@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/RoadHandles.h"
 #include "Solve/JunctionSolver.h"
 
 class URoadNetwork;
@@ -9,6 +10,17 @@ class URoadNetwork;
 struct FRoadSolveResult
 {
 	TMap<int32, FJunctionResult> NodeResults;
+
+	/**
+	 * Each solved node's arms, in the same order as that node's FJunctionResult::Arms,
+	 * naming the segment each arm belongs to.
+	 *
+	 * Published rather than left for callers to re-derive. Rebuilding it means walking
+	 * Node.Incident and re-applying SolveAll's skip rule, and any divergence writes one
+	 * arm's geometry onto another arm's segment - silently.
+	 */
+	TMap<int32, TArray<FRoadSegmentId>> NodeArmSegments;
+
 	int32 SolvedNodes = 0;
 	int32 FailedNodes = 0;
 };

@@ -70,6 +70,31 @@ bool FRoadNetworkSolverTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("re-solve is bitwise idempotent"),
 		Again->LeftCutA.X == BeforeLeft.X && Again->LeftCutA.Y == BeforeLeft.Y);
 
+	// The arm -> segment mapping the solver already computes internally, published so the
+	// mesh builder does not have to re-derive it. Re-deriving means re-walking
+	// Node.Incident and re-applying the same skip rule, which is how the two got out of
+	// step before: an index into Incident is not an index into Arms.
+	{
+		const TArray<FRoadSegmentId>* CentreArms = Result.NodeArmSegments.Find(Centre.Index);
+		if (TestNotNull(TEXT("centre node publishes its arm mapping"), CentreArms))
+		{
+			const FJunctionResult& CentreArmResult = Result.NodeResults[Centre.Index];
+			TestEqual(TEXT("one segment id per solved arm"),
+				CentreArms->Num(), CentreArmResult.Arms.Num());
+
+			// Every entry names a live segment actually incident to this node.
+			for (const FRoadSegmentId ArmSegment : *CentreArms)
+			{
+				const FRoadSegment* Seg = Net->GetSegment(ArmSegment);
+				if (TestNotNull(TEXT("arm names a live segment"), Seg))
+				{
+					TestTrue(TEXT("arm's segment touches this node"),
+						Seg->A == Centre || Seg->B == Centre);
+				}
+			}
+		}
+	}
+
 	return true;
 }
 
