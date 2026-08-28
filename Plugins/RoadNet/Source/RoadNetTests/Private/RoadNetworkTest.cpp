@@ -107,6 +107,38 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 			FMath::IsNearlyEqual(FromControlFallback.Length(), 1.0, 1e-9));
 	}
 
+	// --- Cut vertices are part of the model, not something callers recompute (K2) ---
+	{
+		URoadNetwork* CutNet = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* CutProfile = URoadProfile::MakeTransient(2300.0, 1500.0);
+
+		const FRoadNodeId P = CutNet->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Q = CutNet->AddNode(FVector2D(10000.0, 0.0));
+		const FRoadSegmentId Seg = CutNet->AddStraightSegment(P, Q, CutProfile);
+
+		const FRoadSegment* Fresh = CutNet->GetSegment(Seg);
+		TestFalse(TEXT("a new segment is not yet solved"), Fresh->bSolved);
+		TestTrue(TEXT("cut vertices start at zero"),
+			Fresh->LeftCutA.IsZero() && Fresh->RightCutA.IsZero() &&
+			Fresh->LeftCutB.IsZero() && Fresh->RightCutB.IsZero());
+
+		// Only the solver writes these; the test stands in for it here.
+		FRoadSegment* Mutable = CutNet->GetSegmentMutable(Seg);
+		Mutable->LeftCutA  = FVector2D(1150.0, 1150.0);
+		Mutable->RightCutA = FVector2D(1150.0, -1150.0);
+		Mutable->LeftCutB  = FVector2D(8850.0, -1150.0);
+		Mutable->RightCutB = FVector2D(8850.0, 1150.0);
+		Mutable->bSolved = true;
+
+		const FRoadSegment* Solved = CutNet->GetSegment(Seg);
+		TestTrue(TEXT("solved flag survives"), Solved->bSolved);
+		// Bitwise, not Equals(). These values are the shared truth.
+		TestTrue(TEXT("left cut A stored exactly"),
+			Solved->LeftCutA.X == 1150.0 && Solved->LeftCutA.Y == 1150.0);
+		TestTrue(TEXT("right cut B stored exactly"),
+			Solved->RightCutB.X == 8850.0 && Solved->RightCutB.Y == 1150.0);
+	}
+
 	return true;
 }
 

@@ -33,9 +33,25 @@ struct ROADNET_API FRoadSegment
 
 	UPROPERTY() TObjectPtr<URoadProfile> Profile = nullptr;
 
-	/** Written ONLY by FJunctionSolver. Distance from each end at which the segment is cut. */
+	/** Written ONLY by FRoadNetworkSolver. Distance from each end at which the segment is cut. */
 	UPROPERTY() double TrimA = 0.0;
 	UPROPERTY() double TrimB = 0.0;
+
+	/**
+	 * The segment's four end vertices, written ONLY by FRoadNetworkSolver.
+	 *
+	 * These are the SAME values the junction boundary polygon contains, stored rather
+	 * than recomputed. A mesh builder that rebuilt them from Position + Tangent*Trim
+	 * would be bitwise-identical only if its Tangent were the same double the solver
+	 * received; one differing low bit reopens the seam. Never recompute these.
+	 */
+	UPROPERTY() FVector2D LeftCutA  = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D RightCutA = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D LeftCutB  = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D RightCutB = FVector2D::ZeroVector;
+
+	/** True once a solve has written the trims and cut vertices above. */
+	UPROPERTY() bool bSolved = false;
 
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
