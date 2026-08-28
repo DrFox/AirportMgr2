@@ -61,6 +61,26 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 		if (!Result.bValid)
 		{
 			++Out.FailedNodes;
+
+			// A failed solve must not leave a previous solve's vertices stranded looking
+			// valid. Clear only the end this node owns on every incident segment - the
+			// other end (at the segment's other node) is untouched and keeps its own flag.
+			for (const FRoadSegmentId SegmentId : Node.Incident)
+			{
+				FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
+				if (Segment == nullptr)
+				{
+					continue;
+				}
+				if (Segment->A == NodeId)
+				{
+					Segment->bSolvedA = false;
+				}
+				else
+				{
+					Segment->bSolvedB = false;
+				}
+			}
 			continue;
 		}
 
@@ -84,14 +104,15 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 				Segment->TrimA = ArmResult.CutDistance;
 				Segment->LeftCutA = ArmResult.LeftCut;
 				Segment->RightCutA = ArmResult.RightCut;
+				Segment->bSolvedA = true;
 			}
 			else
 			{
 				Segment->TrimB = ArmResult.CutDistance;
 				Segment->LeftCutB = ArmResult.LeftCut;
 				Segment->RightCutB = ArmResult.RightCut;
+				Segment->bSolvedB = true;
 			}
-			Segment->bSolved = true;
 		}
 
 		Out.NodeResults.Add(NodeIndex, MoveTemp(Result));

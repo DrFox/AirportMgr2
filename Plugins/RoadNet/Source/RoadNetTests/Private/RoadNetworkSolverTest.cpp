@@ -35,7 +35,7 @@ bool FRoadNetworkSolverTest::RunTest(const FString& Parameters)
 
 	// Both segments are marked solved and carry non-zero trims at the bend end.
 	const FRoadSegment* SegEast = Net->GetSegment(ToEast);
-	TestTrue(TEXT("east segment solved"), SegEast->bSolved);
+	TestTrue(TEXT("east segment solved at both ends"), SegEast->bSolvedA && SegEast->bSolvedB);
 	TestTrue(TEXT("east segment trimmed at the bend"), SegEast->TrimA > 0.0);
 
 	// THE CONTRACT, carried into the model: the segment's stored cut vertices are
@@ -59,7 +59,7 @@ bool FRoadNetworkSolverTest::RunTest(const FString& Parameters)
 
 	// A dead-end node still solves and still writes its end's cut vertices.
 	const FRoadSegment* SegNorth = Net->GetSegment(ToNorth);
-	TestTrue(TEXT("north segment solved"), SegNorth->bSolved);
+	TestTrue(TEXT("north segment solved at both ends"), SegNorth->bSolvedA && SegNorth->bSolvedB);
 	TestFalse(TEXT("dead end wrote a real cut line"),
 		SegNorth->LeftCutB.Equals(SegNorth->RightCutB, 1.0));
 

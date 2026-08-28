@@ -117,7 +117,8 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 		const FRoadSegmentId Seg = CutNet->AddStraightSegment(P, Q, CutProfile);
 
 		const FRoadSegment* Fresh = CutNet->GetSegment(Seg);
-		TestFalse(TEXT("a new segment is not yet solved"), Fresh->bSolved);
+		TestFalse(TEXT("a new segment's A end is not yet solved"), Fresh->bSolvedA);
+		TestFalse(TEXT("a new segment's B end is not yet solved"), Fresh->bSolvedB);
 		TestTrue(TEXT("cut vertices start at zero"),
 			Fresh->LeftCutA.IsZero() && Fresh->RightCutA.IsZero() &&
 			Fresh->LeftCutB.IsZero() && Fresh->RightCutB.IsZero());
@@ -128,10 +129,11 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 		Mutable->RightCutA = FVector2D(1150.0, -1150.0);
 		Mutable->LeftCutB  = FVector2D(8850.0, -1150.0);
 		Mutable->RightCutB = FVector2D(8850.0, 1150.0);
-		Mutable->bSolved = true;
+		Mutable->bSolvedA = true;
+		Mutable->bSolvedB = true;
 
 		const FRoadSegment* Solved = CutNet->GetSegment(Seg);
-		TestTrue(TEXT("solved flag survives"), Solved->bSolved);
+		TestTrue(TEXT("solved flags survive"), Solved->bSolvedA && Solved->bSolvedB);
 		// Bitwise, not Equals(). These values are the shared truth.
 		TestTrue(TEXT("left cut A stored exactly"),
 			Solved->LeftCutA.X == 1150.0 && Solved->LeftCutA.Y == 1150.0);

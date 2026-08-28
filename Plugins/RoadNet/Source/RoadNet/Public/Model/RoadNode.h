@@ -50,8 +50,11 @@ struct ROADNET_API FRoadSegment
 	UPROPERTY() FVector2D LeftCutB  = FVector2D::ZeroVector;
 	UPROPERTY() FVector2D RightCutB = FVector2D::ZeroVector;
 
-	/** True once a solve has written the trims and cut vertices above. */
-	UPROPERTY() bool bSolved = false;
+	/** True once a solve has written TrimA/LeftCutA/RightCutA - this segment's A end only. */
+	UPROPERTY() bool bSolvedA = false;
+
+	/** True once a solve has written TrimB/LeftCutB/RightCutB - this segment's B end only. */
+	UPROPERTY() bool bSolvedB = false;
 
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
