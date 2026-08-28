@@ -182,7 +182,7 @@ struct FRoadSegment
     UPROPERTY() FRoadNodeId A, B;
     UPROPERTY() FVector2D  Control;                // quadratic Bezier control point
     UPROPERTY() TObjectPtr<URoadProfile> Profile;
-    UPROPERTY() float TrimA = 0.f, TrimB = 0.f;    // written ONLY by the junction solver
+    UPROPERTY() double TrimA = 0.0, TrimB = 0.0;   // written ONLY by the junction solver
 };
 ```
 
@@ -192,6 +192,39 @@ vertices rather than a model change.
 
 `TrimA`/`TrimB` live on the segment but are written **only** by the solver. This makes
 the core invariant structural rather than conventional.
+
+`double`, not `float`. `FVector2D` is `TVector2<double>` in UE5 and the solver works
+entirely in `double`; storing the trim as `float` would round it on the way in and
+guarantee the mismatch described immediately below.
+
+#### 4.2.1 What the model does NOT persist — a constraint on Slice 2
+
+The model persists only the **scalar** trim distance. It does not persist the four cut
+vertices the solver actually computed.
+
+That is a trap for the mesh builder. A builder that reconstructs a segment's end
+vertices as
+
+```
+Position + Tangent * Trim ± PerpCCW(Tangent) * HalfWidth
+```
+
+reproduces the solver's cut vertices **bitwise** only if its `Tangent` is the very same
+`double` value the solver was handed. Recomputing that tangent — normalising the chord
+again, re-deriving it from the Bezier control point, or round-tripping it through any
+different expression — lands one or two low bits away. The reconstructed vertex is then
+"equal" to any tolerance you like and *not equal* bitwise, and the junction rim and the
+segment ribbon no longer share a vertex. That is exactly the crack this whole design
+exists to prevent; a tolerance-based weld downstream is the failure mode being designed
+out, not the fix.
+
+**Therefore, for Slice 2:**
+
+- Persist the four cut vertices (`LeftCut`/`RightCut` per end), or cache the whole
+  `FJunctionArmResult` per node, alongside the scalar trim.
+- The mesh builder **consumes** those vertices. It is forbidden from recomputing them.
+- The scalar trim stays for UI, snapping and validation — cheap queries where a
+  tolerance is fine — never as the source of a vertex position.
 
 ### 4.3 Profiles — the Flyweight
 

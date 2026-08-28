@@ -1,5 +1,27 @@
 # Road System Slice 1 — Foundations and Junction Solver — Implementation Plan
 
+> ## ⚠️ SUPERSEDED: the fillet and cut derivations in Tasks 6 and 7
+>
+> **The fillet mathematics specified in the Task 6 and Task 7 sections of this plan is
+> WRONG and was disproven and replaced during implementation. Do not implement it and do
+> not "restore" it against the shipped code.**
+>
+> Specifically superseded: the tangent-point rule `T_A = X - d * A.Dir`, the arc-centre
+> rule `C = X - (R / sin(theta/2)) * Rotate(...)`, and the entire "clamping" subsection
+> that follows from them. The tangent points sit **outward** from the corner, not inward:
+> rounding a junction corner cannot carve material out of the corner itself, so the
+> fillet pushes each arm's cut **back** rather than pulling it in. The sign that
+> distinguishes the inside of a bend from the outside is which side of edge A the arc
+> centre falls on, and it flips as `Theta` passes `PI`.
+>
+> **Section 5 of the design spec is authoritative** —
+> `docs/superpowers/specs/2026-08-28-procedural-road-system-design.md` — together with
+> the shipped `RoadGeom::SolveFillet` and `FJunctionSolver::SolveCuts`.
+>
+> The code blocks in Tasks 6 and 7 are left unedited on purpose, as a record of what was
+> tried. Everything else in this plan — the task ordering, the build and test commands,
+> the global constraints — still stands.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the `RoadNet` plugin's data model and analytic junction solver, proven by automation tests and a debug-drawn junction gallery showing clean fillets and exactly-shared vertices.
@@ -47,7 +69,7 @@ Run the RoadNet tests headless:
 
 The script prints one `PASS`/`FAIL` line per test and **exits non-zero if any test failed or if the filter matched no tests at all**.
 
-**Do not judge a test run by the engine's process exit code.** With `-testexit`, `UnrealEditor-Cmd.exe` exits `0` whether tests pass or fail, so the raw command cannot distinguish them; the script parses `Test Completed. Result={...}` out of the run's log instead. Note the engine writes `Result={Success}`, not `Result={Success}`.
+**Do not judge a test run by the engine's process exit code.** With `-testexit`, `UnrealEditor-Cmd.exe` exits `0` whether tests pass or fail, so the raw command cannot distinguish them; the script parses `Test Completed. Result={...}` out of the run's log instead. Note the engine writes `Result={Success}`, not `Result={Passed}`.
 
 ---
 
