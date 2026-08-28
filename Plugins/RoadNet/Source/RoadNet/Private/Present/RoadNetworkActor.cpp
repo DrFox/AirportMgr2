@@ -6,6 +6,7 @@
 #include "Components/SceneComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
+#include "Materials/Material.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
@@ -58,6 +59,20 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	// success, so state all of it rather than inferring any of it.
 	const int32 BuiltTriangles = Mesh.TriangleCount();
 	const int32 BuiltVertices = Mesh.VertexCount();
+
+	// A UDynamicMeshComponent has NO surface-material fallback. GetNumMaterials() is
+	// just BaseMaterials.Num(), so a component nobody called SetMaterial on reports zero
+	// material slots and the renderer has no section to draw - the mesh is present,
+	// correctly bounded, registered and visible, and draws nothing at all. The engine's
+	// only built-in dynamic-mesh defaults (InitializeDefaultMaterials) are for the
+	// wireframe and vertex-colour view modes, not for lit surfaces.
+	//
+	// Slice 2b replaces this with the real asphalt material; until then the surface has
+	// to be given the engine default explicitly rather than assumed.
+	if (Component->GetNumMaterials() == 0)
+	{
+		Component->SetMaterial(0, UMaterial::GetDefaultMaterial(MD_Surface));
+	}
 
 	Component->SetMesh(MoveTemp(Mesh));
 	Component->NotifyMeshUpdated();
