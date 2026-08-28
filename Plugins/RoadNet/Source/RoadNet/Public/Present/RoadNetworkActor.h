@@ -17,8 +17,10 @@ namespace UE::Geometry { class FDynamicMesh3; }
 class ROADNET_API FDynamicMeshSink : public IRoadMeshSink
 {
 public:
-	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr)
-		: Component(InComponent), Material(InMaterial) {}
+	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr,
+		bool bInUseConstantVertexColour = true)
+		: Component(InComponent), Material(InMaterial)
+		, bUseConstantVertexColour(bInUseConstantVertexColour) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
 	/**
@@ -36,6 +38,9 @@ private:
 	// so this is safe today; a preview sink that lives across frames will not be.
 	UDynamicMeshComponent* Component = nullptr;
 	UMaterialInterface* Material = nullptr;
+
+	/** Independent of Material by design - see ARoadNetworkActor::bUseConstantVertexColour. */
+	bool bUseConstantVertexColour = true;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -102,6 +107,18 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	TObjectPtr<UMaterialInterface> SurfaceMaterial;
+
+	/**
+	 * Hold the component's vertex colours at a constant instead of reading the mesh.
+	 *
+	 * Deliberately independent of SurfaceMaterial. These two were previously decided
+	 * together in one if/else, which meant clearing the material also flipped this - so
+	 * "it renders without a material" moved two variables at once and could never say
+	 * which of them mattered. Both are now properties, so all four combinations can be
+	 * tried in the details panel without a rebuild.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	bool bUseConstantVertexColour = true;
 
 	/**
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly

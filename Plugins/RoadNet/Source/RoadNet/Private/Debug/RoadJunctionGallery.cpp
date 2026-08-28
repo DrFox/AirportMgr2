@@ -124,7 +124,7 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 
 	Builder.Build(*Network, Solved, 1);
 
-	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial);
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, true);
 	Builder.Emit(Sink);
 
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),

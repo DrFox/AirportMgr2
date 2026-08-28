@@ -116,28 +116,30 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	//
 	// Slice 2b replaces this with the real asphalt material; until then the surface has
 	// to be given the engine default explicitly rather than assumed.
+	// Material and vertex-colour mode are applied INDEPENDENTLY. They used to be decided
+	// together in one if/else, so clearing the material also flipped the colour mode and
+	// no observation could tell which one mattered.
 	if (Material != nullptr)
 	{
 		Component->SetMaterial(0, Material);
-
-		// Safe to leave the colour override off now that the mesh carries no colour
-		// overlay for the converter to read - the blends moved to UV2 precisely because
-		// this mode decides whether that overlay is touched, and touching it killed the
-		// draw for every material.
-		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::None);
 	}
 	else if (Component->GetNumMaterials() == 0)
 	{
+		// A UDynamicMeshComponent has NO surface-material fallback: GetNumMaterials() is
+		// just BaseMaterials.Num(), so a component nobody called SetMaterial on reports
+		// zero material slots and the renderer has no section to draw.
 		Component->SetMaterial(0, UMaterial::GetDefaultMaterial(MD_Surface));
+	}
 
-		// GetDefaultMaterial(MD_Surface) IS WorldGridMaterial - the same world-aligned
-		// checker the default template floor uses. A flat road laid above that floor
-		// therefore has the same material, the same +Z normal and the same world-space
-		// texture alignment, so seen from straight above it is very nearly
-		// indistinguishable from the ground it sits on. Override the colour so the
-		// surface is unmistakably a road rather than a patch of floor.
+	if (bUseConstantVertexColour)
+	{
 		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::Constant);
-		Component->SetConstantOverrideColor(FColor(40, 40, 45));
+		Component->SetConstantOverrideColor(
+			Material != nullptr ? FColor::White : FColor(40, 40, 45));
+	}
+	else
+	{
+		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::None);
 	}
 
 	Component->SetMesh(MoveTemp(Mesh));
@@ -338,7 +340,7 @@ void ARoadNetworkActor::RebuildMesh()
 
 	Builder.Build(*Network, Solved, RibbonSegments);
 
-	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial);
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, bUseConstantVertexColour);
 	Builder.Emit(Sink);
 
 	if (bDebugDrawMesh)
