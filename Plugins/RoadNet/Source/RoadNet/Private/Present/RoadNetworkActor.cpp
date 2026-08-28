@@ -73,6 +73,17 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	if (Component->GetNumMaterials() == 0)
 	{
 		Component->SetMaterial(0, UMaterial::GetDefaultMaterial(MD_Surface));
+
+		// GetDefaultMaterial(MD_Surface) IS WorldGridMaterial - the same world-aligned
+		// checker the default template floor uses. A flat road laid 200 uu above that
+		// floor therefore has the same material, the same +Z normal and the same
+		// world-space texture alignment, so seen from straight above it is very nearly
+		// indistinguishable from the ground it sits on. Override the colour so the
+		// surface is unmistakably a road rather than a patch of floor.
+		//
+		// Slice 2b replaces both of these with the real asphalt material.
+		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::Constant);
+		Component->SetConstantOverrideColor(FColor(40, 40, 45));
 	}
 
 	Component->SetMesh(MoveTemp(Mesh));
