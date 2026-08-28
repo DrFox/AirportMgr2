@@ -101,6 +101,103 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("no backfacing triangle after subdivision"), Backfacing, 0);
 	}
 
+	// The junction's shoulder fade. A junction's rim IS its outer edge and the only vertex
+	// inboard of it is the fan apex, so fading rim-to-apex would fade the whole junction; a
+	// ring of rim vertices pushed toward the apex is what gives the shoulder somewhere to
+	// end.
+	//
+	// Both assertions below are written to be FALSE before the ring exists. The obvious
+	// phrasing - "count solid vertices near the apex" - is satisfied by the segments' own
+	// band vertices, which carry blend 1 and sit well inside this radius, so it passes
+	// whether or not a ring was ever built and proves nothing.
+	{
+		const FJunctionResult* CentreResult = Solved.NodeResults.Find(Centre.Index);
+		if (!TestNotNull(TEXT("centre node solved"), CentreResult))
+		{
+			return false;
+		}
+
+		const int32 ApexSlot = CentreResult->Boundary.Num() - 1;
+		const FVector2D Apex = CentreResult->Boundary[ApexSlot];
+
+		// An arc sample is a rim vertex no segment owns - it matches no arm's cut vertex
+		// bitwise - so its ground blend is the junction's alone. Before the fade it was
+		// solid; a faded one can only have come from the rim fade.
+		{
+			int32 ArcSamples = 0;
+			int32 FadedArcSamples = 0;
+
+			for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
+			{
+				const FVector2D& Point = CentreResult->Boundary[Slot];
+
+				bool bIsCutVertex = false;
+				for (const FJunctionArmResult& Arm : CentreResult->Arms)
+				{
+					if ((Point.X == Arm.RightCut.X && Point.Y == Arm.RightCut.Y) ||
+						(Point.X == Arm.LeftCut.X  && Point.Y == Arm.LeftCut.Y))
+					{
+						bIsCutVertex = true;
+						break;
+					}
+				}
+				if (bIsCutVertex)
+				{
+					continue;
+				}
+
+				++ArcSamples;
+				for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+				{
+					if (Buffers.Positions[Index].X == Point.X &&
+						Buffers.Positions[Index].Y == Point.Y)
+					{
+						if (Buffers.UV2[Index].Y <= 0.0f)
+						{
+							++FadedArcSamples;
+						}
+						break;
+					}
+				}
+			}
+
+			TestTrue(TEXT("the bend's rim has arc samples to fade"), ArcSamples > 0);
+			TestEqual(TEXT("every arc sample on the rim fades to nothing"),
+				FadedArcSamples, ArcSamples);
+		}
+
+		// The ring itself. Before it exists the apex is the ONLY mesh vertex inboard of the
+		// rim, so a vertex that is nearer the apex than every rim vertex and is not the apex
+		// cannot exist. A fold - the ring overshooting the apex - would show up as a
+		// backfacing triangle, which the check above already forbids across the whole buffer.
+		{
+			double NearestRim = TNumericLimits<double>::Max();
+			for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
+			{
+				NearestRim = FMath::Min(
+					NearestRim, FVector2D::Distance(CentreResult->Boundary[Slot], Apex));
+			}
+
+			int32 Inboard = 0;
+			for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+			{
+				const FVector2D Flat(Buffers.Positions[Index].X, Buffers.Positions[Index].Y);
+				const double ToApex = FVector2D::Distance(Flat, Apex);
+
+				// Strictly between the apex and the innermost rim vertex.
+				if (ToApex > 0.0 && ToApex < NearestRim)
+				{
+					++Inboard;
+					TestTrue(TEXT("an inboard ring vertex is solid"),
+						Buffers.UV2[Index].Y >= 1.0f);
+				}
+			}
+
+			TestTrue(TEXT("the junction has a ring of vertices inboard of its whole rim"),
+				Inboard > 0);
+		}
+	}
+
 	return true;
 }
 

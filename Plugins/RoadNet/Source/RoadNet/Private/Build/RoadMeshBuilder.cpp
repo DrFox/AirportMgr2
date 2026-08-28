@@ -13,26 +13,25 @@ namespace
 	}
 
 	/**
-	 * Masks for a vertex a segment owns. Blend is 1 at the ends and 0 in the interior, so
-	 * markings run down the middle of a segment and fade out before its junctions.
-	 *
-	 * The end vertices are the ones SHARED with a junction, so writing 1 there is what
-	 * makes the whole junction fan unmarked: every fan vertex then carries blend 1 and
-	 * nothing in it can reach the marking mask. Leaving them at 0 puts a band across each
-	 * fan triangle where the lateral has crossed into the marking width but the fade has
-	 * not yet reached zero - which paints a smear into every junction, worst on the inside
-	 * of a bend where the fillet arc is tightest.
+	 * Masks for a vertex the junction owns. The junction blend is ALWAYS 1 - see AddJunction
+	 * for why - so it is written here rather than passed in; only the ground blend varies,
+	 * between a faded rim and a solid ring, band point or apex.
 	 */
-	FVector2f SegmentMasks(double JunctionBlend = 0.0)
+	FVector2f JunctionMasks(double GroundBlend)
 	{
-		return FVector2f(static_cast<float>(FMath::Clamp(JunctionBlend, 0.0, 1.0)), 1.0f);
+		return FVector2f(1.0f, static_cast<float>(FMath::Clamp(GroundBlend, 0.0, 1.0)));
 	}
 
-	/** Masks for a vertex the junction owns. See AddJunction for why the blend is always 1. */
-	FVector2f JunctionMasks(double Blend)
-	{
-		return FVector2f(static_cast<float>(FMath::Clamp(Blend, 0.0, 1.0)), 1.0f);
-	}
+	/**
+	 * Furthest the junction's inset ring may travel toward the fan apex, as a fraction of
+	 * each vertex's own distance to it.
+	 *
+	 * A tight corner has rim points close to the apex, and a full shoulder-width inset
+	 * would take the ring past it and fold the fan inside out. Degrading to a thin ring
+	 * loses the fade at that corner, which is a cosmetic loss; folding is a visible defect
+	 * and a silent one.
+	 */
+	constexpr double MaxInsetFraction = 0.45;
 }
 
 FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit)
@@ -125,15 +124,45 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	const int32 ApexSlot = Junction.Boundary.Num() - 1;
 	const FVector2D Apex = Junction.Boundary[ApexSlot];
 
-	// Rebuild the rim with each arm's band points inserted along its cut line. The
-	// solver's own Triangles array indexes the ORIGINAL boundary, so it cannot be reused
-	// once points are inserted - the fan is rebuilt here instead.
+	// The widest shoulder among this node's arms sets the inset. Different arms may carry
+	// different profiles; the ring is one loop, so it takes the largest.
+	double ShoulderWidth = 0.0;
+	for (const FRoadSegmentId ArmSegment : ArmSegments)
+	{
+		const FRoadSegment* Seg = Network.GetSegment(ArmSegment);
+		const URoadProfile* ArmProfile = Seg ? Seg->Profile.Get() : nullptr;
+		if (ArmProfile == nullptr || ArmProfile->Bands.Num() == 0)
+		{
+			continue;
+		}
+		if (ArmProfile->Bands[0].Type == ERoadBandType::Shoulder)
+		{
+			ShoulderWidth = FMath::Max(ShoulderWidth, ArmProfile->Bands[0].Width);
+		}
+		if (ArmProfile->Bands.Last().Type == ERoadBandType::Shoulder)
+		{
+			ShoulderWidth = FMath::Max(ShoulderWidth, ArmProfile->Bands.Last().Width);
+		}
+	}
+
+	// Rim vertices fade where the node has a shoulder to fade, EXCEPT the band points
+	// inserted below, which are interior to the cross-section and stay solid. Tracking that
+	// per entry rather than blanketing the rim is what stops a junction added before its
+	// segments from writing a faded blend onto an interior band point and winning the weld.
+	const float RimFallbackBlend = ShoulderWidth > 0.0 ? 0.0f : 1.0f;
+
+	// Rebuild the rim with each arm's band points inserted along its cut line. The solver's
+	// own Triangles array indexes the ORIGINAL boundary, so it cannot be reused once points
+	// are inserted - the fan is rebuilt below instead.
 	TArray<FVector2D> Rim;
+	TArray<float> RimBlend;
 	Rim.Reserve(ApexSlot * 2);
+	RimBlend.Reserve(ApexSlot * 2);
 
 	for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
 	{
 		Rim.Add(Junction.Boundary[Slot]);
+		RimBlend.Add(RimFallbackBlend);
 
 		// SolveBoundary emits each arm's RightCut immediately followed by its LeftCut, so
 		// a matching adjacent pair identifies that arm's cut line. Matched bitwise: these
@@ -166,30 +195,57 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
 			{
 				Rim.Add(CutLinePoint(Arm.RightCut, Arm.LeftCut, Bands.Alphas[Boundary]));
+				RimBlend.Add(Bands.GroundBlend[Boundary]);
 			}
 			break;
 		}
 	}
 
-	// Weld the rim and the apex. Cut vertices and band points are already owned by their
-	// segments, so these attributes are discarded for them; they land on arc samples and
-	// the apex. Full junction blend everywhere, so no marking can reach a junction, and a
-	// solid ground blend so the fade is a segment-side effect only for now.
+	// Weld the rim, its inset ring and the apex. Cut vertices and band points are already
+	// owned by their segments, so these attributes are discarded for them; they land on arc
+	// samples, the ring and the apex. Full junction blend on every one, so no marking can
+	// reach a junction.
 	TArray<int32> RimIndices;
+	TArray<int32> RingIndices;
 	RimIndices.Reserve(Rim.Num());
-	for (const FVector2D& Point : Rim)
+	RingIndices.Reserve(Rim.Num());
+
+	for (int32 Slot = 0; Slot < Rim.Num(); ++Slot)
 	{
-		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
+		const FVector2D& Point = Rim[Slot];
+
+		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(RimBlend[Slot])));
+
+		// Ring: one shoulder-width toward the apex, clamped so it can never reach or pass
+		// it. The solver guarantees the rim is star-shaped about the apex, so a straight
+		// move toward it stays inside the polygon and cannot self-intersect - which a
+		// general inward polygon offset would, at any sufficiently tight corner.
+		//
+		// With no shoulder the inset is zero, the ring point IS the rim point, and it welds
+		// to the same index; every strip triangle below is then index-degenerate and
+		// dropped, leaving exactly the plain apex fan this used to build.
+		const FVector2D ToApex = Apex - Point;
+		const double Distance = ToApex.Size();
+		const double Inset = FMath::Min(ShoulderWidth, Distance * MaxInsetFraction);
+		const FVector2D RingPoint = (Distance > UE_KINDA_SMALL_NUMBER)
+			? Point + (ToApex / Distance) * Inset
+			: Point;
+
+		RingIndices.Add(WeldVertex(RingPoint, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
 	}
 
 	const int32 ApexIndex = WeldVertex(Apex, FVector2f(0.0f, 0.0f), JunctionMasks(1.0));
 
-	// Fan from the apex. The solver validates that the rim is star-shaped about this
-	// point before emitting a fan at all, so every triangle here is well formed.
+	// Rim -> ring as a quad strip, then ring -> apex as a fan. The solver validates that
+	// the rim is star-shaped about the apex before emitting a fan at all, and the ring lies
+	// on the straight lines from rim to apex, so every triangle here is well formed.
 	for (int32 Slot = 0; Slot < RimIndices.Num(); ++Slot)
 	{
 		const int32 Next = (Slot + 1) % RimIndices.Num();
-		AddTriangle(ApexIndex, RimIndices[Slot], RimIndices[Next]);
+
+		AddTriangle(RimIndices[Slot], RimIndices[Next], RingIndices[Next]);
+		AddTriangle(RimIndices[Slot], RingIndices[Next], RingIndices[Slot]);
+		AddTriangle(ApexIndex, RingIndices[Slot], RingIndices[Next]);
 	}
 }
 
@@ -244,6 +300,13 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 		// 1 at both ends, 0 everywhere inside, so the centreline is full down the middle
 		// and gone by the time it reaches a junction.
+		//
+		// The end cross-sections are the ones SHARED with a junction, so writing 1 there is
+		// what makes the whole junction fan unmarked: every fan vertex then carries blend 1
+		// and nothing in it can reach the marking mask. Leaving them at 0 puts a band across
+		// each fan triangle where the lateral has crossed into the marking width but the
+		// fade has not yet reached zero - which paints a smear into every junction, worst on
+		// the inside of a bend where the fillet arc is tightest.
 		const bool bIsEnd = (Step == 0) || (Step == Steps);
 		const double JunctionBlend = bIsEnd ? 1.0 : 0.0;
 
@@ -294,6 +357,14 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	const double HalfWidthLeft  = static_cast<double>(LateralLeft);
 	const double HalfWidthRight = static_cast<double>(LateralRight);
 
+	// A cap spans the full width and is not subdivided - it is a flat end, not a length of
+	// road - but its two corners are still the shoulder's outer edge, and they take the
+	// outermost bands' ground blend for it. Left solid they would snap the fade back on at
+	// the last few uu of every dead end, which reads as a bright notch exactly where the
+	// road is supposed to disappear.
+	const float CapBlendRight = Bands.GroundBlend[0];
+	const float CapBlendLeft  = Bands.GroundBlend[RailCount - 1];
+
 	const FRoadNode* NodeA = Network.GetNode(Segment->A);
 	if (NodeA != nullptr && NodeA->Incident.Num() == 1)
 	{
@@ -309,10 +380,12 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// line first, ribbon start second.
 		// The cap spans from the node's own cut line to the ribbon's start, so it sits at
 		// along = 0 - the surface really does begin at the node, not at the trimmed cut.
-		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentMasks(0.0));
+		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f),
+			FVector2f(0.0f, CapBlendRight));
 		const int32 R1 = Rails[0][0];
 		const int32 L1 = Rails[RailCount - 1][0];
-		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentMasks(0.0));
+		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f),
+			FVector2f(0.0f, CapBlendLeft));
 
 		AddTriangle(R0, R1, L1);
 		AddTriangle(R0, L1, L0);
@@ -336,8 +409,10 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// first, node cap line second.
 		const float CapAlong = static_cast<float>(RibbonLength);
 		const int32 R0 = Rails[0][Steps];
-		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentMasks(0.0));
-		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentMasks(0.0));
+		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong),
+			FVector2f(0.0f, CapBlendRight));
+		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong),
+			FVector2f(0.0f, CapBlendLeft));
 		const int32 L0 = Rails[RailCount - 1][Steps];
 
 		AddTriangle(R0, R1, L1);
