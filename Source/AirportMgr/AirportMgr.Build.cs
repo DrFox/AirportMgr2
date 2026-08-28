@@ -8,7 +8,9 @@ public class AirportMgr : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
+		// RoadNet: the game module drives the road facade. The dependency runs this way
+		// only - the plugin never depends on the game.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "RoadNet" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 
