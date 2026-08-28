@@ -164,6 +164,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1")) int32 RibbonSegments = 1;
 
 	/**
+	 * World units per texture tile for the asphalt. Lower means the texture repeats more
+	 * often, so more visible grain across the road.
+	 *
+	 * At the default 512 a 200 uu road shows less than half of one tile across its whole
+	 * width, which magnifies the texture until it reads as flat colour. Roughly a fifth
+	 * of the road's width is a sane starting point.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0")) double TexelsPerUnit = 512.0;
+
+	/**
 	 * Draw every triangle the builder produced as debug lines.
 	 *
 	 * Ground truth for "the mesh is correct but nothing renders": these come from the

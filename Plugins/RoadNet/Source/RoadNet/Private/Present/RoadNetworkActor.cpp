@@ -336,7 +336,7 @@ void ARoadNetworkActor::RebuildMesh()
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
 
-	FRoadMeshBuilder Builder(SurfaceZ);
+	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit);
 
 	Builder.Build(*Network, Solved, RibbonSegments);
 
