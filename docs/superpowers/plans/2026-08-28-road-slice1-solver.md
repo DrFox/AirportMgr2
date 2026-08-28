@@ -2641,6 +2641,10 @@ Expected: `Result: Succeeded`.
 
 - [ ] **Step 7: Run the full test suite once more**
 
+```powershell
+& "C:epos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
 Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Success}`, zero failures.
 
 - [ ] **Step 8: Commit**
