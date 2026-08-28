@@ -81,11 +81,10 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("both ends of a lone road solve"), Solved.FailedNodes, 0);
 		TestEqual(TEXT("both ends produce a junction result"), Solved.SolvedNodes, 2);
 
+		// Segments before junctions, mirroring RebuildMesh. This test exists to reproduce
+		// that path end to end, so building in the order RebuildMesh forbids would make it
+		// a reproduction of something the production code refuses to do.
 		FRoadMeshBuilder Builder(Drawn->SurfaceZ);
-		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
-		{
-			Builder.AddJunction(Pair.Value);
-		}
 
 		const TArray<FRoadSegment>& Segments = Drawn->Network->GetSegments();
 		for (int32 Index = 0; Index < Segments.Num(); ++Index)
@@ -98,6 +97,11 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			SegmentId.Index = Index;
 			SegmentId.Generation = Segments[Index].Generation;
 			Builder.AddSegment(*Drawn->Network, SegmentId, Drawn->RibbonSegments);
+		}
+
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Builder.AddJunction(Pair.Value);
 		}
 
 		const FRoadMeshBuffers& Drawn2D = Builder.GetBuffers();

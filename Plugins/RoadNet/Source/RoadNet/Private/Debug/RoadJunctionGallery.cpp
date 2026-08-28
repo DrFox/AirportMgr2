@@ -9,6 +9,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Solve/JunctionSolver.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadGallery, Log, All);
@@ -23,6 +24,16 @@ ARoadJunctionGallery::ARoadJunctionGallery()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
 	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("GalleryMesh"));
+
+	// The same material the network actor uses. The gallery is the harness built to
+	// inspect junctions, so leaving it on a placeholder colour would hide the very thing
+	// it exists to show.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RoadMaterial(
+		TEXT("/Game/RoadNet/Materials/M_RoadSurface"));
+	if (RoadMaterial.Succeeded())
+	{
+		SurfaceMaterial = RoadMaterial.Object;
+	}
 	MeshComponent->SetupAttachment(RootComponent);
 
 	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
@@ -110,25 +121,10 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
 
 	FRoadMeshBuilder Builder(10.0);
-	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
-	{
-		Builder.AddJunction(Pair.Value);
-	}
 
-	const TArray<FRoadSegment>& Segments = Network->GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		if (!Segments[Index].bAlive)
-		{
-			continue;
-		}
-		FRoadSegmentId SegmentId;
-		SegmentId.Index = Index;
-		SegmentId.Generation = Segments[Index].Generation;
-		Builder.AddSegment(*Network, SegmentId, 1);
-	}
+	Builder.Build(*Network, Solved, 1);
 
-	FDynamicMeshSink Sink(MeshComponent);
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, true);
 	Builder.Emit(Sink);
 
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),

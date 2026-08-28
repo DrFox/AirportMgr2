@@ -7,6 +7,30 @@ struct FRoadMeshBuffers
 {
 	TArray<FVector3d> Positions;
 	TArray<int32>     Indices;
+
+	/**
+	 * World-aligned XY, divided by the texel scale. A pure function of Positions, which
+	 * is exactly why design spec 6.3 chose it: asphalt is continuous across a
+	 * segment/junction boundary by construction, because neither side can disagree about
+	 * a value that depends only on where the vertex is.
+	 */
+	TArray<FVector2f> UV0;
+
+	/** X = lateral offset across the profile in uu, Y = distance along the centreline in uu. */
+	TArray<FVector2f> UV1;
+
+	/**
+	 * Masks, NOT colour. X = junction blend, Y = ground blend (unused until 2b-ii).
+	 *
+	 * These began life in a vertex-colour overlay and must not go back there. A
+	 * UDynamicMeshComponent only ignores its colour overlay while ColorOverrideMode is
+	 * Constant; assigning any material flips it to None, at which point the converter
+	 * reads the overlay and the whole surface stops rendering - with any material, ours
+	 * or a stock one. Beyond that specific fault, vertex colour multiplies through in
+	 * anything that samples it, so a mask stored there tints the surface as a side
+	 * effect. A UV channel carries the same two floats with neither coupling.
+	 */
+	TArray<FVector2f> UV2;
 };
 
 /**

@@ -69,6 +69,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double PanSpeed = 3000.0;
 
+	/** Fraction the view width changes per mouse-wheel notch. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.01", ClampMax = "0.9"))
+	double ZoomStep = 0.15;
+
+	/** Closest the view may zoom, as a ground width in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
+	double MinViewWidth = 200.0;
+
+	/** Furthest the view may zoom out, as a ground width in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
+	double MaxViewWidth = 60000.0;
+
 	/**
 	 * Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane.
 	 *
@@ -110,6 +122,21 @@ private:
 
 	void MoveViewAbovePlane();
 	void PanView(float DeltaTime);
+
+	/** Mouse wheel. Scales the ortho width, or the camera's height in perspective. */
+	void ZoomIn();
+	void ZoomOut();
+	void ZoomBy(double Notches);
+
+	/**
+	 * Swap the build camera between orthographic and perspective.
+	 *
+	 * Orthographic is right for drawing - screen maps 1:1 to ground - but it flattens
+	 * everything, so surface detail and relief are impossible to judge. Perspective is
+	 * for looking at what you built. CursorOnRoadPlane reads the camera's actual
+	 * projection mode, so clicking keeps working in either.
+	 */
+	void ToggleProjection();
 
 	/** Top-down orthographic camera spawned on possession; the view target while building. */
 	UPROPERTY(Transient) TObjectPtr<class ACameraActor> BuildCamera;

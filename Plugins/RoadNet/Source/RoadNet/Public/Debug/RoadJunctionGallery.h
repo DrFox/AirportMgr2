@@ -7,6 +7,7 @@
 class URoadNetwork;
 class URoadProfile;
 class UDynamicMeshComponent;
+class UMaterialInterface;
 
 /**
  * Slice 1 visual regression harness: builds every junction configuration the
@@ -68,6 +69,14 @@ public:
 
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
+
+	/**
+	 * Material for the gallery's surfaces. Defaults to M_RoadSurface, the same one the
+	 * network actor uses - the gallery is the harness built to inspect junctions, so
+	 * leaving it on a placeholder colour would hide exactly what it exists to show.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	TObjectPtr<UMaterialInterface> SurfaceMaterial;
 
 private:
 	void BuildGallery();

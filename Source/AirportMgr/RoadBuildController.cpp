@@ -112,6 +112,10 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnBuildClick);
 	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelChain);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
+
+	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
+	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
+	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::ToggleProjection);
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
@@ -197,6 +201,68 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	}
 
 	return true;
+}
+
+void ARoadBuildController::ZoomIn()
+{
+	ZoomBy(-1.0);
+}
+
+void ARoadBuildController::ZoomOut()
+{
+	ZoomBy(1.0);
+}
+
+void ARoadBuildController::ZoomBy(double Notches)
+{
+	if (BuildCamera == nullptr || Target == nullptr)
+	{
+		return;
+	}
+
+	ViewWidth = FMath::Clamp(
+		ViewWidth * FMath::Pow(1.0 + ZoomStep, Notches), MinViewWidth, MaxViewWidth);
+
+	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
+	if (Camera->ProjectionMode == ECameraProjectionMode::Orthographic)
+	{
+		Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
+	}
+	else
+	{
+		// Height that frames the same ground width at this FOV, so a zoom means the same
+		// thing in both projections and switching between them does not jump the view.
+		const double HalfFovRadians = FMath::DegreesToRadians(Camera->FieldOfView * 0.5f);
+		const double Height = (ViewWidth * 0.5) / FMath::Max(FMath::Tan(HalfFovRadians), UE_KINDA_SMALL_NUMBER);
+
+		const FVector Where = BuildCamera->GetActorLocation();
+		BuildCamera->SetActorLocation(FVector(Where.X, Where.Y, Target->SurfaceZ + Height));
+	}
+
+	UE_LOG(LogRoadBuild, Log, TEXT("View width %.0f uu"), ViewWidth);
+}
+
+void ARoadBuildController::ToggleProjection()
+{
+	if (BuildCamera == nullptr || Target == nullptr)
+	{
+		return;
+	}
+
+	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
+	const bool bWasOrthographic = Camera->ProjectionMode == ECameraProjectionMode::Orthographic;
+
+	// Perspective keeps looking straight down. That is not how you would inspect a
+	// surface for relief, but it keeps the click mapping intuitive; pitch is a separate
+	// control and this driver deliberately has none.
+	Camera->SetProjectionMode(
+		bWasOrthographic ? ECameraProjectionMode::Perspective : ECameraProjectionMode::Orthographic);
+
+	// Re-apply the current zoom through the new projection so the framing carries over.
+	ZoomBy(0.0);
+
+	UE_LOG(LogRoadBuild, Log, TEXT("Projection: %s"),
+		bWasOrthographic ? TEXT("perspective") : TEXT("orthographic"));
 }
 
 void ARoadBuildController::OnBuildClick()

@@ -9,19 +9,38 @@
 class URoadNetwork;
 class URoadProfile;
 class UDynamicMeshComponent;
+class UMaterialInterface;
+
+namespace UE::Geometry { class FDynamicMesh3; }
 
 /** Pushes finished buffers into a UDynamicMeshComponent. */
 class ROADNET_API FDynamicMeshSink : public IRoadMeshSink
 {
 public:
-	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent) : Component(InComponent) {}
+	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr,
+		bool bInUseConstantVertexColour = true)
+		: Component(InComponent), Material(InMaterial)
+		, bUseConstantVertexColour(bInUseConstantVertexColour) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
+	/**
+	 * Copy the buffers' UV and colour channels onto an already-populated mesh.
+	 *
+	 * Static and public so it can be tested without a component, a world or a renderer.
+	 * The buffers being correct says nothing about what the component receives, and that
+	 * gap is precisely where slice 2a's invisible surface hid.
+	 */
+	static void PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
+
 private:
-	// A raw, non-owning pointer: the sink does not own or GC-protect the component and
-	// must not outlive it. Both current call sites are stack-scoped inside a single
-	// function, so this is safe today; Slice 2b's preview sink will not be.
+	// Raw, non-owning pointers: the sink owns and GC-protects neither, and must not
+	// outlive either. Both current call sites are stack-scoped inside a single function,
+	// so this is safe today; a preview sink that lives across frames will not be.
 	UDynamicMeshComponent* Component = nullptr;
+	UMaterialInterface* Material = nullptr;
+
+	/** Independent of Material by design - see ARoadNetworkActor::bUseConstantVertexColour. */
+	bool bUseConstantVertexColour = true;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -81,6 +100,33 @@ public:
 	TObjectPtr<URoadProfile> Profile;
 
 	/**
+	 * Material for the road surface. Defaults to M_RoadSurface, which reads UV0 for
+	 * asphalt and UV1 for markings. Left null, the surface falls back to the engine
+	 * default - which is WorldGridMaterial, the same world-aligned checker the template
+	 * floor uses, so the road becomes very hard to tell apart from the ground.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	TObjectPtr<UMaterialInterface> SurfaceMaterial;
+
+	/**
+	 * DIAGNOSTIC ONLY. Hold vertex colours at a constant - and, as a side effect nobody
+	 * would guess, stop the real material rendering at all.
+	 *
+	 * Any ColorOverrideMode other than None makes FBaseDynamicMeshSceneProxy set
+	 * ForceOverrideMaterial to the engine's vertex-colour debug material, which then
+	 * replaces SurfaceMaterial for every buffer set. So this does not tint the surface;
+	 * it substitutes a different material entirely and shows a flat constant colour with
+	 * no texture, whatever SurfaceMaterial says.
+	 *
+	 * Default false, because true means "do not render the material you asked for". It
+	 * stays available because it is a genuine way to prove geometry reaches the screen
+	 * when the material is suspect - just never mistake the result for the material
+	 * working.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	bool bUseConstantVertexColour = false;
+
+	/**
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly
 	 * five times the road's width in segment length before its fillet has room to be a
 	 * curve rather than a clamped-away stub, so this is sized for roads drawn by hand at
@@ -122,6 +168,16 @@ public:
 
 	/** Quads along each segment. 1 is right for straight segments. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1")) int32 RibbonSegments = 1;
+
+	/**
+	 * World units per texture tile for the asphalt. Lower means the texture repeats more
+	 * often, so more visible grain across the road.
+	 *
+	 * At the default 512 a 200 uu road shows less than half of one tile across its whole
+	 * width, which magnifies the texture until it reads as flat colour. Roughly a fifth
+	 * of the road's width is a sane starting point.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0")) double TexelsPerUnit = 512.0;
 
 	/**
 	 * Draw every triangle the builder produced as debug lines.
