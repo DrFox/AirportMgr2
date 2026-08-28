@@ -65,6 +65,13 @@ public:
 	double GetHalfWidthLeft() const;
 	double GetHalfWidthRight() const;
 
-	/** Symmetric single-band profile for tests and the debug gallery. */
-	static URoadProfile* MakeTransient(double TotalWidth, double FilletRadius);
+	/**
+	 * Symmetric profile for tests and the debug gallery.
+	 *
+	 * ShoulderWidth > 0 produces shoulder | lane | shoulder, which is what the ground
+	 * blend needs: a profile of one Lane band has no outer shoulder, so there is nothing
+	 * to fade and the road ends in a knife edge. Defaults to 0 so every existing caller
+	 * keeps the single-band profile it already had.
+	 */
+	static URoadProfile* MakeTransient(double TotalWidth, double FilletRadius, double ShoulderWidth = 0.0);
 };
