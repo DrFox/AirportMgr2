@@ -296,7 +296,8 @@ Expected: `Result: Succeeded`, and the log lists `Compile [x64] RoadNetModule.cp
 
 - [ ] **Step 8: Run the test and verify it FAILS**
 
-Run: `& "C:eposAirportMgr2ToolsRun-RoadNetTests.ps1"`
+Run: `& "C:
+eposAirportMgr2ToolsRun-RoadNetTests.ps1"`
 Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Failed}` with `Expected 4 but it was 5` (or the reverse wording). Non-zero exit code.
 
 - [ ] **Step 9: Correct the assertion**
@@ -546,7 +547,8 @@ The stale-handle-after-recycle assertions are the entire reason the generation c
   -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
 ```
 
-Then `& "C:eposAirportMgr2ToolsRun-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
+Then `& "C:
+eposAirportMgr2ToolsRun-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
 
 If `RoadSlot::Add` fails to deduce `TItem`, call it as `RoadSlot::Add<FRoadNodeId, FTestItem>(...)`.
 
@@ -747,6 +749,15 @@ bool FRoadProfileTest::RunTest(const FString& Parameters)
 ```
 
 - [ ] **Step 4: Build and run — expect PASS**
+
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
 
 Expected: `RoadNet.Model.Profile` `Result={Success}`.
 
@@ -1114,6 +1125,15 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 5: Build and run — expect PASS**
 
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
 Expected: `RoadNet.Model.Network` `Result={Success}`.
 
 - [ ] **Step 6: Commit**
@@ -1382,6 +1402,15 @@ bool FRoadGeomTest::RunTest(const FString& Parameters)
 Add `#include "Algo/Reverse.h"` to the test file if `Algo::Reverse` does not resolve.
 
 - [ ] **Step 4: Build and run — expect PASS**
+
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
 
 Expected: `RoadNet.Solve.Geom` `Result={Success}`.
 
@@ -1659,6 +1688,15 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 ```
 
 - [ ] **Step 4: Build and run — expect PASS**
+
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
 
 Expected: `RoadNet.Solve.Fillet` `Result={Success}`.
 
@@ -2028,6 +2066,15 @@ bool FRoadJunctionCutTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
 Expected: `RoadNet.Solve.JunctionCuts` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
@@ -2261,6 +2308,15 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 The exact-equality check on cut vertices is the whole point of Slice 1. If it ever needs a tolerance, the shared-truth contract has been broken somewhere and the seams will come back.
 
 - [ ] **Step 3: Build and run — expect PASS**
+
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
 
 Expected: `RoadNet.Solve.JunctionPolygon` `Result={Success}`.
 
