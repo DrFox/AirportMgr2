@@ -601,3 +601,25 @@ All four questions raised during design review are settled; see R8–R11 in §2.
 - ICAO design-group fillet tables.
 - Hold-short markings and logic at runway crossings (slice 6).
 - Aprons and stands as polygon surfaces (slice 5).
+
+---
+
+## 12. Known issues carried into Slice 2
+
+Surfaced by the Slice 1 final review, assessed as safe to defer, and recorded here
+because the execution ledger they came from does not survive the branch.
+
+| # | Issue | Where | Why it can wait | What it breaks if ignored |
+|---|---|---|---|---|
+| K1 | `AddCutVertex`'s weld-**replace** can overwrite one cut vertex with another. At a collinear pass-through node arm 0's `LeftCut` is replaced by arm 1's `RightCut`, so the rim carries 3 of its 4 cut vertices. | `Solve/JunctionSolver.cpp`, `SolveBoundary` | Slice 1 has no consumer that searches the rim for a particular arm's cut vertex, and that node emits no meaningful geometry. | A Slice 2 mesh builder that locates a segment end by searching the ring silently fails to find one. Related to K2. |
+| K2 | The model persists only the scalar `TrimA`/`TrimB`, not the cut vertices themselves. | `Model/RoadNode.h` | Nothing outside the solver consumes trims yet. | See §4.2.1 — a rebuilt `Tangent` differing in one low bit reintroduces the cracks this design exists to prevent. **Fix before the mesh builder is written**, by persisting the four cut vertices or caching `FJunctionArmResult` per node. |
+| K3 | Collinear nodes emit three degenerate triangles of about 1.6e-10 uu². | `Solve/JunctionSolver.cpp` | They pass the CCW gate and are geometrically harmless. | Nothing, but the mesh builder should drop zero-area triangles rather than the solver applying an area heuristic it cannot calibrate. |
+| K4 | `SolveCuts` / `SolveBoundary` is an unenforced two-call contract. A caller that mutates `FJunctionInput` between the two calls gets a polygon disagreeing with its cuts; a mismatched `Arms.Num()` indexes out of range. | `Solve/JunctionSolver.h` | Both call sites today are correct and adjacent. | Collapse into one `Solve(Input)` returning the finished result when Slice 2 settles its call pattern. |
+| K5 | `RoadGeom::IsSimplePolygon` does not report three degeneracies as crossings: non-adjacent edges touching exactly at a vertex, collinear overlapping edges, and pairs involving a zero-length edge. | `Solve/RoadGeom.h` | It reliably detects transversal crossings, which is the regression it exists to catch, and no shipped test input can produce the excluded cases. | Do not reuse it as a mesh-validity gate in Slice 2 without strengthening it: a rim that pinches to a repeated point reads as simple, and becomes a visible fold. |
+| K6 | `Generation` is `int32` and increments forever per slot; strictly this is signed-overflow UB after ~2^31 remove/reuse cycles on a single slot. | `Model/RoadHandles.h` | Unreachable at airport scale. | Prefer `uint32` next time the file is touched. |
+| K7 | The "no valid fan apex" branch is unreachable under current coverage, so it is reasoned rather than measured. | `Solve/JunctionSolver.cpp` | Cheap and directly implied by the CCW check. | Ear-clipping (§5.7) remains the named follow-up if a real configuration ever reaches it. |
+
+**Not an issue, recorded to prevent re-litigation:** `FRoadNodeId::IsSet()` deliberately
+reports only that a handle was assigned. Liveness is `RoadSlot::IsValid(Items, Handle)`
+and nothing else. It was called `IsValid()` during Slice 1 and renamed precisely because
+the old name invited the wrong check.
