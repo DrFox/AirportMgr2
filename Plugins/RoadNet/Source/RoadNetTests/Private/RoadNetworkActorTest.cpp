@@ -1,0 +1,151 @@
+#include "CoreMinimal.h"
+#include "Misc/AutomationTest.h"
+#include "Build/RoadMeshBuilder.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "Build/RoadNetworkSolver.h"
+#include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNetworkActorTest,
+	"RoadNet.Present.NetworkActor",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
+{
+	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("actor constructed"), Actor))
+	{
+		return false;
+	}
+
+	// The facade owns creating the network. Until Slice 3's build tool exists nothing
+	// else ever would, which is exactly why RebuildMesh used to do nothing at all.
+	TestTrue(TEXT("no network before the first edit"), Actor->Network == nullptr);
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(40000.0, 0.0));
+
+	TestTrue(TEXT("placing a node creates the network"), Actor->Network != nullptr);
+	TestTrue(TEXT("node handles are real"), A != INDEX_NONE && B != INDEX_NONE);
+	TestEqual(TEXT("two nodes placed"), Actor->Network->GetNodes().Num(), 2);
+
+	// Connecting is the only way a segment appears, so URoadNetwork stays the sole
+	// owner of the graph invariants the solver depends on - above all the incident
+	// lists being sorted by bearing.
+	TestTrue(TEXT("connecting two placed nodes succeeds"), Actor->ConnectNodes(A, B));
+	TestEqual(TEXT("one segment created"), Actor->Network->GetSegments().Num(), 1);
+
+	// Rejections are reported through the return value rather than swallowed. A build
+	// tool that silently drops an edit is indistinguishable from one that is broken.
+	TestFalse(TEXT("a node cannot connect to itself"), Actor->ConnectNodes(A, A));
+	TestFalse(TEXT("an out-of-range index is rejected"), Actor->ConnectNodes(A, 9999));
+	TestFalse(TEXT("a negative index is rejected"), Actor->ConnectNodes(-1, B));
+	TestEqual(TEXT("rejected connections created nothing"), Actor->Network->GetSegments().Num(), 1);
+
+	// Picking an existing node is what makes a junction authorable at all: without it
+	// every click would start a road disconnected from the last one.
+	TestEqual(TEXT("finds the node under the cursor"),
+		Actor->FindNodeNear(FVector2D(500.0, 0.0), 1000.0), A);
+	TestEqual(TEXT("finds the nearer of two candidates"),
+		Actor->FindNodeNear(FVector2D(39000.0, 0.0), 5000.0), B);
+	TestEqual(TEXT("nothing inside the radius"),
+		Actor->FindNodeNear(FVector2D(20000.0, 0.0), 100.0), INDEX_NONE);
+
+	// Two segments meeting at one node is a junction - the shape Slice 2a exists to
+	// render without a seam, and the thing this facade has to make reachable at runtime.
+	const int32 C = Actor->PlaceNode(FVector2D(0.0, 40000.0));
+	TestTrue(TEXT("a second segment can join the same node"), Actor->ConnectNodes(A, C));
+	TestEqual(TEXT("the centre node carries two incident segments"),
+		Actor->Network->GetNodes()[A].Incident.Num(), 2);
+
+	// A profile is required to solve, so the facade supplies one when none is authored.
+	TestTrue(TEXT("a profile was supplied for the segments"),
+		Actor->Network->GetSegment(Actor->Network->GetNodes()[A].Incident[0])->Profile != nullptr);
+
+	// End to end at the scale the runtime tool actually produces: two clicks about a
+	// thousand uu apart with the default fallback profile must yield real triangles.
+	// Everything above proves the graph is right, which is not the same as proving the
+	// mesh comes out - and a graph that solves to an empty buffer looks, on screen,
+	// exactly like a click that did nothing.
+	{
+		ARoadNetworkActor* Drawn = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		const int32 P = Drawn->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Q = Drawn->PlaceNode(FVector2D(1000.0, 0.0));
+		TestTrue(TEXT("two clicks connect"), Drawn->ConnectNodes(P, Q));
+
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Drawn->Network);
+		TestEqual(TEXT("both ends of a lone road solve"), Solved.FailedNodes, 0);
+		TestEqual(TEXT("both ends produce a junction result"), Solved.SolvedNodes, 2);
+
+		// Segments before junctions, mirroring RebuildMesh. This test exists to reproduce
+		// that path end to end, so building in the order RebuildMesh forbids would make it
+		// a reproduction of something the production code refuses to do.
+		FRoadMeshBuilder Builder(Drawn->SurfaceZ);
+
+		const TArray<FRoadSegment>& Segments = Drawn->Network->GetSegments();
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			if (!Segments[Index].bAlive)
+			{
+				continue;
+			}
+			FRoadSegmentId SegmentId;
+			SegmentId.Index = Index;
+			SegmentId.Generation = Segments[Index].Generation;
+			Builder.AddSegment(*Drawn->Network, SegmentId, Drawn->RibbonSegments);
+		}
+
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Builder.AddJunction(Pair.Value);
+		}
+
+		const FRoadMeshBuffers& Drawn2D = Builder.GetBuffers();
+		TestTrue(
+			FString::Printf(TEXT("a two-click road has triangles (got %d verts, %d tris)"),
+				Drawn2D.Positions.Num(), Drawn2D.Indices.Num() / 3),
+			Drawn2D.Indices.Num() > 0);
+
+		// What FDynamicMeshSink actually does with those buffers. AppendTriangle REFUSES
+		// a non-manifold or duplicate triangle rather than failing, so a buffer that is
+		// correct as a triangle soup can still arrive at the component as vertices with
+		// nothing joining them - which renders as nothing at all, indistinguishable from
+		// a click that did nothing. Nothing above this point would notice.
+		UE::Geometry::FDynamicMesh3 Mesh;
+		for (const FVector3d& Position : Drawn2D.Positions)
+		{
+			Mesh.AppendVertex(Position);
+		}
+
+		int32 Rejected = 0;
+		for (int32 Slot = 0; Slot + 2 < Drawn2D.Indices.Num(); Slot += 3)
+		{
+			if (Mesh.AppendTriangle(
+					Drawn2D.Indices[Slot], Drawn2D.Indices[Slot + 1], Drawn2D.Indices[Slot + 2]) < 0)
+			{
+				++Rejected;
+			}
+		}
+
+		TestEqual(
+			FString::Printf(TEXT("every triangle survives AppendTriangle (%d of %d rejected)"),
+				Rejected, Drawn2D.Indices.Num() / 3),
+			Rejected, 0);
+		TestTrue(
+			FString::Printf(TEXT("the mesh handed to the component has triangles (%d)"),
+				Mesh.TriangleCount()),
+			Mesh.TriangleCount() > 0);
+	}
+
+	Actor->ClearNetwork();
+	TestEqual(TEXT("clearing empties the nodes"), Actor->Network->GetNodes().Num(), 0);
+	TestEqual(TEXT("clearing empties the segments"), Actor->Network->GetSegments().Num(), 0);
+
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

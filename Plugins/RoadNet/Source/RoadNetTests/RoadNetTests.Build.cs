@@ -11,6 +11,7 @@ public class RoadNetTests : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine",
+			"GeometryCore",   // FDynamicMesh3, to test what the sink actually accepts
 			"RoadNet"
 		});
 	}
