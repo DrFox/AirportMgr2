@@ -1,5 +1,8 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Build/RoadMeshBuilder.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
@@ -62,6 +65,77 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 	// A profile is required to solve, so the facade supplies one when none is authored.
 	TestTrue(TEXT("a profile was supplied for the segments"),
 		Actor->Network->GetSegment(Actor->Network->GetNodes()[A].Incident[0])->Profile != nullptr);
+
+	// End to end at the scale the runtime tool actually produces: two clicks about a
+	// thousand uu apart with the default fallback profile must yield real triangles.
+	// Everything above proves the graph is right, which is not the same as proving the
+	// mesh comes out - and a graph that solves to an empty buffer looks, on screen,
+	// exactly like a click that did nothing.
+	{
+		ARoadNetworkActor* Drawn = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		const int32 P = Drawn->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Q = Drawn->PlaceNode(FVector2D(1000.0, 0.0));
+		TestTrue(TEXT("two clicks connect"), Drawn->ConnectNodes(P, Q));
+
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Drawn->Network);
+		TestEqual(TEXT("both ends of a lone road solve"), Solved.FailedNodes, 0);
+		TestEqual(TEXT("both ends produce a junction result"), Solved.SolvedNodes, 2);
+
+		FRoadMeshBuilder Builder(Drawn->SurfaceZ);
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Builder.AddJunction(Pair.Value);
+		}
+
+		const TArray<FRoadSegment>& Segments = Drawn->Network->GetSegments();
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			if (!Segments[Index].bAlive)
+			{
+				continue;
+			}
+			FRoadSegmentId SegmentId;
+			SegmentId.Index = Index;
+			SegmentId.Generation = Segments[Index].Generation;
+			Builder.AddSegment(*Drawn->Network, SegmentId, Drawn->RibbonSegments);
+		}
+
+		const FRoadMeshBuffers& Drawn2D = Builder.GetBuffers();
+		TestTrue(
+			FString::Printf(TEXT("a two-click road has triangles (got %d verts, %d tris)"),
+				Drawn2D.Positions.Num(), Drawn2D.Indices.Num() / 3),
+			Drawn2D.Indices.Num() > 0);
+
+		// What FDynamicMeshSink actually does with those buffers. AppendTriangle REFUSES
+		// a non-manifold or duplicate triangle rather than failing, so a buffer that is
+		// correct as a triangle soup can still arrive at the component as vertices with
+		// nothing joining them - which renders as nothing at all, indistinguishable from
+		// a click that did nothing. Nothing above this point would notice.
+		UE::Geometry::FDynamicMesh3 Mesh;
+		for (const FVector3d& Position : Drawn2D.Positions)
+		{
+			Mesh.AppendVertex(Position);
+		}
+
+		int32 Rejected = 0;
+		for (int32 Slot = 0; Slot + 2 < Drawn2D.Indices.Num(); Slot += 3)
+		{
+			if (Mesh.AppendTriangle(
+					Drawn2D.Indices[Slot], Drawn2D.Indices[Slot + 1], Drawn2D.Indices[Slot + 2]) < 0)
+			{
+				++Rejected;
+			}
+		}
+
+		TestEqual(
+			FString::Printf(TEXT("every triangle survives AppendTriangle (%d of %d rejected)"),
+				Rejected, Drawn2D.Indices.Num() / 3),
+			Rejected, 0);
+		TestTrue(
+			FString::Printf(TEXT("the mesh handed to the component has triangles (%d)"),
+				Mesh.TriangleCount()),
+			Mesh.TriangleCount() > 0);
+	}
 
 	Actor->ClearNetwork();
 	TestEqual(TEXT("clearing empties the nodes"), Actor->Network->GetNodes().Num(), 0);

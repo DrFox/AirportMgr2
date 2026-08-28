@@ -51,8 +51,33 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 
 	UE::Geometry::FMeshNormals::QuickComputeVertexNormals(Mesh);
 
+	// Everything from the graph down to this point is covered by automation tests, so
+	// when a road is built but not seen, the answer is on this side of the boundary.
+	// SetMesh silently does nothing when the component is not editable, and a component
+	// that is unregistered, hidden or wrongly bounded renders nothing while reporting
+	// success, so state all of it rather than inferring any of it.
+	const int32 BuiltTriangles = Mesh.TriangleCount();
+	const int32 BuiltVertices = Mesh.VertexCount();
+
 	Component->SetMesh(MoveTemp(Mesh));
 	Component->NotifyMeshUpdated();
+
+	const FBoxSphereBounds Bounds = Component->Bounds;
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Sink: built %d verts / %d tris -> component holds %d tris. ")
+		TEXT("Editable=%d Registered=%d Visible=%d HiddenInGame=%d Mobility=%d "
+			 "CompLoc=(%.0f,%.0f,%.0f) BoundsOrigin=(%.0f,%.0f,%.0f) BoundsExtent=(%.0f,%.0f,%.0f) Mat=%s"),
+		BuiltVertices, BuiltTriangles, Component->GetDynamicMesh()->GetMeshRef().TriangleCount(),
+		Component->IsEditable() ? 1 : 0,
+		Component->IsRegistered() ? 1 : 0,
+		Component->IsVisible() ? 1 : 0,
+		Component->bHiddenInGame ? 1 : 0,
+		static_cast<int32>(Component->Mobility),
+		Component->GetComponentLocation().X, Component->GetComponentLocation().Y,
+		Component->GetComponentLocation().Z,
+		Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z,
+		Bounds.BoxExtent.X, Bounds.BoxExtent.Y, Bounds.BoxExtent.Z,
+		Component->GetMaterial(0) ? *Component->GetMaterial(0)->GetName() : TEXT("none"));
 }
 
 ARoadNetworkActor::ARoadNetworkActor()
