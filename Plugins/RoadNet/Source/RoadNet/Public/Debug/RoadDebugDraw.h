@@ -11,5 +11,12 @@ namespace RoadDebug
 	/** 0 = off, 1 = boundary and cuts, 2 = adds solver internals. */
 	ROADNET_API int32 GetDebugDrawLevel();
 
-	ROADNET_API void DrawJunction(UWorld* World, const FJunctionInput& Input, const FJunctionResult& Result, double ZHeight);
+	/**
+	 * Draw one solved junction.
+	 *
+	 * Thickness is in world units, not pixels. The gallery spans ~150,000 uu, so the
+	 * 6 uu default that reads fine up close is a small fraction of a pixel when the
+	 * whole gallery is in frame - it looks like nothing was drawn at all.
+	 */
+	ROADNET_API void DrawJunction(UWorld* World, const FJunctionInput& Input, const FJunctionResult& Result, double ZHeight, double Thickness = 6.0);
 }

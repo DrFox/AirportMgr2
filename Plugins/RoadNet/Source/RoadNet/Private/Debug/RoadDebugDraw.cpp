@@ -22,7 +22,7 @@ int32 RoadDebug::GetDebugDrawLevel()
 	return CVarRoadDebugDraw.GetValueOnGameThread();
 }
 
-void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const FJunctionResult& Result, double ZHeight)
+void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const FJunctionResult& Result, double ZHeight, double Thickness)
 {
 	const int32 Level = GetDebugDrawLevel();
 	if (World == nullptr || Level <= 0 || !Result.bValid || Result.Boundary.Num() < 3)
@@ -38,16 +38,16 @@ void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const F
 	{
 		const FVector Start = To3D(Result.Boundary[Index], ZHeight);
 		const FVector End   = To3D(Result.Boundary[(Index + 1) % RimCount], ZHeight);
-		DrawDebugLine(World, Start, End, FColor::Green, false, -1.0f, 0, 6.0f);
+		DrawDebugLine(World, Start, End, FColor::Green, false, 0.25f, 0, static_cast<float>(Thickness));
 	}
 
 	// Cut lines in cyan, cut vertices as spheres.
 	for (const FJunctionArmResult& Arm : Result.Arms)
 	{
 		DrawDebugLine(World, To3D(Arm.RightCut, ZHeight), To3D(Arm.LeftCut, ZHeight),
-			FColor::Cyan, false, -1.0f, 0, 10.0f);
-		DrawDebugSphere(World, To3D(Arm.LeftCut,  ZHeight), 40.0f, 8, FColor::Cyan, false, -1.0f, 0, 2.0f);
-		DrawDebugSphere(World, To3D(Arm.RightCut, ZHeight), 40.0f, 8, FColor::Cyan, false, -1.0f, 0, 2.0f);
+			FColor::Cyan, false, 0.25f, 0, static_cast<float>(Thickness * 1.6));
+		DrawDebugSphere(World, To3D(Arm.LeftCut,  ZHeight), static_cast<float>(Thickness * 6.0), 8, FColor::Cyan, false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
+		DrawDebugSphere(World, To3D(Arm.RightCut, ZHeight), static_cast<float>(Thickness * 6.0), 8, FColor::Cyan, false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
 	}
 
 	if (Level < 2)
@@ -65,11 +65,11 @@ void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const F
 		DrawDebugLine(World,
 			To3D(LeftEdge.Origin, ZHeight),
 			To3D(LeftEdge.Origin + LeftEdge.Dir * Extent, ZHeight),
-			FColor::Yellow, false, -1.0f, 0, 2.0f);
+			FColor::Yellow, false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
 		DrawDebugLine(World,
 			To3D(RightEdge.Origin, ZHeight),
 			To3D(RightEdge.Origin + RightEdge.Dir * Extent, ZHeight),
-			FColor::Orange, false, -1.0f, 0, 2.0f);
+			FColor::Orange, false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
 	}
 
 	for (const RoadGeom::FFillet& Corner : Result.Corners)
@@ -78,9 +78,9 @@ void RoadDebug::DrawJunction(UWorld* World, const FJunctionInput& Input, const F
 		{
 			continue;
 		}
-		DrawDebugSphere(World, To3D(Corner.Corner,   ZHeight), 60.0f, 8, FColor::Red,     false, -1.0f, 0, 2.0f);
-		DrawDebugSphere(World, To3D(Corner.Centre,   ZHeight), 50.0f, 8, FColor::Magenta, false, -1.0f, 0, 2.0f);
-		DrawDebugSphere(World, To3D(Corner.TangentA, ZHeight), 35.0f, 8, FColor::White,   false, -1.0f, 0, 2.0f);
-		DrawDebugSphere(World, To3D(Corner.TangentB, ZHeight), 35.0f, 8, FColor::White,   false, -1.0f, 0, 2.0f);
+		DrawDebugSphere(World, To3D(Corner.Corner,   ZHeight), static_cast<float>(Thickness * 9.0), 8, FColor::Red,     false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
+		DrawDebugSphere(World, To3D(Corner.Centre,   ZHeight), static_cast<float>(Thickness * 7.5), 8, FColor::Magenta, false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
+		DrawDebugSphere(World, To3D(Corner.TangentA, ZHeight), static_cast<float>(Thickness * 5.0), 8, FColor::White,   false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
+		DrawDebugSphere(World, To3D(Corner.TangentB, ZHeight), static_cast<float>(Thickness * 5.0), 8, FColor::White,   false, 0.25f, 0, static_cast<float>(Thickness * 0.4));
 	}
 }

@@ -22,6 +22,21 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/**
+	 * Tick in the editor viewport as well as in play.
+	 *
+	 * This is a visual regression harness: needing to press Play to see it would
+	 * make it useless for the one job it has. Ticking in the editor also means the
+	 * gallery can be inspected from the editor camera, which is controllable, rather
+	 * than from wherever PIE happens to spawn a pawn.
+	 */
+	virtual bool ShouldTickIfViewportsOnly() const override { return true; }
+
+#if WITH_EDITOR
+	/** Discard the built gallery so an edited property takes effect on the next tick. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
 	/** Spacing between gallery cells, in uu. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double CellSpacing = 50000.0;
 
@@ -35,6 +50,13 @@ public:
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double TaxiwayWidth = 2300.0;
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double FilletRadius = 1500.0;
+
+	/**
+	 * Debug line thickness in WORLD units. The whole gallery spans ~150,000 uu, so a
+	 * few units is sub-pixel when it is all in frame. Raise this to see the gallery
+	 * from above; drop it to ~6 to inspect a single junction up close.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet") double DebugLineThickness = 120.0;
 
 private:
 	void BuildGallery();
