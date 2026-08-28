@@ -13,7 +13,7 @@ SOURCE = r"C:\repos\models\materials\concrete-bl\pebbled-asphalt1-bl"
 # of the rest is worth debugging: ColorOverrideMode was forcing the engine's
 # vertex-colour debug material over ours, so M_RoadSurface had never actually been
 # drawn and no part of this graph had ever been exercised.
-MINIMAL = True
+MINIMAL = False
 
 TEX_DIR = "/Game/RoadNet/Textures"
 MAT_DIR = "/Game/RoadNet/Materials"

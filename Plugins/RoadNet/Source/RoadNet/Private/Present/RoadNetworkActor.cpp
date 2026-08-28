@@ -185,7 +185,10 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 			Relevance = Component->GetMaterialRelevance(Scene->GetShaderPlatform());
 		}
 
-		UE_LOG(LogRoadMesh, Warning,
+		// Kept, at Log rather than Warning. This one line - specifically FirstNormal -
+		// identified a defect that survived two slices, several hand-derivations and a
+		// review, all of which agreed with each other while measuring the wrong thing.
+		UE_LOG(LogRoadMesh, Log,
 			TEXT("DIAG: NumMaterials=%d Mat=%s RenderProxy=%d BlendMode=%d ")
 			TEXT("Relevance[Opaque=%d Masked=%d NormalTranslucency=%d SeparateTranslucency=%d] ")
 			TEXT("UVLayers=%d NormalElems=%d BadNormals=%d FirstNormal=(%.3f,%.3f,%.3f) ")
