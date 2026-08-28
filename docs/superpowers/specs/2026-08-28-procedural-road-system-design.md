@@ -182,7 +182,7 @@ struct FRoadSegment
     UPROPERTY() FRoadNodeId A, B;
     UPROPERTY() FVector2D  Control;                // quadratic Bezier control point
     UPROPERTY() TObjectPtr<URoadProfile> Profile;
-    UPROPERTY() float TrimA = 0.f, TrimB = 0.f;    // written ONLY by the junction solver
+    UPROPERTY() double TrimA = 0.0, TrimB = 0.0;   // written ONLY by the junction solver
 };
 ```
 
@@ -192,6 +192,39 @@ vertices rather than a model change.
 
 `TrimA`/`TrimB` live on the segment but are written **only** by the solver. This makes
 the core invariant structural rather than conventional.
+
+`double`, not `float`. `FVector2D` is `TVector2<double>` in UE5 and the solver works
+entirely in `double`; storing the trim as `float` would round it on the way in and
+guarantee the mismatch described immediately below.
+
+#### 4.2.1 What the model does NOT persist — a constraint on Slice 2
+
+The model persists only the **scalar** trim distance. It does not persist the four cut
+vertices the solver actually computed.
+
+That is a trap for the mesh builder. A builder that reconstructs a segment's end
+vertices as
+
+```
+Position + Tangent * Trim ± PerpCCW(Tangent) * HalfWidth
+```
+
+reproduces the solver's cut vertices **bitwise** only if its `Tangent` is the very same
+`double` value the solver was handed. Recomputing that tangent — normalising the chord
+again, re-deriving it from the Bezier control point, or round-tripping it through any
+different expression — lands one or two low bits away. The reconstructed vertex is then
+"equal" to any tolerance you like and *not equal* bitwise, and the junction rim and the
+segment ribbon no longer share a vertex. That is exactly the crack this whole design
+exists to prevent; a tolerance-based weld downstream is the failure mode being designed
+out, not the fix.
+
+**Therefore, for Slice 2:**
+
+- Persist the four cut vertices (`LeftCut`/`RightCut` per end), or cache the whole
+  `FJunctionArmResult` per node, alongside the scalar trim.
+- The mesh builder **consumes** those vertices. It is forbidden from recomputing them.
+- The scalar trim stays for UI, snapping and validation — cheap queries where a
+  tolerance is fine — never as the source of a vertex position.
 
 ### 4.3 Profiles — the Flyweight
 
@@ -251,41 +284,57 @@ if it ever isn't.
 
 ### Step 3 — The tangent arc
 
-Two rays diverging from their intersection `X`, with interior angle `theta`:
+A junction fillet **cannot be carved out of the corner**. Removing material there
+would let the two adjacent arms overlap through the node, and every arm's cut line
+would cross every other's. The fillet instead pushes each arm's cut *further back*.
+
+Let `X` be where arm i's left edge crosses arm i+1's right edge, and
+`theta` the CCW angle from `u_i` to `u_i+1` (the angular gap between the arms):
 
 ```
-                  / ray u2
-                 /
-           T2 o
-            / /
-     C o   /            C = arc centre
-        \ /             R = fillet radius
-  ------o------o------- ray u1
-        X      T1
+                    T_B
+                     o- - - - o C
+                    /|        |
+                   / |        |     C   = arc centre
+      arm i+1     /  |        |     R   = fillet radius
+       edge      /   |        |     m   = |R / tan(theta/2)|
+                o----o--------o
+                X   T_A        arm i edge  ->
 
-  d = |X->T1| = |X->T2| = R / tan(theta/2)
-  |X->C|                = R / sin(theta/2)
+  m     = |R / tan(theta/2)|          always non-negative
+  T_A   = X + m * u_i                 outward from X, never toward the node
+  T_B   = X + m * u_i+1
+  C     = T_A + side * R * perp(u_i)  side = +1 if theta < PI, -1 otherwise
+  cut_i = reach_i + m                 reach_i = projection of X onto u_i
 ```
 
-### Step 4 — Clamping
+**The inside and the outside of a bend differ only in `side`.** That single sign is
+the whole distinction; everything else is the same expression. A mitred corner is
+what you get when the code never computes it.
+
+### Step 4 — Degenerate cases
 
 | Case | Symptom | Handling |
 |---|---|---|
-| theta approaches pi (nearly straight through) | `d` approaches 0 | no fillet, straight join |
-| theta approaches 0 (acute, near-parallel) | `d` diverges | clamp `d` to a fraction of segment length |
-| short segment between two junctions | both ends' fillets overlap | reduce `R` until `d` fits, solving back for `R` |
+| theta = PI (collinear) | no corner exists; edges are parallel | no arc, straight join, contributes no trim |
+| edges parallel but not collinear | no intersection `X` | the node cannot be solved; report invalid |
+| very acute theta | `m` grows without bound, trim runs off down the arm | the solver does not clamp: a caller that must fit a finite segment clamps the radius before calling |
+
+The radius is deliberately **not** clamped inside the solve. Clamping needs the
+segment's length, which the solver does not know and must not depend on.
 
 ### Step 5 — The segment/junction contract
 
 > **Every segment ends in a straight cut perpendicular to its centreline.** The solver
-> computes that cut distance — `max` over the segment's two adjacent corners — and the
-> two vertices at its ends. The junction polygon is assembled **from those exact same
-> vertex values**. Neither side recomputes the other's geometry.
+> computes that cut distance — `max` over the segment's two adjacent corners of
+> `reach + m`, floored at zero — and the two vertices at its ends. The junction
+> polygon is assembled **from those exact same vertex values**. Neither side ever
+> recomputes the other's geometry.
 
-Because the cut is at `max(d)` of the two adjacent corners, both tangent points lie at
-or beyond the cut, so each corner's boundary is `straight -> arc -> straight` with
-non-negative lengths throughout. No special cases, no epsilon tolerance, and the
-shared vertices are bitwise identical rather than merely close.
+Because the cut clears the corner point by the fillet's own reach, each corner's arc
+endpoints *are* cut vertices when that corner is the binding one, and otherwise sit
+behind the cut by a non-negative straight run. The shared vertices are bitwise
+identical rather than merely close.
 
 This is the single most important decision in the design. It makes the seams from the
 old system structurally impossible rather than tuned away.
@@ -474,10 +523,14 @@ clamp. Its `FValidationResult` sets `ValidityBlend` and gates commit.
 A Developer-type module `RoadNetTests` using Unreal's Automation framework. Because
 `Solve/` has no engine dependencies, its tests need no World, no PIE, no editor.
 
+```powershell
+./Tools/Run-RoadNetTests.ps1              # whole suite
+./Tools/Run-RoadNetTests.ps1 -Filter RoadNet.Solve
 ```
-UnrealEditor-Cmd.exe AirportMgr.uproject -ExecCmds="Automation RunTests RoadNet" `
-  -unattended -nopause -nosplash -testexit="Automation Test Queue Empty" -log
-```
+
+The wrapper exists because `UnrealEditor-Cmd.exe` with `-testexit` exits `0` whether
+tests pass or fail. The script parses `Test Completed. Result={...}` from the run log
+and exits non-zero on any failure, or when the filter matched no tests at all.
 
 | Tier | Coverage |
 |---|---|
@@ -548,3 +601,25 @@ All four questions raised during design review are settled; see R8–R11 in §2.
 - ICAO design-group fillet tables.
 - Hold-short markings and logic at runway crossings (slice 6).
 - Aprons and stands as polygon surfaces (slice 5).
+
+---
+
+## 12. Known issues carried into Slice 2
+
+Surfaced by the Slice 1 final review, assessed as safe to defer, and recorded here
+because the execution ledger they came from does not survive the branch.
+
+| # | Issue | Where | Why it can wait | What it breaks if ignored |
+|---|---|---|---|---|
+| K1 | `AddCutVertex`'s weld-**replace** can overwrite one cut vertex with another. At a collinear pass-through node arm 0's `LeftCut` is replaced by arm 1's `RightCut`, so the rim carries 3 of its 4 cut vertices. | `Solve/JunctionSolver.cpp`, `SolveBoundary` | Slice 1 has no consumer that searches the rim for a particular arm's cut vertex, and that node emits no meaningful geometry. | A Slice 2 mesh builder that locates a segment end by searching the ring silently fails to find one. Related to K2. |
+| K2 | The model persists only the scalar `TrimA`/`TrimB`, not the cut vertices themselves. | `Model/RoadNode.h` | Nothing outside the solver consumes trims yet. | See §4.2.1 — a rebuilt `Tangent` differing in one low bit reintroduces the cracks this design exists to prevent. **Fix before the mesh builder is written**, by persisting the four cut vertices or caching `FJunctionArmResult` per node. |
+| K3 | Collinear nodes emit three degenerate triangles of about 1.6e-10 uu². | `Solve/JunctionSolver.cpp` | They pass the CCW gate and are geometrically harmless. | Nothing, but the mesh builder should drop zero-area triangles rather than the solver applying an area heuristic it cannot calibrate. |
+| K4 | `SolveCuts` / `SolveBoundary` is an unenforced two-call contract. A caller that mutates `FJunctionInput` between the two calls gets a polygon disagreeing with its cuts; a mismatched `Arms.Num()` indexes out of range. | `Solve/JunctionSolver.h` | Both call sites today are correct and adjacent. | Collapse into one `Solve(Input)` returning the finished result when Slice 2 settles its call pattern. |
+| K5 | `RoadGeom::IsSimplePolygon` does not report three degeneracies as crossings: non-adjacent edges touching exactly at a vertex, collinear overlapping edges, and pairs involving a zero-length edge. | `Solve/RoadGeom.h` | It reliably detects transversal crossings, which is the regression it exists to catch, and no shipped test input can produce the excluded cases. | Do not reuse it as a mesh-validity gate in Slice 2 without strengthening it: a rim that pinches to a repeated point reads as simple, and becomes a visible fold. |
+| K6 | `Generation` is `int32` and increments forever per slot; strictly this is signed-overflow UB after ~2^31 remove/reuse cycles on a single slot. | `Model/RoadHandles.h` | Unreachable at airport scale. | Prefer `uint32` next time the file is touched. |
+| K7 | The "no valid fan apex" branch is unreachable under current coverage, so it is reasoned rather than measured. | `Solve/JunctionSolver.cpp` | Cheap and directly implied by the CCW check. | Ear-clipping (§5.7) remains the named follow-up if a real configuration ever reaches it. |
+
+**Not an issue, recorded to prevent re-litigation:** `FRoadNodeId::IsSet()` deliberately
+reports only that a handle was assigned. Liveness is `RoadSlot::IsValid(Items, Handle)`
+and nothing else. It was called `IsValid()` during Slice 1 and renamed precisely because
+the old name invited the wrong check.

@@ -1,5 +1,27 @@
 # Road System Slice 1 — Foundations and Junction Solver — Implementation Plan
 
+> ## ⚠️ SUPERSEDED: the fillet and cut derivations in Tasks 6 and 7
+>
+> **The fillet mathematics specified in the Task 6 and Task 7 sections of this plan is
+> WRONG and was disproven and replaced during implementation. Do not implement it and do
+> not "restore" it against the shipped code.**
+>
+> Specifically superseded: the tangent-point rule `T_A = X - d * A.Dir`, the arc-centre
+> rule `C = X - (R / sin(theta/2)) * Rotate(...)`, and the entire "clamping" subsection
+> that follows from them. The tangent points sit **outward** from the corner, not inward:
+> rounding a junction corner cannot carve material out of the corner itself, so the
+> fillet pushes each arm's cut **back** rather than pulling it in. The sign that
+> distinguishes the inside of a bend from the outside is which side of edge A the arc
+> centre falls on, and it flips as `Theta` passes `PI`.
+>
+> **Section 5 of the design spec is authoritative** —
+> `docs/superpowers/specs/2026-08-28-procedural-road-system-design.md` — together with
+> the shipped `RoadGeom::SolveFillet` and `FJunctionSolver::SolveCuts`.
+>
+> The code blocks in Tasks 6 and 7 are left unedited on purpose, as a record of what was
+> tried. Everything else in this plan — the task ordering, the build and test commands,
+> the global constraints — still stands.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the `RoadNet` plugin's data model and analytic junction solver, proven by automation tests and a debug-drawn junction gallery showing clean fillets and exactly-shared vertices.
@@ -41,14 +63,13 @@ Regenerate project files (only after adding/removing modules or plugins):
 Run the RoadNet tests headless:
 
 ```powershell
-& "D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
-  "C:\repos\AirportMgr2\AirportMgr.uproject" `
-  -ExecCmds="Automation RunTests RoadNet" `
-  -unattended -nopause -nosplash -nullrhi `
-  -testexit="Automation Test Queue Empty" -log
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1" -Filter RoadNet.Solve   # a subset
 ```
 
-Success looks like `Test Completed. Result={Passed}` lines and a final summary with zero failures. A non-zero process exit code means failure.
+The script prints one `PASS`/`FAIL` line per test and **exits non-zero if any test failed or if the filter matched no tests at all**.
+
+**Do not judge a test run by the engine's process exit code.** With `-testexit`, `UnrealEditor-Cmd.exe` exits `0` whether tests pass or fail, so the raw command cannot distinguish them; the script parses `Test Completed. Result={...}` out of the run's log instead. Note the engine writes `Result={Success}`, not `Result={Passed}`.
 
 ---
 
@@ -297,7 +318,7 @@ Expected: `Result: Succeeded`, and the log lists `Compile [x64] RoadNetModule.cp
 
 - [ ] **Step 8: Run the test and verify it FAILS**
 
-Run the test command from Global Constraints.
+Run: `& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"`
 Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Failed}` with `Expected 4 but it was 5` (or the reverse wording). Non-zero exit code.
 
 - [ ] **Step 9: Correct the assertion**
@@ -310,7 +331,7 @@ In `ScaffoldTest.cpp` change the assertion to:
 
 - [ ] **Step 10: Run the test and verify it PASSES**
 
-Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Passed}`, zero failures, zero exit code.
+Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Success}`, zero failures, zero exit code.
 
 - [ ] **Step 11: Commit**
 
@@ -547,7 +568,7 @@ The stale-handle-after-recycle assertions are the entire reason the generation c
   -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
 ```
 
-Then the test command. Expected: `RoadNet.Model.SlotMap` `Result={Passed}`.
+Then `& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
 
 If `RoadSlot::Add` fails to deduce `TItem`, call it as `RoadSlot::Add<FRoadNodeId, FTestItem>(...)`.
 
@@ -749,7 +770,16 @@ bool FRoadProfileTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Model.Profile` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Model.Profile` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -803,7 +833,7 @@ struct ROADNET_API FRoadNode
 
 	UPROPERTY() FVector2D Position = FVector2D::ZeroVector;
 
-	/** Incident segments, maintained sorted by outgoing bearing, ascending in (-PI, PI]. */
+	/** Incident segments, maintained sorted by outgoing bearing, ascending in (-UE_DOUBLE_PI, UE_DOUBLE_PI]. */
 	UPROPERTY() TArray<FRoadSegmentId> Incident;
 
 	UPROPERTY() int32 Generation = 0;
@@ -1084,7 +1114,7 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 	const FVector2D TanBack = Net->GetOutgoingTangent(ToEast, East);
 	TestTrue(TEXT("reverse tangent"), TanBack.Equals(FVector2D(-1.0, 0.0), 1e-6));
 
-	// Incident list sorted by bearing ascending: east(0), north(PI/2), west(PI).
+	// Incident list sorted by bearing ascending: east(0), north(UE_DOUBLE_PI/2), west(UE_DOUBLE_PI).
 	const FRoadNode* CentreNode = Net->GetNode(Centre);
 	TestEqual(TEXT("incident count"), CentreNode->Incident.Num(), 3);
 	TestTrue(TEXT("order[0] east"),  CentreNode->Incident[0] == ToEast);
@@ -1115,7 +1145,16 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 5: Build and run — expect PASS**
 
-Expected: `RoadNet.Model.Network` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Model.Network` `Result={Success}`.
 
 - [ ] **Step 6: Commit**
 
@@ -1139,7 +1178,7 @@ git commit -m "feat(roadnet): URoadNetwork repository with bearing-sorted incide
   - `struct FRay2D { FVector2D Origin; FVector2D Dir; }` — `Dir` always normalised.
   - `RoadGeom::PerpCCW(const FVector2D&) -> FVector2D`
   - `RoadGeom::Bearing(const FVector2D&) -> double`
-  - `RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To) -> double` in `[0, 2*PI)`
+  - `RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To) -> double` in `[0, 2*UE_DOUBLE_PI)`
   - `RoadGeom::Rotate(const FVector2D&, double Radians) -> FVector2D`
   - `RoadGeom::LineIntersect(const FRay2D&, const FRay2D&, FVector2D& Out) -> bool`
   - `RoadGeom::PolygonArea(TArrayView<const FVector2D>) -> double` (signed; positive means CCW)
@@ -1173,10 +1212,10 @@ namespace RoadGeom
 	/** Rotate by Radians counter-clockwise. */
 	ROADNET_API FVector2D Rotate(const FVector2D& V, double Radians);
 
-	/** atan2 bearing in (-PI, PI]. */
+	/** atan2 bearing in (-UE_DOUBLE_PI, UE_DOUBLE_PI]. */
 	ROADNET_API double Bearing(const FVector2D& Dir);
 
-	/** CCW angle from From to To, in [0, 2*PI). */
+	/** CCW angle from From to To, in [0, 2*UE_DOUBLE_PI). */
 	ROADNET_API double CcwAngleBetween(const FVector2D& From, const FVector2D& To);
 
 	/** Intersection of the two infinite lines. False if near-parallel. */
@@ -1245,11 +1284,11 @@ double RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To)
 	double Angle = Bearing(To) - Bearing(From);
 	while (Angle < 0.0)
 	{
-		Angle += 2.0 * PI;
+		Angle += 2.0 * UE_DOUBLE_PI;
 	}
-	while (Angle >= 2.0 * PI)
+	while (Angle >= 2.0 * UE_DOUBLE_PI)
 	{
-		Angle -= 2.0 * PI;
+		Angle -= 2.0 * UE_DOUBLE_PI;
 	}
 	return Angle;
 }
@@ -1338,13 +1377,13 @@ bool FRoadGeomTest::RunTest(const FString& Parameters)
 
 	// Rotate
 	TestTrue(TEXT("rotate +X by 90deg"),
-		RoadGeom::Rotate(FVector2D(1.0, 0.0), PI * 0.5).Equals(FVector2D(0.0, 1.0), 1e-9));
+		RoadGeom::Rotate(FVector2D(1.0, 0.0), UE_DOUBLE_PI * 0.5).Equals(FVector2D(0.0, 1.0), 1e-9));
 
 	// CcwAngleBetween is always in [0, 2PI)
 	TestTrue(TEXT("east to north is 90deg"),
-		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(1.0, 0.0), FVector2D(0.0, 1.0)), PI * 0.5, 1e-9));
+		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(1.0, 0.0), FVector2D(0.0, 1.0)), UE_DOUBLE_PI * 0.5, 1e-9));
 	TestTrue(TEXT("north to east is 270deg"),
-		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(0.0, 1.0), FVector2D(1.0, 0.0)), PI * 1.5, 1e-9));
+		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(0.0, 1.0), FVector2D(1.0, 0.0)), UE_DOUBLE_PI * 1.5, 1e-9));
 
 	// LineIntersect
 	FRay2D Horizontal; Horizontal.Origin = FVector2D(0.0, 5.0); Horizontal.Dir = FVector2D(1.0, 0.0);
@@ -1384,7 +1423,16 @@ Add `#include "Algo/Reverse.h"` to the test file if `Algo::Reverse` does not res
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.Geom` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Solve.Geom` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -1419,12 +1467,12 @@ ParamA = dot(T_A - A.Origin, A.Dir)
 ParamB = dot(T_B - B.Origin, B.Dir)
 ```
 
-Both tangent points use the **same** `X - d * Dir` form. The formula is uniform across convex and reflex corners because `d` changes sign: at `Theta < PI` (convex) `d > 0`; at `Theta > PI` (reflex) `tan(Theta/2) < 0` so `d < 0` and the tangent points move outward from `X` instead of inward. At `Theta == PI` the segments are collinear, `tan` diverges, `d -> 0`, and there is no corner to round — return `bStraightThrough = true`. **Because R9 auto-subdivides long drags, collinear nodes are the common case, not an edge case.** A solver that rounds them produces visible faceting down every straight run.
+Both tangent points use the **same** `X - d * Dir` form. The formula is uniform across convex and reflex corners because `d` changes sign: at `Theta < UE_DOUBLE_PI` (convex) `d > 0`; at `Theta > UE_DOUBLE_PI` (reflex) `tan(Theta/2) < 0` so `d < 0` and the tangent points move outward from `X` instead of inward. At `Theta == UE_DOUBLE_PI` the segments are collinear, `tan` diverges, `d -> 0`, and there is no corner to round — return `bStraightThrough = true`. **Because R9 auto-subdivides long drags, collinear nodes are the common case, not an edge case.** A solver that rounds them produces visible faceting down every straight run.
 
 **Clamping.** The polygon stays sane only if both tangent points sit at a non-negative parameter along their edges, so that the later cut (`max` over a segment's two corners) lies at or beyond them. Enforce `ParamA >= 0` and `ParamB >= 0` by adjusting `R`:
 
-- Convex (`Theta < PI`, `d > 0`): `d` must not exceed `min(a_A, a_B)` where `a = dot(X - Origin, Dir)`. Reduce `R` to `min(a_A, a_B) * tan(Theta/2)` when it does.
-- Reflex (`Theta > PI`, `d < 0`): `d` must still satisfy `d <= min(a_A, a_B)`, and since both sides are negative this **raises** the required `R`. Increase `R` to `min(a_A, a_B) * tan(Theta/2)` when needed.
+- Convex (`Theta < UE_DOUBLE_PI`, `d > 0`): `d` must not exceed `min(a_A, a_B)` where `a = dot(X - Origin, Dir)`. Reduce `R` to `min(a_A, a_B) * tan(Theta/2)` when it does.
+- Reflex (`Theta > UE_DOUBLE_PI`, `d < 0`): `d` must still satisfy `d <= min(a_A, a_B)`, and since both sides are negative this **raises** the required `R`. Increase `R` to `min(a_A, a_B) * tan(Theta/2)` when needed.
 
 In both cases the corrected value is the same expression, `R = min(a_A, a_B) * tan(Theta/2)`; only the direction of the adjustment differs. Worked check on a 90° two-way bend of half-width `w`: the convex corner has `a_A = a_B = w`, so `R <= w`; the reflex corner has `a_A = a_B = -w` and `tan(135°) = -1`, so `R >= w`. Inner radius capped at the half-width, outer radius floored at it — which is what a road corner should do.
 
@@ -1449,7 +1497,7 @@ Append inside `namespace RoadGeom` in `Public/Solve/RoadGeom.h`:
 
 		double Distance = 0.0;  // d, signed
 		double Radius   = 0.0;  // actual radius after clamping
-		double Theta    = 0.0;  // CCW angle from A.Dir to B.Dir, [0, 2*PI)
+		double Theta    = 0.0;  // CCW angle from A.Dir to B.Dir, [0, 2*UE_DOUBLE_PI)
 		double ParamA   = 0.0;  // distance of T_A along A from A.Origin
 		double ParamB   = 0.0;  // distance of T_B along B from B.Origin
 	};
@@ -1476,7 +1524,7 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 	Result.Theta = CcwAngleBetween(A.Dir, B.Dir);
 
 	constexpr double CollinearEpsilon = 1e-6;
-	if (FMath::Abs(Result.Theta - PI) < CollinearEpsilon)
+	if (FMath::Abs(Result.Theta - UE_DOUBLE_PI) < CollinearEpsilon)
 	{
 		Result.bValid = true;
 		Result.bStraightThrough = true;
@@ -1538,8 +1586,8 @@ void RoadGeom::SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVect
 
 	const double StartAngle = Bearing(FromCentreA);
 	double Sweep = Bearing(FromCentreB) - StartAngle;
-	while (Sweep > PI)  { Sweep -= 2.0 * PI; }
-	while (Sweep < -PI) { Sweep += 2.0 * PI; }
+	while (Sweep > UE_DOUBLE_PI)  { Sweep -= 2.0 * UE_DOUBLE_PI; }
+	while (Sweep < -UE_DOUBLE_PI) { Sweep += 2.0 * UE_DOUBLE_PI; }
 
 	const double ArcRadius = FromCentreA.Length();
 	for (int32 Step = 0; Step <= SegmentCount; ++Step)
@@ -1581,7 +1629,7 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 		const RoadGeom::FFillet Inner = RoadGeom::SolveFillet(EastLeft, NorthRight, 500.0);
 		TestTrue(TEXT("inner valid"), Inner.bValid);
 		TestFalse(TEXT("inner not straight"), Inner.bStraightThrough);
-		TestTrue(TEXT("inner theta 90deg"), FMath::IsNearlyEqual(Inner.Theta, PI * 0.5, 1e-9));
+		TestTrue(TEXT("inner theta 90deg"), FMath::IsNearlyEqual(Inner.Theta, UE_DOUBLE_PI * 0.5, 1e-9));
 		TestTrue(TEXT("inner corner at (W,W)"), Inner.Corner.Equals(FVector2D(W, W), 1e-6));
 		TestTrue(TEXT("inner d equals R"), FMath::IsNearlyEqual(Inner.Distance, 500.0, 1e-6));
 		TestTrue(TEXT("inner tangent A"), Inner.TangentA.Equals(FVector2D(W - 500.0, W), 1e-6));
@@ -1613,7 +1661,7 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 	{
 		const RoadGeom::FFillet Outer = RoadGeom::SolveFillet(NorthLeft, EastRight, 3000.0);
 		TestTrue(TEXT("outer valid"), Outer.bValid);
-		TestTrue(TEXT("outer theta 270deg"), FMath::IsNearlyEqual(Outer.Theta, PI * 1.5, 1e-9));
+		TestTrue(TEXT("outer theta 270deg"), FMath::IsNearlyEqual(Outer.Theta, UE_DOUBLE_PI * 1.5, 1e-9));
 		TestTrue(TEXT("outer corner at (-W,-W)"), Outer.Corner.Equals(FVector2D(-W, -W), 1e-6));
 		TestTrue(TEXT("outer d is negative"), Outer.Distance < 0.0);
 		TestTrue(TEXT("outer tangent A"), Outer.TangentA.Equals(FVector2D(-W, -W + 3000.0), 1e-6));
@@ -1661,7 +1709,16 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.Fillet` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Solve.Fillet` `Result={Success}`.
 
 If the reflex-corner assertions fail on the sign of `Distance` or the position of `Centre`, the likely cause is `CcwAngleBetween` returning the clockwise angle: verify with the `RoadNet.Solve.Geom` case asserting north-to-east is 270°, and check that the arguments are passed as (earlier segment's LEFT edge, next segment's RIGHT edge) in that order.
 
@@ -1997,9 +2054,9 @@ bool FRoadJunctionCutTest::RunTest(const FString& Parameters)
 	// --- Acute 15deg fork, 3-way and 5-way stay finite and non-negative ---
 	{
 		const TArray<TArray<double>> BearingSets = {
-			{ 0.0, PI * (15.0 / 180.0), PI },                                 // acute fork
-			{ 0.0, PI * 0.5, PI * 1.25 },                                     // 3-way Y
-			{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }                   // 5-way
+			{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0), UE_DOUBLE_PI },                                 // acute fork
+			{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI * 1.25 },                                     // 3-way Y
+			{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }                   // 5-way
 		};
 
 		for (const TArray<double>& Bearings : BearingSets)
@@ -2029,7 +2086,16 @@ bool FRoadJunctionCutTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.JunctionCuts` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Solve.JunctionCuts` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -2097,6 +2163,14 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 	const int32 CentreIndex = InOutResult.Boundary.Add(Input.Position);
 
 	const int32 RimCount = CentreIndex; // every vertex before the centre
+	if (RimCount < 3)
+	{
+		// A dead end contributes only two cut vertices: there is no fan to build.
+		// Proper end-cap geometry is Slice 2's mesh-builder concern; the boundary
+		// is still populated so debug draw can show the cut.
+		return;
+	}
+
 	InOutResult.Triangles.Reserve(RimCount * 3);
 	for (int32 Index = 0; Index < RimCount; ++Index)
 	{
@@ -2149,14 +2223,14 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 
 	// The gallery: every configuration the solver must survive.
 	const TArray<TArray<double>> Gallery = {
-		{ 0.0, PI * (15.0 / 180.0) },          // 2-way, 15 deg
-		{ 0.0, PI * 0.25 },                    // 2-way, 45 deg
-		{ 0.0, PI * 0.5 },                     // 2-way, 90 deg
-		{ 0.0, PI * (170.0 / 180.0) },         // 2-way, 170 deg
-		{ 0.0, PI * 0.5, PI },                 // 3-way T
-		{ 0.0, PI * 0.6667, PI * 1.3333 },     // 3-way Y
-		{ 0.0, PI * 0.5, PI, PI * 1.5 },       // 4-way
-		{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }  // 5-way
+		{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0) },          // 2-way, 15 deg
+		{ 0.0, UE_DOUBLE_PI * 0.25 },                    // 2-way, 45 deg
+		{ 0.0, UE_DOUBLE_PI * 0.5 },                     // 2-way, 90 deg
+		{ 0.0, UE_DOUBLE_PI * (170.0 / 180.0) },         // 2-way, 170 deg
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI },                 // 3-way T
+		{ 0.0, UE_DOUBLE_PI * 0.6667, UE_DOUBLE_PI * 1.3333 },     // 3-way Y
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI, UE_DOUBLE_PI * 1.5 },       // 4-way
+		{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }  // 5-way
 	};
 
 	for (int32 CaseIndex = 0; CaseIndex < Gallery.Num(); ++CaseIndex)
@@ -2217,8 +2291,8 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 		double PreviousArea = -1.0;
 		for (int32 Step = 1; Step < 360; ++Step)
 		{
-			const double Bearing = PI * 2.0 * static_cast<double>(Step) / 360.0;
-			if (FMath::Abs(Bearing - PI) < 0.02)
+			const double Bearing = UE_DOUBLE_PI * 2.0 * static_cast<double>(Step) / 360.0;
+			if (FMath::Abs(Bearing - UE_DOUBLE_PI) < 0.02)
 			{
 				continue; // the collinear case is a legitimate discontinuity in topology
 			}
@@ -2255,7 +2329,16 @@ The exact-equality check on cut vertices is the whole point of Slice 1. If it ev
 
 - [ ] **Step 3: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.JunctionPolygon` `Result={Passed}`.
+```powershell
+& "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
+  -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+The script exits non-zero if any test failed or if no test matched. Do not judge the
+run by the engine's own exit code — it is 0 either way.
+
+Expected: `RoadNet.Solve.JunctionPolygon` `Result={Success}`.
 
 If the continuity sweep fails near a particular bearing, log the offending bearing and inspect that single case with `road.DebugDraw` after Task 9 rather than loosening the threshold.
 
@@ -2427,10 +2510,15 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Spacing between gallery cells, in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") double CellSpacing = 16000.0;
+	UPROPERTY(EditAnywhere, Category = "RoadNet") double CellSpacing = 50000.0;
 
-	/** Arm length within each cell, in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") double ArmLength = 6000.0;
+	/**
+	 * Arm length within each cell, in uu. Must exceed the largest cut distance the
+	 * gallery produces or the arms render inside-out: the fillet reach is
+	 * |R/tan(Theta/2)|, so the 15-degree cell alone cuts at ~12,533 uu with the
+	 * default 1500 uu radius. The draw code clamps per arm as a backstop.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet") double ArmLength = 20000.0;
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double TaxiwayWidth = 2300.0;
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double FilletRadius = 1500.0;
@@ -2455,6 +2543,7 @@ private:
 #include "Debug/RoadJunctionGallery.h"
 
 #include "Debug/RoadDebugDraw.h"
+#include "DrawDebugHelpers.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
@@ -2476,14 +2565,14 @@ void ARoadJunctionGallery::BuildGallery()
 	Profile = URoadProfile::MakeTransient(TaxiwayWidth, FilletRadius);
 
 	CellBearings = {
-		{ 0.0, PI * (15.0 / 180.0) },
-		{ 0.0, PI * 0.25 },
-		{ 0.0, PI * 0.5 },
-		{ 0.0, PI * (170.0 / 180.0) },
-		{ 0.0, PI * 0.5, PI },
-		{ 0.0, PI * 0.6667, PI * 1.3333 },
-		{ 0.0, PI * 0.5, PI, PI * 1.5 },
-		{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }
+		{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0) },
+		{ 0.0, UE_DOUBLE_PI * 0.25 },
+		{ 0.0, UE_DOUBLE_PI * 0.5 },
+		{ 0.0, UE_DOUBLE_PI * (170.0 / 180.0) },
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI },
+		{ 0.0, UE_DOUBLE_PI * 0.6667, UE_DOUBLE_PI * 1.3333 },
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI, UE_DOUBLE_PI * 1.5 },
+		{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }
 	};
 
 	CellCentres.Reset();
@@ -2533,7 +2622,11 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 		{
 			const FJunctionArm& Arm = Input.Arms[ArmIndex];
 			const FVector2D Normal = FVector2D(-Arm.Tangent.Y, Arm.Tangent.X);
-			const FVector2D FarCentre = Input.Position + Arm.Tangent * ArmLength;
+
+			// The arm must extend past its own cut, or it renders inside-out.
+			const double DrawLength =
+				FMath::Max(ArmLength, Result.Arms[ArmIndex].CutDistance + 3000.0);
+			const FVector2D FarCentre = Input.Position + Arm.Tangent * DrawLength;
 
 			const FVector2D FarLeft  = FarCentre + Normal * Arm.HalfWidthLeft;
 			const FVector2D FarRight = FarCentre - Normal * Arm.HalfWidthRight;
@@ -2551,7 +2644,7 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 }
 ```
 
-Add `#include "DrawDebugHelpers.h"` to this file if `DrawDebugLine` does not resolve.
+`DrawDebugHelpers.h` is included directly because `RoadDebugDraw.h` only forward-declares; it does not pull the drawing API through.
 
 - [ ] **Step 5: Build**
 
@@ -2577,7 +2670,11 @@ Expected: `Result: Succeeded`.
 
 - [ ] **Step 7: Run the full test suite once more**
 
-Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Passed}`, zero failures.
+```powershell
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+```
+
+Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Success}`, zero failures.
 
 - [ ] **Step 8: Commit**
 

@@ -48,3 +48,6 @@ Desktop.ini
 # Raw art source is tracked, but keep Blender backups out
 Art/**/*.blend1
 Art/**/*.blend2
+
+# Third-party editor automation tooling (dev only, not part of the game)
+Plugins/McpAutomationBridge/
