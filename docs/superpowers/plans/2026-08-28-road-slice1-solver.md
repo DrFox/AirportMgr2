@@ -41,14 +41,13 @@ Regenerate project files (only after adding/removing modules or plugins):
 Run the RoadNet tests headless:
 
 ```powershell
-& "D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
-  "C:\repos\AirportMgr2\AirportMgr.uproject" `
-  -ExecCmds="Automation RunTests RoadNet" `
-  -unattended -nopause -nosplash -nullrhi `
-  -testexit="Automation Test Queue Empty" -log
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1" -Filter RoadNet.Solve   # a subset
 ```
 
-Success looks like `Test Completed. Result={Passed}` lines and a final summary with zero failures. A non-zero process exit code means failure.
+The script prints one `PASS`/`FAIL` line per test and **exits non-zero if any test failed or if the filter matched no tests at all**.
+
+**Do not judge a test run by the engine's process exit code.** With `-testexit`, `UnrealEditor-Cmd.exe` exits `0` whether tests pass or fail, so the raw command cannot distinguish them; the script parses `Test Completed. Result={...}` out of the run's log instead. Note the engine writes `Result={Success}`, not `Result={Success}`.
 
 ---
 
@@ -297,7 +296,7 @@ Expected: `Result: Succeeded`, and the log lists `Compile [x64] RoadNetModule.cp
 
 - [ ] **Step 8: Run the test and verify it FAILS**
 
-Run the test command from Global Constraints.
+Run: `& "C:eposAirportMgr2ToolsRun-RoadNetTests.ps1"`
 Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Failed}` with `Expected 4 but it was 5` (or the reverse wording). Non-zero exit code.
 
 - [ ] **Step 9: Correct the assertion**
@@ -310,7 +309,7 @@ In `ScaffoldTest.cpp` change the assertion to:
 
 - [ ] **Step 10: Run the test and verify it PASSES**
 
-Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Passed}`, zero failures, zero exit code.
+Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Success}`, zero failures, zero exit code.
 
 - [ ] **Step 11: Commit**
 
@@ -547,7 +546,7 @@ The stale-handle-after-recycle assertions are the entire reason the generation c
   -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
 ```
 
-Then the test command. Expected: `RoadNet.Model.SlotMap` `Result={Passed}`.
+Then `& "C:eposAirportMgr2ToolsRun-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
 
 If `RoadSlot::Add` fails to deduce `TItem`, call it as `RoadSlot::Add<FRoadNodeId, FTestItem>(...)`.
 
@@ -749,7 +748,7 @@ bool FRoadProfileTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Model.Profile` `Result={Passed}`.
+Expected: `RoadNet.Model.Profile` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -1115,7 +1114,7 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 5: Build and run — expect PASS**
 
-Expected: `RoadNet.Model.Network` `Result={Passed}`.
+Expected: `RoadNet.Model.Network` `Result={Success}`.
 
 - [ ] **Step 6: Commit**
 
@@ -1384,7 +1383,7 @@ Add `#include "Algo/Reverse.h"` to the test file if `Algo::Reverse` does not res
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.Geom` `Result={Passed}`.
+Expected: `RoadNet.Solve.Geom` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -1661,7 +1660,7 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.Fillet` `Result={Passed}`.
+Expected: `RoadNet.Solve.Fillet` `Result={Success}`.
 
 If the reflex-corner assertions fail on the sign of `Distance` or the position of `Centre`, the likely cause is `CcwAngleBetween` returning the clockwise angle: verify with the `RoadNet.Solve.Geom` case asserting north-to-east is 270°, and check that the arguments are passed as (earlier segment's LEFT edge, next segment's RIGHT edge) in that order.
 
@@ -2029,7 +2028,7 @@ bool FRoadJunctionCutTest::RunTest(const FString& Parameters)
 
 - [ ] **Step 4: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.JunctionCuts` `Result={Passed}`.
+Expected: `RoadNet.Solve.JunctionCuts` `Result={Success}`.
 
 - [ ] **Step 5: Commit**
 
@@ -2263,7 +2262,7 @@ The exact-equality check on cut vertices is the whole point of Slice 1. If it ev
 
 - [ ] **Step 3: Build and run — expect PASS**
 
-Expected: `RoadNet.Solve.JunctionPolygon` `Result={Passed}`.
+Expected: `RoadNet.Solve.JunctionPolygon` `Result={Success}`.
 
 If the continuity sweep fails near a particular bearing, log the offending bearing and inspect that single case with `road.DebugDraw` after Task 9 rather than loosening the threshold.
 
@@ -2586,7 +2585,7 @@ Expected: `Result: Succeeded`.
 
 - [ ] **Step 7: Run the full test suite once more**
 
-Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Passed}`, zero failures.
+Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Success}`, zero failures.
 
 - [ ] **Step 8: Commit**
 

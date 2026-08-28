@@ -474,10 +474,14 @@ clamp. Its `FValidationResult` sets `ValidityBlend` and gates commit.
 A Developer-type module `RoadNetTests` using Unreal's Automation framework. Because
 `Solve/` has no engine dependencies, its tests need no World, no PIE, no editor.
 
+```powershell
+./Tools/Run-RoadNetTests.ps1              # whole suite
+./Tools/Run-RoadNetTests.ps1 -Filter RoadNet.Solve
 ```
-UnrealEditor-Cmd.exe AirportMgr.uproject -ExecCmds="Automation RunTests RoadNet" `
-  -unattended -nopause -nosplash -testexit="Automation Test Queue Empty" -log
-```
+
+The wrapper exists because `UnrealEditor-Cmd.exe` with `-testexit` exits `0` whether
+tests pass or fail. The script parses `Test Completed. Result={...}` from the run log
+and exits non-zero on any failure, or when the filter matched no tests at all.
 
 | Tier | Coverage |
 |---|---|
