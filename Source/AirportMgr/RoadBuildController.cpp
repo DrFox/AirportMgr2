@@ -192,10 +192,12 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 		return;
 	}
 
-	// Thickness is in world units and the build plane spans tens of thousands of uu, so
-	// single digits would be sub-pixel - indistinguishable from nothing being drawn.
-	constexpr double MarkerRadius = 400.0;
-	constexpr float LineThickness = 120.0f;
+	// Thickness is in world units, so these are sized against the road rather than the
+	// screen: a marker about a quarter of the default road's width, and a band thin
+	// enough not to hide the surface under it. Single digits would be sub-pixel here -
+	// indistinguishable from nothing being drawn at all.
+	constexpr double MarkerRadius = 200.0;
+	constexpr float LineThickness = 40.0f;
 
 	FVector2D Cursor;
 	const bool bCursorOnPlane = CursorOnRoadPlane(Cursor);

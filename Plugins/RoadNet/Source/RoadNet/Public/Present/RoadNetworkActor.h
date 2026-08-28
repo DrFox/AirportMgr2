@@ -80,11 +80,19 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	TObjectPtr<URoadProfile> Profile;
 
+	/**
+	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly
+	 * five times the road's width in segment length before its fillet has room to be a
+	 * curve rather than a clamped-away stub, so this is sized for roads drawn by hand at
+	 * a few thousand uu a click. Airport-realistic widths belong in a URoadProfile asset
+	 * assigned to Profile above, where the segment lengths are planned rather than
+	 * clicked.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double FallbackWidth = 2300.0;
+	double FallbackWidth = 800.0;
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double FallbackFilletRadius = 1500.0;
+	double FallbackFilletRadius = 400.0;
 
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;

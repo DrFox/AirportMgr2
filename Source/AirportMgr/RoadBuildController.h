@@ -28,9 +28,13 @@ class AIRPORTMGR_API ARoadBuildController : public APlayerController
 public:
 	ARoadBuildController();
 
-	/** How close a click must land to reuse an existing node instead of adding one, in uu. */
+	/**
+	 * How close a click must land to reuse an existing node instead of adding one, in uu.
+	 * Roughly the road's own width: much wider and the cursor snaps to junctions you were
+	 * trying to draw past.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double PickRadius = 1500.0;
+	double PickRadius = 600.0;
 
 	/**
 	 * Furthest a click may place a node from the camera, in uu.
@@ -42,15 +46,22 @@ public:
 	 * at that range the depth buffer cannot separate the surface from the ground either.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double MaxPlaceDistance = 100000.0;
+	double MaxPlaceDistance = 40000.0;
 
 	/** Lift the pawn above the road plane on possession, looking down at it. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	bool bStartAbovePlane = true;
 
-	/** Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane. */
+	/**
+	 * Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane.
+	 *
+	 * Sets the drawing scale, because a click's world position is where its ray meets
+	 * the plane: doubling this doubles how far apart two clicks land. Around 8000 uu
+	 * puts a screen's width at roughly 17,000 uu, so an ordinary click-to-click distance
+	 * comfortably clears the fillet reach at the default road width.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double StartHeight = 30000.0;
+	double StartHeight = 8000.0;
 
 	/** Draw the pending node and a rubber band to the cursor. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
