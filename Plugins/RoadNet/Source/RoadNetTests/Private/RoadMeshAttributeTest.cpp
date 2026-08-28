@@ -4,6 +4,7 @@
 #include "Build/RoadNetworkSolver.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
+#include "DynamicMesh/MeshNormals.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
@@ -254,6 +255,31 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 			Mesh.AppendTriangle(
 				Buffers.Indices[Slot], Buffers.Indices[Slot + 1], Buffers.Indices[Slot + 2]);
 		}
+
+		// THE SURFACE MUST FACE UP, measured the way Unreal measures it.
+		//
+		// Every winding check in this suite computed a 2D signed area and demanded it be
+		// positive - the maths convention. Unreal is left-handed and VectorUtil::Normal
+		// takes cross(C-A, B-A), so those triangles faced DOWN and were backface-culled by
+		// every single-sided material. It stayed invisible for a whole slice because the
+		// placeholder colour override substitutes Unreal's two-sided vertex-colour debug
+		// material, so the first real material was the first thing to look.
+		//
+		// Asserting on the normal the engine actually computes cannot make that mistake:
+		// it measures the property that matters rather than a convention chosen by hand.
+		UE::Geometry::FMeshNormals::QuickComputeVertexNormals(Mesh);
+		int32 DownwardNormals = 0;
+		for (const int32 VertexId : Mesh.VertexIndicesItr())
+		{
+			if (Mesh.GetVertexNormal(VertexId).Z <= 0.0f)
+			{
+				++DownwardNormals;
+			}
+		}
+		TestEqual(
+			FString::Printf(TEXT("every vertex normal points up (%d of %d point down)"),
+				DownwardNormals, Mesh.VertexCount()),
+			DownwardNormals, 0);
 
 		FDynamicMeshSink::PopulateAttributes(Mesh, Buffers);
 

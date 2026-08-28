@@ -71,9 +71,24 @@ void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C)
 	{
 		return;
 	}
+
+	// Emitted B and C SWAPPED, because Unreal's front face is the opposite winding to the
+	// mathematical convention every caller here uses.
+	//
+	// Callers build counter-clockwise as seen from +Z, which is correct maths and is what
+	// the solver's polygons are. Unreal is left-handed: VectorUtil::Normal computes
+	// cross(C-A, B-A) - the negation of the standard cross product, with a comment in the
+	// engine saying exactly why - so a counter-clockwise triangle faces DOWN and is
+	// backface-culled from above.
+	//
+	// This went unnoticed from slice 2a until the first genuinely lit material, because
+	// the placeholder colour override substitutes Unreal's vertex-colour debug material,
+	// which is two-sided. Every winding check - the tests, the hand-derivations, the
+	// review - measured the maths convention and agreed with each other while disagreeing
+	// with the rasteriser.
 	Buffers.Indices.Add(A);
-	Buffers.Indices.Add(B);
 	Buffers.Indices.Add(C);
+	Buffers.Indices.Add(B);
 }
 
 void FRoadMeshBuilder::AddJunction(const FJunctionResult& Junction)

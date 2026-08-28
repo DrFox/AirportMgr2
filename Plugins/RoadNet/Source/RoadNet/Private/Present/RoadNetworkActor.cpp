@@ -149,6 +149,64 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	Component->SetMesh(MoveTemp(Mesh));
 	Component->NotifyMeshUpdated();
 
+	// Every explanation reasoned from engine source has been wrong, so this reports the
+	// runtime state instead of inferring it. Relevance is the one that can make a
+	// primitive draw in no pass at all while mesh, bounds and material all look correct.
+	{
+		using namespace UE::Geometry;
+		const FDynamicMesh3& Live = Component->GetDynamicMesh()->GetMeshRef();
+
+		int32 BadNormals = 0;
+		int32 CheckedNormals = 0;
+		FVector3f FirstNormal(0.0f, 0.0f, 0.0f);
+		if (Live.HasAttributes() && Live.Attributes()->PrimaryNormals() != nullptr)
+		{
+			const FDynamicMeshNormalOverlay* Normals = Live.Attributes()->PrimaryNormals();
+			for (const int32 ElementId : Normals->ElementIndicesItr())
+			{
+				const FVector3f N = Normals->GetElement(ElementId);
+				if (CheckedNormals == 0) { FirstNormal = N; }
+				++CheckedNormals;
+				if (!FMath::IsFinite(N.X) || !FMath::IsFinite(N.Y) || !FMath::IsFinite(N.Z) ||
+					N.SizeSquared() < UE_KINDA_SMALL_NUMBER)
+				{
+					++BadNormals;
+				}
+			}
+		}
+
+		UMaterialInterface* Assigned = Component->GetMaterial(0);
+
+		// Via the component's own scene rather than GMaxRHIShaderPlatform, which lives in
+		// the RHI module - not a dependency worth adding for a diagnostic.
+		FMaterialRelevance Relevance;
+		if (const FSceneInterface* Scene = Component->GetScene())
+		{
+			Relevance = Component->GetMaterialRelevance(Scene->GetShaderPlatform());
+		}
+
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DIAG: NumMaterials=%d Mat=%s RenderProxy=%d BlendMode=%d ")
+			TEXT("Relevance[Opaque=%d Masked=%d NormalTranslucency=%d SeparateTranslucency=%d] ")
+			TEXT("UVLayers=%d NormalElems=%d BadNormals=%d FirstNormal=(%.3f,%.3f,%.3f) ")
+			TEXT("TangentsMode=%d ColorMode=%d TwoSided=%d DrawPath=%d"),
+			Component->GetNumMaterials(),
+			Assigned ? *Assigned->GetName() : TEXT("none"),
+			(Assigned && Assigned->GetRenderProxy()) ? 1 : 0,
+			Assigned ? static_cast<int32>(Assigned->GetBlendMode()) : -1,
+			Relevance.bOpaque ? 1 : 0,
+			Relevance.bMasked ? 1 : 0,
+			Relevance.bNormalTranslucency ? 1 : 0,
+			Relevance.bSeparateTranslucency ? 1 : 0,
+			Live.HasAttributes() ? Live.Attributes()->NumUVLayers() : -1,
+			CheckedNormals, BadNormals,
+			FirstNormal.X, FirstNormal.Y, FirstNormal.Z,
+			static_cast<int32>(Component->GetTangentsType()),
+			static_cast<int32>(Component->GetColorOverrideMode()),
+			Component->GetTwoSided() ? 1 : 0,
+			static_cast<int32>(Component->GetMeshDrawPath()));
+	}
+
 	const FBoxSphereBounds Bounds = Component->Bounds;
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Sink: built %d verts / %d tris -> component holds %d tris. ")
@@ -185,13 +243,22 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MeshComponent->SetUsingAbsoluteRotation(true);
 	MeshComponent->SetUsingAbsoluteScale(true);
 
-	// The mesh carries a normal map, so its tangent frame has to come from UV0 rather
-	// than from the default ExternallyProvided mode - which, finding no tangent space,
-	// falls back to a frame derived from the normal alone. On a flat +Z road that frame
-	// is constant and looks plausible, but its handedness relative to UV0 is accidental,
-	// and it either cancels or compounds the deliberate green-channel flip on the
-	// OpenGL-convention normal map. Derived beats lucky.
-	MeshComponent->SetTangentsType(EDynamicMeshComponentTangentsMode::AutoCalculated);
+	// Tangents are left at the default ExternallyProvided, which finds no tangent space on
+	// this mesh and falls back to a frame derived from the normal alone. On a flat +Z road
+	// that is a constant, valid basis.
+	//
+	// AutoCalculated was tried and reverted. It derives the frame from the UV layers, and
+	// this mesh's UV2 is (junction blend, ground blend) - identical at every segment
+	// vertex, so every triangle is degenerate in that UV space. A degenerate UV triangle
+	// divides by zero and yields NaN tangents, and NaN vertices are discarded by the GPU.
+	// That is invisible for an unlit material, which never samples the tangent frame, and
+	// fatal for any lit one - which is exactly the split observed: the engine's unlit
+	// vertex-colour debug material drew, while every lit material, ours and stock alike,
+	// rendered nothing.
+	//
+	// Slice 2b-ii can revisit this once the normal map's handedness matters, but it must
+	// then compute tangents from UV0 specifically rather than from whatever the component
+	// picks.
 
 	// Resolved by path rather than left for a Blueprint to assign, so a freshly placed
 	// actor renders as asphalt with no setup at all. If the asset is missing this stays

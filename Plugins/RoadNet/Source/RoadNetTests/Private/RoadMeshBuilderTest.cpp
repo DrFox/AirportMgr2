@@ -109,7 +109,13 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 				CheckBuffers.Positions[CheckBuffers.Indices[Slot]],
 				CheckBuffers.Positions[CheckBuffers.Indices[Slot + 1]],
 				CheckBuffers.Positions[CheckBuffers.Indices[Slot + 2]]);
-			TestTrue(TEXT("triangle winds counter-clockwise"), Area > 0.0);
+			// Unreal's front face is the OPPOSITE winding to the maths convention: it is
+		// left-handed, so VectorUtil::Normal takes cross(C-A, B-A) and a triangle with
+		// positive 2D signed area faces DOWN and is backface-culled. FRoadMeshBuilder
+		// ::AddTriangle emits the swapped winding for that reason, so front-facing here
+		// means NEGATIVE area. Asserting the maths convention is what let a whole slice
+		// ship with every road facing the ground.
+			TestTrue(TEXT("triangle faces up in Unreal's winding"), Area < 0.0);
 		}
 	};
 

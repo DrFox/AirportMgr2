@@ -68,7 +68,13 @@ bool FRoadShortSegmentTest::RunTest(const FString& Parameters)
 		const FVector3d& A = Buffers.Positions[Buffers.Indices[Slot]];
 		const FVector3d& B = Buffers.Positions[Buffers.Indices[Slot + 1]];
 		const FVector3d& C = Buffers.Positions[Buffers.Indices[Slot + 2]];
-		if (0.5 * ((B.X - A.X) * (C.Y - A.Y) - (B.Y - A.Y) * (C.X - A.X)) <= 0.0)
+		// Unreal's front face is the OPPOSITE winding to the maths convention: it is
+		// left-handed, so VectorUtil::Normal takes cross(C-A, B-A) and a triangle with
+		// positive 2D signed area faces DOWN and is backface-culled. FRoadMeshBuilder
+		// ::AddTriangle emits the swapped winding for that reason, so front-facing here
+		// means NEGATIVE area. Asserting the maths convention is what let a whole slice
+		// ship with every road facing the ground.
+		if (0.5 * ((B.X - A.X) * (C.Y - A.Y) - (B.Y - A.Y) * (C.X - A.X)) >= 0.0)
 		{
 			++Inverted;
 		}
