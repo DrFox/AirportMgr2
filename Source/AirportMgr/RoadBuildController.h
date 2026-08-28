@@ -103,7 +103,7 @@ private:
 	 * the roads carry no collision, on the grounds that the world is flat so the maths
 	 * is exact and generating collision purely to support mouse picking would be waste.
 	 */
-	bool CursorOnRoadPlane(FVector2D& OutPosition) const;
+	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

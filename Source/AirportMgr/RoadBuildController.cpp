@@ -114,7 +114,7 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 }
 
-bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition) const
+bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
 {
 	if (Target == nullptr)
 	{
@@ -125,46 +125,84 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition) const
 	FVector Direction;
 	if (!DeprojectMousePositionToWorld(Origin, Direction))
 	{
+		// Fails whenever there is no mouse position to read at all, so it must never be
+		// the quiet path: a click that vanishes here is indistinguishable from a broken
+		// tool.
+		if (bLogRefusals)
+		{
+			float MouseX = 0.0f;
+			float MouseY = 0.0f;
+			const bool bHaveMouse = GetMousePosition(MouseX, MouseY);
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: could not deproject the cursor (GetMousePosition=%d at %.0f,%.0f)."),
+				bHaveMouse ? 1 : 0, MouseX, MouseY);
+		}
 		return false;
 	}
 
 	// Parallel to the plane: no intersection to find.
 	if (FMath::IsNearlyZero(Direction.Z))
 	{
+		if (bLogRefusals)
+		{
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the view is edge-on to the road plane (dir.Z=%.6f)."), Direction.Z);
+		}
 		return false;
 	}
 
 	const double Distance = (Target->SurfaceZ - Origin.Z) / Direction.Z;
 
+	OutPosition = FVector2D(
+		Origin.X + Direction.X * Distance,
+		Origin.Y + Direction.Y * Distance);
+
+	// The horizon guards below only make sense for a perspective view, where the ray
+	// starts at the eye and a near-horizontal ray runs away to nothing. Under the
+	// orthographic build camera the deprojected origin sits on the near plane rather
+	// than at the camera, so that plane can be behind or far above the road and the
+	// "distance" carries no information about where the click landed - the intersection
+	// is exact either way. Applying them there silently threw away good clicks in the
+	// middle of the screen, which is the whole reason a road only appeared sometimes.
+	const bool bOrthographic = BuildCamera != nullptr
+		&& BuildCamera->GetCameraComponent()->ProjectionMode == ECameraProjectionMode::Orthographic;
+	if (bOrthographic)
+	{
+		return true;
+	}
+
 	// Behind the camera. Without this a click on the sky lands on the plane's mirror
 	// image, dropping a node far off in the opposite direction.
 	if (Distance <= 0.0)
 	{
+		if (bLogRefusals)
+		{
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the road plane is behind the camera there (distance %.0f)."), Distance);
+		}
 		return false;
 	}
 
 	// Near the horizon the ray is almost parallel to the plane and this distance runs
-	// away, so a click a few pixels too high lands kilometres out. Refuse rather than
-	// place, and say so: silently building a road the size of a county is worse.
+	// away, so a click a few pixels too high lands kilometres out.
 	if (Distance > MaxPlaceDistance)
 	{
-		UE_LOG(LogRoadBuild, Log,
-			TEXT("Click ignored: the road plane is %.0f uu away there, past MaxPlaceDistance of %.0f. "
-				 "Aim closer to the ground, or fly higher."),
-			Distance, MaxPlaceDistance);
+		if (bLogRefusals)
+		{
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the road plane is %.0f uu away there, past MaxPlaceDistance of %.0f."),
+				Distance, MaxPlaceDistance);
+		}
 		return false;
 	}
 
-	OutPosition = FVector2D(
-		Origin.X + Direction.X * Distance,
-		Origin.Y + Direction.Y * Distance);
 	return true;
 }
 
 void ARoadBuildController::OnBuildClick()
 {
 	FVector2D Where;
-	if (Target == nullptr || !CursorOnRoadPlane(Where))
+	if (Target == nullptr || !CursorOnRoadPlane(Where, /*bLogRefusals*/ true))
 	{
 		return;
 	}
