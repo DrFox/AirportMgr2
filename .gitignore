@@ -1,0 +1,49 @@
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Unreal generated / regenerable
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+!Build/*/**/*.ini
+
+# Compiled source
+*.dll
+*.exe
+*.lib
+*.pdb
+*.obj
+*.o
+*.a
+*.so
+*.app
+*.ipa
+*.apk
+
+# Packaged builds
+Packaged/
+Builds/
+
+# Precompiled assets
+SourceArt/**/*.png
+SourceArt/**/*.tga
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Raw art source is tracked, but keep Blender backups out
+Art/**/*.blend1
+Art/**/*.blend2
