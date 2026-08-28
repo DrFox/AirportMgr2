@@ -109,16 +109,22 @@ public:
 	TObjectPtr<UMaterialInterface> SurfaceMaterial;
 
 	/**
-	 * Hold the component's vertex colours at a constant instead of reading the mesh.
+	 * DIAGNOSTIC ONLY. Hold vertex colours at a constant - and, as a side effect nobody
+	 * would guess, stop the real material rendering at all.
 	 *
-	 * Deliberately independent of SurfaceMaterial. These two were previously decided
-	 * together in one if/else, which meant clearing the material also flipped this - so
-	 * "it renders without a material" moved two variables at once and could never say
-	 * which of them mattered. Both are now properties, so all four combinations can be
-	 * tried in the details panel without a rebuild.
+	 * Any ColorOverrideMode other than None makes FBaseDynamicMeshSceneProxy set
+	 * ForceOverrideMaterial to the engine's vertex-colour debug material, which then
+	 * replaces SurfaceMaterial for every buffer set. So this does not tint the surface;
+	 * it substitutes a different material entirely and shows a flat constant colour with
+	 * no texture, whatever SurfaceMaterial says.
+	 *
+	 * Default false, because true means "do not render the material you asked for". It
+	 * stays available because it is a genuine way to prove geometry reaches the screen
+	 * when the material is suspect - just never mistake the result for the material
+	 * working.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
-	bool bUseConstantVertexColour = true;
+	bool bUseConstantVertexColour = false;
 
 	/**
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly

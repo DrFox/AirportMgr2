@@ -133,6 +133,10 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 
 	if (bUseConstantVertexColour)
 	{
+		// This does NOT merely tint. Any mode other than None makes the scene proxy set
+		// ForceOverrideMaterial to the engine's vertex-colour debug material and use it
+		// in place of ours, so the surface shows a flat constant with no texture no
+		// matter what SurfaceMaterial holds. Diagnostic only - see the header.
 		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::Constant);
 		Component->SetConstantOverrideColor(
 			Material != nullptr ? FColor::White : FColor(40, 40, 45));

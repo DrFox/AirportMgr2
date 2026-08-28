@@ -9,6 +9,12 @@ import os
 import unreal
 
 SOURCE = r"C:\repos\models\materials\concrete-bl\pebbled-asphalt1-bl"
+# Build only albedo -> BaseColor, nothing else. A baseline that must render before any
+# of the rest is worth debugging: ColorOverrideMode was forcing the engine's
+# vertex-colour debug material over ours, so M_RoadSurface had never actually been
+# drawn and no part of this graph had ever been exercised.
+MINIMAL = True
+
 TEX_DIR = "/Game/RoadNet/Textures"
 MAT_DIR = "/Game/RoadNet/Materials"
 
@@ -115,6 +121,15 @@ def build_material(textures):
     ao.set_editor_property(
         "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
     lib.connect_material_expressions(uv0, "", ao, "UVs")
+
+    if MINIMAL:
+        # Albedo straight into base colour. No UV1, no masks, no parameters - if even
+        # this does not render, the fault is not in the marking maths.
+        lib.connect_material_property(albedo, "RGB", unreal.MaterialProperty.MP_BASE_COLOR)
+        lib.recompile_material(material)
+        unreal.EditorAssetLibrary.save_asset("%s/M_RoadSurface" % MAT_DIR)
+        unreal.log("MARKER: MINIMAL material saved - albedo -> BaseColor only")
+        return material
 
     # --- UV1: markings ---------------------------------------------------------------
     # UV1.X is lateral offset in uu, UV1.Y is distance along the centreline in uu.
