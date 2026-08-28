@@ -115,3 +115,106 @@ bool RoadGeom::IsSimplePolygon(TArrayView<const FVector2D> Points)
 	}
 	return true;
 }
+
+RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double Radius)
+{
+	FFillet Result;
+	Result.Theta = CcwAngleBetween(A.Dir, B.Dir);
+
+	constexpr double CollinearEpsilon = 1e-6;
+
+	// Theta == PI means the two edges run in opposite directions along one straight
+	// line: there is no corner to round. This is the COMMON case, not an edge case,
+	// because long drags auto-subdivide into collinear segments. Rounding here would
+	// facet every straight run.
+	if (FMath::Abs(Result.Theta - UE_DOUBLE_PI) < CollinearEpsilon)
+	{
+		Result.bValid = true;
+		Result.bStraightThrough = true;
+		return Result;
+	}
+
+	FVector2D Corner;
+	if (!LineIntersect(A, B, Corner))
+	{
+		return Result; // bValid stays false: parallel edges that never meet
+	}
+	Result.Corner = Corner;
+
+	const double HalfTheta = Result.Theta * 0.5;
+	const double TanHalf = FMath::Tan(HalfTheta);
+	const double SinHalf = FMath::Sin(HalfTheta);
+
+	if (FMath::Abs(TanHalf) < CollinearEpsilon || FMath::Abs(SinHalf) < CollinearEpsilon)
+	{
+		Result.bValid = true;
+		Result.bStraightThrough = true;
+		return Result;
+	}
+
+	// How far along each edge the corner point sits. The tangent points must land at
+	// or after each edge's origin, so that the later perpendicular cut - taken as the
+	// max over a segment's two corners - never falls behind a tangent point.
+	const double ReachA = FVector2D::DotProduct(Corner - A.Origin, A.Dir);
+	const double ReachB = FVector2D::DotProduct(Corner - B.Origin, B.Dir);
+	const double MaxDistance = FMath::Min(ReachA, ReachB);
+
+	const bool bConvex = Result.Theta < UE_DOUBLE_PI;
+
+	// d = R / tan(Theta/2) is positive at a convex corner and negative at a reflex
+	// one, because tan flips sign past PI/2. Radius = d * tan(Theta/2) must stay
+	// non-negative either way, so d is clamped to its corner type's sign as well as
+	// to MaxDistance.
+	double Distance = Radius / TanHalf;
+	Distance = FMath::Min(Distance, MaxDistance);
+	Distance = bConvex ? FMath::Max(Distance, 0.0) : FMath::Min(Distance, 0.0);
+
+	const double EffectiveRadius = Distance * TanHalf;
+
+	// No fillet with a non-negative radius fits: the edges cross behind the node.
+	// Degrade to a straight join rather than emitting an inverted arc.
+	if (EffectiveRadius < 0.0 || (bConvex && MaxDistance < 0.0))
+	{
+		Result.bValid = true;
+		Result.bStraightThrough = true;
+		return Result;
+	}
+
+	Result.bValid = true;
+	Result.Radius = EffectiveRadius;
+	Result.Distance = Distance;
+	Result.TangentA = Corner - A.Dir * Distance;
+	Result.TangentB = Corner - B.Dir * Distance;
+	Result.Centre = Corner - Rotate(A.Dir, HalfTheta) * (EffectiveRadius / SinHalf);
+	Result.ParamA = ReachA - Distance;
+	Result.ParamB = ReachB - Distance;
+
+	return Result;
+}
+
+void RoadGeom::SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVector2D>& OutPoints)
+{
+	if (!Fillet.bValid || Fillet.bStraightThrough || SegmentCount < 1)
+	{
+		return;
+	}
+
+	const FVector2D FromCentreA = Fillet.TangentA - Fillet.Centre;
+	const FVector2D FromCentreB = Fillet.TangentB - Fillet.Centre;
+
+	const double StartAngle = Bearing(FromCentreA);
+
+	// The arc is always the minor sweep between the two tangent points: a fillet
+	// never wraps the long way round its own circle.
+	double Sweep = Bearing(FromCentreB) - StartAngle;
+	while (Sweep >  UE_DOUBLE_PI) { Sweep -= 2.0 * UE_DOUBLE_PI; }
+	while (Sweep < -UE_DOUBLE_PI) { Sweep += 2.0 * UE_DOUBLE_PI; }
+
+	const double ArcRadius = FromCentreA.Length();
+	for (int32 Step = 0; Step <= SegmentCount; ++Step)
+	{
+		const double Alpha = static_cast<double>(Step) / static_cast<double>(SegmentCount);
+		const double Angle = StartAngle + Sweep * Alpha;
+		OutPoints.Add(Fillet.Centre + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * ArcRadius);
+	}
+}
