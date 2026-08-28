@@ -57,8 +57,12 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	// more new vertices, offset from East by the profile's left/right half-widths (the
 	// ribbon's own B-end vertices are cut back from East by the profile's half-width, so
 	// the cap's vertices are necessarily distinct from them). Total: 2 + 2 = 4.
+	// AddSegment now clamps to a minimum of three steps, so the ribbon has two INTERIOR
+	// cross-sections as well as its two ends - that is where the junction blend holds 0 so
+	// a centreline can survive in the middle of the segment. Two interior cross-sections
+	// times two rails is 4 more vertices on top of the 4 above: 8.
 	TestEqual(TEXT("segment welded its A end and built East's dead-end cap"),
-		Builder.VertexCount() - AfterJunctions, 4);
+		Builder.VertexCount() - AfterJunctions, 8);
 
 	// The cap must actually reach the node, not just approach it.
 	{
@@ -261,10 +265,11 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		AEndBuilder.AddSegment(*AEndNet, SouthToCentre, 1);
 
 		// Mirrors the East-cap arithmetic above: the B end (AEndCentre) welds into the
-		// junction fan already built (0 new), the A end's own ribbon cut line is new
-		// (2), and the A-end cap at AEndSouth's own node position adds 2 more. Total: 4.
-		TestEqual(TEXT("A-end cap adds the same 4 vertices as the B-end cap"),
-			AEndBuilder.VertexCount() - AEndAfterJunctions, 4);
+		// junction fan already built (0 new), the A end's own ribbon cut line is new (2),
+		// the A-end cap at AEndSouth's own node position adds 2 more, and the two interior
+		// cross-sections forced by the three-step minimum add 4. Total: 8.
+		TestEqual(TEXT("A-end cap adds the same 8 vertices as the B-end cap"),
+			AEndBuilder.VertexCount() - AEndAfterJunctions, 8);
 
 		CheckMeshInvariants(AEndBuilder.GetBuffers());
 

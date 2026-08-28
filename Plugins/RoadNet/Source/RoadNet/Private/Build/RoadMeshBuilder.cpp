@@ -11,10 +11,20 @@ namespace
 		return Value == 0.0 ? 0.0 : Value;
 	}
 
-	/** Masks for a vertex a segment owns: no junction blend, no ground fade yet. */
-	FVector2f SegmentMasks()
+	/**
+	 * Masks for a vertex a segment owns. Blend is 1 at the ends and 0 in the interior, so
+	 * markings run down the middle of a segment and fade out before its junctions.
+	 *
+	 * The end vertices are the ones SHARED with a junction, so writing 1 there is what
+	 * makes the whole junction fan unmarked: every fan vertex then carries blend 1 and
+	 * nothing in it can reach the marking mask. Leaving them at 0 puts a band across each
+	 * fan triangle where the lateral has crossed into the marking width but the fade has
+	 * not yet reached zero - which paints a smear into every junction, worst on the inside
+	 * of a bend where the fillet arc is tightest.
+	 */
+	FVector2f SegmentMasks(double JunctionBlend = 0.0)
 	{
-		return FVector2f(0.0f, 1.0f);
+		return FVector2f(static_cast<float>(FMath::Clamp(JunctionBlend, 0.0, 1.0)), 1.0f);
 	}
 
 	/** Masks for a vertex the junction owns. See AddJunction for why the blend is always 1. */
@@ -112,10 +122,10 @@ void FRoadMeshBuilder::AddJunction(const FJunctionResult& Junction)
 	// of 0 nothing fades it, so every fillet renders as a solid fan of centreline paint,
 	// and with 12 arc samples per corner those vertices dominate a bend's rim.
 	//
-	// Full blend on everything the junction owns still gives the taper the design wants,
-	// because the shared cut vertices keep the segment's blend of 0: a fan triangle
-	// spanning a cut line and the apex ramps from marked at the cut line to unmarked
-	// toward the centre - a centreline running up to the junction and fading into it.
+	// The shared cut vertices carry blend 1 too, written by the segment - see
+	// SegmentMasks. So every vertex of every fan triangle is fully blended and no part of
+	// a junction can reach the marking mask. The taper happens on the segment side
+	// instead, where the blend ramps from 0 in the middle to 1 at the ends.
 	TArray<int32> Mapped;
 	Mapped.Reserve(Junction.Boundary.Num());
 	for (const FVector2D& Point : Junction.Boundary)
@@ -140,7 +150,11 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		return;
 	}
 
-	const int32 Steps = FMath::Max(RibbonSegments, 1);
+	// At least three, whatever the caller asked for. The blend has to ramp from 1 at each
+	// end to 0 in the middle, and with a single quad there is no interior cross-section to
+	// hold the 0 - every vertex would be an end, so the whole segment would fade and no
+	// centreline would survive anywhere.
+	const int32 Steps = FMath::Max(RibbonSegments, 3);
 
 	// The two ends come from the model verbatim. Never recompute them: these are the
 	// same values the junction boundary holds, and only bitwise equality welds.
@@ -170,24 +184,29 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		const double Alpha = static_cast<double>(Step) / static_cast<double>(Steps);
 		const float Along = static_cast<float>(Alpha * RibbonLength);
 
+		// 1 at both ends, 0 everywhere inside, so the centreline is full down the middle
+		// and gone by the time it reaches a junction.
+		const bool bIsEnd = (Step == 0) || (Step == Steps);
+		const FVector2f Masks = SegmentMasks(bIsEnd ? 1.0 : 0.0);
+
 		if (Step == 0)
 		{
-			LeftRail.Add(WeldVertex(LeftStart, FVector2f(LateralLeft, Along), SegmentMasks()));
-			RightRail.Add(WeldVertex(RightStart, FVector2f(-LateralRight, Along), SegmentMasks()));
+			LeftRail.Add(WeldVertex(LeftStart, FVector2f(LateralLeft, Along), Masks));
+			RightRail.Add(WeldVertex(RightStart, FVector2f(-LateralRight, Along), Masks));
 		}
 		else if (Step == Steps)
 		{
-			LeftRail.Add(WeldVertex(LeftEnd, FVector2f(LateralLeft, Along), SegmentMasks()));
-			RightRail.Add(WeldVertex(RightEnd, FVector2f(-LateralRight, Along), SegmentMasks()));
+			LeftRail.Add(WeldVertex(LeftEnd, FVector2f(LateralLeft, Along), Masks));
+			RightRail.Add(WeldVertex(RightEnd, FVector2f(-LateralRight, Along), Masks));
 		}
 		else
 		{
 			// Interior samples are ours alone and may be interpolated freely; only the
 			// ends are shared with a junction.
 			LeftRail.Add(WeldVertex(FMath::Lerp(LeftStart, LeftEnd, Alpha),
-				FVector2f(LateralLeft, Along), SegmentMasks()));
+				FVector2f(LateralLeft, Along), Masks));
 			RightRail.Add(WeldVertex(FMath::Lerp(RightStart, RightEnd, Alpha),
-				FVector2f(-LateralRight, Along), SegmentMasks()));
+				FVector2f(-LateralRight, Along), Masks));
 		}
 	}
 
@@ -230,10 +249,10 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// line first, ribbon start second.
 		// The cap spans from the node's own cut line to the ribbon's start, so it sits at
 		// along = 0 - the surface really does begin at the node, not at the trimmed cut.
-		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentMasks());
+		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentMasks(0.0));
 		const int32 R1 = RightRail[0];
 		const int32 L1 = LeftRail[0];
-		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentMasks());
+		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentMasks(0.0));
 
 		AddTriangle(R0, R1, L1);
 		AddTriangle(R0, L1, L0);
@@ -257,8 +276,8 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// first, node cap line second.
 		const float CapAlong = static_cast<float>(RibbonLength);
 		const int32 R0 = RightRail[Steps];
-		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentMasks());
-		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentMasks());
+		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentMasks(0.0));
+		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentMasks(0.0));
 		const int32 L0 = LeftRail[Steps];
 
 		AddTriangle(R0, R1, L1);
