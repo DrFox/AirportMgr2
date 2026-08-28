@@ -122,4 +122,17 @@ public:
 
 	/** Quads along each segment. 1 is right for straight segments. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1")) int32 RibbonSegments = 1;
+
+	/**
+	 * Draw every triangle the builder produced as debug lines.
+	 *
+	 * Ground truth for "the mesh is correct but nothing renders": these come from the
+	 * same buffers the component is handed, but reach the screen by a completely separate
+	 * path, so whatever shows here is the geometry itself - independent of materials,
+	 * bounds, clip planes and the scene proxy.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet") bool bDebugDrawMesh = true;
+
+	/** How long the debug wireframe survives, in seconds. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0")) double DebugDrawSeconds = 30.0;
 };

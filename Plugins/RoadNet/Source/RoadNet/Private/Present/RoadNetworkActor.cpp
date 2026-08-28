@@ -5,6 +5,7 @@
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "DrawDebugHelpers.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Materials/Material.h"
 #include "Model/RoadNetwork.h"
@@ -269,6 +270,32 @@ void ARoadNetworkActor::RebuildMesh()
 
 	FDynamicMeshSink Sink(MeshComponent);
 	Builder.Emit(Sink);
+
+	if (bDebugDrawMesh)
+	{
+		// Same buffers, a completely different route to the screen. If these lines land
+		// where the clicks did and the surface does not, the fault is in the component or
+		// the view, not the geometry - and if the lines are wrong too, every conclusion
+		// drawn from vertex counts and bounds so far needs revisiting.
+		const FRoadMeshBuffers& Drawn = Builder.GetBuffers();
+		const float Lifetime = static_cast<float>(DebugDrawSeconds);
+		for (int32 Slot = 0; Slot + 2 < Drawn.Indices.Num(); Slot += 3)
+		{
+			const FVector A = Drawn.Positions[Drawn.Indices[Slot]];
+			const FVector B = Drawn.Positions[Drawn.Indices[Slot + 1]];
+			const FVector C = Drawn.Positions[Drawn.Indices[Slot + 2]];
+
+			DrawDebugLine(GetWorld(), A, B, FColor::Green, false, Lifetime, 0, 8.0f);
+			DrawDebugLine(GetWorld(), B, C, FColor::Green, false, Lifetime, 0, 8.0f);
+			DrawDebugLine(GetWorld(), C, A, FColor::Green, false, Lifetime, 0, 8.0f);
+		}
+
+		// The bounding box the renderer culls against, so an off-screen or collapsed box
+		// is visible rather than merely reported.
+		DrawDebugBox(GetWorld(), MeshComponent->Bounds.Origin,
+			MeshComponent->Bounds.BoxExtent + FVector(0.0, 0.0, 50.0),
+			FColor::Magenta, false, Lifetime, 0, 8.0f);
+	}
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Rebuilt: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,
