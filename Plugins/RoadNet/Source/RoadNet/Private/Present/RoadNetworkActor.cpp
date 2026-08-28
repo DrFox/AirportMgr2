@@ -7,6 +7,8 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadSlotMap.h"
+#include "Profiles/RoadProfile.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
 
@@ -70,6 +72,131 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MeshComponent->SetUsingAbsoluteLocation(true);
 	MeshComponent->SetUsingAbsoluteRotation(true);
 	MeshComponent->SetUsingAbsoluteScale(true);
+}
+
+URoadNetwork& ARoadNetworkActor::EnsureNetwork()
+{
+	if (Network == nullptr)
+	{
+		Network = NewObject<URoadNetwork>(this);
+	}
+	return *Network;
+}
+
+URoadProfile* ARoadNetworkActor::ResolveProfile()
+{
+	if (Profile != nullptr)
+	{
+		return Profile;
+	}
+
+	if (RuntimeProfile == nullptr)
+	{
+		RuntimeProfile = URoadProfile::MakeTransient(FallbackWidth, FallbackFilletRadius);
+	}
+	return RuntimeProfile;
+}
+
+bool ARoadNetworkActor::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
+{
+	if (Network == nullptr || !Network->GetNodes().IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	// Build the handle from the slot's own generation and then check liveness properly.
+	// FRoadNodeId::IsSet() would only report that a handle was assigned, which is the
+	// check this codebase renamed precisely to stop people reaching for it here.
+	FRoadNodeId Candidate;
+	Candidate.Index = Index;
+	Candidate.Generation = Network->GetNodes()[Index].Generation;
+
+	if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Network->GetNodes(), Candidate))
+	{
+		return false;
+	}
+
+	OutId = Candidate;
+	return true;
+}
+
+int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
+{
+	const FRoadNodeId Node = EnsureNetwork().AddNode(Where);
+	if (!Node.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceNode refused at (%f, %f)"), Where.X, Where.Y);
+		return INDEX_NONE;
+	}
+	return Node.Index;
+}
+
+bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
+{
+	if (FromIndex == ToIndex)
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: node %d cannot join itself"), FromIndex);
+		return false;
+	}
+
+	FRoadNodeId From;
+	FRoadNodeId To;
+	if (!MakeLiveNodeId(FromIndex, From) || !MakeLiveNodeId(ToIndex, To))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("ConnectNodes refused: %d -> %d, one of them is not a live node"), FromIndex, ToIndex);
+		return false;
+	}
+
+	// Straight only. The model stores a Bezier control point, but AddSegment still
+	// interpolates its interior samples in a straight line, so a curve authored here
+	// would render as a chord until slice 2b samples the curve properly.
+	const FRoadSegmentId Segment = Network->AddStraightSegment(From, To, ResolveProfile());
+	if (!Segment.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %d -> %d"), FromIndex, ToIndex);
+		return false;
+	}
+	return true;
+}
+
+int32 ARoadNetworkActor::FindNodeNear(FVector2D Where, double Radius) const
+{
+	if (Network == nullptr || Radius <= 0.0)
+	{
+		return INDEX_NONE;
+	}
+
+	// Compared squared, so a caller passing a large radius costs no square roots.
+	const double RadiusSquared = Radius * Radius;
+	double BestSquared = RadiusSquared;
+	int32 Best = INDEX_NONE;
+
+	const TArray<FRoadNode>& Nodes = Network->GetNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		if (!Nodes[Index].bAlive)
+		{
+			continue;
+		}
+
+		const double DistanceSquared = FVector2D::DistSquared(Nodes[Index].Position, Where);
+		if (DistanceSquared <= BestSquared)
+		{
+			BestSquared = DistanceSquared;
+			Best = Index;
+		}
+	}
+
+	return Best;
+}
+
+void ARoadNetworkActor::ClearNetwork()
+{
+	// A fresh network rather than a drain: node removal bumps generations and prunes
+	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
+	Network = NewObject<URoadNetwork>(this);
+	RebuildMesh();
 }
 
 void ARoadNetworkActor::RebuildMesh()
