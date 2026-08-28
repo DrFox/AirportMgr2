@@ -43,7 +43,9 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 	Builder.AddSegment(*Net, ToNorth, 1);
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{
-		Builder.AddJunction(Pair.Value);
+		static const TArray<FRoadSegmentId> NoArms;
+		const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+		Builder.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 	}
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
@@ -213,7 +215,9 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 		FRoadMeshBuilder Wrong(ZHeight, TexelsPerUnit);
 		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 		{
-			Wrong.AddJunction(Pair.Value);
+			static const TArray<FRoadSegmentId> NoArms;
+			const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+			Wrong.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 		}
 		Wrong.AddSegment(*Net, ToEast, 1);
 		Wrong.AddSegment(*Net, ToNorth, 1);

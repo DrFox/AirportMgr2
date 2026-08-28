@@ -22,8 +22,30 @@ class ROADNET_API FRoadMeshBuilder
 public:
 	explicit FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit = 512.0);
 
-	/** Append a solved junction's triangle fan. */
-	void AddJunction(const FJunctionResult& Junction);
+	/**
+	 * A point on a cut line, parameterised from the right cut to the left.
+	 *
+	 * The ONLY way a band vertex is ever produced. The ribbon and the junction rim both
+	 * call this with the same two stored cut vertices and the same alpha, so their results
+	 * are bitwise identical and weld to one vertex - the same property slice 2a
+	 * established for the outer pair, extended inboard. Never inline this or "simplify"
+	 * one caller: two expressions that are algebraically equal are not bitwise equal.
+	 */
+	static FVector2D CutLinePoint(const FVector2D& RightCut, const FVector2D& LeftCut, double Alpha)
+	{
+		return FMath::Lerp(RightCut, LeftCut, Alpha);
+	}
+
+	/**
+	 * Append a solved junction's fan, subdivided to match each arm's profile bands.
+	 *
+	 * ArmSegments is FRoadSolveResult::NodeArmSegments for this node - parallel to
+	 * Junction.Arms. It is passed in rather than re-derived because re-walking
+	 * Node.Incident re-applies a skip rule that can put the two out of step, which writes
+	 * one arm's bands onto another arm's cut line.
+	 */
+	void AddJunction(const URoadNetwork& Network, int32 NodeIndex, const FJunctionResult& Junction,
+		const TArray<FRoadSegmentId>& ArmSegments);
 
 	/**
 	 * Append a segment's ribbon between its two stored cut lines.
