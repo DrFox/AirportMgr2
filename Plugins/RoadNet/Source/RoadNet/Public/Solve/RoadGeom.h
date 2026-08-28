@@ -33,7 +33,21 @@ namespace RoadGeom
 	/** Signed area via the shoelace formula. Positive means CCW winding. */
 	ROADNET_API double PolygonArea(TArrayView<const FVector2D> Points);
 
-	/** True if no pair of non-adjacent edges intersects. O(n^2); n is tiny here. */
+	/**
+	 * True if no pair of non-adjacent edges crosses transversally. O(n^2); n is tiny here.
+	 *
+	 * This is a transversal-crossing test, and that is all it claims to be. Three kinds
+	 * of degeneracy are deliberately NOT reported as crossings:
+	 *   - non-adjacent edges that touch exactly at a vertex (the intersection parameters
+	 *     are clamped to the open interval, so an endpoint touch does not count);
+	 *   - collinear overlapping edges (the near-zero determinant is treated as
+	 *     non-crossing, so an edge doubling back along another reads as simple);
+	 *   - any pair involving a zero-length edge, for the same reason - so a rim that
+	 *     pinches down to a repeated point also reads as simple.
+	 *
+	 * It reliably catches a boundary that folds through itself, which is what it is for.
+	 * Do not use it as a general validity or non-degeneracy check.
+	 */
 	ROADNET_API bool IsSimplePolygon(TArrayView<const FVector2D> Points);
 
 	/** Result of rounding one corner between two adjacent road edges. */

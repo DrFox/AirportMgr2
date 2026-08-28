@@ -12,7 +12,15 @@ struct ROADNET_API FRoadNodeId
 	UPROPERTY() int32 Index = INDEX_NONE;
 	UPROPERTY() int32 Generation = 0;
 
-	bool IsValid() const { return Index != INDEX_NONE; }
+	/**
+	 * Reports only that this handle was ever assigned - NOT that its referent is still
+	 * alive. A stale handle to a recycled slot still returns true here, because this
+	 * deliberately ignores Generation.
+	 *
+	 * For liveness always use RoadSlot::IsValid(Items, Handle), which is the only check
+	 * that compares Generation and so the only one the recycling scheme is safe under.
+	 */
+	bool IsSet() const { return Index != INDEX_NONE; }
 
 	bool operator==(const FRoadNodeId& Other) const
 	{
@@ -35,7 +43,15 @@ struct ROADNET_API FRoadSegmentId
 	UPROPERTY() int32 Index = INDEX_NONE;
 	UPROPERTY() int32 Generation = 0;
 
-	bool IsValid() const { return Index != INDEX_NONE; }
+	/**
+	 * Reports only that this handle was ever assigned - NOT that its referent is still
+	 * alive. A stale handle to a recycled slot still returns true here, because this
+	 * deliberately ignores Generation.
+	 *
+	 * For liveness always use RoadSlot::IsValid(Items, Handle), which is the only check
+	 * that compares Generation and so the only one the recycling scheme is safe under.
+	 */
+	bool IsSet() const { return Index != INDEX_NONE; }
 
 	bool operator==(const FRoadSegmentId& Other) const
 	{

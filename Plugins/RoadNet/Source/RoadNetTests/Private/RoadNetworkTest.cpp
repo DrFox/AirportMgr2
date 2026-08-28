@@ -24,7 +24,7 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId ToEast  = Net->AddStraightSegment(Centre, East,  Profile);
 	const FRoadSegmentId ToWest  = Net->AddStraightSegment(Centre, West,  Profile);
 
-	TestTrue(TEXT("segments created"), ToNorth.IsValid() && ToEast.IsValid() && ToWest.IsValid());
+	TestTrue(TEXT("segments created"), ToNorth.IsSet() && ToEast.IsSet() && ToWest.IsSet());
 
 	// Outgoing tangents at the centre node.
 	const FVector2D TanEast = Net->GetOutgoingTangent(ToEast, Centre);
@@ -57,8 +57,55 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("east node emptied"), Net->GetNode(East)->Incident.Num(), 0);
 
 	// Self-loops and invalid handles are rejected.
-	TestFalse(TEXT("self loop rejected"), Net->AddStraightSegment(East, East, Profile).IsValid());
-	TestFalse(TEXT("stale handle rejected"), Net->AddStraightSegment(Centre, East, Profile).IsValid());
+	TestFalse(TEXT("self loop rejected"), Net->AddStraightSegment(East, East, Profile).IsSet());
+	TestFalse(TEXT("stale handle rejected"), Net->AddStraightSegment(Centre, East, Profile).IsSet());
+
+	// IsSet() reports assignment, not liveness: a handle to a slot that has since been
+	// removed still reads as set. Liveness is RoadSlot::IsValid's job, and the network
+	// enforces it - which is why the stale-handle AddStraightSegment above was rejected.
+	TestTrue(TEXT("stale handle still reads as set"), Centre.IsSet());
+	TestNull(TEXT("stale handle is not live"), Net->GetNode(Centre));
+
+	// --- GetOutgoingTangent must never return a zero vector ---
+	//
+	// Only A == B is rejected, so two DISTINCT nodes may sit at the same position. The
+	// degenerate-control fallback then computes a zero chord, and an unguarded
+	// GetSafeNormal hands back (0,0) - which collapses every edge ray and makes the node
+	// silently fail to solve rather than fail loudly.
+	{
+		URoadNetwork* Degenerate = NewObject<URoadNetwork>(GetTransientPackage());
+
+		// Case 1: Control sits exactly on the node, so the chord fallback is taken.
+		const FRoadNodeId Origin = Degenerate->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Far    = Degenerate->AddNode(FVector2D(0.0, 5000.0));
+		const FRoadSegmentId Straight =
+			Degenerate->AddSegment(Origin, Far, FVector2D(0.0, 0.0), Profile);
+		TestTrue(TEXT("degenerate-control segment created"), Straight.IsSet());
+
+		const FVector2D FromControlFallback = Degenerate->GetOutgoingTangent(Straight, Origin);
+		TestTrue(TEXT("control-on-node falls back to the chord"),
+			FromControlFallback.Equals(FVector2D(0.0, 1.0), 1e-6));
+
+		// Case 2: two distinct nodes at the same position - the chord is zero too.
+		const FRoadNodeId Twin = Degenerate->AddNode(FVector2D(0.0, 0.0));
+		const FRoadSegmentId Coincident =
+			Degenerate->AddSegment(Origin, Twin, FVector2D(0.0, 0.0), Profile);
+		TestTrue(TEXT("coincident segment created"), Coincident.IsSet());
+
+		const FVector2D BothEnds[] = {
+			Degenerate->GetOutgoingTangent(Coincident, Origin),
+			Degenerate->GetOutgoingTangent(Coincident, Twin)
+		};
+		for (const FVector2D& Tangent : BothEnds)
+		{
+			TestTrue(TEXT("coincident-node tangent is unit length"),
+				FMath::IsNearlyEqual(Tangent.Length(), 1.0, 1e-9));
+		}
+
+		// And the earlier fallbacks are unit length too, by the same contract.
+		TestTrue(TEXT("chord fallback is unit length"),
+			FMath::IsNearlyEqual(FromControlFallback.Length(), 1.0, 1e-9));
+	}
 
 	return true;
 }

@@ -34,6 +34,33 @@ namespace
 		return Rim;
 	}
 
+	/**
+	 * Every emitted triangle must wind counter-clockwise.
+	 *
+	 * PolygonArea(Rim) > 0 provably CANNOT detect an inverted fan. The shoelace sum over
+	 * the rim and the sum of the fan's per-triangle signed areas are the same expression,
+	 * so a fan in which some triangles wind clockwise still totals a positive area: the
+	 * negative contributions are exactly the ones the shoelace already cancels. Only the
+	 * per-triangle sign catches it, which is why this is checked here and not via area.
+	 */
+	bool AllTrianglesCCW(const FJunctionResult& Result)
+	{
+		for (int32 Slot = 0; Slot + 2 < Result.Triangles.Num(); Slot += 3)
+		{
+			const FVector2D& A = Result.Boundary[Result.Triangles[Slot]];
+			const FVector2D& B = Result.Boundary[Result.Triangles[Slot + 1]];
+			const FVector2D& C = Result.Boundary[Result.Triangles[Slot + 2]];
+
+			const FVector2D Edge1 = B - A;
+			const FVector2D Edge2 = C - A;
+			if (Edge1.X * Edge2.Y - Edge1.Y * Edge2.X <= 0.0)
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool ContainsExactly(const TArray<FVector2D>& Points, const FVector2D& Target)
 	{
 		for (const FVector2D& Point : Points)
@@ -97,6 +124,12 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 		TestEqual(*(Label + TEXT(" triangle count is a multiple of 3")),
 			Result.Triangles.Num() % 3, 0);
 		TestTrue(*(Label + TEXT(" triangles were emitted")), Result.Triangles.Num() > 0);
+
+		// The fan apex must see the whole rim. A 2-way node whose arms are less than
+		// ~28 degrees apart puts its own node OUTSIDE its boundary lobe, and the fan
+		// then folds back on itself. Area cannot see that; per-triangle winding can.
+		TestTrue(*(Label + TEXT(" every triangle winds CCW")), AllTrianglesCCW(Result));
+
 		for (int32 Slot = 0; Slot < Result.Triangles.Num(); ++Slot)
 		{
 			const int32 VertexIndex = Result.Triangles[Slot];
@@ -166,6 +199,18 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("collinear trims nothing"),
 			FMath::IsNearlyEqual(Result.Arms[0].CutDistance, 0.0, 1e-9));
 		TestTrue(TEXT("collinear emits no arc points"), Rim.Num() <= 4);
+
+		// The ring close may drop an arc sample, never a cut vertex. Here arm 1's cut
+		// line coincides with arm 0's to within the weld tolerance, so the old
+		// unconditional Pop() discarded arm 1's LeftCut and a mesh builder searching the
+		// rim for that segment end would not have found it.
+		TestEqual(TEXT("collinear rim keeps its last cut vertex"), Rim.Num(), 3);
+		TestTrue(TEXT("collinear keeps arm 1's left cut bitwise"),
+			ContainsExactly(Rim, Result.Arms[1].LeftCut));
+		TestTrue(TEXT("collinear keeps arm 1's right cut bitwise"),
+			ContainsExactly(Rim, Result.Arms[1].RightCut));
+		TestTrue(TEXT("collinear keeps arm 0's right cut bitwise"),
+			ContainsExactly(Rim, Result.Arms[0].RightCut));
 	}
 
 	// --- Dead end: boundary exists, but there is no fan to build ---
@@ -213,6 +258,12 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("acute sweep winding stays CCW"), Area > 0.0);
 			TestTrue(TEXT("acute sweep stays simple"), RoadGeom::IsSimplePolygon(Rim));
 
+			// This is the assertion that would have caught the inverted fan: below
+			// ~28 degrees the node lies outside its own rim, so the apex must move to
+			// the rim centroid or no triangles may be emitted at all.
+			TestTrue(TEXT("acute sweep emits triangles"), Result.Triangles.Num() > 0);
+			TestTrue(TEXT("acute sweep every triangle winds CCW"), AllTrianglesCCW(Result));
+
 			if (PreviousArea > 0.0)
 			{
 				TestTrue(TEXT("area falls monotonically as the fork opens"),
@@ -243,6 +294,10 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 
 			TestTrue(TEXT("reflex sweep winding stays CCW"), Area > 0.0);
 			TestTrue(TEXT("reflex sweep stays simple"), RoadGeom::IsSimplePolygon(Rim));
+
+			// The mirror of the acute case: past ~332 degrees the lobe closes up again.
+			TestTrue(TEXT("reflex sweep emits triangles"), Result.Triangles.Num() > 0);
+			TestTrue(TEXT("reflex sweep every triangle winds CCW"), AllTrianglesCCW(Result));
 
 			if (PreviousArea > 0.0)
 			{

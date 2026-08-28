@@ -145,10 +145,16 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 	const double TanHalf = FMath::Tan(HalfTheta);
 	const double SinHalf = FMath::Sin(HalfTheta);
 
+	// Theta near PI was handled above. Everything that reaches here with a vanishing
+	// tan or sin of the half-angle therefore has Theta near 0 or near 2*PI, which means
+	// the two edges point the SAME way: near-COINCIDENT arms, not collinear-opposite
+	// ones. There is no corner to round and no meaningful cut, so the corner is simply
+	// unsolvable. Calling it straight-through would contribute a zero cut - the exact
+	// opposite of the arbitrarily large cut such a pinched fork actually needs.
 	if (FMath::Abs(TanHalf) < CollinearEpsilon || FMath::Abs(SinHalf) < CollinearEpsilon)
 	{
-		Result.bValid = true;
-		Result.bStraightThrough = true;
+		Result.bValid = false;
+		Result.bStraightThrough = false;
 		return Result;
 	}
 

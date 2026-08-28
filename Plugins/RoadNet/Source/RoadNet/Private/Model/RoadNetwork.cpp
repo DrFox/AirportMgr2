@@ -127,7 +127,12 @@ FVector2D URoadNetwork::GetOutgoingTangent(FRoadSegmentId Segment, FRoadNodeId A
 		Dir = (Other != nullptr) ? (Other->Position - Node->Position) : FVector2D(1.0, 0.0);
 	}
 
-	return Dir.GetSafeNormal();
+	// The chord can be zero too: only A == B is rejected, so two DISTINCT nodes may
+	// legitimately sit at the same position. GetSafeNormal would then hand back (0,0),
+	// which collapses every edge ray and makes the node silently fail to solve. Always
+	// return a unit vector; an arbitrary direction is recoverable, a zero one is not.
+	const FVector2D Normalised = Dir.GetSafeNormal();
+	return Normalised.IsNearlyZero() ? FVector2D(1.0, 0.0) : Normalised;
 }
 
 void URoadNetwork::SortIncident(FRoadNodeId NodeId)
