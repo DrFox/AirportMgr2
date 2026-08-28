@@ -131,7 +131,7 @@ public:
 	 * path, so whatever shows here is the geometry itself - independent of materials,
 	 * bounds, clip planes and the scene proxy.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") bool bDebugDrawMesh = true;
+	UPROPERTY(EditAnywhere, Category = "RoadNet") bool bDebugDrawMesh = false;
 
 	/** How long the debug wireframe survives, in seconds. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0")) double DebugDrawSeconds = 30.0;
