@@ -13,7 +13,15 @@ double URoadProfile::GetTotalWidth() const
 double URoadProfile::GetHalfWidthLeft() const
 {
 	const double Total = GetTotalWidth();
-	return (CentrelineOffset < 0.0) ? Total * 0.5 : CentrelineOffset;
+	if (CentrelineOffset < 0.0)
+	{
+		return Total * 0.5;   // sentinel: symmetric
+	}
+
+	// Clamped so GetHalfWidthRight() can never go negative. The junction solver
+	// offsets edge rays by these half-widths; a negative one mirrors an edge to
+	// the wrong side of the centreline and inverts the junction polygon.
+	return FMath::Min(CentrelineOffset, Total);
 }
 
 double URoadProfile::GetHalfWidthRight() const

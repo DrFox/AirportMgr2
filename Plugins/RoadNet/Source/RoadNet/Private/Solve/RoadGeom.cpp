@@ -152,42 +152,29 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 		return Result;
 	}
 
-	// How far along each edge the corner point sits. The tangent points must land at
-	// or after each edge's origin, so that the later perpendicular cut - taken as the
-	// max over a segment's two corners - never falls behind a tangent point.
+	// How far along each edge the corner point sits, measured from the node.
 	const double ReachA = FVector2D::DotProduct(Corner - A.Origin, A.Dir);
 	const double ReachB = FVector2D::DotProduct(Corner - B.Origin, B.Dir);
-	const double MaxDistance = FMath::Min(ReachA, ReachB);
 
-	const bool bConvex = Result.Theta < UE_DOUBLE_PI;
+	// The tangent points sit OUTWARD from the corner along both edges, never inward.
+	// Rounding a junction corner cannot carve material out of the corner itself -
+	// that would make the two arms overlap through the node - so the fillet instead
+	// pushes each arm's cut further back by this distance.
+	const double Magnitude = FMath::Abs(Radius / TanHalf);
 
-	// d = R / tan(Theta/2) is positive at a convex corner and negative at a reflex
-	// one, because tan flips sign past PI/2. Radius = d * tan(Theta/2) must stay
-	// non-negative either way, so d is clamped to its corner type's sign as well as
-	// to MaxDistance.
-	double Distance = Radius / TanHalf;
-	Distance = FMath::Min(Distance, MaxDistance);
-	Distance = bConvex ? FMath::Max(Distance, 0.0) : FMath::Min(Distance, 0.0);
-
-	const double EffectiveRadius = Distance * TanHalf;
-
-	// No fillet with a non-negative radius fits: the edges cross behind the node.
-	// Degrade to a straight join rather than emitting an inverted arc.
-	if (EffectiveRadius < 0.0 || (bConvex && MaxDistance < 0.0))
-	{
-		Result.bValid = true;
-		Result.bStraightThrough = true;
-		return Result;
-	}
+	// Which side of edge A the arc centre lies on. A convex corner (Theta < PI) is
+	// rounded toward the node's far side; a reflex corner is rounded the other way.
+	// This sign is the only difference between the inside and the outside of a bend.
+	const double Side = (Result.Theta < UE_DOUBLE_PI) ? 1.0 : -1.0;
 
 	Result.bValid = true;
-	Result.Radius = EffectiveRadius;
-	Result.Distance = Distance;
-	Result.TangentA = Corner - A.Dir * Distance;
-	Result.TangentB = Corner - B.Dir * Distance;
-	Result.Centre = Corner - Rotate(A.Dir, HalfTheta) * (EffectiveRadius / SinHalf);
-	Result.ParamA = ReachA - Distance;
-	Result.ParamB = ReachB - Distance;
+	Result.Radius = Radius;
+	Result.Distance = Magnitude;
+	Result.TangentA = Corner + A.Dir * Magnitude;
+	Result.TangentB = Corner + B.Dir * Magnitude;
+	Result.Centre = Result.TangentA + PerpCCW(A.Dir) * (Side * Radius);
+	Result.ParamA = ReachA + Magnitude;
+	Result.ParamB = ReachB + Magnitude;
 
 	return Result;
 }

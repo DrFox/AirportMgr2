@@ -50,19 +50,23 @@ namespace RoadGeom
 		FVector2D TangentA = FVector2D::ZeroVector;  // T_A: arc touches edge A here
 		FVector2D TangentB = FVector2D::ZeroVector;  // T_B: arc touches edge B here
 
-		/** d, signed. Positive at a convex corner, negative at a reflex one. */
+		/** |R / tan(Theta/2)|. Always non-negative: how far OUTWARD from the corner
+		 *  each tangent point sits, and therefore how much further back the fillet
+		 *  pushes each arm's cut. */
 		double Distance = 0.0;
 
-		/** Actual radius after clamping; may differ from the requested radius. */
+		/** The requested radius. The solve never clamps it; a caller that needs the
+		 *  trim to fit a finite segment must clamp before calling. */
 		double Radius = 0.0;
 
 		/** CCW angle from A.Dir to B.Dir, in [0, 2*UE_DOUBLE_PI). */
 		double Theta = 0.0;
 
-		/** Distance of T_A along A from A.Origin. Guaranteed >= 0 on success. */
+		/** Parameter of T_A along edge A, from A.Origin. Equals ReachA + Distance.
+		 *  May be negative at a reflex corner; the cut clamps at zero. */
 		double ParamA = 0.0;
 
-		/** Distance of T_B along B from B.Origin. Guaranteed >= 0 on success. */
+		/** Parameter of T_B along edge B, from B.Origin. Equals ReachB + Distance. */
 		double ParamB = 0.0;
 	};
 
@@ -71,9 +75,10 @@ namespace RoadGeom
 	 * order) and edge B (right edge of the next segment). Both Dir point AWAY from the
 	 * shared node.
 	 *
-	 * The radius is clamped so both tangent parameters are non-negative. At a convex
-	 * corner that clamps the radius DOWN; at a reflex corner it clamps it UP, because
-	 * d = R / tan(Theta/2) changes sign as Theta passes PI.
+	 * The tangent points sit OUTWARD from the corner point along both edges, so the
+	 * fillet pushes each arm's cut back rather than carving into the corner. The only
+	 * difference between the inside and the outside of a bend is which side of edge A
+	 * the arc centre falls on, which flips as Theta passes PI.
 	 */
 	ROADNET_API FFillet SolveFillet(const FRay2D& A, const FRay2D& B, double Radius);
 
