@@ -296,8 +296,7 @@ Expected: `Result: Succeeded`, and the log lists `Compile [x64] RoadNetModule.cp
 
 - [ ] **Step 8: Run the test and verify it FAILS**
 
-Run: `& "C:
-eposAirportMgr2ToolsRun-RoadNetTests.ps1"`
+Run: `& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"`
 Expected: `RoadNet.Scaffold.HarnessRuns` reports `Result={Failed}` with `Expected 4 but it was 5` (or the reverse wording). Non-zero exit code.
 
 - [ ] **Step 9: Correct the assertion**
@@ -547,8 +546,7 @@ The stale-handle-after-recycle assertions are the entire reason the generation c
   -project="C:\repos\AirportMgr2\AirportMgr.uproject" -waitmutex
 ```
 
-Then `& "C:
-eposAirportMgr2ToolsRun-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
+Then `& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"`. Expected: `RoadNet.Model.SlotMap` `Result={Success}`.
 
 If `RoadSlot::Add` fails to deduce `TItem`, call it as `RoadSlot::Add<FRoadNodeId, FTestItem>(...)`.
 
@@ -2642,7 +2640,7 @@ Expected: `Result: Succeeded`.
 - [ ] **Step 7: Run the full test suite once more**
 
 ```powershell
-& "C:epos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
+& "C:\repos\AirportMgr2\Tools\Run-RoadNetTests.ps1"
 ```
 
 Expected: all of `RoadNet.Scaffold.*`, `RoadNet.Model.*`, `RoadNet.Solve.*` report `Result={Success}`, zero failures.
