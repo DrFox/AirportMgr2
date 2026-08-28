@@ -1,0 +1,139 @@
+#include "CoreMinimal.h"
+#include "Misc/AutomationTest.h"
+#include "Build/RoadMeshBuilder.h"
+#include "Build/RoadNetworkSolver.h"
+#include "Model/RoadNetwork.h"
+#include "Profiles/RoadProfile.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadMeshAttributeTest,
+	"RoadNet.Build.MeshAttributes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
+{
+	constexpr double TotalWidth = 800.0;
+	constexpr double FilletRadius = 200.0;
+	constexpr double TexelsPerUnit = 512.0;
+	constexpr double ZHeight = 10.0;
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Profile = URoadProfile::MakeTransient(TotalWidth, FilletRadius);
+
+	// A bend, so there is a real junction with a fan as well as two dead ends.
+	const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId East   = Net->AddNode(FVector2D(12000.0, 0.0));
+	const FRoadNodeId North  = Net->AddNode(FVector2D(0.0, 12000.0));
+	const FRoadSegmentId ToEast  = Net->AddStraightSegment(Centre, East,  Profile);
+	const FRoadSegmentId ToNorth = Net->AddStraightSegment(Centre, North, Profile);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	TestEqual(TEXT("every node solved"), Solved.FailedNodes, 0);
+
+	// Segments FIRST, then junctions. The order is the contract: it decides who owns
+	// UV1 at a shared cut vertex.
+	FRoadMeshBuilder Builder(ZHeight, TexelsPerUnit);
+	Builder.AddSegment(*Net, ToEast, 1);
+	Builder.AddSegment(*Net, ToNorth, 1);
+	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+	{
+		Builder.AddJunction(Pair.Value);
+	}
+
+	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+
+	// Every channel stays parallel to Positions, or the sink cannot index them.
+	TestEqual(TEXT("UV0 is parallel to positions"), Buffers.UV0.Num(), Buffers.Positions.Num());
+	TestEqual(TEXT("UV1 is parallel to positions"), Buffers.UV1.Num(), Buffers.Positions.Num());
+	TestEqual(TEXT("colours are parallel to positions"), Buffers.Colors.Num(), Buffers.Positions.Num());
+
+	// UV0 is a pure function of world position. This is what makes the asphalt continuous
+	// across a junction boundary for free (design spec 6.3) - it cannot disagree between a
+	// junction and a segment, because it never depends on which one wrote it.
+	for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+	{
+		const FVector3d& P = Buffers.Positions[Index];
+		TestEqual(FString::Printf(TEXT("UV0.X derives from X at vertex %d"), Index),
+			Buffers.UV0[Index].X, static_cast<float>(P.X / TexelsPerUnit));
+		TestEqual(FString::Printf(TEXT("UV0.Y derives from Y at vertex %d"), Index),
+			Buffers.UV0[Index].Y, static_cast<float>(P.Y / TexelsPerUnit));
+	}
+
+	// THE ORDERING RULE. The B end of ToEast is a dead end at (12000, 0). Its cut
+	// vertices are shared with nothing, but its ribbon-end vertices carry along =
+	// the trimmed length. If a junction had overwritten them with along = 0, this fails.
+	{
+		const FRoadSegment* Seg = Net->GetSegment(ToEast);
+		if (!TestNotNull(TEXT("east segment resolves"), Seg))
+		{
+			return false;
+		}
+
+		const double Length = FVector2D::Distance(
+			Net->GetNodes()[Centre.Index].Position, Net->GetNodes()[East.Index].Position);
+		const double ExpectedAlong = Length - Seg->TrimB - Seg->TrimA;
+
+		int32 Found = INDEX_NONE;
+		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+		{
+			if (Buffers.Positions[Index].X == Seg->LeftCutB.X &&
+				Buffers.Positions[Index].Y == Seg->LeftCutB.Y)
+			{
+				Found = Index;
+				break;
+			}
+		}
+
+		if (TestTrue(TEXT("the B-end cut vertex is in the buffer"), Found != INDEX_NONE))
+		{
+			TestTrue(
+				FString::Printf(TEXT("along at the B end is the ribbon length (got %f, want %f)"),
+					Buffers.UV1[Found].Y, ExpectedAlong),
+				FMath::IsNearlyEqual(static_cast<double>(Buffers.UV1[Found].Y), ExpectedAlong, 1.0));
+		}
+	}
+
+	// Lateral is signed across the profile: left positive, right negative, and its
+	// magnitude is the half-width. Checked on the A-end cut vertices, which the segment
+	// owns outright.
+	{
+		const FRoadSegment* Seg = Net->GetSegment(ToEast);
+		const float HalfLeft  = static_cast<float>(Profile->GetHalfWidthLeft());
+		const float HalfRight = static_cast<float>(Profile->GetHalfWidthRight());
+
+		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+		{
+			if (Buffers.Positions[Index].X == Seg->LeftCutA.X &&
+				Buffers.Positions[Index].Y == Seg->LeftCutA.Y)
+			{
+				TestEqual(TEXT("left rail lateral is +HalfWidthLeft"), Buffers.UV1[Index].X, HalfLeft);
+			}
+			if (Buffers.Positions[Index].X == Seg->RightCutA.X &&
+				Buffers.Positions[Index].Y == Seg->RightCutA.Y)
+			{
+				TestEqual(TEXT("right rail lateral is -HalfWidthRight"), Buffers.UV1[Index].X, -HalfRight);
+			}
+		}
+	}
+
+	// Junction blend: 0 wherever a segment wrote, 1 at a fan apex. The apex is the only
+	// vertex that is not on any cut line or rail, so at least one vertex must carry 255.
+	{
+		bool bFoundApex = false;
+		for (const FColor& Colour : Buffers.Colors)
+		{
+			if (Colour.G == 255)
+			{
+				bFoundApex = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("a junction apex carries full junction blend"), bFoundApex);
+	}
+
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

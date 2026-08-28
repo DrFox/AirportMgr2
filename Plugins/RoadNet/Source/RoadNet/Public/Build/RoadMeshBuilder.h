@@ -19,7 +19,7 @@ class URoadNetwork;
 class ROADNET_API FRoadMeshBuilder
 {
 public:
-	explicit FRoadMeshBuilder(double InZHeight);
+	explicit FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit = 512.0);
 
 	/** Append a solved junction's triangle fan. */
 	void AddJunction(const FJunctionResult& Junction);
@@ -37,12 +37,23 @@ public:
 	int32 VertexCount() const { return Buffers.Positions.Num(); }
 
 private:
-	/** Returns the index of Point, appending it only if this exact value is new. */
-	int32 WeldVertex(const FVector2D& Point);
+	/**
+	 * Returns the index of Point, appending it only if this exact value is new.
+	 *
+	 * FIRST WRITER WINS. When the point is already present the incoming UV1 and colour
+	 * are discarded, because a welded vertex can only hold one of each. That is why
+	 * callers add segments BEFORE junctions: a segment measures `along` from its A end,
+	 * so its B-end cut vertices carry along = the ribbon's length, while the junction
+	 * standing at that node would write along = 0. Segments must therefore write first
+	 * and own the shared attributes; junctions then supply values only for the vertices
+	 * they alone introduce - arc samples and the fan apex.
+	 */
+	int32 WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FColor& InColor);
 
 	void AddTriangle(int32 A, int32 B, int32 C);
 
 	double ZHeight;
+	double TexelsPerUnit;
 	FRoadMeshBuffers Buffers;
 	TMap<FVector2D, int32> WeldMap;
 };

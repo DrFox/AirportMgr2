@@ -10,14 +10,28 @@ namespace
 	{
 		return Value == 0.0 ? 0.0 : Value;
 	}
+
+	/** Vertex colour for a vertex a segment owns: no junction blend, fully opaque. */
+	FColor SegmentColour()
+	{
+		return FColor(0, 0, 0, 255);
+	}
+
+	/** Vertex colour for a junction's own vertices, blended by how far into the fan they are. */
+	FColor JunctionColour(double Blend)
+	{
+		const uint8 G = static_cast<uint8>(FMath::Clamp(Blend, 0.0, 1.0) * 255.0 + 0.5);
+		return FColor(0, G, 0, 255);
+	}
 }
 
-FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight)
+FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit)
 	: ZHeight(InZHeight)
+	, TexelsPerUnit(InTexelsPerUnit > 0.0 ? InTexelsPerUnit : 1.0)
 {
 }
 
-int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point)
+int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FColor& InColor)
 {
 	// FVector2D::operator== compares X and Y by value, under which -0.0 == +0.0. But
 	// GetTypeHash(const TVector2<T>&) is a CRC over the raw bytes, so -0.0 and +0.0 hash
@@ -31,10 +45,21 @@ int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point)
 
 	if (const int32* Existing = WeldMap.Find(Key))
 	{
+		// First writer wins - see the header for why this is the contract rather than a
+		// convenience, and why it forces segments to be added before junctions.
 		return *Existing;
 	}
 
 	const int32 NewIndex = Buffers.Positions.Add(FVector3d(Key.X, Key.Y, ZHeight));
+
+	// UV0 is derived here and nowhere else, so two callers cannot supply different
+	// world-aligned UVs for the same position.
+	Buffers.UV0.Add(FVector2f(
+		static_cast<float>(Key.X / TexelsPerUnit),
+		static_cast<float>(Key.Y / TexelsPerUnit)));
+	Buffers.UV1.Add(InUV1);
+	Buffers.Colors.Add(InColor);
+
 	WeldMap.Add(Key, NewIndex);
 	return NewIndex;
 }
@@ -61,11 +86,25 @@ void FRoadMeshBuilder::AddJunction(const FJunctionResult& Junction)
 
 	// Boundary holds the rim followed by the fan apex; Triangles indexes into it.
 	// Map every boundary slot through the weld map once, then re-index.
+	//
+	// Almost every rim vertex is a cut vertex some segment has already welded, so for
+	// those these attributes are discarded - see WeldVertex. They land only on the arc
+	// samples and the apex, which no segment touches. The apex carries full junction
+	// blend so markings taper out toward a junction's centre rather than stopping dead
+	// at the rim, which is what lets one welded vertex serve both sides.
+	const int32 ApexSlot = Junction.Boundary.Num() - 1;
+
 	TArray<int32> Mapped;
 	Mapped.Reserve(Junction.Boundary.Num());
-	for (const FVector2D& Point : Junction.Boundary)
+	for (int32 Slot = 0; Slot < Junction.Boundary.Num(); ++Slot)
 	{
-		Mapped.Add(WeldVertex(Point));
+		// An arc sample is an outer-edge point and a junction has no centreline to
+		// measure along, so UV1 here is meaningless by design; junction blend is what
+		// stops anything reading it.
+		Mapped.Add(WeldVertex(
+			Junction.Boundary[Slot],
+			FVector2f(0.0f, 0.0f),
+			JunctionColour(Slot == ApexSlot ? 1.0 : 0.0)));
 	}
 
 	for (int32 Slot = 0; Slot + 2 < Junction.Triangles.Num(); Slot += 3)
@@ -97,6 +136,14 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	const FVector2D LeftEnd  = Segment->RightCutB;
 	const FVector2D RightEnd = Segment->LeftCutB;
 
+	const URoadProfile* SegProfile = Segment->Profile;
+	const float LateralLeft  = static_cast<float>(SegProfile ? FMath::Max(SegProfile->GetHalfWidthLeft(),  0.0) : 0.0);
+	const float LateralRight = static_cast<float>(SegProfile ? FMath::Max(SegProfile->GetHalfWidthRight(), 0.0) : 0.0);
+
+	// `along` runs from the A-end cut to the B-end cut, so it measures the ribbon rather
+	// than the node-to-node distance. Markings therefore start where the surface starts.
+	const double RibbonLength = FVector2D::Distance(LeftStart, LeftEnd);
+
 	TArray<int32> LeftRail;
 	TArray<int32> RightRail;
 	LeftRail.Reserve(Steps + 1);
@@ -104,23 +151,27 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 	for (int32 Step = 0; Step <= Steps; ++Step)
 	{
+		const double Alpha = static_cast<double>(Step) / static_cast<double>(Steps);
+		const float Along = static_cast<float>(Alpha * RibbonLength);
+
 		if (Step == 0)
 		{
-			LeftRail.Add(WeldVertex(LeftStart));
-			RightRail.Add(WeldVertex(RightStart));
+			LeftRail.Add(WeldVertex(LeftStart, FVector2f(LateralLeft, Along), SegmentColour()));
+			RightRail.Add(WeldVertex(RightStart, FVector2f(-LateralRight, Along), SegmentColour()));
 		}
 		else if (Step == Steps)
 		{
-			LeftRail.Add(WeldVertex(LeftEnd));
-			RightRail.Add(WeldVertex(RightEnd));
+			LeftRail.Add(WeldVertex(LeftEnd, FVector2f(LateralLeft, Along), SegmentColour()));
+			RightRail.Add(WeldVertex(RightEnd, FVector2f(-LateralRight, Along), SegmentColour()));
 		}
 		else
 		{
 			// Interior samples are ours alone and may be interpolated freely; only the
 			// ends are shared with a junction.
-			const double Alpha = static_cast<double>(Step) / static_cast<double>(Steps);
-			LeftRail.Add(WeldVertex(FMath::Lerp(LeftStart, LeftEnd, Alpha)));
-			RightRail.Add(WeldVertex(FMath::Lerp(RightStart, RightEnd, Alpha)));
+			LeftRail.Add(WeldVertex(FMath::Lerp(LeftStart, LeftEnd, Alpha),
+				FVector2f(LateralLeft, Along), SegmentColour()));
+			RightRail.Add(WeldVertex(FMath::Lerp(RightStart, RightEnd, Alpha),
+				FVector2f(-LateralRight, Along), SegmentColour()));
 		}
 	}
 
@@ -145,9 +196,8 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	// Clamped exactly like JunctionSolver.cpp clamps Arm.HalfWidthLeft/Right: a negative
 	// band width must not mirror the cap to the wrong side while the ribbon end (which
 	// came from the solver, already clamped) stays put.
-	const URoadProfile* Profile = Segment->Profile;
-	const double HalfWidthLeft  = Profile ? FMath::Max(Profile->GetHalfWidthLeft(),  0.0) : 0.0;
-	const double HalfWidthRight = Profile ? FMath::Max(Profile->GetHalfWidthRight(), 0.0) : 0.0;
+	const double HalfWidthLeft  = static_cast<double>(LateralLeft);
+	const double HalfWidthRight = static_cast<double>(LateralRight);
 
 	const FRoadNode* NodeA = Network.GetNode(Segment->A);
 	if (NodeA != nullptr && NodeA->Incident.Num() == 1)
@@ -162,10 +212,12 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 		// The cap sits BEFORE the ribbon's first cross-section walking A to B: node cap
 		// line first, ribbon start second.
-		const int32 R0 = WeldVertex(CapRight);
+		// The cap spans from the node's own cut line to the ribbon's start, so it sits at
+		// along = 0 - the surface really does begin at the node, not at the trimmed cut.
+		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentColour());
 		const int32 R1 = RightRail[0];
 		const int32 L1 = LeftRail[0];
-		const int32 L0 = WeldVertex(CapLeft);
+		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentColour());
 
 		AddTriangle(R0, R1, L1);
 		AddTriangle(R0, L1, L0);
@@ -187,9 +239,10 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 		// The cap sits AFTER the ribbon's last cross-section walking A to B: ribbon end
 		// first, node cap line second.
+		const float CapAlong = static_cast<float>(RibbonLength);
 		const int32 R0 = RightRail[Steps];
-		const int32 R1 = WeldVertex(CapRight);
-		const int32 L1 = WeldVertex(CapLeft);
+		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentColour());
+		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentColour());
 		const int32 L0 = LeftRail[Steps];
 
 		AddTriangle(R0, R1, L1);
