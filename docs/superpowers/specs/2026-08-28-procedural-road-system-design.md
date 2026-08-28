@@ -53,6 +53,10 @@ Decided during design:
 | R5 | Scale | Airport-sized: a few hundred segments, all loaded, all visible. No streaming. Instant drag feedback. |
 | R6 | Junction geometry | Analytic offset + tangent-arc fillet solve. |
 | R7 | Ghost preview | CS-style translucent "blueprint" shader while dragging, with validity colouring. |
+| R8 | Curve representation | Quadratic Bezier (one control point). S-curves are achieved by chaining segments, not within one. |
+| R9 | Segment subdivision | A long drag auto-subdivides into multiple segments at a maximum length, giving finer granularity for AI pathing and per-segment logic. One drag remains one undo step (`FComposite`). |
+| R10 | Runway crossings | A taxiway crossing a runway creates a **real junction node** with shared geometry, not an unconnected overlapping surface. Hold-short logic then has a topological place to live. |
+| R11 | Fillet radius | Authored per profile as a plain number. An ICAO design-group table is a later refinement, not a Slice 1–4 concern. |
 
 ### Non-goals
 
@@ -528,17 +532,19 @@ Resolution: update Visual Studio 2026 to a build shipping MSVC `14.50.35723` or 
 
 ---
 
-## 11. Open questions
+## 11. Resolved decisions
 
-1. **Fillet radius defaults.** Real taxiway fillets are large, and ICAO guidance ties
-   them to aircraft design group. Should `PreferredFilletRadius` be authored per
-   profile as a plain number now, or driven by a design-group table from the outset?
-2. **Curve representation.** Quadratic Bezier (one control point, matching CS's curved
-   mode) is assumed. Cubic would allow S-curves within a single segment. Quadratic is
-   simpler and chaining covers most cases — confirm that is acceptable.
-3. **Runway crossings.** Should a taxiway crossing a runway create a real junction
-   node (shared geometry, hold-short logic), or pass over as a separate surface with
-   no topological connection? This affects the graph model and is worth settling
-   before Slice 4.
-4. **Segment length limits.** Should long drags auto-subdivide into multiple segments
-   at a maximum length, as CS does, or remain one segment with a sampled polyline?
+All four questions raised during design review are settled; see R8–R11 in §2.
+
+| Question | Decision | Consequence |
+|---|---|---|
+| Fillet radius defaults | Per-profile plain number (R11) | ICAO design-group tables deferred; `PreferredFilletRadius` stays a single float on `URoadProfile` |
+| Curve representation | Quadratic Bezier (R8) | One `Control` point per segment, as modelled in §4.2. S-curves come from chaining |
+| Runway crossings | Real junction node (R10) | The graph must tolerate very large width disparities at a node, and the fillet clamp of §5.4 must handle a narrow taxiway meeting a wide runway. Affects Slice 4, not Slice 1 |
+| Segment length limits | Auto-subdivide at a maximum length (R9) | The build tool emits *n* segments per drag wrapped in one `FComposite` command; `URoadNetwork` must handle collinear interior nodes efficiently, and §5's theta-approaches-pi case (no fillet, straight join) becomes the common path rather than an edge case |
+
+### Deferred to later slices
+
+- ICAO design-group fillet tables.
+- Hold-short markings and logic at runway crossings (slice 6).
+- Aprons and stands as polygon surfaces (slice 5).
