@@ -251,41 +251,57 @@ if it ever isn't.
 
 ### Step 3 — The tangent arc
 
-Two rays diverging from their intersection `X`, with interior angle `theta`:
+A junction fillet **cannot be carved out of the corner**. Removing material there
+would let the two adjacent arms overlap through the node, and every arm's cut line
+would cross every other's. The fillet instead pushes each arm's cut *further back*.
+
+Let `X` be where arm i's left edge crosses arm i+1's right edge, and
+`theta` the CCW angle from `u_i` to `u_i+1` (the angular gap between the arms):
 
 ```
-                  / ray u2
-                 /
-           T2 o
-            / /
-     C o   /            C = arc centre
-        \ /             R = fillet radius
-  ------o------o------- ray u1
-        X      T1
+                    T_B
+                     o- - - - o C
+                    /|        |
+                   / |        |     C   = arc centre
+      arm i+1     /  |        |     R   = fillet radius
+       edge      /   |        |     m   = |R / tan(theta/2)|
+                o----o--------o
+                X   T_A        arm i edge  ->
 
-  d = |X->T1| = |X->T2| = R / tan(theta/2)
-  |X->C|                = R / sin(theta/2)
+  m     = |R / tan(theta/2)|          always non-negative
+  T_A   = X + m * u_i                 outward from X, never toward the node
+  T_B   = X + m * u_i+1
+  C     = T_A + side * R * perp(u_i)  side = +1 if theta < PI, -1 otherwise
+  cut_i = reach_i + m                 reach_i = projection of X onto u_i
 ```
 
-### Step 4 — Clamping
+**The inside and the outside of a bend differ only in `side`.** That single sign is
+the whole distinction; everything else is the same expression. A mitred corner is
+what you get when the code never computes it.
+
+### Step 4 — Degenerate cases
 
 | Case | Symptom | Handling |
 |---|---|---|
-| theta approaches pi (nearly straight through) | `d` approaches 0 | no fillet, straight join |
-| theta approaches 0 (acute, near-parallel) | `d` diverges | clamp `d` to a fraction of segment length |
-| short segment between two junctions | both ends' fillets overlap | reduce `R` until `d` fits, solving back for `R` |
+| theta = PI (collinear) | no corner exists; edges are parallel | no arc, straight join, contributes no trim |
+| edges parallel but not collinear | no intersection `X` | the node cannot be solved; report invalid |
+| very acute theta | `m` grows without bound, trim runs off down the arm | the solver does not clamp: a caller that must fit a finite segment clamps the radius before calling |
+
+The radius is deliberately **not** clamped inside the solve. Clamping needs the
+segment's length, which the solver does not know and must not depend on.
 
 ### Step 5 — The segment/junction contract
 
 > **Every segment ends in a straight cut perpendicular to its centreline.** The solver
-> computes that cut distance — `max` over the segment's two adjacent corners — and the
-> two vertices at its ends. The junction polygon is assembled **from those exact same
-> vertex values**. Neither side recomputes the other's geometry.
+> computes that cut distance — `max` over the segment's two adjacent corners of
+> `reach + m`, floored at zero — and the two vertices at its ends. The junction
+> polygon is assembled **from those exact same vertex values**. Neither side ever
+> recomputes the other's geometry.
 
-Because the cut is at `max(d)` of the two adjacent corners, both tangent points lie at
-or beyond the cut, so each corner's boundary is `straight -> arc -> straight` with
-non-negative lengths throughout. No special cases, no epsilon tolerance, and the
-shared vertices are bitwise identical rather than merely close.
+Because the cut clears the corner point by the fillet's own reach, each corner's arc
+endpoints *are* cut vertices when that corner is the binding one, and otherwise sit
+behind the cut by a non-negative straight run. The shared vertices are bitwise
+identical rather than merely close.
 
 This is the single most important decision in the design. It makes the seams from the
 old system structurally impossible rather than tuned away.
