@@ -803,7 +803,7 @@ struct ROADNET_API FRoadNode
 
 	UPROPERTY() FVector2D Position = FVector2D::ZeroVector;
 
-	/** Incident segments, maintained sorted by outgoing bearing, ascending in (-PI, PI]. */
+	/** Incident segments, maintained sorted by outgoing bearing, ascending in (-UE_DOUBLE_PI, UE_DOUBLE_PI]. */
 	UPROPERTY() TArray<FRoadSegmentId> Incident;
 
 	UPROPERTY() int32 Generation = 0;
@@ -1084,7 +1084,7 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 	const FVector2D TanBack = Net->GetOutgoingTangent(ToEast, East);
 	TestTrue(TEXT("reverse tangent"), TanBack.Equals(FVector2D(-1.0, 0.0), 1e-6));
 
-	// Incident list sorted by bearing ascending: east(0), north(PI/2), west(PI).
+	// Incident list sorted by bearing ascending: east(0), north(UE_DOUBLE_PI/2), west(UE_DOUBLE_PI).
 	const FRoadNode* CentreNode = Net->GetNode(Centre);
 	TestEqual(TEXT("incident count"), CentreNode->Incident.Num(), 3);
 	TestTrue(TEXT("order[0] east"),  CentreNode->Incident[0] == ToEast);
@@ -1139,7 +1139,7 @@ git commit -m "feat(roadnet): URoadNetwork repository with bearing-sorted incide
   - `struct FRay2D { FVector2D Origin; FVector2D Dir; }` — `Dir` always normalised.
   - `RoadGeom::PerpCCW(const FVector2D&) -> FVector2D`
   - `RoadGeom::Bearing(const FVector2D&) -> double`
-  - `RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To) -> double` in `[0, 2*PI)`
+  - `RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To) -> double` in `[0, 2*UE_DOUBLE_PI)`
   - `RoadGeom::Rotate(const FVector2D&, double Radians) -> FVector2D`
   - `RoadGeom::LineIntersect(const FRay2D&, const FRay2D&, FVector2D& Out) -> bool`
   - `RoadGeom::PolygonArea(TArrayView<const FVector2D>) -> double` (signed; positive means CCW)
@@ -1173,10 +1173,10 @@ namespace RoadGeom
 	/** Rotate by Radians counter-clockwise. */
 	ROADNET_API FVector2D Rotate(const FVector2D& V, double Radians);
 
-	/** atan2 bearing in (-PI, PI]. */
+	/** atan2 bearing in (-UE_DOUBLE_PI, UE_DOUBLE_PI]. */
 	ROADNET_API double Bearing(const FVector2D& Dir);
 
-	/** CCW angle from From to To, in [0, 2*PI). */
+	/** CCW angle from From to To, in [0, 2*UE_DOUBLE_PI). */
 	ROADNET_API double CcwAngleBetween(const FVector2D& From, const FVector2D& To);
 
 	/** Intersection of the two infinite lines. False if near-parallel. */
@@ -1245,11 +1245,11 @@ double RoadGeom::CcwAngleBetween(const FVector2D& From, const FVector2D& To)
 	double Angle = Bearing(To) - Bearing(From);
 	while (Angle < 0.0)
 	{
-		Angle += 2.0 * PI;
+		Angle += 2.0 * UE_DOUBLE_PI;
 	}
-	while (Angle >= 2.0 * PI)
+	while (Angle >= 2.0 * UE_DOUBLE_PI)
 	{
-		Angle -= 2.0 * PI;
+		Angle -= 2.0 * UE_DOUBLE_PI;
 	}
 	return Angle;
 }
@@ -1338,13 +1338,13 @@ bool FRoadGeomTest::RunTest(const FString& Parameters)
 
 	// Rotate
 	TestTrue(TEXT("rotate +X by 90deg"),
-		RoadGeom::Rotate(FVector2D(1.0, 0.0), PI * 0.5).Equals(FVector2D(0.0, 1.0), 1e-9));
+		RoadGeom::Rotate(FVector2D(1.0, 0.0), UE_DOUBLE_PI * 0.5).Equals(FVector2D(0.0, 1.0), 1e-9));
 
 	// CcwAngleBetween is always in [0, 2PI)
 	TestTrue(TEXT("east to north is 90deg"),
-		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(1.0, 0.0), FVector2D(0.0, 1.0)), PI * 0.5, 1e-9));
+		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(1.0, 0.0), FVector2D(0.0, 1.0)), UE_DOUBLE_PI * 0.5, 1e-9));
 	TestTrue(TEXT("north to east is 270deg"),
-		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(0.0, 1.0), FVector2D(1.0, 0.0)), PI * 1.5, 1e-9));
+		FMath::IsNearlyEqual(RoadGeom::CcwAngleBetween(FVector2D(0.0, 1.0), FVector2D(1.0, 0.0)), UE_DOUBLE_PI * 1.5, 1e-9));
 
 	// LineIntersect
 	FRay2D Horizontal; Horizontal.Origin = FVector2D(0.0, 5.0); Horizontal.Dir = FVector2D(1.0, 0.0);
@@ -1419,12 +1419,12 @@ ParamA = dot(T_A - A.Origin, A.Dir)
 ParamB = dot(T_B - B.Origin, B.Dir)
 ```
 
-Both tangent points use the **same** `X - d * Dir` form. The formula is uniform across convex and reflex corners because `d` changes sign: at `Theta < PI` (convex) `d > 0`; at `Theta > PI` (reflex) `tan(Theta/2) < 0` so `d < 0` and the tangent points move outward from `X` instead of inward. At `Theta == PI` the segments are collinear, `tan` diverges, `d -> 0`, and there is no corner to round — return `bStraightThrough = true`. **Because R9 auto-subdivides long drags, collinear nodes are the common case, not an edge case.** A solver that rounds them produces visible faceting down every straight run.
+Both tangent points use the **same** `X - d * Dir` form. The formula is uniform across convex and reflex corners because `d` changes sign: at `Theta < UE_DOUBLE_PI` (convex) `d > 0`; at `Theta > UE_DOUBLE_PI` (reflex) `tan(Theta/2) < 0` so `d < 0` and the tangent points move outward from `X` instead of inward. At `Theta == UE_DOUBLE_PI` the segments are collinear, `tan` diverges, `d -> 0`, and there is no corner to round — return `bStraightThrough = true`. **Because R9 auto-subdivides long drags, collinear nodes are the common case, not an edge case.** A solver that rounds them produces visible faceting down every straight run.
 
 **Clamping.** The polygon stays sane only if both tangent points sit at a non-negative parameter along their edges, so that the later cut (`max` over a segment's two corners) lies at or beyond them. Enforce `ParamA >= 0` and `ParamB >= 0` by adjusting `R`:
 
-- Convex (`Theta < PI`, `d > 0`): `d` must not exceed `min(a_A, a_B)` where `a = dot(X - Origin, Dir)`. Reduce `R` to `min(a_A, a_B) * tan(Theta/2)` when it does.
-- Reflex (`Theta > PI`, `d < 0`): `d` must still satisfy `d <= min(a_A, a_B)`, and since both sides are negative this **raises** the required `R`. Increase `R` to `min(a_A, a_B) * tan(Theta/2)` when needed.
+- Convex (`Theta < UE_DOUBLE_PI`, `d > 0`): `d` must not exceed `min(a_A, a_B)` where `a = dot(X - Origin, Dir)`. Reduce `R` to `min(a_A, a_B) * tan(Theta/2)` when it does.
+- Reflex (`Theta > UE_DOUBLE_PI`, `d < 0`): `d` must still satisfy `d <= min(a_A, a_B)`, and since both sides are negative this **raises** the required `R`. Increase `R` to `min(a_A, a_B) * tan(Theta/2)` when needed.
 
 In both cases the corrected value is the same expression, `R = min(a_A, a_B) * tan(Theta/2)`; only the direction of the adjustment differs. Worked check on a 90° two-way bend of half-width `w`: the convex corner has `a_A = a_B = w`, so `R <= w`; the reflex corner has `a_A = a_B = -w` and `tan(135°) = -1`, so `R >= w`. Inner radius capped at the half-width, outer radius floored at it — which is what a road corner should do.
 
@@ -1449,7 +1449,7 @@ Append inside `namespace RoadGeom` in `Public/Solve/RoadGeom.h`:
 
 		double Distance = 0.0;  // d, signed
 		double Radius   = 0.0;  // actual radius after clamping
-		double Theta    = 0.0;  // CCW angle from A.Dir to B.Dir, [0, 2*PI)
+		double Theta    = 0.0;  // CCW angle from A.Dir to B.Dir, [0, 2*UE_DOUBLE_PI)
 		double ParamA   = 0.0;  // distance of T_A along A from A.Origin
 		double ParamB   = 0.0;  // distance of T_B along B from B.Origin
 	};
@@ -1476,7 +1476,7 @@ RoadGeom::FFillet RoadGeom::SolveFillet(const FRay2D& A, const FRay2D& B, double
 	Result.Theta = CcwAngleBetween(A.Dir, B.Dir);
 
 	constexpr double CollinearEpsilon = 1e-6;
-	if (FMath::Abs(Result.Theta - PI) < CollinearEpsilon)
+	if (FMath::Abs(Result.Theta - UE_DOUBLE_PI) < CollinearEpsilon)
 	{
 		Result.bValid = true;
 		Result.bStraightThrough = true;
@@ -1538,8 +1538,8 @@ void RoadGeom::SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVect
 
 	const double StartAngle = Bearing(FromCentreA);
 	double Sweep = Bearing(FromCentreB) - StartAngle;
-	while (Sweep > PI)  { Sweep -= 2.0 * PI; }
-	while (Sweep < -PI) { Sweep += 2.0 * PI; }
+	while (Sweep > UE_DOUBLE_PI)  { Sweep -= 2.0 * UE_DOUBLE_PI; }
+	while (Sweep < -UE_DOUBLE_PI) { Sweep += 2.0 * UE_DOUBLE_PI; }
 
 	const double ArcRadius = FromCentreA.Length();
 	for (int32 Step = 0; Step <= SegmentCount; ++Step)
@@ -1581,7 +1581,7 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 		const RoadGeom::FFillet Inner = RoadGeom::SolveFillet(EastLeft, NorthRight, 500.0);
 		TestTrue(TEXT("inner valid"), Inner.bValid);
 		TestFalse(TEXT("inner not straight"), Inner.bStraightThrough);
-		TestTrue(TEXT("inner theta 90deg"), FMath::IsNearlyEqual(Inner.Theta, PI * 0.5, 1e-9));
+		TestTrue(TEXT("inner theta 90deg"), FMath::IsNearlyEqual(Inner.Theta, UE_DOUBLE_PI * 0.5, 1e-9));
 		TestTrue(TEXT("inner corner at (W,W)"), Inner.Corner.Equals(FVector2D(W, W), 1e-6));
 		TestTrue(TEXT("inner d equals R"), FMath::IsNearlyEqual(Inner.Distance, 500.0, 1e-6));
 		TestTrue(TEXT("inner tangent A"), Inner.TangentA.Equals(FVector2D(W - 500.0, W), 1e-6));
@@ -1613,7 +1613,7 @@ bool FRoadFilletTest::RunTest(const FString& Parameters)
 	{
 		const RoadGeom::FFillet Outer = RoadGeom::SolveFillet(NorthLeft, EastRight, 3000.0);
 		TestTrue(TEXT("outer valid"), Outer.bValid);
-		TestTrue(TEXT("outer theta 270deg"), FMath::IsNearlyEqual(Outer.Theta, PI * 1.5, 1e-9));
+		TestTrue(TEXT("outer theta 270deg"), FMath::IsNearlyEqual(Outer.Theta, UE_DOUBLE_PI * 1.5, 1e-9));
 		TestTrue(TEXT("outer corner at (-W,-W)"), Outer.Corner.Equals(FVector2D(-W, -W), 1e-6));
 		TestTrue(TEXT("outer d is negative"), Outer.Distance < 0.0);
 		TestTrue(TEXT("outer tangent A"), Outer.TangentA.Equals(FVector2D(-W, -W + 3000.0), 1e-6));
@@ -1997,9 +1997,9 @@ bool FRoadJunctionCutTest::RunTest(const FString& Parameters)
 	// --- Acute 15deg fork, 3-way and 5-way stay finite and non-negative ---
 	{
 		const TArray<TArray<double>> BearingSets = {
-			{ 0.0, PI * (15.0 / 180.0), PI },                                 // acute fork
-			{ 0.0, PI * 0.5, PI * 1.25 },                                     // 3-way Y
-			{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }                   // 5-way
+			{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0), UE_DOUBLE_PI },                                 // acute fork
+			{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI * 1.25 },                                     // 3-way Y
+			{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }                   // 5-way
 		};
 
 		for (const TArray<double>& Bearings : BearingSets)
@@ -2097,6 +2097,14 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 	const int32 CentreIndex = InOutResult.Boundary.Add(Input.Position);
 
 	const int32 RimCount = CentreIndex; // every vertex before the centre
+	if (RimCount < 3)
+	{
+		// A dead end contributes only two cut vertices: there is no fan to build.
+		// Proper end-cap geometry is Slice 2's mesh-builder concern; the boundary
+		// is still populated so debug draw can show the cut.
+		return;
+	}
+
 	InOutResult.Triangles.Reserve(RimCount * 3);
 	for (int32 Index = 0; Index < RimCount; ++Index)
 	{
@@ -2149,14 +2157,14 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 
 	// The gallery: every configuration the solver must survive.
 	const TArray<TArray<double>> Gallery = {
-		{ 0.0, PI * (15.0 / 180.0) },          // 2-way, 15 deg
-		{ 0.0, PI * 0.25 },                    // 2-way, 45 deg
-		{ 0.0, PI * 0.5 },                     // 2-way, 90 deg
-		{ 0.0, PI * (170.0 / 180.0) },         // 2-way, 170 deg
-		{ 0.0, PI * 0.5, PI },                 // 3-way T
-		{ 0.0, PI * 0.6667, PI * 1.3333 },     // 3-way Y
-		{ 0.0, PI * 0.5, PI, PI * 1.5 },       // 4-way
-		{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }  // 5-way
+		{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0) },          // 2-way, 15 deg
+		{ 0.0, UE_DOUBLE_PI * 0.25 },                    // 2-way, 45 deg
+		{ 0.0, UE_DOUBLE_PI * 0.5 },                     // 2-way, 90 deg
+		{ 0.0, UE_DOUBLE_PI * (170.0 / 180.0) },         // 2-way, 170 deg
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI },                 // 3-way T
+		{ 0.0, UE_DOUBLE_PI * 0.6667, UE_DOUBLE_PI * 1.3333 },     // 3-way Y
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI, UE_DOUBLE_PI * 1.5 },       // 4-way
+		{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }  // 5-way
 	};
 
 	for (int32 CaseIndex = 0; CaseIndex < Gallery.Num(); ++CaseIndex)
@@ -2217,8 +2225,8 @@ bool FRoadJunctionPolygonTest::RunTest(const FString& Parameters)
 		double PreviousArea = -1.0;
 		for (int32 Step = 1; Step < 360; ++Step)
 		{
-			const double Bearing = PI * 2.0 * static_cast<double>(Step) / 360.0;
-			if (FMath::Abs(Bearing - PI) < 0.02)
+			const double Bearing = UE_DOUBLE_PI * 2.0 * static_cast<double>(Step) / 360.0;
+			if (FMath::Abs(Bearing - UE_DOUBLE_PI) < 0.02)
 			{
 				continue; // the collinear case is a legitimate discontinuity in topology
 			}
@@ -2455,6 +2463,7 @@ private:
 #include "Debug/RoadJunctionGallery.h"
 
 #include "Debug/RoadDebugDraw.h"
+#include "DrawDebugHelpers.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
@@ -2476,14 +2485,14 @@ void ARoadJunctionGallery::BuildGallery()
 	Profile = URoadProfile::MakeTransient(TaxiwayWidth, FilletRadius);
 
 	CellBearings = {
-		{ 0.0, PI * (15.0 / 180.0) },
-		{ 0.0, PI * 0.25 },
-		{ 0.0, PI * 0.5 },
-		{ 0.0, PI * (170.0 / 180.0) },
-		{ 0.0, PI * 0.5, PI },
-		{ 0.0, PI * 0.6667, PI * 1.3333 },
-		{ 0.0, PI * 0.5, PI, PI * 1.5 },
-		{ 0.0, PI * 0.4, PI * 0.8, PI * 1.2, PI * 1.6 }
+		{ 0.0, UE_DOUBLE_PI * (15.0 / 180.0) },
+		{ 0.0, UE_DOUBLE_PI * 0.25 },
+		{ 0.0, UE_DOUBLE_PI * 0.5 },
+		{ 0.0, UE_DOUBLE_PI * (170.0 / 180.0) },
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI },
+		{ 0.0, UE_DOUBLE_PI * 0.6667, UE_DOUBLE_PI * 1.3333 },
+		{ 0.0, UE_DOUBLE_PI * 0.5, UE_DOUBLE_PI, UE_DOUBLE_PI * 1.5 },
+		{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }
 	};
 
 	CellCentres.Reset();
@@ -2551,7 +2560,7 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 }
 ```
 
-Add `#include "DrawDebugHelpers.h"` to this file if `DrawDebugLine` does not resolve.
+`DrawDebugHelpers.h` is included directly because `RoadDebugDraw.h` only forward-declares; it does not pull the drawing API through.
 
 - [ ] **Step 5: Build**
 
