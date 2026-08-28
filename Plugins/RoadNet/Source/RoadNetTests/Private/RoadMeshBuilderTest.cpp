@@ -45,10 +45,33 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	}
 	const int32 AfterJunctions = Builder.VertexCount();
 	Builder.AddSegment(*Net, ToEast, 1);
-	// East is a dead end (2-point rim, no triangles, AddJunction early-outs), so only
-	// the B end is new: exactly 2 vertices. 4 would mean the A end failed to weld.
-	TestEqual(TEXT("segment welded its A end into the junction"),
-		Builder.VertexCount() - AfterJunctions, 2);
+	// East is a dead end (2-point rim, no triangles, AddJunction early-outs), so the A
+	// end welds into Centre's junction (0 new) and the B end's ribbon cut line is new
+	// (2). AddSegment also now builds the dead-end cap at East's own node position: two
+	// more new vertices, offset from East by the profile's left/right half-widths (the
+	// ribbon's own B-end vertices are cut back from East by the profile's half-width, so
+	// the cap's vertices are necessarily distinct from them). Total: 2 + 2 = 4.
+	TestEqual(TEXT("segment welded its A end and built East's dead-end cap"),
+		Builder.VertexCount() - AfterJunctions, 4);
+
+	// The cap must actually reach the node, not just approach it.
+	{
+		const FRoadNode* EastNode = Net->GetNode(East);
+		if (TestNotNull(TEXT("East node exists"), EastNode))
+		{
+			bool bReachesNode = false;
+			for (const FVector3d& P : Builder.GetBuffers().Positions)
+			{
+				if (P.X == EastNode->Position.X)
+				{
+					bReachesNode = true;
+					break;
+				}
+			}
+			TestTrue(TEXT("mesh reaches the dead-end node's own X"), bReachesNode);
+		}
+	}
+
 	Builder.AddSegment(*Net, ToNorth, 1);
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
@@ -86,20 +109,31 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 
 	CheckMeshInvariants(Buffers);
 
+	// Both blocks below key off the same segment; look it up once rather than repeating
+	// the call in each scope, and fail loudly instead of crashing if it is ever missing.
+	const FRoadSegment* ToEastSeg = Net->GetSegment(ToEast);
+	if (!TestNotNull(TEXT("ToEast segment exists"), ToEastSeg))
+	{
+		return false;
+	}
+
 	// The weld can only fuse what the solver already shares. Assert that directly: the
 	// CENTRE junction's own boundary polygon carries this segment's stored cut vertices
 	// bitwise, not merely nearby. If this fails, the weld map is fusing nothing and every
 	// "welded" assertion below is vacuously true.
 	{
-		const FRoadSegment* Seg = Net->GetSegment(ToEast);
-		const FJunctionResult& CentreResult = Solved.NodeResults[Centre.Index];
+		const FJunctionResult* CentreResult = Solved.NodeResults.Find(Centre.Index);
+		if (!TestNotNull(TEXT("centre node has a solved junction result"), CentreResult))
+		{
+			return false;
+		}
 
 		bool bBoundaryHasLeft  = false;
 		bool bBoundaryHasRight = false;
-		for (const FVector2D& Point : CentreResult.Boundary)
+		for (const FVector2D& Point : CentreResult->Boundary)
 		{
-			if (Point.X == Seg->LeftCutA.X  && Point.Y == Seg->LeftCutA.Y)  { bBoundaryHasLeft  = true; }
-			if (Point.X == Seg->RightCutA.X && Point.Y == Seg->RightCutA.Y) { bBoundaryHasRight = true; }
+			if (Point.X == ToEastSeg->LeftCutA.X  && Point.Y == ToEastSeg->LeftCutA.Y)  { bBoundaryHasLeft  = true; }
+			if (Point.X == ToEastSeg->RightCutA.X && Point.Y == ToEastSeg->RightCutA.Y) { bBoundaryHasRight = true; }
 		}
 		TestTrue(TEXT("junction boundary carries the segment's left cut bitwise"),  bBoundaryHasLeft);
 		TestTrue(TEXT("junction boundary carries the segment's right cut bitwise"), bBoundaryHasRight);
@@ -109,7 +143,7 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	// vertices are not merely coincident, they are the SAME vertex. Welding happens on
 	// exact bits, so a crack cannot be represented in this buffer at all.
 	{
-		const FRoadSegment* Seg = Net->GetSegment(ToEast);
+		const FRoadSegment* Seg = ToEastSeg;
 
 		int32 LeftMatches = 0;
 		int32 RightMatches = 0;
@@ -124,11 +158,17 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 
 	// No duplicate positions anywhere: welding is global, not per-primitive.
 	{
+		// Normalise -0.0 to 0.0 exactly like WeldVertex does, so this check has the same
+		// blind spot closed rather than reintroducing it: operator== on FVector2D treats
+		// -0.0 and +0.0 as equal, but a raw TSet<FVector2D> key hashes them to different
+		// buckets, which would otherwise let a real duplicate slip past "no duplicates".
+		auto NormalizeSignedZero = [](double Value) { return Value == 0.0 ? 0.0 : Value; };
+
 		TSet<FVector2D> Seen;
 		int32 Duplicates = 0;
 		for (const FVector3d& P : Buffers.Positions)
 		{
-			const FVector2D Key(P.X, P.Y);
+			const FVector2D Key(NormalizeSignedZero(P.X), NormalizeSignedZero(P.Y));
 			if (Seen.Contains(Key)) { ++Duplicates; }
 			Seen.Add(Key);
 		}
@@ -174,6 +214,35 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		CheckMeshInvariants(Subdivided.GetBuffers());
 		TestTrue(TEXT("subdivided ribbon produced more vertices than the unsubdivided one"),
 			Subdivided.VertexCount() > Baseline.VertexCount());
+	}
+
+	// A node's solve failure only clears ITS OWN end's flag (bSolvedA or bSolvedB), so a
+	// segment solved at only one end must still emit nothing - the other flag being
+	// stranded true is exactly what would draw a triangle out to the world origin.
+	// Stand in for that half-solved state directly, the way RoadNetworkTest.cpp already
+	// stands in for the solver.
+	{
+		URoadNetwork* HalfNet = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* HalfProfile = URoadProfile::MakeTransient(W * 2.0, 1500.0);
+
+		const FRoadNodeId P = HalfNet->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Q = HalfNet->AddNode(FVector2D(10000.0, 0.0));
+		const FRoadSegmentId HalfSolved = HalfNet->AddStraightSegment(P, Q, HalfProfile);
+
+		FRoadSegment* Mutable = HalfNet->GetSegmentMutable(HalfSolved);
+		if (TestNotNull(TEXT("half-solved segment exists"), Mutable))
+		{
+			Mutable->LeftCutA = FVector2D(100.0, 100.0);
+			Mutable->RightCutA = FVector2D(100.0, -100.0);
+			Mutable->bSolvedA = true;
+			// bSolvedB deliberately left false: only the A end solved.
+
+			FRoadMeshBuilder HalfBuilder(10.0);
+			HalfBuilder.AddSegment(*HalfNet, HalfSolved, 1);
+
+			TestEqual(TEXT("half-solved segment adds no vertices"), HalfBuilder.VertexCount(), 0);
+			TestEqual(TEXT("half-solved segment adds no indices"), HalfBuilder.GetBuffers().Indices.Num(), 0);
+		}
 	}
 
 	return true;
