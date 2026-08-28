@@ -16,6 +16,9 @@ public:
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
 private:
+	// A raw, non-owning pointer: the sink does not own or GC-protect the component and
+	// must not outlive it. Both current call sites are stack-scoped inside a single
+	// function, so this is safe today; Slice 2b's preview sink will not be.
 	UDynamicMeshComponent* Component = nullptr;
 };
 
@@ -37,9 +40,11 @@ public:
 
 	UPROPERTY() TObjectPtr<URoadNetwork> Network;
 
-	/** Height of the road surface above the actor, in uu. */
+	/** Absolute world-space Z of the road surface, in uu. Not relative to the actor:
+	 *  the mesh builder emits world-space XY at this Z, and RebuildMesh forces the
+	 *  mesh component to world identity so those coordinates are not transformed again. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double SurfaceZ = 10.0;
 
 	/** Quads along each segment. 1 is right for straight segments. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") int32 RibbonSegments = 1;
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1")) int32 RibbonSegments = 1;
 };

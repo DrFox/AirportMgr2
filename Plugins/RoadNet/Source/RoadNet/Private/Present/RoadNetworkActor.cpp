@@ -91,6 +91,13 @@ void ARoadNetworkActor::RebuildMesh()
 	FDynamicMeshSink Sink(MeshComponent);
 	Builder.Emit(Sink);
 
+	// The builder emits absolute world-space XY at absolute Z (spec section 6.3 makes
+	// UV0 world-aligned, so the coordinates must stay world space), but SetMesh places
+	// those coordinates in COMPONENT space. Left alone, any actor not sitting at the
+	// origin would render its road offset by its own full transform. Force the
+	// component back to identity so the world-space vertices land where they say.
+	MeshComponent->SetWorldTransform(FTransform::Identity);
+
 	UE_LOG(LogRoadMesh, Log, TEXT("Rebuilt: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,
 		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);

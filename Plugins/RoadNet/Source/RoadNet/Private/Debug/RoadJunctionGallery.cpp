@@ -119,6 +119,13 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 	FDynamicMeshSink Sink(MeshComponent);
 	Builder.Emit(Sink);
 
+	// The builder emits absolute world-space XY at absolute Z, and the debug overlay
+	// drawn below is also in absolute world space, but SetMesh places those coordinates
+	// in COMPONENT space. Left alone, the solid mesh would render offset from its own
+	// debug overlay by the gallery's own transform. Force the component back to
+	// identity so the world-space vertices land where they say.
+	MeshComponent->SetWorldTransform(FTransform::Identity);
+
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,
 		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);

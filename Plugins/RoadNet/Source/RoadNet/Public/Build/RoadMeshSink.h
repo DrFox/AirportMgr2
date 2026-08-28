@@ -7,12 +7,6 @@ struct FRoadMeshBuffers
 {
 	TArray<FVector3d> Positions;
 	TArray<int32>     Indices;
-
-	void Reset()
-	{
-		Positions.Reset();
-		Indices.Reset();
-	}
 };
 
 /**
