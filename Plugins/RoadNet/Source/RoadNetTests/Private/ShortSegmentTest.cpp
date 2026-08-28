@@ -54,12 +54,12 @@ bool FRoadShortSegmentTest::RunTest(const FString& Parameters)
 
 	// And the consequence, measured on the mesh rather than inferred from the trims.
 	FRoadMeshBuilder Builder(10.0);
+	Builder.AddSegment(*Net, First, 1);
+	Builder.AddSegment(*Net, Second, 1);
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{
 		Builder.AddJunction(Pair.Value);
 	}
-	Builder.AddSegment(*Net, First, 1);
-	Builder.AddSegment(*Net, Second, 1);
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
 	int32 Inverted = 0;

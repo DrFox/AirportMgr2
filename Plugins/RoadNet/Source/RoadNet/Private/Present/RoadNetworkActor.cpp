@@ -92,10 +92,11 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	PopulateAttributes(Mesh, Buffers);
 
 	// With an attribute set present the renderer reads the normal overlay rather than the
-	// per-vertex normals, so both are filled: the overlay for rendering, and the
-	// per-vertex normals because they cost nothing and keep the mesh self-describing.
+	// per-vertex normals, so both are filled: the overlay for rendering, and the per-vertex
+	// normals because they cost nothing and keep the mesh self-describing. Passing true
+	// reuses the per-vertex normals just computed instead of recomputing from scratch.
 	UE::Geometry::FMeshNormals::QuickComputeVertexNormals(Mesh);
-	UE::Geometry::FMeshNormals::InitializeOverlayToPerVertexNormals(Mesh.Attributes()->PrimaryNormals(), false);
+	UE::Geometry::FMeshNormals::InitializeOverlayToPerVertexNormals(Mesh.Attributes()->PrimaryNormals(), true);
 
 	// Everything from the graph down to this point is covered by automation tests, so
 	// when a road is built but not seen, the answer is on this side of the boundary.
@@ -174,6 +175,14 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MeshComponent->SetUsingAbsoluteLocation(true);
 	MeshComponent->SetUsingAbsoluteRotation(true);
 	MeshComponent->SetUsingAbsoluteScale(true);
+
+	// The mesh carries a normal map, so its tangent frame has to come from UV0 rather
+	// than from the default ExternallyProvided mode - which, finding no tangent space,
+	// falls back to a frame derived from the normal alone. On a flat +Z road that frame
+	// is constant and looks plausible, but its handedness relative to UV0 is accidental,
+	// and it either cancels or compounds the deliberate green-channel flip on the
+	// OpenGL-convention normal map. Derived beats lucky.
+	MeshComponent->SetTangentsType(EDynamicMeshComponentTangentsMode::AutoCalculated);
 
 	// Resolved by path rather than left for a Blueprint to assign, so a freshly placed
 	// actor renders as asphalt with no setup at all. If the asset is missing this stays

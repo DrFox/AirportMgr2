@@ -38,6 +38,12 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestTrue(TEXT("network solved"), Solved.FailedNodes == 0);
 
+	// Junctions BEFORE segments here, deliberately, and against the rule the production
+	// rebuild paths follow. That rule exists so a segment owns UV1 at a shared cut
+	// vertex; this file asserts nothing about UV1, and its vertex-count arithmetic below
+	// measures welding by adding a segment to a builder that ALREADY holds its junction.
+	// Reversing the order would not break welding, but it would destroy the property this
+	// test is built to prove.
 	FRoadMeshBuilder Builder(10.0);
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{

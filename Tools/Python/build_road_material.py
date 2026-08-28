@@ -18,10 +18,15 @@ MAPS = {
         "pebbled_asphalt_albedo.png", True, unreal.TextureCompressionSettings.TC_DEFAULT),
     "T_Asphalt_Normal": (
         "pebbled_asphalt_Normal-ogl.png", False, unreal.TextureCompressionSettings.TC_NORMALMAP),
+    # TC_GRAYSCALE with sRGB off, NOT TC_MASKS. GetSamplerTypeForTexture maps TC_Masks to
+    # SAMPLERTYPE_Masks and TC_Grayscale-without-sRGB to SAMPLERTYPE_LinearGrayscale, and
+    # VerifySamplerType rejects any mismatch outright: the whole material then fails to
+    # compile and every surface using it silently falls back to the engine default. These
+    # are single-channel maps, so grayscale is also what they actually are.
     "T_Asphalt_Roughness": (
-        "pebbled_asphalt_Roughness.png", False, unreal.TextureCompressionSettings.TC_MASKS),
+        "pebbled_asphalt_Roughness.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
     "T_Asphalt_AO": (
-        "pebbled_asphalt_ao.png", False, unreal.TextureCompressionSettings.TC_MASKS),
+        "pebbled_asphalt_ao.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
 }
 
 
@@ -63,8 +68,22 @@ def import_textures():
 
 def build_material(textures):
     tools = unreal.AssetToolsHelpers.get_asset_tools()
+
+    # create_asset returns None rather than raising when the asset already exists, and
+    # the very next call then fails with an unrelated AttributeError on NoneType. This
+    # script has to be re-runnable - it is the authoring step, and authoring gets
+    # iterated - so delete first and rebuild from scratch.
+    path = "%s/M_RoadSurface" % MAT_DIR
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        unreal.EditorAssetLibrary.delete_asset(path)
+        unreal.log("MARKER: replaced existing %s" % path)
+
     material = tools.create_asset(
         "M_RoadSurface", MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
+    if material is None:
+        unreal.log_error("MARKER: create_asset returned None for %s" % path)
+        return None
+
     lib = unreal.MaterialEditingLibrary
 
     # --- UV0: world-aligned asphalt -------------------------------------------------
@@ -89,6 +108,13 @@ def build_material(textures):
     rough.set_editor_property(
         "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
     lib.connect_material_expressions(uv0, "", rough, "UVs")
+
+    ao = lib.create_material_expression(
+        material, unreal.MaterialExpressionTextureSample, -900, 850)
+    ao.set_editor_property("texture", textures["T_Asphalt_AO"])
+    ao.set_editor_property(
+        "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+    lib.connect_material_expressions(uv0, "", ao, "UVs")
 
     # --- UV1: markings ---------------------------------------------------------------
     # UV1.X is lateral offset in uu, UV1.Y is distance along the centreline in uu.
@@ -184,9 +210,35 @@ def build_material(textures):
     lib.connect_material_property(base_colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
     lib.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
     lib.connect_material_property(rough, "R", unreal.MaterialProperty.MP_ROUGHNESS)
+    lib.connect_material_property(ao, "R", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
 
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset("%s/M_RoadSurface" % MAT_DIR)
+
+    # Parameter names prove nothing about whether the shader compiled - they enumerate
+    # expressions either way - and a material with a compile error renders as the engine
+    # default while every other signal says success. Report the statistics so the run has
+    # some evidence, and scan the log for LogMaterial errors after it.
+    # Reported for information only. This commandlet runs under the Null RHI (the log
+    # shows NullDrv loading), so there is no shader map for the current feature level and
+    # every count comes back zero whether the material is sound or broken. Do NOT treat
+    # zero here as a compile failure - it says nothing either way.
+    #
+    # The check that does work is the absence of material errors in the log. A sampler
+    # type that disagrees with its texture's compression setting fails VerifySamplerType,
+    # and the whole material then falls back to the engine default at render time while
+    # parameter names still enumerate perfectly. After running this, scan for:
+    #
+    #   Select-String -Path Saved/Logs/AirportMgr.log -Pattern "LogMaterial|Sampler type"
+    #
+    # Anything there means the material is broken no matter how clean these markers look.
+    stats = lib.get_statistics(material)
+    unreal.log(
+        "MARKER: statistics (zero under the Null RHI, informational only) "
+        "vertex=%d pixel=%d samplers=%d"
+        % (stats.num_vertex_shader_instructions,
+           stats.num_pixel_shader_instructions,
+           stats.num_samplers))
 
     unreal.log("MARKER: material saved at %s/M_RoadSurface" % MAT_DIR)
     for info in lib.get_scalar_parameter_names(material):

@@ -50,13 +50,13 @@ bool FRoadClickedChainTest::RunTest(const FString& Parameters)
 
 	constexpr double ZHeight = 200.0;
 	FRoadMeshBuilder Builder(ZHeight);
-	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
-	{
-		Builder.AddJunction(Pair.Value);
-	}
 	for (const FRoadSegmentId SegmentId : Segments)
 	{
 		Builder.AddSegment(*Net, SegmentId, 1);
+	}
+	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+	{
+		Builder.AddJunction(Pair.Value);
 	}
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();

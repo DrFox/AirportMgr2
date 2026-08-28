@@ -9,6 +9,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Solve/JunctionSolver.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadGallery, Log, All);
@@ -23,6 +24,16 @@ ARoadJunctionGallery::ARoadJunctionGallery()
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
 	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("GalleryMesh"));
+
+	// The same material the network actor uses. The gallery is the harness built to
+	// inspect junctions, so leaving it on a placeholder colour would hide the very thing
+	// it exists to show.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RoadMaterial(
+		TEXT("/Game/RoadNet/Materials/M_RoadSurface"));
+	if (RoadMaterial.Succeeded())
+	{
+		SurfaceMaterial = RoadMaterial.Object;
+	}
 	MeshComponent->SetupAttachment(RootComponent);
 
 	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
@@ -135,7 +146,7 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 		Builder.AddJunction(Pair.Value);
 	}
 
-	FDynamicMeshSink Sink(MeshComponent);
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial);
 	Builder.Emit(Sink);
 
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),

@@ -17,7 +17,7 @@ namespace
 		return FColor(0, 0, 0, 255);
 	}
 
-	/** Vertex colour for a junction's own vertices, blended by how far into the fan they are. */
+	/** Vertex colour for a vertex the junction owns. See AddJunction for why Blend is always 1. */
 	FColor JunctionColour(double Blend)
 	{
 		const uint8 G = static_cast<uint8>(FMath::Clamp(Blend, 0.0, 1.0) * 255.0 + 0.5);
@@ -89,22 +89,24 @@ void FRoadMeshBuilder::AddJunction(const FJunctionResult& Junction)
 	//
 	// Almost every rim vertex is a cut vertex some segment has already welded, so for
 	// those these attributes are discarded - see WeldVertex. They land only on the arc
-	// samples and the apex, which no segment touches. The apex carries full junction
-	// blend so markings taper out toward a junction's centre rather than stopping dead
-	// at the rim, which is what lets one welded vertex serve both sides.
-	const int32 ApexSlot = Junction.Boundary.Num() - 1;
-
+	// samples and the apex, which no segment touches.
+	//
+	// EVERY vertex the junction owns takes FULL junction blend, arc samples and apex
+	// alike. Blending by position along the fan instead - 0 at the rim, 1 at the apex -
+	// reads well and is badly wrong: an arc sample is welded by nobody, so it keeps this
+	// UV1 of (0, 0), which the marking mask reads as "dead on the centreline". At a blend
+	// of 0 nothing fades it, so every fillet renders as a solid fan of centreline paint,
+	// and with 12 arc samples per corner those vertices dominate a bend's rim.
+	//
+	// Full blend on everything the junction owns still gives the taper the design wants,
+	// because the shared cut vertices keep the segment's blend of 0: a fan triangle
+	// spanning a cut line and the apex ramps from marked at the cut line to unmarked
+	// toward the centre - a centreline running up to the junction and fading into it.
 	TArray<int32> Mapped;
 	Mapped.Reserve(Junction.Boundary.Num());
-	for (int32 Slot = 0; Slot < Junction.Boundary.Num(); ++Slot)
+	for (const FVector2D& Point : Junction.Boundary)
 	{
-		// An arc sample is an outer-edge point and a junction has no centreline to
-		// measure along, so UV1 here is meaningless by design; junction blend is what
-		// stops anything reading it.
-		Mapped.Add(WeldVertex(
-			Junction.Boundary[Slot],
-			FVector2f(0.0f, 0.0f),
-			JunctionColour(Slot == ApexSlot ? 1.0 : 0.0)));
+		Mapped.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionColour(1.0)));
 	}
 
 	for (int32 Slot = 0; Slot + 2 < Junction.Triangles.Num(); Slot += 3)

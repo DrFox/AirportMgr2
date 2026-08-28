@@ -64,9 +64,11 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 			Buffers.UV0[Index].Y, static_cast<float>(P.Y / TexelsPerUnit));
 	}
 
-	// THE ORDERING RULE. The B end of ToEast is a dead end at (12000, 0). Its cut
-	// vertices are shared with nothing, but its ribbon-end vertices carry along =
-	// the trimmed length. If a junction had overwritten them with along = 0, this fails.
+	// `along` at the B end is the ribbon's length. Note this does NOT test the ordering
+	// rule, whatever it may look like: East is a dead end, so its rim has two points,
+	// Triangles comes back empty and AddJunction early-returns without ever touching
+	// these vertices. It would pass in either order. The ordering rule is tested
+	// explicitly further down.
 	{
 		const FRoadSegment* Seg = Net->GetSegment(ToEast);
 		if (!TestNotNull(TEXT("east segment resolves"), Seg))
@@ -99,41 +101,114 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 	}
 
 	// Lateral is signed across the profile: left positive, right negative, and its
-	// magnitude is the half-width. Checked on the A-end cut vertices, which the segment
-	// owns outright.
+	// magnitude is the half-width. Checked on the A-end cut vertices, which are shared
+	// with the Centre junction - so these are exactly the vertices the ordering rule is
+	// about, and they must carry the SEGMENT's lateral rather than the junction's 0.
+	//
+	// Guarded on having found the vertex at all: an unguarded search that matches nothing
+	// asserts nothing and reports green.
 	{
 		const FRoadSegment* Seg = Net->GetSegment(ToEast);
 		const float HalfLeft  = static_cast<float>(Profile->GetHalfWidthLeft());
 		const float HalfRight = static_cast<float>(Profile->GetHalfWidthRight());
 
+		int32 LeftIndex = INDEX_NONE;
+		int32 RightIndex = INDEX_NONE;
 		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
 		{
 			if (Buffers.Positions[Index].X == Seg->LeftCutA.X &&
 				Buffers.Positions[Index].Y == Seg->LeftCutA.Y)
 			{
-				TestEqual(TEXT("left rail lateral is +HalfWidthLeft"), Buffers.UV1[Index].X, HalfLeft);
+				LeftIndex = Index;
 			}
 			if (Buffers.Positions[Index].X == Seg->RightCutA.X &&
 				Buffers.Positions[Index].Y == Seg->RightCutA.Y)
 			{
-				TestEqual(TEXT("right rail lateral is -HalfWidthRight"), Buffers.UV1[Index].X, -HalfRight);
+				RightIndex = Index;
 			}
+		}
+
+		if (TestTrue(TEXT("the A-end left cut is in the buffer"), LeftIndex != INDEX_NONE))
+		{
+			TestEqual(TEXT("left rail lateral is +HalfWidthLeft"), Buffers.UV1[LeftIndex].X, HalfLeft);
+		}
+		if (TestTrue(TEXT("the A-end right cut is in the buffer"), RightIndex != INDEX_NONE))
+		{
+			TestEqual(TEXT("right rail lateral is -HalfWidthRight"), Buffers.UV1[RightIndex].X, -HalfRight);
 		}
 	}
 
-	// Junction blend: 0 wherever a segment wrote, 1 at a fan apex. The apex is the only
-	// vertex that is not on any cut line or rail, so at least one vertex must carry 255.
+	// Junction blend reaches full on the vertices a junction owns.
 	{
-		bool bFoundApex = false;
+		bool bFoundJunctionOwned = false;
 		for (const FColor& Colour : Buffers.Colors)
 		{
 			if (Colour.G == 255)
 			{
-				bFoundApex = true;
+				bFoundJunctionOwned = true;
 				break;
 			}
 		}
-		TestTrue(TEXT("a junction apex carries full junction blend"), bFoundApex);
+		TestTrue(TEXT("junction-owned vertices carry full junction blend"), bFoundJunctionOwned);
+	}
+
+	// Nothing may sit on the centreline unfaded except where a segment put it there.
+	//
+	// This is the assertion that catches painting a junction yellow: an arc sample is
+	// welded by nobody, so if the junction gave it lateral 0 AND a blend of 0, the
+	// marking mask reads it as centreline with nothing to fade it, and the fillet renders
+	// as a solid fan of paint. Ribbon vertices never sit at lateral 0 - they are the two
+	// rails - so any vertex that does is junction-owned and must be fully blended.
+	{
+		int32 UnfadedOnCentreline = 0;
+		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+		{
+			if (FMath::Abs(Buffers.UV1[Index].X) < 1.0f && Buffers.Colors[Index].G < 255)
+			{
+				++UnfadedOnCentreline;
+			}
+		}
+		TestEqual(
+			FString::Printf(TEXT("no unfaded vertex sits on the centreline (%d found)"),
+				UnfadedOnCentreline),
+			UnfadedOnCentreline, 0);
+	}
+
+	// THE ORDERING RULE, made executable. Build the same network junctions-first and the
+	// shared cut vertices come out carrying the junction's lateral of 0 instead of the
+	// segment's half-width. Without this, nothing in the suite fails when the order is
+	// reversed - and the failure it causes is markings jumping at one end of every
+	// segment, which no test asserts on and no exception reports.
+	{
+		FRoadMeshBuilder Wrong(ZHeight, TexelsPerUnit);
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Wrong.AddJunction(Pair.Value);
+		}
+		Wrong.AddSegment(*Net, ToEast, 1);
+		Wrong.AddSegment(*Net, ToNorth, 1);
+
+		const FRoadSegment* Seg = Net->GetSegment(ToEast);
+		const FRoadMeshBuffers& Bad = Wrong.GetBuffers();
+
+		int32 BadIndex = INDEX_NONE;
+		for (int32 Index = 0; Index < Bad.Positions.Num(); ++Index)
+		{
+			if (Bad.Positions[Index].X == Seg->LeftCutA.X &&
+				Bad.Positions[Index].Y == Seg->LeftCutA.Y)
+			{
+				BadIndex = Index;
+				break;
+			}
+		}
+
+		if (TestTrue(TEXT("the shared cut vertex exists in the wrong-order build"),
+				BadIndex != INDEX_NONE))
+		{
+			TestNotEqual(
+				TEXT("junctions-first loses the segment's lateral at a shared cut vertex"),
+				Bad.UV1[BadIndex].X, static_cast<float>(Profile->GetHalfWidthLeft()));
+		}
 	}
 
 	// The overlays the material actually samples. The buffers being right proves nothing
@@ -176,6 +251,19 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(TEXT("every triangle has UV0"), UnsetUV0, 0);
 		TestEqual(TEXT("every triangle has UV1"), UnsetUV1, 0);
+
+		// The colour overlay carries the junction fade, so it needs the same coverage: a
+		// triangle corner without it samples nothing and the fade stops working there.
+		const UE::Geometry::FDynamicMeshColorOverlay* ColorLayer = Mesh.Attributes()->PrimaryColors();
+		TestEqual(TEXT("colours have one element per vertex"),
+			ColorLayer->ElementCount(), Buffers.Positions.Num());
+
+		int32 UnsetColors = 0;
+		for (const int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			if (!ColorLayer->IsSetTriangle(TriangleId)) { ++UnsetColors; }
+		}
+		TestEqual(TEXT("every triangle has colours"), UnsetColors, 0);
 	}
 
 	return true;
