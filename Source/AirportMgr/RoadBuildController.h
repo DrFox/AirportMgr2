@@ -34,7 +34,7 @@ public:
 	 * trying to draw past.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double PickRadius = 600.0;
+	double PickRadius = 150.0;
 
 	/**
 	 * Furthest a click may place a node from the camera, in uu.
@@ -46,7 +46,7 @@ public:
 	 * at that range the depth buffer cannot separate the surface from the ground either.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double MaxPlaceDistance = 40000.0;
+	double MaxPlaceDistance = 10000.0;
 
 	/** Lift the pawn above the road plane on possession, looking down at it. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
@@ -56,12 +56,14 @@ public:
 	 * Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane.
 	 *
 	 * Sets the drawing scale, because a click's world position is where its ray meets
-	 * the plane: doubling this doubles how far apart two clicks land. Around 8000 uu
-	 * puts a screen's width at roughly 17,000 uu, so an ordinary click-to-click distance
-	 * comfortably clears the fillet reach at the default road width.
+	 * the plane: doubling this doubles how far apart two clicks land. A screen spans
+	 * roughly twice this, so it wants to be about half the area you mean to draw in, and
+	 * the road's width wants to be around a twentieth of that same area. Those two
+	 * numbers have to move together - lowering the camera alone shortens every segment
+	 * against an unchanged road width, which is what folds the ribbons.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double StartHeight = 8000.0;
+	double StartHeight = 2000.0;
 
 	/** Draw the pending node and a rubber band to the cursor. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")

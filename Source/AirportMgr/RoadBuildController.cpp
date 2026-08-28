@@ -196,8 +196,8 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// screen: a marker about a quarter of the default road's width, and a band thin
 	// enough not to hide the surface under it. Single digits would be sub-pixel here -
 	// indistinguishable from nothing being drawn at all.
-	constexpr double MarkerRadius = 200.0;
-	constexpr float LineThickness = 40.0f;
+	constexpr double MarkerRadius = 50.0;
+	constexpr float LineThickness = 10.0f;
 
 	FVector2D Cursor;
 	const bool bCursorOnPlane = CursorOnRoadPlane(Cursor);

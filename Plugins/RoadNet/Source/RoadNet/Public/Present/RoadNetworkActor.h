@@ -89,10 +89,10 @@ public:
 	 * clicked.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double FallbackWidth = 800.0;
+	double FallbackWidth = 200.0;
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double FallbackFilletRadius = 400.0;
+	double FallbackFilletRadius = 100.0;
 
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
