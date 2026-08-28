@@ -48,9 +48,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
 	double MaxPlaceDistance = 10000.0;
 
-	/** Lift the pawn above the road plane on possession, looking down at it. */
+	/**
+	 * View the road plane through a top-down orthographic camera instead of the pawn.
+	 *
+	 * A perspective view pitched short of vertical maps screen position to ground
+	 * position non-linearly: near the bottom of the screen a click lands a few hundred
+	 * uu out, near the top many thousands, so a square drawn on screen becomes a
+	 * stretched trapezoid on the ground and roads at different distances render at
+	 * different apparent widths. Straight down and orthographic makes that mapping 1:1,
+	 * which is the whole reason city builders use it.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	bool bStartAbovePlane = true;
+
+	/** Ground width the orthographic view spans, in uu. This is the drawing scale. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
+	double ViewWidth = 6000.0;
+
+	/** Pan speed of the top-down camera, in uu per second. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
+	double PanSpeed = 3000.0;
 
 	/**
 	 * Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane.
@@ -92,6 +109,10 @@ private:
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
 
 	void MoveViewAbovePlane();
+	void PanView(float DeltaTime);
+
+	/** Top-down orthographic camera spawned on possession; the view target while building. */
+	UPROPERTY(Transient) TObjectPtr<class ACameraActor> BuildCamera;
 
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;

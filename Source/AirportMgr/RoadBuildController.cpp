@@ -1,5 +1,7 @@
 #include "RoadBuildController.h"
 
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
 #include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -45,19 +47,59 @@ void ARoadBuildController::BeginPlay()
 
 void ARoadBuildController::MoveViewAbovePlane()
 {
-	APawn* Possessed = GetPawn();
-	if (Possessed == nullptr || Target == nullptr)
+	if (Target == nullptr || GetWorld() == nullptr)
 	{
 		return;
 	}
 
-	const FVector Where = Possessed->GetActorLocation();
-	Possessed->SetActorLocation(FVector(Where.X, Where.Y, Target->SurfaceZ + StartHeight));
+	const FVector Above(0.0, 0.0, Target->SurfaceZ + StartHeight);
 
-	// Steeply down, but NOT straight down: at +/-90 pitch the rotation hits gimbal lock
-	// and gets silently renormalised to something else entirely, which reads as the
-	// camera ignoring this call.
-	SetControlRotation(FRotator(-70.0, 0.0, 0.0));
+	FActorSpawnParameters Params;
+	Params.ObjectFlags |= RF_Transient;
+	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(Above, FRotator(-90.0, 0.0, 0.0), Params);
+	if (BuildCamera == nullptr)
+	{
+		return;
+	}
+
+	// Straight down is set on the camera actor's own transform, not through
+	// SetControlRotation: control rotation near +/-90 pitch hits gimbal lock and is
+	// silently renormalised to something else, which reads as the camera ignoring you.
+	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
+	Camera->SetProjectionMode(ECameraProjectionMode::Orthographic);
+	Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
+
+	// Viewing through a camera actor also takes the view away from the pawn, so the
+	// pawn's mouse-look stops fighting the cursor for the same input.
+	SetViewTarget(BuildCamera);
+
+	UE_LOG(LogRoadBuild, Log,
+		TEXT("Top-down orthographic view: %.0f uu across, %.0f uu up. Screen maps 1:1 to ground."),
+		ViewWidth, Target->SurfaceZ + StartHeight);
+}
+
+void ARoadBuildController::PanView(float DeltaTime)
+{
+	if (BuildCamera == nullptr)
+	{
+		return;
+	}
+
+	// Screen up is +Y in world here, because the camera looks straight down its own
+	// -Z with no yaw: panning is a plain XY translation, no basis vectors needed.
+	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
+	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
+
+	if (Right == 0.0 && Forward == 0.0)
+	{
+		return;
+	}
+
+	const FVector Where = BuildCamera->GetActorLocation();
+	BuildCamera->SetActorLocation(FVector(
+		Where.X + Forward * PanSpeed * DeltaTime,
+		Where.Y + Right * PanSpeed * DeltaTime,
+		Where.Z));
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -148,7 +190,14 @@ void ARoadBuildController::OnBuildClick()
 			return;
 		}
 
-		UE_LOG(LogRoadBuild, Log, TEXT("Segment %d -> %d"), PendingNode, Node);
+		// Log both endpoints' world positions, not just the segment's node indices. The
+		// indices alone cannot show whether a click landed where it was aimed, which is
+		// the one question a wrong-looking road actually raises.
+		FVector FromWorld;
+		NodeWorldLocation(PendingNode, FromWorld);
+		UE_LOG(LogRoadBuild, Log, TEXT("Segment %d (%.0f, %.0f) -> %d (%.0f, %.0f), length %.0f"),
+			PendingNode, FromWorld.X, FromWorld.Y, Node, Where.X, Where.Y,
+			FVector2D::Distance(FVector2D(FromWorld.X, FromWorld.Y), Where));
 	}
 	else if (PendingNode == INDEX_NONE)
 	{
@@ -186,6 +235,8 @@ bool ARoadBuildController::NodeWorldLocation(int32 NodeIndex, FVector& OutLocati
 void ARoadBuildController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+
+	PanView(DeltaTime);
 
 	if (!bDrawBuildPreview || Target == nullptr)
 	{
