@@ -50,7 +50,7 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 	// Every channel stays parallel to Positions, or the sink cannot index them.
 	TestEqual(TEXT("UV0 is parallel to positions"), Buffers.UV0.Num(), Buffers.Positions.Num());
 	TestEqual(TEXT("UV1 is parallel to positions"), Buffers.UV1.Num(), Buffers.Positions.Num());
-	TestEqual(TEXT("colours are parallel to positions"), Buffers.Colors.Num(), Buffers.Positions.Num());
+	TestEqual(TEXT("UV2 masks are parallel to positions"), Buffers.UV2.Num(), Buffers.Positions.Num());
 
 	// UV0 is a pure function of world position. This is what makes the asphalt continuous
 	// across a junction boundary for free (design spec 6.3) - it cannot disagree between a
@@ -141,9 +141,9 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 	// Junction blend reaches full on the vertices a junction owns.
 	{
 		bool bFoundJunctionOwned = false;
-		for (const FColor& Colour : Buffers.Colors)
+		for (const FVector2f& Masks : Buffers.UV2)
 		{
-			if (Colour.G == 255)
+			if (Masks.X >= 1.0f)
 			{
 				bFoundJunctionOwned = true;
 				break;
@@ -163,7 +163,7 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 		int32 UnfadedOnCentreline = 0;
 		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
 		{
-			if (FMath::Abs(Buffers.UV1[Index].X) < 1.0f && Buffers.Colors[Index].G < 255)
+			if (FMath::Abs(Buffers.UV1[Index].X) < 1.0f && Buffers.UV2[Index].X < 1.0f)
 			{
 				++UnfadedOnCentreline;
 			}
@@ -232,8 +232,13 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 		{
 			return false;
 		}
-		TestEqual(TEXT("two UV layers exist"), Mesh.Attributes()->NumUVLayers(), 2);
-		TestTrue(TEXT("primary colours are enabled"), Mesh.Attributes()->HasPrimaryColors());
+		TestEqual(TEXT("three UV layers exist"), Mesh.Attributes()->NumUVLayers(), 3);
+
+		// No colour overlay, deliberately. A UDynamicMeshComponent reads its colour overlay
+		// the moment ColorOverrideMode leaves Constant - which assigning any material does -
+		// and reading this one stopped the surface rendering at all. The masks live in UV2
+		// so that path is never entered.
+		TestFalse(TEXT("no colour overlay is created"), Mesh.Attributes()->HasPrimaryColors());
 
 		const UE::Geometry::FDynamicMeshUVOverlay* UV0Layer = Mesh.Attributes()->GetUVLayer(0);
 		const UE::Geometry::FDynamicMeshUVOverlay* UV1Layer = Mesh.Attributes()->GetUVLayer(1);
@@ -252,18 +257,18 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("every triangle has UV0"), UnsetUV0, 0);
 		TestEqual(TEXT("every triangle has UV1"), UnsetUV1, 0);
 
-		// The colour overlay carries the junction fade, so it needs the same coverage: a
-		// triangle corner without it samples nothing and the fade stops working there.
-		const UE::Geometry::FDynamicMeshColorOverlay* ColorLayer = Mesh.Attributes()->PrimaryColors();
-		TestEqual(TEXT("colours have one element per vertex"),
-			ColorLayer->ElementCount(), Buffers.Positions.Num());
+		// UV2 carries the junction fade, so it needs the same coverage: a triangle corner
+		// without it samples nothing and the fade stops working there.
+		const UE::Geometry::FDynamicMeshUVOverlay* UV2Layer = Mesh.Attributes()->GetUVLayer(2);
+		TestEqual(TEXT("UV2 has one element per vertex"),
+			UV2Layer->ElementCount(), Buffers.Positions.Num());
 
-		int32 UnsetColors = 0;
+		int32 UnsetUV2 = 0;
 		for (const int32 TriangleId : Mesh.TriangleIndicesItr())
 		{
-			if (!ColorLayer->IsSetTriangle(TriangleId)) { ++UnsetColors; }
+			if (!UV2Layer->IsSetTriangle(TriangleId)) { ++UnsetUV2; }
 		}
-		TestEqual(TEXT("every triangle has colours"), UnsetColors, 0);
+		TestEqual(TEXT("every triangle has UV2"), UnsetUV2, 0);
 	}
 
 	return true;

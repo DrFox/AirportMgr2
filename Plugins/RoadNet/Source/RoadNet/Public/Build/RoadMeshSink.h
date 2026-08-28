@@ -19,8 +19,18 @@ struct FRoadMeshBuffers
 	/** X = lateral offset across the profile in uu, Y = distance along the centreline in uu. */
 	TArray<FVector2f> UV1;
 
-	/** A = ground blend (unused until 2b-ii), G = junction blend, R and B reserved. */
-	TArray<FColor> Colors;
+	/**
+	 * Masks, NOT colour. X = junction blend, Y = ground blend (unused until 2b-ii).
+	 *
+	 * These began life in a vertex-colour overlay and must not go back there. A
+	 * UDynamicMeshComponent only ignores its colour overlay while ColorOverrideMode is
+	 * Constant; assigning any material flips it to None, at which point the converter
+	 * reads the overlay and the whole surface stops rendering - with any material, ours
+	 * or a stock one. Beyond that specific fault, vertex colour multiplies through in
+	 * anything that samples it, so a mask stored there tints the surface as a side
+	 * effect. A UV channel carries the same two floats with neither coupling.
+	 */
+	TArray<FVector2f> UV2;
 };
 
 /**

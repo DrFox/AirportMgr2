@@ -21,12 +21,17 @@ void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, con
 	using namespace UE::Geometry;
 
 	Mesh.EnableAttributes();
-	Mesh.Attributes()->SetNumUVLayers(2);
-	Mesh.Attributes()->EnablePrimaryColors();
+	Mesh.Attributes()->SetNumUVLayers(3);
 
+	// Deliberately NO colour overlay. The junction and ground blends are masks and live
+	// in UV2. A UDynamicMeshComponent only ignores its colour overlay while
+	// ColorOverrideMode is Constant; assigning any material flips it to None, the
+	// converter then reads the overlay, and the surface stops rendering entirely - with
+	// any material, ours or a stock one. Enabling primary colours here would reintroduce
+	// exactly that.
 	FDynamicMeshUVOverlay* UV0Layer = Mesh.Attributes()->GetUVLayer(0);
 	FDynamicMeshUVOverlay* UV1Layer = Mesh.Attributes()->GetUVLayer(1);
-	FDynamicMeshColorOverlay* ColorLayer = Mesh.Attributes()->PrimaryColors();
+	FDynamicMeshUVOverlay* UV2Layer = Mesh.Attributes()->GetUVLayer(2);
 
 	// The mesh is fully welded, so there is exactly one UV and one colour per vertex and
 	// the overlay element ids can be kept identical to the vertex ids. That is only safe
@@ -36,11 +41,7 @@ void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, con
 	{
 		UV0Layer->AppendElement(Buffers.UV0[Index]);
 		UV1Layer->AppendElement(Buffers.UV1[Index]);
-		ColorLayer->AppendElement(FVector4f(
-			Buffers.Colors[Index].R / 255.0f,
-			Buffers.Colors[Index].G / 255.0f,
-			Buffers.Colors[Index].B / 255.0f,
-			Buffers.Colors[Index].A / 255.0f));
+		UV2Layer->AppendElement(Buffers.UV2[Index]);
 	}
 
 	for (const int32 TriangleId : Mesh.TriangleIndicesItr())
@@ -48,7 +49,7 @@ void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, con
 		const FIndex3i Corners = Mesh.GetTriangle(TriangleId);
 		UV0Layer->SetTriangle(TriangleId, Corners);
 		UV1Layer->SetTriangle(TriangleId, Corners);
-		ColorLayer->SetTriangle(TriangleId, Corners);
+		UV2Layer->SetTriangle(TriangleId, Corners);
 	}
 }
 
@@ -119,8 +120,10 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	{
 		Component->SetMaterial(0, Material);
 
-		// The colour override was a placeholder for having no real material. With one
-		// assigned it must go, or it would flatten the asphalt back to a constant.
+		// Safe to leave the colour override off now that the mesh carries no colour
+		// overlay for the converter to read - the blends moved to UV2 precisely because
+		// this mode decides whether that overlay is touched, and touching it killed the
+		// draw for every material.
 		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::None);
 	}
 	else if (Component->GetNumMaterials() == 0)

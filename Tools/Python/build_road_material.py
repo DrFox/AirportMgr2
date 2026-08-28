@@ -169,12 +169,26 @@ def build_material(textures):
     lib.connect_material_expressions(clamped, "", centre_mask, "")
 
     # --- junction blend fades the markings out ---------------------------------------
-    vertex_colour = lib.create_material_expression(
-        material, unreal.MaterialExpressionVertexColor, -800, 1100)
+    # From UV2.X, NOT vertex colour. A UDynamicMeshComponent only ignores its colour
+    # overlay while ColorOverrideMode is Constant, and assigning any material flips that
+    # to None - at which point the converter reads the overlay and the surface stops
+    # rendering entirely, with any material. A mask is not colour; it belongs in a UV
+    # channel, where nothing about the render path depends on it.
+    uv2 = lib.create_material_expression(
+        material, unreal.MaterialExpressionTextureCoordinate, -1000, 1100)
+    uv2.set_editor_property("coordinate_index", 2)
+
+    junction_blend = lib.create_material_expression(
+        material, unreal.MaterialExpressionComponentMask, -800, 1100)
+    junction_blend.set_editor_property("r", True)
+    junction_blend.set_editor_property("g", False)
+    junction_blend.set_editor_property("b", False)
+    junction_blend.set_editor_property("a", False)
+    lib.connect_material_expressions(uv2, "", junction_blend, "")
 
     fade = lib.create_material_expression(
         material, unreal.MaterialExpressionOneMinus, -600, 1100)
-    lib.connect_material_expressions(vertex_colour, "G", fade, "")
+    lib.connect_material_expressions(junction_blend, "", fade, "")
 
     marking_amount = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -400, 900)

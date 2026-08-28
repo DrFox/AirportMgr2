@@ -11,17 +11,16 @@ namespace
 		return Value == 0.0 ? 0.0 : Value;
 	}
 
-	/** Vertex colour for a vertex a segment owns: no junction blend, fully opaque. */
-	FColor SegmentColour()
+	/** Masks for a vertex a segment owns: no junction blend, no ground fade yet. */
+	FVector2f SegmentMasks()
 	{
-		return FColor(0, 0, 0, 255);
+		return FVector2f(0.0f, 1.0f);
 	}
 
-	/** Vertex colour for a vertex the junction owns. See AddJunction for why Blend is always 1. */
-	FColor JunctionColour(double Blend)
+	/** Masks for a vertex the junction owns. See AddJunction for why the blend is always 1. */
+	FVector2f JunctionMasks(double Blend)
 	{
-		const uint8 G = static_cast<uint8>(FMath::Clamp(Blend, 0.0, 1.0) * 255.0 + 0.5);
-		return FColor(0, G, 0, 255);
+		return FVector2f(static_cast<float>(FMath::Clamp(Blend, 0.0, 1.0)), 1.0f);
 	}
 }
 
@@ -31,7 +30,7 @@ FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit)
 {
 }
 
-int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FColor& InColor)
+int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FVector2f& InUV2)
 {
 	// FVector2D::operator== compares X and Y by value, under which -0.0 == +0.0. But
 	// GetTypeHash(const TVector2<T>&) is a CRC over the raw bytes, so -0.0 and +0.0 hash
@@ -58,7 +57,7 @@ int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV
 		static_cast<float>(Key.X / TexelsPerUnit),
 		static_cast<float>(Key.Y / TexelsPerUnit)));
 	Buffers.UV1.Add(InUV1);
-	Buffers.Colors.Add(InColor);
+	Buffers.UV2.Add(InUV2);
 
 	WeldMap.Add(Key, NewIndex);
 	return NewIndex;
@@ -106,7 +105,7 @@ void FRoadMeshBuilder::AddJunction(const FJunctionResult& Junction)
 	Mapped.Reserve(Junction.Boundary.Num());
 	for (const FVector2D& Point : Junction.Boundary)
 	{
-		Mapped.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionColour(1.0)));
+		Mapped.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
 	}
 
 	for (int32 Slot = 0; Slot + 2 < Junction.Triangles.Num(); Slot += 3)
@@ -158,22 +157,22 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 
 		if (Step == 0)
 		{
-			LeftRail.Add(WeldVertex(LeftStart, FVector2f(LateralLeft, Along), SegmentColour()));
-			RightRail.Add(WeldVertex(RightStart, FVector2f(-LateralRight, Along), SegmentColour()));
+			LeftRail.Add(WeldVertex(LeftStart, FVector2f(LateralLeft, Along), SegmentMasks()));
+			RightRail.Add(WeldVertex(RightStart, FVector2f(-LateralRight, Along), SegmentMasks()));
 		}
 		else if (Step == Steps)
 		{
-			LeftRail.Add(WeldVertex(LeftEnd, FVector2f(LateralLeft, Along), SegmentColour()));
-			RightRail.Add(WeldVertex(RightEnd, FVector2f(-LateralRight, Along), SegmentColour()));
+			LeftRail.Add(WeldVertex(LeftEnd, FVector2f(LateralLeft, Along), SegmentMasks()));
+			RightRail.Add(WeldVertex(RightEnd, FVector2f(-LateralRight, Along), SegmentMasks()));
 		}
 		else
 		{
 			// Interior samples are ours alone and may be interpolated freely; only the
 			// ends are shared with a junction.
 			LeftRail.Add(WeldVertex(FMath::Lerp(LeftStart, LeftEnd, Alpha),
-				FVector2f(LateralLeft, Along), SegmentColour()));
+				FVector2f(LateralLeft, Along), SegmentMasks()));
 			RightRail.Add(WeldVertex(FMath::Lerp(RightStart, RightEnd, Alpha),
-				FVector2f(-LateralRight, Along), SegmentColour()));
+				FVector2f(-LateralRight, Along), SegmentMasks()));
 		}
 	}
 
@@ -216,10 +215,10 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// line first, ribbon start second.
 		// The cap spans from the node's own cut line to the ribbon's start, so it sits at
 		// along = 0 - the surface really does begin at the node, not at the trimmed cut.
-		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentColour());
+		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f), SegmentMasks());
 		const int32 R1 = RightRail[0];
 		const int32 L1 = LeftRail[0];
-		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentColour());
+		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f), SegmentMasks());
 
 		AddTriangle(R0, R1, L1);
 		AddTriangle(R0, L1, L0);
@@ -243,8 +242,8 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// first, node cap line second.
 		const float CapAlong = static_cast<float>(RibbonLength);
 		const int32 R0 = RightRail[Steps];
-		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentColour());
-		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentColour());
+		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong), SegmentMasks());
+		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong), SegmentMasks());
 		const int32 L0 = LeftRail[Steps];
 
 		AddTriangle(R0, R1, L1);

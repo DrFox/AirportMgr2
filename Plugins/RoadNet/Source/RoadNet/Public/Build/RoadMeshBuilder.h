@@ -40,7 +40,7 @@ private:
 	/**
 	 * Returns the index of Point, appending it only if this exact value is new.
 	 *
-	 * FIRST WRITER WINS. When the point is already present the incoming UV1 and colour
+	 * FIRST WRITER WINS. When the point is already present the incoming UV1 and masks
 	 * are discarded, because a welded vertex can only hold one of each. That is why
 	 * callers add segments BEFORE junctions: a segment measures `along` from its A end,
 	 * so its B-end cut vertices carry along = the ribbon's length, while the junction
@@ -48,7 +48,7 @@ private:
 	 * and own the shared attributes; junctions then supply values only for the vertices
 	 * they alone introduce - arc samples and the fan apex.
 	 */
-	int32 WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FColor& InColor);
+	int32 WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FVector2f& InUV2);
 
 	void AddTriangle(int32 A, int32 B, int32 C);
 
