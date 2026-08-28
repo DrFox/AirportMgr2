@@ -1,0 +1,147 @@
+#include "Model/RoadNetwork.h"
+#include "Model/RoadSlotMap.h"
+#include "Profiles/RoadProfile.h"
+
+FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
+{
+	FRoadNode Node;
+	Node.Position = Position;
+	return RoadSlot::Add<FRoadNodeId>(Nodes, NodeFreeList, MoveTemp(Node));
+}
+
+bool URoadNetwork::RemoveNode(FRoadNodeId Node)
+{
+	const FRoadNode* Existing = RoadSlot::Get<FRoadNodeId>(Nodes, Node);
+	if (Existing == nullptr)
+	{
+		return false;
+	}
+
+	// Copy: removing segments mutates the incident array we would otherwise iterate.
+	TArray<FRoadSegmentId> ToRemove = Existing->Incident;
+	for (const FRoadSegmentId Segment : ToRemove)
+	{
+		RemoveSegment(Segment);
+	}
+	return RoadSlot::Remove<FRoadNodeId>(Nodes, NodeFreeList, Node);
+}
+
+FRoadSegmentId URoadNetwork::AddSegment(FRoadNodeId A, FRoadNodeId B, const FVector2D& Control, URoadProfile* Profile)
+{
+	if (!RoadSlot::IsValid<FRoadNodeId>(Nodes, A) || !RoadSlot::IsValid<FRoadNodeId>(Nodes, B) || A == B)
+	{
+		return FRoadSegmentId();
+	}
+
+	FRoadSegment Segment;
+	Segment.A = A;
+	Segment.B = B;
+	Segment.Control = Control;
+	Segment.Profile = Profile;
+
+	const FRoadSegmentId Handle = RoadSlot::Add<FRoadSegmentId>(Segments, SegmentFreeList, MoveTemp(Segment));
+
+	RoadSlot::Get<FRoadNodeId>(Nodes, A)->Incident.Add(Handle);
+	RoadSlot::Get<FRoadNodeId>(Nodes, B)->Incident.Add(Handle);
+	SortIncident(A);
+	SortIncident(B);
+
+	return Handle;
+}
+
+FRoadSegmentId URoadNetwork::AddStraightSegment(FRoadNodeId A, FRoadNodeId B, URoadProfile* Profile)
+{
+	const FRoadNode* NodeA = RoadSlot::Get<FRoadNodeId>(Nodes, A);
+	const FRoadNode* NodeB = RoadSlot::Get<FRoadNodeId>(Nodes, B);
+	if (NodeA == nullptr || NodeB == nullptr)
+	{
+		return FRoadSegmentId();
+	}
+	return AddSegment(A, B, (NodeA->Position + NodeB->Position) * 0.5, Profile);
+}
+
+bool URoadNetwork::RemoveSegment(FRoadSegmentId Segment)
+{
+	const FRoadSegment* Existing = RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
+	if (Existing == nullptr)
+	{
+		return false;
+	}
+
+	const FRoadNodeId EndA = Existing->A;
+	const FRoadNodeId EndB = Existing->B;
+
+	if (FRoadNode* NodeA = RoadSlot::Get<FRoadNodeId>(Nodes, EndA))
+	{
+		NodeA->Incident.Remove(Segment);
+	}
+	if (FRoadNode* NodeB = RoadSlot::Get<FRoadNodeId>(Nodes, EndB))
+	{
+		NodeB->Incident.Remove(Segment);
+	}
+
+	return RoadSlot::Remove<FRoadSegmentId>(Segments, SegmentFreeList, Segment);
+}
+
+const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const
+{
+	return RoadSlot::Get<FRoadNodeId>(Nodes, Node);
+}
+
+const FRoadSegment* URoadNetwork::GetSegment(FRoadSegmentId Segment) const
+{
+	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
+}
+
+FRoadSegment* URoadNetwork::GetSegmentMutable(FRoadSegmentId Segment)
+{
+	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
+}
+
+FRoadNodeId URoadNetwork::GetOtherEnd(FRoadSegmentId Segment, FRoadNodeId AtNode) const
+{
+	const FRoadSegment* Seg = GetSegment(Segment);
+	if (Seg == nullptr)
+	{
+		return FRoadNodeId();
+	}
+	return (Seg->A == AtNode) ? Seg->B : Seg->A;
+}
+
+FVector2D URoadNetwork::GetOutgoingTangent(FRoadSegmentId Segment, FRoadNodeId AtNode) const
+{
+	const FRoadSegment* Seg = GetSegment(Segment);
+	const FRoadNode* Node = GetNode(AtNode);
+	if (Seg == nullptr || Node == nullptr)
+	{
+		return FVector2D(1.0, 0.0);
+	}
+
+	// Both ends: the outgoing tangent points toward the control point.
+	FVector2D Dir = Seg->Control - Node->Position;
+
+	if (Dir.IsNearlyZero())
+	{
+		// Degenerate control point; fall back to the straight chord.
+		const FRoadNode* Other = GetNode(GetOtherEnd(Segment, AtNode));
+		Dir = (Other != nullptr) ? (Other->Position - Node->Position) : FVector2D(1.0, 0.0);
+	}
+
+	return Dir.GetSafeNormal();
+}
+
+void URoadNetwork::SortIncident(FRoadNodeId NodeId)
+{
+	FRoadNode* Node = RoadSlot::Get<FRoadNodeId>(Nodes, NodeId);
+	if (Node == nullptr)
+	{
+		return;
+	}
+
+	Node->Incident.Sort([this, NodeId](const FRoadSegmentId& L, const FRoadSegmentId& R)
+	{
+		const FVector2D DirL = GetOutgoingTangent(L, NodeId);
+		const FVector2D DirR = GetOutgoingTangent(R, NodeId);
+		return FMath::Atan2(DirL.Y, DirL.X) < FMath::Atan2(DirR.Y, DirR.X);
+	});
+}
