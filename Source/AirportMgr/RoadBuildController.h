@@ -32,9 +32,34 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double PickRadius = 1500.0;
 
+	/**
+	 * Furthest a click may place a node from the camera, in uu.
+	 *
+	 * The ray/plane distance is (SurfaceZ - Origin.Z) / Direction.Z, which runs away
+	 * towards infinity as a click approaches the horizon: from near ground level almost
+	 * every ray is shallow, and a click a few pixels above the skyline lands kilometres
+	 * out. Without this the first stray click builds a road the size of a county, and
+	 * at that range the depth buffer cannot separate the surface from the ground either.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
+	double MaxPlaceDistance = 100000.0;
+
+	/** Lift the pawn above the road plane on possession, looking down at it. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	bool bStartAbovePlane = true;
+
+	/** Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
+	double StartHeight = 30000.0;
+
+	/** Draw the pending node and a rubber band to the cursor. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	bool bDrawBuildPreview = true;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupInputComponent() override;
+	virtual void PlayerTick(float DeltaTime) override;
 
 private:
 	void OnBuildClick();
@@ -49,6 +74,11 @@ private:
 	 * is exact and generating collision purely to support mouse picking would be waste.
 	 */
 	bool CursorOnRoadPlane(FVector2D& OutPosition) const;
+
+	/** World-space position of a node, at the road plane's height. */
+	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
+
+	void MoveViewAbovePlane();
 
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
