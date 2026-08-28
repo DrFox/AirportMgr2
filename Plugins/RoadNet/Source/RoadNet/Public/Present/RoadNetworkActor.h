@@ -9,6 +9,7 @@
 class URoadNetwork;
 class URoadProfile;
 class UDynamicMeshComponent;
+class UMaterialInterface;
 
 namespace UE::Geometry { class FDynamicMesh3; }
 
@@ -16,7 +17,8 @@ namespace UE::Geometry { class FDynamicMesh3; }
 class ROADNET_API FDynamicMeshSink : public IRoadMeshSink
 {
 public:
-	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent) : Component(InComponent) {}
+	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr)
+		: Component(InComponent), Material(InMaterial) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
 	/**
@@ -29,10 +31,11 @@ public:
 	static void PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
 
 private:
-	// A raw, non-owning pointer: the sink does not own or GC-protect the component and
-	// must not outlive it. Both current call sites are stack-scoped inside a single
-	// function, so this is safe today; Slice 2b's preview sink will not be.
+	// Raw, non-owning pointers: the sink owns and GC-protects neither, and must not
+	// outlive either. Both current call sites are stack-scoped inside a single function,
+	// so this is safe today; a preview sink that lives across frames will not be.
 	UDynamicMeshComponent* Component = nullptr;
+	UMaterialInterface* Material = nullptr;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -90,6 +93,15 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	TObjectPtr<URoadProfile> Profile;
+
+	/**
+	 * Material for the road surface. Defaults to M_RoadSurface, which reads UV0 for
+	 * asphalt and UV1 for markings. Left null, the surface falls back to the engine
+	 * default - which is WorldGridMaterial, the same world-aligned checker the template
+	 * floor uses, so the road becomes very hard to tell apart from the ground.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	TObjectPtr<UMaterialInterface> SurfaceMaterial;
 
 	/**
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly

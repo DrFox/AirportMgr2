@@ -12,6 +12,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
+#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
 
@@ -113,18 +114,24 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	//
 	// Slice 2b replaces this with the real asphalt material; until then the surface has
 	// to be given the engine default explicitly rather than assumed.
-	if (Component->GetNumMaterials() == 0)
+	if (Material != nullptr)
+	{
+		Component->SetMaterial(0, Material);
+
+		// The colour override was a placeholder for having no real material. With one
+		// assigned it must go, or it would flatten the asphalt back to a constant.
+		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::None);
+	}
+	else if (Component->GetNumMaterials() == 0)
 	{
 		Component->SetMaterial(0, UMaterial::GetDefaultMaterial(MD_Surface));
 
 		// GetDefaultMaterial(MD_Surface) IS WorldGridMaterial - the same world-aligned
-		// checker the default template floor uses. A flat road laid 200 uu above that
-		// floor therefore has the same material, the same +Z normal and the same
-		// world-space texture alignment, so seen from straight above it is very nearly
+		// checker the default template floor uses. A flat road laid above that floor
+		// therefore has the same material, the same +Z normal and the same world-space
+		// texture alignment, so seen from straight above it is very nearly
 		// indistinguishable from the ground it sits on. Override the colour so the
 		// surface is unmistakably a road rather than a patch of floor.
-		//
-		// Slice 2b replaces both of these with the real asphalt material.
 		Component->SetColorOverrideMode(EDynamicMeshComponentColorOverrideMode::Constant);
 		Component->SetConstantOverrideColor(FColor(40, 40, 45));
 	}
@@ -167,6 +174,18 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MeshComponent->SetUsingAbsoluteLocation(true);
 	MeshComponent->SetUsingAbsoluteRotation(true);
 	MeshComponent->SetUsingAbsoluteScale(true);
+
+	// Resolved by path rather than left for a Blueprint to assign, so a freshly placed
+	// actor renders as asphalt with no setup at all. If the asset is missing this stays
+	// null and Accept falls back to the engine default plus a colour override - which
+	// degrades quietly, so a missing material looks like the old placeholder rather than
+	// like an error.
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RoadMaterial(
+		TEXT("/Game/RoadNet/Materials/M_RoadSurface"));
+	if (RoadMaterial.Succeeded())
+	{
+		SurfaceMaterial = RoadMaterial.Object;
+	}
 }
 
 URoadNetwork& ARoadNetworkActor::EnsureNetwork()
@@ -329,7 +348,7 @@ void ARoadNetworkActor::RebuildMesh()
 		Builder.AddJunction(Pair.Value);
 	}
 
-	FDynamicMeshSink Sink(MeshComponent);
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial);
 	Builder.Emit(Sink);
 
 	if (bDebugDrawMesh)
