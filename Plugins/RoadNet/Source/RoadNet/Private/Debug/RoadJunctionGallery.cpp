@@ -3,6 +3,7 @@
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/SceneComponent.h"
 #include "Debug/RoadDebugDraw.h"
 #include "DrawDebugHelpers.h"
 #include "Model/RoadNetwork.h"
@@ -18,10 +19,21 @@ ARoadJunctionGallery::ARoadJunctionGallery()
 
 	// A bare AActor has no transform to speak of: GetActorLocation() returns zero and
 	// the actor cannot be moved in the editor. The gallery reads its own Z to lift the
-	// debug lines off the ground, so give it a real root; UDynamicMeshComponent is
-	// itself a USceneComponent, so it can serve as that root directly.
+	// debug lines off the ground, so give it a real root.
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
 	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("GalleryMesh"));
-	RootComponent = MeshComponent;
+	MeshComponent->SetupAttachment(RootComponent);
+
+	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
+	// transform them again. Absolute placement pins it to world space while leaving the
+	// actor free to be moved -- GetActorLocation() stays meaningful for the debug
+	// overlay drawn in Tick, which is exactly why MeshComponent is a child of the root
+	// rather than the root itself: SetWorldTransform(Identity) on a root component would
+	// have teleported the actor (and pinned GetActorLocation().Z to 0) instead.
+	MeshComponent->SetUsingAbsoluteLocation(true);
+	MeshComponent->SetUsingAbsoluteRotation(true);
+	MeshComponent->SetUsingAbsoluteScale(true);
 }
 
 void ARoadJunctionGallery::BeginPlay()
@@ -118,13 +130,6 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 
 	FDynamicMeshSink Sink(MeshComponent);
 	Builder.Emit(Sink);
-
-	// The builder emits absolute world-space XY at absolute Z, and the debug overlay
-	// drawn below is also in absolute world space, but SetMesh places those coordinates
-	// in COMPONENT space. Left alone, the solid mesh would render offset from its own
-	// debug overlay by the gallery's own transform. Force the component back to
-	// identity so the world-space vertices land where they say.
-	MeshComponent->SetWorldTransform(FTransform::Identity);
 
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,

@@ -3,6 +3,7 @@
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/SceneComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Model/RoadNetwork.h"
@@ -56,8 +57,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+
 	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RoadMesh"));
-	RootComponent = MeshComponent;
+	MeshComponent->SetupAttachment(RootComponent);
+
+	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
+	// transform them again. Absolute placement pins it to world space while leaving the
+	// actor free to be moved: SetWorldTransform(Identity) on a root component would have
+	// teleported the actor itself to the origin instead, which is why the mesh component
+	// is a child of a plain scene root rather than the root itself.
+	MeshComponent->SetUsingAbsoluteLocation(true);
+	MeshComponent->SetUsingAbsoluteRotation(true);
+	MeshComponent->SetUsingAbsoluteScale(true);
 }
 
 void ARoadNetworkActor::RebuildMesh()
@@ -90,13 +102,6 @@ void ARoadNetworkActor::RebuildMesh()
 
 	FDynamicMeshSink Sink(MeshComponent);
 	Builder.Emit(Sink);
-
-	// The builder emits absolute world-space XY at absolute Z (spec section 6.3 makes
-	// UV0 world-aligned, so the coordinates must stay world space), but SetMesh places
-	// those coordinates in COMPONENT space. Left alone, any actor not sitting at the
-	// origin would render its road offset by its own full transform. Force the
-	// component back to identity so the world-space vertices land where they say.
-	MeshComponent->SetWorldTransform(FTransform::Identity);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Rebuilt: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,

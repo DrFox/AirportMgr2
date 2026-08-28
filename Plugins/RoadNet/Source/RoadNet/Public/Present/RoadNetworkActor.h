@@ -41,8 +41,9 @@ public:
 	UPROPERTY() TObjectPtr<URoadNetwork> Network;
 
 	/** Absolute world-space Z of the road surface, in uu. Not relative to the actor:
-	 *  the mesh builder emits world-space XY at this Z, and RebuildMesh forces the
-	 *  mesh component to world identity so those coordinates are not transformed again. */
+	 *  the mesh builder emits world-space XY at this Z, and MeshComponent is set to use
+	 *  absolute location/rotation/scale (see the constructor) so those coordinates are
+	 *  not transformed again by the actor's own placement. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double SurfaceZ = 10.0;
 
 	/** Quads along each segment. 1 is right for straight segments. */

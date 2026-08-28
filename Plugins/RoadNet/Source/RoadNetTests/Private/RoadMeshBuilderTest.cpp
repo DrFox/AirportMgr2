@@ -216,6 +216,65 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 			Subdivided.VertexCount() > Baseline.VertexCount());
 	}
 
+	// The A-end cap branch in AddSegment never runs in any test above: every dead end
+	// there sits at the segment's B end, so its correctness has rested on review
+	// inspection alone. Author a segment the other way around - the dead end is the
+	// segment's A end - and assert the same invariants plus that its cap vertices
+	// appear. A separate network and builder keep the vertex-count assertions above
+	// intact.
+	{
+		URoadNetwork* AEndNet = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* AEndProfile = URoadProfile::MakeTransient(W * 2.0, 1500.0);
+
+		const FRoadNodeId AEndCentre = AEndNet->AddNode(FVector2D(100000.0, 0.0));
+		const FRoadNodeId AEndEast   = AEndNet->AddNode(FVector2D(140000.0, 0.0));
+		const FRoadNodeId AEndSouth  = AEndNet->AddNode(FVector2D(100000.0, -40000.0));
+
+		// AEndCentre gets two arms, making it a real junction with no cap of its own.
+		// SouthToCentre is authored South-to-Centre, so South - the dead end - is the
+		// segment's A end: exactly the direction nothing else in this file exercises.
+		AEndNet->AddStraightSegment(AEndCentre, AEndEast, AEndProfile);
+		const FRoadSegmentId SouthToCentre =
+			AEndNet->AddStraightSegment(AEndSouth, AEndCentre, AEndProfile);
+
+		const FRoadSolveResult AEndSolved = FRoadNetworkSolver::SolveAll(*AEndNet);
+		TestTrue(TEXT("A-end cap network solved"), AEndSolved.FailedNodes == 0);
+
+		FRoadMeshBuilder AEndBuilder(10.0);
+		for (const TPair<int32, FJunctionResult>& Pair : AEndSolved.NodeResults)
+		{
+			AEndBuilder.AddJunction(Pair.Value);
+		}
+		const int32 AEndAfterJunctions = AEndBuilder.VertexCount();
+		AEndBuilder.AddSegment(*AEndNet, SouthToCentre, 1);
+
+		// Mirrors the East-cap arithmetic above: the B end (AEndCentre) welds into the
+		// junction fan already built (0 new), the A end's own ribbon cut line is new
+		// (2), and the A-end cap at AEndSouth's own node position adds 2 more. Total: 4.
+		TestEqual(TEXT("A-end cap adds the same 4 vertices as the B-end cap"),
+			AEndBuilder.VertexCount() - AEndAfterJunctions, 4);
+
+		CheckMeshInvariants(AEndBuilder.GetBuffers());
+
+		// The arm runs north-south, so the cap's two new vertices are offset from the
+		// node in X, not Y (unlike the earlier east-west case, which offset in Y): a
+		// vertex sharing the node's own Y is the cap reaching it.
+		const FRoadNode* AEndSouthNode = AEndNet->GetNode(AEndSouth);
+		if (TestNotNull(TEXT("A-end south node exists"), AEndSouthNode))
+		{
+			bool bReachesNode = false;
+			for (const FVector3d& P : AEndBuilder.GetBuffers().Positions)
+			{
+				if (P.Y == AEndSouthNode->Position.Y)
+				{
+					bReachesNode = true;
+					break;
+				}
+			}
+			TestTrue(TEXT("A-end cap reaches the dead-end node's own Y"), bReachesNode);
+		}
+	}
+
 	// A node's solve failure only clears ITS OWN end's flag (bSolvedA or bSolvedB), so a
 	// segment solved at only one end must still emit nothing - the other flag being
 	// stranded true is exactly what would draw a triangle out to the world origin.

@@ -142,9 +142,12 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	// branch never runs and no fan apex is appended. AddJunction therefore has nothing to
 	// build for that node. Build the cap here instead, where both node positions and the
 	// profile's half-widths are available.
+	// Clamped exactly like JunctionSolver.cpp clamps Arm.HalfWidthLeft/Right: a negative
+	// band width must not mirror the cap to the wrong side while the ribbon end (which
+	// came from the solver, already clamped) stays put.
 	const URoadProfile* Profile = Segment->Profile;
-	const double HalfWidthLeft  = Profile ? Profile->GetHalfWidthLeft()  : 0.0;
-	const double HalfWidthRight = Profile ? Profile->GetHalfWidthRight() : 0.0;
+	const double HalfWidthLeft  = Profile ? FMath::Max(Profile->GetHalfWidthLeft(),  0.0) : 0.0;
+	const double HalfWidthRight = Profile ? FMath::Max(Profile->GetHalfWidthRight(), 0.0) : 0.0;
 
 	const FRoadNode* NodeA = Network.GetNode(Segment->A);
 	if (NodeA != nullptr && NodeA->Incident.Num() == 1)
