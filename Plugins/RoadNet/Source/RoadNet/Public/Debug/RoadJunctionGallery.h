@@ -6,6 +6,7 @@
 
 class URoadNetwork;
 class URoadProfile;
+class UDynamicMeshComponent;
 
 /**
  * Slice 1 visual regression harness: builds every junction configuration the
@@ -57,6 +58,16 @@ public:
 	 * from above; drop it to ~6 to inspect a single junction up close.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double DebugLineThickness = 120.0;
+
+	/** Draw the solver's debug lines on top of the solid surface. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet") bool bDrawDebugLines = true;
+
+	/** Solve every cell, build one batched mesh, and push it to the component. */
+	UFUNCTION(CallInEditor, Category = "RoadNet")
+	void RebuildGalleryMesh();
+
+	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
+	TObjectPtr<UDynamicMeshComponent> MeshComponent;
 
 private:
 	void BuildGallery();
