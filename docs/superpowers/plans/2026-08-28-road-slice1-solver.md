@@ -2488,10 +2488,15 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Spacing between gallery cells, in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") double CellSpacing = 16000.0;
+	UPROPERTY(EditAnywhere, Category = "RoadNet") double CellSpacing = 50000.0;
 
-	/** Arm length within each cell, in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet") double ArmLength = 6000.0;
+	/**
+	 * Arm length within each cell, in uu. Must exceed the largest cut distance the
+	 * gallery produces or the arms render inside-out: the fillet reach is
+	 * |R/tan(Theta/2)|, so the 15-degree cell alone cuts at ~12,533 uu with the
+	 * default 1500 uu radius. The draw code clamps per arm as a backstop.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet") double ArmLength = 20000.0;
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double TaxiwayWidth = 2300.0;
 	UPROPERTY(EditAnywhere, Category = "RoadNet") double FilletRadius = 1500.0;
@@ -2595,7 +2600,11 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 		{
 			const FJunctionArm& Arm = Input.Arms[ArmIndex];
 			const FVector2D Normal = FVector2D(-Arm.Tangent.Y, Arm.Tangent.X);
-			const FVector2D FarCentre = Input.Position + Arm.Tangent * ArmLength;
+
+			// The arm must extend past its own cut, or it renders inside-out.
+			const double DrawLength =
+				FMath::Max(ArmLength, Result.Arms[ArmIndex].CutDistance + 3000.0);
+			const FVector2D FarCentre = Input.Position + Arm.Tangent * DrawLength;
 
 			const FVector2D FarLeft  = FarCentre + Normal * Arm.HalfWidthLeft;
 			const FVector2D FarRight = FarCentre - Normal * Arm.HalfWidthRight;
