@@ -43,37 +43,48 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	{
 		Builder.AddJunction(Pair.Value);
 	}
+	const int32 AfterJunctions = Builder.VertexCount();
 	Builder.AddSegment(*Net, ToEast, 1);
+	// East is a dead end (2-point rim, no triangles, AddJunction early-outs), so only
+	// the B end is new: exactly 2 vertices. 4 would mean the A end failed to weld.
+	TestEqual(TEXT("segment welded its A end into the junction"),
+		Builder.VertexCount() - AfterJunctions, 2);
 	Builder.AddSegment(*Net, ToNorth, 1);
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
 
-	TestTrue(TEXT("mesh has vertices"), Buffers.Positions.Num() > 0);
-	TestTrue(TEXT("mesh has triangles"), Buffers.Indices.Num() > 0);
-	TestEqual(TEXT("indices come in threes"), Buffers.Indices.Num() % 3, 0);
-
-	for (const int32 Index : Buffers.Indices)
+	// Shared invariant checks, reused below for the subdivided-ribbon buffer too.
+	auto CheckMeshInvariants = [this](const FRoadMeshBuffers& CheckBuffers)
 	{
-		TestTrue(TEXT("index in range"), Index >= 0 && Index < Buffers.Positions.Num());
-	}
+		TestTrue(TEXT("mesh has vertices"), CheckBuffers.Positions.Num() > 0);
+		TestTrue(TEXT("mesh has triangles"), CheckBuffers.Indices.Num() > 0);
+		TestEqual(TEXT("indices come in threes"), CheckBuffers.Indices.Num() % 3, 0);
 
-	// Flat world: every vertex sits on the same plane.
-	for (const FVector3d& P : Buffers.Positions)
-	{
-		TestTrue(TEXT("vertex is finite"),
-			FMath::IsFinite(P.X) && FMath::IsFinite(P.Y) && FMath::IsFinite(P.Z));
-		TestTrue(TEXT("vertex is on the road plane"), FMath::IsNearlyEqual(P.Z, 10.0, 1e-9));
-	}
+		for (const int32 Index : CheckBuffers.Indices)
+		{
+			TestTrue(TEXT("index in range"), Index >= 0 && Index < CheckBuffers.Positions.Num());
+		}
 
-	// Every triangle faces up. A wound-backwards triangle renders black or invisible.
-	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
-	{
-		const double Area = TriangleArea2D(
-			Buffers.Positions[Buffers.Indices[Slot]],
-			Buffers.Positions[Buffers.Indices[Slot + 1]],
-			Buffers.Positions[Buffers.Indices[Slot + 2]]);
-		TestTrue(TEXT("triangle winds counter-clockwise"), Area > 0.0);
-	}
+		// Flat world: every vertex sits on the same plane.
+		for (const FVector3d& P : CheckBuffers.Positions)
+		{
+			TestTrue(TEXT("vertex is finite"),
+				FMath::IsFinite(P.X) && FMath::IsFinite(P.Y) && FMath::IsFinite(P.Z));
+			TestTrue(TEXT("vertex is on the road plane"), FMath::IsNearlyEqual(P.Z, 10.0, 1e-9));
+		}
+
+		// Every triangle faces up. A wound-backwards triangle renders black or invisible.
+		for (int32 Slot = 0; Slot + 2 < CheckBuffers.Indices.Num(); Slot += 3)
+		{
+			const double Area = TriangleArea2D(
+				CheckBuffers.Positions[CheckBuffers.Indices[Slot]],
+				CheckBuffers.Positions[CheckBuffers.Indices[Slot + 1]],
+				CheckBuffers.Positions[CheckBuffers.Indices[Slot + 2]]);
+			TestTrue(TEXT("triangle winds counter-clockwise"), Area > 0.0);
+		}
+	};
+
+	CheckMeshInvariants(Buffers);
 
 	// The weld can only fuse what the solver already shares. Assert that directly: the
 	// CENTRE junction's own boundary polygon carries this segment's stored cut vertices
@@ -140,6 +151,29 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		Builder.Emit(Sink);
 		TestEqual(TEXT("sink got every vertex"), Sink.Vertices, Buffers.Positions.Num());
 		TestEqual(TEXT("sink got every triangle"), Sink.Tris, Buffers.Indices.Num() / 3);
+	}
+
+	// The default RibbonSegments (8) never runs above: both AddSegment calls pass 1,
+	// so Steps == 1 and the interior-lerp branch of AddSegment is never exercised.
+	// Build a fresh pair of buffers - one unsubdivided, one subdivided - to cover it.
+	{
+		FRoadMeshBuilder Baseline(10.0);
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Baseline.AddJunction(Pair.Value);
+		}
+		Baseline.AddSegment(*Net, ToNorth, 1);
+
+		FRoadMeshBuilder Subdivided(10.0);
+		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+		{
+			Subdivided.AddJunction(Pair.Value);
+		}
+		Subdivided.AddSegment(*Net, ToNorth, 8);
+
+		CheckMeshInvariants(Subdivided.GetBuffers());
+		TestTrue(TEXT("subdivided ribbon produced more vertices than the unsubdivided one"),
+			Subdivided.VertexCount() > Baseline.VertexCount());
 	}
 
 	return true;
