@@ -32,6 +32,16 @@ namespace
 	 * and a silent one.
 	 */
 	constexpr double MaxInsetFraction = 0.45;
+
+	/**
+	 * Below this, in uu², a triangle cannot cover a pixel at any sane texel density.
+	 *
+	 * A square 0.001 uu on a side. Absolute rather than texel-derived: spec section 12 (K3)
+	 * assigns the drop to the mesh builder precisely because the solver has no texel scale
+	 * to judge "too small" against, and neither does this - what it has is the knowledge
+	 * that nothing this small is ever rasterised, whatever the scale.
+	 */
+	constexpr double MinTriangleArea = 1e-6;
 }
 
 FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit)
@@ -80,6 +90,24 @@ void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C)
 	if (A == B || B == C || A == C)
 	{
 		return;
+	}
+
+	// Zero-area slivers. A pass-through node a hair off collinear emits a fan whose corner
+	// has collapsed: the triangles are correctly wound and have distinct indices, so every
+	// check above passes them, but they carry ~2.6e-07 uu² of area into FDynamicMesh3 and
+	// its normal computation. Spec section 12 (K3) assigns this to the mesh builder rather
+	// than the solver. Note an exactly collinear node never reaches here - the solver finds
+	// no apex that sees its rim and declines to emit a fan at all.
+	{
+		const FVector3d& PA = Buffers.Positions[A];
+		const FVector3d& PB = Buffers.Positions[B];
+		const FVector3d& PC = Buffers.Positions[C];
+		const double Area = FMath::Abs(
+			0.5 * ((PB.X - PA.X) * (PC.Y - PA.Y) - (PB.Y - PA.Y) * (PC.X - PA.X)));
+		if (Area < MinTriangleArea)
+		{
+			return;
+		}
 	}
 
 	// Emitted B and C SWAPPED, because Unreal's front face is the opposite winding to the

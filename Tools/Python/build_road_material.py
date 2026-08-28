@@ -236,6 +236,32 @@ def build_material(textures):
         node.set_editor_property("parameter_name", name)
         node.set_editor_property("default_value", default)
 
+    # --- ground blend: the shoulder fades into the terrain ---------------------------
+    # UV2.Y is 0 at a shoulder's outer edge and 1 inboard.
+    #
+    # Masked rather than translucent: translucency on a large flat surface costs sorting
+    # and overdraw for no benefit. A plain mask alone would only move the hard edge
+    # inboard rather than soften it, which defeats the point - so the dithering is what
+    # actually turns the gradient into a fade.
+    #
+    # That dithering is the material's own dither_opacity_mask flag, NOT a
+    # DitherTemporalAA node. This engine build exposes no MaterialExpressionDitherTemporalAA
+    # to Python and indexes no engine MaterialFunction assets for this project, so the node
+    # route is unavailable here; the flag is the engine doing the same job one level down,
+    # and needs no graph at all.
+    material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
+    material.set_editor_property("dither_opacity_mask", True)
+
+    ground_blend = lib.create_material_expression(
+        material, unreal.MaterialExpressionComponentMask, -800, 1500)
+    ground_blend.set_editor_property("r", False)
+    ground_blend.set_editor_property("g", True)
+    ground_blend.set_editor_property("b", False)
+    ground_blend.set_editor_property("a", False)
+    lib.connect_material_expressions(uv2, "", ground_blend, "")
+
+    lib.connect_material_property(ground_blend, "", unreal.MaterialProperty.MP_OPACITY_MASK)
+
     lib.connect_material_property(base_colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
     lib.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
     lib.connect_material_property(rough, "R", unreal.MaterialProperty.MP_ROUGHNESS)

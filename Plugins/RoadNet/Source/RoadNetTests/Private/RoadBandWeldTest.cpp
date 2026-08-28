@@ -198,6 +198,74 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// K3: a pass-through node that is very nearly, but not exactly, collinear emits slivers -
+	// measured here at 2.6e-07 uu², the same defect slice 2a recorded at 1.6e-10. They pass
+	// every winding check and are geometrically harmless, but they reach the renderer and
+	// the normal computation. Slice 2a could not calibrate a threshold; a millionth of a
+	// square unit is a square 0.001 uu on a side, far below anything a pixel can cover at
+	// any sane texel density, and still above the slivers.
+	auto CountSlivers = [](const FRoadMeshBuffers& In)
+	{
+		int32 Slivers = 0;
+		for (int32 Slot = 0; Slot + 2 < In.Indices.Num(); Slot += 3)
+		{
+			const FVector3d& A = In.Positions[In.Indices[Slot]];
+			const FVector3d& B = In.Positions[In.Indices[Slot + 1]];
+			const FVector3d& C = In.Positions[In.Indices[Slot + 2]];
+			const double Area = FMath::Abs(
+				0.5 * ((B.X - A.X) * (C.Y - A.Y) - (B.Y - A.Y) * (C.X - A.X)));
+			if (Area < 1e-6)
+			{
+				++Slivers;
+			}
+		}
+		return Slivers;
+	};
+
+	TestEqual(TEXT("no zero-area slivers reach the bend's buffers"), CountSlivers(Buffers), 0);
+
+	// The bend above has no near-collinear node, so it produces no slivers whether or not
+	// they are dropped - it cannot fail, and a test that cannot fail is worth less than no
+	// test. A pass-through node a HAIR off collinear is the case that emits them, and the
+	// offset has to be chosen rather than guessed. Measured across a sweep:
+	//
+	//   offset 0        rim 3  triangles 0   - exactly collinear: no apex sees the rim, so
+	//                                          the solver vetoes the fan and emits nothing
+	//   offset 1e-6     rim 3  triangles 9   - 6 slivers, smallest 2.6e-07 uu²  <- K3
+	//   offset 1e-3     rim 4  triangles 0   - vetoed again
+	//   offset 1        rim 28 triangles 84  - healthy, smallest 0.14 uu²
+	//
+	// So "collinear" is the wrong word for the failing case and a straight line is the
+	// wrong test: it produces no junction geometry at all. Only the narrow band where the
+	// fan is still emitted but its corner has collapsed produces slivers.
+	{
+		constexpr double HairOffCollinear = 1e-6;
+
+		URoadNetwork* Straight = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId West   = Straight->AddNode(FVector2D(-10000.0, 0.0));
+		const FRoadNodeId Middle = Straight->AddNode(FVector2D(0.0, HairOffCollinear));
+		const FRoadNodeId Far    = Straight->AddNode(FVector2D(10000.0, 0.0));
+		Straight->AddStraightSegment(West, Middle, Profile);
+		Straight->AddStraightSegment(Middle, Far, Profile);
+
+		const FRoadSolveResult StraightSolved = FRoadNetworkSolver::SolveAll(*Straight);
+		TestEqual(TEXT("the near-collinear network solved"), StraightSolved.FailedNodes, 0);
+
+		FRoadMeshBuilder StraightBuilder(10.0);
+		StraightBuilder.Build(*Straight, StraightSolved, 3);
+
+		// The construction must still be producing a fan, or this asserts nothing.
+		const FJunctionResult* MiddleResult = StraightSolved.NodeResults.Find(Middle.Index);
+		if (TestNotNull(TEXT("the near-collinear node solved"), MiddleResult))
+		{
+			TestTrue(TEXT("the near-collinear node still emits a fan"),
+				MiddleResult->Triangles.Num() > 0);
+		}
+
+		TestEqual(TEXT("no zero-area slivers reach a near-collinear node's buffers"),
+			CountSlivers(StraightBuilder.GetBuffers()), 0);
+	}
+
 	return true;
 }
 
