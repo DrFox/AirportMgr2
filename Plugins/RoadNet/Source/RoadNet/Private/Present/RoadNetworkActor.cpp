@@ -336,29 +336,7 @@ void ARoadNetworkActor::RebuildMesh()
 
 	FRoadMeshBuilder Builder(SurfaceZ);
 
-	// Segments first, junctions second, and the order is a contract rather than a style
-	// choice. A cut vertex is one welded vertex holding one UV1, and WeldVertex is
-	// first-writer-wins. A segment measures `along` from its A end, so its B-end cut
-	// vertices carry along = the ribbon's length, while the junction standing at that
-	// node would write along = 0. Segments must write first, or every segment's markings
-	// jump at one end - and nothing fails while it happens.
-	const TArray<FRoadSegment>& Segments = Network->GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		if (!Segments[Index].bAlive)
-		{
-			continue;
-		}
-		FRoadSegmentId SegmentId;
-		SegmentId.Index = Index;
-		SegmentId.Generation = Segments[Index].Generation;
-		Builder.AddSegment(*Network, SegmentId, RibbonSegments);
-	}
-
-	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
-	{
-		Builder.AddJunction(Pair.Value);
-	}
+	Builder.Build(*Network, Solved, RibbonSegments);
 
 	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial);
 	Builder.Emit(Sink);

@@ -251,6 +251,30 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	}
 }
 
+void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult& Solved, int32 RibbonSegments)
+{
+	// Segments first. See the header: this ordering is the whole reason this function
+	// exists rather than leaving each caller to remember it.
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		if (!Segments[Index].bAlive)
+		{
+			continue;
+		}
+
+		FRoadSegmentId SegmentId;
+		SegmentId.Index = Index;
+		SegmentId.Generation = Segments[Index].Generation;
+		AddSegment(Network, SegmentId, RibbonSegments);
+	}
+
+	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+	{
+		AddJunction(Pair.Value);
+	}
+}
+
 void FRoadMeshBuilder::Emit(IRoadMeshSink& Sink) const
 {
 	Sink.Accept(Buffers);

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Build/RoadMeshSink.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Model/RoadHandles.h"
 #include "Solve/JunctionSolver.h"
 
@@ -30,6 +31,21 @@ public:
 	 * straight segment, more for a curve.
 	 */
 	void AddSegment(const URoadNetwork& Network, FRoadSegmentId SegmentId, int32 RibbonSegments = 8);
+
+	/**
+	 * Build a whole solved network: every live segment, then every junction.
+	 *
+	 * Prefer this to calling AddSegment and AddJunction by hand. The order is a contract,
+	 * not a preference - a cut vertex is one welded vertex holding one UV1, WeldVertex is
+	 * first-writer-wins, and a segment measures `along` from its A end while the junction
+	 * at its B end would write 0. Getting it backwards makes every segment's markings jump
+	 * at one end, and nothing fails when it happens.
+	 *
+	 * Enforcing that here rather than in a comment on each caller is the same move as the
+	 * weld map itself: make the wrong result unrepresentable instead of documented. The
+	 * two element functions stay public because tests need to build partial meshes.
+	 */
+	void Build(const URoadNetwork& Network, const FRoadSolveResult& Solved, int32 RibbonSegments = 1);
 
 	void Emit(IRoadMeshSink& Sink) const;
 

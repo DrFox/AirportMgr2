@@ -174,6 +174,35 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 			UnfadedOnCentreline, 0);
 	}
 
+	// Build() must produce exactly what the correct hand-ordering produces. It exists so
+	// no caller has to remember the order, which only helps if it actually gets it right -
+	// and a Build() that silently ordered them the other way would look identical here
+	// were it not compared against a hand-built reference.
+	{
+		FRoadMeshBuilder Built(ZHeight, TexelsPerUnit);
+		Built.Build(*Net, Solved, 1);
+
+		const FRoadMeshBuffers& FromBuild = Built.GetBuffers();
+		TestEqual(TEXT("Build produces the same vertex count"),
+			FromBuild.Positions.Num(), Buffers.Positions.Num());
+		TestEqual(TEXT("Build produces the same triangle count"),
+			FromBuild.Indices.Num(), Buffers.Indices.Num());
+
+		// Bitwise, because these are the same welded positions reached by the same route.
+		int32 Mismatches = 0;
+		const int32 Count = FMath::Min(FromBuild.Positions.Num(), Buffers.Positions.Num());
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			if (FromBuild.Positions[Index] != Buffers.Positions[Index] ||
+				FromBuild.UV1[Index] != Buffers.UV1[Index] ||
+				FromBuild.UV2[Index] != Buffers.UV2[Index])
+			{
+				++Mismatches;
+			}
+		}
+		TestEqual(TEXT("Build matches the hand-ordered build vertex for vertex"), Mismatches, 0);
+	}
+
 	// THE ORDERING RULE, made executable. Build the same network junctions-first and the
 	// shared cut vertices come out carrying the junction's lateral of 0 instead of the
 	// segment's half-width. Without this, nothing in the suite fails when the order is
