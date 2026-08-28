@@ -1,9 +1,12 @@
 #include "Debug/RoadJunctionGallery.h"
 
-#include "Components/SceneComponent.h"
+#include "Build/RoadMeshBuilder.h"
+#include "Build/RoadNetworkSolver.h"
+#include "Components/DynamicMeshComponent.h"
 #include "Debug/RoadDebugDraw.h"
 #include "DrawDebugHelpers.h"
 #include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
 
@@ -15,8 +18,10 @@ ARoadJunctionGallery::ARoadJunctionGallery()
 
 	// A bare AActor has no transform to speak of: GetActorLocation() returns zero and
 	// the actor cannot be moved in the editor. The gallery reads its own Z to lift the
-	// debug lines off the ground, so give it a real root.
-	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	// debug lines off the ground, so give it a real root; UDynamicMeshComponent is
+	// itself a USceneComponent, so it can serve as that root directly.
+	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("GalleryMesh"));
+	RootComponent = MeshComponent;
 }
 
 void ARoadJunctionGallery::BeginPlay()
@@ -52,10 +57,6 @@ void ARoadJunctionGallery::BuildGallery()
 		{ 0.0, UE_DOUBLE_PI * 0.4, UE_DOUBLE_PI * 0.8, UE_DOUBLE_PI * 1.2, UE_DOUBLE_PI * 1.6 }
 	};
 
-	UE_LOG(LogRoadGallery, Log, TEXT("Gallery built: %d cells, thickness %.1f, world %s"),
-		CellBearings.Num(), DebugLineThickness,
-		GetWorld() ? *GetWorld()->GetName() : TEXT("none"));
-
 	CellCentres.Reset();
 	constexpr int32 Columns = 4;
 	for (int32 Index = 0; Index < CellBearings.Num(); ++Index)
@@ -64,16 +65,68 @@ void ARoadJunctionGallery::BuildGallery()
 		const int32 Row = Index / Columns;
 		CellCentres.Add(FVector2D(Column * CellSpacing, Row * CellSpacing));
 	}
+
+	// Each cell is a real sub-network: a centre node plus one outer node per arm.
+	// The arm must reach past its own cut or the ribbon inverts, so ArmLength is a
+	// floor, not the actual length.
+	for (int32 CellIndex = 0; CellIndex < CellCentres.Num(); ++CellIndex)
+	{
+		const FVector2D Centre = CellCentres[CellIndex];
+		const FRoadNodeId CentreNode = Network->AddNode(Centre);
+
+		for (const double Bearing : CellBearings[CellIndex])
+		{
+			const FVector2D Dir(FMath::Cos(Bearing), FMath::Sin(Bearing));
+			const FRoadNodeId Outer = Network->AddNode(Centre + Dir * ArmLength);
+			Network->AddStraightSegment(CentreNode, Outer, Profile);
+		}
+	}
+
+	UE_LOG(LogRoadGallery, Log, TEXT("Gallery built: %d cells, %d nodes, %d segments"),
+		CellBearings.Num(), Network->GetNodes().Num(), Network->GetSegments().Num());
+
+	RebuildGalleryMesh();
+}
+
+void ARoadJunctionGallery::RebuildGalleryMesh()
+{
+	if (Network == nullptr || MeshComponent == nullptr)
+	{
+		return;
+	}
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
+
+	FRoadMeshBuilder Builder(10.0);
+	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+	{
+		Builder.AddJunction(Pair.Value);
+	}
+
+	const TArray<FRoadSegment>& Segments = Network->GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		if (!Segments[Index].bAlive)
+		{
+			continue;
+		}
+		FRoadSegmentId SegmentId;
+		SegmentId.Index = Index;
+		SegmentId.Generation = Segments[Index].Generation;
+		Builder.AddSegment(*Network, SegmentId, 1);
+	}
+
+	FDynamicMeshSink Sink(MeshComponent);
+	Builder.Emit(Sink);
+
+	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),
+		Solved.SolvedNodes, Solved.FailedNodes,
+		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);
 }
 
 void ARoadJunctionGallery::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-
-	if (RoadDebug::GetDebugDrawLevel() <= 0)
-	{
-		return;
-	}
 
 	// Build lazily rather than only in BeginPlay, so the gallery is visible in the
 	// editor viewport without entering play. Also picks up edits to CellSpacing,
@@ -82,6 +135,13 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 	if (Network == nullptr)
 	{
 		BuildGallery();
+	}
+
+	// The solid surface is the slice 2a deliverable, so it renders whether or not the
+	// debug overlay is on. Only the overlay is gated here.
+	if (!bDrawDebugLines || RoadDebug::GetDebugDrawLevel() <= 0)
+	{
+		return;
 	}
 
 	// Ticking is not observable from outside, and "nothing drawn" looks identical
