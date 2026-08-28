@@ -2,7 +2,10 @@
 #include "Misc/AutomationTest.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -131,6 +134,48 @@ bool FRoadMeshAttributeTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestTrue(TEXT("a junction apex carries full junction blend"), bFoundApex);
+	}
+
+	// The overlays the material actually samples. The buffers being right proves nothing
+	// about what the component receives - that gap is exactly where slice 2a's invisible
+	// surface hid, so it gets a test of its own.
+	{
+		UE::Geometry::FDynamicMesh3 Mesh;
+		for (const FVector3d& Position : Buffers.Positions)
+		{
+			Mesh.AppendVertex(Position);
+		}
+		for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+		{
+			Mesh.AppendTriangle(
+				Buffers.Indices[Slot], Buffers.Indices[Slot + 1], Buffers.Indices[Slot + 2]);
+		}
+
+		FDynamicMeshSink::PopulateAttributes(Mesh, Buffers);
+
+		if (!TestTrue(TEXT("attributes are enabled"), Mesh.HasAttributes()))
+		{
+			return false;
+		}
+		TestEqual(TEXT("two UV layers exist"), Mesh.Attributes()->NumUVLayers(), 2);
+		TestTrue(TEXT("primary colours are enabled"), Mesh.Attributes()->HasPrimaryColors());
+
+		const UE::Geometry::FDynamicMeshUVOverlay* UV0Layer = Mesh.Attributes()->GetUVLayer(0);
+		const UE::Geometry::FDynamicMeshUVOverlay* UV1Layer = Mesh.Attributes()->GetUVLayer(1);
+
+		TestEqual(TEXT("UV0 has one element per vertex"), UV0Layer->ElementCount(), Buffers.Positions.Num());
+		TestEqual(TEXT("UV1 has one element per vertex"), UV1Layer->ElementCount(), Buffers.Positions.Num());
+
+		// Every triangle must be set in both layers, or that triangle samples nothing.
+		int32 UnsetUV0 = 0;
+		int32 UnsetUV1 = 0;
+		for (const int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			if (!UV0Layer->IsSetTriangle(TriangleId)) { ++UnsetUV0; }
+			if (!UV1Layer->IsSetTriangle(TriangleId)) { ++UnsetUV1; }
+		}
+		TestEqual(TEXT("every triangle has UV0"), UnsetUV0, 0);
+		TestEqual(TEXT("every triangle has UV1"), UnsetUV1, 0);
 	}
 
 	return true;

@@ -5,6 +5,7 @@
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
+#include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "DrawDebugHelpers.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Materials/Material.h"
@@ -13,6 +14,42 @@
 #include "Profiles/RoadProfile.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
+
+void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers)
+{
+	using namespace UE::Geometry;
+
+	Mesh.EnableAttributes();
+	Mesh.Attributes()->SetNumUVLayers(2);
+	Mesh.Attributes()->EnablePrimaryColors();
+
+	FDynamicMeshUVOverlay* UV0Layer = Mesh.Attributes()->GetUVLayer(0);
+	FDynamicMeshUVOverlay* UV1Layer = Mesh.Attributes()->GetUVLayer(1);
+	FDynamicMeshColorOverlay* ColorLayer = Mesh.Attributes()->PrimaryColors();
+
+	// The mesh is fully welded, so there is exactly one UV and one colour per vertex and
+	// the overlay element ids can be kept identical to the vertex ids. That is only safe
+	// because welding is on exact bits: a tolerance-welded mesh would need split elements
+	// wherever two surfaces met at a seam.
+	for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+	{
+		UV0Layer->AppendElement(Buffers.UV0[Index]);
+		UV1Layer->AppendElement(Buffers.UV1[Index]);
+		ColorLayer->AppendElement(FVector4f(
+			Buffers.Colors[Index].R / 255.0f,
+			Buffers.Colors[Index].G / 255.0f,
+			Buffers.Colors[Index].B / 255.0f,
+			Buffers.Colors[Index].A / 255.0f));
+	}
+
+	for (const int32 TriangleId : Mesh.TriangleIndicesItr())
+	{
+		const FIndex3i Corners = Mesh.GetTriangle(TriangleId);
+		UV0Layer->SetTriangle(TriangleId, Corners);
+		UV1Layer->SetTriangle(TriangleId, Corners);
+		ColorLayer->SetTriangle(TriangleId, Corners);
+	}
+}
 
 void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 {
@@ -51,7 +88,13 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 			Rejected);
 	}
 
+	PopulateAttributes(Mesh, Buffers);
+
+	// With an attribute set present the renderer reads the normal overlay rather than the
+	// per-vertex normals, so both are filled: the overlay for rendering, and the
+	// per-vertex normals because they cost nothing and keep the mesh self-describing.
 	UE::Geometry::FMeshNormals::QuickComputeVertexNormals(Mesh);
+	UE::Geometry::FMeshNormals::InitializeOverlayToPerVertexNormals(Mesh.Attributes()->PrimaryNormals(), false);
 
 	// Everything from the graph down to this point is covered by automation tests, so
 	// when a road is built but not seen, the answer is on this side of the boundary.

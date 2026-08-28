@@ -10,12 +10,23 @@ class URoadNetwork;
 class URoadProfile;
 class UDynamicMeshComponent;
 
+namespace UE::Geometry { class FDynamicMesh3; }
+
 /** Pushes finished buffers into a UDynamicMeshComponent. */
 class ROADNET_API FDynamicMeshSink : public IRoadMeshSink
 {
 public:
 	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent) : Component(InComponent) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
+
+	/**
+	 * Copy the buffers' UV and colour channels onto an already-populated mesh.
+	 *
+	 * Static and public so it can be tested without a component, a world or a renderer.
+	 * The buffers being correct says nothing about what the component receives, and that
+	 * gap is precisely where slice 2a's invisible surface hid.
+	 */
+	static void PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
 
 private:
 	// A raw, non-owning pointer: the sink does not own or GC-protect the component and
