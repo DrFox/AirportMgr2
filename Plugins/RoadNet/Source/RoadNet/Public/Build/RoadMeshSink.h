@@ -20,7 +20,13 @@ struct FRoadMeshBuffers
 	TArray<FVector2f> UV1;
 
 	/**
-	 * Masks, NOT colour. X = junction blend, Y = ground blend (unused until 2b-ii).
+	 * Masks, NOT colour. X = junction blend. Y is reserved and always 1.
+	 *
+	 * Y briefly carried a ground blend driving a shoulder fade into the terrain. That was
+	 * removed: an airport's surfaces meet at hard material lines - concrete slab, asphalt
+	 * run-off, grass - and a road's edge is a kerb, so the fade solved a problem this game
+	 * does not have while costing a masked material to do it. Edge treatment is a per-band
+	 * material choice instead.
 	 *
 	 * These began life in a vertex-colour overlay and must not go back there. A
 	 * UDynamicMeshComponent only ignores its colour overlay while ColorOverrideMode is

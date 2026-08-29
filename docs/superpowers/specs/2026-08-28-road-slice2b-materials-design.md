@@ -21,11 +21,11 @@ Slice 2a renders solid, seamless surfaces with no material at all. It leaves fou
 
 | Question | Decision |
 |---|---|
-| Ribbon geometry | **Subdivide laterally per profile band.** Enables true vertex-alpha shoulder fade and per-band material slots. |
+| Ribbon geometry | **Subdivide laterally per profile band.** Enables per-band material slots. (Originally also justified by a vertex-alpha shoulder fade; see §6.) |
 | Material authoring | **Authored by commandlet.** `PythonScriptPlugin` is enabled in the `.uproject`; `MaterialEditingLibrary`, `MaterialFactoryNew`, `AssetImportTask` and asset tools were all verified available headlessly via `UnrealEditor-Cmd -run=pythonscript`. No GUI editor work required. |
 | Textures | **`concrete-bl/pebbled-asphalt1-bl`** from `c:\repos\models\materials` — *dark charcoal asphalt with pale pebble aggregate, roadways and yard surfacing*. Imported into `Content/RoadNet/Textures` and committed; the repo is private and the user has confirmed this is acceptable. |
 | Junction markings | **Fade out across the junction**, via a vertex-colour channel. Parent §6.4's "stop short" and "follow the turn paths" remain later data choices; turn paths are Slice 4. |
-| Shoulder fade at junctions | **Inset ring, clamped to a fraction of the junction's inradius.** |
+| Shoulder fade at junctions | ~~**Inset ring, clamped to a fraction of the junction's inradius.**~~ **SUPERSEDED — see §6.** The ring survives as band-boundary geometry; the fade does not. |
 
 ## 3. Buffers
 
@@ -68,7 +68,13 @@ This reverses `RebuildMesh`'s current order (junctions, then segments). The orde
 - **Junction blend (Colors.G)** — 0 at the rim, 1 at the apex. Shared cut vertices are written by the segment as 0, which is what the junction wants there too, so the two agree by construction. Markings taper into the junction rather than stopping dead.
 - **Ground blend (Colors.A)** — 0 at the outermost band's outer edge, 1 at its inner boundary and everywhere inboard. The segment writes 0 at its outer rails; the junction wants 0 at the rim. They agree.
 
-## 6. Shoulder fade at junctions
+## 6. Shoulder fade at junctions — SUPERSEDED
+
+> **Retired 2026-08-29, after playing it.** There is no fade. An airport's surfaces meet at hard material lines — concrete slab, asphalt run-off, grass — and a road's edge is a kerbstone. Edge treatment is a **per-profile, per-band material choice** on a flat ribbon: a `Curb` band for roads, a `Shoulder` band for taxiways and runways. `ERoadBandType` has carried `{ Shoulder, Lane, Curb }` since Slice 1 and was already shaped for this.
+>
+> This section describes a feature that was built, shipped in 2b-ii, and removed. It is kept because **the inset ring it specifies survives** — no longer as an alpha ramp, but as exactly the boundary between a junction's outer band and its interior, which per-band materials need. The clamp below is still load-bearing for that.
+>
+> The fade also concealed a real defect for a day: because the dead-end cap was built from the two outer rails alone, every one of its corners sat on an outer band and the whole cap was masked away, so roads visibly stopped short of where they were drawn. Per-band materials would have failed the same way. The cap is now subdivided band for band.
 
 A junction's rim *is* the outer edge, and the only vertex inboard is the fan apex, so fading rim→apex would fade the whole junction.
 
@@ -85,7 +91,7 @@ Offsetting a polygon inward can self-intersect at tight corners. The inset dista
 | UV0 | world XY / `TexelsPerUnit` | albedo, normal, roughness, metallic, AO |
 | UV1.X | lateral offset, uu | marking mask — centreline near 0, edge lines inset from the rim |
 | UV1.Y | distance along, uu | dash pattern |
-| Vertex A | ground blend | opacity mask at the shoulder's outer edge |
+| ~~Vertex A~~ | ~~ground blend~~ | ~~opacity mask at the shoulder's outer edge~~ — **removed with §6.** The material is Opaque; `UV2.Y` is reserved and always 1. |
 | Vertex G | junction blend | fades markings toward a junction's centre |
 
 Scalar/vector parameters: `TexelsPerUnit`, `MarkingColor`, `CentrelineWidth`, `EdgeLineInset`, `EdgeLineWidth`, `DashLength`, `DashGap`.

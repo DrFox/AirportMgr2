@@ -12,14 +12,10 @@ namespace
 		return Value == 0.0 ? 0.0 : Value;
 	}
 
-	/**
-	 * Masks for a vertex the junction owns. The junction blend is ALWAYS 1 - see AddJunction
-	 * for why - so it is written here rather than passed in; only the ground blend varies,
-	 * between a faded rim and a solid ring, band point or apex.
-	 */
-	FVector2f JunctionMasks(double GroundBlend)
+	/** Masks for a vertex the junction owns. See AddJunction for why the blend is always 1. */
+	FVector2f JunctionMasks(double Blend)
 	{
-		return FVector2f(1.0f, static_cast<float>(FMath::Clamp(GroundBlend, 0.0, 1.0)));
+		return FVector2f(static_cast<float>(FMath::Clamp(Blend, 0.0, 1.0)), 1.0f);
 	}
 
 	/**
@@ -173,24 +169,15 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 		}
 	}
 
-	// Rim vertices fade where the node has a shoulder to fade, EXCEPT the band points
-	// inserted below, which are interior to the cross-section and stay solid. Tracking that
-	// per entry rather than blanketing the rim is what stops a junction added before its
-	// segments from writing a faded blend onto an interior band point and winning the weld.
-	const float RimFallbackBlend = ShoulderWidth > 0.0 ? 0.0f : 1.0f;
-
 	// Rebuild the rim with each arm's band points inserted along its cut line. The solver's
 	// own Triangles array indexes the ORIGINAL boundary, so it cannot be reused once points
 	// are inserted - the fan is rebuilt below instead.
 	TArray<FVector2D> Rim;
-	TArray<float> RimBlend;
 	Rim.Reserve(ApexSlot * 2);
-	RimBlend.Reserve(ApexSlot * 2);
 
 	for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
 	{
 		Rim.Add(Junction.Boundary[Slot]);
-		RimBlend.Add(RimFallbackBlend);
 
 		// SolveBoundary emits each arm's RightCut immediately followed by its LeftCut, so
 		// a matching adjacent pair identifies that arm's cut line. Matched bitwise: these
@@ -223,7 +210,6 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
 			{
 				Rim.Add(CutLinePoint(Arm.RightCut, Arm.LeftCut, Bands.Alphas[Boundary]));
-				RimBlend.Add(Bands.GroundBlend[Boundary]);
 			}
 			break;
 		}
@@ -233,6 +219,13 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	// owned by their segments, so these attributes are discarded for them; they land on arc
 	// samples, the ring and the apex. Full junction blend on every one, so no marking can
 	// reach a junction.
+	//
+	// The ring is BOUNDARY GEOMETRY WITH NO CURRENT EFFECT. It was built to give a shoulder
+	// fade somewhere to end; that fade is gone - an airport's surfaces meet at hard material
+	// lines, not alpha ramps. The ring stays because it is exactly the boundary between a
+	// junction's outer shoulder band and its interior, which is what per-band materials
+	// need next. Until then it is a coplanar subdivision of a single-material surface:
+	// invisible, and cheaper to keep than to rebuild.
 	TArray<int32> RimIndices;
 	TArray<int32> RingIndices;
 	RimIndices.Reserve(Rim.Num());
@@ -242,7 +235,7 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	{
 		const FVector2D& Point = Rim[Slot];
 
-		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(RimBlend[Slot])));
+		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
 
 		// Ring: one shoulder-width toward the apex, clamped so it can never reach or pass
 		// it. The solver guarantees the rim is star-shaped about the apex, so a straight
@@ -353,7 +346,7 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 			Rails[Boundary].Add(WeldVertex(
 				Point,
 				FVector2f(Bands.Laterals[Boundary], Along),
-				FVector2f(static_cast<float>(JunctionBlend), Bands.GroundBlend[Boundary])));
+				FVector2f(static_cast<float>(JunctionBlend), 1.0f)));
 		}
 	}
 
@@ -389,11 +382,12 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	//
 	// It used to be built from the two outer rails alone, on the reasoning that a cap is a
 	// flat end rather than a length of road and needs no subdivision. That is wrong the
-	// moment bands mean anything: all four corners of such a cap sit on an outer band, so
-	// with a shouldered profile every one of them carries ground blend 0 and the whole cap
-	// is masked away - the road visibly stops at its trimmed cut instead of at its node,
-	// and only reaches the node once a second click turns it into a junction whose fan
-	// fills the hole. Per-band materials would fail the same way, one band at a time.
+	// moment bands mean anything. It was caught through the shoulder fade, which made every
+	// corner of such a cap transparent so the road visibly stopped at its trimmed cut and
+	// only reached its node once a second click turned it into a junction. The fade is gone
+	// and the bug it exposed is not: per-band materials would paint the whole cap in the
+	// outermost band's material, one band's worth of road end wearing the shoulder's
+	// surface.
 	auto BuildCapRail = [this, &Bands, RailCount](
 		const FVector2D& CapRight, const FVector2D& CapLeft, float Along)
 	{
@@ -404,7 +398,7 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 			Rail.Add(WeldVertex(
 				CutLinePoint(CapRight, CapLeft, Bands.Alphas[Boundary]),
 				FVector2f(Bands.Laterals[Boundary], Along),
-				FVector2f(0.0f, Bands.GroundBlend[Boundary])));
+				FVector2f(0.0f, 1.0f)));
 		}
 		return Rail;
 	};

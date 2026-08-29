@@ -70,18 +70,18 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// The ground blend reaches 0 somewhere - the shoulder's outer edge - and 1 elsewhere.
-	// Without both, the fade either does not exist or swallows the whole road.
+	// The surface is opaque everywhere. UV2.Y once carried a ground blend that faded the
+	// shoulder into the terrain; edge treatment is a per-band material choice now, so
+	// nothing may be transparent and this asserts the channel stays neutral.
 	{
-		bool bFoundFaded = false;
-		bool bFoundSolid = false;
 		for (const FVector2f& Masks : Buffers.UV2)
 		{
-			if (Masks.Y <= 0.0f) { bFoundFaded = true; }
-			if (Masks.Y >= 1.0f) { bFoundSolid = true; }
+			if (Masks.Y < 1.0f)
+			{
+				AddError(TEXT("a vertex carries a ground blend below 1 - the fade is back"));
+				break;
+			}
 		}
-		TestTrue(TEXT("some vertex fades to nothing"), bFoundFaded);
-		TestTrue(TEXT("some vertex stays solid"), bFoundSolid);
 	}
 
 	// Facing is unchanged by subdivision. Unreal's front face is the opposite winding to
@@ -101,15 +101,14 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("no backfacing triangle after subdivision"), Backfacing, 0);
 	}
 
-	// The junction's shoulder fade. A junction's rim IS its outer edge and the only vertex
-	// inboard of it is the fan apex, so fading rim-to-apex would fade the whole junction; a
-	// ring of rim vertices pushed toward the apex is what gives the shoulder somewhere to
-	// end.
+	// The junction's inset ring. Built for a shoulder fade that no longer exists, kept
+	// because it is exactly the boundary between a junction's outer shoulder band and its
+	// interior - the geometry per-band materials need. Asserted so it is not quietly lost
+	// in the meantime, when nothing renders differently either way.
 	//
-	// Both assertions below are written to be FALSE before the ring exists. The obvious
-	// phrasing - "count solid vertices near the apex" - is satisfied by the segments' own
-	// band vertices, which carry blend 1 and sit well inside this radius, so it passes
-	// whether or not a ring was ever built and proves nothing.
+	// Written to be FALSE without the ring. The obvious phrasing - "count vertices near the
+	// apex" - is satisfied by the segments' own band vertices, which sit well inside this
+	// radius, so it would pass whether or not a ring was ever built and prove nothing.
 	{
 		const FJunctionResult* CentreResult = Solved.NodeResults.Find(Centre.Index);
 		if (!TestNotNull(TEXT("centre node solved"), CentreResult))
@@ -120,56 +119,10 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		const int32 ApexSlot = CentreResult->Boundary.Num() - 1;
 		const FVector2D Apex = CentreResult->Boundary[ApexSlot];
 
-		// An arc sample is a rim vertex no segment owns - it matches no arm's cut vertex
-		// bitwise - so its ground blend is the junction's alone. Before the fade it was
-		// solid; a faded one can only have come from the rim fade.
-		{
-			int32 ArcSamples = 0;
-			int32 FadedArcSamples = 0;
-
-			for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
-			{
-				const FVector2D& Point = CentreResult->Boundary[Slot];
-
-				bool bIsCutVertex = false;
-				for (const FJunctionArmResult& Arm : CentreResult->Arms)
-				{
-					if ((Point.X == Arm.RightCut.X && Point.Y == Arm.RightCut.Y) ||
-						(Point.X == Arm.LeftCut.X  && Point.Y == Arm.LeftCut.Y))
-					{
-						bIsCutVertex = true;
-						break;
-					}
-				}
-				if (bIsCutVertex)
-				{
-					continue;
-				}
-
-				++ArcSamples;
-				for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
-				{
-					if (Buffers.Positions[Index].X == Point.X &&
-						Buffers.Positions[Index].Y == Point.Y)
-					{
-						if (Buffers.UV2[Index].Y <= 0.0f)
-						{
-							++FadedArcSamples;
-						}
-						break;
-					}
-				}
-			}
-
-			TestTrue(TEXT("the bend's rim has arc samples to fade"), ArcSamples > 0);
-			TestEqual(TEXT("every arc sample on the rim fades to nothing"),
-				FadedArcSamples, ArcSamples);
-		}
-
-		// The ring itself. Before it exists the apex is the ONLY mesh vertex inboard of the
-		// rim, so a vertex that is nearer the apex than every rim vertex and is not the apex
-		// cannot exist. A fold - the ring overshooting the apex - would show up as a
-		// backfacing triangle, which the check above already forbids across the whole buffer.
+		// Before the ring exists the apex is the ONLY mesh vertex inboard of the rim, so a
+		// vertex nearer the apex than every rim vertex, and not the apex, cannot exist. A
+		// fold - the ring overshooting the apex - would show up as a backfacing triangle,
+		// which the check above already forbids across the whole buffer.
 		{
 			double NearestRim = TNumericLimits<double>::Max();
 			for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
@@ -188,8 +141,6 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 				if (ToApex > 0.0 && ToApex < NearestRim)
 				{
 					++Inboard;
-					TestTrue(TEXT("an inboard ring vertex is solid"),
-						Buffers.UV2[Index].Y >= 1.0f);
 				}
 			}
 
@@ -198,15 +149,18 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// A dead end must reach its NODE, with solid surface, not stop at its trimmed cut.
+	// A dead end must reach its NODE, carrying its full cross-section, not stop at its
+	// trimmed cut.
 	//
-	// The cap closing that gap used to be built from the two outer rails alone. With a
-	// shouldered profile every one of its four corners then sat on an outer band, carried
-	// ground blend 0, and the whole cap was masked away: the road stopped roughly a
-	// half-width short of where it was drawn, and only reached the node once a second click
-	// turned it into a junction whose fan filled the hole. It looked like a trim bug and was
-	// really a fade bug, which is why this asserts on the blend at the node and not just on
-	// the geometry being present.
+	// The cap closing that gap used to be built from the two outer rails alone. The shoulder
+	// fade exposed it - every corner of such a cap was transparent, so the road visibly
+	// stopped a half-width short of where it was drawn and only reached its node once a
+	// second click turned it into a junction whose fan filled the hole. The fade is gone;
+	// the cap defect it exposed is not, it is merely invisible again until per-band
+	// materials would paint the whole cap in the outermost band's surface.
+	//
+	// So this asserts on the cap's LATERAL SUBDIVISION rather than on a blend. The blend is
+	// uniformly 1 now and an assertion on it would hold either way.
 	{
 		const FRoadSegment* EastSeg = Net->GetSegment(ToEast);
 		const FRoadNode* EastNode = Net->GetNode(East);
@@ -216,33 +170,36 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 			// The segment runs +X from the centre, so its B-end cut line is the LAST thing
 			// the ribbon reaches. Anything beyond it in X belongs to the cap and nothing
 			// else - which is what makes this discriminating. Counting vertices "near the
-			// node" instead would sweep in the ribbon's own interior rails, which are solid
-			// regardless, and the assertion would hold whether or not a cap was ever built.
+			// node" instead would sweep in the ribbon's own rails, which are subdivided
+			// regardless, and the assertion would hold whether or not a cap was built.
 			const double CutX = FMath::Max(EastSeg->LeftCutB.X, EastSeg->RightCutB.X);
+			const float HalfWidth = static_cast<float>(Width * 0.5);
 
 			int32 BeyondCut = 0;
-			int32 SolidBeyondCut = 0;
+			int32 InteriorBandsBeyondCut = 0;
 			for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
 			{
 				if (Buffers.Positions[Index].X > CutX)
 				{
 					++BeyondCut;
-					if (Buffers.UV2[Index].Y >= 1.0f)
+
+					// UV1.X is the lateral offset. An unsubdivided cap has only its two
+					// outer corners, both at exactly +/- the half width; an interior band
+					// boundary is the one thing that cannot be there without subdivision.
+					if (FMath::Abs(Buffers.UV1[Index].X) < HalfWidth)
 					{
-						++SolidBeyondCut;
+						++InteriorBandsBeyondCut;
 					}
 				}
 			}
 
 			TestTrue(TEXT("the dead end has surface beyond its trimmed cut"), BeyondCut > 0);
-			TestTrue(TEXT("the road reaches its own node"),
-				EastNode->Position.X > CutX);
+			TestTrue(TEXT("the road reaches its own node"), EastNode->Position.X > CutX);
 
-			// The load-bearing one. Two outer corners alone are all blend 0, so the cap is
-			// masked away entirely and the road stops at the cut; the cap has to carry the
-			// ribbon's interior bands to arrive solid at the node.
-			TestTrue(TEXT("the dead end's cap is solid across its interior bands"),
-				SolidBeyondCut > 0);
+			// The load-bearing one: the cap carries the ribbon's interior bands, not just
+			// its two outer corners.
+			TestTrue(TEXT("the dead end's cap is subdivided by band"),
+				InteriorBandsBeyondCut > 0);
 		}
 	}
 

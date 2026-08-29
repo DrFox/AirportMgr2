@@ -20,9 +20,6 @@ struct ROADNET_API FRoadProfileBands
 	/** Signed lateral offset in uu at each boundary: negative right, positive left. */
 	TArray<float> Laterals;
 
-	/** 0 at the outer edge of an outermost Shoulder band, 1 everywhere else. */
-	TArray<float> GroundBlend;
-
 	/** Boundaries for a profile, or the degenerate two-boundary case for a null one. */
 	static FRoadProfileBands FromProfile(const URoadProfile* Profile);
 };

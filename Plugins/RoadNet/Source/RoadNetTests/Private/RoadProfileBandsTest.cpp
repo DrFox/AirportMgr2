@@ -24,12 +24,10 @@ bool FRoadProfileBandsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("alpha ends at the left edge"), Bands.Alphas[1], 1.0);
 		TestEqual(TEXT("right edge lateral is -HalfWidthRight"), Bands.Laterals[0], -100.0f);
 		TestEqual(TEXT("left edge lateral is +HalfWidthLeft"), Bands.Laterals[1], 100.0f);
-		TestEqual(TEXT("no shoulder means no fade at the right edge"), Bands.GroundBlend[0], 1.0f);
-		TestEqual(TEXT("no shoulder means no fade at the left edge"), Bands.GroundBlend[1], 1.0f);
 	}
 
-	// Shoulder | lane | shoulder. Four boundaries, and the ground blend is 0 only on the
-	// two outer edges - the shoulders fade into the ground, the lane does not.
+	// Shoulder | lane | shoulder. Four boundaries, so the two shoulders are separable from
+	// the lane and can carry their own material.
 	{
 		URoadProfile* Shouldered = URoadProfile::MakeTransient(200.0, 100.0, 30.0);
 		const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(Shouldered);
@@ -49,11 +47,6 @@ bool FRoadProfileBandsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("right shoulder inner edge"), Bands.Laterals[1], -70.0f);
 		TestEqual(TEXT("left shoulder inner edge"), Bands.Laterals[2], 70.0f);
 		TestEqual(TEXT("left edge"), Bands.Laterals[3], 100.0f);
-
-		TestEqual(TEXT("right outer edge fades to nothing"), Bands.GroundBlend[0], 0.0f);
-		TestEqual(TEXT("inboard of the right shoulder is solid"), Bands.GroundBlend[1], 1.0f);
-		TestEqual(TEXT("inboard of the left shoulder is solid"), Bands.GroundBlend[2], 1.0f);
-		TestEqual(TEXT("left outer edge fades to nothing"), Bands.GroundBlend[3], 0.0f);
 	}
 
 	// A null profile must not crash the builder; it yields the degenerate two-boundary

@@ -16,19 +16,15 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile)
 	{
 		Out.Alphas = { 0.0, 1.0 };
 		Out.Laterals = { static_cast<float>(-HalfRight), static_cast<float>(HalfLeft) };
-		Out.GroundBlend = { 1.0f, 1.0f };
 		return Out;
 	}
 
 	// Bands are ordered left to right; boundaries are walked right to left so the alphas
 	// ascend the way Lerp(RightCut, LeftCut, Alpha) does.
 	const int32 BandCount = Profile->Bands.Num();
-	const bool bLeftShoulder  = Profile->Bands[0].Type == ERoadBandType::Shoulder;
-	const bool bRightShoulder = Profile->Bands[BandCount - 1].Type == ERoadBandType::Shoulder;
 
 	Out.Alphas.Reserve(BandCount + 1);
 	Out.Laterals.Reserve(BandCount + 1);
-	Out.GroundBlend.Reserve(BandCount + 1);
 
 	double Lateral = -HalfRight;
 	for (int32 Boundary = 0; Boundary <= BandCount; ++Boundary)
@@ -42,10 +38,6 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile)
 
 		Out.Alphas.Add(Alpha);
 		Out.Laterals.Add(static_cast<float>(Lateral));
-
-		const bool bOuterRight = (Boundary == 0) && bRightShoulder;
-		const bool bOuterLeft  = (Boundary == BandCount) && bLeftShoulder;
-		Out.GroundBlend.Add((bOuterRight || bOuterLeft) ? 0.0f : 1.0f);
 
 		if (Boundary < BandCount)
 		{
