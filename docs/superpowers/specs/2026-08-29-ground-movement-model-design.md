@@ -220,7 +220,7 @@ Every marking must have a source in the data. Where one does not, the model is m
 | Stand number and stop position | entity instance's `Aircraft` anchor |
 | Service road edge lines | guideline edge, `GroundVehicle` access, at ±`Width`/2 |
 | Pedestrian walkway edging | guideline edge, `Pedestrian` access, at ±`Width`/2 |
-| Zebra crossing | node where a `Pedestrian` edge meets a `GroundVehicle` edge |
+| Zebra crossing | node where a `Pedestrian` edge meets a `GroundVehicle` edge — **not derivable yet:** guideline crossings without a surface junction cannot currently be produced. Needs a hand-drawn guideline API or a crossing-detection pass. See `RoadNet.Model.MarkingSources`. |
 | Runway / taxiway edge treatment | the surface profile's outermost band |
 | Road centre line | two adjacent lane guidelines of one surface |
 
