@@ -486,32 +486,38 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 
 		FRoadGuidelineBuilder::Build(*Mixed, MixedSolved);
 
-		int32 AircraftOnlyTurns = 0;
+		// EXACT counts, not "> 0". Three arms - two aircraft, one ground vehicle - give six
+		// ordered pairs: two aircraft-to-aircraft, and four crossing between classes. A
+		// version that copied ONE arm's mask wholesale rather than intersecting produces the
+		// same six turns with different masks, and every "> 0" assertion still passes - the
+		// two aircraft turns quietly become four and the emergency-only four become zero.
+		// Only pinning the numbers catches it.
+		int32 AircraftTurns = 0;
+		int32 VehicleTurns = 0;
 		int32 EmergencyOnlyTurns = 0;
-		int32 IllegalTurns = 0;
+		int32 TotalTurns = 0;
 		for (const FGuidelineEdge& Edge : Mixed->GetGuidelineEdges())
 		{
 			if (!Edge.bAlive || Edge.DerivedFrom.IsSet())
 			{
 				continue;
 			}
+			++TotalTurns;
 
 			const bool bAir = Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft);
 			const bool bVeh = Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle);
+			const bool bEmg = Edge.AllowedTraffic.Allows(ETraversalClass::Emergency);
 
-			if (bAir && bVeh)
-			{
-				// A turn admitting BOTH would be one arm's mask copied wholesale, which is
-				// the bug: it puts a tug on a taxiway turn and an aircraft on a service road.
-				++IllegalTurns;
-			}
-			else if (bAir) { ++AircraftOnlyTurns; }
-			else if (Edge.AllowedTraffic.Allows(ETraversalClass::Emergency)) { ++EmergencyOnlyTurns; }
+			if (bAir) { ++AircraftTurns; }
+			if (bVeh) { ++VehicleTurns; }
+			if (bEmg && !bAir && !bVeh) { ++EmergencyOnlyTurns; }
 		}
 
-		TestEqual(TEXT("no turn admits both aircraft and ground vehicles"), IllegalTurns, 0);
-		TestTrue(TEXT("aircraft-to-aircraft turns exist"), AircraftOnlyTurns > 0);
-		TestTrue(TEXT("and crossing between classes is emergency-only"), EmergencyOnlyTurns > 0);
+		TestEqual(TEXT("three arms give six ordered turn paths"), TotalTurns, 6);
+		TestEqual(TEXT("exactly two admit aircraft - the two aircraft arms"), AircraftTurns, 2);
+		TestEqual(TEXT("none admits a ground vehicle onto a taxiway turn"), VehicleTurns, 0);
+		TestEqual(TEXT("and the four crossing between classes are emergency-only"),
+			EmergencyOnlyTurns, 4);
 	}
 
 	return true;
