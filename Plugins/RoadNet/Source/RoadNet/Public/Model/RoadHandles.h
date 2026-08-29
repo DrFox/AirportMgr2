@@ -136,3 +136,27 @@ FORCEINLINE uint32 GetTypeHash(const FApronId& Id)
 {
 	return HashCombine(::GetTypeHash(Id.Index), ::GetTypeHash(Id.Generation));
 }
+
+/** Generation-checked handle to a placed entity in URoadNetwork. */
+USTRUCT()
+struct ROADNET_API FEntityInstanceId
+{
+	GENERATED_BODY()
+
+	UPROPERTY() int32 Index = INDEX_NONE;
+	UPROPERTY() int32 Generation = 0;
+
+	/** See FRoadNodeId::IsSet - this reports assignment, never liveness. */
+	bool IsSet() const { return Index != INDEX_NONE; }
+
+	bool operator==(const FEntityInstanceId& Other) const
+	{
+		return Index == Other.Index && Generation == Other.Generation;
+	}
+	bool operator!=(const FEntityInstanceId& Other) const { return !(*this == Other); }
+};
+
+FORCEINLINE uint32 GetTypeHash(const FEntityInstanceId& Id)
+{
+	return HashCombine(::GetTypeHash(Id.Index), ::GetTypeHash(Id.Generation));
+}

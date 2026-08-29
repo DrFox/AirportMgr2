@@ -6,6 +6,7 @@
 #include "Model/RoadNode.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadApron.h"
+#include "Model/RoadEntity.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -46,7 +47,15 @@ public:
 	// the two graphs across two UObjects makes every composite command a two-phase commit
 	// for no gain. Conceptual separation lives in the headers, not in the ownership.
 
-	FGuidelineNodeId AddGuidelineNode(const FVector2D& Position);
+	/**
+	 * A guideline node.
+	 *
+	 * bDerived defaults true, which is right for everything FRoadGuidelineBuilder creates.
+	 * Pass false for a node somebody AUTHORED - an entity anchor, a hold-short position -
+	 * because the builder's orphan sweep removes idle DERIVED nodes, and an authored node
+	 * is idle from the moment it is placed until an edge is drawn to it.
+	 */
+	FGuidelineNodeId AddGuidelineNode(const FVector2D& Position, bool bDerived = true);
 
 	/** Removes the node AND every edge incident to it. */
 	bool RemoveGuidelineNode(FGuidelineNodeId Node);
@@ -79,6 +88,20 @@ public:
 	const FApronSurface* GetApron(FApronId Apron) const;
 	const TArray<FApronSurface>& GetAprons() const { return Aprons; }
 
+	// --- Entities --------------------------------------------------------------------
+
+	/**
+	 * Place an entity and resolve every anchor its definition declares to a guideline node
+	 * at that anchor's world pose. Returns an unset handle for a null definition.
+	 */
+	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition, const FVector2D& Position, double Heading);
+
+	/** Removes the entity AND the anchor nodes it owns. */
+	bool RemoveEntity(FEntityInstanceId Entity);
+
+	const FEntityInstance* GetEntity(FEntityInstanceId Entity) const;
+	const TArray<FEntityInstance>& GetEntities() const { return Entities; }
+
 private:
 	void SortIncident(FRoadNodeId Node);
 
@@ -94,4 +117,7 @@ private:
 
 	UPROPERTY() TArray<FApronSurface> Aprons;
 	UPROPERTY() TArray<int32>         ApronFreeList;
+
+	UPROPERTY() TArray<FEntityInstance> Entities;
+	UPROPERTY() TArray<int32>           EntityFreeList;
 };

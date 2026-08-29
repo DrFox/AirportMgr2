@@ -1,6 +1,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
+#include "Entities/EntityDefinition.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -151,10 +152,11 @@ void URoadNetwork::SortIncident(FRoadNodeId NodeId)
 	});
 }
 
-FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position)
+FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position, bool bDerived)
 {
 	FGuidelineNode Node;
 	Node.Position = Position;
+	Node.bDerived = bDerived;
 	return RoadSlot::Add<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, MoveTemp(Node));
 }
 
@@ -294,4 +296,62 @@ bool URoadNetwork::RemoveApron(FApronId Apron)
 const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
 {
 	return RoadSlot::Get<FApronId>(Aprons, Apron);
+}
+
+FEntityInstanceId URoadNetwork::PlaceEntity(
+	UEntityDefinition* Definition, const FVector2D& Position, double Heading)
+{
+	if (Definition == nullptr)
+	{
+		return FEntityInstanceId();
+	}
+
+	FEntityInstance Instance;
+	Instance.Position = Position;
+	Instance.Heading = Heading;
+	Instance.Definition = Definition;
+	Instance.ResolvedAnchors.Reserve(Definition->Anchors.Num());
+
+	const double Cos = FMath::Cos(Heading);
+	const double Sin = FMath::Sin(Heading);
+
+	for (const FEntityAnchor& Anchor : Definition->Anchors)
+	{
+		// Local to world. Rotating by the entity's heading is what makes an anchor mean
+		// "off the aircraft's left wing" rather than "somewhere north of here".
+		const FVector2D World(
+			Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
+			Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
+
+		// NON-DERIVED. See the header: an anchor node has no incident edges until a
+		// guideline is drawn to it, so a derived one would be swept by the next rebuild
+		// and this handle would dangle.
+		Instance.ResolvedAnchors.Add(AddGuidelineNode(World, /*bDerived=*/false));
+	}
+
+	return RoadSlot::Add<FEntityInstanceId>(Entities, EntityFreeList, MoveTemp(Instance));
+}
+
+bool URoadNetwork::RemoveEntity(FEntityInstanceId Entity)
+{
+	const FEntityInstance* Found = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// Copy before removing anything: RemoveGuidelineNode does not touch this array, but
+	// the slot's payload is not ours to read once the entity is freed.
+	const TArray<FGuidelineNodeId> Owned = Found->ResolvedAnchors;
+	for (const FGuidelineNodeId NodeId : Owned)
+	{
+		RemoveGuidelineNode(NodeId);
+	}
+
+	return RoadSlot::Remove<FEntityInstanceId>(Entities, EntityFreeList, Entity);
+}
+
+const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
+{
+	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 }
