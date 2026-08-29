@@ -150,6 +150,29 @@ bool FRoadTrafficTest::RunTest(const FString& Parameters)
 			TraversalPriority(ETraversalClass::Pedestrian) > TraversalPriority(ETraversalClass::GroundVehicle));
 	}
 
+	// WHICH class wins, against literal expectations.
+	//
+	// The exhaustive loop below derives its expectation from TraversalPriority, so on its
+	// own it would still pass if both functions were flipped together; these pin the
+	// direction to the spec. Asserting only self-tie and argument-order symmetry - which is
+	// what this test did first - is satisfied by an implementation that consistently
+	// returns the LOWER-priority class: every assertion passes while a pedestrian yields to
+	// a baggage cart and an aircraft yields to a pedestrian.
+	{
+		TestEqual(TEXT("emergency takes right of way over aircraft"),
+			ResolveRightOfWay(ETraversalClass::Emergency, ETraversalClass::Aircraft),
+			ETraversalClass::Emergency);
+		TestEqual(TEXT("aircraft take right of way over pedestrians"),
+			ResolveRightOfWay(ETraversalClass::Aircraft, ETraversalClass::Pedestrian),
+			ETraversalClass::Aircraft);
+		TestEqual(TEXT("pedestrians take right of way over ground vehicles"),
+			ResolveRightOfWay(ETraversalClass::Pedestrian, ETraversalClass::GroundVehicle),
+			ETraversalClass::Pedestrian);
+		TestEqual(TEXT("and the answer does not depend on argument order"),
+			ResolveRightOfWay(ETraversalClass::Aircraft, ETraversalClass::Emergency),
+			ETraversalClass::Emergency);
+	}
+
 	// The order must be TOTAL, and right-of-way antisymmetric. Asserted exhaustively over
 	// every ordered pair rather than by spot-check: a partial order here would leave some
 	// crossing in the game with no defined winner, and the failure would surface as two
@@ -175,6 +198,11 @@ bool FRoadTrafficTest::RunTest(const FString& Parameters)
 
 				TestEqual(TEXT("right of way is symmetric in its argument order"),
 					ResolveRightOfWay(Left, Right), ResolveRightOfWay(Right, Left));
+
+				const ETraversalClass Expected =
+					TraversalPriority(Left) >= TraversalPriority(Right) ? Left : Right;
+				TestEqual(TEXT("the higher-priority class takes right of way"),
+					ResolveRightOfWay(Left, Right), Expected);
 			}
 		}
 	}
