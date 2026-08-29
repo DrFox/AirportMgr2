@@ -73,11 +73,19 @@ bool FRoadProfileTest::RunTest(const FString& Parameters)
 		RoadGuidelines->Guidelines.Add(Left);
 		RoadGuidelines->Guidelines.Add(Right);
 
+		// The declared offsets only mean anything against the profile's OWN geometry, and
+		// that geometry IS production code. Each lane guideline sits at the centre of its
+		// band, half a band-width either side of the centreline. Asserting instead that
+		// 175 == -(-175) would compare two literals this test wrote itself and could never
+		// fail; these three exercise GetTotalWidth and GetHalfWidth* on a two-band profile,
+		// a shape no other test covers.
 		TestEqual(TEXT("a two-lane road declares two guidelines"), RoadGuidelines->Guidelines.Num(), 2);
-		TestEqual(TEXT("mirrored about the centreline"),
-			RoadGuidelines->Guidelines[0].CentreOffset, -RoadGuidelines->Guidelines[1].CentreOffset);
-		TestNotEqual(TEXT("running opposite ways"),
-			RoadGuidelines->Guidelines[0].Direction, RoadGuidelines->Guidelines[1].Direction);
+		TestEqual(TEXT("the road is as wide as its two bands"), RoadGuidelines->GetTotalWidth(), 700.0);
+		TestEqual(TEXT("split evenly about the centreline"), RoadGuidelines->GetHalfWidthLeft(), 350.0);
+		TestEqual(TEXT("the left guideline sits at the centre of its band"),
+			RoadGuidelines->Guidelines[0].CentreOffset, RoadGuidelines->GetHalfWidthLeft() * 0.5);
+		TestEqual(TEXT("and the right guideline mirrors it"),
+			RoadGuidelines->Guidelines[1].CentreOffset, -RoadGuidelines->GetHalfWidthRight() * 0.5);
 	}
 
 	return true;

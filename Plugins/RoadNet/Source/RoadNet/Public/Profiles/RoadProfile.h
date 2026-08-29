@@ -13,14 +13,6 @@ enum class ERoadBandType : uint8
 	Curb
 };
 
-UENUM()
-enum class ERoadLaneDirection : uint8
-{
-	Forward,
-	Backward,
-	Bidirectional
-};
-
 /** One lateral band of the cross-section, ordered left to right. */
 USTRUCT()
 struct ROADNET_API FProfileBand
