@@ -35,6 +35,51 @@ bool FRoadProfileTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("summed width"), Road->GetTotalWidth(), 2000.0);
 	TestEqual(TEXT("summed half"), Road->GetHalfWidthLeft(), 1000.0);
 
+	// A taxiway declares ONE guideline, not two lanes. An aircraft occupies the full width
+	// with its nose wheel on the line; there is no second lane to be in. Parent R3's
+	// "per-lane turn paths" is corrected by spec 3 to guideline-level for exactly this.
+	{
+		URoadProfile* TaxiwayGuideline = URoadProfile::MakeTransient(2300.0, 1500.0);
+		TestEqual(TEXT("a taxiway declares one guideline"), TaxiwayGuideline->Guidelines.Num(), 1);
+		TestEqual(TEXT("centred on the profile"), TaxiwayGuideline->Guidelines[0].CentreOffset, 0.0);
+		TestEqual(TEXT("carrying aircraft"),
+			TaxiwayGuideline->Guidelines[0].Class, ETraversalClass::Aircraft);
+		TestEqual(TEXT("in both directions"),
+			TaxiwayGuideline->Guidelines[0].Direction, EGuidelineDir::Bidirectional);
+	}
+
+	// A road is the case that recovers the original per-lane meaning: two guidelines,
+	// mirrored offsets, opposing directions. Built by hand because MakeTransient only ever
+	// produces the symmetric single-guideline profile.
+	{
+		URoadProfile* RoadGuidelines = NewObject<URoadProfile>(GetTransientPackage());
+
+		FProfileBand Lane;
+		Lane.Width = 350.0;
+		Lane.Type = ERoadBandType::Lane;
+		RoadGuidelines->Bands.Add(Lane);
+		RoadGuidelines->Bands.Add(Lane);
+
+		FProfileGuideline Left;
+		Left.CentreOffset = 175.0;
+		Left.Class = ETraversalClass::GroundVehicle;
+		Left.Direction = EGuidelineDir::AToB;
+		Left.Width = 350.0;
+
+		FProfileGuideline Right = Left;
+		Right.CentreOffset = -175.0;
+		Right.Direction = EGuidelineDir::BToA;
+
+		RoadGuidelines->Guidelines.Add(Left);
+		RoadGuidelines->Guidelines.Add(Right);
+
+		TestEqual(TEXT("a two-lane road declares two guidelines"), RoadGuidelines->Guidelines.Num(), 2);
+		TestEqual(TEXT("mirrored about the centreline"),
+			RoadGuidelines->Guidelines[0].CentreOffset, -RoadGuidelines->Guidelines[1].CentreOffset);
+		TestNotEqual(TEXT("running opposite ways"),
+			RoadGuidelines->Guidelines[0].Direction, RoadGuidelines->Guidelines[1].Direction);
+	}
+
 	return true;
 }
 

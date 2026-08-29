@@ -58,11 +58,15 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 		Profile->Bands.Add(Right);
 	}
 
-	FProfileLane DriveLane;
-	DriveLane.CentreOffset = 0.0;
-	DriveLane.Width = TotalWidth - 2.0 * Shoulder;
-	DriveLane.Direction = ERoadLaneDirection::Bidirectional;
-	Profile->Lanes.Add(DriveLane);
+	// One guideline, centred, bidirectional, carrying aircraft: a taxiway. Every existing
+	// caller of MakeTransient is a taxiway or a stand-in for one, and the lane it used to
+	// declare was read by nothing.
+	FProfileGuideline Centre;
+	Centre.CentreOffset = 0.0;
+	Centre.Class = ETraversalClass::Aircraft;
+	Centre.Direction = EGuidelineDir::Bidirectional;
+	Centre.Width = 0.0;
+	Profile->Guidelines.Add(Centre);
 
 	Profile->CentrelineOffset = -1.0;
 	Profile->PreferredFilletRadius = FilletRadius;
