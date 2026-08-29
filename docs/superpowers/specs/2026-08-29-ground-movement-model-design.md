@@ -215,7 +215,7 @@ Every marking must have a source in the data. Where one does not, the model is m
 | Marking | Derived from |
 |---|---|
 | Yellow taxi centreline | guideline edge, `Aircraft` access |
-| Stand lead-in line | the guideline into an `Aircraft` anchor |
+| Stand lead-in line | the guideline into an `Aircraft` anchor — **not derivable yet:** nothing emits an edge terminating on an anchor node, so only the endpoint exists. Needs the same hand-drawn guideline API as the zebra row, plus care on rebuild: a hand-authored edge has no `DerivedFrom`, so `FindSparedEdge` cannot spare its taxiway-end node and the edge detaches. See `RoadNet.Model.MarkingSources`. |
 | Hold bar | guideline node flagged hold-short |
 | Stand number and stop position | entity instance's `Aircraft` anchor |
 | Service road edge lines | guideline edge, `GroundVehicle` access, at ±`Width`/2 |

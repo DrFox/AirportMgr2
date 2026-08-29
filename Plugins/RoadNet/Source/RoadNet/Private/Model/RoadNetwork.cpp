@@ -360,3 +360,40 @@ const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
 {
 	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 }
+
+bool URoadNetwork::GetAnchorWorldHeading(
+	FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const
+{
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || Instance->Definition == nullptr)
+	{
+		return false;
+	}
+
+	// Bounds-checked against the DEFINITION: LocalHeading lives on the anchor, not on the
+	// resolved node, so this is the array that has to be in range.
+	if (!Instance->Definition->Anchors.IsValidIndex(AnchorIndex))
+	{
+		return false;
+	}
+
+	// Composed, never stored. A stored world heading would go stale the moment the
+	// instance is turned, and nothing here would notice.
+	const FEntityAnchor& Anchor = Instance->Definition->Anchors[AnchorIndex];
+	OutHeading = Instance->Heading + Anchor.LocalHeading;
+	return true;
+}
+
+const FGuidelineNode* URoadNetwork::GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const
+{
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->ResolvedAnchors.IsValidIndex(AnchorIndex))
+	{
+		// Deliberately the INSTANCE's array, not the definition's: a definition that gained
+		// an anchor after this instance was placed is longer, and it is this array the
+		// caller is about to read.
+		return nullptr;
+	}
+
+	return GetGuidelineNode(Instance->ResolvedAnchors[AnchorIndex]);
+}

@@ -105,11 +105,40 @@ public:
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition, const FVector2D& Position, double Heading);
 
-	/** Removes the entity AND the anchor nodes it owns. */
+	/**
+	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
+	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
+	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
+	 * destructive and returns nothing describing what went with it. A build tool should
+	 * confirm before calling this.
+	 */
 	bool RemoveEntity(FEntityInstanceId Entity);
 
 	const FEntityInstance* GetEntity(FEntityInstanceId Entity) const;
 	const TArray<FEntityInstance>& GetEntities() const { return Entities; }
+
+	/**
+	 * World heading of an entity's anchor in radians: the instance's heading composed with
+	 * the anchor's own.
+	 *
+	 * FGuidelineNode carries no heading, so the resolved node cannot answer this and spec
+	 * section 6's stop-position marking would have nowhere to learn which way an aircraft
+	 * parks. Composed on demand rather than stored, so it cannot drift from the instance's
+	 * pose. Returns false and leaves OutHeading untouched for an unknown entity, a null
+	 * definition, or an anchor index out of range.
+	 */
+	bool GetAnchorWorldHeading(FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const;
+
+	/**
+	 * The guideline node an entity's Nth anchor resolved to, bounds-checked against BOTH
+	 * arrays.
+	 *
+	 * ResolvedAnchors is parallel to the definition's Anchors by index and nothing enforces
+	 * it: a definition asset that gains an anchor after instances exist leaves every
+	 * instance one short, and the natural pattern - iterate the definition, index the
+	 * instance - then reads out of bounds. Returns nullptr instead of crashing.
+	 */
+	const FGuidelineNode* GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const;
 
 private:
 	void SortIncident(FRoadNodeId Node);

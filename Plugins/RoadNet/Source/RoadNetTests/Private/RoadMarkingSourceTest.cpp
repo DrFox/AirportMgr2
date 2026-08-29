@@ -16,24 +16,27 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"RoadNet.Model.MarkingSources",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-/** A profile of one full-width guideline of the given class. */
-static URoadProfile* MakeGuidedProfile(ETraversalClass Class, EGuidelineDir Direction, double Width)
+namespace
 {
-	URoadProfile* Profile = NewObject<URoadProfile>(GetTransientPackage());
+	/** A profile of one full-width guideline of the given class. */
+	URoadProfile* MakeGuidedProfile(ETraversalClass Class, EGuidelineDir Direction, double Width)
+	{
+		URoadProfile* Profile = NewObject<URoadProfile>(GetTransientPackage());
 
-	FProfileBand Band;
-	Band.Width = Width;
-	Band.Type = ERoadBandType::Lane;
-	Profile->Bands.Add(Band);
+		FProfileBand Band;
+		Band.Width = Width;
+		Band.Type = ERoadBandType::Lane;
+		Profile->Bands.Add(Band);
 
-	FProfileGuideline Line;
-	Line.CentreOffset = 0.0;
-	Line.Class = Class;
-	Line.Direction = Direction;
-	Line.Width = (Class == ETraversalClass::Aircraft) ? 0.0 : Width;
-	Profile->Guidelines.Add(Line);
+		FProfileGuideline Line;
+		Line.CentreOffset = 0.0;
+		Line.Class = Class;
+		Line.Direction = Direction;
+		Line.Width = (Class == ETraversalClass::Aircraft) ? 0.0 : Width;
+		Profile->Guidelines.Add(Line);
 
-	return Profile;
+		return Profile;
+	}
 }
 
 bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
@@ -134,24 +137,38 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("walkway edging has a source"), Sources > 0);
 	}
 
-	// Stand number and stop position <- the entity's Aircraft anchor.
-	// Stand lead-in line <- the guideline INTO that anchor.
+	// Stand number and stop position <- the entity's Aircraft anchor. That row has a real
+	// source and is asserted below.
+	//
+	// Stand lead-in line <- "the guideline into an Aircraft anchor" - which does NOT have a
+	// source. Nothing emits an edge terminating on an anchor node: the derivation only
+	// produces edges between a segment's two cut-line ends, or between arm ends at a
+	// junction. So this block pins the ENDPOINT a lead-in would terminate on, and nothing
+	// about the lead-in itself. Recorded in spec section 6 beside the zebra row.
 	{
 		const FEntityInstance* Instance = Net->GetEntity(Gate);
 		if (TestNotNull(TEXT("the stand resolves"), Instance))
 		{
-			FGuidelineNodeId StopPosition;
+			int32 StopIndex = INDEX_NONE;
 			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
 			{
 				if (Stand->Anchors[Index].Role == EServiceRole::Aircraft)
 				{
-					StopPosition = Instance->ResolvedAnchors[Index];
+					StopIndex = Index;
 				}
 			}
 
-			TestTrue(TEXT("the stop position has a source"), StopPosition.IsSet());
-			TestNotNull(TEXT("and it is a live node a lead-in can terminate on"),
-				Net->GetGuidelineNode(StopPosition));
+			TestTrue(TEXT("the stand declares an aircraft stop position"), StopIndex != INDEX_NONE);
+
+			// Resolved through GetAnchorNode: this loop walked the DEFINITION, and indexing
+			// the instance's parallel array with a definition index is the out-of-bounds
+			// read a definition asset that gained an anchor produces.
+			TestNotNull(TEXT("the stop position has a source, a live node"),
+				Net->GetAnchorNode(Gate, StopIndex));
+
+			// And the safe accessor really is bounds-checked, not merely a rename.
+			TestNull(TEXT("one anchor past the end resolves to nothing"),
+				Net->GetAnchorNode(Gate, Stand->Anchors.Num()));
 		}
 	}
 
@@ -169,7 +186,8 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	// a node can be created would establish nothing about hold bars at all; this sets the
 	// field and reads it back through the network, which is the actual claim.
 	{
-		const FGuidelineNodeId Marked = Net->AddGuidelineNode(FVector2D(1.0, 1.0), false);
+		const FGuidelineNodeId Marked =
+			Net->AddGuidelineNode(FVector2D(1.0, 1.0), /*bDerived=*/false);
 		if (TestTrue(TEXT("a hold-short node can be created"), Marked.IsSet()))
 		{
 			// Any live segment will do as the thing being protected; a runway is the real
@@ -200,9 +218,16 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// Road centre line <- two adjacent lane guidelines of ONE surface. The model expresses
-	// this by a profile declaring two guidelines; nothing else is needed for the marking to
-	// be derivable.
+	// Road centre line <- two adjacent lane guidelines of ONE surface.
+	//
+	// "Surface" is the load-bearing word, and it is the one a profile-only assertion never
+	// touches: asserting that a profile declares two guidelines only restates the fixture
+	// this block just built. The claim is that a single SEGMENT derives both of them, both
+	// naming that segment as their source - which is what a marking pass has to walk to
+	// find the pair to paint between.
+	//
+	// Built on its own network so the fixture above, and the zebra count that reads it, are
+	// left undisturbed.
 	{
 		URoadProfile* TwoLane = NewObject<URoadProfile>(GetTransientPackage());
 		FProfileBand Lane;
@@ -222,10 +247,37 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TwoLane->Guidelines.Add(Left);
 		TwoLane->Guidelines.Add(Right);
 
-		TestEqual(TEXT("a road centre line has two adjacent guidelines to sit between"),
-			TwoLane->Guidelines.Num(), 2);
-		TestTrue(TEXT("on opposite sides of the centreline"),
-			TwoLane->Guidelines[0].CentreOffset * TwoLane->Guidelines[1].CentreOffset < 0.0);
+		URoadNetwork* Divided = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId DualA = Divided->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId DualB = Divided->AddNode(FVector2D(15000.0, 0.0));
+		const FRoadSegmentId Dual = Divided->AddStraightSegment(DualA, DualB, TwoLane);
+		TestTrue(TEXT("the two-lane surface is placed"), Dual.IsSet());
+
+		const FRoadSolveResult DualSolved = FRoadNetworkSolver::SolveAll(*Divided);
+		TestEqual(TEXT("the two-lane surface solved"), DualSolved.FailedNodes, 0);
+		FRoadGuidelineBuilder::Build(*Divided, DualSolved);
+
+		int32 FromThisSurface = 0;
+		int32 Forward = 0;
+		int32 Backward = 0;
+		for (const FGuidelineEdge& Edge : Divided->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive || !(Edge.DerivedFrom == Dual))
+			{
+				continue;
+			}
+
+			++FromThisSurface;
+			if (Edge.Direction == EGuidelineDir::AToB) { ++Forward; }
+			if (Edge.Direction == EGuidelineDir::BToA) { ++Backward; }
+		}
+
+		TestEqual(TEXT("one surface derived exactly two guidelines"), FromThisSurface, 2);
+
+		// Opposed, which is what makes the line between them a CENTRE line rather than a
+		// lane divider: two guidelines running the same way would be one carriageway.
+		TestEqual(TEXT("one of them running A to B"), Forward, 1);
+		TestEqual(TEXT("and one running B to A"), Backward, 1);
 	}
 
 	// Zebra crossing <- a node where a Pedestrian edge meets a GroundVehicle edge.

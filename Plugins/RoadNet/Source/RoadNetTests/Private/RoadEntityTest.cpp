@@ -42,10 +42,15 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			Instance->ResolvedAnchors.Num(), Stand->Anchors.Num());
 
 		// Every anchor became a real guideline node, at the anchor's WORLD pose.
+		//
+		// Resolved through GetAnchorNode rather than by indexing ResolvedAnchors directly.
+		// This loop walks the DEFINITION, and the instance's parallel array can legally be
+		// shorter than it - a saved definition asset that gains an anchor leaves every
+		// already-placed instance one short - so the direct index is an out-of-bounds read
+		// reached by ordinary authoring, not by a bug.
 		for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
 		{
-			const FGuidelineNodeId NodeId = Instance->ResolvedAnchors[Index];
-			const FGuidelineNode* Node = Net->GetGuidelineNode(NodeId);
+			const FGuidelineNode* Node = Net->GetAnchorNode(Placed, Index);
 			if (!TestNotNull(TEXT("an anchor resolved to a live node"), Node))
 			{
 				continue;
@@ -97,8 +102,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("the tug anchor is straight ahead, nothing lateral"),
 					Stand->Anchors[TugIndex].LocalPosition.Y, 0.0);
 
-				const FGuidelineNode* TugNode =
-					Net->GetGuidelineNode(Rotated->ResolvedAnchors[TugIndex]);
+				const FGuidelineNode* TugNode = Net->GetAnchorNode(Placed, TugIndex);
 				if (TestNotNull(TEXT("the tug anchor resolved"), TugNode))
 				{
 					const double Ahead = Stand->Anchors[TugIndex].LocalPosition.X;
@@ -110,21 +114,27 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 	}
 
 	// Anchors must be distinguishable by role, or "drive to the fuel position" has no
-	// answer. Asserted on the definition and on the instance's parallel array together,
-	// because the pairing is what callers rely on.
+	// answer. Asserted on the definition and on the instance together, because the pairing
+	// is what callers rely on: a role that names an index the instance cannot resolve is
+	// an answer nobody can follow.
 	{
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
 		if (TestNotNull(TEXT("the entity still resolves"), Instance))
 		{
 			int32 AircraftAnchors = 0;
 			int32 FuelAnchors = 0;
+			int32 RolesThatResolve = 0;
 			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
 			{
 				if (Stand->Anchors[Index].Role == EServiceRole::Aircraft) { ++AircraftAnchors; }
 				if (Stand->Anchors[Index].Role == EServiceRole::Fuel)     { ++FuelAnchors; }
+
+				if (Net->GetAnchorNode(Placed, Index) != nullptr) { ++RolesThatResolve; }
 			}
 			TestEqual(TEXT("a stand has exactly one aircraft stop position"), AircraftAnchors, 1);
 			TestEqual(TEXT("and one fuel position"), FuelAnchors, 1);
+			TestEqual(TEXT("and every role the definition names resolves on the instance"),
+				RolesThatResolve, Stand->Anchors.Num());
 		}
 	}
 
@@ -145,6 +155,75 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		{
 			TestNull(TEXT("its anchor nodes went with it"), Net->GetGuidelineNode(NodeId));
 		}
+	}
+
+	// Two documented refusals, neither of which anything asserted.
+	TestFalse(TEXT("placing a null definition returns an unset handle"),
+		Net->PlaceEntity(nullptr, FVector2D(0.0, 0.0), 0.0).IsSet());
+	TestFalse(TEXT("removing an already-removed entity returns false"),
+		Net->RemoveEntity(Placed));
+
+	// FEntityAnchor::LocalHeading's first real exercise, and the reason it exists: spec
+	// section 4.3 says a stand's aircraft anchor carries stop position AND heading, but
+	// FGuidelineNode has no heading field, so the resolved node cannot answer it.
+	//
+	// MakeStandTransient cannot test this. Every one of its anchors has LocalHeading == 0,
+	// so an implementation that ignored LocalHeading entirely and returned the instance's
+	// heading would agree with a correct one on every anchor it has. So build a definition
+	// by hand with a genuinely turned anchor.
+	{
+		UEntityDefinition* Turned = NewObject<UEntityDefinition>(GetTransientPackage());
+
+		FEntityAnchor Nose;
+		Nose.LocalPosition = FVector2D::ZeroVector;
+		Nose.LocalHeading = 0.0;
+		Nose.Role = EServiceRole::Aircraft;
+		Turned->Anchors.Add(Nose);
+
+		// A quarter turn relative to the entity: a loader that backs on ACROSS the
+		// aircraft's axis rather than along it.
+		FEntityAnchor Loader;
+		Loader.LocalPosition = FVector2D(-1000.0, 800.0);
+		Loader.LocalHeading = UE_DOUBLE_PI * 0.5;
+		Loader.Role = EServiceRole::Baggage;
+		Turned->Anchors.Add(Loader);
+
+		// An instance heading that is non-zero AND different from the anchor's, so the sum
+		// and either operand alone are three distinguishable numbers.
+		const double Parked = UE_DOUBLE_PI * 0.25;
+		const FEntityInstanceId Loaded =
+			Net->PlaceEntity(Turned, FVector2D(-4000.0, 7000.0), Parked);
+		TestTrue(TEXT("the hand-built entity is placed"), Loaded.IsSet());
+
+		double NoseHeading = 0.0;
+		if (TestTrue(TEXT("an unturned anchor's world heading resolves"),
+			Net->GetAnchorWorldHeading(Loaded, 0, NoseHeading)))
+		{
+			TestEqual(TEXT("and faces exactly the way the entity does"),
+				NoseHeading, Parked);
+		}
+
+		double LoaderHeading = 0.0;
+		if (TestTrue(TEXT("a turned anchor's world heading resolves"),
+			Net->GetAnchorWorldHeading(Loaded, 1, LoaderHeading)))
+		{
+			// THE SUM, and nothing else. Ignoring LocalHeading gives pi/4; returning the
+			// anchor's own gives pi/2; only composition gives 3pi/4.
+			TestEqual(TEXT("and is the instance's heading composed with the anchor's"),
+				LoaderHeading, Parked + UE_DOUBLE_PI * 0.5);
+		}
+
+		// The out-of-range contract, for both accessors. This is the case an added anchor
+		// on a saved definition asset produces, so it must not be a crash.
+		double Untouched = -1.0;
+		TestFalse(TEXT("an out-of-range anchor index has no heading"),
+			Net->GetAnchorWorldHeading(Loaded, Turned->Anchors.Num(), Untouched));
+		TestEqual(TEXT("and the out parameter is left alone"), Untouched, -1.0);
+
+		TestNull(TEXT("an out-of-range anchor index resolves to no node"),
+			Net->GetAnchorNode(Loaded, Turned->Anchors.Num()));
+		TestNull(TEXT("nor does a negative one"), Net->GetAnchorNode(Loaded, -1));
+		TestNotNull(TEXT("while an in-range one does"), Net->GetAnchorNode(Loaded, 1));
 	}
 
 	// SPEC RISK 4, asserted. FRoadGuidelineBuilder::Build destroys and re-adds every
