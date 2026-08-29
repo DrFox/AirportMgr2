@@ -61,6 +61,14 @@ public:
 	const TArray<FGuidelineNode>& GetGuidelineNodes() const { return GuidelineNodes; }
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 
+	/**
+	 * Edges an agent of this class may leave Node along, honouring access AND direction.
+	 *
+	 * Returns edges, not neighbours, because a caller needs the edge's own width, wingspan
+	 * limit and geometry to decide whether to take it.
+	 */
+	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
+
 private:
 	void SortIncident(FRoadNodeId Node);
 

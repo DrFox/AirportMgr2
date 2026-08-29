@@ -240,3 +240,37 @@ FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
 {
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
 }
+
+TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
+	FGuidelineNodeId Node, ETraversalClass Class) const
+{
+	TArray<FGuidelineEdgeId> Out;
+
+	const FGuidelineNode* Found = RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
+	if (Found == nullptr)
+	{
+		return Out;
+	}
+
+	for (const FGuidelineEdgeId Id : Found->Incident)
+	{
+		const FGuidelineEdge* Edge = RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Id);
+		if (Edge == nullptr || !Edge->AllowedTraffic.Allows(Class))
+		{
+			continue;
+		}
+
+		const bool bLeavingA = (Edge->A == Node);
+		const bool bPermitted =
+			Edge->Direction == EGuidelineDir::Bidirectional ||
+			(bLeavingA  && Edge->Direction == EGuidelineDir::AToB) ||
+			(!bLeavingA && Edge->Direction == EGuidelineDir::BToA);
+
+		if (bPermitted)
+		{
+			Out.Add(Id);
+		}
+	}
+
+	return Out;
+}

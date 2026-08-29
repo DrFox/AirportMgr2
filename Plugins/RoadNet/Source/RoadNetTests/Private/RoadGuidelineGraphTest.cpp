@@ -171,6 +171,32 @@ bool FRoadGuidelineGraphTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Traversal respects BOTH access and direction. Either one ignored routes an agent
+	// somewhere it may not go, and the two failures look identical from the outside.
+	{
+		const FGuidelineNodeId P = Net->AddGuidelineNode(FVector2D(0.0, 2000.0));
+		const FGuidelineNodeId Q = Net->AddGuidelineNode(FVector2D(1000.0, 2000.0));
+
+		FGuidelineEdge OneWay;
+		OneWay.A = P;
+		OneWay.B = Q;
+		OneWay.Direction = EGuidelineDir::AToB;
+		OneWay.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		const FGuidelineEdgeId OneWayId = Net->AddGuidelineEdge(MoveTemp(OneWay));
+
+		const TArray<FGuidelineEdgeId> FromP =
+			Net->GetOutgoingGuidelines(P, ETraversalClass::GroundVehicle);
+		TestTrue(TEXT("a vehicle may leave P along the one-way"), FromP.Contains(OneWayId));
+
+		const TArray<FGuidelineEdgeId> FromQ =
+			Net->GetOutgoingGuidelines(Q, ETraversalClass::GroundVehicle);
+		TestFalse(TEXT("but may not leave Q against it"), FromQ.Contains(OneWayId));
+
+		const TArray<FGuidelineEdgeId> Walking =
+			Net->GetOutgoingGuidelines(P, ETraversalClass::Pedestrian);
+		TestFalse(TEXT("and a pedestrian may not use it at all"), Walking.Contains(OneWayId));
+	}
+
 	return true;
 }
 
