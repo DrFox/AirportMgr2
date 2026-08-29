@@ -94,6 +94,83 @@ bool FRoadGuidelineGraphTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// A self-loop must appear in Incident ONCE. Without the guard in AddGuidelineEdge the
+	// node lists it twice and a single Remove leaves one behind - an edge handle in an
+	// incidence list resolving to nothing, which is the exact inconsistency the handle
+	// discipline exists to prevent.
+	{
+		const FGuidelineNodeId Loop = Net->AddGuidelineNode(FVector2D(700.0, 700.0));
+
+		FGuidelineEdge Self;
+		Self.A = Loop;
+		Self.B = Loop;
+		const FGuidelineEdgeId SelfId = Net->AddGuidelineEdge(MoveTemp(Self));
+		TestTrue(TEXT("a self-loop is accepted"), SelfId.IsSet());
+
+		const FGuidelineNode* LoopNode = Net->GetGuidelineNode(Loop);
+		if (TestNotNull(TEXT("the self-loop's node resolves"), LoopNode))
+		{
+			int32 Occurrences = 0;
+			for (const FGuidelineEdgeId IncidentId : LoopNode->Incident)
+			{
+				if (IncidentId == SelfId)
+				{
+					++Occurrences;
+				}
+			}
+			TestEqual(TEXT("a self-loop is listed once, not twice"), Occurrences, 1);
+		}
+
+		TestTrue(TEXT("the self-loop removes"), Net->RemoveGuidelineEdge(SelfId));
+
+		const FGuidelineNode* AfterRemoval = Net->GetGuidelineNode(Loop);
+		if (TestNotNull(TEXT("the node survives its self-loop's removal"), AfterRemoval))
+		{
+			TestFalse(TEXT("leaving nothing dangling"), AfterRemoval->Incident.Contains(SelfId));
+		}
+	}
+
+	// The documented rejection path: "A and B must both be live, or this returns an unset
+	// handle and adds nothing." Both halves matter - a version that returned unset AFTER
+	// appending would leave a dead edge occupying a slot and half-linked incidence.
+	{
+		const FGuidelineNodeId Alive = Net->AddGuidelineNode(FVector2D(1500.0,   0.0));
+		const FGuidelineNodeId Dead  = Net->AddGuidelineNode(FVector2D(1500.0, 100.0));
+		TestTrue(TEXT("the doomed endpoint removes"), Net->RemoveGuidelineNode(Dead));
+
+		int32 LiveBefore = 0;
+		for (const FGuidelineEdge& E : Net->GetGuidelineEdges())
+		{
+			if (E.bAlive)
+			{
+				++LiveBefore;
+			}
+		}
+
+		FGuidelineEdge Rejected;
+		Rejected.A = Alive;
+		Rejected.B = Dead;
+		const FGuidelineEdgeId RejectedId = Net->AddGuidelineEdge(MoveTemp(Rejected));
+
+		TestFalse(TEXT("an edge to a dead node is refused"), RejectedId.IsSet());
+
+		int32 LiveAfter = 0;
+		for (const FGuidelineEdge& E : Net->GetGuidelineEdges())
+		{
+			if (E.bAlive)
+			{
+				++LiveAfter;
+			}
+		}
+		TestEqual(TEXT("and nothing was added"), LiveAfter, LiveBefore);
+
+		const FGuidelineNode* AliveNode = Net->GetGuidelineNode(Alive);
+		if (TestNotNull(TEXT("the live endpoint resolves"), AliveNode))
+		{
+			TestEqual(TEXT("and gained no incidence"), AliveNode->Incident.Num(), 0);
+		}
+	}
+
 	return true;
 }
 
