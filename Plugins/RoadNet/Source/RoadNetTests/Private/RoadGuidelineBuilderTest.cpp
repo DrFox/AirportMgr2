@@ -228,6 +228,63 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("three arms give six ordered turn paths"), TeeTurns, 6);
 	}
 
+	// Idempotence. Build runs on every edit in the build tool, so a Build that accumulates
+	// is a leak that grows with every mouse move - and one that looks like nothing at all
+	// until the graph is large.
+	{
+		int32 Before = 0;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive) { ++Before; }
+		}
+
+		FRoadGuidelineBuilder::Build(*Net, Solved);
+
+		int32 After = 0;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive) { ++After; }
+		}
+
+		TestEqual(TEXT("rebuilding does not accumulate edges"), After, Before);
+	}
+
+	// An edited guideline survives regeneration. Without this, a player who redraws a
+	// taxi line loses it the next time anything touches the pavement - silently, because
+	// the replacement looks exactly like a correct derived guideline.
+	{
+		FGuidelineEdgeId Edited;
+		for (int32 Index = 0; Index < Net->GetGuidelineEdges().Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Net->GetGuidelineEdges()[Index];
+			if (Edge.bAlive && Edge.DerivedFrom.IsSet())
+			{
+				Edited.Index = Index;
+				Edited.Generation = Edge.Generation;
+				break;
+			}
+		}
+
+		if (TestTrue(TEXT("found a derived edge to edit"), Edited.IsSet()))
+		{
+			FGuidelineEdge* Mutable = Net->GetGuidelineEdgeMutable(Edited);
+			if (TestNotNull(TEXT("the edge is mutable"), Mutable))
+			{
+				Mutable->bDerived = false;
+				Mutable->MaxWingspan = 6543.0;   // a value derivation would never produce
+			}
+
+			FRoadGuidelineBuilder::Build(*Net, Solved);
+
+			const FGuidelineEdge* Survivor = Net->GetGuidelineEdge(Edited);
+			if (TestNotNull(TEXT("the edited edge survives regeneration"), Survivor))
+			{
+				TestFalse(TEXT("still marked as edited"), Survivor->bDerived);
+				TestEqual(TEXT("and keeps its edited value"), Survivor->MaxWingspan, 6543.0);
+			}
+		}
+	}
+
 	return true;
 }
 

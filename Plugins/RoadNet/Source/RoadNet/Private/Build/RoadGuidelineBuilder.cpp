@@ -27,6 +27,49 @@ namespace
 
 void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved)
 {
+	// Clear the previous derivation before regenerating, or Build accumulates.
+	//
+	// bDerived == false edges are the player's, not ours: regenerating one would discard a
+	// deliberate edit and replace it with something indistinguishable from correct. They
+	// are left in place, and so are the nodes they still reference - RemoveGuidelineNode
+	// takes incident edges with it, so a node is only safe to drop once nothing kept
+	// points at it.
+	{
+		TArray<FGuidelineEdgeId> Doomed;
+		const TArray<FGuidelineEdge>& Existing = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Existing.Num(); ++Index)
+		{
+			if (Existing[Index].bAlive && Existing[Index].bDerived)
+			{
+				FGuidelineEdgeId Id;
+				Id.Index = Index;
+				Id.Generation = Existing[Index].Generation;
+				Doomed.Add(Id);
+			}
+		}
+		for (const FGuidelineEdgeId Id : Doomed)
+		{
+			Network.RemoveGuidelineEdge(Id);
+		}
+
+		TArray<FGuidelineNodeId> Orphans;
+		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].Incident.Num() == 0)
+			{
+				FGuidelineNodeId Id;
+				Id.Index = Index;
+				Id.Generation = Nodes[Index].Generation;
+				Orphans.Add(Id);
+			}
+		}
+		for (const FGuidelineNodeId Id : Orphans)
+		{
+			Network.RemoveGuidelineNode(Id);
+		}
+	}
+
 	// (SegmentIndex, which end, GuidelineIndex) -> the node that segment end terminates on.
 	//
 	// The junction loop reuses these handles rather than adding coincident nodes of its
