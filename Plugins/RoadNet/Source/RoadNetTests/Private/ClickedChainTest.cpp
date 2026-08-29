@@ -56,7 +56,9 @@ bool FRoadClickedChainTest::RunTest(const FString& Parameters)
 	}
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{
-		Builder.AddJunction(Pair.Value);
+		static const TArray<FRoadSegmentId> NoArms;
+		const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+		Builder.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 	}
 
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();

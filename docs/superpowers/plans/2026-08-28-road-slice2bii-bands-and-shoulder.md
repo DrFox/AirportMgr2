@@ -93,7 +93,7 @@ The profile has carried `FProfileBand` since Slice 1 and nothing has ever read i
   - `struct FRoadProfileBands { TArray<double> Alphas; TArray<float> Laterals; TArray<float> GroundBlend; static FRoadProfileBands FromProfile(const URoadProfile*); }`
   - `URoadProfile::MakeTransient(double TotalWidth, double FilletRadius, double ShoulderWidth = 0.0)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Plugins/RoadNet/Source/RoadNetTests/Private/RoadProfileBandsTest.cpp`:
 
@@ -170,11 +170,11 @@ bool FRoadProfileBandsTest::RunTest(const FString& Parameters)
 #endif // WITH_DEV_AUTOMATION_TESTS
 ```
 
-- [ ] **Step 2: Build — expect FAIL**
+- [x] **Step 2: Build — expect FAIL**
 
 Expected: compile error, `Build/RoadProfileBands.h` not found, and `MakeTransient` does not take three arguments.
 
-- [ ] **Step 3: Give MakeTransient an optional shoulder**
+- [x] **Step 3: Give MakeTransient an optional shoulder**
 
 In `Public/Profiles/RoadProfile.h`, replace the `MakeTransient` declaration:
 
@@ -234,7 +234,7 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 }
 ```
 
-- [ ] **Step 4: Write the band header**
+- [x] **Step 4: Write the band header**
 
 `Public/Build/RoadProfileBands.h`:
 
@@ -269,7 +269,7 @@ struct ROADNET_API FRoadProfileBands
 };
 ```
 
-- [ ] **Step 5: Write the band implementation**
+- [x] **Step 5: Write the band implementation**
 
 `Private/Build/RoadProfileBands.cpp`:
 
@@ -334,7 +334,7 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile)
 }
 ```
 
-- [ ] **Step 6: Build and run — expect PASS**
+- [x] **Step 6: Build and run — expect PASS**
 
 ```powershell
 & "D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat" AirportMgrEditor Win64 Development `
@@ -344,7 +344,7 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile)
 
 Expected: 15 tests, 0 failed, including `RoadNet.Build.ProfileBands`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add Plugins/RoadNet
@@ -366,7 +366,7 @@ git commit -m "feat(roadnet): profile band boundaries as cut-line parameters"
 - Consumes: the existing `ArmSegments` local in `SolveAll`.
 - Produces: `FRoadSolveResult::NodeArmSegments` — `TMap<int32, TArray<FRoadSegmentId>>`, keyed by node index, parallel to that node's `FJunctionResult::Arms`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append inside `FRoadNetworkSolverTest::RunTest`, immediately before its final `return true;`:
 
@@ -397,11 +397,11 @@ Append inside `FRoadNetworkSolverTest::RunTest`, immediately before its final `r
 	}
 ```
 
-- [ ] **Step 2: Build — expect FAIL**
+- [x] **Step 2: Build — expect FAIL**
 
 Expected: compile error, `FRoadSolveResult` has no member `NodeArmSegments`.
 
-- [ ] **Step 3: Publish the mapping**
+- [x] **Step 3: Publish the mapping**
 
 In `Public/Build/RoadNetworkSolver.h`, add to `FRoadSolveResult`:
 
@@ -425,11 +425,11 @@ In `Private/Build/RoadNetworkSolver.cpp`, immediately before `Out.NodeResults.Ad
 
 Note the ordering: `ArmSegments` must be copied **before** `Result` is moved, and both lines refer to the same `NodeIndex`.
 
-- [ ] **Step 4: Build and run — expect PASS**
+- [x] **Step 4: Build and run — expect PASS**
 
 Expected: 15 tests, 0 failed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Plugins/RoadNet
@@ -453,7 +453,7 @@ The crux. Band vertices sit **between** the two stored cut vertices, so they mus
   - `static FVector2D FRoadMeshBuilder::CutLinePoint(const FVector2D& RightCut, const FVector2D& LeftCut, double Alpha)`
   - `void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex, const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments)`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Plugins/RoadNet/Source/RoadNetTests/Private/RoadBandWeldTest.cpp`:
 
@@ -567,11 +567,11 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 #endif // WITH_DEV_AUTOMATION_TESTS
 ```
 
-- [ ] **Step 2: Build — expect FAIL**
+- [x] **Step 2: Build — expect FAIL**
 
 Expected: compile error, `FRoadMeshBuilder` has no member `CutLinePoint`.
 
-- [ ] **Step 3: Declare the shared derivation and the new AddJunction**
+- [x] **Step 3: Declare the shared derivation and the new AddJunction**
 
 In `Public/Build/RoadMeshBuilder.h`, add to the public section:
 
@@ -606,7 +606,7 @@ and replace the `AddJunction` declaration:
 		const TArray<FRoadSegmentId>& ArmSegments);
 ```
 
-- [ ] **Step 4: Subdivide the ribbon**
+- [x] **Step 4: Subdivide the ribbon**
 
 In `Private/Build/RoadMeshBuilder.cpp`, add the include:
 
@@ -675,7 +675,7 @@ Replace the rail construction and triangle emission in `AddSegment` — the bloc
 
 The two dead-end cap blocks further down still index `RightRail[0]`/`LeftRail[0]` and `RightRail[Steps]`/`LeftRail[Steps]`. Replace those four references with `Rails[0][0]`, `Rails[RailCount - 1][0]`, `Rails[0][Steps]` and `Rails[RailCount - 1][Steps]` respectively — the caps span the full width and are not subdivided, which is correct: a cap is a flat end, not a length of road.
 
-- [ ] **Step 5: Subdivide the junction rim and triangulate it directly**
+- [x] **Step 5: Subdivide the junction rim and triangulate it directly**
 
 Replace the whole of `AddJunction`:
 
@@ -763,7 +763,7 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 }
 ```
 
-- [ ] **Step 6: Update Build and the callers**
+- [x] **Step 6: Update Build and the callers**
 
 In `Private/Build/RoadMeshBuilder.cpp`, `Build`'s junction loop becomes:
 
@@ -778,7 +778,7 @@ In `Private/Build/RoadMeshBuilder.cpp`, `Build`'s junction loop becomes:
 
 Every test that calls `AddJunction(Pair.Value)` directly must pass the four arguments. `RoadMeshBuilderTest.cpp`, `RoadMeshAttributeTest.cpp`, `ShortSegmentTest.cpp` and `ClickedChainTest.cpp` each have such a loop; update them the same way. Prefer `Builder.Build(*Net, Solved, N)` where the test does not specifically need a partial mesh.
 
-- [ ] **Step 7: Build and run — expect PASS**
+- [x] **Step 7: Build and run — expect PASS**
 
 Expected: 16 tests, 0 failed, including `RoadNet.Build.BandWeld`.
 
@@ -786,7 +786,7 @@ Vertex-count assertions in `RoadMeshBuilderTest` will change, because a shoulder
 
 **If "band boundary N is present exactly once" reports 2**, the ribbon and the rim produced different bits for the same boundary. Do not add a tolerance. Check that both call `CutLinePoint` with the arm's own `RightCut`/`LeftCut` in that order, and that the alpha came from the same profile.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add Plugins/RoadNet
@@ -809,7 +809,7 @@ A junction's rim **is** the outer edge, and the only vertex inboard is the apex,
 
 **Why toward the apex rather than a polygon offset:** offsetting a polygon inward self-intersects at tight corners and needs mitre handling. Moving each rim vertex along the straight line to the fan apex cannot self-intersect, because the solver has already validated that the rim is star-shaped about that apex — every rim point sees it. The inset is clamped to a fraction of each vertex's own distance to the apex, so a tight corner degrades to a thin ring rather than folding through it.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append inside `FRoadBandWeldTest::RunTest`, before its final `return true;`:
 
@@ -854,11 +854,11 @@ Append inside `FRoadBandWeldTest::RunTest`, before its final `return true;`:
 	}
 ```
 
-- [ ] **Step 2: Build — expect FAIL**
+- [x] **Step 2: Build — expect FAIL**
 
 Expected: FAIL on "the junction has solid vertices inboard of its rim", because every junction vertex currently carries a ground blend of 1 and there is no ring, so the count is nonzero for the wrong reason — read the failure text and confirm it is the ring assertion before implementing.
 
-- [ ] **Step 3: Build the inset ring**
+- [x] **Step 3: Build the inset ring**
 
 In `AddJunction`, replace the rim-welding and fan block written in Task 3 with a ring-aware version:
 
@@ -939,11 +939,11 @@ Add the constant to the anonymous namespace at the top of the file:
 	constexpr double MaxInsetFraction = 0.45;
 ```
 
-- [ ] **Step 4: Build and run — expect PASS**
+- [x] **Step 4: Build and run — expect PASS**
 
 Expected: 16 tests, 0 failed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add Plugins/RoadNet
@@ -966,7 +966,7 @@ Closes K3, which spec §12 assigns to the mesh builder and which Slice 2a could 
 - Consumes: `FRoadMeshBuffers::UV2`.
 - Produces: no new C++ API. `M_RoadSurface` gains a dithered opacity mask driven by UV2.Y.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append inside `FRoadBandWeldTest::RunTest`, before its final `return true;`:
 
@@ -994,11 +994,11 @@ Append inside `FRoadBandWeldTest::RunTest`, before its final `return true;`:
 	}
 ```
 
-- [ ] **Step 2: Build — expect FAIL or PASS**
+- [x] **Step 2: Build — expect FAIL or PASS**
 
 This may already pass on this network, because the bend has no collinear node. Run it, and if it passes, add a collinear case first: three nodes in a straight line joined by two segments, built into the same builder. A test that cannot fail is worth less than no test.
 
-- [ ] **Step 3: Drop the slivers**
+- [x] **Step 3: Drop the slivers**
 
 In `AddTriangle`, after the index-degeneracy check and before the emission:
 
@@ -1027,7 +1027,7 @@ and add to the anonymous namespace:
 	constexpr double MinTriangleArea = 1e-6;
 ```
 
-- [ ] **Step 4: Drive opacity from UV2.Y**
+- [x] **Step 4: Drive opacity from UV2.Y**
 
 In `Tools/Python/build_road_material.py`, immediately before `lib.connect_material_property(base_colour, ...)`:
 
@@ -1055,7 +1055,7 @@ In `Tools/Python/build_road_material.py`, immediately before `lib.connect_materi
 
 **This is the step most likely to need iteration.** The Python material API is unforgiving about node input names and enum spellings, and a failure here is a traceback in the log rather than a compile error. If `connect_material_expressions` fails, read the traceback for the offending input name and check it against the node's real inputs — do not guess another name and re-run blind. If `MaterialExpressionDitherTemporalAA` is unavailable, connect `ground_blend` straight to `MP_OPACITY_MASK`: the fade becomes a hard edge, which is worse-looking but correct, and worth shipping over a broken material.
 
-- [ ] **Step 5: Re-author the material and check the log**
+- [x] **Step 5: Re-author the material and check the log**
 
 ```powershell
 & "D:\Epic\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" "C:\repos\AirportMgr2\AirportMgr.uproject" `
@@ -1065,7 +1065,7 @@ Select-String -Path C:\repos\AirportMgr2\Saved\Logs\AirportMgr.log -Pattern "MAR
 
 Expected: `MARKER: done`, and **no** `LogMaterial` lines. The commandlet runs under the Null RHI, so shader instruction counts are zero whether the material is sound or broken — the absence of material errors is the only signal available here, and the visual check is the real gate.
 
-- [ ] **Step 6: Give the fallback profile a shoulder**
+- [x] **Step 6: Give the fallback profile a shoulder**
 
 In `Private/Present/RoadNetworkActor.cpp`, in `ResolveProfile`:
 
@@ -1076,15 +1076,15 @@ In `Private/Present/RoadNetworkActor.cpp`, in `ResolveProfile`:
 			FallbackWidth, FallbackFilletRadius, FallbackWidth * 0.1);
 ```
 
-- [ ] **Step 7: Correct K3 in the spec**
+- [x] **Step 7: Correct K3 in the spec**
 
 In `docs/superpowers/specs/2026-08-28-procedural-road-system-design.md` §12, update the K3 row: it is resolved, `FRoadMeshBuilder::AddTriangle` drops triangles below `MinTriangleArea`, and the threshold is absolute rather than texel-derived because a millionth of a square unit is below any plausible pixel coverage. Change only that row.
 
-- [ ] **Step 8: Build and run — expect PASS**
+- [x] **Step 8: Build and run — expect PASS**
 
 Expected: 16 tests, 0 failed.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add Plugins/RoadNet Tools/Python Content/RoadNet docs

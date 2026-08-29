@@ -210,6 +210,8 @@ FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSe
 			}
 		}
 
+		// Copied BEFORE Result is moved from, and keyed on the same NodeIndex.
+		Out.NodeArmSegments.Add(NodeIndex, ArmSegments);
 		Out.NodeResults.Add(NodeIndex, MoveTemp(Result));
 		++Out.SolvedNodes;
 	}

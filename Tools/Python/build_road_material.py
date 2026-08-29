@@ -236,6 +236,11 @@ def build_material(textures):
         node.set_editor_property("parameter_name", name)
         node.set_editor_property("default_value", default)
 
+    # The surface is OPAQUE. UV2.Y once drove a dithered opacity mask that faded the
+    # shoulder into the terrain; that is gone. An airport's surfaces meet at hard material
+    # lines - concrete slab, asphalt run-off, grass - and a road's edge is a kerb, so the
+    # fade solved a problem this game does not have and cost a masked material to do it.
+    # Edge treatment becomes a per-band material choice; this material covers one band.
     lib.connect_material_property(base_colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
     lib.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
     lib.connect_material_property(rough, "R", unreal.MaterialProperty.MP_ROUGHNESS)

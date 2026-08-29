@@ -47,7 +47,9 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 	FRoadMeshBuilder Builder(10.0);
 	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 	{
-		Builder.AddJunction(Pair.Value);
+		static const TArray<FRoadSegmentId> NoArms;
+		const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+		Builder.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 	}
 	const int32 AfterJunctions = Builder.VertexCount();
 	Builder.AddSegment(*Net, ToEast, 1);
@@ -216,14 +218,18 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		FRoadMeshBuilder Baseline(10.0);
 		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 		{
-			Baseline.AddJunction(Pair.Value);
+			static const TArray<FRoadSegmentId> NoArms;
+			const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+			Baseline.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 		}
 		Baseline.AddSegment(*Net, ToNorth, 1);
 
 		FRoadMeshBuilder Subdivided(10.0);
 		for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
 		{
-			Subdivided.AddJunction(Pair.Value);
+			static const TArray<FRoadSegmentId> NoArms;
+			const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(Pair.Key);
+			Subdivided.AddJunction(*Net, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 		}
 		Subdivided.AddSegment(*Net, ToNorth, 8);
 
@@ -259,7 +265,9 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		FRoadMeshBuilder AEndBuilder(10.0);
 		for (const TPair<int32, FJunctionResult>& Pair : AEndSolved.NodeResults)
 		{
-			AEndBuilder.AddJunction(Pair.Value);
+			static const TArray<FRoadSegmentId> NoArms;
+			const TArray<FRoadSegmentId>* Arms = AEndSolved.NodeArmSegments.Find(Pair.Key);
+			AEndBuilder.AddJunction(*AEndNet, Pair.Key, Pair.Value, Arms ? *Arms : NoArms);
 		}
 		const int32 AEndAfterJunctions = AEndBuilder.VertexCount();
 		AEndBuilder.AddSegment(*AEndNet, SouthToCentre, 1);

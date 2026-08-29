@@ -294,7 +294,10 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 	if (RuntimeProfile == nullptr)
 	{
-		RuntimeProfile = URoadProfile::MakeTransient(FallbackWidth, FallbackFilletRadius);
+		// A tenth of the width per side. Without a Shoulder band the profile has no outer
+		// band to fade and the road ends in a knife edge against the ground.
+		RuntimeProfile = URoadProfile::MakeTransient(
+			FallbackWidth, FallbackFilletRadius, FallbackWidth * 0.1);
 	}
 	return RuntimeProfile;
 }
