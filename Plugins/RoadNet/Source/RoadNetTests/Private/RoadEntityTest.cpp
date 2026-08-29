@@ -69,6 +69,46 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// The block above recomputes the expected pose with the SAME trigonometry as the
+	// implementation, so it restates the transform rather than verifying it: a transposed
+	// rotation matrix - a rotation by minus the heading, invisible at heading 0 and wrong
+	// everywhere else - would be reproduced identically in both and pass.
+	//
+	// This pins the rotation DIRECTION with plain arithmetic and no trig at all. The tug
+	// anchor sits at local (1500, 0): straight ahead of the aircraft, nothing lateral. At
+	// heading pi/2 the stand faces world +Y, so straight ahead must land 1500 uu NORTH of
+	// it - where a transposed matrix would put it 1500 uu east.
+	{
+		const FEntityInstance* Rotated = Net->GetEntity(Placed);
+		if (TestNotNull(TEXT("the entity resolves for the rotation check"), Rotated))
+		{
+			int32 TugIndex = INDEX_NONE;
+			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
+			{
+				if (Stand->Anchors[Index].Role == EServiceRole::Tug)
+				{
+					TugIndex = Index;
+				}
+			}
+
+			if (TestTrue(TEXT("the stand has a tug anchor"), TugIndex != INDEX_NONE))
+			{
+				// Straight ahead in local space, so rotation is the only thing under test.
+				TestEqual(TEXT("the tug anchor is straight ahead, nothing lateral"),
+					Stand->Anchors[TugIndex].LocalPosition.Y, 0.0);
+
+				const FGuidelineNode* TugNode =
+					Net->GetGuidelineNode(Rotated->ResolvedAnchors[TugIndex]);
+				if (TestNotNull(TEXT("the tug anchor resolved"), TugNode))
+				{
+					const double Ahead = Stand->Anchors[TugIndex].LocalPosition.X;
+					TestTrue(TEXT("facing +Y, straight ahead lands due north of the stand"),
+						TugNode->Position.Equals(FVector2D(Where.X, Where.Y + Ahead), 0.01));
+				}
+			}
+		}
+	}
+
 	// Anchors must be distinguishable by role, or "drive to the fuel position" has no
 	// answer. Asserted on the definition and on the instance's parallel array together,
 	// because the pairing is what callers rely on.
