@@ -280,3 +280,18 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 
 	return Out;
 }
+
+FApronId URoadNetwork::AddApron(FApronSurface&& Apron)
+{
+	return RoadSlot::Add<FApronId>(Aprons, ApronFreeList, MoveTemp(Apron));
+}
+
+bool URoadNetwork::RemoveApron(FApronId Apron)
+{
+	return RoadSlot::Remove<FApronId>(Aprons, ApronFreeList, Apron);
+}
+
+const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
+{
+	return RoadSlot::Get<FApronId>(Aprons, Apron);
+}

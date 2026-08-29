@@ -5,6 +5,7 @@
 #include "Model/RoadHandles.h"
 #include "Model/RoadNode.h"
 #include "Model/RoadGuideline.h"
+#include "Model/RoadApron.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -69,6 +70,15 @@ public:
 	 */
 	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
 
+	// --- Apron surfaces --------------------------------------------------------------
+	// Polygon pavement. Deliberately NOT in the segment list: the junction solver walks
+	// segments, and an apron has nothing for it to solve.
+
+	FApronId AddApron(FApronSurface&& Apron);
+	bool RemoveApron(FApronId Apron);
+	const FApronSurface* GetApron(FApronId Apron) const;
+	const TArray<FApronSurface>& GetAprons() const { return Aprons; }
+
 private:
 	void SortIncident(FRoadNodeId Node);
 
@@ -81,4 +91,7 @@ private:
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
 	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
 	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
+
+	UPROPERTY() TArray<FApronSurface> Aprons;
+	UPROPERTY() TArray<int32>         ApronFreeList;
 };
