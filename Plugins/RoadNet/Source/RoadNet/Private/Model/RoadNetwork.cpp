@@ -260,10 +260,16 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 			continue;
 		}
 
+		// A self-loop's two ends are the SAME node, so leaving it leaves both ends at once
+		// and every direction permits it. Without this, bLeavingA is unconditionally true
+		// for a self-loop and a BToA one can never satisfy !bLeavingA - it becomes
+		// untraversable from its own node, silently, with nothing to report it.
+		const bool bSelfLoop = (Edge->A == Edge->B);
 		const bool bLeavingA = (Edge->A == Node);
 		const bool bPermitted =
+			bSelfLoop ||
 			Edge->Direction == EGuidelineDir::Bidirectional ||
-			(bLeavingA  && Edge->Direction == EGuidelineDir::AToB) ||
+			(bLeavingA && Edge->Direction == EGuidelineDir::AToB) ||
 			(!bLeavingA && Edge->Direction == EGuidelineDir::BToA);
 
 		if (bPermitted)

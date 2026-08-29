@@ -197,6 +197,28 @@ bool FRoadGuidelineGraphTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("and a pedestrian may not use it at all"), Walking.Contains(OneWayId));
 	}
 
+	// A self-loop's two ends are the same node, so every direction permits leaving it.
+	// Bidirectional would prove nothing here - the existing self-loop test uses the default
+	// direction and passes either way. BToA is the case that exposes the bug: Edge->A ==
+	// Node is unconditionally true for a self-loop, so a naive !bLeavingA can never be
+	// satisfied and the edge silently vanishes from every query.
+	{
+		const FGuidelineNodeId Turnaround = Net->AddGuidelineNode(FVector2D(0.0, 3000.0));
+
+		FGuidelineEdge Reverse;
+		Reverse.A = Turnaround;
+		Reverse.B = Turnaround;
+		Reverse.Direction = EGuidelineDir::BToA;
+		Reverse.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+		const FGuidelineEdgeId ReverseId = Net->AddGuidelineEdge(MoveTemp(Reverse));
+		TestTrue(TEXT("the one-way self-loop is accepted"), ReverseId.IsSet());
+
+		const TArray<FGuidelineEdgeId> Leaving =
+			Net->GetOutgoingGuidelines(Turnaround, ETraversalClass::Aircraft);
+		TestTrue(TEXT("a BToA self-loop is traversable from its own node"),
+			Leaving.Contains(ReverseId));
+	}
+
 	return true;
 }
 
