@@ -157,6 +157,77 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the off-centre segment produced an edge to check"), bChecked);
 	}
 
+	// Turn paths. The centre node has two arms, so two ordered pairs, so two turn edges.
+	// A turn edge is recognised by carrying no DerivedFrom - it belongs to a junction
+	// rather than to any one segment.
+	{
+		int32 TurnEdges = 0;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && !Edge.DerivedFrom.IsSet())
+			{
+				++TurnEdges;
+				TestEqual(TEXT("a turn path runs one way"), Edge.Direction, EGuidelineDir::AToB);
+			}
+		}
+		TestEqual(TEXT("two arms give two ordered turn paths"), TurnEdges, 2);
+	}
+
+	// THE CONNECTIVITY PROPERTY. A turn path must reuse the SAME node handles its segments
+	// end on, or the graph is a heap of disconnected sticks that each look fine on their
+	// own and that nothing can route across. Handles, not positions - this graph has no
+	// weld contract, so two coincident-but-distinct nodes would be invisible to any
+	// position check while being fatal to pathfinding.
+	{
+		TSet<FGuidelineNodeId> SegmentEnds;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.DerivedFrom.IsSet())
+			{
+				SegmentEnds.Add(Edge.A);
+				SegmentEnds.Add(Edge.B);
+			}
+		}
+
+		int32 Connected = 0;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && !Edge.DerivedFrom.IsSet() &&
+				SegmentEnds.Contains(Edge.A) && SegmentEnds.Contains(Edge.B))
+			{
+				++Connected;
+			}
+		}
+		TestEqual(TEXT("every turn path joins two segment endpoints"), Connected, 2);
+	}
+
+	// A three-arm node gives six ordered pairs. Asserted separately because two arms
+	// cannot distinguish "ordered pairs" from "pairs" - both give two.
+	{
+		URoadNetwork* Tee = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* TeeProfile = URoadProfile::MakeTransient(800.0, 200.0);
+
+		const FRoadNodeId Hub = Tee->AddNode(FVector2D(0.0, 0.0));
+		Tee->AddStraightSegment(Hub, Tee->AddNode(FVector2D( 12000.0,     0.0)), TeeProfile);
+		Tee->AddStraightSegment(Hub, Tee->AddNode(FVector2D(-12000.0,     0.0)), TeeProfile);
+		Tee->AddStraightSegment(Hub, Tee->AddNode(FVector2D(     0.0, 12000.0)), TeeProfile);
+
+		const FRoadSolveResult TeeSolved = FRoadNetworkSolver::SolveAll(*Tee);
+		TestEqual(TEXT("the tee solved"), TeeSolved.FailedNodes, 0);
+
+		FRoadGuidelineBuilder::Build(*Tee, TeeSolved);
+
+		int32 TeeTurns = 0;
+		for (const FGuidelineEdge& Edge : Tee->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && !Edge.DerivedFrom.IsSet())
+			{
+				++TeeTurns;
+			}
+		}
+		TestEqual(TEXT("three arms give six ordered turn paths"), TeeTurns, 6);
+	}
+
 	return true;
 }
 
