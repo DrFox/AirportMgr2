@@ -147,6 +147,59 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// SPEC RISK 4, asserted. FRoadGuidelineBuilder::Build destroys and re-adds every
+	// DERIVED node on each run, advancing its generation - so anything holding a derived
+	// node's handle across a rebuild finds it dangling. An entity's anchors are exactly
+	// that: handles, stored, and expected to outlive edits elsewhere on the airport.
+	//
+	// The answer is provenance, not a rewrite. Anchor nodes are created non-derived, the
+	// orphan sweep requires bDerived, so Build cannot touch them.
+	{
+		URoadNetwork* Live = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Taxi = URoadProfile::MakeTransient(800.0, 200.0);
+		UEntityDefinition* Gate = UEntityDefinition::MakeStandTransient();
+
+		// A taxiway network the builder will churn, and a stand parked well away from it.
+		const FRoadNodeId Hub  = Live->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId East = Live->AddNode(FVector2D(12000.0, 0.0));
+		const FRoadNodeId Nrth = Live->AddNode(FVector2D(0.0, 12000.0));
+		Live->AddStraightSegment(Hub, East, Taxi);
+		Live->AddStraightSegment(Hub, Nrth, Taxi);
+
+		const FEntityInstanceId Gate12 =
+			Live->PlaceEntity(Gate, FVector2D(30000.0, 30000.0), 0.0);
+
+		TArray<FGuidelineNodeId> Before;
+		if (const FEntityInstance* Instance = Live->GetEntity(Gate12))
+		{
+			Before = Instance->ResolvedAnchors;
+		}
+		TestTrue(TEXT("the stand resolved its anchors"), Before.Num() > 0);
+
+		// Now churn the graph. Twice, because the first Build has nothing to clear.
+		const FRoadSolveResult LiveSolved = FRoadNetworkSolver::SolveAll(*Live);
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
+
+		const FEntityInstance* After = Live->GetEntity(Gate12);
+		if (TestNotNull(TEXT("the stand survives a rebuild"), After))
+		{
+			TestEqual(TEXT("with the same anchor count"), After->ResolvedAnchors.Num(), Before.Num());
+
+			for (int32 Index = 0; Index < Before.Num(); ++Index)
+			{
+				// Handle identity, generation included - not just "a node is still there".
+				// A swept-and-recreated node would have the same index and a DIFFERENT
+				// generation, which is exactly the dangle this guards against.
+				TestTrue(TEXT("the anchor handle is unchanged, generation included"),
+					After->ResolvedAnchors[Index] == Before[Index]);
+
+				TestNotNull(TEXT("and still resolves to a live node"),
+					Live->GetGuidelineNode(Before[Index]));
+			}
+		}
+	}
+
 	return true;
 }
 
