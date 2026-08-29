@@ -150,3 +150,93 @@ void URoadNetwork::SortIncident(FRoadNodeId NodeId)
 		return FMath::Atan2(DirL.Y, DirL.X) < FMath::Atan2(DirR.Y, DirR.X);
 	});
 }
+
+FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position)
+{
+	FGuidelineNode Node;
+	Node.Position = Position;
+	return RoadSlot::Add<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, MoveTemp(Node));
+}
+
+FGuidelineEdgeId URoadNetwork::AddGuidelineEdge(FGuidelineEdge&& Edge)
+{
+	// Both endpoints must be live BEFORE anything is added, or a rejected edge leaves a
+	// half-linked graph behind.
+	if (!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, Edge.A) ||
+		!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, Edge.B))
+	{
+		return FGuidelineEdgeId();
+	}
+
+	const FGuidelineNodeId EndA = Edge.A;
+	const FGuidelineNodeId EndB = Edge.B;
+
+	const FGuidelineEdgeId Handle =
+		RoadSlot::Add<FGuidelineEdgeId>(GuidelineEdges, GuidelineEdgeFreeList, MoveTemp(Edge));
+
+	GuidelineNodes[EndA.Index].Incident.Add(Handle);
+	if (EndB != EndA)
+	{
+		GuidelineNodes[EndB.Index].Incident.Add(Handle);
+	}
+
+	return Handle;
+}
+
+bool URoadNetwork::RemoveGuidelineEdge(FGuidelineEdgeId Edge)
+{
+	const FGuidelineEdge* Found =
+		RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// Retract from BOTH endpoints before freeing the slot - after Remove the payload is
+	// still there but the generation has moved on, so read the endpoints now.
+	const FGuidelineNodeId EndA = Found->A;
+	const FGuidelineNodeId EndB = Found->B;
+
+	if (RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, EndA))
+	{
+		GuidelineNodes[EndA.Index].Incident.Remove(Edge);
+	}
+	if (RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, EndB))
+	{
+		GuidelineNodes[EndB.Index].Incident.Remove(Edge);
+	}
+
+	return RoadSlot::Remove<FGuidelineEdgeId>(GuidelineEdges, GuidelineEdgeFreeList, Edge);
+}
+
+bool URoadNetwork::RemoveGuidelineNode(FGuidelineNodeId Node)
+{
+	if (!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, Node))
+	{
+		return false;
+	}
+
+	// Copy the incidence list before removing anything: RemoveGuidelineEdge mutates it.
+	const TArray<FGuidelineEdgeId> Doomed = GuidelineNodes[Node.Index].Incident;
+	for (const FGuidelineEdgeId Edge : Doomed)
+	{
+		RemoveGuidelineEdge(Edge);
+	}
+
+	return RoadSlot::Remove<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, Node);
+}
+
+const FGuidelineNode* URoadNetwork::GetGuidelineNode(FGuidelineNodeId Node) const
+{
+	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
+}
+
+const FGuidelineEdge* URoadNetwork::GetGuidelineEdge(FGuidelineEdgeId Edge) const
+{
+	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
+}
+
+FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
+{
+	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
+}
