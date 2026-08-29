@@ -4,6 +4,7 @@
 #include "UObject/Object.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadNode.h"
+#include "Model/RoadGuideline.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -37,6 +38,37 @@ public:
 	const TArray<FRoadNode>&    GetNodes()    const { return Nodes; }
 	const TArray<FRoadSegment>& GetSegments() const { return Segments; }
 
+	// --- Guideline graph -------------------------------------------------------------
+	// A SECOND graph, deliberately in the same object. The build tool must make "draw a
+	// taxiway" one atomic undo step spanning pavement and its derived guideline, and
+	// Revert must restore handles identically including generation counters; splitting
+	// the two graphs across two UObjects makes every composite command a two-phase commit
+	// for no gain. Conceptual separation lives in the headers, not in the ownership.
+
+	FGuidelineNodeId AddGuidelineNode(const FVector2D& Position);
+
+	/** Removes the node AND every edge incident to it. */
+	bool RemoveGuidelineNode(FGuidelineNodeId Node);
+
+	/** A and B must both be live, or this returns an unset handle and adds nothing. */
+	FGuidelineEdgeId AddGuidelineEdge(FGuidelineEdge&& Edge);
+	bool RemoveGuidelineEdge(FGuidelineEdgeId Edge);
+
+	const FGuidelineNode* GetGuidelineNode(FGuidelineNodeId Node) const;
+	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
+	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
+
+	const TArray<FGuidelineNode>& GetGuidelineNodes() const { return GuidelineNodes; }
+	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
+
+	/**
+	 * Edges an agent of this class may leave Node along, honouring access AND direction.
+	 *
+	 * Returns edges, not neighbours, because a caller needs the edge's own width, wingspan
+	 * limit and geometry to decide whether to take it.
+	 */
+	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
+
 private:
 	void SortIncident(FRoadNodeId Node);
 
@@ -44,4 +76,9 @@ private:
 	UPROPERTY() TArray<int32>        NodeFreeList;
 	UPROPERTY() TArray<FRoadSegment> Segments;
 	UPROPERTY() TArray<int32>        SegmentFreeList;
+
+	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
+	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
+	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
+	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
 };
