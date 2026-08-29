@@ -170,11 +170,18 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			Live->PlaceEntity(Gate, FVector2D(30000.0, 30000.0), 0.0);
 
 		TArray<FGuidelineNodeId> Before;
+		TArray<FVector2D> PlacedAt;
 		if (const FEntityInstance* Instance = Live->GetEntity(Gate12))
 		{
 			Before = Instance->ResolvedAnchors;
+			for (const FGuidelineNodeId NodeId : Before)
+			{
+				const FGuidelineNode* Node = Live->GetGuidelineNode(NodeId);
+				PlacedAt.Add(Node != nullptr ? Node->Position : FVector2D::ZeroVector);
+			}
 		}
 		TestTrue(TEXT("the stand resolved its anchors"), Before.Num() > 0);
+		TestEqual(TEXT("and every one was live before the rebuild"), PlacedAt.Num(), Before.Num());
 
 		// Now churn the graph. Twice, because the first Build has nothing to clear.
 		const FRoadSolveResult LiveSolved = FRoadNetworkSolver::SolveAll(*Live);
@@ -184,18 +191,26 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstance* After = Live->GetEntity(Gate12);
 		if (TestNotNull(TEXT("the stand survives a rebuild"), After))
 		{
-			TestEqual(TEXT("with the same anchor count"), After->ResolvedAnchors.Num(), Before.Num());
-
+			// ResolvedAnchors is written once, at placement, and nothing rewrites it - so
+			// comparing it to a copy of itself proves nothing and cannot fail. What CAN
+			// fail is whether those handles still RESOLVE: the sweep removes a node by
+			// bumping its generation, after which the stored handle stops matching.
 			for (int32 Index = 0; Index < Before.Num(); ++Index)
 			{
-				// Handle identity, generation included - not just "a node is still there".
-				// A swept-and-recreated node would have the same index and a DIFFERENT
-				// generation, which is exactly the dangle this guards against.
-				TestTrue(TEXT("the anchor handle is unchanged, generation included"),
-					After->ResolvedAnchors[Index] == Before[Index]);
+				const FGuidelineNode* Node = Live->GetGuidelineNode(Before[Index]);
+				if (!TestNotNull(TEXT("the anchor handle still resolves after a rebuild"), Node))
+				{
+					continue;
+				}
 
-				TestNotNull(TEXT("and still resolves to a live node"),
-					Live->GetGuidelineNode(Before[Index]));
+				// And resolves to the SAME node, not merely to something. A rebuild that
+				// moved or re-pointed an anchor would satisfy a null check and still send
+				// the fuel truck to the wrong place.
+				TestTrue(TEXT("at the position the anchor was placed at"),
+					Node->Position.Equals(PlacedAt[Index], 0.01));
+
+				// And is still the entity's, not reclaimed by the derivation.
+				TestFalse(TEXT("and is still not owned by the derivation"), Node->bDerived);
 			}
 		}
 	}
