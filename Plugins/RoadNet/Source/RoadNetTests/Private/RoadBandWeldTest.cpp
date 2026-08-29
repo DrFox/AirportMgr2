@@ -198,6 +198,54 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// A dead end must reach its NODE, with solid surface, not stop at its trimmed cut.
+	//
+	// The cap closing that gap used to be built from the two outer rails alone. With a
+	// shouldered profile every one of its four corners then sat on an outer band, carried
+	// ground blend 0, and the whole cap was masked away: the road stopped roughly a
+	// half-width short of where it was drawn, and only reached the node once a second click
+	// turned it into a junction whose fan filled the hole. It looked like a trim bug and was
+	// really a fade bug, which is why this asserts on the blend at the node and not just on
+	// the geometry being present.
+	{
+		const FRoadSegment* EastSeg = Net->GetSegment(ToEast);
+		const FRoadNode* EastNode = Net->GetNode(East);
+		if (TestNotNull(TEXT("east dead-end node resolves"), EastNode) &&
+			TestNotNull(TEXT("east segment resolves for the cap check"), EastSeg))
+		{
+			// The segment runs +X from the centre, so its B-end cut line is the LAST thing
+			// the ribbon reaches. Anything beyond it in X belongs to the cap and nothing
+			// else - which is what makes this discriminating. Counting vertices "near the
+			// node" instead would sweep in the ribbon's own interior rails, which are solid
+			// regardless, and the assertion would hold whether or not a cap was ever built.
+			const double CutX = FMath::Max(EastSeg->LeftCutB.X, EastSeg->RightCutB.X);
+
+			int32 BeyondCut = 0;
+			int32 SolidBeyondCut = 0;
+			for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+			{
+				if (Buffers.Positions[Index].X > CutX)
+				{
+					++BeyondCut;
+					if (Buffers.UV2[Index].Y >= 1.0f)
+					{
+						++SolidBeyondCut;
+					}
+				}
+			}
+
+			TestTrue(TEXT("the dead end has surface beyond its trimmed cut"), BeyondCut > 0);
+			TestTrue(TEXT("the road reaches its own node"),
+				EastNode->Position.X > CutX);
+
+			// The load-bearing one. Two outer corners alone are all blend 0, so the cap is
+			// masked away entirely and the road stops at the cut; the cap has to carry the
+			// ribbon's interior bands to arrive solid at the node.
+			TestTrue(TEXT("the dead end's cap is solid across its interior bands"),
+				SolidBeyondCut > 0);
+		}
+	}
+
 	// K3: a pass-through node that is very nearly, but not exactly, collinear emits slivers -
 	// measured here at 2.6e-07 uu², the same defect slice 2a recorded at 1.6e-10. They pass
 	// every winding check and are geometrically harmless, but they reach the renderer and

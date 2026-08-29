@@ -385,13 +385,29 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	const double HalfWidthLeft  = static_cast<double>(LateralLeft);
 	const double HalfWidthRight = static_cast<double>(LateralRight);
 
-	// A cap spans the full width and is not subdivided - it is a flat end, not a length of
-	// road - but its two corners are still the shoulder's outer edge, and they take the
-	// outermost bands' ground blend for it. Left solid they would snap the fade back on at
-	// the last few uu of every dead end, which reads as a bright notch exactly where the
-	// road is supposed to disappear.
-	const float CapBlendRight = Bands.GroundBlend[0];
-	const float CapBlendLeft  = Bands.GroundBlend[RailCount - 1];
+	// A cap carries the SAME cross-section as the ribbon it closes, band for band.
+	//
+	// It used to be built from the two outer rails alone, on the reasoning that a cap is a
+	// flat end rather than a length of road and needs no subdivision. That is wrong the
+	// moment bands mean anything: all four corners of such a cap sit on an outer band, so
+	// with a shouldered profile every one of them carries ground blend 0 and the whole cap
+	// is masked away - the road visibly stops at its trimmed cut instead of at its node,
+	// and only reaches the node once a second click turns it into a junction whose fan
+	// fills the hole. Per-band materials would fail the same way, one band at a time.
+	auto BuildCapRail = [this, &Bands, RailCount](
+		const FVector2D& CapRight, const FVector2D& CapLeft, float Along)
+	{
+		TArray<int32> Rail;
+		Rail.Reserve(RailCount);
+		for (int32 Boundary = 0; Boundary < RailCount; ++Boundary)
+		{
+			Rail.Add(WeldVertex(
+				CutLinePoint(CapRight, CapLeft, Bands.Alphas[Boundary]),
+				FVector2f(Bands.Laterals[Boundary], Along),
+				FVector2f(0.0f, Bands.GroundBlend[Boundary])));
+		}
+		return Rail;
+	};
 
 	const FRoadNode* NodeA = Network.GetNode(Segment->A);
 	if (NodeA != nullptr && NodeA->Incident.Num() == 1)
@@ -408,15 +424,18 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// line first, ribbon start second.
 		// The cap spans from the node's own cut line to the ribbon's start, so it sits at
 		// along = 0 - the surface really does begin at the node, not at the trimmed cut.
-		const int32 R0 = WeldVertex(CapRight, FVector2f(-LateralRight, 0.0f),
-			FVector2f(0.0f, CapBlendRight));
-		const int32 R1 = Rails[0][0];
-		const int32 L1 = Rails[RailCount - 1][0];
-		const int32 L0 = WeldVertex(CapLeft, FVector2f(LateralLeft, 0.0f),
-			FVector2f(0.0f, CapBlendLeft));
+		const TArray<int32> CapRail = BuildCapRail(CapRight, CapLeft, 0.0f);
 
-		AddTriangle(R0, R1, L1);
-		AddTriangle(R0, L1, L0);
+		for (int32 Boundary = 0; Boundary + 1 < RailCount; ++Boundary)
+		{
+			const int32 R0 = CapRail[Boundary];
+			const int32 R1 = Rails[Boundary][0];
+			const int32 L1 = Rails[Boundary + 1][0];
+			const int32 L0 = CapRail[Boundary + 1];
+
+			AddTriangle(R0, R1, L1);
+			AddTriangle(R0, L1, L0);
+		}
 	}
 
 	const FRoadNode* NodeB = Network.GetNode(Segment->B);
@@ -436,15 +455,18 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 		// The cap sits AFTER the ribbon's last cross-section walking A to B: ribbon end
 		// first, node cap line second.
 		const float CapAlong = static_cast<float>(RibbonLength);
-		const int32 R0 = Rails[0][Steps];
-		const int32 R1 = WeldVertex(CapRight, FVector2f(-LateralRight, CapAlong),
-			FVector2f(0.0f, CapBlendRight));
-		const int32 L1 = WeldVertex(CapLeft, FVector2f(LateralLeft, CapAlong),
-			FVector2f(0.0f, CapBlendLeft));
-		const int32 L0 = Rails[RailCount - 1][Steps];
+		const TArray<int32> CapRail = BuildCapRail(CapRight, CapLeft, CapAlong);
 
-		AddTriangle(R0, R1, L1);
-		AddTriangle(R0, L1, L0);
+		for (int32 Boundary = 0; Boundary + 1 < RailCount; ++Boundary)
+		{
+			const int32 R0 = Rails[Boundary][Steps];
+			const int32 R1 = CapRail[Boundary];
+			const int32 L1 = CapRail[Boundary + 1];
+			const int32 L0 = Rails[Boundary + 1][Steps];
+
+			AddTriangle(R0, R1, L1);
+			AddTriangle(R0, L1, L0);
+		}
 	}
 }
 
