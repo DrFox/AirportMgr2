@@ -1725,10 +1725,16 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 			continue;
 		}
 
+		// A self-loop's two ends are the SAME node, so leaving it leaves both ends at once
+		// and every direction permits it. Without this, bLeavingA is unconditionally true
+		// for a self-loop and a BToA one can never satisfy !bLeavingA - it becomes
+		// untraversable from its own node, silently, with nothing to report it.
+		const bool bSelfLoop = (Edge->A == Edge->B);
 		const bool bLeavingA = (Edge->A == Node);
 		const bool bPermitted =
+			bSelfLoop ||
 			Edge->Direction == EGuidelineDir::Bidirectional ||
-			(bLeavingA  && Edge->Direction == EGuidelineDir::AToB) ||
+			(bLeavingA && Edge->Direction == EGuidelineDir::AToB) ||
 			(!bLeavingA && Edge->Direction == EGuidelineDir::BToA);
 
 		if (bPermitted)
@@ -1788,3 +1794,25 @@ git commit -m "feat(roadnet): guideline traversal queries honouring access and d
 3. **`MaxWingspan` uses a naive `Min`** where `0` means unlimited, so a limited arm meeting an unlimited one yields `0` — unlimited — which is the unsafe direction. Harmless while every profile is `0`; fix before mixed profiles exist.
 4. **Nothing sets `HoldShortFor` or `PriorityOverride`.** Both are fields with no writer until the build tool can author them. They are in Task 2 so the graph does not need reshaping later, not because anything uses them yet.
 5. **`Build` is O(segments x guidelines) plus O(arms²) per node** and rebuilds everything. At parent R5's few-hundred-segment scale that is fine; it is not an incremental rebuild and would need to become one before it runs on every mouse move.
+
+
+---
+
+## Corrections found during execution
+
+Every task in this plan drew at least one review finding, and all but one were tests that
+could not fail. They are recorded here rather than silently patched into the steps above,
+because the pattern matters more than any individual fix: **a plan's test code gets the
+same scrutiny as its implementation code, and gets it later.**
+
+| Task | Defect | Severity | Fixed in |
+|---|---|---|---|
+| 1 | The right-of-way test asserted self-tie and argument-order symmetry, neither of which pins down WHICH class wins. Flipping `>=` to `<=` in `ResolveRightOfWay` passed every assertion while inverting every crossing in the game. | Important | `b320f25`; Step 1 above amended |
+| 2 | The self-loop guard and the dead-endpoint rejection path — both promised by the header — had no test. | Important | `b1c3558` |
+| 3 | The two-lane road block asserted only against literals the test itself had just written; it exercised no production code at all. Now ties the guideline offsets to `GetTotalWidth`/`GetHalfWidth*`. | Important | `9b15fba` |
+| 3 | `ERoadLaneDirection` left behind as dead code — the exact zero-reader defect this task existed to remove. | Minor | `9b15fba` |
+| 4 | The B-end cut-line swap was correct but untestable: every fixture was centred, so alpha was 0.5 and `Lerp(X,Y,0.5) == Lerp(Y,X,0.5)`. Deleting the swap left all tests green. Now covered by an off-centre guideline. | Important | `579a858` |
+| 5 | `MaxWingspan` used a naive `Min` where `0` means unlimited, letting an unlimited arm widen a limited one — wrong in the direction that routes an oversized aircraft onto a turn it cannot take. | Important | `00fbc4c` |
+| 7 | **A real production bug, not a test gap.** For a self-loop, `Edge->A == Node` is unconditionally true, so a `BToA` self-loop could never satisfy `!bLeavingA` and was silently untraversable from its own node. Step 3 above is corrected. | Important | `d55ae58` |
+
+Task 6 was the only one to pass review unamended on its first attempt alongside Task 5.
