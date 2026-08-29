@@ -68,6 +68,15 @@ public:
 	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
 
+	/**
+	 * Mutable access to a guideline node.
+	 *
+	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldShortFor and
+	 * PriorityOverride live on the NODE, and until the build tool can author them there is
+	 * otherwise no way for anything - including a test - to write either.
+	 */
+	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
+
 	const TArray<FGuidelineNode>& GetGuidelineNodes() const { return GuidelineNodes; }
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 

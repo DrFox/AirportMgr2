@@ -243,6 +243,11 @@ FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
 }
 
+FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
+{
+	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
+}
+
 TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 	FGuidelineNodeId Node, ETraversalClass Class) const
 {

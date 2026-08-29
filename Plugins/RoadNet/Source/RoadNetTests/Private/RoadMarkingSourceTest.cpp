@@ -162,13 +162,42 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("with a real width"), Taxiway->GetTotalWidth() > 0.0);
 	}
 
-	// Hold bar <- a guideline node flagged hold-short. Nothing WRITES HoldShortFor yet -
-	// that is the build tool's job - so this asserts the model can CARRY the source, which
-	// is what section 6 is testing. Set it here to prove the field round-trips.
+	// Hold bar <- a guideline node flagged hold-short.
+	//
+	// Nothing WRITES HoldShortFor yet - that is the build tool's job - so what section 6
+	// needs from the model here is that the node can CARRY the source. Asserting only that
+	// a node can be created would establish nothing about hold bars at all; this sets the
+	// field and reads it back through the network, which is the actual claim.
 	{
 		const FGuidelineNodeId Marked = Net->AddGuidelineNode(FVector2D(1.0, 1.0), false);
-		TestTrue(TEXT("a hold-short node can be created"), Marked.IsSet());
-		TestNotNull(TEXT("and resolves"), Net->GetGuidelineNode(Marked));
+		if (TestTrue(TEXT("a hold-short node can be created"), Marked.IsSet()))
+		{
+			// Any live segment will do as the thing being protected; a runway is the real
+			// case, and the field is a plain FRoadSegmentId either way.
+			FRoadSegmentId Protected;
+			for (int32 Index = 0; Index < Net->GetSegments().Num(); ++Index)
+			{
+				if (Net->GetSegments()[Index].bAlive)
+				{
+					Protected.Index = Index;
+					Protected.Generation = Net->GetSegments()[Index].Generation;
+					break;
+				}
+			}
+			TestTrue(TEXT("there is a surface for it to protect"), Protected.IsSet());
+
+			if (FGuidelineNode* Mutable = Net->GetGuidelineNodeMutable(Marked))
+			{
+				Mutable->HoldShortFor = Protected;
+			}
+
+			const FGuidelineNode* ReadBack = Net->GetGuidelineNode(Marked);
+			if (TestNotNull(TEXT("the hold-short node resolves"), ReadBack))
+			{
+				TestTrue(TEXT("and carries the surface it protects"),
+					ReadBack->HoldShortFor == Protected);
+			}
+		}
 	}
 
 	// Road centre line <- two adjacent lane guidelines of ONE surface. The model expresses
