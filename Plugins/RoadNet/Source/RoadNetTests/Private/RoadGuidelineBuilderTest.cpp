@@ -95,6 +95,68 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("an endpoint sits on the A-end cut line"), bOnCutLine);
 	}
 
+	// The B end's cut line is authored from B's point of view, so its left is the segment's
+	// RIGHT walking A to B - which is why the builder passes the B-end cut vertices
+	// swapped. With a CENTRED guideline alpha is exactly 0.5, and Lerp(X,Y,0.5) equals
+	// Lerp(Y,X,0.5), so that swap is mathematically invisible: deleting it leaves every
+	// assertion above still passing.
+	//
+	// An off-centre guideline is what makes it visible. Offset +175 on a 700-wide profile
+	// gives alpha 0.75, so both ends must land on the SAME side of the segment axis.
+	// Without the swap the B end lands across it and the guideline cuts diagonally over
+	// the road.
+	{
+		URoadNetwork* Offset = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* OffsetProfile = NewObject<URoadProfile>(GetTransientPackage());
+
+		FProfileBand OffsetLane;
+		OffsetLane.Width = 350.0;
+		OffsetLane.Type = ERoadBandType::Lane;
+		OffsetProfile->Bands.Add(OffsetLane);
+		OffsetProfile->Bands.Add(OffsetLane);
+
+		FProfileGuideline LeftOfCentre;
+		LeftOfCentre.CentreOffset = 175.0;          // positive is left; gives alpha 0.75
+		LeftOfCentre.Class = ETraversalClass::GroundVehicle;
+		LeftOfCentre.Direction = EGuidelineDir::AToB;
+		OffsetProfile->Guidelines.Add(LeftOfCentre);
+
+		const FRoadNodeId Hub  = Offset->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Away = Offset->AddNode(FVector2D(12000.0, 0.0));
+		const FRoadNodeId Side = Offset->AddNode(FVector2D(0.0, 12000.0));
+		const FRoadSegmentId Eastward = Offset->AddStraightSegment(Hub, Away, OffsetProfile);
+		Offset->AddStraightSegment(Hub, Side, OffsetProfile);
+
+		const FRoadSolveResult OffsetSolved = FRoadNetworkSolver::SolveAll(*Offset);
+		TestEqual(TEXT("the off-centre network solved"), OffsetSolved.FailedNodes, 0);
+
+		FRoadGuidelineBuilder::Build(*Offset, OffsetSolved);
+
+		// Eastward runs +X, so the segment's left is +Y. A guideline 175uu left of centre
+		// sits at roughly y = +175 at BOTH ends.
+		bool bChecked = false;
+		for (const FGuidelineEdge& Edge : Offset->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive || Edge.DerivedFrom != Eastward)
+			{
+				continue;
+			}
+
+			const FGuidelineNode* OffsetA = Offset->GetGuidelineNode(Edge.A);
+			const FGuidelineNode* OffsetB = Offset->GetGuidelineNode(Edge.B);
+			if (TestNotNull(TEXT("the off-centre edge's A node resolves"), OffsetA) &&
+				TestNotNull(TEXT("the off-centre edge's B node resolves"), OffsetB))
+			{
+				bChecked = true;
+				TestTrue(TEXT("the A end sits left of the segment axis"),
+					OffsetA->Position.Y > 100.0);
+				TestTrue(TEXT("and the B end sits on the SAME side, not across it"),
+					OffsetB->Position.Y > 100.0);
+			}
+		}
+		TestTrue(TEXT("the off-centre segment produced an edge to check"), bChecked);
+	}
+
 	return true;
 }
 
