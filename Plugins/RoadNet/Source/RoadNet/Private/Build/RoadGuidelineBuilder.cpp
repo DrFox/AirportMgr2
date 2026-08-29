@@ -23,6 +23,25 @@ namespace
 		}
 		return FMath::Clamp((CentreOffset + HalfRight) / Total, 0.0, 1.0);
 	}
+
+	/** A live, hand-edited guideline already covering this segment's Nth declared guideline. */
+	FGuidelineEdgeId FindSparedEdge(const URoadNetwork& Network, FRoadSegmentId Segment, int32 Which)
+	{
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (Edge.bAlive && !Edge.bDerived &&
+				Edge.DerivedFrom == Segment && Edge.DerivedGuidelineIndex == Which)
+			{
+				FGuidelineEdgeId Id;
+				Id.Index = Index;
+				Id.Generation = Edge.Generation;
+				return Id;
+			}
+		}
+		return FGuidelineEdgeId();
+	}
 }
 
 void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved)
@@ -56,7 +75,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
 		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 		{
-			if (Nodes[Index].bAlive && Nodes[Index].Incident.Num() == 0)
+			if (Nodes[Index].bAlive && Nodes[Index].bDerived && Nodes[Index].Incident.Num() == 0)
 			{
 				FGuidelineNodeId Id;
 				Id.Index = Index;
@@ -111,6 +130,23 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 		for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
 		{
+			// A guideline the player edited survived the clear pass. Deriving over it would
+			// leave TWO guidelines on this segment - the player's, attached to nothing, and
+			// a fresh derived one that every turn path and every route would use instead.
+			// The edit would appear to have done nothing at all.
+			const FGuidelineEdgeId Spared = FindSparedEdge(Network, SegmentId, Which);
+			if (Spared.IsSet())
+			{
+				if (const FGuidelineEdge* SparedEdge = Network.GetGuidelineEdge(Spared))
+				{
+					// Register the player's OWN endpoints, so the turn paths below attach
+					// to their line instead of to one nothing can reach.
+					Ends.Add(EndKey(Index, true,  Which), SparedEdge->A);
+					Ends.Add(EndKey(Index, false, Which), SparedEdge->B);
+					continue;
+				}
+			}
+
 			const FProfileGuideline& Declared = Profile->Guidelines[Which];
 			const double Alpha = AlphaForOffset(Profile, Declared.CentreOffset);
 
@@ -131,6 +167,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Edge.Width = Declared.Width;
 			Edge.MaxWingspan = Declared.MaxWingspan;
 			Edge.DerivedFrom = SegmentId;
+			Edge.DerivedGuidelineIndex = Which;
 			Edge.bDerived = true;
 
 			Ends.Add(EndKey(Index, true,  Which), Edge.A);
@@ -199,6 +236,29 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 						continue;
 					}
 
+					// Arriving at this node along the From arm, then leaving along the To
+					// arm. Either arm may be one-way, and a turn that ignores that lands an
+					// agent on a node it cannot leave.
+					const bool bFromAtA = (FromSegment->A == NodeId);
+					const bool bToAtA   = (ToSegment->A == NodeId);
+					const EGuidelineDir FromDir = FromProfile->Guidelines[Which].Direction;
+					const EGuidelineDir ToDir   = ToProfile->Guidelines[Which].Direction;
+
+					const bool bMayArrive =
+						FromDir == EGuidelineDir::Bidirectional ||
+						(bFromAtA  && FromDir == EGuidelineDir::BToA) ||
+						(!bFromAtA && FromDir == EGuidelineDir::AToB);
+
+					const bool bMayLeave =
+						ToDir == EGuidelineDir::Bidirectional ||
+						(bToAtA  && ToDir == EGuidelineDir::AToB) ||
+						(!bToAtA && ToDir == EGuidelineDir::BToA);
+
+					if (!bMayArrive || !bMayLeave)
+					{
+						continue;
+					}
+
 					const FProfileGuideline& Declared = FromProfile->Guidelines[Which];
 
 					FGuidelineEdge Turn;
@@ -210,10 +270,21 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// quadratic case, and why this is not the parent spec's cubic.
 					Turn.Control = Node->Position;
 
-					Turn.AllowedTraffic = FTrafficMask::Only(Declared.Class);
-					Turn.AllowedTraffic.Add(ETraversalClass::Emergency);
+					// A turn is usable only by what BOTH arms admit - the same reasoning
+					// already applied to MaxWingspan below, which this previously
+					// contradicted one line up. Where the two arms carry different classes
+					// the intersection leaves Emergency alone, which is right: a fire truck
+					// may cross between a service road and a taxiway and nothing else may.
+					FTrafficMask FromMask = FTrafficMask::Only(FromProfile->Guidelines[Which].Class);
+					FromMask.Add(ETraversalClass::Emergency);
+					FTrafficMask ToMask = FTrafficMask::Only(ToProfile->Guidelines[Which].Class);
+					ToMask.Add(ETraversalClass::Emergency);
+
+					Turn.AllowedTraffic.Bits = static_cast<uint8>(FromMask.Bits & ToMask.Bits);
 					Turn.Direction = EGuidelineDir::AToB;
-					Turn.Width = Declared.Width;
+					Turn.Width = FMath::Min(
+						FromProfile->Guidelines[Which].Width,
+						ToProfile->Guidelines[Which].Width);
 
 					// 0 means UNLIMITED, so a naive Min would let an unlimited arm widen a
 					// limited one - wrong in the direction that puts an oversized aircraft

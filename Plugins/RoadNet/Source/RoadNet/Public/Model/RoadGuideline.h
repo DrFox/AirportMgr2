@@ -32,6 +32,15 @@ struct ROADNET_API FGuidelineNode
 	 */
 	UPROPERTY() TArray<ETraversalClass> PriorityOverride;
 
+	/**
+	 * True while this node is owned by the derivation and may be swept when it falls idle.
+	 *
+	 * Edges carry provenance and nodes did not, so the orphan sweep used to remove ANY
+	 * idle node - including one the build tool had placed but not yet drawn an edge to,
+	 * which is the natural authoring order.
+	 */
+	UPROPERTY() bool bDerived = true;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
@@ -74,6 +83,16 @@ struct ROADNET_API FGuidelineEdge
 
 	/** The surface this was derived from; unset when hand-drawn. */
 	UPROPERTY() FRoadSegmentId DerivedFrom;
+
+	/**
+	 * Which of the source profile's declared guidelines this came from. INDEX_NONE for a
+	 * turn path or a hand-drawn edge.
+	 *
+	 * Without it, DerivedFrom alone cannot tell a regeneration that a slot is already
+	 * covered by an edge the player has edited - so it derives over the top and the
+	 * airport ends up with two guidelines where the player drew one.
+	 */
+	UPROPERTY() int32 DerivedGuidelineIndex = INDEX_NONE;
 
 	/**
 	 * True while this edge is still owned by its surface and may be regenerated.

@@ -231,11 +231,21 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 	// Idempotence. Build runs on every edit in the build tool, so a Build that accumulates
 	// is a leak that grows with every mouse move - and one that looks like nothing at all
 	// until the graph is large.
+	//
+	// Counting EDGES alone leaves the orphan sweep completely unpinned: deleting the whole
+	// sweep leaks four nodes per rebuild and every edge assertion stays green. So the node
+	// count is asserted alongside.
 	{
 		int32 Before = 0;
 		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
 		{
 			if (Edge.bAlive) { ++Before; }
+		}
+
+		int32 NodesBefore = 0;
+		for (const FGuidelineNode& Node : Net->GetGuidelineNodes())
+		{
+			if (Node.bAlive) { ++NodesBefore; }
 		}
 
 		FRoadGuidelineBuilder::Build(*Net, Solved);
@@ -246,7 +256,14 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 			if (Edge.bAlive) { ++After; }
 		}
 
+		int32 NodesAfter = 0;
+		for (const FGuidelineNode& Node : Net->GetGuidelineNodes())
+		{
+			if (Node.bAlive) { ++NodesAfter; }
+		}
+
 		TestEqual(TEXT("rebuilding does not accumulate edges"), After, Before);
+		TestEqual(TEXT("rebuilding does not accumulate nodes"), NodesAfter, NodesBefore);
 	}
 
 	// An edited guideline survives regeneration. Without this, a player who redraws a
@@ -281,8 +298,82 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 			{
 				TestFalse(TEXT("still marked as edited"), Survivor->bDerived);
 				TestEqual(TEXT("and keeps its edited value"), Survivor->MaxWingspan, 6543.0);
+
+				// SURVIVING IS NOT ENOUGH. Deriving over a spared edge leaves the player's
+				// line AND a fresh derived one on the same segment - and every turn path
+				// and every route uses the derived one, so the edit does nothing while the
+				// graph grows a coincident pair per edit. Only the count catches that:
+				// every assertion above passes with the duplicate sitting right there.
+				const FRoadSegmentId EditedSegment = Survivor->DerivedFrom;
+				int32 OnThatSegment = 0;
+				for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+				{
+					if (Edge.bAlive && Edge.DerivedFrom == EditedSegment)
+					{
+						++OnThatSegment;
+					}
+				}
+				TestEqual(TEXT("and is not duplicated by a fresh derived edge"),
+					OnThatSegment, 1);
 			}
 		}
+	}
+
+	// The wingspan sentinel. 0 means UNLIMITED, so a turn between an unlimited arm and a
+	// 5200 arm must be 5200 - a naive Min gives 0 and waves a 747 onto a turn that cannot
+	// take it. Every other profile in this file leaves MaxWingspan at 0, so without a real
+	// value on one arm the three-way conditional is never actually evaluated and swapping
+	// it for that Min leaves the whole suite green.
+	{
+		URoadNetwork* Span = NewObject<URoadNetwork>(GetTransientPackage());
+
+		// Built by hand: MakeTransient always produces MaxWingspan == 0 on both arms.
+		auto MakeSpanProfile = [](double MaxWingspan) -> URoadProfile*
+		{
+			URoadProfile* Made = NewObject<URoadProfile>(GetTransientPackage());
+
+			FProfileBand Lane;
+			Lane.Width = 350.0;
+			Lane.Type = ERoadBandType::Lane;
+			Made->Bands.Add(Lane);
+			Made->Bands.Add(Lane);
+
+			FProfileGuideline Centre;
+			Centre.CentreOffset = 0.0;
+			Centre.Class = ETraversalClass::Aircraft;      // same class on both arms, so the
+			Centre.Direction = EGuidelineDir::Bidirectional; // direction filter keeps the turns
+			Centre.Width = 400.0;
+			Centre.MaxWingspan = MaxWingspan;
+			Made->Guidelines.Add(Centre);
+
+			return Made;
+		};
+
+		URoadProfile* Unlimited = MakeSpanProfile(0.0);
+		URoadProfile* Limited   = MakeSpanProfile(5200.0);
+
+		const FRoadNodeId SpanHub  = Span->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId SpanEast = Span->AddNode(FVector2D(12000.0, 0.0));
+		const FRoadNodeId SpanNorth = Span->AddNode(FVector2D(0.0, 12000.0));
+		Span->AddStraightSegment(SpanHub, SpanEast,  Unlimited);
+		Span->AddStraightSegment(SpanHub, SpanNorth, Limited);
+
+		const FRoadSolveResult SpanSolved = FRoadNetworkSolver::SolveAll(*Span);
+		TestEqual(TEXT("the wingspan network solved"), SpanSolved.FailedNodes, 0);
+
+		FRoadGuidelineBuilder::Build(*Span, SpanSolved);
+
+		int32 SpanTurns = 0;
+		for (const FGuidelineEdge& Edge : Span->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && !Edge.DerivedFrom.IsSet())
+			{
+				++SpanTurns;
+				TestEqual(TEXT("an unlimited arm does not widen a limited one"),
+					Edge.MaxWingspan, 5200.0);
+			}
+		}
+		TestEqual(TEXT("both turn paths at the mixed junction were checked"), SpanTurns, 2);
 	}
 
 	return true;
