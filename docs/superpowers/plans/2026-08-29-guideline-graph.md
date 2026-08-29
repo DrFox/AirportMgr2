@@ -1791,9 +1791,15 @@ git commit -m "feat(roadnet): guideline traversal queries honouring access and d
 
 1. **`FGuidelineEdge::Control` is a straight midpoint for segment edges.** Curved segments have a Bezier `Control` of their own that the guideline ignores, so a guideline down a curved taxiway will cut the corner. Correct for the straight segments every current test uses, and wrong the moment curves are drawn — Task 4's `Control` should be derived from the segment's own control point when that matters.
 2. **Turn paths pair guidelines by index.** Arm A's guideline 0 connects to arm B's guideline 0. That is right for uniform profiles and arbitrary where a two-guideline road meets a one-guideline taxiway; `FMath::Min` stops it crashing but does not make it meaningful. Real lane-to-lane pairing needs the offsets compared, not the indices.
-3. **`MaxWingspan` uses a naive `Min`** where `0` means unlimited, so a limited arm meeting an unlimited one yields `0` — unlimited — which is the unsafe direction. Harmless while every profile is `0`; fix before mixed profiles exist.
+3. ~~**`MaxWingspan` uses a naive `Min`**~~ **FIXED during execution** (ruling R2, commit `00fbc4c`), and given coverage by the final fix wave (`81d17ee`). A turn now takes the stricter of the two arms, treating `0` as unlimited.
 4. **Nothing sets `HoldShortFor` or `PriorityOverride`.** Both are fields with no writer until the build tool can author them. They are in Task 2 so the graph does not need reshaping later, not because anything uses them yet.
 5. **`Build` is O(segments x guidelines) plus O(arms²) per node** and rebuilds everything. At parent R5's few-hundred-segment scale that is fine; it is not an incremental rebuild and would need to become one before it runs on every mouse move.
+
+6. **The turn-path direction filter and the mask intersection have no test.** Added by the final fix wave to close review findings I1 and I2, and verified correct by review — but every junction profile in the suite is bidirectional with identical class and width on both arms, so **deleting either fix leaves all tests green**. This is the highest-value follow-up in this list: a one-way-arm junction and a mixed-class junction would pin both, in roughly twenty lines. Until then these two behaviours are write-only.
+
+7. **`Build` churns every guideline handle's generation on every run.** Derived nodes and edges are destroyed and re-added rather than updated in place, so no handle survives a rebuild. Nothing holds a guideline handle across a `Build` today, so this is not a live defect — but spec §4.3's entity anchors resolve to guideline nodes and are required to survive, so **Plan B must either make the builder update in place or stop storing node handles**. Recorded here as an accepted decision rather than left to be discovered.
+
+8. **`FGuidelineNode::bDerived` has no writer yet.** Added so the orphan sweep stops destroying nodes the derivation does not own. Every node on this branch is created by the derivation and takes the default `true`, so the guard protects nobody until a build-tool path places a hand-authored node — at which point it must set `false`.
 
 
 ---
