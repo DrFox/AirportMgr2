@@ -94,9 +94,32 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double StartHeight = 2000.0;
 
-	/** Draw the pending node and a rubber band to the cursor. */
+	/** Draw the rubber band from the pending node to the cursor. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	bool bDrawBuildPreview = true;
+
+	// --- Read side, for ARoadBuildHUD ------------------------------------------------
+	//
+	// The overlay draws what this controller has decided; it must not decide anything
+	// itself. Exposing the decisions rather than the state is what keeps the two from
+	// drifting into disagreeing about which node the next click will use.
+
+	/** The road actor being built into, or null when the level has none. */
+	ARoadNetworkActor* GetTarget() const { return Target; }
+
+	/** Node the next click runs a segment from, or INDEX_NONE when not chaining. */
+	int32 GetPendingNode() const { return PendingNode; }
+
+	double GetPickRadius() const { return PickRadius; }
+
+	/**
+	 * Where the cursor meets the road plane.
+	 *
+	 * An exact ray/plane intersection, not a line trace: design spec section 6.2 states
+	 * the roads carry no collision, on the grounds that the world is flat so the maths
+	 * is exact and generating collision purely to support mouse picking would be waste.
+	 */
+	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -107,15 +130,6 @@ private:
 	void OnBuildClick();
 	void OnCancelChain();
 	void OnClearNetwork();
-
-	/**
-	 * Where the cursor meets the road plane.
-	 *
-	 * An exact ray/plane intersection, not a line trace: design spec section 6.2 states
-	 * the roads carry no collision, on the grounds that the world is flat so the maths
-	 * is exact and generating collision purely to support mouse picking would be waste.
-	 */
-	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

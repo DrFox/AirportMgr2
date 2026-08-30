@@ -1,0 +1,112 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/HUD.h"
+#include "RoadBuildHUD.generated.h"
+
+class ARoadBuildController;
+class ARoadNetworkActor;
+
+/**
+ * Draws the road graph's nodes as a screen-space overlay.
+ *
+ * The graph's joints are the one thing the pavement mesh cannot show you. A junction and
+ * a straight-through node produce the same continuous asphalt, and a node with no
+ * segments yet renders nothing at all - SolveAll skips it - so before this the only
+ * evidence a click had landed was a log line. Segments are deliberately NOT drawn: the
+ * mesh and its centreline already are the segment.
+ *
+ * Screen space rather than world geometry because a marker's job is to stay readable at
+ * any zoom. World-unit markers have to be sized against the road, so they swamp it zoomed
+ * in and fall below a pixel zoomed out - the same sub-pixel trap that made earlier debug
+ * lines indistinguishable from nothing being drawn.
+ *
+ * Set this as HUD Class on the game mode. It reads ARoadBuildController for the target
+ * actor and the pending node, and draws nothing when there is no road actor in the level.
+ */
+UCLASS()
+class AIRPORTMGR_API ARoadBuildHUD : public AHUD
+{
+	GENERATED_BODY()
+
+public:
+	/** Draw a ring at every live node. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	bool bDrawNodes = true;
+
+	/** Ring radius in PIXELS, so it is the same size however far the view is zoomed out. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "1.0"))
+	float NodeRingRadius = 9.0f;
+
+	/** Line thickness of a ring, in pixels. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "0.5"))
+	float NodeRingThickness = 2.0f;
+
+	/** Sides of the polygon a ring is drawn as. Below about 10 it reads as a polygon. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "3", ClampMax = "64"))
+	int32 NodeRingSides = 16;
+
+	/** Label each ring with its node index. Off by default; it clutters a dense graph. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	bool bDrawNodeIndices = false;
+
+	/**
+	 * A node with no incident segments. It draws no pavement whatsoever, so without a
+	 * marker of its own it is invisible - which is what makes the first click of a chain
+	 * look like a no-op.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor StubColour = FLinearColor(1.0f, 0.55f, 0.1f);
+
+	/** One or two incident segments: a dead end, or a straight-through node. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor EndColour = FLinearColor(0.85f, 0.85f, 0.85f);
+
+	/** Three or more incident segments - a real junction, with a solved boundary. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor JunctionColour = FLinearColor(0.15f, 0.85f, 1.0f);
+
+	/** The node the next click runs a segment from. Drawn as a double ring. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor PendingColour = FLinearColor(0.2f, 1.0f, 0.3f);
+
+	/** A node the next click would reuse rather than add to. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor SnapColour = FLinearColor(1.0f, 0.9f, 0.15f);
+
+	/** Draw a crosshair where the cursor meets the road plane. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Cursor")
+	bool bDrawCursor = true;
+
+	/** Half-length of the cursor crosshair's arms, in pixels. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Cursor", meta = (ClampMin = "1.0"))
+	float CursorSize = 7.0f;
+
+	virtual void DrawHUD() override;
+
+private:
+	/** The controller this HUD belongs to, if it is the road build controller. */
+	ARoadBuildController* GetBuildController() const;
+
+	/** SnapTo is the node the next click would reuse, or INDEX_NONE. */
+	void DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode, int32 SnapTo);
+
+	/** Cursor is the road-plane point under the mouse, already known to exist. */
+	void DrawCursor(const ARoadNetworkActor& Target, const FVector2D& Cursor, bool bWouldSnap);
+
+	/** Ring of NodeRingSides segments, centred on a screen position. */
+	void DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness);
+
+	/**
+	 * Screen position of a point on the road plane. False when it cannot be drawn.
+	 *
+	 * Deliberately does NOT reject on depth. Project() signals behind-the-camera through
+	 * the clip W, and clamps Z to exactly zero when it sees W <= 0 - but an orthographic
+	 * projection leaves W at 1 for every point, so that signal never fires there and a
+	 * `Z <= 0` test would instead be reading a depth that is legitimately near zero. The
+	 * ortho build view is the common case, and a guard that quietly drops every node in
+	 * it is worse than no guard: this rejects the clamp sentinel only, and culls the rest
+	 * on screen bounds.
+	 */
+	bool ProjectPlanePoint(const FVector2D& Where, double SurfaceZ, FVector2D& OutScreen) const;
+};

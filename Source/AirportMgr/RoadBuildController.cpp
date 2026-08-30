@@ -347,38 +347,21 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 		return;
 	}
 
-	// Thickness is in world units, so these are sized against the road rather than the
-	// screen: a marker about a quarter of the default road's width, and a band thin
-	// enough not to hide the surface under it. Single digits would be sub-pixel here -
-	// indistinguishable from nothing being drawn at all.
-	constexpr double MarkerRadius = 50.0;
+	// The node markers and the cursor crosshair are ARoadBuildHUD's now - screen space, so
+	// they hold their size through a zoom instead of being sized against the road. What is
+	// left here is the rubber band alone, and only until the ghost drag replaces it: a
+	// line in world units is the right shape for something lying on the road surface.
+	//
+	// Thickness is in world units. Single digits would be sub-pixel across a scene this
+	// large - indistinguishable from nothing being drawn at all.
 	constexpr float LineThickness = 10.0f;
 
-	FVector2D Cursor;
-	const bool bCursorOnPlane = CursorOnRoadPlane(Cursor);
-	const FVector CursorWorld(Cursor.X, Cursor.Y, Target->SurfaceZ);
-
-	// Where the next click would land, and whether it would reuse a node rather than
-	// add one - the difference between continuing a road and closing a junction.
-	if (bCursorOnPlane)
-	{
-		const bool bWouldSnap = Target->FindNodeNear(Cursor, PickRadius) != INDEX_NONE;
-		DrawDebugSphere(GetWorld(), CursorWorld, MarkerRadius, 12,
-			bWouldSnap ? FColor::Yellow : FColor::White, false, -1.0f, 0, LineThickness * 0.25f);
-	}
-
 	FVector PendingWorld;
-	if (NodeWorldLocation(PendingNode, PendingWorld))
+	FVector2D Cursor;
+	if (NodeWorldLocation(PendingNode, PendingWorld) && CursorOnRoadPlane(Cursor))
 	{
-		DrawDebugSphere(GetWorld(), PendingWorld, MarkerRadius * 1.5, 12,
-			FColor::Green, false, -1.0f, 0, LineThickness * 0.25f);
-
-		// The rubber band: the segment this click would create.
-		if (bCursorOnPlane)
-		{
-			DrawDebugLine(GetWorld(), PendingWorld, CursorWorld,
-				FColor::Green, false, -1.0f, 0, LineThickness);
-		}
+		DrawDebugLine(GetWorld(), PendingWorld, FVector(Cursor.X, Cursor.Y, Target->SurfaceZ),
+			FColor::Green, false, -1.0f, 0, LineThickness);
 	}
 }
 
