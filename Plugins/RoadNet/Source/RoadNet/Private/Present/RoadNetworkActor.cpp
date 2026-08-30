@@ -10,6 +10,7 @@
 #include "DynamicMesh/MeshNormals.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "EngineUtils.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Algo/Reverse.h"
@@ -335,6 +336,39 @@ URoadNetwork& ARoadNetworkActor::EnsureNetwork()
 	return *Network;
 }
 
+ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
+{
+	if (World == nullptr)
+	{
+		return nullptr;
+	}
+
+	for (TActorIterator<ARoadNetworkActor> It(World); It; ++It)
+	{
+		return *It;
+	}
+
+	// Not transient, and not RF_Transient: this is the one that will be saved with the
+	// level. An actor spawned with the transient flag would vanish on save and take the
+	// whole airport with it.
+	FActorSpawnParameters Params;
+	Params.Name = TEXT("RoadNetwork");
+	return World->SpawnActor<ARoadNetworkActor>(FVector::ZeroVector, FRotator::ZeroRotator, Params);
+}
+
+URoadEditHistory* ARoadNetworkActor::HistoryForEdit()
+{
+	// The editor's transaction system does the Memento's job already - see the header. In a
+	// game world there is no transaction system, so the history is the only undo there is.
+	const UWorld* World = GetWorld();
+	if (World != nullptr && !World->IsGameWorld())
+	{
+		return nullptr;
+	}
+
+	return &EnsureHistory();
+}
+
 URoadEditHistory& ARoadNetworkActor::EnsureHistory()
 {
 	if (History == nullptr)
@@ -394,7 +428,7 @@ int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 	// than of nothing at all - otherwise the first node of a session is the one edit that
 	// cannot be undone.
 	URoadNetwork& Net = EnsureNetwork();
-	FRoadEditScope Edit(&EnsureHistory(), &Net, TEXT("place node"));
+	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place node"));
 
 	const FRoadNodeId Node = Net.AddNode(Where);
 	if (!Node.IsSet())
@@ -426,7 +460,7 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
 
 	// Created after the guards above, all of which refuse without mutating anything, so a
 	// rejected connection never costs a snapshot.
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("connect nodes"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("connect nodes"));
 
 	// Straight only. The model stores a Bezier control point, but AddSegment still
 	// interpolates its interior samples in a straight line, so a curve authored here
@@ -503,7 +537,7 @@ int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
 		return INDEX_NONE;
 	}
 
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("split segment"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("split segment"));
 
 	const FRoadNodeId Middle = SplitSegmentIn(*Network, Doomed, At);
 	if (!Middle.IsSet())
@@ -747,9 +781,10 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 
 void ARoadNetworkActor::BeginInteractiveEdit(const FString& Label)
 {
-	if (Network != nullptr && !EnsureHistory().IsEditing())
+	URoadEditHistory* Use = HistoryForEdit();
+	if (Network != nullptr && Use != nullptr && !Use->IsEditing())
 	{
-		History->BeginEdit(*Network, Label);
+		Use->BeginEdit(*Network, Label);
 	}
 }
 
@@ -798,10 +833,11 @@ bool ARoadNetworkActor::MoveNode(int32 NodeIndex, FVector2D To)
 
 	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
 	// is one edit of its own. IsEditing is what tells the two apart.
-	const bool bOwnsEdit = !EnsureHistory().IsEditing();
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
 	if (bOwnsEdit)
 	{
-		History->BeginEdit(*Network, TEXT("move node"));
+		Use->BeginEdit(*Network, TEXT("move node"));
 	}
 
 	const bool bMoved = Network->SetNodePosition(Node, To);
@@ -810,11 +846,11 @@ bool ARoadNetworkActor::MoveNode(int32 NodeIndex, FVector2D To)
 	{
 		if (bMoved)
 		{
-			History->CommitEdit();
+			Use->CommitEdit();
 		}
 		else
 		{
-			History->AbandonEdit();
+			Use->AbandonEdit();
 		}
 	}
 
@@ -852,7 +888,7 @@ bool ARoadNetworkActor::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete node"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete node"));
 
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
 	if (!Network->RemoveNode(Node))
@@ -897,7 +933,7 @@ bool ARoadNetworkActor::DeleteSegment(int32 SegmentIndex)
 	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
 	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
 
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete segment"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete segment"));
 
 	if (!Network->RemoveSegment(Segment))
 	{
@@ -1052,7 +1088,7 @@ int32 ARoadNetworkActor::AddApron(const TArray<FVector2D>& Outline)
 		Algo::Reverse(Surface.Outline);
 	}
 
-	FRoadEditScope Edit(&EnsureHistory(), &EnsureNetwork(), TEXT("add apron"));
+	FRoadEditScope Edit(HistoryForEdit(), &EnsureNetwork(), TEXT("add apron"));
 
 	const FApronId Added = Network->AddApron(MoveTemp(Surface));
 	if (!Added.IsSet())
@@ -1077,7 +1113,7 @@ bool ARoadNetworkActor::DeleteApron(int32 ApronIndex)
 	Doomed.Index = ApronIndex;
 	Doomed.Generation = Network->GetAprons()[ApronIndex].Generation;
 
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete apron"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete apron"));
 
 	if (!Network->RemoveApron(Doomed))
 	{
@@ -1198,7 +1234,7 @@ int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
 	}
 
 	URoadNetwork& Net = EnsureNetwork();
-	FRoadEditScope Edit(&EnsureHistory(), &Net, TEXT("place stand"));
+	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
 
 	const FEntityInstanceId Placed = Net.PlaceEntity(StandDefinition, Where, Heading);
 	if (!Placed.IsSet())
@@ -1222,7 +1258,7 @@ bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)
 	Doomed.Index = EntityIndex;
 	Doomed.Generation = Network->GetEntities()[EntityIndex].Generation;
 
-	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete stand"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete stand"));
 
 	if (!Network->RemoveEntity(Doomed))
 	{
@@ -1271,7 +1307,7 @@ void ARoadNetworkActor::ClearNetwork()
 	// and the only one with nothing left on screen to hint at what was lost.
 	if (Network != nullptr)
 	{
-		FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("clear network"));
+		FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("clear network"));
 		Edit.Commit();
 	}
 

@@ -16,6 +16,11 @@
 			"LoadingPhase": "Default"
 		},
 		{
+			"Name": "RoadNetEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		},
+		{
 			"Name": "RoadNetTests",
 			"Type": "DeveloperTool",
 			"LoadingPhase": "Default"
