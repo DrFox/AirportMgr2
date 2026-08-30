@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/RoadDrawTool.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
 
@@ -33,6 +34,8 @@ void ARoadBuildController::BeginPlay()
 		return;
 	}
 
+	Tools.Add(MakeUnique<FRoadDrawTool>());
+
 	if (bStartAbovePlane)
 	{
 		CreateBuildCamera();
@@ -40,7 +43,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. WASD pans, Q/E rotate, wheel zooms."),
+			 "Backspace clears. 1 roads, 2 aprons. WASD pans, Q/E rotate, wheel zooms."),
 		*Target->GetName());
 }
 
@@ -123,7 +126,12 @@ void ARoadBuildController::SetupInputComponent()
 	// work the moment the module compiles, with nothing to author first.
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnPrimaryPressed);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ARoadBuildController::OnPrimaryReleased);
-	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelChain);
+	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelGesture);
+
+	// Numbered tools rather than a third modifier on one button. Drawing a polygon is
+	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
+	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ARoadBuildController::SelectRoadTool);
+	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
@@ -272,36 +280,56 @@ FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
 	return Limits;
 }
 
-ERoadPlacement ARoadBuildController::JudgePlacement(const FRoadSnapResult& Snap) const
+IBuildTool* ARoadBuildController::GetActiveTool() const
 {
-	// Nothing to judge until a chain is in progress: the first click of a road places a
-	// node and builds no segment, and there is no rule a lone node can break.
-	FRoadNodeId From;
-	if (PendingNode == INDEX_NONE || Target == nullptr || Target->Network == nullptr
-		|| !Target->MakeLiveNodeId(PendingNode, From))
-	{
-		return ERoadPlacement::Valid;
-	}
-
-	return RoadPlacement::Validate(*Target->Network, From, Snap, MakePlacementLimits());
+	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
 }
 
-bool ARoadBuildController::GetPendingPlacement(ERoadPlacement& Out) const
-{
-	Out = LastPlacement;
-	return bLastPlacementRelevant;
-}
-
-bool ARoadBuildController::IsDeleteHeld() const
+bool ARoadBuildController::IsRemoveHeld() const
 {
 	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+}
+
+FToolContext ARoadBuildController::MakeToolContext() const
+{
+	FToolContext Context;
+	Context.Target = Target;
+	Context.Limits = MakePlacementLimits();
+	Context.bRemoveModifier = IsRemoveHeld();
+	Context.bInsertModifier =
+		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);
+
+	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
+	// this and the overlay draws it, so what is highlighted and what happens cannot come
+	// from two searches that merely tend to agree.
+	ResolveSnap(Context.Snap);
+	Context.Cursor = Context.Snap.Position;
+	return Context;
+}
+
+void ARoadBuildController::SelectTool(int32 Index)
+{
+	if (!Tools.IsValidIndex(Index) || Index == ActiveTool)
+	{
+		return;
+	}
+
+	// The outgoing tool abandons whatever it had part-drawn. Left alone it would reappear
+	// on the next selection as a chain the player started minutes ago and has forgotten.
+	if (IBuildTool* Outgoing = GetActiveTool())
+	{
+		Outgoing->OnDeactivate(MakeToolContext());
+	}
+
+	ActiveTool = Index;
+	UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Tools[ActiveTool]->GetDisplayName().ToString());
 }
 
 void ARoadBuildController::OnUndo()
 {
 	// Ctrl+Z, read as a chord rather than bound as one: BindKey has no modifier form, and
 	// a bare Z would take back an edit every time the key was brushed.
-	if (Target == nullptr || !IsDeleteHeld())
+	if (Target == nullptr || !IsRemoveHeld())
 	{
 		return;
 	}
@@ -313,17 +341,18 @@ void ARoadBuildController::OnUndo()
 		return;
 	}
 
-	// The node being chained from may not exist any more, and an index outlives the thing
-	// it pointed at. Dropped rather than validated: after an undo the player's next click
-	// should start fresh, not silently continue a road from before it.
-	PendingNode = INDEX_NONE;
-	bPendingNodeCreated = false;
+	// The tool may be part-way through something built on a graph that no longer exists.
+	if (IBuildTool* Tool = GetActiveTool())
+	{
+		Tool->OnDeactivate(MakeToolContext());
+	}
+
 	UE_LOG(LogRoadBuild, Log, TEXT("Undid: %s"), *Label);
 }
 
 void ARoadBuildController::OnRedo()
 {
-	if (Target == nullptr || !IsDeleteHeld())
+	if (Target == nullptr || !IsRemoveHeld())
 	{
 		return;
 	}
@@ -334,70 +363,36 @@ void ARoadBuildController::OnRedo()
 		return;
 	}
 
-	PendingNode = INDEX_NONE;
-}
-
-void ARoadBuildController::OnDeleteClick(const FRoadSnapResult& Snap)
-{
-	switch (Snap.Kind)
+	if (IBuildTool* Tool = GetActiveTool())
 	{
-	case ERoadSnapKind::Node:
-		if (Target->DeleteNode(Snap.Node.Index))
-		{
-			UE_LOG(LogRoadBuild, Log, TEXT("Deleted node %d and its roads"), Snap.Node.Index);
-		}
-		break;
-
-	case ERoadSnapKind::Segment:
-		if (Target->DeleteSegment(Snap.Segment.Index))
-		{
-			UE_LOG(LogRoadBuild, Log, TEXT("Deleted segment %d"), Snap.Segment.Index);
-		}
-		break;
-
-	case ERoadSnapKind::Free:
-	default:
-		// Nothing under the cursor. Silent: a click on open ground meaning nothing is the
-		// correct outcome, not a refusal worth reporting.
-		return;
+		Tool->OnDeactivate(MakeToolContext());
 	}
-
-	// A deletion can remove the node the chain was running from, and can invalidate the
-	// preview's cached start. Both are dropped rather than checked.
-	PendingNode = INDEX_NONE;
-	bPendingNodeCreated = false;
-	Target->RebuildMesh();
 }
 
 void ARoadBuildController::OnPrimaryPressed()
 {
 	bPrimaryDown = true;
 	bDragging = false;
-	DragNode = INDEX_NONE;
 
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	GetMousePosition(MouseX, MouseY);
 	PressScreen = FVector2D(MouseX, MouseY);
-
-	// Only a press that lands on a node can become a drag. Ctrl is delete, and dragging
-	// something you are about to remove would be nonsense.
-	FRoadSnapResult Snap;
-	if (!IsDeleteHeld() && ResolveSnap(Snap) && Snap.Kind == ERoadSnapKind::Node)
-	{
-		DragNode = Snap.Node.Index;
-	}
 }
 
 void ARoadBuildController::UpdateDrag()
 {
-	if (!bPrimaryDown || DragNode == INDEX_NONE || Target == nullptr)
+	IBuildTool* Tool = GetActiveTool();
+	if (!bPrimaryDown || Tool == nullptr || Target == nullptr)
 	{
 		return;
 	}
 
 	if (!bDragging)
 	{
+		// The threshold is the controller's business: it is a fact about the mouse, not
+		// about what dragging means. Without it every slightly imprecise click would be
+		// read as a drag and the click interactions would be impossible to perform.
 		float MouseX = 0.0f;
 		float MouseY = 0.0f;
 		if (!GetMousePosition(MouseX, MouseY)
@@ -406,162 +401,35 @@ void ARoadBuildController::UpdateDrag()
 			return;
 		}
 
-		// One undo step for the whole drag, not one per frame - otherwise undo crawls back
-		// along the path the mouse took.
-		Target->BeginInteractiveEdit(TEXT("move node"));
 		bDragging = true;
+		Tool->OnDragBegin(MakeToolContext());
 	}
 
-	FVector2D Cursor;
-	if (!CursorOnRoadPlane(Cursor))
-	{
-		return;
-	}
-
-	// A refused move simply does not happen, so the node stops following the cursor rather
-	// than dragging a road shorter than the solver can trim.
-	if (Target->MoveNode(DragNode, Cursor))
-	{
-		Target->RebuildMesh();
-	}
+	Tool->OnDrag(MakeToolContext());
 }
 
 void ARoadBuildController::OnPrimaryReleased()
 {
 	const bool bWasDragging = bDragging;
-
 	bPrimaryDown = false;
 	bDragging = false;
-	const int32 Moved = DragNode;
-	DragNode = INDEX_NONE;
 
-	if (bWasDragging && Target != nullptr)
-	{
-		Target->EndInteractiveEdit(/*bKeep*/ true);
-		Target->RebuildMesh();
-		UE_LOG(LogRoadBuild, Log, TEXT("Moved node %d"), Moved);
-		return;
-	}
-
-	// Never travelled: it was a click after all.
-	OnBuildClick();
-}
-
-void ARoadBuildController::OnBuildClick()
-{
-	FRoadSnapResult Snap;
-	if (Target == nullptr || !ResolveSnap(Snap, /*bLogRefusals*/ true))
+	IBuildTool* Tool = GetActiveTool();
+	if (Tool == nullptr || Target == nullptr)
 	{
 		return;
 	}
 
-	// The same click, read through the modifier. The snap chain has already decided WHAT is
-	// under the cursor; delete only chooses what to do about it.
-	if (IsDeleteHeld())
+	// A press that never travelled was a click after all.
+	const FToolContext Context = MakeToolContext();
+	if (bWasDragging)
 	{
-		OnDeleteClick(Snap);
-		return;
+		Tool->OnDragEnd(Context);
 	}
-
-	// Shift on a road inserts a node and stops there. A plain click splits too, but also
-	// starts a chain from the new node - which is right when you are drawing a road INTO
-	// an existing one, and a nuisance when all you wanted was somewhere to drag.
-	if ((IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift))
-		&& Snap.Kind == ERoadSnapKind::Segment)
+	else
 	{
-		const int32 Inserted = Target->SplitSegment(Snap.Segment.Index, Snap.Position);
-		if (Inserted != INDEX_NONE)
-		{
-			Target->RebuildMesh();
-			UE_LOG(LogRoadBuild, Log, TEXT("Inserted node %d into segment %d"),
-				Inserted, Snap.Segment.Index);
-		}
-		return;
+		Tool->OnClick(Context);
 	}
-
-	const FVector2D Where = Snap.Position;
-
-	// Judged BEFORE anything is created. Validating after placing the node would leave a
-	// stray node behind on every refused click - the road would not appear, but the graph
-	// would still have grown.
-	const ERoadPlacement Judgement = JudgePlacement(Snap);
-	if (Judgement != ERoadPlacement::Valid)
-	{
-		UE_LOG(LogRoadBuild, Log, TEXT("Click refused: %s"), RoadPlacement::Describe(Judgement));
-		return;
-	}
-
-	// One decision, taken by the chain, acted on here and drawn by the HUD. The three
-	// outcomes are the whole difference between continuing a road, closing a junction on
-	// an existing node, and cutting a new junction into a road already drawn.
-	int32 Node = INDEX_NONE;
-	bool bCreated = true;
-	switch (Snap.Kind)
-	{
-	case ERoadSnapKind::Node:
-		Node = Snap.Node.Index;
-
-		// Already there. Cancelling must not take it away.
-		bCreated = false;
-		break;
-
-	case ERoadSnapKind::Segment:
-		// PendingNode survives this. The split kills a SEGMENT handle and recycles its
-		// slot, and nodes live in a separate slot array that a split only ever appends
-		// to - so the index being chained from still means the same node.
-		Node = Target->SplitSegment(Snap.Segment.Index, Where);
-		if (Node != INDEX_NONE)
-		{
-			UE_LOG(LogRoadBuild, Log, TEXT("Split segment %d at (%.0f, %.0f) into node %d"),
-				Snap.Segment.Index, Where.X, Where.Y, Node);
-		}
-		break;
-
-	case ERoadSnapKind::Free:
-	default:
-		Node = Target->PlaceNode(Where);
-		break;
-	}
-
-	if (Node == INDEX_NONE)
-	{
-		return;
-	}
-
-	if (PendingNode != INDEX_NONE && PendingNode != Node)
-	{
-		if (!Target->ConnectNodes(PendingNode, Node))
-		{
-			// The facade already logged why. Drop the chain rather than leaving the
-			// player clicking against a connection that will not form.
-			PendingNode = INDEX_NONE;
-			return;
-		}
-
-		// Log both endpoints' world positions, not just the segment's node indices. The
-		// indices alone cannot show whether a click landed where it was aimed, which is
-		// the one question a wrong-looking road actually raises.
-		FVector FromWorld;
-		NodeWorldLocation(PendingNode, FromWorld);
-		UE_LOG(LogRoadBuild, Log, TEXT("Segment %d (%.0f, %.0f) -> %d (%.0f, %.0f), length %.0f"),
-			PendingNode, FromWorld.X, FromWorld.Y, Node, Where.X, Where.Y,
-			FVector2D::Distance(FVector2D(FromWorld.X, FromWorld.Y), Where));
-	}
-	else if (PendingNode == INDEX_NONE)
-	{
-		// A node on its own draws nothing: SolveAll skips a node with no incident
-		// segments, so the first click of a chain would otherwise look like a no-op.
-		// The preview draw is what makes it visible; say so in the log too.
-		UE_LOG(LogRoadBuild, Log,
-			TEXT("Started at node %d (%.0f, %.0f). Click again to run a segment to it."),
-			Node, Where.X, Where.Y);
-	}
-
-	// Chain from the node just placed, so a road is drawn click by click rather than a
-	// pair of clicks per segment.
-	PendingNode = Node;
-	bPendingNodeCreated = bCreated;
-	Target->RebuildMesh();
 }
 
 bool ARoadBuildController::NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const
@@ -597,59 +465,19 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	Target->PlacementLimits = MakePlacementLimits();
 
 	UpdateDrag();
-	if (bDragging)
+
+	if (IBuildTool* Tool = GetActiveTool())
 	{
-		// The ghost previews a road a click would build. Mid-drag there is no such click,
-		// and the road being reshaped is already on screen.
-		Target->HideGhost();
-		return;
+		Tool->Tick(MakeToolContext());
 	}
-
-	FRoadSnapResult Snap;
-	const bool bHaveSnap = ResolveSnap(Snap);
-
-	// Judged every frame whether or not the ghost is drawn: the overlay reports the reason
-	// a click will be refused, and that has to be true even with previews switched off.
-	bLastPlacementRelevant = bHaveSnap && PendingNode != INDEX_NONE;
-	LastPlacement = bHaveSnap ? JudgePlacement(Snap) : ERoadPlacement::Valid;
-
-	// No ghost while a deletion is being aimed: the preview would be offering to build the
-	// very thing the click is about to remove.
-	if (!bDrawBuildPreview || !bLastPlacementRelevant || IsDeleteHeld())
-	{
-		Target->HideGhost();
-		return;
-	}
-
-	// The ghost shows the segment even when it is illegal, coloured rather than withheld.
-	// Hiding it would answer "why can I not build here" with nothing at all.
-	Target->UpdateGhost(PendingNode, Snap, LastPlacement == ERoadPlacement::Valid);
 }
 
-void ARoadBuildController::OnCancelChain()
+void ARoadBuildController::OnCancelGesture()
 {
-	// A chain that placed a node and drew nothing from it leaves that node behind with no
-	// road on it. Removed here rather than swept later: it is this gesture that created it,
-	// and this gesture that is being abandoned.
-	//
-	// Only if the chain created it, and only if it is still bare - a node that picked up a
-	// segment is part of the network now, whoever made it.
-	if (Target != nullptr && bPendingNodeCreated && PendingNode != INDEX_NONE
-		&& Target->Network != nullptr
-		&& Target->Network->GetNodes().IsValidIndex(PendingNode)
-		&& Target->Network->GetNodes()[PendingNode].bAlive
-		&& Target->Network->GetNodes()[PendingNode].Incident.Num() == 0)
+	if (IBuildTool* Tool = GetActiveTool())
 	{
-		if (Target->DeleteNode(PendingNode))
-		{
-			Target->RebuildMesh();
-			UE_LOG(LogRoadBuild, Log, TEXT("Chain cancelled; removed the node it had dropped."));
-		}
+		Tool->OnCancel(MakeToolContext());
 	}
-
-	PendingNode = INDEX_NONE;
-	bPendingNodeCreated = false;
-	UE_LOG(LogRoadBuild, Log, TEXT("Chain ended; the next click starts a new road."));
 }
 
 void ARoadBuildController::OnClearNetwork()
@@ -659,7 +487,12 @@ void ARoadBuildController::OnClearNetwork()
 		return;
 	}
 
-	PendingNode = INDEX_NONE;
+	// The tool may be holding a node from the graph about to be discarded.
+	if (IBuildTool* Tool = GetActiveTool())
+	{
+		Tool->OnDeactivate(MakeToolContext());
+	}
+
 	Target->ClearNetwork();
 	UE_LOG(LogRoadBuild, Log, TEXT("Network cleared."));
 }
