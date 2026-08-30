@@ -14,7 +14,7 @@ class UEntityDefinition;
  * the job they come to do, which is this. Keeping the two apart is what lets this list
  * grow with every vehicle type in the game without pathfinding ever consulting it.
  */
-UENUM()
+UENUM(BlueprintType)
 enum class EServiceRole : uint8
 {
 	Aircraft,
@@ -37,7 +37,7 @@ enum class EServiceRole : uint8
  * All distances are local X or spans in uu, on the same axes as the anchors: +X forward,
  * +Y starboard, origin at whatever the definition measures from.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct ROADNET_API FEntityFootprint
 {
 	GENERATED_BODY()
@@ -63,7 +63,7 @@ struct ROADNET_API FEntityFootprint
 };
 
 /** A connection point between an entity and the guideline graph, in the entity's local space. */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct ROADNET_API FEntityAnchor
 {
 	GENERATED_BODY()

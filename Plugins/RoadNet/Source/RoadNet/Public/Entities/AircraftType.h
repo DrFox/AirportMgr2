@@ -23,7 +23,7 @@
  * practice, not from a manufacturer's ground-handling manual. Door stations are the figures
  * to check first if something looks wrong on a real layout.
  */
-UCLASS()
+UCLASS(BlueprintType)
 class ROADNET_API UAircraftType : public UDataAsset
 {
 	GENERATED_BODY()

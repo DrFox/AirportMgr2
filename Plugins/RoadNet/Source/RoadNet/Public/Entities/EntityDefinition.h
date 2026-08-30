@@ -14,7 +14,7 @@
  * their visuals. Adding a new kind is a new data asset, not new code - which is the whole
  * reason anchors are a general mechanism rather than fields on a stand.
  */
-UCLASS()
+UCLASS(BlueprintType)
 class ROADNET_API UEntityDefinition : public UDataAsset
 {
 	GENERATED_BODY()

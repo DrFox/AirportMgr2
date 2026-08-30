@@ -5,7 +5,7 @@
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
-UENUM()
+UENUM(BlueprintType)
 enum class ERoadBandType : uint8
 {
 	Shoulder,
@@ -14,7 +14,7 @@ enum class ERoadBandType : uint8
 };
 
 /** One lateral band of the cross-section, ordered left to right. */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct ROADNET_API FProfileBand
 {
 	GENERATED_BODY()
@@ -31,7 +31,7 @@ struct ROADNET_API FProfileBand
  * declares exactly one of these; a two-lane road declares two with mirrored offsets and
  * opposing directions, which is the case that recovers what "lane" used to mean.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct ROADNET_API FProfileGuideline
 {
 	GENERATED_BODY()
@@ -53,7 +53,7 @@ struct ROADNET_API FProfileGuideline
  * Shared, immutable cross-section description (Flyweight).
  * A taxiway, runway and service road differ only by their profile asset.
  */
-UCLASS()
+UCLASS(BlueprintType)
 class ROADNET_API URoadProfile : public UDataAsset
 {
 	GENERATED_BODY()

@@ -11,7 +11,7 @@
  * entity anchor, and it is deliberately not this enum - otherwise this grows with every
  * vehicle type in the game and gets consulted by pathfinding for no reason.
  */
-UENUM()
+UENUM(BlueprintType)
 enum class ETraversalClass : uint8
 {
 	Aircraft,
@@ -63,7 +63,7 @@ struct ROADNET_API FTrafficMask
 };
 
 /** Which way a guideline may be traversed. */
-UENUM()
+UENUM(BlueprintType)
 enum class EGuidelineDir : uint8
 {
 	Bidirectional,

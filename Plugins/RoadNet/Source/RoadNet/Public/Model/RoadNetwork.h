@@ -15,7 +15,7 @@ class URoadProfile;
  * Repository owning the road graph. All mutation goes through this type;
  * from Slice 3 onward only IRoadCommand implementations may call the mutators.
  */
-UCLASS()
+UCLASS(BlueprintType)
 class ROADNET_API URoadNetwork : public UObject
 {
 	GENERATED_BODY()

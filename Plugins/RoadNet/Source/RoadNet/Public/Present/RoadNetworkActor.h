@@ -445,7 +445,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Ghost", meta = (ClampMin = "0.0"))
 	double GhostZOffset = 2.0;
 
-	UPROPERTY() TObjectPtr<URoadNetwork> Network;
+	/** The graph this actor owns and renders. Readable from Blueprint; mutate it only
+	 *  through the facade above, so every change stays undoable. */
+	UPROPERTY(BlueprintReadOnly, Category = "RoadNet") TObjectPtr<URoadNetwork> Network;
 
 	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
 	 *  rather than the Command layer design spec 7.3 specifies. */
