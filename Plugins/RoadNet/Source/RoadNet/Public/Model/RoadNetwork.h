@@ -5,6 +5,8 @@
 #include "Model/RoadHandles.h"
 #include "Model/RoadNode.h"
 #include "Model/RoadGuideline.h"
+#include "Model/RoadApron.h"
+#include "Model/RoadEntity.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -45,7 +47,15 @@ public:
 	// the two graphs across two UObjects makes every composite command a two-phase commit
 	// for no gain. Conceptual separation lives in the headers, not in the ownership.
 
-	FGuidelineNodeId AddGuidelineNode(const FVector2D& Position);
+	/**
+	 * A guideline node.
+	 *
+	 * bDerived defaults true, which is right for everything FRoadGuidelineBuilder creates.
+	 * Pass false for a node somebody AUTHORED - an entity anchor, a hold-short position -
+	 * because the builder's orphan sweep removes idle DERIVED nodes, and an authored node
+	 * is idle from the moment it is placed until an edge is drawn to it.
+	 */
+	FGuidelineNodeId AddGuidelineNode(const FVector2D& Position, bool bDerived = true);
 
 	/** Removes the node AND every edge incident to it. */
 	bool RemoveGuidelineNode(FGuidelineNodeId Node);
@@ -58,6 +68,15 @@ public:
 	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
 
+	/**
+	 * Mutable access to a guideline node.
+	 *
+	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldShortFor and
+	 * PriorityOverride live on the NODE, and until the build tool can author them there is
+	 * otherwise no way for anything - including a test - to write either.
+	 */
+	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
+
 	const TArray<FGuidelineNode>& GetGuidelineNodes() const { return GuidelineNodes; }
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 
@@ -68,6 +87,58 @@ public:
 	 * limit and geometry to decide whether to take it.
 	 */
 	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
+
+	// --- Apron surfaces --------------------------------------------------------------
+	// Polygon pavement. Deliberately NOT in the segment list: the junction solver walks
+	// segments, and an apron has nothing for it to solve.
+
+	FApronId AddApron(FApronSurface&& Apron);
+	bool RemoveApron(FApronId Apron);
+	const FApronSurface* GetApron(FApronId Apron) const;
+	const TArray<FApronSurface>& GetAprons() const { return Aprons; }
+
+	// --- Entities --------------------------------------------------------------------
+
+	/**
+	 * Place an entity and resolve every anchor its definition declares to a guideline node
+	 * at that anchor's world pose. Returns an unset handle for a null definition.
+	 */
+	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition, const FVector2D& Position, double Heading);
+
+	/**
+	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
+	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
+	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is
+	 * destructive and returns nothing describing what went with it. A build tool should
+	 * confirm before calling this.
+	 */
+	bool RemoveEntity(FEntityInstanceId Entity);
+
+	const FEntityInstance* GetEntity(FEntityInstanceId Entity) const;
+	const TArray<FEntityInstance>& GetEntities() const { return Entities; }
+
+	/**
+	 * World heading of an entity's anchor in radians: the instance's heading composed with
+	 * the anchor's own.
+	 *
+	 * FGuidelineNode carries no heading, so the resolved node cannot answer this and spec
+	 * section 6's stop-position marking would have nowhere to learn which way an aircraft
+	 * parks. Composed on demand rather than stored, so it cannot drift from the instance's
+	 * pose. Returns false and leaves OutHeading untouched for an unknown entity, a null
+	 * definition, or an anchor index out of range.
+	 */
+	bool GetAnchorWorldHeading(FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const;
+
+	/**
+	 * The guideline node an entity's Nth anchor resolved to, bounds-checked against BOTH
+	 * arrays.
+	 *
+	 * ResolvedAnchors is parallel to the definition's Anchors by index and nothing enforces
+	 * it: a definition asset that gains an anchor after instances exist leaves every
+	 * instance one short, and the natural pattern - iterate the definition, index the
+	 * instance - then reads out of bounds. Returns nullptr instead of crashing.
+	 */
+	const FGuidelineNode* GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const;
 
 private:
 	void SortIncident(FRoadNodeId Node);
@@ -81,4 +152,10 @@ private:
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
 	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
 	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
+
+	UPROPERTY() TArray<FApronSurface> Aprons;
+	UPROPERTY() TArray<int32>         ApronFreeList;
+
+	UPROPERTY() TArray<FEntityInstance> Entities;
+	UPROPERTY() TArray<int32>           EntityFreeList;
 };

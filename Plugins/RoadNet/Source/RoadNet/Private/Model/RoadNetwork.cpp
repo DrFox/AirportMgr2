@@ -1,6 +1,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
+#include "Entities/EntityDefinition.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -151,10 +152,11 @@ void URoadNetwork::SortIncident(FRoadNodeId NodeId)
 	});
 }
 
-FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position)
+FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position, bool bDerived)
 {
 	FGuidelineNode Node;
 	Node.Position = Position;
+	Node.bDerived = bDerived;
 	return RoadSlot::Add<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, MoveTemp(Node));
 }
 
@@ -241,6 +243,11 @@ FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
 }
 
+FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
+{
+	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
+}
+
 TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 	FGuidelineNodeId Node, ETraversalClass Class) const
 {
@@ -279,4 +286,114 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 	}
 
 	return Out;
+}
+
+FApronId URoadNetwork::AddApron(FApronSurface&& Apron)
+{
+	return RoadSlot::Add<FApronId>(Aprons, ApronFreeList, MoveTemp(Apron));
+}
+
+bool URoadNetwork::RemoveApron(FApronId Apron)
+{
+	return RoadSlot::Remove<FApronId>(Aprons, ApronFreeList, Apron);
+}
+
+const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
+{
+	return RoadSlot::Get<FApronId>(Aprons, Apron);
+}
+
+FEntityInstanceId URoadNetwork::PlaceEntity(
+	UEntityDefinition* Definition, const FVector2D& Position, double Heading)
+{
+	if (Definition == nullptr)
+	{
+		return FEntityInstanceId();
+	}
+
+	FEntityInstance Instance;
+	Instance.Position = Position;
+	Instance.Heading = Heading;
+	Instance.Definition = Definition;
+	Instance.ResolvedAnchors.Reserve(Definition->Anchors.Num());
+
+	const double Cos = FMath::Cos(Heading);
+	const double Sin = FMath::Sin(Heading);
+
+	for (const FEntityAnchor& Anchor : Definition->Anchors)
+	{
+		// Local to world. Rotating by the entity's heading is what makes an anchor mean
+		// "off the aircraft's left wing" rather than "somewhere north of here".
+		const FVector2D World(
+			Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
+			Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
+
+		// NON-DERIVED. See the header: an anchor node has no incident edges until a
+		// guideline is drawn to it, so a derived one would be swept by the next rebuild
+		// and this handle would dangle.
+		Instance.ResolvedAnchors.Add(AddGuidelineNode(World, /*bDerived=*/false));
+	}
+
+	return RoadSlot::Add<FEntityInstanceId>(Entities, EntityFreeList, MoveTemp(Instance));
+}
+
+bool URoadNetwork::RemoveEntity(FEntityInstanceId Entity)
+{
+	const FEntityInstance* Found = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// Copy before removing anything: RemoveGuidelineNode does not touch this array, but
+	// the slot's payload is not ours to read once the entity is freed.
+	const TArray<FGuidelineNodeId> Owned = Found->ResolvedAnchors;
+	for (const FGuidelineNodeId NodeId : Owned)
+	{
+		RemoveGuidelineNode(NodeId);
+	}
+
+	return RoadSlot::Remove<FEntityInstanceId>(Entities, EntityFreeList, Entity);
+}
+
+const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
+{
+	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+}
+
+bool URoadNetwork::GetAnchorWorldHeading(
+	FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const
+{
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || Instance->Definition == nullptr)
+	{
+		return false;
+	}
+
+	// Bounds-checked against the DEFINITION: LocalHeading lives on the anchor, not on the
+	// resolved node, so this is the array that has to be in range.
+	if (!Instance->Definition->Anchors.IsValidIndex(AnchorIndex))
+	{
+		return false;
+	}
+
+	// Composed, never stored. A stored world heading would go stale the moment the
+	// instance is turned, and nothing here would notice.
+	const FEntityAnchor& Anchor = Instance->Definition->Anchors[AnchorIndex];
+	OutHeading = Instance->Heading + Anchor.LocalHeading;
+	return true;
+}
+
+const FGuidelineNode* URoadNetwork::GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const
+{
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr || !Instance->ResolvedAnchors.IsValidIndex(AnchorIndex))
+	{
+		// Deliberately the INSTANCE's array, not the definition's: a definition that gained
+		// an anchor after this instance was placed is longer, and it is this array the
+		// caller is about to read.
+		return nullptr;
+	}
+
+	return GetGuidelineNode(Instance->ResolvedAnchors[AnchorIndex]);
 }
