@@ -29,4 +29,23 @@ public:
 	 * origin and the servicing vehicles stand off to either side and behind.
 	 */
 	static UEntityDefinition* MakeStandTransient();
+
+	/**
+	 * Fill Definition with the Code C contact stand layout, replacing whatever it held.
+	 *
+	 * Shared by MakeStandTransient and the commandlet that authors the DA_Stand_CodeC data
+	 * asset, so the tested layout and the shipped one are the same numbers rather than two
+	 * transcriptions of them.
+	 */
+	static void BuildCodeCStand(UEntityDefinition* Definition);
+
+	/**
+	 * True when every anchor carries a non-empty id and no two share one.
+	 *
+	 * Lookup is by id, so an unnamed or duplicated one makes two anchors indistinguishable
+	 * and a query silently returns whichever comes first - which sends the fuel truck to
+	 * the belt loader's position and reports success. PlaceEntity checks this and complains
+	 * loudly rather than refusing, so a half-authored asset is visible instead of fatal.
+	 */
+	static bool HasUsableAnchorIds(const UEntityDefinition* Definition);
 };

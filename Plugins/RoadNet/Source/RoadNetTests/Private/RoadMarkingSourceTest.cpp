@@ -160,15 +160,20 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 
 			TestTrue(TEXT("the stand declares an aircraft stop position"), StopIndex != INDEX_NONE);
 
-			// Resolved through GetAnchorNode: this loop walked the DEFINITION, and indexing
-			// the instance's parallel array with a definition index is the out-of-bounds
-			// read a definition asset that gained an anchor produces.
-			TestNotNull(TEXT("the stop position has a source, a live node"),
-				Net->GetAnchorNode(Gate, StopIndex));
+			// Resolved by ID. This loop walked the DEFINITION, and an instance placed before
+			// the definition gained an anchor carries fewer - so a definition index into the
+			// instance was an out-of-bounds read reached by ordinary authoring. By id the
+			// same case is a miss, which is an answer rather than a crash.
+			if (Stand->Anchors.IsValidIndex(StopIndex))
+			{
+				TestNotNull(TEXT("the stop position has a source, a live node"),
+					Net->GetAnchorNode(Gate, Stand->Anchors[StopIndex].Id));
+			}
 
-			// And the safe accessor really is bounds-checked, not merely a rename.
-			TestNull(TEXT("one anchor past the end resolves to nothing"),
-				Net->GetAnchorNode(Gate, Stand->Anchors.Num()));
+			// And an id that names nothing resolves to nothing, rather than to whatever
+			// happens to sit at that slot.
+			TestNull(TEXT("an id the stand does not declare resolves to nothing"),
+				Net->GetAnchorNode(Gate, FName(TEXT("NoSuchAnchor"))));
 		}
 	}
 

@@ -3,6 +3,10 @@
 #include "Profiles/RoadProfile.h"
 #include "Entities/EntityDefinition.h"
 
+// Named apart from RoadNetModule.cpp's LogRoadNet on purpose: both are file-static, and a
+// unity build merges the translation units into one where the two definitions collide.
+DEFINE_LOG_CATEGORY_STATIC(LogRoadModel, Log, All);
+
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
 	FRoadNode Node;
@@ -357,6 +361,18 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 		return FEntityInstanceId();
 	}
 
+	// Complained about, not refused: a half-authored definition should be visible in the
+	// log rather than fatal at the call site. But it IS a real fault - lookup is by id, so
+	// two anchors sharing one are indistinguishable and a query for either returns the
+	// first, which sends the fuel truck to the belt loader and reports success.
+	if (!UEntityDefinition::HasUsableAnchorIds(Definition))
+	{
+		UE_LOG(LogRoadModel, Error,
+			TEXT("PlaceEntity: %s has anchors with empty or duplicate ids. Anchor lookups on "
+				 "this entity will be ambiguous."),
+			*Definition->GetName());
+	}
+
 	FEntityInstance Instance;
 	Instance.Position = Position;
 	Instance.Heading = Heading;
@@ -377,7 +393,10 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 		// NON-DERIVED. See the header: an anchor node has no incident edges until a
 		// guideline is drawn to it, so a derived one would be swept by the next rebuild
 		// and this handle would dangle.
-		Instance.ResolvedAnchors.Add(AddGuidelineNode(World, /*bDerived=*/false));
+		FResolvedAnchor Resolved;
+		Resolved.Id = Anchor.Id;
+		Resolved.Node = AddGuidelineNode(World, /*bDerived=*/false);
+		Instance.ResolvedAnchors.Add(Resolved);
 	}
 
 	return RoadSlot::Add<FEntityInstanceId>(Entities, EntityFreeList, MoveTemp(Instance));
@@ -393,10 +412,10 @@ bool URoadNetwork::RemoveEntity(FEntityInstanceId Entity)
 
 	// Copy before removing anything: RemoveGuidelineNode does not touch this array, but
 	// the slot's payload is not ours to read once the entity is freed.
-	const TArray<FGuidelineNodeId> Owned = Found->ResolvedAnchors;
-	for (const FGuidelineNodeId NodeId : Owned)
+	const TArray<FResolvedAnchor> Owned = Found->ResolvedAnchors;
+	for (const FResolvedAnchor& Anchor : Owned)
 	{
-		RemoveGuidelineNode(NodeId);
+		RemoveGuidelineNode(Anchor.Node);
 	}
 
 	return RoadSlot::Remove<FEntityInstanceId>(Entities, EntityFreeList, Entity);
@@ -407,8 +426,29 @@ const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
 	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 }
 
+const FResolvedAnchor* URoadNetwork::FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const
+{
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return nullptr;
+	}
+
+	// A linear scan over a handful of anchors. A map keyed by id would be faster and would
+	// have to be kept in step with the array, which is the class of duplication this change
+	// exists to remove.
+	for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+	{
+		if (Resolved.Id == AnchorId)
+		{
+			return &Resolved;
+		}
+	}
+	return nullptr;
+}
+
 bool URoadNetwork::GetAnchorWorldHeading(
-	FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const
+	FEntityInstanceId Entity, FName AnchorId, double& OutHeading) const
 {
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
 	if (Instance == nullptr || Instance->Definition == nullptr)
@@ -416,30 +456,49 @@ bool URoadNetwork::GetAnchorWorldHeading(
 		return false;
 	}
 
-	// Bounds-checked against the DEFINITION: LocalHeading lives on the anchor, not on the
-	// resolved node, so this is the array that has to be in range.
-	if (!Instance->Definition->Anchors.IsValidIndex(AnchorIndex))
+	// Read from the DEFINITION, by id: LocalHeading lives on the anchor rather than on the
+	// resolved node, and reading it from the asset means an anchor re-aimed there is picked
+	// up by instances already placed instead of them keeping a stale copy.
+	for (const FEntityAnchor& Anchor : Instance->Definition->Anchors)
 	{
-		return false;
+		if (Anchor.Id == AnchorId)
+		{
+			// Composed, never stored. A stored world heading would go stale the moment the
+			// instance is turned, and nothing here would notice.
+			OutHeading = Instance->Heading + Anchor.LocalHeading;
+			return true;
+		}
 	}
 
-	// Composed, never stored. A stored world heading would go stale the moment the
-	// instance is turned, and nothing here would notice.
-	const FEntityAnchor& Anchor = Instance->Definition->Anchors[AnchorIndex];
-	OutHeading = Instance->Heading + Anchor.LocalHeading;
-	return true;
+	return false;
 }
 
-const FGuidelineNode* URoadNetwork::GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const
+const FGuidelineNode* URoadNetwork::GetAnchorNode(FEntityInstanceId Entity, FName AnchorId) const
 {
+	const FResolvedAnchor* Resolved = FindResolvedAnchor(Entity, AnchorId);
+	return Resolved != nullptr ? GetGuidelineNode(Resolved->Node) : nullptr;
+}
+
+TArray<FName> URoadNetwork::GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const
+{
+	TArray<FName> Found;
+
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
-	if (Instance == nullptr || !Instance->ResolvedAnchors.IsValidIndex(AnchorIndex))
+	if (Instance == nullptr || Instance->Definition == nullptr)
 	{
-		// Deliberately the INSTANCE's array, not the definition's: a definition that gained
-		// an anchor after this instance was placed is longer, and it is this array the
-		// caller is about to read.
-		return nullptr;
+		return Found;
 	}
 
-	return GetGuidelineNode(Instance->ResolvedAnchors[AnchorIndex]);
+	for (const FEntityAnchor& Anchor : Instance->Definition->Anchors)
+	{
+		// Only ids this INSTANCE actually resolved. A definition that gained an anchor
+		// after placement would otherwise hand back an id leading nowhere, which is the
+		// same stale-lookup failure in a politer disguise.
+		if (Anchor.Role == Role && FindResolvedAnchor(Entity, Anchor.Id) != nullptr)
+		{
+			Found.Add(Anchor.Id);
+		}
+	}
+	return Found;
 }
+

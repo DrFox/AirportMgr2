@@ -138,21 +138,39 @@ public:
 	 * FGuidelineNode carries no heading, so the resolved node cannot answer this and spec
 	 * section 6's stop-position marking would have nowhere to learn which way an aircraft
 	 * parks. Composed on demand rather than stored, so it cannot drift from the instance's
-	 * pose. Returns false and leaves OutHeading untouched for an unknown entity, a null
-	 * definition, or an anchor index out of range.
+	 * pose - and read from the DEFINITION by id, so editing an anchor's heading in the
+	 * asset is picked up by instances already placed.
+	 *
+	 * Returns false and leaves OutHeading untouched when the entity, the definition or the
+	 * id is unknown.
+	 *
+	 * NOTE the sum is not wrapped: 7*PI/4 + PI/2 gives 9*PI/4, not PI/4. Every consumer
+	 * feeds it to trigonometry, where it makes no difference. A caller comparing two
+	 * headings for equality must wrap first.
 	 */
-	bool GetAnchorWorldHeading(FEntityInstanceId Entity, int32 AnchorIndex, double& OutHeading) const;
+	bool GetAnchorWorldHeading(FEntityInstanceId Entity, FName AnchorId, double& OutHeading) const;
 
 	/**
-	 * The guideline node an entity's Nth anchor resolved to, bounds-checked against BOTH
-	 * arrays.
+	 * The guideline node an entity's named anchor resolved to, or null.
 	 *
-	 * ResolvedAnchors is parallel to the definition's Anchors by index and nothing enforces
-	 * it: a definition asset that gains an anchor after instances exist leaves every
-	 * instance one short, and the natural pattern - iterate the definition, index the
-	 * instance - then reads out of bounds. Returns nullptr instead of crashing.
+	 * By ID, never by index. An instance placed before its definition gained an anchor
+	 * simply has no entry for that id and this returns null - a correct answer to "where
+	 * does the new cart park on this old stand", where indexing read out of bounds.
 	 */
-	const FGuidelineNode* GetAnchorNode(FEntityInstanceId Entity, int32 AnchorIndex) const;
+	const FGuidelineNode* GetAnchorNode(FEntityInstanceId Entity, FName AnchorId) const;
+
+	/** The resolved anchor for an id, or null. For callers needing the handle itself. */
+	const FResolvedAnchor* FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const;
+
+	/**
+	 * Ids of an entity's anchors serving a role, in definition order.
+	 *
+	 * Role is a CATEGORY, not an identity - a stand has two belt loaders - so this answers
+	 * "where can baggage be worked" and the caller picks. Only ids the instance actually
+	 * resolved are returned, so a definition edited after placement cannot hand back an id
+	 * that leads nowhere.
+	 */
+	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 
 private:
 	void SortIncident(FRoadNodeId Node);
