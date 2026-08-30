@@ -3,6 +3,9 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Model/RoadNetwork.h"
+#include "Entities/AircraftType.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
@@ -34,6 +37,11 @@ void ARoadBuildHUD::DrawHUD()
 	if (bDrawNodes && Target->Network != nullptr)
 	{
 		DrawNodes(*Target);
+	}
+
+	if (bDrawStands && Target->Network != nullptr)
+	{
+		DrawStands(*Target);
 	}
 
 	// The tool describes what it would do; this class decides what that looks like. The
@@ -181,6 +189,116 @@ void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target)
 				static_cast<float>(Screen.X) + NodeRingRadius + 3.0f,
 				static_cast<float>(Screen.Y) - NodeRingRadius,
 				GEngine->GetSmallFont());
+		}
+	}
+}
+
+void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
+{
+	for (const FEntityInstance& Entity : Target.Network->GetEntities())
+	{
+		if (!Entity.bAlive)
+		{
+			continue;
+		}
+
+		FVector2D StopScreen;
+		const bool bStopVisible = ProjectPlanePoint(Entity.Position, Target.SurfaceZ, StopScreen);
+		if (bStopVisible)
+		{
+			DrawRing(StopScreen, NodeRingRadius, StandColour, NodeRingThickness);
+			DrawRing(StopScreen, NodeRingRadius * 1.6f, StandColour, NodeRingThickness);
+		}
+
+		// The aircraft's plan extent, so the anchors have something to be read against and
+		// the heading is unmistakable. A stand aimed 180 degrees out looks identical to a
+		// correct one until something tries to taxi onto it.
+		//
+		// Dimensions come from the DEFINITION. An overlay carrying its own would be a
+		// second opinion about how big an A320 is.
+		const UAircraftType* Design =
+			Entity.Definition != nullptr ? Entity.Definition->DesignAircraft.Get() : nullptr;
+		if (Design != nullptr)
+		{
+			TArray<FVector2D> Outline;
+			UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
+
+			const double Cos = FMath::Cos(Entity.Heading);
+			const double Sin = FMath::Sin(Entity.Heading);
+
+			for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
+			{
+				auto ToWorld = [&Entity, Cos, Sin](const FVector2D& Local)
+				{
+					return FVector2D(
+						Entity.Position.X + Local.X * Cos - Local.Y * Sin,
+						Entity.Position.Y + Local.X * Sin + Local.Y * Cos);
+				};
+
+				FVector2D FromScreen;
+				FVector2D ToScreen;
+				if (ProjectPlanePoint(ToWorld(Outline[Index]), Target.SurfaceZ, FromScreen)
+					&& ProjectPlanePoint(ToWorld(Outline[Index + 1]), Target.SurfaceZ, ToScreen))
+				{
+					DrawLine(
+						static_cast<float>(FromScreen.X), static_cast<float>(FromScreen.Y),
+						static_cast<float>(ToScreen.X), static_cast<float>(ToScreen.Y),
+						StandColour, NodeRingThickness);
+				}
+			}
+		}
+
+		// Where the design aircraft would need each service. Recomputed rather than stored,
+		// because these belong to whatever is PARKED here - today the type the stand was
+		// sized for, tomorrow whatever actually occupies it - and a stored copy would be a
+		// claim about an aircraft that has not arrived.
+		if (Design != nullptr)
+		{
+			const double Cos = FMath::Cos(Entity.Heading);
+			const double Sin = FMath::Sin(Entity.Heading);
+
+			for (const FEntityAnchor& Point : Design->ServicePoints)
+			{
+				const FVector2D World(
+					Entity.Position.X + Point.LocalPosition.X * Cos - Point.LocalPosition.Y * Sin,
+					Entity.Position.Y + Point.LocalPosition.X * Sin + Point.LocalPosition.Y * Cos);
+
+				FVector2D Screen;
+				if (ProjectPlanePoint(World, Target.SurfaceZ, Screen))
+				{
+					DrawRing(Screen, ServiceAnchorRadius * 0.7f, StandColour, NodeRingThickness);
+				}
+			}
+		}
+
+		// The stand's FIXTURES, read from the INSTANCE rather than recomputed from the
+		// definition.
+		// These are the guideline nodes vehicles will actually route to; drawing the
+		// definition's local positions transformed again would be a second opinion about
+		// where they are, and the two could disagree without anything reporting it.
+		for (const FResolvedAnchor& Anchor : Entity.ResolvedAnchors)
+		{
+			const FGuidelineNode* Node = Target.Network->GetGuidelineNode(Anchor.Node);
+			if (Node == nullptr)
+			{
+				continue;
+			}
+
+			FVector2D Screen;
+			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen))
+			{
+				continue;
+			}
+
+			DrawRing(Screen, ServiceAnchorRadius, ServiceAnchorColour, NodeRingThickness);
+
+			if (bDrawAnchorIds && GEngine != nullptr)
+			{
+				DrawText(Anchor.Id.ToString(), ServiceAnchorColour,
+					static_cast<float>(Screen.X) + ServiceAnchorRadius + 3.0f,
+					static_cast<float>(Screen.Y) - ServiceAnchorRadius,
+					GEngine->GetSmallFont());
+			}
 		}
 	}
 }

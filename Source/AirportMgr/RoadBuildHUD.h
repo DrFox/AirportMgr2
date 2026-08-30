@@ -67,6 +67,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
 	FLinearColor JunctionColour = FLinearColor(0.15f, 0.85f, 1.0f);
 
+	/** Draw a marker at every placed stand's anchors, and the way it faces. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	bool bDrawStands = true;
+
+	/** The aircraft stop position - the thing a stand IS. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	FLinearColor StandColour = FLinearColor(0.25f, 0.7f, 1.0f);
+
+	/** Where the service vehicles park. Consequences of where the aircraft sits. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	FLinearColor ServiceAnchorColour = FLinearColor(0.9f, 0.6f, 0.2f);
+
+	/** Radius of a service anchor's ring, in pixels. Smaller than a road node's. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands", meta = (ClampMin = "1.0"))
+	float ServiceAnchorRadius = 5.0f;
+
+	/** Label each anchor with its id. Off by default; a stand carries eight of them. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	bool bDrawAnchorIds = false;
+
 	// --- Preview palette --------------------------------------------------------------
 	//
 	// One colour per EPreviewStyle. A tool names a MEANING and this maps it to a look, so
@@ -119,6 +139,9 @@ private:
 
 	/** Rings for every live node, coloured by degree. This class's own view of the model. */
 	void DrawNodes(const ARoadNetworkActor& Target);
+
+	/** Placed stands: the stop position, its anchors, and which way it faces. */
+	void DrawStands(const ARoadNetworkActor& Target);
 
 	FLinearColor StyleColour(EPreviewStyle Style) const;
 

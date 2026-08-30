@@ -221,6 +221,7 @@ private:
 	void SelectTool(int32 Index);
 	void SelectRoadTool()  { SelectTool(0); }
 	void SelectApronTool() { SelectTool(1); }
+	void SelectStandTool() { SelectTool(2); }
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

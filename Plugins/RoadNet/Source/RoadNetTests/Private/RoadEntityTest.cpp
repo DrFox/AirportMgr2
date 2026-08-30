@@ -43,20 +43,18 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		// Every anchor became a real guideline node, at the anchor's WORLD pose.
 		//
-		// Resolved through GetAnchorNode rather than by indexing ResolvedAnchors directly.
-		// This loop walks the DEFINITION, and the instance's parallel array can legally be
-		// shorter than it - a saved definition asset that gains an anchor leaves every
-		// already-placed instance one short - so the direct index is an out-of-bounds read
-		// reached by ordinary authoring, not by a bug.
-		for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
+		// Walked by ID. This loop iterates the DEFINITION, and an instance placed before the
+		// definition gained an anchor legitimately carries fewer - so an index into the
+		// instance would be an out-of-bounds read reached by ordinary authoring rather than
+		// by a bug. By id the same situation is simply a miss.
+		for (const FEntityAnchor& Anchor : Stand->Anchors)
 		{
-			const FGuidelineNode* Node = Net->GetAnchorNode(Placed, Index);
+			const FGuidelineNode* Node = Net->GetAnchorNode(Placed, Anchor.Id);
 			if (!TestNotNull(TEXT("an anchor resolved to a live node"), Node))
 			{
 				continue;
 			}
 
-			const FEntityAnchor& Anchor = Stand->Anchors[Index];
 			const double Cos = FMath::Cos(Facing);
 			const double Sin = FMath::Sin(Facing);
 			const FVector2D Expected(
@@ -87,30 +85,58 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Rotated = Net->GetEntity(Placed);
 		if (TestNotNull(TEXT("the entity resolves for the rotation check"), Rotated))
 		{
-			int32 TugIndex = INDEX_NONE;
-			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
-			{
-				if (Stand->Anchors[Index].Role == EServiceRole::Tug)
-				{
-					TugIndex = Index;
-				}
-			}
+			// Purpose-built rather than borrowed from the shipped stand. No GROUND fixture
+			// sits on the centreline any more - the aircraft stop position is the stand's
+			// own pose, not an anchor - and this is testing the rotation, not the layout.
+			UEntityDefinition* Straight = NewObject<UEntityDefinition>(GetTransientPackage());
+			FEntityAnchor Ahead;
+			Ahead.Id = TEXT("Ahead");
+			Ahead.LocalPosition = FVector2D(1500.0, 0.0);
+			Ahead.Role = EServiceRole::Tug;
+			Straight->Anchors.Add(Ahead);
 
-			if (TestTrue(TEXT("the stand has a tug anchor"), TugIndex != INDEX_NONE))
+			const FEntityInstanceId Aimed = Net->PlaceEntity(Straight, Where, Facing);
+			const FGuidelineNode* AheadNode = Net->GetAnchorNode(Aimed, FName(TEXT("Ahead")));
+			if (TestNotNull(TEXT("the straight-ahead anchor resolved"), AheadNode))
 			{
-				// Straight ahead in local space, so rotation is the only thing under test.
-				TestEqual(TEXT("the tug anchor is straight ahead, nothing lateral"),
-					Stand->Anchors[TugIndex].LocalPosition.Y, 0.0);
-
-				const FGuidelineNode* TugNode = Net->GetAnchorNode(Placed, TugIndex);
-				if (TestNotNull(TEXT("the tug anchor resolved"), TugNode))
-				{
-					const double Ahead = Stand->Anchors[TugIndex].LocalPosition.X;
-					TestTrue(TEXT("facing +Y, straight ahead lands due north of the stand"),
-						TugNode->Position.Equals(FVector2D(Where.X, Where.Y + Ahead), 0.01));
-				}
+				TestTrue(TEXT("facing +Y, straight ahead lands due north of the stand"),
+					AheadNode->Position.Equals(FVector2D(Where.X, Where.Y + 1500.0), 0.01));
 			}
 		}
+	}
+
+	// THE INVARIANT THAT WAS RETIRED.
+	//
+	// A definition that gains an anchor after instances exist is ordinary designer work, and
+	// it used to make the natural pattern - iterate the definition, index the instance -
+	// read out of bounds. Verified by doing exactly that: add an anchor to the asset AFTER
+	// placing, then look every id up again.
+	{
+		FEntityAnchor Late;
+		Late.Id = TEXT("DeIcer");
+		Late.LocalPosition = FVector2D(-3000.0, 900.0);
+		Late.Role = EServiceRole::Fuel;
+		Stand->Anchors.Add(Late);
+
+		// The instance predates it and cannot know where the de-icer parks. A MISS is the
+		// correct answer; an index would have read past the end of the array to get here.
+		TestNull(TEXT("an anchor added after placement does not resolve on that instance"),
+			Net->GetAnchorNode(Placed, FName(TEXT("DeIcer"))));
+
+		// And every anchor that DID exist still resolves - the new one shifted nothing.
+		TestNotNull(TEXT("the hydrant fixture still resolves"),
+			Net->GetAnchorNode(Placed, FName(TEXT("HydrantPit"))));
+		TestNotNull(TEXT("the aft equipment box still resolves"),
+			Net->GetAnchorNode(Placed, FName(TEXT("EquipmentAft"))));
+
+		// The role query must not offer an id the instance cannot follow.
+		for (const FName Id : Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel))
+		{
+			TestNotNull(TEXT("every id a role query returns resolves to a node"),
+				Net->GetAnchorNode(Placed, Id));
+		}
+
+		Stand->Anchors.Pop();
 	}
 
 	// Anchors must be distinguishable by role, or "drive to the fuel position" has no
@@ -121,20 +147,38 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
 		if (TestNotNull(TEXT("the entity still resolves"), Instance))
 		{
-			int32 AircraftAnchors = 0;
-			int32 FuelAnchors = 0;
-			int32 RolesThatResolve = 0;
-			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
-			{
-				if (Stand->Anchors[Index].Role == EServiceRole::Aircraft) { ++AircraftAnchors; }
-				if (Stand->Anchors[Index].Role == EServiceRole::Fuel)     { ++FuelAnchors; }
+			// The aircraft stop position is the stand's own POSE, not a fixture: there is
+			// nothing dug into the concrete at the nose gear mark except paint.
+			TestEqual(TEXT("no ground fixture claims to be the aircraft"),
+				Net->GetAnchorIdsForRole(Placed, EServiceRole::Aircraft).Num(), 0);
+			TestTrue(TEXT("but the stand does declare it can take one"),
+				Stand->Provides(EServiceRole::Aircraft));
 
-				if (Net->GetAnchorNode(Placed, Index) != nullptr) { ++RolesThatResolve; }
+			TestEqual(TEXT("one hydrant pit"),
+				Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
+
+			// Role is a CATEGORY, not an identity, and this is the case that proves it: a
+			// Code C stand paints two equipment boxes, so asking for "the baggage position"
+			// by role alone has two answers and any scheme keyed on role must pick one.
+			TestEqual(TEXT("and TWO equipment boxes, fore and aft"),
+				Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 2);
+
+			int32 IdsThatResolve = 0;
+			for (const FEntityAnchor& Anchor : Stand->Anchors)
+			{
+				if (Net->GetAnchorNode(Placed, Anchor.Id) != nullptr) { ++IdsThatResolve; }
 			}
-			TestEqual(TEXT("a stand has exactly one aircraft stop position"), AircraftAnchors, 1);
-			TestEqual(TEXT("and one fuel position"), FuelAnchors, 1);
-			TestEqual(TEXT("and every role the definition names resolves on the instance"),
-				RolesThatResolve, Stand->Anchors.Num());
+			TestEqual(TEXT("and every anchor the definition names resolves on the instance"),
+				IdsThatResolve, Stand->Anchors.Num());
+
+			// Every id is distinct, or lookup by id is no better than lookup by index.
+			TSet<FName> Seen;
+			for (const FEntityAnchor& Anchor : Stand->Anchors)
+			{
+				TestFalse(TEXT("anchor ids are unique within a definition"), Seen.Contains(Anchor.Id));
+				TestFalse(TEXT("and none is empty"), Anchor.Id.IsNone());
+				Seen.Add(Anchor.Id);
+			}
 		}
 	}
 
@@ -142,7 +186,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 	// nothing references and no route can reach.
 	{
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
-		TArray<FGuidelineNodeId> Orphaned;
+		TArray<FResolvedAnchor> Orphaned;
 		if (TestNotNull(TEXT("the entity resolves before removal"), Instance))
 		{
 			Orphaned = Instance->ResolvedAnchors;
@@ -151,9 +195,9 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the entity removes"), Net->RemoveEntity(Placed));
 		TestNull(TEXT("a removed entity no longer resolves"), Net->GetEntity(Placed));
 
-		for (const FGuidelineNodeId NodeId : Orphaned)
+		for (const FResolvedAnchor& Anchor : Orphaned)
 		{
-			TestNull(TEXT("its anchor nodes went with it"), Net->GetGuidelineNode(NodeId));
+			TestNull(TEXT("its anchor nodes went with it"), Net->GetGuidelineNode(Anchor.Node));
 		}
 	}
 
@@ -175,6 +219,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		UEntityDefinition* Turned = NewObject<UEntityDefinition>(GetTransientPackage());
 
 		FEntityAnchor Nose;
+		Nose.Id = TEXT("Nose");
 		Nose.LocalPosition = FVector2D::ZeroVector;
 		Nose.LocalHeading = 0.0;
 		Nose.Role = EServiceRole::Aircraft;
@@ -183,6 +228,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		// A quarter turn relative to the entity: a loader that backs on ACROSS the
 		// aircraft's axis rather than along it.
 		FEntityAnchor Loader;
+		Loader.Id = TEXT("Loader");
 		Loader.LocalPosition = FVector2D(-1000.0, 800.0);
 		Loader.LocalHeading = UE_DOUBLE_PI * 0.5;
 		Loader.Role = EServiceRole::Baggage;
@@ -197,7 +243,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		double NoseHeading = 0.0;
 		if (TestTrue(TEXT("an unturned anchor's world heading resolves"),
-			Net->GetAnchorWorldHeading(Loaded, 0, NoseHeading)))
+			Net->GetAnchorWorldHeading(Loaded, Turned->Anchors[0].Id, NoseHeading)))
 		{
 			TestEqual(TEXT("and faces exactly the way the entity does"),
 				NoseHeading, Parked);
@@ -205,7 +251,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		double LoaderHeading = 0.0;
 		if (TestTrue(TEXT("a turned anchor's world heading resolves"),
-			Net->GetAnchorWorldHeading(Loaded, 1, LoaderHeading)))
+			Net->GetAnchorWorldHeading(Loaded, Turned->Anchors[1].Id, LoaderHeading)))
 		{
 			// THE SUM, and nothing else. Ignoring LocalHeading gives pi/4; returning the
 			// anchor's own gives pi/2; only composition gives 3pi/4.
@@ -213,17 +259,46 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 				LoaderHeading, Parked + UE_DOUBLE_PI * 0.5);
 		}
 
-		// The out-of-range contract, for both accessors. This is the case an added anchor
-		// on a saved definition asset produces, so it must not be a crash.
+		// An anchor with NO id is the failure this design has to defend against: two of them
+		// are indistinguishable, and a lookup silently returns whichever comes first. Caught
+		// by this very fixture before it had ids, so it is asserted rather than assumed.
+		{
+			UEntityDefinition* Nameless = NewObject<UEntityDefinition>(GetTransientPackage());
+			FEntityAnchor First;
+			First.LocalPosition = FVector2D(100.0, 0.0);
+			Nameless->Anchors.Add(First);
+			FEntityAnchor Second;
+			Second.LocalPosition = FVector2D(200.0, 0.0);
+			Nameless->Anchors.Add(Second);
+
+			TestFalse(TEXT("a definition with unnamed anchors is reported as unusable"),
+				UEntityDefinition::HasUsableAnchorIds(Nameless));
+
+			FEntityAnchor Clash;
+			Clash.Id = TEXT("Same");
+			Nameless->Anchors.Reset();
+			Nameless->Anchors.Add(Clash);
+			Nameless->Anchors.Add(Clash);
+			TestFalse(TEXT("and so is one with duplicate ids"),
+				UEntityDefinition::HasUsableAnchorIds(Nameless));
+
+			TestTrue(TEXT("while the shipped stand is usable"),
+				UEntityDefinition::HasUsableAnchorIds(Stand));
+		}
+
+		// The unknown-id contract, for both accessors. There is no longer an out-of-range
+		// case to have: an id either names an anchor or it does not, and neither answer can
+		// read past the end of anything.
 		double Untouched = -1.0;
-		TestFalse(TEXT("an out-of-range anchor index has no heading"),
-			Net->GetAnchorWorldHeading(Loaded, Turned->Anchors.Num(), Untouched));
+		TestFalse(TEXT("an unknown anchor id has no heading"),
+			Net->GetAnchorWorldHeading(Loaded, FName(TEXT("NoSuchAnchor")), Untouched));
 		TestEqual(TEXT("and the out parameter is left alone"), Untouched, -1.0);
 
-		TestNull(TEXT("an out-of-range anchor index resolves to no node"),
-			Net->GetAnchorNode(Loaded, Turned->Anchors.Num()));
-		TestNull(TEXT("nor does a negative one"), Net->GetAnchorNode(Loaded, -1));
-		TestNotNull(TEXT("while an in-range one does"), Net->GetAnchorNode(Loaded, 1));
+		TestNull(TEXT("an unknown anchor id resolves to no node"),
+			Net->GetAnchorNode(Loaded, FName(TEXT("NoSuchAnchor"))));
+		TestNull(TEXT("nor does an empty one"), Net->GetAnchorNode(Loaded, NAME_None));
+		TestNotNull(TEXT("while a known one does"),
+			Net->GetAnchorNode(Loaded, Turned->Anchors[1].Id));
 	}
 
 	// SPEC RISK 4, asserted. FRoadGuidelineBuilder::Build destroys and re-adds every
@@ -248,14 +323,14 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstanceId Gate12 =
 			Live->PlaceEntity(Gate, FVector2D(30000.0, 30000.0), 0.0);
 
-		TArray<FGuidelineNodeId> Before;
+		TArray<FResolvedAnchor> Before;
 		TArray<FVector2D> PlacedAt;
 		if (const FEntityInstance* Instance = Live->GetEntity(Gate12))
 		{
 			Before = Instance->ResolvedAnchors;
-			for (const FGuidelineNodeId NodeId : Before)
+			for (const FResolvedAnchor& Anchor : Before)
 			{
-				const FGuidelineNode* Node = Live->GetGuidelineNode(NodeId);
+				const FGuidelineNode* Node = Live->GetGuidelineNode(Anchor.Node);
 				PlacedAt.Add(Node != nullptr ? Node->Position : FVector2D::ZeroVector);
 			}
 		}
@@ -276,7 +351,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			// bumping its generation, after which the stored handle stops matching.
 			for (int32 Index = 0; Index < Before.Num(); ++Index)
 			{
-				const FGuidelineNode* Node = Live->GetGuidelineNode(Before[Index]);
+				const FGuidelineNode* Node = Live->GetGuidelineNode(Before[Index].Node);
 				if (!TestNotNull(TEXT("the anchor handle still resolves after a rebuild"), Node))
 				{
 					continue;

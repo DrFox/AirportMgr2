@@ -149,26 +149,22 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(Gate);
 		if (TestNotNull(TEXT("the stand resolves"), Instance))
 		{
-			int32 StopIndex = INDEX_NONE;
-			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
-			{
-				if (Stand->Anchors[Index].Role == EServiceRole::Aircraft)
-				{
-					StopIndex = Index;
-				}
-			}
+			// Spec section 6's stop-position marking is derived from the stand's OWN POSE,
+			// not from an anchor. That changed when stand and aircraft were split: the mark
+			// painted on the apron is where the stand is, and where the nose gear stops is
+			// the same point by construction. An "Aircraft" fixture would have been a
+			// second copy of the stand's own position, free to disagree with it.
+			TestTrue(TEXT("the stand declares it can take an aircraft"),
+				Stand->Provides(EServiceRole::Aircraft));
+			TestTrue(TEXT("and its pose is the stop position the marking derives from"),
+				Instance->Position.Equals(FVector2D(25000.0, 25000.0), 0.01));
 
-			TestTrue(TEXT("the stand declares an aircraft stop position"), StopIndex != INDEX_NONE);
+			// The ground fixtures still resolve, by id.
+			TestNotNull(TEXT("the hydrant pit has a source, a live node"),
+				Net->GetAnchorNode(Gate, FName(TEXT("HydrantPit"))));
 
-			// Resolved through GetAnchorNode: this loop walked the DEFINITION, and indexing
-			// the instance's parallel array with a definition index is the out-of-bounds
-			// read a definition asset that gained an anchor produces.
-			TestNotNull(TEXT("the stop position has a source, a live node"),
-				Net->GetAnchorNode(Gate, StopIndex));
-
-			// And the safe accessor really is bounds-checked, not merely a rename.
-			TestNull(TEXT("one anchor past the end resolves to nothing"),
-				Net->GetAnchorNode(Gate, Stand->Anchors.Num()));
+			TestNull(TEXT("an id the stand does not declare resolves to nothing"),
+				Net->GetAnchorNode(Gate, FName(TEXT("NoSuchAnchor"))));
 		}
 	}
 
