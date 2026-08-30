@@ -174,6 +174,29 @@ public:
 	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
 	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
 
+	// --- Aprons -----------------------------------------------------------------------
+
+	/**
+	 * Add a polygon of pavement. Returns its slot index, or INDEX_NONE if refused.
+	 *
+	 * Refuses an outline of fewer than three corners, or one that crosses itself - the
+	 * triangulator's contract is a SIMPLE polygon, and a figure-eight fed to it produces
+	 * triangles that overlap rather than an error.
+	 *
+	 * Winding is corrected rather than refused: FApronSurface asks for counter-clockwise,
+	 * the shoelace sign says which way round this is, and reversing a clockwise outline is
+	 * an answer where refusing would only be a complaint.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 AddApron(const TArray<FVector2D>& Outline);
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteApron(int32 ApronIndex);
+
+	/** The topmost apron containing a point, or INDEX_NONE. For picking. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 FindApronAt(FVector2D Where) const;
+
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
@@ -289,6 +312,85 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
 
+	/**
+	 * Third component, carrying the aprons.
+	 *
+	 * Its own component because an apron shares nothing with a road: no cross-section, no
+	 * junction solve, and no vertices that may weld to a road's. Separate also means a
+	 * change to one surface cannot force the other to rebuild.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Apron")
+	TObjectPtr<UDynamicMeshComponent> ApronComponent;
+
+	/**
+	 * Concrete for the aprons. Defaults to M_ApronConcrete.
+	 *
+	 * A material of its own rather than the road's, and not only for realism: while an
+	 * apron borrowed M_RoadSurface it was very hard to tell from the taxiway lying on it
+	 * and from the ground under it, which is indistinguishable from it not rendering.
+	 *
+	 * Left null it falls back to SurfaceMaterial, and if that is null too the sink gives
+	 * the component the engine default - which is WorldGridMaterial, the same checker the
+	 * template floor wears. That degrades quietly, and quiet is the problem.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	TObjectPtr<UMaterialInterface> ApronMaterial;
+
+	/**
+	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
+	 * effect nobody would guess, stop ApronMaterial rendering at all.
+	 *
+	 * The same trap as bUseConstantVertexColour: any ColorOverrideMode other than None
+	 * makes the scene proxy substitute the engine's vertex-colour debug material, so this
+	 * does not tint the concrete, it replaces it. Which is exactly what makes it useful -
+	 * it is the fastest way to answer "is the apron on screen at all", because a flat
+	 * unmissable colour cannot be confused with the ground or with the road.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	bool bUseConstantApronColour = false;
+
+	/**
+	 * Draw every apron triangle as debug lines.
+	 *
+	 * The same ground truth bDebugDrawMesh gives the roads: the same buffers reaching the
+	 * screen by a completely separate route. If these lines land where the outline was
+	 * drawn and the concrete does not, the fault is in the component, the material or the
+	 * view - never the geometry. If the lines are wrong too, every conclusion drawn from
+	 * triangle counts so far needs revisiting.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	bool bDebugDrawAprons = false;
+
+	/**
+	 * MOST the aprons sit below the road surface, in uu. Not a fixed drop - see
+	 * GetApronSurfaceZ.
+	 *
+	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
+	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
+	 * z-fight, and the two surfaces genuinely do overlap wherever a road runs onto a stand.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron", meta = (ClampMin = "0.0"))
+	double ApronZOffset = 4.0;
+
+	/**
+	 * Height the apron surface is actually built at.
+	 *
+	 * ApronZOffset is a MAXIMUM, not a fixed drop: the apron never descends more than
+	 * halfway from the road to the ground plane. A fixed drop silently assumes the road has
+	 * headroom, and with SurfaceZ at 1 a 4 uu drop put the concrete at Z = -3 - rendering
+	 * correctly, normals up, material bound, and buried under the ground where nothing
+	 * about it looked wrong.
+	 *
+	 * Halfway rather than clamped at zero because zero is where the ground is: an apron
+	 * pinned exactly to it would z-fight with the terrain instead of vanishing under it,
+	 * which trades one silent failure for another.
+	 *
+	 * Public and shared so the mesh, the log and the tests cannot each compute it their
+	 * own way and disagree.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet|Apron")
+	double GetApronSurfaceZ() const;
+
 	/** Second component, carrying only the preview. Separate so showing and hiding the
 	 *  ghost never touches the real road's mesh. */
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Ghost")
@@ -339,6 +441,9 @@ private:
 
 	/** Undo history, created on first use and kept in step with MaxUndoDepth. */
 	URoadEditHistory& EnsureHistory();
+
+	/** Rebuild the apron surface. Separate from the roads, which share none of it. */
+	void RebuildAprons();
 
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;

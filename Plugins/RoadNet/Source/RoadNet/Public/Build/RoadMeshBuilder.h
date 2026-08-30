@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Build/RoadMeshSink.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Model/RoadApron.h"
 #include "Model/RoadHandles.h"
 #include "Solve/JunctionSolver.h"
 
@@ -68,6 +69,24 @@ public:
 	 * two element functions stay public because tests need to build partial meshes.
 	 */
 	void Build(const URoadNetwork& Network, const FRoadSolveResult& Solved, int32 RibbonSegments = 1);
+
+	/**
+	 * Append an apron polygon.
+	 *
+	 * An apron never enters the junction solve - it has no arms to trim, no fillets and no
+	 * cut vertices to share - so this takes the outline and nothing else. It goes through
+	 * the SAME AddTriangle as everything here, deliberately: that function is the one place
+	 * that knows Unreal's winding is left-handed, and "every road faced the ground" is a
+	 * bug this project has already shipped once. A separate apron builder that re-derived
+	 * winding is how it comes back.
+	 *
+	 * Aprons belong on their own builder INSTANCE, though, so their vertices cannot weld to
+	 * a road's. The two surfaces meet; they are not one surface.
+	 *
+	 * UV1 is zero throughout: lateral offset and distance along a centreline are meaningless
+	 * for a polygon, and a made-up value would be sampled by any material that reads them.
+	 */
+	void AddApron(const FApronSurface& Apron);
 
 	void Emit(IRoadMeshSink& Sink) const;
 

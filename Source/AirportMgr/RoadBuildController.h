@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
+#include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "RoadBuildController.generated.h"
@@ -169,23 +170,18 @@ public:
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
-	/** Node the next click runs a segment from, or INDEX_NONE when not chaining. */
-	int32 GetPendingNode() const { return PendingNode; }
+	/** The tool the number keys selected, or null before BeginPlay has built them. */
+	IBuildTool* GetActiveTool() const;
 
-	/**
-	 * True while a modifier is held that turns the next click into a deletion.
-	 *
-	 * Read by the overlay so it can redden what would go. A query rather than state the
-	 * controller pushes at the HUD: there is one answer, asked for when it is needed.
-	 */
-	bool IsDeleteHeld() const;
+	/** Everything the active tool needs to judge the current cursor. */
+	FToolContext MakeToolContext() const;
 
 	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
 	 *
-	 * The single source of truth for the decision: the overlay draws this and OnBuildClick
-	 * acts on it, so what is highlighted and what happens cannot disagree.
+	 * The single source of truth for the decision: the overlay draws this and the active
+	 * tool acts on it, so what is highlighted and what happens cannot disagree.
 	 */
 	bool ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals = false) const;
 
@@ -198,40 +194,33 @@ public:
 	 */
 	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
 
-	/**
-	 * Whether the click being previewed may be built, and why not if it may not.
-	 *
-	 * False when nothing is being previewed at all - no chain in progress, or the cursor
-	 * off the road plane. Computed once in PlayerTick and read back here, so the ghost's
-	 * colour, the overlay's reason text and the click's own decision are one value rather
-	 * than three that agree by coincidence.
-	 */
-	bool GetPendingPlacement(ERoadPlacement& Out) const;
-
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupInputComponent() override;
 	virtual void PlayerTick(float DeltaTime) override;
 
 private:
-	/** Left button down: remember where, and what was under it. Decides nothing yet. */
+	/** Left button down: remember where. Decides nothing - that waits for the release. */
 	void OnPrimaryPressed();
 
-	/** Left button up: a drag ends, or - if it never became one - the click happens here. */
+	/** Left button up: a drag ends, or - if it never became one - it was a click. */
 	void OnPrimaryReleased();
 
-	/** Move the held node with the cursor once the press has travelled far enough. */
+	/** Promote a held press to a drag once it has travelled, and feed the tool. */
 	void UpdateDrag();
 
-	void OnBuildClick();
-
-	/** Ctrl+click: remove whatever the snap chain resolved. */
-	void OnDeleteClick(const FRoadSnapResult& Snap);
-
-	void OnCancelChain();
+	void OnCancelGesture();
 	void OnClearNetwork();
 	void OnUndo();
 	void OnRedo();
+
+	/** True while Ctrl is held: the gesture means remove rather than build. */
+	bool IsRemoveHeld() const;
+
+	/** Number keys. Deactivates the outgoing tool so nothing is left part-drawn. */
+	void SelectTool(int32 Index);
+	void SelectRoadTool()  { SelectTool(0); }
+	void SelectApronTool() { SelectTool(1); }
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
@@ -240,9 +229,6 @@ private:
 	FRoadSnapSettings MakeSnapSettings() const;
 
 	FRoadPlacementLimits MakePlacementLimits() const;
-
-	/** Judge the snap against PendingNode. Valid when no chain is in progress. */
-	ERoadPlacement JudgePlacement(const FRoadSnapResult& Snap) const;
 
 	void CreateBuildCamera();
 
@@ -268,32 +254,26 @@ private:
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
-	/** Node the next click will run a segment from, or INDEX_NONE when not chaining. */
-	int32 PendingNode = INDEX_NONE;
-
 	/**
-	 * Whether this chain created PendingNode, rather than starting from a node already
-	 * there.
+	 * The selectable tools, in key order: 1 is the first.
 	 *
-	 * Cancelling a chain removes the node the chain dropped, and only that node. Without
-	 * this flag, right-clicking a chain started on an existing bare node would delete a
-	 * node the player put there on purpose.
+	 * Strategy, not a state machine - see IBuildTool. A tool is picked, never transitioned
+	 * into, so what lives here is a list and an index rather than a transition graph.
 	 */
-	bool bPendingNodeCreated = false;
+	TArray<TUniquePtr<IBuildTool>> Tools;
+
+	int32 ActiveTool = 0;
 
 	// --- Press, drag, release ---------------------------------------------------------
 	//
-	// The left button is resolved on RELEASE rather than on press, because until the button
-	// comes up a press on a node is not yet either a click or a drag. A press that never
-	// travels is still a click and builds exactly as it did.
+	// The controller decides what the MOUSE did - a click or a drag, and how far a press
+	// must travel to count as one. What that MEANS is the tool's business, and a tool
+	// never sees a raw key.
 
 	bool bPrimaryDown = false;
 
 	/** Screen position of the press, to measure the drag threshold against. */
 	FVector2D PressScreen = FVector2D::ZeroVector;
-
-	/** Node under the press, or INDEX_NONE if the press did not land on one. */
-	int32 DragNode = INDEX_NONE;
 
 	/** True once the press has travelled past DragThresholdPixels. */
 	bool bDragging = false;
@@ -304,7 +284,5 @@ private:
 	 */
 	FRoadSnapChain SnapChain;
 
-	/** Last judgement made in PlayerTick, and whether it referred to anything. */
-	ERoadPlacement LastPlacement = ERoadPlacement::Valid;
-	bool bLastPlacementRelevant = false;
+
 };

@@ -12,6 +12,8 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
+#include "Algo/Reverse.h"
+#include "Solve/RoadGeom.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
@@ -292,6 +294,22 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// against the road it is hovering over.
 	GhostComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GhostComponent->SetCastShadow(false);
+
+	// Aprons: their own component, and no collision or shadows for the same reason the
+	// roads have none - the world is flat, so picking is exact maths rather than a trace.
+	ApronComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("ApronMesh"));
+	ApronComponent->SetupAttachment(RootComponent);
+	ApronComponent->SetUsingAbsoluteLocation(true);
+	ApronComponent->SetUsingAbsoluteRotation(true);
+	ApronComponent->SetUsingAbsoluteScale(true);
+	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ApronAsset(
+		TEXT("/Game/RoadNet/Materials/M_ApronConcrete"));
+	if (ApronAsset.Succeeded())
+	{
+		ApronMaterial = ApronAsset.Object;
+	}
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GhostAsset(
 		TEXT("/Game/RoadNet/Materials/M_RoadGhost"));
@@ -1000,6 +1018,168 @@ FString ARoadNetworkActor::PeekUndoLabel() const
 	return History != nullptr ? History->PeekUndoLabel() : FString();
 }
 
+int32 ARoadNetworkActor::AddApron(const TArray<FVector2D>& Outline)
+{
+	if (Outline.Num() < 3)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("AddApron refused: %d corners, three is the minimum"), Outline.Num());
+		return INDEX_NONE;
+	}
+
+	// The triangulator's contract is a SIMPLE polygon. Fed a figure-eight it produces
+	// overlapping triangles rather than an error, so the refusal has to happen here.
+	if (!RoadGeom::IsSimplePolygon(Outline))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("AddApron refused: the outline crosses itself"));
+		return INDEX_NONE;
+	}
+
+	FApronSurface Surface;
+	Surface.Outline = Outline;
+
+	// Corrected, not refused. FApronSurface asks for counter-clockwise and the shoelace
+	// sign says which way round this is; reversing is an answer, refusing is a complaint.
+	if (RoadGeom::PolygonArea(Surface.Outline) < 0.0)
+	{
+		Algo::Reverse(Surface.Outline);
+	}
+
+	FRoadEditScope Edit(&EnsureHistory(), &EnsureNetwork(), TEXT("add apron"));
+
+	const FApronId Added = Network->AddApron(MoveTemp(Surface));
+	if (!Added.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("AddApron refused by the model"));
+		return INDEX_NONE;
+	}
+
+	Edit.Commit();
+	return Added.Index;
+}
+
+bool ARoadNetworkActor::DeleteApron(int32 ApronIndex)
+{
+	if (Network == nullptr || !Network->GetAprons().IsValidIndex(ApronIndex)
+		|| !Network->GetAprons()[ApronIndex].bAlive)
+	{
+		return false;
+	}
+
+	FApronId Doomed;
+	Doomed.Index = ApronIndex;
+	Doomed.Generation = Network->GetAprons()[ApronIndex].Generation;
+
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete apron"));
+
+	if (!Network->RemoveApron(Doomed))
+	{
+		return false;
+	}
+
+	Edit.Commit();
+	return true;
+}
+
+int32 ARoadNetworkActor::FindApronAt(FVector2D Where) const
+{
+	if (Network == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	// Walked backwards so the most recently added apron wins where two overlap, which is
+	// what "the one on top" means to someone who just drew it.
+	const TArray<FApronSurface>& Aprons = Network->GetAprons();
+	for (int32 Index = Aprons.Num() - 1; Index >= 0; --Index)
+	{
+		if (Aprons[Index].bAlive && RoadGeom::PointInPolygon(Aprons[Index].Outline, Where))
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
+double ARoadNetworkActor::GetApronSurfaceZ() const
+{
+	// Never more than halfway down to the ground plane, whatever ApronZOffset asks for.
+	// SurfaceZ is already a height above that plane, so half of it is the most that can be
+	// given away while still leaving the apron above ground.
+	const double Drop = FMath::Min(ApronZOffset, FMath::Max(SurfaceZ, 0.0) * 0.5);
+	return SurfaceZ - Drop;
+}
+
+void ARoadNetworkActor::RebuildAprons()
+{
+	if (Network == nullptr || ApronComponent == nullptr)
+	{
+		return;
+	}
+
+	// Its own builder instance, so an apron corner that happens to land exactly on a road
+	// vertex cannot weld to it. The two surfaces meet; they are not one surface.
+	FRoadMeshBuilder Builder(GetApronSurfaceZ(), TexelsPerUnit);
+
+	int32 Built = 0;
+	for (const FApronSurface& Apron : Network->GetAprons())
+	{
+		if (Apron.bAlive)
+		{
+			Builder.AddApron(Apron);
+			++Built;
+		}
+	}
+
+	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+
+	FDynamicMeshSink Sink(ApronComponent,
+		ApronMaterial != nullptr ? ApronMaterial : SurfaceMaterial,
+		bUseConstantApronColour);
+	Sink.Accept(Buffers);
+
+	ApronComponent->SetVisibility(Built > 0);
+
+	// Reported rather than inferred. An apron that is built and never seen, and one that
+	// is never built, look identical from outside - and every explanation reasoned from
+	// engine source about the roads was wrong before the numbers were printed.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
+		Built, Buffers.Indices.Num() / 3, GetApronSurfaceZ(),
+		ApronMaterial != nullptr ? *ApronMaterial->GetName() : TEXT("<fallback>"),
+		bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
+
+	// Worth saying out loud: a road surface this close to the ground leaves nothing to
+	// separate the two surfaces with, and both will z-fight at distance whatever is done
+	// here. The apron is above ground either way - this is about the ROAD being too low.
+	if (Built > 0 && SurfaceZ < ApronZOffset * 2.0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SurfaceZ is %.1f, less than twice ApronZOffset (%.1f): the apron is squeezed "
+				 "to Z=%.1f. Raise SurfaceZ for a cleaner separation."),
+			SurfaceZ, ApronZOffset, GetApronSurfaceZ());
+	}
+
+	if (bDebugDrawAprons && GetWorld() != nullptr)
+	{
+		// A completely separate route to the screen, from the same buffers the component
+		// was handed.
+		const float Lifetime = static_cast<float>(DebugDrawSeconds);
+		for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+		{
+			const FVector A = Buffers.Positions[Buffers.Indices[Slot]];
+			const FVector B = Buffers.Positions[Buffers.Indices[Slot + 1]];
+			const FVector C = Buffers.Positions[Buffers.Indices[Slot + 2]];
+
+			// Thickness in WORLD units. Single digits are sub-pixel across a scene this
+			// large - indistinguishable from nothing being drawn at all.
+			DrawDebugLine(GetWorld(), A, B, FColor::Cyan, false, Lifetime, 0, 12.0f);
+			DrawDebugLine(GetWorld(), B, C, FColor::Cyan, false, Lifetime, 0, 12.0f);
+			DrawDebugLine(GetWorld(), C, A, FColor::Cyan, false, Lifetime, 0, 12.0f);
+		}
+	}
+}
+
 void ARoadNetworkActor::ClearNetwork()
 {
 	HideGhost();
@@ -1039,6 +1219,10 @@ void ARoadNetworkActor::RebuildMesh()
 
 	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, bUseConstantVertexColour);
 	Builder.Emit(Sink);
+
+	// Aprons share nothing with the roads and are built separately, but they are rebuilt
+	// together so one call still means "make the world match the model".
+	RebuildAprons();
 
 	if (bDebugDrawMesh)
 	{

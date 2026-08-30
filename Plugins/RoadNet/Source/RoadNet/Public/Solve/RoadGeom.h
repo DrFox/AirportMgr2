@@ -40,6 +40,27 @@ namespace RoadGeom
 	 */
 	ROADNET_API double ClosestPointOnSegment(const FVector2D& A, const FVector2D& B, const FVector2D& P);
 
+	/**
+	 * True when segments A0-A1 and B0-B1 cross each other properly.
+	 *
+	 * A shared endpoint is NOT a crossing: consecutive edges of an outline meet at a corner
+	 * by construction, and reporting that as self-intersection would refuse every polygon
+	 * with more than two sides. Collinear overlap is not reported either - the same
+	 * degeneracies IsSimplePolygon documents, and for the same reason.
+	 */
+	ROADNET_API bool SegmentsCross(const FVector2D& A0, const FVector2D& A1,
+		const FVector2D& B0, const FVector2D& B1);
+
+	/**
+	 * True when Point lies inside the polygon, by crossing number.
+	 *
+	 * Winding-agnostic, so it answers the same for an outline stored either way round. A
+	 * point exactly on an edge is not guaranteed either answer, which is acceptable for
+	 * picking - the cursor is never exactly on a line - and would not be for containment
+	 * that decides geometry.
+	 */
+	ROADNET_API bool PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector2D& Point);
+
 	/** Signed area via the shoelace formula. Positive means CCW winding. */
 	ROADNET_API double PolygonArea(TArrayView<const FVector2D> Points);
 

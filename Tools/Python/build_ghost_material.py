@@ -28,18 +28,36 @@ MAT_NAME = "M_RoadGhost"
 def build_ghost_material():
     tools = unreal.AssetToolsHelpers.get_asset_tools()
 
-    # create_asset returns None rather than raising when the asset already exists, and
-    # the next call then fails with an unrelated AttributeError on NoneType. This script
-    # is the authoring step and authoring gets iterated, so delete and rebuild.
+    lib = unreal.MaterialEditingLibrary
     path = "%s/%s" % (MAT_DIR, MAT_NAME)
+
+    # Rebuilt IN PLACE rather than deleted and re-created. ARoadNetworkActor resolves this
+    # material by path in its constructor, so it is already loaded when this script runs;
+    # delete_asset then reports success while the package stays in memory and create_asset
+    # refuses with "already exists ... cannot ask the user as the application is running
+    # unattended". Re-creating would also strand every existing reference to it.
+    # Deleted through delete_loaded_asset, not delete_asset.
+    #
+    # ARoadNetworkActor resolves this material by path in its constructor, so it is already
+    # in memory when this script runs. delete_asset then reports success while the package
+    # stays loaded and create_asset refuses with "already exists ... cannot ask the user as
+    # the application is running unattended". Clearing the graph in place is not the answer
+    # either: delete_all_material_expressions asserts !IsRooted() on a material the CDO is
+    # holding, and takes the whole commandlet down with it.
     if unreal.EditorAssetLibrary.does_asset_exist(path):
-        unreal.EditorAssetLibrary.delete_asset(path)
+        existing = unreal.EditorAssetLibrary.load_asset(path)
+        if existing is not None:
+            unreal.EditorAssetLibrary.delete_loaded_asset(existing)
+        else:
+            unreal.EditorAssetLibrary.delete_asset(path)
         unreal.log("MARKER: replaced existing %s" % path)
 
     material = tools.create_asset(
         MAT_NAME, MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
     if material is None:
-        unreal.log_error("MARKER: create_asset returned None for %s" % path)
+        unreal.log_error(
+            "MARKER: create_asset returned None for %s - the asset is still loaded. "
+            "Delete the .uasset from disk and re-run." % path)
         return None
 
     # Unlit because a preview must read the same regardless of time of day or what it is
@@ -48,8 +66,6 @@ def build_ghost_material():
     material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
     material.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
     material.set_editor_property("two_sided", True)
-
-    lib = unreal.MaterialEditingLibrary
 
     # --- Parameters ------------------------------------------------------------------
     base = lib.create_material_expression(
