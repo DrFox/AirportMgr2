@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
@@ -196,6 +197,41 @@ public:
 	/** The topmost apron containing a point, or INDEX_NONE. For picking. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	int32 FindApronAt(FVector2D Where) const;
+
+	// --- Stands -----------------------------------------------------------------------
+
+	/**
+	 * Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE.
+	 *
+	 * Every anchor the definition declares resolves to a NON-DERIVED guideline node, so the
+	 * guideline builder's orphan sweep leaves them alone and the handles survive every
+	 * taxiway edit. That is what makes "drive to stand 12's fuel position" an ordinary path
+	 * query rather than a lookup that goes stale.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 PlaceStand(FVector2D Where, double Heading);
+
+	/**
+	 * Remove a placed entity, and the anchor nodes it owns.
+	 *
+	 * RemoveGuidelineNode cascades, so this also removes any guideline drawn INTO the
+	 * stand - a lead-in to a stand that is gone leads nowhere. Destructive and undoable.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteEntity(int32 EntityIndex);
+
+	/** Nearest placed entity within Radius of a point, or INDEX_NONE. For picking. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 FindEntityAt(FVector2D Where, double Radius) const;
+
+	/**
+	 * The stand layout new stands are placed from. Defaults to DA_Stand_CodeC.
+	 *
+	 * A Flyweight: every stand shares one definition and carries only its own pose, which
+	 * is the whole reason anchors live on the definition rather than on the instance.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")

@@ -304,6 +304,13 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	static ConstructorHelpers::FObjectFinder<UEntityDefinition> StandAsset(
+		TEXT("/Game/RoadNet/Entities/DA_Stand_CodeC"));
+	if (StandAsset.Succeeded())
+	{
+		StandDefinition = StandAsset.Object;
+	}
+
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ApronAsset(
 		TEXT("/Game/RoadNet/Materials/M_ApronConcrete"));
 	if (ApronAsset.Succeeded())
@@ -1178,6 +1185,82 @@ void ARoadNetworkActor::RebuildAprons()
 			DrawDebugLine(GetWorld(), C, A, FColor::Cyan, false, Lifetime, 0, 12.0f);
 		}
 	}
+}
+
+int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
+{
+	if (StandDefinition == nullptr)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceStand refused: no StandDefinition. Author DA_Stand_CodeC with "
+				 "Tools/Python/build_stand_asset.py, or set one on the actor."));
+		return INDEX_NONE;
+	}
+
+	URoadNetwork& Net = EnsureNetwork();
+	FRoadEditScope Edit(&EnsureHistory(), &Net, TEXT("place stand"));
+
+	const FEntityInstanceId Placed = Net.PlaceEntity(StandDefinition, Where, Heading);
+	if (!Placed.IsSet())
+	{
+		return INDEX_NONE;
+	}
+
+	Edit.Commit();
+	return Placed.Index;
+}
+
+bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)
+{
+	if (Network == nullptr || !Network->GetEntities().IsValidIndex(EntityIndex)
+		|| !Network->GetEntities()[EntityIndex].bAlive)
+	{
+		return false;
+	}
+
+	FEntityInstanceId Doomed;
+	Doomed.Index = EntityIndex;
+	Doomed.Generation = Network->GetEntities()[EntityIndex].Generation;
+
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete stand"));
+
+	if (!Network->RemoveEntity(Doomed))
+	{
+		return false;
+	}
+
+	Edit.Commit();
+	return true;
+}
+
+int32 ARoadNetworkActor::FindEntityAt(FVector2D Where, double Radius) const
+{
+	if (Network == nullptr || Radius <= 0.0)
+	{
+		return INDEX_NONE;
+	}
+
+	// Picked by the entity's own position - its stop mark - rather than by any anchor. An
+	// anchor is where a vehicle parks; the stand is the thing being pointed at.
+	double BestSquared = Radius * Radius;
+	int32 Best = INDEX_NONE;
+
+	const TArray<FEntityInstance>& Entities = Network->GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		if (!Entities[Index].bAlive)
+		{
+			continue;
+		}
+
+		const double DistanceSquared = FVector2D::DistSquared(Entities[Index].Position, Where);
+		if (DistanceSquared <= BestSquared)
+		{
+			BestSquared = DistanceSquared;
+			Best = Index;
+		}
+	}
+	return Best;
 }
 
 void ARoadNetworkActor::ClearNetwork()

@@ -3,6 +3,8 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Model/RoadNetwork.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
@@ -34,6 +36,11 @@ void ARoadBuildHUD::DrawHUD()
 	if (bDrawNodes && Target->Network != nullptr)
 	{
 		DrawNodes(*Target);
+	}
+
+	if (bDrawStands && Target->Network != nullptr)
+	{
+		DrawStands(*Target);
 	}
 
 	// The tool describes what it would do; this class decides what that looks like. The
@@ -181,6 +188,69 @@ void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target)
 				static_cast<float>(Screen.X) + NodeRingRadius + 3.0f,
 				static_cast<float>(Screen.Y) - NodeRingRadius,
 				GEngine->GetSmallFont());
+		}
+	}
+}
+
+void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
+{
+	for (const FEntityInstance& Entity : Target.Network->GetEntities())
+	{
+		if (!Entity.bAlive)
+		{
+			continue;
+		}
+
+		FVector2D StopScreen;
+		const bool bStopVisible = ProjectPlanePoint(Entity.Position, Target.SurfaceZ, StopScreen);
+		if (bStopVisible)
+		{
+			DrawRing(StopScreen, NodeRingRadius, StandColour, NodeRingThickness);
+			DrawRing(StopScreen, NodeRingRadius * 1.6f, StandColour, NodeRingThickness);
+		}
+
+		// Which way it faces. A stand aimed 180 degrees out looks identical to a correct
+		// one until something tries to taxi onto it, so the heading has to be drawn.
+		const FVector2D Nose(
+			Entity.Position.X + FMath::Cos(Entity.Heading) * 2500.0,
+			Entity.Position.Y + FMath::Sin(Entity.Heading) * 2500.0);
+
+		FVector2D NoseScreen;
+		if (bStopVisible && ProjectPlanePoint(Nose, Target.SurfaceZ, NoseScreen))
+		{
+			DrawLine(
+				static_cast<float>(StopScreen.X), static_cast<float>(StopScreen.Y),
+				static_cast<float>(NoseScreen.X), static_cast<float>(NoseScreen.Y),
+				StandColour, PreviewThickness);
+		}
+
+		// The anchors, read from the INSTANCE rather than recomputed from the definition.
+		// These are the guideline nodes vehicles will actually route to; drawing the
+		// definition's local positions transformed again would be a second opinion about
+		// where they are, and the two could disagree without anything reporting it.
+		for (const FResolvedAnchor& Anchor : Entity.ResolvedAnchors)
+		{
+			const FGuidelineNode* Node = Target.Network->GetGuidelineNode(Anchor.Node);
+			if (Node == nullptr)
+			{
+				continue;
+			}
+
+			FVector2D Screen;
+			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen))
+			{
+				continue;
+			}
+
+			DrawRing(Screen, ServiceAnchorRadius, ServiceAnchorColour, NodeRingThickness);
+
+			if (bDrawAnchorIds && GEngine != nullptr)
+			{
+				DrawText(Anchor.Id.ToString(), ServiceAnchorColour,
+					static_cast<float>(Screen.X) + ServiceAnchorRadius + 3.0f,
+					static_cast<float>(Screen.Y) - ServiceAnchorRadius,
+					GEngine->GetSmallFont());
+			}
 		}
 	}
 }

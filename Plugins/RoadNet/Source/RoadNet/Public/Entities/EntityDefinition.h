@@ -37,6 +37,7 @@ public:
 	 * asset, so the tested layout and the shipped one are the same numbers rather than two
 	 * transcriptions of them.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	static void BuildCodeCStand(UEntityDefinition* Definition);
 
 	/**
@@ -47,5 +48,6 @@ public:
 	 * the belt loader's position and reports success. PlaceEntity checks this and complains
 	 * loudly rather than refusing, so a half-authored asset is visible instead of fatal.
 	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	static bool HasUsableAnchorIds(const UEntityDefinition* Definition);
 };

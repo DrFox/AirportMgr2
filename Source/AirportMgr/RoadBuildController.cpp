@@ -8,6 +8,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/StandPlaceTool.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
 
@@ -38,6 +39,7 @@ void ARoadBuildController::BeginPlay()
 	// Key order: 1 is the first. Strategy, so adding a tool is appending to a list.
 	Tools.Add(MakeUnique<FRoadDrawTool>());
 	Tools.Add(MakeUnique<FApronDrawTool>());
+	Tools.Add(MakeUnique<FStandPlaceTool>());
 
 	if (bStartAbovePlane)
 	{
@@ -46,7 +48,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons. WASD pans, Q/E rotate, wheel zooms."),
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands. WASD pans, Q/E rotate, wheel zooms."),
 		*Target->GetName());
 }
 
@@ -135,6 +137,7 @@ void ARoadBuildController::SetupInputComponent()
 	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
 	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ARoadBuildController::SelectRoadTool);
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
+	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ARoadBuildController::SelectStandTool);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
