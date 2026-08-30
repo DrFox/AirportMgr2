@@ -4,11 +4,15 @@
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Tool/RoadSnap.h"
 #include "RoadNetworkActor.generated.h"
 
 class URoadNetwork;
 class URoadProfile;
 class UDynamicMeshComponent;
+class UMaterialInstanceDynamic;
+class FRoadMeshBuilder;
+struct FRoadSolveResult;
 class UMaterialInterface;
 
 namespace UE::Geometry { class FDynamicMesh3; }
@@ -112,6 +116,42 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
 
+	// --- Ghost preview --------------------------------------------------------------
+
+	/**
+	 * Show the segment a click would build, as real solved pavement.
+	 *
+	 * Built on a DUPLICATE of the network, never the live one. FRoadNetworkSolver::SolveAll
+	 * takes a non-const network and writes trim distances and cut vertices INTO it, so
+	 * solving a hypothetical segment against the real graph would leave the real road's
+	 * stored geometry describing a road nobody built - and it would only show once
+	 * something forced a rebuild.
+	 *
+	 * A Segment snap is split on the copy for real, because a split turns one road into a
+	 * three-arm junction and nothing short of performing it shows that junction's shape.
+	 *
+	 * bValid drives the material's ValidityBlend only. Validity is a parameter rather than
+	 * a mesh variant, so turning a drag red regenerates no geometry at all.
+	 */
+	void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid);
+
+	/**
+	 * The ghost's triangles, without touching a component, a material or a renderer.
+	 *
+	 * Public and separated from UpdateGhost so the one property this whole mechanism
+	 * rests on can be asserted in a test with no World: building a preview must leave the
+	 * REAL network bitwise unchanged. That failure is otherwise invisible - the ghost
+	 * looks right either way, and the damage only surfaces later as a road whose stored
+	 * cut vertices describe a segment nobody built.
+	 */
+	bool BuildGhostBuffers(int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers);
+
+	/** Hide the preview and forget what it was showing. */
+	void HideGhost();
+
+	/** A live node's handle from its slot index, or false if it is not live. */
+	bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const;
+
 	/**
 	 * Cross-section for segments created through this facade. When unset, a symmetric
 	 * one from FallbackWidth and FallbackFilletRadius is made on demand - the solver
@@ -164,11 +204,43 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
 
+	/** Second component, carrying only the preview. Separate so showing and hiding the
+	 *  ghost never touches the real road's mesh. */
+	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Ghost")
+	TObjectPtr<UDynamicMeshComponent> GhostComponent;
+
+	/** Translucent unlit preview material. Defaults to M_RoadGhost. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Ghost")
+	TObjectPtr<UMaterialInterface> GhostMaterial;
+
+	/**
+	 * How far above the road surface the ghost sits, in uu.
+	 *
+	 * Enough to clear the pavement's depth, little enough that it still reads as lying on
+	 * it. At zero the two surfaces z-fight; the preview then flickers rather than hovers.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Ghost", meta = (ClampMin = "0.0"))
+	double GhostZOffset = 2.0;
+
 	UPROPERTY() TObjectPtr<URoadNetwork> Network;
 
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
+
+	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
+	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;
+
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
+
+	// What the ghost currently shows. A drag holds still for most frames, and rebuilding
+	// an unchanged preview means duplicating the network and re-solving it every frame for
+	// an identical result.
+	int32 LastGhostFrom = INDEX_NONE;
+	FVector2D LastGhostTo = FVector2D::ZeroVector;
+	ERoadSnapKind LastGhostKind = ERoadSnapKind::Free;
+	bool bLastGhostValid = true;
+	bool bGhostVisible = false;
 
 	/** The authored profile if there is one, otherwise the on-demand fallback. */
 	URoadProfile* ResolveProfile();
@@ -176,11 +248,23 @@ private:
 	/** Network, creating it on first use. Nothing else in the project makes one yet. */
 	URoadNetwork& EnsureNetwork();
 
-	/** A live node's handle from its slot index, or an unset handle if it is not live. */
-	bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const;
-
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
+
+	/**
+	 * The split surgery itself, against any network.
+	 *
+	 * Shared by the real edit and the ghost deliberately. Two implementations of the same
+	 * surgery is precisely how a preview comes to show something the click will not do,
+	 * and that failure is invisible - the ghost looks plausible either way.
+	 */
+	static FRoadNodeId SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Doomed, const FVector2D& At);
+
+	/** Append a solved node's fan to Builder, if that node solved at all. */
+	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
+
+	/** The ghost's material instance, made on first use. Null if GhostMaterial is unset. */
+	UMaterialInstanceDynamic* GhostMaterialInstance();
 
 public:
 

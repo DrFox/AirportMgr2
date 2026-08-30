@@ -6,6 +6,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/RoadSnap.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -220,6 +221,59 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			Actor->SplitSegment(0, FVector2D(0.0, 0.0)), INDEX_NONE);
 		TestEqual(TEXT("the refused degenerate split created no node"),
 			Actor->Network->GetNodes().Num(), 3);
+	}
+
+	// The ghost is built on a DUPLICATE of the network, and this is the assertion that
+	// says so. FRoadNetworkSolver::SolveAll takes a non-const network and writes trim
+	// distances and cut vertices into it, so a preview solved against the real graph would
+	// leave the real road's stored geometry describing a segment nobody built - correct on
+	// screen until the next rebuild, then wrong, with nothing reporting it.
+	{
+		Actor->ClearNetwork();
+		const int32 GhostFrom = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 GhostTo = Actor->PlaceNode(FVector2D(6000.0, 0.0));
+		TestTrue(TEXT("ghost fixture connects"), Actor->ConnectNodes(GhostFrom, GhostTo));
+		Actor->RebuildMesh();
+
+		// Captured AFTER a real solve, so these are the values a correct ghost must not
+		// disturb - not the zeroes an unsolved segment would hold.
+		const FRoadSegment Before = Actor->Network->GetSegments()[0];
+		const int32 NodesBefore = Actor->Network->GetNodes().Num();
+		const int32 SegmentsBefore = Actor->Network->GetSegments().Num();
+		TestTrue(TEXT("the fixture segment really was solved"), Before.bSolvedA && Before.bSolvedB);
+
+		FRoadSnapResult Hypothetical;
+		Hypothetical.Kind = ERoadSnapKind::Free;
+		Hypothetical.Position = FVector2D(0.0, 6000.0);
+
+		FRoadMeshBuffers GhostBuffers;
+		TestTrue(TEXT("the ghost builds"),
+			Actor->BuildGhostBuffers(GhostFrom, Hypothetical, GhostBuffers));
+		TestTrue(TEXT("the ghost has triangles"), GhostBuffers.Indices.Num() > 0);
+
+		// The graph itself must not have grown.
+		TestEqual(TEXT("the ghost adds no node to the real network"),
+			Actor->Network->GetNodes().Num(), NodesBefore);
+		TestEqual(TEXT("the ghost adds no segment to the real network"),
+			Actor->Network->GetSegments().Num(), SegmentsBefore);
+
+		// Compared BITWISE, the same discipline the weld contract uses. A solve that
+		// leaked into the real segment would move these by a hair, not by a mile, and a
+		// tolerance here would report success on exactly the damage being looked for.
+		const FRoadSegment& After = Actor->Network->GetSegments()[0];
+		TestTrue(TEXT("the real segment's A cuts are untouched"),
+			After.LeftCutA == Before.LeftCutA && After.RightCutA == Before.RightCutA);
+		TestTrue(TEXT("the real segment's B cuts are untouched"),
+			After.LeftCutB == Before.LeftCutB && After.RightCutB == Before.RightCutB);
+		TestTrue(TEXT("the real segment's trims are untouched"),
+			After.TrimA == Before.TrimA && After.TrimB == Before.TrimB);
+
+		// Generations too: a ghost that mutated the real graph and tidied up after itself
+		// would still have burned slots, and every outstanding handle with them.
+		TestEqual(TEXT("the real segment's generation is untouched"),
+			After.Generation, Before.Generation);
+		TestEqual(TEXT("the start node's incidence is untouched"),
+			Actor->Network->GetNodes()[GhostFrom].Incident.Num(), 1);
 	}
 
 	return true;

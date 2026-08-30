@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "RoadBuildHUD.generated.h"
 
@@ -79,6 +80,10 @@ public:
 	 *  reusing a node and cutting a new one into a road are different edits. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
 	FLinearColor SplitColour = FLinearColor(1.0f, 0.4f, 0.8f);
+
+	/** Text colour for the reason a click will be refused. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor RefusedColour = FLinearColor(1.0f, 0.25f, 0.2f);
 
 	/** Draw a crosshair where the cursor meets the road plane. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Cursor")

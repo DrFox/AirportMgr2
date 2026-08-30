@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "RoadBuildController.generated.h"
 
@@ -115,9 +116,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double StartHeight = 2000.0;
 
-	/** Draw the rubber band from the pending node to the cursor. */
+	/**
+	 * Show the ghost of the segment the next click would build.
+	 *
+	 * Real solved pavement on a duplicate of the graph, not a rubber band: it carries the
+	 * road's actual width and the shape the junction at either end will take.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet")
 	bool bDrawBuildPreview = true;
+
+	/** Shortest segment a click may build, in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Placement", meta = (ClampMin = "0.0"))
+	double MinSegmentLength = 250.0;
+
+	/** Tightest corner a click may make against a road already leaving the start node. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Placement", meta = (ClampMin = "0.0", ClampMax = "180.0"))
+	double MinTurnDegrees = 25.0;
 
 	// --- Read side, for ARoadBuildHUD ------------------------------------------------
 	//
@@ -149,6 +163,16 @@ public:
 	 */
 	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
 
+	/**
+	 * Whether the click being previewed may be built, and why not if it may not.
+	 *
+	 * False when nothing is being previewed at all - no chain in progress, or the cursor
+	 * off the road plane. Computed once in PlayerTick and read back here, so the ghost's
+	 * colour, the overlay's reason text and the click's own decision are one value rather
+	 * than three that agree by coincidence.
+	 */
+	bool GetPendingPlacement(ERoadPlacement& Out) const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupInputComponent() override;
@@ -164,6 +188,11 @@ private:
 
 	/** Radii and toggles above, gathered into the form the chain takes. */
 	FRoadSnapSettings MakeSnapSettings() const;
+
+	FRoadPlacementLimits MakePlacementLimits() const;
+
+	/** Judge the snap against PendingNode. Valid when no chain is in progress. */
+	ERoadPlacement JudgePlacement(const FRoadSnapResult& Snap) const;
 
 	void MoveViewAbovePlane();
 	void PanView(float DeltaTime);
@@ -197,4 +226,8 @@ private:
 	 * TUniquePtr and holds no state worth saving, only the ordering.
 	 */
 	FRoadSnapChain SnapChain;
+
+	/** Last judgement made in PlayerTick, and whether it referred to anything. */
+	ERoadPlacement LastPlacement = ERoadPlacement::Valid;
+	bool bLastPlacementRelevant = false;
 };

@@ -2,7 +2,6 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
-#include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
@@ -297,6 +296,34 @@ bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) 
 	return true;
 }
 
+FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
+{
+	FRoadPlacementLimits Limits;
+	Limits.MinSegmentLength = MinSegmentLength;
+	Limits.MinTurnDegrees = MinTurnDegrees;
+	return Limits;
+}
+
+ERoadPlacement ARoadBuildController::JudgePlacement(const FRoadSnapResult& Snap) const
+{
+	// Nothing to judge until a chain is in progress: the first click of a road places a
+	// node and builds no segment, and there is no rule a lone node can break.
+	FRoadNodeId From;
+	if (PendingNode == INDEX_NONE || Target == nullptr || Target->Network == nullptr
+		|| !Target->MakeLiveNodeId(PendingNode, From))
+	{
+		return ERoadPlacement::Valid;
+	}
+
+	return RoadPlacement::Validate(*Target->Network, From, Snap, MakePlacementLimits());
+}
+
+bool ARoadBuildController::GetPendingPlacement(ERoadPlacement& Out) const
+{
+	Out = LastPlacement;
+	return bLastPlacementRelevant;
+}
+
 void ARoadBuildController::OnBuildClick()
 {
 	FRoadSnapResult Snap;
@@ -306,6 +333,16 @@ void ARoadBuildController::OnBuildClick()
 	}
 
 	const FVector2D Where = Snap.Position;
+
+	// Judged BEFORE anything is created. Validating after placing the node would leave a
+	// stray node behind on every refused click - the road would not appear, but the graph
+	// would still have grown.
+	const ERoadPlacement Judgement = JudgePlacement(Snap);
+	if (Judgement != ERoadPlacement::Valid)
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Click refused: %s"), RoadPlacement::Describe(Judgement));
+		return;
+	}
 
 	// One decision, taken by the chain, acted on here and drawn by the HUD. The three
 	// outcomes are the whole difference between continuing a road, closing a junction on
@@ -398,27 +435,28 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 
 	PanView(DeltaTime);
 
-	if (!bDrawBuildPreview || Target == nullptr)
+	if (Target == nullptr)
 	{
 		return;
 	}
 
-	// The node markers and the cursor crosshair are ARoadBuildHUD's now - screen space, so
-	// they hold their size through a zoom instead of being sized against the road. What is
-	// left here is the rubber band alone, and only until the ghost drag replaces it: a
-	// line in world units is the right shape for something lying on the road surface.
-	//
-	// Thickness is in world units. Single digits would be sub-pixel across a scene this
-	// large - indistinguishable from nothing being drawn at all.
-	constexpr float LineThickness = 10.0f;
+	FRoadSnapResult Snap;
+	const bool bHaveSnap = ResolveSnap(Snap);
 
-	FVector PendingWorld;
-	FVector2D Cursor;
-	if (NodeWorldLocation(PendingNode, PendingWorld) && CursorOnRoadPlane(Cursor))
+	// Judged every frame whether or not the ghost is drawn: the overlay reports the reason
+	// a click will be refused, and that has to be true even with previews switched off.
+	bLastPlacementRelevant = bHaveSnap && PendingNode != INDEX_NONE;
+	LastPlacement = bHaveSnap ? JudgePlacement(Snap) : ERoadPlacement::Valid;
+
+	if (!bDrawBuildPreview || !bLastPlacementRelevant)
 	{
-		DrawDebugLine(GetWorld(), PendingWorld, FVector(Cursor.X, Cursor.Y, Target->SurfaceZ),
-			FColor::Green, false, -1.0f, 0, LineThickness);
+		Target->HideGhost();
+		return;
 	}
+
+	// The ghost shows the segment even when it is illegal, coloured rather than withheld.
+	// Hiding it would answer "why can I not build here" with nothing at all.
+	Target->UpdateGhost(PendingNode, Snap, LastPlacement == ERoadPlacement::Valid);
 }
 
 void ARoadBuildController::OnCancelChain()

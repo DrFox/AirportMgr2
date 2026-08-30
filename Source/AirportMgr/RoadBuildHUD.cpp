@@ -46,6 +46,21 @@ void ARoadBuildHUD::DrawHUD()
 	{
 		DrawSnapMarker(*Target, Snap);
 	}
+
+	// Why a click will be refused. The ghost already says THAT it will be - it turns red -
+	// and a colour cannot say which of four rules objected.
+	ERoadPlacement Placement = ERoadPlacement::Valid;
+	if (Controller->GetPendingPlacement(Placement) && Placement != ERoadPlacement::Valid)
+	{
+		FVector2D Screen;
+		if (ProjectPlanePoint(Snap.Position, Target->SurfaceZ, Screen) && GEngine != nullptr)
+		{
+			DrawText(RoadPlacement::Describe(Placement), RefusedColour,
+				static_cast<float>(Screen.X) + CursorSize + 4.0f,
+				static_cast<float>(Screen.Y) + CursorSize,
+				GEngine->GetSmallFont());
+		}
+	}
 }
 
 ARoadBuildController* ARoadBuildHUD::GetBuildController() const

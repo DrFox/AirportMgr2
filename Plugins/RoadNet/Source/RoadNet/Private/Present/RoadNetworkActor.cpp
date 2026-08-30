@@ -9,6 +9,7 @@
 #include "DrawDebugHelpers.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
@@ -274,6 +275,28 @@ ARoadNetworkActor::ARoadNetworkActor()
 	{
 		SurfaceMaterial = RoadMaterial.Object;
 	}
+
+	// A second component for the preview, sharing the road's absolute-space setup for the
+	// same reason: the builder emits world coordinates and must not have them transformed
+	// twice. Hidden until there is something to preview.
+	GhostComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RoadGhost"));
+	GhostComponent->SetupAttachment(RootComponent);
+	GhostComponent->SetUsingAbsoluteLocation(true);
+	GhostComponent->SetUsingAbsoluteRotation(true);
+	GhostComponent->SetUsingAbsoluteScale(true);
+	GhostComponent->SetVisibility(false);
+
+	// The preview is a hint, not scenery: it must never occlude, shadow or be traced
+	// against the road it is hovering over.
+	GhostComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GhostComponent->SetCastShadow(false);
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GhostAsset(
+		TEXT("/Game/RoadNet/Materials/M_RoadGhost"));
+	if (GhostAsset.Succeeded())
+	{
+		GhostMaterial = GhostAsset.Object;
+	}
 }
 
 URoadNetwork& ARoadNetworkActor::EnsureNetwork()
@@ -426,14 +449,24 @@ int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
 		return INDEX_NONE;
 	}
 
-	const FRoadSegment* Segment = Network->GetSegment(Doomed);
-	const FRoadNode* EndA = Segment != nullptr ? Network->GetNode(Segment->A) : nullptr;
-	const FRoadNode* EndB = Segment != nullptr ? Network->GetNode(Segment->B) : nullptr;
-	if (EndA == nullptr || EndB == nullptr)
+	const FRoadNodeId Middle = SplitSegmentIn(*Network, Doomed, At);
+	if (!Middle.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SplitSegment refused: segment %d has an endpoint that is not live"), SegmentIndex);
+			TEXT("SplitSegment refused: segment %d at (%f, %f)"), SegmentIndex, At.X, At.Y);
 		return INDEX_NONE;
+	}
+	return Middle.Index;
+}
+
+FRoadNodeId ARoadNetworkActor::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Doomed, const FVector2D& At)
+{
+	const FRoadSegment* Segment = Net.GetSegment(Doomed);
+	const FRoadNode* EndA = Segment != nullptr ? Net.GetNode(Segment->A) : nullptr;
+	const FRoadNode* EndB = Segment != nullptr ? Net.GetNode(Segment->B) : nullptr;
+	if (EndA == nullptr || EndB == nullptr)
+	{
+		return FRoadNodeId();
 	}
 
 	// Copied out before anything mutates. Every pointer above dangles the moment the
@@ -454,47 +487,210 @@ int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
 	if (FVector2D::DistSquared(At, PositionA) < MinSplitOffset * MinSplitOffset
 		|| FVector2D::DistSquared(At, PositionB) < MinSplitOffset * MinSplitOffset)
 	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SplitSegment refused: (%f, %f) is on top of an endpoint of segment %d"),
-			At.X, At.Y, SegmentIndex);
-		return INDEX_NONE;
+		return FRoadNodeId();
 	}
 
-	const FRoadNodeId Middle = Network->AddNode(At);
+	const FRoadNodeId Middle = Net.AddNode(At);
 	if (!Middle.IsSet())
 	{
-		UE_LOG(LogRoadMesh, Warning, TEXT("SplitSegment refused: could not add the middle node"));
-		return INDEX_NONE;
+		return FRoadNodeId();
 	}
 
 	// Removed, not reshaped. A segment's endpoints are its identity and both of them
 	// change here, so the handle must die rather than quietly come to mean half a road.
-	if (!Network->RemoveSegment(Doomed))
+	if (!Net.RemoveSegment(Doomed))
 	{
-		Network->RemoveNode(Middle);
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SplitSegment refused: segment %d would not remove"), SegmentIndex);
-		return INDEX_NONE;
+		Net.RemoveNode(Middle);
+		return FRoadNodeId();
 	}
 
-	const FRoadSegmentId First = Network->AddStraightSegment(KeepA, Middle, KeepProfile);
-	const FRoadSegmentId Second = Network->AddStraightSegment(Middle, KeepB, KeepProfile);
+	const FRoadSegmentId First = Net.AddStraightSegment(KeepA, Middle, KeepProfile);
+	const FRoadSegmentId Second = Net.AddStraightSegment(Middle, KeepB, KeepProfile);
 
 	// Both endpoints were checked live and the middle node was just created, so the only
 	// way here is a model invariant having changed underneath. Loud rather than silent:
 	// the graph is now missing a road the player can still see the ends of.
 	if (!First.IsSet() || !Second.IsSet())
 	{
-		UE_LOG(LogRoadMesh, Error,
-			TEXT("SplitSegment left segment %d half-replaced: first=%d second=%d"),
-			SegmentIndex, First.IsSet() ? 1 : 0, Second.IsSet() ? 1 : 0);
+		UE_LOG(LogRoadMesh, Error, TEXT("SplitSegmentIn left a segment half-replaced: first=%d second=%d"),
+			First.IsSet() ? 1 : 0, Second.IsSet() ? 1 : 0);
 	}
 
-	return Middle.Index;
+	return Middle;
+}
+
+UMaterialInstanceDynamic* ARoadNetworkActor::GhostMaterialInstance()
+{
+	if (GhostMID == nullptr && GhostMaterial != nullptr)
+	{
+		GhostMID = UMaterialInstanceDynamic::Create(GhostMaterial, this);
+	}
+	return GhostMID;
+}
+
+void ARoadNetworkActor::AddGhostJunction(
+	FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const
+{
+	const FJunctionResult* Junction = Solved.NodeResults.Find(NodeIndex);
+	const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(NodeIndex);
+
+	// A one-armed node solves to no fan at all - the solver trims it back and leaves the
+	// end cap to the mesh builder - so a missing entry is ordinary, not an error.
+	if (Junction == nullptr || Arms == nullptr || GhostNetwork == nullptr)
+	{
+		return;
+	}
+	Builder.AddJunction(*GhostNetwork, NodeIndex, *Junction, *Arms);
+}
+
+void ARoadNetworkActor::HideGhost()
+{
+	if (GhostComponent != nullptr)
+	{
+		GhostComponent->SetVisibility(false);
+	}
+	bGhostVisible = false;
+	LastGhostFrom = INDEX_NONE;
+}
+
+bool ARoadNetworkActor::BuildGhostBuffers(
+	int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers)
+{
+	FRoadNodeId From;
+	if (Network == nullptr || !MakeLiveNodeId(FromNodeIndex, From))
+	{
+		return false;
+	}
+
+	// The duplicate, and the reason for the whole function. Slot indices and generation
+	// counters survive duplication, so a handle resolved against the real network
+	// resolves to the same thing here - which is what lets Snap's node and segment
+	// handles be used directly below without translation.
+	GhostNetwork = DuplicateObject<URoadNetwork>(Network, this);
+	if (GhostNetwork == nullptr)
+	{
+		return false;
+	}
+
+	FRoadNodeId To;
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+		To = Snap.Node;
+		break;
+
+	case ERoadSnapKind::Segment:
+		// The same surgery the click will perform, run on the copy. Sharing the
+		// implementation is the only thing that stops the preview and the edit diverging.
+		To = SplitSegmentIn(*GhostNetwork, Snap.Segment, Snap.Position);
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		To = GhostNetwork->AddNode(Snap.Position);
+		break;
+	}
+
+	if (!To.IsSet() || To == From)
+	{
+		return false;
+	}
+
+	const FRoadSegmentId Ghosted = GhostNetwork->AddStraightSegment(From, To, ResolveProfile());
+	if (!Ghosted.IsSet())
+	{
+		return false;
+	}
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*GhostNetwork);
+
+	// Only the NEW segment and the two junctions it reshapes. Drawing the whole ghost
+	// network would lay a translucent copy over every road already on screen, and the one
+	// thing the preview has to answer is what THIS click changes.
+	//
+	// Segments before junctions: the builder's ordering contract. A cut vertex is one
+	// welded vertex holding one UV1, first writer wins, and a segment measures its
+	// distance-along from its A end while the junction standing at that node would write
+	// zero. Reversed, the ghost's markings jump at one end and nothing reports it.
+	FRoadMeshBuilder Builder(SurfaceZ + GhostZOffset, TexelsPerUnit);
+	Builder.AddSegment(*GhostNetwork, Ghosted, RibbonSegments);
+	AddGhostJunction(Builder, Solved, From.Index);
+	AddGhostJunction(Builder, Solved, To.Index);
+
+	OutBuffers = Builder.GetBuffers();
+	return true;
+}
+
+void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
+{
+	FRoadNodeId From;
+	if (Network == nullptr || GhostComponent == nullptr || !MakeLiveNodeId(FromNodeIndex, From))
+	{
+		HideGhost();
+		return;
+	}
+
+	// A drag holds still for most of its frames. Rebuilding then means duplicating the
+	// network and re-solving it to produce exactly the same triangles, sixty times a
+	// second. Cleared by RebuildMesh, so any real edit invalidates it.
+	if (bGhostVisible
+		&& FromNodeIndex == LastGhostFrom
+		&& Snap.Kind == LastGhostKind
+		&& Snap.Position == LastGhostTo)
+	{
+		if (bValid != bLastGhostValid)
+		{
+			// Geometry untouched: this is the whole reason validity is a material
+			// parameter rather than a second mesh.
+			if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance())
+			{
+				Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
+			}
+			bLastGhostValid = bValid;
+		}
+		return;
+	}
+
+	FRoadMeshBuffers Buffers;
+	if (!BuildGhostBuffers(FromNodeIndex, Snap, Buffers))
+	{
+		HideGhost();
+		return;
+	}
+
+	if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance())
+	{
+		Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
+
+		// The material cannot know where this road's edge is; UV1.X is in uu and the
+		// profile owns the half-width. Left at its default a narrow road would glow from
+		// edge to edge and a wide one not at all.
+		if (const URoadProfile* Used = ResolveProfile())
+		{
+			Instance->SetScalarParameterValue(TEXT("EdgeHalfWidth"),
+				static_cast<float>(FMath::Max(Used->GetHalfWidthLeft(), Used->GetHalfWidthRight())));
+		}
+	}
+
+	// bUseConstantVertexColour false, and it matters: any ColorOverrideMode other than
+	// None makes the scene proxy substitute the engine's vertex-colour debug material for
+	// ours, so the ghost would render as flat opaque grey with none of its parameters.
+	FDynamicMeshSink Sink(GhostComponent, GhostMaterialInstance(), /*bUseConstantVertexColour*/ false);
+	Sink.Accept(Buffers);
+
+	GhostComponent->SetVisibility(true);
+
+	bGhostVisible = true;
+	LastGhostFrom = FromNodeIndex;
+	LastGhostTo = Snap.Position;
+	LastGhostKind = Snap.Kind;
+	bLastGhostValid = bValid;
 }
 
 void ARoadNetworkActor::ClearNetwork()
 {
+	HideGhost();
+
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
 	Network = NewObject<URoadNetwork>(this);
@@ -503,6 +699,12 @@ void ARoadNetworkActor::ClearNetwork()
 
 void ARoadNetworkActor::RebuildMesh()
 {
+	// Any real edit invalidates whatever the ghost was showing, and the cache key cannot
+	// see it: a click that splits a segment can leave the cursor and the start node
+	// exactly where they were, so every field the cache compares is unchanged while the
+	// graph underneath is not. Cleared here because this is what every mutation ends with.
+	LastGhostFrom = INDEX_NONE;
+
 	if (Network == nullptr || MeshComponent == nullptr)
 	{
 		return;
