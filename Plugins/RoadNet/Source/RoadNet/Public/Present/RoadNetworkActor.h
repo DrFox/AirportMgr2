@@ -322,8 +322,44 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Apron")
 	TObjectPtr<UDynamicMeshComponent> ApronComponent;
 
+	/**
+	 * Concrete for the aprons. Defaults to M_ApronConcrete.
+	 *
+	 * A material of its own rather than the road's, and not only for realism: while an
+	 * apron borrowed M_RoadSurface it was very hard to tell from the taxiway lying on it
+	 * and from the ground under it, which is indistinguishable from it not rendering.
+	 *
+	 * Left null it falls back to SurfaceMaterial, and if that is null too the sink gives
+	 * the component the engine default - which is WorldGridMaterial, the same checker the
+	 * template floor wears. That degrades quietly, and quiet is the problem.
+	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
 	TObjectPtr<UMaterialInterface> ApronMaterial;
+
+	/**
+	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
+	 * effect nobody would guess, stop ApronMaterial rendering at all.
+	 *
+	 * The same trap as bUseConstantVertexColour: any ColorOverrideMode other than None
+	 * makes the scene proxy substitute the engine's vertex-colour debug material, so this
+	 * does not tint the concrete, it replaces it. Which is exactly what makes it useful -
+	 * it is the fastest way to answer "is the apron on screen at all", because a flat
+	 * unmissable colour cannot be confused with the ground or with the road.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	bool bUseConstantApronColour = false;
+
+	/**
+	 * Draw every apron triangle as debug lines.
+	 *
+	 * The same ground truth bDebugDrawMesh gives the roads: the same buffers reaching the
+	 * screen by a completely separate route. If these lines land where the outline was
+	 * drawn and the concrete does not, the fault is in the component, the material or the
+	 * view - never the geometry. If the lines are wrong too, every conclusion drawn from
+	 * triangle counts so far needs revisiting.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	bool bDebugDrawAprons = false;
 
 	/**
 	 * How far BELOW the road surface the aprons sit, in uu.

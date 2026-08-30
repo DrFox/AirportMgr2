@@ -304,6 +304,13 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ApronAsset(
+		TEXT("/Game/RoadNet/Materials/M_ApronConcrete"));
+	if (ApronAsset.Succeeded())
+	{
+		ApronMaterial = ApronAsset.Object;
+	}
+
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GhostAsset(
 		TEXT("/Game/RoadNet/Materials/M_RoadGhost"));
 	if (GhostAsset.Succeeded())
@@ -1115,14 +1122,42 @@ void ARoadNetworkActor::RebuildAprons()
 		}
 	}
 
-	// bUseConstantVertexColour false: any ColorOverrideMode other than None makes the scene
-	// proxy substitute the engine's vertex-colour debug material for ours.
+	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+
 	FDynamicMeshSink Sink(ApronComponent,
 		ApronMaterial != nullptr ? ApronMaterial : SurfaceMaterial,
-		/*bUseConstantVertexColour*/ false);
-	Sink.Accept(Builder.GetBuffers());
+		bUseConstantApronColour);
+	Sink.Accept(Buffers);
 
 	ApronComponent->SetVisibility(Built > 0);
+
+	// Reported rather than inferred. An apron that is built and never seen, and one that
+	// is never built, look identical from outside - and every explanation reasoned from
+	// engine source about the roads was wrong before the numbers were printed.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
+		Built, Buffers.Indices.Num() / 3, SurfaceZ - ApronZOffset,
+		ApronMaterial != nullptr ? *ApronMaterial->GetName() : TEXT("<fallback>"),
+		bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
+
+	if (bDebugDrawAprons && GetWorld() != nullptr)
+	{
+		// A completely separate route to the screen, from the same buffers the component
+		// was handed.
+		const float Lifetime = static_cast<float>(DebugDrawSeconds);
+		for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+		{
+			const FVector A = Buffers.Positions[Buffers.Indices[Slot]];
+			const FVector B = Buffers.Positions[Buffers.Indices[Slot + 1]];
+			const FVector C = Buffers.Positions[Buffers.Indices[Slot + 2]];
+
+			// Thickness in WORLD units. Single digits are sub-pixel across a scene this
+			// large - indistinguishable from nothing being drawn at all.
+			DrawDebugLine(GetWorld(), A, B, FColor::Cyan, false, Lifetime, 0, 12.0f);
+			DrawDebugLine(GetWorld(), B, C, FColor::Cyan, false, Lifetime, 0, 12.0f);
+			DrawDebugLine(GetWorld(), C, A, FColor::Cyan, false, Lifetime, 0, 12.0f);
+		}
+	}
 }
 
 void ARoadNetworkActor::ClearNetwork()

@@ -5,6 +5,7 @@
 #include "DynamicMesh/MeshNormals.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadNetwork.h"
+#include "Components/DynamicMeshComponent.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/ApronDrawTool.h"
@@ -213,6 +214,56 @@ bool FApronDrawToolTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestEqual(TEXT("every apron triangle faces the sky"), FacingUp, Mesh.TriangleCount());
+	}
+
+	// --- Does the geometry actually REACH the component? ------------------------------
+	//
+	// Instrumenting the boundary rather than reasoning at it. An apron that is built
+	// correctly and never seen, and an apron that is never built, look identical from the
+	// outside - and the last time this project guessed between them it got seven wrong
+	// diagnoses in a row. This asserts which side of the boundary the geometry is on.
+	{
+		Actor->ClearNetwork();
+		const int32 Added = Actor->AddApron({ FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0),
+			FVector2D(6000.0, 4000.0), FVector2D(0.0, 4000.0) });
+		if (!TestTrue(TEXT("the apron is accepted"), Added != INDEX_NONE))
+		{
+			return false;
+		}
+
+		Actor->RebuildMesh();
+
+		if (!TestNotNull(TEXT("the actor has an apron component"), Actor->ApronComponent.Get()))
+		{
+			return false;
+		}
+
+		const UE::Geometry::FDynamicMesh3& Live =
+			Actor->ApronComponent->GetDynamicMesh()->GetMeshRef();
+
+		TestTrue(TEXT("the component holds apron triangles"), Live.TriangleCount() > 0);
+		TestTrue(TEXT("and their vertices"), Live.VertexCount() > 0);
+
+		// A UDynamicMeshComponent has NO surface-material fallback: GetNumMaterials() is
+		// literally BaseMaterials.Num(), so a component nobody called SetMaterial on has
+		// zero slots and the renderer has no section to draw. Correct geometry, nothing on
+		// screen, and not one line of log.
+		TestTrue(TEXT("and a material slot to draw them in"),
+			Actor->ApronComponent->GetNumMaterials() > 0);
+
+		TestTrue(TEXT("the component is visible"), Actor->ApronComponent->GetVisibleFlag());
+
+		// Facing the sky at the component, not merely in the buffers.
+		int32 FacingUp = 0;
+		for (const int32 TriangleId : Live.TriangleIndicesItr())
+		{
+			if (Live.GetTriNormal(TriangleId).Z > 0.9)
+			{
+				++FacingUp;
+			}
+		}
+		TestEqual(TEXT("every triangle the component holds faces the sky"),
+			FacingUp, Live.TriangleCount());
 	}
 
 	return true;
