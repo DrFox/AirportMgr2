@@ -93,6 +93,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Delete")
 	FLinearColor DoomedColour = FLinearColor(1.0f, 0.15f, 0.1f);
 
+	/** The roads a deletion would create to rejoin what it strands. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Delete")
+	FLinearColor HealColour = FLinearColor(0.3f, 1.0f, 0.5f);
+
 	/** Thickness of the doomed-segment lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Delete", meta = (ClampMin = "0.5"))
 	float DoomedThickness = 3.0f;
@@ -127,6 +131,14 @@ private:
 
 	/** Redden what a Ctrl+click would remove, cascade included. */
 	void DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap);
+
+	/** A ring on a node by slot index, in a colour of its own. */
+	void DrawNodeRing(const ARoadNetworkActor& Target, int32 NodeIndex,
+		const FLinearColor& Colour, float Thickness);
+
+	/** A straight line between two nodes - a road that does not exist yet. */
+	void DrawPlaneLine(const ARoadNetworkActor& Target, FRoadNodeId From, FRoadNodeId To,
+		const FLinearColor& Colour, float Thickness);
 
 	/** A line along a segment, in screen space. Skipped if either end cannot be drawn. */
 	void DrawSegmentLine(const ARoadNetworkActor& Target, int32 SegmentIndex,

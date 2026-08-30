@@ -297,7 +297,9 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("the deleted node is gone"), Actor->Network->GetNodes()[Hub].bAlive);
 		TestFalse(TEXT("and its segment cascaded with it"),
 			Actor->Network->GetSegments()[0].bAlive);
-		TestTrue(TEXT("the far endpoint is left behind, not swept up"),
+		// Reversed policy, deliberately: an endpoint left holding no road is litter, not a
+		// thing the deletion destroyed, so it goes too.
+		TestFalse(TEXT("the far endpoint is swept, holding no road"),
 			Actor->Network->GetNodes()[Spoke].bAlive);
 
 		TestTrue(TEXT("there is something to undo"), Actor->CanUndo());
@@ -325,11 +327,12 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("redo deletes the node again"), Actor->Network->GetNodes()[Hub].bAlive);
 		TestTrue(TEXT("undo is available once more"), Actor->Undo());
 
-		// Deleting one segment leaves both its endpoints standing.
+		// Deleting the only segment sweeps both endpoints, because neither is left holding
+		// a road. An endpoint that still has one is untouched - covered in the heal test.
 		TestTrue(TEXT("deleting the segment succeeds"), Actor->DeleteSegment(0));
 		TestFalse(TEXT("the segment is gone"), Actor->Network->GetSegments()[0].bAlive);
-		TestTrue(TEXT("its near endpoint survives"), Actor->Network->GetNodes()[Hub].bAlive);
-		TestTrue(TEXT("its far endpoint survives"), Actor->Network->GetNodes()[Spoke].bAlive);
+		TestFalse(TEXT("its now-bare near endpoint is swept"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestFalse(TEXT("its now-bare far endpoint is swept"), Actor->Network->GetNodes()[Spoke].bAlive);
 
 		// A refused edit must not become an undo step that does nothing.
 		const int32 DepthBefore = Actor->CanUndo() ? 1 : 0;

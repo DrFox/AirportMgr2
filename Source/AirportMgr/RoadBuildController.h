@@ -253,6 +253,16 @@ private:
 	int32 PendingNode = INDEX_NONE;
 
 	/**
+	 * Whether this chain created PendingNode, rather than starting from a node already
+	 * there.
+	 *
+	 * Cancelling a chain removes the node the chain dropped, and only that node. Without
+	 * this flag, right-clicking a chain started on an existing bare node would delete a
+	 * node the player put there on purpose.
+	 */
+	bool bPendingNodeCreated = false;
+
+	/**
 	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through
 	 * TUniquePtr and holds no state worth saving, only the ordering.
 	 */

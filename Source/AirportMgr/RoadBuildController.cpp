@@ -316,6 +316,7 @@ void ARoadBuildController::OnUndo()
 	// it pointed at. Dropped rather than validated: after an undo the player's next click
 	// should start fresh, not silently continue a road from before it.
 	PendingNode = INDEX_NONE;
+	bPendingNodeCreated = false;
 	UE_LOG(LogRoadBuild, Log, TEXT("Undid: %s"), *Label);
 }
 
@@ -363,6 +364,7 @@ void ARoadBuildController::OnDeleteClick(const FRoadSnapResult& Snap)
 	// A deletion can remove the node the chain was running from, and can invalidate the
 	// preview's cached start. Both are dropped rather than checked.
 	PendingNode = INDEX_NONE;
+	bPendingNodeCreated = false;
 	Target->RebuildMesh();
 }
 
@@ -398,10 +400,14 @@ void ARoadBuildController::OnBuildClick()
 	// outcomes are the whole difference between continuing a road, closing a junction on
 	// an existing node, and cutting a new junction into a road already drawn.
 	int32 Node = INDEX_NONE;
+	bool bCreated = true;
 	switch (Snap.Kind)
 	{
 	case ERoadSnapKind::Node:
 		Node = Snap.Node.Index;
+
+		// Already there. Cancelling must not take it away.
+		bCreated = false;
 		break;
 
 	case ERoadSnapKind::Segment:
@@ -459,6 +465,7 @@ void ARoadBuildController::OnBuildClick()
 	// Chain from the node just placed, so a road is drawn click by click rather than a
 	// pair of clicks per segment.
 	PendingNode = Node;
+	bPendingNodeCreated = bCreated;
 	Target->RebuildMesh();
 }
 
@@ -490,6 +497,10 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 		return;
 	}
 
+	// The deletion planner judges its rejoins by the same rules a click obeys, so the two
+	// cannot drift apart. Pushed every frame so a details-panel edit takes effect at once.
+	Target->PlacementLimits = MakePlacementLimits();
+
 	FRoadSnapResult Snap;
 	const bool bHaveSnap = ResolveSnap(Snap);
 
@@ -513,7 +524,27 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 
 void ARoadBuildController::OnCancelChain()
 {
+	// A chain that placed a node and drew nothing from it leaves that node behind with no
+	// road on it. Removed here rather than swept later: it is this gesture that created it,
+	// and this gesture that is being abandoned.
+	//
+	// Only if the chain created it, and only if it is still bare - a node that picked up a
+	// segment is part of the network now, whoever made it.
+	if (Target != nullptr && bPendingNodeCreated && PendingNode != INDEX_NONE
+		&& Target->Network != nullptr
+		&& Target->Network->GetNodes().IsValidIndex(PendingNode)
+		&& Target->Network->GetNodes()[PendingNode].bAlive
+		&& Target->Network->GetNodes()[PendingNode].Incident.Num() == 0)
+	{
+		if (Target->DeleteNode(PendingNode))
+		{
+			Target->RebuildMesh();
+			UE_LOG(LogRoadBuild, Log, TEXT("Chain cancelled; removed the node it had dropped."));
+		}
+	}
+
 	PendingNode = INDEX_NONE;
+	bPendingNodeCreated = false;
 	UE_LOG(LogRoadBuild, Log, TEXT("Chain ended; the next click starts a new road."));
 }
 

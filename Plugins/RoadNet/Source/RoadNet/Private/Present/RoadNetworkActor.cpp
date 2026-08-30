@@ -14,6 +14,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadEditHistory.h"
+#include "Tool/RoadHeal.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
@@ -719,6 +720,16 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	bLastGhostValid = bValid;
 }
 
+FRoadDeletionPlan ARoadNetworkActor::PlanNodeDeletion(int32 NodeIndex) const
+{
+	FRoadNodeId Node;
+	if (Network == nullptr || !MakeLiveNodeId(NodeIndex, Node))
+	{
+		return FRoadDeletionPlan();
+	}
+	return RoadHeal::PlanNodeDeletion(*Network, Node, PlacementLimits);
+}
+
 bool ARoadNetworkActor::DeleteNode(int32 NodeIndex)
 {
 	FRoadNodeId Node;
@@ -728,14 +739,42 @@ bool ARoadNetworkActor::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
+	const FRoadDeletionPlan Plan = RoadHeal::PlanNodeDeletion(*Network, Node, PlacementLimits);
+	if (!Plan.bValid)
+	{
+		// Refused whole. Nothing has been touched yet, which is the point of planning
+		// before acting rather than unwinding afterwards.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DeleteNode refused: node %d cannot rejoin node %d (%s). Delete its roads "
+				 "one at a time to strand it, then it will delete."),
+			NodeIndex, Plan.RefusedNeighbour.Index, RoadPlacement::Describe(Plan.Refusal));
+		return false;
+	}
+
 	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete node"));
 
-	// RemoveNode takes the incident segments with it. That cascade is the model's and not
-	// a policy chosen here: a segment whose endpoint is gone has no geometry to build.
+	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
 	if (!Network->RemoveNode(Node))
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
 		return false;
+	}
+
+	// The heal. Every one of these was judged against the post-deletion graph, so it is
+	// being applied to exactly the state it was approved for.
+	for (const FRoadNodeId& Stranded : Plan.Rejoin)
+	{
+		if (!Network->AddStraightSegment(Stranded, Plan.Anchor, ResolveProfile()).IsSet())
+		{
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
+				Stranded.Index, Plan.Anchor.Index);
+		}
+	}
+
+	for (const FRoadNodeId& Litter : Plan.Swept)
+	{
+		Network->RemoveNode(Litter);
 	}
 
 	Edit.Commit();
@@ -752,16 +791,31 @@ bool ARoadNetworkActor::DeleteSegment(int32 SegmentIndex)
 		return false;
 	}
 
+	// Captured before the removal, because afterwards the segment cannot say what it joined.
+	const FRoadSegment* Doomed = Network->GetSegment(Segment);
+	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
+	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
+
 	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete segment"));
 
-	// Endpoints deliberately survive, even when this was their only segment. They stay
-	// visible as bare nodes and can be removed on their own; sweeping them here would
-	// delete things the player did not point at.
 	if (!Network->RemoveSegment(Segment))
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("DeleteSegment refused: segment %d would not remove"), SegmentIndex);
 		return false;
+	}
+
+	// Cleanup, not deletion: an endpoint left with no road holds no geometry, so removing
+	// it destroys nothing. An endpoint that still has roads is untouched.
+	for (const FRoadNodeId& End : { EndA, EndB })
+	{
+		if (const FRoadNode* Live = Network->GetNode(End))
+		{
+			if (Live->Incident.Num() == 0)
+			{
+				Network->RemoveNode(End);
+			}
+		}
 	}
 
 	Edit.Commit();

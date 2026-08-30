@@ -5,6 +5,7 @@
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Tool/RoadEditHistory.h"
+#include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 #include "RoadNetworkActor.generated.h"
 
@@ -114,24 +115,35 @@ public:
 	int32 SplitSegment(int32 SegmentIndex, FVector2D At);
 
 	/**
-	 * Remove a node and every segment incident to it.
+	 * Remove a node, rejoining the roads it would otherwise strand. See RoadHeal.h.
 	 *
-	 * The cascade is the model's, not a policy invented here: a segment with a dead
-	 * endpoint has no geometry. Its OTHER endpoints are left behind as bare nodes rather
-	 * than swept up - they are visible, reusable and individually deletable, and silently
-	 * removing things adjacent to what the player pointed at is how a delete comes to take
-	 * more than anyone asked it to.
+	 * Refuses WHOLE, changing nothing, if any rejoin would break a placement rule - a
+	 * junction can therefore become undeletable, and the way out is to delete its arms
+	 * individually until it is bare. Nothing is ever moved or lost unexpectedly, which is
+	 * the trade that choice buys.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	bool DeleteNode(int32 NodeIndex);
 
-	/** Remove one segment, leaving both of its endpoints in place. */
+	/**
+	 * Remove one segment.
+	 *
+	 * Either endpoint left holding no road at all goes with it. That is cleanup rather
+	 * than deletion: a node with no segments carries no geometry, so removing it destroys
+	 * nothing - and leaving it behind is just litter on the map.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	bool DeleteSegment(int32 SegmentIndex);
 
 	/** Slot indices of the segments that deleting NodeIndex would take with it. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
+
+	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
+	FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const;
+
+	/** Limits the deletion plan judges its rejoins against. Set from the build tool. */
+	FRoadPlacementLimits PlacementLimits;
 
 	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
 	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;

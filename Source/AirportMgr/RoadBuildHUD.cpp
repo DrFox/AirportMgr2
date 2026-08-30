@@ -5,6 +5,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/RoadHeal.h"
 #include "RoadBuildController.h"
 
 void ARoadBuildHUD::DrawHUD()
@@ -228,14 +229,59 @@ void ARoadBuildHUD::DrawSegmentLine(const ARoadNetworkActor& Target, int32 Segme
 		Colour, Thickness);
 }
 
+void ARoadBuildHUD::DrawNodeRing(const ARoadNetworkActor& Target, int32 NodeIndex,
+	const FLinearColor& Colour, float Thickness)
+{
+	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
+	if (!Nodes.IsValidIndex(NodeIndex) || !Nodes[NodeIndex].bAlive)
+	{
+		return;
+	}
+
+	FVector2D Screen;
+	if (ProjectPlanePoint(Nodes[NodeIndex].Position, Target.SurfaceZ, Screen))
+	{
+		DrawRing(Screen, NodeRingRadius, Colour, Thickness);
+	}
+}
+
+void ARoadBuildHUD::DrawPlaneLine(const ARoadNetworkActor& Target, FRoadNodeId From, FRoadNodeId To,
+	const FLinearColor& Colour, float Thickness)
+{
+	const FRoadNode* Start = Target.Network->GetNode(From);
+	const FRoadNode* End = Target.Network->GetNode(To);
+	if (Start == nullptr || End == nullptr)
+	{
+		return;
+	}
+
+	FVector2D ScreenA;
+	FVector2D ScreenB;
+	if (!ProjectPlanePoint(Start->Position, Target.SurfaceZ, ScreenA)
+		|| !ProjectPlanePoint(End->Position, Target.SurfaceZ, ScreenB))
+	{
+		return;
+	}
+
+	DrawLine(
+		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+		Colour, Thickness);
+}
+
 void ARoadBuildHUD::DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap)
 {
 	switch (Snap.Kind)
 	{
 	case ERoadSnapKind::Node:
 	{
+		// The whole plan, asked of the model rather than guessed at here - so what is drawn
+		// and what the click does are one answer, including the refusal.
+		const FRoadDeletionPlan Plan = Target.PlanNodeDeletion(Snap.Node.Index);
+
 		FVector2D Screen;
-		if (ProjectPlanePoint(Snap.Position, Target.SurfaceZ, Screen))
+		const bool bOnScreen = ProjectPlanePoint(Snap.Position, Target.SurfaceZ, Screen);
+		if (bOnScreen)
 		{
 			// A heavier ring than the node normally wears, so the doomed one reads as
 			// marked rather than merely recoloured.
@@ -243,12 +289,39 @@ void ARoadBuildHUD::DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapR
 			DrawRing(Screen, NodeRingRadius * 1.6f, DoomedColour, DoomedThickness);
 		}
 
-		// The cascade, asked of the model rather than re-derived here. Deleting a node
-		// takes its roads with it, and the count is the difference between removing a
-		// junction and removing the four roads that met at it.
-		for (const int32 Doomed : Target.SegmentsIncidentTo(Snap.Node.Index))
+		for (const FRoadSegmentId& Doomed : Plan.Doomed)
 		{
-			DrawSegmentLine(Target, Doomed, DoomedColour, DoomedThickness);
+			DrawSegmentLine(Target, Doomed.Index, DoomedColour, DoomedThickness);
+		}
+
+		// A refused deletion says so BEFORE the click, and says which neighbour it could
+		// not rejoin. Drawing the heal it cannot perform would be a promise it will break.
+		if (!Plan.bValid)
+		{
+			if (bOnScreen && GEngine != nullptr)
+			{
+				DrawText(
+					FString::Printf(TEXT("cannot rejoin node %d (%s)"),
+						Plan.RefusedNeighbour.Index, RoadPlacement::Describe(Plan.Refusal)),
+					RefusedColour,
+					static_cast<float>(Screen.X) + NodeRingRadius * 1.8f,
+					static_cast<float>(Screen.Y) + NodeRingRadius,
+					GEngine->GetSmallFont());
+			}
+			break;
+		}
+
+		// Nodes that go because the deletion leaves them holding no road.
+		for (const FRoadNodeId& Swept : Plan.Swept)
+		{
+			DrawNodeRing(Target, Swept.Index, DoomedColour, DoomedThickness);
+		}
+
+		// And the roads that will exist afterwards. Deleting is no longer purely
+		// subtractive, so showing only what goes would be half the truth.
+		for (const FRoadNodeId& Stranded : Plan.Rejoin)
+		{
+			DrawPlaneLine(Target, Stranded, Plan.Anchor, HealColour, DoomedThickness);
 		}
 		break;
 	}
