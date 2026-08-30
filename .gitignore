@@ -57,3 +57,9 @@ Art/**/*.blend2
 
 # Third-party editor automation tooling (dev only, not part of the game)
 Plugins/McpAutomationBridge/
+
+# Visual Studio project-upgrade logs - build detritus, regenerated on demand
+UpgradeLog*.htm
+
+# Reference screenshots kept alongside the project, not part of it
+samples/
