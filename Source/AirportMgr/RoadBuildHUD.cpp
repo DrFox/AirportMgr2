@@ -5,6 +5,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/RoadHeal.h"
 #include "RoadBuildController.h"
 
 void ARoadBuildHUD::DrawHUD()
@@ -45,6 +46,13 @@ void ARoadBuildHUD::DrawHUD()
 	if (bDrawCursor && bHaveSnap)
 	{
 		DrawSnapMarker(*Target, Snap);
+	}
+
+	// Aiming a deletion. Drawn after the rings so the doomed ones overdraw their normal
+	// colour rather than being hidden underneath it.
+	if (bHaveSnap && Controller->IsDeleteHeld() && Target->Network != nullptr)
+	{
+		DrawDoomed(*Target, Snap);
 	}
 
 	// Why a click will be refused. The ghost already says THAT it will be - it turns red -
@@ -192,6 +200,141 @@ void ARoadBuildHUD::DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadS
 		X - static_cast<float>(Across.X) * Half, Y - static_cast<float>(Across.Y) * Half,
 		X + static_cast<float>(Across.X) * Half, Y + static_cast<float>(Across.Y) * Half,
 		Colour, NodeRingThickness);
+}
+
+void ARoadBuildHUD::DrawSegmentLine(const ARoadNetworkActor& Target, int32 SegmentIndex,
+	const FLinearColor& Colour, float Thickness)
+{
+	FVector2D WorldA;
+	FVector2D WorldB;
+	if (!Target.GetSegmentEnds(SegmentIndex, WorldA, WorldB))
+	{
+		return;
+	}
+
+	// Both ends must project, so a road with one end off screen draws nothing rather than
+	// a line to a culled position. Acceptable here because the cursor is over the road:
+	// whatever is being deleted is on screen by definition, even if its far end is not.
+	FVector2D ScreenA;
+	FVector2D ScreenB;
+	if (!ProjectPlanePoint(WorldA, Target.SurfaceZ, ScreenA)
+		|| !ProjectPlanePoint(WorldB, Target.SurfaceZ, ScreenB))
+	{
+		return;
+	}
+
+	DrawLine(
+		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+		Colour, Thickness);
+}
+
+void ARoadBuildHUD::DrawNodeRing(const ARoadNetworkActor& Target, int32 NodeIndex,
+	const FLinearColor& Colour, float Thickness)
+{
+	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
+	if (!Nodes.IsValidIndex(NodeIndex) || !Nodes[NodeIndex].bAlive)
+	{
+		return;
+	}
+
+	FVector2D Screen;
+	if (ProjectPlanePoint(Nodes[NodeIndex].Position, Target.SurfaceZ, Screen))
+	{
+		DrawRing(Screen, NodeRingRadius, Colour, Thickness);
+	}
+}
+
+void ARoadBuildHUD::DrawPlaneLine(const ARoadNetworkActor& Target, FRoadNodeId From, FRoadNodeId To,
+	const FLinearColor& Colour, float Thickness)
+{
+	const FRoadNode* Start = Target.Network->GetNode(From);
+	const FRoadNode* End = Target.Network->GetNode(To);
+	if (Start == nullptr || End == nullptr)
+	{
+		return;
+	}
+
+	FVector2D ScreenA;
+	FVector2D ScreenB;
+	if (!ProjectPlanePoint(Start->Position, Target.SurfaceZ, ScreenA)
+		|| !ProjectPlanePoint(End->Position, Target.SurfaceZ, ScreenB))
+	{
+		return;
+	}
+
+	DrawLine(
+		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+		Colour, Thickness);
+}
+
+void ARoadBuildHUD::DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap)
+{
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+	{
+		// The whole plan, asked of the model rather than guessed at here - so what is drawn
+		// and what the click does are one answer, including the refusal.
+		const FRoadDeletionPlan Plan = Target.PlanNodeDeletion(Snap.Node.Index);
+
+		FVector2D Screen;
+		const bool bOnScreen = ProjectPlanePoint(Snap.Position, Target.SurfaceZ, Screen);
+		if (bOnScreen)
+		{
+			// A heavier ring than the node normally wears, so the doomed one reads as
+			// marked rather than merely recoloured.
+			DrawRing(Screen, NodeRingRadius, DoomedColour, NodeRingThickness);
+			DrawRing(Screen, NodeRingRadius * 1.6f, DoomedColour, DoomedThickness);
+		}
+
+		for (const FRoadSegmentId& Doomed : Plan.Doomed)
+		{
+			DrawSegmentLine(Target, Doomed.Index, DoomedColour, DoomedThickness);
+		}
+
+		// A refused deletion says so BEFORE the click, and says which neighbour it could
+		// not rejoin. Drawing the heal it cannot perform would be a promise it will break.
+		if (!Plan.bValid)
+		{
+			if (bOnScreen && GEngine != nullptr)
+			{
+				DrawText(
+					FString::Printf(TEXT("cannot rejoin node %d (%s)"),
+						Plan.RefusedNeighbour.Index, RoadPlacement::Describe(Plan.Refusal)),
+					RefusedColour,
+					static_cast<float>(Screen.X) + NodeRingRadius * 1.8f,
+					static_cast<float>(Screen.Y) + NodeRingRadius,
+					GEngine->GetSmallFont());
+			}
+			break;
+		}
+
+		// Nodes that go because the deletion leaves them holding no road.
+		for (const FRoadNodeId& Swept : Plan.Swept)
+		{
+			DrawNodeRing(Target, Swept.Index, DoomedColour, DoomedThickness);
+		}
+
+		// And the roads that will exist afterwards. Deleting is no longer purely
+		// subtractive, so showing only what goes would be half the truth.
+		for (const FRoadNodeId& Stranded : Plan.Rejoin)
+		{
+			DrawPlaneLine(Target, Stranded, Plan.Anchor, HealColour, DoomedThickness);
+		}
+		break;
+	}
+
+	case ERoadSnapKind::Segment:
+		// Just this one. Its endpoints survive, so they keep their own colours.
+		DrawSegmentLine(Target, Snap.Segment.Index, DoomedColour, DoomedThickness);
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		break;
+	}
 }
 
 void ARoadBuildHUD::DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness)

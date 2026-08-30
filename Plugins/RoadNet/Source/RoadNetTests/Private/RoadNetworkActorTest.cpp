@@ -276,6 +276,156 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			Actor->Network->GetNodes()[GhostFrom].Incident.Num(), 1);
 	}
 
+	// Delete, and the undo that has to put it back exactly. This is the whole reason undo
+	// was rebuilt as a snapshot rather than as the command layer: spec 7.3 warns that
+	// "Revert must restore handles identically, generation counter included", and the
+	// commands written to that spec broke it twice.
+	{
+		Actor->ClearNetwork();
+		const int32 Hub = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Spoke = Actor->PlaceNode(FVector2D(3000.0, 0.0));
+		TestTrue(TEXT("undo fixture connects"), Actor->ConnectNodes(Hub, Spoke));
+
+		const int32 HubGeneration = Actor->Network->GetNodes()[Hub].Generation;
+		const FVector2D HubPosition = Actor->Network->GetNodes()[Hub].Position;
+		const int32 SpanGeneration = Actor->Network->GetSegments()[0].Generation;
+
+		TestEqual(TEXT("the node reports the segment it would take with it"),
+			Actor->SegmentsIncidentTo(Hub).Num(), 1);
+
+		TestTrue(TEXT("deleting the node succeeds"), Actor->DeleteNode(Hub));
+		TestFalse(TEXT("the deleted node is gone"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestFalse(TEXT("and its segment cascaded with it"),
+			Actor->Network->GetSegments()[0].bAlive);
+		// Reversed policy, deliberately: an endpoint left holding no road is litter, not a
+		// thing the deletion destroyed, so it goes too.
+		TestFalse(TEXT("the far endpoint is swept, holding no road"),
+			Actor->Network->GetNodes()[Spoke].bAlive);
+
+		TestTrue(TEXT("there is something to undo"), Actor->CanUndo());
+		TestEqual(TEXT("and it is named"), Actor->PeekUndoLabel(), FString(TEXT("delete node")));
+		TestTrue(TEXT("undo succeeds"), Actor->Undo());
+
+		// The assertion the whole design turns on. A handle built from the ORIGINAL
+		// generation must resolve again - an undo that re-created the node instead of
+		// restoring its slot would leave this stale while everything on screen looked right.
+		FRoadNodeId OriginalHub;
+		OriginalHub.Index = Hub;
+		OriginalHub.Generation = HubGeneration;
+		TestTrue(TEXT("the original node handle resolves again after undo"),
+			RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Actor->Network->GetNodes(), OriginalHub));
+		TestTrue(TEXT("and the node is back where it was"),
+			Actor->Network->GetNodes()[Hub].Position == HubPosition);
+		TestEqual(TEXT("the segment's generation survives the round trip"),
+			Actor->Network->GetSegments()[0].Generation, SpanGeneration);
+		TestTrue(TEXT("the segment is live again"), Actor->Network->GetSegments()[0].bAlive);
+		TestEqual(TEXT("incidence is rebuilt"),
+			Actor->Network->GetNodes()[Hub].Incident.Num(), 1);
+
+		// Redo puts the deletion back.
+		TestTrue(TEXT("redo succeeds"), Actor->Redo());
+		TestFalse(TEXT("redo deletes the node again"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestTrue(TEXT("undo is available once more"), Actor->Undo());
+
+		// Deleting the only segment sweeps both endpoints, because neither is left holding
+		// a road. An endpoint that still has one is untouched - covered in the heal test.
+		TestTrue(TEXT("deleting the segment succeeds"), Actor->DeleteSegment(0));
+		TestFalse(TEXT("the segment is gone"), Actor->Network->GetSegments()[0].bAlive);
+		TestFalse(TEXT("its now-bare near endpoint is swept"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestFalse(TEXT("its now-bare far endpoint is swept"), Actor->Network->GetNodes()[Spoke].bAlive);
+
+		// A refused edit must not become an undo step that does nothing.
+		const int32 DepthBefore = Actor->CanUndo() ? 1 : 0;
+		TestFalse(TEXT("deleting a node that is not live refuses"), Actor->DeleteNode(Hub + 900));
+		TestEqual(TEXT("a refused delete is not an undo step"),
+			Actor->PeekUndoLabel(), FString(TEXT("delete segment")));
+		TestTrue(TEXT("and the stack still has its real entry"), DepthBefore == 1 && Actor->CanUndo());
+	}
+
+	// Moving a node, and the incidence order the solver depends on surviving it.
+	{
+		Actor->ClearNetwork();
+		const int32 Centre = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Northward = Actor->PlaceNode(FVector2D(0.0, 5000.0));
+		const int32 Eastward = Actor->PlaceNode(FVector2D(5000.0, 0.0));
+
+		// Northward needs TWO arms or its incidence order cannot be observed to be wrong,
+		// and the neighbour re-sort is exactly what a move is most likely to forget.
+		const int32 Far = Actor->PlaceNode(FVector2D(0.0, 10000.0));
+		TestTrue(TEXT("move fixture arm one"), Actor->ConnectNodes(Centre, Northward));
+		TestTrue(TEXT("move fixture arm two"), Actor->ConnectNodes(Centre, Eastward));
+		TestTrue(TEXT("move fixture arm three"), Actor->ConnectNodes(Northward, Far));
+
+		// Due west of Northward. Its bearing to Centre swings from south to west, crossing
+		// its bearing to Far, so the two arms must swap places in Northward's own list.
+		TestTrue(TEXT("a node moves"), Actor->MoveNode(Centre, FVector2D(-5000.0, 5000.0)));
+		TestTrue(TEXT("and it is where it was put"),
+			Actor->Network->GetNodes()[Centre].Position == FVector2D(-5000.0, 5000.0));
+
+		// The control point has to travel with the node. Tangents - and so the bearing sort
+		// and the solver - are derived from Control, not from the endpoints, so a segment
+		// left with a stale one goes on pointing at where the node used to be. A straight
+		// segment's control is its chord midpoint, and must still be.
+		for (const FRoadSegmentId& Arm : Actor->Network->GetNodes()[Centre].Incident)
+		{
+			const FRoadSegment* Segment = Actor->Network->GetSegment(Arm);
+			const FRoadNode* SideA = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
+			const FRoadNode* SideB = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
+			if (SideA != nullptr && SideB != nullptr)
+			{
+				TestTrue(FString::Printf(TEXT("segment %d keeps its control on the chord"), Arm.Index),
+					Segment->Control.Equals((SideA->Position + SideB->Position) * 0.5, 1e-9));
+			}
+		}
+
+		// Bearings changed for BOTH ends of both roads, so the incident lists have to be
+		// re-sorted at the neighbours too - not only at the node that moved. Asserted as
+		// the contract URoadNetwork states: sorted ascending by outgoing bearing.
+		for (const int32 Each : { Centre, Northward, Eastward, Far })
+		{
+			const TArray<FRoadSegmentId>& Incident = Actor->Network->GetNodes()[Each].Incident;
+			FRoadNodeId Owner;
+			Owner.Index = Each;
+			Owner.Generation = Actor->Network->GetNodes()[Each].Generation;
+
+			double Previous = -UE_DOUBLE_PI * 2.0;
+			bool bAscending = true;
+			for (const FRoadSegmentId& Arm : Incident)
+			{
+				const double Bearing =
+					FMath::Atan2(Actor->Network->GetOutgoingTangent(Arm, Owner).Y,
+						Actor->Network->GetOutgoingTangent(Arm, Owner).X);
+				bAscending = bAscending && Bearing >= Previous;
+				Previous = Bearing;
+			}
+			TestTrue(FString::Printf(TEXT("node %d keeps its arms sorted by bearing"), Each),
+				bAscending);
+		}
+
+		// A move that would pull a road under the minimum length is refused outright, so a
+		// drag stops following the cursor rather than making a segment nothing can trim.
+		Actor->PlacementLimits.MinSegmentLength = 250.0;
+		const FVector2D Before = Actor->Network->GetNodes()[Centre].Position;
+		TestFalse(TEXT("a move that would shorten a road too far is refused"),
+			Actor->MoveNode(Centre, FVector2D(0.0, 4900.0)));
+		TestTrue(TEXT("and the node has not moved"),
+			Actor->Network->GetNodes()[Centre].Position == Before);
+
+		// A whole drag is one undo step, not one per frame.
+		const FString LabelBefore = Actor->PeekUndoLabel();
+		Actor->BeginInteractiveEdit(TEXT("move node"));
+		Actor->MoveNode(Centre, FVector2D(-1200.0, -1000.0));
+		Actor->MoveNode(Centre, FVector2D(-1400.0, -1000.0));
+		Actor->MoveNode(Centre, FVector2D(-1600.0, -1000.0));
+		Actor->EndInteractiveEdit(true);
+
+		TestTrue(TEXT("undo takes the whole drag back at once"), Actor->Undo());
+		TestTrue(TEXT("all the way to where the drag started"),
+			Actor->Network->GetNodes()[Centre].Position == Before);
+		TestEqual(TEXT("and the step beneath it is the one from before the drag"),
+			Actor->PeekUndoLabel(), LabelBefore);
+	}
+
 	return true;
 }
 

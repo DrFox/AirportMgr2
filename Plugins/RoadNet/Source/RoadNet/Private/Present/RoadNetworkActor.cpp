@@ -13,6 +13,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/RoadEditHistory.h"
+#include "Tool/RoadHeal.h"
 #include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
@@ -308,6 +310,19 @@ URoadNetwork& ARoadNetworkActor::EnsureNetwork()
 	return *Network;
 }
 
+URoadEditHistory& ARoadNetworkActor::EnsureHistory()
+{
+	if (History == nullptr)
+	{
+		History = NewObject<URoadEditHistory>(this);
+	}
+
+	// Re-applied on every edit rather than only at creation, so lowering the depth in the
+	// details panel mid-session takes effect instead of waiting for a restart.
+	History->MaxDepth = FMath::Max(MaxUndoDepth, 1);
+	return *History;
+}
+
 URoadProfile* ARoadNetworkActor::ResolveProfile()
 {
 	if (Profile != nullptr)
@@ -350,12 +365,20 @@ bool ARoadNetworkActor::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
 
 int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 {
-	const FRoadNodeId Node = EnsureNetwork().AddNode(Where);
+	// The network is made BEFORE the scope, so the snapshot is of an empty graph rather
+	// than of nothing at all - otherwise the first node of a session is the one edit that
+	// cannot be undone.
+	URoadNetwork& Net = EnsureNetwork();
+	FRoadEditScope Edit(&EnsureHistory(), &Net, TEXT("place node"));
+
+	const FRoadNodeId Node = Net.AddNode(Where);
 	if (!Node.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("PlaceNode refused at (%f, %f)"), Where.X, Where.Y);
 		return INDEX_NONE;
 	}
+
+	Edit.Commit();
 	return Node.Index;
 }
 
@@ -376,6 +399,10 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
 		return false;
 	}
 
+	// Created after the guards above, all of which refuse without mutating anything, so a
+	// rejected connection never costs a snapshot.
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("connect nodes"));
+
 	// Straight only. The model stores a Bezier control point, but AddSegment still
 	// interpolates its interior samples in a straight line, so a curve authored here
 	// would render as a chord until slice 2b samples the curve properly.
@@ -385,6 +412,8 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %d -> %d"), FromIndex, ToIndex);
 		return false;
 	}
+
+	Edit.Commit();
 	return true;
 }
 
@@ -449,6 +478,8 @@ int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
 		return INDEX_NONE;
 	}
 
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("split segment"));
+
 	const FRoadNodeId Middle = SplitSegmentIn(*Network, Doomed, At);
 	if (!Middle.IsSet())
 	{
@@ -456,6 +487,8 @@ int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
 			TEXT("SplitSegment refused: segment %d at (%f, %f)"), SegmentIndex, At.X, At.Y);
 		return INDEX_NONE;
 	}
+
+	Edit.Commit();
 	return Middle.Index;
 }
 
@@ -687,9 +720,297 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	bLastGhostValid = bValid;
 }
 
+void ARoadNetworkActor::BeginInteractiveEdit(const FString& Label)
+{
+	if (Network != nullptr && !EnsureHistory().IsEditing())
+	{
+		History->BeginEdit(*Network, Label);
+	}
+}
+
+void ARoadNetworkActor::EndInteractiveEdit(bool bKeep)
+{
+	if (History == nullptr || !History->IsEditing())
+	{
+		return;
+	}
+
+	if (bKeep)
+	{
+		History->CommitEdit();
+	}
+	else
+	{
+		History->AbandonEdit();
+	}
+}
+
+bool ARoadNetworkActor::MoveNode(int32 NodeIndex, FVector2D To)
+{
+	FRoadNodeId Node;
+	if (!MakeLiveNodeId(NodeIndex, Node))
+	{
+		return false;
+	}
+
+	const FRoadNode* Live = Network->GetNode(Node);
+	if (Live == nullptr)
+	{
+		return false;
+	}
+
+	// Judged before moving. Every road this node holds gets longer or shorter as it goes,
+	// and one pulled under the minimum is one the solver cannot trim back from both ends.
+	for (const FRoadSegmentId& Incident : Live->Incident)
+	{
+		const FRoadNodeId Other = Network->GetOtherEnd(Incident, Node);
+		const FRoadNode* Far = Network->GetNode(Other);
+		if (Far != nullptr && FVector2D::Distance(Far->Position, To) < PlacementLimits.MinSegmentLength)
+		{
+			return false;
+		}
+	}
+
+	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
+	// is one edit of its own. IsEditing is what tells the two apart.
+	const bool bOwnsEdit = !EnsureHistory().IsEditing();
+	if (bOwnsEdit)
+	{
+		History->BeginEdit(*Network, TEXT("move node"));
+	}
+
+	const bool bMoved = Network->SetNodePosition(Node, To);
+
+	if (bOwnsEdit)
+	{
+		if (bMoved)
+		{
+			History->CommitEdit();
+		}
+		else
+		{
+			History->AbandonEdit();
+		}
+	}
+
+	return bMoved;
+}
+
+FRoadDeletionPlan ARoadNetworkActor::PlanNodeDeletion(int32 NodeIndex) const
+{
+	FRoadNodeId Node;
+	if (Network == nullptr || !MakeLiveNodeId(NodeIndex, Node))
+	{
+		return FRoadDeletionPlan();
+	}
+	return RoadHeal::PlanNodeDeletion(*Network, Node, PlacementLimits);
+}
+
+bool ARoadNetworkActor::DeleteNode(int32 NodeIndex)
+{
+	FRoadNodeId Node;
+	if (!MakeLiveNodeId(NodeIndex, Node))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: %d is not a live node"), NodeIndex);
+		return false;
+	}
+
+	const FRoadDeletionPlan Plan = RoadHeal::PlanNodeDeletion(*Network, Node, PlacementLimits);
+	if (!Plan.bValid)
+	{
+		// Refused whole. Nothing has been touched yet, which is the point of planning
+		// before acting rather than unwinding afterwards.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DeleteNode refused: node %d cannot rejoin node %d (%s). Delete its roads "
+				 "one at a time to strand it, then it will delete."),
+			NodeIndex, Plan.RefusedNeighbour.Index, RoadPlacement::Describe(Plan.Refusal));
+		return false;
+	}
+
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete node"));
+
+	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
+	if (!Network->RemoveNode(Node))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
+		return false;
+	}
+
+	// The heal. Every one of these was judged against the post-deletion graph, so it is
+	// being applied to exactly the state it was approved for.
+	for (const FRoadNodeId& Stranded : Plan.Rejoin)
+	{
+		if (!Network->AddStraightSegment(Stranded, Plan.Anchor, ResolveProfile()).IsSet())
+		{
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
+				Stranded.Index, Plan.Anchor.Index);
+		}
+	}
+
+	for (const FRoadNodeId& Litter : Plan.Swept)
+	{
+		Network->RemoveNode(Litter);
+	}
+
+	Edit.Commit();
+	return true;
+}
+
+bool ARoadNetworkActor::DeleteSegment(int32 SegmentIndex)
+{
+	FRoadSegmentId Segment;
+	if (!MakeLiveSegmentId(SegmentIndex, Segment))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DeleteSegment refused: %d is not a live segment"), SegmentIndex);
+		return false;
+	}
+
+	// Captured before the removal, because afterwards the segment cannot say what it joined.
+	const FRoadSegment* Doomed = Network->GetSegment(Segment);
+	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
+	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
+
+	FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("delete segment"));
+
+	if (!Network->RemoveSegment(Segment))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DeleteSegment refused: segment %d would not remove"), SegmentIndex);
+		return false;
+	}
+
+	// Cleanup, not deletion: an endpoint left with no road holds no geometry, so removing
+	// it destroys nothing. An endpoint that still has roads is untouched.
+	for (const FRoadNodeId& End : { EndA, EndB })
+	{
+		if (const FRoadNode* Live = Network->GetNode(End))
+		{
+			if (Live->Incident.Num() == 0)
+			{
+				Network->RemoveNode(End);
+			}
+		}
+	}
+
+	Edit.Commit();
+	return true;
+}
+
+TArray<int32> ARoadNetworkActor::SegmentsIncidentTo(int32 NodeIndex) const
+{
+	TArray<int32> Found;
+
+	FRoadNodeId Node;
+	if (!MakeLiveNodeId(NodeIndex, Node))
+	{
+		return Found;
+	}
+
+	const FRoadNode* Live = Network->GetNode(Node);
+	if (Live == nullptr)
+	{
+		return Found;
+	}
+
+	Found.Reserve(Live->Incident.Num());
+	for (const FRoadSegmentId& Incident : Live->Incident)
+	{
+		Found.Add(Incident.Index);
+	}
+	return Found;
+}
+
+bool ARoadNetworkActor::GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const
+{
+	FRoadSegmentId Id;
+	if (!MakeLiveSegmentId(SegmentIndex, Id))
+	{
+		return false;
+	}
+
+	const FRoadSegment* Segment = Network->GetSegment(Id);
+	const FRoadNode* EndA = Segment != nullptr ? Network->GetNode(Segment->A) : nullptr;
+	const FRoadNode* EndB = Segment != nullptr ? Network->GetNode(Segment->B) : nullptr;
+	if (EndA == nullptr || EndB == nullptr)
+	{
+		return false;
+	}
+
+	OutA = EndA->Position;
+	OutB = EndB->Position;
+	return true;
+}
+
+bool ARoadNetworkActor::Undo()
+{
+	if (Network == nullptr || History == nullptr)
+	{
+		return false;
+	}
+
+	URoadNetwork* Restored = History->Undo(*Network);
+	if (Restored == nullptr)
+	{
+		return false;
+	}
+
+	// Adopted outright rather than copied: the history has already let go of it.
+	Network = Restored;
+
+	// The preview may be describing a node that no longer exists, and its cache compares
+	// only the cursor and the start node - neither of which an undo changes.
+	HideGhost();
+	RebuildMesh();
+	return true;
+}
+
+bool ARoadNetworkActor::Redo()
+{
+	if (Network == nullptr || History == nullptr)
+	{
+		return false;
+	}
+
+	URoadNetwork* Restored = History->Redo(*Network);
+	if (Restored == nullptr)
+	{
+		return false;
+	}
+
+	Network = Restored;
+	HideGhost();
+	RebuildMesh();
+	return true;
+}
+
+bool ARoadNetworkActor::CanUndo() const
+{
+	return History != nullptr && History->CanUndo();
+}
+
+bool ARoadNetworkActor::CanRedo() const
+{
+	return History != nullptr && History->CanRedo();
+}
+
+FString ARoadNetworkActor::PeekUndoLabel() const
+{
+	return History != nullptr ? History->PeekUndoLabel() : FString();
+}
+
 void ARoadNetworkActor::ClearNetwork()
 {
 	HideGhost();
+
+	// Undoable, because clearing everything by accident is the worst thing the tool can do
+	// and the only one with nothing left on screen to hint at what was lost.
+	if (Network != nullptr)
+	{
+		FRoadEditScope Edit(&EnsureHistory(), Network, TEXT("clear network"));
+		Edit.Commit();
+	}
 
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.

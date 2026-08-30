@@ -4,6 +4,8 @@
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Tool/RoadEditHistory.h"
+#include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 #include "RoadNetworkActor.generated.h"
 
@@ -112,9 +114,92 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	int32 SplitSegment(int32 SegmentIndex, FVector2D At);
 
-	/** Discard the whole graph and the mesh built from it. */
+	/**
+	 * Remove a node, rejoining the roads it would otherwise strand. See RoadHeal.h.
+	 *
+	 * Refuses WHOLE, changing nothing, if any rejoin would break a placement rule - a
+	 * junction can therefore become undeletable, and the way out is to delete its arms
+	 * individually until it is bare. Nothing is ever moved or lost unexpectedly, which is
+	 * the trade that choice buys.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteNode(int32 NodeIndex);
+
+	/**
+	 * Remove one segment.
+	 *
+	 * Either endpoint left holding no road at all goes with it. That is cleanup rather
+	 * than deletion: a node with no segments carries no geometry, so removing it destroys
+	 * nothing - and leaving it behind is just litter on the map.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteSegment(int32 SegmentIndex);
+
+	/** Slot indices of the segments that deleting NodeIndex would take with it. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
+
+	/**
+	 * Move a node, dragging its roads with it.
+	 *
+	 * Refused if it would pull any of its roads under MinSegmentLength - so a node being
+	 * dragged simply stops following the cursor rather than producing a segment the solver
+	 * cannot trim. Turn angles are NOT checked: a node between two roads can legitimately
+	 * be dragged through any angle, and refusing mid-drag would read as the node sticking.
+	 *
+	 * Undoable on its own, and joins an open interactive edit when there is one - so a
+	 * whole drag is one undo step rather than one per frame.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool MoveNode(int32 NodeIndex, FVector2D To);
+
+	/**
+	 * Open an edit that spans frames, for a drag.
+	 *
+	 * Everything done until EndInteractiveEdit becomes one undo step. Without this a drag
+	 * would push a snapshot per frame and undo would crawl back along the path the mouse
+	 * took.
+	 */
+	void BeginInteractiveEdit(const FString& Label);
+
+	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
+	void EndInteractiveEdit(bool bKeep);
+
+	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
+	FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const;
+
+	/** Limits the deletion plan judges its rejoins against. Set from the build tool. */
+	FRoadPlacementLimits PlacementLimits;
+
+	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
+	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
+
+	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
+
+	// --- Undo -------------------------------------------------------------------------
+
+	/** Take back the last edit. False when there is nothing to take back. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool Undo();
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool Redo();
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool CanUndo() const;
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool CanRedo() const;
+
+	/** Name of the edit the next Undo would take back, for the overlay. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	FString PeekUndoLabel() const;
+
+	/** How many edits can be taken back before the oldest is forgotten. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1"))
+	int32 MaxUndoDepth = 50;
 
 	// --- Ghost preview --------------------------------------------------------------
 
@@ -224,6 +309,10 @@ public:
 
 	UPROPERTY() TObjectPtr<URoadNetwork> Network;
 
+	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
+	 *  rather than the Command layer design spec 7.3 specifies. */
+	UPROPERTY() TObjectPtr<URoadEditHistory> History;
+
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
@@ -247,6 +336,9 @@ private:
 
 	/** Network, creating it on first use. Nothing else in the project makes one yet. */
 	URoadNetwork& EnsureNetwork();
+
+	/** Undo history, created on first use and kept in step with MaxUndoDepth. */
+	URoadEditHistory& EnsureHistory();
 
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
