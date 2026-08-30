@@ -1,6 +1,7 @@
 #include "Build/RoadMeshBuilder.h"
 
 #include "Build/RoadProfileBands.h"
+#include "CompGeom/PolygonTriangulation.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 
@@ -487,6 +488,39 @@ void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult
 		const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
 		static const TArray<FRoadSegmentId> Empty;
 		AddJunction(Network, Pair.Key, Pair.Value, ArmSegments ? *ArmSegments : Empty);
+	}
+}
+
+void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
+{
+	if (Apron.Outline.Num() < 3)
+	{
+		return;
+	}
+
+	// The engine's ear-clipping triangulator. The junction solver's apex fan cannot be
+	// reused here: it needs a polygon every rim vertex can see, and an apron following a
+	// terminal frontage is not star-shaped.
+	TArray<UE::Geometry::FIndex3i> Triangles;
+	PolygonTriangulation::TriangulateSimplePolygon(
+		Apron.Outline, Triangles, /*bOrientAsHoleFill*/ false);
+
+	TArray<int32> Corners;
+	Corners.Reserve(Apron.Outline.Num());
+	for (const FVector2D& Corner : Apron.Outline)
+	{
+		// UV1 zero, and UV2 carrying no junction blend with the reserved channel at one -
+		// the same values a segment far from any junction would hold.
+		Corners.Add(WeldVertex(Corner, FVector2f(0.0f, 0.0f), FVector2f(0.0f, 1.0f)));
+	}
+
+	for (const UE::Geometry::FIndex3i& Triangle : Triangles)
+	{
+		if (Corners.IsValidIndex(Triangle.A) && Corners.IsValidIndex(Triangle.B)
+			&& Corners.IsValidIndex(Triangle.C))
+		{
+			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C]);
+		}
 	}
 }
 

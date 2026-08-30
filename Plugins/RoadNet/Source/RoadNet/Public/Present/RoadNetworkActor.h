@@ -174,6 +174,29 @@ public:
 	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
 	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
 
+	// --- Aprons -----------------------------------------------------------------------
+
+	/**
+	 * Add a polygon of pavement. Returns its slot index, or INDEX_NONE if refused.
+	 *
+	 * Refuses an outline of fewer than three corners, or one that crosses itself - the
+	 * triangulator's contract is a SIMPLE polygon, and a figure-eight fed to it produces
+	 * triangles that overlap rather than an error.
+	 *
+	 * Winding is corrected rather than refused: FApronSurface asks for counter-clockwise,
+	 * the shoelace sign says which way round this is, and reversing a clockwise outline is
+	 * an answer where refusing would only be a complaint.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 AddApron(const TArray<FVector2D>& Outline);
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteApron(int32 ApronIndex);
+
+	/** The topmost apron containing a point, or INDEX_NONE. For picking. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 FindApronAt(FVector2D Where) const;
+
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
@@ -289,6 +312,29 @@ public:
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
 
+	/**
+	 * Third component, carrying the aprons.
+	 *
+	 * Its own component because an apron shares nothing with a road: no cross-section, no
+	 * junction solve, and no vertices that may weld to a road's. Separate also means a
+	 * change to one surface cannot force the other to rebuild.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Apron")
+	TObjectPtr<UDynamicMeshComponent> ApronComponent;
+
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
+	TObjectPtr<UMaterialInterface> ApronMaterial;
+
+	/**
+	 * How far BELOW the road surface the aprons sit, in uu.
+	 *
+	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
+	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
+	 * z-fight, and the two surfaces genuinely do overlap wherever a road runs onto a stand.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron", meta = (ClampMin = "0.0"))
+	double ApronZOffset = 4.0;
+
 	/** Second component, carrying only the preview. Separate so showing and hiding the
 	 *  ghost never touches the real road's mesh. */
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet|Ghost")
@@ -339,6 +385,9 @@ private:
 
 	/** Undo history, created on first use and kept in step with MaxUndoDepth. */
 	URoadEditHistory& EnsureHistory();
+
+	/** Rebuild the apron surface. Separate from the roads, which share none of it. */
+	void RebuildAprons();
 
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;

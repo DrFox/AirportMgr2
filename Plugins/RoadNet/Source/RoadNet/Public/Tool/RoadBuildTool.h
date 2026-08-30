@@ -30,6 +30,15 @@ struct FToolContext
 
 	FRoadPlacementLimits Limits;
 
+	/**
+	 * How close, in uu, counts as "on" something - the same radius the snap chain uses.
+	 *
+	 * Carried so a tool that has to decide whether the cursor is back on a point it placed
+	 * itself - an apron closing on its first corner - measures it the same way everything
+	 * else does, rather than inventing a second notion of near.
+	 */
+	double SnapRadius = 150.0;
+
 	/** Ctrl: the gesture means remove rather than build. */
 	bool bRemoveModifier = false;
 

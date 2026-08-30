@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
@@ -34,7 +35,9 @@ void ARoadBuildController::BeginPlay()
 		return;
 	}
 
+	// Key order: 1 is the first. Strategy, so adding a tool is appending to a list.
 	Tools.Add(MakeUnique<FRoadDrawTool>());
+	Tools.Add(MakeUnique<FApronDrawTool>());
 
 	if (bStartAbovePlane)
 	{
@@ -295,6 +298,7 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	FToolContext Context;
 	Context.Target = Target;
 	Context.Limits = MakePlacementLimits();
+	Context.SnapRadius = PickRadius;
 	Context.bRemoveModifier = IsRemoveHeld();
 	Context.bInsertModifier =
 		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);

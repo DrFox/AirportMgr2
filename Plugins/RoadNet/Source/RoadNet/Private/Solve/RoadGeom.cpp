@@ -229,3 +229,61 @@ double RoadGeom::ClosestPointOnSegment(const FVector2D& A, const FVector2D& B, c
 	// distance.
 	return FMath::Clamp(FVector2D::DotProduct(P - A, Along) / LengthSquared, 0.0, 1.0);
 }
+
+bool RoadGeom::SegmentsCross(const FVector2D& A0, const FVector2D& A1,
+	const FVector2D& B0, const FVector2D& B1)
+{
+	const FVector2D DirA = A1 - A0;
+	const FVector2D DirB = B1 - B0;
+
+	const double Denominator = DirA.X * DirB.Y - DirA.Y * DirB.X;
+
+	// Parallel or collinear. Treated as not crossing, which is what IsSimplePolygon does
+	// too - an edge doubling back along another reads as simple to both.
+	if (FMath::IsNearlyZero(Denominator))
+	{
+		return false;
+	}
+
+	const FVector2D Between = B0 - A0;
+	const double AlongA = (Between.X * DirB.Y - Between.Y * DirB.X) / Denominator;
+	const double AlongB = (Between.X * DirA.Y - Between.Y * DirA.X) / Denominator;
+
+	// The OPEN interval on both, so a shared endpoint is not a crossing. Consecutive edges
+	// of an outline meet at a corner by construction; counting that would refuse every
+	// polygon with more than two sides.
+	constexpr double Edge = 1e-9;
+	return AlongA > Edge && AlongA < 1.0 - Edge
+		&& AlongB > Edge && AlongB < 1.0 - Edge;
+}
+
+bool RoadGeom::PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector2D& Point)
+{
+	if (Polygon.Num() < 3)
+	{
+		return false;
+	}
+
+	// Crossing number: count the edges a ray cast in +X from Point passes through. Odd
+	// means inside. Winding-agnostic, so an outline stored either way round answers the
+	// same - which matters because the model normalises winding on the way in and callers
+	// should not have to know that.
+	bool bInside = false;
+	for (int32 Index = 0, Previous = Polygon.Num() - 1; Index < Polygon.Num(); Previous = Index++)
+	{
+		const FVector2D& Low = Polygon[Index];
+		const FVector2D& High = Polygon[Previous];
+
+		// Half-open in Y so a vertex exactly at the ray's height is counted once, not twice.
+		if ((Low.Y > Point.Y) != (High.Y > Point.Y))
+		{
+			const double CrossingX =
+				(High.X - Low.X) * (Point.Y - Low.Y) / (High.Y - Low.Y) + Low.X;
+			if (Point.X < CrossingX)
+			{
+				bInside = !bInside;
+			}
+		}
+	}
+	return bInside;
+}
