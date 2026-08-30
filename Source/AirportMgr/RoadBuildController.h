@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
@@ -59,62 +60,78 @@ public:
 	double MinSplitFromEndpoint = 50.0;
 
 	/**
-	 * Furthest a click may place a node from the camera, in uu.
+	 * Furthest a click may place a node, as a MULTIPLE of the current view distance.
 	 *
 	 * The ray/plane distance is (SurfaceZ - Origin.Z) / Direction.Z, which runs away
-	 * towards infinity as a click approaches the horizon: from near ground level almost
-	 * every ray is shallow, and a click a few pixels above the skyline lands kilometres
-	 * out. Without this the first stray click builds a road the size of a county, and
-	 * at that range the depth buffer cannot separate the surface from the ground either.
+	 * towards infinity as a click approaches the horizon - and the horizon is on screen
+	 * now that the view is angled. A click a few pixels too high lands kilometres out.
+	 *
+	 * Relative rather than absolute because the view spans a hundredfold range of
+	 * distances: a fixed cap that allows a legitimate click when zoomed out would let a
+	 * horizon click through when zoomed in, and one tight enough for the close view would
+	 * reject half the screen when zoomed out.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double MaxPlaceDistance = 10000.0;
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0"))
+	double MaxPlaceDistanceFactor = 6.0;
 
 	/**
-	 * View the road plane through a top-down orthographic camera instead of the pawn.
+	 * Use the orbiting build camera instead of the pawn's own view.
 	 *
-	 * A perspective view pitched short of vertical maps screen position to ground
-	 * position non-linearly: near the bottom of the screen a click lands a few hundred
-	 * uu out, near the top many thousands, so a square drawn on screen becomes a
-	 * stretched trapezoid on the ground and roads at different distances render at
-	 * different apparent widths. Straight down and orthographic makes that mapping 1:1,
-	 * which is the whole reason city builders use it.
+	 * Viewing through a camera actor also takes the view away from the pawn, so the pawn's
+	 * mouse-look stops fighting the cursor for the same input.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet")
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View")
 	bool bStartAbovePlane = true;
 
-	/** Ground width the orthographic view spans, in uu. This is the drawing scale. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double ViewWidth = 6000.0;
+	/** Camera-to-focus distance the session opens at, in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0"))
+	double StartViewDistance = 8000.0;
 
-	/** Pan speed of the top-down camera, in uu per second. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double PanSpeed = 3000.0;
+	/** Closest the camera may come, in uu. Sized to sit beside a vehicle. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0"))
+	double MinViewDistance = 600.0;
 
-	/** Fraction the view width changes per mouse-wheel notch. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.01", ClampMax = "0.9"))
-	double ZoomStep = 0.15;
+	/** Furthest the camera may pull back, in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0"))
+	double MaxViewDistance = 60000.0;
 
-	/** Closest the view may zoom, as a ground width in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double MinViewWidth = 200.0;
-
-	/** Furthest the view may zoom out, as a ground width in uu. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double MaxViewWidth = 60000.0;
+	/** Pitch at MinViewDistance, in degrees below horizontal. Near eye level. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double MinPitchDegrees = 30.0;
 
 	/**
-	 * Height above the road plane to start at, in uu. Ignored unless bStartAbovePlane.
-	 *
-	 * Sets the drawing scale, because a click's world position is where its ray meets
-	 * the plane: doubling this doubles how far apart two clicks land. A screen spans
-	 * roughly twice this, so it wants to be about half the area you mean to draw in, and
-	 * the road's width wants to be around a twentieth of that same area. Those two
-	 * numbers have to move together - lowering the camera alone shortens every segment
-	 * against an unchanged road width, which is what folds the ribbons.
+	 * Pitch at MaxViewDistance. 90 would be straight down, and is deliberately not
+	 * offered: control rotation renormalises unpredictably at the poles, and a view that
+	 * flat loses every cue about relief that the angle exists to provide.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double StartHeight = 2000.0;
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double MaxPitchDegrees = 70.0;
+
+	/** Fraction the view distance changes per mouse-wheel notch. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.01", ClampMax = "0.9"))
+	double ZoomStep = 0.15;
+
+	/**
+	 * Pan speed, in view distances per second.
+	 *
+	 * Not uu per second: the view spans a hundredfold range, and a fixed speed crawls when
+	 * zoomed out and overshoots when zoomed in. As a fraction of the view, a pan crosses
+	 * the same amount of screen at every zoom.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.0"))
+	double PanRate = 0.9;
+
+	/** Rotation speed on Q and E, in degrees per second. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.0"))
+	double RotateRate = 90.0;
+
+	/** Seconds the view takes to settle after an input. Zero snaps. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.0"))
+	double CameraLag = 0.12;
+
+	/** Horizontal field of view, in degrees. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "20.0", ClampMax = "150.0"))
+	double FieldOfView = 75.0;
 
 	/**
 	 * Show the ghost of the segment the next click would build.
@@ -194,26 +211,26 @@ private:
 	/** Judge the snap against PendingNode. Valid when no chain is in progress. */
 	ERoadPlacement JudgePlacement(const FRoadSnapResult& Snap) const;
 
-	void MoveViewAbovePlane();
-	void PanView(float DeltaTime);
+	void CreateBuildCamera();
 
-	/** Mouse wheel. Scales the ortho width, or the camera's height in perspective. */
+	/** Read WASD/QE into the target rig, ease the view towards it, and apply it. */
+	void UpdateView(float DeltaTime);
+
+	/** Mouse wheel. Moves the camera in or out; the pitch follows from the distance. */
 	void ZoomIn();
 	void ZoomOut();
 	void ZoomBy(double Notches);
 
-	/**
-	 * Swap the build camera between orthographic and perspective.
-	 *
-	 * Orthographic is right for drawing - screen maps 1:1 to ground - but it flattens
-	 * everything, so surface detail and relief are impossible to judge. Perspective is
-	 * for looking at what you built. CursorOnRoadPlane reads the camera's actual
-	 * projection mode, so clicking keeps working in either.
-	 */
-	void ToggleProjection();
+	/** Copy the tunables above onto a rig, so details-panel edits take effect live. */
+	void ApplyViewLimits(FBuildCameraRig& Rig) const;
 
-	/** Top-down orthographic camera spawned on possession; the view target while building. */
+	/** Orbiting camera spawned on possession; the view target while building. */
 	UPROPERTY(Transient) TObjectPtr<class ACameraActor> BuildCamera;
+
+	/** Where the input says the view should be, and where it actually is. Separate so a
+	 *  wheel notch eases in rather than cutting - see FBuildCameraRig::EaseToward. */
+	FBuildCameraRig TargetView;
+	FBuildCameraRig CurrentView;
 
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;

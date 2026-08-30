@@ -134,10 +134,13 @@ void ARoadBuildHUD::DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadS
 		return;
 	}
 
-	// Drawn at the SNAPPED position. Under the top-down orthographic view a Free snap
-	// puts this exactly under the mouse pointer and it says nothing; the moment a rule
-	// claims the cursor the marker jumps to where the click will really land, and the gap
-	// between pointer and marker is the snap made visible.
+	// Drawn at the SNAPPED position. A Free snap puts this under the mouse pointer and it
+	// says nothing; the moment a rule claims the cursor the marker jumps to where the click
+	// will really land, and the gap between pointer and marker is the snap made visible.
+	//
+	// It earns more under the angled view than it did under the old top-down one: a click
+	// lands where its ray meets the road plane, and the shallower the view the further that
+	// is from anything the pointer appears to be over.
 	const FLinearColor Colour =
 		(Snap.Kind == ERoadSnapKind::Node) ? SnapColour :
 		(Snap.Kind == ERoadSnapKind::Segment) ? SplitColour : FLinearColor::White;

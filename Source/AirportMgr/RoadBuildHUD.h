@@ -115,13 +115,14 @@ private:
 	/**
 	 * Screen position of a point on the road plane. False when it cannot be drawn.
 	 *
-	 * Deliberately does NOT reject on depth. Project() signals behind-the-camera through
-	 * the clip W, and clamps Z to exactly zero when it sees W <= 0 - but an orthographic
-	 * projection leaves W at 1 for every point, so that signal never fires there and a
-	 * `Z <= 0` test would instead be reading a depth that is legitimately near zero. The
-	 * ortho build view is the common case, and a guard that quietly drops every node in
-	 * it is worse than no guard: this rejects the clamp sentinel only, and culls the rest
-	 * on screen bounds.
+	 * Rejects Project()'s behind-the-camera sentinel - an exact zero, written when the clip
+	 * W goes non-positive - and culls everything else on screen bounds. It does NOT test
+	 * `Z <= 0`, and must not be "simplified" into doing so: Z is a depth that is
+	 * legitimately near zero far from the camera, and an orthographic projection leaves W
+	 * at 1 for every point so the sentinel never fires there at all. The build view is
+	 * perspective today, which makes the sentinel live and this correct; written this way
+	 * it stays correct if an orthographic mode returns, where `Z <= 0` would silently drop
+	 * every node on screen.
 	 */
 	bool ProjectPlanePoint(const FVector2D& Where, double SurfaceZ, FVector2D& OutScreen) const;
 };

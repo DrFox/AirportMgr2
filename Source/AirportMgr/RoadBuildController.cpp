@@ -35,70 +35,83 @@ void ARoadBuildController::BeginPlay()
 
 	if (bStartAbovePlane)
 	{
-		MoveViewAbovePlane();
+		CreateBuildCamera();
 	}
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears."),
+			 "Backspace clears. WASD pans, Q/E rotate, wheel zooms."),
 		*Target->GetName());
 }
 
-void ARoadBuildController::MoveViewAbovePlane()
+void ARoadBuildController::ApplyViewLimits(FBuildCameraRig& Rig) const
+{
+	Rig.MinDistance = MinViewDistance;
+	Rig.MaxDistance = MaxViewDistance;
+	Rig.MinPitch = MinPitchDegrees;
+	Rig.MaxPitch = MaxPitchDegrees;
+}
+
+void ARoadBuildController::CreateBuildCamera()
 {
 	if (Target == nullptr || GetWorld() == nullptr)
 	{
 		return;
 	}
 
-	const FVector Above(0.0, 0.0, Target->SurfaceZ + StartHeight);
+	ApplyViewLimits(TargetView);
+	TargetView.Focus = FVector2D::ZeroVector;
+	TargetView.Distance = FMath::Clamp(StartViewDistance, MinViewDistance, MaxViewDistance);
+	TargetView.Yaw = 0.0;
+
+	// The view starts settled rather than easing in from wherever a default-constructed
+	// rig happens to sit, which would swoop the camera across the map on possession.
+	CurrentView = TargetView;
 
 	FActorSpawnParameters Params;
 	Params.ObjectFlags |= RF_Transient;
-	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(Above, FRotator(-90.0, 0.0, 0.0), Params);
+	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(
+		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation(), Params);
 	if (BuildCamera == nullptr)
 	{
 		return;
 	}
 
-	// Straight down is set on the camera actor's own transform, not through
-	// SetControlRotation: control rotation near +/-90 pitch hits gimbal lock and is
-	// silently renormalised to something else, which reads as the camera ignoring you.
 	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	Camera->SetProjectionMode(ECameraProjectionMode::Orthographic);
-	Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
+	Camera->SetProjectionMode(ECameraProjectionMode::Perspective);
+	Camera->SetFieldOfView(static_cast<float>(FieldOfView));
 
-	// Viewing through a camera actor also takes the view away from the pawn, so the
-	// pawn's mouse-look stops fighting the cursor for the same input.
+	// Viewing through a camera actor takes the view away from the pawn, so the pawn's
+	// mouse-look stops fighting the cursor for the same input.
 	SetViewTarget(BuildCamera);
 
 	UE_LOG(LogRoadBuild, Log,
-		TEXT("Top-down orthographic view: %.0f uu across, %.0f uu up. Screen maps 1:1 to ground."),
-		ViewWidth, Target->SurfaceZ + StartHeight);
+		TEXT("Build camera: %.0f uu out at %.1f degrees. Pitch follows the zoom, %.0f to %.0f degrees."),
+		CurrentView.Distance, CurrentView.PitchDegrees(), MinPitchDegrees, MaxPitchDegrees);
 }
 
-void ARoadBuildController::PanView(float DeltaTime)
+void ARoadBuildController::UpdateView(float DeltaTime)
 {
-	if (BuildCamera == nullptr)
+	if (BuildCamera == nullptr || Target == nullptr)
 	{
 		return;
 	}
 
-	// Screen up is +Y in world here, because the camera looks straight down its own
-	// -Z with no yaw: panning is a plain XY translation, no basis vectors needed.
+	ApplyViewLimits(TargetView);
+
 	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
 	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
+	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
 
-	if (Right == 0.0 && Forward == 0.0)
-	{
-		return;
-	}
+	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
+	TargetView.Rotate(Turn * RotateRate * DeltaTime);
 
-	const FVector Where = BuildCamera->GetActorLocation();
-	BuildCamera->SetActorLocation(FVector(
-		Where.X + Forward * PanSpeed * DeltaTime,
-		Where.Y + Right * PanSpeed * DeltaTime,
-		Where.Z));
+	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
+	// key binding fires once on press. The same reason WASD was never bound.
+	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
+
+	BuildCamera->SetActorLocationAndRotation(
+		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -114,7 +127,6 @@ void ARoadBuildController::SetupInputComponent()
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
-	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::ToggleProjection);
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
@@ -160,19 +172,12 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 		Origin.X + Direction.X * Distance,
 		Origin.Y + Direction.Y * Distance);
 
-	// The horizon guards below only make sense for a perspective view, where the ray
-	// starts at the eye and a near-horizontal ray runs away to nothing. Under the
-	// orthographic build camera the deprojected origin sits on the near plane rather
-	// than at the camera, so that plane can be behind or far above the road and the
-	// "distance" carries no information about where the click landed - the intersection
-	// is exact either way. Applying them there silently threw away good clicks in the
-	// middle of the screen, which is the whole reason a road only appeared sometimes.
-	const bool bOrthographic = BuildCamera != nullptr
-		&& BuildCamera->GetCameraComponent()->ProjectionMode == ECameraProjectionMode::Orthographic;
-	if (bOrthographic)
-	{
-		return true;
-	}
+	// These guards were skipped while the build camera was orthographic, and skipping them
+	// was what stopped good clicks vanishing: under an orthographic projection the
+	// deprojected origin sits on the near plane rather than at the camera, so the
+	// ray/plane distance carries no information about where the click landed. The view is
+	// perspective now and they are live and necessary again - if an orthographic mode ever
+	// returns, it must exempt itself from both of them.
 
 	// Behind the camera. Without this a click on the sky lands on the plane's mirror
 	// image, dropping a node far off in the opposite direction.
@@ -187,14 +192,17 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	}
 
 	// Near the horizon the ray is almost parallel to the plane and this distance runs
-	// away, so a click a few pixels too high lands kilometres out.
-	if (Distance > MaxPlaceDistance)
+	// away, so a click a few pixels too high lands kilometres out. Measured against the
+	// current view distance rather than a fixed number, because the view spans a
+	// hundredfold range and no single cap suits both ends of it.
+	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
+	if (Distance > Furthest)
 	{
 		if (bLogRefusals)
 		{
 			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the road plane is %.0f uu away there, past MaxPlaceDistance of %.0f."),
-				Distance, MaxPlaceDistance);
+				TEXT("Click ignored: the road plane is %.0f uu away there, past %.0f (%.1fx the view)."),
+				Distance, Furthest, MaxPlaceDistanceFactor);
 		}
 		return false;
 	}
@@ -214,54 +222,11 @@ void ARoadBuildController::ZoomOut()
 
 void ARoadBuildController::ZoomBy(double Notches)
 {
-	if (BuildCamera == nullptr || Target == nullptr)
-	{
-		return;
-	}
+	ApplyViewLimits(TargetView);
+	TargetView.Zoom(ZoomStep, Notches);
 
-	ViewWidth = FMath::Clamp(
-		ViewWidth * FMath::Pow(1.0 + ZoomStep, Notches), MinViewWidth, MaxViewWidth);
-
-	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	if (Camera->ProjectionMode == ECameraProjectionMode::Orthographic)
-	{
-		Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
-	}
-	else
-	{
-		// Height that frames the same ground width at this FOV, so a zoom means the same
-		// thing in both projections and switching between them does not jump the view.
-		const double HalfFovRadians = FMath::DegreesToRadians(Camera->FieldOfView * 0.5f);
-		const double Height = (ViewWidth * 0.5) / FMath::Max(FMath::Tan(HalfFovRadians), UE_KINDA_SMALL_NUMBER);
-
-		const FVector Where = BuildCamera->GetActorLocation();
-		BuildCamera->SetActorLocation(FVector(Where.X, Where.Y, Target->SurfaceZ + Height));
-	}
-
-	UE_LOG(LogRoadBuild, Log, TEXT("View width %.0f uu"), ViewWidth);
-}
-
-void ARoadBuildController::ToggleProjection()
-{
-	if (BuildCamera == nullptr || Target == nullptr)
-	{
-		return;
-	}
-
-	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	const bool bWasOrthographic = Camera->ProjectionMode == ECameraProjectionMode::Orthographic;
-
-	// Perspective keeps looking straight down. That is not how you would inspect a
-	// surface for relief, but it keeps the click mapping intuitive; pitch is a separate
-	// control and this driver deliberately has none.
-	Camera->SetProjectionMode(
-		bWasOrthographic ? ECameraProjectionMode::Perspective : ECameraProjectionMode::Orthographic);
-
-	// Re-apply the current zoom through the new projection so the framing carries over.
-	ZoomBy(0.0);
-
-	UE_LOG(LogRoadBuild, Log, TEXT("Projection: %s"),
-		bWasOrthographic ? TEXT("perspective") : TEXT("orthographic"));
+	UE_LOG(LogRoadBuild, Log, TEXT("View %.0f uu out, %.1f degrees"),
+		TargetView.Distance, TargetView.PitchDegrees());
 }
 
 FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
@@ -433,7 +398,7 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 
-	PanView(DeltaTime);
+	UpdateView(DeltaTime);
 
 	if (Target == nullptr)
 	{
