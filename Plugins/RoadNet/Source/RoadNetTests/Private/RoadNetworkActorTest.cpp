@@ -342,6 +342,90 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and the stack still has its real entry"), DepthBefore == 1 && Actor->CanUndo());
 	}
 
+	// Moving a node, and the incidence order the solver depends on surviving it.
+	{
+		Actor->ClearNetwork();
+		const int32 Centre = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Northward = Actor->PlaceNode(FVector2D(0.0, 5000.0));
+		const int32 Eastward = Actor->PlaceNode(FVector2D(5000.0, 0.0));
+
+		// Northward needs TWO arms or its incidence order cannot be observed to be wrong,
+		// and the neighbour re-sort is exactly what a move is most likely to forget.
+		const int32 Far = Actor->PlaceNode(FVector2D(0.0, 10000.0));
+		TestTrue(TEXT("move fixture arm one"), Actor->ConnectNodes(Centre, Northward));
+		TestTrue(TEXT("move fixture arm two"), Actor->ConnectNodes(Centre, Eastward));
+		TestTrue(TEXT("move fixture arm three"), Actor->ConnectNodes(Northward, Far));
+
+		// Due west of Northward. Its bearing to Centre swings from south to west, crossing
+		// its bearing to Far, so the two arms must swap places in Northward's own list.
+		TestTrue(TEXT("a node moves"), Actor->MoveNode(Centre, FVector2D(-5000.0, 5000.0)));
+		TestTrue(TEXT("and it is where it was put"),
+			Actor->Network->GetNodes()[Centre].Position == FVector2D(-5000.0, 5000.0));
+
+		// The control point has to travel with the node. Tangents - and so the bearing sort
+		// and the solver - are derived from Control, not from the endpoints, so a segment
+		// left with a stale one goes on pointing at where the node used to be. A straight
+		// segment's control is its chord midpoint, and must still be.
+		for (const FRoadSegmentId& Arm : Actor->Network->GetNodes()[Centre].Incident)
+		{
+			const FRoadSegment* Segment = Actor->Network->GetSegment(Arm);
+			const FRoadNode* SideA = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
+			const FRoadNode* SideB = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
+			if (SideA != nullptr && SideB != nullptr)
+			{
+				TestTrue(FString::Printf(TEXT("segment %d keeps its control on the chord"), Arm.Index),
+					Segment->Control.Equals((SideA->Position + SideB->Position) * 0.5, 1e-9));
+			}
+		}
+
+		// Bearings changed for BOTH ends of both roads, so the incident lists have to be
+		// re-sorted at the neighbours too - not only at the node that moved. Asserted as
+		// the contract URoadNetwork states: sorted ascending by outgoing bearing.
+		for (const int32 Each : { Centre, Northward, Eastward, Far })
+		{
+			const TArray<FRoadSegmentId>& Incident = Actor->Network->GetNodes()[Each].Incident;
+			FRoadNodeId Owner;
+			Owner.Index = Each;
+			Owner.Generation = Actor->Network->GetNodes()[Each].Generation;
+
+			double Previous = -UE_DOUBLE_PI * 2.0;
+			bool bAscending = true;
+			for (const FRoadSegmentId& Arm : Incident)
+			{
+				const double Bearing =
+					FMath::Atan2(Actor->Network->GetOutgoingTangent(Arm, Owner).Y,
+						Actor->Network->GetOutgoingTangent(Arm, Owner).X);
+				bAscending = bAscending && Bearing >= Previous;
+				Previous = Bearing;
+			}
+			TestTrue(FString::Printf(TEXT("node %d keeps its arms sorted by bearing"), Each),
+				bAscending);
+		}
+
+		// A move that would pull a road under the minimum length is refused outright, so a
+		// drag stops following the cursor rather than making a segment nothing can trim.
+		Actor->PlacementLimits.MinSegmentLength = 250.0;
+		const FVector2D Before = Actor->Network->GetNodes()[Centre].Position;
+		TestFalse(TEXT("a move that would shorten a road too far is refused"),
+			Actor->MoveNode(Centre, FVector2D(0.0, 4900.0)));
+		TestTrue(TEXT("and the node has not moved"),
+			Actor->Network->GetNodes()[Centre].Position == Before);
+
+		// A whole drag is one undo step, not one per frame.
+		const FString LabelBefore = Actor->PeekUndoLabel();
+		Actor->BeginInteractiveEdit(TEXT("move node"));
+		Actor->MoveNode(Centre, FVector2D(-1200.0, -1000.0));
+		Actor->MoveNode(Centre, FVector2D(-1400.0, -1000.0));
+		Actor->MoveNode(Centre, FVector2D(-1600.0, -1000.0));
+		Actor->EndInteractiveEdit(true);
+
+		TestTrue(TEXT("undo takes the whole drag back at once"), Actor->Undo());
+		TestTrue(TEXT("all the way to where the drag started"),
+			Actor->Network->GetNodes()[Centre].Position == Before);
+		TestEqual(TEXT("and the step beneath it is the one from before the drag"),
+			Actor->PeekUndoLabel(), LabelBefore);
+	}
+
 	return true;
 }
 

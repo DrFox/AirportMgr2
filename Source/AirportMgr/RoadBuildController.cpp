@@ -121,7 +121,8 @@ void ARoadBuildController::SetupInputComponent()
 	// Bound as raw keys rather than through Enhanced Input: the mappings would need
 	// InputAction and InputMappingContext content assets, and this driver is meant to
 	// work the moment the module compiles, with nothing to author first.
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnBuildClick);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnPrimaryPressed);
+	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ARoadBuildController::OnPrimaryReleased);
 	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelChain);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
@@ -368,6 +369,84 @@ void ARoadBuildController::OnDeleteClick(const FRoadSnapResult& Snap)
 	Target->RebuildMesh();
 }
 
+void ARoadBuildController::OnPrimaryPressed()
+{
+	bPrimaryDown = true;
+	bDragging = false;
+	DragNode = INDEX_NONE;
+
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	GetMousePosition(MouseX, MouseY);
+	PressScreen = FVector2D(MouseX, MouseY);
+
+	// Only a press that lands on a node can become a drag. Ctrl is delete, and dragging
+	// something you are about to remove would be nonsense.
+	FRoadSnapResult Snap;
+	if (!IsDeleteHeld() && ResolveSnap(Snap) && Snap.Kind == ERoadSnapKind::Node)
+	{
+		DragNode = Snap.Node.Index;
+	}
+}
+
+void ARoadBuildController::UpdateDrag()
+{
+	if (!bPrimaryDown || DragNode == INDEX_NONE || Target == nullptr)
+	{
+		return;
+	}
+
+	if (!bDragging)
+	{
+		float MouseX = 0.0f;
+		float MouseY = 0.0f;
+		if (!GetMousePosition(MouseX, MouseY)
+			|| FVector2D::Distance(FVector2D(MouseX, MouseY), PressScreen) < DragThresholdPixels)
+		{
+			return;
+		}
+
+		// One undo step for the whole drag, not one per frame - otherwise undo crawls back
+		// along the path the mouse took.
+		Target->BeginInteractiveEdit(TEXT("move node"));
+		bDragging = true;
+	}
+
+	FVector2D Cursor;
+	if (!CursorOnRoadPlane(Cursor))
+	{
+		return;
+	}
+
+	// A refused move simply does not happen, so the node stops following the cursor rather
+	// than dragging a road shorter than the solver can trim.
+	if (Target->MoveNode(DragNode, Cursor))
+	{
+		Target->RebuildMesh();
+	}
+}
+
+void ARoadBuildController::OnPrimaryReleased()
+{
+	const bool bWasDragging = bDragging;
+
+	bPrimaryDown = false;
+	bDragging = false;
+	const int32 Moved = DragNode;
+	DragNode = INDEX_NONE;
+
+	if (bWasDragging && Target != nullptr)
+	{
+		Target->EndInteractiveEdit(/*bKeep*/ true);
+		Target->RebuildMesh();
+		UE_LOG(LogRoadBuild, Log, TEXT("Moved node %d"), Moved);
+		return;
+	}
+
+	// Never travelled: it was a click after all.
+	OnBuildClick();
+}
+
 void ARoadBuildController::OnBuildClick()
 {
 	FRoadSnapResult Snap;
@@ -381,6 +460,22 @@ void ARoadBuildController::OnBuildClick()
 	if (IsDeleteHeld())
 	{
 		OnDeleteClick(Snap);
+		return;
+	}
+
+	// Shift on a road inserts a node and stops there. A plain click splits too, but also
+	// starts a chain from the new node - which is right when you are drawing a road INTO
+	// an existing one, and a nuisance when all you wanted was somewhere to drag.
+	if ((IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift))
+		&& Snap.Kind == ERoadSnapKind::Segment)
+	{
+		const int32 Inserted = Target->SplitSegment(Snap.Segment.Index, Snap.Position);
+		if (Inserted != INDEX_NONE)
+		{
+			Target->RebuildMesh();
+			UE_LOG(LogRoadBuild, Log, TEXT("Inserted node %d into segment %d"),
+				Inserted, Snap.Segment.Index);
+		}
 		return;
 	}
 
@@ -500,6 +595,15 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	// The deletion planner judges its rejoins by the same rules a click obeys, so the two
 	// cannot drift apart. Pushed every frame so a details-panel edit takes effect at once.
 	Target->PlacementLimits = MakePlacementLimits();
+
+	UpdateDrag();
+	if (bDragging)
+	{
+		// The ghost previews a road a click would build. Mid-drag there is no such click,
+		// and the road being reshaped is already on screen.
+		Target->HideGhost();
+		return;
+	}
 
 	FRoadSnapResult Snap;
 	const bool bHaveSnap = ResolveSnap(Snap);

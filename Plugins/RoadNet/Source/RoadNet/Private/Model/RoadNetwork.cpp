@@ -84,6 +84,52 @@ bool URoadNetwork::RemoveSegment(FRoadSegmentId Segment)
 	return RoadSlot::Remove<FRoadSegmentId>(Segments, SegmentFreeList, Segment);
 }
 
+bool URoadNetwork::SetNodePosition(FRoadNodeId Node, const FVector2D& To)
+{
+	if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Nodes, Node))
+	{
+		return false;
+	}
+
+	const FVector2D Was = Nodes[Node.Index].Position;
+	Nodes[Node.Index].Position = To;
+
+	// Every incident segment's CONTROL POINT has to come with it. GetOutgoingTangent - and
+	// therefore SortIncident, and therefore the solver - derives direction from Control,
+	// not from the endpoints, so a node moved without it keeps pointing at where it used
+	// to be: the roads do not follow the node, and the incidence order is sorted on stale
+	// geometry. Found by instrumenting; nothing in the graph reports it.
+	//
+	// Moved by half the node's own displacement, which is how far the chord's midpoint
+	// travels. That leaves a straight segment straight and preserves a curve's bend
+	// relative to its chord, rather than flattening it.
+	const FVector2D ControlShift = (To - Was) * 0.5;
+	for (const FRoadSegmentId& Incident : Nodes[Node.Index].Incident)
+	{
+		if (FRoadSegment* Segment = GetSegmentMutable(Incident))
+		{
+			Segment->Control += ControlShift;
+		}
+	}
+
+	// Copied before sorting: SortIncident reorders the very array being walked.
+	const TArray<FRoadSegmentId> Touching = Nodes[Node.Index].Incident;
+
+	SortIncident(Node);
+	for (const FRoadSegmentId& Incident : Touching)
+	{
+		// The neighbour's bearing towards this node changed too, so its own list is now
+		// out of order as well. Missing this is invisible until a junction is solved.
+		const FRoadNodeId Other = GetOtherEnd(Incident, Node);
+		if (Other.IsSet())
+		{
+			SortIncident(Other);
+		}
+	}
+
+	return true;
+}
+
 const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const
 {
 	return RoadSlot::Get<FRoadNodeId>(Nodes, Node);

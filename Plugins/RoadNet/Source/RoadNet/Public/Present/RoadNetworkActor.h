@@ -139,6 +139,32 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
 
+	/**
+	 * Move a node, dragging its roads with it.
+	 *
+	 * Refused if it would pull any of its roads under MinSegmentLength - so a node being
+	 * dragged simply stops following the cursor rather than producing a segment the solver
+	 * cannot trim. Turn angles are NOT checked: a node between two roads can legitimately
+	 * be dragged through any angle, and refusing mid-drag would read as the node sticking.
+	 *
+	 * Undoable on its own, and joins an open interactive edit when there is one - so a
+	 * whole drag is one undo step rather than one per frame.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool MoveNode(int32 NodeIndex, FVector2D To);
+
+	/**
+	 * Open an edit that spans frames, for a drag.
+	 *
+	 * Everything done until EndInteractiveEdit becomes one undo step. Without this a drag
+	 * would push a snapshot per frame and undo would crawl back along the path the mouse
+	 * took.
+	 */
+	void BeginInteractiveEdit(const FString& Label);
+
+	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
+	void EndInteractiveEdit(bool bKeep);
+
 	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
 	FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const;
 

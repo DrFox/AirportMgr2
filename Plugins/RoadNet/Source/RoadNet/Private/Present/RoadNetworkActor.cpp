@@ -720,6 +720,82 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 	bLastGhostValid = bValid;
 }
 
+void ARoadNetworkActor::BeginInteractiveEdit(const FString& Label)
+{
+	if (Network != nullptr && !EnsureHistory().IsEditing())
+	{
+		History->BeginEdit(*Network, Label);
+	}
+}
+
+void ARoadNetworkActor::EndInteractiveEdit(bool bKeep)
+{
+	if (History == nullptr || !History->IsEditing())
+	{
+		return;
+	}
+
+	if (bKeep)
+	{
+		History->CommitEdit();
+	}
+	else
+	{
+		History->AbandonEdit();
+	}
+}
+
+bool ARoadNetworkActor::MoveNode(int32 NodeIndex, FVector2D To)
+{
+	FRoadNodeId Node;
+	if (!MakeLiveNodeId(NodeIndex, Node))
+	{
+		return false;
+	}
+
+	const FRoadNode* Live = Network->GetNode(Node);
+	if (Live == nullptr)
+	{
+		return false;
+	}
+
+	// Judged before moving. Every road this node holds gets longer or shorter as it goes,
+	// and one pulled under the minimum is one the solver cannot trim back from both ends.
+	for (const FRoadSegmentId& Incident : Live->Incident)
+	{
+		const FRoadNodeId Other = Network->GetOtherEnd(Incident, Node);
+		const FRoadNode* Far = Network->GetNode(Other);
+		if (Far != nullptr && FVector2D::Distance(Far->Position, To) < PlacementLimits.MinSegmentLength)
+		{
+			return false;
+		}
+	}
+
+	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
+	// is one edit of its own. IsEditing is what tells the two apart.
+	const bool bOwnsEdit = !EnsureHistory().IsEditing();
+	if (bOwnsEdit)
+	{
+		History->BeginEdit(*Network, TEXT("move node"));
+	}
+
+	const bool bMoved = Network->SetNodePosition(Node, To);
+
+	if (bOwnsEdit)
+	{
+		if (bMoved)
+		{
+			History->CommitEdit();
+		}
+		else
+		{
+			History->AbandonEdit();
+		}
+	}
+
+	return bMoved;
+}
+
 FRoadDeletionPlan ARoadNetworkActor::PlanNodeDeletion(int32 NodeIndex) const
 {
 	FRoadNodeId Node;

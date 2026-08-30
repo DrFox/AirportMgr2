@@ -121,6 +121,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.0"))
 	double PanRate = 0.9;
 
+	/**
+	 * How far the mouse must move while held, in pixels, before a press on a node becomes a
+	 * drag rather than a click.
+	 *
+	 * Without a threshold every slightly imprecise click on a node would nudge it, and the
+	 * click-to-chain interaction would become impossible to perform reliably.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Move", meta = (ClampMin = "0.0"))
+	double DragThresholdPixels = 4.0;
+
 	/** Rotation speed on Q and E, in degrees per second. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|View", meta = (ClampMin = "0.0"))
 	double RotateRate = 90.0;
@@ -204,6 +214,15 @@ protected:
 	virtual void PlayerTick(float DeltaTime) override;
 
 private:
+	/** Left button down: remember where, and what was under it. Decides nothing yet. */
+	void OnPrimaryPressed();
+
+	/** Left button up: a drag ends, or - if it never became one - the click happens here. */
+	void OnPrimaryReleased();
+
+	/** Move the held node with the cursor once the press has travelled far enough. */
+	void UpdateDrag();
+
 	void OnBuildClick();
 
 	/** Ctrl+click: remove whatever the snap chain resolved. */
@@ -261,6 +280,23 @@ private:
 	 * node the player put there on purpose.
 	 */
 	bool bPendingNodeCreated = false;
+
+	// --- Press, drag, release ---------------------------------------------------------
+	//
+	// The left button is resolved on RELEASE rather than on press, because until the button
+	// comes up a press on a node is not yet either a click or a drag. A press that never
+	// travels is still a click and builds exactly as it did.
+
+	bool bPrimaryDown = false;
+
+	/** Screen position of the press, to measure the drag threshold against. */
+	FVector2D PressScreen = FVector2D::ZeroVector;
+
+	/** Node under the press, or INDEX_NONE if the press did not land on one. */
+	int32 DragNode = INDEX_NONE;
+
+	/** True once the press has travelled past DragThresholdPixels. */
+	bool bDragging = false;
 
 	/**
 	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through

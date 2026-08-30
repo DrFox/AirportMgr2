@@ -28,6 +28,20 @@ public:
 	FRoadSegmentId AddStraightSegment(FRoadNodeId A, FRoadNodeId B, URoadProfile* Profile);
 	bool RemoveSegment(FRoadSegmentId Segment);
 
+	/**
+	 * Move a live node, keeping the incidence order the solver depends on.
+	 *
+	 * Moving a node changes the outgoing bearing of every segment that touches it - at BOTH
+	 * ends, not just this one - and URoadNetwork's contract is that Incident stays sorted by
+	 * that bearing. So this re-sorts the node and every neighbour. Writing Position directly
+	 * would leave the lists out of order, and the junction solver walks them assuming they
+	 * are: an arm in the wrong slot puts one road's geometry on another road's cut line.
+	 *
+	 * The stored cut vertices are left stale. The next solve rewrites all of them, and a
+	 * partial refresh here would be a second writer of values that must have exactly one.
+	 */
+	bool SetNodePosition(FRoadNodeId Node, const FVector2D& To);
+
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
 	FRoadSegment*       GetSegmentMutable(FRoadSegmentId Segment);
