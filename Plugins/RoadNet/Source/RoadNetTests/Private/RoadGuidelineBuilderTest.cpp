@@ -376,6 +376,150 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("both turn paths at the mixed junction were checked"), SpanTurns, 2);
 	}
 
+	// Plan A's known gap 6. The turn loop filters by each arm's DIRECTION and intersects
+	// their access MASKS, and both are correct - but every junction profile in this file
+	// is bidirectional with identical class and width on both arms, so deleting either
+	// filter leaves the whole suite green. These two blocks are the only thing that would
+	// notice.
+	//
+	// One-way arms first. An arm declared AToB runs AWAY from a junction at its A end, so
+	// nothing can ARRIVE at that junction along it, and no turn may be emitted FROM it.
+	{
+		URoadNetwork* OneWay = NewObject<URoadNetwork>(GetTransientPackage());
+
+		FProfileBand OneWayLane;
+		OneWayLane.Width = 700.0;
+		OneWayLane.Type = ERoadBandType::Lane;
+
+		// Outbound: A is the hub, so AToB means traffic leaves the hub and never returns.
+		URoadProfile* Outbound = NewObject<URoadProfile>(GetTransientPackage());
+		Outbound->Bands.Add(OneWayLane);
+		FProfileGuideline OutLine;
+		OutLine.CentreOffset = 0.0;
+		OutLine.Class = ETraversalClass::GroundVehicle;
+		OutLine.Direction = EGuidelineDir::AToB;
+		Outbound->Guidelines.Add(OutLine);
+
+		// Two-way, for the arms that must still work.
+		URoadProfile* TwoWay = NewObject<URoadProfile>(GetTransientPackage());
+		TwoWay->Bands.Add(OneWayLane);
+		FProfileGuideline BothWays = OutLine;
+		BothWays.Direction = EGuidelineDir::Bidirectional;
+		TwoWay->Guidelines.Add(BothWays);
+
+		const FRoadNodeId Hub   = OneWay->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Out   = OneWay->AddNode(FVector2D(12000.0, 0.0));
+		const FRoadNodeId FreeA = OneWay->AddNode(FVector2D(-12000.0, 0.0));
+		const FRoadNodeId FreeB = OneWay->AddNode(FVector2D(0.0, 12000.0));
+
+		const FRoadSegmentId OutArm = OneWay->AddStraightSegment(Hub, Out, Outbound);
+		OneWay->AddStraightSegment(Hub, FreeA, TwoWay);
+		OneWay->AddStraightSegment(Hub, FreeB, TwoWay);
+
+		const FRoadSolveResult OneWaySolved = FRoadNetworkSolver::SolveAll(*OneWay);
+		TestEqual(TEXT("the one-way network solved"), OneWaySolved.FailedNodes, 0);
+
+		FRoadGuidelineBuilder::Build(*OneWay, OneWaySolved);
+
+		// The hub's guideline node for the outbound arm's A end. Turn paths carry no
+		// DerivedFrom, so they are told apart from segment edges that way.
+		FGuidelineNodeId OutArmAtHub;
+		for (const FGuidelineEdge& Edge : OneWay->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.DerivedFrom == OutArm)
+			{
+				OutArmAtHub = Edge.A;   // A end is the hub end: the segment was added Hub->Out
+			}
+		}
+		TestTrue(TEXT("found the outbound arm's hub-end node"), OutArmAtHub.IsSet());
+
+		int32 TurnsFromOutbound = 0;
+		int32 TurnsIntoOutbound = 0;
+		for (const FGuidelineEdge& Edge : OneWay->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive || Edge.DerivedFrom.IsSet())
+			{
+				continue;
+			}
+			if (Edge.A == OutArmAtHub) { ++TurnsFromOutbound; }
+			if (Edge.B == OutArmAtHub) { ++TurnsIntoOutbound; }
+		}
+
+		// Nothing can arrive at the hub along an arm that only runs away from it.
+		TestEqual(TEXT("no turn is emitted FROM a one-way arm nothing can arrive on"),
+			TurnsFromOutbound, 0);
+		// But you may still turn INTO it - that is the direction it permits.
+		TestTrue(TEXT("turns INTO the one-way arm are still emitted"), TurnsIntoOutbound > 0);
+	}
+
+	// Then the mask intersection. Where two arms carry different traversal classes, the
+	// only thing that may cross between them is Emergency - a baggage tug must not be
+	// routed from a service road onto a live taxiway turn.
+	{
+		URoadNetwork* Mixed = NewObject<URoadNetwork>(GetTransientPackage());
+
+		FProfileBand MixedLane;
+		MixedLane.Width = 700.0;
+		MixedLane.Type = ERoadBandType::Lane;
+
+		URoadProfile* AirProfile = NewObject<URoadProfile>(GetTransientPackage());
+		AirProfile->Bands.Add(MixedLane);
+		FProfileGuideline AirLine;
+		AirLine.CentreOffset = 0.0;
+		AirLine.Class = ETraversalClass::Aircraft;
+		AirLine.Direction = EGuidelineDir::Bidirectional;
+		AirProfile->Guidelines.Add(AirLine);
+
+		URoadProfile* RoadProfile = NewObject<URoadProfile>(GetTransientPackage());
+		RoadProfile->Bands.Add(MixedLane);
+		FProfileGuideline RoadLine = AirLine;
+		RoadLine.Class = ETraversalClass::GroundVehicle;
+		RoadProfile->Guidelines.Add(RoadLine);
+
+		const FRoadNodeId Cross = Mixed->AddNode(FVector2D(0.0, 0.0));
+		Mixed->AddStraightSegment(Cross, Mixed->AddNode(FVector2D( 12000.0, 0.0)), AirProfile);
+		Mixed->AddStraightSegment(Cross, Mixed->AddNode(FVector2D(-12000.0, 0.0)), AirProfile);
+		Mixed->AddStraightSegment(Cross, Mixed->AddNode(FVector2D(0.0, 12000.0)), RoadProfile);
+
+		const FRoadSolveResult MixedSolved = FRoadNetworkSolver::SolveAll(*Mixed);
+		TestEqual(TEXT("the mixed-class network solved"), MixedSolved.FailedNodes, 0);
+
+		FRoadGuidelineBuilder::Build(*Mixed, MixedSolved);
+
+		// EXACT counts, not "> 0". Three arms - two aircraft, one ground vehicle - give six
+		// ordered pairs: two aircraft-to-aircraft, and four crossing between classes. A
+		// version that copied ONE arm's mask wholesale rather than intersecting produces the
+		// same six turns with different masks, and every "> 0" assertion still passes - the
+		// two aircraft turns quietly become four and the emergency-only four become zero.
+		// Only pinning the numbers catches it.
+		int32 AircraftTurns = 0;
+		int32 VehicleTurns = 0;
+		int32 EmergencyOnlyTurns = 0;
+		int32 TotalTurns = 0;
+		for (const FGuidelineEdge& Edge : Mixed->GetGuidelineEdges())
+		{
+			if (!Edge.bAlive || Edge.DerivedFrom.IsSet())
+			{
+				continue;
+			}
+			++TotalTurns;
+
+			const bool bAir = Edge.AllowedTraffic.Allows(ETraversalClass::Aircraft);
+			const bool bVeh = Edge.AllowedTraffic.Allows(ETraversalClass::GroundVehicle);
+			const bool bEmg = Edge.AllowedTraffic.Allows(ETraversalClass::Emergency);
+
+			if (bAir) { ++AircraftTurns; }
+			if (bVeh) { ++VehicleTurns; }
+			if (bEmg && !bAir && !bVeh) { ++EmergencyOnlyTurns; }
+		}
+
+		TestEqual(TEXT("three arms give six ordered turn paths"), TotalTurns, 6);
+		TestEqual(TEXT("exactly two admit aircraft - the two aircraft arms"), AircraftTurns, 2);
+		TestEqual(TEXT("none admits a ground vehicle onto a taxiway turn"), VehicleTurns, 0);
+		TestEqual(TEXT("and the four crossing between classes are emergency-only"),
+			EmergencyOnlyTurns, 4);
+	}
+
 	return true;
 }
 
