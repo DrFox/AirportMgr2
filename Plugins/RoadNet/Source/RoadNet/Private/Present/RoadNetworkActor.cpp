@@ -1101,6 +1101,15 @@ int32 ARoadNetworkActor::FindApronAt(FVector2D Where) const
 	return INDEX_NONE;
 }
 
+double ARoadNetworkActor::GetApronSurfaceZ() const
+{
+	// Never more than halfway down to the ground plane, whatever ApronZOffset asks for.
+	// SurfaceZ is already a height above that plane, so half of it is the most that can be
+	// given away while still leaving the apron above ground.
+	const double Drop = FMath::Min(ApronZOffset, FMath::Max(SurfaceZ, 0.0) * 0.5);
+	return SurfaceZ - Drop;
+}
+
 void ARoadNetworkActor::RebuildAprons()
 {
 	if (Network == nullptr || ApronComponent == nullptr)
@@ -1110,7 +1119,7 @@ void ARoadNetworkActor::RebuildAprons()
 
 	// Its own builder instance, so an apron corner that happens to land exactly on a road
 	// vertex cannot weld to it. The two surfaces meet; they are not one surface.
-	FRoadMeshBuilder Builder(SurfaceZ - ApronZOffset, TexelsPerUnit);
+	FRoadMeshBuilder Builder(GetApronSurfaceZ(), TexelsPerUnit);
 
 	int32 Built = 0;
 	for (const FApronSurface& Apron : Network->GetAprons())
@@ -1136,9 +1145,20 @@ void ARoadNetworkActor::RebuildAprons()
 	// engine source about the roads was wrong before the numbers were printed.
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
-		Built, Buffers.Indices.Num() / 3, SurfaceZ - ApronZOffset,
+		Built, Buffers.Indices.Num() / 3, GetApronSurfaceZ(),
 		ApronMaterial != nullptr ? *ApronMaterial->GetName() : TEXT("<fallback>"),
 		bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
+
+	// Worth saying out loud: a road surface this close to the ground leaves nothing to
+	// separate the two surfaces with, and both will z-fight at distance whatever is done
+	// here. The apron is above ground either way - this is about the ROAD being too low.
+	if (Built > 0 && SurfaceZ < ApronZOffset * 2.0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SurfaceZ is %.1f, less than twice ApronZOffset (%.1f): the apron is squeezed "
+				 "to Z=%.1f. Raise SurfaceZ for a cleaner separation."),
+			SurfaceZ, ApronZOffset, GetApronSurfaceZ());
+	}
 
 	if (bDebugDrawAprons && GetWorld() != nullptr)
 	{

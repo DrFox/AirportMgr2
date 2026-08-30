@@ -362,7 +362,8 @@ public:
 	bool bDebugDrawAprons = false;
 
 	/**
-	 * How far BELOW the road surface the aprons sit, in uu.
+	 * MOST the aprons sit below the road surface, in uu. Not a fixed drop - see
+	 * GetApronSurfaceZ.
 	 *
 	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
 	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
@@ -370,6 +371,25 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron", meta = (ClampMin = "0.0"))
 	double ApronZOffset = 4.0;
+
+	/**
+	 * Height the apron surface is actually built at.
+	 *
+	 * ApronZOffset is a MAXIMUM, not a fixed drop: the apron never descends more than
+	 * halfway from the road to the ground plane. A fixed drop silently assumes the road has
+	 * headroom, and with SurfaceZ at 1 a 4 uu drop put the concrete at Z = -3 - rendering
+	 * correctly, normals up, material bound, and buried under the ground where nothing
+	 * about it looked wrong.
+	 *
+	 * Halfway rather than clamped at zero because zero is where the ground is: an apron
+	 * pinned exactly to it would z-fight with the terrain instead of vanishing under it,
+	 * which trades one silent failure for another.
+	 *
+	 * Public and shared so the mesh, the log and the tests cannot each compute it their
+	 * own way and disagree.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet|Apron")
+	double GetApronSurfaceZ() const;
 
 	/** Second component, carrying only the preview. Separate so showing and hiding the
 	 *  ghost never touches the real road's mesh. */

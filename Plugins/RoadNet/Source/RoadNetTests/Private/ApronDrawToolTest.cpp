@@ -266,6 +266,54 @@ bool FApronDrawToolTest::RunTest(const FString& Parameters)
 			FacingUp, Live.TriangleCount());
 	}
 
+	// --- An apron must never be built underground -------------------------------------
+	//
+	// Reported as an apron that vanished the moment it was created. Everything about it was
+	// right - normals up, material bound, triangles in the component - and it was three
+	// units under the ground plane, because a fixed drop below the road assumed the road
+	// had headroom. With SurfaceZ at 1 and a 4 uu drop it did not.
+	{
+		Actor->ClearNetwork();
+
+		Actor->SurfaceZ = 1.0;
+		Actor->ApronZOffset = 4.0;
+
+		TestTrue(TEXT("a drop deeper than the road is high stays above the ground plane"),
+			Actor->GetApronSurfaceZ() > 0.0);
+		TestTrue(TEXT("and gives away at most half the height"),
+			FMath::IsNearlyEqual(Actor->GetApronSurfaceZ(), 0.5, 1e-9));
+
+		// With headroom the offset is honoured in full - the cap is a floor, not a policy.
+		Actor->SurfaceZ = 20.0;
+		TestTrue(TEXT("with headroom the full offset applies"),
+			FMath::IsNearlyEqual(Actor->GetApronSurfaceZ(), 16.0, 1e-9));
+
+		// Below the road, always: the taxiway has to win the depth test where they overlap.
+		TestTrue(TEXT("and the apron is always below the road"),
+			Actor->GetApronSurfaceZ() < Actor->SurfaceZ);
+
+		// The mesh is built at that height, not at some second opinion of it.
+		Actor->SurfaceZ = 1.0;
+		const int32 Low = Actor->AddApron({ FVector2D(0.0, 0.0), FVector2D(3000.0, 0.0),
+			FVector2D(3000.0, 2000.0), FVector2D(0.0, 2000.0) });
+		if (TestTrue(TEXT("the low-surface apron is accepted"), Low != INDEX_NONE))
+		{
+			Actor->RebuildMesh();
+
+			const UE::Geometry::FDynamicMesh3& Buried =
+				Actor->ApronComponent->GetDynamicMesh()->GetMeshRef();
+			if (TestTrue(TEXT("it reaches the component"), Buried.VertexCount() > 0))
+			{
+				double Lowest = TNumericLimits<double>::Max();
+				for (const int32 VertexId : Buried.VertexIndicesItr())
+				{
+					Lowest = FMath::Min(Lowest, Buried.GetVertex(VertexId).Z);
+				}
+				TestTrue(TEXT("and every vertex of it is above the ground plane"), Lowest > 0.0);
+			}
+		}
+	}
+
 	return true;
 }
 
