@@ -26,6 +26,42 @@ enum class EServiceRole : uint8
 	Crew
 };
 
+/**
+ * Plan-view extent of the thing a definition describes, in its own local space.
+ *
+ * Here rather than in the overlay because it is a fact about an A320, not a drawing
+ * choice: an overlay that carried its own dimensions would be a second opinion about how
+ * big the aircraft is, and the two could disagree without anything reporting it. It is
+ * also what a stand's painted boundary is derived from.
+ *
+ * All distances are local X or spans in uu, on the same axes as the anchors: +X forward,
+ * +Y starboard, origin at whatever the definition measures from.
+ */
+USTRUCT()
+struct ROADNET_API FEntityFootprint
+{
+	GENERATED_BODY()
+
+	/** Nose, forward of the origin. */
+	UPROPERTY(EditAnywhere) double NoseX = 0.0;
+
+	/** Tail, normally behind the origin and so negative. */
+	UPROPERTY(EditAnywhere) double TailX = 0.0;
+
+	/** Wingtip to wingtip. */
+	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
+
+	/** Where the wing crosses the centreline. */
+	UPROPERTY(EditAnywhere) double WingX = 0.0;
+
+	UPROPERTY(EditAnywhere) double TailplaneSpan = 0.0;
+
+	UPROPERTY(EditAnywhere) double TailplaneX = 0.0;
+
+	/** False when nothing has been authored, so callers can skip drawing rather than draw a dot. */
+	bool IsSet() const { return Wingspan > 0.0 && NoseX > TailX; }
+};
+
 /** A connection point between an entity and the guideline graph, in the entity's local space. */
 USTRUCT()
 struct ROADNET_API FEntityAnchor

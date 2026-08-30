@@ -209,19 +209,40 @@ void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
 			DrawRing(StopScreen, NodeRingRadius * 1.6f, StandColour, NodeRingThickness);
 		}
 
-		// Which way it faces. A stand aimed 180 degrees out looks identical to a correct
-		// one until something tries to taxi onto it, so the heading has to be drawn.
-		const FVector2D Nose(
-			Entity.Position.X + FMath::Cos(Entity.Heading) * 2500.0,
-			Entity.Position.Y + FMath::Sin(Entity.Heading) * 2500.0);
-
-		FVector2D NoseScreen;
-		if (bStopVisible && ProjectPlanePoint(Nose, Target.SurfaceZ, NoseScreen))
+		// The aircraft's plan extent, so the anchors have something to be read against and
+		// the heading is unmistakable. A stand aimed 180 degrees out looks identical to a
+		// correct one until something tries to taxi onto it.
+		//
+		// Dimensions come from the DEFINITION. An overlay carrying its own would be a
+		// second opinion about how big an A320 is.
+		if (Entity.Definition != nullptr)
 		{
-			DrawLine(
-				static_cast<float>(StopScreen.X), static_cast<float>(StopScreen.Y),
-				static_cast<float>(NoseScreen.X), static_cast<float>(NoseScreen.Y),
-				StandColour, PreviewThickness);
+			TArray<FVector2D> Outline;
+			UEntityDefinition::BuildFootprintLines(Entity.Definition->Footprint, Outline);
+
+			const double Cos = FMath::Cos(Entity.Heading);
+			const double Sin = FMath::Sin(Entity.Heading);
+
+			for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
+			{
+				auto ToWorld = [&Entity, Cos, Sin](const FVector2D& Local)
+				{
+					return FVector2D(
+						Entity.Position.X + Local.X * Cos - Local.Y * Sin,
+						Entity.Position.Y + Local.X * Sin + Local.Y * Cos);
+				};
+
+				FVector2D FromScreen;
+				FVector2D ToScreen;
+				if (ProjectPlanePoint(ToWorld(Outline[Index]), Target.SurfaceZ, FromScreen)
+					&& ProjectPlanePoint(ToWorld(Outline[Index + 1]), Target.SurfaceZ, ToScreen))
+				{
+					DrawLine(
+						static_cast<float>(FromScreen.X), static_cast<float>(FromScreen.Y),
+						static_cast<float>(ToScreen.X), static_cast<float>(ToScreen.Y),
+						StandColour, NodeRingThickness);
+				}
+			}
 		}
 
 		// The anchors, read from the INSTANCE rather than recomputed from the definition.

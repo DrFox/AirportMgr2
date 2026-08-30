@@ -21,6 +21,18 @@ class ROADNET_API UEntityDefinition : public UDataAsset
 public:
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> Anchors;
 
+	/** Plan extent, for the overlay to draw the thing the anchors surround. */
+	UPROPERTY(EditAnywhere) FEntityFootprint Footprint;
+
+	/**
+	 * The footprint as plan-view line segments in LOCAL space: even indices start a
+	 * segment, odd indices end it.
+	 *
+	 * One implementation, called by both the overlay and the placement preview, so a stand
+	 * being aimed and a stand already placed cannot be drawn to different shapes.
+	 */
+	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
+
 	/**
 	 * A contact stand for tests and the debug gallery: the aircraft stop position, plus
 	 * the service positions that surround it.

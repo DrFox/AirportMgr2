@@ -45,6 +45,17 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition)
 		Definition->Anchors.Add(Anchor);
 	};
 
+	// Plan extent, on the same axes and the same origin as the anchors. A320 reference
+	// figures: 37.6 m long, 35.8 m span with sharklets, nose gear 5.1 m aft of the nose,
+	// horizontal stabiliser about 12.4 m across. Wing station is taken at the root, roughly
+	// 16 m aft of the nose, which is where the span reads correctly in plan.
+	Definition->Footprint.NoseX = 507.0;
+	Definition->Footprint.TailX = -3250.0;
+	Definition->Footprint.Wingspan = 3580.0;
+	Definition->Footprint.WingX = -1100.0;
+	Definition->Footprint.TailplaneSpan = 1240.0;
+	Definition->Footprint.TailplaneX = -2950.0;
+
 	// The aircraft itself: nose gear on the mark, facing the terminal.
 	AddAnchor(TEXT("Aircraft"), 0.0, 0.0, 0.0, EServiceRole::Aircraft);
 
@@ -95,4 +106,39 @@ bool UEntityDefinition::HasUsableAnchorIds(const UEntityDefinition* Definition)
 		Seen.Add(Anchor.Id);
 	}
 	return true;
+}
+
+void UEntityDefinition::BuildFootprintLines(
+	const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments)
+{
+	OutSegments.Reset();
+	if (!Footprint.IsSet())
+	{
+		return;
+	}
+
+	auto Segment = [&OutSegments](const FVector2D& From, const FVector2D& To)
+	{
+		OutSegments.Add(From);
+		OutSegments.Add(To);
+	};
+
+	const double HalfSpan = Footprint.Wingspan * 0.5;
+	const double HalfTail = Footprint.TailplaneSpan * 0.5;
+
+	// The envelope - the "outside lines". A rectangle rather than a silhouette because
+	// that is what it is FOR: the box the aircraft occupies, which is what a stand's
+	// painted boundary encloses and what tells you at a glance whether a service vehicle
+	// is parked under a wing or out on the grass.
+	Segment(FVector2D(Footprint.NoseX, -HalfSpan), FVector2D(Footprint.NoseX, HalfSpan));
+	Segment(FVector2D(Footprint.TailX, -HalfSpan), FVector2D(Footprint.TailX, HalfSpan));
+	Segment(FVector2D(Footprint.NoseX, -HalfSpan), FVector2D(Footprint.TailX, -HalfSpan));
+	Segment(FVector2D(Footprint.NoseX, HalfSpan), FVector2D(Footprint.TailX, HalfSpan));
+
+	// And the aircraft inside it, as three lines. Enough to read as an aeroplane in plan
+	// and to place the wing - which is the thing most of the service positions are
+	// measured against - without drawing a silhouette nobody asked for.
+	Segment(FVector2D(Footprint.NoseX, 0.0), FVector2D(Footprint.TailX, 0.0));
+	Segment(FVector2D(Footprint.WingX, -HalfSpan), FVector2D(Footprint.WingX, HalfSpan));
+	Segment(FVector2D(Footprint.TailplaneX, -HalfTail), FVector2D(Footprint.TailplaneX, HalfTail));
 }

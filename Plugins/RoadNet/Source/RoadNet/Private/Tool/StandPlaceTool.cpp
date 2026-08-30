@@ -130,6 +130,14 @@ void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& 
 			At.Y + Local.X * Sin + Local.Y * Cos);
 	};
 
+	// The outline first, so the anchors read against it rather than floating on their own.
+	TArray<FVector2D> Outline;
+	UEntityDefinition::BuildFootprintLines(Definition->Footprint, Outline);
+	for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
+	{
+		Sink.Line(ToWorld(Outline[Index]), ToWorld(Outline[Index + 1]), EPreviewStyle::Snap);
+	}
+
 	for (const FEntityAnchor& Anchor : Definition->Anchors)
 	{
 		const FVector2D World = ToWorld(Anchor.LocalPosition);
@@ -141,9 +149,6 @@ void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& 
 		Sink.Line(At, World, EPreviewStyle::Heal);
 	}
 
-	// Which way it faces, drawn from the stop mark forward. Without it a stand aimed 180
-	// degrees out looks identical to one aimed correctly until vehicles try to use it.
-	Sink.Line(At, ToWorld(FVector2D(2500.0, 0.0)), EPreviewStyle::Pending);
 }
 
 void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

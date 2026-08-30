@@ -57,6 +57,36 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and its anchors are all named and distinct"),
 		UEntityDefinition::HasUsableAnchorIds(Actor->StandDefinition));
 
+	// --- The footprint, which is what makes a stand legible ---------------------------
+	{
+		const FEntityFootprint& Plan = Actor->StandDefinition->Footprint;
+		TestTrue(TEXT("the stand definition carries a plan footprint"), Plan.IsSet());
+		TestTrue(TEXT("its nose is ahead of its tail"), Plan.NoseX > Plan.TailX);
+
+		// The anchors must fall INSIDE the envelope they are measured against, or the
+		// outline is decoration rather than orientation. The belt loaders stand alongside
+		// the fuselage, so they are within the span; nothing should be off the wingtips.
+		const double HalfSpan = Plan.Wingspan * 0.5;
+		for (const FEntityAnchor& Anchor : Actor->StandDefinition->Anchors)
+		{
+			TestTrue(FString::Printf(TEXT("anchor %s lies within the wingspan"), *Anchor.Id.ToString()),
+				FMath::Abs(Anchor.LocalPosition.Y) <= HalfSpan);
+		}
+
+		// Four sides of the envelope plus fuselage, wing and tailplane: seven segments,
+		// fourteen points. Asserted so a silently empty outline is not mistaken for a
+		// stand drawn without one.
+		TArray<FVector2D> Outline;
+		UEntityDefinition::BuildFootprintLines(Plan, Outline);
+		TestEqual(TEXT("the outline is seven segments"), Outline.Num(), 14);
+
+		// An unauthored footprint draws nothing rather than a degenerate dot at the origin.
+		FEntityFootprint Empty;
+		TestFalse(TEXT("an unauthored footprint reports itself unset"), Empty.IsSet());
+		UEntityDefinition::BuildFootprintLines(Empty, Outline);
+		TestEqual(TEXT("and produces no segments at all"), Outline.Num(), 0);
+	}
+
 	// --- Press, drag to aim, release --------------------------------------------------
 	{
 		Actor->ClearNetwork();
