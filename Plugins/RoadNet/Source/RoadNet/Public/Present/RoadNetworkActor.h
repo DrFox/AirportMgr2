@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Tool/RoadEditHistory.h"
 #include "Tool/RoadSnap.h"
 #include "RoadNetworkActor.generated.h"
 
@@ -112,9 +113,55 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	int32 SplitSegment(int32 SegmentIndex, FVector2D At);
 
-	/** Discard the whole graph and the mesh built from it. */
+	/**
+	 * Remove a node and every segment incident to it.
+	 *
+	 * The cascade is the model's, not a policy invented here: a segment with a dead
+	 * endpoint has no geometry. Its OTHER endpoints are left behind as bare nodes rather
+	 * than swept up - they are visible, reusable and individually deletable, and silently
+	 * removing things adjacent to what the player pointed at is how a delete comes to take
+	 * more than anyone asked it to.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteNode(int32 NodeIndex);
+
+	/** Remove one segment, leaving both of its endpoints in place. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DeleteSegment(int32 SegmentIndex);
+
+	/** Slot indices of the segments that deleting NodeIndex would take with it. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
+
+	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
+	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
+
+	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
+
+	// --- Undo -------------------------------------------------------------------------
+
+	/** Take back the last edit. False when there is nothing to take back. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool Undo();
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool Redo();
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool CanUndo() const;
+
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool CanRedo() const;
+
+	/** Name of the edit the next Undo would take back, for the overlay. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	FString PeekUndoLabel() const;
+
+	/** How many edits can be taken back before the oldest is forgotten. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1"))
+	int32 MaxUndoDepth = 50;
 
 	// --- Ghost preview --------------------------------------------------------------
 
@@ -224,6 +271,10 @@ public:
 
 	UPROPERTY() TObjectPtr<URoadNetwork> Network;
 
+	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
+	 *  rather than the Command layer design spec 7.3 specifies. */
+	UPROPERTY() TObjectPtr<URoadEditHistory> History;
+
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
@@ -247,6 +298,9 @@ private:
 
 	/** Network, creating it on first use. Nothing else in the project makes one yet. */
 	URoadNetwork& EnsureNetwork();
+
+	/** Undo history, created on first use and kept in step with MaxUndoDepth. */
+	URoadEditHistory& EnsureHistory();
 
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;

@@ -81,6 +81,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
 	FLinearColor SplitColour = FLinearColor(1.0f, 0.4f, 0.8f);
 
+	/**
+	 * What a Ctrl+click would remove: the node ring, and a line along every segment that
+	 * would cascade with it.
+	 *
+	 * This is the ONLY place the overlay draws segments. Slice A left them out because the
+	 * pavement already shows where the roads are - but it cannot show WHICH ones are about
+	 * to go, and a delete that takes more than the thing under the cursor has to say so
+	 * before the click, not after.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Delete")
+	FLinearColor DoomedColour = FLinearColor(1.0f, 0.15f, 0.1f);
+
+	/** Thickness of the doomed-segment lines, in pixels. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Delete", meta = (ClampMin = "0.5"))
+	float DoomedThickness = 3.0f;
+
 	/** Text colour for the reason a click will be refused. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
 	FLinearColor RefusedColour = FLinearColor(1.0f, 0.25f, 0.2f);
@@ -108,6 +124,13 @@ private:
 	 * split it also draws the cut across the segment.
 	 */
 	void DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap);
+
+	/** Redden what a Ctrl+click would remove, cascade included. */
+	void DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap);
+
+	/** A line along a segment, in screen space. Skipped if either end cannot be drawn. */
+	void DrawSegmentLine(const ARoadNetworkActor& Target, int32 SegmentIndex,
+		const FLinearColor& Colour, float Thickness);
 
 	/** Ring of NodeRingSides segments, centred on a screen position. */
 	void DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness);

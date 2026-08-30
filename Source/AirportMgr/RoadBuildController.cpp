@@ -124,6 +124,8 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnBuildClick);
 	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelChain);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
+	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
+	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
@@ -289,11 +291,94 @@ bool ARoadBuildController::GetPendingPlacement(ERoadPlacement& Out) const
 	return bLastPlacementRelevant;
 }
 
+bool ARoadBuildController::IsDeleteHeld() const
+{
+	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+}
+
+void ARoadBuildController::OnUndo()
+{
+	// Ctrl+Z, read as a chord rather than bound as one: BindKey has no modifier form, and
+	// a bare Z would take back an edit every time the key was brushed.
+	if (Target == nullptr || !IsDeleteHeld())
+	{
+		return;
+	}
+
+	const FString Label = Target->PeekUndoLabel();
+	if (!Target->Undo())
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to undo."));
+		return;
+	}
+
+	// The node being chained from may not exist any more, and an index outlives the thing
+	// it pointed at. Dropped rather than validated: after an undo the player's next click
+	// should start fresh, not silently continue a road from before it.
+	PendingNode = INDEX_NONE;
+	UE_LOG(LogRoadBuild, Log, TEXT("Undid: %s"), *Label);
+}
+
+void ARoadBuildController::OnRedo()
+{
+	if (Target == nullptr || !IsDeleteHeld())
+	{
+		return;
+	}
+
+	if (!Target->Redo())
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to redo."));
+		return;
+	}
+
+	PendingNode = INDEX_NONE;
+}
+
+void ARoadBuildController::OnDeleteClick(const FRoadSnapResult& Snap)
+{
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+		if (Target->DeleteNode(Snap.Node.Index))
+		{
+			UE_LOG(LogRoadBuild, Log, TEXT("Deleted node %d and its roads"), Snap.Node.Index);
+		}
+		break;
+
+	case ERoadSnapKind::Segment:
+		if (Target->DeleteSegment(Snap.Segment.Index))
+		{
+			UE_LOG(LogRoadBuild, Log, TEXT("Deleted segment %d"), Snap.Segment.Index);
+		}
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		// Nothing under the cursor. Silent: a click on open ground meaning nothing is the
+		// correct outcome, not a refusal worth reporting.
+		return;
+	}
+
+	// A deletion can remove the node the chain was running from, and can invalidate the
+	// preview's cached start. Both are dropped rather than checked.
+	PendingNode = INDEX_NONE;
+	Target->RebuildMesh();
+}
+
 void ARoadBuildController::OnBuildClick()
 {
 	FRoadSnapResult Snap;
 	if (Target == nullptr || !ResolveSnap(Snap, /*bLogRefusals*/ true))
 	{
+		return;
+	}
+
+	// The same click, read through the modifier. The snap chain has already decided WHAT is
+	// under the cursor; delete only chooses what to do about it.
+	if (IsDeleteHeld())
+	{
+		OnDeleteClick(Snap);
 		return;
 	}
 
@@ -413,7 +498,9 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	bLastPlacementRelevant = bHaveSnap && PendingNode != INDEX_NONE;
 	LastPlacement = bHaveSnap ? JudgePlacement(Snap) : ERoadPlacement::Valid;
 
-	if (!bDrawBuildPreview || !bLastPlacementRelevant)
+	// No ghost while a deletion is being aimed: the preview would be offering to build the
+	// very thing the click is about to remove.
+	if (!bDrawBuildPreview || !bLastPlacementRelevant || IsDeleteHeld())
 	{
 		Target->HideGhost();
 		return;

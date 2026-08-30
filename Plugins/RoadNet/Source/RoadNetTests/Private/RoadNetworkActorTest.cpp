@@ -276,6 +276,69 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			Actor->Network->GetNodes()[GhostFrom].Incident.Num(), 1);
 	}
 
+	// Delete, and the undo that has to put it back exactly. This is the whole reason undo
+	// was rebuilt as a snapshot rather than as the command layer: spec 7.3 warns that
+	// "Revert must restore handles identically, generation counter included", and the
+	// commands written to that spec broke it twice.
+	{
+		Actor->ClearNetwork();
+		const int32 Hub = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Spoke = Actor->PlaceNode(FVector2D(3000.0, 0.0));
+		TestTrue(TEXT("undo fixture connects"), Actor->ConnectNodes(Hub, Spoke));
+
+		const int32 HubGeneration = Actor->Network->GetNodes()[Hub].Generation;
+		const FVector2D HubPosition = Actor->Network->GetNodes()[Hub].Position;
+		const int32 SpanGeneration = Actor->Network->GetSegments()[0].Generation;
+
+		TestEqual(TEXT("the node reports the segment it would take with it"),
+			Actor->SegmentsIncidentTo(Hub).Num(), 1);
+
+		TestTrue(TEXT("deleting the node succeeds"), Actor->DeleteNode(Hub));
+		TestFalse(TEXT("the deleted node is gone"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestFalse(TEXT("and its segment cascaded with it"),
+			Actor->Network->GetSegments()[0].bAlive);
+		TestTrue(TEXT("the far endpoint is left behind, not swept up"),
+			Actor->Network->GetNodes()[Spoke].bAlive);
+
+		TestTrue(TEXT("there is something to undo"), Actor->CanUndo());
+		TestEqual(TEXT("and it is named"), Actor->PeekUndoLabel(), FString(TEXT("delete node")));
+		TestTrue(TEXT("undo succeeds"), Actor->Undo());
+
+		// The assertion the whole design turns on. A handle built from the ORIGINAL
+		// generation must resolve again - an undo that re-created the node instead of
+		// restoring its slot would leave this stale while everything on screen looked right.
+		FRoadNodeId OriginalHub;
+		OriginalHub.Index = Hub;
+		OriginalHub.Generation = HubGeneration;
+		TestTrue(TEXT("the original node handle resolves again after undo"),
+			RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Actor->Network->GetNodes(), OriginalHub));
+		TestTrue(TEXT("and the node is back where it was"),
+			Actor->Network->GetNodes()[Hub].Position == HubPosition);
+		TestEqual(TEXT("the segment's generation survives the round trip"),
+			Actor->Network->GetSegments()[0].Generation, SpanGeneration);
+		TestTrue(TEXT("the segment is live again"), Actor->Network->GetSegments()[0].bAlive);
+		TestEqual(TEXT("incidence is rebuilt"),
+			Actor->Network->GetNodes()[Hub].Incident.Num(), 1);
+
+		// Redo puts the deletion back.
+		TestTrue(TEXT("redo succeeds"), Actor->Redo());
+		TestFalse(TEXT("redo deletes the node again"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestTrue(TEXT("undo is available once more"), Actor->Undo());
+
+		// Deleting one segment leaves both its endpoints standing.
+		TestTrue(TEXT("deleting the segment succeeds"), Actor->DeleteSegment(0));
+		TestFalse(TEXT("the segment is gone"), Actor->Network->GetSegments()[0].bAlive);
+		TestTrue(TEXT("its near endpoint survives"), Actor->Network->GetNodes()[Hub].bAlive);
+		TestTrue(TEXT("its far endpoint survives"), Actor->Network->GetNodes()[Spoke].bAlive);
+
+		// A refused edit must not become an undo step that does nothing.
+		const int32 DepthBefore = Actor->CanUndo() ? 1 : 0;
+		TestFalse(TEXT("deleting a node that is not live refuses"), Actor->DeleteNode(Hub + 900));
+		TestEqual(TEXT("a refused delete is not an undo step"),
+			Actor->PeekUndoLabel(), FString(TEXT("delete segment")));
+		TestTrue(TEXT("and the stack still has its real entry"), DepthBefore == 1 && Actor->CanUndo());
+	}
+
 	return true;
 }
 

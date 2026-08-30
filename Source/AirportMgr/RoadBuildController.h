@@ -163,6 +163,14 @@ public:
 	int32 GetPendingNode() const { return PendingNode; }
 
 	/**
+	 * True while a modifier is held that turns the next click into a deletion.
+	 *
+	 * Read by the overlay so it can redden what would go. A query rather than state the
+	 * controller pushes at the HUD: there is one answer, asked for when it is needed.
+	 */
+	bool IsDeleteHeld() const;
+
+	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
 	 *
@@ -197,8 +205,14 @@ protected:
 
 private:
 	void OnBuildClick();
+
+	/** Ctrl+click: remove whatever the snap chain resolved. */
+	void OnDeleteClick(const FRoadSnapResult& Snap);
+
 	void OnCancelChain();
 	void OnClearNetwork();
+	void OnUndo();
+	void OnRedo();
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

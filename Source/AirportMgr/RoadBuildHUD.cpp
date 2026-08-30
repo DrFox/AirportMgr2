@@ -47,6 +47,13 @@ void ARoadBuildHUD::DrawHUD()
 		DrawSnapMarker(*Target, Snap);
 	}
 
+	// Aiming a deletion. Drawn after the rings so the doomed ones overdraw their normal
+	// colour rather than being hidden underneath it.
+	if (bHaveSnap && Controller->IsDeleteHeld() && Target->Network != nullptr)
+	{
+		DrawDoomed(*Target, Snap);
+	}
+
 	// Why a click will be refused. The ghost already says THAT it will be - it turns red -
 	// and a colour cannot say which of four rules objected.
 	ERoadPlacement Placement = ERoadPlacement::Valid;
@@ -192,6 +199,69 @@ void ARoadBuildHUD::DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadS
 		X - static_cast<float>(Across.X) * Half, Y - static_cast<float>(Across.Y) * Half,
 		X + static_cast<float>(Across.X) * Half, Y + static_cast<float>(Across.Y) * Half,
 		Colour, NodeRingThickness);
+}
+
+void ARoadBuildHUD::DrawSegmentLine(const ARoadNetworkActor& Target, int32 SegmentIndex,
+	const FLinearColor& Colour, float Thickness)
+{
+	FVector2D WorldA;
+	FVector2D WorldB;
+	if (!Target.GetSegmentEnds(SegmentIndex, WorldA, WorldB))
+	{
+		return;
+	}
+
+	// Both ends must project, so a road with one end off screen draws nothing rather than
+	// a line to a culled position. Acceptable here because the cursor is over the road:
+	// whatever is being deleted is on screen by definition, even if its far end is not.
+	FVector2D ScreenA;
+	FVector2D ScreenB;
+	if (!ProjectPlanePoint(WorldA, Target.SurfaceZ, ScreenA)
+		|| !ProjectPlanePoint(WorldB, Target.SurfaceZ, ScreenB))
+	{
+		return;
+	}
+
+	DrawLine(
+		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+		Colour, Thickness);
+}
+
+void ARoadBuildHUD::DrawDoomed(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap)
+{
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+	{
+		FVector2D Screen;
+		if (ProjectPlanePoint(Snap.Position, Target.SurfaceZ, Screen))
+		{
+			// A heavier ring than the node normally wears, so the doomed one reads as
+			// marked rather than merely recoloured.
+			DrawRing(Screen, NodeRingRadius, DoomedColour, NodeRingThickness);
+			DrawRing(Screen, NodeRingRadius * 1.6f, DoomedColour, DoomedThickness);
+		}
+
+		// The cascade, asked of the model rather than re-derived here. Deleting a node
+		// takes its roads with it, and the count is the difference between removing a
+		// junction and removing the four roads that met at it.
+		for (const int32 Doomed : Target.SegmentsIncidentTo(Snap.Node.Index))
+		{
+			DrawSegmentLine(Target, Doomed, DoomedColour, DoomedThickness);
+		}
+		break;
+	}
+
+	case ERoadSnapKind::Segment:
+		// Just this one. Its endpoints survive, so they keep their own colours.
+		DrawSegmentLine(Target, Snap.Segment.Index, DoomedColour, DoomedThickness);
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		break;
+	}
 }
 
 void ARoadBuildHUD::DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness)
