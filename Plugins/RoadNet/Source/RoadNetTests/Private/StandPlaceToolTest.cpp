@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -57,33 +58,74 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and its anchors are all named and distinct"),
 		UEntityDefinition::HasUsableAnchorIds(Actor->StandDefinition));
 
-	// --- The footprint, which is what makes a stand legible ---------------------------
+	// --- Stand and aircraft are different things --------------------------------------
+	//
+	// A Code C stand takes an A320 AND a 737-800, and their doors are metres apart. Where a
+	// service is REQUIRED therefore belongs to the aircraft; what the ground can PROVIDE
+	// belongs to the stand. Baking one type's geometry into the stand is the bug this split
+	// exists to prevent, and this is the assertion that would catch it coming back.
 	{
-		const FEntityFootprint& Plan = Actor->StandDefinition->Footprint;
-		TestTrue(TEXT("the stand definition carries a plan footprint"), Plan.IsSet());
-		TestTrue(TEXT("its nose is ahead of its tail"), Plan.NoseX > Plan.TailX);
-
-		// The anchors must fall INSIDE the envelope they are measured against, or the
-		// outline is decoration rather than orientation. The belt loaders stand alongside
-		// the fuselage, so they are within the span; nothing should be off the wingtips.
-		const double HalfSpan = Plan.Wingspan * 0.5;
-		for (const FEntityAnchor& Anchor : Actor->StandDefinition->Anchors)
+		const UAircraftType* Design = Actor->StandDefinition->DesignAircraft.Get();
+		if (!TestNotNull(TEXT("the stand names a design aircraft"), Design))
 		{
-			TestTrue(FString::Printf(TEXT("anchor %s lies within the wingspan"), *Anchor.Id.ToString()),
-				FMath::Abs(Anchor.LocalPosition.Y) <= HalfSpan);
+			return false;
 		}
 
-		// Four sides of the envelope plus fuselage, wing and tailplane: seven segments,
-		// fourteen points. Asserted so a silently empty outline is not mistaken for a
-		// stand drawn without one.
+		TestTrue(TEXT("the aircraft carries the plan footprint"), Design->Footprint.IsSet());
+		TestTrue(TEXT("and its service points are all named and distinct"),
+			UAircraftType::HasUsableServiceIds(Design));
+		TestTrue(TEXT("the stand provides fuel"),
+			Actor->StandDefinition->Provides(EServiceRole::Fuel));
+
+		// The stand's own anchors are GROUND fixtures. None of them may be a place on an
+		// airframe, so none should sit where a door does.
+		TestTrue(TEXT("the stand declares ground fixtures"),
+			Actor->StandDefinition->Anchors.Num() > 0);
+
+		// THE PROPERTY THE SPLIT BUYS. Two Code C types, same stand, and their hold doors
+		// must NOT land in the same place - if they did, the stand could have carried the
+		// geometry after all and this whole change bought nothing.
+		UAircraftType* Boeing = NewObject<UAircraftType>(GetTransientPackage());
+		UAircraftType::Build737(Boeing);
+
+		const FEntityAnchor* AirbusHold = Design->ServicePoints.FindByPredicate(
+			[](const FEntityAnchor& Each) { return Each.Id == FName(TEXT("HoldFwd")); });
+		const FEntityAnchor* BoeingHold = Boeing->ServicePoints.FindByPredicate(
+			[](const FEntityAnchor& Each) { return Each.Id == FName(TEXT("HoldFwd")); });
+
+		if (TestNotNull(TEXT("the A320 has a forward hold"), AirbusHold)
+			&& TestNotNull(TEXT("and so does the 737"), BoeingHold))
+		{
+			TestTrue(TEXT("their forward holds are at DIFFERENT stations"),
+				FMath::Abs(AirbusHold->LocalPosition.X - BoeingHold->LocalPosition.X) > 100.0);
+		}
+
+		TestTrue(TEXT("and the two types are not the same length"),
+			FMath::Abs(Design->Footprint.TailX - Boeing->Footprint.TailX) > 100.0);
+
+		// Four sides of the envelope plus fuselage, wing and tailplane: seven segments.
 		TArray<FVector2D> Outline;
-		UEntityDefinition::BuildFootprintLines(Plan, Outline);
+		UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
 		TestEqual(TEXT("the outline is seven segments"), Outline.Num(), 14);
+
+		// Every service point must fall within the aircraft it belongs to, or the outline
+		// is decoration rather than orientation.
+		const double HalfSpan = Design->Footprint.Wingspan * 0.5;
+		for (const FEntityAnchor& Point : Design->ServicePoints)
+		{
+			TestTrue(FString::Printf(TEXT("service point %s lies within the wingspan"),
+				*Point.Id.ToString()),
+				FMath::Abs(Point.LocalPosition.Y) <= HalfSpan);
+			TestTrue(FString::Printf(TEXT("service point %s lies along the fuselage"),
+				*Point.Id.ToString()),
+				Point.LocalPosition.X <= Design->Footprint.NoseX
+				&& Point.LocalPosition.X >= Design->Footprint.TailX);
+		}
 
 		// An unauthored footprint draws nothing rather than a degenerate dot at the origin.
 		FEntityFootprint Empty;
 		TestFalse(TEXT("an unauthored footprint reports itself unset"), Empty.IsSet());
-		UEntityDefinition::BuildFootprintLines(Empty, Outline);
+		UAircraftType::BuildFootprintLines(Empty, Outline);
 		TestEqual(TEXT("and produces no segments at all"), Outline.Num(), 0);
 	}
 

@@ -149,29 +149,20 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(Gate);
 		if (TestNotNull(TEXT("the stand resolves"), Instance))
 		{
-			int32 StopIndex = INDEX_NONE;
-			for (int32 Index = 0; Index < Stand->Anchors.Num(); ++Index)
-			{
-				if (Stand->Anchors[Index].Role == EServiceRole::Aircraft)
-				{
-					StopIndex = Index;
-				}
-			}
+			// Spec section 6's stop-position marking is derived from the stand's OWN POSE,
+			// not from an anchor. That changed when stand and aircraft were split: the mark
+			// painted on the apron is where the stand is, and where the nose gear stops is
+			// the same point by construction. An "Aircraft" fixture would have been a
+			// second copy of the stand's own position, free to disagree with it.
+			TestTrue(TEXT("the stand declares it can take an aircraft"),
+				Stand->Provides(EServiceRole::Aircraft));
+			TestTrue(TEXT("and its pose is the stop position the marking derives from"),
+				Instance->Position.Equals(FVector2D(25000.0, 25000.0), 0.01));
 
-			TestTrue(TEXT("the stand declares an aircraft stop position"), StopIndex != INDEX_NONE);
+			// The ground fixtures still resolve, by id.
+			TestNotNull(TEXT("the hydrant pit has a source, a live node"),
+				Net->GetAnchorNode(Gate, FName(TEXT("HydrantPit"))));
 
-			// Resolved by ID. This loop walked the DEFINITION, and an instance placed before
-			// the definition gained an anchor carries fewer - so a definition index into the
-			// instance was an out-of-bounds read reached by ordinary authoring. By id the
-			// same case is a miss, which is an answer rather than a crash.
-			if (Stand->Anchors.IsValidIndex(StopIndex))
-			{
-				TestNotNull(TEXT("the stop position has a source, a live node"),
-					Net->GetAnchorNode(Gate, Stand->Anchors[StopIndex].Id));
-			}
-
-			// And an id that names nothing resolves to nothing, rather than to whatever
-			// happens to sit at that slot.
 			TestNull(TEXT("an id the stand does not declare resolves to nothing"),
 				Net->GetAnchorNode(Gate, FName(TEXT("NoSuchAnchor"))));
 		}

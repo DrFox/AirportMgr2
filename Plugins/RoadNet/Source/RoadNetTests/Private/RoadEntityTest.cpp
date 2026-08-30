@@ -85,23 +85,22 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Rotated = Net->GetEntity(Placed);
 		if (TestNotNull(TEXT("the entity resolves for the rotation check"), Rotated))
 		{
-			const TArray<FName> TugIds = Net->GetAnchorIdsForRole(Placed, EServiceRole::Tug);
-			if (TestEqual(TEXT("the stand has exactly one tug anchor"), TugIds.Num(), 1))
+			// Purpose-built rather than borrowed from the shipped stand. No GROUND fixture
+			// sits on the centreline any more - the aircraft stop position is the stand's
+			// own pose, not an anchor - and this is testing the rotation, not the layout.
+			UEntityDefinition* Straight = NewObject<UEntityDefinition>(GetTransientPackage());
+			FEntityAnchor Ahead;
+			Ahead.Id = TEXT("Ahead");
+			Ahead.LocalPosition = FVector2D(1500.0, 0.0);
+			Ahead.Role = EServiceRole::Tug;
+			Straight->Anchors.Add(Ahead);
+
+			const FEntityInstanceId Aimed = Net->PlaceEntity(Straight, Where, Facing);
+			const FGuidelineNode* AheadNode = Net->GetAnchorNode(Aimed, FName(TEXT("Ahead")));
+			if (TestNotNull(TEXT("the straight-ahead anchor resolved"), AheadNode))
 			{
-				const FEntityAnchor* Tug = Stand->Anchors.FindByPredicate(
-					[&TugIds](const FEntityAnchor& Each) { return Each.Id == TugIds[0]; });
-
-				// Straight ahead in local space, so rotation is the only thing under test.
-				TestEqual(TEXT("the tug anchor is straight ahead, nothing lateral"),
-					Tug != nullptr ? Tug->LocalPosition.Y : -1.0, 0.0);
-
-				const FGuidelineNode* TugNode = Net->GetAnchorNode(Placed, TugIds[0]);
-				if (TestNotNull(TEXT("the tug anchor resolved"), TugNode) && Tug != nullptr)
-				{
-					const double Ahead = Tug->LocalPosition.X;
-					TestTrue(TEXT("facing +Y, straight ahead lands due north of the stand"),
-						TugNode->Position.Equals(FVector2D(Where.X, Where.Y + Ahead), 0.01));
-				}
+				TestTrue(TEXT("facing +Y, straight ahead lands due north of the stand"),
+					AheadNode->Position.Equals(FVector2D(Where.X, Where.Y + 1500.0), 0.01));
 			}
 		}
 	}
@@ -125,10 +124,10 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			Net->GetAnchorNode(Placed, FName(TEXT("DeIcer"))));
 
 		// And every anchor that DID exist still resolves - the new one shifted nothing.
-		TestNotNull(TEXT("the aircraft anchor still resolves"),
-			Net->GetAnchorNode(Placed, FName(TEXT("Aircraft"))));
-		TestNotNull(TEXT("the aft baggage anchor still resolves"),
-			Net->GetAnchorNode(Placed, FName(TEXT("BaggageAft"))));
+		TestNotNull(TEXT("the hydrant fixture still resolves"),
+			Net->GetAnchorNode(Placed, FName(TEXT("HydrantPit"))));
+		TestNotNull(TEXT("the aft equipment box still resolves"),
+			Net->GetAnchorNode(Placed, FName(TEXT("EquipmentAft"))));
 
 		// The role query must not offer an id the instance cannot follow.
 		for (const FName Id : Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel))
@@ -148,15 +147,20 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
 		if (TestNotNull(TEXT("the entity still resolves"), Instance))
 		{
-			TestEqual(TEXT("a stand has exactly one aircraft stop position"),
-				Net->GetAnchorIdsForRole(Placed, EServiceRole::Aircraft).Num(), 1);
-			TestEqual(TEXT("and one fuel position"),
+			// The aircraft stop position is the stand's own POSE, not a fixture: there is
+			// nothing dug into the concrete at the nose gear mark except paint.
+			TestEqual(TEXT("no ground fixture claims to be the aircraft"),
+				Net->GetAnchorIdsForRole(Placed, EServiceRole::Aircraft).Num(), 0);
+			TestTrue(TEXT("but the stand does declare it can take one"),
+				Stand->Provides(EServiceRole::Aircraft));
+
+			TestEqual(TEXT("one hydrant pit"),
 				Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
 
 			// Role is a CATEGORY, not an identity, and this is the case that proves it: a
-			// Code C stand works two holds, so asking for "the baggage position" by role
-			// alone has two answers and any scheme keyed on role would have to pick one.
-			TestEqual(TEXT("and TWO baggage positions, fore and aft"),
+			// Code C stand paints two equipment boxes, so asking for "the baggage position"
+			// by role alone has two answers and any scheme keyed on role must pick one.
+			TestEqual(TEXT("and TWO equipment boxes, fore and aft"),
 				Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 2);
 
 			int32 IdsThatResolve = 0;

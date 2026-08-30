@@ -3,6 +3,7 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Model/RoadNetwork.h"
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
@@ -215,10 +216,12 @@ void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
 		//
 		// Dimensions come from the DEFINITION. An overlay carrying its own would be a
 		// second opinion about how big an A320 is.
-		if (Entity.Definition != nullptr)
+		const UAircraftType* Design =
+			Entity.Definition != nullptr ? Entity.Definition->DesignAircraft.Get() : nullptr;
+		if (Design != nullptr)
 		{
 			TArray<FVector2D> Outline;
-			UEntityDefinition::BuildFootprintLines(Entity.Definition->Footprint, Outline);
+			UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
 
 			const double Cos = FMath::Cos(Entity.Heading);
 			const double Sin = FMath::Sin(Entity.Heading);
@@ -245,7 +248,31 @@ void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
 			}
 		}
 
-		// The anchors, read from the INSTANCE rather than recomputed from the definition.
+		// Where the design aircraft would need each service. Recomputed rather than stored,
+		// because these belong to whatever is PARKED here - today the type the stand was
+		// sized for, tomorrow whatever actually occupies it - and a stored copy would be a
+		// claim about an aircraft that has not arrived.
+		if (Design != nullptr)
+		{
+			const double Cos = FMath::Cos(Entity.Heading);
+			const double Sin = FMath::Sin(Entity.Heading);
+
+			for (const FEntityAnchor& Point : Design->ServicePoints)
+			{
+				const FVector2D World(
+					Entity.Position.X + Point.LocalPosition.X * Cos - Point.LocalPosition.Y * Sin,
+					Entity.Position.Y + Point.LocalPosition.X * Sin + Point.LocalPosition.Y * Cos);
+
+				FVector2D Screen;
+				if (ProjectPlanePoint(World, Target.SurfaceZ, Screen))
+				{
+					DrawRing(Screen, ServiceAnchorRadius * 0.7f, StandColour, NodeRingThickness);
+				}
+			}
+		}
+
+		// The stand's FIXTURES, read from the INSTANCE rather than recomputed from the
+		// definition.
 		// These are the guideline nodes vehicles will actually route to; drawing the
 		// definition's local positions transformed again would be a second opinion about
 		// where they are, and the two could disagree without anything reporting it.

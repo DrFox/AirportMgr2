@@ -1,5 +1,6 @@
 #include "Tool/StandPlaceTool.h"
 
+#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -130,24 +131,37 @@ void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& 
 			At.Y + Local.X * Sin + Local.Y * Cos);
 	};
 
-	// The outline first, so the anchors read against it rather than floating on their own.
-	TArray<FVector2D> Outline;
-	UEntityDefinition::BuildFootprintLines(Definition->Footprint, Outline);
-	for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
+	// The DESIGN AIRCRAFT first, so everything else reads against it. An aircraft parked
+	// here shares the stand's pose exactly - both are measured from the nose gear - so the
+	// same transform serves both without an offset of its own.
+	if (const UAircraftType* Design = Definition->DesignAircraft.Get())
 	{
-		Sink.Line(ToWorld(Outline[Index]), ToWorld(Outline[Index + 1]), EPreviewStyle::Snap);
+		TArray<FVector2D> Outline;
+		UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
+		for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
+		{
+			Sink.Line(ToWorld(Outline[Index]), ToWorld(Outline[Index + 1]), EPreviewStyle::Snap);
+		}
+
+		// Where THIS type needs each service. A different type on the same stand puts these
+		// somewhere else, which is the entire reason they live on the aircraft.
+		for (const FEntityAnchor& Point : Design->ServicePoints)
+		{
+			Sink.Marker(ToWorld(Point.LocalPosition), EPreviewStyle::Pending);
+		}
 	}
 
-	for (const FEntityAnchor& Anchor : Definition->Anchors)
+	// The stand's own fixtures: plant dug into the concrete, which stay put whatever parks
+	// on them. Drawn with a line back to the stop mark so they read as belonging to it.
+	for (const FEntityAnchor& Fixture : Definition->Anchors)
 	{
-		const FVector2D World = ToWorld(Anchor.LocalPosition);
-
-		// The aircraft's own stop position reads differently from the vehicles that serve
-		// it: it is the thing being positioned, the rest are consequences of where it sits.
-		Sink.Marker(World, Anchor.Role == EServiceRole::Aircraft
-			? EPreviewStyle::Pending : EPreviewStyle::Snap);
+		const FVector2D World = ToWorld(Fixture.LocalPosition);
+		Sink.Marker(World, EPreviewStyle::Snap);
 		Sink.Line(At, World, EPreviewStyle::Heal);
 	}
+
+	// The stop mark itself - the thing actually being positioned.
+	Sink.Marker(At, EPreviewStyle::Pending);
 
 }
 
