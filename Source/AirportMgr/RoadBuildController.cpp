@@ -2,7 +2,6 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
-#include "DrawDebugHelpers.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
@@ -36,70 +35,83 @@ void ARoadBuildController::BeginPlay()
 
 	if (bStartAbovePlane)
 	{
-		MoveViewAbovePlane();
+		CreateBuildCamera();
 	}
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears."),
+			 "Backspace clears. WASD pans, Q/E rotate, wheel zooms."),
 		*Target->GetName());
 }
 
-void ARoadBuildController::MoveViewAbovePlane()
+void ARoadBuildController::ApplyViewLimits(FBuildCameraRig& Rig) const
+{
+	Rig.MinDistance = MinViewDistance;
+	Rig.MaxDistance = MaxViewDistance;
+	Rig.MinPitch = MinPitchDegrees;
+	Rig.MaxPitch = MaxPitchDegrees;
+}
+
+void ARoadBuildController::CreateBuildCamera()
 {
 	if (Target == nullptr || GetWorld() == nullptr)
 	{
 		return;
 	}
 
-	const FVector Above(0.0, 0.0, Target->SurfaceZ + StartHeight);
+	ApplyViewLimits(TargetView);
+	TargetView.Focus = FVector2D::ZeroVector;
+	TargetView.Distance = FMath::Clamp(StartViewDistance, MinViewDistance, MaxViewDistance);
+	TargetView.Yaw = 0.0;
+
+	// The view starts settled rather than easing in from wherever a default-constructed
+	// rig happens to sit, which would swoop the camera across the map on possession.
+	CurrentView = TargetView;
 
 	FActorSpawnParameters Params;
 	Params.ObjectFlags |= RF_Transient;
-	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(Above, FRotator(-90.0, 0.0, 0.0), Params);
+	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(
+		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation(), Params);
 	if (BuildCamera == nullptr)
 	{
 		return;
 	}
 
-	// Straight down is set on the camera actor's own transform, not through
-	// SetControlRotation: control rotation near +/-90 pitch hits gimbal lock and is
-	// silently renormalised to something else, which reads as the camera ignoring you.
 	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	Camera->SetProjectionMode(ECameraProjectionMode::Orthographic);
-	Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
+	Camera->SetProjectionMode(ECameraProjectionMode::Perspective);
+	Camera->SetFieldOfView(static_cast<float>(FieldOfView));
 
-	// Viewing through a camera actor also takes the view away from the pawn, so the
-	// pawn's mouse-look stops fighting the cursor for the same input.
+	// Viewing through a camera actor takes the view away from the pawn, so the pawn's
+	// mouse-look stops fighting the cursor for the same input.
 	SetViewTarget(BuildCamera);
 
 	UE_LOG(LogRoadBuild, Log,
-		TEXT("Top-down orthographic view: %.0f uu across, %.0f uu up. Screen maps 1:1 to ground."),
-		ViewWidth, Target->SurfaceZ + StartHeight);
+		TEXT("Build camera: %.0f uu out at %.1f degrees. Pitch follows the zoom, %.0f to %.0f degrees."),
+		CurrentView.Distance, CurrentView.PitchDegrees(), MinPitchDegrees, MaxPitchDegrees);
 }
 
-void ARoadBuildController::PanView(float DeltaTime)
+void ARoadBuildController::UpdateView(float DeltaTime)
 {
-	if (BuildCamera == nullptr)
+	if (BuildCamera == nullptr || Target == nullptr)
 	{
 		return;
 	}
 
-	// Screen up is +Y in world here, because the camera looks straight down its own
-	// -Z with no yaw: panning is a plain XY translation, no basis vectors needed.
+	ApplyViewLimits(TargetView);
+
 	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
 	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
+	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
 
-	if (Right == 0.0 && Forward == 0.0)
-	{
-		return;
-	}
+	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
+	TargetView.Rotate(Turn * RotateRate * DeltaTime);
 
-	const FVector Where = BuildCamera->GetActorLocation();
-	BuildCamera->SetActorLocation(FVector(
-		Where.X + Forward * PanSpeed * DeltaTime,
-		Where.Y + Right * PanSpeed * DeltaTime,
-		Where.Z));
+	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
+	// key binding fires once on press. The same reason WASD was never bound.
+	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
+
+	BuildCamera->SetActorLocationAndRotation(
+		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -115,7 +127,6 @@ void ARoadBuildController::SetupInputComponent()
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
-	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::ToggleProjection);
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
@@ -161,19 +172,12 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 		Origin.X + Direction.X * Distance,
 		Origin.Y + Direction.Y * Distance);
 
-	// The horizon guards below only make sense for a perspective view, where the ray
-	// starts at the eye and a near-horizontal ray runs away to nothing. Under the
-	// orthographic build camera the deprojected origin sits on the near plane rather
-	// than at the camera, so that plane can be behind or far above the road and the
-	// "distance" carries no information about where the click landed - the intersection
-	// is exact either way. Applying them there silently threw away good clicks in the
-	// middle of the screen, which is the whole reason a road only appeared sometimes.
-	const bool bOrthographic = BuildCamera != nullptr
-		&& BuildCamera->GetCameraComponent()->ProjectionMode == ECameraProjectionMode::Orthographic;
-	if (bOrthographic)
-	{
-		return true;
-	}
+	// These guards were skipped while the build camera was orthographic, and skipping them
+	// was what stopped good clicks vanishing: under an orthographic projection the
+	// deprojected origin sits on the near plane rather than at the camera, so the
+	// ray/plane distance carries no information about where the click landed. The view is
+	// perspective now and they are live and necessary again - if an orthographic mode ever
+	// returns, it must exempt itself from both of them.
 
 	// Behind the camera. Without this a click on the sky lands on the plane's mirror
 	// image, dropping a node far off in the opposite direction.
@@ -188,14 +192,17 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	}
 
 	// Near the horizon the ray is almost parallel to the plane and this distance runs
-	// away, so a click a few pixels too high lands kilometres out.
-	if (Distance > MaxPlaceDistance)
+	// away, so a click a few pixels too high lands kilometres out. Measured against the
+	// current view distance rather than a fixed number, because the view spans a
+	// hundredfold range and no single cap suits both ends of it.
+	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
+	if (Distance > Furthest)
 	{
 		if (bLogRefusals)
 		{
 			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the road plane is %.0f uu away there, past MaxPlaceDistance of %.0f."),
-				Distance, MaxPlaceDistance);
+				TEXT("Click ignored: the road plane is %.0f uu away there, past %.0f (%.1fx the view)."),
+				Distance, Furthest, MaxPlaceDistanceFactor);
 		}
 		return false;
 	}
@@ -215,69 +222,120 @@ void ARoadBuildController::ZoomOut()
 
 void ARoadBuildController::ZoomBy(double Notches)
 {
-	if (BuildCamera == nullptr || Target == nullptr)
-	{
-		return;
-	}
+	ApplyViewLimits(TargetView);
+	TargetView.Zoom(ZoomStep, Notches);
 
-	ViewWidth = FMath::Clamp(
-		ViewWidth * FMath::Pow(1.0 + ZoomStep, Notches), MinViewWidth, MaxViewWidth);
-
-	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	if (Camera->ProjectionMode == ECameraProjectionMode::Orthographic)
-	{
-		Camera->SetOrthoWidth(static_cast<float>(ViewWidth));
-	}
-	else
-	{
-		// Height that frames the same ground width at this FOV, so a zoom means the same
-		// thing in both projections and switching between them does not jump the view.
-		const double HalfFovRadians = FMath::DegreesToRadians(Camera->FieldOfView * 0.5f);
-		const double Height = (ViewWidth * 0.5) / FMath::Max(FMath::Tan(HalfFovRadians), UE_KINDA_SMALL_NUMBER);
-
-		const FVector Where = BuildCamera->GetActorLocation();
-		BuildCamera->SetActorLocation(FVector(Where.X, Where.Y, Target->SurfaceZ + Height));
-	}
-
-	UE_LOG(LogRoadBuild, Log, TEXT("View width %.0f uu"), ViewWidth);
+	UE_LOG(LogRoadBuild, Log, TEXT("View %.0f uu out, %.1f degrees"),
+		TargetView.Distance, TargetView.PitchDegrees());
 }
 
-void ARoadBuildController::ToggleProjection()
+FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
 {
-	if (BuildCamera == nullptr || Target == nullptr)
+	FRoadSnapSettings Settings;
+	Settings.NodeRadius = PickRadius;
+	Settings.SegmentRadius = SegmentSnapRadius;
+	Settings.bSnapToSegments = bSnapToSegments;
+	Settings.MinSplitFromEndpoint = MinSplitFromEndpoint;
+	return Settings;
+}
+
+bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) const
+{
+	FVector2D Cursor;
+	if (Target == nullptr || !CursorOnRoadPlane(Cursor, bLogRefusals))
 	{
-		return;
+		return false;
 	}
 
-	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	const bool bWasOrthographic = Camera->ProjectionMode == ECameraProjectionMode::Orthographic;
+	// Before the first node exists there is no network to search - the facade builds one
+	// lazily inside PlaceNode. Free at the cursor is the right answer here, not a
+	// refusal: treating a missing network as failure would make the first click of every
+	// session do nothing at all.
+	Out = FRoadSnapResult();
+	Out.Position = Cursor;
 
-	// Perspective keeps looking straight down. That is not how you would inspect a
-	// surface for relief, but it keeps the click mapping intuitive; pitch is a separate
-	// control and this driver deliberately has none.
-	Camera->SetProjectionMode(
-		bWasOrthographic ? ECameraProjectionMode::Perspective : ECameraProjectionMode::Orthographic);
+	if (Target->Network != nullptr)
+	{
+		Out = SnapChain.Resolve(*Target->Network, Cursor, MakeSnapSettings());
+	}
+	return true;
+}
 
-	// Re-apply the current zoom through the new projection so the framing carries over.
-	ZoomBy(0.0);
+FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
+{
+	FRoadPlacementLimits Limits;
+	Limits.MinSegmentLength = MinSegmentLength;
+	Limits.MinTurnDegrees = MinTurnDegrees;
+	return Limits;
+}
 
-	UE_LOG(LogRoadBuild, Log, TEXT("Projection: %s"),
-		bWasOrthographic ? TEXT("perspective") : TEXT("orthographic"));
+ERoadPlacement ARoadBuildController::JudgePlacement(const FRoadSnapResult& Snap) const
+{
+	// Nothing to judge until a chain is in progress: the first click of a road places a
+	// node and builds no segment, and there is no rule a lone node can break.
+	FRoadNodeId From;
+	if (PendingNode == INDEX_NONE || Target == nullptr || Target->Network == nullptr
+		|| !Target->MakeLiveNodeId(PendingNode, From))
+	{
+		return ERoadPlacement::Valid;
+	}
+
+	return RoadPlacement::Validate(*Target->Network, From, Snap, MakePlacementLimits());
+}
+
+bool ARoadBuildController::GetPendingPlacement(ERoadPlacement& Out) const
+{
+	Out = LastPlacement;
+	return bLastPlacementRelevant;
 }
 
 void ARoadBuildController::OnBuildClick()
 {
-	FVector2D Where;
-	if (Target == nullptr || !CursorOnRoadPlane(Where, /*bLogRefusals*/ true))
+	FRoadSnapResult Snap;
+	if (Target == nullptr || !ResolveSnap(Snap, /*bLogRefusals*/ true))
 	{
 		return;
 	}
 
-	// Reuse a node already under the cursor so a click can close a junction. Without
-	// this every click would start a road disconnected from the last one, and the
-	// junction geometry - the whole point of the mesh slice - would be unreachable.
-	const int32 Existing = Target->FindNodeNear(Where, PickRadius);
-	const int32 Node = (Existing != INDEX_NONE) ? Existing : Target->PlaceNode(Where);
+	const FVector2D Where = Snap.Position;
+
+	// Judged BEFORE anything is created. Validating after placing the node would leave a
+	// stray node behind on every refused click - the road would not appear, but the graph
+	// would still have grown.
+	const ERoadPlacement Judgement = JudgePlacement(Snap);
+	if (Judgement != ERoadPlacement::Valid)
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Click refused: %s"), RoadPlacement::Describe(Judgement));
+		return;
+	}
+
+	// One decision, taken by the chain, acted on here and drawn by the HUD. The three
+	// outcomes are the whole difference between continuing a road, closing a junction on
+	// an existing node, and cutting a new junction into a road already drawn.
+	int32 Node = INDEX_NONE;
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+		Node = Snap.Node.Index;
+		break;
+
+	case ERoadSnapKind::Segment:
+		// PendingNode survives this. The split kills a SEGMENT handle and recycles its
+		// slot, and nodes live in a separate slot array that a split only ever appends
+		// to - so the index being chained from still means the same node.
+		Node = Target->SplitSegment(Snap.Segment.Index, Where);
+		if (Node != INDEX_NONE)
+		{
+			UE_LOG(LogRoadBuild, Log, TEXT("Split segment %d at (%.0f, %.0f) into node %d"),
+				Snap.Segment.Index, Where.X, Where.Y, Node);
+		}
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		Node = Target->PlaceNode(Where);
+		break;
+	}
 
 	if (Node == INDEX_NONE)
 	{
@@ -340,46 +398,30 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 
-	PanView(DeltaTime);
+	UpdateView(DeltaTime);
 
-	if (!bDrawBuildPreview || Target == nullptr)
+	if (Target == nullptr)
 	{
 		return;
 	}
 
-	// Thickness is in world units, so these are sized against the road rather than the
-	// screen: a marker about a quarter of the default road's width, and a band thin
-	// enough not to hide the surface under it. Single digits would be sub-pixel here -
-	// indistinguishable from nothing being drawn at all.
-	constexpr double MarkerRadius = 50.0;
-	constexpr float LineThickness = 10.0f;
+	FRoadSnapResult Snap;
+	const bool bHaveSnap = ResolveSnap(Snap);
 
-	FVector2D Cursor;
-	const bool bCursorOnPlane = CursorOnRoadPlane(Cursor);
-	const FVector CursorWorld(Cursor.X, Cursor.Y, Target->SurfaceZ);
+	// Judged every frame whether or not the ghost is drawn: the overlay reports the reason
+	// a click will be refused, and that has to be true even with previews switched off.
+	bLastPlacementRelevant = bHaveSnap && PendingNode != INDEX_NONE;
+	LastPlacement = bHaveSnap ? JudgePlacement(Snap) : ERoadPlacement::Valid;
 
-	// Where the next click would land, and whether it would reuse a node rather than
-	// add one - the difference between continuing a road and closing a junction.
-	if (bCursorOnPlane)
+	if (!bDrawBuildPreview || !bLastPlacementRelevant)
 	{
-		const bool bWouldSnap = Target->FindNodeNear(Cursor, PickRadius) != INDEX_NONE;
-		DrawDebugSphere(GetWorld(), CursorWorld, MarkerRadius, 12,
-			bWouldSnap ? FColor::Yellow : FColor::White, false, -1.0f, 0, LineThickness * 0.25f);
+		Target->HideGhost();
+		return;
 	}
 
-	FVector PendingWorld;
-	if (NodeWorldLocation(PendingNode, PendingWorld))
-	{
-		DrawDebugSphere(GetWorld(), PendingWorld, MarkerRadius * 1.5, 12,
-			FColor::Green, false, -1.0f, 0, LineThickness * 0.25f);
-
-		// The rubber band: the segment this click would create.
-		if (bCursorOnPlane)
-		{
-			DrawDebugLine(GetWorld(), PendingWorld, CursorWorld,
-				FColor::Green, false, -1.0f, 0, LineThickness);
-		}
-	}
+	// The ghost shows the segment even when it is illegal, coloured rather than withheld.
+	// Hiding it would answer "why can I not build here" with nothing at all.
+	Target->UpdateGhost(PendingNode, Snap, LastPlacement == ERoadPlacement::Valid);
 }
 
 void ARoadBuildController::OnCancelChain()
