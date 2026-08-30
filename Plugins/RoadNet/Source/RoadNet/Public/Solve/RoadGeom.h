@@ -30,6 +30,16 @@ namespace RoadGeom
 	/** Intersection of the two infinite lines. False if near-parallel. */
 	ROADNET_API bool LineIntersect(const FRay2D& A, const FRay2D& B, FVector2D& OutPoint);
 
+	/**
+	 * Parameter in [0,1] of the point on segment A->B closest to P.
+	 *
+	 * Clamped, so it describes the closest point on the SEGMENT, not on its infinite
+	 * line: a t of exactly 0 or 1 therefore means the closest point is an endpoint, which
+	 * is the signal the segment snap rule uses to stand down and let the node rule own
+	 * that neighbourhood. A zero-length segment returns 0.
+	 */
+	ROADNET_API double ClosestPointOnSegment(const FVector2D& A, const FVector2D& B, const FVector2D& P);
+
 	/** Signed area via the shoelace formula. Positive means CCW winding. */
 	ROADNET_API double PolygonArea(TArrayView<const FVector2D> Points);
 

@@ -23,28 +23,28 @@ void ARoadBuildHUD::DrawHUD()
 	}
 
 	const ARoadNetworkActor* Target = Controller->GetTarget();
-	if (Target == nullptr || Target->Network == nullptr)
+	if (Target == nullptr)
 	{
 		return;
 	}
 
-	// Resolved once and passed down rather than asked for twice: the rings and the
-	// crosshair must agree about what the next click would do, and two independent
-	// searches are two things that can disagree.
-	FVector2D Cursor = FVector2D::ZeroVector;
-	const bool bHaveCursor = Controller->CursorOnRoadPlane(Cursor);
-	const int32 SnapTo = bHaveCursor
-		? Target->FindNodeNear(Cursor, Controller->GetPickRadius())
-		: INDEX_NONE;
+	// The controller's own answer, not a second search of our own. The overlay and the
+	// click have to agree about what the next click does, and the only way to guarantee
+	// that is for there to be one decision rather than two that happen to match.
+	FRoadSnapResult Snap;
+	const bool bHaveSnap = Controller->ResolveSnap(Snap);
 
-	if (bDrawNodes)
+	// Network is null until the first node is placed. Rings need one; the marker does
+	// not, and is worth more then than at any other time - it is the only thing on screen
+	// showing where the first click will land.
+	if (bDrawNodes && Target->Network != nullptr)
 	{
-		DrawNodes(*Target, Controller->GetPendingNode(), SnapTo);
+		DrawNodes(*Target, Controller->GetPendingNode(), Snap);
 	}
 
-	if (bDrawCursor && bHaveCursor)
+	if (bDrawCursor && bHaveSnap)
 	{
-		DrawCursor(*Target, Cursor, SnapTo != INDEX_NONE);
+		DrawSnapMarker(*Target, Snap);
 	}
 }
 
@@ -53,9 +53,13 @@ ARoadBuildController* ARoadBuildHUD::GetBuildController() const
 	return Cast<ARoadBuildController>(GetOwningPlayerController());
 }
 
-void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode, int32 SnapTo)
+void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode, const FRoadSnapResult& Snap)
 {
 	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
+
+	// Only a Node snap highlights a ring. A Segment snap is a cut between two nodes and
+	// belongs to neither of them, so highlighting either would name the wrong thing.
+	const int32 SnapTo = (Snap.Kind == ERoadSnapKind::Node) ? Snap.Node.Index : INDEX_NONE;
 
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
@@ -107,23 +111,69 @@ void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode
 	}
 }
 
-void ARoadBuildHUD::DrawCursor(const ARoadNetworkActor& Target, const FVector2D& Cursor, bool bWouldSnap)
+void ARoadBuildHUD::DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap)
 {
 	FVector2D Screen;
-	if (!ProjectPlanePoint(Cursor, Target.SurfaceZ, Screen))
+	if (!ProjectPlanePoint(Snap.Position, Target.SurfaceZ, Screen))
 	{
 		return;
 	}
 
-	// Where the click lands on the PLANE, which under a perspective view is not where the
-	// mouse pointer is drawn. Under the top-down orthographic build view the two coincide,
-	// and that agreement is itself worth being able to see.
-	const FLinearColor Colour = bWouldSnap ? SnapColour : FLinearColor::White;
+	// Drawn at the SNAPPED position. Under the top-down orthographic view a Free snap
+	// puts this exactly under the mouse pointer and it says nothing; the moment a rule
+	// claims the cursor the marker jumps to where the click will really land, and the gap
+	// between pointer and marker is the snap made visible.
+	const FLinearColor Colour =
+		(Snap.Kind == ERoadSnapKind::Node) ? SnapColour :
+		(Snap.Kind == ERoadSnapKind::Segment) ? SplitColour : FLinearColor::White;
+
 	const float X = static_cast<float>(Screen.X);
 	const float Y = static_cast<float>(Screen.Y);
-
 	DrawLine(X - CursorSize, Y, X + CursorSize, Y, Colour, 1.0f);
 	DrawLine(X, Y - CursorSize, X, Y + CursorSize, Colour, 1.0f);
+
+	if (Snap.Kind != ERoadSnapKind::Segment || Target.Network == nullptr)
+	{
+		return;
+	}
+
+	const FRoadSegment* Segment = Target.Network->GetSegment(Snap.Segment);
+	const FRoadNode* EndA = Segment != nullptr ? Target.Network->GetNode(Segment->A) : nullptr;
+	const FRoadNode* EndB = Segment != nullptr ? Target.Network->GetNode(Segment->B) : nullptr;
+	if (EndA == nullptr || EndB == nullptr)
+	{
+		return;
+	}
+
+	const FVector2D Along = (EndB->Position - EndA->Position).GetSafeNormal();
+	if (Along.IsNearlyZero())
+	{
+		return;
+	}
+
+	// The tick's direction is taken from a point just beside the split rather than from
+	// the segment's endpoints, because a long road usually has at least one end off
+	// screen and ProjectPlanePoint culls those - the cut mark would then vanish on
+	// exactly the segments most worth cutting.
+	FVector2D Beside;
+	if (!ProjectPlanePoint(Snap.Position + FVector2D(-Along.Y, Along.X) * 100.0, Target.SurfaceZ, Beside))
+	{
+		return;
+	}
+
+	FVector2D Across = Beside - Screen;
+	if (!Across.Normalize())
+	{
+		return;
+	}
+
+	// Sized in pixels off the ring radius, so the cut mark reads at the same weight as
+	// the nodes it will become one of.
+	const float Half = NodeRingRadius;
+	DrawLine(
+		X - static_cast<float>(Across.X) * Half, Y - static_cast<float>(Across.Y) * Half,
+		X + static_cast<float>(Across.X) * Half, Y + static_cast<float>(Across.Y) * Half,
+		Colour, NodeRingThickness);
 }
 
 void ARoadBuildHUD::DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness)

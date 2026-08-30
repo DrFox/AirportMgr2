@@ -4,6 +4,7 @@
 #include "DynamicMesh/DynamicMesh3.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 
@@ -146,6 +147,80 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 	Actor->ClearNetwork();
 	TestEqual(TEXT("clearing empties the nodes"), Actor->Network->GetNodes().Num(), 0);
 	TestEqual(TEXT("clearing empties the segments"), Actor->Network->GetSegments().Num(), 0);
+
+	// Splitting is what makes a T-junction authorable. Without it a junction can only form
+	// where a node was already placed, so a taxiway run into a road already drawn has
+	// nothing to land on. Block-scoped with its own names: V7 makes shadowing an error and
+	// A, B, C are already taken above.
+	{
+		const int32 SplitFrom = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 SplitTo = Actor->PlaceNode(FVector2D(4000.0, 0.0));
+		TestTrue(TEXT("split fixture connects"), Actor->ConnectNodes(SplitFrom, SplitTo));
+		TestEqual(TEXT("one segment before the split"), Actor->Network->GetSegments().Num(), 1);
+
+		const int32 DoomedGeneration = Actor->Network->GetSegments()[0].Generation;
+
+		TestEqual(TEXT("an index that is not a segment is refused"),
+			Actor->SplitSegment(77, FVector2D(2000.0, 0.0)), INDEX_NONE);
+		TestEqual(TEXT("a refused split changes nothing"), Actor->Network->GetSegments().Num(), 1);
+
+		const int32 Middle = Actor->SplitSegment(0, FVector2D(2000.0, 0.0));
+		TestTrue(TEXT("the split creates a node"), Middle != INDEX_NONE);
+		TestEqual(TEXT("three nodes after the split"), Actor->Network->GetNodes().Num(), 3);
+
+		// Everything below indexes by Middle. Guarded rather than trusted: a split that
+		// refuses returns INDEX_NONE, and indexing the array with it takes the whole
+		// suite down with an access violation instead of reporting one failed assertion.
+		if (Actor->Network->GetNodes().IsValidIndex(Middle))
+		{
+
+			// The original handle must be DEAD, not merely pointing at different data. The
+			// slot is recycled immediately by the first replacement segment, so a caller
+			// holding the old handle would otherwise silently address one half of the split
+			// as though it were the whole road. Only the generation counter separates them.
+			FRoadSegmentId Stale;
+			Stale.Index = 0;
+			Stale.Generation = DoomedGeneration;
+			TestFalse(TEXT("the original segment handle no longer resolves"),
+				RoadSlot::IsValid<FRoadSegmentId, FRoadSegment>(Actor->Network->GetSegments(), Stale));
+
+			int32 LiveHalves = 0;
+			for (const FRoadSegment& Half : Actor->Network->GetSegments())
+			{
+				if (Half.bAlive)
+				{
+					++LiveHalves;
+				}
+			}
+			TestEqual(TEXT("the split leaves exactly two live segments"), LiveHalves, 2);
+
+			TestTrue(TEXT("the new node sits exactly where it was asked for"),
+				Actor->Network->GetNodes()[Middle].Position == FVector2D(2000.0, 0.0));
+
+			// Incidence is the half that a split gets wrong quietly: a road that renders
+			// correctly can still have a middle node the solver sees only one arm at.
+			TestEqual(TEXT("the middle node joins both halves"),
+				Actor->Network->GetNodes()[Middle].Incident.Num(), 2);
+			TestEqual(TEXT("the near end keeps exactly one segment"),
+				Actor->Network->GetNodes()[SplitFrom].Incident.Num(), 1);
+			TestEqual(TEXT("the far end keeps exactly one segment"),
+				Actor->Network->GetNodes()[SplitTo].Incident.Num(), 1);
+
+			// Both halves must carry the original's profile, or the road changes width at a
+			// point the player only asked to put a node on.
+			TestTrue(TEXT("both halves inherit a profile"),
+				Actor->Network->GetSegments()[0].Profile != nullptr
+				&& Actor->Network->GetSegments()[1].Profile != nullptr);
+
+		}
+
+		// A split landing on an endpoint would produce a zero-length segment, which the
+		// solver cannot trim - both its ends would sit on the same point.
+		TestEqual(TEXT("splitting at an endpoint is refused"),
+			Actor->SplitSegment(0, FVector2D(0.0, 0.0)), INDEX_NONE);
+		TestEqual(TEXT("the refused degenerate split created no node"),
+			Actor->Network->GetNodes().Num(), 3);
+	}
 
 	return true;
 }

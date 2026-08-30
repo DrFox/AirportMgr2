@@ -211,3 +211,21 @@ void RoadGeom::SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVect
 		OutPoints.Add(Fillet.Centre + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * ArcRadius);
 	}
 }
+
+double RoadGeom::ClosestPointOnSegment(const FVector2D& A, const FVector2D& B, const FVector2D& P)
+{
+	const FVector2D Along = B - A;
+	const double LengthSquared = Along.SizeSquared();
+
+	// A zero-length segment has no direction to project onto. Returning 0 rather than
+	// dividing gives the caller the A endpoint, which is the only point it has.
+	if (LengthSquared <= 0.0)
+	{
+		return 0.0;
+	}
+
+	// Divided by the squared length, not the length: the dot product is already scaled by
+	// |Along| once, so one more division normalises it to a parameter rather than a
+	// distance.
+	return FMath::Clamp(FVector2D::DotProduct(P - A, Along) / LengthSquared, 0.0, 1.0);
+}

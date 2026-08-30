@@ -265,19 +265,75 @@ void ARoadBuildController::ToggleProjection()
 		bWasOrthographic ? TEXT("perspective") : TEXT("orthographic"));
 }
 
+FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
+{
+	FRoadSnapSettings Settings;
+	Settings.NodeRadius = PickRadius;
+	Settings.SegmentRadius = SegmentSnapRadius;
+	Settings.bSnapToSegments = bSnapToSegments;
+	Settings.MinSplitFromEndpoint = MinSplitFromEndpoint;
+	return Settings;
+}
+
+bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) const
+{
+	FVector2D Cursor;
+	if (Target == nullptr || !CursorOnRoadPlane(Cursor, bLogRefusals))
+	{
+		return false;
+	}
+
+	// Before the first node exists there is no network to search - the facade builds one
+	// lazily inside PlaceNode. Free at the cursor is the right answer here, not a
+	// refusal: treating a missing network as failure would make the first click of every
+	// session do nothing at all.
+	Out = FRoadSnapResult();
+	Out.Position = Cursor;
+
+	if (Target->Network != nullptr)
+	{
+		Out = SnapChain.Resolve(*Target->Network, Cursor, MakeSnapSettings());
+	}
+	return true;
+}
+
 void ARoadBuildController::OnBuildClick()
 {
-	FVector2D Where;
-	if (Target == nullptr || !CursorOnRoadPlane(Where, /*bLogRefusals*/ true))
+	FRoadSnapResult Snap;
+	if (Target == nullptr || !ResolveSnap(Snap, /*bLogRefusals*/ true))
 	{
 		return;
 	}
 
-	// Reuse a node already under the cursor so a click can close a junction. Without
-	// this every click would start a road disconnected from the last one, and the
-	// junction geometry - the whole point of the mesh slice - would be unreachable.
-	const int32 Existing = Target->FindNodeNear(Where, PickRadius);
-	const int32 Node = (Existing != INDEX_NONE) ? Existing : Target->PlaceNode(Where);
+	const FVector2D Where = Snap.Position;
+
+	// One decision, taken by the chain, acted on here and drawn by the HUD. The three
+	// outcomes are the whole difference between continuing a road, closing a junction on
+	// an existing node, and cutting a new junction into a road already drawn.
+	int32 Node = INDEX_NONE;
+	switch (Snap.Kind)
+	{
+	case ERoadSnapKind::Node:
+		Node = Snap.Node.Index;
+		break;
+
+	case ERoadSnapKind::Segment:
+		// PendingNode survives this. The split kills a SEGMENT handle and recycles its
+		// slot, and nodes live in a separate slot array that a split only ever appends
+		// to - so the index being chained from still means the same node.
+		Node = Target->SplitSegment(Snap.Segment.Index, Where);
+		if (Node != INDEX_NONE)
+		{
+			UE_LOG(LogRoadBuild, Log, TEXT("Split segment %d at (%.0f, %.0f) into node %d"),
+				Snap.Segment.Index, Where.X, Where.Y, Node);
+		}
+		break;
+
+	case ERoadSnapKind::Free:
+	default:
+		Node = Target->PlaceNode(Where);
+		break;
+	}
 
 	if (Node == INDEX_NONE)
 	{

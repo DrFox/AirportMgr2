@@ -53,6 +53,29 @@ bool FRoadGeomTest::RunTest(const FString& Parameters)
 	};
 	TestFalse(TEXT("bowtie is not simple"), RoadGeom::IsSimplePolygon(Bowtie));
 
+	// ClosestPointOnSegment returns a PARAMETER, clamped to the segment. Names are
+	// block-local rather than reusing the shorter ones above: V7 makes shadowing an error.
+	const FVector2D ChordStart(0.0, 0.0);
+	const FVector2D ChordEnd(10.0, 0.0);
+
+	TestTrue(TEXT("perpendicular foot at the midpoint"), FMath::IsNearlyEqual(
+		RoadGeom::ClosestPointOnSegment(ChordStart, ChordEnd, FVector2D(5.0, 3.0)), 0.5, 1e-9));
+
+	// A quarter along, and from the far side of the line. This is the case that separates
+	// a parameter from a distance: anything returning a length gets 2.5 here, not 0.25.
+	TestTrue(TEXT("a quarter along, from below"), FMath::IsNearlyEqual(
+		RoadGeom::ClosestPointOnSegment(ChordStart, ChordEnd, FVector2D(2.5, -7.0)), 0.25, 1e-9));
+
+	// Exactly 0 and exactly 1 are the clamp signalling "the closest point is an endpoint",
+	// which the segment snap rule reads to stand down. Compared exactly, because a rule
+	// testing `== 0.0` is only safe if the clamp really does produce that value.
+	TestTrue(TEXT("past the A end clamps to exactly 0"),
+		RoadGeom::ClosestPointOnSegment(ChordStart, ChordEnd, FVector2D(-40.0, 1.0)) == 0.0);
+	TestTrue(TEXT("past the B end clamps to exactly 1"),
+		RoadGeom::ClosestPointOnSegment(ChordStart, ChordEnd, FVector2D(90.0, 1.0)) == 1.0);
+	TestTrue(TEXT("a zero-length segment returns 0 rather than dividing by it"),
+		RoadGeom::ClosestPointOnSegment(ChordStart, ChordStart, FVector2D(3.0, 4.0)) == 0.0);
+
 	return true;
 }
 

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "Tool/RoadSnap.h"
 #include "RoadBuildHUD.generated.h"
 
 class ARoadBuildController;
@@ -74,6 +75,11 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
 	FLinearColor SnapColour = FLinearColor(1.0f, 0.9f, 0.15f);
 
+	/** A segment the next click would cut in two. Distinct from SnapColour on purpose:
+	 *  reusing a node and cutting a new one into a road are different edits. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	FLinearColor SplitColour = FLinearColor(1.0f, 0.4f, 0.8f);
+
 	/** Draw a crosshair where the cursor meets the road plane. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Cursor")
 	bool bDrawCursor = true;
@@ -88,11 +94,15 @@ private:
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;
 
-	/** SnapTo is the node the next click would reuse, or INDEX_NONE. */
-	void DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode, int32 SnapTo);
+	/** Snap is what the next click would do; a node it names is drawn highlighted. */
+	void DrawNodes(const ARoadNetworkActor& Target, int32 PendingNode, const FRoadSnapResult& Snap);
 
-	/** Cursor is the road-plane point under the mouse, already known to exist. */
-	void DrawCursor(const ARoadNetworkActor& Target, const FVector2D& Cursor, bool bWouldSnap);
+	/**
+	 * Where the click will actually land - the SNAPPED position, not the raw cursor, so
+	 * the marker separates from the mouse pointer exactly when a snap has moved it. For a
+	 * split it also draws the cut across the segment.
+	 */
+	void DrawSnapMarker(const ARoadNetworkActor& Target, const FRoadSnapResult& Snap);
 
 	/** Ring of NodeRingSides segments, centred on a screen position. */
 	void DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness);

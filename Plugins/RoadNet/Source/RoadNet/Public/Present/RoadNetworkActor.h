@@ -87,6 +87,27 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	int32 FindNodeNear(FVector2D Where, double Radius) const;
 
+	/**
+	 * Replace a live segment with two, meeting at a new node placed at At.
+	 *
+	 * Returns the new node's index, or INDEX_NONE if it refused. This is what makes a
+	 * T-junction authorable: without it a junction can only ever form where a node was
+	 * already placed, so running a taxiway into a road you have already drawn is
+	 * impossible.
+	 *
+	 * The original segment's handle is DEAD afterwards - the segment is removed, not
+	 * reshaped, because its endpoints define its identity and both of them change.
+	 * Anything holding that handle must re-resolve. Both replacements inherit the
+	 * original's profile.
+	 *
+	 * At is taken as given rather than projected onto the segment: the snap chain has
+	 * already found the point, and re-deriving it here would let the two disagree about
+	 * where the split is. A caller passing a point off the segment gets a kink, which is
+	 * a caller error and not something to silently correct.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 SplitSegment(int32 SegmentIndex, FVector2D At);
+
 	/** Discard the whole graph and the mesh built from it. */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	void ClearNetwork();
@@ -157,6 +178,9 @@ private:
 
 	/** A live node's handle from its slot index, or an unset handle if it is not live. */
 	bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const;
+
+	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
+	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 
 public:
 

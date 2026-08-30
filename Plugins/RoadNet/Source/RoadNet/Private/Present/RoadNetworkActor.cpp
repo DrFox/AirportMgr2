@@ -396,6 +396,103 @@ int32 ARoadNetworkActor::FindNodeNear(FVector2D Where, double Radius) const
 	return Best;
 }
 
+bool ARoadNetworkActor::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const
+{
+	if (Network == nullptr || !Network->GetSegments().IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	FRoadSegmentId Candidate;
+	Candidate.Index = Index;
+	Candidate.Generation = Network->GetSegments()[Index].Generation;
+
+	if (!RoadSlot::IsValid<FRoadSegmentId, FRoadSegment>(Network->GetSegments(), Candidate))
+	{
+		return false;
+	}
+
+	OutId = Candidate;
+	return true;
+}
+
+int32 ARoadNetworkActor::SplitSegment(int32 SegmentIndex, FVector2D At)
+{
+	FRoadSegmentId Doomed;
+	if (!MakeLiveSegmentId(SegmentIndex, Doomed))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SplitSegment refused: %d is not a live segment"), SegmentIndex);
+		return INDEX_NONE;
+	}
+
+	const FRoadSegment* Segment = Network->GetSegment(Doomed);
+	const FRoadNode* EndA = Segment != nullptr ? Network->GetNode(Segment->A) : nullptr;
+	const FRoadNode* EndB = Segment != nullptr ? Network->GetNode(Segment->B) : nullptr;
+	if (EndA == nullptr || EndB == nullptr)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SplitSegment refused: segment %d has an endpoint that is not live"), SegmentIndex);
+		return INDEX_NONE;
+	}
+
+	// Copied out before anything mutates. Every pointer above dangles the moment the
+	// segment is removed or the arrays reallocate, and the two replacements need all of
+	// this after that point.
+	const FRoadNodeId KeepA = Segment->A;
+	const FRoadNodeId KeepB = Segment->B;
+	URoadProfile* KeepProfile = Segment->Profile;
+	const FVector2D PositionA = EndA->Position;
+	const FVector2D PositionB = EndB->Position;
+
+	// A degeneracy floor, NOT a placement policy: how far from an end a split should be
+	// allowed is the snap chain's MinSplitFromEndpoint, which is tuned and can be turned
+	// down. This is the point below which the result is not a road at all, and no setting
+	// may cross it - a zero-length segment has no direction, so the solver cannot derive
+	// a bearing for it and the junction at either end loses an arm.
+	constexpr double MinSplitOffset = 1.0;
+	if (FVector2D::DistSquared(At, PositionA) < MinSplitOffset * MinSplitOffset
+		|| FVector2D::DistSquared(At, PositionB) < MinSplitOffset * MinSplitOffset)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SplitSegment refused: (%f, %f) is on top of an endpoint of segment %d"),
+			At.X, At.Y, SegmentIndex);
+		return INDEX_NONE;
+	}
+
+	const FRoadNodeId Middle = Network->AddNode(At);
+	if (!Middle.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("SplitSegment refused: could not add the middle node"));
+		return INDEX_NONE;
+	}
+
+	// Removed, not reshaped. A segment's endpoints are its identity and both of them
+	// change here, so the handle must die rather than quietly come to mean half a road.
+	if (!Network->RemoveSegment(Doomed))
+	{
+		Network->RemoveNode(Middle);
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SplitSegment refused: segment %d would not remove"), SegmentIndex);
+		return INDEX_NONE;
+	}
+
+	const FRoadSegmentId First = Network->AddStraightSegment(KeepA, Middle, KeepProfile);
+	const FRoadSegmentId Second = Network->AddStraightSegment(Middle, KeepB, KeepProfile);
+
+	// Both endpoints were checked live and the middle node was just created, so the only
+	// way here is a model invariant having changed underneath. Loud rather than silent:
+	// the graph is now missing a road the player can still see the ends of.
+	if (!First.IsSet() || !Second.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Error,
+			TEXT("SplitSegment left segment %d half-replaced: first=%d second=%d"),
+			SegmentIndex, First.IsSet() ? 1 : 0, Second.IsSet() ? 1 : 0);
+	}
+
+	return Middle.Index;
+}
+
 void ARoadNetworkActor::ClearNetwork()
 {
 	// A fresh network rather than a drain: node removal bumps generations and prunes

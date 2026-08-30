@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "Tool/RoadSnap.h"
 #include "RoadBuildController.generated.h"
 
 class ARoadNetworkActor;
@@ -12,10 +13,10 @@ class ARoadNetworkActor;
  *
  * This is the minimum needed to exercise the model -> solver -> mesh pipeline live. It
  * is NOT the build tool of design spec section 7 - there is no state machine, no
- * IRoadCommand, no undo, no validation, no ghost preview, and picking an existing node
- * is a plain radius search rather than the snap chain of section 7.4. Slice 3 replaces
- * this class outright; it survives only because the facade it calls on
- * ARoadNetworkActor is the same one commands will drive.
+ * IRoadCommand, no undo and no validation. It DOES drive the section 7.4 snap chain,
+ * which is what lets a click reuse a node or split a segment. Slice 3 replaces this
+ * class outright; it survives only because the facade it calls on ARoadNetworkActor is
+ * the same one commands will drive.
  *
  * It lives in the game module rather than the RoadNet plugin because a PlayerController
  * is game-framework glue. The plugin must not depend on the game.
@@ -32,9 +33,29 @@ public:
 	 * How close a click must land to reuse an existing node instead of adding one, in uu.
 	 * Roughly the road's own width: much wider and the cursor snaps to junctions you were
 	 * trying to draw past.
+	 *
+	 * This is the snap chain's rule 1 radius; it keeps its old name because it is the same
+	 * number it always was.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double PickRadius = 150.0;
+
+	/** How close a click must land to split an existing segment, in uu. Snap rule 2. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
+	double SegmentSnapRadius = 150.0;
+
+	/**
+	 * Let a click land on a segment and split it.
+	 *
+	 * Off, a junction can only ever form where a node was already placed, so a road run
+	 * into one already drawn just crosses over it.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap")
+	bool bSnapToSegments = true;
+
+	/** Nearest a split may happen to the ends of the segment being split, in uu. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
+	double MinSplitFromEndpoint = 50.0;
 
 	/**
 	 * Furthest a click may place a node from the camera, in uu.
@@ -110,7 +131,14 @@ public:
 	/** Node the next click runs a segment from, or INDEX_NONE when not chaining. */
 	int32 GetPendingNode() const { return PendingNode; }
 
-	double GetPickRadius() const { return PickRadius; }
+	/**
+	 * What the next click would do, run through the snap chain. False only when the
+	 * cursor is not over the road plane at all.
+	 *
+	 * The single source of truth for the decision: the overlay draws this and OnBuildClick
+	 * acts on it, so what is highlighted and what happens cannot disagree.
+	 */
+	bool ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals = false) const;
 
 	/**
 	 * Where the cursor meets the road plane.
@@ -133,6 +161,9 @@ private:
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
+
+	/** Radii and toggles above, gathered into the form the chain takes. */
+	FRoadSnapSettings MakeSnapSettings() const;
 
 	void MoveViewAbovePlane();
 	void PanView(float DeltaTime);
@@ -160,4 +191,10 @@ private:
 
 	/** Node the next click will run a segment from, or INDEX_NONE when not chaining. */
 	int32 PendingNode = INDEX_NONE;
+
+	/**
+	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through
+	 * TUniquePtr and holds no state worth saving, only the ordering.
+	 */
+	FRoadSnapChain SnapChain;
 };
