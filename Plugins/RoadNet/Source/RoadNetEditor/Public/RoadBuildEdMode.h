@@ -32,4 +32,12 @@ public:
 	virtual void Enter() override;
 	virtual void CreateToolkit() override;
 	virtual TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetModeCommands() const override;
+	virtual void BindCommands() override;
+
+private:
+	/** Escape: tell whichever build tool is active to drop what it was holding. */
+	void CancelActiveGesture();
+
+	/** Starts a tool by name, unless it is already the active one. */
+	FExecuteAction StartToolAction(const FString& ToolName);
 };

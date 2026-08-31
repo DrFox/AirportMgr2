@@ -141,17 +141,32 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and nothing is committed while aiming"), LiveEntities(Actor), 0);
 
 		Tool.OnDragEnd(StandAt(Actor, FVector2D(1000.0, 9000.0)));
-		TestTrue(TEXT("releasing commits the stand"), Tool.IsIdle());
-		TestEqual(TEXT("exactly one"), LiveEntities(Actor), 1);
+		TestTrue(TEXT("releasing ends the aim"), Tool.IsIdle());
+
+		// A MOUSE-UP IS NOT A DECISION TO PLACE. It finishes the rotation and nothing
+		// more, so re-aiming does not strew a stand behind on every attempt.
+		TestEqual(TEXT("and commits nothing on its own"), LiveEntities(Actor), 0);
+
+		// The aimed heading survives; the next CLICK is what places.
+		Tool.OnClick(StandAt(Actor, FVector2D(1000.0, 2000.0)));
+
+		// Guarded, not indexed blind. An unguarded [0] here crashed the whole suite the
+		// moment this behaviour changed - and the runner reported it as a test that had
+		// simply vanished, not as a failure.
+		if (!TestEqual(TEXT("the click places exactly one"), LiveEntities(Actor), 1)
+			|| !Actor->Network->GetEntities().IsValidIndex(0))
+		{
+			return false;
+		}
 
 		const FEntityInstance& Placed = Actor->Network->GetEntities()[0];
 
-		// THE POSE. The stand sits where the press landed, NOT where the release did - the
-		// drag says which way it faces and nothing else. Getting this backwards would drag
-		// the stand along with the cursor and make it impossible to aim one at all.
-		TestTrue(TEXT("the stand sits where the press landed"),
+		// THE POSE. The stand sits where the CLICK landed, and faces the way the earlier
+		// drag pointed - aiming and placing are two gestures, and the heading outlives the
+		// one that set it.
+		TestTrue(TEXT("the stand sits where the click landed"),
 			Placed.Position.Equals(FVector2D(1000.0, 2000.0), 0.01));
-		TestTrue(TEXT("and faces the way the drag pointed"),
+		TestTrue(TEXT("and keeps the heading the drag aimed it at"),
 			FMath::IsNearlyEqual(Placed.Heading, UE_DOUBLE_PI * 0.5, 1e-6));
 
 		TestEqual(TEXT("every anchor the definition declares resolved"),

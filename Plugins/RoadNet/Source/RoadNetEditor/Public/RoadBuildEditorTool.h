@@ -70,6 +70,18 @@ public:
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
 
+	/** Escape. Drops a road chain or a half-drawn apron; see FRoadBuildEdModeCommands. */
+	void CancelGesture();
+
+	/**
+	 * Draws the graph that already exists - nodes by degree, stands by heading.
+	 *
+	 * The runtime HUD has always done this; the editor never did, which is why existing
+	 * nodes could not be seen, moved or removed, and why a snap had nothing visible to
+	 * attach to. The tool's own preview draws on top of this.
+	 */
+	void DrawPersistentState(IToolPreviewSink& Sink) const;
+
 	// --- IClickDragBehaviorTarget ------------------------------------------------------
 	virtual FInputRayHit CanBeginClickDragSequence(const FInputDeviceRay& PressPos) override;
 	virtual void OnClickPress(const FInputDeviceRay& PressPos) override;
@@ -95,6 +107,19 @@ private:
 	/** Everything the tool needs to judge this position, built fresh each event. */
 	FToolContext MakeContext(const FInputDeviceRay& At) const;
 
+	/**
+	 * Context for the last known cursor, for callers that have no ray - Render, cancel,
+	 * deactivate.
+	 *
+	 * These used to pass a default-constructed FRay as a "no ray" sentinel. FRay defaults
+	 * its direction to (0,0,1), so it hit the road plane at the world origin and reported
+	 * SUCCESS, and every preview was drawn against (0,0) while the model stayed correct.
+	 */
+	FToolContext MakeHoverContext() const;
+
+	/** The shared body of both: everything that follows from a plane position. */
+	FToolContext MakeContextAt(const FVector2D& Plane) const;
+
 	/** The network actor in the editor world, created if the level has none. */
 	ARoadNetworkActor* ResolveTarget() const;
 
@@ -118,4 +143,13 @@ private:
 	/** Last cursor position on the plane, for previews between events. */
 	FVector2D HoverPosition = FVector2D::ZeroVector;
 	bool bHoverValid = false;
+
+	/**
+	 * World width the viewport currently spans at the cursor, refreshed each Render.
+	 *
+	 * Everything the preview measures - marker size, how close counts as "on" a point -
+	 * is a fraction of this rather than a fixed number of uu. A tolerance in world units
+	 * is either unusably tight zoomed out or absurdly loose zoomed in.
+	 */
+	double ViewWorldWidth = 10000.0;
 };
