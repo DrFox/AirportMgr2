@@ -1414,6 +1414,18 @@ void ARoadNetworkActor::RebuildMesh()
 		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);
 }
 
+bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
+{
+	// Ticks in the EDITOR viewport, not only in play. The build tools work at design time,
+	// so an agent dispatched at design time has to move at design time; without this the
+	// cube spawns correctly and then stands still for ever.
+	//
+	// Scoped to non-game worlds so this says nothing about play, where ordinary ticking
+	// already applies.
+	const UWorld* World = GetWorld();
+	return World != nullptr && !World->IsGameWorld();
+}
+
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -1447,12 +1459,21 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, double Speed)
 	}
 
 	UWorld* World = GetWorld();
-	if (World == nullptr || !World->IsGameWorld())
+	if (World == nullptr)
 	{
-		// An editor world would SAVE these. The route still solves and still draws at
-		// design time; only the cube waits for Play.
 		return false;
 	}
+
+	// Editor worlds included, deliberately. This first refused outside a game world on the
+	// grounds that an editor world would SAVE the cubes - but they are spawned RF_Transient
+	// below, so they were never going to be saved and the guard was protecting against
+	// nothing. What it DID do was make the tool look broken in the one place the build
+	// tools are actually used: the ed mode, where pressing 4 and clicking twice drew a
+	// route and produced no cube, with nothing on screen to say why.
+	//
+	// See ShouldTickIfViewportsOnly: an actor does not tick in an editor world unless it
+	// asks to, so allowing the spawn without that would have left a cube frozen at its
+	// start - which is a worse lie than no cube at all.
 
 	FRoadAgent Agent;
 	Agent.Follower.Start(Plan, Speed);

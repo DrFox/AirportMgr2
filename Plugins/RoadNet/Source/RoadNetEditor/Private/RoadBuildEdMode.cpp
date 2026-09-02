@@ -7,6 +7,15 @@
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdMode"
 
+// Every tool switch is logged, and so is every tool that gets built.
+//
+// Not decoration: this mode has now produced three separate rounds of "the tool looks
+// broken" where the model was correct, and each was diagnosed from screenshots and guesses
+// before anything measured the boundary. A tool that does not activate and a tool that
+// activates and draws nothing are indistinguishable on screen, and these two lines tell
+// them apart outright.
+DEFINE_LOG_CATEGORY_STATIC(LogRoadBuildMode, Log, All);
+
 const FEditorModeID URoadBuildEdMode::EM_RoadBuild = TEXT("EM_RoadBuild");
 
 FString URoadBuildEdMode::RoadToolName = TEXT("RoadNet_DrawRoads");
@@ -40,6 +49,11 @@ void URoadBuildEdMode::Enter()
 	RegisterTool(Commands.DrawAprons, ApronToolName, MakeBuilder(ERoadBuildToolKind::Apron));
 	RegisterTool(Commands.PlaceStands, StandToolName, MakeBuilder(ERoadBuildToolKind::Stand));
 	RegisterTool(Commands.FindRoutes, RouteToolName, MakeBuilder(ERoadBuildToolKind::Route));
+
+	UE_LOG(LogRoadBuildMode, Log,
+		TEXT("Road Build mode entered. Tools: 1 %s, 2 %s, 3 %s, 4 %s. If a number key does "
+			 "nothing, the palette buttons do the same job."),
+		*RoadToolName, *ApronToolName, *StandToolName, *RouteToolName);
 
 	// Roads first, because it is the one that needs no setup - an empty level can be drawn
 	// on immediately, where a stand wants somewhere to stand.
@@ -83,6 +97,8 @@ FExecuteAction URoadBuildEdMode::StartToolAction(const FString& ToolName)
 {
 	return FExecuteAction::CreateLambda([this, ToolName]()
 	{
+		UE_LOG(LogRoadBuildMode, Log, TEXT("Tool switch requested: %s"), *ToolName);
+
 		// Guarded because both command lists can carry the same key: restarting the tool
 		// already running would silently abandon a chain half-drawn.
 		UInteractiveToolManager* Manager = GetToolManager();

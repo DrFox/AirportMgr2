@@ -155,6 +155,10 @@ void URoadBuildEditorTool::Setup()
 
 	Target = ResolveTarget();
 
+	UE_LOG(LogTemp, Log, TEXT("RoadNet ed tool active: %s, target %s"),
+		*Build->GetDisplayName().ToString(),
+		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
+
 	UClickDragInputBehavior* Drag = NewObject<UClickDragInputBehavior>(this);
 	Drag->Initialize(this);
 

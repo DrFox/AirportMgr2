@@ -122,6 +122,9 @@ public:
 
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** True outside a game world, so dispatched agents move in the editor viewport too. */
+	virtual bool ShouldTickIfViewportsOnly() const override;
+
 	// --- Agents ----------------------------------------------------------------------
 	//
 	// Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part
@@ -132,8 +135,8 @@ public:
 	/**
 	 * Sends one agent along a plan, spawning the cube that shows it. False if it cannot.
 	 *
-	 * Refuses outside a game world. An editor world has no business spawning throwaway
-	 * actors into the level the player is authoring - they would be saved with it.
+	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
+	 * so are never saved, and the build tools this is driven from are used at design time.
 	 */
 	bool DispatchAgent(const FRoutePlan& Plan, double Speed);
 
