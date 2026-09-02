@@ -5,12 +5,15 @@
 #include "EngineUtils.h"
 #include "InteractiveToolManager.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadEntity.h"
+#include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/StandPlaceTool.h"
+#include "Tool/StandPreview.h"
 #include "ToolContextInterfaces.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEditorTool"
@@ -30,16 +33,37 @@ namespace
 	class FViewportPreviewSink : public IToolPreviewSink
 	{
 	public:
-		FViewportPreviewSink(FPrimitiveDrawInterface* InPDI, double InPlaneZ)
-			: PDI(InPDI), PlaneZ(InPlaneZ) {}
+		FViewportPreviewSink(FPrimitiveDrawInterface* InPDI, double InPlaneZ,
+			const FVector& InCamera, double InPerDistance, double InFixedRadius)
+			: PDI(InPDI), PlaneZ(InPlaneZ), Camera(InCamera)
+			, PerDistance(InPerDistance), FixedRadius(InFixedRadius) {}
+
+		/**
+		 * Radius that holds a constant SIZE ON SCREEN for a point at this distance.
+		 *
+		 * A world-space circle shrinks with distance, so sizing every marker from one
+		 * view-centre number left near ones huge and far ones specks - which is exactly
+		 * what the nodes looked like.
+		 */
+		double RadiusAt(const FVector2D& Plane) const
+		{
+			if (FixedRadius > 0.0)
+			{
+				return FixedRadius;
+			}
+			return PerDistance * FVector::Dist(Camera, Lift(Plane));
+		}
 
 		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override
 		{
 			// A ring in WORLD units here, unlike the HUD's pixels: the viewport gives no
 			// screen size to work in, and a marker sized against the road at least stays
 			// meaningful when the camera moves.
+			// A FRACTION OF THE SCREEN, not a fixed world size. At 120 uu this ring was
+			// 1.2 m across, which is sub-pixel over an airport and looked like the preview
+			// was not following the mouse at all.
 			constexpr int32 Sides = 16;
-			constexpr double Radius = 120.0;
+			const double Radius = RadiusAt(At);
 
 			FVector Previous = Lift(At + FVector2D(Radius, 0.0));
 			for (int32 Side = 1; Side <= Sides; ++Side)
@@ -47,14 +71,19 @@ namespace
 				const double Angle = 2.0 * UE_DOUBLE_PI * Side / Sides;
 				const FVector Point = Lift(At + FVector2D(
 					Radius * FMath::Cos(Angle), Radius * FMath::Sin(Angle)));
-				PDI->DrawLine(Previous, Point, Colour(Style), SDPG_Foreground, 2.0f);
+				PDI->DrawLine(Previous, Point, Colour(Style), SDPG_Foreground,
+					2.0f, 0.0f, true);
 				Previous = Point;
 			}
 		}
 
 		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
 		{
-			PDI->DrawLine(Lift(From), Lift(To), Colour(Style), SDPG_Foreground, 3.0f);
+			// bScreenSpace = TRUE. Thickness is otherwise WORLD units: 3 uu is 3 cm, a
+			// hairline over an airport, which is why these read as far thinner than the
+			// runtime HUD's pixel-width lines.
+			PDI->DrawLine(Lift(From), Lift(To), Colour(Style), SDPG_Foreground,
+				3.0f, 0.0f, true);
 		}
 
 		virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override
@@ -65,8 +94,9 @@ namespace
 			}
 
 			const FVector2D Across(-Along.Y, Along.X);
-			PDI->DrawLine(Lift(At - Across * 150.0), Lift(At + Across * 150.0),
-				Colour(Style), SDPG_Foreground, 3.0f);
+			const double Arm = RadiusAt(At) * 1.25;
+			PDI->DrawLine(Lift(At - Across * Arm), Lift(At + Across * Arm),
+				Colour(Style), SDPG_Foreground, 3.0f, 0.0f, true);
 		}
 
 		virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override
@@ -78,6 +108,9 @@ namespace
 
 	private:
 		FVector Lift(const FVector2D& Plane) const { return FVector(Plane.X, Plane.Y, PlaneZ); }
+		FVector Camera = FVector::ZeroVector;
+		double PerDistance = 0.0;
+		double FixedRadius = 0.0;
 
 		static FLinearColor Colour(EPreviewStyle Style)
 		{
@@ -143,7 +176,7 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 	// begun before the user went away.
 	if (Build.IsValid() && Target != nullptr)
 	{
-		Build->OnDeactivate(MakeContext(FInputDeviceRay(FRay())));
+		Build->OnDeactivate(MakeHoverContext());
 	}
 	Build.Reset();
 
@@ -186,16 +219,35 @@ bool URoadBuildEditorTool::RayToPlane(const FRay& Ray, FVector2D& OutPosition) c
 
 FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
 {
-	FToolContext Context;
-	Context.Target = Target;
-	Context.bRemoveModifier = bRemoveHeld;
-	Context.bInsertModifier = bInsertHeld;
-
-	FVector2D Plane = HoverPosition;
+	// Resolve the ray HERE, where a miss can fall back honestly. There is deliberately no
+	// "no ray" sentinel: FRay() defaults its direction to (0,0,1), which points straight
+	// down at the road plane and resolves to the WORLD ORIGIN rather than failing. Every
+	// preview drew against (0,0) because of it.
+	FVector2D Plane;
 	if (!RayToPlane(At.WorldRay, Plane))
 	{
 		Plane = HoverPosition;
 	}
+	return MakeContextAt(Plane);
+}
+
+FToolContext URoadBuildEditorTool::MakeHoverContext() const
+{
+	return MakeContextAt(HoverPosition);
+}
+
+FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
+{
+	FToolContext Context;
+	Context.Target = Target;
+
+	// How close counts as "on" something has to be a screen distance, not a world one.
+	// At the fixed 150 uu default, closing an apron meant clicking within 1.5 m of its
+	// first corner - unhittable when zoomed out over a runway.
+	Context.SnapRadius = FMath::Max(150.0, ViewWorldWidth * 0.02);
+	Context.bRemoveModifier = bRemoveHeld;
+	Context.bInsertModifier = bInsertHeld;
+
 	Context.Cursor = Plane;
 
 	// The same snap chain the runtime tool uses, over the same graph. Resolved here rather
@@ -230,6 +282,7 @@ FInputRayHit URoadBuildEditorTool::CanBeginClickDragSequence(const FInputDeviceR
 	{
 		return FInputRayHit();
 	}
+
 
 	// Any point on the road plane is fair game. A depth of zero puts this behind anything
 	// else that claims the click, which is what we want: a gizmo should still win.
@@ -320,7 +373,7 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 		GEditor->CancelTransaction(0);
 		if (Build.IsValid())
 		{
-			Build->OnCancel(MakeContext(FInputDeviceRay(FRay())));
+			Build->OnCancel(MakeHoverContext());
 		}
 	}
 
@@ -345,6 +398,64 @@ bool URoadBuildEditorTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 	return true;
 }
 
+void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		return;
+	}
+
+	for (const FRoadNode& Node : Target->Network->GetNodes())
+	{
+		if (!Node.bAlive)
+		{
+			continue;
+		}
+
+		// Same reading as the HUD: degree separates a junction from a straight-through
+		// node, and the pavement looks identical either way.
+		const int32 Degree = Node.Incident.Num();
+		const EPreviewStyle Style = (Degree == 0) ? EPreviewStyle::Refused
+			: (Degree >= 3) ? EPreviewStyle::Snap
+			: EPreviewStyle::Heal;
+
+		Sink.Marker(Node.Position, Style);
+	}
+
+	for (const FEntityInstance& Entity : Target->Network->GetEntities())
+	{
+		if (Entity.bAlive)
+		{
+			// The full stand - aircraft footprint, service points, fixtures - not the
+			// ring and tick this used to draw.
+			StandPreview::Describe(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+		}
+	}
+}
+
+void URoadBuildEditorTool::CancelGesture()
+{
+	if (!Build.IsValid() || Target == nullptr)
+	{
+		return;
+	}
+
+	// A cancel can still touch the graph - abandoning a chain after one click removes the
+	// node it stranded - so it gets a transaction like any other edit.
+	GEditor->BeginTransaction(LOCTEXT("RoadBuildCancel", "Road Build Cancel"));
+	if (Target->Network != nullptr)
+	{
+		Target->Modify();
+		Target->Network->Modify();
+	}
+
+	Build->OnCancel(MakeHoverContext());
+	GEditor->EndTransaction();
+
+	bPressed = false;
+	bDragging = false;
+}
+
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 	if (!Build.IsValid() || Target == nullptr || RenderAPI == nullptr)
@@ -358,8 +469,55 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 		return;
 	}
 
-	FViewportPreviewSink Sink(PDI, Target->SurfaceZ);
-	Build->BuildPreview(MakeContext(FInputDeviceRay(FRay())), Sink);
+	const FViewCameraState Camera = RenderAPI->GetCameraState();
+	if (Camera.bIsOrthographic)
+	{
+		ViewWorldWidth = Camera.OrthoWorldCoordinateWidth;
+	}
+	else
+	{
+		// Distance to the plane at the VIEW CENTRE, never to the cursor. Keyed to the
+		// cursor, every marker resized as the mouse moved - the scale has to depend on
+		// where the camera is, not on where the pointer happens to be.
+		const FVector Forward = Camera.Orientation.GetForwardVector();
+		const double Drop = FMath::Abs(Camera.Position.Z - Target->SurfaceZ);
+
+		double Distance = Drop;
+		if (!FMath::IsNearlyZero(Forward.Z))
+		{
+			const double Along = (Target->SurfaceZ - Camera.Position.Z) / Forward.Z;
+			if (Along > 0.0)
+			{
+				Distance = Along;
+			}
+		}
+
+		ViewWorldWidth = 2.0 * Distance
+			* FMath::Tan(FMath::DegreesToRadians(Camera.HorizontalFOVDegrees * 0.5f));
+	}
+	ViewWorldWidth = FMath::Clamp(ViewWorldWidth, 100.0, 1.0e7);
+
+	// Perspective: a marker's radius is a fraction of the view width AT ITS OWN DEPTH.
+	// Orthographic: depth is irrelevant, so one fixed size is correct.
+	const double PerDistance = Camera.bIsOrthographic
+		? 0.0
+		: 0.012 * 2.0 * FMath::Tan(FMath::DegreesToRadians(Camera.HorizontalFOVDegrees * 0.5f));
+	const double FixedRadius = Camera.bIsOrthographic ? ViewWorldWidth * 0.012 : 0.0;
+
+	FViewportPreviewSink Sink(PDI, Target->SurfaceZ, Camera.Position, PerDistance, FixedRadius);
+
+	// The COMMITTED graph first, then the tool's intent on top. The runtime HUD does this
+	// in ARoadBuildHUD::DrawNodes/DrawStands; in the editor nothing did, so existing nodes
+	// and stands were invisible and there was no way to see what a snap would attach to.
+	DrawPersistentState(Sink);
+
+	// Gated on a real hover. Before the first mouse move HoverPosition is (0,0), and the
+	// idle marker was drawing a corner at the world origin.
+	if (bHoverValid)
+	{
+		Build->BuildPreview(MakeHoverContext(), Sink);
+	}
+
 }
 
 #undef LOCTEXT_NAMESPACE

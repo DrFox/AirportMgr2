@@ -24,6 +24,9 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Two));
 	UI_COMMAND(PlaceStands, "Stands", "Place an aircraft stand: press to position, drag to aim, release.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Three));
+
+	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
+		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

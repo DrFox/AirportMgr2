@@ -2,6 +2,7 @@
 
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Tool/StandPreview.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
@@ -60,12 +61,10 @@ void FStandPlaceTool::OnDragEnd(const FToolContext& Context)
 
 	bAiming = false;
 
-	const double Heading = AimedHeading(Context);
-	if (Context.Target->PlaceStand(PressedAt, Heading) != INDEX_NONE)
-	{
-		LastHeading = Heading;
-		Context.Target->RebuildMesh();
-	}
+	// Releasing ENDS THE AIM. It does not place: a mouse-up that finishes a rotation is
+	// not a decision to commit, and treating it as one meant every attempt to re-aim left
+	// a stand behind. Placing is its own click, which OnClick does with this heading.
+	LastHeading = AimedHeading(Context);
 }
 
 void FStandPlaceTool::OnClick(const FToolContext& Context)
@@ -109,60 +108,12 @@ void FStandPlaceTool::OnDeactivate(const FToolContext& Context)
 void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& At,
 	double Heading, IToolPreviewSink& Sink) const
 {
+	// Shared with the editor's view of an already-placed stand, so the same object cannot
+	// be drawn two different ways depending on which code path found it.
 	const UEntityDefinition* Definition =
 		Context.Target != nullptr ? Context.Target->StandDefinition.Get() : nullptr;
-	if (Definition == nullptr)
-	{
-		Sink.Marker(At, EPreviewStyle::Refused);
-		Sink.Label(At, TEXT("no stand definition"), EPreviewStyle::Refused);
-		return;
-	}
 
-	const double Cos = FMath::Cos(Heading);
-	const double Sin = FMath::Sin(Heading);
-
-	// The same local-to-world transform PlaceEntity uses. Restated here rather than shared
-	// because the preview must work on a pose that does not exist in the model yet - there
-	// is no entity to ask.
-	auto ToWorld = [&At, Cos, Sin](const FVector2D& Local)
-	{
-		return FVector2D(
-			At.X + Local.X * Cos - Local.Y * Sin,
-			At.Y + Local.X * Sin + Local.Y * Cos);
-	};
-
-	// The DESIGN AIRCRAFT first, so everything else reads against it. An aircraft parked
-	// here shares the stand's pose exactly - both are measured from the nose gear - so the
-	// same transform serves both without an offset of its own.
-	if (const UAircraftType* Design = Definition->DesignAircraft.Get())
-	{
-		TArray<FVector2D> Outline;
-		UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
-		for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
-		{
-			Sink.Line(ToWorld(Outline[Index]), ToWorld(Outline[Index + 1]), EPreviewStyle::Snap);
-		}
-
-		// Where THIS type needs each service. A different type on the same stand puts these
-		// somewhere else, which is the entire reason they live on the aircraft.
-		for (const FEntityAnchor& Point : Design->ServicePoints)
-		{
-			Sink.Marker(ToWorld(Point.LocalPosition), EPreviewStyle::Pending);
-		}
-	}
-
-	// The stand's own fixtures: plant dug into the concrete, which stay put whatever parks
-	// on them. Drawn with a line back to the stop mark so they read as belonging to it.
-	for (const FEntityAnchor& Fixture : Definition->Anchors)
-	{
-		const FVector2D World = ToWorld(Fixture.LocalPosition);
-		Sink.Marker(World, EPreviewStyle::Snap);
-		Sink.Line(At, World, EPreviewStyle::Heal);
-	}
-
-	// The stop mark itself - the thing actually being positioned.
-	Sink.Marker(At, EPreviewStyle::Pending);
-
+	StandPreview::Describe(Definition, At, Heading, Sink);
 }
 
 void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

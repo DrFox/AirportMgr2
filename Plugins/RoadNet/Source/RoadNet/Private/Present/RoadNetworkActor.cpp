@@ -2,6 +2,7 @@
 
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Components/BillboardComponent.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "DynamicMesh/DynamicMesh3.h"
@@ -240,6 +241,13 @@ ARoadNetworkActor::ARoadNetworkActor()
 
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
+#if WITH_EDITORONLY_DATA
+	// No editor sprite. The mesh components are in absolute space, so the actor's own
+	// transform never leaves the world origin - and a billboard sitting there is
+	// indistinguishable from a node the build tool drew at (0,0).
+	RootComponent->bVisualizeComponent = false;
+#endif
+
 	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RoadMesh"));
 	MeshComponent->SetupAttachment(RootComponent);
 
@@ -335,6 +343,22 @@ URoadNetwork& ARoadNetworkActor::EnsureNetwork()
 	}
 	return *Network;
 }
+
+#if WITH_EDITOR
+void ARoadNetworkActor::PostRegisterAllComponents()
+{
+	Super::PostRegisterAllComponents();
+
+	// USceneComponent keeps its sprite protected, so the owner cannot reach it by name -
+	// but it is a component of this actor, so it can be found by type. Hidden rather than
+	// destroyed: the engine re-creates it on the next OnRegister, and a component destroyed
+	// out from under the thing that owns the pointer is a worse bargain than a hidden one.
+	for (UBillboardComponent* Billboard : TInlineComponentArray<UBillboardComponent*>(this))
+	{
+		Billboard->SetVisibility(false);
+	}
+}
+#endif
 
 ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
 {
