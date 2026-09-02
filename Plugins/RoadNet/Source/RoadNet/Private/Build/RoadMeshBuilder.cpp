@@ -3,6 +3,7 @@
 #include "Build/RoadProfileBands.h"
 #include "CompGeom/PolygonTriangulation.h"
 #include "Model/RoadNetwork.h"
+#include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
 namespace
@@ -41,10 +42,60 @@ namespace
 	constexpr double MinTriangleArea = 1e-6;
 }
 
-FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit)
+FRoadMeshBuilder::FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit,
+	const URoadMaterialSet* InMaterials)
 	: ZHeight(InZHeight)
 	, TexelsPerUnit(InTexelsPerUnit > 0.0 ? InTexelsPerUnit : 1.0)
+	, Materials(InMaterials)
 {
+}
+
+void FRoadMeshBuilder::JunctionSlots(const URoadNetwork& Network,
+	const TArray<FRoadSegmentId>& ArmSegments, int32& OutStripSlot, int32& OutFanSlot) const
+{
+	OutStripSlot = 0;
+	OutFanSlot = 0;
+
+	const URoadProfile* Widest = nullptr;
+	double WidestTotal = -1.0;
+	int32 WidestIndex = MAX_int32;
+
+	for (const FRoadSegmentId ArmSegment : ArmSegments)
+	{
+		const FRoadSegment* Seg = Network.GetSegment(ArmSegment);
+		const URoadProfile* ArmProfile = Seg ? Seg->Profile.Get() : nullptr;
+		if (ArmProfile == nullptr || ArmProfile->Bands.Num() == 0)
+		{
+			continue;
+		}
+
+		const double Total = ArmProfile->GetTotalWidth();
+
+		// Ties broken by the LOWEST segment id, not by arm order. Arm order comes from the
+		// solver's boundary walk, which depends on incident-edge angles - so two equally
+		// wide arms would otherwise skin the junction differently depending on which
+		// direction the roads were drawn in.
+		const bool bBetter = (Total > WidestTotal)
+			|| (Total == WidestTotal && ArmSegment.Index < WidestIndex);
+
+		if (bBetter)
+		{
+			Widest = ArmProfile;
+			WidestTotal = Total;
+			WidestIndex = ArmSegment.Index;
+		}
+	}
+
+	if (Widest == nullptr)
+	{
+		return;
+	}
+
+	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(Widest, Materials);
+
+	// Band 0 is the rightmost, which is an OUTER band - the strip runs along the rim.
+	OutStripSlot = Bands.SlotForBand(0);
+	OutFanSlot = Bands.SlotForBand(Bands.BandAt(Bands.CentrelineAlpha));
 }
 
 int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FVector2f& InUV2)
@@ -80,7 +131,7 @@ int32 FRoadMeshBuilder::WeldVertex(const FVector2D& Point, const FVector2f& InUV
 	return NewIndex;
 }
 
-void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C)
+void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C, int32 MaterialID)
 {
 	// A degenerate triangle contributes nothing and upsets downstream normal
 	// computation, so drop it rather than emit it.
@@ -124,6 +175,12 @@ void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C)
 	Buffers.Indices.Add(A);
 	Buffers.Indices.Add(C);
 	Buffers.Indices.Add(B);
+
+	// Added HERE, after every early return above, so the array stays exactly one entry per
+	// emitted triangle. Pushing it at the top would leave an id for each degenerate and
+	// sliver triangle this function drops, and MaterialIDs would silently run one ahead of
+	// Indices for the rest of the mesh.
+	Buffers.MaterialIDs.Add(MaterialID);
 }
 
 void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
@@ -205,7 +262,7 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 
 			const FRoadSegment* ArmSegment = Network.GetSegment(ArmSegments[ArmIndex]);
 			const URoadProfile* ArmProfile = ArmSegment ? ArmSegment->Profile.Get() : nullptr;
-			const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(ArmProfile);
+			const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(ArmProfile, Materials);
 
 			// Interior boundaries only: 0 and 1 are the cut vertices already in the rim.
 			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
@@ -258,6 +315,12 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 
 	const int32 ApexIndex = WeldVertex(Apex, FVector2f(0.0f, 0.0f), JunctionMasks(1.0));
 
+	// One arm's profile skins the whole junction - see JunctionSlots for why it cannot be
+	// per arm, and which arm wins.
+	int32 StripSlot = 0;
+	int32 FanSlot = 0;
+	JunctionSlots(Network, ArmSegments, StripSlot, FanSlot);
+
 	// Rim -> ring as a quad strip, then ring -> apex as a fan. The solver validates that
 	// the rim is star-shaped about the apex before emitting a fan at all, and the ring lies
 	// on the straight lines from rim to apex, so every triangle here is well formed.
@@ -265,9 +328,11 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	{
 		const int32 Next = (Slot + 1) % RimIndices.Num();
 
-		AddTriangle(RimIndices[Slot], RimIndices[Next], RingIndices[Next]);
-		AddTriangle(RimIndices[Slot], RingIndices[Next], RingIndices[Slot]);
-		AddTriangle(ApexIndex, RingIndices[Slot], RingIndices[Next]);
+		// Strip is the outer band, fan is the interior: the ring is exactly that boundary,
+		// which is why 2b-ii left it standing after the shoulder fade it was built for went.
+		AddTriangle(RimIndices[Slot], RimIndices[Next], RingIndices[Next], StripSlot);
+		AddTriangle(RimIndices[Slot], RingIndices[Next], RingIndices[Slot], StripSlot);
+		AddTriangle(ApexIndex, RingIndices[Slot], RingIndices[Next], FanSlot);
 	}
 }
 
@@ -303,7 +368,7 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	// than the node-to-node distance. Markings therefore start where the surface starts.
 	const double RibbonLength = FVector2D::Distance(LeftStart, LeftEnd);
 
-	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile);
+	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile, Materials);
 	const int32 RailCount = Bands.Alphas.Num();
 
 	// Rails[Boundary][Step]. Boundary 0 is the right edge and the last is the left, so the
@@ -361,9 +426,12 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 			const int32 L0 = Rails[Boundary + 1][Step];
 			const int32 L1 = Rails[Boundary + 1][Step + 1];
 
+			// Boundary IS the band index - the strip between boundary and boundary + 1 -
+			// so the ribbon needs no extra bookkeeping to know its surface.
 			// Counter-clockwise seen from +Z; AddTriangle swaps for Unreal's winding.
-			AddTriangle(R0, R1, L1);
-			AddTriangle(R0, L1, L0);
+			const int32 BandSlot = Bands.SlotForBand(Boundary);
+			AddTriangle(R0, R1, L1, BandSlot);
+			AddTriangle(R0, L1, L0, BandSlot);
 		}
 	}
 
@@ -428,8 +496,9 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 			const int32 L1 = Rails[Boundary + 1][0];
 			const int32 L0 = CapRail[Boundary + 1];
 
-			AddTriangle(R0, R1, L1);
-			AddTriangle(R0, L1, L0);
+			const int32 CapSlot = Bands.SlotForBand(Boundary);
+			AddTriangle(R0, R1, L1, CapSlot);
+			AddTriangle(R0, L1, L0, CapSlot);
 		}
 	}
 
@@ -459,8 +528,9 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 			const int32 L1 = CapRail[Boundary + 1];
 			const int32 L0 = Rails[Boundary + 1][Steps];
 
-			AddTriangle(R0, R1, L1);
-			AddTriangle(R0, L1, L0);
+			const int32 CapSlot = Bands.SlotForBand(Boundary);
+			AddTriangle(R0, R1, L1, CapSlot);
+			AddTriangle(R0, L1, L0, CapSlot);
 		}
 	}
 }
@@ -519,7 +589,10 @@ void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
 		if (Corners.IsValidIndex(Triangle.A) && Corners.IsValidIndex(Triangle.B)
 			&& Corners.IsValidIndex(Triangle.C))
 		{
-			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C]);
+			// Slot 0 STATED, not defaulted. Aprons are out of scope for per-band
+			// materials - they render on their own component with one ApronMaterial - and
+			// FApronSurface::SurfaceMaterialSlot stays unread until that follow-up.
+			AddTriangle(Corners[Triangle.A], Corners[Triangle.B], Corners[Triangle.C], 0);
 		}
 	}
 }

@@ -8,6 +8,7 @@
 #include "Solve/JunctionSolver.h"
 
 class URoadNetwork;
+class URoadMaterialSet;
 
 /**
  * Accumulates junction fans and segment ribbons into one welded triangle soup.
@@ -21,7 +22,13 @@ class URoadNetwork;
 class ROADNET_API FRoadMeshBuilder
 {
 public:
-	explicit FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit = 512.0);
+	/**
+	 * A null InMaterials is the supported single-material state: every triangle takes id 0
+	 * and the result is byte-for-byte the mesh this builder produced before per-band
+	 * materials existed.
+	 */
+	explicit FRoadMeshBuilder(double InZHeight, double InTexelsPerUnit = 512.0,
+		const URoadMaterialSet* InMaterials = nullptr);
 
 	/**
 	 * A point on a cut line, parameterised from the right cut to the left.
@@ -107,10 +114,32 @@ private:
 	 */
 	int32 WeldVertex(const FVector2D& Point, const FVector2f& InUV1, const FVector2f& InUV2);
 
-	void AddTriangle(int32 A, int32 B, int32 C);
+	/**
+	 * DELIBERATELY NO DEFAULT ARGUMENT ON MaterialID.
+	 *
+	 * A default is exactly the mechanism by which a band silently becomes slot 0: the
+	 * caller that forgets compiles, runs, and renders a plausible road in the wrong
+	 * surface. Every caller must state which surface it is emitting, for the same reason
+	 * this one function owns winding - it is the single place that can be got wrong once
+	 * instead of everywhere.
+	 */
+	void AddTriangle(int32 A, int32 B, int32 C, int32 MaterialID);
+
+	/**
+	 * The junction's slots, taken from its WIDEST arm: greatest total width, ties broken
+	 * by lowest segment id so the choice is deterministic.
+	 *
+	 * A junction is one continuous annulus plus one fan, and its arms may carry different
+	 * profiles, so one arm has to win. The dominant road paves the junction; a junction
+	 * paved unlike every road entering it is the wrong answer, and per-arm strips would
+	 * need the inset ring subdivided per arm, which it is not.
+	 */
+	void JunctionSlots(const URoadNetwork& Network, const TArray<FRoadSegmentId>& ArmSegments,
+		int32& OutStripSlot, int32& OutFanSlot) const;
 
 	double ZHeight;
 	double TexelsPerUnit;
+	const URoadMaterialSet* Materials = nullptr;
 	FRoadMeshBuffers Buffers;
 	TMap<FVector2D, int32> WeldMap;
 };

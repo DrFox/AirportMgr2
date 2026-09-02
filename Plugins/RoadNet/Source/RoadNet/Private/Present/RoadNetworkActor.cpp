@@ -20,6 +20,7 @@
 #include "Present/RoadAgentActor.h"
 #include "Algo/Reverse.h"
 #include "Solve/RoadGeom.h"
+#include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
@@ -64,14 +65,8 @@ void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, con
 	}
 }
 
-void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
+int32 FDynamicMeshSink::BuildMesh(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers)
 {
-	if (Component == nullptr)
-	{
-		return;
-	}
-
-	UE::Geometry::FDynamicMesh3 Mesh;
 	Mesh.Clear();
 
 	for (const FVector3d& Position : Buffers.Positions)
@@ -79,8 +74,12 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 		Mesh.AppendVertex(Position);
 	}
 
+	// Mesh triangle id -> index into Buffers.MaterialIDs. Recorded here, where it is known,
+	// because it is NOT the identity - see the header.
+	TArray<int32> SourceTriangle;
 	int32 Rejected = 0;
-	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+
+	for (int32 Slot = 0, Source = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3, ++Source)
 	{
 		const int32 Result = Mesh.AppendTriangle(
 			Buffers.Indices[Slot], Buffers.Indices[Slot + 1], Buffers.Indices[Slot + 2]);
@@ -91,8 +90,55 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 		if (Result < 0)
 		{
 			++Rejected;
+			continue;
+		}
+
+		while (SourceTriangle.Num() <= Result)
+		{
+			SourceTriangle.Add(INDEX_NONE);
+		}
+		SourceTriangle[Result] = Source;
+	}
+
+	PopulateAttributes(Mesh, Buffers);
+
+	// Material ids, looked up THROUGH the mapping rather than by triangle id. Skipped
+	// entirely when the buffers carry none, so a single-material build produces a mesh
+	// with no material attribute at all - which is what keeps the scene proxy on its
+	// single-buffer path instead of splitting by an attribute of all zeroes.
+	if (Buffers.MaterialIDs.Num() > 0)
+	{
+		Mesh.EnableAttributes();
+		Mesh.Attributes()->EnableMaterialID();
+		UE::Geometry::FDynamicMeshMaterialAttribute* Attribute = Mesh.Attributes()->GetMaterialID();
+
+		for (const int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			const int32 Source = SourceTriangle.IsValidIndex(TriangleId)
+				? SourceTriangle[TriangleId] : INDEX_NONE;
+
+			// 0 for anything unmapped. An id must exist for every triangle the mesh holds:
+			// the attribute defaults to 0 anyway, and stating it keeps the invariant here
+			// rather than in the engine's initialisation.
+			const int32 Id = Buffers.MaterialIDs.IsValidIndex(Source)
+				? Buffers.MaterialIDs[Source] : 0;
+
+			Attribute->SetValue(TriangleId, Id);
 		}
 	}
+
+	return Rejected;
+}
+
+void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
+{
+	if (Component == nullptr)
+	{
+		return;
+	}
+
+	UE::Geometry::FDynamicMesh3 Mesh;
+	const int32 Rejected = BuildMesh(Mesh, Buffers);
 
 	if (Rejected > 0)
 	{
@@ -100,8 +146,6 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 			TEXT("%d triangle(s) rejected as non-manifold or duplicate - the surface will have holes"),
 			Rejected);
 	}
-
-	PopulateAttributes(Mesh, Buffers);
 
 	// With an attribute set present the renderer reads the normal overlay rather than the
 	// per-vertex normals, so both are filled: the overlay for rendering, and the per-vertex
@@ -130,7 +174,19 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	// Material and vertex-colour mode are applied INDEPENDENTLY. They used to be decided
 	// together in one if/else, so clearing the material also flipped the colour mode and
 	// no observation could tell which one mattered.
-	if (Material != nullptr)
+	//
+	// A material SET takes precedence over the single material, and must be applied as one
+	// array: FDynamicMeshSceneProxy splits by material id only when HasAttributes() and
+	// HasMaterialID() and NumMaterials > 1 all hold. Fail any one of those and it silently
+	// falls back to a single buffer drawn entirely with material 0 - a complete, plausible
+	// road in one surface, which looks exactly like a set that resolved to one material.
+	if (Materials != nullptr && Materials->Slots.Num() > 1 && Buffers.MaterialIDs.Num() > 0)
+	{
+		TArray<UMaterialInterface*> Resolved;
+		Materials->ResolveMaterials(Resolved);
+		Component->ConfigureMaterialSet(Resolved);
+	}
+	else if (Material != nullptr)
 	{
 		Component->SetMaterial(0, Material);
 	}
@@ -144,6 +200,17 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 
 	if (bUseConstantVertexColour)
 	{
+		// Said out loud, because the two together look exactly like a material set that
+		// failed to resolve: the colour override wins, every band renders the same flat
+		// constant, and nothing else reports anything wrong.
+		if (Materials != nullptr && Materials->Slots.Num() > 1)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("bUseConstantVertexColour is on, so the vertex-colour debug material ")
+				TEXT("replaces all %d material slots - the road will render as one flat colour"),
+				Materials->Slots.Num());
+		}
+
 		// This does NOT merely tint. Any mode other than None makes the scene proxy set
 		// ForceOverrideMaterial to the engine's vertex-colour debug material and use it
 		// in place of ours, so the surface shows a flat constant with no texture no
@@ -294,6 +361,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 	if (RoadMaterial.Succeeded())
 	{
 		SurfaceMaterial = RoadMaterial.Object;
+	}
+
+	// Defaulted here for the same reason as the materials above, and one more: this actor
+	// lives in a level that is deliberately never saved, so a set assigned by hand in the
+	// Details panel would be gone at the next editor start. A class default survives.
+	//
+	// Missing keeps MaterialSet null, which is the supported single-material state - the
+	// road renders as it did before per-band materials, rather than as an error.
+	static ConstructorHelpers::FObjectFinder<URoadMaterialSet> RoadMaterials(
+		TEXT("/Game/RoadNet/DA_RoadMaterials"));
+	if (RoadMaterials.Succeeded())
+	{
+		MaterialSet = RoadMaterials.Object;
 	}
 
 	// A second component for the preview, sharing the road's absolute-space setup for the
@@ -1372,11 +1452,13 @@ void ARoadNetworkActor::RebuildMesh()
 	FRoadGuidelineBuilder::Build(*Network, Solved);
 	FAnchorLink::Build(*Network);
 
-	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit);
+	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit, MaterialSet);
 
 	Builder.Build(*Network, Solved, RibbonSegments);
 
-	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, bUseConstantVertexColour);
+	// MaterialSet null keeps SurfaceMaterial and the single-slot path, so a level that has
+	// not been given a set renders exactly as it did before per-band materials.
+	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, bUseConstantVertexColour, MaterialSet);
 	Builder.Emit(Sink);
 
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt

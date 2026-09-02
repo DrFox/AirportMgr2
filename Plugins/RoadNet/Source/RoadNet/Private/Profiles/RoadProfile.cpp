@@ -42,12 +42,17 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 		FProfileBand Left;
 		Left.Width = Shoulder;
 		Left.Type = ERoadBandType::Shoulder;
+		Left.MaterialSlot = TEXT("Asphalt");
 		Profile->Bands.Add(Left);
 	}
 
+	// Named so a transient profile shows per-band materials the moment a set is assigned.
+	// A taxiway is concrete between asphalt run-offs; with no material set these names are
+	// inert and every band is slot 0, exactly as before.
 	FProfileBand Lane;
 	Lane.Width = TotalWidth - 2.0 * Shoulder;
 	Lane.Type = ERoadBandType::Lane;
+	Lane.MaterialSlot = TEXT("Concrete");
 	Profile->Bands.Add(Lane);
 
 	if (Shoulder > 0.0)
@@ -55,6 +60,7 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 		FProfileBand Right;
 		Right.Width = Shoulder;
 		Right.Type = ERoadBandType::Shoulder;
+		Right.MaterialSlot = TEXT("Asphalt");
 		Profile->Bands.Add(Right);
 	}
 
