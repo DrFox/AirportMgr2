@@ -218,10 +218,22 @@ private:
 	bool IsRemoveHeld() const;
 
 	/** Number keys. Deactivates the outgoing tool so nothing is left part-drawn. */
+	/**
+	 * How many number keys SetupInputComponent binds. Must equal Tools.Num().
+	 *
+	 * The two are separate lists by necessity - the bindings are set up before BeginPlay
+	 * fills Tools - and they silently disagreed once already: the route tool was appended
+	 * and EKeys::Four was not bound, so the startup log advertised a key that went nowhere.
+	 * BeginPlay compares them and complains, which is the cheapest thing that turns that
+	 * from invisible into obvious.
+	 */
+	static constexpr int32 ToolKeyCount = 4;
+
 	void SelectTool(int32 Index);
 	void SelectRoadTool()  { SelectTool(0); }
 	void SelectApronTool() { SelectTool(1); }
 	void SelectStandTool() { SelectTool(2); }
+	void SelectRouteTool() { SelectTool(3); }
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

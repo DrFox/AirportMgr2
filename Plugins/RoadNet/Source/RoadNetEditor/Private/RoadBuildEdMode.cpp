@@ -16,6 +16,37 @@
 // them apart outright.
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuildMode, Log, All);
 
+namespace
+{
+	/**
+	 * A toolkit that actually SHOWS the mode's palette.
+	 *
+	 * FModeToolkit::GetToolPaletteNames is `{}` - it returns nothing at all. BuildToolPalette
+	 * looks up GetModeCommands() BY PALETTE NAME, so with no names it is never called with
+	 * one, and a mode using the stock toolkit renders no buttons however many commands it
+	 * declares. URoadBuildEdMode::GetModeCommands has been returning a "Build" palette that
+	 * nothing on the other side ever asked for.
+	 *
+	 * This is the SAME defect as the ToolCommandList one: a list declared in the right shape,
+	 * consumed by nobody. Check where a list is READ, not where it is filled in.
+	 */
+	class FRoadBuildModeToolkit : public FModeToolkit
+	{
+	public:
+		virtual void GetToolPaletteNames(TArray<FName>& PaletteNames) const override
+		{
+			// Must match the key GetModeCommands fills in, or the lookup misses and this
+			// is right back to drawing nothing.
+			PaletteNames.Add(FName(TEXT("Build")));
+		}
+
+		virtual FText GetToolPaletteDisplayName(FName Palette) const override
+		{
+			return LOCTEXT("BuildPalette", "Build");
+		}
+	};
+}
+
 const FEditorModeID URoadBuildEdMode::EM_RoadBuild = TEXT("EM_RoadBuild");
 
 FString URoadBuildEdMode::RoadToolName = TEXT("RoadNet_DrawRoads");
@@ -128,7 +159,8 @@ void URoadBuildEdMode::CancelActiveGesture()
 
 void URoadBuildEdMode::CreateToolkit()
 {
-	Toolkit = MakeShareable(new FModeToolkit);
+	// Not FModeToolkit: the stock one names no palettes and so draws no buttons.
+	Toolkit = MakeShareable(new FRoadBuildModeToolkit);
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> URoadBuildEdMode::GetModeCommands() const

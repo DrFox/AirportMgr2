@@ -43,6 +43,14 @@ void ARoadBuildController::BeginPlay()
 	Tools.Add(MakeUnique<FStandPlaceTool>());
 	Tools.Add(MakeUnique<FRouteTool>());
 
+	if (Tools.Num() != ToolKeyCount)
+	{
+		UE_LOG(LogRoadBuild, Error,
+			TEXT("%d tools but %d number keys bound. A tool with no key is unreachable and "
+				 "a key with no tool does nothing - see ARoadBuildController::ToolKeyCount."),
+			Tools.Num(), ToolKeyCount);
+	}
+
 	if (bStartAbovePlane)
 	{
 		CreateBuildCamera();
@@ -138,9 +146,15 @@ void ARoadBuildController::SetupInputComponent()
 
 	// Numbered tools rather than a third modifier on one button. Drawing a polygon is
 	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
+	//
+	// ONE BINDING PER ENTRY IN Tools, and they are two lists that must agree. The route
+	// tool was appended to Tools and this line was not written, so the startup log
+	// advertised "4 routes" while EKeys::Four went nowhere - the log was the only thing
+	// claiming the binding existed, and it was wrong.
 	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ARoadBuildController::SelectRoadTool);
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
 	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ARoadBuildController::SelectStandTool);
+	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ARoadBuildController::SelectRouteTool);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
