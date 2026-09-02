@@ -12,6 +12,7 @@
 #include "SceneManagement.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/RouteTool.h"
 #include "Tool/StandPlaceTool.h"
 #include "Tool/StandPreview.h"
 #include "ToolContextInterfaces.h"
@@ -120,6 +121,8 @@ namespace
 			case EPreviewStyle::Doomed:  return FLinearColor(1.0f, 0.15f, 0.1f);
 			case EPreviewStyle::Heal:    return FLinearColor(0.3f, 1.0f, 0.5f);
 			case EPreviewStyle::Refused: return FLinearColor(1.0f, 0.25f, 0.2f);
+			case EPreviewStyle::Guideline: return FLinearColor(0.35f, 0.45f, 0.6f);
+			case EPreviewStyle::Route:   return FLinearColor(0.2f, 0.85f, 1.0f);
 			case EPreviewStyle::Pending:
 			default:                     return FLinearColor(0.2f, 1.0f, 0.3f);
 			}
@@ -145,11 +148,16 @@ void URoadBuildEditorTool::Setup()
 	{
 	case ERoadBuildToolKind::Apron: Build = MakeUnique<FApronDrawTool>(); break;
 	case ERoadBuildToolKind::Stand: Build = MakeUnique<FStandPlaceTool>(); break;
+	case ERoadBuildToolKind::Route: Build = MakeUnique<FRouteTool>(); break;
 	case ERoadBuildToolKind::Road:
 	default:                        Build = MakeUnique<FRoadDrawTool>(); break;
 	}
 
 	Target = ResolveTarget();
+
+	UE_LOG(LogTemp, Log, TEXT("RoadNet ed tool active: %s, target %s"),
+		*Build->GetDisplayName().ToString(),
+		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
 
 	UClickDragInputBehavior* Drag = NewObject<UClickDragInputBehavior>(this);
 	Drag->Initialize(this);

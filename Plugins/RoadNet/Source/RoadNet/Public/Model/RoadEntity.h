@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoadTraffic.h"
 #include "RoadEntity.generated.h"
 
 class UEntityDefinition;
@@ -133,6 +134,33 @@ struct ROADNET_API FEntityInstance
 	/** Keyed by anchor id, never by position in the definition's array. */
 	UPROPERTY() TArray<FResolvedAnchor> ResolvedAnchors;
 
+	/**
+	 * The entity's OWN pose as a guideline node - for a stand, the nose gear stop.
+	 *
+	 * Not an anchor, and deliberately not in the array above. An anchor is a FIXTURE: a
+	 * hydrant pit, a ground power point, a painted equipment box - something dug into or
+	 * painted onto the concrete. There is nothing at the nose gear mark except paint, and
+	 * a definition that declared one would be claiming a Code C stand has a piece of plant
+	 * where the aircraft parks. RoadEntityTest asserts that invariant directly.
+	 *
+	 * But an aircraft routed to this stand has to be routed SOMEWHERE, and that somewhere
+	 * is the stop position. So it gets a node of its own, named for what it is, rather than
+	 * being smuggled into the fixture list to make pathfinding easier.
+	 *
+	 * Non-derived, like the anchor nodes, so the rebuild sweep leaves it alone.
+	 */
+	UPROPERTY() FGuidelineNodeId PoseNode;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
+
+/**
+ * How a thing that comes to do this job MOVES.
+ *
+ * The two enums are deliberately separate - see EServiceRole - but a lead-in still has to
+ * decide which traffic its guideline admits, and that decision has exactly one right
+ * answer per role. Here rather than at each call site, so a fuel truck and a belt loader
+ * cannot end up classified differently by two functions that both looked obvious.
+ */
+ROADNET_API ETraversalClass TraversalForRole(EServiceRole Role);

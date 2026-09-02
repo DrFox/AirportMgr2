@@ -16,6 +16,7 @@ enum class ERoadBuildToolKind : uint8
 	Road,
 	Apron,
 	Stand,
+	Route,
 };
 
 /**

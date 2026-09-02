@@ -7,11 +7,52 @@
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdMode"
 
+// Every tool switch is logged, and so is every tool that gets built.
+//
+// Not decoration: this mode has now produced three separate rounds of "the tool looks
+// broken" where the model was correct, and each was diagnosed from screenshots and guesses
+// before anything measured the boundary. A tool that does not activate and a tool that
+// activates and draws nothing are indistinguishable on screen, and these two lines tell
+// them apart outright.
+DEFINE_LOG_CATEGORY_STATIC(LogRoadBuildMode, Log, All);
+
+namespace
+{
+	/**
+	 * A toolkit that actually SHOWS the mode's palette.
+	 *
+	 * FModeToolkit::GetToolPaletteNames is `{}` - it returns nothing at all. BuildToolPalette
+	 * looks up GetModeCommands() BY PALETTE NAME, so with no names it is never called with
+	 * one, and a mode using the stock toolkit renders no buttons however many commands it
+	 * declares. URoadBuildEdMode::GetModeCommands has been returning a "Build" palette that
+	 * nothing on the other side ever asked for.
+	 *
+	 * This is the SAME defect as the ToolCommandList one: a list declared in the right shape,
+	 * consumed by nobody. Check where a list is READ, not where it is filled in.
+	 */
+	class FRoadBuildModeToolkit : public FModeToolkit
+	{
+	public:
+		virtual void GetToolPaletteNames(TArray<FName>& PaletteNames) const override
+		{
+			// Must match the key GetModeCommands fills in, or the lookup misses and this
+			// is right back to drawing nothing.
+			PaletteNames.Add(FName(TEXT("Build")));
+		}
+
+		virtual FText GetToolPaletteDisplayName(FName Palette) const override
+		{
+			return LOCTEXT("BuildPalette", "Build");
+		}
+	};
+}
+
 const FEditorModeID URoadBuildEdMode::EM_RoadBuild = TEXT("EM_RoadBuild");
 
 FString URoadBuildEdMode::RoadToolName = TEXT("RoadNet_DrawRoads");
 FString URoadBuildEdMode::ApronToolName = TEXT("RoadNet_DrawAprons");
 FString URoadBuildEdMode::StandToolName = TEXT("RoadNet_PlaceStands");
+FString URoadBuildEdMode::RouteToolName = TEXT("RoadNet_FindRoutes");
 
 URoadBuildEdMode::URoadBuildEdMode()
 {
@@ -38,6 +79,12 @@ void URoadBuildEdMode::Enter()
 	RegisterTool(Commands.DrawRoads, RoadToolName, MakeBuilder(ERoadBuildToolKind::Road));
 	RegisterTool(Commands.DrawAprons, ApronToolName, MakeBuilder(ERoadBuildToolKind::Apron));
 	RegisterTool(Commands.PlaceStands, StandToolName, MakeBuilder(ERoadBuildToolKind::Stand));
+	RegisterTool(Commands.FindRoutes, RouteToolName, MakeBuilder(ERoadBuildToolKind::Route));
+
+	UE_LOG(LogRoadBuildMode, Log,
+		TEXT("Road Build mode entered. Tools: 1 %s, 2 %s, 3 %s, 4 %s. If a number key does "
+			 "nothing, the palette buttons do the same job."),
+		*RoadToolName, *ApronToolName, *StandToolName, *RouteToolName);
 
 	// Roads first, because it is the one that needs no setup - an empty level can be drawn
 	// on immediately, where a stand wants somewhere to stand.
@@ -67,6 +114,7 @@ void URoadBuildEdMode::BindCommands()
 		Commands2->MapAction(Commands.DrawRoads, StartToolAction(RoadToolName));
 		Commands2->MapAction(Commands.DrawAprons, StartToolAction(ApronToolName));
 		Commands2->MapAction(Commands.PlaceStands, StartToolAction(StandToolName));
+		Commands2->MapAction(Commands.FindRoutes, StartToolAction(RouteToolName));
 	}
 
 	if (ToolCommandList.IsValid())
@@ -80,6 +128,8 @@ FExecuteAction URoadBuildEdMode::StartToolAction(const FString& ToolName)
 {
 	return FExecuteAction::CreateLambda([this, ToolName]()
 	{
+		UE_LOG(LogRoadBuildMode, Log, TEXT("Tool switch requested: %s"), *ToolName);
+
 		// Guarded because both command lists can carry the same key: restarting the tool
 		// already running would silently abandon a chain half-drawn.
 		UInteractiveToolManager* Manager = GetToolManager();
@@ -109,7 +159,8 @@ void URoadBuildEdMode::CancelActiveGesture()
 
 void URoadBuildEdMode::CreateToolkit()
 {
-	Toolkit = MakeShareable(new FModeToolkit);
+	// Not FModeToolkit: the stock one names no palettes and so draws no buttons.
+	Toolkit = MakeShareable(new FRoadBuildModeToolkit);
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> URoadBuildEdMode::GetModeCommands() const
