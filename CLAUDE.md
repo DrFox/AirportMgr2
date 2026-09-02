@@ -49,15 +49,40 @@ frequently wrong. But keep it cheap:
 - **Write durable findings to memory** (`unreal-*` notes). A fact looked up twice is a
   memory file that was not written.
 
-## MCP bridge
+## MCP: look at the editor instead of guessing
 
-`Plugins/McpAutomationBridge` exposes the running editor over MCP (`unreal-engine`, HTTP
-at `localhost:3000/mcp`; the plugin listens on 8090/8091). It gives PIE state, viewport
-screenshots, console commands and log access - i.e. the ability to LOOK instead of guess.
+Epic's own MCP ships with UE 5.8 (`Engine/Plugins/Experimental/ModelContextProtocol`,
+Experimental). This project enables it plus three toolsets, in `AirportMgr.uproject`:
 
-Claude Code connects to MCP servers once, at startup. **If the editor was closed when the
-session began, the server is dead for that session** - `/mcp` can reconnect it. Starting
-the editor before Claude Code avoids the problem.
+| Plugin | Why it is on |
+|---|---|
+| `ModelContextProtocol` | The server. `http://localhost:8000/mcp`, wired up in `.mcp.json` as `unreal`. |
+| `EditorToolset` | Editor and PIE state - answers "which driver is live" without guessing. |
+| `AutomationTestToolset` | `RunTestsByFilter` / `GetTestResults` against the RUNNING editor. |
+| `LiveCodingToolset` | `CompileLiveCoding` - compile without making the user close the editor. |
+
+`AllToolsets` is deliberately NOT enabled: it drags in MetaHuman, Niagara, PCG, Sequencer
+and the rest, loading on every editor start for tools nothing here calls. Swap it in if a
+workflow needs them.
+
+`Config/DefaultEditorPerProjectUserSettings.ini` sets `bAutoStartServer=True`, because
+**Claude Code connects to MCP servers once, at session start** - a server that must be
+started by hand is dead for any session that began first. It also pins
+`bEnableToolSearch=True`, which keeps hundreds of tool schemas out of the prompt behind
+`list_toolsets` / `describe_toolset` / `call_tool`.
+
+**Prefer these over the shell when the editor is up:**
+
+- `CompileLiveCoding` instead of asking the user to close the editor. It covers function
+  bodies only - new UPROPERTYs, UCLASSes and classes with vtables still need a full
+  `Build.bat`, so batch those.
+- `AutomationTestToolset` instead of `Run-RoadNetTests.ps1` for a quick loop; the script
+  spawns a whole cold editor. Use the script for the authoritative pre-commit run, since
+  it is what catches a CRASHED test.
+- `EditorToolset` before asking the user what they are looking at.
+
+`Plugins/McpAutomationBridge` (third-party, port 3000/8090) is present but DISABLED in the
+.uproject - the fallback if the experimental one misbehaves. Do not run both.
 
 ## Build and test
 
