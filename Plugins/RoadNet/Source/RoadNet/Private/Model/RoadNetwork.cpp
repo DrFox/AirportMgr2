@@ -379,6 +379,11 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	Instance.Definition = Definition;
 	Instance.ResolvedAnchors.Reserve(Definition->Anchors.Num());
 
+	// The stop position itself, as a node an aircraft can be routed to. NON-DERIVED for
+	// the same reason the anchor nodes are: it carries no edge until a lead-in is cast to
+	// it, and a derived one would be swept by the next rebuild.
+	Instance.PoseNode = AddGuidelineNode(Position, /*bDerived=*/false);
+
 	const double Cos = FMath::Cos(Heading);
 	const double Sin = FMath::Sin(Heading);
 
@@ -413,10 +418,15 @@ bool URoadNetwork::RemoveEntity(FEntityInstanceId Entity)
 	// Copy before removing anything: RemoveGuidelineNode does not touch this array, but
 	// the slot's payload is not ours to read once the entity is freed.
 	const TArray<FResolvedAnchor> Owned = Found->ResolvedAnchors;
+	const FGuidelineNodeId OwnedPose = Found->PoseNode;
 	for (const FResolvedAnchor& Anchor : Owned)
 	{
 		RemoveGuidelineNode(Anchor.Node);
 	}
+
+	// The stop position goes with the stand. Left behind it would be a node in the middle
+	// of the apron that routes still lead to and nothing explains.
+	RemoveGuidelineNode(OwnedPose);
 
 	return RoadSlot::Remove<FEntityInstanceId>(Entities, EntityFreeList, Entity);
 }

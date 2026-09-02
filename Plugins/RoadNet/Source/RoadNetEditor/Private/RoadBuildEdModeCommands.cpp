@@ -25,6 +25,9 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	UI_COMMAND(PlaceStands, "Stands", "Place an aircraft stand: press to position, drag to aim, release.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Three));
 
+	UI_COMMAND(FindRoutes, "Routes", "Click a start then a destination to route between them; the guideline graph is drawn underneath.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Four));
+
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
 		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
 }
@@ -34,7 +37,7 @@ TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCom
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
 
 	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Palettes;
-	Palettes.Add(FName(TEXT("Build")), { Commands.DrawRoads, Commands.DrawAprons, Commands.PlaceStands });
+	Palettes.Add(FName(TEXT("Build")), { Commands.DrawRoads, Commands.DrawAprons, Commands.PlaceStands, Commands.FindRoutes });
 	return Palettes;
 }
 

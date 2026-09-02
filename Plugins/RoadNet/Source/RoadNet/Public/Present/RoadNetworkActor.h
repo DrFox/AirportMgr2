@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Model/RouteFollower.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
@@ -12,6 +13,7 @@
 
 class URoadNetwork;
 class URoadProfile;
+class ARoadAgentActor;
 class UDynamicMeshComponent;
 class UMaterialInstanceDynamic;
 class FRoadMeshBuilder;
@@ -48,6 +50,25 @@ private:
 
 	/** Independent of Material by design - see ARoadNetworkActor::bUseConstantVertexColour. */
 	bool bUseConstantVertexColour = true;
+};
+
+/**
+ * One thing driving one route, plus the cube standing where it is.
+ *
+ * The follower is the model and the actor is the view, which is why they are two fields
+ * rather than one class: everything about whether the route is walked correctly is decided
+ * in FRouteFollower, with no world involved and no actor to spawn.
+ *
+ * Runtime only. These are NOT saved with the level - see ARoadNetworkActor::Agents.
+ */
+USTRUCT()
+struct ROADNET_API FRoadAgent
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FRouteFollower Follower;
+
+	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -98,6 +119,41 @@ public:
 	/** Solve every node, build the mesh, and push it to the component. */
 	UFUNCTION(CallInEditor, Category = "RoadNet")
 	void RebuildMesh();
+
+	virtual void Tick(float DeltaSeconds) override;
+
+	// --- Agents ----------------------------------------------------------------------
+	//
+	// Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part
+	// way through a journey, not a fact about the airport: putting them in the network
+	// would snapshot them into every undo Memento and serialise them into the saved level,
+	// so re-opening a map would restore half-driven cubes that no longer have a route.
+
+	/**
+	 * Sends one agent along a plan, spawning the cube that shows it. False if it cannot.
+	 *
+	 * Refuses outside a game world. An editor world has no business spawning throwaway
+	 * actors into the level the player is authoring - they would be saved with it.
+	 */
+	bool DispatchAgent(const FRoutePlan& Plan, double Speed);
+
+	/** Removes every agent and its cube. */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "RoadNet")
+	void ClearAgents();
+
+	/** How many agents are currently under way or parked at their destination. */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 GetAgentCount() const { return Agents.Num(); }
+
+	/**
+	 * Route between two guideline nodes over the network this actor owns.
+	 *
+	 * On the facade so a tool, a Blueprint and the HUD all ask the same question of the
+	 * same graph rather than three of them reaching past it.
+	 */
+	FRoutePlan FindRoute(
+		FGuidelineNodeId Start, FGuidelineNodeId Goal,
+		ETraversalClass Class, double Wingspan) const;
 
 	// --- Runtime graph facade -------------------------------------------------------
 	//
@@ -495,6 +551,14 @@ private:
 
 	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
 	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;
+
+	/**
+	 * Transient, and that is the whole point: agents never reach disk.
+	 *
+	 * UPROPERTY regardless, because View is a UObject pointer and an agent that the
+	 * garbage collector cannot see is an agent whose cube is collected out from under it.
+	 */
+	UPROPERTY(Transient) TArray<FRoadAgent> Agents;
 
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
 

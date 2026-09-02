@@ -108,6 +108,13 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
 	FLinearColor RefusedColour = FLinearColor(1.0f, 0.25f, 0.2f);
 
+	/** Context, not intent - so it must read as BEHIND everything else the tools draw. */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	FLinearColor GuidelineColour = FLinearColor(0.35f, 0.45f, 0.6f);
+
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	FLinearColor RouteColour = FLinearColor(0.2f, 0.85f, 1.0f);
+
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview", meta = (ClampMin = "0.5"))
 	float PreviewThickness = 3.0f;

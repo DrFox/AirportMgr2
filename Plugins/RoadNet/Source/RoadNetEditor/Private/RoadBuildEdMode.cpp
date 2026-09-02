@@ -12,6 +12,7 @@ const FEditorModeID URoadBuildEdMode::EM_RoadBuild = TEXT("EM_RoadBuild");
 FString URoadBuildEdMode::RoadToolName = TEXT("RoadNet_DrawRoads");
 FString URoadBuildEdMode::ApronToolName = TEXT("RoadNet_DrawAprons");
 FString URoadBuildEdMode::StandToolName = TEXT("RoadNet_PlaceStands");
+FString URoadBuildEdMode::RouteToolName = TEXT("RoadNet_FindRoutes");
 
 URoadBuildEdMode::URoadBuildEdMode()
 {
@@ -38,6 +39,7 @@ void URoadBuildEdMode::Enter()
 	RegisterTool(Commands.DrawRoads, RoadToolName, MakeBuilder(ERoadBuildToolKind::Road));
 	RegisterTool(Commands.DrawAprons, ApronToolName, MakeBuilder(ERoadBuildToolKind::Apron));
 	RegisterTool(Commands.PlaceStands, StandToolName, MakeBuilder(ERoadBuildToolKind::Stand));
+	RegisterTool(Commands.FindRoutes, RouteToolName, MakeBuilder(ERoadBuildToolKind::Route));
 
 	// Roads first, because it is the one that needs no setup - an empty level can be drawn
 	// on immediately, where a stand wants somewhere to stand.
@@ -67,6 +69,7 @@ void URoadBuildEdMode::BindCommands()
 		Commands2->MapAction(Commands.DrawRoads, StartToolAction(RoadToolName));
 		Commands2->MapAction(Commands.DrawAprons, StartToolAction(ApronToolName));
 		Commands2->MapAction(Commands.PlaceStands, StartToolAction(StandToolName));
+		Commands2->MapAction(Commands.FindRoutes, StartToolAction(RouteToolName));
 	}
 
 	if (ToolCommandList.IsValid())

@@ -8,6 +8,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/RouteTool.h"
 #include "Tool/StandPlaceTool.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
@@ -40,6 +41,7 @@ void ARoadBuildController::BeginPlay()
 	Tools.Add(MakeUnique<FRoadDrawTool>());
 	Tools.Add(MakeUnique<FApronDrawTool>());
 	Tools.Add(MakeUnique<FStandPlaceTool>());
+	Tools.Add(MakeUnique<FRouteTool>());
 
 	if (bStartAbovePlane)
 	{
@@ -48,7 +50,8 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands. WASD pans, Q/E rotate, wheel zooms."),
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes. WASD pans, Q/E rotate, "
+			 "wheel zooms."),
 		*Target->GetName());
 }
 

@@ -17,6 +17,7 @@ public:
 	TSharedPtr<FUICommandInfo> DrawRoads;
 	TSharedPtr<FUICommandInfo> DrawAprons;
 	TSharedPtr<FUICommandInfo> PlaceStands;
+	TSharedPtr<FUICommandInfo> FindRoutes;
 
 	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.

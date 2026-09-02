@@ -69,6 +69,18 @@ enum class EPreviewStyle : uint8
 
 	/** Something the gesture cannot do, with the reason. */
 	Refused,
+
+	/**
+	 * The guideline graph itself: context, not intent.
+	 *
+	 * Every other style describes something the CURRENT GESTURE would do. This one is the
+	 * world the gesture happens in, and it reads as background - because a route drawn
+	 * over an invisible graph tells you a path exists but never why it went that way.
+	 */
+	Guideline,
+
+	/** A route that was found, and would be driven. */
+	Route,
 };
 
 /**

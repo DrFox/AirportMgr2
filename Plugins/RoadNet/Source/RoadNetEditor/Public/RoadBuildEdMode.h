@@ -26,6 +26,7 @@ public:
 	static FString RoadToolName;
 	static FString ApronToolName;
 	static FString StandToolName;
+	static FString RouteToolName;
 
 	URoadBuildEdMode();
 

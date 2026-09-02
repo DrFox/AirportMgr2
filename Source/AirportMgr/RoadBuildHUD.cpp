@@ -72,6 +72,8 @@ FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 	case EPreviewStyle::Doomed:  return DoomedColour;
 	case EPreviewStyle::Heal:    return HealColour;
 	case EPreviewStyle::Refused: return RefusedColour;
+	case EPreviewStyle::Guideline: return GuidelineColour;
+	case EPreviewStyle::Route:   return RouteColour;
 	case EPreviewStyle::Pending:
 	default:                     return PendingColour;
 	}
@@ -86,8 +88,14 @@ void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
 	}
 
 	// A heavier ring than a node normally wears, so a marked one reads as marked rather
-	// than merely recoloured.
-	DrawRing(Screen, NodeRingRadius, StyleColour(Style), PreviewThickness);
+	// than merely recoloured. Guideline nodes are the exception: there are hundreds of
+	// them and they are context, so they get a dot rather than a ring that would swamp
+	// every mark a tool actually wants read.
+	const bool bContext = (Style == EPreviewStyle::Guideline);
+	const float Radius = bContext ? NodeRingRadius * 0.35f : NodeRingRadius;
+	const float Thickness = bContext ? PreviewThickness * 0.5f : PreviewThickness;
+
+	DrawRing(Screen, Radius, StyleColour(Style), Thickness);
 	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending)
 	{
 		DrawRing(Screen, NodeRingRadius * 1.6f, StyleColour(Style), PreviewThickness);
@@ -103,10 +111,17 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 		return;
 	}
 
+	// The route is what was asked for and the graph is what it ran over, so the route is
+	// drawn heavier than everything and the graph lighter than everything.
+	const float Weight =
+		Style == EPreviewStyle::Guideline ? PreviewThickness * 0.5f :
+		Style == EPreviewStyle::Route     ? PreviewThickness * 2.0f :
+											PreviewThickness;
+
 	DrawLine(
 		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
 		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
-		StyleColour(Style), PreviewThickness);
+		StyleColour(Style), Weight);
 }
 
 void ARoadBuildHUD::CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style)

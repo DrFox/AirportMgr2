@@ -2,6 +2,8 @@
 
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/AnchorLink.h"
+#include "Build/RoadGuidelineBuilder.h"
 #include "Components/BillboardComponent.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
@@ -14,6 +16,8 @@
 #include "EngineUtils.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
+#include "Model/RouteSearch.h"
+#include "Present/RoadAgentActor.h"
 #include "Algo/Reverse.h"
 #include "Solve/RoadGeom.h"
 #include "Profiles/RoadProfile.h"
@@ -237,7 +241,10 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 
 ARoadNetworkActor::ARoadNetworkActor()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	// Ticks for the agents and for nothing else. With none dispatched the tick body is a
+	// single empty-array test, which is cheaper than the machinery needed to switch
+	// ticking on and off as agents come and go.
+	PrimaryActorTick.bCanEverTick = true;
 
 	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 
@@ -1356,6 +1363,15 @@ void ARoadNetworkActor::RebuildMesh()
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
 
+	// The guideline graph is derived from the same solve, and until this call existed it
+	// was derived NOWHERE outside the tests - so every route query at runtime ran against
+	// an empty graph and correctly reported that nothing was connected.
+	//
+	// Anchor lead-ins go second and must: they join stands to guidelines that only exist
+	// once the line above has run, and both are swept and rebuilt together.
+	FRoadGuidelineBuilder::Build(*Network, Solved);
+	FAnchorLink::Build(*Network);
+
 	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit);
 
 	Builder.Build(*Network, Solved, RibbonSegments);
@@ -1396,4 +1412,104 @@ void ARoadNetworkActor::RebuildMesh()
 	UE_LOG(LogRoadMesh, Log, TEXT("Rebuilt: %d nodes (%d failed), %d vertices, %d triangles"),
 		Solved.SolvedNodes, Solved.FailedNodes,
 		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);
+}
+
+void ARoadNetworkActor::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	for (FRoadAgent& Agent : Agents)
+	{
+		FVector2D At;
+		double Heading = 0.0;
+
+		// Advance is the ONLY thing that decides where an agent is. When it declines - no
+		// route, or a polyline too short to have a direction - the pose is left exactly as
+		// it was. Writing an unset FVector2D through here instead is how this project has
+		// twice put things at the world origin.
+		if (!Agent.Follower.Advance(DeltaSeconds, At, Heading))
+		{
+			continue;
+		}
+
+		if (Agent.View != nullptr)
+		{
+			Agent.View->SetPose(At, Heading, SurfaceZ);
+		}
+	}
+}
+
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, double Speed)
+{
+	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	if (World == nullptr || !World->IsGameWorld())
+	{
+		// An editor world would SAVE these. The route still solves and still draws at
+		// design time; only the cube waits for Play.
+		return false;
+	}
+
+	FRoadAgent Agent;
+	Agent.Follower.Start(Plan, Speed);
+
+	FActorSpawnParameters Params;
+	Params.Owner = this;
+	Params.ObjectFlags |= RF_Transient;
+
+	Agent.View = World->SpawnActor<ARoadAgentActor>(
+		FVector::ZeroVector, FRotator::ZeroRotator, Params);
+	if (Agent.View == nullptr)
+	{
+		return false;
+	}
+
+	// Posed before the first tick, so it appears at its start rather than at the origin
+	// for one frame.
+	Agent.View->SetPose(Plan.Polyline[0], 0.0, SurfaceZ);
+
+	FVector2D At;
+	double Heading = 0.0;
+	if (Agent.Follower.Advance(0.0, At, Heading))
+	{
+		Agent.View->SetPose(At, Heading, SurfaceZ);
+	}
+
+	Agents.Add(Agent);
+	return true;
+}
+
+void ARoadNetworkActor::ClearAgents()
+{
+	for (FRoadAgent& Agent : Agents)
+	{
+		if (Agent.View != nullptr)
+		{
+			Agent.View->Destroy();
+		}
+	}
+
+	Agents.Reset();
+}
+
+FRoutePlan ARoadNetworkActor::FindRoute(
+	FGuidelineNodeId Start, FGuidelineNodeId Goal,
+	ETraversalClass Class, double Wingspan) const
+{
+	if (Network == nullptr)
+	{
+		return FRoutePlan();
+	}
+
+	FRouteQuery Query;
+	Query.Start = Start;
+	Query.Goal = Goal;
+	Query.Class = Class;
+	Query.Wingspan = Wingspan;
+
+	return RouteSearch::Find(*Network, Query);
 }
