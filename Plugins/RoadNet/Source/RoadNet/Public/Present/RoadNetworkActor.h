@@ -70,6 +70,20 @@ public:
 	 */
 	static ARoadNetworkActor* FindOrCreate(UWorld* World);
 
+#if WITH_EDITOR
+	/**
+	 * Hides the engine's visualization billboard, if anything attached one.
+	 *
+	 * USceneComponent::CreateSpriteComponent runs on EVERY OnRegister and attaches an
+	 * /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent is set. This
+	 * actor's mesh is in absolute space, so its transform stays at the world origin - and a
+	 * sprite there reads as a node the build tool drew at (0,0), which is precisely the
+	 * false picture the editor mode has already produced twice. The constructor clears the
+	 * flag; this catches any component another path attached regardless.
+	 */
+	virtual void PostRegisterAllComponents() override;
+#endif
+
 	/**
 	 * The history an edit should snapshot into, or NULL when the editor owns undo.
 	 *
