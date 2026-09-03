@@ -56,6 +56,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap")
 	bool bSnapToSegments = true;
 
+	/**
+	 * Draw the guideline graph - the routes agents follow - under every tool. Toggled by G.
+	 *
+	 * Defaults ON. It used to be drawn only while the route tool was selected, so the graph
+	 * you are building FOR was invisible while you built it, and a defect at the
+	 * road/guideline boundary stayed hidden until someone happened to press 4.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View")
+	bool bShowGuidelines = true;
+
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
 	double MinSplitFromEndpoint = 50.0;
@@ -209,6 +219,9 @@ public:
 	 * is exact and generating collision purely to support mouse picking would be waste.
 	 */
 	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
+
+	/** G: show or hide the guideline overlay. */
+	void OnToggleGuidelines();
 
 protected:
 	virtual void BeginPlay() override;

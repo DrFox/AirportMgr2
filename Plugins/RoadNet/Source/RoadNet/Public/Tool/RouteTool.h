@@ -47,7 +47,6 @@ private:
 	/** The guideline node under the cursor that this class could use, if any. */
 	FGuidelineNodeId PickNode(const FToolContext& Context) const;
 
-	void DrawGraph(const FToolContext& Context, IToolPreviewSink& Sink) const;
 
 	bool bHasStart = false;
 

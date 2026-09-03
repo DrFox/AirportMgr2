@@ -136,44 +136,6 @@ void FRouteTool::OnDeactivate(const FToolContext& Context)
 	LastPlan = FRoutePlan();
 }
 
-void FRouteTool::DrawGraph(const FToolContext& Context, IToolPreviewSink& Sink) const
-{
-	const URoadNetwork& Network = *Context.Target->Network;
-
-	for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
-	{
-		if (!Edge.bAlive || !Edge.AllowedTraffic.Allows(Class))
-		{
-			continue;
-		}
-
-		const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
-		if (A == nullptr || B == nullptr)
-		{
-			continue;
-		}
-
-		// The same sampling the search costed and a follower will walk, so what is drawn
-		// is what is driven.
-		TArray<FVector2D> Points;
-		GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Points);
-
-		for (int32 At = 1; At < Points.Num(); ++At)
-		{
-			Sink.Line(Points[At - 1], Points[At], EPreviewStyle::Guideline);
-		}
-	}
-
-	for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
-	{
-		if (Node.bAlive)
-		{
-			Sink.Marker(Node.Position, EPreviewStyle::Guideline);
-		}
-	}
-}
-
 void FRouteTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
 	if (Context.Target == nullptr || Context.Target->Network == nullptr)
@@ -181,7 +143,10 @@ void FRouteTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sin
 		return;
 	}
 
-	DrawGraph(Context, Sink);
+	// The graph itself is NOT drawn here. GuidelineOverlay is its only emitter, so it is
+	// visible under every tool rather than only this one - which is what let a defect at the
+	// road/guideline boundary hide until someone pressed 4. This tool draws only what its
+	// own gesture is doing.
 
 	if (bHasStart)
 	{
