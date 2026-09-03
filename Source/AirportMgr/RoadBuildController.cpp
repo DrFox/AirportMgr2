@@ -270,6 +270,7 @@ FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
 	Settings.SegmentRadius = SegmentSnapRadius;
 	Settings.bSnapToSegments = bSnapToSegments;
 	Settings.MinSplitFromEndpoint = MinSplitFromEndpoint;
+	Settings.JunctionSnapFactor = JunctionSnapFactor;
 	return Settings;
 }
 

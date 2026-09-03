@@ -61,6 +61,22 @@ public:
 	double MinSplitFromEndpoint = 50.0;
 
 	/**
+	 * How far a junction claims the cursor, as a multiple of the pavement it actually
+	 * covers. See FRoadSnapSettings::JunctionSnapFactor.
+	 *
+	 * PickRadius is a fixed 150 uu while a junction reaches HalfWidth + |R/tan(Theta/2)| -
+	 * 300 uu even for a plain 90 degree corner on the default profile. Clicking in the gap
+	 * used to build a second node inside the first junction's pavement, which is two
+	 * junction polygons at one Z and therefore z-fighting. At 1.0 a click anywhere on a
+	 * junction closes onto it instead.
+	 *
+	 * Raise it to keep new roads further off existing junctions; zero restores the old
+	 * fixed-radius behaviour.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
+	double JunctionSnapFactor = 1.0;
+
+	/**
 	 * Furthest a click may place a node, as a MULTIPLE of the current view distance.
 	 *
 	 * The ray/plane distance is (SurfaceZ - Origin.Z) / Direction.Z, which runs away

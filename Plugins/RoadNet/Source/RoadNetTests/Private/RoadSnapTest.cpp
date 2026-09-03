@@ -107,6 +107,13 @@ bool FRoadSnapTest::RunTest(const FString& Parameters)
 		FRoadSnapSettings NarrowNodes = Settings;
 		NarrowNodes.NodeRadius = 10.0;
 
+		// And the junction reach off with it. A dead end on this profile paves ~200 uu, so
+		// with the reach live the node rule claims this whole neighbourhood and the split
+		// floor below is unreachable - which is the correct behaviour, asserted in
+		// RoadNet.Tool.JunctionClearance. This block is about the floor itself, so it opts
+		// out of the reach the way a caller would.
+		NarrowNodes.JunctionSnapFactor = 0.0;
+
 		const FRoadSnapResult TooCloseToEnd =
 			Chain.Resolve(*Network, FVector2D(30.0, 20.0), NarrowNodes);
 		TestTrue(TEXT("a split within MinSplitFromEndpoint is refused"),
@@ -125,6 +132,14 @@ bool FRoadSnapTest::RunTest(const FString& Parameters)
 			Chain.Resolve(*Network, FVector2D(-30.0, 20.0), NarrowNodes);
 		TestTrue(TEXT("a cursor beyond the end does not split at the endpoint"),
 			BeyondEnd.Kind == ERoadSnapKind::Free);
+
+		// The same cursor with the reach LIVE resolves to the node instead, even though
+		// NodeRadius is only 10 uu. This is the pair that shows the factor is what decides
+		// it, rather than some other difference between the two calls.
+		const FRoadSnapResult WithReach =
+			Chain.Resolve(*Network, FVector2D(30.0, 20.0), Settings);
+		TestTrue(TEXT("the junction reach claims what a 10 uu NodeRadius could not"),
+			WithReach.Kind == ERoadSnapKind::Node);
 	}
 
 	// Turning segment snapping off leaves rule 1 and the Free fallback intact.

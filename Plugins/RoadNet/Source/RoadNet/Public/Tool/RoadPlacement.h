@@ -35,6 +35,16 @@ enum class ERoadPlacement : uint8
 	 * so a hairpin either clamps to a stub or eats the whole segment.
 	 */
 	TooSharp,
+
+	/**
+	 * The same corner, at the FAR end: too tight against an arm already at the
+	 * destination, or against the segment this click would split.
+	 *
+	 * A distinct value because the two are fixed differently - the player moves the far
+	 * end, not the near one - and because a single reason cannot say which end is at
+	 * fault when the ghost is red at both.
+	 */
+	TooSharpAtEnd,
 };
 
 struct FRoadPlacementLimits

@@ -56,12 +56,30 @@ struct FRoadSnapSettings
 	/**
 	 * Nearest a split may happen to either endpoint of the segment being split, in uu.
 	 *
-	 * Below this the split produces a segment shorter than the solver can trim, whose
-	 * two ends then overlap. The node rule normally covers this neighbourhood already,
-	 * but only while NodeRadius is the larger of the two radii - which is a setting,
-	 * not an invariant, so the rule enforces its own floor rather than assuming.
+	 * A FLOOR, not the whole rule. The real exclusion is the endpoint's junction reach,
+	 * which is far larger than this on any road of realistic width - a split 200 uu from
+	 * a node whose junction reaches 550 uu drops a new node inside existing pavement. This
+	 * still stands as the answer for a node that has no junction to reach anywhere.
 	 */
 	double MinSplitFromEndpoint = 50.0;
+
+	/**
+	 * Multiplier on a node's junction reach when deciding how far out it claims the cursor.
+	 *
+	 * The effective node snap radius is max(NodeRadius, reach * this). NodeRadius alone is
+	 * a fixed number - 150 uu by default - while a junction's pavement extends by
+	 * HalfWidth + |R / tan(Theta/2)|, which is several times that on any real road. Every
+	 * click in the gap between the two used to make a SECOND node inside the first's
+	 * junction: two overlapping junction polygons at the same Z, which is z-fighting and
+	 * not a solvable surface.
+	 *
+	 * Snapping rather than refusing is deliberate. It makes the overlap unrepresentable
+	 * instead of forbidden, the same move the mesh builder's weld map makes, and it leaves
+	 * no dead band where clicking does nothing.
+	 *
+	 * Zero restores the old fixed-radius behaviour, for a test that needs it.
+	 */
+	double JunctionSnapFactor = 1.0;
 };
 
 /**

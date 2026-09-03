@@ -1,5 +1,6 @@
 #include "Tool/RoadSnap.h"
 
+#include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
@@ -13,8 +14,17 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 	}
 
 	// Compared squared throughout, so a wide radius costs no square roots.
-	double BestSquared = Settings.NodeRadius * Settings.NodeRadius;
+	//
+	// The radius is PER NODE, not one global value, because a junction's pavement extends
+	// by HalfWidth + |R / tan(Theta/2)| - several times NodeRadius on any real road, and
+	// different at every node. A fixed radius left a band where the cursor was inside a
+	// junction and still resolved Free, which built a second node inside existing pavement:
+	// two junction polygons at one Z, which is a z-fight rather than a surface.
+	double BestSquared = TNumericLimits<double>::Max();
 	int32 Best = INDEX_NONE;
+
+	const double Fixed = Settings.NodeRadius;
+	const double FixedSquared = Fixed * Fixed;
 
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
@@ -25,7 +35,31 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 		}
 
 		const double DistanceSquared = FVector2D::DistSquared(Nodes[Index].Position, Cursor);
-		if (DistanceSquared <= BestSquared)
+		if (DistanceSquared >= BestSquared)
+		{
+			continue;
+		}
+
+		double RadiusSquared = FixedSquared;
+
+		// Solved ONLY when the fixed radius has already declined. The common case - a
+		// cursor sitting on a node - never pays for a junction solve at all, and the rest
+		// costs one SolveCuts per candidate node on a graph of tens of nodes.
+		if (Settings.JunctionSnapFactor > 0.0 && DistanceSquared > FixedSquared)
+		{
+			FRoadNodeId Id;
+			Id.Index = Index;
+			Id.Generation = Nodes[Index].Generation;
+
+			const double Reach = FRoadNetworkSolver::NodeReach(Network, Id)
+				* Settings.JunctionSnapFactor;
+			if (Reach > Fixed)
+			{
+				RadiusSquared = Reach * Reach;
+			}
+		}
+
+		if (DistanceSquared <= RadiusSquared)
 		{
 			BestSquared = DistanceSquared;
 			Best = Index;
@@ -101,8 +135,20 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 
 		// A split this close to an end leaves a stub the solver cannot trim: its two cut
 		// lines would cross, and the junction it feeds would fold through itself.
-		if (FVector2D::Distance(Point, EndA->Position) < Settings.MinSplitFromEndpoint
-			|| FVector2D::Distance(Point, EndB->Position) < Settings.MinSplitFromEndpoint)
+		//
+		// The real exclusion is the endpoint's own junction reach - a split inside that
+		// puts a new node in pavement that already exists, which is the same overlap the
+		// node rule above now absorbs. MinSplitFromEndpoint survives as the floor for an
+		// endpoint that paves nothing to reach with.
+		const double ClearA = FMath::Max(
+			Settings.MinSplitFromEndpoint,
+			FRoadNetworkSolver::NodeReach(Network, Segment.A) * Settings.JunctionSnapFactor);
+		const double ClearB = FMath::Max(
+			Settings.MinSplitFromEndpoint,
+			FRoadNetworkSolver::NodeReach(Network, Segment.B) * Settings.JunctionSnapFactor);
+
+		if (FVector2D::Distance(Point, EndA->Position) < ClearA
+			|| FVector2D::Distance(Point, EndB->Position) < ClearB)
 		{
 			continue;
 		}
