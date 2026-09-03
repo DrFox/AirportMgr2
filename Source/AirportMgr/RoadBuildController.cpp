@@ -330,7 +330,7 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	FToolContext Context;
 	Context.Target = Target;
 	Context.Limits = MakePlacementLimits();
-	Context.SnapRadius = PickRadius;
+	Context.SnapRadius = ToolPickRadius;
 	Context.bRemoveModifier = IsRemoveHeld();
 	Context.bInsertModifier =
 		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);

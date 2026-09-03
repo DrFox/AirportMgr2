@@ -43,6 +43,24 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double PickRadius = 150.0;
 
+	/**
+	 * How close, in uu, the cursor counts as "on" something a tool is asking about - a
+	 * guideline node to route from, a stand to pick up, an apron's first corner.
+	 *
+	 * SEPARATE from PickRadius, and larger. The two answer different questions and only
+	 * looked like one number by coincidence: PickRadius decides where a road NODE goes, and
+	 * wants to be tight or roads land where you did not click. This decides what the cursor
+	 * is POINTING AT, and 150 uu is a punishing target - a guideline node is a dimensionless
+	 * point on a road 200 uu wide, viewed from 8000 uu out, so the route tool read as doing
+	 * nothing at all when it was simply being missed.
+	 *
+	 * Road snapping no longer depends on this number anyway: a junction claims the cursor
+	 * out to its own pavement (FRoadSnapSettings::JunctionSnapFactor), so widening the fixed
+	 * radius here would only have made BARE nodes grabbier for no gain.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
+	double ToolPickRadius = 400.0;
+
 	/** How close a click must land to split an existing segment, in uu. Snap rule 2. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
 	double SegmentSnapRadius = 150.0;

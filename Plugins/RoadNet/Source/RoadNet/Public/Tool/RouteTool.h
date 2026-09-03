@@ -8,9 +8,13 @@
  * Routing: click a start, click a destination, watch a cube drive it.
  *
  * The only tool that BUILDS NOTHING. Every other one edits the airport; this one asks it a
- * question, which is why it is also the only one whose preview draws the guideline graph -
- * the thing being asked about is otherwise invisible, and a route drawn over an invisible
- * graph shows that a path exists while hiding every reason it went that way.
+ * question.
+ *
+ * It used to draw the guideline graph itself, which made the thing being asked about
+ * visible ONLY here - so a route drawn over an otherwise invisible graph showed that a path
+ * existed while hiding every reason it went that way, and nothing else could see the graph
+ * at all. GuidelineOverlay owns that now and draws it under every tool; this one draws only
+ * its own query.
  *
  * Two states and no more, so this carries a bool rather than the IRoadDrawState machine the
  * road and apron tools use: a second click always completes the query, and there is no
