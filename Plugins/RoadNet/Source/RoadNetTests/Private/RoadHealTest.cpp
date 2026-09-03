@@ -26,7 +26,14 @@ bool FRoadHealTest::RunTest(const FString& Parameters)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		const FRoadNodeId One = Net->AddNode(FVector2D(-4000.0, 1000.0));
-		const FRoadNodeId Two = Net->AddNode(FVector2D(-1500.0, 3000.0));
+		// Two approaches Four from the SOUTH-west rather than beside One.
+		//
+		// It used to sit at (-1500, 3000), which put both rejoins arriving at Four only
+		// 16.2 degrees apart - a hairpin, built by heal itself and never measured, because
+		// the corner a rejoin makes at the ANCHOR went unchecked until TooSharpAtEnd. The
+		// fixture was quietly asserting that heal may do the very thing MinTurnDegrees
+		// exists to forbid. The refusal is asserted on its own terms further down.
+		const FRoadNodeId Two = Net->AddNode(FVector2D(0.0, -5000.0));
 		const FRoadNodeId Three = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId Four = Net->AddNode(FVector2D(5000.0, 1500.0));
 		const FRoadNodeId North = Net->AddNode(FVector2D(4500.0, 4000.0));
@@ -50,6 +57,35 @@ bool FRoadHealTest::RunTest(const FString& Parameters)
 
 		// The anchor is not itself rejoined to anything - it keeps the roads it had.
 		TestFalse(TEXT("the anchor is not rejoined to itself"), Plan.Rejoin.Contains(Four));
+	}
+
+	// Heal REFUSES when the rejoin it would invent is itself a hairpin at the anchor.
+	//
+	// Two leaves approaching the anchor from nearly the same bearing is the case the
+	// fixture above used to contain by accident. Healing is not a licence to build a
+	// junction the build tool would have rejected, and Plan.Refusal already exists to say
+	// so - it simply had no way to learn about a corner at the far end.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FRoadNodeId One = Net->AddNode(FVector2D(-4000.0, 1000.0));
+		const FRoadNodeId Two = Net->AddNode(FVector2D(-1500.0, 3000.0));
+		const FRoadNodeId Three = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Four = Net->AddNode(FVector2D(5000.0, 1500.0));
+		const FRoadNodeId North = Net->AddNode(FVector2D(4500.0, 4000.0));
+		const FRoadNodeId East = Net->AddNode(FVector2D(9000.0, 2500.0));
+
+		Net->AddStraightSegment(One, Three, Profile);
+		Net->AddStraightSegment(Two, Three, Profile);
+		Net->AddStraightSegment(Three, Four, Profile);
+		Net->AddStraightSegment(Four, North, Profile);
+		Net->AddStraightSegment(Four, East, Profile);
+
+		const FRoadDeletionPlan Plan = RoadHeal::PlanNodeDeletion(*Net, Three, Limits);
+
+		TestFalse(TEXT("a heal that would build a 16 degree corner is refused"), Plan.bValid);
+		TestTrue(TEXT("and says the far end is what refused it"),
+			Plan.Refusal == ERoadPlacement::TooSharpAtEnd);
+		TestEqual(TEXT("a refused plan rejoins nothing"), Plan.Rejoin.Num(), 0);
 	}
 
 	// Degree 2 heals even when NEITHER end would be stranded. Removing a point from the

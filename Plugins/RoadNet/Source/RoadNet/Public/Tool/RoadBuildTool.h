@@ -22,10 +22,25 @@ struct FToolContext
 	/** The facade every mutation goes through, so every mutation is undoable. */
 	ARoadNetworkActor* Target = nullptr;
 
-	/** Where the cursor meets the road plane. */
+	/**
+	 * Where the cursor meets the road plane. THE RAW HIT - never the snapped position.
+	 *
+	 * The two are different answers to different questions and must not be folded into
+	 * one. Snap says where a ROAD NODE would go; Cursor says where the mouse is. A tool
+	 * that does not build roads - the route tool picking a guideline node, the stand tool
+	 * placing a pose, the apron tool closing an outline - wants the mouse, and reading a
+	 * road-snapped value silently applies road-building semantics to work that has none.
+	 *
+	 * This is not hypothetical. Guideline nodes sit on a segment's CUT LINE, which is
+	 * CutDistance from the road node, while a junction's snap reach is
+	 * CutDistance + HalfWidth - strictly further. So once the snap covered the junction,
+	 * hovering a guideline node moved Cursor onto the ROAD node CutDistance away, and the
+	 * route tool's pick - which uses SnapRadius, a smaller number - could never hit
+	 * anything again. Every junction-adjacent guideline node became unhoverable at once.
+	 */
 	FVector2D Cursor = FVector2D::ZeroVector;
 
-	/** What the snap chain made of that position. */
+	/** What the snap chain made of that position. Carried BESIDE Cursor, never into it. */
 	FRoadSnapResult Snap;
 
 	FRoadPlacementLimits Limits;
@@ -44,6 +59,20 @@ struct FToolContext
 
 	/** Shift: the gesture means insert without starting anything. */
 	bool bInsertModifier = false;
+
+	/**
+	 * Fill the cursor and the snap together, from the raw plane hit.
+	 *
+	 * Exists so the two cannot be conflated by a driver writing the assignments itself.
+	 * They were: one driver set Cursor to the raw hit and the other to Snap.Position, the
+	 * two behaved differently, and only one of them was right. A single function both call
+	 * is what stops that being a per-driver choice at all.
+	 */
+	void SetCursor(const FVector2D& PlaneHit, const FRoadSnapResult& InSnap)
+	{
+		Cursor = PlaneHit;
+		Snap = InSnap;
+	}
 };
 
 /**
