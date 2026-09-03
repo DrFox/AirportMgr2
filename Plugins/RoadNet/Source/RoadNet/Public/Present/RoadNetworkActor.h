@@ -180,6 +180,29 @@ public:
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex);
 
 	/**
+	 * Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE.
+	 *
+	 * The routing graph is derived from pavement and can therefore only connect what
+	 * pavement connects. This is how a connection is made that no road expresses - across
+	 * an apron, or to a stand whose lead-in found nothing.
+	 *
+	 * The edge is bDerived == false, so the builder leaves it alone, and carries both
+	 * endpoints' identities so every later rebuild re-attaches it. Both of those matter:
+	 * without the second it survives every rebuild connected to nothing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex);
+
+	/**
+	 * Remove a HAND-AUTHORED guideline edge. Refuses a derived one.
+	 *
+	 * Refuses rather than obeys, because the next rebuild would put a derived edge straight
+	 * back - which reads as the tool ignoring the click.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	bool DisconnectGuideline(int32 EdgeIndex);
+
+	/**
 	 * Index of the nearest live node within Radius of Where, or INDEX_NONE.
 	 *
 	 * A crude stand-in for the snap chain of section 7.4. Something has to let a click

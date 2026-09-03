@@ -22,6 +22,7 @@
 #include "Solve/RoadGeom.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadEditHistory.h"
+#include "Tool/GuidelineDrawTool.h"
 #include "Tool/RoadHeal.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -505,6 +506,93 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
 
 	Edit.Commit();
 	return true;
+}
+
+int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
+{
+	if (Network == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	const TArray<FGuidelineNode>& Nodes = Network->GetGuidelineNodes();
+	if (!Nodes.IsValidIndex(FromNodeIndex) || !Nodes.IsValidIndex(ToNodeIndex))
+	{
+		return INDEX_NONE;
+	}
+
+	FGuidelineNodeId From;
+	From.Index = FromNodeIndex;
+	From.Generation = Nodes[FromNodeIndex].Generation;
+
+	FGuidelineNodeId To;
+	To.Index = ToNodeIndex;
+	To.Generation = Nodes[ToNodeIndex].Generation;
+
+	if (FGuidelineDrawTool::Validate(*Network, From, To) != EGuidelineLink::Valid)
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectGuidelines refused: %s"),
+			FGuidelineDrawTool::Describe(FGuidelineDrawTool::Validate(*Network, From, To)));
+		return INDEX_NONE;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("link guidelines"));
+
+	FGuidelineEdge Edge;
+	Edge.A = From;
+	Edge.B = To;
+
+	// Straight, like a derived guideline on a straight segment: Control at the midpoint.
+	// A curve would need a gesture to author it and would render as a chord regardless.
+	Edge.Control = (Nodes[FromNodeIndex].Position + Nodes[ToNodeIndex].Position) * 0.5;
+
+	// EVERY class. A hand-drawn link exists because the graph is missing a connection, and
+	// guessing a narrower rule would make it silently useless to whoever needed it - with
+	// no way to tell, because a refusal to route looks the same as no link at all.
+	Edge.AllowedTraffic = FTrafficMask::All();
+	Edge.Direction = EGuidelineDir::Bidirectional;
+
+	// The player's, so the builder steps aside for it.
+	Edge.bDerived = false;
+
+	// And WHAT its ends are, not merely where they are now. Without this it survives every
+	// rebuild attached to nodes the new derivation abandoned - drawn, and routing nothing.
+	Edge.EndRefA = Nodes[FromNodeIndex].Origin;
+	Edge.EndRefB = Nodes[ToNodeIndex].Origin;
+
+	const FGuidelineEdgeId Added = Network->AddGuidelineEdge(MoveTemp(Edge));
+	return Added.IsSet() ? Added.Index : INDEX_NONE;
+}
+
+bool ARoadNetworkActor::DisconnectGuideline(int32 EdgeIndex)
+{
+	if (Network == nullptr)
+	{
+		return false;
+	}
+
+	const TArray<FGuidelineEdge>& Edges = Network->GetGuidelineEdges();
+	if (!Edges.IsValidIndex(EdgeIndex) || !Edges[EdgeIndex].bAlive)
+	{
+		return false;
+	}
+
+	// A derived edge belongs to the pavement, and the next rebuild would put it straight
+	// back. Obeying here would be indistinguishable from ignoring the click.
+	if (Edges[EdgeIndex].bDerived)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("DisconnectGuideline refused: edge %d is derived from a road, not hand-drawn"),
+			EdgeIndex);
+		return false;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("unlink guidelines"));
+
+	FGuidelineEdgeId Id;
+	Id.Index = EdgeIndex;
+	Id.Generation = Edges[EdgeIndex].Generation;
+	return Network->RemoveGuidelineEdge(Id);
 }
 
 int32 ARoadNetworkActor::FindNodeNear(FVector2D Where, double Radius) const
