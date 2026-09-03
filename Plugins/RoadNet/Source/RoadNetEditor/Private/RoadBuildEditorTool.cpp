@@ -256,10 +256,15 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 	Context.bRemoveModifier = bRemoveHeld;
 	Context.bInsertModifier = bInsertHeld;
 
-	Context.Cursor = Plane;
-
 	// The same snap chain the runtime tool uses, over the same graph. Resolved here rather
 	// than inside the tool so both drivers hand it the same shape of answer.
+	//
+	// Through SetCursor, like the runtime driver, so the raw hit and the snapped answer
+	// cannot drift into meaning the same thing in one driver and different things in the
+	// other - which they did, and only this one was right.
+	FRoadSnapResult Snapped;
+	Snapped.Position = Plane;
+
 	if (Target != nullptr && Target->Network != nullptr)
 	{
 		FRoadSnapSettings Settings;
@@ -267,12 +272,10 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 		Settings.SegmentRadius = Context.SnapRadius;
 
 		static const FRoadSnapChain Chain;
-		Context.Snap = Chain.Resolve(*Target->Network, Plane, Settings);
+		Snapped = Chain.Resolve(*Target->Network, Plane, Settings);
 	}
-	else
-	{
-		Context.Snap.Position = Plane;
-	}
+
+	Context.SetCursor(Plane, Snapped);
 
 	return Context;
 }

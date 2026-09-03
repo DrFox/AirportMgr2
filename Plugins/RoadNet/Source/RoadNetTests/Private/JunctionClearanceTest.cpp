@@ -11,13 +11,17 @@
 
 namespace
 {
+	// Prefixed because UE builds these files in UNITY: several test .cpp files become one
+	// translation unit, so two anonymous namespaces declaring NodeSnap collide with
+	// "already has a body" - which reads as a redefinition in a file that has none.
+
 	/** The PIE build tool's defaults: 200 uu wide, 100 uu fillet. */
-	URoadProfile* BuildToolProfile()
+	URoadProfile* ClearanceProfile()
 	{
 		return URoadProfile::MakeTransient(200.0, 100.0);
 	}
 
-	FRoadPlacementLimits DefaultLimits()
+	FRoadPlacementLimits ClearanceLimits()
 	{
 		FRoadPlacementLimits Limits;
 		Limits.MinSegmentLength = 250.0;
@@ -26,7 +30,7 @@ namespace
 	}
 
 	/** A snap result naming an existing node, as the node rule would produce. */
-	FRoadSnapResult NodeSnap(const URoadNetwork& Network, FRoadNodeId Node)
+	FRoadSnapResult ClearanceNodeSnap(const URoadNetwork& Network, FRoadNodeId Node)
 	{
 		FRoadSnapResult Out;
 		Out.Kind = ERoadSnapKind::Node;
@@ -66,7 +70,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 	//    this shares one function to prevent.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Profile = BuildToolProfile();
+		URoadProfile* Profile = ClearanceProfile();
 
 		const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId East   = Net->AddNode(FVector2D(4000.0, 0.0));
@@ -108,7 +112,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 	//    at the same Z, which is not a solvable surface, only a z-fight.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Profile = BuildToolProfile();
+		URoadProfile* Profile = ClearanceProfile();
 
 		const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId East   = Net->AddNode(FVector2D(4000.0, 0.0));
@@ -169,14 +173,14 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 	//    This one makes the corner now.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Profile = BuildToolProfile();
+		URoadProfile* Profile = ClearanceProfile();
 
 		// Target already has one arm heading due EAST.
 		const FRoadNodeId Target = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId TargetEast = Net->AddNode(FVector2D(4000.0, 0.0));
 		Net->AddStraightSegment(Target, TargetEast, Profile);
 
-		const FRoadPlacementLimits Limits = DefaultLimits();
+		const FRoadPlacementLimits Limits = ClearanceLimits();
 
 		// A start node placed so the new arm arrives at Target from just 10 degrees off
 		// that existing arm - a hairpin at Target, and nothing at the start to object.
@@ -186,7 +190,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 			const FRoadNodeId Start = Net->AddNode(From);
 
 			const ERoadPlacement Result =
-				RoadPlacement::Validate(*Net, Start, NodeSnap(*Net, Target), Limits);
+				RoadPlacement::Validate(*Net, Start, ClearanceNodeSnap(*Net, Target), Limits);
 
 			TestTrue(TEXT("a hairpin AT THE DESTINATION is refused"),
 				Result == ERoadPlacement::TooSharpAtEnd);
@@ -200,7 +204,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 			const FRoadNodeId Start = Net->AddNode(From);
 
 			const ERoadPlacement Result =
-				RoadPlacement::Validate(*Net, Start, NodeSnap(*Net, Target), Limits);
+				RoadPlacement::Validate(*Net, Start, ClearanceNodeSnap(*Net, Target), Limits);
 
 			TestTrue(TEXT("a wide corner at the destination is still allowed"),
 				Result == ERoadPlacement::Valid);
@@ -212,7 +216,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 	//    sharp as any other hairpin - and was equally unchecked.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Profile = BuildToolProfile();
+		URoadProfile* Profile = ClearanceProfile();
 
 		const FRoadNodeId West = Net->AddNode(FVector2D(-4000.0, 0.0));
 		const FRoadNodeId EastEnd = Net->AddNode(FVector2D(4000.0, 0.0));
@@ -228,7 +232,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 		Split.SegmentT = 0.5;
 
 		const ERoadPlacement Result =
-			RoadPlacement::Validate(*Net, Start, Split, DefaultLimits());
+			RoadPlacement::Validate(*Net, Start, Split, ClearanceLimits());
 
 		TestTrue(TEXT("arriving almost along a segment being split is refused"),
 			Result == ERoadPlacement::TooSharpAtEnd);
@@ -238,7 +242,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 	//    this the far-end rule could quietly refuse ordinary road building.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Profile = BuildToolProfile();
+		URoadProfile* Profile = ClearanceProfile();
 
 		const FRoadNodeId Start = Net->AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId Away  = Net->AddNode(FVector2D(-4000.0, 0.0));
@@ -249,7 +253,7 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 		Free.Position = FVector2D(4000.0, 0.0);
 
 		TestTrue(TEXT("a free end is never too sharp at the far end"),
-			RoadPlacement::Validate(*Net, Start, Free, DefaultLimits()) == ERoadPlacement::Valid);
+			RoadPlacement::Validate(*Net, Start, Free, ClearanceLimits()) == ERoadPlacement::Valid);
 	}
 
 	// 7. Every reason still describes itself. A blank string in the overlay is the same

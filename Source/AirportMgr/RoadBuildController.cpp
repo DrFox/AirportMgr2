@@ -327,8 +327,19 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
 	// from two searches that merely tend to agree.
-	ResolveSnap(Context.Snap);
-	Context.Cursor = Context.Snap.Position;
+	//
+	// Cursor is the RAW plane hit and the snap is carried BESIDE it - see
+	// FToolContext::SetCursor. This used to assign Context.Snap.Position to Cursor, which
+	// handed road-node semantics to every tool including the ones that place no road
+	// nodes: hovering a guideline node moved the cursor onto the junction it sits beside,
+	// and the route tool could never pick anything again.
+	FRoadSnapResult Snapped;
+	ResolveSnap(Snapped);
+
+	FVector2D PlaneHit = Snapped.Position;
+	CursorOnRoadPlane(PlaneHit);
+
+	Context.SetCursor(PlaneHit, Snapped);
 	return Context;
 }
 
