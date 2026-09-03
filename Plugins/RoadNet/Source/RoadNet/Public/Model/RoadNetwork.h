@@ -78,6 +78,15 @@ public:
 	FGuidelineEdgeId AddGuidelineEdge(FGuidelineEdge&& Edge);
 	bool RemoveGuidelineEdge(FGuidelineEdgeId Edge);
 
+	/**
+	 * Move an existing edge onto different endpoints, fixing incidence at all four nodes.
+	 *
+	 * Exists for re-resolution after a rebuild: a hand-authored edge outlives the nodes it
+	 * was drawn between, and must be re-pointed at the freshly derived ones rather than
+	 * deleted and re-added, which would change its handle and lose the player's edit.
+	 */
+	bool RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId NewA, FGuidelineNodeId NewB);
+
 	const FGuidelineNode* GetGuidelineNode(FGuidelineNodeId Node) const;
 	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);

@@ -261,6 +261,48 @@ bool URoadNetwork::RemoveGuidelineEdge(FGuidelineEdgeId Edge)
 	return RoadSlot::Remove<FGuidelineEdgeId>(GuidelineEdges, GuidelineEdgeFreeList, Edge);
 }
 
+bool URoadNetwork::RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId NewA,
+	FGuidelineNodeId NewB)
+{
+	FGuidelineEdge* Found = RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// Both new ends must be live BEFORE anything moves, for the same reason AddGuidelineEdge
+	// checks first: a half-applied relink leaves the graph inconsistent in a way nothing
+	// downstream can detect.
+	if (!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, NewA) ||
+		!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, NewB))
+	{
+		return false;
+	}
+
+	const FGuidelineNodeId OldA = Found->A;
+	const FGuidelineNodeId OldB = Found->B;
+
+	if (RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, OldA))
+	{
+		GuidelineNodes[OldA.Index].Incident.Remove(Edge);
+	}
+	if (RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, OldB))
+	{
+		GuidelineNodes[OldB.Index].Incident.Remove(Edge);
+	}
+
+	Found->A = NewA;
+	Found->B = NewB;
+
+	GuidelineNodes[NewA.Index].Incident.AddUnique(Edge);
+	if (NewB != NewA)
+	{
+		GuidelineNodes[NewB.Index].Incident.AddUnique(Edge);
+	}
+
+	return true;
+}
+
 bool URoadNetwork::RemoveGuidelineNode(FGuidelineNodeId Node)
 {
 	if (!RoadSlot::IsValid<FGuidelineNodeId>(GuidelineNodes, Node))
