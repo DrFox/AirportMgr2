@@ -334,7 +334,12 @@ TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshol
 		// Beyond the point the aircraft could have slowed to taxi speed, and still on the
 		// strip. An exit before that is one it cannot take, which is the whole reason
 		// MinDistance is a parameter rather than zero.
-		if (Distance < MinDistance || Distance > Length)
+		// The far end is INCLUDED, with the runway's own half width of slack past it. The
+		// commonest airport anyone draws has its taxiway joined to the END of the runway, and
+		// the guideline node there sits wherever the junction cut put it - which can be a
+		// little beyond the road node the length was measured to. Excluding it leaves that
+		// airport with no exits at all.
+		if (Distance < MinDistance || Distance > Length + HalfWidth)
 		{
 			continue;
 		}

@@ -1976,7 +1976,11 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 	// 2. THE EARLIEST EXIT IT COULD TAKE. Asked BEFORE arming, so an arrival is never flown
 	//    to a runway it has no way off - the same discipline as the departure refusing a
 	//    strip it cannot leave.
-	const double Needed = FLandingRun::RequiredLandingDistance(Ground, Approach);
+	// The distance the model actually flies, plus its margin - see FLandingRun. The closed
+	// form this replaces demanded 649 m of a 297 m landing and refused every runway on the
+	// field, which is what "pressing 7 does nothing" turned out to be.
+	const double Needed =
+		FLandingRun::RequiredLandingDistance(Ground, Climb, Approach) * FLandingRun::LandingMargin;
 
 	// The runway's own width bounds what counts as ON it, the same figure RunwayExtentAt
 	// uses for its reach - so "on the runway" means one thing across the whole model.
@@ -1997,6 +2001,16 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 
 	const TArray<FGuidelineNodeId> Exits =
 		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, Needed);
+
+	// Reported whether or not this succeeds, because a refusal that does not say which of
+	// these was the problem is a feature that "does nothing". Every one of these numbers was
+	// missing from the first refusal message and every one of them was needed to diagnose it.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop. %d node(s) on the strip, "
+			 "%d of them usable as exits. %d stand(s) on the airport."),
+		*RunwayDesignator::ToPairText(Direction), Length, Needed,
+		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, 0.0).Num(),
+		Exits.Num(), Network->GetEntities().Num());
 
 	// 3. WHICH STAND. Shortest route, the user's rule - and taken from the FIRST exit that
 	//    reaches anything, because an aircraft takes the earliest turn-off it can rather than
@@ -2037,14 +2051,41 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 
 	if (!Best.IsValid())
 	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("Arrival refused: %d exit(s) past %.0f uu, none of them reaching a stand."),
-			Exits.Num(), Needed);
+		if (Length < Needed)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to "
+					 "stop. Draw a longer runway."),
+				Length, Needed);
+		}
+		else if (Exits.Num() == 0)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: nothing joins the runway beyond %.0f uu, so there is "
+					 "no exit this aircraft could take. Connect a taxiway further down it."),
+				Needed);
+		}
+		else
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: %d usable exit(s), but no route from any of them to a "
+					 "stand. Check the taxiway reaches the stands."),
+				Exits.Num());
+		}
 		return false;
 	}
 
+	// WHERE IT LEAVES THE RUNWAY, handed to the landing so the rollout carries on to the
+	// taxiway at taxi speed instead of stopping wherever the braking ran out. Without this
+	// the follower starts at the exit node and the aircraft jumps to it.
+	double VacateAt = Length;
+	if (const FGuidelineNode* ExitNode = Network->GetGuidelineNode(BestExit))
+	{
+		VacateAt = FVector2D::DotProduct(ExitNode->Position - Threshold, Direction);
+	}
+
 	FRoadAgent Agent;
-	if (!Agent.Arrival.Start(Threshold, Direction, Length, Ground, Climb, Approach))
+	if (!Agent.Arrival.Start(Threshold, Direction, Length, Ground, Climb, Approach, VacateAt))
 	{
 		// FLandingRun has already logged why. Nothing spawns: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.

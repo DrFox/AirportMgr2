@@ -3,35 +3,79 @@
 DEFINE_LOG_CATEGORY_STATIC(LogLanding, Log, All);
 
 double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
-	const FApproachPerformance& InApproach)
+	const FClimbPerformance& InClimb, const FApproachPerformance& InApproach)
 {
-	const double Vref = InGround.Landing.SpeedCap;
-	const double Brake = InGround.Landing.Decel;
-	if (Vref <= 0.0 || Brake <= 0.0 || !InApproach.IsSet())
+	// FLOWN, NOT ESTIMATED. See the header: a closed form is a second description of the
+	// model, and this one disagreed with it by more than a factor of two - it charged the
+	// flare's whole horizontal run against the runway, when most of that run happens before
+	// the threshold, over the approach.
+	//
+	// Begin rather than Start, because Start's whole job is to apply the answer this is
+	// computing. A probe refused by the check it exists to feed would return zero and make
+	// every runway acceptable.
+	FLandingRun Probe;
+	// A long but FINITE runway. TNumericLimits<double>::Max() works arithmetically and puts
+	// 1.8e308 into the armed log line, which is 300 characters of noise in the one place
+	// somebody reads to find out why an arrival was refused.
+	constexpr double UnboundedRunway = 1.0e9;
+	if (!Probe.Begin(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
+		UnboundedRunway, InGround, InClimb, InApproach, 0.0))
 	{
 		return 0.0;
 	}
 
-	// THE AIR DISTANCE. On the glideslope alone the flare height would be flown off in
-	// FlareHeight / tan(slope). The flare stretches that, because arresting the descent is
-	// precisely a refusal to keep descending at the glideslope rate - so doubling it is a
-	// deliberate over-estimate rather than a fudge, and it is the direction a refusal wants
-	// to err in.
-	const double Slope = FMath::Tan(FMath::DegreesToRadians(InApproach.GlideslopeDegrees));
-	const double AirDistance = Slope > 0.0 ? 2.0 * (InApproach.FlareHeight / Slope) : 0.0;
+	FVector2D At = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	double Altitude = 0.0;
+	double Pitch = 0.0;
 
-	// THE BRAKING ROLL, to taxi speed rather than to a stop: an aircraft that has slowed to
-	// taxi speed has vacated, and demanding room to stop dead would refuse runways that are
-	// perfectly usable.
-	const double TaxiCap = FMath::Max(InGround.Taxi.SpeedCap, 0.0);
-	const double Excess = FMath::Max(Vref * Vref - TaxiCap * TaxiCap, 0.0);
+	// A fixed step, so the answer does not depend on the frame rate of whoever asks. Fine
+	// enough that the flare is integrated properly; the guard is against a set of numbers
+	// that never touches down at all rather than against slow convergence.
+	constexpr double Step = 1.0 / 60.0;
+	constexpr int32 MaxSteps = 60 * 600;
 
-	return AirDistance + Excess / (2.0 * Brake);
+	for (int32 Guard = 0; Guard < MaxSteps; ++Guard)
+	{
+		if (!Probe.Advance(Step, At, Heading, Altitude, Pitch))
+		{
+			break;
+		}
+		if (Probe.Phase == ELandingPhase::Vacated)
+		{
+			break;
+		}
+	}
+
+	// Travelled is measured from the THRESHOLD and is negative on final, so this is exactly
+	// the runway consumed and nothing else.
+	return FMath::Max(Probe.Travelled, 0.0);
 }
 
 bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
 	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-	const FApproachPerformance& InApproach)
+	const FApproachPerformance& InApproach, double InVacateAt)
+{
+	Phase = ELandingPhase::Vacated;
+
+	const double Needed = RequiredLandingDistance(InGround, InClimb, InApproach) * LandingMargin;
+	if (InRunwayLength < Needed)
+	{
+		UE_LOG(LogLanding, Warning,
+			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s "
+				 "(%.0f flown plus a %.0f%% margin)."),
+			InRunwayLength, Needed, InGround.Landing.SpeedCap,
+			Needed / LandingMargin, (LandingMargin - 1.0) * 100.0);
+		return false;
+	}
+
+	return Begin(InThreshold, InDirection, InRunwayLength, InGround, InClimb, InApproach,
+		InVacateAt);
+}
+
+bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirection,
+	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
+	const FApproachPerformance& InApproach, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
 
@@ -48,14 +92,7 @@ bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 		return false;
 	}
 
-	const double Needed = RequiredLandingDistance(InGround, InApproach);
-	if (InRunwayLength < Needed)
-	{
-		UE_LOG(LogLanding, Warning,
-			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s."),
-			InRunwayLength, Needed, InGround.Landing.SpeedCap);
-		return false;
-	}
+	VacateAt = InVacateAt;
 
 	Threshold = InThreshold;
 	Direction = InDirection.GetSafeNormal();
@@ -81,8 +118,8 @@ bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Phase = ELandingPhase::Approach;
 
 	UE_LOG(LogLanding, Log,
-		TEXT("Arrival armed: %.0f uu runway, %.0f needed, Vref %.0f uu/s, joining %.0f uu out."),
-		RunwayLength, Needed, Speed, Approach.FinalDistance());
+		TEXT("Arrival armed: %.0f uu runway, vacating at %.0f, Vref %.0f uu/s, joining %.0f uu out."),
+		RunwayLength, VacateAt, Speed, Approach.FinalDistance());
 	return true;
 }
 
@@ -194,7 +231,11 @@ bool FLandingRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& O
 		// what a nosewheel touching down looks like.
 		Pitch = FMath::Max(Pitch - Approach.FlareRateDegPerSec * DeltaSeconds, 0.0);
 
-		if (Speed <= Floor)
+		// SLOWED IS NOT VACATED. It has to reach the taxiway, and where the braking ran out
+		// is not where the taxiway is - on this airport the only exit is at the far END of
+		// the runway, so an aircraft that called itself vacated the moment it hit taxi speed
+		// would hand over hundreds of metres short and jump to the exit node.
+		if (Speed <= Floor && Travelled >= VacateAt)
 		{
 			Phase = ELandingPhase::Vacated;
 			UE_LOG(LogLanding, Log,

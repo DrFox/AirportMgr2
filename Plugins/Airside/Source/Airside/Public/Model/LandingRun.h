@@ -73,6 +73,18 @@ struct AIRSIDE_API FLandingRun
 	/** Radians. Fixed on the runway heading throughout - an arrival is already lined up. */
 	UPROPERTY() double Heading = 0.0;
 
+	/**
+	 * Where the aircraft leaves the runway, uu from the threshold.
+	 *
+	 * IT KEEPS ROLLING AT TAXI SPEED UNTIL IT GETS THERE. Braking to taxi speed and stopping
+	 * being "vacated" was the first version, and it puts the aircraft wherever the physics
+	 * ran out - which is not where the taxiway is. The follower then starts at the exit node
+	 * and the aircraft jumps to it.
+	 *
+	 * Zero means "as soon as it has slowed down", which is what a probe wants.
+	 */
+	UPROPERTY() double VacateAt = 0.0;
+
 	/** Above the runway surface, uu. */
 	UPROPERTY() double Altitude = 0.0;
 
@@ -89,7 +101,7 @@ struct AIRSIDE_API FLandingRun
 	 */
 	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
 		const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-		const FApproachPerformance& InApproach);
+		const FApproachPerformance& InApproach, double InVacateAt = 0.0);
 
 	/**
 	 * Flies one frame. False once the arrival is over, leaving the outputs untouched.
@@ -110,13 +122,38 @@ struct AIRSIDE_API FLandingRun
 	}
 
 	/**
-	 * Runway needed from the threshold to stop at taxi speed, uu.
+	 * Runway needed PAST THE THRESHOLD to stop at taxi speed, uu.
 	 *
-	 * Two parts, the mirror of FTakeoffRun::RequiredRoll's two: the air distance from the
-	 * flare height to touchdown, and then the braking roll. Both over-estimate, which is the
-	 * safe direction for a figure a refusal is based on - the alternative is an aircraft
-	 * that accepts a runway and runs off the end of it.
+	 * MEASURED BY FLYING IT, not estimated. This flies a whole arrival on a runway long
+	 * enough that it cannot be refused, and reports where it vacated - so the figure the
+	 * refusal uses and the distance the aircraft actually covers are the same number by
+	 * construction, and cannot drift apart.
+	 *
+	 * That is the point. The closed form it replaces charged the flare's whole horizontal
+	 * run against the runway, but a flare from thirty feet on a three-degree slope BEGINS
+	 * about 172 m before the threshold, over the approach lights. It demanded 649 m of a
+	 * model that uses 297 m, which refused every runway on a 500 m field - and the refusal
+	 * read as "pressing 7 does nothing".
+	 *
+	 * Cheap enough to do per dispatch: a few thousand steps of arithmetic on three structs,
+	 * with no world and no allocation.
 	 */
 	static double RequiredLandingDistance(const FGroundPerformance& InGround,
-		const FApproachPerformance& InApproach);
+		const FClimbPerformance& InClimb, const FApproachPerformance& InApproach);
+
+	/**
+	 * The safety factor on that measurement.
+	 *
+	 * A refusal wants to err toward refusing: accepting a runway and running off the end is
+	 * the failure worth avoiding, and a landing is flown to a touchdown zone rather than to
+	 * the numbers. Applied where the figure is USED rather than inside the measurement, so
+	 * the measurement stays a measurement.
+	 */
+	static constexpr double LandingMargin = 1.25;
+
+private:
+	/** Arms without the runway-length check, so RequiredLandingDistance can fly a probe. */
+	bool Begin(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
+		const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
+		const FApproachPerformance& InApproach, double InVacateAt);
 };

@@ -837,6 +837,12 @@ public:
 	 */
 	int32 SurfaceTriangleCountForTest() const;
 
+	/** Agents alive right now, for Airside.Present.ArrivalDispatch. */
+	int32 AgentCountForTest() const { return Agents.Num(); }
+
+	/** The stand definition this actor would use, for the same test. */
+	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
+
 private:
 
 	URoadProfile* ResolveProfile();

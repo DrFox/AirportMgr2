@@ -196,18 +196,34 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    The mirror of FTakeoffRun's refusal, and the user chose it over a go-around: a
 	//    go-around is a second flight phase and doubles this.
 	{
-		const double Needed = FLandingRun::RequiredLandingDistance(Ground, Approach);
+		const double Needed = FLandingRun::RequiredLandingDistance(Ground, Climb, Approach);
 		TestTrue(FString::Printf(TEXT("stopping needs a real distance (%.0f uu)"), Needed),
 			Needed > 0.0);
+
+		// THE FIGURE IS THE ONE ACTUALLY FLOWN. This is the assertion that would have caught
+		// the closed form: it demanded 649 m of a landing that uses 297, refused every runway
+		// on a 500 m field, and read to the user as the key doing nothing.
+		//
+		// Measured against the trace above rather than against a constant, so it keeps
+		// checking the two agree if any of the approach numbers are retuned.
+		FLandingRun Flown;
+		Flown.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Ground, Climb, Approach);
+		const FLandingTrace FlownTrace = FlyLanding(Flown);
+		TestEqual(FString::Printf(
+			TEXT("the required distance is what it flies: %.0f uu needed, %.0f used"),
+			Needed, FlownTrace.VacatedAt),
+			Needed, FlownTrace.VacatedAt, 1.0);
 
 		FLandingRun Run;
 		TestFalse(TEXT("a runway shorter than that is refused"),
 			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5,
 				Ground, Climb, Approach));
 
-		TestTrue(TEXT("and one longer than it is not"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 1.1,
-				Ground, Climb, Approach));
+		// Comfortably past the safety margin - a landing is flown to a touchdown zone, not
+		// to the numbers, so the refusal deliberately wants more than the bare measurement.
+		TestTrue(TEXT("and one with room to spare is not"),
+			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
+				Needed * FLandingRun::LandingMargin * 1.1, Ground, Climb, Approach));
 	}
 
 	// 8. AN AIRFRAME WITH NO LANDING FIGURES DECLINES rather than flying a nonsense - and
