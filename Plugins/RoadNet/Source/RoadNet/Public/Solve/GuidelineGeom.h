@@ -36,6 +36,20 @@ namespace GuidelineGeom
 		const FVector2D& A, const FVector2D& Control, const FVector2D& B, double T);
 
 	/**
+	 * Unit direction of travel at T. The ANALYTIC derivative of Eval, not a second sampler.
+	 *
+	 * Deliberately derived from the same three control points Eval uses, so it cannot
+	 * disagree with the curve it describes - the single-sampling rule for this graph is
+	 * about there being one evaluator, and a tangent measured by differencing sampled
+	 * points would be a second one that drifts on exactly the bends that matter.
+	 *
+	 * Falls back to the chord when the derivative degenerates, which happens when the
+	 * control point coincides with an end.
+	 */
+	ROADNET_API FVector2D Tangent(
+		const FVector2D& A, const FVector2D& Control, const FVector2D& B, double T);
+
+	/**
 	 * True when Control sits on the midpoint, which is how the builder spells "straight".
 	 *
 	 * Tested against the midpoint rather than against collinearity: a control point that

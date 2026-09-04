@@ -54,7 +54,92 @@ namespace
 		FVector2D Dir = FVector2D(1.0, 0.0);
 		ETraversalClass Class = ETraversalClass::GroundVehicle;
 		double MaxWingspan = 0.0;
+
+		/** Sweep radius for this stand's painted line - see RadiusForCode. */
+		double Radius = 2500.0;
 	};
+
+	/**
+	 * Minimum centreline curve radius, in uu, for an ICAO aerodrome code letter.
+	 *
+	 * A taxi line is PAINTED, and the pilot follows it with the nose wheel - so its radius
+	 * belongs to the STAND, sized for the largest aircraft that stand admits, and never to
+	 * whichever aircraft happens to be taxiing. One line, one curve, every type follows it.
+	 *
+	 * PROVENANCE, stated plainly as UAircraftType does for its door stations: these are
+	 * standard aerodrome design values by code letter, not figures lifted from a specific
+	 * Annex 14 edition. They are what to check first if a real layout looks wrong - but the
+	 * SHAPE of the rule, radius by code letter, is how aerodromes are actually dimensioned.
+	 */
+	double RadiusForCode(FName Code)
+	{
+		const FString Letter = Code.ToString().ToUpper();
+
+		if (Letter == TEXT("A")) { return 1500.0; }
+		if (Letter == TEXT("B")) { return 2000.0; }
+		if (Letter == TEXT("C")) { return 2500.0; }
+		if (Letter == TEXT("D")) { return 4000.0; }
+		if (Letter == TEXT("E")) { return 5000.0; }
+		if (Letter == TEXT("F")) { return 6000.0; }
+
+		// No code, or one nobody recognises. Code C is the commonest stand in the world, and
+		// erring to Code F instead would put a 60 m curve on a light-aircraft apron.
+		return 2500.0;
+	}
+
+	/**
+	 * The curve parameter Offset of ARC LENGTH away from Param, walked on the sampled
+	 * polyline. Negative walks backwards. Clamped to the curve's own ends.
+	 *
+	 * Walked on the SAMPLES rather than integrated in closed form, because the samples are
+	 * what every other consumer of this graph measures - the search costs them, the overlay
+	 * draws them, a follower walks them. An exact arc length here would be more accurate
+	 * and would disagree with all three.
+	 */
+	double ParamAtArcOffset(const TArray<FVector2D>& Points, double Param, double Offset)
+	{
+		if (Points.Num() < 2)
+		{
+			return FMath::Clamp(Param, 0.0, 1.0);
+		}
+
+		const int32 Spans = Points.Num() - 1;
+		const double Scaled = FMath::Clamp(Param, 0.0, 1.0) * Spans;
+		int32 Index = FMath::Clamp(static_cast<int32>(Scaled), 0, Spans - 1);
+		double Fraction = Scaled - Index;
+
+		double Remaining = FMath::Abs(Offset);
+		const bool bForward = Offset >= 0.0;
+
+		while (Remaining > 0.0)
+		{
+			const double SpanLength = FVector2D::Distance(Points[Index], Points[Index + 1]);
+			const double Available = bForward ? SpanLength * (1.0 - Fraction) : SpanLength * Fraction;
+
+			if (SpanLength <= 0.0 || Available >= Remaining)
+			{
+				Fraction += (bForward ? 1.0 : -1.0) * (SpanLength > 0.0 ? Remaining / SpanLength : 0.0);
+				break;
+			}
+
+			Remaining -= Available;
+			if (bForward)
+			{
+				if (Index + 1 >= Spans) { Fraction = 1.0; break; }
+				++Index;
+				Fraction = 0.0;
+			}
+			else
+			{
+				if (Index == 0) { Fraction = 0.0; break; }
+				--Index;
+				Fraction = 1.0;
+			}
+		}
+
+		return GuidelineGeom::ParamAtSample(Index, FMath::Clamp(Fraction, 0.0, 1.0), Points.Num());
+	}
+
 }
 
 int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
@@ -84,6 +169,14 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			? Instance.Definition->DesignAircraft->Footprint.Wingspan
 			: 0.0;
 
+		// The same design aircraft decides how wide the painted line sweeps. Its CODE
+		// LETTER, not its span: aerodromes are dimensioned by code letter, and the line is
+		// laid once for the largest aircraft the stand admits.
+		const double StandRadius = RadiusForCode(
+			Instance.Definition->DesignAircraft != nullptr
+				? Instance.Definition->DesignAircraft->Code
+				: FName());
+
 		// The stop position first. It is not an anchor - see FEntityInstance::PoseNode -
 		// but it needs a lead-in for exactly the same reason, and it is the one an
 		// AIRCRAFT is routed to.
@@ -103,6 +196,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			Link.Dir = FVector2D(FMath::Cos(Out), FMath::Sin(Out));
 			Link.Class = ETraversalClass::Aircraft;
 			Link.MaxWingspan = StandWingspan;
+			Link.Radius = StandRadius;
 			Pending.Add(Link);
 		}
 
@@ -139,6 +233,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			Link.Dir = FVector2D(FMath::Cos(Heading), FMath::Sin(Heading));
 			Link.Class = TraversalForRole(Declared->Role);
 			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
+			Link.Radius = StandRadius;
 			Pending.Add(Link);
 		}
 	}
@@ -228,49 +323,139 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 		const FVector2D PositionA = EndA->Position;
 		const FVector2D PositionB = EndB->Position;
 
-		FVector2D Mid;
-		FVector2D ControlLeft;
-		FVector2D ControlRight;
-		GuidelineGeom::Split(PositionA, Original.Control, PositionB, BestParam, Mid, ControlLeft, ControlRight);
+		// WHERE THE LEAD-IN RAY STRIKES IS THE CORNER, NOT THE JOIN.
+		//
+		// Joining here is what produced a hard turn: the ray meets the taxiway at whatever
+		// angle the stand happens to face, and a stand square to the taxiway makes it 90
+		// degrees. A curve cannot fix that in place - a quadratic's end tangents both point
+		// at its control, so being tangent to the lead-in AND to the taxiway would put the
+		// control exactly here, which is the straight line again. The join has to MOVE.
+		const FVector2D Corner =
+			GuidelineGeom::Eval(PositionA, Original.Control, PositionB, BestParam);
+		const FVector2D TaxiDir =
+			GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, BestParam);
 
-		FGuidelineNodeId Join;
-		if (FVector2D::Distance(Mid, PositionA) <= LeadInWeldTolerance)
+		TArray<FVector2D> Curve;
+		GuidelineGeom::Sample(PositionA, Original.Control, PositionB, Curve);
+
+		// How far back along each line the tangent points sit, for a fillet of this radius.
+		// The lead-in makes two corners with the taxiway - theta one way, 180 - theta the
+		// other - and the SHARPER one sizes the offset, so it gets at least its radius and
+		// the shallower one simply sweeps more gently.
+		const double Cosine = FMath::Clamp(
+			FVector2D::DotProduct(-Link.Dir, TaxiDir), -1.0, 1.0);
+		const double Theta = FMath::Acos(Cosine);
+		const double Sharper = FMath::Min(Theta, UE_DOUBLE_PI - Theta);
+
+		double Offset = 0.0;
+		if (Sharper > UE_DOUBLE_KINDA_SMALL_NUMBER)
 		{
-			// The lead-in met the guideline at its own end. Splitting here would leave a
-			// stub edge shorter than the weld tolerance, which is geometry nobody wants and
-			// a zero-length cost the search would have to tolerate.
-			Join = Original.A;
+			Offset = Link.Radius / FMath::Tan(Sharper * 0.5);
 		}
-		else if (FVector2D::Distance(Mid, PositionB) <= LeadInWeldTolerance)
+
+		// It has to fit: on the lead-in, and on the taxiway BOTH ways, with a weld
+		// tolerance of room left over so no split produces a stub.
+		const double LeadRoom = FVector2D::Distance(Link.At, Corner) - LeadInWeldTolerance;
+		const double TotalLength = GuidelineGeom::PolylineLength(Curve);
+		const double Behind = TotalLength * BestParam - LeadInWeldTolerance;
+		const double Ahead = TotalLength * (1.0 - BestParam) - LeadInWeldTolerance;
+
+		Offset = FMath::Min(Offset, FMath::Min(LeadRoom, FMath::Min(Behind, Ahead)));
+
+		FGuidelineNodeId LeadEnd;
+		TArray<FGuidelineNodeId> SweepEnds;
+
+		if (Offset <= LeadInWeldTolerance)
 		{
-			Join = Original.B;
+			// No room to sweep - a stand crammed against a taxiway end, or one whose
+			// lead-in is barely longer than the weld tolerance. Fall back to the hard join
+			// rather than emit folded geometry: an ugly corner is recoverable, an inverted
+			// arc is not. The junction solver clamps its fillets for the same reason.
+			FGuidelineNodeId Join;
+			if (FVector2D::Distance(Corner, PositionA) <= LeadInWeldTolerance)
+			{
+				Join = Original.A;
+			}
+			else if (FVector2D::Distance(Corner, PositionB) <= LeadInWeldTolerance)
+			{
+				Join = Original.B;
+			}
+			else
+			{
+				FVector2D Mid, ControlLeft, ControlRight;
+				GuidelineGeom::Split(PositionA, Original.Control, PositionB, BestParam,
+					Mid, ControlLeft, ControlRight);
+
+				Join = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
+
+				FGuidelineEdge Left = Original;
+				Left.B = Join;
+				Left.Control = ControlLeft;
+
+				FGuidelineEdge Right = Original;
+				Right.A = Join;
+				Right.Control = ControlRight;
+
+				Network.RemoveGuidelineEdge(BestEdge);
+				Network.AddGuidelineEdge(MoveTemp(Left));
+				Network.AddGuidelineEdge(MoveTemp(Right));
+			}
+
+			LeadEnd = Join;
 		}
 		else
 		{
-			Join = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
+			// Cut the taxiway at BOTH tangent points and keep the piece between them: an
+			// aircraft taxiing PAST the stand still needs a way through.
+			const double ParamBack = ParamAtArcOffset(Curve, BestParam, -Offset);
+			const double ParamFwd  = ParamAtArcOffset(Curve, BestParam, +Offset);
 
-			FGuidelineEdge Left = Original;
-			Left.B = Join;
-			Left.Control = ControlLeft;
+			FVector2D BackAt, ControlToBack, ControlFromBack;
+			GuidelineGeom::Split(PositionA, Original.Control, PositionB, ParamBack,
+				BackAt, ControlToBack, ControlFromBack);
 
-			FGuidelineEdge Right = Original;
-			Right.A = Join;
-			Right.Control = ControlRight;
+			// The forward cut expressed in the REMAINING piece's own parameter, because
+			// that is the curve it is now being taken from.
+			const double ParamFwdInRest = (ParamFwd - ParamBack) / FMath::Max(1.0 - ParamBack, UE_DOUBLE_SMALL_NUMBER);
 
-			// Removed before the halves are added, so the graph is never momentarily
-			// carrying the whole guideline and both of its parts.
+			FVector2D FwdAt, ControlMiddle, ControlTail;
+			GuidelineGeom::Split(BackAt, ControlFromBack, PositionB, ParamFwdInRest,
+				FwdAt, ControlMiddle, ControlTail);
+
+			const FGuidelineNodeId BackNode = Network.AddGuidelineNode(BackAt, /*bDerived=*/true);
+			const FGuidelineNodeId FwdNode = Network.AddGuidelineNode(FwdAt, /*bDerived=*/true);
+
+			FGuidelineEdge Head = Original;
+			Head.B = BackNode;
+			Head.Control = ControlToBack;
+
+			FGuidelineEdge Middle = Original;
+			Middle.A = BackNode;
+			Middle.B = FwdNode;
+			Middle.Control = ControlMiddle;
+
+			FGuidelineEdge Tail = Original;
+			Tail.A = FwdNode;
+			Tail.Control = ControlTail;
+
 			Network.RemoveGuidelineEdge(BestEdge);
-			Network.AddGuidelineEdge(MoveTemp(Left));
-			Network.AddGuidelineEdge(MoveTemp(Right));
+			Network.AddGuidelineEdge(MoveTemp(Head));
+			Network.AddGuidelineEdge(MoveTemp(Middle));
+			Network.AddGuidelineEdge(MoveTemp(Tail));
+
+			// The straight lead-in now stops short of the corner; the sweeps take over.
+			const FVector2D LeadEndAt = Corner - Link.Dir * Offset;
+			LeadEnd = Network.AddGuidelineNode(LeadEndAt, /*bDerived=*/true);
+
+			SweepEnds.Add(BackNode);
+			SweepEnds.Add(FwdNode);
 		}
 
+		// The painted lead-in itself: still straight, because it is. Only the ENTRY sweeps.
 		FGuidelineEdge Lead;
 		Lead.A = Link.Node;
-		Lead.B = Join;
-
-		// Straight: the painted lead-in line is straight, and the control point is the
-		// midpoint because that is how this graph spells "no bend".
-		Lead.Control = (Link.At + Mid) * 0.5;
+		Lead.B = LeadEnd;
+		Lead.Control = (Link.At + Network.GetGuidelineNode(LeadEnd)->Position) * 0.5;
 
 		Lead.AllowedTraffic = FTrafficMask::Only(Link.Class);
 		Lead.AllowedTraffic.Add(ETraversalClass::Emergency);
@@ -278,8 +463,31 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 		Lead.Width = Original.Width;
 		Lead.MaxWingspan = Link.MaxWingspan;
 		Lead.bDerived = true;
-
 		Network.AddGuidelineEdge(MoveTemp(Lead));
+
+		// One sweep to each side, so the stand is reachable whichever way an aircraft
+		// arrives. With only one, an approach from the other side is routed round a hairpin
+		// at the tangent point - the same corner, moved a few metres rather than removed.
+		//
+		// Control AT THE CORNER, which is what makes each arc tangent to the lead-in at one
+		// end and to the taxiway at the other: a quadratic's end tangents point at its
+		// control, and both tangent points sit the same distance from it. Exactly the
+		// construction RoadGuidelineBuilder uses for a junction turn path.
+		for (const FGuidelineNodeId SweepEnd : SweepEnds)
+		{
+			FGuidelineEdge Sweep;
+			Sweep.A = LeadEnd;
+			Sweep.B = SweepEnd;
+			Sweep.Control = Corner;
+			Sweep.AllowedTraffic = FTrafficMask::Only(Link.Class);
+			Sweep.AllowedTraffic.Add(ETraversalClass::Emergency);
+			Sweep.Direction = EGuidelineDir::Bidirectional;
+			Sweep.Width = Original.Width;
+			Sweep.MaxWingspan = Link.MaxWingspan;
+			Sweep.bDerived = true;
+			Network.AddGuidelineEdge(MoveTemp(Sweep));
+		}
+
 		++Joined;
 	}
 
