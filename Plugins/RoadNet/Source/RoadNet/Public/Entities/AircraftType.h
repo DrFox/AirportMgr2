@@ -49,6 +49,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> ServicePoints;
 
+	/**
+	 * How this airframe moves on the ground: taxi speed, creep speed, turn rate.
+	 *
+	 * On the TYPE and not on the taxiway, which is the opposite of where the lead-in sweep
+	 * lives and deliberately so - see FTaxiPerformance for why the two go different ways.
+	 */
+	UPROPERTY(EditAnywhere) FTaxiPerformance Taxi;
+
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
 
@@ -76,4 +84,28 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "RoadNet")
 	static void Build737(UAircraftType* Type);
+
+	/**
+	 * A PA-46-500TP Meridian - the airframe that is actually on screen.
+	 *
+	 * Authored because SM_PiperMeridian is what ARoadAgentActor draws, so an agent taxiing
+	 * with an A320's turn rate is a Piper moving like an airliner. It is also the FALLBACK
+	 * when a route starts somewhere with no design aircraft, which is most of the graph.
+	 *
+	 * Its LOCAL ORIGIN IS THE MAIN-GEAR AXLE, not the nose gear this class otherwise
+	 * specifies, and that is a deviation with a reason rather than an oversight - see the
+	 * comment at the footprint.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "RoadNet")
+	static void BuildPiperMeridian(UAircraftType* Type);
+
+	/**
+	 * The Meridian's ground performance on its own, without needing a UAircraftType.
+	 *
+	 * Exists because the FALLBACK needs it: a route that starts on a plain taxiway node has
+	 * no design aircraft to ask, and the aircraft on screen is a Piper regardless. Making
+	 * the caller build a transient asset to learn three numbers would have put those three
+	 * numbers at the call site instead, which is how a figure ends up written twice.
+	 */
+	static FTaxiPerformance PiperMeridianTaxi();
 };

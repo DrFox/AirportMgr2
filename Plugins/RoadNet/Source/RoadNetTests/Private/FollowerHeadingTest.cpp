@@ -17,6 +17,21 @@ namespace
 			FMath::UnwindRadians(ToRadians - FromRadians)));
 	}
 
+	/**
+	 * Taxi performance with the turn rate deliberately WIDE OPEN.
+	 *
+	 * This test measures the HEADING FUNCTION - that PointAtDistance interpolates across a
+	 * span instead of holding the segment's own direction. A real turn-rate limit would
+	 * smooth that staircase back out, so this test would pass on the very bug it exists to
+	 * catch. The limit is measured on its own, in RoadNet.Model.TurnRate.
+	 */
+	FTaxiPerformance HeadingTestUnlimitedTaxi()
+	{
+		FTaxiPerformance Taxi;
+		Taxi.MaxTurnRateDegPerSec = 1.0e6;
+		return Taxi;
+	}
+
 	/** A quarter circle of radius R, as the sampled polyline a swept lead-in produces. */
 	TArray<FVector2D> QuarterCircle(double Radius, int32 Samples)
 	{
@@ -155,7 +170,7 @@ bool FFollowerHeadingTest::RunTest(const FString& Parameters)
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
 
 		FRouteFollower Follower;
-		Follower.Start(Plan, /*Speed=*/1000.0);
+		Follower.Start(Plan, HeadingTestUnlimitedTaxi());
 
 		// Sixty frames a second, which is the rate the jerk was actually seen at.
 		constexpr double Frame = 1.0 / 60.0;

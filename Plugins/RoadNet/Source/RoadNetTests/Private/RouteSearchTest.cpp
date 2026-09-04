@@ -205,7 +205,12 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 
 		FRouteFollower Follower;
-		Follower.Start(Plan, /*Speed=*/1000.0);
+		// Turn rate wide open: this asks whether the follower walks the SAME GEOMETRY the
+		// search costed, and an agent slowing for corners would turn a clean "arrives in N
+		// steps" into a question about turn rates. That is measured in RoadNet.Model.TurnRate.
+		FTaxiPerformance Taxi;
+		Taxi.MaxTurnRateDegPerSec = 1.0e6;
+		Follower.Start(Plan, Taxi);
 
 		FVector2D At;
 		double Heading = 0.0;

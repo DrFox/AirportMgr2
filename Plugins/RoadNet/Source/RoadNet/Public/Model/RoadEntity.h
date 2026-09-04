@@ -63,6 +63,69 @@ struct ROADNET_API FEntityFootprint
 	bool IsSet() const { return Wingspan > 0.0 && NoseX > TailX; }
 };
 
+/**
+ * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
+ *
+ * The distinction matters and this project has already had to make it once, the other way
+ * round: painted geometry - a stand's lead-in sweep, a taxiway fillet - is sized for the
+ * LARGEST type admitted and is deliberately not per-aircraft, because concrete cannot be
+ * repoured per movement. A turn RATE is the opposite. Nothing about the taxiway decides
+ * how fast a nosewheel can be slewed; the airframe does, and an A320 and a Piper differ by
+ * a factor of two and a half.
+ *
+ * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. Entities/
+ * depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
+ *
+ * Distances are uu per second, and a uu is a centimetre.
+ */
+USTRUCT(BlueprintType)
+struct ROADNET_API FTaxiPerformance
+{
+	GENERATED_BODY()
+
+	/**
+	 * Normal taxi speed on a straight. 1000 is 10 m/s, a brisk taxi.
+	 *
+	 * The defaults on this struct are a deliberately GENERIC airframe, not any real one.
+	 * A real type's figures live in its builder - see UAircraftType::PiperMeridianTaxi -
+	 * so that no aircraft's numbers are written down in two places and free to drift.
+	 * They are non-zero rather than zero so a caller that forgets to author them gets an
+	 * aircraft that moves sluggishly, which is visible, rather than one that never turns.
+	 */
+	UPROPERTY(EditAnywhere) double TaxiSpeed = 1000.0;
+
+	/**
+	 * The slowest this type can be kept rolling - NOT zero, and that is the point.
+	 *
+	 * A wheeled aircraft cannot yaw without rolling: a prop or a fan produces thrust along
+	 * the airframe, and a nosewheel steers the direction that thrust is taken in. It has no
+	 * way to pivot on the spot. So a turn that cannot be made at speed is made at a crawl,
+	 * which is what a pilot riding the brakes against idle thrust actually does.
+	 *
+	 * Without this floor the speed law below reaches zero at a sharp corner and the
+	 * aircraft stops dead and spins - the one thing an aeroplane provably cannot do.
+	 */
+	UPROPERTY(EditAnywhere) double MinTaxiSpeed = 50.0;
+
+	/**
+	 * How fast the nose can be swung, in DEGREES per second.
+	 *
+	 * Degrees because this is authored and read by hand, matching the convention the
+	 * service-point builders use; FRouteFollower converts once, on Start.
+	 *
+	 * It is v/R at the tightest turn the steering allows, taken at the speed a pilot would
+	 * take it - so it is derived from two published figures rather than dialled in until it
+	 * looked right. See BuildPiperMeridian for that arithmetic.
+	 */
+	UPROPERTY(EditAnywhere) double MaxTurnRateDegPerSec = 10.0;
+
+	/** False when nothing was authored, so a caller can fall back rather than freeze an agent. */
+	bool IsSet() const
+	{
+		return TaxiSpeed > 0.0 && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
+	}
+};
+
 /** A connection point between an entity and the guideline graph, in the entity's local space. */
 USTRUCT(BlueprintType)
 struct ROADNET_API FEntityAnchor

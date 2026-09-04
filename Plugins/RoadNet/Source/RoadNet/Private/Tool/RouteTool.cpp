@@ -13,14 +13,18 @@
 namespace
 {
 	/**
-	 * The wingspan to route with: that of the stand the journey STARTS at, or 0.
+	 * The aircraft to route AS: the design aircraft of the stand the journey STARTS at.
 	 *
 	 * "An A320 leaves stand 5 for stand 12" is the query worth asking, and the aircraft in
 	 * it is the one the origin stand was designed for. Taking it from the DESTINATION
 	 * instead would make every route trivially fit, which is the one answer that can never
 	 * be wrong and never be useful.
+	 *
+	 * Returns the TYPE rather than the wingspan it used to. Both things the dispatch needs -
+	 * how wide it is and how it moves - are facts about the same aeroplane, and looking the
+	 * same stand up twice to get them separately is how the two come to disagree.
 	 */
-	double WingspanAtNode(const URoadNetwork& Network, FGuidelineNodeId Node)
+	const UAircraftType* AircraftAtNode(const URoadNetwork& Network, FGuidelineNodeId Node)
 	{
 		for (const FEntityInstance& Instance : Network.GetEntities())
 		{
@@ -32,19 +36,38 @@ namespace
 
 			if (Instance.PoseNode == Node)
 			{
-				return Instance.Definition->DesignAircraft->Footprint.Wingspan;
+				return Instance.Definition->DesignAircraft;
 			}
 
 			for (const FResolvedAnchor& Anchor : Instance.ResolvedAnchors)
 			{
 				if (Anchor.Node == Node)
 				{
-					return Instance.Definition->DesignAircraft->Footprint.Wingspan;
+					return Instance.Definition->DesignAircraft;
 				}
 			}
 		}
 
-		return 0.0;
+		return nullptr;
+	}
+
+	/**
+	 * How the thing being routed moves on the ground.
+	 *
+	 * Falls back to a Meridian rather than to the struct's generic defaults, because a
+	 * Meridian is what ARoadAgentActor puts on screen. Most of the graph is plain taxiway
+	 * with no stand to ask, so this fallback is the common path, not the edge case - and an
+	 * agent that looked like a Piper and turned like an airliner would be wrong nearly
+	 * everywhere rather than nearly nowhere.
+	 */
+	FTaxiPerformance TaxiFor(const UAircraftType* Aircraft)
+	{
+		if (Aircraft != nullptr && Aircraft->Taxi.IsSet())
+		{
+			return Aircraft->Taxi;
+		}
+
+		return UAircraftType::PiperMeridianTaxi();
 	}
 
 	FString DescribeFailure(ERouteResult Result)
@@ -103,8 +126,10 @@ void FRouteTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	LastPlan = Context.Target->FindRoute(
-		StartNode, Picked, Class, WingspanAtNode(*Context.Target->Network, StartNode));
+	const UAircraftType* Aircraft = AircraftAtNode(*Context.Target->Network, StartNode);
+	const double Wingspan = Aircraft != nullptr ? Aircraft->Footprint.Wingspan : 0.0;
+
+	LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Wingspan);
 
 	bHasStart = false;
 
@@ -112,7 +137,7 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	{
 		// Refused in an editor world, deliberately - the route still draws there. See
 		// ARoadNetworkActor::DispatchAgent.
-		Context.Target->DispatchAgent(LastPlan, Speed);
+		Context.Target->DispatchAgent(LastPlan, TaxiFor(Aircraft));
 	}
 }
 

@@ -160,8 +160,12 @@ public:
 	 *
 	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
 	 * so are never saved, and the build tools this is driven from are used at design time.
+	 *
+	 * Takes the AIRFRAME's ground performance rather than a bare speed. How fast a thing
+	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
+	 * them across two arguments invited a caller to pass one and default the other.
 	 */
-	bool DispatchAgent(const FRoutePlan& Plan, double Speed);
+	bool DispatchAgent(const FRoutePlan& Plan, const FTaxiPerformance& Taxi);
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "RoadNet")
