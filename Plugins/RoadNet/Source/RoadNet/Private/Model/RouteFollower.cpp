@@ -2,12 +2,21 @@
 
 #include "Solve/GuidelineGeom.h"
 
-void FRouteFollower::Start(const FRoutePlan& InPlan, const FTaxiPerformance& InTaxi)
+void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround)
 {
 	Plan = InPlan;
 	Travelled = 0.0;
-	Taxi = InTaxi;
-	Speed = InTaxi.TaxiSpeed;
+	Ground = InGround;
+
+	// FROM REST. An aeroplane on a stand is stopped, and snapping to taxi speed on the first
+	// frame is the same defect as the corner this class was just taught about - an
+	// acceleration no airframe has - only at the one moment the player is certain to be
+	// looking, because they just dispatched it.
+	Speed = 0.0;
+
+	// The whole route costed before the first frame. See FSpeedProfile: once braking is
+	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
+	Profile.Build(Plan.Polyline, Ground);
 
 	// Seeded from the line, not left at zero. An agent that starts facing due east and
 	// slews to its actual heading pirouettes on the stand the instant it is dispatched -
@@ -47,7 +56,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double
 
 	// Unwound first, so a turn across the +/-PI seam is taken the short way round rather
 	// than very nearly all the way about.
-	const double MaxStep = FMath::DegreesToRadians(Taxi.MaxTurnRateDegPerSec) * DeltaSeconds;
+	const double MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
 	const double Step = FMath::Clamp(Error, -MaxStep, MaxStep);
 	Heading = FMath::UnwindRadians(Heading + Step);
 
@@ -57,18 +66,31 @@ bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double
 	// a few percent off the speed of every agent on every gentle bend for nothing.
 	const double Crab = FMath::RadiansToDegrees(FMath::Abs(Error - Step));
 
-	// SPEED IS WHAT GIVES. The aircraft is on the painted line by construction - position
-	// comes from the polyline and nothing here touches it - so when the geometry demands a
-	// turn the airframe cannot make, the only remaining freedom is how fast it takes it.
-	// Slowing is also what a pilot does, and it settles: the yaw a curve demands is v times
-	// curvature, so losing speed lowers the demand until the two meet.
+	// TWO THINGS DECIDE THE TARGET SPEED, and they have different jobs.
 	//
-	// The floor is NOT zero, and that is physics rather than taste. A prop or a fan makes
-	// thrust along the airframe and the nosewheel only steers where that thrust is taken;
-	// there is no way to pivot standing still. At zero this law would park an agent at a
-	// sharp corner for ever - a deadlock, and a lie about what an aeroplane can do.
+	// The PROFILE is the plan: it knows what is coming and is the only reason the aircraft
+	// is ever slow BEFORE a corner rather than after it. It is also the only one that can
+	// bring the aircraft to a stop, at the destination.
+	//
+	// The CRAB TERM is the feedback: it reacts to the line the aircraft is actually being
+	// given. It should almost never bind - if the profile has done its job the crab stays
+	// near zero on anything but a genuine corner - but it is what makes "the nose stays
+	// within CrabAtMinSpeedDegrees of the line" a property of this loop rather than a
+	// prediction that happens to come true. A plan alone would have nothing to notice with.
+	//
+	// It floors at MinTaxiSpeed and the profile does not, which is what lets the aircraft
+	// creep through a turn but still stop when it has arrived.
 	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
-	Speed = FMath::Max(Taxi.MinTaxiSpeed, Taxi.TaxiSpeed * Slowing);
+	const double CrabLimit = FMath::Max(Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap * Slowing);
+
+	const double Target = FMath::Min(Profile.LimitAt(Travelled), CrabLimit);
+
+	// AND THE TARGET IS APPROACHED, NOT TAKEN. Speed used to be assigned outright, so
+	// meeting a corner cost 920 uu/s in a single frame - 552 m/s2, fifty-six g. Thrust and
+	// brakes are separate figures because they are not equal: wheel brakes beat a propeller.
+	Speed = Target > Speed
+		? FMath::Min(Target, Speed + Ground.Taxi.Accel * DeltaSeconds)
+		: FMath::Max(Target, Speed - Ground.Taxi.Decel * DeltaSeconds);
 
 	OutHeading = Heading;
 	return true;

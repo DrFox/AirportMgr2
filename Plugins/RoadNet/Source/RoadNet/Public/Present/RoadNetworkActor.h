@@ -165,7 +165,7 @@ public:
 	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
 	 * them across two arguments invited a caller to pass one and default the other.
 	 */
-	bool DispatchAgent(const FRoutePlan& Plan, const FTaxiPerformance& Taxi);
+	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground);
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "RoadNet")

@@ -113,9 +113,14 @@ void UAircraftType::BuildA320(UAircraftType* Type)
 	// direction quickly, and a tiller is worked gently because the mains track well inside
 	// the nose. Roughly a third of the Piper's rate, which is the whole reason this is on
 	// the type: the same corner is a different manoeuvre for the two.
-	Type->Taxi.TaxiSpeed = 800.0;
-	Type->Taxi.MinTaxiSpeed = 50.0;
-	Type->Taxi.MaxTurnRateDegPerSec = 8.0;
+	Type->Ground.Taxi.SpeedCap = 800.0;
+	Type->Ground.MinTaxiSpeed = 50.0;
+	Type->Ground.MaxTurnRateDegPerSec = 8.0;
+
+	// Seventy tonnes moving on idle thrust: it gets under way slowly and is braked gently,
+	// because a firm application on a taxiway throws the cabin about.
+	Type->Ground.Taxi.Accel = 50.0;
+	Type->Ground.Taxi.Decel = 150.0;
 }
 
 void UAircraftType::Build737(UAircraftType* Type)
@@ -152,9 +157,9 @@ void UAircraftType::Build737(UAircraftType* Type)
 	AddPoint(Type, TEXT("DoorR1"), -150.0, 190.0, -90.0, EServiceRole::Crew);
 
 	// Longer than the A320 and steered the same way, so it turns no faster.
-	Type->Taxi.TaxiSpeed = 800.0;
-	Type->Taxi.MinTaxiSpeed = 50.0;
-	Type->Taxi.MaxTurnRateDegPerSec = 8.0;
+	Type->Ground.Taxi.SpeedCap = 800.0;
+	Type->Ground.MinTaxiSpeed = 50.0;
+	Type->Ground.MaxTurnRateDegPerSec = 8.0;
 }
 
 void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
@@ -202,12 +207,12 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// keep out. Nothing consumes them yet either. HasUsableServiceIds passes on an empty
 	// array, which is the honest answer: no ids, no duplicate ids.
 
-	Type->Taxi = PiperMeridianTaxi();
+	Type->Ground = PiperMeridianGround();
 }
 
-FTaxiPerformance UAircraftType::PiperMeridianTaxi()
+FGroundPerformance UAircraftType::PiperMeridianGround()
 {
-	FTaxiPerformance Taxi;
+	FGroundPerformance Ground;
 
 	// TURN RATE, derived rather than dialled in.
 	//
@@ -219,17 +224,30 @@ FTaxiPerformance UAircraftType::PiperMeridianTaxi()
 	//
 	// So it is two published figures and one piece of ramp practice. If it looks wrong on
 	// screen, the thing to argue with is one of those three rather than this number.
-	Taxi.MaxTurnRateDegPerSec = 20.0;
+	Ground.MaxTurnRateDegPerSec = 20.0;
 
 	// 10 m/s is 19 kt: fast for a real taxi, and the speed this project has used since the
 	// cube. Left alone so this change is about the TURN and nothing else.
-	Taxi.TaxiSpeed = 1000.0;
+	Ground.Taxi.SpeedCap = 1000.0;
 
-	// 0.8 m/s, about 1.6 kt - a slow walk. Idle thrust against brakes. See FTaxiPerformance:
+	// 0.8 m/s, about 1.6 kt - a slow walk. Idle thrust against brakes. See FGroundPerformance:
 	// the floor exists because an aeroplane cannot yaw while stopped.
-	Taxi.MinTaxiSpeed = 80.0;
+	Ground.MinTaxiSpeed = 80.0;
 
-	return Taxi;
+	// COMFORTABLE figures, not maximum-performance ones. A Meridian's PT6A can shove it
+	// along far harder than this and its brakes can stop it far shorter - on dry concrete
+	// the tyres give out somewhere near 6 m/s2 - but nobody taxis an aeroplane like that,
+	// and the thing being modelled here is a pilot moving about an airport.
+	//
+	//   1.0 m/s2 up: rest to taxi speed in ten seconds.
+	//   2.0 m/s2 down: a twenty-five metre stop from taxi speed.
+	//
+	// Down is the larger because wheel brakes beat a propeller, which is true of every
+	// aeroplane and is why FGroundRegime keeps the two apart rather than carrying one rate.
+	Ground.Taxi.Accel = 100.0;
+	Ground.Taxi.Decel = 200.0;
+
+	return Ground;
 }
 
 #undef LOCTEXT_NAMESPACE

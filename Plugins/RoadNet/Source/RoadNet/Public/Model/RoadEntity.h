@@ -64,6 +64,39 @@ struct ROADNET_API FEntityFootprint
 };
 
 /**
+ * One POWER SETTING: what the airframe does when it is being flown a particular way.
+ *
+ * Taxi, take-off and landing are three different machines as far as motion is concerned -
+ * an aircraft that accelerates onto a runway at its taxi rate never gets airborne - so the
+ * numbers are grouped by the regime they belong to rather than flattened onto the airframe
+ * where a caller would have to remember which one it was holding.
+ *
+ * ONLY TAXI EXISTS TODAY, and deliberately. A Takeoff or Landing field here would be
+ * authored numbers that nothing reads, which is the failure this codebase has shipped three
+ * times over - see CLAUDE.md. They become fields the day something flies, and the shape is
+ * already right for that.
+ *
+ * Braking is here alongside thrust because both are "how fast can this change speed", and
+ * the two are not equal: wheel brakes beat a propeller, which is why Decel is the larger.
+ */
+USTRUCT(BlueprintType)
+struct ROADNET_API FGroundRegime
+{
+	GENERATED_BODY()
+
+	/** How hard it can speed up, uu per second squared. 100 is 1 m/s2. */
+	UPROPERTY(EditAnywhere) double Accel = 100.0;
+
+	/** How hard it can slow down. Larger than Accel: brakes beat thrust. */
+	UPROPERTY(EditAnywhere) double Decel = 200.0;
+
+	/** The speed this regime works up to, uu per second. 1000 is 10 m/s. */
+	UPROPERTY(EditAnywhere) double SpeedCap = 1000.0;
+
+	bool IsSet() const { return Accel > 0.0 && Decel > 0.0 && SpeedCap > 0.0; }
+};
+
+/**
  * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
  *
  * The distinction matters and this project has already had to make it once, the other way
@@ -76,53 +109,50 @@ struct ROADNET_API FEntityFootprint
  * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. Entities/
  * depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
  *
- * Distances are uu per second, and a uu is a centimetre.
+ * Distances are uu, and a uu is a centimetre.
  */
 USTRUCT(BlueprintType)
-struct ROADNET_API FTaxiPerformance
+struct ROADNET_API FGroundPerformance
 {
 	GENERATED_BODY()
 
-	/**
-	 * Normal taxi speed on a straight. 1000 is 10 m/s, a brisk taxi.
-	 *
-	 * The defaults on this struct are a deliberately GENERIC airframe, not any real one.
-	 * A real type's figures live in its builder - see UAircraftType::PiperMeridianTaxi -
-	 * so that no aircraft's numbers are written down in two places and free to drift.
-	 * They are non-zero rather than zero so a caller that forgets to author them gets an
-	 * aircraft that moves sluggishly, which is visible, rather than one that never turns.
-	 */
-	UPROPERTY(EditAnywhere) double TaxiSpeed = 1000.0;
+	/** Moving about the airport. The only regime there is yet - see FGroundRegime. */
+	UPROPERTY(EditAnywhere) FGroundRegime Taxi;
 
 	/**
-	 * The slowest this type can be kept rolling - NOT zero, and that is the point.
+	 * The slowest this type can be kept rolling WHILE STEERING - NOT zero, and that is the
+	 * point.
 	 *
 	 * A wheeled aircraft cannot yaw without rolling: a prop or a fan produces thrust along
 	 * the airframe, and a nosewheel steers the direction that thrust is taken in. It has no
 	 * way to pivot on the spot. So a turn that cannot be made at speed is made at a crawl,
 	 * which is what a pilot riding the brakes against idle thrust actually does.
 	 *
-	 * Without this floor the speed law below reaches zero at a sharp corner and the
-	 * aircraft stops dead and spins - the one thing an aeroplane provably cannot do.
+	 * Not a floor on speed in general: an aircraft parked at its destination is stopped.
+	 * This bounds only what a TURN may slow it to.
 	 */
 	UPROPERTY(EditAnywhere) double MinTaxiSpeed = 50.0;
 
 	/**
 	 * How fast the nose can be swung, in DEGREES per second.
 	 *
+	 * Outside the regime because it is a fact about the STEERING rather than about a power
+	 * setting - the same nosewheel, at the same speed, slews at the same rate whatever the
+	 * throttle is doing.
+	 *
 	 * Degrees because this is authored and read by hand, matching the convention the
 	 * service-point builders use; FRouteFollower converts once, on Start.
 	 *
 	 * It is v/R at the tightest turn the steering allows, taken at the speed a pilot would
 	 * take it - so it is derived from two published figures rather than dialled in until it
-	 * looked right. See BuildPiperMeridian for that arithmetic.
+	 * looked right. See UAircraftType::PiperMeridianGround for that arithmetic.
 	 */
 	UPROPERTY(EditAnywhere) double MaxTurnRateDegPerSec = 10.0;
 
 	/** False when nothing was authored, so a caller can fall back rather than freeze an agent. */
 	bool IsSet() const
 	{
-		return TaxiSpeed > 0.0 && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
+		return Taxi.IsSet() && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
 	}
 };
 

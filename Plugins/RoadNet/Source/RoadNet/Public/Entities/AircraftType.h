@@ -50,12 +50,12 @@ public:
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> ServicePoints;
 
 	/**
-	 * How this airframe moves on the ground: taxi speed, creep speed, turn rate.
+	 * How this airframe moves on the ground: power settings, creep speed, turn rate.
 	 *
 	 * On the TYPE and not on the taxiway, which is the opposite of where the lead-in sweep
-	 * lives and deliberately so - see FTaxiPerformance for why the two go different ways.
+	 * lives and deliberately so - see FGroundPerformance for why the two go different ways.
 	 */
-	UPROPERTY(EditAnywhere) FTaxiPerformance Taxi;
+	UPROPERTY(EditAnywhere) FGroundPerformance Ground;
 
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
@@ -107,5 +107,5 @@ public:
 	 * the caller build a transient asset to learn three numbers would have put those three
 	 * numbers at the call site instead, which is how a figure ends up written twice.
 	 */
-	static FTaxiPerformance PiperMeridianTaxi();
+	static FGroundPerformance PiperMeridianGround();
 };

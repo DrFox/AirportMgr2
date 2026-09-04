@@ -60,14 +60,14 @@ namespace
 	 * agent that looked like a Piper and turned like an airliner would be wrong nearly
 	 * everywhere rather than nearly nowhere.
 	 */
-	FTaxiPerformance TaxiFor(const UAircraftType* Aircraft)
+	FGroundPerformance GroundFor(const UAircraftType* Aircraft)
 	{
-		if (Aircraft != nullptr && Aircraft->Taxi.IsSet())
+		if (Aircraft != nullptr && Aircraft->Ground.IsSet())
 		{
-			return Aircraft->Taxi;
+			return Aircraft->Ground;
 		}
 
-		return UAircraftType::PiperMeridianTaxi();
+		return UAircraftType::PiperMeridianGround();
 	}
 
 	FString DescribeFailure(ERouteResult Result)
@@ -137,7 +137,7 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	{
 		// Refused in an editor world, deliberately - the route still draws there. See
 		// ARoadNetworkActor::DispatchAgent.
-		Context.Target->DispatchAgent(LastPlan, TaxiFor(Aircraft));
+		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft));
 	}
 }
 

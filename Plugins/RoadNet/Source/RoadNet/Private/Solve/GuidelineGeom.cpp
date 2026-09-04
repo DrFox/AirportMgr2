@@ -182,6 +182,26 @@ namespace GuidelineGeom
 		}
 	}
 
+	void VertexHeadings(
+		const TArray<FVector2D>& Points, int32 Vertex,
+		double& OutArriving, double& OutLeaving)
+	{
+		if (!Points.IsValidIndex(Vertex) || Points.Num() < 2)
+		{
+			return;
+		}
+
+		const FVector2D Arriving = VertexDirection(Points, Vertex, /*bLeaving=*/false);
+		const FVector2D Leaving = VertexDirection(Points, Vertex, /*bLeaving=*/true);
+		if (Arriving.IsNearlyZero() || Leaving.IsNearlyZero())
+		{
+			return;
+		}
+
+		OutArriving = FMath::Atan2(Arriving.Y, Arriving.X);
+		OutLeaving = FMath::Atan2(Leaving.Y, Leaving.X);
+	}
+
 	bool PointAtDistance(
 		const TArray<FVector2D>& Points, double Distance,
 		FVector2D& OutPosition, double& OutHeading)
