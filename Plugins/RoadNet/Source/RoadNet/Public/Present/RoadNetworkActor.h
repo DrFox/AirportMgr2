@@ -475,16 +475,19 @@ public:
 	/**
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly
 	 * five times the road's width in segment length before its fillet has room to be a
-	 * curve rather than a clamped-away stub, so this is sized for roads drawn by hand at
-	 * a few thousand uu a click. Airport-realistic widths belong in a URoadProfile asset
-	 * assigned to Profile above, where the segment lengths are planned rather than
-	 * clicked.
+	 * curve rather than a clamped-away stub.
+	 *
+	 * 23 m and a 15 m fillet - a real taxiway, matching the debug gallery - since a real
+	 * airframe arrived. At the old 2 m the Piper's 13.1 m wingspan was six times the width
+	 * of the road it was taxiing down, which reads as a broken model rather than as a
+	 * placeholder road. Roads must now be drawn a few thousand uu a click to avoid the
+	 * solver clamping their fillets away, which is what an airport is anyway.
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "1.0"))
-	double FallbackWidth = 200.0;
+	double FallbackWidth = 2300.0;
 
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
-	double FallbackFilletRadius = 100.0;
+	double FallbackFilletRadius = 1500.0;
 
 	UPROPERTY(VisibleAnywhere, Category = "RoadNet")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
