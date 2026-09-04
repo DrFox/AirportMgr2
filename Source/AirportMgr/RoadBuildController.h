@@ -274,7 +274,15 @@ private:
 	 * BeginPlay compares them and complains, which is the cheapest thing that turns that
 	 * from invisible into obvious.
 	 */
-	static constexpr int32 ToolKeyCount = 4;
+	/**
+	 * How many number keys are bound to tools. MUST equal Tools.Num().
+	 *
+	 * Checked at startup and logged as an error, because a tool with no key is unreachable
+	 * and a key with no tool does nothing - and neither shows up as anything but a tool that
+	 * "does not work". It was 4 against 5 tools for as long as the guideline tool has
+	 * existed, so the guard was reporting a real mismatch that was in the guard itself.
+	 */
+	static constexpr int32 ToolKeyCount = 6;
 
 	void SelectTool(int32 Index);
 	void SelectRoadTool()  { SelectTool(0); }
@@ -291,6 +299,7 @@ private:
 	 * the startup banner - are listed together in BeginPlay for that reason.
 	 */
 	void SelectGuidelineTool() { SelectTool(4); }
+	void SelectRunwayTool() { SelectTool(5); }
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

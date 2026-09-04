@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Engine/StaticMesh.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Present/RoadAgentActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -8,7 +10,20 @@
 namespace
 {
 	// Prefixed against the UNITY build - these test files share one translation unit.
-	const TCHAR* AgentMeshPath = TEXT("/Game/RoadNet/Aircraft/SM_PiperMeridian.SM_PiperMeridian");
+
+	/**
+	 * The airframe, from the configured content set rather than a path written here.
+	 *
+	 * A literal path in this file would be a ninth copy of the mistake the content set
+	 * exists to remove: it would keep passing after a content move only until it did not,
+	 * and it would fail as "the airframe is the wrong size" rather than "it is somewhere
+	 * else now". Null when nothing is configured, which the caller reports as a skip.
+	 */
+	UStaticMesh* AgentActorTestAirframe()
+	{
+		const UAirsideContent* Content = UAirsideSettings::GetContent();
+		return Content != nullptr ? Content->AgentMesh.LoadSynchronous() : nullptr;
+	}
 
 	/** Published PA-46-500TP wingspan, 13.110 m, in Unreal units. */
 	constexpr double PiperWingspanUU = 1311.0;
@@ -30,7 +45,7 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 	//    wingspan, so an airframe that re-exports at a different scale must fail loudly
 	//    rather than quietly making all of those numbers wrong.
 	{
-		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, AgentMeshPath);
+		UStaticMesh* Mesh = AgentActorTestAirframe();
 		if (TestNotNull(TEXT("the Piper airframe asset loads"), Mesh))
 		{
 			const FBox Bounds = Mesh->GetBoundingBox();
@@ -73,6 +88,13 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		}
 
 		constexpr double SurfaceZ = 3.0;
+
+		// DRESSED FIRST, which is the contract now. The airframe used to be resolved by path
+		// in the constructor, so a bare agent arrived wearing it; it is pushed in by whoever
+		// spawns the agent instead, because a path in C++ is a reference the editor cannot
+		// fix up when content moves. An undressed agent is the placeholder cube - asserted
+		// below, because the lift SetPose applies depends on which of the two it is.
+		Agent->SetAirframe(AgentActorTestAirframe());
 		Agent->SetPose(FVector2D(1200.0, -400.0), FMath::DegreesToRadians(30.0), SurfaceZ);
 
 		const FVector At = Agent->GetActorLocation();
@@ -80,7 +102,18 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and at the position it was given"), At.X, 1200.0);
 		TestEqual(TEXT("on both axes"), At.Y, -400.0);
 
-		// Heading is yaw from +X, which is why the airframe had to be imported nose-along-X.
+			// And an UNDRESSED one is lifted, because the cube's pivot is at its centre while the
+		// airframe's is on the ground. Getting this backwards flies the aircraft a metre above
+		// the taxiway, which reads as a physics bug rather than as the arithmetic it is.
+		ARoadAgentActor* Bare = NewObject<ARoadAgentActor>(GetTransientPackage());
+		if (TestNotNull(TEXT("a second agent constructs"), Bare))
+		{
+			Bare->SetPose(FVector2D::ZeroVector, 0.0, SurfaceZ);
+			TestTrue(TEXT("an agent with no airframe stands on the cube's lift"),
+				Bare->GetActorLocation().Z > SurfaceZ);
+		}
+
+	// Heading is yaw from +X, which is why the airframe had to be imported nose-along-X.
 		TestTrue(TEXT("heading becomes yaw"),
 			FMath::IsNearlyEqual(Agent->GetActorRotation().Yaw, 30.0, 0.01));
 	}

@@ -4,12 +4,13 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Debug/RoadDebugDraw.h"
 #include "DrawDebugHelpers.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
-#include "UObject/ConstructorHelpers.h"
 #include "Solve/JunctionSolver.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadGallery, Log, All);
@@ -28,12 +29,8 @@ ARoadJunctionGallery::ARoadJunctionGallery()
 	// The same material the network actor uses. The gallery is the harness built to
 	// inspect junctions, so leaving it on a placeholder colour would hide the very thing
 	// it exists to show.
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RoadMaterial(
-		TEXT("/Game/RoadNet/Materials/M_RoadSurface"));
-	if (RoadMaterial.Succeeded())
-	{
-		SurfaceMaterial = RoadMaterial.Object;
-	}
+	// Resolved where it is used, not here. A literal /Game/ path in a constructor is a
+	// reference the editor cannot fix up when content moves - see UAirsideSettings.
 	MeshComponent->SetupAttachment(RootComponent);
 
 	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
@@ -123,6 +120,14 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 	FRoadMeshBuilder Builder(10.0);
 
 	Builder.Build(*Network, Solved, 1);
+
+	if (SurfaceMaterial == nullptr)
+	{
+		if (const UAirsideContent* Content = UAirsideSettings::GetContent())
+		{
+			SurfaceMaterial = Content->SurfaceMaterial.LoadSynchronous();
+		}
+	}
 
 	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, true);
 	Builder.Emit(Sink);

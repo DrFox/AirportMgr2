@@ -139,6 +139,136 @@ const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const
 	return RoadSlot::Get<FRoadNodeId>(Nodes, Node);
 }
 
+const URoadProfile* URoadNetwork::ProfileFor(const FRoadSegment& Segment) const
+{
+	// Its own first, always. DefaultProfile is for segments that never had one or lost it
+	// to a save, never an override - a road drawn deliberately narrow must stay narrow.
+	return Segment.Profile != nullptr ? Segment.Profile.Get() : DefaultProfile.Get();
+}
+
+bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
+	FVector2D& OutDirection, double& OutLength) const
+{
+	auto IsRunway = [this](const FRoadSegment& Segment)
+	{
+		const URoadProfile* Profile = ProfileFor(Segment);
+		return Profile != nullptr && Profile->bContinuousThroughJunctions;
+	};
+
+	// The runway segment with an END nearest the query. Ends rather than centres: a threshold
+	// is an end, and a long runway's midpoint can be closer to a query than the end that
+	// actually matters.
+	int32 Best = INDEX_NONE;
+	double BestDistance = TNumericLimits<double>::Max();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegment& Segment = Segments[Index];
+		if (!Segment.bAlive || !IsRunway(Segment))
+		{
+			continue;
+		}
+
+		const FRoadNode* A = GetNode(Segment.A);
+		const FRoadNode* B = GetNode(Segment.B);
+		if (A == nullptr || B == nullptr)
+		{
+			continue;
+		}
+
+		const double Distance = FMath::Min(
+			FVector2D::Distance(Near, A->Position), FVector2D::Distance(Near, B->Position));
+		if (Distance < BestDistance)
+		{
+			BestDistance = Distance;
+			Best = Index;
+		}
+	}
+
+	if (Best == INDEX_NONE)
+	{
+		return false;
+	}
+
+	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
+	// else - a threshold, or a node with a taxiway on it - ends the walk in that direction.
+	//
+	// Tracked by the node WALKED FROM rather than the segment walked along, because a node's
+	// Incident list already holds segment handles and building one from an index would mean
+	// reconstructing a generation counter that the slot map owns.
+	auto WalkFrom = [this, &IsRunway](FRoadNodeId At, FRoadNodeId CameFrom)
+	{
+		for (int32 Guard = 0; Guard < 1024; ++Guard)
+		{
+			const FRoadNode* Node = GetNode(At);
+			if (Node == nullptr)
+			{
+				break;
+			}
+
+			FRoadSegmentId Next;
+			FRoadNodeId Beyond;
+			int32 RunwayArms = 0;
+
+			for (const FRoadSegmentId& Incident : Node->Incident)
+			{
+				const FRoadSegment* Other = GetSegment(Incident);
+				if (Other == nullptr || !Other->bAlive || !IsRunway(*Other))
+				{
+					continue;
+				}
+				++RunwayArms;
+
+				const FRoadNodeId Far = GetOtherEnd(Incident, At);
+				if (Far != CameFrom)
+				{
+					Next = Incident;
+					Beyond = Far;
+				}
+			}
+
+			// One runway arm means this node is a threshold. More than two would be a fork,
+			// which a runway does not have - stopping there is the safe reading.
+			if (RunwayArms != 2 || !Next.IsSet() || !Beyond.IsSet())
+			{
+				break;
+			}
+
+			CameFrom = At;
+			At = Beyond;
+		}
+
+		return At;
+	};
+
+	const FRoadSegment& Seed = Segments[Best];
+	const FRoadNodeId EndA = WalkFrom(Seed.A, Seed.B);
+	const FRoadNodeId EndB = WalkFrom(Seed.B, Seed.A);
+
+	const FRoadNode* NodeA = GetNode(EndA);
+	const FRoadNode* NodeB = GetNode(EndB);
+	if (NodeA == nullptr || NodeB == nullptr)
+	{
+		return false;
+	}
+
+	// The threshold is the end you are AT; you depart away from it.
+	const bool bNearA = FVector2D::Distance(Near, NodeA->Position)
+		<= FVector2D::Distance(Near, NodeB->Position);
+
+	OutThreshold = bNearA ? NodeA->Position : NodeB->Position;
+	const FVector2D Far = bNearA ? NodeB->Position : NodeA->Position;
+
+	const FVector2D Along = Far - OutThreshold;
+	OutLength = Along.Size();
+	if (OutLength <= 0.0)
+	{
+		return false;
+	}
+
+	OutDirection = Along / OutLength;
+	return true;
+}
+
 const FRoadSegment* URoadNetwork::GetSegment(FRoadSegmentId Segment) const
 {
 	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);

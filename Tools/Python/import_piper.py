@@ -26,9 +26,9 @@ import unreal
 
 SOURCE = r"C:\repos\AirportMgr2Models\piperMeridian\export"
 
-MESH_DIR = "/Game/RoadNet/Aircraft"
-TEX_DIR = "/Game/RoadNet/Aircraft/Textures"
-MAT_DIR = "/Game/RoadNet/Aircraft/Materials"
+MESH_DIR = "/Game/Aircraft"
+TEX_DIR = "/Game/Aircraft/Textures"
+MAT_DIR = "/Game/Aircraft/Materials"
 
 MESH_NAME = "SM_PiperMeridian"
 BODY_MATERIAL = "M_PiperMeridian"

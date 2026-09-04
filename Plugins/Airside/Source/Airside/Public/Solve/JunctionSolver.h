@@ -13,6 +13,20 @@ struct FJunctionArm
 	double HalfWidthRight = 0.0;
 	double FilletRadius   = 0.0;
 
+	/**
+	 * This arm PASSES THROUGH the node rather than ending at it, so it is never trimmed.
+	 *
+	 * A runway is the case: its edges run unbroken past an exit, and the fillets belong to
+	 * the taxiway side only. A taxiway meeting another taxiway is not - both are cut back
+	 * and a polygon is paved between them, which is what every node did before this flag.
+	 *
+	 * The consequence is the point of it. Two opposite continuous arms of equal width take
+	 * CutDistance 0, so their cut vertices are computed from the same node position and the
+	 * same half-width and come out BITWISE equal - which is the surface model's contract
+	 * stated for a case that previously could not arise.
+	 */
+	bool bContinuous = false;
+
 	/** Opaque caller tag, e.g. a packed FRoadSegmentId index. Never read by the solver. */
 	int32 UserData = INDEX_NONE;
 };

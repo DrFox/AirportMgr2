@@ -15,8 +15,8 @@ SOURCE = r"C:\repos\models\materials\concrete-bl\pebbled-asphalt1-bl"
 # drawn and no part of this graph had ever been exercised.
 MINIMAL = False
 
-TEX_DIR = "/Game/RoadNet/Textures"
-MAT_DIR = "/Game/RoadNet/Materials"
+TEX_DIR = "/Game/Textures"
+MAT_DIR = "/Game/Materials"
 
 # name -> (file, is_srgb, compression)
 MAPS = {

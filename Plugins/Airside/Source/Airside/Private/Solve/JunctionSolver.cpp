@@ -98,6 +98,15 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 		// which is what keeps the boundary walk's straight runs non-negative.
 		for (int32 Index = 0; Index < ArmCount; ++Index)
 		{
+			if (Input.Arms[Index].bContinuous)
+			{
+				// PASSES THROUGH, so it is not trimmed at all. Its cut vertices then come
+				// from the node position and its own half-widths alone, which is what makes
+				// two opposite continuous arms share them bitwise - see FJunctionArm.
+				Result.Arms[Index].CutDistance = 0.0;
+				continue;
+			}
+
 			const int32 PrevIndex = (Index + ArmCount - 1) % ArmCount;
 
 			const double FromLeft = Result.Corners[Index].bStraightThrough
@@ -173,10 +182,26 @@ void FJunctionSolver::SolveBoundary(const FJunctionInput& Input, FJunctionResult
 
 	for (int32 Index = 0; Index < ArmCount; ++Index)
 	{
-		// The segment's cut line, traversed right-to-left so the interior stays on the
-		// left and the polygon comes out counter-clockwise.
-		AddCutVertex(InOutResult.Arms[Index].RightCut);
-		AddCutVertex(InOutResult.Arms[Index].LeftCut);
+		// A CONTINUOUS ARM CONTRIBUTES NO RIM. Its "cut line" is the node's own cross
+		// section, which lies INSIDE the surface it is passing through - emitting it walks
+		// the boundary up across the runway and back, a zero-width spike that a shoelace
+		// area cancels out and a triangle fan happily paves. Measured: the rim reached the
+		// far edge of a 45 m runway while reporting exactly the area of the taxiway lens.
+		//
+		// Leaving it out, the ring closes along the arm's edge between the two fillet
+		// tangents, which is the lens the taxiway actually needs paving.
+		//
+		// This does not weaken the weld contract, it moves it: an uncut segment has no rim
+		// vertex to weld TO, because it does not end here. It welds to the collinear segment
+		// opposite, whose cut vertices are computed from the same node and the same
+		// half-widths and so are bitwise identical - see FJunctionArm::bContinuous.
+		if (!Input.Arms[Index].bContinuous)
+		{
+			// The segment's cut line, traversed right-to-left so the interior stays on the
+			// left and the polygon comes out counter-clockwise.
+			AddCutVertex(InOutResult.Arms[Index].RightCut);
+			AddCutVertex(InOutResult.Arms[Index].LeftCut);
+		}
 
 		if (ArmCount == 1)
 		{

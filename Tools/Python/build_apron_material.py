@@ -20,8 +20,8 @@ import unreal
 
 SOURCE = r"C:\repos\models\materials\concrete-bl\degraded-concrete-bl"
 
-TEX_DIR = "/Game/RoadNet/Textures"
-MAT_DIR = "/Game/RoadNet/Materials"
+TEX_DIR = "/Game/Textures"
+MAT_DIR = "/Game/Materials"
 MAT_NAME = "M_ApronConcrete"
 
 # name -> (file, is_srgb, compression)

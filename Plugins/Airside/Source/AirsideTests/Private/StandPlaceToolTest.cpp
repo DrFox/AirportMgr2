@@ -49,7 +49,8 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// The actor resolves DA_Stand_CodeC in its constructor. A test that silently placed
+	// The actor fills this from the configured content set in PostInitProperties - NOT in
+	// its constructor, where a literal /Game/ path used to sit. A test that silently placed
 	// nothing because the asset was missing would pass every assertion below vacuously.
 	if (!TestNotNull(TEXT("the actor found a stand definition"), Actor->StandDefinition.Get()))
 	{

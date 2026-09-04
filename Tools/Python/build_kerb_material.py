@@ -22,8 +22,8 @@ should only ever be plain concrete.
 """
 import unreal
 
-TEX_DIR = "/Game/RoadNet/Textures"
-MAT_DIR = "/Game/RoadNet/Materials"
+TEX_DIR = "/Game/Textures"
+MAT_DIR = "/Game/Materials"
 MAT_NAME = "M_RoadKerb"
 
 # Reused, not re-imported. build_apron_material.py owns the import and its settings - the
