@@ -282,6 +282,16 @@ private:
 	void SelectStandTool() { SelectTool(2); }
 	void SelectRouteTool() { SelectTool(3); }
 
+	/**
+	 * Key 5. Index 4, matching the order Tools are added in the constructor.
+	 *
+	 * These indices ARE the registration order and nothing checks them against it. Key 4
+	 * once advertised a tool it did not select because the binding was never added at all;
+	 * the four places that must agree - the Tools array, this index, the BindKey call and
+	 * the startup banner - are listed together in BeginPlay for that reason.
+	 */
+	void SelectGuidelineTool() { SelectTool(4); }
+
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
 

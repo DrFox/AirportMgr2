@@ -8,6 +8,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
+#include "Tool/GuidelineDrawTool.h"
 #include "Tool/RouteTool.h"
 #include "Tool/StandPlaceTool.h"
 
@@ -42,6 +43,7 @@ void ARoadBuildController::BeginPlay()
 	Tools.Add(MakeUnique<FApronDrawTool>());
 	Tools.Add(MakeUnique<FStandPlaceTool>());
 	Tools.Add(MakeUnique<FRouteTool>());
+	Tools.Add(MakeUnique<FGuidelineDrawTool>());
 
 	if (Tools.Num() != ToolKeyCount)
 	{
@@ -58,7 +60,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes. G toggles the guideline overlay. WASD pans, Q/E rotate, "
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links. G toggles the guideline overlay. WASD pans, Q/E rotate, "
 			 "wheel zooms."),
 		*Target->GetName());
 }
@@ -155,6 +157,7 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
 	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ARoadBuildController::SelectStandTool);
 	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ARoadBuildController::SelectRouteTool);
+	InputComponent->BindKey(EKeys::Five, IE_Pressed, this, &ARoadBuildController::SelectGuidelineTool);
 	InputComponent->BindKey(EKeys::G, IE_Pressed, this, &ARoadBuildController::OnToggleGuidelines);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);

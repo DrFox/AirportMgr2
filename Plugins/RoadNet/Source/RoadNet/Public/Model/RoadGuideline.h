@@ -13,6 +13,40 @@
  * parent spec's R9 subdivision was justified by a pathing benefit that moved to this
  * graph when the two graphs were separated.
  */
+/**
+ * WHICH derived endpoint a node is, so it can be found again after regeneration.
+ *
+ * The guideline graph is rebuilt wholesale on every road edit, and AddGuidelineNode never
+ * deduplicates - it allocates a new slot every time. A handle held across a rebuild
+ * therefore points at a node the new derivation no longer uses, while a fresh coincident
+ * node takes its place. Anything hand-authored must say WHAT its endpoint is, not WHERE it
+ * currently lives.
+ *
+ * These three fields are exactly FRoadGuidelineBuilder's own EndKey, which is what lets a
+ * player edge be re-resolved through the same map the builder already computes. Same move
+ * as FResolvedAnchor: carry the id you resolved FROM.
+ */
+USTRUCT()
+struct ROADNET_API FGuidelineEndRef
+{
+	GENERATED_BODY()
+
+	UPROPERTY() FRoadSegmentId Segment;
+
+	/** Which end of that segment - A, or B. */
+	UPROPERTY() bool bEndA = true;
+
+	UPROPERTY() int32 GuidelineIndex = 0;
+
+	bool IsSet() const { return Segment.IsSet(); }
+
+	bool operator==(const FGuidelineEndRef& Other) const
+	{
+		return Segment == Other.Segment && bEndA == Other.bEndA
+			&& GuidelineIndex == Other.GuidelineIndex;
+	}
+};
+
 USTRUCT()
 struct ROADNET_API FGuidelineNode
 {
@@ -40,6 +74,15 @@ struct ROADNET_API FGuidelineNode
 	 * which is the natural authoring order.
 	 */
 	UPROPERTY() bool bDerived = true;
+
+	/**
+	 * Which segment end this node was derived FOR, or unset.
+	 *
+	 * Carried so a hand-drawn edge can record what it attached to rather than merely which
+	 * slot happened to hold it. Unset on anchor and pose nodes: those are non-derived, are
+	 * never swept, and keep their handles across every rebuild already.
+	 */
+	UPROPERTY() FGuidelineEndRef Origin;
 
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
@@ -101,6 +144,17 @@ struct ROADNET_API FGuidelineEdge
 	 * must then leave it alone, because regenerating it would silently discard the edit.
 	 */
 	UPROPERTY() bool bDerived = true;
+
+	/**
+	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.
+	 *
+	 * Filled from the clicked nodes' Origin, and re-resolved after every derivation. Unset
+	 * for a derived edge (which is regenerated anyway) and for a link between two anchor
+	 * nodes (whose handles are already stable), and an unset ref means "leave this end
+	 * alone" rather than "detach it".
+	 */
+	UPROPERTY() FGuidelineEndRef EndRefA;
+	UPROPERTY() FGuidelineEndRef EndRefB;
 
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;

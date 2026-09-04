@@ -71,23 +71,15 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Network.RemoveGuidelineEdge(Id);
 		}
 
-		TArray<FGuidelineNodeId> Orphans;
-		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].bDerived && Nodes[Index].Incident.Num() == 0)
-			{
-				FGuidelineNodeId Id;
-				Id.Index = Index;
-				Id.Generation = Nodes[Index].Generation;
-				Orphans.Add(Id);
-			}
-		}
-		for (const FGuidelineNodeId Id : Orphans)
-		{
-			Network.RemoveGuidelineNode(Id);
-		}
 	}
+
+	// The orphan sweep used to sit in the block above, before anything was derived. It runs
+	// at the END now, because re-resolution below MOVES hand-authored edges off the nodes
+	// they were drawn between - a sweep that ran first would leave those behind alive and
+	// idle for ever, and the overlay would draw every one of them.
+	//
+	// Running last is strictly safer: it is the only point at which every detachment this
+	// function performs has already happened.
 
 	// (SegmentIndex, which end, GuidelineIndex) -> the node that segment end terminates on.
 	//
@@ -160,6 +152,22 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			FGuidelineEdge Edge;
 			Edge.A = Network.AddGuidelineNode(AtA);
 			Edge.B = Network.AddGuidelineNode(AtB);
+
+			// Each end records WHICH end it is, so a hand-authored edge can name what it
+			// attached to rather than which slot happened to hold it. Handles do not
+			// survive a rebuild; this does.
+			if (FGuidelineNode* NodeA = Network.GetGuidelineNodeMutable(Edge.A))
+			{
+				NodeA->Origin.Segment = SegmentId;
+				NodeA->Origin.bEndA = true;
+				NodeA->Origin.GuidelineIndex = Which;
+			}
+			if (FGuidelineNode* NodeB = Network.GetGuidelineNodeMutable(Edge.B))
+			{
+				NodeB->Origin.Segment = SegmentId;
+				NodeB->Origin.bEndA = false;
+				NodeB->Origin.GuidelineIndex = Which;
+			}
 			Edge.Control = (AtA + AtB) * 0.5;
 			Edge.AllowedTraffic = FTrafficMask::Only(Declared.Class);
 			Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
@@ -303,6 +311,97 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					Network.AddGuidelineEdge(MoveTemp(Turn));
 				}
 			}
+		}
+	}
+
+	// --- Re-resolve hand-authored edges ------------------------------------------------
+	//
+	// A player's edge survived the clear pass, but the nodes it was drawn between are not
+	// the nodes this derivation just made: AddGuidelineNode never deduplicates, so every
+	// rebuild produces FRESH coincident nodes and the player's edge would keep pointing at
+	// the old ones. It would still draw, and route nothing - breaking on a road edit that
+	// had nothing to do with it.
+	//
+	// So an end that knows what it IS gets re-pointed at whatever now holds that identity.
+	// Ends is the builder's own map, keyed exactly this way, and is simply no longer thrown
+	// away.
+	{
+		auto Resolve = [&Ends, &EndKey](const FGuidelineEndRef& Ref, FGuidelineNodeId& Out) -> bool
+		{
+			if (!Ref.IsSet())
+			{
+				// No identity recorded - a link between two anchor nodes, whose handles are
+				// stable already. Leave the end exactly where it is.
+				return true;
+			}
+
+			const FGuidelineNodeId* Found =
+				Ends.Find(EndKey(Ref.Segment.Index, Ref.bEndA, Ref.GuidelineIndex));
+			if (Found == nullptr)
+			{
+				return false;
+			}
+
+			Out = *Found;
+			return true;
+		};
+
+		TArray<FGuidelineEdgeId> Stranded;
+		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
+		{
+			const FGuidelineEdge& Edge = Edges[Index];
+			if (!Edge.bAlive || Edge.bDerived)
+			{
+				continue;
+			}
+
+			FGuidelineEdgeId Id;
+			Id.Index = Index;
+			Id.Generation = Edge.Generation;
+
+			FGuidelineNodeId NewA = Edge.A;
+			FGuidelineNodeId NewB = Edge.B;
+
+			if (!Resolve(Edge.EndRefA, NewA) || !Resolve(Edge.EndRefB, NewB))
+			{
+				// The road under an end is gone. Kill the link rather than leave one
+				// pointing at a road that no longer exists - a route across it would be a
+				// route across nothing.
+				Stranded.Add(Id);
+				continue;
+			}
+
+			if (NewA != Edge.A || NewB != Edge.B)
+			{
+				Network.RelinkGuidelineEdge(Id, NewA, NewB);
+			}
+		}
+
+		for (const FGuidelineEdgeId Id : Stranded)
+		{
+			Network.RemoveGuidelineEdge(Id);
+		}
+	}
+
+	// LAST, for the reason given where this used to live: every detachment above has now
+	// happened, so an idle derived node really is idle.
+	{
+		TArray<FGuidelineNodeId> Orphans;
+		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (Nodes[Index].bAlive && Nodes[Index].bDerived && Nodes[Index].Incident.Num() == 0)
+			{
+				FGuidelineNodeId Id;
+				Id.Index = Index;
+				Id.Generation = Nodes[Index].Generation;
+				Orphans.Add(Id);
+			}
+		}
+		for (const FGuidelineNodeId Id : Orphans)
+		{
+			Network.RemoveGuidelineNode(Id);
 		}
 	}
 }
