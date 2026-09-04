@@ -306,6 +306,13 @@ def build_material(name, textures, translucent):
     else:
         unreal.log_warning("MARKER: no packed MR map, using material defaults")
 
+    # THE AIRFRAME IS DRAWN ON A SKELETAL MESH, so the material must say so. Without
+    # bUsedWithSkeletalMesh the engine silently substitutes its grey default at RENDER time -
+    # the component still reports the correct material, so every check short of looking at
+    # the screen says it is fine. That is precisely why the static mesh looked right and the
+    # skeletal one was clay.
+    material.set_editor_property("used_with_skeletal_mesh", True)
+
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset(path)
     unreal.log("MARKER: %s built" % path)
