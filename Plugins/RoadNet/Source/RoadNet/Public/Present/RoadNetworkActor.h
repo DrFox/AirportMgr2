@@ -19,6 +19,7 @@ class UMaterialInstanceDynamic;
 class FRoadMeshBuilder;
 struct FRoadSolveResult;
 class UMaterialInterface;
+class URoadMaterialSet;
 
 namespace UE::Geometry { class FDynamicMesh3; }
 
@@ -26,20 +27,39 @@ namespace UE::Geometry { class FDynamicMesh3; }
 class ROADNET_API FDynamicMeshSink : public IRoadMeshSink
 {
 public:
+	/**
+	 * InMaterials null keeps the single-material path: one SetMaterial(0, InMaterial) and
+	 * no material-ID attribute, exactly as before per-band materials existed.
+	 */
 	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr,
-		bool bInUseConstantVertexColour = true)
+		bool bInUseConstantVertexColour = true, const URoadMaterialSet* InMaterials = nullptr)
 		: Component(InComponent), Material(InMaterial)
-		, bUseConstantVertexColour(bInUseConstantVertexColour) {}
+		, bUseConstantVertexColour(bInUseConstantVertexColour), Materials(InMaterials) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
 	/**
-	 * Copy the buffers' UV and colour channels onto an already-populated mesh.
+	 * Copy the buffers' UV, colour and material-id channels onto an already-populated mesh.
 	 *
 	 * Static and public so it can be tested without a component, a world or a renderer.
 	 * The buffers being correct says nothing about what the component receives, and that
 	 * gap is precisely where slice 2a's invisible surface hid.
 	 */
 	static void PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
+
+	/**
+	 * Convert whole buffers into a mesh - vertices, triangles, UVs and material ids.
+	 * Returns the number of triangles FDynamicMesh3 refused.
+	 *
+	 * Static and public for the same reason as PopulateAttributes, and it carries the one
+	 * correspondence in this file that is NOT the identity: FDynamicMesh3::AppendTriangle
+	 * REFUSES non-manifold and duplicate triangles, so one refusal shifts every later
+	 * triangle's id away from its buffer index. Indexing MaterialIDs by mesh triangle id
+	 * would then re-skin the entire mesh downstream of the first refusal, silently. That
+	 * is the index-parallel defect this codebase has already paid for once, in
+	 * FEntityInstance::ResolvedAnchors; here the mapping is recorded as the triangles are
+	 * appended, where it is known, rather than assumed afterwards.
+	 */
+	static int32 BuildMesh(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
 
 private:
 	// Raw, non-owning pointers: the sink owns and GC-protects neither, and must not
@@ -50,6 +70,9 @@ private:
 
 	/** Independent of Material by design - see ARoadNetworkActor::bUseConstantVertexColour. */
 	bool bUseConstantVertexColour = true;
+
+	/** Null means the single-material path. Non-owning, like Component and Material. */
+	const URoadMaterialSet* Materials = nullptr;
 };
 
 /**
@@ -487,6 +510,16 @@ public:
 	 * the component the engine default - which is WorldGridMaterial, the same checker the
 	 * template floor wears. That degrades quietly, and quiet is the problem.
 	 */
+	/**
+	 * Name -> material for the road surface's profile bands. Null renders exactly as
+	 * before: one material, every triangle id 0.
+	 *
+	 * A DataAsset rather than a table edited here, because this actor lives in a level
+	 * that is deliberately never saved - see URoadMaterialSet.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|Materials")
+	TObjectPtr<URoadMaterialSet> MaterialSet;
+
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Apron")
 	TObjectPtr<UMaterialInterface> ApronMaterial;
 

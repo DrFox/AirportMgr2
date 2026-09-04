@@ -37,6 +37,17 @@ struct FRoadMeshBuffers
 	 * effect. A UV channel carries the same two floats with neither coupling.
 	 */
 	TArray<FVector2f> UV2;
+
+	/**
+	 * Material id per TRIANGLE, so exactly Indices.Num() / 3 entries.
+	 *
+	 * Per triangle, not per vertex, and that is the whole reason this slice does not touch
+	 * slice 2a's contract. A vertex on the boundary between two bands of different
+	 * materials is shared by triangles of both; because the id lives on the face, that
+	 * vertex stays ONE welded vertex and nothing is ever tempted to split it in order to
+	 * carry a material. Material is a per-face property; the weld is a per-vertex one.
+	 */
+	TArray<int32> MaterialIDs;
 };
 
 /**
