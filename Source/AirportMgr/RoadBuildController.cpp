@@ -10,6 +10,7 @@
 #include "Tool/RoadDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/RouteTool.h"
+#include "Present/RoadAgentActor.h"
 #include "Tool/RunwayTool.h"
 #include "Tool/StandPlaceTool.h"
 
@@ -62,7 +63,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links, 6 runway. G toggles the guideline overlay. WASD pans, Q/E rotate, "
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links, 6 runway. C watches the aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, "
 			 "wheel zooms."),
 		*Target->GetName());
 }
@@ -133,8 +134,60 @@ void ARoadBuildController::UpdateView(float DeltaTime)
 	// key binding fires once on press. The same reason WASD was never bound.
 	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
 
+	// WATCHING AN AIRCRAFT takes over the camera entirely, and hands it straight back when
+	// there is nothing to watch - a mode that stranded the view on a despawned aircraft would
+	// leave the player looking at empty sky with no way to tell why.
+	if (bWatchingAgent)
+	{
+		if (ARoadAgentActor* Agent = Target->GetNewestAgent())
+		{
+			const FVector At = Agent->GetActorLocation();
+			const double Yaw = FMath::DegreesToRadians(Agent->GetActorRotation().Yaw);
+
+			// Offsets are in the AIRCRAFT'S frame, so the view stays side-on through the
+			// backtrack turn and the climb rather than being side-on only while it happens
+			// to be pointing the way it started.
+			const FVector Nose(FMath::Cos(Yaw), FMath::Sin(Yaw), 0.0);
+			const FVector Wing(-FMath::Sin(Yaw), FMath::Cos(Yaw), 0.0);
+
+			const FVector Eye = At
+				+ Wing * WatchSideOffset
+				- Nose * WatchBehindOffset
+				+ FVector(0.0, 0.0, WatchHeight);
+
+			// Aimed AT the aircraft rather than along a fixed rotation, so a rotation and a
+			// climb stay framed instead of climbing out of shot.
+			BuildCamera->SetActorLocationAndRotation(Eye, (At - Eye).Rotation());
+			return;
+		}
+
+		bWatchingAgent = false;
+		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to watch: back to the build view."));
+	}
+
 	BuildCamera->SetActorLocationAndRotation(
 		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
+}
+
+void ARoadBuildController::ToggleWatchAgent()
+{
+	if (Target == nullptr)
+	{
+		return;
+	}
+
+	if (!bWatchingAgent && Target->GetNewestAgent() == nullptr)
+	{
+		// Refused out loud. Silently staying on the build camera is indistinguishable from
+		// the key not being bound, which is a class of confusion this project has paid for.
+		UE_LOG(LogRoadBuild, Warning,
+			TEXT("Nothing to watch: dispatch an aircraft first (4, then click a start and a goal)."));
+		return;
+	}
+
+	bWatchingAgent = !bWatchingAgent;
+	UE_LOG(LogRoadBuild, Log, TEXT("Camera: %s"),
+		bWatchingAgent ? TEXT("watching the aircraft") : TEXT("build view"));
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -162,6 +215,7 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Five, IE_Pressed, this, &ARoadBuildController::SelectGuidelineTool);
 	InputComponent->BindKey(EKeys::Six, IE_Pressed, this, &ARoadBuildController::SelectRunwayTool);
 	InputComponent->BindKey(EKeys::G, IE_Pressed, this, &ARoadBuildController::OnToggleGuidelines);
+	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARoadBuildController::ToggleWatchAgent);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);

@@ -70,16 +70,18 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 			}
 			Previous = Run.Speed;
 
-			if (RollDistance < 0.0 && Run.Phase == ETakeoffPhase::Rotate)
+			// TO LIFT-OFF, not to Vr. The published ground roll includes the rotation, which
+			// is another second and a half of accelerating with the wheels still down.
+			if (RollDistance < 0.0 && Run.Phase == ETakeoffPhase::Climb)
 			{
 				RollDistance = Run.Travelled;
 			}
 		}
 
-		AddInfo(FString::Printf(TEXT("ground roll %.0f uu, published about 30500"), RollDistance));
+		AddInfo(FString::Printf(TEXT("ground roll to lift-off %.0f uu, published about 30500"), RollDistance));
 
 		TestTrue(FString::Printf(
-			TEXT("it rotates after about the published roll (%.0f uu)"), RollDistance),
+			TEXT("it leaves the ground after about the published roll (%.0f uu)"), RollDistance),
 			RollDistance > 27000.0 && RollDistance < 34000.0);
 
 		TestTrue(FString::Printf(
@@ -158,10 +160,24 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("holding the climb attitude (%.1f deg)"), TopPitch),
 			FMath::IsNearlyEqual(TopPitch, Climb.ClimbPitchDegrees, 0.5));
 
+		// THE PUBLISHED CLIMB RATE, MEASURED RATHER THAN SET. Nothing configures 780 uu/s -
+		// it falls out of holding 11.2 degrees at 120 KIAS with a wing needing 4 of them.
+		// A rate that came out wrong is an argument with the pitch or the speed, which are
+		// the two things a pilot actually has.
+		const double Settled = Climb.ClimbRateAt(Climb.ClimbSpeed, Piper.Takeoff.SpeedCap);
+		AddInfo(FString::Printf(
+			TEXT("settled climb %.0f uu/s, published 780; steepest seen %.0f"),
+			Settled, WorstClimb));
+
 		TestTrue(FString::Printf(
-			TEXT("and never climbing faster than %.0f uu/s (worst %.0f)"),
-			Climb.ClimbRate, WorstClimb),
-			WorstClimb <= Climb.ClimbRate + 1.0);
+			TEXT("the settled climb is the published 1540 fpm (%.0f uu/s)"), Settled),
+			Settled > 730.0 && Settled < 830.0);
+
+		// And it is never steeper than that, because the aircraft accelerates TO Vy and
+		// stops - a climb that overshot would mean speed running away past best rate.
+		TestTrue(FString::Printf(
+			TEXT("and nothing steeper on the way (%.0f uu/s)"), WorstClimb),
+			WorstClimb <= Settled + 1.0);
 
 		// STRAIGHT AHEAD. There are no turns in this departure, so anything off the runway
 		// centreline is the direction being applied wrongly.
@@ -169,6 +185,66 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 			FMath::Abs(Last.Y)), FMath::Abs(Last.Y) < 1e-6);
 		TestTrue(TEXT("and keeps going past the far end, being airborne"),
 			Last.X > TakeoffRunwayLength);
+	}
+
+	// 3b. THE ROTATION HAPPENS ON THE WHEELS, which is the correction this model exists for.
+	//     An aircraft that started gaining height the instant the nose moved was rising off
+	//     the tarmac flat - a lift, not a take-off. The mains stay down while the nose comes
+	//     up, and the aircraft flies only once the wing has the angle it needs at the speed
+	//     it has.
+	{
+		FTakeoffRun Run;
+		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
+			Piper, Climb, 0.0);
+
+		double PitchAtLiftOff = -1.0;
+		double RotateSeconds = 0.0;
+		double HighestWhileRotating = 0.0;
+		double RollAtVr = -1.0;
+		double RollAtLiftOff = -1.0;
+
+		for (int32 Frame = 0; Frame < 6000; ++Frame)
+		{
+			FVector2D At;
+			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
+			if (!Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch))
+			{
+				break;
+			}
+
+			if (Run.Phase == ETakeoffPhase::Rotate)
+			{
+				RotateSeconds += TakeoffFrame;
+				HighestWhileRotating = FMath::Max(HighestWhileRotating, Altitude);
+				if (RollAtVr < 0.0)
+				{
+					RollAtVr = Run.Travelled;
+				}
+			}
+			if (PitchAtLiftOff < 0.0 && Run.Phase == ETakeoffPhase::Climb)
+			{
+				PitchAtLiftOff = Pitch;
+				RollAtLiftOff = Run.Travelled;
+			}
+		}
+
+		AddInfo(FString::Printf(
+			TEXT("rotation took %.1f s over %.0f uu, lifting off at %.1f deg"),
+			RotateSeconds, RollAtLiftOff - RollAtVr, PitchAtLiftOff));
+
+		// THE MEASUREMENT. Zero, exactly - the wheels are on the ground for the whole
+		// rotation, and any height at all here is the old behaviour returning.
+		TestEqual(TEXT("it gains no height at all while rotating"), HighestWhileRotating, 0.0);
+
+		TestTrue(FString::Printf(TEXT("the rotation takes a real moment (%.1f s)"), RotateSeconds),
+			RotateSeconds > 1.0 && RotateSeconds < 4.0);
+
+		// It leaves the ground part way up, not at the climb attitude: required angle is
+		// falling as it accelerates, so the two meet before the nose has finished rising.
+		TestTrue(FString::Printf(
+			TEXT("and lifts off below the climb attitude (%.1f of %.1f deg)"),
+			PitchAtLiftOff, Climb.ClimbPitchDegrees),
+			PitchAtLiftOff > 0.0 && PitchAtLiftOff < Climb.ClimbPitchDegrees);
 	}
 
 	// 4. IT LINES UP FIRST, at the airframe's turn rate. An aircraft that snapped onto the
@@ -212,11 +288,15 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	// 5. A RUNWAY TOO SHORT IS REFUSED. v2/2a is a published figure, and a strip under it is
 	//    one this aircraft cannot leave - rolling anyway would simulate an overrun.
 	{
-		const double Needed = FTakeoffRun::RequiredRoll(Piper);
+		const double Needed = FTakeoffRun::RequiredRoll(Piper, Climb);
 		AddInfo(FString::Printf(TEXT("roll needed %.0f uu"), Needed));
 
-		TestTrue(FString::Printf(TEXT("the needed roll matches the published 30500 (%.0f)"), Needed),
-			Needed > 27000.0 && Needed < 34000.0);
+		// Covers the WHOLE roll to lift-off, and errs long. Measured at 30385 in section 1,
+		// so a figure below that would accept a runway the aircraft cannot leave.
+		TestTrue(FString::Printf(
+			TEXT("the needed roll covers the measured 30385 without wild over-estimation (%.0f)"),
+			Needed),
+			Needed >= 30385.0 && Needed < 40000.0);
 
 		FTakeoffRun Short;
 		TestFalse(TEXT("a runway shorter than the roll is refused"),

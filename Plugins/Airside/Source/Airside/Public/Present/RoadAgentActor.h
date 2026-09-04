@@ -2,9 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Model/RoadEntity.h"
 #include "RoadAgentActor.generated.h"
 
-class UStaticMesh;
+class UAnimInstance;
+class USkeletalMesh;
+class USkeletalMeshComponent;
 class UStaticMeshComponent;
 
 /**
@@ -27,27 +30,42 @@ public:
 	ARoadAgentActor();
 
 	/**
-	 * Position in road-plane XY, heading in radians, Z the road surface height.
+	 * Everything about where this agent is and what it is doing, in one call.
 	 *
-	 * Altitude is ABOVE that surface and pitch is nose-up in degrees, both zero for anything
-	 * on the ground - which is every caller until a departure rotates. Defaulted rather than
-	 * added to every call site, because "on the wheels" is the overwhelmingly common case and
-	 * an explicit zero at each taxi call would be noise.
+	 * SurfaceZ stays a separate argument because it belongs to the AIRPORT rather than to the
+	 * agent - every aircraft on a flat airfield shares it, and folding it into the motion
+	 * would have each agent carrying its own copy of one number.
 	 */
-	void SetPose(const FVector2D& Position, double Heading, double SurfaceZ,
-		double Altitude = 0.0, double PitchDegrees = 0.0);
+	void SetMotion(const FAgentMotion& Motion, double SurfaceZ);
 
 	/**
-	 * Dresses this agent in an airframe. Null leaves the placeholder cube standing.
+	 * What the model last said this agent was doing. Read by UAirsideAgentAnim.
 	 *
-	 * PUSHED IN by whoever spawned it, exactly as the pose is. This class held the mesh's
-	 * path itself until a content move proved that a path in C++ is a reference the editor
-	 * cannot maintain - and a view that fetches its own assets is doing a second job anyway.
+	 * The view keeps it and the animation reads it, rather than the animation reaching into
+	 * the model: an AnimInstance that knew about followers and departures would be a second
+	 * consumer of the simulation, free to disagree with the one that draws the aircraft.
 	 */
-	void SetAirframe(UStaticMesh* Airframe);
+	const FAgentMotion& GetMotion() const { return LastMotion; }
+
+	void SetAirframe(USkeletalMesh* InAirframe, UClass* AnimClass = nullptr);
 
 private:
-	UPROPERTY() TObjectPtr<UStaticMeshComponent> Mesh;
+	/**
+	 * The aircraft. SKELETAL, so the propeller and wheels can turn - see UAirsideAgentAnim.
+	 *
+	 * The root, so the placeholder can hang off it and be hidden rather than juggled.
+	 */
+	UPROPERTY() TObjectPtr<USkeletalMeshComponent> Airframe;
+
+	/**
+	 * The box that stands in when no airframe was assigned.
+	 *
+	 * A SEPARATE COMPONENT now, because a static mesh cannot live in a skeletal one. Kept
+	 * rather than dropped for the reason it always was: a missing airframe should look like
+	 * the box this used to be rather than like an agent that failed to spawn - one of those
+	 * reads as a content problem and the other as a routing bug.
+	 */
+	UPROPERTY() TObjectPtr<UStaticMeshComponent> Placeholder;
 
 	/**
 	 * False when the airframe asset was missing and the cube stood in.
@@ -60,4 +78,13 @@ private:
 	 * never serialised anyway.
 	 */
 	bool bHasAirframe = false;
+
+	/**
+	 * What the model last said this agent was doing.
+	 *
+	 * Not read by anything yet: the mesh is still a static one and cannot animate. It is here
+	 * because it is what the AnimInstance will read, and keeping it means the model half of
+	 * the animation is complete and can be got right before the rigged asset arrives.
+	 */
+	FAgentMotion LastMotion;
 };

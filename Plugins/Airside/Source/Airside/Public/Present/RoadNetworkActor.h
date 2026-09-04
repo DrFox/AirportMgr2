@@ -108,6 +108,31 @@ struct AIRSIDE_API FRoadAgent
 	/** Armed at dispatch when the route's goal was a runway threshold. */
 	UPROPERTY() bool bDepartOnArrival = false;
 
+	/**
+	 * The engine is turning. NOT the same question as whether the aircraft is moving.
+	 *
+	 * This was inferred from movement - the propeller stopped whenever the aircraft did -
+	 * which is wrong at both ends. An aircraft holding short with its engine idling is the
+	 * commonest thing on an airport, and one that has actually shut down could not be
+	 * expressed at all.
+	 *
+	 * True from dispatch until the agent goes. A shutdown at the stand is a turnaround state
+	 * and belongs with the rest of that when it exists; what matters here is that the answer
+	 * is STATE rather than a guess made from the speed.
+	 */
+	UPROPERTY() bool bEngineRunning = false;
+
+	/**
+	 * What to show for this agent right now: where it is, and what it is doing.
+	 *
+	 * ON THE AGENT rather than in ARoadNetworkActor::Tick, which is where it used to be
+	 * assembled. Buried in a tick that needs a world, "is the engine running" was a line
+	 * nothing could test - and it was wrong for as long as it existed. Here it is a pure
+	 * function of the agent's own state, so Airside.Present.AgentMotion can ask it directly.
+	 */
+	FAgentMotion DescribeMotion(const FVector2D& At, double Heading,
+		double Altitude = 0.0, double PitchDegrees = 0.0) const;
+
 	/** Where the roll starts, and which way. Unused unless bDepartOnArrival. */
 	UPROPERTY() FVector2D DepartureThreshold = FVector2D::ZeroVector;
 	UPROPERTY() FVector2D DepartureDirection = FVector2D::ZeroVector;
@@ -196,6 +221,18 @@ public:
 	/** How many agents are currently under way or parked at their destination. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 GetAgentCount() const { return Agents.Num(); }
+
+	/**
+	 * The most recently dispatched agent's actor, or null when nothing is under way.
+	 *
+	 * The NEWEST rather than the nearest or the first: the one you just sent is the one you
+	 * want to watch, and any other rule makes "follow it" mean something different depending
+	 * on what else happens to be taxiing.
+	 */
+	ARoadAgentActor* GetNewestAgent() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().View.Get() : nullptr;
+	}
 
 	/**
 	 * Route between two guideline nodes over the network this actor owns.
@@ -686,19 +723,40 @@ private:
 	bool bGhostVisible = false;
 
 	/** The authored profile if there is one, otherwise the on-demand fallback. */
-	virtual void PostInitProperties() override;
+	/**
+	 * The authored value if there is one, else the configured content default.
+	 *
+	 * READ-ONLY, and that is the whole point of them. These replaced a single
+	 * ApplyContentDefaults that FILLED each property when it found it null - which looked
+	 * harmless and was not: these are EditAnywhere properties on an actor that rebuilds at
+	 * design time, so the fill landed on the level and was saved. An airport deliberately
+	 * left on a single material acquired a material set it never asked for, permanently, and
+	 * clearing it by hand only lasted until the next rebuild.
+	 *
+	 * It is the same defect ResolveProfile had, and this was the original of it. A resolver
+	 * that writes what it resolves has turned a setting into a cache.
+	 *
+	 * PUBLIC because the authored value alone no longer answers "what will this actor use" -
+	 * a test or a tool that read the property directly would see null and conclude nothing was
+	 * configured, which was true of the raw field and false of the actor.
+	 */
+public:
+	UMaterialInterface* ResolveSurfaceMaterial() const;
+	UMaterialInterface* ResolveApronMaterial() const;
+	UMaterialInterface* ResolveGhostMaterial() const;
+	URoadMaterialSet*   ResolveMaterialSet() const;
+	UEntityDefinition*  ResolveStandDefinition() const;
 
 	/**
-	 * Fills any unassigned material, material set or stand from the configured content set.
+	 * ResolveProfile, for the test that guards it. Not for production use.
 	 *
-	 * Called at the top of every rebuild rather than from the constructor. These were
-	 * ConstructorHelpers lookups against literal /Game/ paths - which is exactly why a
-	 * content folder move broke them invisibly, and why they cannot simply be moved to a
-	 * data asset read at CDO time. See UAirsideSettings::GetContent.
-	 *
-	 * Only ever fills a null, so anything set by hand survives.
+	 * ResolveProfile is private and non-const because it caches into RuntimeProfile, and
+	 * Airside.Present.AuthoredPropertiesUntouched has to be able to ask what the actor would
+	 * use without being given the write access that whole test exists to forbid.
 	 */
-	void ApplyContentDefaults();
+	const URoadProfile* ResolveProfileForTest() { return ResolveProfile(); }
+
+private:
 
 	URoadProfile* ResolveProfile();
 

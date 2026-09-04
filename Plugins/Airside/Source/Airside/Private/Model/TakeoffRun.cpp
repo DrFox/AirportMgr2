@@ -17,28 +17,28 @@ namespace
 	 */
 	constexpr double LinedUpTolerance = 1.0e-9;
 
-	/**
-	 * The pitch at which the wheels leave the ground, as a fraction of the climb attitude.
-	 *
-	 * A rotation is not an instant: the nose comes up, the wing reaches its angle, and the
-	 * aircraft flies. Lifting off part-way through the rotation is what makes it look like
-	 * one movement rather than a jump at the end of it.
-	 */
-	constexpr double LiftOffPitchFraction = 0.35;
 }
 
-double FTakeoffRun::RequiredRoll(const FGroundPerformance& InGround)
+double FTakeoffRun::RequiredRoll(const FGroundPerformance& InGround,
+	const FClimbPerformance& InClimb)
 {
 	const double Vr = InGround.Takeoff.SpeedCap;
 	const double Accel = InGround.Takeoff.Accel;
-	if (Vr <= 0.0 || Accel <= 0.0)
+	if (Vr <= 0.0 || Accel <= 0.0 || InClimb.RotateRateDegPerSec <= 0.0)
 	{
 		return 0.0;
 	}
 
-	// v^2 = u^2 + 2as from rest, rearranged. The same arithmetic the braking profile uses,
-	// pointing the other way.
-	return (Vr * Vr) / (2.0 * Accel);
+	// To Vr: v^2 = u^2 + 2as from rest, rearranged. The same arithmetic the braking profile
+	// uses, pointing the other way.
+	const double ToRotate = (Vr * Vr) / (2.0 * Accel);
+
+	// Then the rotation, which is still ground roll. Timed as though the full angle were
+	// needed - see the header for why over-estimating is the safe direction here.
+	const double RotateSeconds = InClimb.LiftAngleAtRotateDegrees / InClimb.RotateRateDegPerSec;
+	const double WhileRotating = Vr * RotateSeconds + 0.5 * Accel * RotateSeconds * RotateSeconds;
+
+	return ToRotate + WhileRotating;
 }
 
 bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
@@ -60,7 +60,7 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 		return false;
 	}
 
-	const double Needed = RequiredRoll(InGround);
+	const double Needed = RequiredRoll(InGround, InClimb);
 	if (InRunwayLength < Needed)
 	{
 		// The whole reason this returns a bool. A strip shorter than the roll to Vr is one
@@ -142,26 +142,21 @@ bool FTakeoffRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& O
 
 	case ETakeoffPhase::Rotate:
 	{
-		// Still accelerating: an aircraft does not stop gaining speed at Vr, it stops
-		// gaining it on the ground.
+		// STILL ON THE WHEELS. The nose comes up and the mains stay down - that is what a
+		// rotation is, and an aircraft that started gaining height the instant the nose moved
+		// was rising off the tarmac flat, which reads as a lift rather than a take-off.
 		Speed += Ground.Takeoff.Accel * DeltaSeconds;
 		Travelled += Speed * DeltaSeconds;
+		Altitude = 0.0;
 
 		Pitch = FMath::Min(Pitch + Climb.RotateRateDegPerSec * DeltaSeconds,
 			Climb.ClimbPitchDegrees);
 
-		// The wheels come off part way up, and the climb builds with the attitude rather
-		// than starting at full rate the instant the nose moves.
-		const double LiftOffPitch = Climb.ClimbPitchDegrees * LiftOffPitchFraction;
-		if (Pitch > LiftOffPitch)
-		{
-			const double Established = FMath::Clamp(
-				(Pitch - LiftOffPitch) / FMath::Max(Climb.ClimbPitchDegrees - LiftOffPitch, 1e-6),
-				0.0, 1.0);
-			Altitude += Climb.ClimbRate * Established * DeltaSeconds;
-		}
-
-		if (Pitch >= Climb.ClimbPitchDegrees && Altitude > 0.0)
+		// IT FLIES WHEN THE WING HAS THE ANGLE IT NEEDS AT THE SPEED IT HAS. Required angle
+		// falls as the square of speed while the nose is coming up, so the two cross - and
+		// they cross at zero climb rate, so the aircraft leaves the ground smoothly instead
+		// of stepping off it.
+		if (Pitch >= Climb.RequiredAngleAt(Speed, Ground.Takeoff.SpeedCap))
 		{
 			Phase = ETakeoffPhase::Climb;
 		}
@@ -170,9 +165,23 @@ bool FTakeoffRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& O
 
 	case ETakeoffPhase::Climb:
 	{
-		Pitch = Climb.ClimbPitchDegrees;
-		Altitude += Climb.ClimbRate * DeltaSeconds;
-		Travelled += Speed * DeltaSeconds;
+		// Accelerating to best-rate speed, which is why the climb steepens after lift-off
+		// rather than being established the moment the wheels come up.
+		Speed = FMath::Min(Speed + Ground.Takeoff.Accel * DeltaSeconds, Climb.ClimbSpeed);
+		Pitch = FMath::Min(Pitch + Climb.RotateRateDegPerSec * DeltaSeconds,
+			Climb.ClimbPitchDegrees);
+
+		// HEIGHT FROM SPEED AND PITCH, not from a rate someone typed in. The flight path is
+		// the attitude less the angle the wing is using, and the climb is the speed along it.
+		const double Rate = Climb.ClimbRateAt(Speed, Ground.Takeoff.SpeedCap);
+		const double Gamma = FMath::Asin(FMath::Clamp(
+			Speed > 0.0 ? Rate / Speed : 0.0, -1.0, 1.0));
+
+		Altitude += Rate * DeltaSeconds;
+
+		// Over the ground it covers only the horizontal component - a climbing aircraft is
+		// not making its airspeed good along the runway.
+		Travelled += Speed * FMath::Cos(Gamma) * DeltaSeconds;
 
 		if (Altitude >= Climb.ClearAltitude)
 		{

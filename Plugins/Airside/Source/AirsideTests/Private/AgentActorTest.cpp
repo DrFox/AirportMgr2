@@ -1,8 +1,9 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
-#include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Model/RoadEntity.h"
 #include "Present/RoadAgentActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -19,7 +20,7 @@ namespace
 	 * and it would fail as "the airframe is the wrong size" rather than "it is somewhere
 	 * else now". Null when nothing is configured, which the caller reports as a skip.
 	 */
-	UStaticMesh* AgentActorTestAirframe()
+	USkeletalMesh* AgentActorTestAirframe()
 	{
 		const UAirsideContent* Content = UAirsideSettings::GetContent();
 		return Content != nullptr ? Content->AgentMesh.LoadSynchronous() : nullptr;
@@ -45,10 +46,10 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 	//    wingspan, so an airframe that re-exports at a different scale must fail loudly
 	//    rather than quietly making all of those numbers wrong.
 	{
-		UStaticMesh* Mesh = AgentActorTestAirframe();
+		USkeletalMesh* Mesh = AgentActorTestAirframe();
 		if (TestNotNull(TEXT("the Piper airframe asset loads"), Mesh))
 		{
-			const FBox Bounds = Mesh->GetBoundingBox();
+			const FBox Bounds = Mesh->GetBounds().GetBox();
 			const double Span   = Bounds.Max.Y - Bounds.Min.Y;
 			const double Length = Bounds.Max.X - Bounds.Min.X;
 
@@ -67,14 +68,14 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("the nose is on +X, the shorter reach from the main gear"),
 				Bounds.Max.X < -Bounds.Min.X);
 
-			// Wheels on the ground is what lets SetPose place the actor at SurfaceZ with no
+			// Wheels on the ground is what lets SetMotion place the actor at SurfaceZ with no
 			// lift of its own.
 			TestTrue(FString::Printf(TEXT("the wheels rest on Z=0, measured %.1f"), Bounds.Min.Z),
 				FMath::Abs(Bounds.Min.Z) < 5.0);
 		}
 	}
 
-	// 2. SetPose puts the aircraft ON the road, not above it.
+	// 2. SetMotion puts the aircraft ON the road, not above it.
 	//
 	//    The cube this replaced had its pivot at its centre and was lifted by half its own
 	//    height. The airframe's origin is already on the ground, so that same lift would fly
@@ -93,9 +94,13 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		// in the constructor, so a bare agent arrived wearing it; it is pushed in by whoever
 		// spawns the agent instead, because a path in C++ is a reference the editor cannot
 		// fix up when content moves. An undressed agent is the placeholder cube - asserted
-		// below, because the lift SetPose applies depends on which of the two it is.
+		// below, because the lift SetMotion applies depends on which of the two it is.
 		Agent->SetAirframe(AgentActorTestAirframe());
-		Agent->SetPose(FVector2D(1200.0, -400.0), FMath::DegreesToRadians(30.0), SurfaceZ);
+
+		FAgentMotion Motion;
+		Motion.Position = FVector2D(1200.0, -400.0);
+		Motion.Heading = FMath::DegreesToRadians(30.0);
+		Agent->SetMotion(Motion, SurfaceZ);
 
 		const FVector At = Agent->GetActorLocation();
 		TestEqual(TEXT("the agent stands at the road surface height"), At.Z, SurfaceZ);
@@ -108,7 +113,7 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		ARoadAgentActor* Bare = NewObject<ARoadAgentActor>(GetTransientPackage());
 		if (TestNotNull(TEXT("a second agent constructs"), Bare))
 		{
-			Bare->SetPose(FVector2D::ZeroVector, 0.0, SurfaceZ);
+			Bare->SetMotion(FAgentMotion(), SurfaceZ);
 			TestTrue(TEXT("an agent with no airframe stands on the cube's lift"),
 				Bare->GetActorLocation().Z > SurfaceZ);
 		}

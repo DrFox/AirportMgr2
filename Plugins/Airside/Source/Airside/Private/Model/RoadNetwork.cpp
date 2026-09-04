@@ -189,6 +189,22 @@ bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold
 		return false;
 	}
 
+	// AND IT HAS TO BE NEAR. Without this the search kept the nearest threshold and never
+	// asked how near, so it answered "yes, a runway" for every point on the airport as soon
+	// as one runway existed - and every dispatched route armed a departure at it. An aircraft
+	// would taxi correctly to a stand on the far side and then jump to the runway and roll.
+	//
+	// The tolerance is the RUNWAY'S OWN WIDTH, so it scales with the strip rather than being
+	// a number chosen to make one airport work: a wider runway is correspondingly more
+	// forgiving about where its threshold is considered to begin, and a taxiway a hundred
+	// metres away is never mistaken for one.
+	const URoadProfile* SeedProfile = ProfileFor(Segments[Best]);
+	const double Reach = SeedProfile != nullptr ? SeedProfile->GetTotalWidth() : 0.0;
+	if (BestDistance > Reach)
+	{
+		return false;
+	}
+
 	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
 	// else - a threshold, or a node with a taxiway on it - ends the walk in that direction.
 	//

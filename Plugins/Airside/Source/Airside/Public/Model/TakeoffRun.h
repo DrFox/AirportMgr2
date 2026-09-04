@@ -96,6 +96,18 @@ struct AIRSIDE_API FTakeoffRun
 
 	bool HasCleared() const { return Phase == ETakeoffPhase::Clear; }
 
-	/** The ground roll this airframe needs to reach rotation speed, uu. v^2 / 2a. */
-	static double RequiredRoll(const FGroundPerformance& InGround);
+	/**
+	 * The ground roll this airframe needs TO LEAVE THE GROUND, uu.
+	 *
+	 * v^2/2a is only the roll to Vr, and for a while this returned it - which understated the
+	 * runway needed by the whole of the rotation, because the nose comes up at Vr and the
+	 * wheels stay down for another second and a half of accelerating. A strip that length
+	 * would have been accepted and run off the end.
+	 *
+	 * DELIBERATELY CONSERVATIVE. The rotation is timed as though the wing needed its full
+	 * angle at Vr, when in fact the angle it needs is falling the whole way up, so this
+	 * over-estimates by a little. That is the safe direction for a refusal: it declines a
+	 * marginal runway rather than committing to one.
+	 */
+	static double RequiredRoll(const FGroundPerformance& InGround, const FClimbPerformance& InClimb);
 };

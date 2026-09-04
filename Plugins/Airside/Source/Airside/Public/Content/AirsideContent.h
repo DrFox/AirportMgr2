@@ -6,9 +6,9 @@
 
 class UEntityDefinition;
 class UMaterialInterface;
-class URoadMaterialSet;
 class URoadProfile;
-class UStaticMesh;
+class UAnimInstance;
+class USkeletalMesh;
 
 /**
  * The content this plugin reaches for when nothing has been assigned by hand.
@@ -50,9 +50,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
 	TSoftObjectPtr<UMaterialInterface> GhostMaterial;
 
-	/** Per-band materials. Null is the supported single-material state. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
-	TSoftObjectPtr<URoadMaterialSet> MaterialSet;
+	// NO MaterialSet HERE, deliberately. A null one on the actor is not an unset field, it is
+	// the single-material road - so offering a default silently converts every airport that
+	// chose it. Assign one on the actor to get per-band materials.
 
 	/**
 	 * The runway cross-sections, one per standard width, widest last.
@@ -75,7 +75,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;
 
-	/** The airframe a dispatched agent wears. Null leaves the placeholder cube. */
+	/**
+	 * The airframe a dispatched agent wears. Null leaves the placeholder cube.
+	 *
+	 * SKELETAL, because the propeller and the wheels turn. A static mesh cannot animate, and
+	 * the parts that move are vertex groups inside one mesh rather than separate objects -
+	 * see the rig built by AirportMgr2Models/piperMeridian/scripts/build_lowpoly.py.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
-	TSoftObjectPtr<UStaticMesh> AgentMesh;
+	TSoftObjectPtr<USkeletalMesh> AgentMesh;
+
+	/**
+	 * What drives the airframe's moving parts. Null leaves it posed in its reference pose.
+	 *
+	 * A SOFT CLASS, and here rather than in C++, for the reason the rest of this asset exists:
+	 * an Animation Blueprint is content, and a path to it written into a constructor would be
+	 * a reference the editor cannot fix up when the asset moves. It also has to be soft
+	 * because the class lives in a Blueprint that C++ cannot name at compile time.
+	 *
+	 * Must be built on UAirsideAgentAnim, which is what computes the angles it applies.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> AgentAnimClass;
 };

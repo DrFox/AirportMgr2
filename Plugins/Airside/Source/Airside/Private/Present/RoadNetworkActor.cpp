@@ -458,37 +458,47 @@ URoadEditHistory& ARoadNetworkActor::EnsureHistory()
 	return *History;
 }
 
-void ARoadNetworkActor::PostInitProperties()
+UMaterialInterface* ARoadNetworkActor::ResolveSurfaceMaterial() const
 {
-	Super::PostInitProperties();
-
-	// INSTANCES ONLY. The class default object is built while the module loads, which is
-	// exactly the moment the asset registry cannot be relied on - it is the reason the old
-	// path lookups needed ConstructorHelpers, and re-entering it here would reintroduce the
-	// problem this change exists to remove.
-	if (!HasAnyFlags(RF_ClassDefaultObject))
-	{
-		// Here as well as at rebuild because a tool can read StandDefinition before anything
-		// has ever been built - placing the first stand on an empty network does exactly that.
-		ApplyContentDefaults();
-	}
+	if (SurfaceMaterial != nullptr) { return SurfaceMaterial; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->SurfaceMaterial.LoadSynchronous() : nullptr;
 }
 
-void ARoadNetworkActor::ApplyContentDefaults()
+UMaterialInterface* ARoadNetworkActor::ResolveApronMaterial() const
 {
-	// Only ever fills a null. Anything assigned in the Details panel, or by a Blueprint,
-	// or by a previous call, wins - this supplies a default, it does not impose one.
+	if (ApronMaterial != nullptr) { return ApronMaterial; }
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	if (Content == nullptr)
-	{
-		return;
-	}
+	return Content != nullptr ? Content->ApronMaterial.LoadSynchronous() : nullptr;
+}
 
-	if (SurfaceMaterial == nullptr) { SurfaceMaterial = Content->SurfaceMaterial.LoadSynchronous(); }
-	if (ApronMaterial == nullptr)   { ApronMaterial   = Content->ApronMaterial.LoadSynchronous(); }
-	if (GhostMaterial == nullptr)   { GhostMaterial   = Content->GhostMaterial.LoadSynchronous(); }
-	if (MaterialSet == nullptr)     { MaterialSet     = Content->MaterialSet.LoadSynchronous(); }
-	if (StandDefinition == nullptr) { StandDefinition = Content->DefaultStand.LoadSynchronous(); }
+UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
+{
+	if (GhostMaterial != nullptr) { return GhostMaterial; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->GhostMaterial.LoadSynchronous() : nullptr;
+}
+
+URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
+{
+	// NO DEFAULT, and this one is different from the others on purpose.
+	//
+	// A null material set is not "unset", it is a STATE: the road is drawn with one material
+	// throughout. So a resolver cannot supply a default here without changing what an airport
+	// looks like, and it cannot tell "never chosen" from "deliberately cleared" - which is
+	// exactly what happened. Removing the write that filled this property was not enough,
+	// because handing back the same value from the content set produced the identical road.
+	//
+	// Per-band materials are still available: assign one on the actor and it is used. What is
+	// gone is the plugin deciding you wanted them.
+	return MaterialSet;
+}
+
+UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
+{
+	if (StandDefinition != nullptr) { return StandDefinition; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->DefaultStand.LoadSynchronous() : nullptr;
 }
 
 URoadProfile* ARoadNetworkActor::ResolveProfile()
@@ -880,9 +890,10 @@ FRoadNodeId ARoadNetworkActor::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId 
 
 UMaterialInstanceDynamic* ARoadNetworkActor::GhostMaterialInstance()
 {
-	if (GhostMID == nullptr && GhostMaterial != nullptr)
+	UMaterialInterface* Base = ResolveGhostMaterial();
+	if (GhostMID == nullptr && Base != nullptr)
 	{
-		GhostMID = UMaterialInstanceDynamic::Create(GhostMaterial, this);
+		GhostMID = UMaterialInstanceDynamic::Create(Base, this);
 	}
 	return GhostMID;
 }
@@ -1444,7 +1455,7 @@ void ARoadNetworkActor::RebuildAprons()
 	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
 
 	FDynamicMeshSink Sink(ApronComponent,
-		ApronMaterial != nullptr ? ApronMaterial : SurfaceMaterial,
+		ResolveApronMaterial() != nullptr ? ResolveApronMaterial() : ResolveSurfaceMaterial(),
 		bUseConstantApronColour);
 	Sink.Accept(Buffers);
 
@@ -1456,7 +1467,7 @@ void ARoadNetworkActor::RebuildAprons()
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
 		Built, Buffers.Indices.Num() / 3, GetApronSurfaceZ(),
-		ApronMaterial != nullptr ? *ApronMaterial->GetName() : TEXT("<fallback>"),
+		ResolveApronMaterial() != nullptr ? *ResolveApronMaterial()->GetName() : TEXT("<fallback>"),
 		bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
 
 	// Worth saying out loud: a road surface this close to the ground leaves nothing to
@@ -1492,7 +1503,8 @@ void ARoadNetworkActor::RebuildAprons()
 
 int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
 {
-	if (StandDefinition == nullptr)
+	UEntityDefinition* Stand = ResolveStandDefinition();
+	if (Stand == nullptr)
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceStand refused: no StandDefinition. Author DA_Stand_CodeC with "
@@ -1503,7 +1515,7 @@ int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
 
-	const FEntityInstanceId Placed = Net.PlaceEntity(StandDefinition, Where, Heading);
+	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Where, Heading);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;
@@ -1597,10 +1609,6 @@ void ARoadNetworkActor::RebuildMesh()
 		return;
 	}
 
-	// Whatever is still unassigned, from the configured content set. Here rather than in the
-	// constructor because that is the one moment the asset registry cannot be relied on.
-	ApplyContentDefaults();
-
 	// BEFORE the solve, because the solver reads it. Segments made in this session already
 	// carry this profile; segments reloaded from a saved level carry null, because the
 	// profile they were given lived in the transient package and never survived the save.
@@ -1619,13 +1627,17 @@ void ARoadNetworkActor::RebuildMesh()
 	FRoadGuidelineBuilder::Build(*Network, Solved);
 	FAnchorLink::Build(*Network);
 
-	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit, MaterialSet);
+	// THROUGH THE RESOLVERS, never the raw properties: an unset MaterialSet means "single
+	// material", and the content default supplies one without the actor being altered to say
+	// so. Reading MaterialSet directly here was fine; it was FILLING it that changed a level.
+	URoadMaterialSet* const UseMaterials = ResolveMaterialSet();
+	FRoadMeshBuilder Builder(SurfaceZ, TexelsPerUnit, UseMaterials);
 
 	Builder.Build(*Network, Solved, RibbonSegments);
 
 	// MaterialSet null keeps SurfaceMaterial and the single-slot path, so a level that has
 	// not been given a set renders exactly as it did before per-band materials.
-	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, bUseConstantVertexColour, MaterialSet);
+	FDynamicMeshSink Sink(MeshComponent, ResolveSurfaceMaterial(), bUseConstantVertexColour, UseMaterials);
 	Builder.Emit(Sink);
 
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt
@@ -1663,6 +1675,36 @@ void ARoadNetworkActor::RebuildMesh()
 	// identically. That ambiguity cost a whole diagnosis - a level with five nodes and no
 	// segments SHOULD produce no road surface, and there was no way to tell that from a
 	// builder that had stopped emitting bands.
+	// WHAT THE SEGMENTS THEMSELVES USED, not just what the default was. "The roads changed
+	// width when I clicked a tool" is unanswerable from the default alone: a segment with its
+	// own profile ignores it, and the interesting case is precisely when some segments have
+	// one and some do not. Reported as a census so the next reproduction says which.
+	int32 OwnProfile = 0;
+	int32 Fallback = 0;
+	double NarrowestUsed = TNumericLimits<double>::Max();
+	double WidestUsed = 0.0;
+	for (const FRoadSegment& Segment : Network->GetSegments())
+	{
+		if (!Segment.bAlive)
+		{
+			continue;
+		}
+		Segment.Profile != nullptr ? ++OwnProfile : ++Fallback;
+		if (const URoadProfile* Used_ = Network->ProfileFor(Segment))
+		{
+			NarrowestUsed = FMath::Min(NarrowestUsed, Used_->GetTotalWidth());
+			WidestUsed = FMath::Max(WidestUsed, Used_->GetTotalWidth());
+		}
+	}
+
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Profiles: %d segments own theirs, %d fall back; widths used %.0f..%.0f uu. "
+			 "SurfaceMaterial=%s MaterialSet=%s"),
+		OwnProfile, Fallback,
+		OwnProfile + Fallback > 0 ? NarrowestUsed : 0.0, WidestUsed,
+		ResolveSurfaceMaterial() != nullptr ? *ResolveSurfaceMaterial()->GetName() : TEXT("none"),
+		ResolveMaterialSet() != nullptr ? *ResolveMaterialSet()->GetName() : TEXT("none"));
+
 	const URoadProfile* Used = Network->DefaultProfile;
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Rebuilt: %d nodes (%d failed), %d segments, %d aprons, %d vertices, %d triangles, "
@@ -1687,6 +1729,30 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 	return World != nullptr && !World->IsGameWorld();
 }
 
+FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
+	double Altitude, double PitchDegrees) const
+{
+	FAgentMotion Motion;
+	Motion.Position = At;
+	Motion.Heading = Heading;
+	Motion.Altitude = Altitude;
+	Motion.PitchDegrees = PitchDegrees;
+
+	// Whichever phase is driving. The follower's speed is meaningless once a departure has
+	// taken over, and the departure's is meaningless before it.
+	Motion.GroundSpeed = bDeparting ? Departure.Speed : Follower.Speed;
+
+	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
+	// turning propeller, which is what this used to get wrong.
+	Motion.bEngineRunning = bEngineRunning;
+
+	// Off the wheels only once the rotation is finished. The phase already knows, so nothing
+	// here has to infer it from the altitude being above zero.
+	Motion.bAirborne = bDeparting && Departure.Phase == ETakeoffPhase::Climb;
+
+	return Motion;
+}
+
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -1708,7 +1774,8 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 			{
 				if (Agent.View != nullptr)
 				{
-					Agent.View->SetPose(At, Heading, SurfaceZ, Altitude, Pitch);
+					Agent.View->SetMotion(
+						Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
 				}
 				continue;
 			}
@@ -1736,7 +1803,7 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 
 		if (Agent.View != nullptr)
 		{
-			Agent.View->SetPose(At, Heading, SurfaceZ);
+			Agent.View->SetMotion(Agent.DescribeMotion(At, Heading), SurfaceZ);
 		}
 
 		// ARRIVED ON A RUNWAY: hand over. The heading it arrived on is handed across too, so
@@ -1780,6 +1847,10 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	FRoadAgent Agent;
 	Agent.Follower.Start(Plan, Ground);
 
+	// It was dispatched, so it is running. Nothing shuts an engine down yet; when a
+	// turnaround does, this is the flag it clears.
+	Agent.bEngineRunning = true;
+
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
 	// is a fact about the network and the last polyline point is the only thing that knows
 	// where the route actually finished. A route that ends anywhere else simply taxis, which
@@ -1818,18 +1889,28 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	// how a content move turned every aircraft into a cube - see ARoadAgentActor::SetAirframe.
 	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 	{
-		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous());
+		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
+			Content->AgentAnimClass.LoadSynchronous());
 	}
 
 	// Posed before the first tick, so it appears at its start rather than at the origin
 	// for one frame.
-	Agent.View->SetPose(Plan.Polyline[0], 0.0, SurfaceZ);
+	{
+		// Placed before its first tick so it never appears at the origin for a frame - this
+		// project's most-repeated bug. Stationary, so nothing is turning yet.
+		FAgentMotion Spawn;
+		Spawn.Position = Plan.Polyline[0];
+		Agent.View->SetMotion(Spawn, SurfaceZ);
+	}
 
 	FVector2D At;
 	double Heading = 0.0;
 	if (Agent.Follower.Advance(0.0, At, Heading))
 	{
-		Agent.View->SetPose(At, Heading, SurfaceZ);
+		FAgentMotion Motion;
+		Motion.Position = At;
+		Motion.Heading = Heading;
+		Agent.View->SetMotion(Motion, SurfaceZ);
 	}
 
 	Agents.Add(Agent);

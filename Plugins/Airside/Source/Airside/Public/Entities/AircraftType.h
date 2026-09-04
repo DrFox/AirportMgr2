@@ -39,6 +39,19 @@ public:
 	UPROPERTY(EditAnywhere) FEntityFootprint Footprint;
 
 	/**
+	 * Main wheel radius, uu. What a rolling wheel's spin rate is divided by.
+	 *
+	 * MEASURED off the model, not estimated: the Meridian's mains are 0.420 m across in
+	 * piper_aligned.blend, and their axle sits at Z = 0.21 with the origin on the ground,
+	 * which is the same number arrived at twice. An earlier guess of 0.34 m would have turned
+	 * the wheels at two thirds of the right rate - slow enough to look like a skid.
+	 */
+	UPROPERTY(EditAnywhere) double MainWheelRadius = 21.0;
+
+	/** Propeller diameter, uu. Measured at 1.814 m on the model; published is 2.03. */
+	UPROPERTY(EditAnywhere) double PropellerDiameter = 181.4;
+
+	/**
 	 * Where each service connects to THIS aircraft: hold doors, refuel panel, galley
 	 * doors, ground power receptacle, nose gear for the tug.
 	 *
