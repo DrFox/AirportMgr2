@@ -8,6 +8,25 @@ namespace GuidelineGeom
 		return (U * U) * A + (2.0 * U * T) * Control + (T * T) * B;
 	}
 
+	FVector2D Tangent(const FVector2D& A, const FVector2D& Control, const FVector2D& B, double T)
+	{
+		// d/dt of (1-t)^2 A + 2(1-t)t C + t^2 B, with the constant factor of 2 dropped -
+		// only the direction is wanted.
+		const double Clamped = FMath::Clamp(T, 0.0, 1.0);
+		const FVector2D Derivative = (Control - A) * (1.0 - Clamped) + (B - Control) * Clamped;
+
+		const FVector2D Unit = Derivative.GetSafeNormal();
+		if (!Unit.IsNearlyZero())
+		{
+			return Unit;
+		}
+
+		// Degenerate: the control point sits on an end, so the derivative vanishes there.
+		// The chord is the only direction left that means anything.
+		const FVector2D Chord = (B - A).GetSafeNormal();
+		return Chord.IsNearlyZero() ? FVector2D(1.0, 0.0) : Chord;
+	}
+
 	bool IsStraight(const FVector2D& A, const FVector2D& Control, const FVector2D& B)
 	{
 		// Scaled to the guideline's own length: a fixed tolerance is either meaningless on

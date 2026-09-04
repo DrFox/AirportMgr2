@@ -104,20 +104,38 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and the route ends at the nose stop"),
 			FVector2D::Distance(Plan.Polyline.Last(), Stop->Position) < 1.0);
 
-		// The taxiway was SPLIT rather than merely touched: the lead-in meets it at a real
-		// node, so traffic can continue past the stand in both directions. A lead-in joined
-		// to an endpoint instead would silently reroute every through movement via the
-		// stand.
-		const FGuidelineNode* Junction = Net->GetGuidelineNode(Plan.Steps.Last().bReversed
+		// The lead-in ends where the SWEEP takes over, not on the taxiway.
+		//
+		// It used to end on the centreline, and that was the defect: the ray meets the
+		// taxiway square-on, so joining there made a 90 degree corner. The straight painted
+		// line now stops short and two arcs carry the turn - see RoadNet.Build.LeadInSweep,
+		// which measures the angle rather than the topology.
+		const FGuidelineNode* LeadEnd = Net->GetGuidelineNode(Plan.Steps.Last().bReversed
 			? Net->GetGuidelineEdge(Plan.Steps.Last().Edge)->B
 			: Net->GetGuidelineEdge(Plan.Steps.Last().Edge)->A);
-		if (TestNotNull(TEXT("the lead-in has a junction end"), Junction))
+		if (TestNotNull(TEXT("the lead-in has a far end"), LeadEnd))
 		{
-			TestEqual(TEXT("the split lands on the taxiway"), Junction->Position.Y, 0.0);
-			TestEqual(TEXT("directly below the stand"), Junction->Position.X, 0.0);
+			TestEqual(TEXT("still directly above the stand, on the painted line"),
+				LeadEnd->Position.X, 0.0);
+			TestTrue(TEXT("but set BACK from the taxiway, leaving room for the turn"),
+				LeadEnd->Position.Y > 1.0);
 
-			// Two taxiway halves plus the lead-in.
-			TestEqual(TEXT("three edges meet at the split"), Junction->Incident.Num(), 3);
+			// The lead-in plus one sweep each way.
+			TestEqual(TEXT("three edges meet where the sweeps begin"), LeadEnd->Incident.Num(), 3);
+		}
+
+		// The taxiway was SPLIT rather than merely touched, and to BOTH sides: an aircraft
+		// taxiing past the stand must still get through. Asserted as a route rather than
+		// inferred from a node's degree, because through-traffic is the thing that actually
+		// matters and a correct-looking degree can still be a severed taxiway.
+		{
+			FRouteQuery Through;
+			Through.Start = West;
+			Through.Goal = East;
+			Through.Class = ETraversalClass::Aircraft;
+
+			TestTrue(TEXT("traffic still passes the stand from end to end"),
+				RouteSearch::Find(*Net, Through).IsValid());
 		}
 	}
 
