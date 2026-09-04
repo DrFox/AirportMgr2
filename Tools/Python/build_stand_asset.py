@@ -23,7 +23,7 @@ the .uasset open and create_asset then refuses under -unattended.
 """
 import unreal
 
-ASSET_DIR = "/Game/RoadNet/Entities"
+ASSET_DIR = "/Game/Entities"
 
 
 def replace_asset(name, asset_class, factory):

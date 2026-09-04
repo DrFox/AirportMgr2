@@ -208,6 +208,25 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// array, which is the honest answer: no ids, no duplicate ids.
 
 	Type->Ground = PiperMeridianGround();
+	Type->Climb = PiperMeridianClimb();
+}
+
+FClimbPerformance UAircraftType::PiperMeridianClimb()
+{
+	FClimbPerformance Climb;
+
+	// 1540 fpm published, which is 7.8 m/s.
+	Climb.ClimbRate = 780.0;
+
+	// A light turboprop climbs out around 8 degrees nose-up at Vy. Not a published number -
+	// it is an attitude, and it is here to look right rather than to be flown by.
+	Climb.ClimbPitchDegrees = 8.0;
+	Climb.RotateRateDegPerSec = 4.0;
+
+	// 300 m. High enough to be clearly departing and low enough to still be worth watching.
+	Climb.ClearAltitude = 30000.0;
+
+	return Climb;
 }
 
 FGroundPerformance UAircraftType::PiperMeridianGround()
@@ -246,6 +265,23 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 	// aeroplane and is why FGroundRegime keeps the two apart rather than carrying one rate.
 	Ground.Taxi.Accel = 100.0;
 	Ground.Taxi.Decel = 200.0;
+
+	// TAKE-OFF, derived from two published figures rather than dialled in.
+	//
+	//   rotation ~85 KIAS      = 44 m/s
+	//   sea-level ground roll  = about 1000 ft, 305 m
+	//
+	//   a = v2 / 2s = 44 x 44 / (2 x 305) = 3.2 m/s2
+	//
+	// About three times what it taxis at, which is the number that makes a roll read as a
+	// take-off rather than as a brisk taxi. If the aircraft leaves the ground in the wrong
+	// distance, the figure to argue with is one of those two, not this one.
+	Ground.Takeoff.Accel = 320.0;
+	Ground.Takeoff.SpeedCap = 4400.0;
+
+	// A rejected take-off is braking hard from near Vr - harder than anything taxiing asks
+	// for, and the one time a light aircraft uses its brakes in anger.
+	Ground.Takeoff.Decel = 400.0;
 
 	return Ground;
 }

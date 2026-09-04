@@ -68,6 +68,25 @@ public:
 	/** Preferred corner radius in uu. Clamped by geometry at solve time. */
 	UPROPERTY(EditAnywhere) double PreferredFilletRadius = 1500.0;
 
+	/**
+	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are
+	 * never trimmed and no junction polygon is paved over them. True for a runway.
+	 *
+	 * ON THE PROFILE, not on the segment, because continuity is a fact about the KIND of
+	 * pavement: a runway edge runs unbroken from threshold to threshold and a taxiway meeting
+	 * it fillets into that edge, while two taxiways meeting each other both give way to a
+	 * paved junction. Putting it here also means splitting a runway to add an exit cannot
+	 * lose it - both halves keep the profile, and so keep the property.
+	 *
+	 * It is also what makes "a runway must be straight" cost nothing in the model: the halves
+	 * of a split segment are collinear by construction, and an uncut node between two
+	 * collinear arms produces no polygon at all.
+	 *
+	 * See FJunctionArm::bContinuous for what the solver does with it, and
+	 * Airside.Solve.RunwayContinuity for the property it buys.
+	 */
+	UPROPERTY(EditAnywhere) bool bContinuousThroughJunctions = false;
+
 	double GetTotalWidth() const;
 	double GetHalfWidthLeft() const;
 	double GetHalfWidthRight() const;
@@ -81,4 +100,17 @@ public:
 	 * keeps the single-band profile it already had.
 	 */
 	static URoadProfile* MakeTransient(double TotalWidth, double FilletRadius, double ShoulderWidth = 0.0);
+
+	/**
+	 * Fills Profile with the standard taxiway cross-section, replacing whatever it held.
+	 *
+	 * Exposed to script for the same reason UEntityDefinition::BuildCodeCStand is: the
+	 * authoring commandlet that writes DA_RoadProfile_Taxiway must lay down the SAME bands
+	 * the tests exercise, rather than a second transcription of them that is free to drift.
+	 *
+	 * MakeTransient is this plus a NewObject, so there is one description of a taxiway.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	static void Fill(URoadProfile* Profile, double TotalWidth, double FilletRadius,
+		double ShoulderWidth = 0.0);
 };

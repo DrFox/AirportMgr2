@@ -57,6 +57,14 @@ public:
 	 */
 	UPROPERTY(EditAnywhere) FGroundPerformance Ground;
 
+	/**
+	 * What it does once the wheels are off: climb rate, attitude, and when it is gone.
+	 *
+	 * Beside Ground rather than inside it, because FGroundPerformance is named for what it
+	 * describes and a climb rate in it would be a lie in the field list. See FClimbPerformance.
+	 */
+	UPROPERTY(EditAnywhere) FClimbPerformance Climb;
+
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
 
@@ -108,4 +116,7 @@ public:
 	 * numbers at the call site instead, which is how a figure ends up written twice.
 	 */
 	static FGroundPerformance PiperMeridianGround();
+
+	/** The Meridian's climb, for the same reason PiperMeridianGround exists. */
+	static FClimbPerformance PiperMeridianClimb();
 };

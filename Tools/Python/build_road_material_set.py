@@ -16,8 +16,8 @@ records no reason for its ordering; this file does.
 """
 import unreal
 
-MAT_DIR = "/Game/RoadNet/Materials"
-ASSET_DIR = "/Game/RoadNet"
+MAT_DIR = "/Game/Materials"
+ASSET_DIR = "/Game/Materials"
 ASSET_NAME = "DA_RoadMaterials"
 
 # ORDER IS THE CONTRACT. Append only; never insert, never sort.

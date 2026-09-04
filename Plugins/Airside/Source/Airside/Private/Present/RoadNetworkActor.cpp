@@ -1,6 +1,9 @@
 #include "Present/RoadNetworkActor.h"
 
 #include "Build/RoadMeshBuilder.h"
+#include "Content/AirsideContent.h"
+#include "Solve/RunwayDesignator.h"
+#include "Content/AirsideSettings.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -25,7 +28,6 @@
 #include "Tool/RoadEditHistory.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/RoadHeal.h"
-#include "UObject/ConstructorHelpers.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
 
@@ -352,30 +354,12 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// then compute tangents from UV0 specifically rather than from whatever the component
 	// picks.
 
-	// Resolved by path rather than left for a Blueprint to assign, so a freshly placed
-	// actor renders as asphalt with no setup at all. If the asset is missing this stays
-	// null and Accept falls back to the engine default plus a colour override - which
-	// degrades quietly, so a missing material looks like the old placeholder rather than
-	// like an error.
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> RoadMaterial(
-		TEXT("/Game/RoadNet/Materials/M_RoadSurface"));
-	if (RoadMaterial.Succeeded())
-	{
-		SurfaceMaterial = RoadMaterial.Object;
-	}
-
-	// Defaulted here for the same reason as the materials above, and one more: this actor
-	// lives in a level that is deliberately never saved, so a set assigned by hand in the
-	// Details panel would be gone at the next editor start. A class default survives.
-	//
-	// Missing keeps MaterialSet null, which is the supported single-material state - the
-	// road renders as it did before per-band materials, rather than as an error.
-	static ConstructorHelpers::FObjectFinder<URoadMaterialSet> RoadMaterials(
-		TEXT("/Game/RoadNet/DA_RoadMaterials"));
-	if (RoadMaterials.Succeeded())
-	{
-		MaterialSet = RoadMaterials.Object;
-	}
+	// NOTHING IS RESOLVED HERE ANY MORE. Materials, the material set, the stand definition
+	// and the default profile were all ConstructorHelpers::FObjectFinder calls against
+	// literal /Game/ paths, which is what let a freshly placed actor render with no setup -
+	// and what made eight references the editor could not see when a content folder moved.
+	// ApplyContentDefaults fills in whatever is still null, at the moment it is first
+	// wanted. See UAirsideSettings for why that cannot happen in a constructor.
 
 	// A second component for the preview, sharing the road's absolute-space setup for the
 	// same reason: the builder emits world coordinates and must not have them transformed
@@ -401,26 +385,6 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	static ConstructorHelpers::FObjectFinder<UEntityDefinition> StandAsset(
-		TEXT("/Game/RoadNet/Entities/DA_Stand_CodeC"));
-	if (StandAsset.Succeeded())
-	{
-		StandDefinition = StandAsset.Object;
-	}
-
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> ApronAsset(
-		TEXT("/Game/RoadNet/Materials/M_ApronConcrete"));
-	if (ApronAsset.Succeeded())
-	{
-		ApronMaterial = ApronAsset.Object;
-	}
-
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GhostAsset(
-		TEXT("/Game/RoadNet/Materials/M_RoadGhost"));
-	if (GhostAsset.Succeeded())
-	{
-		GhostMaterial = GhostAsset.Object;
-	}
 }
 
 URoadNetwork& ARoadNetworkActor::EnsureNetwork()
@@ -494,8 +458,44 @@ URoadEditHistory& ARoadNetworkActor::EnsureHistory()
 	return *History;
 }
 
+void ARoadNetworkActor::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+	// INSTANCES ONLY. The class default object is built while the module loads, which is
+	// exactly the moment the asset registry cannot be relied on - it is the reason the old
+	// path lookups needed ConstructorHelpers, and re-entering it here would reintroduce the
+	// problem this change exists to remove.
+	if (!HasAnyFlags(RF_ClassDefaultObject))
+	{
+		// Here as well as at rebuild because a tool can read StandDefinition before anything
+		// has ever been built - placing the first stand on an empty network does exactly that.
+		ApplyContentDefaults();
+	}
+}
+
+void ARoadNetworkActor::ApplyContentDefaults()
+{
+	// Only ever fills a null. Anything assigned in the Details panel, or by a Blueprint,
+	// or by a previous call, wins - this supplies a default, it does not impose one.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content == nullptr)
+	{
+		return;
+	}
+
+	if (SurfaceMaterial == nullptr) { SurfaceMaterial = Content->SurfaceMaterial.LoadSynchronous(); }
+	if (ApronMaterial == nullptr)   { ApronMaterial   = Content->ApronMaterial.LoadSynchronous(); }
+	if (GhostMaterial == nullptr)   { GhostMaterial   = Content->GhostMaterial.LoadSynchronous(); }
+	if (MaterialSet == nullptr)     { MaterialSet     = Content->MaterialSet.LoadSynchronous(); }
+	if (StandDefinition == nullptr) { StandDefinition = Content->DefaultStand.LoadSynchronous(); }
+}
+
 URoadProfile* ARoadNetworkActor::ResolveProfile()
 {
+	// AUTHORED INPUT, READ AND NEVER WRITTEN. This briefly assigned Profile when it found it
+	// null - a resolver that writes to the property it resolves has turned a setting into a
+	// cache, and in an editor world, where this actor ticks, that write lands on the level.
 	if (Profile != nullptr)
 	{
 		return Profile;
@@ -503,11 +503,25 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 	if (RuntimeProfile == nullptr)
 	{
-		// A tenth of the width per side. Without a Shoulder band the profile has no outer
+		// FROM THIS ACTOR'S OWN FallbackWidth, and deliberately not from the content set.
+		//
+		// A configured default was briefly consulted here, above these fields. It looked
+		// harmless - both are 2300 by default - and it silently overrode every instance
+		// whose width had been tuned in the Details panel, because the class default is not
+		// the instance value. A road authored narrow came back at the class width and its
+		// centreline marking, which scales with the surface, came back as a yellow slab.
+		//
+		// The content set has no business here at all: this is per-instance tuning, and the
+		// serialisation problem it was brought in to solve is not this function's. Segments
+		// reloaded with a null profile are repaired through URoadNetwork::DefaultProfile,
+		// which RebuildMesh reassigns every time and so never depends on being saved.
+		//
+		// A tenth of the width per side: without a Shoulder band the profile has no outer
 		// band to fade and the road ends in a knife edge against the ground.
 		RuntimeProfile = URoadProfile::MakeTransient(
 			FallbackWidth, FallbackFilletRadius, FallbackWidth * 0.1);
 	}
+
 	return RuntimeProfile;
 }
 
@@ -585,6 +599,60 @@ bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
 	}
 
 	Edit.Commit();
+	return true;
+}
+
+bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
+{
+	if (Network == nullptr)
+	{
+		return false;
+	}
+
+	if (RunwayProfile == nullptr)
+	{
+		// Refused rather than defaulted. Falling back to ResolveProfile here would lay a
+		// taxiway at runway length and call it a runway - the right shape on screen and the
+		// wrong behaviour at every exit, with nothing to say so.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceRunway refused: no runway profile. Check Project Settings > Plugins > "
+				 "Airside, the content set's RunwayProfiles."));
+		return false;
+	}
+
+	const double Length = FVector2D::Distance(From, To);
+	if (Length < MinimumRunwayLength)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceRunway refused: %.0f uu is under the %.0f uu minimum"),
+			Length, MinimumRunwayLength);
+		return false;
+	}
+
+	// After the guards, all of which refuse without mutating, so a rejected runway never
+	// costs a snapshot - the same rule ConnectNodes follows.
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("place runway"));
+
+	const FRoadNodeId A = Network->AddNode(From);
+	const FRoadNodeId B = Network->AddNode(To);
+	if (!A.IsSet() || !B.IsSet())
+	{
+		return false;
+	}
+
+	// STRAIGHT, and the model cannot express otherwise here: AddStraightSegment puts the
+	// control point on the midpoint, which IsStraight tests for exactly.
+	const FRoadSegmentId Segment = Network->AddStraightSegment(A, B, RunwayProfile);
+	if (!Segment.IsSet())
+	{
+		return false;
+	}
+
+	Edit.Commit();
+	RebuildMesh();
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide"),
+		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth());
 	return true;
 }
 
@@ -1529,6 +1597,17 @@ void ARoadNetworkActor::RebuildMesh()
 		return;
 	}
 
+	// Whatever is still unassigned, from the configured content set. Here rather than in the
+	// constructor because that is the one moment the asset registry cannot be relied on.
+	ApplyContentDefaults();
+
+	// BEFORE the solve, because the solver reads it. Segments made in this session already
+	// carry this profile; segments reloaded from a saved level carry null, because the
+	// profile they were given lived in the transient package and never survived the save.
+	// Handing it to the network repairs both cases through one accessor - see
+	// URoadNetwork::ProfileFor, and Airside.Build.ProfileFallback for what it is worth.
+	Network->DefaultProfile = ResolveProfile();
+
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
 
 	// The guideline graph is derived from the same solve, and until this call existed it
@@ -1579,9 +1658,21 @@ void ARoadNetworkActor::RebuildMesh()
 			FColor::Magenta, false, Lifetime, 0, 8.0f);
 	}
 
-	UE_LOG(LogRoadMesh, Log, TEXT("Rebuilt: %d nodes (%d failed), %d vertices, %d triangles"),
+	// SEGMENTS AND APRONS ARE REPORTED, not just nodes, because without them "0 triangles"
+	// is ambiguous in the one way that matters: an empty network and a broken builder read
+	// identically. That ambiguity cost a whole diagnosis - a level with five nodes and no
+	// segments SHOULD produce no road surface, and there was no way to tell that from a
+	// builder that had stopped emitting bands.
+	const URoadProfile* Used = Network->DefaultProfile;
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Rebuilt: %d nodes (%d failed), %d segments, %d aprons, %d vertices, %d triangles, "
+			 "default profile '%s' %.0f uu wide"),
 		Solved.SolvedNodes, Solved.FailedNodes,
-		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3);
+		Network != nullptr ? Network->GetSegments().Num() : -1,
+		Network != nullptr ? Network->GetAprons().Num() : -1,
+		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3,
+		Used != nullptr ? *Used->GetName() : TEXT("none"),
+		Used != nullptr ? Used->GetTotalWidth() : 0.0);
 }
 
 bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
@@ -1600,10 +1691,39 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	for (FRoadAgent& Agent : Agents)
+	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
+		FRoadAgent& Agent = Agents[Index];
+
 		FVector2D At;
 		double Heading = 0.0;
+
+		// AIRBORNE: the departure drives it, and the follower is done with it. Two phases,
+		// one at a time - see FTakeoffRun for why they are not one class.
+		if (Agent.bDeparting)
+		{
+			double Altitude = 0.0;
+			double Pitch = 0.0;
+			if (Agent.Departure.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
+			{
+				if (Agent.View != nullptr)
+				{
+					Agent.View->SetPose(At, Heading, SurfaceZ, Altitude, Pitch);
+				}
+				continue;
+			}
+
+			// Cleared. The aircraft has gone, so the actor goes with it - an agent that
+			// climbed away and stayed in the world would accumulate one aircraft per
+			// departure, hanging above the airport for ever.
+			UE_LOG(LogRoadMesh, Log, TEXT("Departure complete, agent despawned"));
+			if (Agent.View != nullptr)
+			{
+				Agent.View->Destroy();
+			}
+			Agents.RemoveAt(Index);
+			continue;
+		}
 
 		// Advance is the ONLY thing that decides where an agent is. When it declines - no
 		// route, or a polyline too short to have a direction - the pose is left exactly as
@@ -1618,10 +1738,22 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 		{
 			Agent.View->SetPose(At, Heading, SurfaceZ);
 		}
+
+		// ARRIVED ON A RUNWAY: hand over. The heading it arrived on is handed across too, so
+		// the line-up turn starts from where the taxi actually left it rather than from a
+		// fresh guess - which is what makes a backtrack read as a backtrack.
+		if (Agent.bDepartOnArrival && Agent.Follower.HasArrived())
+		{
+			Agent.bDepartOnArrival = false;
+			Agent.bDeparting = Agent.Departure.Start(
+				Agent.DepartureThreshold, Agent.DepartureDirection, Agent.DepartureRunwayLength,
+				Agent.Follower.Ground, Agent.DepartureClimb, Heading);
+		}
 	}
 }
 
-bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground)
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
+	const FClimbPerformance& Climb)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
@@ -1648,6 +1780,29 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	FRoadAgent Agent;
 	Agent.Follower.Start(Plan, Ground);
 
+	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
+	// is a fact about the network and the last polyline point is the only thing that knows
+	// where the route actually finished. A route that ends anywhere else simply taxis, which
+	// is what every route did before departures existed.
+	if (Network != nullptr && Plan.Polyline.Num() > 0 && Climb.IsSet())
+	{
+		FVector2D Threshold;
+		FVector2D Direction;
+		double Length = 0.0;
+		if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length))
+		{
+			Agent.bDepartOnArrival = true;
+			Agent.DepartureThreshold = Threshold;
+			Agent.DepartureDirection = Direction;
+			Agent.DepartureRunwayLength = Length;
+			Agent.DepartureClimb = Climb;
+
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
+				*RunwayDesignator::ToPairText(Direction), Length);
+		}
+	}
+
 	FActorSpawnParameters Params;
 	Params.Owner = this;
 	Params.ObjectFlags |= RF_Transient;
@@ -1657,6 +1812,13 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	if (Agent.View == nullptr)
 	{
 		return false;
+	}
+
+	// The airframe is pushed in, like the pose. A view that fetched its own mesh by path was
+	// how a content move turned every aircraft into a cube - see ARoadAgentActor::SetAirframe.
+	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
+	{
+		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous());
 	}
 
 	// Posed before the first tick, so it appears at its start rather than at the origin

@@ -4,6 +4,7 @@
 #include "GameFramework/Actor.h"
 #include "RoadAgentActor.generated.h"
 
+class UStaticMesh;
 class UStaticMeshComponent;
 
 /**
@@ -25,8 +26,25 @@ class AIRSIDE_API ARoadAgentActor : public AActor
 public:
 	ARoadAgentActor();
 
-	/** Position in road-plane XY, heading in radians, Z the road surface height. */
-	void SetPose(const FVector2D& Position, double Heading, double SurfaceZ);
+	/**
+	 * Position in road-plane XY, heading in radians, Z the road surface height.
+	 *
+	 * Altitude is ABOVE that surface and pitch is nose-up in degrees, both zero for anything
+	 * on the ground - which is every caller until a departure rotates. Defaulted rather than
+	 * added to every call site, because "on the wheels" is the overwhelmingly common case and
+	 * an explicit zero at each taxi call would be noise.
+	 */
+	void SetPose(const FVector2D& Position, double Heading, double SurfaceZ,
+		double Altitude = 0.0, double PitchDegrees = 0.0);
+
+	/**
+	 * Dresses this agent in an airframe. Null leaves the placeholder cube standing.
+	 *
+	 * PUSHED IN by whoever spawned it, exactly as the pose is. This class held the mesh's
+	 * path itself until a content move proved that a path in C++ is a reference the editor
+	 * cannot maintain - and a view that fetches its own assets is doing a second job anyway.
+	 */
+	void SetAirframe(UStaticMesh* Airframe);
 
 private:
 	UPROPERTY() TObjectPtr<UStaticMeshComponent> Mesh;

@@ -97,6 +97,42 @@ struct AIRSIDE_API FGroundRegime
 };
 
 /**
+ * What the aircraft does once the wheels leave the ground.
+ *
+ * SEPARATE FROM FGroundPerformance, which is named for what it describes and would start
+ * lying the moment a climb rate was added to it. The two are consumed by different things:
+ * the follower and the take-off roll read the ground, and only the climb reads this.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FClimbPerformance
+{
+	GENERATED_BODY()
+
+	/** Vertical speed once established, uu per second. 780 is 7.8 m/s, about 1540 fpm. */
+	UPROPERTY(EditAnywhere) double ClimbRate = 780.0;
+
+	/** Nose-up attitude held in the climb, degrees. */
+	UPROPERTY(EditAnywhere) double ClimbPitchDegrees = 8.0;
+
+	/**
+	 * How fast the nose comes up at rotation, degrees per second.
+	 *
+	 * A rotation is deliberate and takes two or three seconds - it is not a snap to the climb
+	 * attitude, and the moment it takes is the moment that reads as a take-off.
+	 */
+	UPROPERTY(EditAnywhere) double RotateRateDegPerSec = 4.0;
+
+	/** Height above the surface at which the departure is over and the agent goes, uu. */
+	UPROPERTY(EditAnywhere) double ClearAltitude = 30000.0;
+
+	bool IsSet() const
+	{
+		return ClimbRate > 0.0 && ClimbPitchDegrees > 0.0 && RotateRateDegPerSec > 0.0
+			&& ClearAltitude > 0.0;
+	}
+};
+
+/**
  * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
  *
  * The distinction matters and this project has already had to make it once, the other way
@@ -116,8 +152,18 @@ struct AIRSIDE_API FGroundPerformance
 {
 	GENERATED_BODY()
 
-	/** Moving about the airport. The only regime there is yet - see FGroundRegime. */
+	/** Moving about the airport. */
 	UPROPERTY(EditAnywhere) FGroundRegime Taxi;
+
+	/**
+	 * Full power down a runway. SpeedCap here is ROTATION SPEED - the speed at which the
+	 * nose comes up - which is exactly what "the speed this regime works up to" means for a
+	 * take-off roll.
+	 *
+	 * Decel is the ABORT: a rejected take-off is braking from near Vr, which is harder than
+	 * anything a taxi asks for.
+	 */
+	UPROPERTY(EditAnywhere) FGroundRegime Takeoff;
 
 	/**
 	 * The slowest this type can be kept rolling WHILE STEERING - NOT zero, and that is the

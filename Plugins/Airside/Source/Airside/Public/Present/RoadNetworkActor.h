@@ -5,6 +5,7 @@
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteFollower.h"
+#include "Model/TakeoffRun.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
@@ -92,6 +93,26 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() FRouteFollower Follower;
 
 	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
+
+	/**
+	 * The departure this agent flies once the taxi is done, if its route ended on a runway.
+	 *
+	 * A SECOND MOTION PHASE rather than a mode inside the follower - see FTakeoffRun. The
+	 * agent owns which of the two is driving it, so neither has to know the other exists.
+	 */
+	UPROPERTY() FTakeoffRun Departure;
+
+	/** True once the taxi has finished and the departure has taken over. */
+	UPROPERTY() bool bDeparting = false;
+
+	/** Armed at dispatch when the route's goal was a runway threshold. */
+	UPROPERTY() bool bDepartOnArrival = false;
+
+	/** Where the roll starts, and which way. Unused unless bDepartOnArrival. */
+	UPROPERTY() FVector2D DepartureThreshold = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D DepartureDirection = FVector2D::ZeroVector;
+	UPROPERTY() double DepartureRunwayLength = 0.0;
+	UPROPERTY() FClimbPerformance DepartureClimb;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -165,7 +186,8 @@ public:
 	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
 	 * them across two arguments invited a caller to pass one and default the other.
 	 */
-	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground);
+	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
+		const FClimbPerformance& Climb = FClimbPerformance());
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
@@ -217,8 +239,34 @@ public:
 	 * endpoints' identities so every later rebuild re-attaches it. Both of those matter:
 	 * without the second it survives every rebuild connected to nothing.
 	 */
+
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex);
+
+	/**
+	 * Lays a runway from From to To in one edit, with its own profile.
+	 *
+	 * Separate from PlaceNode plus ConnectNodes for two reasons. It is ONE undo step, which is
+	 * what a player means by "place a runway"; and it takes the profile explicitly, because a
+	 * runway's cross-section is not the network's default and must never fall back to it - a
+	 * runway that quietly became a taxiway would keep its shape on screen and lose its
+	 * continuity at every exit.
+	 *
+	 * Straight by construction: one segment, two nodes, no control point. Refuses a runway
+	 * shorter than MinimumRunwayLength, because a strip too short to take off from is a
+	 * mis-click rather than an intention.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile);
+
+	/**
+	 * The shortest thing that may be called a runway, in uu. 500 m.
+	 *
+	 * Not an aviation rule - real minima depend on the aircraft - but a floor that separates
+	 * a runway from a slip of the mouse. A Meridian needs about 700 m at sea level.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
+	double MinimumRunwayLength = 50000.0;
 
 	/**
 	 * Remove a HAND-AUTHORED guideline edge. Refuses a derived one.
@@ -638,6 +686,20 @@ private:
 	bool bGhostVisible = false;
 
 	/** The authored profile if there is one, otherwise the on-demand fallback. */
+	virtual void PostInitProperties() override;
+
+	/**
+	 * Fills any unassigned material, material set or stand from the configured content set.
+	 *
+	 * Called at the top of every rebuild rather than from the constructor. These were
+	 * ConstructorHelpers lookups against literal /Game/ paths - which is exactly why a
+	 * content folder move broke them invisibly, and why they cannot simply be moved to a
+	 * data asset read at CDO time. See UAirsideSettings::GetContent.
+	 *
+	 * Only ever fills a null, so anything set by hand survives.
+	 */
+	void ApplyContentDefaults();
+
 	URoadProfile* ResolveProfile();
 
 	/** Network, creating it on first use. Nothing else in the project makes one yet. */

@@ -32,6 +32,20 @@ double URoadProfile::GetHalfWidthRight() const
 URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius, double ShoulderWidth)
 {
 	URoadProfile* Profile = NewObject<URoadProfile>(GetTransientPackage());
+	Fill(Profile, TotalWidth, FilletRadius, ShoulderWidth);
+	return Profile;
+}
+
+void URoadProfile::Fill(URoadProfile* Profile, double TotalWidth, double FilletRadius,
+	double ShoulderWidth)
+{
+	if (Profile == nullptr)
+	{
+		return;
+	}
+
+	Profile->Bands.Reset();
+	Profile->Guidelines.Reset();
 
 	// Clamped so two shoulders can never exceed the road: a lane of zero or negative
 	// width would put the band boundaries out of order and invert the ribbon.
@@ -76,5 +90,4 @@ URoadProfile* URoadProfile::MakeTransient(double TotalWidth, double FilletRadius
 
 	Profile->CentrelineOffset = -1.0;
 	Profile->PreferredFilletRadius = FilletRadius;
-	return Profile;
 }

@@ -54,6 +54,49 @@ public:
 	const TArray<FRoadNode>&    GetNodes()    const { return Nodes; }
 	const TArray<FRoadSegment>& GetSegments() const { return Segments; }
 
+	/**
+	 * Used by any segment that carries no profile of its own.
+	 *
+	 * Exists because a segment's own profile did not survive being saved: the fallback
+	 * ARoadNetworkActor made on demand lived in the transient package, so every segment in
+	 * a reloaded level came back with a null pointer, and a level with four roads in it
+	 * rebuilt to four segments and zero triangles.
+	 *
+	 * A UPROPERTY, so pointing it at an authored asset makes the whole network survive a
+	 * round trip. Null is still legal and still means what it meant before.
+	 */
+	UPROPERTY() TObjectPtr<URoadProfile> DefaultProfile;
+
+	/**
+	 * The profile that governs Segment - its own, or DefaultProfile when it has none.
+	 *
+	 * THE ONLY WAY either the solver or the mesh builder should ask. They previously each
+	 * tested Segment->Profile themselves and each treated null as "skip" - the solver by
+	 * taking zero half-widths, the builder by dropping the segment - so a null profile
+	 * produced a collapsed junction AND no ribbon, from two independent decisions that
+	 * happened to agree. Two readers of one fact is how they stop agreeing; this is the
+	 * same rule the surface solver and GuidelineGeom already follow.
+	 */
+	const URoadProfile* ProfileFor(const FRoadSegment& Segment) const;
+
+	/**
+	 * If Near sits on a runway, reports the departure from the threshold nearest it.
+	 *
+	 * WALKS THE WHOLE RUNWAY, not the one segment it lands on. Adding an exit splits a runway,
+	 * so by the time it is useful it is several segments - and a roll computed from one piece
+	 * would refuse a departure the strip can easily take. The walk follows nodes joining
+	 * exactly two continuous segments, which is what an uninterrupted runway looks like from
+	 * the graph's point of view.
+	 *
+	 * A runway is recognised by its PROFILE - see URoadProfile::bContinuousThroughJunctions -
+	 * so nothing here needs a runway type or a flag on the segment.
+	 *
+	 * Direction points from the near threshold toward the far one: the way you depart having
+	 * backtracked to that end. False when Near is not on a runway at all.
+	 */
+	bool RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold, FVector2D& OutDirection,
+		double& OutLength) const;
+
 	// --- Guideline graph -------------------------------------------------------------
 	// A SECOND graph, deliberately in the same object. The build tool must make "draw a
 	// taxiway" one atomic undo step spanning pavement and its derived guideline, and
