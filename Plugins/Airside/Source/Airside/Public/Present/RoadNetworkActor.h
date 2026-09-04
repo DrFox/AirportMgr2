@@ -160,19 +160,34 @@ public:
 	 */
 	static ARoadNetworkActor* FindOrCreate(UWorld* World);
 
-#if WITH_EDITOR
 	/**
-	 * Hides the engine's visualization billboard, if anything attached one.
+	 * Rebuilds the surface from the model, and hides the engine's visualization billboard.
 	 *
-	 * USceneComponent::CreateSpriteComponent runs on EVERY OnRegister and attaches an
-	 * /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent is set. This
-	 * actor's mesh is in absolute space, so its transform stays at the world origin - and a
-	 * sprite there reads as a node the build tool drew at (0,0), which is precisely the
-	 * false picture the editor mode has already produced twice. The constructor clears the
-	 * flag; this catches any component another path attached regardless.
+	 * REBUILDING HERE IS NOT AN OPTIMISATION, IT IS THE INVALIDATION OF A CACHE WE CANNOT
+	 * DECLINE. UDynamicMeshComponent holds its mesh as UPROPERTY(Instanced) with no
+	 * Transient flag, so the built surface is serialised into the level and comes back on
+	 * load. That surface is DERIVED - the graph is the truth - and a persisted derived
+	 * value with no invalidation is stale by definition. It stayed stale until something
+	 * rebuilt for an unrelated reason, at which point roads the user had drawn in an
+	 * earlier session visibly changed width and material. See
+	 * Airside.Present.MeshIsFreshAfterLoad, and the measurement: 276 triangles loaded from
+	 * the level against 194 the model produced.
+	 *
+	 * This hook rather than PostLoad because the mesh component must be REGISTERED before
+	 * it will accept one, and rather than BeginPlay because the editor viewport is where
+	 * the stale picture was being read. It runs in both worlds for the same reason.
+	 *
+	 * It does dirty the level on open, which is honest: the saved mesh really did disagree
+	 * with the model, and saving now records what is actually on screen.
+	 *
+	 * The billboard half: USceneComponent::CreateSpriteComponent runs on EVERY OnRegister
+	 * and attaches an /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent
+	 * is set. This actor's mesh is in absolute space, so its transform stays at the world
+	 * origin - and a sprite there reads as a node the build tool drew at (0,0), which is
+	 * precisely the false picture the editor mode has already produced twice. The
+	 * constructor clears the flag; this catches any component another path attached.
 	 */
 	virtual void PostRegisterAllComponents() override;
-#endif
 
 	/**
 	 * The history an edit should snapshot into, or NULL when the editor owns undo.
@@ -755,6 +770,15 @@ public:
 	 * use without being given the write access that whole test exists to forbid.
 	 */
 	const URoadProfile* ResolveProfileForTest() { return ResolveProfile(); }
+
+	/**
+	 * Triangles currently in the road surface, for Airside.Present.MeshIsFreshAfterLoad.
+	 *
+	 * The mesh is what the user SEES, and the whole of that test is that seeing and
+	 * modelling agree. Counting triangles is the cheapest measure that moves when the
+	 * surface does, and it needs no GeometryFramework dependency in the test module.
+	 */
+	int32 SurfaceTriangleCountForTest() const;
 
 private:
 

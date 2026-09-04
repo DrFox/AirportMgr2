@@ -407,11 +407,22 @@ URoadNetwork& ARoadNetworkActor::EnsureNetwork()
 	return *Network;
 }
 
-#if WITH_EDITOR
 void ARoadNetworkActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
 
+	// See the header. The surface saved in the level is a cache of a derived value, and
+	// this is its only invalidation point - without it the picture on screen is whatever
+	// was last serialised, and the first rebuild from any cause silently replaces it.
+	//
+	// Templates excluded: a class default object has no model to build from, and running
+	// the solver over one would be work done to produce nothing.
+	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		RebuildMesh();
+	}
+
+#if WITH_EDITOR
 	// USceneComponent keeps its sprite protected, so the owner cannot reach it by name -
 	// but it is a component of this actor, so it can be found by type. Hidden rather than
 	// destroyed: the engine re-creates it on the next OnRegister, and a component destroyed
@@ -420,8 +431,17 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	{
 		Billboard->SetVisibility(false);
 	}
-}
 #endif
+}
+
+int32 ARoadNetworkActor::SurfaceTriangleCountForTest() const
+{
+	if (MeshComponent == nullptr || MeshComponent->GetDynamicMesh() == nullptr)
+	{
+		return 0;
+	}
+	return MeshComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+}
 
 ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
 {
@@ -1715,7 +1735,40 @@ void ARoadNetworkActor::RebuildMesh()
 		Slots += FString::Printf(TEXT("[%d]=%s "), Slot,
 			Applied != nullptr ? *Applied->GetName() : TEXT("null"));
 	}
-	UE_LOG(LogRoadMesh, Log, TEXT("Surface slots: %s"), *Slots);
+	// The distinct material ids the BUILDER produced, against the slots the COMPONENT holds.
+	// A road that changes appearance with an unchanged model has to differ in one of these
+	// two, and comparing them is the only way to see which - an id with no slot behind it
+	// draws as nothing or as the default, and reports neither.
+	TSet<int32> DistinctIDs;
+	for (const int32 Id : Builder.GetBuffers().MaterialIDs)
+	{
+		DistinctIDs.Add(Id);
+	}
+	FString IDList;
+	for (const int32 Id : DistinctIDs)
+	{
+		IDList += FString::Printf(TEXT("%d "), Id);
+	}
+
+	// And which profile OBJECT each segment resolved to. Segments drawn before a save come
+	// back with a null profile and fall to the network default; ones drawn since carry their
+	// own. If the two ever resolve to different objects, they render differently while the
+	// widths agree - which is a road changing material for no reason the model can show.
+	TSet<FString> ProfileNames;
+	for (const FRoadSegment& Seg : Network->GetSegments())
+	{
+		if (!Seg.bAlive) { continue; }
+		const URoadProfile* Used_ = Network->ProfileFor(Seg);
+		ProfileNames.Add(Used_ != nullptr ? Used_->GetName() : TEXT("null"));
+	}
+	FString ProfileList;
+	for (const FString& Name : ProfileNames)
+	{
+		ProfileList += Name + TEXT(" ");
+	}
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Surface slots: %s| material ids: %s| profiles in use: %s"),
+		*Slots, *IDList, *ProfileList);
 
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Profiles: %d segments own theirs, %d fall back; widths used %.0f..%.0f uu. "
