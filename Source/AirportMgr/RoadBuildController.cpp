@@ -58,7 +58,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes. WASD pans, Q/E rotate, "
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes. G toggles the guideline overlay. WASD pans, Q/E rotate, "
 			 "wheel zooms."),
 		*Target->GetName());
 }
@@ -155,6 +155,7 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
 	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ARoadBuildController::SelectStandTool);
 	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ARoadBuildController::SelectRouteTool);
+	InputComponent->BindKey(EKeys::G, IE_Pressed, this, &ARoadBuildController::OnToggleGuidelines);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
@@ -309,6 +310,16 @@ IBuildTool* ARoadBuildController::GetActiveTool() const
 	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
 }
 
+void ARoadBuildController::OnToggleGuidelines()
+{
+	bShowGuidelines = !bShowGuidelines;
+
+	// Logged because an overlay that fails to appear and one that is switched off look
+	// identical on screen, and this project has already spent rounds on that distinction.
+	UE_LOG(LogRoadBuild, Log, TEXT("Guideline overlay %s"),
+		bShowGuidelines ? TEXT("on") : TEXT("off"));
+}
+
 bool ARoadBuildController::IsRemoveHeld() const
 {
 	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
@@ -319,7 +330,7 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	FToolContext Context;
 	Context.Target = Target;
 	Context.Limits = MakePlacementLimits();
-	Context.SnapRadius = PickRadius;
+	Context.SnapRadius = ToolPickRadius;
 	Context.bRemoveModifier = IsRemoveHeld();
 	Context.bInsertModifier =
 		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);

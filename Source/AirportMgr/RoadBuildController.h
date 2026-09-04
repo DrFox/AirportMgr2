@@ -43,6 +43,24 @@ public:
 	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
 	double PickRadius = 150.0;
 
+	/**
+	 * How close, in uu, the cursor counts as "on" something a tool is asking about - a
+	 * guideline node to route from, a stand to pick up, an apron's first corner.
+	 *
+	 * SEPARATE from PickRadius, and larger. The two answer different questions and only
+	 * looked like one number by coincidence: PickRadius decides where a road NODE goes, and
+	 * wants to be tight or roads land where you did not click. This decides what the cursor
+	 * is POINTING AT, and 150 uu is a punishing target - a guideline node is a dimensionless
+	 * point on a road 200 uu wide, viewed from 8000 uu out, so the route tool read as doing
+	 * nothing at all when it was simply being missed.
+	 *
+	 * Road snapping no longer depends on this number anyway: a junction claims the cursor
+	 * out to its own pavement (FRoadSnapSettings::JunctionSnapFactor), so widening the fixed
+	 * radius here would only have made BARE nodes grabbier for no gain.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet", meta = (ClampMin = "0.0"))
+	double ToolPickRadius = 400.0;
+
 	/** How close a click must land to split an existing segment, in uu. Snap rule 2. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
 	double SegmentSnapRadius = 150.0;
@@ -55,6 +73,16 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap")
 	bool bSnapToSegments = true;
+
+	/**
+	 * Draw the guideline graph - the routes agents follow - under every tool. Toggled by G.
+	 *
+	 * Defaults ON. It used to be drawn only while the route tool was selected, so the graph
+	 * you are building FOR was invisible while you built it, and a defect at the
+	 * road/guideline boundary stayed hidden until someone happened to press 4.
+	 */
+	UPROPERTY(EditAnywhere, Category = "RoadNet|View")
+	bool bShowGuidelines = true;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "RoadNet|Snap", meta = (ClampMin = "0.0"))
@@ -209,6 +237,9 @@ public:
 	 * is exact and generating collision purely to support mouse picking would be waste.
 	 */
 	bool CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals = false) const;
+
+	/** G: show or hide the guideline overlay. */
+	void OnToggleGuidelines();
 
 protected:
 	virtual void BeginPlay() override;

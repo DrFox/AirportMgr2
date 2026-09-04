@@ -11,6 +11,7 @@
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
 #include "Tool/ApronDrawTool.h"
+#include "Tool/GuidelineOverlay.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RouteTool.h"
 #include "Tool/StandPlaceTool.h"
@@ -415,6 +416,15 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 	{
 		return;
 	}
+
+	// The routing graph is committed state, so it belongs here beside the nodes and stands
+	// rather than inside whichever tool happens to be selected.
+	//
+	// ALWAYS ON in the editor - there is no toggle. The runtime driver binds G for it, but
+	// a key here would mean a new command plus a palette entry, and that pairing is where
+	// this module has already shipped three separate "the list nothing reads" defects. A
+	// visibility change is not the place to take that on.
+	GuidelineOverlay::Draw(*Target->Network, Sink);
 
 	for (const FRoadNode& Node : Target->Network->GetNodes())
 	{
