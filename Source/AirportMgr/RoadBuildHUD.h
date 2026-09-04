@@ -33,58 +33,58 @@ class AIRPORTMGR_API ARoadBuildHUD : public AHUD, public IToolPreviewSink
 
 public:
 	/** Draw a ring at every live node. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	bool bDrawNodes = true;
 
 	/** Ring radius in PIXELS, so it is the same size however far the view is zoomed out. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "1.0"))
 	float NodeRingRadius = 9.0f;
 
 	/** Line thickness of a ring, in pixels. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "0.5"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "0.5"))
 	float NodeRingThickness = 2.0f;
 
 	/** Sides of the polygon a ring is drawn as. Below about 10 it reads as a polygon. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes", meta = (ClampMin = "3", ClampMax = "64"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "3", ClampMax = "64"))
 	int32 NodeRingSides = 16;
 
 	/** Label each ring with its node index. Off by default; it clutters a dense graph. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	bool bDrawNodeIndices = false;
 
 	/**
 	 * A node with no incident segments. It draws no pavement whatsoever, so without a
 	 * marker of its own it is invisible.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	FLinearColor StubColour = FLinearColor(1.0f, 0.55f, 0.1f);
 
 	/** One or two incident segments: a dead end, or a straight-through node. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	FLinearColor EndColour = FLinearColor(0.85f, 0.85f, 0.85f);
 
 	/** Three or more incident segments - a real junction, with a solved boundary. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Nodes")
+	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	FLinearColor JunctionColour = FLinearColor(0.15f, 0.85f, 1.0f);
 
 	/** Draw a marker at every placed stand's anchors, and the way it faces. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	bool bDrawStands = true;
 
 	/** The aircraft stop position - the thing a stand IS. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	FLinearColor StandColour = FLinearColor(0.25f, 0.7f, 1.0f);
 
 	/** Where the service vehicles park. Consequences of where the aircraft sits. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	FLinearColor ServiceAnchorColour = FLinearColor(0.9f, 0.6f, 0.2f);
 
 	/** Radius of a service anchor's ring, in pixels. Smaller than a road node's. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands", meta = (ClampMin = "1.0"))
 	float ServiceAnchorRadius = 5.0f;
 
 	/** Label each anchor with its id. Off by default; a stand carries eight of them. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Stands")
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	bool bDrawAnchorIds = false;
 
 	// --- Preview palette --------------------------------------------------------------
@@ -93,34 +93,34 @@ public:
 	// the plugin holds no colours, the palette can be retuned without touching a tool, and
 	// every tool reads the same way for the same meaning.
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor PendingColour = FLinearColor(0.2f, 1.0f, 0.3f);
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor SnapColour = FLinearColor(1.0f, 0.9f, 0.15f);
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor DoomedColour = FLinearColor(1.0f, 0.15f, 0.1f);
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor HealColour = FLinearColor(0.3f, 1.0f, 0.5f);
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor RefusedColour = FLinearColor(1.0f, 0.25f, 0.2f);
 
 	/** Context, not intent - so it must read as BEHIND everything else the tools draw. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor GuidelineColour = FLinearColor(0.35f, 0.45f, 0.6f);
 
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor RouteColour = FLinearColor(0.2f, 0.85f, 1.0f);
 
 	/** Thickness of preview lines, in pixels. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview", meta = (ClampMin = "0.5"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
 	float PreviewThickness = 3.0f;
 
 	/** Half-length of a cross mark, in pixels. */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview", meta = (ClampMin = "1.0"))
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "1.0"))
 	float CrossMarkRadius = 9.0f;
 
 	/**
@@ -129,7 +129,7 @@ public:
 	 * This is the first genuinely modal thing in the build tool, and a mode you cannot see
 	 * is the classic modal trap: one click means two different things and nothing says which.
 	 */
-	UPROPERTY(EditAnywhere, Category = "RoadNet|Preview")
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	bool bDrawToolName = true;
 
 	virtual void DrawHUD() override;
