@@ -18,11 +18,21 @@ Saved/
 Build/
 !Build/*/**/*.ini
 
-# RoadNet's Build/ source layer (Public/Build, Private/Build) collides with the
-# ignore rule above, which targets UE's platform build-config directories, not
-# plugin source folders. Un-ignore just these two.
-!Plugins/RoadNet/Source/RoadNet/Public/Build/
-!Plugins/RoadNet/Source/RoadNet/Private/Build/
+# The Build/ SOURCE layer collides with the ignore rule above, which targets UE's
+# platform build-config directories, not plugin source folders.
+#
+# These paths were written against the old plugin name and the rename to Airside did
+# not carry them over, so the exception stopped matching anything and the whole layer -
+# the mesh builder, the network solver, the guideline builder - was silently dropped
+# from the repository for four commits. Nothing reported it: the files were on disk and
+# the project built, and only `git ls-files` on a directory nobody thought to question
+# would have shown it. `main` would not have compiled from a fresh clone.
+#
+# Matched by DIRECTORY NAME rather than by full path, so the next rename cannot repeat
+# this. Un-ignoring a directory needs the pattern that re-admits its contents too - git
+# never descends into an excluded directory, so `!.../Build/` alone re-admits nothing.
+!**/Source/**/Build/
+!**/Source/**/Build/**
 
 # Compiled source
 *.dll
