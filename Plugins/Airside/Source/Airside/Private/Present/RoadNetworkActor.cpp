@@ -191,7 +191,18 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	}
 	else if (Material != nullptr)
 	{
-		Component->SetMaterial(0, Material);
+		// ONE SLOT, NOT SLOT ZERO. SetMaterial(0, ...) writes the first slot and leaves every
+		// other one exactly where it was - so a component that had once been given a material
+		// SET kept its extra slots for ever, they were SAVED INTO THE LEVEL, and every editor
+		// restart loaded them back:
+		//
+		//   AS LOADED RoadMesh 3 slots [0]=M_RoadSurface [1]=M_ApronConcrete [2]=M_RoadKerb
+		//
+		// With material IDs still on the mesh the proxy splits across them and the lane draws
+		// as apron concrete, which is a road changing colour on restart with nothing in the
+		// model to explain it. Configuring the whole set replaces the slots rather than
+		// overwriting the first of them.
+		Component->ConfigureMaterialSet({ Material });
 	}
 	else if (Component->GetNumMaterials() == 0)
 	{
@@ -1696,6 +1707,15 @@ void ARoadNetworkActor::RebuildMesh()
 			WidestUsed = FMath::Max(WidestUsed, Used_->GetTotalWidth());
 		}
 	}
+
+	FString Slots;
+	for (int32 Slot = 0; Slot < MeshComponent->GetNumMaterials(); ++Slot)
+	{
+		const UMaterialInterface* Applied = MeshComponent->GetMaterial(Slot);
+		Slots += FString::Printf(TEXT("[%d]=%s "), Slot,
+			Applied != nullptr ? *Applied->GetName() : TEXT("null"));
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("Surface slots: %s"), *Slots);
 
 	UE_LOG(LogRoadMesh, Log,
 		TEXT("Profiles: %d segments own theirs, %d fall back; widths used %.0f..%.0f uu. "
