@@ -97,6 +97,36 @@ public:
 	bool RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold, FVector2D& OutDirection,
 		double& OutLength) const;
 
+	/**
+	 * The runway threshold nearest a point, however far away it is.
+	 *
+	 * THE SAME SEARCH AS RunwayExtentAt WITHOUT THE PROXIMITY TEST, which is exactly the
+	 * difference between the two questions. A departure asks "did my taxi end on a runway",
+	 * and must hear no everywhere else - that test exists because without it every route
+	 * armed a departure at the only runway on the field. An arrival asks "which runway am I
+	 * landing on", of a click that is deliberately nowhere near one.
+	 *
+	 * The threshold returned is the end NEAREST the query and the direction runs away from
+	 * it, so an aircraft lands toward the far end - the same convention as a departure, and
+	 * the reason both can share the walk.
+	 */
+	bool NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
+		FVector2D& OutDirection, double& OutLength) const;
+
+	/**
+	 * Guideline nodes lying on a runway, ordered by distance from its threshold.
+	 *
+	 * THE EXITS, without needing an exit to be a thing. A runway is continuous through
+	 * junctions, so a taxiway joining it already puts a guideline node on the centreline;
+	 * asking which nodes lie along the strip therefore finds every way off it, including
+	 * ones the player drew after the runway existed.
+	 *
+	 * MinDistance is what makes the answer useful to an arrival: an exit before the aircraft
+	 * can possibly have slowed down is not an exit it can take.
+	 */
+	TArray<FGuidelineNodeId> RunwayExitNodes(const FVector2D& Threshold,
+		const FVector2D& Direction, double Length, double HalfWidth, double MinDistance) const;
+
 	// --- Guideline graph -------------------------------------------------------------
 	// A SECOND graph, deliberately in the same object. The build tool must make "draw a
 	// taxiway" one atomic undo step spanning pavement and its derived guideline, and
@@ -231,6 +261,10 @@ private:
 	UPROPERTY() TArray<int32>        NodeFreeList;
 	UPROPERTY() TArray<FRoadSegment> Segments;
 	UPROPERTY() TArray<int32>        SegmentFreeList;
+
+	/** RunwayExtentAt and NearestRunwayThreshold, which differ only in the proximity test. */
+	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
+		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const;
 
 	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;

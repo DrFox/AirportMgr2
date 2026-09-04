@@ -256,6 +256,18 @@ struct AIRSIDE_API FGroundPerformance
 	UPROPERTY(EditAnywhere) FGroundRegime Takeoff;
 
 	/**
+	 * Wheels down after touchdown. SpeedCap here is Vref - the speed the approach is flown
+	 * at - which is what "the speed this regime works up to" means read backwards: it is the
+	 * speed the regime STARTS from and brakes away.
+	 *
+	 * Decel is wheel braking with reverse or beta, which is harder than a rejected take-off
+	 * because there is no question of stopping and going again. Accel is small and real: an
+	 * aircraft that has slowed too far still has to keep rolling to steer, and the same
+	 * MinTaxiSpeed rule applies on a runway as anywhere else.
+	 */
+	UPROPERTY(EditAnywhere) FGroundRegime Landing;
+
+	/**
 	 * The slowest this type can be kept rolling WHILE STEERING - NOT zero, and that is the
 	 * point.
 	 *
@@ -288,7 +300,125 @@ struct AIRSIDE_API FGroundPerformance
 	/** False when nothing was authored, so a caller can fall back rather than freeze an agent. */
 	bool IsSet() const
 	{
+		// Landing is NOT required here. This answers "can this thing move about an airport",
+		// which every agent needs; an arrival additionally checks Landing.IsSet() for itself,
+		// so an airframe with no landing figures declines to land rather than failing to taxi.
 		return Taxi.IsSet() && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
+	}
+};
+
+/**
+ * Flying an approach: the descent, the flare, and the moment it stops flying.
+ *
+ * THE MIRROR OF FClimbPerformance, and it shares that struct's one number rather than
+ * restating it. A departure rotates because the angle the wing NEEDS falls as the square of
+ * speed while the nose comes up, so the two cross and the aircraft leaves. A landing is the
+ * same crossing run backwards: speed bleeds off in the flare, so the required angle RISES,
+ * the nose comes up to chase it, and when it can no longer keep up the aircraft settles.
+ *
+ * That is why touchdown is not declared here at an altitude or a stopwatch reading, any more
+ * than lift-off is in FTakeoffRun. Both fall out of FClimbPerformance::RequiredAngleAt.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FApproachPerformance
+{
+	GENERATED_BODY()
+
+	/**
+	 * The descent path, degrees. 3 is the standard everywhere for a reason - it is shallow
+	 * enough to be flown on instruments and steep enough to clear obstacles.
+	 */
+	UPROPERTY(EditAnywhere) double GlideslopeDegrees = 3.0;
+
+	/**
+	 * Height at which the approach is joined, uu. The DISTANCE out is derived from this and
+	 * the glideslope rather than authored beside it: two numbers that must agree about a
+	 * triangle are two numbers that can disagree about it.
+	 */
+	UPROPERTY(EditAnywhere) double FinalAltitude = 10000.0;
+
+	/**
+	 * Height at which the flare begins, uu. 900 is about thirty feet, which is where a light
+	 * twin's pilot starts raising the nose.
+	 */
+	UPROPERTY(EditAnywhere) double FlareHeight = 900.0;
+
+	/** How fast the nose comes up in the flare, degrees per second. */
+	UPROPERTY(EditAnywhere) double FlareRateDegPerSec = 3.0;
+
+	/**
+	 * How fast speed bleeds in the flare, uu per second squared. NOT the braking figure.
+	 *
+	 * The wheels are not down yet, so nothing in FGroundRegime::Decel applies: this is idle
+	 * thrust against drag at a rising angle of attack, and it is an order of magnitude
+	 * gentler than braking. Using the braking number here was tried and it bled seven knots
+	 * a second, which put the aircraft on the ground almost immediately - a landing with no
+	 * flare in it at all, which is the thing this phase exists to model.
+	 *
+	 * It is also what SETS the float: the required angle rises as speed falls, so a faster
+	 * bleed brings the touchdown forward. 90 is about 1.7 kt/s.
+	 */
+	UPROPERTY(EditAnywhere) double FlareDecel = 90.0;
+
+	/**
+	 * The flight path the flare HOLDS, degrees below the horizontal.
+	 *
+	 * A landing is not a level-off: an aircraft that arrested its descent completely would
+	 * float down the runway and never touch. The flare trades the approach path for a much
+	 * shallower one and flies THAT onto the ground, so this is the number that decides how
+	 * firmly it arrives. 0.6 degrees at Vref is about 45 uu/s, a touchdown you would not
+	 * spill a drink over.
+	 *
+	 * This is what the nose chases. Attitude is the consequence: required angle less this.
+	 */
+	UPROPERTY(EditAnywhere) double TouchdownSinkAngleDegrees = 0.6;
+
+	/**
+	 * How quickly the flare bleeds the descent off, seconds.
+	 *
+	 * The flare commands a sink rate PROPORTIONAL TO HEIGHT - h' = -h/tau - which is the law
+	 * a pilot flies and the one an autoland computes. It is what makes a flare terminate:
+	 * the descent keeps easing as the ground approaches, so the aircraft arrives gently and
+	 * in bounded time.
+	 *
+	 * Holding a single shallow path instead was tried and floats for sixteen seconds, most
+	 * of a kilometre down the runway, ending in a firm arrival once the tailstrike limit
+	 * binds - measured at 127 uu/s against 230 on the approach. Proportional control is not
+	 * a refinement here; it is the difference between a flare and a slow descent.
+	 *
+	 * 2.5 puts the air distance at about 340 m, against the 332 m implied by this type's
+	 * published landing distance over fifty feet.
+	 */
+	UPROPERTY(EditAnywhere) double FlareTimeConstantSeconds = 2.5;
+
+	/**
+	 * The most nose-up the flare will go, degrees. A TAILSTRIKE LIMIT, not the target.
+	 *
+	 * It should not normally bind - the flare law below asks for whatever attitude holds the
+	 * touchdown path, and that stays under this until the speed has decayed a long way. When
+	 * it does bind, the aircraft has floated too long and settles firmly, which is exactly
+	 * what happens in life.
+	 *
+	 * It was briefly the target instead, set to the angle the wing needs at Vref. That
+	 * guarantees the aircraft can NEVER hold itself off: the moment speed falls below Vref
+	 * the requirement exceeds the cap and it sinks. Measured, the flare took the sink rate
+	 * from 230 uu/s to 204 - an eleven percent reduction, which is not a flare.
+	 */
+	UPROPERTY(EditAnywhere) double MaxFlarePitchDegrees = 11.0;
+
+	/** False when nothing was authored, so a caller can decline rather than fly a nonsense. */
+	bool IsSet() const
+	{
+		return GlideslopeDegrees > 0.0 && FinalAltitude > 0.0 && FlareHeight > 0.0
+			&& FlareRateDegPerSec > 0.0 && FlareDecel > 0.0
+			&& FlareTimeConstantSeconds > 0.0;
+	}
+
+	/** Horizontal distance from joining the approach to the threshold, uu. */
+	double FinalDistance() const
+	{
+		const double Slope = FMath::Tan(FMath::DegreesToRadians(GlideslopeDegrees));
+		return Slope > 0.0 ? FinalAltitude / Slope : 0.0;
 	}
 };
 

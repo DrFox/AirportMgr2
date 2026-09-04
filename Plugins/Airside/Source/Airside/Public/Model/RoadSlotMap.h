@@ -32,6 +32,29 @@ namespace RoadSlot
 		return Handle;
 	}
 
+	/**
+	 * The handle addressing a live slot by INDEX.
+	 *
+	 * Here rather than at each call site because the generation counter is the slot map's,
+	 * and three separate places had already rebuilt one by hand - see the comment in
+	 * URoadNetwork::RunwayExtentAt, which names doing so as the reason it tracks nodes
+	 * rather than segment indices. A handle to a dead slot is not a handle, so this returns
+	 * a default (unset) one for anything not alive.
+	 */
+	template<typename THandle, typename TItem>
+	THandle HandleAt(const TArray<TItem>& Items, int32 Index)
+	{
+		if (!Items.IsValidIndex(Index) || !Items[Index].bAlive)
+		{
+			return THandle();
+		}
+
+		THandle Handle;
+		Handle.Index = Index;
+		Handle.Generation = Items[Index].Generation;
+		return Handle;
+	}
+
 	template<typename THandle, typename TItem>
 	bool IsValid(const TArray<TItem>& Items, THandle Handle)
 	{

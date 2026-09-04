@@ -209,6 +209,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 
 	Type->Ground = PiperMeridianGround();
 	Type->Climb = PiperMeridianClimb();
+	Type->Approach = PiperMeridianApproach();
 }
 
 FClimbPerformance UAircraftType::PiperMeridianClimb()
@@ -300,7 +301,55 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 	// for, and the one time a light aircraft uses its brakes in anger.
 	Ground.Takeoff.Decel = 400.0;
 
+	// LANDING. SpeedCap is Vref, 85 KIAS at maximum landing weight, the same 4400 uu/s the
+	// take-off rotates at - which is a coincidence of this airframe, not a rule, and is why
+	// the two are separate fields.
+	Ground.Landing.SpeedCap = 4400.0;
+
+	// Wheel braking with beta. Derived from the published ground roll of 1,020 ft (31,100 uu)
+	// from touchdown, taken to taxi speed rather than to a stop:
+	//
+	//     a = (v2 - u2) / 2s = (4400^2 - 1000^2) / (2 x 31100) = 295
+	//
+	// called 300. The MEASURED roll comes out shorter than 31,100 because this model touches
+	// down slower than Vref - the flare bleeds it - and Airside.Model.LandingRun reads that
+	// back rather than asserting the brochure figure it was derived from.
+	Ground.Landing.Decel = 300.0;
+
+	// Idle thrust once the wheels are down and the brakes are released. Small: an aircraft
+	// that has slowed below taxi speed still has to keep rolling to steer.
+	Ground.Landing.Accel = 100.0;
+
 	return Ground;
+}
+
+FApproachPerformance UAircraftType::PiperMeridianApproach()
+{
+	FApproachPerformance Approach;
+
+	// The standard everywhere, and the one number here that is not about this airframe.
+	Approach.GlideslopeDegrees = 3.0;
+
+	// 100 m, so the approach is joined about 1.9 km out. Chosen to mirror ClearAltitude's
+	// reasoning from the other end: far enough to read as an approach, near enough to watch.
+	Approach.FinalAltitude = 10000.0;
+
+	// Thirty feet, where a light twin's pilot starts raising the nose.
+	Approach.FlareHeight = 900.0;
+
+	// About a second and a half from the approach attitude to the flare attitude.
+	Approach.FlareRateDegPerSec = 3.0;
+
+	// The limit, not a target. Eight degrees is the angle this wing needs at Vref, so the
+	// nose stops where the wing would be exactly holding the aircraft up at its approach
+	// speed - beyond that it would be flying it back into the air.
+	Approach.MaxFlarePitchDegrees = 8.0;
+
+	// About 1.7 kt/s, which is roughly seven knots across a four-second flare. See
+	// FApproachPerformance::FlareDecel for why this is emphatically not the braking figure.
+	Approach.FlareDecel = 90.0;
+
+	return Approach;
 }
 
 #undef LOCTEXT_NAMESPACE
