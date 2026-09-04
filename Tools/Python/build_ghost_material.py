@@ -21,7 +21,7 @@ regeneration. Two deliberate departures from what that section specifies:
 """
 import unreal
 
-MAT_DIR = "/Game/RoadNet/Materials"
+MAT_DIR = "/Game/Materials"
 MAT_NAME = "M_RoadGhost"
 
 

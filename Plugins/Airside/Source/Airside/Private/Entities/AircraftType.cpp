@@ -208,6 +208,38 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// array, which is the honest answer: no ids, no duplicate ids.
 
 	Type->Ground = PiperMeridianGround();
+	Type->Climb = PiperMeridianClimb();
+}
+
+FClimbPerformance UAircraftType::PiperMeridianClimb()
+{
+	FClimbPerformance Climb;
+
+	// The wing's angle at rotation speed. Everything about when the aircraft leaves the
+	// ground follows from this and the acceleration - see FClimbPerformance.
+	Climb.LiftAngleAtRotateDegrees = 8.0;
+
+	// 120 KIAS, best rate of climb.
+	Climb.ClimbSpeed = 6200.0;
+
+	// CHOSEN SO THE PUBLISHED CLIMB RATE COMES OUT, rather than the rate being set directly:
+	//
+	//   at Vy the wing needs 8 x (4400/6200)^2 = 4.0 degrees
+	//   1540 fpm at 120 KIAS is a flight path of asin(780/6200) = 7.2 degrees
+	//   so the attitude held is 7.2 + 4.0 = 11.2
+	//
+	// The rate is then a measurement - Airside.Model.TakeoffRun reads it back and checks it
+	// against 780 - instead of a number that agrees with the brochure because it was copied
+	// from it.
+	Climb.ClimbPitchDegrees = 11.2;
+
+	// About three seconds from nose-down to the climb attitude, which is what a rotation is.
+	Climb.RotateRateDegPerSec = 4.0;
+
+	// 300 m. High enough to be clearly departing, low enough to still be worth watching.
+	Climb.ClearAltitude = 30000.0;
+
+	return Climb;
 }
 
 FGroundPerformance UAircraftType::PiperMeridianGround()
@@ -246,6 +278,27 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 	// aeroplane and is why FGroundRegime keeps the two apart rather than carrying one rate.
 	Ground.Taxi.Accel = 100.0;
 	Ground.Taxi.Decel = 200.0;
+
+	// TAKE-OFF, derived from two published figures rather than dialled in.
+	//
+	//   rotation ~85 KIAS      = 44 m/s
+	//   sea-level ground roll  = about 1000 ft, 305 m
+	//
+	// THE PUBLISHED ROLL IS TO LIFT-OFF, NOT TO Vr, and an earlier version of this read it as
+	// the latter - which understated the acceleration, because it gave the rotation no
+	// distance at all. The nose comes up at Vr and the wheels stay down for another second
+	// and a half of accelerating, which is about 75 m of the 305:
+	//
+	//   a = v2 / 2s = 44 x 44 / (2 x 230) = 4.2 m/s2
+	//
+	// Four times what it taxis at. The total roll to lift-off is measured back out in
+	// Airside.Model.TakeoffRun, which is what makes this a derivation rather than a guess.
+	Ground.Takeoff.Accel = 420.0;
+	Ground.Takeoff.SpeedCap = 4400.0;
+
+	// A rejected take-off is braking hard from near Vr - harder than anything taxiing asks
+	// for, and the one time a light aircraft uses its brakes in anger.
+	Ground.Takeoff.Decel = 400.0;
 
 	return Ground;
 }

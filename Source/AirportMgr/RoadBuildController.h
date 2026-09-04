@@ -274,7 +274,41 @@ private:
 	 * BeginPlay compares them and complains, which is the cheapest thing that turns that
 	 * from invisible into obvious.
 	 */
-	static constexpr int32 ToolKeyCount = 4;
+	/**
+	 * How many number keys are bound to tools. MUST equal Tools.Num().
+	 *
+	 * Checked at startup and logged as an error, because a tool with no key is unreachable
+	 * and a key with no tool does nothing - and neither shows up as anything but a tool that
+	 * "does not work". It was 4 against 5 tools for as long as the guideline tool has
+	 * existed, so the guard was reporting a real mismatch that was in the guard itself.
+	 */
+	// --- Watch camera -----------------------------------------------------------------
+	//
+	// A second camera MODE rather than a second camera: the build rig is a top-down thing
+	// for laying pavement, and watching a take-off from it shows a dot getting smaller. This
+	// sits beside the aircraft instead, and hands back the moment there is nothing to watch.
+
+	/** C: follow the newest agent from beside it, or go back to the build view. */
+	void ToggleWatchAgent();
+
+	/** True while the camera is riding beside an agent. */
+	bool bWatchingAgent = false;
+
+	/**
+	 * How far to the aircraft's left the camera sits, uu. 1500 is 15 m.
+	 *
+	 * Wide enough to frame a 13 m wingspan and close enough to read the attitude, which is
+	 * the whole point of watching a rotation.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchSideOffset = 1500.0;
+
+	/** How far behind, uu. Negative sits ahead. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchBehindOffset = 400.0;
+
+	/** Eye height above the aircraft's own origin, uu. Its origin is the main-gear axle. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchHeight = 250.0;
+
+	static constexpr int32 ToolKeyCount = 6;
 
 	void SelectTool(int32 Index);
 	void SelectRoadTool()  { SelectTool(0); }
@@ -291,6 +325,7 @@ private:
 	 * the startup banner - are listed together in BeginPlay for that reason.
 	 */
 	void SelectGuidelineTool() { SelectTool(4); }
+	void SelectRunwayTool() { SelectTool(5); }
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;

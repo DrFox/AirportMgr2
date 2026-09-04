@@ -49,14 +49,17 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// The actor resolves DA_Stand_CodeC in its constructor. A test that silently placed
-	// nothing because the asset was missing would pass every assertion below vacuously.
-	if (!TestNotNull(TEXT("the actor found a stand definition"), Actor->StandDefinition.Get()))
+	// THROUGH THE RESOLVER, not the raw property. StandDefinition stays null unless somebody
+	// authored one: the actor used to have the content default written INTO it, which is what
+	// silently gave every level a material set and a stand it never asked for. Asking the
+	// resolver is now the only way to know what the actor will actually place.
+	UEntityDefinition* Stand = Actor->ResolveStandDefinition();
+	if (!TestNotNull(TEXT("the actor resolves a stand definition"), Stand))
 	{
 		return false;
 	}
 	TestTrue(TEXT("and its anchors are all named and distinct"),
-		UEntityDefinition::HasUsableAnchorIds(Actor->StandDefinition));
+		UEntityDefinition::HasUsableAnchorIds(Stand));
 
 	// --- Stand and aircraft are different things --------------------------------------
 	//
@@ -65,7 +68,7 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 	// belongs to the stand. Baking one type's geometry into the stand is the bug this split
 	// exists to prevent, and this is the assertion that would catch it coming back.
 	{
-		const UAircraftType* Design = Actor->StandDefinition->DesignAircraft.Get();
+		const UAircraftType* Design = Stand->DesignAircraft.Get();
 		if (!TestNotNull(TEXT("the stand names a design aircraft"), Design))
 		{
 			return false;
@@ -75,12 +78,12 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and its service points are all named and distinct"),
 			UAircraftType::HasUsableServiceIds(Design));
 		TestTrue(TEXT("the stand provides fuel"),
-			Actor->StandDefinition->Provides(EServiceRole::Fuel));
+			Stand->Provides(EServiceRole::Fuel));
 
 		// The stand's own anchors are GROUND fixtures. None of them may be a place on an
 		// airframe, so none should sit where a door does.
 		TestTrue(TEXT("the stand declares ground fixtures"),
-			Actor->StandDefinition->Anchors.Num() > 0);
+			Stand->Anchors.Num() > 0);
 
 		// THE PROPERTY THE SPLIT BUYS. Two Code C types, same stand, and their hold doors
 		// must NOT land in the same place - if they did, the stand could have carried the
@@ -170,7 +173,7 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 			FMath::IsNearlyEqual(Placed.Heading, UE_DOUBLE_PI * 0.5, 1e-6));
 
 		TestEqual(TEXT("every anchor the definition declares resolved"),
-			Placed.ResolvedAnchors.Num(), Actor->StandDefinition->Anchors.Num());
+			Placed.ResolvedAnchors.Num(), Stand->Anchors.Num());
 	}
 
 	// A press that never travelled still places one, facing the way the last did. A row of
@@ -247,7 +250,7 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and redo returns it"), Actor->Redo());
 		TestEqual(TEXT("with its anchors"),
 			Actor->Network->GetEntities()[0].ResolvedAnchors.Num(),
-			Actor->StandDefinition->Anchors.Num());
+			Stand->Anchors.Num());
 	}
 
 	// --- THE PROPERTY THE WHOLE DESIGN RESTS ON ---------------------------------------

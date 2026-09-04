@@ -60,6 +60,23 @@ namespace
 	 * agent that looked like a Piper and turned like an airliner would be wrong nearly
 	 * everywhere rather than nearly nowhere.
 	 */
+	/**
+	 * What the thing being routed does once airborne, for a route that ends on a runway.
+	 *
+	 * Falls back to a Meridian for the same reason GroundFor does: that is the airframe on
+	 * screen, so an agent that taxied like a Piper and climbed like an airliner would be two
+	 * different aircraft depending on which phase you were watching.
+	 */
+	FClimbPerformance ClimbFor(const UAircraftType* Aircraft)
+	{
+		if (Aircraft != nullptr && Aircraft->Climb.IsSet())
+		{
+			return Aircraft->Climb;
+		}
+
+		return UAircraftType::PiperMeridianClimb();
+	}
+
 	FGroundPerformance GroundFor(const UAircraftType* Aircraft)
 	{
 		if (Aircraft != nullptr && Aircraft->Ground.IsSet())
@@ -137,7 +154,7 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	{
 		// Refused in an editor world, deliberately - the route still draws there. See
 		// ARoadNetworkActor::DispatchAgent.
-		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft));
+		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft), ClimbFor(Aircraft));
 	}
 }
 

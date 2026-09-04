@@ -5,6 +5,7 @@
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteFollower.h"
+#include "Model/TakeoffRun.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadHeal.h"
@@ -92,6 +93,51 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() FRouteFollower Follower;
 
 	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
+
+	/**
+	 * The departure this agent flies once the taxi is done, if its route ended on a runway.
+	 *
+	 * A SECOND MOTION PHASE rather than a mode inside the follower - see FTakeoffRun. The
+	 * agent owns which of the two is driving it, so neither has to know the other exists.
+	 */
+	UPROPERTY() FTakeoffRun Departure;
+
+	/** True once the taxi has finished and the departure has taken over. */
+	UPROPERTY() bool bDeparting = false;
+
+	/** Armed at dispatch when the route's goal was a runway threshold. */
+	UPROPERTY() bool bDepartOnArrival = false;
+
+	/**
+	 * The engine is turning. NOT the same question as whether the aircraft is moving.
+	 *
+	 * This was inferred from movement - the propeller stopped whenever the aircraft did -
+	 * which is wrong at both ends. An aircraft holding short with its engine idling is the
+	 * commonest thing on an airport, and one that has actually shut down could not be
+	 * expressed at all.
+	 *
+	 * True from dispatch until the agent goes. A shutdown at the stand is a turnaround state
+	 * and belongs with the rest of that when it exists; what matters here is that the answer
+	 * is STATE rather than a guess made from the speed.
+	 */
+	UPROPERTY() bool bEngineRunning = false;
+
+	/**
+	 * What to show for this agent right now: where it is, and what it is doing.
+	 *
+	 * ON THE AGENT rather than in ARoadNetworkActor::Tick, which is where it used to be
+	 * assembled. Buried in a tick that needs a world, "is the engine running" was a line
+	 * nothing could test - and it was wrong for as long as it existed. Here it is a pure
+	 * function of the agent's own state, so Airside.Present.AgentMotion can ask it directly.
+	 */
+	FAgentMotion DescribeMotion(const FVector2D& At, double Heading,
+		double Altitude = 0.0, double PitchDegrees = 0.0) const;
+
+	/** Where the roll starts, and which way. Unused unless bDepartOnArrival. */
+	UPROPERTY() FVector2D DepartureThreshold = FVector2D::ZeroVector;
+	UPROPERTY() FVector2D DepartureDirection = FVector2D::ZeroVector;
+	UPROPERTY() double DepartureRunwayLength = 0.0;
+	UPROPERTY() FClimbPerformance DepartureClimb;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -114,19 +160,34 @@ public:
 	 */
 	static ARoadNetworkActor* FindOrCreate(UWorld* World);
 
-#if WITH_EDITOR
 	/**
-	 * Hides the engine's visualization billboard, if anything attached one.
+	 * Rebuilds the surface from the model, and hides the engine's visualization billboard.
 	 *
-	 * USceneComponent::CreateSpriteComponent runs on EVERY OnRegister and attaches an
-	 * /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent is set. This
-	 * actor's mesh is in absolute space, so its transform stays at the world origin - and a
-	 * sprite there reads as a node the build tool drew at (0,0), which is precisely the
-	 * false picture the editor mode has already produced twice. The constructor clears the
-	 * flag; this catches any component another path attached regardless.
+	 * REBUILDING HERE IS NOT AN OPTIMISATION, IT IS THE INVALIDATION OF A CACHE WE CANNOT
+	 * DECLINE. UDynamicMeshComponent holds its mesh as UPROPERTY(Instanced) with no
+	 * Transient flag, so the built surface is serialised into the level and comes back on
+	 * load. That surface is DERIVED - the graph is the truth - and a persisted derived
+	 * value with no invalidation is stale by definition. It stayed stale until something
+	 * rebuilt for an unrelated reason, at which point roads the user had drawn in an
+	 * earlier session visibly changed width and material. See
+	 * Airside.Present.MeshIsFreshAfterLoad, and the measurement: 276 triangles loaded from
+	 * the level against 194 the model produced.
+	 *
+	 * This hook rather than PostLoad because the mesh component must be REGISTERED before
+	 * it will accept one, and rather than BeginPlay because the editor viewport is where
+	 * the stale picture was being read. It runs in both worlds for the same reason.
+	 *
+	 * It does dirty the level on open, which is honest: the saved mesh really did disagree
+	 * with the model, and saving now records what is actually on screen.
+	 *
+	 * The billboard half: USceneComponent::CreateSpriteComponent runs on EVERY OnRegister
+	 * and attaches an /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent
+	 * is set. This actor's mesh is in absolute space, so its transform stays at the world
+	 * origin - and a sprite there reads as a node the build tool drew at (0,0), which is
+	 * precisely the false picture the editor mode has already produced twice. The
+	 * constructor clears the flag; this catches any component another path attached.
 	 */
 	virtual void PostRegisterAllComponents() override;
-#endif
 
 	/**
 	 * The history an edit should snapshot into, or NULL when the editor owns undo.
@@ -165,7 +226,8 @@ public:
 	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
 	 * them across two arguments invited a caller to pass one and default the other.
 	 */
-	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground);
+	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
+		const FClimbPerformance& Climb = FClimbPerformance());
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
@@ -174,6 +236,18 @@ public:
 	/** How many agents are currently under way or parked at their destination. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 GetAgentCount() const { return Agents.Num(); }
+
+	/**
+	 * The most recently dispatched agent's actor, or null when nothing is under way.
+	 *
+	 * The NEWEST rather than the nearest or the first: the one you just sent is the one you
+	 * want to watch, and any other rule makes "follow it" mean something different depending
+	 * on what else happens to be taxiing.
+	 */
+	ARoadAgentActor* GetNewestAgent() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().View.Get() : nullptr;
+	}
 
 	/**
 	 * Route between two guideline nodes over the network this actor owns.
@@ -217,8 +291,34 @@ public:
 	 * endpoints' identities so every later rebuild re-attaches it. Both of those matter:
 	 * without the second it survives every rebuild connected to nothing.
 	 */
+
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex);
+
+	/**
+	 * Lays a runway from From to To in one edit, with its own profile.
+	 *
+	 * Separate from PlaceNode plus ConnectNodes for two reasons. It is ONE undo step, which is
+	 * what a player means by "place a runway"; and it takes the profile explicitly, because a
+	 * runway's cross-section is not the network's default and must never fall back to it - a
+	 * runway that quietly became a taxiway would keep its shape on screen and lose its
+	 * continuity at every exit.
+	 *
+	 * Straight by construction: one segment, two nodes, no control point. Refuses a runway
+	 * shorter than MinimumRunwayLength, because a strip too short to take off from is a
+	 * mis-click rather than an intention.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile);
+
+	/**
+	 * The shortest thing that may be called a runway, in uu. 500 m.
+	 *
+	 * Not an aviation rule - real minima depend on the aircraft - but a floor that separates
+	 * a runway from a slip of the mouse. A Meridian needs about 700 m at sea level.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
+	double MinimumRunwayLength = 50000.0;
 
 	/**
 	 * Remove a HAND-AUTHORED guideline edge. Refuses a derived one.
@@ -638,6 +738,50 @@ private:
 	bool bGhostVisible = false;
 
 	/** The authored profile if there is one, otherwise the on-demand fallback. */
+	/**
+	 * The authored value if there is one, else the configured content default.
+	 *
+	 * READ-ONLY, and that is the whole point of them. These replaced a single
+	 * ApplyContentDefaults that FILLED each property when it found it null - which looked
+	 * harmless and was not: these are EditAnywhere properties on an actor that rebuilds at
+	 * design time, so the fill landed on the level and was saved. An airport deliberately
+	 * left on a single material acquired a material set it never asked for, permanently, and
+	 * clearing it by hand only lasted until the next rebuild.
+	 *
+	 * It is the same defect ResolveProfile had, and this was the original of it. A resolver
+	 * that writes what it resolves has turned a setting into a cache.
+	 *
+	 * PUBLIC because the authored value alone no longer answers "what will this actor use" -
+	 * a test or a tool that read the property directly would see null and conclude nothing was
+	 * configured, which was true of the raw field and false of the actor.
+	 */
+public:
+	UMaterialInterface* ResolveSurfaceMaterial() const;
+	UMaterialInterface* ResolveApronMaterial() const;
+	UMaterialInterface* ResolveGhostMaterial() const;
+	URoadMaterialSet*   ResolveMaterialSet() const;
+	UEntityDefinition*  ResolveStandDefinition() const;
+
+	/**
+	 * ResolveProfile, for the test that guards it. Not for production use.
+	 *
+	 * ResolveProfile is private and non-const because it caches into RuntimeProfile, and
+	 * Airside.Present.AuthoredPropertiesUntouched has to be able to ask what the actor would
+	 * use without being given the write access that whole test exists to forbid.
+	 */
+	const URoadProfile* ResolveProfileForTest() { return ResolveProfile(); }
+
+	/**
+	 * Triangles currently in the road surface, for Airside.Present.MeshIsFreshAfterLoad.
+	 *
+	 * The mesh is what the user SEES, and the whole of that test is that seeing and
+	 * modelling agree. Counting triangles is the cheapest measure that moves when the
+	 * surface does, and it needs no GeometryFramework dependency in the test module.
+	 */
+	int32 SurfaceTriangleCountForTest() const;
+
+private:
+
 	URoadProfile* ResolveProfile();
 
 	/** Network, creating it on first use. Nothing else in the project makes one yet. */

@@ -12,7 +12,8 @@ public class Airside : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"GeometryCore",       // FDynamicMesh3
-			"GeometryFramework"   // UDynamicMeshComponent
+			"GeometryFramework",  // UDynamicMeshComponent
+			"DeveloperSettings"   // UAirsideSettings, so the content set is configured not coded
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
