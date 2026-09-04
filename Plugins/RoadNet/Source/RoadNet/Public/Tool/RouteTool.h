@@ -44,9 +44,6 @@ public:
 	 */
 	ETraversalClass Class = ETraversalClass::Aircraft;
 
-	/** uu per second. 1000 is 10 m/s. */
-	double Speed = 1000.0;
-
 private:
 	/** The guideline node under the cursor that this class could use, if any. */
 	FGuidelineNodeId PickNode(const FToolContext& Context) const;

@@ -1621,7 +1621,7 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	}
 }
 
-bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, double Speed)
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
@@ -1646,7 +1646,7 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, double Speed)
 	// start - which is a worse lie than no cube at all.
 
 	FRoadAgent Agent;
-	Agent.Follower.Start(Plan, Speed);
+	Agent.Follower.Start(Plan, Ground);
 
 	FActorSpawnParameters Params;
 	Params.Owner = this;

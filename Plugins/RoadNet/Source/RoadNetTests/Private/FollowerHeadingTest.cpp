@@ -17,6 +17,24 @@ namespace
 			FMath::UnwindRadians(ToRadians - FromRadians)));
 	}
 
+	/**
+	 * Ground performance with every limit deliberately WIDE OPEN.
+	 *
+	 * This test measures the HEADING FUNCTION - that PointAtDistance interpolates across a
+	 * span instead of holding the segment's own direction. A turn-rate limit would smooth
+	 * that staircase back out, and an acceleration limit would creep the agent so slowly
+	 * that no span produced a visible step: either way it would pass on the very bug it
+	 * exists to catch. Both limits are measured on their own, in RoadNet.Model.TurnRate.
+	 */
+	FGroundPerformance HeadingTestUnlimitedGround()
+	{
+		FGroundPerformance Ground;
+		Ground.MaxTurnRateDegPerSec = 1.0e6;
+		Ground.Taxi.Accel = 1.0e9;
+		Ground.Taxi.Decel = 1.0e9;
+		return Ground;
+	}
+
 	/** A quarter circle of radius R, as the sampled polyline a swept lead-in produces. */
 	TArray<FVector2D> QuarterCircle(double Radius, int32 Samples)
 	{
@@ -155,7 +173,7 @@ bool FFollowerHeadingTest::RunTest(const FString& Parameters)
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
 
 		FRouteFollower Follower;
-		Follower.Start(Plan, /*Speed=*/1000.0);
+		Follower.Start(Plan, HeadingTestUnlimitedGround());
 
 		// Sixty frames a second, which is the rate the jerk was actually seen at.
 		constexpr double Frame = 1.0 / 60.0;

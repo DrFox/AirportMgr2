@@ -101,6 +101,24 @@ namespace GuidelineGeom
 	ROADNET_API double PolylineLength(const TArray<FVector2D>& Points);
 
 	/**
+	 * The heading a follower is given AT a vertex, arriving at it and leaving it.
+	 *
+	 * The same function PointAtDistance interpolates between, exposed rather than reimplemented
+	 * - a planner that decided where the corners were from its own reading of the polyline
+	 * would be free to brake for a bend the driver does not agree is there, which is the
+	 * second-evaluator failure this whole namespace is arranged to prevent.
+	 *
+	 * The two differ ONLY at a real corner. Everywhere else the vertex is a sample of a curve
+	 * and both report the smoothed tangent, so "arriving != leaving" is exactly the test for
+	 * a genuine change of direction - see the MaxSampledTurn note below.
+	 *
+	 * Both are left untouched for a polyline with no direction at all.
+	 */
+	ROADNET_API void VertexHeadings(
+		const TArray<FVector2D>& Points, int32 Vertex,
+		double& OutArriving, double& OutLeaving);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from
