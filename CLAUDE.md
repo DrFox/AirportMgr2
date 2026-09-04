@@ -1,8 +1,8 @@
 # AirportMgr
 
 UE 5.8.2, C++. A Cities-Skylines-style procedural airport: roads, taxiways, aprons,
-stands, and routing over them. The `RoadNet` plugin holds the model; the `AirportMgr`
-game module holds the runtime driver; `RoadNetEditor` holds the design-time mode.
+stands, and routing over them. The `Airside` plugin holds the model; the `AirportMgr`
+game module holds the runtime driver; `AirsideEditor` holds the design-time mode.
 
 Engine source: `D:\Epic\UE_5.8`. Project: `C:\repos\AirportMgr2`.
 
@@ -76,7 +76,7 @@ started by hand is dead for any session that began first. It also pins
 - `CompileLiveCoding` instead of asking the user to close the editor. It covers function
   bodies only - new UPROPERTYs, UCLASSes and classes with vtables still need a full
   `Build.bat`, so batch those.
-- `AutomationTestToolset` instead of `Run-RoadNetTests.ps1` for a quick loop; the script
+- `AutomationTestToolset` instead of `Run-AirsideTests.ps1` for a quick loop; the script
   spawns a whole cold editor. Use the script for the authoritative pre-commit run, since
   it is what catches a CRASHED test.
 - `EditorToolset` before asking the user what they are looking at.
@@ -90,14 +90,14 @@ started by hand is dead for any session that began first. It also pins
 D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat AirportMgrEditor Win64 Development `
   -Project="C:\repos\AirportMgr2\AirportMgr.uproject" -WaitMutex
 
-./Tools/Run-RoadNetTests.ps1            # all; -Filter RoadNet.Solve to narrow
+./Tools/Run-AirsideTests.ps1            # all; -Filter Airside.Solve to narrow
 ```
 
 - **The editor must be CLOSED to build.** Live Coding holds the DLLs and the build fails
   with "Unable to build while Live Coding is active". `Ctrl+Alt+F11` covers function
   bodies only - not new UPROPERTYs, UCLASSes, or classes with vtables. Batch such changes
   into one round rather than making the user close the editor repeatedly.
-- **Never trust the automation runner's exit code.** `Run-RoadNetTests.ps1` parses the log
+- **Never trust the automation runner's exit code.** `Run-AirsideTests.ps1` parses the log
   and diffs started-against-completed tests, because a CRASHING test used to vanish and
   report green. Read its `N test(s) run, N failed, N crashed` line.
 - `Tools/Python/*.py` author materials headlessly and need the editor closed.
