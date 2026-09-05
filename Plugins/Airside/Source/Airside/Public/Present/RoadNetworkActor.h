@@ -3,10 +3,8 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Build/RoadMeshSink.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadHandles.h"
-#include "Model/RouteFollower.h"
-#include "Model/LandingRun.h"
-#include "Model/TakeoffRun.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
 #include "Tool/RoadEditTarget.h"
@@ -79,115 +77,23 @@ private:
 };
 
 /**
- * One thing driving one route, plus the cube standing where it is.
+ * One agent, plus the cube standing where it is.
  *
- * The follower is the model and the actor is the view, which is why they are two fields
- * rather than one class: everything about whether the route is walked correctly is decided
- * in FRouteFollower, with no world involved and no actor to spawn.
+ * THE VIEW POINTER LIVES HERE, NOT ON FRoadAgent. FRoadAgent is Model/ - world-free, and
+ * testable with no actor to spawn - and ARoadAgentActor is a level-resident view, so
+ * pairing them is a Present-layer job. Putting View back on the model struct would be
+ * exactly the dependency CLAUDE.md's layering rule forbids: Model reaching up to Present.
  *
- * Runtime only. These are NOT saved with the level - see ARoadNetworkActor::Agents.
+ * Runtime only. Neither field is saved with the level - see ARoadNetworkActor::Agents.
  */
 USTRUCT()
-struct AIRSIDE_API FRoadAgent
+struct AIRSIDE_API FAgentSlot
 {
 	GENERATED_BODY()
 
-	UPROPERTY() FRouteFollower Follower;
+	UPROPERTY() FRoadAgent Agent;
 
 	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
-
-	/**
-	 * The departure this agent flies once the taxi is done, if its route ended on a runway.
-	 *
-	 * A SECOND MOTION PHASE rather than a mode inside the follower - see FTakeoffRun. The
-	 * agent owns which of the two is driving it, so neither has to know the other exists.
-	 */
-	UPROPERTY() FTakeoffRun Departure;
-
-	/** True once the taxi has finished and the departure has taken over. */
-	UPROPERTY() bool bDeparting = false;
-
-	/** Armed at dispatch when the route's goal was a runway threshold. */
-	UPROPERTY() bool bDepartOnArrival = false;
-
-	/**
-	 * The engine is turning. NOT the same question as whether the aircraft is moving.
-	 *
-	 * This was inferred from movement - the propeller stopped whenever the aircraft did -
-	 * which is wrong at both ends. An aircraft holding short with its engine idling is the
-	 * commonest thing on an airport, and one that has actually shut down could not be
-	 * expressed at all.
-	 *
-	 * True from dispatch until the agent goes. A shutdown at the stand is a turnaround state
-	 * and belongs with the rest of that when it exists; what matters here is that the answer
-	 * is STATE rather than a guess made from the speed.
-	 */
-	UPROPERTY() bool bEngineRunning = false;
-
-	/** This airframe's spool rates. */
-	UPROPERTY() FEnginePerformance Engine;
-
-	/**
-	 * Where the propeller has actually got to, RPM.
-	 *
-	 * Trails bEngineRunning rather than following it - see FEnginePerformance. Advanced by
-	 * AdvanceEngine every frame, whichever phase happens to be driving the aircraft.
-	 */
-	UPROPERTY() double EngineRPM = 0.0;
-
-	/**
-	 * Spools the propeller one frame toward whatever the engine has been commanded to do.
-	 *
-	 * Separate from the phase advance because it happens in ALL of them - taxiing, rolling,
-	 * climbing, parked - and an engine that only spooled while one of them was driving would
-	 * stop dead the moment an aircraft changed phase.
-	 */
-	void AdvanceEngine(double DeltaSeconds);
-
-	/**
-	 * What to show for this agent right now: where it is, and what it is doing.
-	 *
-	 * ON THE AGENT rather than in ARoadNetworkActor::Tick, which is where it used to be
-	 * assembled. Buried in a tick that needs a world, "is the engine running" was a line
-	 * nothing could test - and it was wrong for as long as it existed. Here it is a pure
-	 * function of the agent's own state, so Airside.Present.AgentMotion can ask it directly.
-	 */
-	FAgentMotion DescribeMotion(const FVector2D& At, double Heading,
-		double Altitude = 0.0, double PitchDegrees = 0.0) const;
-
-	/** Where the roll starts, and which way. Unused unless bDepartOnArrival. */
-	UPROPERTY() FVector2D DepartureThreshold = FVector2D::ZeroVector;
-	UPROPERTY() FVector2D DepartureDirection = FVector2D::ZeroVector;
-	UPROPERTY() double DepartureRunwayLength = 0.0;
-	UPROPERTY() FClimbPerformance DepartureClimb;
-
-	/**
-	 * The arrival this agent flies BEFORE its taxi, if it was dispatched as a landing.
-	 *
-	 * The handover runs the opposite way round from a departure, which is the whole reason
-	 * both exist as separate structs rather than as modes: a departure is follower then
-	 * FTakeoffRun, an arrival is FLandingRun then follower. The agent owns the switch and
-	 * neither phase knows the other is there.
-	 */
-	UPROPERTY() FLandingRun Arrival;
-
-	/** True while the landing is driving this agent, before the taxi to the stand. */
-	UPROPERTY() bool bArriving = false;
-
-	/** The route to fly once it has vacated. Planned at dispatch, so a landing cannot be
-	 *  armed for a stand it has no way of reaching. */
-	UPROPERTY() FRoutePlan TaxiInPlan;
-
-	/**
-	 * Seconds still to run on the post-arrival pause before the engine is shut down.
-	 *
-	 * Counted down only once the aircraft has parked. Zero means nothing is pending - either
-	 * it has not arrived yet, or the shutdown has already happened.
-	 */
-	UPROPERTY() double ShutdownCountdown = 0.0;
-
-	/** True once parked at the stand, whether or not the engine has stopped yet. */
-	UPROPERTY() bool bParked = false;
 };
 
 /**
@@ -828,7 +734,7 @@ private:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside") double ShutdownPauseSeconds = 10.0;
 
-	UPROPERTY(Transient) TArray<FRoadAgent> Agents;
+	UPROPERTY(Transient) TArray<FAgentSlot> Agents;
 
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
 
@@ -889,28 +795,6 @@ public:
 
 	/** The stand definition this actor would use, for the same test. */
 	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
-
-	/**
-	 * True once the most recently dispatched agent's landing has handed over to the
-	 * follower, for the same test.
-	 *
-	 * A landing plus a taxi is dozens of seconds of simulated flight, so the test ticks in a
-	 * bounded loop rather than a fixed frame count - which needs a way to ask "is it there
-	 * yet" instead of guessing how many frames that takes.
-	 */
-	bool LastAgentHasVacatedForTest() const
-	{
-		return Agents.Num() > 0 && !Agents.Last().bArriving;
-	}
-
-	/**
-	 * The ground performance the most recently dispatched agent's follower is taxiing with,
-	 * for the same test - see the WHY comment on the VACATED handover in Tick.
-	 */
-	FGroundPerformance LastAgentFollowerGroundForTest() const
-	{
-		return Agents.Num() > 0 ? Agents.Last().Follower.Ground : FGroundPerformance();
-	}
 
 private:
 
