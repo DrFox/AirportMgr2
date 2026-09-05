@@ -13,7 +13,8 @@ public class Airside : ModuleRules
 			"Engine",
 			"GeometryCore",       // FDynamicMesh3
 			"GeometryFramework",  // UDynamicMeshComponent
-			"DeveloperSettings"   // UAirsideSettings, so the content set is configured not coded
+			"DeveloperSettings",  // UAirsideSettings, so the content set is configured not coded
+			"InputCore"           // FKey, for FToolRegistration - the one thing the shared tool table needs
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
