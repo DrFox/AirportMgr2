@@ -264,6 +264,21 @@ public:
 	 */
 	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 
+	/**
+	 * Overwrite one resolved anchor's LocalHeading and Role in place. False when Entity or
+	 * AnchorId does not resolve to anything.
+	 *
+	 * A pure data write, taking values rather than a UEntityDefinition, so Model/ still
+	 * never calls into the Entities layer - see PlaceEntity's comment. This exists for
+	 * UEntityDefinition::RefreshResolvedAnchors (Entities layer) to correct
+	 * FResolvedAnchor's snapshot: an instance placed and saved before LocalHeading and Role
+	 * existed on this struct loads with LocalHeading == 0.0 and Role == Aircraft (the
+	 * UPROPERTY defaults), and nothing else ever writes the real values into it. Not
+	 * exposed as a general setter - the caller resolves what the right values ARE by
+	 * reading a UEntityDefinition, which is exactly the thing this layer must not do.
+	 */
+	bool RefreshResolvedAnchor(FEntityInstanceId Entity, FName AnchorId, double LocalHeading, EServiceRole Role);
+
 private:
 	void SortIncident(FRoadNodeId Node);
 

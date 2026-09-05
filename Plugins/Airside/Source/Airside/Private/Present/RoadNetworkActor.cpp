@@ -419,6 +419,22 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	// the solver over one would be work done to produce nothing.
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
+		// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
+		// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
+		// FResolvedAnchor grew LocalHeading and Role restores those UPROPERTYs at their
+		// defaults (0.0 and Aircraft), and nothing else ever repairs that - see
+		// UEntityDefinition::RefreshResolvedAnchors for why this is the one moment it can.
+		if (Network != nullptr)
+		{
+			const int32 RefreshedAnchors = UEntityDefinition::RefreshResolvedAnchors(*Network);
+			if (RefreshedAnchors > 0)
+			{
+				UE_LOG(LogRoadMesh, Log,
+					TEXT("Refreshed %d resolved anchor(s) against their current definitions."),
+					RefreshedAnchors);
+			}
+		}
+
 		RebuildMesh();
 	}
 

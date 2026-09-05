@@ -1,5 +1,7 @@
 #include "Entities/EntityDefinition.h"
 
+#include "Model/RoadNetwork.h"
+
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
@@ -84,6 +86,53 @@ bool UEntityDefinition::HasUsableAnchorIds(const UEntityDefinition* Definition)
 		Seen.Add(Anchor.Id);
 	}
 	return true;
+}
+
+int32 UEntityDefinition::RefreshResolvedAnchors(URoadNetwork& Network)
+{
+	int32 ChangedCount = 0;
+
+	// Gathered by index, like FAnchorLink::Build: nothing here adds or removes an entity,
+	// so holding this reference across RefreshResolvedAnchor calls is safe, and the id
+	// still needs building by hand from Index and Generation - the array elements have no
+	// stable handle of their own to hand back.
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		const FEntityInstance& Instance = Entities[Index];
+		if (!Instance.bAlive || Instance.Definition == nullptr)
+		{
+			continue;
+		}
+
+		FEntityInstanceId EntityId;
+		EntityId.Index = Index;
+		EntityId.Generation = Instance.Generation;
+
+		for (const FResolvedAnchor& Resolved : Instance.ResolvedAnchors)
+		{
+			// The role lives on the definition, addressed by id - never by position in the
+			// array, which is the invariant FResolvedAnchor exists to remove.
+			const FEntityAnchor* Declared = Instance.Definition->Anchors.FindByPredicate(
+				[&Resolved](const FEntityAnchor& Candidate) { return Candidate.Id == Resolved.Id; });
+			if (Declared == nullptr)
+			{
+				continue;
+			}
+
+			if (Declared->LocalHeading == Resolved.LocalHeading && Declared->Role == Resolved.Role)
+			{
+				continue;
+			}
+
+			if (Network.RefreshResolvedAnchor(EntityId, Resolved.Id, Declared->LocalHeading, Declared->Role))
+			{
+				++ChangedCount;
+			}
+		}
+	}
+
+	return ChangedCount;
 }
 
 

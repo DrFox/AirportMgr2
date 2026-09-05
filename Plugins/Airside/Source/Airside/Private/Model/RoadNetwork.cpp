@@ -778,3 +778,24 @@ TArray<FName> URoadNetwork::GetAnchorIdsForRole(FEntityInstanceId Entity, EServi
 	return Found;
 }
 
+bool URoadNetwork::RefreshResolvedAnchor(
+	FEntityInstanceId Entity, FName AnchorId, double LocalHeading, EServiceRole Role)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return false;
+	}
+
+	for (FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+	{
+		if (Resolved.Id == AnchorId)
+		{
+			Resolved.LocalHeading = LocalHeading;
+			Resolved.Role = Role;
+			return true;
+		}
+	}
+	return false;
+}
+

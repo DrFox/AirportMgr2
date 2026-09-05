@@ -372,4 +372,85 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FResolvedAnchorRefreshTest,
+	"Airside.Model.ResolvedAnchorRefresh",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FResolvedAnchorRefreshTest::RunTest(const FString& Parameters)
+{
+	// THE STALE-SAVED-DATA CASE, by construction. FResolvedAnchor::LocalHeading and ::Role
+	// are placement-time snapshots (see the struct's comment) - which means an instance
+	// placed and saved BEFORE those fields existed loads with their UPROPERTY defaults
+	// (0.0, Aircraft), not the values its definition actually declares. Nothing but
+	// UEntityDefinition::RefreshResolvedAnchors ever corrects that, so this proves it does.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
+
+	FEntityAnchor Belt;
+	Belt.Id = TEXT("belt");
+	Belt.Role = EServiceRole::Baggage;
+	Belt.LocalHeading = 1.0;
+	Definition->Anchors.Add(Belt);
+
+	const FEntityInstanceId Placed = Net->PlaceEntity(
+		Definition, Definition->Anchors, FVector2D(1000.0, 2000.0), 0.0);
+	if (!TestTrue(TEXT("the entity is placed"), Placed.IsSet()))
+	{
+		return false;
+	}
+
+	double HeadingBefore = -1.0;
+	if (TestTrue(TEXT("the anchor resolves before any edit"),
+		Net->GetAnchorWorldHeading(Placed, TEXT("belt"), HeadingBefore)))
+	{
+		TestEqual(TEXT("and carries the definition's original heading"), HeadingBefore, 1.0);
+	}
+	TestEqual(TEXT("and is filed under its original role"),
+		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
+
+	// Edited AFTER placement - simulating a definition asset changed since the level that
+	// placed this instance was saved.
+	Definition->Anchors[0].LocalHeading = 2.0;
+	Definition->Anchors[0].Role = EServiceRole::Fuel;
+
+	// SNAPSHOT, not yet refreshed: the instance must still report what it resolved at
+	// placement, exactly like FResolvedAnchor::Node already does for a definition that
+	// gained or lost an anchor after the fact.
+	double HeadingStillSnapshot = -1.0;
+	if (TestTrue(TEXT("the anchor still resolves, unrefreshed"),
+		Net->GetAnchorWorldHeading(Placed, TEXT("belt"), HeadingStillSnapshot)))
+	{
+		TestEqual(TEXT("and still reports the OLD heading before any refresh"),
+			HeadingStillSnapshot, 1.0);
+	}
+	TestEqual(TEXT("and is still filed under the OLD role before any refresh"),
+		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
+	TestEqual(TEXT("and not yet under the new one"),
+		Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 0);
+
+	const int32 ChangedCount = UEntityDefinition::RefreshResolvedAnchors(*Net);
+	TestEqual(TEXT("exactly the one edited anchor is reported changed"), ChangedCount, 1);
+
+	double HeadingAfter = -1.0;
+	if (TestTrue(TEXT("the anchor still resolves after the refresh"),
+		Net->GetAnchorWorldHeading(Placed, TEXT("belt"), HeadingAfter)))
+	{
+		TestEqual(TEXT("and now reports the NEW heading"), HeadingAfter, 2.0);
+	}
+	TestEqual(TEXT("and is now filed under the NEW role"),
+		Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
+	TestEqual(TEXT("and no longer under the old one"),
+		Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 0);
+
+	// A second refresh with nothing left to change reports zero - not a re-count of what
+	// it already fixed, and not a crash on an entity with no Definition (RemoveEntity
+	// leaves none here to hit, but PlaceEntity(nullptr, ...) elsewhere in this file already
+	// proves that path is refused before ResolvedAnchors is ever touched).
+	TestEqual(TEXT("a second refresh with nothing stale changes nothing"),
+		UEntityDefinition::RefreshResolvedAnchors(*Net), 0);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS
