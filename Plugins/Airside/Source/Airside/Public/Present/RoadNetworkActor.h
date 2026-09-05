@@ -864,6 +864,28 @@ public:
 	/** The stand definition this actor would use, for the same test. */
 	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
 
+	/**
+	 * True once the most recently dispatched agent's landing has handed over to the
+	 * follower, for the same test.
+	 *
+	 * A landing plus a taxi is dozens of seconds of simulated flight, so the test ticks in a
+	 * bounded loop rather than a fixed frame count - which needs a way to ask "is it there
+	 * yet" instead of guessing how many frames that takes.
+	 */
+	bool LastAgentHasVacatedForTest() const
+	{
+		return Agents.Num() > 0 && !Agents.Last().bArriving;
+	}
+
+	/**
+	 * The ground performance the most recently dispatched agent's follower is taxiing with,
+	 * for the same test - see the WHY comment on the VACATED handover in Tick.
+	 */
+	FGroundPerformance LastAgentFollowerGroundForTest() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().Follower.Ground : FGroundPerformance();
+	}
+
 private:
 
 	URoadProfile* ResolveProfile();
