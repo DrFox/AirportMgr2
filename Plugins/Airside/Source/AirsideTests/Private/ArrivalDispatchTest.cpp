@@ -145,8 +145,17 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//
 	//    This is the assertion the feature was shipped without. Everything else about the
 	//    landing can be perfect and this can still be false, which is the state it shipped in.
+	//
+	//    DispatchArrival now takes one FAirframe rather than four structs - see issue #29 -
+	//    but this test still exercises it through the actor, because it is what needs the
+	//    world: the plan itself is asserted world-free in Airside.Model.ArrivalPlanner.
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Approach = Approach;
+
 	const int32 Before = Actor->AgentCountForTest();
-	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Ground, Climb, Approach);
+	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Airframe);
 
 	TestTrue(TEXT("an arrival is accepted on a runway that has an exit to a stand"), bDispatched);
 	TestEqual(TEXT("and an aircraft exists as a result"),
@@ -179,7 +188,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 			Small->RebuildMesh();
 
 			TestFalse(TEXT("a runway shorter than the landing distance is refused"),
-				Small->DispatchArrival(FVector2D::ZeroVector, Ground, Climb, Approach));
+				Small->DispatchArrival(FVector2D::ZeroVector, Airframe));
 			TestEqual(TEXT("and nothing is left in the world"), Small->AgentCountForTest(), 0);
 		}
 	}

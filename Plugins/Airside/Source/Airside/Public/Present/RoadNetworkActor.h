@@ -180,6 +180,23 @@ public:
 	// so re-opening a map would restore half-driven cubes that no longer have a route.
 
 	/**
+	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
+	 *
+	 * WHICH RUNWAY, WHICH EXIT AND WHICH STAND ARE DECIDED BY ArrivalPlanner::Plan, before
+	 * anything is spawned - see its header. An arrival that cannot be completed leaves no
+	 * aircraft in the world, rather than one frozen on final or rolling to a runway it has
+	 * no way off. This function's own job is what is left once that choice is made: arm the
+	 * landing, spawn the view, and log the plan's own refusal or success - never re-derive
+	 * either. Moved out of here into Model/ by issue #29, because none of that choice needs
+	 * a world and this actor's job never was to make it.
+	 *
+	 * That is the same discipline as FTakeoffRun's refusal, and it is why the taxi route is
+	 * planned now rather than when the aircraft vacates: at that point it is on the runway
+	 * and a failure has nowhere to put it.
+	 */
+	bool DispatchArrival(const FVector2D& Near, const FAirframe& Airframe);
+
+	/**
 	 * Sends one agent along a plan, spawning the cube that shows it. False if it cannot.
 	 *
 	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
@@ -189,26 +206,6 @@ public:
 	 * FAirframe and IRoadEditTarget::DispatchAgent for why splitting them across arguments
 	 * invited a caller to pass one and default the other.
 	 */
-	/**
-	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
-	 *
-	 * THE WHOLE ARRIVAL IS DECIDED HERE, BEFORE ANYTHING IS SPAWNED - which runway, which
-	 * exit, which stand, and whether the aircraft can stop in the distance available. An
-	 * arrival that cannot be completed leaves no aircraft in the world, rather than one
-	 * frozen on final or rolling to a runway it has no way off.
-	 *
-	 * That is the same discipline as FTakeoffRun's refusal, and it is why the taxi route is
-	 * planned now rather than when the aircraft vacates: at that point it is on the runway
-	 * and a failure has nowhere to put it.
-	 *
-	 * Nearest runway and shortest taxi are the user's own rules. Neither has a better
-	 * answer available - there is no wind model to choose a runway by, and no stand
-	 * occupancy to choose a stand by.
-	 */
-	bool DispatchArrival(const FVector2D& Near, const FGroundPerformance& Ground,
-		const FClimbPerformance& Climb, const FApproachPerformance& Approach,
-		const FEnginePerformance& Engine = FEnginePerformance(), double Wingspan = 0.0);
-
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
 
 	/** Removes every agent and its cube. */

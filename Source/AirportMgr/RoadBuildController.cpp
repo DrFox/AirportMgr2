@@ -247,13 +247,12 @@ void ARoadBuildController::OnLandAircraft()
 	// The SAME resolver FRouteTool falls back to, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
 	// depending on which phase you were watching - see UAirsideSettings::
-	// ResolveDefaultAirframe. Unpacked into four here rather than one FAirframe argument
-	// because DispatchArrival still takes the four separately (issue #29's job to collapse).
+	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave
+	// DispatchArrival the same shape ResolveDefaultAirframe already returns.
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
-	const FAirframe Default = UAirsideSettings::ResolveDefaultAirframe();
-	Target->DispatchArrival(Cursor, Default.Ground, Default.Climb, Default.Approach, Default.Engine);
+	Target->DispatchArrival(Cursor, UAirsideSettings::ResolveDefaultAirframe());
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
