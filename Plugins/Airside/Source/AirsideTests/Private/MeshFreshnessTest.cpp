@@ -119,4 +119,66 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// URoadEditFacade::OnChanged -> ARoadNetworkActor::RebuildMesh, which replaced four direct
+// RebuildMesh() calls the facade's mutators used to make (PlaceRunway, ClearNetwork, Undo,
+// Redo - see RoadEditFacade.h's own comment on OnChanged). Nothing asserted that the wiring
+// still fires: every other test that wants a rebuilt mesh calls Actor->RebuildMesh() itself,
+// which would still pass even if the constructor's
+// Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh) were deleted outright.
+//
+// NewObject, no world - matching Airside.Present.NetworkActor rather than
+// Airside.Present.ArrivalDispatch's spawned actor: what is under test here is the delegate
+// firing and the presenter rebuilding, neither of which needs PostRegisterAllComponents (that
+// is MeshIsFreshAfterLoad's own reason for a real world, above).
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMeshRebuildsOnFacadeChangeTest,
+	"Airside.Present.MeshRebuildsOnFacadeChange",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
+{
+	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("actor constructed"), Actor))
+	{
+		return false;
+	}
+
+	// One isolated node, purely to bring the network into being - see MeshIsFreshAfterLoad's
+	// own comment on PlaceNode for why this is how every test here does it.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	const int32 Before = Actor->SurfaceTriangleCountForTest();
+
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+
+	// Below the default 50000 uu MinimumRunwayLength - PlaceRunway refuses under it, and
+	// this test wants a short runway, not a realistic one.
+	Actor->MinimumRunwayLength = 100.0;
+
+	// PLACERUNWAY IS ONE OF THE FOUR. No Actor->RebuildMesh() call anywhere in this test -
+	// if the OnChanged binding were missing, this would place a runway into the model and
+	// leave the mesh exactly as stale as Before.
+	TestTrue(TEXT("a runway is placed"),
+		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), Runway));
+
+	const int32 AfterPlace = Actor->SurfaceTriangleCountForTest();
+	TestTrue(TEXT("PlaceRunway's OnChanged broadcast rebuilt the mesh with no explicit "
+		"RebuildMesh() call - the triangle count actually changed"), AfterPlace != Before);
+	TestTrue(TEXT("and the rebuild produced real triangles, not an empty buffer"),
+		AfterPlace > 0);
+
+	// UNDO IS ANOTHER OF THE FOUR. Same absence of an explicit rebuild call: if Undo's own
+	// OnChanged.Broadcast() were missing, the mesh would still show the runway after the
+	// model itself had taken it back.
+	TestTrue(TEXT("the placement undoes"), Actor->Undo());
+
+	const int32 AfterUndo = Actor->SurfaceTriangleCountForTest();
+	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh back to what it was before "
+		"the runway existed, with no explicit RebuildMesh() call either"),
+		AfterUndo, Before);
+
+	return true;
+}
+
 #endif
