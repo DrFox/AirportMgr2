@@ -2063,8 +2063,7 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 	return true;
 }
 
-bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-	const FClimbPerformance& Climb, const FEnginePerformance& Engine)
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
@@ -2088,11 +2087,6 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	// asks to, so allowing the spawn without that would have left a cube frozen at its
 	// start - which is a worse lie than no cube at all.
 
-	FAirframe Airframe;
-	Airframe.Ground = Ground;
-	Airframe.Climb = Climb;
-	Airframe.Engine = Engine;
-
 	FRoadAgent Agent;
 	Agent.StartTaxi(Plan, Airframe);
 
@@ -2104,7 +2098,7 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	// is a fact about the network and the last polyline point is the only thing that knows
 	// where the route actually finished. A route that ends anywhere else simply taxis, which
 	// is what every route did before departures existed.
-	if (Network != nullptr && Plan.Polyline.Num() > 0 && Climb.IsSet())
+	if (Network != nullptr && Plan.Polyline.Num() > 0 && Airframe.Climb.IsSet())
 	{
 		FVector2D Threshold;
 		FVector2D Direction;

@@ -2,10 +2,10 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Content/AirsideSettings.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
-#include "Entities/AircraftType.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
@@ -244,17 +244,16 @@ void ARoadBuildController::OnLandAircraft()
 		return;
 	}
 
-	// The airframe on screen, for the same reason FRouteTool falls back to it: an aircraft
-	// that approached like a Meridian and taxied like something else would be two different
-	// aircraft depending on which phase you were watching.
+	// The SAME resolver FRouteTool falls back to, for the same reason: an aircraft that
+	// approached as one airframe and taxied as another would be two different aircraft
+	// depending on which phase you were watching - see UAirsideSettings::
+	// ResolveDefaultAirframe. Unpacked into four here rather than one FAirframe argument
+	// because DispatchArrival still takes the four separately (issue #29's job to collapse).
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
-	Target->DispatchArrival(Cursor,
-		UAircraftType::PiperMeridianGround(),
-		UAircraftType::PiperMeridianClimb(),
-		UAircraftType::PiperMeridianApproach(),
-		UAircraftType::PiperMeridianEngine());
+	const FAirframe Default = UAirsideSettings::ResolveDefaultAirframe();
+	Target->DispatchArrival(Cursor, Default.Ground, Default.Climb, Default.Approach, Default.Engine);
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const

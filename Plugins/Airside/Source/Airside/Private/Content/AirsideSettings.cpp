@@ -1,6 +1,7 @@
 #include "Content/AirsideSettings.h"
 
 #include "Content/AirsideContent.h"
+#include "Entities/AircraftType.h"
 
 // File-local, matching every other category in this module.
 DEFINE_LOG_CATEGORY_STATIC(LogAirsideContent, Log, All);
@@ -41,4 +42,25 @@ const UAirsideContent* UAirsideSettings::GetContent()
 	}
 
 	return Loaded;
+}
+
+FAirframe UAirsideSettings::ResolveDefaultAirframe()
+{
+	if (const UAirsideContent* Content = GetContent(); Content != nullptr)
+	{
+		if (const UAircraftType* Default = Content->DefaultAircraft.LoadSynchronous())
+		{
+			return Default->Airframe();
+		}
+	}
+
+	// TODO(#30): author DA_PiperMeridian and set UAirsideContent::DefaultAircraft. Until an
+	// asset exists to point it at, this is the fallback every project runs on - including
+	// every automation test, which configures no content set at all.
+	FAirframe Piper;
+	Piper.Ground = UAircraftType::PiperMeridianGround();
+	Piper.Climb = UAircraftType::PiperMeridianClimb();
+	Piper.Approach = UAircraftType::PiperMeridianApproach();
+	Piper.Engine = UAircraftType::PiperMeridianEngine();
+	return Piper;
 }

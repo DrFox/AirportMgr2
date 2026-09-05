@@ -185,9 +185,9 @@ public:
 	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
 	 * so are never saved, and the build tools this is driven from are used at design time.
 	 *
-	 * Takes the AIRFRAME's ground performance rather than a bare speed. How fast a thing
-	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
-	 * them across two arguments invited a caller to pass one and default the other.
+	 * Takes the whole AIRFRAME rather than its performance structs one at a time - see
+	 * FAirframe and IRoadEditTarget::DispatchAgent for why splitting them across arguments
+	 * invited a caller to pass one and default the other.
 	 */
 	/**
 	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
@@ -209,9 +209,7 @@ public:
 		const FClimbPerformance& Climb, const FApproachPerformance& Approach,
 		const FEnginePerformance& Engine = FEnginePerformance(), double Wingspan = 0.0);
 
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-		const FClimbPerformance& Climb = FClimbPerformance(),
-		const FEnginePerformance& Engine = FEnginePerformance()) override;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
