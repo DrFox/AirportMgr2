@@ -25,6 +25,15 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $projectDir = Split-Path -Parent $Project
+
+# The architecture rules first, because they take a second and the editor takes minutes:
+# an include cycle or a duplicated log category is a verdict on the commit whatever the
+# tests say, and finding it before a cold editor start is the whole point of a lint.
+& (Join-Path $PSScriptRoot 'Check-Architecture.ps1') -Root $projectDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'FAIL: Check-Architecture.ps1 found violations; tests not run.' -ForegroundColor Red
+    exit 1
+}
 $logPath    = Join-Path $projectDir 'Saved\Logs\AirsideTests.log'
 
 # A stale log would let a crashed run masquerade as the previous green one.
