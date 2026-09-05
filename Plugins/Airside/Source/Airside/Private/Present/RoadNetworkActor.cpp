@@ -40,16 +40,29 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MeshComponent->SetUsingAbsoluteRotation(true);
 	MeshComponent->SetUsingAbsoluteScale(true);
 
-	// Tangents are left at the default ExternallyProvided rather than AutoCalculated: this
-	// mesh's UV2 (junction blend, ground blend) is identical at every segment vertex, so
-	// AutoCalculated's UV-derived frame is degenerate and yields NaN tangents there - fatal
-	// for a lit material, invisible for the unlit one that exposed it. ExternallyProvided
-	// falls back to a frame derived from the normal alone, a valid constant basis on a flat
-	// +Z road.
+	// Tangents are left at the default ExternallyProvided, which finds no tangent space on
+	// this mesh and falls back to a frame derived from the normal alone. On a flat +Z road
+	// that is a constant, valid basis.
+	//
+	// AutoCalculated was tried and reverted. It derives the frame from the UV layers, and
+	// this mesh's UV2 is (junction blend, ground blend) - identical at every segment
+	// vertex, so every triangle is degenerate in that UV space. A degenerate UV triangle
+	// divides by zero and yields NaN tangents, and NaN vertices are discarded by the GPU.
+	// That is invisible for an unlit material, which never samples the tangent frame, and
+	// fatal for any lit one - which is exactly the split observed: the engine's unlit
+	// vertex-colour debug material drew, while every lit material, ours and stock alike,
+	// rendered nothing.
+	//
+	// Slice 2b-ii can revisit this once the normal map's handedness matters, but it must
+	// then compute tangents from UV0 specifically rather than from whatever the component
+	// picks.
 
-	// NOTHING IS RESOLVED HERE ANY MORE: materials, the material set, the stand definition
-	// and the default profile are filled on demand by the Resolve* functions below, not by
-	// ConstructorHelpers against literal /Game/ paths - see UAirsideSettings for why.
+	// NOTHING IS RESOLVED HERE ANY MORE. Materials, the material set, the stand definition
+	// and the default profile were all ConstructorHelpers::FObjectFinder calls against
+	// literal /Game/ paths, which is what let a freshly placed actor render with no setup -
+	// and what made eight references the editor could not see when a content folder moved.
+	// The Resolve* functions below fill in whatever is still null, at the moment it is
+	// first wanted. See UAirsideSettings for why that cannot happen in a constructor.
 
 	// A second component for the preview, sharing the road's absolute-space setup for the
 	// same reason: the builder emits world coordinates and must not have them transformed
@@ -112,6 +125,21 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.ApronMaterial = ResolveApronMaterial();
 	Settings.GhostMaterial = ResolveGhostMaterial();
 	Settings.MaterialSet = ResolveMaterialSet();
+	Settings.Profile = ResolveProfile();
+	return Settings;
+}
+
+URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSettings()
+{
+	// Only what UpdateGhost/BuildGhostBuffers read - narrower than MakeSurfaceSettings so
+	// the ghost path never pays for SurfaceMaterial/ApronMaterial/MaterialSet, each a
+	// content lookup plus a LoadSynchronous that only RebuildMesh/RebuildAprons need.
+	URoadSurfacePresenter::FSurfaceSettings Settings;
+	Settings.SurfaceZ = SurfaceZ;
+	Settings.TexelsPerUnit = TexelsPerUnit;
+	Settings.RibbonSegments = RibbonSegments;
+	Settings.GhostZOffset = GhostZOffset;
+	Settings.GhostMaterial = ResolveGhostMaterial();
 	Settings.Profile = ResolveProfile();
 	return Settings;
 }
@@ -258,9 +286,13 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 void ARoadNetworkActor::RebuildMesh()
 {
-	// A null Network cannot become a URoadNetwork&, so this guard - unlike the presenter's
-	// own LastGhostFrom reset - has to live here rather than there. It only ever fires once
-	// per actor, before the first node is placed, when no ghost has ever been shown either.
+	// Unconditional, matching the pre-split RebuildMesh exactly: even the path below that
+	// returns before there is a Network must still invalidate the ghost cache. Presenter::
+	// Rebuild also calls this itself; doing it again there is harmless.
+	Presenter->InvalidateGhostCache();
+
+	// A null Network cannot become a URoadNetwork&, so this guard lives here, not on the
+	// presenter. Fires once per actor, before the first node is placed.
 	if (Network == nullptr)
 	{
 		return;
@@ -275,13 +307,26 @@ double ARoadNetworkActor::GetApronSurfaceZ() const
 
 void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
 {
-	Presenter->UpdateGhost(Network, FromNodeIndex, Snap, bValid, MakeSurfaceSettings());
+	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
+	// unchanged FromNodeIndex/Snap, and the cache already knows that without a Resolve*
+	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
+	bool bValidityChanged = false;
+	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, Snap, bValid, bValidityChanged))
+	{
+		if (bValidityChanged)
+		{
+			Presenter->SetGhostValidity(bValid, ResolveGhostMaterial());
+		}
+		return;
+	}
+
+	Presenter->UpdateGhost(Network, FromNodeIndex, Snap, bValid, MakeGhostSurfaceSettings());
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(
 	int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers)
 {
-	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, Snap, MakeSurfaceSettings(), OutBuffers);
+	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, Snap, MakeGhostSurfaceSettings(), OutBuffers);
 }
 
 void ARoadNetworkActor::HideGhost()

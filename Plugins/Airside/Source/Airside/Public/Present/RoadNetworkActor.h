@@ -342,8 +342,18 @@ public:
 
 	/**
 	 * DIAGNOSTIC ONLY. Hold vertex colours at a constant - and, as a side effect nobody
-	 * would guess, stop the real material rendering at all. See URoadSurfacePresenter and
-	 * FDynamicMeshSink for what this actually does to the scene proxy.
+	 * would guess, stop the real material rendering at all.
+	 *
+	 * Any ColorOverrideMode other than None makes FBaseDynamicMeshSceneProxy set
+	 * ForceOverrideMaterial to the engine's vertex-colour debug material, which then
+	 * replaces SurfaceMaterial for every buffer set. So this does not tint the surface;
+	 * it substitutes a different material entirely and shows a flat constant colour with
+	 * no texture, whatever SurfaceMaterial says.
+	 *
+	 * Default false, because true means "do not render the material you asked for". It
+	 * stays available because it is a genuine way to prove geometry reaches the screen
+	 * when the material is suspect - just never mistake the result for the material
+	 * working. See FDynamicMeshSink::Accept for where this is actually applied.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside")
 	bool bUseConstantVertexColour = false;
@@ -352,6 +362,12 @@ public:
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly
 	 * five times the road's width in segment length before its fillet has room to be a
 	 * curve rather than a clamped-away stub.
+	 *
+	 * 23 m and a 15 m fillet - a real taxiway, matching the debug gallery - since a real
+	 * airframe arrived. At the old 2 m the Piper's 13.1 m wingspan was six times the width
+	 * of the road it was taxiing down, which reads as a broken model rather than as a
+	 * placeholder road. Roads must now be drawn a few thousand uu a click to avoid the
+	 * solver clamping their fillets away, which is what an airport is anyway.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
 	double FallbackWidth = 2300.0;
@@ -399,6 +415,12 @@ public:
 	/**
 	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
 	 * effect nobody would guess, stop ApronMaterial rendering at all.
+	 *
+	 * The same trap as bUseConstantVertexColour: any ColorOverrideMode other than None
+	 * makes the scene proxy substitute the engine's vertex-colour debug material, so this
+	 * does not tint the concrete, it replaces it. Which is exactly what makes it useful -
+	 * it is the fastest way to answer "is the apron on screen at all", because a flat
+	 * unmissable colour cannot be confused with the ground or with the road.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	bool bUseConstantApronColour = false;
@@ -415,13 +437,18 @@ public:
 	/**
 	 * MOST the aprons sit below the road surface, in uu. Not a fixed drop - see
 	 * GetApronSurfaceZ.
+	 *
+	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
+	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
+	 * z-fight, and the two surfaces genuinely do overlap wherever a road runs onto a stand.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron", meta = (ClampMin = "0.0"))
 	double ApronZOffset = 4.0;
 
 	/**
 	 * Height the apron surface is actually built at. Forwards to Presenter, which owns the
-	 * ApronZOffset-as-maximum logic - see URoadSurfacePresenter::GetApronSurfaceZ.
+	 * ApronZOffset-as-maximum failure story in full - see
+	 * URoadSurfacePresenter::GetApronSurfaceZ.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside|Apron")
 	double GetApronSurfaceZ() const;
@@ -497,12 +524,35 @@ private:
 	 *  and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<UAirsideTraffic> Traffic;
 
-	/** Builds the FSurfaceSettings a rebuild or a ghost update needs from this actor's own
-	 *  Resolve* functions and level-authored tunables. One place, so RebuildMesh and
-	 *  UpdateGhost cannot read the knobs into two different snapshots of the same rebuild. */
+	/** Builds the FSurfaceSettings RebuildMesh needs from this actor's own Resolve*
+	 *  functions and level-authored tunables. One place, so a rebuild cannot read the
+	 *  knobs into two different snapshots of itself. */
 	URoadSurfacePresenter::FSurfaceSettings MakeSurfaceSettings();
 
+	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
+	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */
+	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings();
+
 public:
+	/**
+	 * The authored value if there is one, else the configured content default.
+	 *
+	 * READ-ONLY, and that is the whole point of them. These replaced a single
+	 * ApplyContentDefaults that FILLED each property when it found it null - which looked
+	 * harmless and was not: these are EditAnywhere properties on an actor that rebuilds at
+	 * design time, so the fill landed on the level and was saved. An airport deliberately
+	 * left on a single material acquired a material set it never asked for, permanently, and
+	 * clearing it by hand only lasted until the next rebuild.
+	 *
+	 * It is the same defect ResolveProfile had, and this was the original of it. A resolver
+	 * that writes what it resolves has turned a setting into a cache.
+	 *
+	 * PUBLIC because the authored value alone no longer answers "what will this actor use" -
+	 * a test or a tool that read the property directly would see null and conclude nothing was
+	 * configured, which was true of the raw field and false of the actor. MakeSurfaceSettings
+	 * and URoadSurfacePresenter::Rebuild are the reason these are called at all now, in place
+	 * of RebuildMesh reading the properties itself.
+	 */
 	UMaterialInterface* ResolveSurfaceMaterial() const;
 	UMaterialInterface* ResolveApronMaterial() const;
 	UMaterialInterface* ResolveGhostMaterial() const;
@@ -552,6 +602,10 @@ public:
 	/**
 	 * World units per texture tile for the asphalt. Lower means the texture repeats more
 	 * often, so more visible grain across the road.
+	 *
+	 * At the default 512 a 200 uu road shows less than half of one tile across its whole
+	 * width, which magnifies the texture until it reads as flat colour. Roughly a fifth
+	 * of the road's width is a sane starting point.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0")) double TexelsPerUnit = 512.0;
 

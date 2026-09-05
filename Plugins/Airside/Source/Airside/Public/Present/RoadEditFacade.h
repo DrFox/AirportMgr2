@@ -21,15 +21,20 @@ class URoadEditHistory;
  * Held Transient by the actor for the same reason: it carries no fields of its own that a
  * save would ever need to persist.
  *
- * DOES NOT OWN Network OR History. Both stay UPROPERTYs on ARoadNetworkActor: they are what
- * the level actually saves, and moving them here would put the saved graph behind a subobject
- * the .umap has never heard of - a bigger, riskier change than this pure refactor is meant to
- * make (see the task's ruling on this point). Instead this class reaches its owner through
- * GetTypedOuter<ARoadNetworkActor>() - Outer is already the actor, because the actor creates
- * this facade with CreateDefaultSubobject, so a second stored pointer would only be a second
- * thing that could disagree with the first. The same path answers GetWorld() (UObject's
- * default walks GetOuter()->GetWorld()), which is what HistoryForEdit needs to tell an editor
- * world from a game one without being handed a world explicitly.
+ * THIS FACADE IS A SUBOBJECT OF ARoadNetworkActor AND NEVER EXISTS WITHOUT ONE - it is not
+ * usable standalone, and that is deliberate rather than an oversight. DOES NOT OWN Network
+ * OR History: both stay UPROPERTYs on ARoadNetworkActor because they are what the level
+ * actually saves, and moving them here would put the saved graph behind a subobject the
+ * .umap has never heard of - a bigger, riskier change than this pure refactor is meant to
+ * make (see the task's ruling on this point). Existing tool tests still target the actor,
+ * which forwards here, rather than constructing this class with NewObject and no owner.
+ *
+ * Instead this class reaches its owner through the private Actor() accessor
+ * (GetTypedOuter<ARoadNetworkActor>(), checked) - Outer is already the actor, because the
+ * actor creates this facade with CreateDefaultSubobject, so a second stored pointer would
+ * only be a second thing that could disagree with the first. The same path answers
+ * GetWorld() (UObject's default walks GetOuter()->GetWorld()), which is what HistoryForEdit
+ * needs to tell an editor world from a game one without being handed a world explicitly.
  *
  * PlacementLimits, MinimumRunwayLength and StandDefinition are read the same way: they are
  * level-authored tunables on the actor (RoadBuildController writes PlacementLimits on the
@@ -86,7 +91,7 @@ public:
 	 * IRoadEditTarget is a base this class cannot leave abstract, but each one simply asks
 	 * the owning actor to do its own job: ARoadNetworkActor's own overrides of these four are
 	 * the real forwarders, to the presenter and the traffic object respectively, and this
-	 * just reaches them the same way every other query here reaches Network - through Owner().
+	 * just reaches them the same way every other query here reaches Network - through Actor().
 	 * Nothing calls IRoadEditTarget through a facade-typed pointer today; this exists so
 	 * nothing would silently do the wrong thing if that ever changed.
 	 */
@@ -154,13 +159,17 @@ private:
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.
 	 *
-	 * CreateDefaultSubobject sets Outer to the constructing actor, so GetTypedOuter is exactly
-	 * as reliable as a cached pointer would be and cannot go stale independently of it. Never
-	 * null for a facade actually driving an actor; the only caller that could hand this a null
-	 * owner is a test constructing URoadEditFacade with NewObject and no actor, which none of
-	 * the existing tests do - they still target ARoadNetworkActor, which forwards here.
+	 * A REFERENCE, not a pointer every caller has to null-check: this facade REQUIRES an
+	 * owning actor (see the class comment) and is created only by
+	 * ARoadNetworkActor::ARoadNetworkActor via CreateDefaultSubobject, so a null Outer here
+	 * is a construction error, not a state normal control flow should route around.
+	 * checkf-ed rather than silently tolerated, so that error is loud at the first call
+	 * instead of surfacing later as a null-network read that looks like an empty level.
+	 * CreateDefaultSubobject sets Outer to the constructing actor, so GetTypedOuter is
+	 * exactly as reliable as a cached pointer would be and cannot go stale independently of
+	 * it.
 	 */
-	ARoadNetworkActor* Owner() const;
+	ARoadNetworkActor& Actor() const;
 
 	URoadNetwork& EnsureNetwork();
 	URoadEditHistory& EnsureHistory();

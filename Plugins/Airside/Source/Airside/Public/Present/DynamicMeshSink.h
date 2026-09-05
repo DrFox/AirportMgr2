@@ -63,7 +63,9 @@ private:
 	UDynamicMeshComponent* Component = nullptr;
 	UMaterialInterface* Material = nullptr;
 
-	/** Independent of Material by design - see URoadSurfacePresenter::bUseConstantVertexColour. */
+	/** Independent of Material by design - see URoadSurfacePresenter::FSurfaceSettings::
+	 *  bUseConstantVertexColour, or ARoadNetworkActor::bUseConstantVertexColour for the
+	 *  full ForceOverrideMaterial explanation. */
 	bool bUseConstantVertexColour = true;
 
 	/** Null means the single-material path. Non-owning, like Component and Material. */

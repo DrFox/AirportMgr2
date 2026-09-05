@@ -18,63 +18,63 @@
 
 bool URoadEditFacade::Undo()
 {
-	ARoadNetworkActor& Actor = *Owner();
-	if (Actor.Network == nullptr || Actor.History == nullptr)
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr || Owner.History == nullptr)
 	{
 		return false;
 	}
 
-	URoadNetwork* Restored = Actor.History->Undo(*Actor.Network);
+	URoadNetwork* Restored = Owner.History->Undo(*Owner.Network);
 	if (Restored == nullptr)
 	{
 		return false;
 	}
 
 	// Adopted outright rather than copied: the history has already let go of it.
-	Actor.Network = Restored;
+	Owner.Network = Restored;
 
 	// The preview may be describing a node that no longer exists, and its cache compares
 	// only the cursor and the start node - neither of which an undo changes.
-	Actor.HideGhost();
+	Owner.HideGhost();
 	OnChanged.Broadcast();
 	return true;
 }
 
 bool URoadEditFacade::Redo()
 {
-	ARoadNetworkActor& Actor = *Owner();
-	if (Actor.Network == nullptr || Actor.History == nullptr)
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr || Owner.History == nullptr)
 	{
 		return false;
 	}
 
-	URoadNetwork* Restored = Actor.History->Redo(*Actor.Network);
+	URoadNetwork* Restored = Owner.History->Redo(*Owner.Network);
 	if (Restored == nullptr)
 	{
 		return false;
 	}
 
-	Actor.Network = Restored;
-	Actor.HideGhost();
+	Owner.Network = Restored;
+	Owner.HideGhost();
 	OnChanged.Broadcast();
 	return true;
 }
 
 bool URoadEditFacade::CanUndo() const
 {
-	const URoadEditHistory* History = Owner()->History;
+	const URoadEditHistory* History = Actor().History;
 	return History != nullptr && History->CanUndo();
 }
 
 bool URoadEditFacade::CanRedo() const
 {
-	const URoadEditHistory* History = Owner()->History;
+	const URoadEditHistory* History = Actor().History;
 	return History != nullptr && History->CanRedo();
 }
 
 FString URoadEditFacade::PeekUndoLabel() const
 {
-	const URoadEditHistory* History = Owner()->History;
+	const URoadEditHistory* History = Actor().History;
 	return History != nullptr ? History->PeekUndoLabel() : FString();
 }
 
@@ -121,7 +121,7 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 
 bool URoadEditFacade::DeleteApron(int32 ApronIndex)
 {
-	URoadNetwork* Network = Owner()->Network;
+	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr || !Network->GetAprons().IsValidIndex(ApronIndex)
 		|| !Network->GetAprons()[ApronIndex].bAlive)
 	{
@@ -166,8 +166,8 @@ int32 URoadEditFacade::FindApronAt(FVector2D Where) const
 
 int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
 {
-	ARoadNetworkActor& Actor = *Owner();
-	UEntityDefinition* Stand = Actor.ResolveStandDefinition();
+	ARoadNetworkActor& Owner = Actor();
+	UEntityDefinition* Stand = Owner.ResolveStandDefinition();
 	if (Stand == nullptr)
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -206,7 +206,7 @@ int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
 
 bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 {
-	URoadNetwork* Network = Owner()->Network;
+	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr || !Network->GetEntities().IsValidIndex(EntityIndex)
 		|| !Network->GetEntities()[EntityIndex].bAlive)
 	{
@@ -261,20 +261,20 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 
 void URoadEditFacade::ClearNetwork()
 {
-	ARoadNetworkActor& Actor = *Owner();
-	Actor.HideGhost();
+	ARoadNetworkActor& Owner = Actor();
+	Owner.HideGhost();
 
 	// Undoable, because clearing everything by accident is the worst thing the tool can do
 	// and the only one with nothing left on screen to hint at what was lost.
-	if (Actor.Network != nullptr)
+	if (Owner.Network != nullptr)
 	{
-		FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("clear network"));
+		FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("clear network"));
 		Edit.Commit();
 	}
 
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
-	Actor.Network = NewObject<URoadNetwork>(&Actor);
+	Owner.Network = NewObject<URoadNetwork>(&Owner);
 	OnChanged.Broadcast();
 }
 

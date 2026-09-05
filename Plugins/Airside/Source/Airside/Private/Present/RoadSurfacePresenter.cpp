@@ -142,13 +142,15 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	}
 }
 
+void URoadSurfacePresenter::InvalidateGhostCache()
+{
+	LastGhostFrom = INDEX_NONE;
+}
+
 void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
-	// Any real edit invalidates whatever the ghost was showing, and the cache key cannot
-	// see it: a click that splits a segment can leave the cursor and the start node
-	// exactly where they were, so every field the cache compares is unchanged while the
-	// graph underneath is not. Cleared here because this is what every mutation ends with.
-	LastGhostFrom = INDEX_NONE;
+	// See InvalidateGhostCache's own comment for why this must happen on every rebuild.
+	InvalidateGhostCache();
 
 	if (MeshComponent == nullptr)
 	{
@@ -328,14 +330,18 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 	return true;
 }
 
-void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex,
-	const FRoadSnapResult& Snap, bool bValid, const FSurfaceSettings& Settings)
+bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 FromNodeIndex,
+	const FRoadSnapResult& Snap, bool bValid, bool& bOutValidityChanged) const
 {
+	bOutValidityChanged = false;
+
+	// Mirrors UpdateGhost's own opening guard exactly: a node that is not currently live
+	// is never a cache hit, so a caller that sees false here and falls through to
+	// UpdateGhost gets the same HideGhost() it would have gotten before this query existed.
 	FRoadNodeId From;
 	if (Network == nullptr || GhostComponent == nullptr || !MakeLiveNodeIdIn(*Network, FromNodeIndex, From))
 	{
-		HideGhost();
-		return;
+		return false;
 	}
 
 	// A drag holds still for most of its frames. Rebuilding then means duplicating the
@@ -346,16 +352,35 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 		&& Snap.Kind == LastGhostKind
 		&& Snap.Position == LastGhostTo)
 	{
-		if (bValid != bLastGhostValid)
-		{
-			// Geometry untouched: this is the whole reason validity is a material
-			// parameter rather than a second mesh.
-			if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance(Settings.GhostMaterial))
-			{
-				Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
-			}
-			bLastGhostValid = bValid;
-		}
+		bOutValidityChanged = (bValid != bLastGhostValid);
+		return true;
+	}
+
+	return false;
+}
+
+void URoadSurfacePresenter::SetGhostValidity(bool bValid, UMaterialInterface* GhostMaterialBase)
+{
+	// Geometry untouched: this is the whole reason validity is a material parameter rather
+	// than a second mesh.
+	if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance(GhostMaterialBase))
+	{
+		Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
+	}
+	bLastGhostValid = bValid;
+}
+
+void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex,
+	const FRoadSnapResult& Snap, bool bValid, const FSurfaceSettings& Settings)
+{
+	// The cache-hit short-circuit this used to open with is now the caller's job - see
+	// IsGhostCacheHit and SetGhostValidity, which exist so the caller can skip resolving
+	// Settings at all on a still drag. This function always does the full rebuild; a
+	// caller that already knows it has a cache hit must not reach here.
+	FRoadNodeId From;
+	if (Network == nullptr || GhostComponent == nullptr || !MakeLiveNodeIdIn(*Network, FromNodeIndex, From))
+	{
+		HideGhost();
 		return;
 	}
 

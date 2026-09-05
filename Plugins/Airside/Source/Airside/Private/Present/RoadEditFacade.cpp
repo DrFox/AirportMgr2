@@ -1,4 +1,4 @@
-// Node, segment and guideline surgery, plus the undo/mutator plumbing (Owner, EnsureNetwork,
+// Node, segment and guideline surgery, plus the undo/mutator plumbing (Actor, EnsureNetwork,
 // EnsureHistory, HistoryForEdit, MakeLiveNodeId/MakeLiveSegmentId, the ghost/traffic
 // forwarders) every one of them shares. Undo/redo, aprons, stands, ClearNetwork and FindRoute
 // are a second translation unit of this SAME class - see RoadEditFacadeSurfaces.cpp's own
@@ -15,33 +15,40 @@
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/RoadEditHistory.h"
 
-ARoadNetworkActor* URoadEditFacade::Owner() const
+ARoadNetworkActor& URoadEditFacade::Actor() const
 {
-	return GetTypedOuter<ARoadNetworkActor>();
+	// A REFERENCE, not a pointer every caller re-checks: this facade REQUIRES an owning
+	// actor (see the class comment), so a null Outer here is a construction error, not a
+	// state to handle gracefully. checkf makes that loud at the first call rather than a
+	// later null-network read that looks like an empty level.
+	ARoadNetworkActor* Found = GetTypedOuter<ARoadNetworkActor>();
+	checkf(Found != nullptr, TEXT("URoadEditFacade has no owning ARoadNetworkActor - it must ")
+		TEXT("be a CreateDefaultSubobject of one, never constructed standalone"));
+	return *Found;
 }
 
 URoadNetwork& URoadEditFacade::EnsureNetwork()
 {
-	ARoadNetworkActor& Actor = *Owner();
-	if (Actor.Network == nullptr)
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr)
 	{
-		Actor.Network = NewObject<URoadNetwork>(&Actor);
+		Owner.Network = NewObject<URoadNetwork>(&Owner);
 	}
-	return *Actor.Network;
+	return *Owner.Network;
 }
 
 URoadEditHistory& URoadEditFacade::EnsureHistory()
 {
-	ARoadNetworkActor& Actor = *Owner();
-	if (Actor.History == nullptr)
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.History == nullptr)
 	{
-		Actor.History = NewObject<URoadEditHistory>(&Actor);
+		Owner.History = NewObject<URoadEditHistory>(&Owner);
 	}
 
 	// Re-applied on every edit rather than only at creation, so lowering the depth in the
 	// details panel mid-session takes effect instead of waiting for a restart.
-	Actor.History->MaxDepth = FMath::Max(Actor.MaxUndoDepth, 1);
-	return *Actor.History;
+	Owner.History->MaxDepth = FMath::Max(Owner.MaxUndoDepth, 1);
+	return *Owner.History;
 }
 
 URoadEditHistory* URoadEditFacade::HistoryForEdit()
@@ -59,40 +66,39 @@ URoadEditHistory* URoadEditFacade::HistoryForEdit()
 
 const URoadNetwork* URoadEditFacade::GetNetwork() const
 {
-	const ARoadNetworkActor* Actor = Owner();
-	return Actor != nullptr ? Actor->Network : nullptr;
+	return Actor().Network;
 }
 
 double URoadEditFacade::GetMinimumRunwayLength() const
 {
-	return Owner()->MinimumRunwayLength;
+	return Actor().MinimumRunwayLength;
 }
 
 const UEntityDefinition* URoadEditFacade::GetStandDefinition() const
 {
 	// The RAW field, not ResolveStandDefinition()'s content-default fallback - see
 	// ARoadNetworkActor::GetStandDefinition's own comment for why that distinction matters.
-	return Owner()->StandDefinition;
+	return Actor().StandDefinition;
 }
 
 void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
 {
-	Owner()->UpdateGhost(FromNodeIndex, Snap, bValid);
+	Actor().UpdateGhost(FromNodeIndex, Snap, bValid);
 }
 
 void URoadEditFacade::HideGhost()
 {
-	Owner()->HideGhost();
+	Actor().HideGhost();
 }
 
 void URoadEditFacade::RebuildMesh()
 {
-	Owner()->RebuildMesh();
+	Actor().RebuildMesh();
 }
 
 bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
 {
-	return Owner()->DispatchAgent(Plan, Airframe);
+	return Actor().DispatchAgent(Plan, Airframe);
 }
 
 bool URoadEditFacade::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
@@ -176,16 +182,16 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
 		return false;
 	}
 
-	ARoadNetworkActor& Actor = *Owner();
+	ARoadNetworkActor& Owner = Actor();
 
 	// Created after the guards above, all of which refuse without mutating anything, so a
 	// rejected connection never costs a snapshot.
-	FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("connect nodes"));
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("connect nodes"));
 
 	// Straight only. The model stores a Bezier control point, but AddSegment still
 	// interpolates its interior samples in a straight line, so a curve authored here
 	// would render as a chord until slice 2b samples the curve properly.
-	const FRoadSegmentId Segment = Actor.Network->AddStraightSegment(From, To, Actor.ResolveProfile());
+	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(From, To, Owner.ResolveProfile());
 	if (!Segment.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %d -> %d"), FromIndex, ToIndex);
@@ -198,8 +204,8 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
 
 bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
 {
-	ARoadNetworkActor& Actor = *Owner();
-	if (Actor.Network == nullptr)
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr)
 	{
 		return false;
 	}
@@ -216,20 +222,20 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	}
 
 	const double Length = FVector2D::Distance(From, To);
-	if (Length < Actor.MinimumRunwayLength)
+	if (Length < Owner.MinimumRunwayLength)
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("PlaceRunway refused: %.0f uu is under the %.0f uu minimum"),
-			Length, Actor.MinimumRunwayLength);
+			Length, Owner.MinimumRunwayLength);
 		return false;
 	}
 
 	// After the guards, all of which refuse without mutating, so a rejected runway never
 	// costs a snapshot - the same rule ConnectNodes follows.
-	FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("place runway"));
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("place runway"));
 
-	const FRoadNodeId A = Actor.Network->AddNode(From);
-	const FRoadNodeId B = Actor.Network->AddNode(To);
+	const FRoadNodeId A = Owner.Network->AddNode(From);
+	const FRoadNodeId B = Owner.Network->AddNode(To);
 	if (!A.IsSet() || !B.IsSet())
 	{
 		return false;
@@ -237,7 +243,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 	// STRAIGHT, and the model cannot express otherwise here: AddStraightSegment puts the
 	// control point on the midpoint, which IsStraight tests for exactly.
-	const FRoadSegmentId Segment = Actor.Network->AddStraightSegment(A, B, RunwayProfile);
+	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(A, B, RunwayProfile);
 	if (!Segment.IsSet())
 	{
 		return false;
@@ -253,7 +259,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 {
-	URoadNetwork* Network = Owner()->Network;
+	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
 	{
 		return INDEX_NONE;
@@ -310,7 +316,7 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 
 bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 {
-	URoadNetwork* Network = Owner()->Network;
+	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
 	{
 		return false;
@@ -382,10 +388,10 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 		return INDEX_NONE;
 	}
 
-	ARoadNetworkActor& Actor = *Owner();
-	FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("split segment"));
+	ARoadNetworkActor& Owner = Actor();
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("split segment"));
 
-	const FRoadNodeId Middle = SplitSegmentIn(*Actor.Network, Doomed, At);
+	const FRoadNodeId Middle = SplitSegmentIn(*Owner.Network, Doomed, At);
 	if (!Middle.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -460,7 +466,7 @@ FRoadNodeId URoadEditFacade::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Do
 void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 {
 	URoadEditHistory* Use = HistoryForEdit();
-	URoadNetwork* Network = Owner()->Network;
+	URoadNetwork* Network = Actor().Network;
 	if (Network != nullptr && Use != nullptr && !Use->IsEditing())
 	{
 		Use->BeginEdit(*Network, Label);
@@ -469,7 +475,7 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 {
-	URoadEditHistory* History = Owner()->History;
+	URoadEditHistory* History = Actor().History;
 	if (History == nullptr || !History->IsEditing())
 	{
 		return;
@@ -493,8 +499,8 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		return false;
 	}
 
-	ARoadNetworkActor& Actor = *Owner();
-	const FRoadNode* Live = Actor.Network->GetNode(Node);
+	ARoadNetworkActor& Owner = Actor();
+	const FRoadNode* Live = Owner.Network->GetNode(Node);
 	if (Live == nullptr)
 	{
 		return false;
@@ -504,9 +510,9 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	// and one pulled under the minimum is one the solver cannot trim back from both ends.
 	for (const FRoadSegmentId& Incident : Live->Incident)
 	{
-		const FRoadNodeId Other = Actor.Network->GetOtherEnd(Incident, Node);
-		const FRoadNode* Far = Actor.Network->GetNode(Other);
-		if (Far != nullptr && FVector2D::Distance(Far->Position, To) < Actor.PlacementLimits.MinSegmentLength)
+		const FRoadNodeId Other = Owner.Network->GetOtherEnd(Incident, Node);
+		const FRoadNode* Far = Owner.Network->GetNode(Other);
+		if (Far != nullptr && FVector2D::Distance(Far->Position, To) < Owner.PlacementLimits.MinSegmentLength)
 		{
 			return false;
 		}
@@ -518,10 +524,10 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
 	if (bOwnsEdit)
 	{
-		Use->BeginEdit(*Actor.Network, TEXT("move node"));
+		Use->BeginEdit(*Owner.Network, TEXT("move node"));
 	}
 
-	const bool bMoved = Actor.Network->SetNodePosition(Node, To);
+	const bool bMoved = Owner.Network->SetNodePosition(Node, To);
 
 	if (bOwnsEdit)
 	{
@@ -541,12 +547,12 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 FRoadDeletionPlan URoadEditFacade::PlanNodeDeletion(int32 NodeIndex) const
 {
 	FRoadNodeId Node;
-	const ARoadNetworkActor* Actor = Owner();
-	if (Actor == nullptr || Actor->Network == nullptr || !MakeLiveNodeId(NodeIndex, Node))
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr || !MakeLiveNodeId(NodeIndex, Node))
 	{
 		return FRoadDeletionPlan();
 	}
-	return RoadHeal::PlanNodeDeletion(*Actor->Network, Node, Actor->PlacementLimits);
+	return RoadHeal::PlanNodeDeletion(*Owner.Network, Node, Owner.PlacementLimits);
 }
 
 bool URoadEditFacade::DeleteNode(int32 NodeIndex)
@@ -558,8 +564,8 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
-	ARoadNetworkActor& Actor = *Owner();
-	const FRoadDeletionPlan Plan = RoadHeal::PlanNodeDeletion(*Actor.Network, Node, Actor.PlacementLimits);
+	ARoadNetworkActor& Owner = Actor();
+	const FRoadDeletionPlan Plan = RoadHeal::PlanNodeDeletion(*Owner.Network, Node, Owner.PlacementLimits);
 	if (!Plan.bValid)
 	{
 		// Refused whole. Nothing has been touched yet, which is the point of planning
@@ -571,10 +577,10 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
-	FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("delete node"));
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
-	if (!Actor.Network->RemoveNode(Node))
+	if (!Owner.Network->RemoveNode(Node))
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
 		return false;
@@ -584,7 +590,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// being applied to exactly the state it was approved for.
 	for (const FRoadNodeId& Stranded : Plan.Rejoin)
 	{
-		if (!Actor.Network->AddStraightSegment(Stranded, Plan.Anchor, Actor.ResolveProfile()).IsSet())
+		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Owner.ResolveProfile()).IsSet())
 		{
 			UE_LOG(LogRoadMesh, Error,
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
@@ -594,7 +600,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 
 	for (const FRoadNodeId& Litter : Plan.Swept)
 	{
-		Actor.Network->RemoveNode(Litter);
+		Owner.Network->RemoveNode(Litter);
 	}
 
 	Edit.Commit();
@@ -611,16 +617,16 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 		return false;
 	}
 
-	ARoadNetworkActor& Actor = *Owner();
+	ARoadNetworkActor& Owner = Actor();
 
 	// Captured before the removal, because afterwards the segment cannot say what it joined.
-	const FRoadSegment* Doomed = Actor.Network->GetSegment(Segment);
+	const FRoadSegment* Doomed = Owner.Network->GetSegment(Segment);
 	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
 	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
 
-	FRoadEditScope Edit(HistoryForEdit(), Actor.Network, TEXT("delete segment"));
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete segment"));
 
-	if (!Actor.Network->RemoveSegment(Segment))
+	if (!Owner.Network->RemoveSegment(Segment))
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("DeleteSegment refused: segment %d would not remove"), SegmentIndex);
@@ -631,11 +637,11 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 	// it destroys nothing. An endpoint that still has roads is untouched.
 	for (const FRoadNodeId& End : { EndA, EndB })
 	{
-		if (const FRoadNode* Live = Actor.Network->GetNode(End))
+		if (const FRoadNode* Live = Owner.Network->GetNode(End))
 		{
 			if (Live->Incident.Num() == 0)
 			{
-				Actor.Network->RemoveNode(End);
+				Owner.Network->RemoveNode(End);
 			}
 		}
 	}
@@ -689,4 +695,3 @@ bool URoadEditFacade::GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVecto
 	OutB = EndB->Position;
 	return true;
 }
-

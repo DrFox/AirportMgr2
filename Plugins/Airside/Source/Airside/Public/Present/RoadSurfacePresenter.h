@@ -91,15 +91,64 @@ public:
 	void Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/**
+	 * Forget what the ghost cache last showed, without touching the ghost component's
+	 * visibility.
+	 *
+	 * Any real edit invalidates whatever the ghost was showing, and the cache key cannot
+	 * see it: a click that splits a segment can leave the cursor and the start node
+	 * exactly where they were, so every field the cache compares is unchanged while the
+	 * graph underneath is not. Called unconditionally at the top of every rebuild - see
+	 * Rebuild, which calls this itself, and ARoadNetworkActor::RebuildMesh, which must call
+	 * it even on the one path that returns before there is a Network to rebuild from (a
+	 * null Network cannot become the URoadNetwork& Rebuild takes, so that early return has
+	 * to live on the actor - this is what lets it still invalidate the cache first).
+	 */
+	void InvalidateGhostCache();
+
+	/**
 	 * Height the apron surface is actually built at.
 	 *
 	 * ApronZOffset is a MAXIMUM, not a fixed drop: the apron never descends more than
 	 * halfway from the road to the ground plane. A fixed drop silently assumes the road has
-	 * headroom - see ARoadNetworkActor::ApronZOffset's own comment for the failure this
-	 * guards against. Public and shared so the mesh, the log and the tests cannot each
-	 * compute it their own way and disagree.
+	 * headroom, and with SurfaceZ at 1 a 4 uu drop put the concrete at Z = -3 - rendering
+	 * correctly, normals up, material bound, and buried under the ground where nothing
+	 * about it looked wrong.
+	 *
+	 * Halfway rather than clamped at zero because zero is where the ground is: an apron
+	 * pinned exactly to it would z-fight with the terrain instead of vanishing under it,
+	 * which trades one silent failure for another.
+	 *
+	 * The single place this is computed - see ARoadNetworkActor::ApronZOffset and
+	 * ::GetApronSurfaceZ, which both point here rather than repeating it. Public and shared
+	 * so the mesh, the log and the tests cannot each compute it their own way and disagree.
 	 */
 	double GetApronSurfaceZ(double SurfaceZ, double ApronZOffset) const;
+
+	/**
+	 * True if the ghost already shows FromNodeIndex/Snap and UpdateGhost would therefore
+	 * skip rebuilding it - the "a drag holds still for most frames" case (see the cache
+	 * fields below). OutValidityChanged reports whether bValid differs from what the
+	 * ghost's material is currently blending toward. False (never a hit) whenever
+	 * FromNodeIndex is not currently a live node - the same guard UpdateGhost itself
+	 * opens with, so a caller that gets false here and calls UpdateGhost sees identical
+	 * behaviour to before this query existed.
+	 *
+	 * Exists so the CALLER can skip its own work on a cache hit too: ARoadNetworkActor's
+	 * Resolve* functions are a content lookup plus a LoadSynchronous each, not free, and
+	 * UpdateGhost used to pay for all of them every frame of a still drag before this
+	 * query let it ask first. A const query, so it is safe to call speculatively.
+	 */
+	bool IsGhostCacheHit(const URoadNetwork* Network, int32 FromNodeIndex, const FRoadSnapResult& Snap,
+		bool bValid, bool& bOutValidityChanged) const;
+
+	/**
+	 * The cache-hit path: update only the ghost material's ValidityBlend parameter.
+	 *
+	 * Geometry untouched: this is the whole reason validity is a material parameter rather
+	 * than a second mesh. GhostMaterialBase is the one resolver this path still needs -
+	 * see IsGhostCacheHit's own comment for why the other four are skipped entirely here.
+	 */
+	void SetGhostValidity(bool bValid, UMaterialInterface* GhostMaterialBase);
 
 	/**
 	 * Show the segment a click would build, as real solved pavement.
@@ -107,7 +156,8 @@ public:
 	 * Built on a DUPLICATE of Network, never the live one - FRoadNetworkSolver::SolveAll
 	 * writes trim distances and cut vertices INTO whatever it is handed, so solving a
 	 * hypothetical segment against the real graph would leave the real road's stored
-	 * geometry describing a road nobody built.
+	 * geometry describing a road nobody built. Call only on an IsGhostCacheHit miss - see
+	 * its comment - since this always does the full rebuild.
 	 */
 	void UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex, const FRoadSnapResult& Snap,
 		bool bValid, const FSurfaceSettings& Settings);
