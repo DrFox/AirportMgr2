@@ -261,15 +261,13 @@ public:
 	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/**
-	 * IRoadEditTarget accessor for StandDefinition - the RAW field, not
-	 * ResolveStandDefinition()'s content-default fallback. Preserves exactly what
-	 * FStandPlaceTool::PreviewPose read before this seam existed
-	 * (Context.Target->StandDefinition.Get()); changing it to the resolved value would be
-	 * a behaviour change this task is not making.
+	 * IRoadEditTarget accessor for StandDefinition - RESOLVED, via ResolveStandDefinition(),
+	 * the same as PlaceStand places from: preview and placement must resolve the same
+	 * object, or a stand's ghost and the stand PlaceStand actually drops can disagree.
 	 */
 	virtual const UEntityDefinition* GetStandDefinition() const override
 	{
-		return StandDefinition;
+		return ResolveStandDefinition();
 	}
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */

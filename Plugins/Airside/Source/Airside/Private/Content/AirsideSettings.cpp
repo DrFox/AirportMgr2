@@ -62,5 +62,12 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	Piper.Climb = UAircraftType::PiperMeridianClimb();
 	Piper.Approach = UAircraftType::PiperMeridianApproach();
 	Piper.Engine = UAircraftType::PiperMeridianEngine();
+
+	// Must agree with the content branch's Default->Airframe(), which reads
+	// Footprint.Wingspan - a route search costs a turn by Wingspan (RouteSearch::Find), so
+	// a fallback that left this at the FAirframe default (0.0) would let the SAME aircraft
+	// take a turn too tight for its own wing depending purely on whether content happened
+	// to be loaded.
+	Piper.Wingspan = UAircraftType::PiperMeridianWingspan();
 	return Piper;
 }

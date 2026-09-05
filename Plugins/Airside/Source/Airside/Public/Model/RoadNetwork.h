@@ -203,7 +203,7 @@ public:
 	 * depend on the Entities layer (RoadEntity.h says so at the top), so the caller resolves
 	 * the definition's own Anchors array and hands it in rather than this function reading
 	 * Definition->Anchors itself. HasUsableAnchorIds' validation moves with it: the caller
-	 * (ARoadNetworkActor::PlaceStand) checks it before calling, since that check is also a
+	 * (URoadEditFacade::PlaceStand) checks it before calling, since that check is also a
 	 * UEntityDefinition method this layer cannot call.
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,

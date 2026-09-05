@@ -234,4 +234,99 @@ bool FArrivalPlannerVacateAtTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// (e) NoExit: a runway long enough to stop on, with nothing on it to route from.
+//
+// RunwayExitNodes reads only the GUIDELINE graph, not the road graph - and the far end of
+// ANY solved runway always sits exactly at Distance == Length from the threshold (Direction
+// is defined as the unit vector toward it), with zero lateral offset, so it always qualifies
+// as a candidate once RunwayLength >= Needed. That means a solved runway - even a bare one
+// with no taxiway - always has at least one "exit": its own far end. So the only way to
+// exercise NoExit is to ask NearestRunwayThreshold's answer (pure road-graph, needs no
+// solve) against a network whose GUIDELINE graph was never derived at all: FRoadNetworkSolver
+// ::SolveAll and FRoadGuidelineBuilder::Build are deliberately NOT called here, so
+// GuidelineNodes stays empty and RunwayExitNodes has nothing to find - which is exactly
+// "the runway can be stopped on, but nothing joins it far enough down to be usable."
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNoExitTest,
+	"Airside.Model.ArrivalPlanner.NoExit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNoExitTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = MakePiperAirframe();
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+
+	// Long enough to stop on (RunwayLength > Needed), so the refusal cannot be RunwayTooShort.
+	const FRoadNodeId A = Network->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId B = Network->AddNode(FVector2D(Needed * 2.0, 0.0));
+	Network->AddStraightSegment(A, B, Runway);
+
+	// NOT solved and NOT built - see the test's own banner comment for why that is the whole
+	// point rather than an oversight.
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, Airframe);
+
+	TestEqual(TEXT("a runway with no derived guideline graph refuses NoExit"),
+		Plan.Why, EArrivalRefusal::NoExit);
+	TestEqual(TEXT("and ExitCount is reported as zero"), Plan.ExitCount, 0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// (f) NoRouteToStand: an exit exists - the taxiway leaves the runway and goes somewhere -
+// but nothing on the far end of it is a stand, so no route reaches one.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNoRouteToStandTest,
+	"Airside.Model.ArrivalPlanner.NoRouteToStand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = MakePiperAirframe();
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const double RunwayLength = Needed * 1.5;
+
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+
+	const FVector2D ThresholdAt(0.0, 0.0);
+	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
+	const FVector2D FarAt(RunwayLength, 0.0);
+
+	// Split at the exit, same as ArrivalDispatchTest, so a guideline node lands on the runway
+	// centreline for RunwayExitNodes to find.
+	const FRoadNodeId Threshold = Network->AddNode(ThresholdAt);
+	const FRoadNodeId Exit = Network->AddNode(ExitAt);
+	const FRoadNodeId Far = Network->AddNode(FarAt);
+	Network->AddStraightSegment(Threshold, Exit, Runway);
+	Network->AddStraightSegment(Exit, Far, Runway);
+
+	// The taxiway leaves the runway and goes somewhere - a dead end, nothing on it. NO
+	// stand is placed anywhere in this network, which is the whole point: an exit exists
+	// (this junction), but UEntityInstance::GetEntities() is empty, so the route search
+	// inside ArrivalPlanner::Plan never finds a Goal to search for at all.
+	const FRoadNodeId TaxiEnd = Network->AddNode(ExitAt + FVector2D(0.0, -20000.0));
+	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
+	FRoadGuidelineBuilder::Build(*Network, Solved);
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
+
+	TestEqual(TEXT("an exit with no reachable stand refuses NoRouteToStand"),
+		Plan.Why, EArrivalRefusal::NoRouteToStand);
+	TestTrue(TEXT("and at least one exit was found - the refusal is about the STAND, not the exit"),
+		Plan.ExitCount > 0);
+	return true;
+}
+
 #endif
