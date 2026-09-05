@@ -550,6 +550,11 @@ const FGuidelineNode* URoadNetwork::GetGuidelineNode(FGuidelineNodeId Node) cons
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
+FGuidelineNodeId URoadNetwork::GuidelineNodeIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FGuidelineNodeId>(GuidelineNodes, Index);
+}
+
 const FGuidelineEdge* URoadNetwork::GetGuidelineEdge(FGuidelineEdgeId Edge) const
 {
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
@@ -622,7 +627,7 @@ const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
 
 FEntityInstanceId URoadNetwork::PlaceEntity(
 	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
-	const FVector2D& Position, double Heading)
+	const FVector2D& Position, double Heading, double DesignWingspan)
 {
 	if (Definition == nullptr)
 	{
@@ -636,6 +641,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	Instance.Position = Position;
 	Instance.Heading = Heading;
 	Instance.Definition = Definition;
+	Instance.DesignWingspan = DesignWingspan;
 	Instance.ResolvedAnchors.Reserve(Anchors.Num());
 
 	// The stop position itself, as a node an aircraft can be routed to. NON-DERIVED for
@@ -699,6 +705,11 @@ bool URoadNetwork::RemoveEntity(FEntityInstanceId Entity)
 const FEntityInstance* URoadNetwork::GetEntity(FEntityInstanceId Entity) const
 {
 	return RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+}
+
+FEntityInstanceId URoadNetwork::EntityIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FEntityInstanceId>(Entities, Index);
 }
 
 const FResolvedAnchor* URoadNetwork::FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const

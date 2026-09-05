@@ -10,10 +10,14 @@
 .EXAMPLE
     ./Tools/Run-AirsideTests.ps1
     ./Tools/Run-AirsideTests.ps1 -Filter Airside.Solve
+    ./Tools/Run-AirsideTests.ps1 -Filter AirportOps.Model
 #>
 [CmdletBinding()]
 param(
-    [string] $Filter  = 'Airside',
+    # Both plugins by default. '+' is the automation runner's own list separator
+    # (AutomationCommandline.cpp splits RunTests arguments on it), so one cold editor
+    # start covers both suites.
+    [string] $Filter  = 'Airside+AirportOps',
     # Derived from the script's own location, not the hardcoded main checkout: this script
     # runs from git worktrees too, each with its own .uproject beside its own Tools/, and a
     # fixed C:\repos\AirportMgr2 default silently tested the WRONG checkout's DLLs whenever

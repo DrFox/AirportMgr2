@@ -37,8 +37,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
 
-$plugin = Join-Path $Root 'Plugins\Airside\Source\Airside'
-$trees  = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Source\AirportMgr'))
+$plugin  = Join-Path $Root 'Plugins\Airside\Source\Airside'
+$ops     = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
+$modules = @($plugin, $ops)
+$trees   = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Plugins\AirportOps\Source'), (Join-Path $Root 'Source\AirportMgr'))
 
 function Get-Sources([string] $Dir, [string[]] $Ext) {
     if (-not (Test-Path $Dir)) { return @() }
@@ -46,23 +48,41 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
 }
 
 # --- 1. Include direction -----------------------------------------------------------------
-# Layer -> regex of forbidden include prefixes. Solve/ is handled separately as an allow-list.
+# Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
+# handled separately as an allow-list.
 $forbidden = @{
     'Model' = 'Build/|Tool/|Present/|Entities/'
     'Tool'  = 'Present/'
     'Build' = 'Present/|Tool/'
 }
-foreach ($layer in $forbidden.Keys) {
-    foreach ($half in 'Public', 'Private') {
-        $dir = Join-Path $plugin (Join-Path $half $layer)
-        foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
-            $hits = Select-String -Path $file.FullName -Pattern ('#include\s+"(' + $forbidden[$layer] + ')')
-            foreach ($h in $hits) {
-                $failures.Add("include-direction: $($file.FullName):$($h.LineNumber) $layer/ must not include $($h.Line.Trim())")
+foreach ($module in $modules) {
+    foreach ($layer in $forbidden.Keys) {
+        foreach ($half in 'Public', 'Private') {
+            $dir = Join-Path $module (Join-Path $half $layer)
+            foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+                $hits = Select-String -Path $file.FullName -Pattern ('#include\s+"(' + $forbidden[$layer] + ')')
+                foreach ($h in $hits) {
+                    $failures.Add("include-direction: $($file.FullName):$($h.LineNumber) $layer/ must not include $($h.Line.Trim())")
+                }
             }
         }
     }
 }
+
+# --- 1b. Cross-plugin direction: Airside never includes AirportOps ------------------------
+# AirportOps -> Airside is the only legal direction. A header from the ops plugin inside
+# Airside would make movement depend on money, which is the boundary the plugin split exists
+# to hold. Matched on CODE references - an include path, the API macro, or a UOps* class
+# name (a forward declaration is the same leak with no #include to catch) - and NOT on the
+# bare word, because a WHY comment that names the consumer ("AirportOps binds this") is
+# exactly the kind of comment this codebase wants more of.
+foreach ($file in Get-Sources (Join-Path $Root 'Plugins\Airside\Source') @('.h', '.cpp')) {
+    $hits = Select-String -Path $file.FullName -Pattern '#include\s+"[^"]*AirportOps|AIRPORTOPS_API|\bUOps[A-Z]\w*'
+    foreach ($h in $hits) {
+        $failures.Add("cross-plugin: $($file.FullName):$($h.LineNumber) Airside must not reference AirportOps: $($h.Line.Trim())")
+    }
+}
+
 foreach ($half in 'Public', 'Private') {
     $dir = Join-Path $plugin (Join-Path $half 'Solve')
     foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
@@ -74,17 +94,19 @@ foreach ($half in 'Public', 'Private') {
     }
 }
 
-# --- 2. Log category names unique across the module ------------------------------------
-$categories = @{}
-foreach ($file in Get-Sources $plugin @('.cpp', '.h')) {
-    $hits = Select-String -Path $file.FullName -Pattern 'DEFINE_LOG_CATEGORY(_STATIC)?\(\s*(\w+)'
-    foreach ($h in $hits) {
-        $name = $h.Matches[0].Groups[2].Value
-        if ($categories.ContainsKey($name)) {
-            $failures.Add("log-category: $name defined in both $($categories[$name]) and $($file.FullName):$($h.LineNumber) - unity build collision; declare it once in Public/AirsideLog.h")
-        }
-        else {
-            $categories[$name] = "$($file.FullName):$($h.LineNumber)"
+# --- 2. Log category names unique within each module ------------------------------------
+foreach ($module in $modules) {
+    $categories = @{}
+    foreach ($file in Get-Sources $module @('.cpp', '.h')) {
+        $hits = Select-String -Path $file.FullName -Pattern 'DEFINE_LOG_CATEGORY(_STATIC)?\(\s*(\w+)'
+        foreach ($h in $hits) {
+            $name = $h.Matches[0].Groups[2].Value
+            if ($categories.ContainsKey($name)) {
+                $failures.Add("log-category: $name defined in both $($categories[$name]) and $($file.FullName):$($h.LineNumber) - unity build collision; declare it once in the module's Public/*Log.h")
+            }
+            else {
+                $categories[$name] = "$($file.FullName):$($h.LineNumber)"
+            }
         }
     }
 }
@@ -105,7 +127,7 @@ foreach ($tree in $trees) {
 $allowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp')
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
-        if ($file.FullName -match '\\AirsideTests\\') { continue }
+        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
         if ($allowed -contains $file.Name) { continue }
         $hits = Select-String -Path $file.FullName -Pattern 'PiperMeridian\w*\s*\('
         foreach ($h in $hits) {
@@ -116,7 +138,7 @@ foreach ($tree in $trees) {
 
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, log categories, doc comments, content default)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default)' -ForegroundColor Green
     exit 0
 }
 

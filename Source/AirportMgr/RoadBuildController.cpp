@@ -7,6 +7,9 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
+#include "Model/SimClock.h"
+#include "Present/OpsRuntime.h"
+#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
@@ -64,7 +67,8 @@ void ARoadBuildController::BeginPlay()
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
 			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C orbits the "
 			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms - "
-			 "while building or watching."),
+			 "while building or watching. Comma/Period slow/speed the sim clock, P pauses, "
+			 "F5 quick-saves, F9 quick-loads."),
 		*Target->GetName(), *ToolKeys);
 }
 
@@ -238,6 +242,13 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
 	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
 	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
+
+	// Sim clock and quick save - see the header. Same rule as above: the banner names them.
+	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARoadBuildController::OnSpeedDown);
+	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARoadBuildController::OnSpeedUp);
+	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::OnTogglePause);
+	InputComponent->BindKey(EKeys::F5, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
+	InputComponent->BindKey(EKeys::F9, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
@@ -631,3 +642,27 @@ void ARoadBuildController::OnClearNetwork()
 	Target->ClearNetwork();
 	UE_LOG(LogRoadBuild, Log, TEXT("Network cleared."));
 }
+
+// --- Sim clock and quick save ---------------------------------------------------------------
+
+namespace
+{
+	UOpsRuntime* RuntimeFor(const APlayerController& PC)
+	{
+		UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(PC.GetWorld());
+		if (Runtime == nullptr)
+		{
+			// Says so rather than silently doing nothing: "pressing P does nothing" is the
+			// exact shape of bug CLAUDE.md warns about, and the reason is worth one line.
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("No OpsRuntime: clock and save keys need a game instance (PIE), not the editor mode"));
+		}
+		return Runtime;
+	}
+}
+
+void ARoadBuildController::OnSpeedDown()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->StepSpeed(-1); } }
+void ARoadBuildController::OnSpeedUp()     { if (UOpsRuntime* R = RuntimeFor(*this)) { R->StepSpeed(+1); } }
+void ARoadBuildController::OnTogglePause() { if (UOpsRuntime* R = RuntimeFor(*this)) { R->TogglePause(); } }
+void ARoadBuildController::OnQuickSave()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->SaveToSlot(TEXT("QuickSave")); } }
+void ARoadBuildController::OnQuickLoad()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->LoadFromSlot(TEXT("QuickSave")); } }

@@ -177,6 +177,13 @@ public:
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 
 	/**
+	 * The handle for a live slot index, for callers walking GetGuidelineNodes() by index.
+	 * Unset for a dead or out-of-range slot, so a caller cannot build a handle to a node
+	 * that RoadSlot::IsValid would then reject.
+	 */
+	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
+
+	/**
 	 * Edges an agent of this class may leave Node along, honouring access AND direction.
 	 *
 	 * Returns edges, not neighbours, because a caller needs the edge's own width, wingspan
@@ -205,9 +212,14 @@ public:
 	 * Definition->Anchors itself. HasUsableAnchorIds' validation moves with it: the caller
 	 * (URoadEditFacade::PlaceStand) checks it before calling, since that check is also a
 	 * UEntityDefinition method this layer cannot call.
+	 *
+	 * DesignWingspan is stored on the instance for the capability summary; the caller reads
+	 * it from the definition for the same Model/-must-not-see-Entities/ reason as Anchors.
+	 * Defaulted so the many test callers that never cared about size keep compiling.
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,
-		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading);
+		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading,
+		double DesignWingspan = 0.0);
 
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
@@ -220,6 +232,9 @@ public:
 
 	const FEntityInstance* GetEntity(FEntityInstanceId Entity) const;
 	const TArray<FEntityInstance>& GetEntities() const { return Entities; }
+
+	/** The handle for a live slot index, for callers walking GetEntities() by index. Unset if dead. */
+	FEntityInstanceId EntityIdAt(int32 Index) const;
 
 	/**
 	 * World heading of an entity's anchor in radians: the instance's heading composed with

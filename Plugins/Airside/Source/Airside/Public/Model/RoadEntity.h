@@ -579,6 +579,14 @@ struct AIRSIDE_API FEntityInstance
 	UPROPERTY() TArray<FResolvedAnchor> ResolvedAnchors;
 
 	/**
+	 * Wingspan of the aircraft this stand was designed for, uu, captured at placement.
+	 * CAPTURED, not read from Definition->DesignAircraft, for the same reason FResolvedAnchor
+	 * copies Role: Model/ must not dereference the Entities layer. 0 means unknown.
+	 * The capability summary (Model/AirsideCapability.h) classes the stand from this.
+	 */
+	UPROPERTY() double DesignWingspan = 0.0;
+
+	/**
 	 * The entity's OWN pose as a guideline node - for a stand, the nose gear stop.
 	 *
 	 * Not an anchor, and deliberately not in the array above. An anchor is a FIXTURE: a
