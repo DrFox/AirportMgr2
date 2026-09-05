@@ -14,7 +14,11 @@
 [CmdletBinding()]
 param(
     [string] $Filter  = 'Airside',
-    [string] $Project = 'C:\repos\AirportMgr2\AirportMgr.uproject',
+    # Derived from the script's own location, not the hardcoded main checkout: this script
+    # runs from git worktrees too, each with its own .uproject beside its own Tools/, and a
+    # fixed C:\repos\AirportMgr2 default silently tested the WRONG checkout's DLLs whenever
+    # it was reached from one of those.
+    [string] $Project = (Join-Path (Split-Path -Parent $PSScriptRoot) 'AirportMgr.uproject'),
     [string] $Engine  = 'D:\Epic\UE_5.8'
 )
 

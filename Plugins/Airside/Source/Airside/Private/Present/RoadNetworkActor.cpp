@@ -1,5 +1,6 @@
 #include "Present/RoadNetworkActor.h"
 
+#include "AirsideLog.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Content/AirsideContent.h"
 #include "Model/ArrivalPlanner.h"
@@ -29,8 +30,7 @@
 #include "Tool/RoadEditHistory.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/RoadHeal.h"
-
-DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
+#include "Debug/RoadRebuildCensus.h"
 
 void FDynamicMeshSink::PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers)
 {
@@ -1733,93 +1733,13 @@ void ARoadNetworkActor::RebuildMesh()
 			FColor::Magenta, false, Lifetime, 0, 8.0f);
 	}
 
-	// SEGMENTS AND APRONS ARE REPORTED, not just nodes, because without them "0 triangles"
-	// is ambiguous in the one way that matters: an empty network and a broken builder read
-	// identically. That ambiguity cost a whole diagnosis - a level with five nodes and no
-	// segments SHOULD produce no road surface, and there was no way to tell that from a
-	// builder that had stopped emitting bands.
-	// WHAT THE SEGMENTS THEMSELVES USED, not just what the default was. "The roads changed
-	// width when I clicked a tool" is unanswerable from the default alone: a segment with its
-	// own profile ignores it, and the interesting case is precisely when some segments have
-	// one and some do not. Reported as a census so the next reproduction says which.
-	int32 OwnProfile = 0;
-	int32 Fallback = 0;
-	double NarrowestUsed = TNumericLimits<double>::Max();
-	double WidestUsed = 0.0;
-	for (const FRoadSegment& Segment : Network->GetSegments())
-	{
-		if (!Segment.bAlive)
-		{
-			continue;
-		}
-		Segment.Profile != nullptr ? ++OwnProfile : ++Fallback;
-		if (const URoadProfile* Used_ = Network->ProfileFor(Segment))
-		{
-			NarrowestUsed = FMath::Min(NarrowestUsed, Used_->GetTotalWidth());
-			WidestUsed = FMath::Max(WidestUsed, Used_->GetTotalWidth());
-		}
-	}
-
-	FString Slots;
-	for (int32 Slot = 0; Slot < MeshComponent->GetNumMaterials(); ++Slot)
-	{
-		const UMaterialInterface* Applied = MeshComponent->GetMaterial(Slot);
-		Slots += FString::Printf(TEXT("[%d]=%s "), Slot,
-			Applied != nullptr ? *Applied->GetName() : TEXT("null"));
-	}
-	// The distinct material ids the BUILDER produced, against the slots the COMPONENT holds.
-	// A road that changes appearance with an unchanged model has to differ in one of these
-	// two, and comparing them is the only way to see which - an id with no slot behind it
-	// draws as nothing or as the default, and reports neither.
-	TSet<int32> DistinctIDs;
-	for (const int32 Id : Builder.GetBuffers().MaterialIDs)
-	{
-		DistinctIDs.Add(Id);
-	}
-	FString IDList;
-	for (const int32 Id : DistinctIDs)
-	{
-		IDList += FString::Printf(TEXT("%d "), Id);
-	}
-
-	// And which profile OBJECT each segment resolved to. Segments drawn before a save come
-	// back with a null profile and fall to the network default; ones drawn since carry their
-	// own. If the two ever resolve to different objects, they render differently while the
-	// widths agree - which is a road changing material for no reason the model can show.
-	TSet<FString> ProfileNames;
-	for (const FRoadSegment& Seg : Network->GetSegments())
-	{
-		if (!Seg.bAlive) { continue; }
-		const URoadProfile* Used_ = Network->ProfileFor(Seg);
-		ProfileNames.Add(Used_ != nullptr ? Used_->GetName() : TEXT("null"));
-	}
-	FString ProfileList;
-	for (const FString& Name : ProfileNames)
-	{
-		ProfileList += Name + TEXT(" ");
-	}
-
-	UE_LOG(LogRoadMesh, Log, TEXT("Surface slots: %s| material ids: %s| profiles in use: %s"),
-		*Slots, *IDList, *ProfileList);
-
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Profiles: %d segments own theirs, %d fall back; widths used %.0f..%.0f uu. "
-			 "SurfaceMaterial=%s MaterialSet=%s"),
-		OwnProfile, Fallback,
-		OwnProfile + Fallback > 0 ? NarrowestUsed : 0.0, WidestUsed,
-		ResolveSurfaceMaterial() != nullptr ? *ResolveSurfaceMaterial()->GetName() : TEXT("none"),
-		ResolveMaterialSet() != nullptr ? *ResolveMaterialSet()->GetName() : TEXT("none"));
-
-	const URoadProfile* Used = Network->DefaultProfile;
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Rebuilt: %d nodes (%d failed), %d segments, %d aprons, %d vertices, %d triangles, "
-			 "default profile '%s' %.0f uu wide"),
-		Solved.SolvedNodes, Solved.FailedNodes,
-		Network != nullptr ? Network->GetSegments().Num() : -1,
-		Network != nullptr ? Network->GetAprons().Num() : -1,
-		Builder.GetBuffers().Positions.Num(), Builder.GetBuffers().Indices.Num() / 3,
-		Used != nullptr ? *Used->GetName() : TEXT("none"),
-		Used != nullptr ? Used->GetTotalWidth() : 0.0);
+	// Diagnostic-only from here: profile counts, the material slot list, distinct material
+	// ids, profile names in use, and the final "Rebuilt:" line. Extracted to
+	// RoadRebuildCensus so this function stays about DOING the rebuild, not reporting on
+	// it - see the header there for why it takes exactly these five things instead of the
+	// whole actor.
+	RoadRebuildCensus::Log(*Network, Builder.GetBuffers(), *MeshComponent, Solved,
+		ResolveSurfaceMaterial(), ResolveMaterialSet());
 }
 
 bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
@@ -1883,7 +1803,7 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 	// which found no runway at all - every other field here is meaningless until one is.
 	if (Plan.Why != EArrivalRefusal::NoRunway)
 	{
-		UE_LOG(LogRoadMesh, Log,
+		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop, %d usable exit(s), ")
 			TEXT("%d stand(s) on the airport."),
 			*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
@@ -1892,7 +1812,7 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 
 	if (!Plan.IsValid())
 	{
-		UE_LOG(LogRoadMesh, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
 		return false;
 	}
 
@@ -1928,7 +1848,7 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 		Slot.View->SetMotion(Motion, SurfaceZ);
 	}
 
-	UE_LOG(LogRoadMesh, Log,
+	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, ")
 		TEXT("taxiing %.0f uu to a stand."),
 		*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
@@ -1983,7 +1903,7 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& A
 		{
 			Agent.ArmDeparture(Threshold, Direction, Length);
 
-			UE_LOG(LogRoadMesh, Log,
+			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
 				*RunwayDesignator::ToPairText(Direction), Length);
 		}
