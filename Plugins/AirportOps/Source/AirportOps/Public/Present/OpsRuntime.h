@@ -6,6 +6,7 @@
 #include "OpsRuntime.generated.h"
 
 class ARoadNetworkActor;
+class UOpsCatalog;
 class UOpsEvents;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
@@ -34,6 +35,7 @@ public:
 
 	USimClock* GetClock() const { return Clock; }
 	UOpsEvents* GetEvents() const { return Events; }
+	UOpsCatalog* GetCatalog() const { return Catalog; }
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
@@ -54,6 +56,7 @@ public:
 private:
 	UPROPERTY() TObjectPtr<USimClock> Clock;
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
+	UPROPERTY() TObjectPtr<UOpsCatalog> Catalog;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/** What TogglePause returns to. X1 if nothing was ever set. */

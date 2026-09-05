@@ -1,5 +1,8 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
+#include "Content/AirportOpsSettings.h"
+#include "Model/OpsCatalog.h"
+#include "Model/OpsDefinition.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -11,6 +14,7 @@ UOpsRuntime::UOpsRuntime()
 {
 	Clock = CreateDefaultSubobject<USimClock>(TEXT("Clock"));
 	Events = CreateDefaultSubobject<UOpsEvents>(TEXT("Events"));
+	Catalog = CreateDefaultSubobject<UOpsCatalog>(TEXT("Catalog"));
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -25,6 +29,19 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	UAirsideTraffic* Traffic = Target->GetTraffic();
 	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
+
+	// Content is resolved ONCE, here, and applied to the clock. Balance goes to the ledger
+	// when it exists (M3); until then the scenario's day length is the only field consumed.
+	if (Catalog->Num() == 0)
+	{
+		Catalog->LoadFromAssetManager();
+	}
+	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario())
+	{
+		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
+		UE_LOG(LogAirportOps, Log, TEXT("Scenario '%s': %.0f real s per game day"),
+			*Scenario->GetName(), Scenario->RealSecondsPerGameDay);
+	}
 	ApplySpeed(Clock->GetSpeed());
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
 }
