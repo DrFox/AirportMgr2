@@ -1,8 +1,8 @@
 #include "Tool/RouteTool.h"
 
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
-#include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
@@ -50,53 +50,6 @@ namespace
 		return nullptr;
 	}
 
-	/**
-	 * How the thing being routed moves on the ground.
-	 *
-	 * Falls back to a Meridian rather than to the struct's generic defaults, because a
-	 * Meridian is what ARoadAgentActor puts on screen. Most of the graph is plain taxiway
-	 * with no stand to ask, so this fallback is the common path, not the edge case - and an
-	 * agent that looked like a Piper and turned like an airliner would be wrong nearly
-	 * everywhere rather than nearly nowhere.
-	 */
-	/**
-	 * What the thing being routed does once airborne, for a route that ends on a runway.
-	 *
-	 * Falls back to a Meridian for the same reason GroundFor does: that is the airframe on
-	 * screen, so an agent that taxied like a Piper and climbed like an airliner would be two
-	 * different aircraft depending on which phase you were watching.
-	 */
-	FClimbPerformance ClimbFor(const UAircraftType* Aircraft)
-	{
-		if (Aircraft != nullptr && Aircraft->Climb.IsSet())
-		{
-			return Aircraft->Climb;
-		}
-
-		return UAircraftType::PiperMeridianClimb();
-	}
-
-	/** Same fallback as ClimbFor and GroundFor, for the same reason. */
-	FEnginePerformance EngineFor(const UAircraftType* Aircraft)
-	{
-		if (Aircraft != nullptr && Aircraft->Engine.IsSet())
-		{
-			return Aircraft->Engine;
-		}
-
-		return UAircraftType::PiperMeridianEngine();
-	}
-
-	FGroundPerformance GroundFor(const UAircraftType* Aircraft)
-	{
-		if (Aircraft != nullptr && Aircraft->Ground.IsSet())
-		{
-			return Aircraft->Ground;
-		}
-
-		return UAircraftType::PiperMeridianGround();
-	}
-
 	FString DescribeFailure(ERouteResult Result)
 	{
 		switch (Result)
@@ -109,6 +62,18 @@ namespace
 		default:                        return FString();
 		}
 	}
+}
+
+FAirframe AirframeFor(const URoadNetwork& Network, FGuidelineNodeId Node)
+{
+	if (const UAircraftType* Aircraft = AircraftAtNode(Network, Node); Aircraft != nullptr)
+	{
+		return Aircraft->Airframe();
+	}
+
+	// Most of the graph is plain taxiway with no stand to ask, so this is the common path,
+	// not the edge case - see UAirsideSettings::ResolveDefaultAirframe.
+	return UAirsideSettings::ResolveDefaultAirframe();
 }
 
 FText FRouteTool::GetDisplayName() const
@@ -153,10 +118,12 @@ void FRouteTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	const UAircraftType* Aircraft = AircraftAtNode(*Context.Target->GetNetwork(), StartNode);
-	const double Wingspan = Aircraft != nullptr ? Aircraft->Footprint.Wingspan : 0.0;
+	// One lookup, not three: Wingspan below and the performance DispatchAgent gets are facts
+	// about the SAME aeroplane, so there is exactly one place they could disagree - see
+	// FAirframe.
+	const FAirframe Airframe = AirframeFor(*Context.Target->GetNetwork(), StartNode);
 
-	LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Wingspan);
+	LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Airframe.Wingspan);
 
 	bHasStart = false;
 
@@ -164,8 +131,7 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	{
 		// Refused in an editor world, deliberately - the route still draws there. See
 		// ARoadNetworkActor::DispatchAgent.
-		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft), ClimbFor(Aircraft),
-			EngineFor(Aircraft));
+		Context.Target->DispatchAgent(LastPlan, Airframe);
 	}
 }
 

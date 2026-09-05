@@ -1,8 +1,23 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
 #include "Tool/RoadBuildTool.h"
+
+class URoadNetwork;
+
+/**
+ * The airframe to route AS, at a guideline node: the design aircraft's if the node names
+ * one, else the content set's default, else the Piper - see UAirsideSettings::
+ * ResolveDefaultAirframe.
+ *
+ * A FREE FUNCTION rather than staying inside FRouteTool::OnClick's anonymous namespace,
+ * because Airside.Tool.RouteTool.DefaultAirframe needs to call it directly: the fallback
+ * used to be three helpers (GroundFor, ClimbFor, EngineFor) each reachable only from this
+ * .cpp, which is exactly how issue #30 went seven call sites without a test on any of them.
+ */
+AIRSIDE_API FAirframe AirframeFor(const URoadNetwork& Network, FGuidelineNodeId Node);
 
 /**
  * Routing: click a start, click a destination, watch a cube drive it.

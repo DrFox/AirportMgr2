@@ -9,6 +9,7 @@ class UMaterialInterface;
 class URoadProfile;
 class UAnimInstance;
 class USkeletalMesh;
+class UAircraftType;
 
 /**
  * The content this plugin reaches for when nothing has been assigned by hand.
@@ -74,6 +75,19 @@ public:
 	/** What the stand tool places. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;
+
+	/**
+	 * The airframe a route wears when its start has no design aircraft to ask - most of the
+	 * graph. See UAirsideSettings::ResolveDefaultAirframe, the one place this is read.
+	 *
+	 * BESIDE AgentMesh AND NOWHERE ELSE, deliberately: the two must describe the same
+	 * airframe, or the thing on screen moves like an aeroplane it does not look like. Issue
+	 * #30 was seven call sites hardcoding a Piper's numbers while the MESH already came from
+	 * here - swap the mesh and the aircraft still taxied like a Piper, because only one of
+	 * the two facts about it was data.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<UAircraftType> DefaultAircraft;
 
 	/**
 	 * The airframe a dispatched agent wears. Null leaves the placeholder cube.

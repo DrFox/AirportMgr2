@@ -90,8 +90,13 @@ public:
 	virtual FRoutePlan FindRoute(FGuidelineNodeId Start, FGuidelineNodeId Goal,
 		ETraversalClass Class, double Wingspan) const = 0;
 
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-		const FClimbPerformance& Climb, const FEnginePerformance& Engine) = 0;
+	/**
+	 * One struct, not four - see FAirframe. Ground, Climb and Engine used to be separate
+	 * parameters, which is how issue #27 happened: a caller could pass one and default
+	 * another, so the taxi and a later handover were never guaranteed to read the SAME
+	 * aeroplane. Issue #30 finished the collapse begun there.
+	 */
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) = 0;
 
 	virtual void RebuildMesh() = 0;
 };

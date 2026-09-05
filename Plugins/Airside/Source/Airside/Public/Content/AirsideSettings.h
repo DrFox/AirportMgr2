@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "Model/RoadEntity.h"
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
@@ -46,4 +47,17 @@ public:
 	 * silence about it is what cost this project an hour of looking at empty roads.
 	 */
 	static const UAirsideContent* GetContent();
+
+	/**
+	 * The airframe a route wears when there is no design aircraft to ask - THE ONE place
+	 * UAircraftType::PiperMeridian*() may still be called from production code.
+	 *
+	 * Issue #30: those four functions used to be called directly at seven sites (RouteTool's
+	 * three *For helpers, RoadBuildController::OnLandAircraft's four), each one a place the
+	 * fallback could drift from the others. Content->DefaultAircraft is preferred when the
+	 * content set names one - Airframe() is what makes UAircraftType::Airframe stop being
+	 * dead code - and the Piper is the fallback for a project with no content set configured
+	 * at all, which every automation test still is.
+	 */
+	static FAirframe ResolveDefaultAirframe();
 };
