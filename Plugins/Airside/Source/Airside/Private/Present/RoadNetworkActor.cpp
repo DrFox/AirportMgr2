@@ -1891,8 +1891,14 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 			// VACATED: hand over to the taxi. The route was planned at dispatch - see
 			// DispatchArrival - so this cannot fail here and strand an aircraft on the
 			// runway with nowhere to go.
+			//
+			// Ground.Taxi comes from Agent.Arrival.Ground, NOT Agent.Follower.Ground: the
+			// follower has never been started before this point, so its Ground is still the
+			// struct default (Accel 100, SpeedCap 1000, turn rate 10) rather than the
+			// airframe's figures. The landing is the only phase that was handed the real
+			// FGroundPerformance, so it is the only place to read it from.
 			Agent.bArriving = false;
-			Agent.Follower.Start(Agent.TaxiInPlan, Agent.Follower.Ground);
+			Agent.Follower.Start(Agent.TaxiInPlan, Agent.Arrival.Ground);
 
 			UE_LOG(LogRoadMesh, Log, TEXT("Vacated; taxiing in."));
 			continue;

@@ -47,7 +47,15 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
+	FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
+
+	// DISTINCTIVE, not authored: 1000 is the Piper's own Taxi.SpeedCap AND what a
+	// default-constructed FGroundPerformance carries, so leaving the figure alone could not
+	// tell "the follower now has the airframe's ground performance" apart from "the follower
+	// never got it and is still running on the struct default" - which is the defect issue
+	// #27 describes. 1234 belongs to neither, so only the real handover proves it.
+	Ground.Taxi.SpeedCap = 1234.0;
+
 	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
 	const FApproachPerformance Approach = UAircraftType::PiperMeridianApproach();
 
@@ -144,7 +152,32 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and an aircraft exists as a result"),
 		Actor->AgentCountForTest(), Before + 1);
 
-	// 3. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
+	// 3. THE FOLLOWER TAXIS ON THE AIRFRAME'S GROUND PERFORMANCE, NOT THE STRUCT DEFAULT.
+	//
+	//    Issue #27: the VACATED handover in Tick started the follower from its own
+	//    (never-set) Ground instead of Agent.Arrival.Ground, so every arrival taxied in at
+	//    Accel 100 / SpeedCap 1000 / turn rate 10 whatever the airframe actually does.
+	//
+	//    Ticked in a BOUNDED LOOP rather than a fixed frame count: a landing plus a taxi is
+	//    dozens of simulated seconds, and hard-coding that would make the test as fragile as
+	//    the numbers it exercises. LastAgentHasVacatedForTest says when to stop instead.
+	{
+		constexpr int32 MaxTicks = 6000;
+		int32 Ticks = 0;
+		while (!Actor->LastAgentHasVacatedForTest() && Ticks < MaxTicks)
+		{
+			Actor->Tick(0.1f);
+			++Ticks;
+		}
+
+		TestTrue(TEXT("the arrival vacates the runway within the bounded loop"),
+			Actor->LastAgentHasVacatedForTest());
+		TestEqual(TEXT("and the follower taxis on the airframe's ground performance handed "
+			"to the landing, not the struct default the follower would otherwise start with"),
+			Actor->LastAgentFollowerGroundForTest().Taxi.SpeedCap, 1234.0);
+	}
+
+	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
 	//    arrival that cannot be completed must leave nothing frozen on final.
 	{
 		ARoadNetworkActor* Small = World->SpawnActor<ARoadNetworkActor>();
