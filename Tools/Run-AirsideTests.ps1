@@ -14,13 +14,26 @@
 [CmdletBinding()]
 param(
     [string] $Filter  = 'Airside',
-    [string] $Project = 'C:\repos\AirportMgr2\AirportMgr.uproject',
+    # Derived from the script's own location, not the hardcoded main checkout: this script
+    # runs from git worktrees too, each with its own .uproject beside its own Tools/, and a
+    # fixed C:\repos\AirportMgr2 default silently tested the WRONG checkout's DLLs whenever
+    # it was reached from one of those.
+    [string] $Project = (Join-Path (Split-Path -Parent $PSScriptRoot) 'AirportMgr.uproject'),
     [string] $Engine  = 'D:\Epic\UE_5.8'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $projectDir = Split-Path -Parent $Project
+
+# The architecture rules first, because they take a second and the editor takes minutes:
+# an include cycle or a duplicated log category is a verdict on the commit whatever the
+# tests say, and finding it before a cold editor start is the whole point of a lint.
+& (Join-Path $PSScriptRoot 'Check-Architecture.ps1') -Root $projectDir
+if ($LASTEXITCODE -ne 0) {
+    Write-Host 'FAIL: Check-Architecture.ps1 found violations; tests not run.' -ForegroundColor Red
+    exit 1
+}
 $logPath    = Join-Path $projectDir 'Saved\Logs\AirsideTests.log'
 
 # A stale log would let a crashed run masquerade as the previous green one.

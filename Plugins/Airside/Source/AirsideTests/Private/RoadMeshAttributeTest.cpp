@@ -6,7 +6,7 @@
 #include "DynamicMesh/DynamicMeshAttributeSet.h"
 #include "DynamicMesh/MeshNormals.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
+#include "Present/DynamicMeshSink.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS

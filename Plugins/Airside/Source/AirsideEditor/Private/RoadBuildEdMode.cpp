@@ -3,6 +3,7 @@
 #include "EdModeInteractiveToolsContext.h"
 #include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
+#include "Tool/BuildSession.h"
 #include "Toolkits/BaseToolkit.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdMode"
@@ -49,11 +50,6 @@ namespace
 
 const FEditorModeID URoadBuildEdMode::EM_RoadBuild = TEXT("EM_RoadBuild");
 
-FString URoadBuildEdMode::RoadToolName = TEXT("Airside_DrawRoads");
-FString URoadBuildEdMode::ApronToolName = TEXT("Airside_DrawAprons");
-FString URoadBuildEdMode::StandToolName = TEXT("Airside_PlaceStands");
-FString URoadBuildEdMode::RouteToolName = TEXT("Airside_FindRoutes");
-
 URoadBuildEdMode::URoadBuildEdMode()
 {
 	Info = FEditorModeInfo(
@@ -63,32 +59,78 @@ URoadBuildEdMode::URoadBuildEdMode()
 		true);
 }
 
+FString URoadBuildEdMode::MakeToolName(int32 Index)
+{
+	return FString::Printf(TEXT("Airside_%s"), *ToolRegistry()[Index].Name.ToString());
+}
+
 void URoadBuildEdMode::Enter()
 {
 	UEdMode::Enter();
 
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
+	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
 
-	auto MakeBuilder = [this](ERoadBuildToolKind Kind)
+	// Logged rather than a hard check(): a crash over a wiring mistake is worse than a tool
+	// with no command. The runtime controller has no equivalent check any more - its tool
+	// list, its key bindings and its banner are ALL read from ToolRegistry() itself, so
+	// they cannot disagree by construction. This CAN still disagree:
+	// FRoadBuildEdModeCommands::ToolCommandsInOrder() is a hand-written UI_COMMAND list, a
+	// separate thing from ToolRegistry(), so this is the one place left that has to check
+	// the two agree rather than being able to assume it.
+	//
+	// A RUNTIME check, not an automation test, and that is a real gap rather than a stylistic
+	// choice: AirsideTests does not depend on AirsideEditor (Model/Present/Tool are tested
+	// world-free with no editor module loaded at all), so nothing short of opening this mode
+	// exercises FRoadBuildEdModeCommands. This log line is what stands in for that test.
+	if (ToolCommands.Num() != Registry.Num())
 	{
-		URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(this);
-		Builder->Kind = Kind;
-		return Builder;
-	};
+		UE_LOG(LogRoadBuildMode, Error,
+			TEXT("%d editor commands but %d registry entries - see FRoadBuildEdModeCommands::"
+				 "ToolCommandsInOrder and ToolRegistry(). A tool past the shorter count gets "
+				 "no command."),
+			ToolCommands.Num(), Registry.Num());
+	}
 
-	RegisterTool(Commands.DrawRoads, RoadToolName, MakeBuilder(ERoadBuildToolKind::Road));
-	RegisterTool(Commands.DrawAprons, ApronToolName, MakeBuilder(ERoadBuildToolKind::Apron));
-	RegisterTool(Commands.PlaceStands, StandToolName, MakeBuilder(ERoadBuildToolKind::Stand));
-	RegisterTool(Commands.FindRoutes, RouteToolName, MakeBuilder(ERoadBuildToolKind::Route));
+	FString Banner;
+	for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), Registry.Num()); ++Index)
+	{
+		// COUNT alone does not catch a reordering - six of each, wrongly paired, still
+		// passes the check above. Identity does: a command's label is a human-authored
+		// UI_COMMAND string, so it names which tool the palette THINKS index Index is,
+		// independent of the FKey/Make lambda the registry entry actually carries.
+		if (const TSharedPtr<FUICommandInfo>& Command = ToolCommands[Index];
+			Command.IsValid() && !Command->GetLabel().EqualTo(Registry[Index].Name))
+		{
+			UE_LOG(LogRoadBuildMode, Error,
+				TEXT("Tool %d: command label \"%s\" does not match registry name \"%s\" - ")
+				TEXT("FRoadBuildEdModeCommands::ToolCommandsInOrder and ToolRegistry() have ")
+				TEXT("drifted out of order."),
+				Index, *Command->GetLabel().ToString(), *Registry[Index].Name.ToString());
+		}
+
+		URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(this);
+		Builder->ToolIndex = Index;
+		RegisterTool(ToolCommands[Index], MakeToolName(Index), Builder);
+
+		Banner += FString::Printf(TEXT("%s%d %s"),
+			Index == 0 ? TEXT("") : TEXT(", "), Index + 1, *Registry[Index].Name.ToString());
+	}
 
 	UE_LOG(LogRoadBuildMode, Log,
-		TEXT("Road Build mode entered. Tools: 1 %s, 2 %s, 3 %s, 4 %s. If a number key does "
-			 "nothing, the palette buttons do the same job."),
-		*RoadToolName, *ApronToolName, *StandToolName, *RouteToolName);
+		TEXT("Road Build mode entered. Tools: %s. If a number key does nothing, the palette "
+			 "buttons do the same job."),
+		*Banner);
 
 	// Roads first, because it is the one that needs no setup - an empty level can be drawn
 	// on immediately, where a stand wants somewhere to stand.
-	GetInteractiveToolsContext()->StartTool(RoadToolName);
+	GetInteractiveToolsContext()->StartTool(MakeToolName(0));
+
+	// TODO(#33): key 7 (land an aircraft) has no editor equivalent. It is not a SelectTool
+	// at runtime either - see ARoadBuildController::OnLandAircraft - so wiring it up here
+	// needs its own command and its own cursor-to-plane resolution, not a seventh registry
+	// entry; out of scope for making the two drivers share ONE tool table.
 }
 
 void URoadBuildEdMode::BindCommands()
@@ -101,6 +143,10 @@ void URoadBuildEdMode::BindCommands()
 	// viewport shortcuts here, and ToolCommandList - despite its comment - is created and
 	// then never consulted anywhere in UEdMode.cpp. Bound to the wrong one, Escape was
 	// simply unreachable.
+	//
+	// Called from WITHIN Super::Enter(), before URoadBuildEdMode::Enter()'s own body runs -
+	// so this cannot read anything Enter() fills in later. MakeToolName(Index) is a pure
+	// function of ToolRegistry() for exactly that reason; see its comment in the header.
 	if (Toolkit.IsValid())
 	{
 		const TSharedRef<FUICommandList>& Commands2 = Toolkit->GetToolkitCommands();
@@ -111,10 +157,11 @@ void URoadBuildEdMode::BindCommands()
 		// processed by the viewport and therefore only once the viewport has keyboard
 		// focus - so 1/2/3 did nothing until you had clicked in it, and the click that
 		// gave it focus also started a road. Bound here as well, they work immediately.
-		Commands2->MapAction(Commands.DrawRoads, StartToolAction(RoadToolName));
-		Commands2->MapAction(Commands.DrawAprons, StartToolAction(ApronToolName));
-		Commands2->MapAction(Commands.PlaceStands, StartToolAction(StandToolName));
-		Commands2->MapAction(Commands.FindRoutes, StartToolAction(RouteToolName));
+		const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
+		for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), ToolRegistry().Num()); ++Index)
+		{
+			Commands2->MapAction(ToolCommands[Index], StartToolAction(MakeToolName(Index)));
+		}
 	}
 
 	if (ToolCommandList.IsValid())

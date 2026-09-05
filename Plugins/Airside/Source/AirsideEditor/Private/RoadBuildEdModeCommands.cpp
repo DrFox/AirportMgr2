@@ -28,16 +28,26 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	UI_COMMAND(FindRoutes, "Routes", "Click a start then a destination to route between them; the guideline graph is drawn underneath.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Four));
 
+	// Issue #33: the editor had no way to make these two, so an airport authored here could
+	// never get a hand-drawn guideline link or a runway without a trip through PIE.
+	UI_COMMAND(DrawGuidelines, "Guidelines", "Draw a routing link the derivation never made: click a node, click another.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Five));
+	UI_COMMAND(PlaceRunways, "Runway", "Click one threshold, then the other.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Six));
+
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
 		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
 }
 
+TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
+{
+	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways };
+}
+
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()
 {
-	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
-
 	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Palettes;
-	Palettes.Add(FName(TEXT("Build")), { Commands.DrawRoads, Commands.DrawAprons, Commands.PlaceStands, Commands.FindRoutes });
+	Palettes.Add(FName(TEXT("Build")), FRoadBuildEdModeCommands::Get().ToolCommandsInOrder());
 	return Palettes;
 }
 

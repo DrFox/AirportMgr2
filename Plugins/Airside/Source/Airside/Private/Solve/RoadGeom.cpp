@@ -257,6 +257,56 @@ bool RoadGeom::SegmentsCross(const FVector2D& A0, const FVector2D& A1,
 		&& AlongB > Edge && AlongB < 1.0 - Edge;
 }
 
+bool RoadGeom::RayToPlaneZ(const FVector& Origin, const FVector& Direction, double PlaneZ,
+	double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy, double* OutDistance)
+{
+	// One place to set OutWhy and return, so a new guard cannot add a way to refuse
+	// without also saying why - which is the whole reason OutWhy exists.
+	auto Refuse = [OutWhy](ERayToPlaneRefusal Reason)
+	{
+		if (OutWhy != nullptr)
+		{
+			*OutWhy = Reason;
+		}
+		return false;
+	};
+
+	// Parallel to the plane: no intersection to find.
+	if (FMath::IsNearlyZero(Direction.Z))
+	{
+		return Refuse(ERayToPlaneRefusal::Parallel);
+	}
+
+	const double Distance = (PlaneZ - Origin.Z) / Direction.Z;
+
+	// Written as soon as a distance exists, ahead of the two guards below that may still
+	// refuse on it - a BeyondMaxDistance refusal wants the actual distance to log, not
+	// just the cap it tripped.
+	if (OutDistance != nullptr)
+	{
+		*OutDistance = Distance;
+	}
+
+	// Behind the origin. Without this a ray aimed away from the plane would resolve to its
+	// mirror image on the far side, rather than refusing.
+	if (Distance <= 0.0)
+	{
+		return Refuse(ERayToPlaneRefusal::BehindOrigin);
+	}
+
+	if (Distance > MaxDistance)
+	{
+		return Refuse(ERayToPlaneRefusal::BeyondMaxDistance);
+	}
+
+	if (OutWhy != nullptr)
+	{
+		*OutWhy = ERayToPlaneRefusal::None;
+	}
+	OutXY = FVector2D(Origin.X + Direction.X * Distance, Origin.Y + Direction.Y * Distance);
+	return true;
+}
+
 bool RoadGeom::PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector2D& Point)
 {
 	if (Polygon.Num() < 3)

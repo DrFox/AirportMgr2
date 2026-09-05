@@ -134,5 +134,3 @@ int32 UEntityDefinition::RefreshResolvedAnchors(URoadNetwork& Network)
 
 	return ChangedCount;
 }
-
-

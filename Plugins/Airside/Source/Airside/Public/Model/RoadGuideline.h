@@ -6,14 +6,6 @@
 #include "RoadGuideline.generated.h"
 
 /**
- * A point on the guideline graph where something happens.
- *
- * Nodes exist at junctions, crossings, hold-short positions and entity anchors - NOT at
- * a fixed interval. Spec 3: a node every N metres has nothing to say to anybody, and the
- * parent spec's R9 subdivision was justified by a pathing benefit that moved to this
- * graph when the two graphs were separated.
- */
-/**
  * WHICH derived endpoint a node is, so it can be found again after regeneration.
  *
  * The guideline graph is rebuilt wholesale on every road edit, and AddGuidelineNode never
@@ -47,6 +39,14 @@ struct AIRSIDE_API FGuidelineEndRef
 	}
 };
 
+/**
+ * A point on the guideline graph where something happens.
+ *
+ * Nodes exist at junctions, crossings, hold-short positions and entity anchors - NOT at
+ * a fixed interval. Spec 3: a node every N metres has nothing to say to anybody, and the
+ * parent spec's R9 subdivision was justified by a pathing benefit that moved to this
+ * graph when the two graphs were separated.
+ */
 USTRUCT()
 struct AIRSIDE_API FGuidelineNode
 {

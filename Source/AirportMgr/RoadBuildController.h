@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
+#include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
@@ -264,24 +265,19 @@ private:
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
 
-	/** Number keys. Deactivates the outgoing tool so nothing is left part-drawn. */
 	/**
-	 * How many number keys SetupInputComponent binds. Must equal Tools.Num().
+	 * The key that was pressed, looked up against ToolRegistry() to find which tool it
+	 * selects.
 	 *
-	 * The two are separate lists by necessity - the bindings are set up before BeginPlay
-	 * fills Tools - and they silently disagreed once already: the route tool was appended
-	 * and EKeys::Four was not bound, so the startup log advertised a key that went nowhere.
-	 * BeginPlay compares them and complains, which is the cheapest thing that turns that
-	 * from invisible into obvious.
+	 * ONE handler bound once per registry entry, rather than one dedicated method per tool
+	 * (issue #33 removed six of those - a "select the Nth tool" method for each key) or a
+	 * lambda per BindKey call: the registry already carries the FKey, so a handler that
+	 * receives it back needs no capture and no second place to say which index goes with
+	 * which key. Any key not in the registry (there is none, by construction) is silently
+	 * ignored.
 	 */
-	/**
-	 * How many number keys are bound to tools. MUST equal Tools.Num().
-	 *
-	 * Checked at startup and logged as an error, because a tool with no key is unreachable
-	 * and a key with no tool does nothing - and neither shows up as anything but a tool that
-	 * "does not work". It was 4 against 5 tools for as long as the guideline tool has
-	 * existed, so the guard was reporting a real mismatch that was in the guard itself.
-	 */
+	void SelectToolByKey(FKey Key);
+
 	// --- Watch camera -----------------------------------------------------------------
 	//
 	// A second camera MODE rather than a second camera: the build rig is a top-down thing
@@ -360,31 +356,12 @@ private:
 	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "0.0"))
 	double WatchMaxFocusOffset = 2000.0;
 
-	static constexpr int32 ToolKeyCount = 6;
-
-	void SelectTool(int32 Index);
-	void SelectRoadTool()  { SelectTool(0); }
-	void SelectApronTool() { SelectTool(1); }
-	void SelectStandTool() { SelectTool(2); }
-	void SelectRouteTool() { SelectTool(3); }
-
-	/**
-	 * Key 5. Index 4, matching the order Tools are added in the constructor.
-	 *
-	 * These indices ARE the registration order and nothing checks them against it. Key 4
-	 * once advertised a tool it did not select because the binding was never added at all;
-	 * the four places that must agree - the Tools array, this index, the BindKey call and
-	 * the startup banner - are listed together in BeginPlay for that reason.
-	 */
-	void SelectGuidelineTool() { SelectTool(4); }
-	void SelectRunwayTool() { SelectTool(5); }
-
 	/**
 	 * Lands an aircraft on the runway nearest the cursor and taxis it to a stand. Key 7.
 	 *
-	 * NOT a SelectTool, and not in the Tools array: an arrival is one decision taken at the
-	 * cursor rather than a gesture with states, so giving it an IBuildTool would be inventing
-	 * a mode for it to sit in.
+	 * NOT a tool, and not in ToolRegistry(): an arrival is one decision taken at the cursor
+	 * rather than a gesture with states, so giving it an IBuildTool would be inventing a
+	 * mode for it to sit in.
 	 */
 	void OnLandAircraft();
 
@@ -421,14 +398,12 @@ private:
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/**
-	 * The selectable tools, in key order: 1 is the first.
-	 *
-	 * Strategy, not a state machine - see IBuildTool. A tool is picked, never transitioned
-	 * into, so what lives here is a list and an index rather than a transition graph.
+	 * The tools, which one is active, and the snap/placement rules a click is judged
+	 * against - see FBuildSession. Owned here rather than as separate fields so the editor
+	 * mode's URoadBuildEditorTool can hold the identical state and the two cannot drift the
+	 * way they did before issue #33.
 	 */
-	TArray<TUniquePtr<IBuildTool>> Tools;
-
-	int32 ActiveTool = 0;
+	FBuildSession Session;
 
 	// --- Press, drag, release ---------------------------------------------------------
 	//
@@ -445,10 +420,20 @@ private:
 	bool bDragging = false;
 
 	/**
-	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through
-	 * TUniquePtr and holds no state worth saving, only the ordering.
+	 * The last road-plane position CursorOnRoadPlane actually resolved, in road-plane
+	 * coordinates.
+	 *
+	 * MakeToolContext runs every PlayerTick and cannot simply drop the frame when the
+	 * cursor briefly leaves the plane (a click above the horizon, say) - the ghost and the
+	 * snap chain need SOME position that frame. Falling back to this rather than an
+	 * unwritten local is the same fix URoadBuildEditorTool::MakeContext already applies
+	 * with HoverPosition: an off-plane frame must not invent a position, so it keeps the
+	 * last good hit instead of whatever FVector2D's default constructor happened to leave
+	 * on the stack.
+	 *
+	 * mutable because CursorOnRoadPlane, which updates it, is const - it reports the
+	 * cursor, it does not decide anything, so every other caller still treats it as a
+	 * read.
 	 */
-	FRoadSnapChain SnapChain;
-
-
+	mutable FVector2D LastPlaneHit = FVector2D::ZeroVector;
 };

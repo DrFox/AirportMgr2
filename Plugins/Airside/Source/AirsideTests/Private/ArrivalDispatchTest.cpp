@@ -5,6 +5,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/LandingRun.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
@@ -145,8 +146,17 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//
 	//    This is the assertion the feature was shipped without. Everything else about the
 	//    landing can be perfect and this can still be false, which is the state it shipped in.
+	//
+	//    DispatchArrival now takes one FAirframe rather than four structs - see issue #29 -
+	//    but this test still exercises it through the actor, because it is what needs the
+	//    world: the plan itself is asserted world-free in Airside.Model.ArrivalPlanner.
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Approach = Approach;
+
 	const int32 Before = Actor->AgentCountForTest();
-	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Ground, Climb, Approach);
+	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Airframe);
 
 	TestTrue(TEXT("an arrival is accepted on a runway that has an exit to a stand"), bDispatched);
 	TestEqual(TEXT("and an aircraft exists as a result"),
@@ -156,10 +166,37 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    issue #27, and issue #28's own reason for existing: with FAirframe as ONE struct
 	//    handed to FRoadAgent::StartArrival and read again from it at the VACATED handover
 	//    (Airframe.Ground, never Follower.Ground), the two literally cannot disagree any
-	//    more. That property is now asserted world-free in Airside.Model.RoadAgent, which is
-	//    what let the world-bound accessors this block used
-	//    (LastAgentHasVacatedForTest / LastAgentFollowerGroundForTest) be deleted - this test
-	//    keeps only what needs a world: that dispatch itself succeeds.
+	//    more. That property is asserted world-free, on the STRUCT, in
+	//    Airside.Model.RoadAgent - what THIS test can add on top is that the handover
+	//    actually happens when Tick is what drives it, through the same Tick -> Traffic->
+	//    Advance path PlayerTick uses every frame, not a direct call to FRoadAgent::Advance.
+	//
+	//    RUN TO COMPLETION, bounded rather than open-ended: an infinite loop over a defect
+	//    that never resolves would hang the whole test run instead of failing one test.
+	//    6000 * 0.1s = 600 simulated seconds, comfortably past the landing roll plus the
+	//    taxi from the runway exit to the stand at even a cautious ground speed.
+	{
+		int32 Ticks = 0;
+		while (Actor->LastAgentPhaseForTest() != EAgentPhase::Parked && Ticks < 6000)
+		{
+			Actor->Tick(0.1f);
+			++Ticks;
+		}
+
+		TestEqual(FString::Printf(TEXT("the arrival parks within %d ticks (phase %d)"),
+			Ticks, static_cast<int32>(Actor->LastAgentPhaseForTest())),
+			Actor->LastAgentPhaseForTest(), EAgentPhase::Parked);
+		TestEqual(TEXT("and it is still the only agent - parking does not spawn or drop one"),
+			Actor->AgentCountForTest(), Before + 1);
+
+		// THE 1234.0 FIXTURE. Read through the follower Tick actually drove, not the
+		// Airframe the test itself constructed - this is what proves the handover in
+		// FRoadAgent::Advance (Airframe.Ground copied into Follower.Ground at the VACATED
+		// moment) reached the struct the taxi is actually driven by.
+		TestEqual(TEXT("the parked follower taxied on the airframe's own SpeedCap, not the ")
+			TEXT("FGroundPerformance struct default"),
+			Actor->LastAgentTaxiSpeedCapForTest(), 1234.0);
+	}
 
 	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
 	//    arrival that cannot be completed must leave nothing frozen on final.
@@ -179,8 +216,76 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 			Small->RebuildMesh();
 
 			TestFalse(TEXT("a runway shorter than the landing distance is refused"),
-				Small->DispatchArrival(FVector2D::ZeroVector, Ground, Climb, Approach));
+				Small->DispatchArrival(FVector2D::ZeroVector, Airframe));
 			TestEqual(TEXT("and nothing is left in the world"), Small->AgentCountForTest(), 0);
+		}
+	}
+
+	// 5. A DEPARTURE REACHES GONE, AND THE AGENT COUNT RETURNS TO 0 - covering the other half
+	//    of Tick -> Traffic->Advance that the arrival above cannot reach on its own: it only
+	//    parks (nothing arms a departure for it), so this dispatches a SEPARATE agent with a
+	//    plain DispatchAgent call on a two-point plan that ends on a runway, which is what
+	//    arms one (see UAirsideTraffic::DispatchAgent's own "DOES THIS ROUTE END ON A RUNWAY"
+	//    comment). Ticking it to Gone exercises the SetMotion call every surviving frame takes
+	//    and the Gone-frame View->Destroy() + RemoveAt neither this test nor any other reaches.
+	//
+	//    ONE UNDIVIDED SEGMENT, deliberately, rather than a taxiway joining a runway at a
+	//    junction: RoadGuidelineBuilder gives every segment END its own guideline node - even
+	//    at a plain dead end, a node can sit well off the road node it was derived from once a
+	//    fillet radius is in play - so hunting for "the taxiway's node" by position is not
+	//    reliable. A single segment has exactly one derived guideline edge, and it is the
+	//    plan in its entirety: no junction, no ambiguity about which end is which.
+	{
+		ARoadNetworkActor* Departing = World->SpawnActor<ARoadNetworkActor>();
+		if (TestNotNull(TEXT("a third actor"), Departing))
+		{
+			Departing->PlaceNode(FVector2D(-100000.0, -100000.0));
+			URoadNetwork& Net2 = *Departing->Network;
+
+			URoadProfile* Runway2 = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+			Runway2->bContinuousThroughJunctions = true;
+
+			const FVector2D NearAt2(0.0, 0.0);
+			const FVector2D FarAt2(RunwayLength * 2.0, 0.0);
+			const FRoadNodeId NearNode2 = Net2.AddNode(NearAt2);
+			const FRoadNodeId FarNode2 = Net2.AddNode(FarAt2);
+			Net2.AddStraightSegment(NearNode2, FarNode2, Runway2);
+			Departing->RebuildMesh();
+
+			const TArray<FGuidelineEdge>& Edges2 = Net2.GetGuidelineEdges();
+			if (TestEqual(TEXT("the lone runway segment derives exactly one guideline edge"),
+				Edges2.Num(), 1))
+			{
+				// Wingspan 0: unconstrained, per FRouteQuery::Wingspan's own comment - what
+				// this plan needs to prove is that it ends on the runway, not that it fits
+				// under some edge's MaxWingspan.
+				const FRoutePlan Plan = Departing->FindRoute(
+					Edges2[0].A, Edges2[0].B, ETraversalClass::Aircraft, 0.0);
+				if (TestTrue(TEXT("the runway's own centreline resolves to a route"),
+					Plan.IsValid()))
+				{
+					TestEqual(TEXT("a route along one undivided segment is a two-point plan"),
+						Plan.Polyline.Num(), 2);
+
+					const int32 BeforeDeparture = Departing->AgentCountForTest();
+					TestTrue(TEXT("a plain DispatchAgent onto a runway is accepted"),
+						Departing->DispatchAgent(Plan, Airframe));
+					TestEqual(TEXT("and an aircraft exists as a result"),
+						Departing->AgentCountForTest(), BeforeDeparture + 1);
+
+					int32 DepartTicks = 0;
+					while (Departing->AgentCountForTest() > 0 && DepartTicks < 6000)
+					{
+						Departing->Tick(0.1f);
+						++DepartTicks;
+					}
+
+					TestEqual(FString::Printf(
+						TEXT("the departure clears and the agent is dropped within %d ticks"),
+						DepartTicks),
+						Departing->AgentCountForTest(), 0);
+				}
+			}
 		}
 	}
 

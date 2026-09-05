@@ -164,12 +164,25 @@ D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat AirportMgrEditor Win64 Developm
   -Project="C:\repos\AirportMgr2\AirportMgr.uproject" -WaitMutex
 
 ./Tools/Run-AirsideTests.ps1            # all; -Filter Airside.Solve to narrow
+./Tools/Check-Architecture.ps1          # runs first inside the test script; seconds
 ```
 
 - **The editor must be CLOSED to build.** Live Coding holds the DLLs and the build fails
   with "Unable to build while Live Coding is active". `Ctrl+Alt+F11` covers function
   bodies only - not new UPROPERTYs, UCLASSes, or classes with vtables. Batch such changes
   into one round rather than making the user close the editor repeatedly.
+- **Except in a git worktree.** UBT keys that check on the ENGINE executable's path, so an
+  editor open on `C:\repos\AirportMgr2` blocks every worktree too. A worktree build adds
+  `-NoHotReloadFromIDE` - safe, because it writes only its own `Binaries/` and
+  `Intermediate/`, which the open editor never loaded. Never use the flag on the checkout
+  the editor has open. Pass `-Project` to the test script from a worktree.
+- **A commit has been built.** The tree once sat uncompilable for a session because a
+  header changed in one breath and its .cpp in another. If a full build is impossible
+  (editor open, no worktree), the commit message says "unbuilt".
+- **`Check-Architecture.ps1` is the pre-commit lint.** Include direction, one log category
+  per name (the module is a UNITY build; two `DEFINE_LOG_CATEGORY_STATIC` of one name
+  compile alone and collide together), stacked doc comments, one production caller of the
+  Piper fallback. It fails the test run before the editor starts.
 - **Never trust the automation runner's exit code.** `Run-AirsideTests.ps1` parses the log
   and diffs started-against-completed tests, because a CRASHING test used to vanish and
   report green. Read its `N test(s) run, N failed, N crashed` line.
@@ -184,7 +197,17 @@ D:\Epic\UE_5.8\Engine\Build\BatchFiles\Build.bat AirportMgrEditor Win64 Developm
 - `Tool/` - `IBuildTool` strategies. They describe intent to `IToolPreviewSink` in ROAD
   PLANE coordinates naming a MEANING, never a colour. That is what keeps the plugin free
   of the game module; do not leak presentation into it.
-- `Present/` - `ARoadNetworkActor`, a Facade and the single level-resident object.
+- `Present/` - `ARoadNetworkActor` is the single level-resident object and a composition
+  root ONLY. It grows by forwarding. Logic lands in the subobject that owns it:
+  `URoadSurfacePresenter` (mesh, ghost, aprons), `URoadEditFacade` (mutators, undo,
+  `IRoadEditTarget`), `UAirsideTraffic` (agents, dispatch, tick). Before adding a method to
+  the actor, name which of the three owns it; if none does, it is probably `Model/` and gets
+  a world-free test first. The actor was 2313 lines in September 2026 because every
+  feature entered through the one door.
+- `Content/` resolves every content default in exactly one function
+  (`UAirsideSettings::Resolve*`). A literal asset path or performance figure at a second
+  call site is a second source of truth, and the two drift - the Piper's numbers were
+  typed at seven sites while its mesh came from content.
 
 Named deviations from textbook patterns are documented at their site (undo is a Memento,
 not a Command; `RouteSearch` takes `URoadNetwork` rather than a graph adapter; the editor
@@ -210,4 +233,41 @@ bitwise; the guideline graph shares by HANDLE and needs no such contract.
 - Comments explain WHY, and especially why an obvious alternative was rejected. The
   codebase is dense with this deliberately - match it rather than stripping it.
 - Tests assert behaviour with a named reason, not just values.
-- Branches are `feature/*`; PRs to `main`.
+- Branches are `feature/*`; PRs to `main`. The PR template asks for the build line, the
+  test line and, for refactors, the log-line and comment-line deltas - fill it in.
+- A doc comment touches its declaration. Inserting between them means moving the comment.
+- **A phase is an enum, never a set of bools.** If two flags can never both be true they
+  are one enum, and the illegal state stops being representable. `FRoadAgent` carried
+  five bools and a `Tick` of nested ifs before `EAgentPhase`.
+- **One struct per thing.** When the same fields are being copied into two sibling
+  structs (the airframe into the follower AND the landing AND the take-off), bundle them
+  and pass the bundle by reference. The copy that nobody set is how an arrival taxied on
+  default figures.
+- **Lists that must agree are ONE list.** Where UE forces two (editor `UI_COMMAND`s beside
+  `ToolRegistry()`), the consumer checks identity - names, not counts - and logs both on
+  mismatch. See "Check where a list is CONSUMED".
+- **Honour the return of anything that fills an out-parameter.** `FVector2D X;` is
+  uninitialised, and a function that returns false without writing `X` leaves garbage the
+  next line will use. Either initialise, or branch on the return - never both discard.
+
+## Refactor contract
+
+A refactor promises "no behaviour change". Measure it, don't assert it:
+
+- **Every `UE_LOG` survives the move.** A log line is a feature - the whole of "Diagnosing"
+  above depends on them. Count `UE_LOG(` before and after; a refactor that drops one has to
+  say which and why in the PR.
+- **Every WHY comment travels with its code.** Comment-line count in the touched files
+  should not fall. Two refactors this year stripped a dozen justifications from members
+  that never moved; one deleted paragraph is a rule nobody will know existed.
+- **Every `UFUNCTION` and interface virtual stays reachable** at its old name, as a
+  forwarder if the logic moved. Blueprint and the two drivers do not compile otherwise.
+- **Every seam you introduce gets a test that fails if it is unwired.** A delegate that
+  replaced four direct calls, a forwarder, a new interface: one test each, at the level of
+  the composition (spawn the actor and tick it, not the model struct). Moving an assertion
+  down to `Model/` is right; leaving nothing above it is how `Tick`, view spawn and view
+  destroy ended up with zero coverage.
+- **Diff the moved body against the removed one** yourself before the reviewer does: order
+  of operations, what happens on the exact handover frame, what a default value now means.
+  The follower's speed stayed frozen on a parked aircraft because a loop that used to
+  decay it every frame stopped being reached.

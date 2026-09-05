@@ -232,21 +232,6 @@ struct AIRSIDE_API FClimbPerformance
 };
 
 /**
- * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
- *
- * The distinction matters and this project has already had to make it once, the other way
- * round: painted geometry - a stand's lead-in sweep, a taxiway fillet - is sized for the
- * LARGEST type admitted and is deliberately not per-aircraft, because concrete cannot be
- * repoured per movement. A turn RATE is the opposite. Nothing about the taxiway decides
- * how fast a nosewheel can be slewed; the airframe does, and an A320 and a Piper differ by
- * a factor of two and a half.
- *
- * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. The Entities
- * layer depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
- *
- * Distances are uu, and a uu is a centimetre.
- */
-/**
  * How the engine spools up and down.
  *
  * A PROPELLER HAS INERTIA. The RPM was a switch - full or nothing - so the disc appeared the
@@ -284,6 +269,21 @@ struct AIRSIDE_API FEnginePerformance
 	}
 };
 
+/**
+ * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
+ *
+ * The distinction matters and this project has already had to make it once, the other way
+ * round: painted geometry - a stand's lead-in sweep, a taxiway fillet - is sized for the
+ * LARGEST type admitted and is deliberately not per-aircraft, because concrete cannot be
+ * repoured per movement. A turn RATE is the opposite. Nothing about the taxiway decides
+ * how fast a nosewheel can be slewed; the airframe does, and an A320 and a Piper differ by
+ * a factor of two and a half.
+ *
+ * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. The Entities
+ * layer depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
+ *
+ * Distances are uu, and a uu is a centimetre.
+ */
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FGroundPerformance
 {
@@ -428,10 +428,8 @@ struct AIRSIDE_API FApproachPerformance
 	 * the descent keeps easing as the ground approaches, so the aircraft arrives gently and
 	 * in bounded time.
 	 *
-	 * Holding a single shallow path instead was tried and floats for sixteen seconds, most
-	 * of a kilometre down the runway, ending in a firm arrival once the tailstrike limit
-	 * binds - measured at 127 uu/s against 230 on the approach. Proportional control is not
-	 * a refinement here; it is the difference between a flare and a slow descent.
+	 * A single shallow path instead of this law was tried and read as a slow descent, not
+	 * a flare.
 	 *
 	 * 2.5 puts the air distance at about 340 m, against the 332 m implied by this type's
 	 * published landing distance over fifty feet.
@@ -448,8 +446,7 @@ struct AIRSIDE_API FApproachPerformance
 	 *
 	 * It was briefly the target instead, set to the angle the wing needs at Vref. That
 	 * guarantees the aircraft can NEVER hold itself off: the moment speed falls below Vref
-	 * the requirement exceeds the cap and it sinks. Measured, the flare took the sink rate
-	 * from 230 uu/s to 204 - an eleven percent reduction, which is not a flare.
+	 * the requirement exceeds the cap and it sinks, which is not a flare.
 	 */
 	UPROPERTY(EditAnywhere) double MaxFlarePitchDegrees = 11.0;
 
