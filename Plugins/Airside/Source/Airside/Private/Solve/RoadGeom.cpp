@@ -257,6 +257,33 @@ bool RoadGeom::SegmentsCross(const FVector2D& A0, const FVector2D& A1,
 		&& AlongB > Edge && AlongB < 1.0 - Edge;
 }
 
+bool RoadGeom::RayToPlaneZ(const FVector& Origin, const FVector& Direction, double PlaneZ,
+	double MaxDistance, FVector2D& OutXY)
+{
+	// Parallel to the plane: no intersection to find.
+	if (FMath::IsNearlyZero(Direction.Z))
+	{
+		return false;
+	}
+
+	const double Distance = (PlaneZ - Origin.Z) / Direction.Z;
+
+	// Behind the origin. Without this a ray aimed away from the plane would resolve to its
+	// mirror image on the far side, rather than refusing.
+	if (Distance <= 0.0)
+	{
+		return false;
+	}
+
+	if (Distance > MaxDistance)
+	{
+		return false;
+	}
+
+	OutXY = FVector2D(Origin.X + Direction.X * Distance, Origin.Y + Direction.Y * Distance);
+	return true;
+}
+
 bool RoadGeom::PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector2D& Point)
 {
 	if (Polygon.Num() < 3)
