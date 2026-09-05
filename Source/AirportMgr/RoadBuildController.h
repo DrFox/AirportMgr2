@@ -282,27 +282,79 @@ private:
 	//
 	// A second camera MODE rather than a second camera: the build rig is a top-down thing
 	// for laying pavement, and watching a take-off from it shows a dot getting smaller. This
-	// sits beside the aircraft instead, and hands back the moment there is nothing to watch.
+	// orbits the aircraft instead, and hands back the moment there is nothing to watch.
+	//
+	// It is the SAME rig type as the build view, kept in the aircraft's frame (see
+	// FBuildCameraRig::InFrame), so the wheel, WASD and Q/E do in watch mode exactly what
+	// they do while building: zoom, slide the look-at point, orbit. Two rigs rather than
+	// one re-aimed, so leaving watch mode lands on the build view where it was left.
 
-	/** C: follow the newest agent from beside it, or go back to the build view. */
+	/** C: orbit the newest agent, or go back to the build view. */
 	void ToggleWatchAgent();
 
-	/** True while the camera is riding beside an agent. */
+	/** True while the camera is riding with an agent. */
 	bool bWatchingAgent = false;
 
+	/** Where the watch rig is asked to be, and where it is; relative to the aircraft. */
+	FBuildCameraRig WatchTarget;
+	FBuildCameraRig WatchCurrent;
+
+	/** Copy the watch tunables below onto a rig. The watch twin of ApplyViewLimits. */
+	void ApplyWatchLimits(FBuildCameraRig& Rig) const;
+
 	/**
-	 * How far to the aircraft's left the camera sits, uu. 1500 is 15 m.
+	 * Camera-to-aircraft distance on pressing C, uu. 1550 is 15.5 m.
 	 *
 	 * Wide enough to frame a 13 m wingspan and close enough to read the attitude, which is
 	 * the whole point of watching a rotation.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchSideOffset = 1500.0;
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
+	double WatchStartDistance = 1550.0;
 
-	/** How far behind, uu. Negative sits ahead. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchBehindOffset = 400.0;
+	/**
+	 * Direction the camera looks on pressing C, degrees from the aircraft's heading.
+	 *
+	 * -75 looks across the aircraft from off its right wing and a little behind, which is
+	 * the pose the fixed watch camera had: side-on enough to read pitch, angled enough
+	 * to see the nose.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch")
+	double WatchStartYaw = -75.0;
 
-	/** Eye height above the aircraft's own origin, uu. Its origin is the main-gear axle. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch") double WatchHeight = 250.0;
+	/** Height of the look-at point above the aircraft's origin, uu. Its origin is the
+	 *  main-gear axle; 150 is about the fuselage centreline. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch")
+	double WatchFocusHeight = 150.0;
+
+	/** Closest the wheel may bring the camera to the aircraft, uu. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
+	double WatchMinDistance = 800.0;
+
+	/** Furthest the wheel may pull back while still following, uu. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
+	double WatchMaxDistance = 20000.0;
+
+	/**
+	 * Pitch at WatchMinDistance, degrees below horizontal.
+	 *
+	 * Lower than the build rig's: the build rig's floor keeps the road plane readable,
+	 * while this one wants to be near eye level beside an aircraft.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double WatchMinPitchDegrees = 10.0;
+
+	/** Pitch at WatchMaxDistance, degrees below horizontal. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double WatchMaxPitchDegrees = 60.0;
+
+	/**
+	 * Furthest WASD may slide the look-at point from the aircraft, uu.
+	 *
+	 * Without a leash, W held for a few seconds carries the focus off into the grass and
+	 * the aircraft leaves the frame, with nothing on screen to say which way it went.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "0.0"))
+	double WatchMaxFocusOffset = 2000.0;
 
 	/**
 	 * Lands an aircraft on the runway nearest the cursor and taxis it to a stand. Key 7.

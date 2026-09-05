@@ -2,6 +2,7 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -61,8 +62,9 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C watches the "
-			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms."),
+			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C orbits the "
+			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms - "
+			 "while building or watching."),
 		*Target->GetName(), *ToolKeys);
 }
 
@@ -119,49 +121,44 @@ void ARoadBuildController::UpdateView(float DeltaTime)
 		return;
 	}
 
-	ApplyViewLimits(TargetView);
-
+	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
+	// key binding fires once on press. The same reason WASD was never bound.
 	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
 	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
 	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
 
-	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
-	TargetView.Rotate(Turn * RotateRate * DeltaTime);
-
-	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
-	// key binding fires once on press. The same reason WASD was never bound.
-	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
-
-	// WATCHING AN AIRCRAFT takes over the camera entirely, and hands it straight back when
-	// there is nothing to watch - a mode that stranded the view on a despawned aircraft would
-	// leave the player looking at empty sky with no way to tell why.
+	// WATCHING AN AIRCRAFT drives the watch rig with the same keys, and hands the camera
+	// straight back when there is nothing to watch - a mode that stranded the view on a
+	// despawned aircraft would leave the player looking at empty sky with no way to tell why.
 	if (bWatchingAgent)
 	{
 		if (ARoadAgentActor* Agent = Target->GetNewestAgent())
 		{
+			ApplyWatchLimits(WatchTarget);
+			WatchTarget.Pan(Right, Forward, PanRate, DeltaTime);
+			WatchTarget.Focus = WatchTarget.Focus.GetClampedToMaxSize(WatchMaxFocusOffset);
+			WatchTarget.Rotate(Turn * RotateRate * DeltaTime);
+
+			// Eased in the AIRCRAFT'S frame, then projected: the aircraft's own motion
+			// reaches the camera rigidly and only the player's inputs are smoothed. Easing
+			// a world-space rig towards a moving aircraft would trail it instead.
+			WatchCurrent.EaseToward(WatchTarget, CameraLag, DeltaTime);
+
 			const FVector At = Agent->GetActorLocation();
-			const double Yaw = FMath::DegreesToRadians(Agent->GetActorRotation().Yaw);
-
-			// Offsets are in the AIRCRAFT'S frame, so the view stays side-on through the
-			// backtrack turn and the climb rather than being side-on only while it happens
-			// to be pointing the way it started.
-			const FVector Nose(FMath::Cos(Yaw), FMath::Sin(Yaw), 0.0);
-			const FVector Wing(-FMath::Sin(Yaw), FMath::Cos(Yaw), 0.0);
-
-			const FVector Eye = At
-				+ Wing * WatchSideOffset
-				- Nose * WatchBehindOffset
-				+ FVector(0.0, 0.0, WatchHeight);
-
-			// Aimed AT the aircraft rather than along a fixed rotation, so a rotation and a
-			// climb stay framed instead of climbing out of shot.
-			BuildCamera->SetActorLocationAndRotation(Eye, (At - Eye).Rotation());
+			const FBuildCameraRig World = WatchCurrent.InFrame(FVector2D(At), Agent->GetActorRotation().Yaw);
+			BuildCamera->SetActorLocationAndRotation(
+				World.CameraLocation(At.Z + WatchFocusHeight), World.CameraRotation());
 			return;
 		}
 
 		bWatchingAgent = false;
 		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to watch: back to the build view."));
 	}
+
+	ApplyViewLimits(TargetView);
+	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
+	TargetView.Rotate(Turn * RotateRate * DeltaTime);
+	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
 
 	BuildCamera->SetActorLocationAndRotation(
 		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
@@ -184,8 +181,27 @@ void ARoadBuildController::ToggleWatchAgent()
 	}
 
 	bWatchingAgent = !bWatchingAgent;
+	if (bWatchingAgent)
+	{
+		// Reset on every entry rather than resuming: C is "show me the aircraft", and a
+		// view left zoomed into a wheel last time would answer with a wheel.
+		ApplyWatchLimits(WatchTarget);
+		WatchTarget.Focus = FVector2D::ZeroVector;
+		WatchTarget.Distance = FMath::Clamp(WatchStartDistance, WatchMinDistance, WatchMaxDistance);
+		WatchTarget.Yaw = WatchStartYaw;
+		WatchCurrent = WatchTarget;
+	}
+
 	UE_LOG(LogRoadBuild, Log, TEXT("Camera: %s"),
 		bWatchingAgent ? TEXT("watching the aircraft") : TEXT("build view"));
+}
+
+void ARoadBuildController::ApplyWatchLimits(FBuildCameraRig& Rig) const
+{
+	Rig.MinDistance = WatchMinDistance;
+	Rig.MaxDistance = WatchMaxDistance;
+	Rig.MinPitch = WatchMinPitchDegrees;
+	Rig.MaxPitch = WatchMaxPitchDegrees;
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -344,11 +360,14 @@ void ARoadBuildController::ZoomOut()
 
 void ARoadBuildController::ZoomBy(double Notches)
 {
-	ApplyViewLimits(TargetView);
-	TargetView.Zoom(ZoomStep, Notches);
+	// The wheel drives whichever rig owns the camera. Zooming the hidden build view while
+	// watching would be a surprise stored up for the moment the watch ends.
+	FBuildCameraRig& View = bWatchingAgent ? WatchTarget : TargetView;
+	bWatchingAgent ? ApplyWatchLimits(View) : ApplyViewLimits(View);
+	View.Zoom(ZoomStep, Notches);
 
-	UE_LOG(LogRoadBuild, Log, TEXT("View %.0f uu out, %.1f degrees"),
-		TargetView.Distance, TargetView.PitchDegrees());
+	UE_LOG(LogRoadBuild, Log, TEXT("%s %.0f uu out, %.1f degrees"),
+		bWatchingAgent ? TEXT("Watch") : TEXT("View"), View.Distance, View.PitchDegrees());
 }
 
 FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
