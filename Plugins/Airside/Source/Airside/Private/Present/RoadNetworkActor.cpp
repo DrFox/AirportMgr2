@@ -419,6 +419,22 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	// the solver over one would be work done to produce nothing.
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
+		// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
+		// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
+		// FResolvedAnchor grew LocalHeading and Role restores those UPROPERTYs at their
+		// defaults (0.0 and Aircraft), and nothing else ever repairs that - see
+		// UEntityDefinition::RefreshResolvedAnchors for why this is the one moment it can.
+		if (Network != nullptr)
+		{
+			const int32 RefreshedAnchors = UEntityDefinition::RefreshResolvedAnchors(*Network);
+			if (RefreshedAnchors > 0)
+			{
+				UE_LOG(LogRoadMesh, Log,
+					TEXT("Refreshed %d resolved anchor(s) against their current definitions."),
+					RefreshedAnchors);
+			}
+		}
+
 		RebuildMesh();
 	}
 
@@ -1543,10 +1559,25 @@ int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
 		return INDEX_NONE;
 	}
 
+	// Moved down from URoadNetwork::PlaceEntity along with Anchors itself: HasUsableAnchorIds
+	// is a UEntityDefinition method, and Model/ no longer calls into Entities/ at all - see
+	// Tool/RoadEditTarget.h's header comment for the other half of that seam. Complained
+	// about, not refused: a half-authored definition should be visible in the log rather
+	// than fatal at the call site. But it IS a real fault - lookup is by id, so two anchors
+	// sharing one are indistinguishable and a query for either returns the first, which
+	// sends the fuel truck to the belt loader and reports success.
+	if (!UEntityDefinition::HasUsableAnchorIds(Stand))
+	{
+		UE_LOG(LogRoadMesh, Error,
+			TEXT("PlaceStand: %s has anchors with empty or duplicate ids. Anchor lookups on "
+				 "this entity will be ambiguous."),
+			*Stand->GetName());
+	}
+
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
 
-	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Where, Heading);
+	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

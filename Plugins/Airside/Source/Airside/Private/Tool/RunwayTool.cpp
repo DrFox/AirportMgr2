@@ -2,7 +2,6 @@
 
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
-#include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -101,7 +100,7 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	const double Length = Along.Size();
 
 	const double Minimum = Context.Target != nullptr
-		? Context.Target->MinimumRunwayLength : 0.0;
+		? Context.Target->GetMinimumRunwayLength() : 0.0;
 	const bool bLongEnough = Length >= Minimum;
 	const EPreviewStyle Style = bLongEnough ? EPreviewStyle::Pending : EPreviewStyle::Refused;
 

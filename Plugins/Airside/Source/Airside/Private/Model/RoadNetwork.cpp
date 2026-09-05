@@ -1,11 +1,6 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
-#include "Entities/EntityDefinition.h"
-
-// Named apart from AirsideModule.cpp's LogAirside on purpose: both are file-static, and a
-// unity build merges the translation units into one where the two definitions collide.
-DEFINE_LOG_CATEGORY_STATIC(LogRoadModel, Log, All);
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -626,30 +621,22 @@ const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
 }
 
 FEntityInstanceId URoadNetwork::PlaceEntity(
-	UEntityDefinition* Definition, const FVector2D& Position, double Heading)
+	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
+	const FVector2D& Position, double Heading)
 {
 	if (Definition == nullptr)
 	{
 		return FEntityInstanceId();
 	}
 
-	// Complained about, not refused: a half-authored definition should be visible in the
-	// log rather than fatal at the call site. But it IS a real fault - lookup is by id, so
-	// two anchors sharing one are indistinguishable and a query for either returns the
-	// first, which sends the fuel truck to the belt loader and reports success.
-	if (!UEntityDefinition::HasUsableAnchorIds(Definition))
-	{
-		UE_LOG(LogRoadModel, Error,
-			TEXT("PlaceEntity: %s has anchors with empty or duplicate ids. Anchor lookups on "
-				 "this entity will be ambiguous."),
-			*Definition->GetName());
-	}
+	// HasUsableAnchorIds' complaint moved to the caller along with it: that check, like
+	// Anchors itself, is a UEntityDefinition method Model/ cannot call - see the header.
 
 	FEntityInstance Instance;
 	Instance.Position = Position;
 	Instance.Heading = Heading;
 	Instance.Definition = Definition;
-	Instance.ResolvedAnchors.Reserve(Definition->Anchors.Num());
+	Instance.ResolvedAnchors.Reserve(Anchors.Num());
 
 	// The stop position itself, as a node an aircraft can be routed to. NON-DERIVED for
 	// the same reason the anchor nodes are: it carries no edge until a lead-in is cast to
@@ -659,7 +646,7 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	const double Cos = FMath::Cos(Heading);
 	const double Sin = FMath::Sin(Heading);
 
-	for (const FEntityAnchor& Anchor : Definition->Anchors)
+	for (const FEntityAnchor& Anchor : Anchors)
 	{
 		// Local to world. Rotating by the entity's heading is what makes an anchor mean
 		// "off the aircraft's left wing" rather than "somewhere north of here".
@@ -673,6 +660,12 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 		FResolvedAnchor Resolved;
 		Resolved.Id = Anchor.Id;
 		Resolved.Node = AddGuidelineNode(World, /*bDerived=*/false);
+
+		// Captured rather than left on the definition - see FResolvedAnchor's comment.
+		// GetAnchorWorldHeading and GetAnchorIdsForRole read these back instead of
+		// Definition->Anchors, which is the whole reason this struct grew them.
+		Resolved.LocalHeading = Anchor.LocalHeading;
+		Resolved.Role = Anchor.Role;
 		Instance.ResolvedAnchors.Add(Resolved);
 	}
 
@@ -733,21 +726,21 @@ bool URoadNetwork::GetAnchorWorldHeading(
 	FEntityInstanceId Entity, FName AnchorId, double& OutHeading) const
 {
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
-	if (Instance == nullptr || Instance->Definition == nullptr)
+	if (Instance == nullptr)
 	{
 		return false;
 	}
 
-	// Read from the DEFINITION, by id: LocalHeading lives on the anchor rather than on the
-	// resolved node, and reading it from the asset means an anchor re-aimed there is picked
-	// up by instances already placed instead of them keeping a stale copy.
-	for (const FEntityAnchor& Anchor : Instance->Definition->Anchors)
+	// Read from the RESOLVED anchor, by id: LocalHeading was captured here at placement -
+	// see FResolvedAnchor's comment - because Model/ cannot read it back from the
+	// definition live the way this used to.
+	for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
 	{
-		if (Anchor.Id == AnchorId)
+		if (Resolved.Id == AnchorId)
 		{
 			// Composed, never stored. A stored world heading would go stale the moment the
 			// instance is turned, and nothing here would notice.
-			OutHeading = Instance->Heading + Anchor.LocalHeading;
+			OutHeading = Instance->Heading + Resolved.LocalHeading;
 			return true;
 		}
 	}
@@ -766,21 +759,43 @@ TArray<FName> URoadNetwork::GetAnchorIdsForRole(FEntityInstanceId Entity, EServi
 	TArray<FName> Found;
 
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
-	if (Instance == nullptr || Instance->Definition == nullptr)
+	if (Instance == nullptr)
 	{
 		return Found;
 	}
 
-	for (const FEntityAnchor& Anchor : Instance->Definition->Anchors)
+	// Reads FResolvedAnchor::Role rather than filtering the definition's own anchors and
+	// checking each one against ResolvedAnchors - ResolvedAnchors already holds only ids
+	// this INSTANCE actually resolved, so iterating it directly cannot hand back an id a
+	// definition edited after placement would leave leading nowhere.
+	for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
 	{
-		// Only ids this INSTANCE actually resolved. A definition that gained an anchor
-		// after placement would otherwise hand back an id leading nowhere, which is the
-		// same stale-lookup failure in a politer disguise.
-		if (Anchor.Role == Role && FindResolvedAnchor(Entity, Anchor.Id) != nullptr)
+		if (Resolved.Role == Role)
 		{
-			Found.Add(Anchor.Id);
+			Found.Add(Resolved.Id);
 		}
 	}
 	return Found;
+}
+
+bool URoadNetwork::RefreshResolvedAnchor(
+	FEntityInstanceId Entity, FName AnchorId, double LocalHeading, EServiceRole Role)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return false;
+	}
+
+	for (FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+	{
+		if (Resolved.Id == AnchorId)
+		{
+			Resolved.LocalHeading = LocalHeading;
+			Resolved.Role = Role;
+			return true;
+		}
+	}
+	return false;
 }
 

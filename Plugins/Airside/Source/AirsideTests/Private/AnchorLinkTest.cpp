@@ -58,7 +58,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		// down -Y, at the taxiway. Placing at -90 aims it at +Y instead and joins nothing,
 		// which is the case asserted further down.
 		const FEntityInstanceId Placed =
-			Net->PlaceEntity(Stand, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
+			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
 
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
 		if (!TestNotNull(TEXT("the stand resolves"), Instance))
@@ -150,7 +150,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		// Rotated -90, so the nose stop's lead-in casts along world +Y - directly away from
 		// the taxiway it is sitting beside.
 		const FEntityInstanceId Placed =
-			Net->PlaceEntity(Stand, FVector2D(0.0, 4000.0), -UE_DOUBLE_PI * 0.5);
+			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), -UE_DOUBLE_PI * 0.5);
 
 		FAnchorLink::Build(*Net);
 
@@ -170,7 +170,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		LayTaxiway(*Net, West, East);
 
 		const FEntityInstanceId Placed = Net->PlaceEntity(
-			Stand, FVector2D(0.0, FAnchorLink::DefaultMaxLeadIn * 2.0), UE_DOUBLE_PI * 0.5);
+			Stand, Stand->Anchors, FVector2D(0.0, FAnchorLink::DefaultMaxLeadIn * 2.0), UE_DOUBLE_PI * 0.5);
 
 		FAnchorLink::Build(*Net);
 
@@ -190,7 +190,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		LayTaxiway(*Net, West, East);
 
 		const FEntityInstanceId Placed =
-			Net->PlaceEntity(Stand, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
+			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
 
 		FAnchorLink::Build(*Net);
 		const int32 SecondPass = FAnchorLink::Build(*Net);
@@ -213,7 +213,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		LayTaxiway(*Net, West, East);
 
 		const FEntityInstanceId Placed =
-			Net->PlaceEntity(Stand, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
+			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
 		FAnchorLink::Build(*Net);
 
 		FRouteQuery Query;

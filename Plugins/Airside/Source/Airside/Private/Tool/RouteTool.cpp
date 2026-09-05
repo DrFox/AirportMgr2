@@ -5,7 +5,6 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
 #include "Solve/GuidelineGeom.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -119,7 +118,7 @@ FText FRouteTool::GetDisplayName() const
 
 FGuidelineNodeId FRouteTool::PickNode(const FToolContext& Context) const
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return FGuidelineNodeId();
 	}
@@ -127,12 +126,12 @@ FGuidelineNodeId FRouteTool::PickNode(const FToolContext& Context) const
 	// The same radius everything else snaps with, so "on" means one thing in this tool and
 	// in every other.
 	return RouteSearch::FindNearestNode(
-		*Context.Target->Network, Context.Cursor, Class, Context.SnapRadius);
+		*Context.Target->GetNetwork(), Context.Cursor, Class, Context.SnapRadius);
 }
 
 void FRouteTool::OnClick(const FToolContext& Context)
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return;
 	}
@@ -154,7 +153,7 @@ void FRouteTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	const UAircraftType* Aircraft = AircraftAtNode(*Context.Target->Network, StartNode);
+	const UAircraftType* Aircraft = AircraftAtNode(*Context.Target->GetNetwork(), StartNode);
 	const double Wingspan = Aircraft != nullptr ? Aircraft->Footprint.Wingspan : 0.0;
 
 	LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Wingspan);
@@ -192,7 +191,7 @@ void FRouteTool::OnDeactivate(const FToolContext& Context)
 
 void FRouteTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return;
 	}
@@ -204,7 +203,7 @@ void FRouteTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sin
 
 	if (bHasStart)
 	{
-		if (const FGuidelineNode* Node = Context.Target->Network->GetGuidelineNode(StartNode))
+		if (const FGuidelineNode* Node = Context.Target->GetNetwork()->GetGuidelineNode(StartNode))
 		{
 			Sink.Marker(Node->Position, EPreviewStyle::Snap);
 
@@ -218,7 +217,7 @@ void FRouteTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sin
 	// What the cursor would pick, so a node that cannot be used simply never lights up.
 	if (const FGuidelineNodeId Hover = PickNode(Context); Hover.IsSet())
 	{
-		if (const FGuidelineNode* Node = Context.Target->Network->GetGuidelineNode(Hover))
+		if (const FGuidelineNode* Node = Context.Target->GetNetwork()->GetGuidelineNode(Hover))
 		{
 			Sink.Marker(Node->Position, EPreviewStyle::Snap);
 		}

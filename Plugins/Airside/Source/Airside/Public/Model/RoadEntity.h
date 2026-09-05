@@ -241,8 +241,8 @@ struct AIRSIDE_API FClimbPerformance
  * how fast a nosewheel can be slewed; the airframe does, and an A320 and a Piper differ by
  * a factor of two and a half.
  *
- * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. Entities/
- * depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
+ * Here in Model/ rather than on UAircraftType so FRouteFollower can take one. The Entities
+ * layer depends on Model/ and never the reverse - the same reason FEntityFootprint lives here.
  *
  * Distances are uu, and a uu is a centimetre.
  */
@@ -504,6 +504,15 @@ struct AIRSIDE_API FEntityAnchor
  * anchors - an invariant nothing enforced, and which the natural iterate-the-definition,
  * index-the-instance pattern broke by reading out of bounds the moment a saved definition
  * gained an anchor. Ordinary designer work, not an edge case.
+ *
+ * LocalHeading and Role are a second widening of the same idea, for the same reason:
+ * URoadNetwork::PlaceEntity is given FEntityAnchor values (Model/ must not depend on the
+ * Entities layer - see the top of this file), and once placement is over there is no
+ * UEntityDefinition left to read them back from without breaking that rule. So the two
+ * fields placement actually needs afterwards - GetAnchorWorldHeading's heading,
+ * GetAnchorIdsForRole's role - are captured here rather than looked up live. The trade is
+ * the one FEntityInstance's own header already accepts for Node: an anchor edited on the
+ * asset after a stand is placed is not picked up by instances already placed from it.
  */
 USTRUCT()
 struct AIRSIDE_API FResolvedAnchor
@@ -513,6 +522,12 @@ struct AIRSIDE_API FResolvedAnchor
 	UPROPERTY() FName Id;
 
 	UPROPERTY() FGuidelineNodeId Node;
+
+	/** Radians, relative to the entity's own heading. Copied from FEntityAnchor::LocalHeading. */
+	UPROPERTY() double LocalHeading = 0.0;
+
+	/** Copied from FEntityAnchor::Role. */
+	UPROPERTY() EServiceRole Role = EServiceRole::Aircraft;
 };
 
 /**

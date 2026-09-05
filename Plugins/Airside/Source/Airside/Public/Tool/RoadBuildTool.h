@@ -1,18 +1,20 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
-
-class ARoadNetworkActor;
 
 /**
  * Everything a tool needs to decide what an input means.
  *
- * The actor is forward-declared and included only in the tool .cpp files. Present/ already
- * includes Tool/ headers for snap results, placement limits and deletion plans, so a tool
- * header including Present/ back would close a cycle. It is not a cycle in substance: the
- * actor depends on tool-layer VALUE types, and the tools depend on the actor as a facade.
+ * Target is IRoadEditTarget, not the concrete ARoadNetworkActor - see that header's
+ * comment. Present/ already includes Tool/ headers for snap results, placement limits and
+ * deletion plans, so a tool header including Present/ back for the actor's own type would
+ * close a real cycle; going through the interface instead means Tool/*.cpp never includes
+ * Present/RoadNetworkActor.h at all. A caller that owns the concrete actor - the game
+ * driver, the editor mode, the tool tests - passes it in through an implicit upcast, so
+ * this is a widening of what Target may point to, not a behaviour change.
  *
  * Nothing here is a pointer the tool keeps. A context is built fresh each frame by whoever
  * owns the input, so a tool can hold no stale view of the world between events.
@@ -20,7 +22,7 @@ class ARoadNetworkActor;
 struct FToolContext
 {
 	/** The facade every mutation goes through, so every mutation is undoable. */
-	ARoadNetworkActor* Target = nullptr;
+	IRoadEditTarget* Target = nullptr;
 
 	/**
 	 * Where the cursor meets the road plane. THE RAW HIT - never the snapped position.

@@ -2,7 +2,6 @@
 
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -127,16 +126,16 @@ const TCHAR* FGuidelineDrawTool::Describe(EGuidelineLink Result)
 
 FGuidelineNodeId FGuidelineDrawTool::PickNode(const FToolContext& Context) const
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return FGuidelineNodeId();
 	}
-	return NearestAnyNode(*Context.Target->Network, Context.Cursor, Context.SnapRadius);
+	return NearestAnyNode(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
 }
 
 void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return;
 	}
@@ -146,7 +145,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 	if (Context.bRemoveModifier)
 	{
 		const FGuidelineEdgeId Doomed =
-			NearestHandEdge(*Context.Target->Network, Context.Cursor, Context.SnapRadius);
+			NearestHandEdge(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
 		if (Doomed.IsSet())
 		{
 			Context.Target->DisconnectGuideline(Doomed.Index);
@@ -170,7 +169,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 
 	// Refusals leave the START in place rather than dropping it. Clearing it would make a
 	// mis-aimed second click cost the first one too.
-	if (Validate(*Context.Target->Network, StartNode, Picked) != EGuidelineLink::Valid)
+	if (Validate(*Context.Target->GetNetwork(), StartNode, Picked) != EGuidelineLink::Valid)
 	{
 		return;
 	}
@@ -191,12 +190,12 @@ void FGuidelineDrawTool::OnDeactivate(const FToolContext& Context)
 
 void FGuidelineDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return;
 	}
 
-	const URoadNetwork& Network = *Context.Target->Network;
+	const URoadNetwork& Network = *Context.Target->GetNetwork();
 
 	// Removal reads differently from drawing, so it previews differently: the link that
 	// would go, marked as doomed, and nothing about starting a new one.

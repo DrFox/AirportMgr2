@@ -6,6 +6,8 @@
 #include "Model/RoadEntity.h"
 #include "EntityDefinition.generated.h"
 
+class URoadNetwork;
+
 /**
  * Shared, immutable description of a kind of installation (Flyweight), matching
  * URoadProfile's role for cross-sections.
@@ -84,9 +86,29 @@ public:
 	 *
 	 * Lookup is by id, so an unnamed or duplicated one makes two anchors indistinguishable
 	 * and a query silently returns whichever comes first - which sends the fuel truck to
-	 * the belt loader's position and reports success. PlaceEntity checks this and complains
-	 * loudly rather than refusing, so a half-authored asset is visible instead of fatal.
+	 * the belt loader's position and reports success. ARoadNetworkActor::PlaceStand checks
+	 * this and complains loudly rather than refusing, so a half-authored asset is visible
+	 * instead of fatal - checked there rather than in URoadNetwork::PlaceEntity because
+	 * Model/ cannot call a UEntityDefinition method (see RoadEntity.h's header comment).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static bool HasUsableAnchorIds(const UEntityDefinition* Definition);
+
+	/**
+	 * Bring every live entity's FResolvedAnchor::LocalHeading and ::Role up to date with
+	 * its definition's current FEntityAnchor values. Returns how many anchors changed.
+	 *
+	 * Lives here, not on URoadNetwork, because Entities depends on Model and never the
+	 * reverse (see RoadEntity.h) - this is the one place both are known at once. It exists
+	 * for two reasons that are really one: FResolvedAnchor's LocalHeading and Role are
+	 * placement-time SNAPSHOTS (see that struct's comment), and a snapshot needs a moment
+	 * it gets refreshed at. An instance placed and saved before these two fields existed on
+	 * the struct loads with the UPROPERTY defaults (LocalHeading 0.0, Role Aircraft) and
+	 * nothing else ever corrects it; a definition anyone edits after stands are placed from
+	 * it needs the same correction to reach them. Called from
+	 * ARoadNetworkActor::PostRegisterAllComponents, before RebuildMesh - so both cases are
+	 * caught at the next load or explicit rebuild, which is as well-defined a moment as a
+	 * snapshot design gets.
+	 */
+	static int32 RefreshResolvedAnchors(URoadNetwork& Network);
 };

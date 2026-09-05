@@ -2,7 +2,6 @@
 
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
-#include "Present/RoadNetworkActor.h"
 #include "Tool/RoadHeal.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -12,9 +11,9 @@ namespace
 	/** Position of a live node, or the cursor when there is not one. */
 	FVector2D NodePosition(const FToolContext& Context, int32 NodeIndex)
 	{
-		if (Context.Target != nullptr && Context.Target->Network != nullptr)
+		if (Context.Target != nullptr && Context.Target->GetNetwork() != nullptr)
 		{
-			const TArray<FRoadNode>& Nodes = Context.Target->Network->GetNodes();
+			const TArray<FRoadNode>& Nodes = Context.Target->GetNetwork()->GetNodes();
 			if (Nodes.IsValidIndex(NodeIndex) && Nodes[NodeIndex].bAlive)
 			{
 				return Nodes[NodeIndex].Position;
@@ -91,7 +90,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 	if (Context.Target->MakeLiveNodeId(From, FromId))
 	{
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Target->Network, FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Context.Target->GetNetwork(), FromId, Context.Snap, Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			return nullptr;
@@ -126,9 +125,9 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Cont
 	// it. Removed here because this gesture created it and this gesture is being abandoned
 	// - and only if it is still bare, because a node that picked up a segment is part of
 	// the network now, whoever made it.
-	if (bCreated && Context.Target != nullptr && Context.Target->Network != nullptr)
+	if (bCreated && Context.Target != nullptr && Context.Target->GetNetwork() != nullptr)
 	{
-		const TArray<FRoadNode>& Nodes = Context.Target->Network->GetNodes();
+		const TArray<FRoadNode>& Nodes = Context.Target->GetNetwork()->GetNodes();
 		if (Nodes.IsValidIndex(From) && Nodes[From].bAlive && Nodes[From].Incident.Num() == 0)
 		{
 			if (Context.Target->DeleteNode(From))
@@ -153,11 +152,11 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 	// The reason a click will be refused. The ghost already says THAT it will be, by
 	// turning red; a colour cannot say which of four rules objected.
 	FRoadNodeId FromId;
-	if (Context.Target != nullptr && Context.Target->Network != nullptr
+	if (Context.Target != nullptr && Context.Target->GetNetwork() != nullptr
 		&& Context.Target->MakeLiveNodeId(From, FromId))
 	{
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Target->Network, FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Context.Target->GetNetwork(), FromId, Context.Snap, Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			Sink.Label(Context.Snap.Position, RoadPlacement::Describe(Judgement), EPreviewStyle::Refused);
@@ -317,7 +316,7 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	}
 
 	FRoadNodeId FromId;
-	if (Context.Target->Network == nullptr || !Context.Target->MakeLiveNodeId(Pending, FromId))
+	if (Context.Target->GetNetwork() == nullptr || !Context.Target->MakeLiveNodeId(Pending, FromId))
 	{
 		Context.Target->HideGhost();
 		return;
@@ -326,7 +325,7 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// Shown even when illegal, coloured rather than withheld: hiding it would answer "why
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
-		RoadPlacement::Validate(*Context.Target->Network, FromId, Context.Snap, Context.Limits);
+		RoadPlacement::Validate(*Context.Target->GetNetwork(), FromId, Context.Snap, Context.Limits);
 	Context.Target->UpdateGhost(Pending, Context.Snap, Judgement == ERoadPlacement::Valid);
 }
 
@@ -350,12 +349,12 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 
 void FRoadDrawTool::PreviewRemoval(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Target == nullptr || Context.Target->Network == nullptr)
+	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
 		return;
 	}
 
-	const URoadNetwork& Network = *Context.Target->Network;
+	const URoadNetwork& Network = *Context.Target->GetNetwork();
 
 	auto SegmentEnds = [&Network](int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB)
 	{
@@ -461,14 +460,14 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 	// mouse pointer is drawn - and the shallower the view, the further apart they are.
 	Sink.Marker(Context.Snap.Position, EPreviewStyle::Pending);
 
-	if (Context.Snap.Kind == ERoadSnapKind::Segment && Context.Target->Network != nullptr)
+	if (Context.Snap.Kind == ERoadSnapKind::Segment && Context.Target->GetNetwork() != nullptr)
 	{
-		const TArray<FRoadSegment>& Segments = Context.Target->Network->GetSegments();
+		const TArray<FRoadSegment>& Segments = Context.Target->GetNetwork()->GetSegments();
 		const int32 Index = Context.Snap.Segment.Index;
 		if (Segments.IsValidIndex(Index) && Segments[Index].bAlive)
 		{
-			const FRoadNode* EndA = Context.Target->Network->GetNode(Segments[Index].A);
-			const FRoadNode* EndB = Context.Target->Network->GetNode(Segments[Index].B);
+			const FRoadNode* EndA = Context.Target->GetNetwork()->GetNode(Segments[Index].A);
+			const FRoadNode* EndB = Context.Target->GetNetwork()->GetNode(Segments[Index].B);
 			if (EndA != nullptr && EndB != nullptr)
 			{
 				Sink.CrossMark(Context.Snap.Position,

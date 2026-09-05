@@ -72,7 +72,7 @@ namespace
 
 		// Facing north (+Y): the lead-in leaves along heading + 180, i.e. south to north is
 		// how the stand faces, so the ray runs north to the taxiway.
-		Net->PlaceEntity(Stand, FVector2D(0.0, -9000.0), UE_DOUBLE_PI * 0.5 + UE_DOUBLE_PI);
+		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, -9000.0), UE_DOUBLE_PI * 0.5 + UE_DOUBLE_PI);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 		FRoadGuidelineBuilder::Build(*Net, Solved);

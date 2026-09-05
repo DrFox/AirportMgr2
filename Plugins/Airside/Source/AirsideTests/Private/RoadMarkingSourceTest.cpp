@@ -85,7 +85,7 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 	FRoadGuidelineBuilder::Build(*Net, Solved);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FEntityInstanceId Gate = Net->PlaceEntity(Stand, FVector2D(25000.0, 25000.0), UE_DOUBLE_PI);
+	const FEntityInstanceId Gate = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(25000.0, 25000.0), UE_DOUBLE_PI);
 	TestTrue(TEXT("the stand is placed"), Gate.IsSet());
 
 	// --- Now walk spec section 6's table, row by row. -------------------------------
