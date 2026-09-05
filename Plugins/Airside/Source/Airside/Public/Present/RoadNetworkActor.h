@@ -2,11 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Build/RoadMeshSink.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
-#include "Tool/RoadEditHistory.h"
+#include "Present/RoadSurfacePresenter.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
@@ -16,65 +15,10 @@ class URoadNetwork;
 class URoadProfile;
 class ARoadAgentActor;
 class UDynamicMeshComponent;
-class UMaterialInstanceDynamic;
-class FRoadMeshBuilder;
-struct FRoadSolveResult;
 class UMaterialInterface;
 class URoadMaterialSet;
-
-namespace UE::Geometry { class FDynamicMesh3; }
-
-/** Pushes finished buffers into a UDynamicMeshComponent. */
-class AIRSIDE_API FDynamicMeshSink : public IRoadMeshSink
-{
-public:
-	/**
-	 * InMaterials null keeps the single-material path: one SetMaterial(0, InMaterial) and
-	 * no material-ID attribute, exactly as before per-band materials existed.
-	 */
-	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr,
-		bool bInUseConstantVertexColour = true, const URoadMaterialSet* InMaterials = nullptr)
-		: Component(InComponent), Material(InMaterial)
-		, bUseConstantVertexColour(bInUseConstantVertexColour), Materials(InMaterials) {}
-	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
-
-	/**
-	 * Copy the buffers' UV, colour and material-id channels onto an already-populated mesh.
-	 *
-	 * Static and public so it can be tested without a component, a world or a renderer.
-	 * The buffers being correct says nothing about what the component receives, and that
-	 * gap is precisely where slice 2a's invisible surface hid.
-	 */
-	static void PopulateAttributes(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
-
-	/**
-	 * Convert whole buffers into a mesh - vertices, triangles, UVs and material ids.
-	 * Returns the number of triangles FDynamicMesh3 refused.
-	 *
-	 * Static and public for the same reason as PopulateAttributes, and it carries the one
-	 * correspondence in this file that is NOT the identity: FDynamicMesh3::AppendTriangle
-	 * REFUSES non-manifold and duplicate triangles, so one refusal shifts every later
-	 * triangle's id away from its buffer index. Indexing MaterialIDs by mesh triangle id
-	 * would then re-skin the entire mesh downstream of the first refusal, silently. That
-	 * is the index-parallel defect this codebase has already paid for once, in
-	 * FEntityInstance::ResolvedAnchors; here the mapping is recorded as the triangles are
-	 * appended, where it is known, rather than assumed afterwards.
-	 */
-	static int32 BuildMesh(UE::Geometry::FDynamicMesh3& Mesh, const FRoadMeshBuffers& Buffers);
-
-private:
-	// Raw, non-owning pointers: the sink owns and GC-protects neither, and must not
-	// outlive either. Both current call sites are stack-scoped inside a single function,
-	// so this is safe today; a preview sink that lives across frames will not be.
-	UDynamicMeshComponent* Component = nullptr;
-	UMaterialInterface* Material = nullptr;
-
-	/** Independent of Material by design - see ARoadNetworkActor::bUseConstantVertexColour. */
-	bool bUseConstantVertexColour = true;
-
-	/** Null means the single-material path. Non-owning, like Component and Material. */
-	const URoadMaterialSet* Materials = nullptr;
-};
+class URoadEditHistory;
+class URoadEditFacade;
 
 /**
  * One agent, plus the cube standing where it is.
@@ -85,6 +29,8 @@ private:
  * exactly the dependency CLAUDE.md's layering rule forbids: Model reaching up to Present.
  *
  * Runtime only. Neither field is saved with the level - see ARoadNetworkActor::Agents.
+ * TEMPORARY: still declared here pending issue #32's Traffic step, which moves this and
+ * every agent-handling member below to a new UAirsideTraffic.
  */
 USTRUCT()
 struct AIRSIDE_API FAgentSlot
@@ -97,12 +43,26 @@ struct AIRSIDE_API FAgentSlot
 };
 
 /**
- * Owns a road network and renders it as one batched dynamic mesh.
+ * Owns a road network and renders it as one batched dynamic mesh - the level-resident
+ * COMPOSITION ROOT issue #32 is splitting into three objects: URoadSurfacePresenter (the
+ * mesh, the aprons, the ghost preview) and URoadEditFacade (every graph mutator, query and
+ * undo step) are split out already; agent dispatch and Tick are the next step and still live
+ * here, on FAgentSlot above. Every responsibility already delegated is handed to exactly one
+ * of the two existing objects in the .cpp; what remains here is: owning them, owning the
+ * components and every level-authored UPROPERTY (because those are what the .umap actually
+ * saves), PostRegisterAllComponents and Tick (because only an AActor has either), the
+ * content Resolve* functions (because only the actor knows about UAirsideSettings'
+ * defaults), and a thin forwarder for every member Blueprint, the game module or a test
+ * could already call - see the banner comment above them for why they exist and must not
+ * shrink.
  *
  * Multiple inheritance from AActor plus IRoadEditTarget: ordinary UE C++, not a deviation
  * needing justification - IRoadEditTarget is a plain abstract class with no UPROPERTYs and
  * no reflection of its own, so it costs nothing to add to an actor's base list. See that
- * header for why the interface exists at all.
+ * header for why the interface exists at all. Every IRoadEditTarget virtual is implemented
+ * here by forwarding to whichever object owns the real work - mostly the facade, with
+ * UpdateGhost/HideGhost/RebuildMesh going to the presenter and DispatchAgent still handled
+ * inline; see each forwarder's own one-line comment for which.
  */
 UCLASS()
 class AIRSIDE_API ARoadNetworkActor : public AActor, public IRoadEditTarget
@@ -152,21 +112,14 @@ public:
 	 */
 	virtual void PostRegisterAllComponents() override;
 
-	/**
-	 * The history an edit should snapshot into, or NULL when the editor owns undo.
-	 *
-	 * In an editor world the transaction system already serialises the network on Modify()
-	 * and restores it on Ctrl+Z - which is the same job the Memento does. Running both
-	 * would leave two stacks disagreeing about one graph, and the editor's is the one a
-	 * user will reach for. So in the editor this returns null and FRoadEditScope becomes a
-	 * no-op; at runtime, where there is no transaction system, it returns the history.
-	 */
-	URoadEditHistory* HistoryForEdit();
-
-	/** Solve every node, build the mesh, and push it to the component. */
+	/** Solve every node, build the mesh, and push it to the component. Forwards to
+	 *  Presenter with a FSurfaceSettings built from this actor's own Resolve* functions and
+	 *  level-authored tunables - see URoadSurfacePresenter::Rebuild for the pipeline itself. */
 	UFUNCTION(CallInEditor, Category = "Airside")
 	virtual void RebuildMesh() override;
 
+	/** Advances every agent and hands the model's answer to its view. TEMPORARY: moves to
+	 *  UAirsideTraffic::Advance in issue #32's next step. */
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** True outside a game world, so dispatched agents move in the editor viewport too. */
@@ -174,10 +127,8 @@ public:
 
 	// --- Agents ----------------------------------------------------------------------
 	//
-	// Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part
-	// way through a journey, not a fact about the airport: putting them in the network
-	// would snapshot them into every undo Memento and serialise them into the saved level,
-	// so re-opening a map would restore half-driven cubes that no longer have a route.
+	// Runtime only, and deliberately not part of URoadNetwork - see FAgentSlot's own comment.
+	// TEMPORARY: this whole section moves to UAirsideTraffic in issue #32's next step.
 
 	/**
 	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
@@ -187,12 +138,7 @@ public:
 	 * aircraft in the world, rather than one frozen on final or rolling to a runway it has
 	 * no way off. This function's own job is what is left once that choice is made: arm the
 	 * landing, spawn the view, and log the plan's own refusal or success - never re-derive
-	 * either. Moved out of here into Model/ by issue #29, because none of that choice needs
-	 * a world and this actor's job never was to make it.
-	 *
-	 * That is the same discipline as FTakeoffRun's refusal, and it is why the taxi route is
-	 * planned now rather than when the aircraft vacates: at that point it is on the runway
-	 * and a failure has nowhere to put it.
+	 * either.
 	 */
 	bool DispatchArrival(const FVector2D& Near, const FAirframe& Airframe);
 
@@ -201,10 +147,6 @@ public:
 	 *
 	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
 	 * so are never saved, and the build tools this is driven from are used at design time.
-	 *
-	 * Takes the whole AIRFRAME rather than its performance structs one at a time - see
-	 * FAirframe and IRoadEditTarget::DispatchAgent for why splitting them across arguments
-	 * invited a caller to pass one and default the other.
 	 */
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
 
@@ -228,28 +170,23 @@ public:
 		return Agents.Num() > 0 ? Agents.Last().View.Get() : nullptr;
 	}
 
-	/**
-	 * Route between two guideline nodes over the network this actor owns.
-	 *
-	 * On the facade so a tool, a Blueprint and the HUD all ask the same question of the
-	 * same graph rather than three of them reaching past it.
-	 */
+	/** Route between two guideline nodes over the network this actor owns. Forwards to the
+	 *  facade, so a tool, a Blueprint and the HUD all ask the same question of the same
+	 *  graph rather than three of them reaching past it. */
 	virtual FRoutePlan FindRoute(
 		FGuidelineNodeId Start, FGuidelineNodeId Goal,
 		ETraversalClass Class, double Wingspan) const override;
 
-	// --- Runtime graph facade -------------------------------------------------------
-	//
-	// The player builds the network while the game runs, so these are the entry points
-	// a build tool drives. They are deliberately on the actor rather than on
-	// URoadNetwork: Model/RoadNetwork.h reserves the mutators for IRoadCommand from
-	// Slice 3 onward, and when that lands these bodies start emitting commands while
-	// every caller - Blueprint included - stays exactly as it is. Placing them here is
-	// what keeps that swap from being a breaking change.
-	//
-	// Node identity crosses the boundary as a plain int32 slot index rather than
-	// FRoadNodeId, because a USTRUCT handle does not round-trip cleanly through
-	// Blueprint and the index is unambiguous within one network.
+	// =====================================================================================
+	// THIN FORWARDERS. Every member below existed on this actor before issue #32 and is kept
+	// here, unchanged in name and signature, purely so Blueprint graphs, RoadBuildController,
+	// RoadBuildHUD, RoadBuildEditorTool and every existing automation test compile and behave
+	// exactly as they did - none of them may be asked to call Facade or Presenter directly. A
+	// later cleanup may repoint those drivers at the facade once this settles; this task is a
+	// pure refactor and must not be the one that does it. Each forwarder's own body is one
+	// line; the real work, and the WHY comments that used to sit here, moved with the code -
+	// see URoadEditFacade.cpp.
+	// =====================================================================================
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -259,34 +196,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
 
-	/**
-	 * Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE.
-	 *
-	 * The routing graph is derived from pavement and can therefore only connect what
-	 * pavement connects. This is how a connection is made that no road expresses - across
-	 * an apron, or to a stand whose lead-in found nothing.
-	 *
-	 * The edge is bDerived == false, so the builder leaves it alone, and carries both
-	 * endpoints' identities so every later rebuild re-attaches it. Both of those matter:
-	 * without the second it survives every rebuild connected to nothing.
-	 */
-
+	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 
-	/**
-	 * Lays a runway from From to To in one edit, with its own profile.
-	 *
-	 * Separate from PlaceNode plus ConnectNodes for two reasons. It is ONE undo step, which is
-	 * what a player means by "place a runway"; and it takes the profile explicitly, because a
-	 * runway's cross-section is not the network's default and must never fall back to it - a
-	 * runway that quietly became a taxiway would keep its shape on screen and lose its
-	 * continuity at every exit.
-	 *
-	 * Straight by construction: one segment, two nodes, no control point. Refuses a runway
-	 * shorter than MinimumRunwayLength, because a strip too short to take off from is a
-	 * mis-click rather than an intention.
-	 */
+	/** Lays a runway from From to To in one edit, with its own profile. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
 
@@ -294,7 +208,9 @@ public:
 	 * The shortest thing that may be called a runway, in uu. 500 m.
 	 *
 	 * Not an aviation rule - real minima depend on the aircraft - but a floor that separates
-	 * a runway from a slip of the mouse. A Meridian needs about 700 m at sea level.
+	 * a runway from a slip of the mouse. A Meridian needs about 700 m at sea level. Stays on
+	 * the actor: it is level-authored, and the facade only reads it (see
+	 * URoadEditFacade::GetMinimumRunwayLength).
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
 	double MinimumRunwayLength = 50000.0;
@@ -302,64 +218,23 @@ public:
 	/** IRoadEditTarget accessor for MinimumRunwayLength - see the property's own comment. */
 	virtual double GetMinimumRunwayLength() const override { return MinimumRunwayLength; }
 
-	/**
-	 * Remove a HAND-AUTHORED guideline edge. Refuses a derived one.
-	 *
-	 * Refuses rather than obeys, because the next rebuild would put a derived edge straight
-	 * back - which reads as the tool ignoring the click.
-	 */
+	/** Remove a HAND-AUTHORED guideline edge. Refuses a derived one. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
-	/**
-	 * Index of the nearest live node within Radius of Where, or INDEX_NONE.
-	 *
-	 * A crude stand-in for the snap chain of section 7.4. Something has to let a click
-	 * reattach to an existing node, or every road drawn would be disconnected from the
-	 * last and no junction could ever be authored.
-	 */
+	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 FindNodeNear(FVector2D Where, double Radius) const;
 
-	/**
-	 * Replace a live segment with two, meeting at a new node placed at At.
-	 *
-	 * Returns the new node's index, or INDEX_NONE if it refused. This is what makes a
-	 * T-junction authorable: without it a junction can only ever form where a node was
-	 * already placed, so running a taxiway into a road you have already drawn is
-	 * impossible.
-	 *
-	 * The original segment's handle is DEAD afterwards - the segment is removed, not
-	 * reshaped, because its endpoints define its identity and both of them change.
-	 * Anything holding that handle must re-resolve. Both replacements inherit the
-	 * original's profile.
-	 *
-	 * At is taken as given rather than projected onto the segment: the snap chain has
-	 * already found the point, and re-deriving it here would let the two disagree about
-	 * where the split is. A caller passing a point off the segment gets a kink, which is
-	 * a caller error and not something to silently correct.
-	 */
+	/** Replace a live segment with two, meeting at a new node placed at At. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 
-	/**
-	 * Remove a node, rejoining the roads it would otherwise strand. See RoadHeal.h.
-	 *
-	 * Refuses WHOLE, changing nothing, if any rejoin would break a placement rule - a
-	 * junction can therefore become undeletable, and the way out is to delete its arms
-	 * individually until it is bare. Nothing is ever moved or lost unexpectedly, which is
-	 * the trade that choice buys.
-	 */
+	/** Remove a node, rejoining the roads it would otherwise strand. See RoadHeal.h. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DeleteNode(int32 NodeIndex) override;
 
-	/**
-	 * Remove one segment.
-	 *
-	 * Either endpoint left holding no road at all goes with it. That is cleanup rather
-	 * than deletion: a node with no segments carries no geometry, so removing it destroys
-	 * nothing - and leaving it behind is just litter on the map.
-	 */
+	/** Remove one segment. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
 
@@ -367,27 +242,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	TArray<int32> SegmentsIncidentTo(int32 NodeIndex) const;
 
-	/**
-	 * Move a node, dragging its roads with it.
-	 *
-	 * Refused if it would pull any of its roads under MinSegmentLength - so a node being
-	 * dragged simply stops following the cursor rather than producing a segment the solver
-	 * cannot trim. Turn angles are NOT checked: a node between two roads can legitimately
-	 * be dragged through any angle, and refusing mid-drag would read as the node sticking.
-	 *
-	 * Undoable on its own, and joins an open interactive edit when there is one - so a
-	 * whole drag is one undo step rather than one per frame.
-	 */
+	/** Move a node, dragging its roads with it. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool MoveNode(int32 NodeIndex, FVector2D To) override;
 
-	/**
-	 * Open an edit that spans frames, for a drag.
-	 *
-	 * Everything done until EndInteractiveEdit becomes one undo step. Without this a drag
-	 * would push a snapshot per frame and undo would crawl back along the path the mouse
-	 * took.
-	 */
+	/** Open an edit that spans frames, for a drag. */
 	virtual void BeginInteractiveEdit(const FString& Label) override;
 
 	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
@@ -396,7 +255,15 @@ public:
 	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;
 
-	/** Limits the deletion plan judges its rejoins against. Set from the build tool. */
+	/**
+	 * Limits the deletion plan judges its rejoins against. Set from the build tool.
+	 *
+	 * Stays a plain field on the actor, not moved to the facade: RoadBuildController writes
+	 * it directly every frame (Target->PlacementLimits = ...) on the concrete actor type, so
+	 * moving it would mean either breaking that write or adding a forwarding setter for a
+	 * struct assignment - more machinery than a runtime-only tuning knob is worth. The facade
+	 * reads it back through its owning actor; see URoadEditFacade::MoveNode.
+	 */
 	FRoadPlacementLimits PlacementLimits;
 
 	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
@@ -404,17 +271,7 @@ public:
 
 	// --- Aprons -----------------------------------------------------------------------
 
-	/**
-	 * Add a polygon of pavement. Returns its slot index, or INDEX_NONE if refused.
-	 *
-	 * Refuses an outline of fewer than three corners, or one that crosses itself - the
-	 * triangulator's contract is a SIMPLE polygon, and a figure-eight fed to it produces
-	 * triangles that overlap rather than an error.
-	 *
-	 * Winding is corrected rather than refused: FApronSurface asks for counter-clockwise,
-	 * the shoelace sign says which way round this is, and reversing a clockwise outline is
-	 * an answer where refusing would only be a complaint.
-	 */
+	/** Add a polygon of pavement. Returns its slot index, or INDEX_NONE if refused. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 AddApron(const TArray<FVector2D>& Outline) override;
 
@@ -427,23 +284,11 @@ public:
 
 	// --- Stands -----------------------------------------------------------------------
 
-	/**
-	 * Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE.
-	 *
-	 * Every anchor the definition declares resolves to a NON-DERIVED guideline node, so the
-	 * guideline builder's orphan sweep leaves them alone and the handles survive every
-	 * taxiway edit. That is what makes "drive to stand 12's fuel position" an ordinary path
-	 * query rather than a lookup that goes stale.
-	 */
+	/** Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 PlaceStand(FVector2D Where, double Heading) override;
 
-	/**
-	 * Remove a placed entity, and the anchor nodes it owns.
-	 *
-	 * RemoveGuidelineNode cascades, so this also removes any guideline drawn INTO the
-	 * stand - a lead-in to a stand that is gone leads nowhere. Destructive and undoable.
-	 */
+	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 
@@ -501,21 +346,8 @@ public:
 
 	// --- Ghost preview --------------------------------------------------------------
 
-	/**
-	 * Show the segment a click would build, as real solved pavement.
-	 *
-	 * Built on a DUPLICATE of the network, never the live one. FRoadNetworkSolver::SolveAll
-	 * takes a non-const network and writes trim distances and cut vertices INTO it, so
-	 * solving a hypothetical segment against the real graph would leave the real road's
-	 * stored geometry describing a road nobody built - and it would only show once
-	 * something forced a rebuild.
-	 *
-	 * A Segment snap is split on the copy for real, because a split turns one road into a
-	 * three-arm junction and nothing short of performing it shows that junction's shape.
-	 *
-	 * bValid drives the material's ValidityBlend only. Validity is a parameter rather than
-	 * a mesh variant, so turning a drag red regenerates no geometry at all.
-	 */
+	/** Show the segment a click would build, as real solved pavement. Forwards to Presenter
+	 *  with a FSurfaceSettings built the same way RebuildMesh's is. */
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
 
 	/**
@@ -523,16 +355,15 @@ public:
 	 *
 	 * Public and separated from UpdateGhost so the one property this whole mechanism
 	 * rests on can be asserted in a test with no World: building a preview must leave the
-	 * REAL network bitwise unchanged. That failure is otherwise invisible - the ghost
-	 * looks right either way, and the damage only surfaces later as a road whose stored
-	 * cut vertices describe a segment nobody built.
+	 * REAL network bitwise unchanged. Forwards to Presenter.
 	 */
 	bool BuildGhostBuffers(int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers);
 
-	/** Hide the preview and forget what it was showing. */
+	/** Hide the preview and forget what it was showing. Forwards to Presenter. */
 	virtual void HideGhost() override;
 
-	/** A live node's handle from its slot index, or false if it is not live. */
+	/** A live node's handle from its slot index, or false if it is not live. Forwards to
+	 *  the facade. */
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 
 	/**
@@ -554,18 +385,8 @@ public:
 
 	/**
 	 * DIAGNOSTIC ONLY. Hold vertex colours at a constant - and, as a side effect nobody
-	 * would guess, stop the real material rendering at all.
-	 *
-	 * Any ColorOverrideMode other than None makes FBaseDynamicMeshSceneProxy set
-	 * ForceOverrideMaterial to the engine's vertex-colour debug material, which then
-	 * replaces SurfaceMaterial for every buffer set. So this does not tint the surface;
-	 * it substitutes a different material entirely and shows a flat constant colour with
-	 * no texture, whatever SurfaceMaterial says.
-	 *
-	 * Default false, because true means "do not render the material you asked for". It
-	 * stays available because it is a genuine way to prove geometry reaches the screen
-	 * when the material is suspect - just never mistake the result for the material
-	 * working.
+	 * would guess, stop the real material rendering at all. See URoadSurfacePresenter and
+	 * FDynamicMeshSink for what this actually does to the scene proxy.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside")
 	bool bUseConstantVertexColour = false;
@@ -574,12 +395,6 @@ public:
 	 * Deliberately far narrower than a real taxiway's 2300 uu. A corner needs roughly
 	 * five times the road's width in segment length before its fillet has room to be a
 	 * curve rather than a clamped-away stub.
-	 *
-	 * 23 m and a 15 m fillet - a real taxiway, matching the debug gallery - since a real
-	 * airframe arrived. At the old 2 m the Piper's 13.1 m wingspan was six times the width
-	 * of the road it was taxiing down, which reads as a broken model rather than as a
-	 * placeholder road. Roads must now be drawn a few thousand uu a click to avoid the
-	 * solver clamping their fillets away, which is what an airport is anyway.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
 	double FallbackWidth = 2300.0;
@@ -601,6 +416,16 @@ public:
 	TObjectPtr<UDynamicMeshComponent> ApronComponent;
 
 	/**
+	 * Name -> material for the road surface's profile bands. Null renders exactly as
+	 * before: one material, every triangle id 0.
+	 *
+	 * A DataAsset rather than a table edited here, because this actor lives in a level
+	 * that is deliberately never saved - see URoadMaterialSet.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TObjectPtr<URoadMaterialSet> MaterialSet;
+
+	/**
 	 * Concrete for the aprons. Defaults to M_ApronConcrete.
 	 *
 	 * A material of its own rather than the road's, and not only for realism: while an
@@ -611,28 +436,12 @@ public:
 	 * the component the engine default - which is WorldGridMaterial, the same checker the
 	 * template floor wears. That degrades quietly, and quiet is the problem.
 	 */
-	/**
-	 * Name -> material for the road surface's profile bands. Null renders exactly as
-	 * before: one material, every triangle id 0.
-	 *
-	 * A DataAsset rather than a table edited here, because this actor lives in a level
-	 * that is deliberately never saved - see URoadMaterialSet.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
-	TObjectPtr<URoadMaterialSet> MaterialSet;
-
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	TObjectPtr<UMaterialInterface> ApronMaterial;
 
 	/**
 	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
 	 * effect nobody would guess, stop ApronMaterial rendering at all.
-	 *
-	 * The same trap as bUseConstantVertexColour: any ColorOverrideMode other than None
-	 * makes the scene proxy substitute the engine's vertex-colour debug material, so this
-	 * does not tint the concrete, it replaces it. Which is exactly what makes it useful -
-	 * it is the fastest way to answer "is the apron on screen at all", because a flat
-	 * unmissable colour cannot be confused with the ground or with the road.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	bool bUseConstantApronColour = false;
@@ -641,10 +450,7 @@ public:
 	 * Draw every apron triangle as debug lines.
 	 *
 	 * The same ground truth bDebugDrawMesh gives the roads: the same buffers reaching the
-	 * screen by a completely separate route. If these lines land where the outline was
-	 * drawn and the concrete does not, the fault is in the component, the material or the
-	 * view - never the geometry. If the lines are wrong too, every conclusion drawn from
-	 * triangle counts so far needs revisiting.
+	 * screen by a completely separate route.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	bool bDebugDrawAprons = false;
@@ -652,29 +458,13 @@ public:
 	/**
 	 * MOST the aprons sit below the road surface, in uu. Not a fixed drop - see
 	 * GetApronSurfaceZ.
-	 *
-	 * Below, not above: a taxiway crossing an apron should win the depth test, which is
-	 * also how it reads in life - the taxiway is painted onto the apron. Coplanar would
-	 * z-fight, and the two surfaces genuinely do overlap wherever a road runs onto a stand.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron", meta = (ClampMin = "0.0"))
 	double ApronZOffset = 4.0;
 
 	/**
-	 * Height the apron surface is actually built at.
-	 *
-	 * ApronZOffset is a MAXIMUM, not a fixed drop: the apron never descends more than
-	 * halfway from the road to the ground plane. A fixed drop silently assumes the road has
-	 * headroom, and with SurfaceZ at 1 a 4 uu drop put the concrete at Z = -3 - rendering
-	 * correctly, normals up, material bound, and buried under the ground where nothing
-	 * about it looked wrong.
-	 *
-	 * Halfway rather than clamped at zero because zero is where the ground is: an apron
-	 * pinned exactly to it would z-fight with the terrain instead of vanishing under it,
-	 * which trades one silent failure for another.
-	 *
-	 * Public and shared so the mesh, the log and the tests cannot each compute it their
-	 * own way and disagree.
+	 * Height the apron surface is actually built at. Forwards to Presenter, which owns the
+	 * ApronZOffset-as-maximum logic - see URoadSurfacePresenter::GetApronSurfaceZ.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside|Apron")
 	double GetApronSurfaceZ() const;
@@ -698,29 +488,23 @@ public:
 	double GhostZOffset = 2.0;
 
 	/** The graph this actor owns and renders. Readable from Blueprint; mutate it only
-	 *  through the facade above, so every change stays undoable. */
+	 *  through the facade above, so every change stays undoable. Stays on the actor rather
+	 *  than moving to URoadEditFacade because this is what the level actually saves - see
+	 *  that class's header comment. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside") TObjectPtr<URoadNetwork> Network;
 
 	/** IRoadEditTarget accessor for Network - see the property's own comment. */
 	virtual const URoadNetwork* GetNetwork() const override { return Network; }
 
 	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
-	 *  rather than the Command layer design spec 7.3 specifies. */
+	 *  rather than the Command layer design spec 7.3 specifies. Stays on the actor for the
+	 *  same saved-with-the-level reason as Network. */
 	UPROPERTY() TObjectPtr<URoadEditHistory> History;
 
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
 
-	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
-	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;
-
-	/**
-	 * Transient, and that is the whole point: agents never reach disk.
-	 *
-	 * UPROPERTY regardless, because View is a UObject pointer and an agent that the
-	 * garbage collector cannot see is an agent whose cube is collected out from under it.
-	 */
 	/**
 	 * How long an arrival sits at the stand before the engine stops, seconds.
 	 *
@@ -729,37 +513,40 @@ private:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside") double ShutdownPauseSeconds = 10.0;
 
+	/**
+	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
+	 * through a journey, not a fact about the airport: putting them in the network would
+	 * snapshot them into every undo Memento and serialise them into the saved level, so
+	 * re-opening a map would restore half-driven cubes that no longer have a route.
+	 * TEMPORARY: moves to UAirsideTraffic in issue #32's next step.
+	 */
 	UPROPERTY(Transient) TArray<FAgentSlot> Agents;
 
-	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
-
-	// What the ghost currently shows. A drag holds still for most frames, and rebuilding
-	// an unchanged preview means duplicating the network and re-solving it every frame for
-	// an identical result.
-	int32 LastGhostFrom = INDEX_NONE;
-	FVector2D LastGhostTo = FVector2D::ZeroVector;
-	ERoadSnapKind LastGhostKind = ERoadSnapKind::Free;
-	bool bLastGhostValid = true;
-	bool bGhostVisible = false;
-
-	/** The authored profile if there is one, otherwise the on-demand fallback. */
 	/**
-	 * The authored value if there is one, else the configured content default.
-	 *
-	 * READ-ONLY, and that is the whole point of them. These replaced a single
-	 * ApplyContentDefaults that FILLED each property when it found it null - which looked
-	 * harmless and was not: these are EditAnywhere properties on an actor that rebuilds at
-	 * design time, so the fill landed on the level and was saved. An airport deliberately
-	 * left on a single material acquired a material set it never asked for, permanently, and
-	 * clearing it by hand only lasted until the next rebuild.
-	 *
-	 * It is the same defect ResolveProfile had, and this was the original of it. A resolver
-	 * that writes what it resolves has turned a setting into a cache.
-	 *
-	 * PUBLIC because the authored value alone no longer answers "what will this actor use" -
-	 * a test or a tool that read the property directly would see null and conclude nothing was
-	 * configured, which was true of the raw field and false of the actor.
+	 * Everything the road LOOKS like - see URoadSurfacePresenter's own header for the
+	 * pattern and why it is a UObject. CreateDefaultSubobject, not UPROPERTY(Instanced):
+	 * Instanced exists to let an EDITABLE subobject property be swapped for a different
+	 * instance or class in the Details panel and archetype-propagate across Blueprint
+	 * children, none of which applies here - this is never exposed as EditAnywhere, is
+	 * always exactly URoadSurfacePresenter, and every actor of this class needs its own
+	 * (never shared, the way a CDO's own default subobject would be if nothing constructed
+	 * a fresh one). CreateDefaultSubobject already gives it that, plus reachability through
+	 * this actor's own UPROPERTY for the garbage collector, without inviting an edit this
+	 * class must reject. Transient: nothing it holds is level content - the mesh components
+	 * it draws into are saved on their own UPROPERTYs, and the ghost cache is exactly as
+	 * disposable as it always was.
 	 */
+	UPROPERTY(Transient) TObjectPtr<URoadSurfacePresenter> Presenter;
+
+	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
+	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */
+	UPROPERTY(Transient) TObjectPtr<URoadEditFacade> Facade;
+
+	/** Builds the FSurfaceSettings a rebuild or a ghost update needs from this actor's own
+	 *  Resolve* functions and level-authored tunables. One place, so RebuildMesh and
+	 *  UpdateGhost cannot read the knobs into two different snapshots of the same rebuild. */
+	URoadSurfacePresenter::FSurfaceSettings MakeSurfaceSettings();
+
 public:
 	UMaterialInterface* ResolveSurfaceMaterial() const;
 	UMaterialInterface* ResolveApronMaterial() const;
@@ -768,9 +555,18 @@ public:
 	UEntityDefinition*  ResolveStandDefinition() const;
 
 	/**
+	 * AUTHORED INPUT, READ AND NEVER WRITTEN save for the on-demand fallback cache - see
+	 * the .cpp. Public (moved from private by issue #32): URoadEditFacade::ConnectNodes and
+	 * ::DeleteNode call this directly, in place of the bare member access they used when
+	 * they were part of this class. Still non-const, because it lazily fills RuntimeProfile
+	 * - see ResolveProfileForTest for the const-preserving path a test needs instead.
+	 */
+	URoadProfile* ResolveProfile();
+
+	/**
 	 * ResolveProfile, for the test that guards it. Not for production use.
 	 *
-	 * ResolveProfile is private and non-const because it caches into RuntimeProfile, and
+	 * ResolveProfile is non-const because it caches into RuntimeProfile, and
 	 * Airside.Present.AuthoredPropertiesUntouched has to be able to ask what the actor would
 	 * use without being given the write access that whole test exists to forbid.
 	 */
@@ -778,10 +574,7 @@ public:
 
 	/**
 	 * Triangles currently in the road surface, for Airside.Present.MeshIsFreshAfterLoad.
-	 *
-	 * The mesh is what the user SEES, and the whole of that test is that seeing and
-	 * modelling agree. Counting triangles is the cheapest measure that moves when the
-	 * surface does, and it needs no GeometryFramework dependency in the test module.
+	 * Forwards to Presenter, which is what actually holds MeshComponent's built mesh.
 	 */
 	int32 SurfaceTriangleCountForTest() const;
 
@@ -791,39 +584,7 @@ public:
 	/** The stand definition this actor would use, for the same test. */
 	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
 
-private:
-
-	URoadProfile* ResolveProfile();
-
-	/** Network, creating it on first use. Nothing else in the project makes one yet. */
-	URoadNetwork& EnsureNetwork();
-
-	/** Undo history, created on first use and kept in step with MaxUndoDepth. */
-	URoadEditHistory& EnsureHistory();
-
-	/** Rebuild the apron surface. Separate from the roads, which share none of it. */
-	void RebuildAprons();
-
-	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
-	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
-
-	/**
-	 * The split surgery itself, against any network.
-	 *
-	 * Shared by the real edit and the ghost deliberately. Two implementations of the same
-	 * surgery is precisely how a preview comes to show something the click will not do,
-	 * and that failure is invisible - the ghost looks plausible either way.
-	 */
-	static FRoadNodeId SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Doomed, const FVector2D& At);
-
-	/** Append a solved node's fan to Builder, if that node solved at all. */
-	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
-
-	/** The ghost's material instance, made on first use. Null if GhostMaterial is unset. */
-	UMaterialInstanceDynamic* GhostMaterialInstance();
-
 public:
-
 	/** Absolute world-space Z of the road surface, in uu. Not relative to the actor:
 	 *  the mesh builder emits world-space XY at this Z, and MeshComponent is set to use
 	 *  absolute location/rotation/scale (see the constructor) so those coordinates are
@@ -836,10 +597,6 @@ public:
 	/**
 	 * World units per texture tile for the asphalt. Lower means the texture repeats more
 	 * often, so more visible grain across the road.
-	 *
-	 * At the default 512 a 200 uu road shows less than half of one tile across its whole
-	 * width, which magnifies the texture until it reads as flat colour. Roughly a fifth
-	 * of the road's width is a sane starting point.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0")) double TexelsPerUnit = 512.0;
 
