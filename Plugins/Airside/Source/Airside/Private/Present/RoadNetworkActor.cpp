@@ -1833,193 +1833,34 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 	return World != nullptr && !World->IsGameWorld();
 }
 
-void FRoadAgent::AdvanceEngine(double DeltaSeconds)
-{
-	if (!Engine.IsSet())
-	{
-		// Nothing authored: fall back to the switch this replaced, so an airframe with no
-		// engine figures still shows a turning propeller rather than a stopped one.
-		EngineRPM = bEngineRunning ? 2000.0 : 0.0;
-		return;
-	}
-
-	const double Target = bEngineRunning ? Engine.MaxRPM : 0.0;
-
-	// The rate is the whole travel over the time it takes, so the two seconds figures mean
-	// what they say - idle to governed, and governed to stopped.
-	const double Seconds = bEngineRunning ? Engine.SpoolUpSeconds : Engine.SpoolDownSeconds;
-	const double Rate = Engine.MaxRPM / Seconds;
-
-	// Clamped by the REMAINING error, so the last step lands exactly on the target and the
-	// propeller neither overshoots nor creeps. The same construction the line-up turn and
-	// the flare use.
-	const double Error = Target - EngineRPM;
-	const double MaxStep = Rate * DeltaSeconds;
-	EngineRPM += FMath::Clamp(Error, -MaxStep, MaxStep);
-}
-
-FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
-	double Altitude, double PitchDegrees) const
-{
-	FAgentMotion Motion;
-	Motion.Position = At;
-	Motion.Heading = Heading;
-	Motion.Altitude = Altitude;
-	Motion.PitchDegrees = PitchDegrees;
-
-	// Whichever phase is driving. The follower's speed is meaningless once a departure has
-	// taken over, and the departure's is meaningless before it.
-	Motion.GroundSpeed = bDeparting ? Departure.Speed : Follower.Speed;
-
-	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
-	// turning propeller, which is what this used to get wrong.
-	Motion.bEngineRunning = bEngineRunning;
-
-	// AND WHERE THE PROPELLER HAS GOT TO, which is not the same question - see
-	// FAgentMotion::EngineRPM. The view spins the prop at this, so a shutdown winds down.
-	Motion.EngineRPM = EngineRPM;
-
-	// Off the wheels only once the rotation is finished. The phase already knows, so nothing
-	// here has to infer it from the altitude being above zero.
-	Motion.bAirborne = bDeparting && Departure.Phase == ETakeoffPhase::Climb;
-
-	return Motion;
-}
-
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
+	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
+	// by FRoadAgent::Advance now - see its own comment. This loop is left with exactly one
+	// job: hand the model's answer to the view, and drop an agent once it says Gone.
 	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
-		FRoadAgent& Agent = Agents[Index];
+		FAgentSlot& Slot = Agents[Index];
 
-		FVector2D At;
-		double Heading = 0.0;
-
-		// FIRST, AND OUTSIDE EVERY PHASE. Each branch below can continue out of this loop,
-		// so an engine spooled inside one of them would freeze whenever the aircraft was
-		// doing something else - which is most of the time.
-		Agent.AdvanceEngine(DeltaSeconds);
-
-		// ARRIVING: the landing drives it, and the follower has not started yet. The mirror
-		// of the departure block below, and deliberately first - an agent cannot be doing
-		// both, and asking about the arrival first keeps the two handovers side by side.
-		if (Agent.bArriving)
+		FAgentMotion Motion;
+		if (!Slot.Agent.Advance(DeltaSeconds, Motion))
 		{
-			double Altitude = 0.0;
-			double Pitch = 0.0;
-			if (Agent.Arrival.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
+			// Cleared or otherwise finished - the aircraft has gone, so the actor goes with
+			// it. An agent that stayed in the world would accumulate one per departure,
+			// hanging above the airport for ever.
+			if (Slot.View != nullptr)
 			{
-				if (Agent.View != nullptr)
-				{
-					Agent.View->SetMotion(
-						Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
-				}
-				continue;
-			}
-
-			// VACATED: hand over to the taxi. The route was planned at dispatch - see
-			// DispatchArrival - so this cannot fail here and strand an aircraft on the
-			// runway with nowhere to go.
-			//
-			// Ground.Taxi comes from Agent.Arrival.Ground, NOT Agent.Follower.Ground: the
-			// follower has never been started before this point, so its Ground is still the
-			// struct default (Accel 100, SpeedCap 1000, turn rate 10) rather than the
-			// airframe's figures. The landing is the only phase that was handed the real
-			// FGroundPerformance, so it is the only place to read it from.
-			Agent.bArriving = false;
-			Agent.Follower.Start(Agent.TaxiInPlan, Agent.Arrival.Ground);
-
-			UE_LOG(LogRoadMesh, Log, TEXT("Vacated; taxiing in."));
-			continue;
-		}
-
-		// AIRBORNE: the departure drives it, and the follower is done with it. Two phases,
-		// one at a time - see FTakeoffRun for why they are not one class.
-		if (Agent.bDeparting)
-		{
-			double Altitude = 0.0;
-			double Pitch = 0.0;
-			if (Agent.Departure.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
-			{
-				if (Agent.View != nullptr)
-				{
-					Agent.View->SetMotion(
-						Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
-				}
-				continue;
-			}
-
-			// Cleared. The aircraft has gone, so the actor goes with it - an agent that
-			// climbed away and stayed in the world would accumulate one aircraft per
-			// departure, hanging above the airport for ever.
-			UE_LOG(LogRoadMesh, Log, TEXT("Departure complete, agent despawned"));
-			if (Agent.View != nullptr)
-			{
-				Agent.View->Destroy();
+				Slot.View->Destroy();
 			}
 			Agents.RemoveAt(Index);
 			continue;
 		}
 
-		// Advance is the ONLY thing that decides where an agent is. When it declines - no
-		// route, or a polyline too short to have a direction - the pose is left exactly as
-		// it was. Writing an unset FVector2D through here instead is how this project has
-		// twice put things at the world origin.
-		if (!Agent.Follower.Advance(DeltaSeconds, At, Heading))
+		if (Slot.View != nullptr)
 		{
-			continue;
-		}
-
-		if (Agent.View != nullptr)
-		{
-			Agent.View->SetMotion(Agent.DescribeMotion(At, Heading), SurfaceZ);
-		}
-
-		// PARKED: the taxi is over, so the turnaround starts. Counted rather than acted on
-		// at once, because an engine that stopped the instant the wheels did would look like
-		// a stall - an arriving aircraft sits at the stand with the engine running while the
-		// chocks go in.
-		if (Agent.Follower.HasArrived() && !Agent.bDepartOnArrival)
-		{
-			if (!Agent.bParked)
-			{
-				Agent.bParked = true;
-				Agent.ShutdownCountdown = ShutdownPauseSeconds;
-				UE_LOG(LogRoadMesh, Log,
-					TEXT("Parked. Shutting down in %.0f s."), Agent.ShutdownCountdown);
-			}
-			else if (Agent.ShutdownCountdown > 0.0)
-			{
-				Agent.ShutdownCountdown -= DeltaSeconds;
-				if (Agent.ShutdownCountdown <= 0.0)
-				{
-					Agent.ShutdownCountdown = 0.0;
-
-					// The flag FRoadAgent::bEngineRunning was introduced for - see its
-					// comment, which says a shutdown at the stand is what would clear it.
-					// The propeller stops and the aircraft stays where it is.
-					Agent.bEngineRunning = false;
-					UE_LOG(LogRoadMesh, Log, TEXT("Engine shut down at the stand."));
-
-					if (Agent.View != nullptr)
-					{
-						Agent.View->SetMotion(Agent.DescribeMotion(At, Heading), SurfaceZ);
-					}
-				}
-			}
-		}
-
-		// ARRIVED ON A RUNWAY: hand over. The heading it arrived on is handed across too, so
-		// the line-up turn starts from where the taxi actually left it rather than from a
-		// fresh guess - which is what makes a backtrack read as a backtrack.
-		if (Agent.bDepartOnArrival && Agent.Follower.HasArrived())
-		{
-			Agent.bDepartOnArrival = false;
-			Agent.bDeparting = Agent.Departure.Start(
-				Agent.DepartureThreshold, Agent.DepartureDirection, Agent.DepartureRunwayLength,
-				Agent.Follower.Ground, Agent.DepartureClimb, Heading);
+			Slot.View->SetMotion(Motion, SurfaceZ);
 		}
 	}
 }
@@ -2156,52 +1997,58 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 		VacateAt = FVector2D::DotProduct(ExitNode->Position - Threshold, Direction);
 	}
 
+	// One struct holding every fact about this aeroplane - see FAirframe - so the landing,
+	// the taxi and a later departure are guaranteed to read the SAME Ground figures rather
+	// than three copies that could disagree. That disagreement is exactly what issue #27
+	// was: the taxi read Follower.Ground, which nothing had ever set to Ground's argument.
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Approach = Approach;
+	Airframe.Engine = Engine;
+	Airframe.Wingspan = Wingspan;
+
 	FRoadAgent Agent;
-	if (!Agent.Arrival.Start(Threshold, Direction, Length, Ground, Climb, Approach, VacateAt))
+	if (!Agent.StartArrival(Threshold, Direction, Length, Airframe, VacateAt, Best))
 	{
 		// FLandingRun has already logged why. Nothing spawns: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.
 		return false;
 	}
 
-	Agent.bArriving = true;
-	Agent.bEngineRunning = true;
-	Agent.Engine = Engine;
-
-	// ALREADY TURNING. An arrival appears on final with its engine running - spooling up from
-	// stopped would show a Meridian gliding down the approach with a dead propeller.
-	Agent.EngineRPM = Engine.MaxRPM;
-	Agent.TaxiInPlan = Best;
+	// FRoadAgent is world-free and cannot read this actor's UPROPERTY for itself, so the
+	// pause is copied in at dispatch - the only time the two ever need to meet.
+	Agent.ShutdownPause = ShutdownPauseSeconds;
 
 	FActorSpawnParameters Params;
 	Params.Owner = this;
 	Params.ObjectFlags |= RF_Transient;
 
-	Agent.View = World->SpawnActor<ARoadAgentActor>(
+	FAgentSlot Slot;
+	Slot.View = World->SpawnActor<ARoadAgentActor>(
 		FVector::ZeroVector, FRotator::ZeroRotator, Params);
-	if (Agent.View == nullptr)
+	if (Slot.View == nullptr)
 	{
 		return false;
 	}
 
-	// The airframe is pushed in, like the pose - see DispatchAgent for what fetching it by
-	// path cost.
+	// The airframe MESH is pushed in, like the pose - see DispatchAgent for what fetching it
+	// by path cost. Not to be confused with the FAirframe struct above, which is the model's
+	// performance figures rather than the view's asset.
 	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 	{
-		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
+		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
 			Content->AgentAnimClass.LoadSynchronous());
 	}
 
 	// Posed before its first tick, at the far end of final and in the air, so it never
-	// appears at the origin for a frame - this project's most-repeated bug.
+	// appears at the origin for a frame - this project's most-repeated bug. Zero delta asks
+	// Advance for where the arrival starts without moving it.
 	{
-		FVector2D At;
-		double Heading = 0.0;
-		double Altitude = 0.0;
-		double Pitch = 0.0;
-		if (Agent.Arrival.Advance(0.0, At, Heading, Altitude, Pitch))
+		FAgentMotion Motion;
+		if (Agent.Advance(0.0, Motion))
 		{
-			Agent.View->SetMotion(Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
+			Slot.View->SetMotion(Motion, SurfaceZ);
 		}
 	}
 
@@ -2211,7 +2058,8 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 		*RunwayDesignator::ToPairText(Direction), Length, Needed,
 		Exits.IndexOfByKey(BestExit) + 1, Exits.Num(), Best.Length);
 
-	Agents.Add(MoveTemp(Agent));
+	Slot.Agent = MoveTemp(Agent);
+	Agents.Add(MoveTemp(Slot));
 	return true;
 }
 
@@ -2240,17 +2088,17 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	// asks to, so allowing the spawn without that would have left a cube frozen at its
 	// start - which is a worse lie than no cube at all.
 
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Engine = Engine;
+
 	FRoadAgent Agent;
-	Agent.Follower.Start(Plan, Ground);
+	Agent.StartTaxi(Plan, Airframe);
 
-	// It was dispatched, so it is running. The turnaround at the end of an arrival is what
-	// clears this now.
-	Agent.bEngineRunning = true;
-	Agent.Engine = Engine;
-
-	// FROM COLD, deliberately: a departure is dispatched at a stand, so the propeller spools
-	// up as it starts to taxi, which is the thing that was asked for.
-	Agent.EngineRPM = 0.0;
+	// FRoadAgent is world-free and cannot read this actor's UPROPERTY for itself, so the
+	// pause is copied in at dispatch - the only time the two ever need to meet.
+	Agent.ShutdownPause = ShutdownPauseSeconds;
 
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
 	// is a fact about the network and the last polyline point is the only thing that knows
@@ -2263,11 +2111,7 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 		double Length = 0.0;
 		if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length))
 		{
-			Agent.bDepartOnArrival = true;
-			Agent.DepartureThreshold = Threshold;
-			Agent.DepartureDirection = Direction;
-			Agent.DepartureRunwayLength = Length;
-			Agent.DepartureClimb = Climb;
+			Agent.ArmDeparture(Threshold, Direction, Length);
 
 			UE_LOG(LogRoadMesh, Log,
 				TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
@@ -2279,9 +2123,10 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	Params.Owner = this;
 	Params.ObjectFlags |= RF_Transient;
 
-	Agent.View = World->SpawnActor<ARoadAgentActor>(
+	FAgentSlot Slot;
+	Slot.View = World->SpawnActor<ARoadAgentActor>(
 		FVector::ZeroVector, FRotator::ZeroRotator, Params);
-	if (Agent.View == nullptr)
+	if (Slot.View == nullptr)
 	{
 		return false;
 	}
@@ -2290,41 +2135,33 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	// how a content move turned every aircraft into a cube - see ARoadAgentActor::SetAirframe.
 	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 	{
-		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
+		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
 			Content->AgentAnimClass.LoadSynchronous());
 	}
 
-	// Posed before the first tick, so it appears at its start rather than at the origin
-	// for one frame.
-	{
-		// Placed before its first tick so it never appears at the origin for a frame - this
-		// project's most-repeated bug. Stationary, so nothing is turning yet.
-		FAgentMotion Spawn;
-		Spawn.Position = Plan.Polyline[0];
-		Agent.View->SetMotion(Spawn, SurfaceZ);
-	}
-
-	FVector2D At;
-	double Heading = 0.0;
-	if (Agent.Follower.Advance(0.0, At, Heading))
+	// Posed before the first tick, so it appears at its start rather than at the origin for
+	// one frame. Zero delta asks Advance for where the taxi starts without moving it; the
+	// fallback FRoadAgent::StartTaxi left in LastMotion covers a plan too short to advance.
 	{
 		FAgentMotion Motion;
-		Motion.Position = At;
-		Motion.Heading = Heading;
-		Agent.View->SetMotion(Motion, SurfaceZ);
+		if (Agent.Advance(0.0, Motion))
+		{
+			Slot.View->SetMotion(Motion, SurfaceZ);
+		}
 	}
 
-	Agents.Add(Agent);
+	Slot.Agent = MoveTemp(Agent);
+	Agents.Add(MoveTemp(Slot));
 	return true;
 }
 
 void ARoadNetworkActor::ClearAgents()
 {
-	for (FRoadAgent& Agent : Agents)
+	for (FAgentSlot& Slot : Agents)
 	{
-		if (Agent.View != nullptr)
+		if (Slot.View != nullptr)
 		{
-			Agent.View->Destroy();
+			Slot.View->Destroy();
 		}
 	}
 

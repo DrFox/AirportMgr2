@@ -84,6 +84,24 @@ public:
 	/** How this type's propeller spools up and down. */
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
 
+	/**
+	 * The four performance structs plus Wingspan, bundled - see FAirframe for why.
+	 *
+	 * Assembled on demand rather than stored, because the four already live here as the
+	 * authored source of truth; a cached FAirframe would be a second place they could drift
+	 * out of step with what a designer edited.
+	 */
+	FAirframe Airframe() const
+	{
+		FAirframe Out;
+		Out.Ground = Ground;
+		Out.Climb = Climb;
+		Out.Approach = Approach;
+		Out.Engine = Engine;
+		Out.Wingspan = Footprint.Wingspan;
+		return Out;
+	}
+
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
 

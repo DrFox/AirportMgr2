@@ -469,6 +469,32 @@ struct AIRSIDE_API FApproachPerformance
 	}
 };
 
+/**
+ * Every fact about one aeroplane that a dispatch needs, bundled - not four parameters.
+ *
+ * FRoadAgent used to be handed Ground, Climb, Approach and Engine as four separate
+ * arguments (plus a bare Wingspan), which is how #27 happened: the VACATED handover read
+ * Agent.Follower.Ground instead of Agent.Arrival.Ground, and nothing forced the two to be
+ * the same figure because they were never the same PARAMETER. One struct means an agent
+ * that is taxiing, landing or departing is always reading facts about the SAME aeroplane,
+ * because there is only one place they could have come from.
+ *
+ * Wingspan travels with the other four despite living on FEntityFootprint on the type,
+ * because a route search needs it in the same breath it needs Ground - see
+ * UAircraftType::Airframe.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FAirframe
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere) FGroundPerformance Ground;
+	UPROPERTY(EditAnywhere) FClimbPerformance Climb;
+	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
+	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
+	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
+};
+
 /** A connection point between an entity and the guideline graph, in the entity's local space. */
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FEntityAnchor
