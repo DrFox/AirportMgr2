@@ -396,6 +396,16 @@ int32 ARoadNetworkActor::AgentCountForTest() const
 	return Traffic->GetAgentCount();
 }
 
+EAgentPhase ARoadNetworkActor::LastAgentPhaseForTest() const
+{
+	return Traffic->LastAgentPhaseForTest();
+}
+
+double ARoadNetworkActor::LastAgentTaxiSpeedCapForTest() const
+{
+	return Traffic->LastAgentTaxiSpeedCapForTest();
+}
+
 FRoutePlan ARoadNetworkActor::FindRoute(
 	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan) const
 {
