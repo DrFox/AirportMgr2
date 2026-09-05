@@ -82,6 +82,19 @@ bool FRoadAgent::StartArrival(const FVector2D& Threshold, const FVector2D& Direc
 	// from stopped would show it gliding down the approach with a dead propeller.
 	EngineRPM = InAirframe.Engine.MaxRPM;
 
+	// SEEDED FROM THE APPROACH'S OWN STARTING POSE, the same rule StartTaxi follows for
+	// Polyline[0]: a caller that reads LastMotion before the first real Advance must see
+	// where the arrival actually begins, never the FVector2D default - the "world origin"
+	// bug this field exists to prevent. A zero-second Advance costs nothing (every term in
+	// FLandingRun::Advance multiplies by DeltaSeconds) and returns exactly the pose Start()
+	// just computed, via the same DescribeMotion call the real Arriving branch uses.
+	FVector2D At = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	double Altitude = 0.0;
+	double Pitch = 0.0;
+	Arrival.Advance(0.0, At, Heading, Altitude, Pitch);
+	LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
+
 	return true;
 }
 
@@ -189,10 +202,13 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 					Phase = EAgentPhase::Departing;
 					UE_LOG(LogRoadAgent, Log, TEXT("Taxi complete; rolling for departure."));
 				}
-				// Declined (see FTakeoffRun::Start): stays Taxiing rather than driving off
-				// a runway it cannot use. This route was validated before dispatch, so it
-				// is not expected to happen, but "stay put" is a safer failure than "fly
-				// anyway" if it ever does.
+				// Declined (see FTakeoffRun::Start): bDepartureArmed is already cleared
+				// above, so this does NOT stay Taxiing indefinitely - the follower has
+				// already arrived, so the very next Advance re-checks HasArrived(), finds
+				// bDepartureArmed false, and takes the PARKED branch below instead. This
+				// route was validated before dispatch, so it is not expected to happen,
+				// but parking one frame late is a safer failure than flying a departure
+				// that just refused itself.
 			}
 			else
 			{
@@ -204,6 +220,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// while the chocks go in.
 				Phase = EAgentPhase::Parked;
 				ShutdownCountdown = ShutdownPause;
+
+				// ZEROED HERE: the Parked branch below never calls Follower.Advance again, so
+				// its Speed would otherwise sit at whatever the last taxiing tick left it at
+				// FOR EVER - and DescribeMotion reads exactly that field as GroundSpeed
+				// regardless of phase, so a parked aircraft would report itself still rolling.
+				Follower.Speed = 0.0;
 				UE_LOG(LogRoadAgent, Log,
 					TEXT("Parked. Shutting down in %.0f s."), ShutdownCountdown);
 			}

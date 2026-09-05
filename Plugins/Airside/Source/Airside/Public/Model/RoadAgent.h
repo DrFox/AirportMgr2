@@ -92,13 +92,26 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() FAirframe Airframe;
 
-	/** Drives Phase == Arriving. */
+	/**
+	 * Drives Phase == Arriving.
+	 *
+	 * THE HANDOVER RUNS THE OPPOSITE WAY ROUND FROM A DEPARTURE, which is the whole reason
+	 * both exist as separate structs rather than as modes: a departure is the follower then
+	 * FTakeoffRun, an arrival is FLandingRun then the follower. FRoadAgent owns the switch
+	 * and neither phase knows the other exists.
+	 */
 	UPROPERTY() FLandingRun Arrival;
 
 	/** Drives Phase == Taxiing. */
 	UPROPERTY() FRouteFollower Follower;
 
-	/** Drives Phase == Departing. */
+	/**
+	 * Drives Phase == Departing.
+	 *
+	 * A SECOND MOTION PHASE rather than a mode inside the follower - see FTakeoffRun.
+	 * FRoadAgent owns which of the two is driving it, so neither has to know the other
+	 * exists.
+	 */
 	UPROPERTY() FTakeoffRun Departure;
 
 	/** The route to fly once an arrival has vacated. Planned at dispatch, so a landing
@@ -108,7 +121,14 @@ struct AIRSIDE_API FRoadAgent
 	/** What to fly once the current taxi ends, if anything. See FDepartureOrder. */
 	UPROPERTY() FDepartureOrder DepartureOrder;
 
-	/** Armed at dispatch when the route's goal was a runway threshold. */
+	/**
+	 * Armed at dispatch when the route's goal was a runway threshold.
+	 *
+	 * A BOOL BESIDE THE STRUCT, not TOptional<FDepartureOrder>: TOptional is not
+	 * UHT-reflectable, and every FRoadAgent field must be a UPROPERTY because FRoadAgent
+	 * itself lives inside a UPROPERTY TArray (ARoadNetworkActor::Agents) that only
+	 * serializes what UHT can see.
+	 */
 	UPROPERTY() bool bDepartureArmed = false;
 
 	/**
@@ -116,6 +136,11 @@ struct AIRSIDE_API FRoadAgent
 	 * orthogonal to Phase, because an engine can run in ANY phase: idling while parked and
 	 * taxiing, at full power while departing, even while arriving (an arrival appears on
 	 * final with it already turning). See FEnginePerformance for the RPM this commands.
+	 *
+	 * THIS WAS ONCE INFERRED FROM MOVEMENT - the propeller stopped whenever the aircraft
+	 * did - which was wrong at both ends: an aircraft holding short with its engine idling
+	 * is the commonest thing on an airport, and one that had actually shut down could not
+	 * be expressed at all. The answer here is STATE, not a guess made from the speed.
 	 */
 	UPROPERTY() bool bEngineRunning = false;
 

@@ -218,8 +218,17 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the engine is still running the instant it parks - the chocks are not "
 		"in yet"), Agent.bEngineRunning);
 
-	// Advance to just short of the pause: still running.
-	double Elapsed = 0.0;
+	// Tick once more, now safely inside the Parked branch: the follower is never advanced
+	// again once parked, so without zeroing its Speed on entry, GroundSpeed would keep
+	// reporting whatever the last taxiing tick left it at, for ever - a parked aircraft
+	// that claims to still be rolling.
+	Agent.Advance(Step, Motion);
+	TestEqual(TEXT("GroundSpeed reads zero once parked, not the follower's stale taxi speed"),
+		Motion.GroundSpeed, 0.0);
+
+	// Advance to just short of the pause: still running. Elapsed starts at Step, not zero -
+	// the GroundSpeed check above already spent one tick of the countdown.
+	double Elapsed = Step;
 	while (Elapsed < Pause - Step)
 	{
 		Agent.Advance(Step, Motion);
