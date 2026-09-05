@@ -61,10 +61,6 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	bool bPropIsDisc = false;
 
-	/** Propeller speed while the engine runs, RPM. */
-	UPROPERTY(EditDefaultsOnly, Category = "Airside")
-	float PropellerRPM = 2000.0f;
-
 	/**
 	 * Main wheel radius, uu. Divides ground speed to give the wheel's turn rate.
 	 *

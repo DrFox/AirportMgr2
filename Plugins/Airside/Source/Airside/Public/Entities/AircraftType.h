@@ -81,6 +81,9 @@ public:
 	/** How this type flies an approach. Its arrival declines if this is not authored. */
 	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
 
+	/** How this type's propeller spools up and down. */
+	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
+
 	/** The footprint as plan-view line segments in LOCAL space; pairs of points. */
 	static void BuildFootprintLines(const FEntityFootprint& Footprint, TArray<FVector2D>& OutSegments);
 
@@ -138,4 +141,7 @@ public:
 
 	/** The Meridian's approach and flare, for the same reason again. */
 	static FApproachPerformance PiperMeridianApproach();
+
+	/** The Meridian's propeller spool rates, for the same reason again. */
+	static FEnginePerformance PiperMeridianEngine();
 };

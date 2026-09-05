@@ -123,6 +123,26 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() bool bEngineRunning = false;
 
+	/** This airframe's spool rates. */
+	UPROPERTY() FEnginePerformance Engine;
+
+	/**
+	 * Where the propeller has actually got to, RPM.
+	 *
+	 * Trails bEngineRunning rather than following it - see FEnginePerformance. Advanced by
+	 * AdvanceEngine every frame, whichever phase happens to be driving the aircraft.
+	 */
+	UPROPERTY() double EngineRPM = 0.0;
+
+	/**
+	 * Spools the propeller one frame toward whatever the engine has been commanded to do.
+	 *
+	 * Separate from the phase advance because it happens in ALL of them - taxiing, rolling,
+	 * climbing, parked - and an engine that only spooled while one of them was driving would
+	 * stop dead the moment an aircraft changed phase.
+	 */
+	void AdvanceEngine(double DeltaSeconds);
+
 	/**
 	 * What to show for this agent right now: where it is, and what it is doing.
 	 *
@@ -273,10 +293,11 @@ public:
 	 */
 	bool DispatchArrival(const FVector2D& Near, const FGroundPerformance& Ground,
 		const FClimbPerformance& Climb, const FApproachPerformance& Approach,
-		double Wingspan = 0.0);
+		const FEnginePerformance& Engine = FEnginePerformance(), double Wingspan = 0.0);
 
 	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-		const FClimbPerformance& Climb = FClimbPerformance());
+		const FClimbPerformance& Climb = FClimbPerformance(),
+		const FEnginePerformance& Engine = FEnginePerformance());
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")

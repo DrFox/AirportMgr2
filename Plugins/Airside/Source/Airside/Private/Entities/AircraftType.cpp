@@ -210,6 +210,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->Ground = PiperMeridianGround();
 	Type->Climb = PiperMeridianClimb();
 	Type->Approach = PiperMeridianApproach();
+	Type->Engine = PiperMeridianEngine();
 }
 
 FClimbPerformance UAircraftType::PiperMeridianClimb()
@@ -321,6 +322,25 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 	Ground.Landing.Accel = 100.0;
 
 	return Ground;
+}
+
+FEnginePerformance UAircraftType::PiperMeridianEngine()
+{
+	FEnginePerformance Engine;
+
+	// A PT6A turns its propeller at 2000 RPM governed, which is where the disc threshold in
+	// UAirsideAgentAnim came from.
+	Engine.MaxRPM = 2000.0;
+
+	// A free-turbine start is unhurried - the gas generator comes up first and the propeller
+	// follows it.
+	Engine.SpoolUpSeconds = 4.0;
+
+	// Longer, because nothing is driving it: the blades go to feather and windmill down. See
+	// FEnginePerformance for why the asymmetry is the point rather than an oversight.
+	Engine.SpoolDownSeconds = 9.0;
+
+	return Engine;
 }
 
 FApproachPerformance UAircraftType::PiperMeridianApproach()

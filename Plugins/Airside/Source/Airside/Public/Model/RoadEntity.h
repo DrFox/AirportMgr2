@@ -137,6 +137,15 @@ struct AIRSIDE_API FAgentMotion
 	/** The propeller turns. True whenever the aircraft is under way at all. */
 	UPROPERTY() bool bEngineRunning = false;
 
+	/**
+	 * How fast the propeller is actually turning, RPM.
+	 *
+	 * NOT derivable from bEngineRunning, which is why both are here. That flag is what the
+	 * engine has been COMMANDED to do; this is where the propeller has got to, and between a
+	 * shutdown and a stopped prop there are nine seconds where they disagree.
+	 */
+	UPROPERTY() double EngineRPM = 0.0;
+
 	/** Off the wheels. Stage 2's gear retraction hangs on this. */
 	UPROPERTY() bool bAirborne = false;
 };
@@ -237,6 +246,44 @@ struct AIRSIDE_API FClimbPerformance
  *
  * Distances are uu, and a uu is a centimetre.
  */
+/**
+ * How the engine spools up and down.
+ *
+ * A PROPELLER HAS INERTIA. The RPM was a switch - full or nothing - so the disc appeared the
+ * instant the aircraft was dispatched and vanished the instant it shut down. A turbine takes
+ * several seconds to come up to speed and the propeller windmills down over rather longer,
+ * and the asymmetry is the visible part: it is what makes a shutdown read as a shutdown.
+ *
+ * In the MODEL rather than in the animation blueprint, for the reason FAgentMotion gives:
+ * the view decides nothing, and RPM is a fact about the engine. Keeping it here also makes
+ * it a thing a test can measure, which an anim instance is not.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FEnginePerformance
+{
+	GENERATED_BODY()
+
+	/** Governed propeller speed, RPM. */
+	UPROPERTY(EditAnywhere) double MaxRPM = 2000.0;
+
+	/** Idle to governed speed, seconds. */
+	UPROPERTY(EditAnywhere) double SpoolUpSeconds = 4.0;
+
+	/**
+	 * Governed speed to stopped, seconds.
+	 *
+	 * LONGER THAN SPOOLING UP, and deliberately: coming up is the engine driving the
+	 * propeller, going down is only drag stopping it. A symmetric figure looks like a brake
+	 * being applied to the prop.
+	 */
+	UPROPERTY(EditAnywhere) double SpoolDownSeconds = 9.0;
+
+	bool IsSet() const
+	{
+		return MaxRPM > 0.0 && SpoolUpSeconds > 0.0 && SpoolDownSeconds > 0.0;
+	}
+};
+
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FGroundPerformance
 {

@@ -253,7 +253,8 @@ void ARoadBuildController::OnLandAircraft()
 	Target->DispatchArrival(Cursor,
 		UAircraftType::PiperMeridianGround(),
 		UAircraftType::PiperMeridianClimb(),
-		UAircraftType::PiperMeridianApproach());
+		UAircraftType::PiperMeridianApproach(),
+		UAircraftType::PiperMeridianEngine());
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
