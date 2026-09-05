@@ -37,6 +37,21 @@ FRotator FBuildCameraRig::CameraRotation() const
 	return FRotator(-PitchDegrees(), Yaw, 0.0);
 }
 
+FBuildCameraRig FBuildCameraRig::InFrame(const FVector2D& Origin, double HeadingDegrees) const
+{
+	const double HeadingRadians = FMath::DegreesToRadians(HeadingDegrees);
+
+	// The same basis Pan uses: nose along the heading, right wing a quarter turn on from
+	// it in Unreal's left-handed sense.
+	const FVector2D Nose(FMath::Cos(HeadingRadians), FMath::Sin(HeadingRadians));
+	const FVector2D Wing(-FMath::Sin(HeadingRadians), FMath::Cos(HeadingRadians));
+
+	FBuildCameraRig World = *this;
+	World.Focus = Origin + Nose * Focus.X + Wing * Focus.Y;
+	World.Yaw = HeadingDegrees + Yaw;
+	return World;
+}
+
 void FBuildCameraRig::Zoom(double Step, double Notches)
 {
 	Distance = FMath::Clamp(

@@ -66,6 +66,20 @@ struct FBuildCameraRig
 
 	FRotator CameraRotation() const;
 
+	/**
+	 * This rig re-expressed in world space, treating its Focus and Yaw as RELATIVE to a
+	 * frame at Origin facing HeadingDegrees: Focus.X is ahead of the nose, Focus.Y is off
+	 * the right wing, Yaw is measured from the heading. Limits and distance carry across.
+	 *
+	 * The watch camera keeps its state in the aircraft's frame and projects with this each
+	 * frame. Storing the state in world space instead would mean re-deriving "beside the
+	 * aircraft" after every degree of turn, and easing a world-space focus towards a moving
+	 * aircraft lags behind it - which reads as the camera failing to keep up, not as
+	 * smoothing. In the relative frame the aircraft's own motion is rigid and only the
+	 * player's inputs are eased, which is the split that feels right.
+	 */
+	FBuildCameraRig InFrame(const FVector2D& Origin, double HeadingDegrees) const;
+
 	// --- Input -----------------------------------------------------------------------
 
 	/** Multiply the distance by (1 + Step) per notch, and clamp. */
