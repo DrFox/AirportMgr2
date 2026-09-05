@@ -76,7 +76,7 @@ struct AIRSIDE_API FDepartureOrder
  * park and depart correctly" is testable by calling Advance in a loop with no actor, no
  * world and no view - see Airside.Model.RoadAgent.
  *
- * Runtime only. See ARoadNetworkActor::Agents and FAgentSlot for why the view that renders
+ * Runtime only. See UAirsideTraffic::Agents and FAgentSlot for why the view that renders
  * this is a separate, Present-layer field rather than living here.
  */
 USTRUCT()
@@ -126,7 +126,7 @@ struct AIRSIDE_API FRoadAgent
 	 *
 	 * A BOOL BESIDE THE STRUCT, not TOptional<FDepartureOrder>: TOptional is not
 	 * UHT-reflectable, and every FRoadAgent field must be a UPROPERTY because FRoadAgent
-	 * itself lives inside a UPROPERTY TArray (ARoadNetworkActor::Agents) that only
+	 * itself lives inside a UPROPERTY TArray (UAirsideTraffic::Agents) that only
 	 * serializes what UHT can see.
 	 */
 	UPROPERTY() bool bDepartureArmed = false;

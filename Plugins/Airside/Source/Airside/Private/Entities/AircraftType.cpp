@@ -191,7 +191,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	// constant at the call site.
 	Type->Footprint.NoseX = 385.1;
 	Type->Footprint.TailX = -531.5;
-	Type->Footprint.Wingspan = 1311.0;   // 43 ft 0 in, published, and the import asserts it
+	Type->Footprint.Wingspan = PiperMeridianWingspan();   // 43 ft 0 in, published, and the import asserts it
 
 	// The mains are ON the wing, which is why the axle sits essentially under the spar.
 	Type->Footprint.WingX = 0.0;
@@ -341,6 +341,15 @@ FEnginePerformance UAircraftType::PiperMeridianEngine()
 	Engine.SpoolDownSeconds = 9.0;
 
 	return Engine;
+}
+
+double UAircraftType::PiperMeridianWingspan()
+{
+	// 43 ft 0 in, published, and the import asserts it - the SAME figure BuildPiperMeridian
+	// writes onto Footprint.Wingspan, so a route with no design aircraft to ask (see
+	// PiperMeridianGround's own comment) gets the real Meridian's wingspan rather than the
+	// FAirframe struct default.
+	return 1311.0;
 }
 
 FApproachPerformance UAircraftType::PiperMeridianApproach()

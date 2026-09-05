@@ -258,7 +258,7 @@ bool RoadGeom::SegmentsCross(const FVector2D& A0, const FVector2D& A1,
 }
 
 bool RoadGeom::RayToPlaneZ(const FVector& Origin, const FVector& Direction, double PlaneZ,
-	double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy)
+	double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy, double* OutDistance)
 {
 	// One place to set OutWhy and return, so a new guard cannot add a way to refuse
 	// without also saying why - which is the whole reason OutWhy exists.
@@ -278,6 +278,14 @@ bool RoadGeom::RayToPlaneZ(const FVector& Origin, const FVector& Direction, doub
 	}
 
 	const double Distance = (PlaneZ - Origin.Z) / Direction.Z;
+
+	// Written as soon as a distance exists, ahead of the two guards below that may still
+	// refuse on it - a BeyondMaxDistance refusal wants the actual distance to log, not
+	// just the cap it tripped.
+	if (OutDistance != nullptr)
+	{
+		*OutDistance = Distance;
+	}
 
 	// Behind the origin. Without this a ray aimed away from the plane would resolve to its
 	// mirror image on the far side, rather than refusing.

@@ -10,7 +10,7 @@ struct FRoadMeshBuffers;
 struct FRoadSolveResult;
 
 /**
- * The diagnostic census ARoadNetworkActor::RebuildMesh logs after every rebuild.
+ * The diagnostic census URoadSurfacePresenter::Rebuild logs after every rebuild.
  *
  * Pulled out of RebuildMesh because the census - profile counts, the material slot list,
  * the distinct material ids the builder produced, the profile names in use, and the final

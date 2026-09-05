@@ -129,8 +129,8 @@ void FRouteTool::OnClick(const FToolContext& Context)
 
 	if (LastPlan.IsValid())
 	{
-		// Refused in an editor world, deliberately - the route still draws there. See
-		// ARoadNetworkActor::DispatchAgent.
+		// Accepted in an editor world, deliberately - see UAirsideTraffic::DispatchAgent's
+		// own comment for why refusing it there used to make the tool look broken.
 		Context.Target->DispatchAgent(LastPlan, Airframe);
 	}
 }

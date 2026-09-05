@@ -289,8 +289,13 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
 
 	RoadGeom::ERayToPlaneRefusal Why = RoadGeom::ERayToPlaneRefusal::None;
-	if (RoadGeom::RayToPlaneZ(Origin, Direction, Target->SurfaceZ, Furthest, OutPosition, &Why))
+	double Distance = 0.0;
+	if (RoadGeom::RayToPlaneZ(Origin, Direction, Target->SurfaceZ, Furthest, OutPosition, &Why, &Distance))
 	{
+		// The one place a good hit is recorded, so every refusal path below - and
+		// MakeToolContext, which cannot afford to skip a frame - can fall back to where
+		// the cursor last actually was.
+		LastPlaneHit = OutPosition;
 		return true;
 	}
 
@@ -312,8 +317,8 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 
 		case RoadGeom::ERayToPlaneRefusal::BeyondMaxDistance:
 			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the road plane is past %.0f uu away there (%.1fx the view)."),
-				Furthest, MaxPlaceDistanceFactor);
+				TEXT("Click ignored: the road plane is past %.0f uu away there (%.1fx the view, actual %.0f uu)."),
+				Furthest, MaxPlaceDistanceFactor, Distance);
 			break;
 
 		case RoadGeom::ERayToPlaneRefusal::None:
@@ -398,7 +403,14 @@ bool ARoadBuildController::IsRemoveHeld() const
 
 FToolContext ARoadBuildController::MakeToolContext() const
 {
-	FVector2D PlaneHit;
+	// Runs every PlayerTick, so a frame where the cursor is off the plane (above the
+	// horizon, say) cannot simply skip building a context - the ghost and the snap chain
+	// still need a position. Fall back to the last good hit rather than an unwritten
+	// FVector2D: before this, CursorOnRoadPlane's failure paths left PlaneHit exactly as
+	// its default constructor did (uninitialised), so a refused frame fed garbage into
+	// Session.MakeContext -> ResolveSnap -> SnapChain.Resolve. Same fallback
+	// URoadBuildEditorTool::MakeContext already uses with HoverPosition.
+	FVector2D PlaneHit = LastPlaneHit;
 	CursorOnRoadPlane(PlaneHit);
 
 	// Read fresh every call rather than cached, so a details-panel edit to PickRadius and

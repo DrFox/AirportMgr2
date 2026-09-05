@@ -162,4 +162,14 @@ public:
 
 	/** The Meridian's propeller spool rates, for the same reason again. */
 	static FEnginePerformance PiperMeridianEngine();
+
+	/**
+	 * The Meridian's wingspan on its own, without needing a UAircraftType.
+	 *
+	 * Same reason PiperMeridianGround exists: UAirsideSettings::ResolveDefaultAirframe's
+	 * fallback builds an FAirframe with no UAircraftType to read Footprint.Wingspan from,
+	 * and this is the one place the 1311.0 figure is written down, so the fallback and
+	 * BuildPiperMeridian's own footprint cannot drift apart the way two copies would.
+	 */
+	static double PiperMeridianWingspan();
 };

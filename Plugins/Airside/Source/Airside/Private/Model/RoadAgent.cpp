@@ -145,7 +145,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		}
 
 		// VACATED: hand over to the taxi. The route was planned at dispatch - see
-		// ARoadNetworkActor::DispatchArrival - so this cannot fail here and strand an
+		// UAirsideTraffic::DispatchArrival - so this cannot fail here and strand an
 		// aircraft on the runway with nowhere to go.
 		//
 		// Started from Airframe.Ground, NOT Follower.Ground: the follower has never been
@@ -259,7 +259,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 			return true;
 		}
 
-		// Cleared. The aircraft has gone - see ARoadNetworkActor::Tick for why the caller
+		// Cleared. The aircraft has gone - see UAirsideTraffic::Advance for why the caller
 		// destroys the view and drops the agent the moment this returns false.
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Departure complete, agent despawned"));
 		Phase = EAgentPhase::Gone;

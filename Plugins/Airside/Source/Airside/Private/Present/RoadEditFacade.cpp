@@ -76,9 +76,10 @@ double URoadEditFacade::GetMinimumRunwayLength() const
 
 const UEntityDefinition* URoadEditFacade::GetStandDefinition() const
 {
-	// The RAW field, not ResolveStandDefinition()'s content-default fallback - see
-	// ARoadNetworkActor::GetStandDefinition's own comment for why that distinction matters.
-	return Actor().StandDefinition;
+	// RESOLVED, not the raw field: PlaceStand places from ResolveStandDefinition()'s
+	// content-default fallback, so the preview a tool draws from this must resolve the
+	// SAME object or the two can disagree about what a click will actually place.
+	return Actor().ResolveStandDefinition();
 }
 
 void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)

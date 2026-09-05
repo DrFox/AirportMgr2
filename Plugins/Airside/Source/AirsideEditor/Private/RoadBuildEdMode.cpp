@@ -79,6 +79,11 @@ void URoadBuildEdMode::Enter()
 	// FRoadBuildEdModeCommands::ToolCommandsInOrder() is a hand-written UI_COMMAND list, a
 	// separate thing from ToolRegistry(), so this is the one place left that has to check
 	// the two agree rather than being able to assume it.
+	//
+	// A RUNTIME check, not an automation test, and that is a real gap rather than a stylistic
+	// choice: AirsideTests does not depend on AirsideEditor (Model/Present/Tool are tested
+	// world-free with no editor module loaded at all), so nothing short of opening this mode
+	// exercises FRoadBuildEdModeCommands. This log line is what stands in for that test.
 	if (ToolCommands.Num() != Registry.Num())
 	{
 		UE_LOG(LogRoadBuildMode, Error,
@@ -91,6 +96,20 @@ void URoadBuildEdMode::Enter()
 	FString Banner;
 	for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), Registry.Num()); ++Index)
 	{
+		// COUNT alone does not catch a reordering - six of each, wrongly paired, still
+		// passes the check above. Identity does: a command's label is a human-authored
+		// UI_COMMAND string, so it names which tool the palette THINKS index Index is,
+		// independent of the FKey/Make lambda the registry entry actually carries.
+		if (const TSharedPtr<FUICommandInfo>& Command = ToolCommands[Index];
+			Command.IsValid() && !Command->GetLabel().EqualTo(Registry[Index].Name))
+		{
+			UE_LOG(LogRoadBuildMode, Error,
+				TEXT("Tool %d: command label \"%s\" does not match registry name \"%s\" - ")
+				TEXT("FRoadBuildEdModeCommands::ToolCommandsInOrder and ToolRegistry() have ")
+				TEXT("drifted out of order."),
+				Index, *Command->GetLabel().ToString(), *Registry[Index].Name.ToString());
+		}
+
 		URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(this);
 		Builder->ToolIndex = Index;
 		RegisterTool(ToolCommands[Index], MakeToolName(Index), Builder);

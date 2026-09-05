@@ -109,6 +109,29 @@ public:
 	 */
 	void Advance(float DeltaSeconds, double SurfaceZ);
 
+	/**
+	 * The newest agent's Phase, for Airside.Present.ArrivalDispatch - which drives a real
+	 * Tick loop and needs to see it move Arriving -> Taxiing -> Parked, not just that the
+	 * agent still exists. EAgentPhase::Gone when there is no newest agent: the same phase an
+	 * agent itself ends in, which reads correctly as "nothing here to ask" either way.
+	 */
+	EAgentPhase LastAgentPhaseForTest() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().Agent.Phase : EAgentPhase::Gone;
+	}
+
+	/**
+	 * The newest agent's OWN taxi speed cap, for the same test - reading FRoadAgent::
+	 * Follower::Ground rather than the FAirframe the caller dispatched with, so this proves
+	 * the handover in FRoadAgent::Advance (Airframe.Ground copied into the follower at the
+	 * VACATED handover) actually reached the struct that drives the taxi, not merely that
+	 * DispatchArrival was handed the right number.
+	 */
+	double LastAgentTaxiSpeedCapForTest() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().Agent.Follower.Ground.Taxi.SpeedCap : 0.0;
+	}
+
 private:
 	/**
 	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
