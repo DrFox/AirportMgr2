@@ -23,6 +23,10 @@
       "Enabled": true
     },
     {
+      "Name": "AirportOps",
+      "Enabled": true
+    },
+    {
       "Name": "PythonScriptPlugin",
       "Enabled": true,
       "TargetAllowList": [

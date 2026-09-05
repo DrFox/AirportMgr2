@@ -8,9 +8,10 @@ public class AirportMgr : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		// Airside: the game module drives the road facade. The dependency runs this way
-		// only - the plugin never depends on the game.
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Airside" });
+		// Airside: the game module drives the road facade. AirportOps: the game module drives
+		// the sim clock and save/load. Both dependencies run this way only - neither plugin
+		// ever depends on the game, and AirportOps depends on Airside, never the reverse.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Airside", "AirportOps" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 
