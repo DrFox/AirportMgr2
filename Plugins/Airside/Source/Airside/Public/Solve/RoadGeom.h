@@ -165,7 +165,13 @@ namespace RoadGeom
 	 * refusal (the controller's CursorOnRoadPlane, which needs the reason but not the
 	 * plugin's business logging it) reads that back instead of re-running this function's
 	 * own arithmetic a second time to guess.
+	 *
+	 * OutDistance, when given, is written on every path where a distance was computed -
+	 * BehindOrigin, BeyondMaxDistance and success - but left untouched on Parallel, where
+	 * there is none to report. Lets a BeyondMaxDistance log say how far past the cap the
+	 * click actually landed, instead of only naming the cap it exceeded.
 	 */
 	AIRSIDE_API bool RayToPlaneZ(const FVector& Origin, const FVector& Direction, double PlaneZ,
-		double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy = nullptr);
+		double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy = nullptr,
+		double* OutDistance = nullptr);
 }
