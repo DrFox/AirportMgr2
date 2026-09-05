@@ -152,30 +152,14 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and an aircraft exists as a result"),
 		Actor->AgentCountForTest(), Before + 1);
 
-	// 3. THE FOLLOWER TAXIS ON THE AIRFRAME'S GROUND PERFORMANCE, NOT THE STRUCT DEFAULT.
-	//
-	//    Issue #27: the VACATED handover in Tick started the follower from its own
-	//    (never-set) Ground instead of Agent.Arrival.Ground, so every arrival taxied in at
-	//    Accel 100 / SpeedCap 1000 / turn rate 10 whatever the airframe actually does.
-	//
-	//    Ticked in a BOUNDED LOOP rather than a fixed frame count: a landing plus a taxi is
-	//    dozens of simulated seconds, and hard-coding that would make the test as fragile as
-	//    the numbers it exercises. LastAgentHasVacatedForTest says when to stop instead.
-	{
-		constexpr int32 MaxTicks = 6000;
-		int32 Ticks = 0;
-		while (!Actor->LastAgentHasVacatedForTest() && Ticks < MaxTicks)
-		{
-			Actor->Tick(0.1f);
-			++Ticks;
-		}
-
-		TestTrue(TEXT("the arrival vacates the runway within the bounded loop"),
-			Actor->LastAgentHasVacatedForTest());
-		TestEqual(TEXT("and the follower taxis on the airframe's ground performance handed "
-			"to the landing, not the struct default the follower would otherwise start with"),
-			Actor->LastAgentFollowerGroundForTest().Taxi.SpeedCap, 1234.0);
-	}
+	// 3. THE FOLLOWER TAXIS ON THE AIRFRAME'S GROUND PERFORMANCE, NOT THE STRUCT DEFAULT -
+	//    issue #27, and issue #28's own reason for existing: with FAirframe as ONE struct
+	//    handed to FRoadAgent::StartArrival and read again from it at the VACATED handover
+	//    (Airframe.Ground, never Follower.Ground), the two literally cannot disagree any
+	//    more. That property is now asserted world-free in Airside.Model.RoadAgent, which is
+	//    what let the world-bound accessors this block used
+	//    (LastAgentHasVacatedForTest / LastAgentFollowerGroundForTest) be deleted - this test
+	//    keeps only what needs a world: that dispatch itself succeeds.
 
 	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
 	//    arrival that cannot be completed must leave nothing frozen on final.

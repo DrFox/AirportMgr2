@@ -1,6 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
-#include "Present/RoadNetworkActor.h"
+#include "Model/RoadAgent.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -56,7 +56,7 @@ bool FAgentMotionTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("taxiing, the follower's speed is the one that counts"),
 			Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).GroundSpeed, 800.0);
 
-		Agent.bDeparting = true;
+		Agent.Phase = EAgentPhase::Departing;
 		TestEqual(TEXT("departing, the take-off run's speed is"),
 			Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).GroundSpeed, 4400.0);
 	}
@@ -67,7 +67,7 @@ bool FAgentMotionTest::RunTest(const FString& Parameters)
 	{
 		FRoadAgent Agent;
 		Agent.bEngineRunning = true;
-		Agent.bDeparting = true;
+		Agent.Phase = EAgentPhase::Departing;
 
 		Agent.Departure.Phase = ETakeoffPhase::Roll;
 		TestFalse(TEXT("rolling is not airborne"),
@@ -87,7 +87,7 @@ bool FAgentMotionTest::RunTest(const FString& Parameters)
 	{
 		FRoadAgent Agent;
 		Agent.bEngineRunning = true;
-		Agent.bDeparting = false;
+		Agent.Phase = EAgentPhase::Taxiing;
 		Agent.Departure.Phase = ETakeoffPhase::Climb;
 
 		TestFalse(TEXT("an armed but inactive departure leaves the aircraft on the ground"),
