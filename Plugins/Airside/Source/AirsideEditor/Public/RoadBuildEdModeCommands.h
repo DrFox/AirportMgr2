@@ -20,6 +20,14 @@ public:
 	TSharedPtr<FUICommandInfo> FindRoutes;
 
 	/**
+	 * Issue #33: the editor previously had four tools against the runtime's six, with no
+	 * way to draw a guideline link or lay a runway outside PIE. One command per
+	 * ToolRegistry() entry now, in the same order, so the two cannot drift apart again.
+	 */
+	TSharedPtr<FUICommandInfo> DrawGuidelines;
+	TSharedPtr<FUICommandInfo> PlaceRunways;
+
+	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.
 	 *
 	 * Exists because RIGHT-CLICK CANNOT DO THIS IN THE EDITOR. At runtime right-click

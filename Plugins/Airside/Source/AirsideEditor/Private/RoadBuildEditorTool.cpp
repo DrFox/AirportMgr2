@@ -10,11 +10,8 @@
 #include "Present/RoadNetworkActor.h"
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
-#include "Tool/ApronDrawTool.h"
+#include "Solve/RoadGeom.h"
 #include "Tool/GuidelineOverlay.h"
-#include "Tool/RoadDrawTool.h"
-#include "Tool/RouteTool.h"
-#include "Tool/StandPlaceTool.h"
 #include "Tool/StandPreview.h"
 #include "ToolContextInterfaces.h"
 
@@ -137,7 +134,7 @@ namespace
 UInteractiveTool* URoadBuildEditorToolBuilder::BuildTool(const FToolBuilderState& SceneState) const
 {
 	URoadBuildEditorTool* Tool = NewObject<URoadBuildEditorTool>(SceneState.ToolManager);
-	Tool->SetKind(Kind);
+	Tool->SetToolIndex(ToolIndex);
 	return Tool;
 }
 
@@ -145,19 +142,14 @@ void URoadBuildEditorTool::Setup()
 {
 	UInteractiveTool::Setup();
 
-	switch (Kind)
-	{
-	case ERoadBuildToolKind::Apron: Build = MakeUnique<FApronDrawTool>(); break;
-	case ERoadBuildToolKind::Stand: Build = MakeUnique<FStandPlaceTool>(); break;
-	case ERoadBuildToolKind::Route: Build = MakeUnique<FRouteTool>(); break;
-	case ERoadBuildToolKind::Road:
-	default:                        Build = MakeUnique<FRoadDrawTool>(); break;
-	}
+	// Session is constructed with all six registry tools already - see FBuildSession's
+	// constructor - so selecting this instance's one is a switch, not a make.
+	Session.SelectTool(ToolIndex);
 
 	Target = ResolveTarget();
 
 	UE_LOG(LogTemp, Log, TEXT("Airside ed tool active: %s, target %s"),
-		*Build->GetDisplayName().ToString(),
+		Session.GetActiveTool() != nullptr ? *Session.GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),
 		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
 
 	UClickDragInputBehavior* Drag = NewObject<UClickDragInputBehavior>(this);
@@ -183,11 +175,10 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 	// Leaving the tool abandons whatever it had part-drawn, exactly as switching tools does
 	// at runtime. A chain resumed after a mode change would be a click landing on something
 	// begun before the user went away.
-	if (Build.IsValid() && Target != nullptr)
+	if (IBuildTool* Tool = Session.GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
-		Build->OnDeactivate(MakeHoverContext());
+		Tool->OnDeactivate(MakeHoverContext());
 	}
-	Build.Reset();
 
 	UInteractiveTool::Shutdown(ShutdownType);
 }
@@ -208,25 +199,21 @@ ARoadNetworkActor* URoadBuildEditorTool::ResolveTarget() const
 
 bool URoadBuildEditorTool::RayToPlane(const FRay& Ray, FVector2D& OutPosition) const
 {
-	if (Target == nullptr || FMath::IsNearlyZero(Ray.Direction.Z))
+	if (Target == nullptr)
 	{
 		return false;
 	}
 
-	const double Distance = (Target->SurfaceZ - Ray.Origin.Z) / Ray.Direction.Z;
-	if (Distance <= 0.0)
-	{
-		// Behind the camera, or above the horizon. Under an editor camera looking up at the
-		// sky this is most of the screen, so it is a refusal rather than a rarity.
-		return false;
-	}
-
-	const FVector Hit = Ray.Origin + Ray.Direction * Distance;
-	OutPosition = FVector2D(Hit.X, Hit.Y);
-	return true;
+	// No max-distance guard, unlike the runtime driver's CursorOnRoadPlane: that guard is
+	// measured against the build camera's "current view distance", a concept this editor
+	// tool has no equivalent of (ViewWorldWidth is a WIDTH, not a distance, and is only
+	// refreshed in Render). An effectively infinite cap keeps this call refusing only for
+	// the two reasons it always did - parallel, or behind the camera.
+	return RoadGeom::RayToPlaneZ(Ray.Origin, Ray.Direction, Target->SurfaceZ,
+		TNumericLimits<double>::Max(), OutPosition);
 }
 
-FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
+FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At)
 {
 	// Resolve the ray HERE, where a miss can fall back honestly. There is deliberately no
 	// "no ray" sentinel: FRay() defaults its direction to (0,0,1), which points straight
@@ -240,45 +227,28 @@ FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
 	return MakeContextAt(Plane);
 }
 
-FToolContext URoadBuildEditorTool::MakeHoverContext() const
+FToolContext URoadBuildEditorTool::MakeHoverContext()
 {
 	return MakeContextAt(HoverPosition);
 }
 
-FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
+FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane)
 {
-	FToolContext Context;
-	Context.Target = Target;
-
 	// How close counts as "on" something has to be a screen distance, not a world one.
 	// At the fixed 150 uu default, closing an apron meant clicking within 1.5 m of its
-	// first corner - unhittable when zoomed out over a runway.
-	Context.SnapRadius = FMath::Max(150.0, ViewWorldWidth * 0.02);
-	Context.bRemoveModifier = bRemoveHeld;
-	Context.bInsertModifier = bInsertHeld;
+	// first corner - unhittable when zoomed out over a runway. Pushed into Session before
+	// asking it to resolve and build, rather than passed as an argument MakeContext has no
+	// room for (its signature is shared with the runtime driver's call) - the same "push
+	// the tunable, then act" shape ARoadBuildController::MakeToolContext uses.
+	const double SnapRadius = FMath::Max(150.0, ViewWorldWidth * 0.02);
+	Session.ToolPickRadius = SnapRadius;
+	Session.Snap.NodeRadius = SnapRadius;
+	Session.Snap.SegmentRadius = SnapRadius;
 
-	// The same snap chain the runtime tool uses, over the same graph. Resolved here rather
-	// than inside the tool so both drivers hand it the same shape of answer.
-	//
 	// Through SetCursor, like the runtime driver, so the raw hit and the snapped answer
 	// cannot drift into meaning the same thing in one driver and different things in the
-	// other - which they did, and only this one was right.
-	FRoadSnapResult Snapped;
-	Snapped.Position = Plane;
-
-	if (Target != nullptr && Target->Network != nullptr)
-	{
-		FRoadSnapSettings Settings;
-		Settings.NodeRadius = Context.SnapRadius;
-		Settings.SegmentRadius = Context.SnapRadius;
-
-		static const FRoadSnapChain Chain;
-		Snapped = Chain.Resolve(*Target->Network, Plane, Settings);
-	}
-
-	Context.SetCursor(Plane, Snapped);
-
-	return Context;
+	// other - which they did, and only one of them was right.
+	return Session.MakeContext(Target, Plane, bRemoveHeld, bInsertHeld);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
@@ -312,7 +282,8 @@ void URoadBuildEditorTool::OnClickPress(const FInputDeviceRay& PressPos)
 
 void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 {
-	if (!bPressed || !Build.IsValid())
+	IBuildTool* Tool = Session.GetActiveTool();
+	if (!bPressed || Tool == nullptr)
 	{
 		return;
 	}
@@ -336,15 +307,16 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 			Target->Network->Modify();
 		}
 
-		Build->OnDragBegin(MakeContext(DragPos));
+		Tool->OnDragBegin(MakeContext(DragPos));
 	}
 
-	Build->OnDrag(MakeContext(DragPos));
+	Tool->OnDrag(MakeContext(DragPos));
 }
 
 void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 {
-	if (!bPressed || !Build.IsValid())
+	IBuildTool* Tool = Session.GetActiveTool();
+	if (!bPressed || Tool == nullptr)
 	{
 		bPressed = false;
 		return;
@@ -358,7 +330,7 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 
 	if (bWasDragging)
 	{
-		Build->OnDragEnd(MakeContext(ReleasePos));
+		Tool->OnDragEnd(MakeContext(ReleasePos));
 		GEditor->EndTransaction();
 		return;
 	}
@@ -372,7 +344,7 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 		Target->Network->Modify();
 	}
 
-	Build->OnClick(MakeContext(ReleasePos));
+	Tool->OnClick(MakeContext(ReleasePos));
 	GEditor->EndTransaction();
 }
 
@@ -383,9 +355,9 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 		// Escape during a drag. Cancel the transaction rather than committing a half-aimed
 		// stand, and tell the tool so it drops whatever it was holding.
 		GEditor->CancelTransaction(0);
-		if (Build.IsValid())
+		if (IBuildTool* Tool = Session.GetActiveTool())
 		{
-			Build->OnCancel(MakeHoverContext());
+			Tool->OnCancel(MakeHoverContext());
 		}
 	}
 
@@ -403,9 +375,9 @@ bool URoadBuildEditorTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 {
 	bHoverValid = RayToPlane(DevicePos.WorldRay, HoverPosition);
 
-	if (Build.IsValid() && Target != nullptr)
+	if (IBuildTool* Tool = Session.GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
-		Build->Tick(MakeContext(DevicePos));
+		Tool->Tick(MakeContext(DevicePos));
 	}
 	return true;
 }
@@ -456,7 +428,8 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 
 void URoadBuildEditorTool::CancelGesture()
 {
-	if (!Build.IsValid() || Target == nullptr)
+	IBuildTool* Tool = Session.GetActiveTool();
+	if (Tool == nullptr || Target == nullptr)
 	{
 		return;
 	}
@@ -470,7 +443,7 @@ void URoadBuildEditorTool::CancelGesture()
 		Target->Network->Modify();
 	}
 
-	Build->OnCancel(MakeHoverContext());
+	Tool->OnCancel(MakeHoverContext());
 	GEditor->EndTransaction();
 
 	bPressed = false;
@@ -479,7 +452,8 @@ void URoadBuildEditorTool::CancelGesture()
 
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
-	if (!Build.IsValid() || Target == nullptr || RenderAPI == nullptr)
+	IBuildTool* Tool = Session.GetActiveTool();
+	if (Tool == nullptr || Target == nullptr || RenderAPI == nullptr)
 	{
 		return;
 	}
@@ -536,7 +510,7 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	// idle marker was drawing a corner at the world origin.
 	if (bHoverValid)
 	{
-		Build->BuildPreview(MakeHoverContext(), Sink);
+		Tool->BuildPreview(MakeHoverContext(), Sink);
 	}
 
 }

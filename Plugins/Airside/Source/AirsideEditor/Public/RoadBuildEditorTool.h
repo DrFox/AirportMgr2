@@ -4,27 +4,18 @@
 #include "InteractiveTool.h"
 #include "InteractiveToolBuilder.h"
 #include "BaseBehaviors/BehaviorTargetInterfaces.h"
+#include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
 #include "RoadBuildEditorTool.generated.h"
 
 class ARoadNetworkActor;
 
-/** Which IBuildTool a builder should wrap. */
-UENUM()
-enum class ERoadBuildToolKind : uint8
-{
-	Road,
-	Apron,
-	Stand,
-	Route,
-};
-
 /**
- * Makes one adapter around one build tool.
- *
- * A single builder class parameterised by kind rather than three near-identical ones: what
- * differs between them is one line, and three classes to say it would be three places for
- * the wiring to drift.
+ * Makes one adapter around one build tool, named by its index into ToolRegistry() rather
+ * than a `Kind` enum - see issue #33. A single builder class parameterised by index rather
+ * than one per tool: what differs between them is one number, and one class per tool would
+ * be one more place for the registry and the editor to drift, which is the class of bug
+ * this whole table exists to make impossible.
  */
 UCLASS()
 class URoadBuildEditorToolBuilder : public UInteractiveToolBuilder
@@ -33,7 +24,7 @@ class URoadBuildEditorToolBuilder : public UInteractiveToolBuilder
 
 public:
 	UPROPERTY()
-	ERoadBuildToolKind Kind = ERoadBuildToolKind::Road;
+	int32 ToolIndex = 0;
 
 	virtual bool CanBuildTool(const FToolBuilderState& SceneState) const override { return true; }
 	virtual UInteractiveTool* BuildTool(const FToolBuilderState& SceneState) const override;
@@ -65,7 +56,7 @@ class URoadBuildEditorTool : public UInteractiveTool, public IClickDragBehaviorT
 	GENERATED_BODY()
 
 public:
-	void SetKind(ERoadBuildToolKind InKind) { Kind = InKind; }
+	void SetToolIndex(int32 InToolIndex) { ToolIndex = InToolIndex; }
 
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
@@ -105,8 +96,13 @@ private:
 	/** Where a ray meets the road plane. False when it is parallel or points away. */
 	bool RayToPlane(const FRay& Ray, FVector2D& OutPosition) const;
 
-	/** Everything the tool needs to judge this position, built fresh each event. */
-	FToolContext MakeContext(const FInputDeviceRay& At) const;
+	/**
+	 * Everything the tool needs to judge this position, built fresh each event.
+	 *
+	 * Not const: it pushes the current view-relative snap radius into Session before
+	 * asking Session to build the context - see MakeContextAt.
+	 */
+	FToolContext MakeContext(const FInputDeviceRay& At);
 
 	/**
 	 * Context for the last known cursor, for callers that have no ray - Render, cancel,
@@ -116,18 +112,25 @@ private:
 	 * its direction to (0,0,1), so it hit the road plane at the world origin and reported
 	 * SUCCESS, and every preview was drawn against (0,0) while the model stayed correct.
 	 */
-	FToolContext MakeHoverContext() const;
+	FToolContext MakeHoverContext();
 
 	/** The shared body of both: everything that follows from a plane position. */
-	FToolContext MakeContextAt(const FVector2D& Plane) const;
+	FToolContext MakeContextAt(const FVector2D& Plane);
 
 	/** The network actor in the editor world, created if the level has none. */
 	ARoadNetworkActor* ResolveTarget() const;
 
-	ERoadBuildToolKind Kind = ERoadBuildToolKind::Road;
+	int32 ToolIndex = 0;
 
-	/** The shared behaviour. Owned here; the framework owns this object. */
-	TUniquePtr<IBuildTool> Build;
+	/**
+	 * The tool this instance wraps, and the snap/placement rules a click is judged against -
+	 * see FBuildSession. Session.Tools holds all six registry entries, of which only the one
+	 * at ToolIndex is ever asked for: wasteful in tool COUNT, cheap in reality, since these
+	 * are small state machines with nothing expensive to construct. The alternative - a
+	 * second, editor-only way to make just one - is exactly the kind of second copy issue
+	 * #33 exists to remove.
+	 */
+	FBuildSession Session;
 
 	UPROPERTY()
 	TObjectPtr<ARoadNetworkActor> Target;
