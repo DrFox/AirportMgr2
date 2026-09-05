@@ -12,8 +12,10 @@
  * real editor world and save with the level, which is what makes an airport authorable at
  * all rather than a thing you rebuild every session.
  *
- * It registers three tools, one per IBuildTool, keyed 1, 2 and 3 to match the runtime
- * shortcuts. Nothing about what a click MEANS lives here - that is all in the shared tools.
+ * It registers one tool per ToolRegistry() entry, keyed 1 through 6 to match the runtime
+ * shortcuts - see issue #33, which added the guideline and runway tools here; before it
+ * this mode stopped at four, and the two build drivers had quietly drifted apart. Nothing
+ * about what a click MEANS lives here - that is all in the shared tools.
  */
 UCLASS()
 class URoadBuildEdMode : public UEdMode
@@ -23,11 +25,6 @@ class URoadBuildEdMode : public UEdMode
 public:
 	const static FEditorModeID EM_RoadBuild;
 
-	static FString RoadToolName;
-	static FString ApronToolName;
-	static FString StandToolName;
-	static FString RouteToolName;
-
 	URoadBuildEdMode();
 
 	virtual void Enter() override;
@@ -36,6 +33,17 @@ public:
 	virtual void BindCommands() override;
 
 private:
+	/**
+	 * The registered ITF tool name for ToolRegistry()[Index] - "Airside_Road" and so on.
+	 *
+	 * A pure function of the registry rather than a static array filled in during Enter():
+	 * UEdMode::Enter() calls BindCommands() - virtual, so it reaches THIS class's override -
+	 * before returning to run the rest of URoadBuildEdMode::Enter() where the tools get
+	 * registered. An array populated there would still be empty the first time BindCommands
+	 * asked it for a name.
+	 */
+	static FString MakeToolName(int32 Index);
+
 	/** Escape: tell whichever build tool is active to drop what it was holding. */
 	void CancelActiveGesture();
 

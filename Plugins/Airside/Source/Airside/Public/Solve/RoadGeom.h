@@ -129,4 +129,43 @@ namespace RoadGeom
 
 	/** Sample an arc from TangentA to TangentB about Centre, inclusive of both ends. */
 	AIRSIDE_API void SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVector2D>& OutPoints);
+
+	/** Which of RayToPlaneZ's three guards refused, or None on success. */
+	enum class ERayToPlaneRefusal : uint8
+	{
+		None,
+
+		/** Direction nearly parallel to the plane: no intersection to find. */
+		Parallel,
+
+		/** The plane sits behind Origin along Direction (Distance <= 0). */
+		BehindOrigin,
+
+		/** Distance > MaxDistance. */
+		BeyondMaxDistance,
+	};
+
+	/**
+	 * Where a ray meets the horizontal plane Z == PlaneZ, as an XY position.
+	 *
+	 * The one 3D function in an otherwise 2D file: both build drivers pick the road plane
+	 * with a ray from the camera, and until issue #33 each carried its own copy of this
+	 * maths (ARoadBuildController::CursorOnRoadPlane, URoadBuildEditorTool::RayToPlane) -
+	 * one of the two things this file exists to stop.
+	 *
+	 * Refuses three ways, in order: Direction nearly parallel to the plane (no intersection
+	 * to find); the plane behind Origin along Direction (Distance <= 0 - without this a
+	 * click on the sky would land on the plane's mirror image); and Distance > MaxDistance,
+	 * because near the horizon the ray is almost parallel to the plane and the distance
+	 * runs away toward infinity, so a click a few pixels too high would land kilometres out.
+	 * Pass a very large MaxDistance to opt out of the third guard, as the editor tool does -
+	 * it has no notion of "current view distance" to measure a cap against.
+	 *
+	 * OutWhy, when given, names which guard tripped - so a caller that wants to LOG a
+	 * refusal (the controller's CursorOnRoadPlane, which needs the reason but not the
+	 * plugin's business logging it) reads that back instead of re-running this function's
+	 * own arithmetic a second time to guess.
+	 */
+	AIRSIDE_API bool RayToPlaneZ(const FVector& Origin, const FVector& Direction, double PlaneZ,
+		double MaxDistance, FVector2D& OutXY, ERayToPlaneRefusal* OutWhy = nullptr);
 }
