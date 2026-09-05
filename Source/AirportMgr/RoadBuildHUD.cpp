@@ -7,6 +7,9 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
+#include "Model/SimClock.h"
+#include "Present/OpsRuntime.h"
+#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 #include "Tool/GuidelineOverlay.h"
@@ -66,6 +69,19 @@ void ARoadBuildHUD::DrawHUD()
 		{
 			DrawText(Tool->GetDisplayName().ToString(), PendingColour, 24.0f, 24.0f,
 				GEngine->GetSmallFont(), 1.3f);
+
+			// The clock, under the tool name and on the same toggle: one corner for "what
+			// am I doing and when". Absent in the editor mode, which has no game instance.
+			if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+			{
+				const USimClock* Clock = Runtime->GetClock();
+				const int32 Hour = static_cast<int32>(Clock->TimeOfDay() / 3600.0);
+				const int32 Minute = static_cast<int32>(FMath::Fmod(Clock->TimeOfDay(), 3600.0) / 60.0);
+				const FString Line = FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
+					Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
+					Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""));
+				DrawText(Line, PendingColour, 24.0f, 48.0f, GEngine->GetSmallFont(), 1.1f);
+			}
 		}
 	}
 }

@@ -359,7 +359,9 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	Traffic->Advance(DeltaSeconds, SurfaceZ);
+	// Scaled HERE, at the one place real frame time becomes agent time, so nothing below
+	// this line ever learns there is a speed setting. See SetSimTimeScale.
+	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)

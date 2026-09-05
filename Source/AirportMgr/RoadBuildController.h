@@ -262,6 +262,17 @@ private:
 	void OnUndo();
 	void OnRedo();
 
+	/**
+	 * Sim clock and save: Comma slower, Period faster, P pause; F5 save, F9 load. Reach the
+	 * AirportOps runtime through the game instance, so they work only in play - the editor
+	 * mode has no game instance and its own driver, and these keys log that when pressed.
+	 */
+	void OnSpeedDown();
+	void OnSpeedUp();
+	void OnTogglePause();
+	void OnQuickSave();
+	void OnQuickLoad();
+
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
 

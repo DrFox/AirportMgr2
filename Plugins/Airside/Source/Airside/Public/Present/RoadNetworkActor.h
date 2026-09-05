@@ -133,6 +133,16 @@ public:
 	 */
 	UAirsideTraffic* GetTraffic() const { return Traffic; }
 
+	/**
+	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
+	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
+	 * compression - see USimClock's class comment for why the two are different numbers.
+	 * Transient and runtime-only: it is a fact about the current session's speed setting,
+	 * not about the level, so it must not be saved into the map or a game save.
+	 */
+	void SetSimTimeScale(double Scale) { SimTimeScale = FMath::Max(0.0, Scale); }
+	double GetSimTimeScale() const { return SimTimeScale; }
+
 	/** Route between two guideline nodes over the network this actor owns. Forwards to the
 	 *  facade, so a tool, a Blueprint and the HUD all ask the same question of the same
 	 *  graph rather than three of them reaching past it. */
@@ -527,6 +537,9 @@ private:
 	/** Agents and dispatch - see UAirsideTraffic's own header. Same CreateDefaultSubobject
 	 *  and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<UAirsideTraffic> Traffic;
+
+	/** See SetSimTimeScale. 1.0 is real time, which is what every caller before AirportOps got. */
+	UPROPERTY(Transient) double SimTimeScale = 1.0;
 
 	/** Builds the FSurfaceSettings RebuildMesh needs from this actor's own Resolve*
 	 *  functions and level-authored tunables. One place, so a rebuild cannot read the
