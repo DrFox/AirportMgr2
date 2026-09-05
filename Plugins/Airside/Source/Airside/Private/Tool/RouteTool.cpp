@@ -77,6 +77,17 @@ namespace
 		return UAircraftType::PiperMeridianClimb();
 	}
 
+	/** Same fallback as ClimbFor and GroundFor, for the same reason. */
+	FEnginePerformance EngineFor(const UAircraftType* Aircraft)
+	{
+		if (Aircraft != nullptr && Aircraft->Engine.IsSet())
+		{
+			return Aircraft->Engine;
+		}
+
+		return UAircraftType::PiperMeridianEngine();
+	}
+
 	FGroundPerformance GroundFor(const UAircraftType* Aircraft)
 	{
 		if (Aircraft != nullptr && Aircraft->Ground.IsSet())
@@ -154,7 +165,8 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	{
 		// Refused in an editor world, deliberately - the route still draws there. See
 		// ARoadNetworkActor::DispatchAgent.
-		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft), ClimbFor(Aircraft));
+		Context.Target->DispatchAgent(LastPlan, GroundFor(Aircraft), ClimbFor(Aircraft),
+			EngineFor(Aircraft));
 	}
 }
 

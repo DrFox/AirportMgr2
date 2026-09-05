@@ -149,6 +149,22 @@ const URoadProfile* URoadNetwork::ProfileFor(const FRoadSegment& Segment) const
 bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
 	FVector2D& OutDirection, double& OutLength) const
 {
+	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength);
+}
+
+bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
+	FVector2D& OutDirection, double& OutLength) const
+{
+	// NO PROXIMITY TEST, and that is the difference between the two. RunwayExtentAt answers
+	// "is this point ON a runway", which a departure asks of the place its taxi ended and
+	// which must say no for the rest of the airport. This answers "which runway would you
+	// land on", which is asked of a click that is deliberately nowhere near one.
+	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength);
+}
+
+bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
+	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const
+{
 	auto IsRunway = [this](const FRoadSegment& Segment)
 	{
 		const URoadProfile* Profile = ProfileFor(Segment);
@@ -198,11 +214,14 @@ bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold
 	// a number chosen to make one airport work: a wider runway is correspondingly more
 	// forgiving about where its threshold is considered to begin, and a taxiway a hundred
 	// metres away is never mistaken for one.
-	const URoadProfile* SeedProfile = ProfileFor(Segments[Best]);
-	const double Reach = SeedProfile != nullptr ? SeedProfile->GetTotalWidth() : 0.0;
-	if (BestDistance > Reach)
+	if (bRequireOnRunway)
 	{
-		return false;
+		const URoadProfile* SeedProfile = ProfileFor(Segments[Best]);
+		const double Reach = SeedProfile != nullptr ? SeedProfile->GetTotalWidth() : 0.0;
+		if (BestDistance > Reach)
+		{
+			return false;
+		}
 	}
 
 	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
@@ -283,6 +302,71 @@ bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold
 
 	OutDirection = Along / OutLength;
 	return true;
+}
+
+TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshold,
+	const FVector2D& Direction, double Length, double HalfWidth, double MinDistance) const
+{
+	TArray<FGuidelineNodeId> Out;
+	if (Direction.IsNearlyZero() || Length <= 0.0)
+	{
+		return Out;
+	}
+
+	const FVector2D Along = Direction.GetSafeNormal();
+
+	// Sorted by distance down the runway, because the CALLER's rule is "the first exit I can
+	// take". Collected with the distance and sorted at the end rather than inserted in order:
+	// the guideline node array is in creation order, which has nothing to do with geometry.
+	TArray<TPair<double, FGuidelineNodeId>> Found;
+
+	for (int32 Index = 0; Index < GuidelineNodes.Num(); ++Index)
+	{
+		const FGuidelineNode& Node = GuidelineNodes[Index];
+		if (!Node.bAlive)
+		{
+			continue;
+		}
+
+		const FVector2D Offset = Node.Position - Threshold;
+		const double Distance = FVector2D::DotProduct(Offset, Along);
+
+		// Beyond the point the aircraft could have slowed to taxi speed, and still on the
+		// strip. An exit before that is one it cannot take, which is the whole reason
+		// MinDistance is a parameter rather than zero.
+		// The far end is INCLUDED, with the runway's own half width of slack past it. The
+		// commonest airport anyone draws has its taxiway joined to the END of the runway, and
+		// the guideline node there sits wherever the junction cut put it - which can be a
+		// little beyond the road node the length was measured to. Excluding it leaves that
+		// airport with no exits at all.
+		if (Distance < MinDistance || Distance > Length + HalfWidth)
+		{
+			continue;
+		}
+
+		// LATERAL, so a node on a parallel taxiway is not mistaken for one on the runway.
+		// The runway's own half width is the bound, so it scales with the strip.
+		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
+		if (Lateral > HalfWidth)
+		{
+			continue;
+		}
+
+		Found.Add(TPair<double, FGuidelineNodeId>(
+			Distance, RoadSlot::HandleAt<FGuidelineNodeId>(GuidelineNodes, Index)));
+	}
+
+	Found.Sort([](const TPair<double, FGuidelineNodeId>& A, const TPair<double, FGuidelineNodeId>& B)
+	{
+		return A.Key < B.Key;
+	});
+
+	Out.Reserve(Found.Num());
+	for (const TPair<double, FGuidelineNodeId>& Entry : Found)
+	{
+		Out.Add(Entry.Value);
+	}
+	return Out;
 }
 
 const FRoadSegment* URoadNetwork::GetSegment(FRoadSegmentId Segment) const

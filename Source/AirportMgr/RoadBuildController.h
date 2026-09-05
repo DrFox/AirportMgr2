@@ -327,6 +327,15 @@ private:
 	void SelectGuidelineTool() { SelectTool(4); }
 	void SelectRunwayTool() { SelectTool(5); }
 
+	/**
+	 * Lands an aircraft on the runway nearest the cursor and taxis it to a stand. Key 7.
+	 *
+	 * NOT a SelectTool, and not in the Tools array: an arrival is one decision taken at the
+	 * cursor rather than a gesture with states, so giving it an IBuildTool would be inventing
+	 * a mode for it to sit in.
+	 */
+	void OnLandAircraft();
+
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
 

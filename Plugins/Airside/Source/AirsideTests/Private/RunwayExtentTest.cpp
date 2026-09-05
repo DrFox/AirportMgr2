@@ -91,7 +91,78 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 				OutThreshold, OutDirection, OutLength));
 	}
 
-	// 4. A NETWORK WITH NO RUNWAY never reports one, whatever is asked of it - the state
+	// 4. NEAREST-THRESHOLD IS THE SAME SEARCH WITHOUT THE PROXIMITY TEST, and that is the
+	//    whole difference between the two questions.
+	//
+	//    "Am I on a runway" must say no across the airport - point 2 above is that rule, and
+	//    it exists because without it every dispatched route armed a departure. "Which runway
+	//    would I land on" is asked of a click that is deliberately nowhere near one, so the
+	//    same refusal would make an arrival impossible to order.
+	{
+		TestFalse(TEXT("the far taxiway is not ON a runway"),
+			Net->RunwayExtentAt(FarAway, OutThreshold, OutDirection, OutLength));
+
+		if (TestTrue(TEXT("but it still has a nearest runway to land on"),
+			Net->NearestRunwayThreshold(FarAway, OutThreshold, OutDirection, OutLength)))
+		{
+			TestEqual(TEXT("and it is the threshold nearer the query"), OutThreshold, Threshold);
+			TestTrue(TEXT("landing away from that threshold"), OutDirection.X > 0.99);
+			TestEqual(TEXT("down the full length"), OutLength, 100000.0);
+		}
+	}
+
+	// 5. THE EXITS. A runway is continuous through junctions, so anything joining it already
+	//    puts a guideline node on the centreline - which means the exits can be FOUND rather
+	//    than declared, and a taxiway drawn onto the runway later is an exit immediately.
+	{
+		constexpr double HalfWidth = 2250.0;
+
+		// On the centreline, at 10 km, 40 km and 70 km - ADDED OUT OF ORDER ON PURPOSE.
+		//
+		// The guideline node array is in creation order, so adding them near-to-far would
+		// make the ordering assertion below pass on an implementation that did no sorting at
+		// all. This project has shipped that shape of assertion before; see the note in
+		// CLAUDE.md about ones that merely name a contract.
+		const FGuidelineNodeId Late = Net->AddGuidelineNode(FVector2D(70000.0, 0.0), false);
+		const FGuidelineNodeId Early = Net->AddGuidelineNode(FVector2D(10000.0, 0.0), false);
+		const FGuidelineNodeId Middle = Net->AddGuidelineNode(FVector2D(40000.0, 0.0), false);
+
+		// On a PARALLEL taxiway abeam the middle one. The reason the lateral bound exists:
+		// every airport has a taxiway running alongside its runway, and taking a node on it
+		// for an exit would turn an aircraft off into the grass.
+		Net->AddGuidelineNode(FVector2D(40000.0, HalfWidth * 4.0), false);
+
+		// Beyond the far threshold, which is not on the runway at all.
+		Net->AddGuidelineNode(FVector2D(130000.0, 0.0), false);
+
+		const TArray<FGuidelineNodeId> Exits =
+			Net->RunwayExitNodes(Threshold, FVector2D(1.0, 0.0), 100000.0, HalfWidth, 0.0);
+
+		TestEqual(TEXT("three nodes lie on the runway, and only three"), Exits.Num(), 3);
+		if (Exits.Num() == 3)
+		{
+			// ORDERED BY DISTANCE, which is what makes "the first exit I can take" a
+			// question the caller can answer by taking the first element. The guideline node
+			// array is in creation order, which has nothing to do with geometry.
+			TestEqual(TEXT("nearest the threshold first"), Exits[0], Early);
+			TestEqual(TEXT("then the middle one"), Exits[1], Middle);
+			TestEqual(TEXT("then the far one"), Exits[2], Late);
+		}
+
+		// 6. THE MEASUREMENT AN ARRIVAL DEPENDS ON. An exit before the aircraft could have
+		//    slowed to taxi speed is not an exit it can take, and offering one would turn a
+		//    landing aircraft off the runway at approach speed.
+		const TArray<FGuidelineNodeId> Usable =
+			Net->RunwayExitNodes(Threshold, FVector2D(1.0, 0.0), 100000.0, HalfWidth, 30000.0);
+
+		TestEqual(TEXT("an exit inside the landing distance is not offered"), Usable.Num(), 2);
+		if (Usable.Num() == 2)
+		{
+			TestEqual(TEXT("the first usable one is the middle exit"), Usable[0], Middle);
+		}
+	}
+
+	// 7. A NETWORK WITH NO RUNWAY never reports one, whatever is asked of it - the state
 	//    every airport is in before a runway is laid.
 	{
 		URoadNetwork* Bare = NewObject<URoadNetwork>(GetTransientPackage());

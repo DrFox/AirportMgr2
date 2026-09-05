@@ -5,6 +5,7 @@
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteFollower.h"
+#include "Model/LandingRun.h"
 #include "Model/TakeoffRun.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
@@ -122,6 +123,26 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() bool bEngineRunning = false;
 
+	/** This airframe's spool rates. */
+	UPROPERTY() FEnginePerformance Engine;
+
+	/**
+	 * Where the propeller has actually got to, RPM.
+	 *
+	 * Trails bEngineRunning rather than following it - see FEnginePerformance. Advanced by
+	 * AdvanceEngine every frame, whichever phase happens to be driving the aircraft.
+	 */
+	UPROPERTY() double EngineRPM = 0.0;
+
+	/**
+	 * Spools the propeller one frame toward whatever the engine has been commanded to do.
+	 *
+	 * Separate from the phase advance because it happens in ALL of them - taxiing, rolling,
+	 * climbing, parked - and an engine that only spooled while one of them was driving would
+	 * stop dead the moment an aircraft changed phase.
+	 */
+	void AdvanceEngine(double DeltaSeconds);
+
 	/**
 	 * What to show for this agent right now: where it is, and what it is doing.
 	 *
@@ -138,6 +159,34 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() FVector2D DepartureDirection = FVector2D::ZeroVector;
 	UPROPERTY() double DepartureRunwayLength = 0.0;
 	UPROPERTY() FClimbPerformance DepartureClimb;
+
+	/**
+	 * The arrival this agent flies BEFORE its taxi, if it was dispatched as a landing.
+	 *
+	 * The handover runs the opposite way round from a departure, which is the whole reason
+	 * both exist as separate structs rather than as modes: a departure is follower then
+	 * FTakeoffRun, an arrival is FLandingRun then follower. The agent owns the switch and
+	 * neither phase knows the other is there.
+	 */
+	UPROPERTY() FLandingRun Arrival;
+
+	/** True while the landing is driving this agent, before the taxi to the stand. */
+	UPROPERTY() bool bArriving = false;
+
+	/** The route to fly once it has vacated. Planned at dispatch, so a landing cannot be
+	 *  armed for a stand it has no way of reaching. */
+	UPROPERTY() FRoutePlan TaxiInPlan;
+
+	/**
+	 * Seconds still to run on the post-arrival pause before the engine is shut down.
+	 *
+	 * Counted down only once the aircraft has parked. Zero means nothing is pending - either
+	 * it has not arrived yet, or the shutdown has already happened.
+	 */
+	UPROPERTY() double ShutdownCountdown = 0.0;
+
+	/** True once parked at the stand, whether or not the engine has stopped yet. */
+	UPROPERTY() bool bParked = false;
 };
 
 /** Owns a road network and renders it as one batched dynamic mesh. */
@@ -226,8 +275,29 @@ public:
 	 * taxis and how fast it can be turned are both facts about the aeroplane, and splitting
 	 * them across two arguments invited a caller to pass one and default the other.
 	 */
+	/**
+	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
+	 *
+	 * THE WHOLE ARRIVAL IS DECIDED HERE, BEFORE ANYTHING IS SPAWNED - which runway, which
+	 * exit, which stand, and whether the aircraft can stop in the distance available. An
+	 * arrival that cannot be completed leaves no aircraft in the world, rather than one
+	 * frozen on final or rolling to a runway it has no way off.
+	 *
+	 * That is the same discipline as FTakeoffRun's refusal, and it is why the taxi route is
+	 * planned now rather than when the aircraft vacates: at that point it is on the runway
+	 * and a failure has nowhere to put it.
+	 *
+	 * Nearest runway and shortest taxi are the user's own rules. Neither has a better
+	 * answer available - there is no wind model to choose a runway by, and no stand
+	 * occupancy to choose a stand by.
+	 */
+	bool DispatchArrival(const FVector2D& Near, const FGroundPerformance& Ground,
+		const FClimbPerformance& Climb, const FApproachPerformance& Approach,
+		const FEnginePerformance& Engine = FEnginePerformance(), double Wingspan = 0.0);
+
 	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-		const FClimbPerformance& Climb = FClimbPerformance());
+		const FClimbPerformance& Climb = FClimbPerformance(),
+		const FEnginePerformance& Engine = FEnginePerformance());
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
@@ -724,6 +794,14 @@ private:
 	 * UPROPERTY regardless, because View is a UObject pointer and an agent that the
 	 * garbage collector cannot see is an agent whose cube is collected out from under it.
 	 */
+	/**
+	 * How long an arrival sits at the stand before the engine stops, seconds.
+	 *
+	 * Not zero, and not a formality: an engine that stopped the instant the wheels did reads
+	 * as a stall rather than a shutdown. Real enough to watch, short enough not to wait for.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside") double ShutdownPauseSeconds = 10.0;
+
 	UPROPERTY(Transient) TArray<FRoadAgent> Agents;
 
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
@@ -779,6 +857,12 @@ public:
 	 * surface does, and it needs no GeometryFramework dependency in the test module.
 	 */
 	int32 SurfaceTriangleCountForTest() const;
+
+	/** Agents alive right now, for Airside.Present.ArrivalDispatch. */
+	int32 AgentCountForTest() const { return Agents.Num(); }
+
+	/** The stand definition this actor would use, for the same test. */
+	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
 
 private:
 

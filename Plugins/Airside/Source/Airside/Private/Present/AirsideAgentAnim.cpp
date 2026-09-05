@@ -38,7 +38,12 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	}
 
 	// PROPELLER: RPM to degrees a second is x6 - 360 degrees over 60 seconds.
-	const float RPM = Motion.bEngineRunning ? PropellerRPM : 0.0f;
+	//
+	// TAKEN FROM THE MODEL, not derived from the running flag. It used to be
+	// bEngineRunning ? PropellerRPM : 0, which made the propeller a switch: full speed the
+	// instant an aircraft was dispatched, stopped the instant it shut down. A propeller has
+	// inertia, and the model now says where it has got to - see FEnginePerformance.
+	const float RPM = static_cast<float>(Motion.EngineRPM);
 	PropAngleDegrees = FMath::Fmod(PropAngleDegrees + RPM * 6.0f * DeltaSeconds, 360.0f);
 
 	// See the header: a modelled blade at 2000 RPM strobes against a 60 Hz frame rate.

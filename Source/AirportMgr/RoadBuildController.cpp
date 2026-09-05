@@ -5,6 +5,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
+#include "Entities/AircraftType.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/RoadDrawTool.h"
@@ -63,8 +64,9 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links, 6 runway. C watches the aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, "
-			 "wheel zooms."),
+			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links, 6 runway, "
+			 "7 lands an aircraft on the nearest runway. C watches the aircraft, G toggles the "
+			 "guideline overlay. WASD pans, Q/E rotate, wheel zooms."),
 		*Target->GetName());
 }
 
@@ -214,6 +216,11 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ARoadBuildController::SelectRouteTool);
 	InputComponent->BindKey(EKeys::Five, IE_Pressed, this, &ARoadBuildController::SelectGuidelineTool);
 	InputComponent->BindKey(EKeys::Six, IE_Pressed, this, &ARoadBuildController::SelectRunwayTool);
+
+	// AN ACTION, NOT A TOOL, so it is bound here and appears in no tool list. The banner above
+	// is updated in the same breath: this project has twice advertised a key that was never
+	// bound, and the log was the only thing claiming the binding existed.
+	InputComponent->BindKey(EKeys::Seven, IE_Pressed, this, &ARoadBuildController::OnLandAircraft);
 	InputComponent->BindKey(EKeys::G, IE_Pressed, this, &ARoadBuildController::OnToggleGuidelines);
 	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARoadBuildController::ToggleWatchAgent);
 	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
@@ -222,6 +229,32 @@ void ARoadBuildController::SetupInputComponent()
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
+}
+
+void ARoadBuildController::OnLandAircraft()
+{
+	if (Target == nullptr)
+	{
+		return;
+	}
+
+	FVector2D Cursor;
+	if (!CursorOnRoadPlane(Cursor))
+	{
+		return;
+	}
+
+	// The airframe on screen, for the same reason FRouteTool falls back to it: an aircraft
+	// that approached like a Meridian and taxied like something else would be two different
+	// aircraft depending on which phase you were watching.
+	//
+	// DispatchArrival has already logged which runway, which exit and which stand it chose,
+	// or why it declined.
+	Target->DispatchArrival(Cursor,
+		UAircraftType::PiperMeridianGround(),
+		UAircraftType::PiperMeridianClimb(),
+		UAircraftType::PiperMeridianApproach(),
+		UAircraftType::PiperMeridianEngine());
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const

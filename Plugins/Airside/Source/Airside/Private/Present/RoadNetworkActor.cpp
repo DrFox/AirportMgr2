@@ -1802,6 +1802,31 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 	return World != nullptr && !World->IsGameWorld();
 }
 
+void FRoadAgent::AdvanceEngine(double DeltaSeconds)
+{
+	if (!Engine.IsSet())
+	{
+		// Nothing authored: fall back to the switch this replaced, so an airframe with no
+		// engine figures still shows a turning propeller rather than a stopped one.
+		EngineRPM = bEngineRunning ? 2000.0 : 0.0;
+		return;
+	}
+
+	const double Target = bEngineRunning ? Engine.MaxRPM : 0.0;
+
+	// The rate is the whole travel over the time it takes, so the two seconds figures mean
+	// what they say - idle to governed, and governed to stopped.
+	const double Seconds = bEngineRunning ? Engine.SpoolUpSeconds : Engine.SpoolDownSeconds;
+	const double Rate = Engine.MaxRPM / Seconds;
+
+	// Clamped by the REMAINING error, so the last step lands exactly on the target and the
+	// propeller neither overshoots nor creeps. The same construction the line-up turn and
+	// the flare use.
+	const double Error = Target - EngineRPM;
+	const double MaxStep = Rate * DeltaSeconds;
+	EngineRPM += FMath::Clamp(Error, -MaxStep, MaxStep);
+}
+
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	double Altitude, double PitchDegrees) const
 {
@@ -1818,6 +1843,10 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
 	// turning propeller, which is what this used to get wrong.
 	Motion.bEngineRunning = bEngineRunning;
+
+	// AND WHERE THE PROPELLER HAS GOT TO, which is not the same question - see
+	// FAgentMotion::EngineRPM. The view spins the prop at this, so a shutdown winds down.
+	Motion.EngineRPM = EngineRPM;
 
 	// Off the wheels only once the rotation is finished. The phase already knows, so nothing
 	// here has to infer it from the altitude being above zero.
@@ -1836,6 +1865,38 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 
 		FVector2D At;
 		double Heading = 0.0;
+
+		// FIRST, AND OUTSIDE EVERY PHASE. Each branch below can continue out of this loop,
+		// so an engine spooled inside one of them would freeze whenever the aircraft was
+		// doing something else - which is most of the time.
+		Agent.AdvanceEngine(DeltaSeconds);
+
+		// ARRIVING: the landing drives it, and the follower has not started yet. The mirror
+		// of the departure block below, and deliberately first - an agent cannot be doing
+		// both, and asking about the arrival first keeps the two handovers side by side.
+		if (Agent.bArriving)
+		{
+			double Altitude = 0.0;
+			double Pitch = 0.0;
+			if (Agent.Arrival.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
+			{
+				if (Agent.View != nullptr)
+				{
+					Agent.View->SetMotion(
+						Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
+				}
+				continue;
+			}
+
+			// VACATED: hand over to the taxi. The route was planned at dispatch - see
+			// DispatchArrival - so this cannot fail here and strand an aircraft on the
+			// runway with nowhere to go.
+			Agent.bArriving = false;
+			Agent.Follower.Start(Agent.TaxiInPlan, Agent.Follower.Ground);
+
+			UE_LOG(LogRoadMesh, Log, TEXT("Vacated; taxiing in."));
+			continue;
+		}
 
 		// AIRBORNE: the departure drives it, and the follower is done with it. Two phases,
 		// one at a time - see FTakeoffRun for why they are not one class.
@@ -1879,6 +1940,40 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 			Agent.View->SetMotion(Agent.DescribeMotion(At, Heading), SurfaceZ);
 		}
 
+		// PARKED: the taxi is over, so the turnaround starts. Counted rather than acted on
+		// at once, because an engine that stopped the instant the wheels did would look like
+		// a stall - an arriving aircraft sits at the stand with the engine running while the
+		// chocks go in.
+		if (Agent.Follower.HasArrived() && !Agent.bDepartOnArrival)
+		{
+			if (!Agent.bParked)
+			{
+				Agent.bParked = true;
+				Agent.ShutdownCountdown = ShutdownPauseSeconds;
+				UE_LOG(LogRoadMesh, Log,
+					TEXT("Parked. Shutting down in %.0f s."), Agent.ShutdownCountdown);
+			}
+			else if (Agent.ShutdownCountdown > 0.0)
+			{
+				Agent.ShutdownCountdown -= DeltaSeconds;
+				if (Agent.ShutdownCountdown <= 0.0)
+				{
+					Agent.ShutdownCountdown = 0.0;
+
+					// The flag FRoadAgent::bEngineRunning was introduced for - see its
+					// comment, which says a shutdown at the stand is what would clear it.
+					// The propeller stops and the aircraft stays where it is.
+					Agent.bEngineRunning = false;
+					UE_LOG(LogRoadMesh, Log, TEXT("Engine shut down at the stand."));
+
+					if (Agent.View != nullptr)
+					{
+						Agent.View->SetMotion(Agent.DescribeMotion(At, Heading), SurfaceZ);
+					}
+				}
+			}
+		}
+
 		// ARRIVED ON A RUNWAY: hand over. The heading it arrived on is handed across too, so
 		// the line-up turn starts from where the taxi actually left it rather than from a
 		// fresh guess - which is what makes a backtrack read as a backtrack.
@@ -1892,8 +1987,199 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	}
 }
 
+bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerformance& Ground,
+	const FClimbPerformance& Climb, const FApproachPerformance& Approach,
+	const FEnginePerformance& Engine, double Wingspan)
+{
+	UWorld* World = GetWorld();
+	if (World == nullptr || Network == nullptr)
+	{
+		return false;
+	}
+
+	// 1. WHICH RUNWAY. Nearest threshold to the click, which is the user's own choice of rule
+	//    - there is no wind model, so nothing else could decide it.
+	FVector2D Threshold;
+	FVector2D Direction;
+	double Length = 0.0;
+	if (!Network->NearestRunwayThreshold(Near, Threshold, Direction, Length))
+	{
+		UE_LOG(LogRoadMesh, Warning, TEXT("No runway to land on - draw one first."));
+		return false;
+	}
+
+	// 2. THE EARLIEST EXIT IT COULD TAKE. Asked BEFORE arming, so an arrival is never flown
+	//    to a runway it has no way off - the same discipline as the departure refusing a
+	//    strip it cannot leave.
+	// The distance the model actually flies, plus its margin - see FLandingRun. The closed
+	// form this replaces demanded 649 m of a 297 m landing and refused every runway on the
+	// field, which is what "pressing 7 does nothing" turned out to be.
+	const double Needed =
+		FLandingRun::RequiredLandingDistance(Ground, Climb, Approach) * FLandingRun::LandingMargin;
+
+	// The runway's own width bounds what counts as ON it, the same figure RunwayExtentAt
+	// uses for its reach - so "on the runway" means one thing across the whole model.
+	double HalfWidth = 0.0;
+	for (const FRoadSegment& Segment : Network->GetSegments())
+	{
+		if (!Segment.bAlive)
+		{
+			continue;
+		}
+		// Named apart from the actor's own Profile member, which it would otherwise hide.
+		const URoadProfile* SegmentProfile = Network->ProfileFor(Segment);
+		if (SegmentProfile != nullptr && SegmentProfile->bContinuousThroughJunctions)
+		{
+			HalfWidth = FMath::Max(HalfWidth, SegmentProfile->GetTotalWidth() * 0.5);
+		}
+	}
+
+	const TArray<FGuidelineNodeId> Exits =
+		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, Needed);
+
+	// Reported whether or not this succeeds, because a refusal that does not say which of
+	// these was the problem is a feature that "does nothing". Every one of these numbers was
+	// missing from the first refusal message and every one of them was needed to diagnose it.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop. %d node(s) on the strip, "
+			 "%d of them usable as exits. %d stand(s) on the airport."),
+		*RunwayDesignator::ToPairText(Direction), Length, Needed,
+		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, 0.0).Num(),
+		Exits.Num(), Network->GetEntities().Num());
+
+	// 3. WHICH STAND. Shortest route, the user's rule - and taken from the FIRST exit that
+	//    reaches anything, because an aircraft takes the earliest turn-off it can rather than
+	//    rolling to the end in search of a marginally shorter taxi.
+	FRoutePlan Best;
+	FGuidelineNodeId BestExit;
+	for (const FGuidelineNodeId& Exit : Exits)
+	{
+		double BestLength = TNumericLimits<double>::Max();
+		for (const FEntityInstance& Stand : Network->GetEntities())
+		{
+			if (!Stand.bAlive || !Stand.PoseNode.IsSet())
+			{
+				continue;
+			}
+
+			const FRoutePlan Plan =
+				FindRoute(Exit, Stand.PoseNode, ETraversalClass::Aircraft, Wingspan);
+			if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
+			{
+				continue;
+			}
+
+			const double PlanLength = Plan.Length;
+			if (PlanLength < BestLength)
+			{
+				BestLength = PlanLength;
+				Best = Plan;
+				BestExit = Exit;
+			}
+		}
+
+		if (Best.IsValid())
+		{
+			break;
+		}
+	}
+
+	if (!Best.IsValid())
+	{
+		if (Length < Needed)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to "
+					 "stop. Draw a longer runway."),
+				Length, Needed);
+		}
+		else if (Exits.Num() == 0)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: nothing joins the runway beyond %.0f uu, so there is "
+					 "no exit this aircraft could take. Connect a taxiway further down it."),
+				Needed);
+		}
+		else
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Arrival refused: %d usable exit(s), but no route from any of them to a "
+					 "stand. Check the taxiway reaches the stands."),
+				Exits.Num());
+		}
+		return false;
+	}
+
+	// WHERE IT LEAVES THE RUNWAY, handed to the landing so the rollout carries on to the
+	// taxiway at taxi speed instead of stopping wherever the braking ran out. Without this
+	// the follower starts at the exit node and the aircraft jumps to it.
+	double VacateAt = Length;
+	if (const FGuidelineNode* ExitNode = Network->GetGuidelineNode(BestExit))
+	{
+		VacateAt = FVector2D::DotProduct(ExitNode->Position - Threshold, Direction);
+	}
+
+	FRoadAgent Agent;
+	if (!Agent.Arrival.Start(Threshold, Direction, Length, Ground, Climb, Approach, VacateAt))
+	{
+		// FLandingRun has already logged why. Nothing spawns: an arrival that cannot be
+		// flown must leave no aircraft in the world, rather than one frozen on final.
+		return false;
+	}
+
+	Agent.bArriving = true;
+	Agent.bEngineRunning = true;
+	Agent.Engine = Engine;
+
+	// ALREADY TURNING. An arrival appears on final with its engine running - spooling up from
+	// stopped would show a Meridian gliding down the approach with a dead propeller.
+	Agent.EngineRPM = Engine.MaxRPM;
+	Agent.TaxiInPlan = Best;
+
+	FActorSpawnParameters Params;
+	Params.Owner = this;
+	Params.ObjectFlags |= RF_Transient;
+
+	Agent.View = World->SpawnActor<ARoadAgentActor>(
+		FVector::ZeroVector, FRotator::ZeroRotator, Params);
+	if (Agent.View == nullptr)
+	{
+		return false;
+	}
+
+	// The airframe is pushed in, like the pose - see DispatchAgent for what fetching it by
+	// path cost.
+	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
+	{
+		Agent.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
+			Content->AgentAnimClass.LoadSynchronous());
+	}
+
+	// Posed before its first tick, at the far end of final and in the air, so it never
+	// appears at the origin for a frame - this project's most-repeated bug.
+	{
+		FVector2D At;
+		double Heading = 0.0;
+		double Altitude = 0.0;
+		double Pitch = 0.0;
+		if (Agent.Arrival.Advance(0.0, At, Heading, Altitude, Pitch))
+		{
+			Agent.View->SetMotion(Agent.DescribeMotion(At, Heading, Altitude, Pitch), SurfaceZ);
+		}
+	}
+
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, "
+			 "taxiing %.0f uu to a stand."),
+		*RunwayDesignator::ToPairText(Direction), Length, Needed,
+		Exits.IndexOfByKey(BestExit) + 1, Exits.Num(), Best.Length);
+
+	Agents.Add(MoveTemp(Agent));
+	return true;
+}
+
 bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
-	const FClimbPerformance& Climb)
+	const FClimbPerformance& Climb, const FEnginePerformance& Engine)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
@@ -1920,9 +2206,14 @@ bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FGroundPerfo
 	FRoadAgent Agent;
 	Agent.Follower.Start(Plan, Ground);
 
-	// It was dispatched, so it is running. Nothing shuts an engine down yet; when a
-	// turnaround does, this is the flag it clears.
+	// It was dispatched, so it is running. The turnaround at the end of an arrival is what
+	// clears this now.
 	Agent.bEngineRunning = true;
+	Agent.Engine = Engine;
+
+	// FROM COLD, deliberately: a departure is dispatched at a stand, so the propeller spools
+	// up as it starts to taxi, which is the thing that was asked for.
+	Agent.EngineRPM = 0.0;
 
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
 	// is a fact about the network and the last polyline point is the only thing that knows
