@@ -211,3 +211,4 @@ bitwise; the guideline graph shares by HANDLE and needs no such contract.
   codebase is dense with this deliberately - match it rather than stripping it.
 - Tests assert behaviour with a named reason, not just values.
 - Branches are `feature/*`; PRs to `main`.
+- A doc comment touches its declaration. Inserting between them means moving the comment.
