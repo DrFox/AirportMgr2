@@ -84,8 +84,10 @@ public:
 	 *
 	 * Lookup is by id, so an unnamed or duplicated one makes two anchors indistinguishable
 	 * and a query silently returns whichever comes first - which sends the fuel truck to
-	 * the belt loader's position and reports success. PlaceEntity checks this and complains
-	 * loudly rather than refusing, so a half-authored asset is visible instead of fatal.
+	 * the belt loader's position and reports success. ARoadNetworkActor::PlaceStand checks
+	 * this and complains loudly rather than refusing, so a half-authored asset is visible
+	 * instead of fatal - checked there rather than in URoadNetwork::PlaceEntity because
+	 * Model/ cannot call a UEntityDefinition method (see RoadEntity.h's header comment).
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static bool HasUsableAnchorIds(const UEntityDefinition* Definition);

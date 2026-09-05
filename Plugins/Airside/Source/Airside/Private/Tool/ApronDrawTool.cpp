@@ -2,7 +2,6 @@
 
 #include "Model/RoadApron.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -46,9 +45,9 @@ void FApronIdleState::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	if (Context.bRemoveModifier)
 	{
 		const int32 Under = Context.Target->FindApronAt(Context.Cursor);
-		if (Under != INDEX_NONE && Context.Target->Network != nullptr)
+		if (Under != INDEX_NONE && Context.Target->GetNetwork() != nullptr)
 		{
-			const TArray<FApronSurface>& Aprons = Context.Target->Network->GetAprons();
+			const TArray<FApronSurface>& Aprons = Context.Target->GetNetwork()->GetAprons();
 			if (Aprons.IsValidIndex(Under))
 			{
 				const TArray<FVector2D>& Outline = Aprons[Under].Outline;

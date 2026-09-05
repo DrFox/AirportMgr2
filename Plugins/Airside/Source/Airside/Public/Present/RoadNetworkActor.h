@@ -9,6 +9,7 @@
 #include "Model/TakeoffRun.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/RoadEditHistory.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 #include "RoadNetworkActor.generated.h"
@@ -189,9 +190,16 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() bool bParked = false;
 };
 
-/** Owns a road network and renders it as one batched dynamic mesh. */
+/**
+ * Owns a road network and renders it as one batched dynamic mesh.
+ *
+ * Multiple inheritance from AActor plus IRoadEditTarget: ordinary UE C++, not a deviation
+ * needing justification - IRoadEditTarget is a plain abstract class with no UPROPERTYs and
+ * no reflection of its own, so it costs nothing to add to an actor's base list. See that
+ * header for why the interface exists at all.
+ */
 UCLASS()
-class AIRSIDE_API ARoadNetworkActor : public AActor
+class AIRSIDE_API ARoadNetworkActor : public AActor, public IRoadEditTarget
 {
 	GENERATED_BODY()
 
@@ -251,7 +259,7 @@ public:
 
 	/** Solve every node, build the mesh, and push it to the component. */
 	UFUNCTION(CallInEditor, Category = "Airside")
-	void RebuildMesh();
+	virtual void RebuildMesh() override;
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -295,9 +303,9 @@ public:
 		const FClimbPerformance& Climb, const FApproachPerformance& Approach,
 		const FEnginePerformance& Engine = FEnginePerformance(), double Wingspan = 0.0);
 
-	bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FGroundPerformance& Ground,
 		const FClimbPerformance& Climb = FClimbPerformance(),
-		const FEnginePerformance& Engine = FEnginePerformance());
+		const FEnginePerformance& Engine = FEnginePerformance()) override;
 
 	/** Removes every agent and its cube. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
@@ -325,9 +333,9 @@ public:
 	 * On the facade so a tool, a Blueprint and the HUD all ask the same question of the
 	 * same graph rather than three of them reaching past it.
 	 */
-	FRoutePlan FindRoute(
+	virtual FRoutePlan FindRoute(
 		FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		ETraversalClass Class, double Wingspan) const;
+		ETraversalClass Class, double Wingspan) const override;
 
 	// --- Runtime graph facade -------------------------------------------------------
 	//
@@ -344,11 +352,11 @@ public:
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 PlaceNode(FVector2D Where);
+	virtual int32 PlaceNode(FVector2D Where) override;
 
 	/** Join two placed nodes with a straight segment. Returns false, and logs, if it refused. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool ConnectNodes(int32 FromIndex, int32 ToIndex);
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
 
 	/**
 	 * Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE.
@@ -363,7 +371,7 @@ public:
 	 */
 
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex);
+	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 
 	/**
 	 * Lays a runway from From to To in one edit, with its own profile.
@@ -379,7 +387,7 @@ public:
 	 * mis-click rather than an intention.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile);
+	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
 
 	/**
 	 * The shortest thing that may be called a runway, in uu. 500 m.
@@ -390,6 +398,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
 	double MinimumRunwayLength = 50000.0;
 
+	/** IRoadEditTarget accessor for MinimumRunwayLength - see the property's own comment. */
+	virtual double GetMinimumRunwayLength() const override { return MinimumRunwayLength; }
+
 	/**
 	 * Remove a HAND-AUTHORED guideline edge. Refuses a derived one.
 	 *
@@ -397,7 +408,7 @@ public:
 	 * back - which reads as the tool ignoring the click.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool DisconnectGuideline(int32 EdgeIndex);
+	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
 	/**
 	 * Index of the nearest live node within Radius of Where, or INDEX_NONE.
@@ -428,7 +439,7 @@ public:
 	 * a caller error and not something to silently correct.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 SplitSegment(int32 SegmentIndex, FVector2D At);
+	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 
 	/**
 	 * Remove a node, rejoining the roads it would otherwise strand. See RoadHeal.h.
@@ -439,7 +450,7 @@ public:
 	 * the trade that choice buys.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool DeleteNode(int32 NodeIndex);
+	virtual bool DeleteNode(int32 NodeIndex) override;
 
 	/**
 	 * Remove one segment.
@@ -449,7 +460,7 @@ public:
 	 * nothing - and leaving it behind is just litter on the map.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool DeleteSegment(int32 SegmentIndex);
+	virtual bool DeleteSegment(int32 SegmentIndex) override;
 
 	/** Slot indices of the segments that deleting NodeIndex would take with it. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -467,7 +478,7 @@ public:
 	 * whole drag is one undo step rather than one per frame.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool MoveNode(int32 NodeIndex, FVector2D To);
+	virtual bool MoveNode(int32 NodeIndex, FVector2D To) override;
 
 	/**
 	 * Open an edit that spans frames, for a drag.
@@ -476,13 +487,13 @@ public:
 	 * would push a snapshot per frame and undo would crawl back along the path the mouse
 	 * took.
 	 */
-	void BeginInteractiveEdit(const FString& Label);
+	virtual void BeginInteractiveEdit(const FString& Label) override;
 
 	/** Close it. bKeep false abandons the snapshot, leaving no undo step. */
-	void EndInteractiveEdit(bool bKeep);
+	virtual void EndInteractiveEdit(bool bKeep) override;
 
 	/** What deleting NodeIndex would do, without doing any of it. For the overlay. */
-	FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const;
+	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;
 
 	/** Limits the deletion plan judges its rejoins against. Set from the build tool. */
 	FRoadPlacementLimits PlacementLimits;
@@ -504,14 +515,14 @@ public:
 	 * an answer where refusing would only be a complaint.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 AddApron(const TArray<FVector2D>& Outline);
+	virtual int32 AddApron(const TArray<FVector2D>& Outline) override;
 
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool DeleteApron(int32 ApronIndex);
+	virtual bool DeleteApron(int32 ApronIndex) override;
 
 	/** The topmost apron containing a point, or INDEX_NONE. For picking. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 FindApronAt(FVector2D Where) const;
+	virtual int32 FindApronAt(FVector2D Where) const override;
 
 	// --- Stands -----------------------------------------------------------------------
 
@@ -524,7 +535,7 @@ public:
 	 * query rather than a lookup that goes stale.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 PlaceStand(FVector2D Where, double Heading);
+	virtual int32 PlaceStand(FVector2D Where, double Heading) override;
 
 	/**
 	 * Remove a placed entity, and the anchor nodes it owns.
@@ -533,11 +544,11 @@ public:
 	 * stand - a lead-in to a stand that is gone leads nowhere. Destructive and undoable.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	bool DeleteEntity(int32 EntityIndex);
+	virtual bool DeleteEntity(int32 EntityIndex) override;
 
 	/** Nearest placed entity within Radius of a point, or INDEX_NONE. For picking. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 FindEntityAt(FVector2D Where, double Radius) const;
+	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
 
 	/**
 	 * The stand layout new stands are placed from. Defaults to DA_Stand_CodeC.
@@ -547,6 +558,18 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	TObjectPtr<UEntityDefinition> StandDefinition;
+
+	/**
+	 * IRoadEditTarget accessor for StandDefinition - the RAW field, not
+	 * ResolveStandDefinition()'s content-default fallback. Preserves exactly what
+	 * FStandPlaceTool::PreviewPose read before this seam existed
+	 * (Context.Target->StandDefinition.Get()); changing it to the resolved value would be
+	 * a behaviour change this task is not making.
+	 */
+	virtual const UEntityDefinition* GetStandDefinition() const override
+	{
+		return StandDefinition;
+	}
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -592,7 +615,7 @@ public:
 	 * bValid drives the material's ValidityBlend only. Validity is a parameter rather than
 	 * a mesh variant, so turning a drag red regenerates no geometry at all.
 	 */
-	void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid);
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
 
 	/**
 	 * The ghost's triangles, without touching a component, a material or a renderer.
@@ -606,10 +629,10 @@ public:
 	bool BuildGhostBuffers(int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers);
 
 	/** Hide the preview and forget what it was showing. */
-	void HideGhost();
+	virtual void HideGhost() override;
 
 	/** A live node's handle from its slot index, or false if it is not live. */
-	bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const;
+	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 
 	/**
 	 * Cross-section for segments created through this facade. When unset, a symmetric
@@ -776,6 +799,9 @@ public:
 	/** The graph this actor owns and renders. Readable from Blueprint; mutate it only
 	 *  through the facade above, so every change stays undoable. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside") TObjectPtr<URoadNetwork> Network;
+
+	/** IRoadEditTarget accessor for Network - see the property's own comment. */
+	virtual const URoadNetwork* GetNetwork() const override { return Network; }
 
 	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
 	 *  rather than the Command layer design spec 7.3 specifies. */

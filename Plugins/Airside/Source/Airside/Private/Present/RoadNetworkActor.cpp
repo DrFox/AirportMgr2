@@ -1543,10 +1543,25 @@ int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
 		return INDEX_NONE;
 	}
 
+	// Moved down from URoadNetwork::PlaceEntity along with Anchors itself: HasUsableAnchorIds
+	// is a UEntityDefinition method, and Model/ no longer calls into Entities/ at all - see
+	// Tool/RoadEditTarget.h's header comment for the other half of that seam. Complained
+	// about, not refused: a half-authored definition should be visible in the log rather
+	// than fatal at the call site. But it IS a real fault - lookup is by id, so two anchors
+	// sharing one are indistinguishable and a query for either returns the first, which
+	// sends the fuel truck to the belt loader and reports success.
+	if (!UEntityDefinition::HasUsableAnchorIds(Stand))
+	{
+		UE_LOG(LogRoadMesh, Error,
+			TEXT("PlaceStand: %s has anchors with empty or duplicate ids. Anchor lookups on "
+				 "this entity will be ambiguous."),
+			*Stand->GetName());
+	}
+
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
 
-	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Where, Heading);
+	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

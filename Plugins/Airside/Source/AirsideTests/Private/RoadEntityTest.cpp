@@ -28,7 +28,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 	const FVector2D Where(5000.0, 3000.0);
 	const double Facing = UE_DOUBLE_PI * 0.5;
 
-	const FEntityInstanceId Placed = Net->PlaceEntity(Stand, Where, Facing);
+	const FEntityInstanceId Placed = Net->PlaceEntity(Stand, Stand->Anchors, Where, Facing);
 	TestTrue(TEXT("the entity handle is set"), Placed.IsSet());
 
 	{
@@ -95,7 +95,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			Ahead.Role = EServiceRole::Tug;
 			Straight->Anchors.Add(Ahead);
 
-			const FEntityInstanceId Aimed = Net->PlaceEntity(Straight, Where, Facing);
+			const FEntityInstanceId Aimed = Net->PlaceEntity(Straight, Straight->Anchors, Where, Facing);
 			const FGuidelineNode* AheadNode = Net->GetAnchorNode(Aimed, FName(TEXT("Ahead")));
 			if (TestNotNull(TEXT("the straight-ahead anchor resolved"), AheadNode))
 			{
@@ -203,7 +203,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 	// Two documented refusals, neither of which anything asserted.
 	TestFalse(TEXT("placing a null definition returns an unset handle"),
-		Net->PlaceEntity(nullptr, FVector2D(0.0, 0.0), 0.0).IsSet());
+		Net->PlaceEntity(nullptr, TConstArrayView<FEntityAnchor>(), FVector2D(0.0, 0.0), 0.0).IsSet());
 	TestFalse(TEXT("removing an already-removed entity returns false"),
 		Net->RemoveEntity(Placed));
 
@@ -238,7 +238,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		// and either operand alone are three distinguishable numbers.
 		const double Parked = UE_DOUBLE_PI * 0.25;
 		const FEntityInstanceId Loaded =
-			Net->PlaceEntity(Turned, FVector2D(-4000.0, 7000.0), Parked);
+			Net->PlaceEntity(Turned, Turned->Anchors, FVector2D(-4000.0, 7000.0), Parked);
 		TestTrue(TEXT("the hand-built entity is placed"), Loaded.IsSet());
 
 		double NoseHeading = 0.0;
@@ -321,7 +321,7 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		Live->AddStraightSegment(Hub, Nrth, Taxi);
 
 		const FEntityInstanceId Gate12 =
-			Live->PlaceEntity(Gate, FVector2D(30000.0, 30000.0), 0.0);
+			Live->PlaceEntity(Gate, Gate->Anchors, FVector2D(30000.0, 30000.0), 0.0);
 
 		TArray<FResolvedAnchor> Before;
 		TArray<FVector2D> PlacedAt;

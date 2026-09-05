@@ -196,10 +196,18 @@ public:
 	// --- Entities --------------------------------------------------------------------
 
 	/**
-	 * Place an entity and resolve every anchor its definition declares to a guideline node
-	 * at that anchor's world pose. Returns an unset handle for a null definition.
+	 * Place an entity and resolve every one of Anchors to a guideline node at its world
+	 * pose. Returns an unset handle for a null definition.
+	 *
+	 * Definition is stored on the instance but never dereferenced here - Model/ must not
+	 * depend on the Entities layer (RoadEntity.h says so at the top), so the caller resolves
+	 * the definition's own Anchors array and hands it in rather than this function reading
+	 * Definition->Anchors itself. HasUsableAnchorIds' validation moves with it: the caller
+	 * (ARoadNetworkActor::PlaceStand) checks it before calling, since that check is also a
+	 * UEntityDefinition method this layer cannot call.
 	 */
-	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition, const FVector2D& Position, double Heading);
+	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,
+		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading);
 
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
@@ -219,12 +227,12 @@ public:
 	 *
 	 * FGuidelineNode carries no heading, so the resolved node cannot answer this and spec
 	 * section 6's stop-position marking would have nowhere to learn which way an aircraft
-	 * parks. Composed on demand rather than stored, so it cannot drift from the instance's
-	 * pose - and read from the DEFINITION by id, so editing an anchor's heading in the
-	 * asset is picked up by instances already placed.
+	 * parks. Composed on demand rather than stored on the instance, so it cannot drift from
+	 * the instance's own pose - added to FResolvedAnchor::LocalHeading, captured at
+	 * placement (see PlaceEntity) rather than read live from the definition, because Model/
+	 * cannot call back into UEntityDefinition to do that read.
 	 *
-	 * Returns false and leaves OutHeading untouched when the entity, the definition or the
-	 * id is unknown.
+	 * Returns false and leaves OutHeading untouched when the entity or the id is unknown.
 	 *
 	 * NOTE the sum is not wrapped: 7*PI/4 + PI/2 gives 9*PI/4, not PI/4. Every consumer
 	 * feeds it to trigonometry, where it makes no difference. A caller comparing two
@@ -249,8 +257,10 @@ public:
 	 *
 	 * Role is a CATEGORY, not an identity - a stand has two belt loaders - so this answers
 	 * "where can baggage be worked" and the caller picks. Only ids the instance actually
-	 * resolved are returned, so a definition edited after placement cannot hand back an id
-	 * that leads nowhere.
+	 * resolved are returned, by construction: this reads FResolvedAnchor::Role, captured at
+	 * placement, rather than filtering the definition's own anchors and checking each one
+	 * against ResolvedAnchors - so a definition edited after placement cannot hand back an
+	 * id that leads nowhere.
 	 */
 	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 

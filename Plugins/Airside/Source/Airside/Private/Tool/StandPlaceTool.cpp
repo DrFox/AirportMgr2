@@ -5,7 +5,6 @@
 #include "Tool/StandPreview.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -111,7 +110,7 @@ void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& 
 	// Shared with the editor's view of an already-placed stand, so the same object cannot
 	// be drawn two different ways depending on which code path found it.
 	const UEntityDefinition* Definition =
-		Context.Target != nullptr ? Context.Target->StandDefinition.Get() : nullptr;
+		Context.Target != nullptr ? Context.Target->GetStandDefinition() : nullptr;
 
 	StandPreview::Describe(Definition, At, Heading, Sink);
 }
@@ -126,9 +125,9 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	if (Context.bRemoveModifier)
 	{
 		const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-		if (Under != INDEX_NONE && Context.Target->Network != nullptr)
+		if (Under != INDEX_NONE && Context.Target->GetNetwork() != nullptr)
 		{
-			const TArray<FEntityInstance>& Entities = Context.Target->Network->GetEntities();
+			const TArray<FEntityInstance>& Entities = Context.Target->GetNetwork()->GetEntities();
 			if (Entities.IsValidIndex(Under))
 			{
 				Sink.Marker(Entities[Under].Position, EPreviewStyle::Doomed);
