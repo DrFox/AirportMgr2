@@ -1,11 +1,12 @@
 #include "Model/RoadAgent.h"
 
-// Own static category rather than sharing ARoadNetworkActor's LogRoadMesh, which is itself
-// DEFINE_LOG_CATEGORY_STATIC and so has internal linkage - a translation unit cannot borrow
-// another's copy. Every other Model/*.cpp with a log line does the same thing (LogLanding,
-// LogTakeoff, LogRoadModel); a later task renames categories, so this keeps today's name
-// rather than inventing a new one.
-DEFINE_LOG_CATEGORY_STATIC(LogRoadMesh, Log, All);
+// Own static category, not a shared LogRoadMesh: the plugin builds as a unity build
+// (Module.Airside.cpp concatenates every translation unit), and two _STATIC definitions of
+// the same name in one module is a redefinition error, not a shared symbol - DEFINE_LOG_
+// CATEGORY_STATIC gives internal linkage, so RoadNetworkActor.cpp's LogRoadMesh cannot be
+// borrowed here even outside a unity build. Every other Model/*.cpp with a log line does the
+// same thing (LogLanding, LogTakeoff, LogRoadModel); a later task consolidates categories.
+DEFINE_LOG_CATEGORY_STATIC(LogRoadAgent, Log, All);
 
 void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 {
@@ -145,7 +146,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// SpeedCap 1000, turn rate 10) rather than the airframe's figures - see issue #27.
 		Phase = EAgentPhase::Taxiing;
 		Follower.Start(TaxiInPlan, Airframe.Ground);
-		UE_LOG(LogRoadMesh, Log, TEXT("Vacated; taxiing in."));
+		UE_LOG(LogRoadAgent, Log, TEXT("Vacated; taxiing in."));
 
 		// THIS FRAME'S ARRIVAL ADVANCE DECLINED, so - same rule as every other decline -
 		// LastMotion is handed back UNRECOMPUTED rather than described afresh. Recomputing
@@ -186,7 +187,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 					DepartureOrder.RunwayLength, Airframe.Ground, Airframe.Climb, LastMotion.Heading))
 				{
 					Phase = EAgentPhase::Departing;
-					UE_LOG(LogRoadMesh, Log, TEXT("Taxi complete; rolling for departure."));
+					UE_LOG(LogRoadAgent, Log, TEXT("Taxi complete; rolling for departure."));
 				}
 				// Declined (see FTakeoffRun::Start): stays Taxiing rather than driving off
 				// a runway it cannot use. This route was validated before dispatch, so it
@@ -203,7 +204,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// while the chocks go in.
 				Phase = EAgentPhase::Parked;
 				ShutdownCountdown = ShutdownPause;
-				UE_LOG(LogRoadMesh, Log,
+				UE_LOG(LogRoadAgent, Log,
 					TEXT("Parked. Shutting down in %.0f s."), ShutdownCountdown);
 			}
 		}
@@ -224,7 +225,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// a shutdown at the stand is what would clear it. The propeller stops and
 				// the aircraft stays where it is.
 				bEngineRunning = false;
-				UE_LOG(LogRoadMesh, Log, TEXT("Engine shut down at the stand."));
+				UE_LOG(LogRoadAgent, Log, TEXT("Engine shut down at the stand."));
 			}
 		}
 
@@ -244,7 +245,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 
 		// Cleared. The aircraft has gone - see ARoadNetworkActor::Tick for why the caller
 		// destroys the view and drops the agent the moment this returns false.
-		UE_LOG(LogRoadMesh, Log, TEXT("Departure complete, agent despawned"));
+		UE_LOG(LogRoadAgent, Log, TEXT("Departure complete, agent despawned"));
 		Phase = EAgentPhase::Gone;
 		return false;
 	}
