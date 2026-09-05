@@ -73,7 +73,13 @@ struct AIRSIDE_API FArrivalPlan
 	/** Shortest taxi from Exit to a stand. */
 	UPROPERTY() FRoutePlan TaxiIn;
 
-	/** None means every step above succeeded and every other field is meaningful. */
+	/**
+	 * None means every step above succeeded and every other field is meaningful.
+	 *
+	 * DEFAULTS TO NoRunway, not None - fail closed. A default-constructed plan (one nobody
+	 * has run Plan() over yet) must read as refused, never as an arrival some caller could
+	 * mistake for valid and act on.
+	 */
 	UPROPERTY() EArrivalRefusal Why = EArrivalRefusal::NoRunway;
 
 	bool IsValid() const { return Why == EArrivalRefusal::None; }

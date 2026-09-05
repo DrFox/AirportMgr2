@@ -23,11 +23,6 @@ namespace ArrivalPlanner
 		// field, which is what "pressing 7 does nothing" turned out to be.
 		Out.Needed = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach)
 			* FLandingRun::LandingMargin;
-		if (Out.RunwayLength < Out.Needed)
-		{
-			Out.Why = EArrivalRefusal::RunwayTooShort;
-			return Out;
-		}
 
 		// The runway's own width bounds what counts as ON it, the same figure RunwayExtentAt
 		// uses for its reach - so "on the runway" means one thing across the whole model.
@@ -48,15 +43,25 @@ namespace ArrivalPlanner
 		// 2. THE EARLIEST EXIT IT COULD TAKE, asked before anything is armed - the same
 		//    discipline as a departure refusing a strip it cannot leave.
 		//
-		//    CALLED ONCE. DispatchArrival used to call this twice, the second time with
-		//    MinDistance 0 purely to log how many nodes sat on the strip at all versus how many
-		//    were far enough down to use. That count served a diagnostic log line, not a
-		//    decision - Plan makes no decision from it - so it is dropped rather than paid for
-		//    on every dispatch; a caller that wants it back can run the MinDistance-0 query
-		//    itself, the same cheap filter this used to duplicate.
+		//    CALLED ONCE, and ALWAYS - even when the runway is already too short to matter -
+		//    so ExitCount is populated on every path DispatchArrival logs from, RunwayTooShort
+		//    included (it comes back 0 there: MinDistance Needed exceeds a too-short runway,
+		//    so nothing qualifies, which is the right answer to report). DispatchArrival used
+		//    to call this twice, the second time with MinDistance 0 purely to log how many
+		//    nodes sat on the strip at all versus how many were far enough down to use. That
+		//    count served a diagnostic log line, not a decision - Plan makes no decision from
+		//    it - so it is dropped rather than paid for on every dispatch; a caller that wants
+		//    it back can run the MinDistance-0 query itself, the same cheap filter this used
+		//    to duplicate.
 		const TArray<FGuidelineNodeId> Exits =
 			Network.RunwayExitNodes(Out.Threshold, Out.Direction, Out.RunwayLength, HalfWidth, Out.Needed);
 		Out.ExitCount = Exits.Num();
+
+		if (Out.RunwayLength < Out.Needed)
+		{
+			Out.Why = EArrivalRefusal::RunwayTooShort;
+			return Out;
+		}
 		if (Exits.Num() == 0)
 		{
 			Out.Why = EArrivalRefusal::NoExit;

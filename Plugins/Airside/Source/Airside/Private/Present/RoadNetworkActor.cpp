@@ -1877,6 +1877,19 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 	// WHICH RUNWAY, WHICH EXIT, WHICH STAND - none of that needs a world, so issue #29 moved
 	// it to Model/ArrivalPlanner. This is left with arming, spawning and logging the plan.
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, Near, Airframe);
+
+	// Reported whether or not this succeeds, because a refusal that does not say which of
+	// these was the problem is a feature that "does nothing". Skipped only for NoRunway,
+	// which found no runway at all - every other field here is meaningless until one is.
+	if (Plan.Why != EArrivalRefusal::NoRunway)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop, %d usable exit(s), ")
+			TEXT("%d stand(s) on the airport."),
+			*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
+			Plan.ExitCount, Network->GetEntities().Num());
+	}
+
 	if (!Plan.IsValid())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
