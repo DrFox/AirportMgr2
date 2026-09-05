@@ -2,6 +2,7 @@
 
 #include "Build/RoadMeshBuilder.h"
 #include "Content/AirsideContent.h"
+#include "Model/ArrivalPlanner.h"
 #include "Solve/RunwayDesignator.h"
 #include "Content/AirsideSettings.h"
 #include "Build/RoadNetworkSolver.h"
@@ -1865,9 +1866,7 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	}
 }
 
-bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerformance& Ground,
-	const FClimbPerformance& Climb, const FApproachPerformance& Approach,
-	const FEnginePerformance& Engine, double Wingspan)
+bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
 {
 	UWorld* World = GetWorld();
 	if (World == nullptr || Network == nullptr)
@@ -1875,188 +1874,65 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FGroundPerf
 		return false;
 	}
 
-	// 1. WHICH RUNWAY. Nearest threshold to the click, which is the user's own choice of rule
-	//    - there is no wind model, so nothing else could decide it.
-	FVector2D Threshold;
-	FVector2D Direction;
-	double Length = 0.0;
-	if (!Network->NearestRunwayThreshold(Near, Threshold, Direction, Length))
-	{
-		UE_LOG(LogRoadMesh, Warning, TEXT("No runway to land on - draw one first."));
-		return false;
-	}
-
-	// 2. THE EARLIEST EXIT IT COULD TAKE. Asked BEFORE arming, so an arrival is never flown
-	//    to a runway it has no way off - the same discipline as the departure refusing a
-	//    strip it cannot leave.
-	// The distance the model actually flies, plus its margin - see FLandingRun. The closed
-	// form this replaces demanded 649 m of a 297 m landing and refused every runway on the
-	// field, which is what "pressing 7 does nothing" turned out to be.
-	const double Needed =
-		FLandingRun::RequiredLandingDistance(Ground, Climb, Approach) * FLandingRun::LandingMargin;
-
-	// The runway's own width bounds what counts as ON it, the same figure RunwayExtentAt
-	// uses for its reach - so "on the runway" means one thing across the whole model.
-	double HalfWidth = 0.0;
-	for (const FRoadSegment& Segment : Network->GetSegments())
-	{
-		if (!Segment.bAlive)
-		{
-			continue;
-		}
-		// Named apart from the actor's own Profile member, which it would otherwise hide.
-		const URoadProfile* SegmentProfile = Network->ProfileFor(Segment);
-		if (SegmentProfile != nullptr && SegmentProfile->bContinuousThroughJunctions)
-		{
-			HalfWidth = FMath::Max(HalfWidth, SegmentProfile->GetTotalWidth() * 0.5);
-		}
-	}
-
-	const TArray<FGuidelineNodeId> Exits =
-		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, Needed);
+	// WHICH RUNWAY, WHICH EXIT, WHICH STAND - none of that needs a world, so issue #29 moved
+	// it to Model/ArrivalPlanner. This is left with arming, spawning and logging the plan.
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, Near, Airframe);
 
 	// Reported whether or not this succeeds, because a refusal that does not say which of
-	// these was the problem is a feature that "does nothing". Every one of these numbers was
-	// missing from the first refusal message and every one of them was needed to diagnose it.
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop. %d node(s) on the strip, "
-			 "%d of them usable as exits. %d stand(s) on the airport."),
-		*RunwayDesignator::ToPairText(Direction), Length, Needed,
-		Network->RunwayExitNodes(Threshold, Direction, Length, HalfWidth, 0.0).Num(),
-		Exits.Num(), Network->GetEntities().Num());
-
-	// 3. WHICH STAND. Shortest route, the user's rule - and taken from the FIRST exit that
-	//    reaches anything, because an aircraft takes the earliest turn-off it can rather than
-	//    rolling to the end in search of a marginally shorter taxi.
-	FRoutePlan Best;
-	FGuidelineNodeId BestExit;
-	for (const FGuidelineNodeId& Exit : Exits)
+	// these was the problem is a feature that "does nothing". Skipped only for NoRunway,
+	// which found no runway at all - every other field here is meaningless until one is.
+	if (Plan.Why != EArrivalRefusal::NoRunway)
 	{
-		double BestLength = TNumericLimits<double>::Max();
-		for (const FEntityInstance& Stand : Network->GetEntities())
-		{
-			if (!Stand.bAlive || !Stand.PoseNode.IsSet())
-			{
-				continue;
-			}
-
-			const FRoutePlan Plan =
-				FindRoute(Exit, Stand.PoseNode, ETraversalClass::Aircraft, Wingspan);
-			if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
-			{
-				continue;
-			}
-
-			const double PlanLength = Plan.Length;
-			if (PlanLength < BestLength)
-			{
-				BestLength = PlanLength;
-				Best = Plan;
-				BestExit = Exit;
-			}
-		}
-
-		if (Best.IsValid())
-		{
-			break;
-		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop, %d usable exit(s), ")
+			TEXT("%d stand(s) on the airport."),
+			*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
+			Plan.ExitCount, Network->GetEntities().Num());
 	}
 
-	if (!Best.IsValid())
+	if (!Plan.IsValid())
 	{
-		if (Length < Needed)
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to "
-					 "stop. Draw a longer runway."),
-				Length, Needed);
-		}
-		else if (Exits.Num() == 0)
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("Arrival refused: nothing joins the runway beyond %.0f uu, so there is "
-					 "no exit this aircraft could take. Connect a taxiway further down it."),
-				Needed);
-		}
-		else
-		{
-			UE_LOG(LogRoadMesh, Warning,
-				TEXT("Arrival refused: %d usable exit(s), but no route from any of them to a "
-					 "stand. Check the taxiway reaches the stands."),
-				Exits.Num());
-		}
+		UE_LOG(LogRoadMesh, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
 		return false;
 	}
 
-	// WHERE IT LEAVES THE RUNWAY, handed to the landing so the rollout carries on to the
-	// taxiway at taxi speed instead of stopping wherever the braking ran out. Without this
-	// the follower starts at the exit node and the aircraft jumps to it.
-	double VacateAt = Length;
-	if (const FGuidelineNode* ExitNode = Network->GetGuidelineNode(BestExit))
-	{
-		VacateAt = FVector2D::DotProduct(ExitNode->Position - Threshold, Direction);
-	}
-
-	// One struct holding every fact about this aeroplane - see FAirframe - so the landing,
-	// the taxi and a later departure are guaranteed to read the SAME Ground figures rather
-	// than three copies that could disagree. That disagreement is exactly what issue #27
-	// was: the taxi read Follower.Ground, which nothing had ever set to Ground's argument.
-	FAirframe Airframe;
-	Airframe.Ground = Ground;
-	Airframe.Climb = Climb;
-	Airframe.Approach = Approach;
-	Airframe.Engine = Engine;
-	Airframe.Wingspan = Wingspan;
-
 	FRoadAgent Agent;
-	if (!Agent.StartArrival(Threshold, Direction, Length, Airframe, VacateAt, Best))
+	if (!Agent.StartArrival(Plan.Threshold, Plan.Direction, Plan.RunwayLength, Airframe, Plan.VacateAt, Plan.TaxiIn))
 	{
 		// FLandingRun has already logged why. Nothing spawns: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.
 		return false;
 	}
 
-	// FRoadAgent is world-free and cannot read this actor's UPROPERTY for itself, so the
-	// pause is copied in at dispatch - the only time the two ever need to meet.
+	// FRoadAgent is world-free and cannot read this actor's UPROPERTY, so the pause is copied in here.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
-
 	FActorSpawnParameters Params;
 	Params.Owner = this;
 	Params.ObjectFlags |= RF_Transient;
-
 	FAgentSlot Slot;
-	Slot.View = World->SpawnActor<ARoadAgentActor>(
-		FVector::ZeroVector, FRotator::ZeroRotator, Params);
+	Slot.View = World->SpawnActor<ARoadAgentActor>(FVector::ZeroVector, FRotator::ZeroRotator, Params);
 	if (Slot.View == nullptr)
 	{
 		return false;
 	}
-
-	// The airframe MESH is pushed in, like the pose - see DispatchAgent for what fetching it
-	// by path cost. Not to be confused with the FAirframe struct above, which is the model's
-	// performance figures rather than the view's asset.
+	// The airframe MESH, not to be confused with the FAirframe performance struct above.
 	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 	{
-		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
-			Content->AgentAnimClass.LoadSynchronous());
+		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(), Content->AgentAnimClass.LoadSynchronous());
 	}
 
-	// Posed before its first tick, at the far end of final and in the air, so it never
-	// appears at the origin for a frame - this project's most-repeated bug. Zero delta asks
-	// Advance for where the arrival starts without moving it.
+	// Posed before its first tick so it never appears at the origin - zero delta asks where it starts.
+	FAgentMotion Motion;
+	if (Agent.Advance(0.0, Motion))
 	{
-		FAgentMotion Motion;
-		if (Agent.Advance(0.0, Motion))
-		{
-			Slot.View->SetMotion(Motion, SurfaceZ);
-		}
+		Slot.View->SetMotion(Motion, SurfaceZ);
 	}
 
 	UE_LOG(LogRoadMesh, Log,
-		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, "
-			 "taxiing %.0f uu to a stand."),
-		*RunwayDesignator::ToPairText(Direction), Length, Needed,
-		Exits.IndexOfByKey(BestExit) + 1, Exits.Num(), Best.Length);
+		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, ")
+		TEXT("taxiing %.0f uu to a stand."),
+		*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
+		Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
 
 	Slot.Agent = MoveTemp(Agent);
 	Agents.Add(MoveTemp(Slot));
