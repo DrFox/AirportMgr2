@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
@@ -27,6 +28,14 @@ struct AIRSIDE_API FAgentSlot
 	UPROPERTY() FRoadAgent Agent;
 
 	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
+
+	/**
+	 * Stable identity for the lifetime of the agent. Slot indices shift on RemoveAt, and a
+	 * pointer to the view dies with it, so a listener that wants to say "the one I
+	 * dispatched" needs a number nothing else reuses. Assigned from UAirsideTraffic::
+	 * NextAgentId; 0 means unassigned and is never handed out.
+	 */
+	UPROPERTY() int32 Id = 0;
 };
 
 /**
@@ -52,6 +61,24 @@ class AIRSIDE_API UAirsideTraffic : public UObject
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Fired on every phase change, including spawn (From == Gone) and removal (To == Gone).
+	 * Gone-as-"did not exist" is the reading LastAgentPhaseForTest already gives it, so one
+	 * convention covers both ends of an agent's life without a separate spawned/removed pair.
+	 * A plain (non-dynamic) delegate: the only subscriber is C++ in AirportOps, which relays
+	 * onto its own Blueprint-facing bus. Making this one dynamic too would be two Blueprint
+	 * surfaces for one fact.
+	 */
+	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAgentPhaseChanged, int32 /*AgentId*/, EAgentPhase /*From*/, EAgentPhase /*To*/);
+	FOnAgentPhaseChanged OnAgentPhaseChanged;
+
+	/** Fired when DispatchArrival refuses, with the planner's reason. The log line stays too. */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnArrivalRefused, EArrivalRefusal);
+	FOnArrivalRefused OnArrivalRefused;
+
+	/** Id of the most recently dispatched agent, or 0 when nothing is under way. */
+	int32 GetNewestAgentId() const { return Agents.Num() > 0 ? Agents.Last().Id : 0; }
+
 	/**
 	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
 	 *
@@ -80,6 +107,29 @@ public:
 	 */
 	bool DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan, const FAirframe& Airframe,
 		double SurfaceZ, double ShutdownPauseSeconds);
+
+	/**
+	 * Sends an EXISTING agent along a new plan, keeping its id and its view.
+	 *
+	 * The seam AirportOps composes "go to the stand, dwell, return to the depot" from
+	 * (spec §2.0, amended by the M1 plan): DispatchAgent, then on the Parked event wait the
+	 * dwell on the sim clock, then this, then RetireAgent on the second Parked. Dwell lives
+	 * with the job, not here, because how long a fuel truck stays is a fact about the fuel
+	 * job, and movement should not have to be told about jobs.
+	 *
+	 * Accepted in Parked or Taxiing (a mid-route redirect is a replan). Refused in Arriving
+	 * or Departing - an aircraft on the runway is not something a job can redirect - and for
+	 * an unknown id. Arms a departure if the new route ends on a runway, exactly as
+	 * DispatchAgent does, through the same helper.
+	 */
+	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
+
+	/**
+	 * Removes an agent and its view immediately, announcing <phase> -> Gone. For a service
+	 * vehicle that has returned to its depot: it does not fly away, so nothing else would
+	 * ever remove it. False for an unknown id.
+	 */
+	bool RetireAgent(int32 AgentId);
 
 	/** Removes every agent and its cube. */
 	void ClearAgents();
@@ -132,6 +182,12 @@ public:
 		return Agents.Num() > 0 ? Agents.Last().Agent.Follower.Ground.Taxi.SpeedCap : 0.0;
 	}
 
+	/** The newest agent's last shown position, road plane, for the redirect test. Zero when none. */
+	FVector2D LastAgentPositionForTest() const
+	{
+		return Agents.Num() > 0 ? Agents.Last().Agent.LastMotion.Position : FVector2D::ZeroVector;
+	}
+
 private:
 	/**
 	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
@@ -140,4 +196,19 @@ private:
 	 * re-opening a map would restore half-driven cubes that no longer have a route.
 	 */
 	UPROPERTY(Transient) TArray<FAgentSlot> Agents;
+
+	/** Next FAgentSlot::Id to hand out. Transient: ids are per-session, agents never reach disk. */
+	UPROPERTY(Transient) int32 NextAgentId = 1;
+
+	/** Assigns the slot's id, stores it, and announces the spawn. The one place both happen. */
+	void Admit(FAgentSlot&& Slot);
+
+	int32 FindSlot(int32 AgentId) const;
+
+	/**
+	 * Arms a departure when Plan ends on a runway. Pulled out of DispatchAgent so
+	 * RedirectAgent gets the identical rule; two copies would be the drift this codebase's
+	 * "one struct per thing" rule exists to prevent.
+	 */
+	void ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const;
 };

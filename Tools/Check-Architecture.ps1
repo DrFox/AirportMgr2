@@ -72,10 +72,12 @@ foreach ($module in $modules) {
 # --- 1b. Cross-plugin direction: Airside never includes AirportOps ------------------------
 # AirportOps -> Airside is the only legal direction. A header from the ops plugin inside
 # Airside would make movement depend on money, which is the boundary the plugin split exists
-# to hold. Matched on the include path AND on the API macro, because a forward-declared
-# AIRPORTOPS_API type is the same leak with no #include to catch.
+# to hold. Matched on CODE references - an include path, the API macro, or a UOps* class
+# name (a forward declaration is the same leak with no #include to catch) - and NOT on the
+# bare word, because a WHY comment that names the consumer ("AirportOps binds this") is
+# exactly the kind of comment this codebase wants more of.
 foreach ($file in Get-Sources (Join-Path $Root 'Plugins\Airside\Source') @('.h', '.cpp')) {
-    $hits = Select-String -Path $file.FullName -Pattern 'AirportOps|AIRPORTOPS_API'
+    $hits = Select-String -Path $file.FullName -Pattern '#include\s+"[^"]*AirportOps|AIRPORTOPS_API|\bUOps[A-Z]\w*'
     foreach ($h in $hits) {
         $failures.Add("cross-plugin: $($file.FullName):$($h.LineNumber) Airside must not reference AirportOps: $($h.Line.Trim())")
     }

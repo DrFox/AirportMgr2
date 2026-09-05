@@ -126,6 +126,13 @@ public:
 	/** The most recently dispatched agent's actor, or null. Forwards to Traffic. */
 	ARoadAgentActor* GetNewestAgent() const;
 
+	/**
+	 * The traffic mediator, for AirportOps to bind its delegates. READ ACCESS TO A SUBOBJECT,
+	 * not a forwarder per delegate: the actor is a composition root that grows by forwarding
+	 * (CLAUDE.md), and a forwarder per event would re-grow it one line per event for ever.
+	 */
+	UAirsideTraffic* GetTraffic() const { return Traffic; }
+
 	/** Route between two guideline nodes over the network this actor owns. Forwards to the
 	 *  facade, so a tool, a Blueprint and the HUD all ask the same question of the same
 	 *  graph rather than three of them reaching past it. */

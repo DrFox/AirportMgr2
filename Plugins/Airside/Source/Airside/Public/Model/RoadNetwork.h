@@ -177,6 +177,13 @@ public:
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 
 	/**
+	 * The handle for a live slot index, for callers walking GetGuidelineNodes() by index.
+	 * Unset for a dead or out-of-range slot, so a caller cannot build a handle to a node
+	 * that RoadSlot::IsValid would then reject.
+	 */
+	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
+
+	/**
 	 * Edges an agent of this class may leave Node along, honouring access AND direction.
 	 *
 	 * Returns edges, not neighbours, because a caller needs the edge's own width, wingspan

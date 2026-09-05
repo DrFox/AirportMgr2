@@ -550,6 +550,11 @@ const FGuidelineNode* URoadNetwork::GetGuidelineNode(FGuidelineNodeId Node) cons
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
+FGuidelineNodeId URoadNetwork::GuidelineNodeIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FGuidelineNodeId>(GuidelineNodes, Index);
+}
+
 const FGuidelineEdge* URoadNetwork::GetGuidelineEdge(FGuidelineEdgeId Edge) const
 {
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);

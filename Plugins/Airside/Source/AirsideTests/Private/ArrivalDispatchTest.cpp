@@ -7,6 +7,7 @@
 #include "Model/LandingRun.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 
@@ -47,6 +48,13 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// PHASE EVENTS ARE THE SEAM AirportOps drives on (spec §2.0). Recorded here, in the test
+	// that already ticks a real arrival end to end, because a delegate that fires in a unit
+	// test of FRoadAgent proves nothing about whether UAirsideTraffic::Advance broadcasts it.
+	TArray<TPair<EAgentPhase, EAgentPhase>> Transitions;
+	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
+		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
 
 	FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
 
@@ -196,6 +204,18 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the parked follower taxied on the airframe's own SpeedCap, not the ")
 			TEXT("FGroundPerformance struct default"),
 			Actor->LastAgentTaxiSpeedCapForTest(), 1234.0);
+
+		// The seam: every handover the loop above drove was ANNOUNCED, in the order it
+		// happened, and the spawn was announced as Gone -> Arriving.
+		auto Has = [&Transitions](EAgentPhase From, EAgentPhase To)
+		{
+			return Transitions.ContainsByPredicate([From, To](const TPair<EAgentPhase, EAgentPhase>& T)
+				{ return T.Key == From && T.Value == To; });
+		};
+		TestTrue(TEXT("spawn is announced as Gone -> Arriving"), Has(EAgentPhase::Gone, EAgentPhase::Arriving));
+		TestTrue(TEXT("vacating the runway is announced as Arriving -> Taxiing"), Has(EAgentPhase::Arriving, EAgentPhase::Taxiing));
+		TestTrue(TEXT("reaching the stand is announced as Taxiing -> Parked"), Has(EAgentPhase::Taxiing, EAgentPhase::Parked));
+		TestTrue(TEXT("the agent id is assigned from 1"), Actor->GetTraffic()->GetNewestAgentId() >= 1);
 	}
 
 	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
