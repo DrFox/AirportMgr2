@@ -1,6 +1,6 @@
 #include "Model/TakeoffRun.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogTakeoff, Log, All);
+#include "AirsideLog.h"
 
 namespace
 {
@@ -49,14 +49,14 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	if (!InGround.IsSet() || !InGround.Takeoff.IsSet() || !InClimb.IsSet())
 	{
-		UE_LOG(LogTakeoff, Warning,
+		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Departure refused: the airframe has no take-off or climb performance."));
 		return false;
 	}
 
 	if (InDirection.IsNearlyZero())
 	{
-		UE_LOG(LogTakeoff, Warning, TEXT("Departure refused: the runway has no direction."));
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("Departure refused: the runway has no direction."));
 		return false;
 	}
 
@@ -65,7 +65,7 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	{
 		// The whole reason this returns a bool. A strip shorter than the roll to Vr is one
 		// this aircraft cannot leave, and rolling anyway simulates an overrun.
-		UE_LOG(LogTakeoff, Warning,
+		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Departure refused: %.0f uu of runway, %.0f needed to reach %.0f uu/s."),
 			InRunwayLength, Needed, InGround.Takeoff.SpeedCap);
 		return false;
@@ -87,7 +87,7 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Speed = Ground.MinTaxiSpeed;
 	Phase = ETakeoffPhase::LineUp;
 
-	UE_LOG(LogTakeoff, Log,
+	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Departure armed: %.0f uu runway, %.0f needed, rotate at %.0f uu/s."),
 		RunwayLength, Needed, Ground.Takeoff.SpeedCap);
 	return true;

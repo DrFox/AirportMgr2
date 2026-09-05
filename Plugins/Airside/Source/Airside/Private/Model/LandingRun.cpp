@@ -1,6 +1,6 @@
 #include "Model/LandingRun.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogLanding, Log, All);
+#include "AirsideLog.h"
 
 double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	const FClimbPerformance& InClimb, const FApproachPerformance& InApproach)
@@ -61,7 +61,7 @@ bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	const double Needed = RequiredLandingDistance(InGround, InClimb, InApproach) * LandingMargin;
 	if (InRunwayLength < Needed)
 	{
-		UE_LOG(LogLanding, Warning,
+		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s "
 				 "(%.0f flown plus a %.0f%% margin)."),
 			InRunwayLength, Needed, InGround.Landing.SpeedCap,
@@ -81,14 +81,14 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	if (!InGround.IsSet() || !InGround.Landing.IsSet() || !InClimb.IsSet() || !InApproach.IsSet())
 	{
-		UE_LOG(LogLanding, Warning,
+		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Arrival refused: the airframe has no landing or approach performance."));
 		return false;
 	}
 
 	if (InDirection.IsNearlyZero())
 	{
-		UE_LOG(LogLanding, Warning, TEXT("Arrival refused: the runway has no direction."));
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("Arrival refused: the runway has no direction."));
 		return false;
 	}
 
@@ -117,7 +117,7 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	Phase = ELandingPhase::Approach;
 
-	UE_LOG(LogLanding, Log,
+	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Arrival armed: %.0f uu runway, vacating at %.0f, Vref %.0f uu/s, joining %.0f uu out."),
 		RunwayLength, VacateAt, Speed, Approach.FinalDistance());
 	return true;
@@ -209,7 +209,7 @@ bool FLandingRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& O
 			Altitude = 0.0;
 			Phase = ELandingPhase::Rollout;
 
-			UE_LOG(LogLanding, Log,
+			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Touchdown %.0f uu past the threshold at %.0f uu/s, %.1f deg nose-up."),
 				Travelled, Speed, Pitch);
 		}
@@ -238,7 +238,7 @@ bool FLandingRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& O
 		if (Speed <= Floor && Travelled >= VacateAt)
 		{
 			Phase = ELandingPhase::Vacated;
-			UE_LOG(LogLanding, Log,
+			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Vacated %.0f uu past the threshold of %.0f available."),
 				Travelled, RunwayLength);
 		}
