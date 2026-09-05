@@ -67,11 +67,9 @@ public:
 	 * DECLINE. UDynamicMeshComponent holds its mesh as UPROPERTY(Instanced) with no
 	 * Transient flag, so the built surface is serialised into the level and comes back on
 	 * load. That surface is DERIVED - the graph is the truth - and a persisted derived
-	 * value with no invalidation is stale by definition. It stayed stale until something
-	 * rebuilt for an unrelated reason, at which point roads the user had drawn in an
-	 * earlier session visibly changed width and material. See
-	 * Airside.Present.MeshIsFreshAfterLoad, and the measurement: 276 triangles loaded from
-	 * the level against 194 the model produced.
+	 * value with no invalidation is stale by definition. It stayed stale until an unrelated
+	 * rebuild caught up, changing width and material under roads already drawn - see
+	 * Airside.Present.MeshIsFreshAfterLoad.
 	 *
 	 * This hook rather than PostLoad because the mesh component must be REGISTERED before
 	 * it will accept one, and rather than BeginPlay because the editor viewport is where
@@ -83,9 +81,9 @@ public:
 	 * The billboard half: USceneComponent::CreateSpriteComponent runs on EVERY OnRegister
 	 * and attaches an /Engine/EditorResources/EmptyActor sprite whenever bVisualizeComponent
 	 * is set. This actor's mesh is in absolute space, so its transform stays at the world
-	 * origin - and a sprite there reads as a node the build tool drew at (0,0), which is
-	 * precisely the false picture the editor mode has already produced twice. The
-	 * constructor clears the flag; this catches any component another path attached.
+	 * origin - and a sprite there reads as a node the build tool drew at (0,0), a false
+	 * picture. The constructor clears the flag; this catches any component another path
+	 * attached.
 	 */
 	virtual void PostRegisterAllComponents() override;
 
