@@ -38,8 +38,36 @@ struct FToolRegistration
 AIRSIDE_API TConstArrayView<FToolRegistration> ToolRegistry();
 
 /**
- * Owns the tool session both build drivers drive: which tools exist, which one is active,
- * and the snap/placement rules a click is judged against.
+ * The tunables a click is judged against, as one bundle rather than three separate
+ * arguments to MakeContext.
+ *
+ * These used to live as mutable members on FBuildSession, pushed in by the caller just
+ * before each MakeContext call - an ordering contract nothing enforced, and the reason
+ * MakeToolContext/MakeContext/MakeContextAt/MakeHoverContext all had to lose their `const`
+ * (they needed to write the members before reading them back). Passing them as one value
+ * instead means MakeContext can stay const, and there is no "did you remember to push
+ * first" question to get wrong.
+ */
+struct FBuildSessionTunables
+{
+	/** Radii and toggles the snap chain judges a click against. */
+	FRoadSnapSettings Snap;
+
+	/** Shortest segment and tightest turn a click may build. */
+	FRoadPlacementLimits Limits;
+
+	/**
+	 * How close, in uu, the cursor counts as "on" something a tool is asking about.
+	 *
+	 * SEPARATE from Snap's own radii, which decide where a ROAD NODE lands - see
+	 * ARoadBuildController::ToolPickRadius, whose comment this one keeps.
+	 */
+	double ToolPickRadius = 400.0;
+};
+
+/**
+ * Owns the tool session both build drivers drive: which tools exist and which one is
+ * active.
  *
  * Before issue #33 this state was `ARoadBuildController`'s alone, and `URoadBuildEditorTool`
  * carried its own second copy - a `switch` over four tools instead of the runtime's six, its
@@ -47,9 +75,9 @@ AIRSIDE_API TConstArrayView<FToolRegistration> ToolRegistry();
  * drifted (no guideline tool, no runway tool, in the editor) before this existed to stop it.
  *
  * It knows nothing about cameras, input devices, or worlds - see `MakeContext`, which takes
- * the plane hit and the modifier state as arguments rather than reading a mouse or a
- * `PlayerController` itself. That is what lets both an `APlayerController` and a plain
- * `UInteractiveTool` hold one.
+ * the plane hit, the tunables and the modifier state as arguments rather than reading a
+ * mouse or a `PlayerController` itself. That is what lets both an `APlayerController` and a
+ * plain `UInteractiveTool` hold one.
  */
 class AIRSIDE_API FBuildSession
 {
@@ -75,7 +103,7 @@ public:
 	void SelectTool(int32 Index, const FToolContext& DeactivateContext = FToolContext());
 
 	/**
-	 * What a click at PlaneHit would resolve to, over Network.
+	 * What a click at PlaneHit would resolve to, over Network, judged by Snap.
 	 *
 	 * Before the first node exists there is no network to search - the facade builds one
 	 * lazily inside PlaceNode. Free at the cursor is the right answer here, not a refusal:
@@ -84,7 +112,8 @@ public:
 	 * two drivers used to call this as, and so a future rule that CAN refuse - an edit lock,
 	 * say - has somewhere to return false from without changing every call site.
 	 */
-	bool ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit, FRoadSnapResult& Out) const;
+	bool ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+		const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const;
 
 	/**
 	 * Everything a tool needs to judge PlaneHit, with the snap chain already run over it.
@@ -96,24 +125,10 @@ public:
 	 * has none.
 	 */
 	FToolContext MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-		bool bRemoveModifier, bool bInsertModifier) const;
+		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier) const;
 
 	/** Right click (or Escape, in the editor): step back out of whatever is part-drawn. */
 	void CancelActiveGesture(const FToolContext& Context);
-
-	/** Radii and toggles a click is judged against. Pushed from tunables every frame. */
-	FRoadSnapSettings Snap;
-
-	/** Shortest segment and tightest turn a click may build. Pushed every frame too. */
-	FRoadPlacementLimits Limits;
-
-	/**
-	 * How close, in uu, the cursor counts as "on" something a tool is asking about.
-	 *
-	 * SEPARATE from Snap's own radii, which decide where a ROAD NODE lands - see
-	 * ARoadBuildController::ToolPickRadius, whose comment this one keeps.
-	 */
-	double ToolPickRadius = 400.0;
 
 private:
 	/**

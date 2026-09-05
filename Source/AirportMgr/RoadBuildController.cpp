@@ -287,37 +287,41 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	// Measured against the current view distance rather than a fixed number, because the
 	// view spans a hundredfold range and no single cap suits both ends of it.
 	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
-	if (RoadGeom::RayToPlaneZ(Origin, Direction, Target->SurfaceZ, Furthest, OutPosition))
+
+	RoadGeom::ERayToPlaneRefusal Why = RoadGeom::ERayToPlaneRefusal::None;
+	if (RoadGeom::RayToPlaneZ(Origin, Direction, Target->SurfaceZ, Furthest, OutPosition, &Why))
 	{
 		return true;
 	}
 
-	// RayToPlaneZ only says which of its three guards refused, not why the caller cares -
-	// so on refusal, and only then, re-derive which one it was to log something useful.
-	// Cheap to redo: this path is never taken by a click that succeeded.
 	if (bLogRefusals)
 	{
-		if (FMath::IsNearlyZero(Direction.Z))
+		switch (Why)
 		{
+		case RoadGeom::ERayToPlaneRefusal::Parallel:
 			UE_LOG(LogRoadBuild, Warning,
 				TEXT("Click ignored: the view is edge-on to the road plane (dir.Z=%.6f)."), Direction.Z);
-		}
-		else
-		{
-			const double Distance = (Target->SurfaceZ - Origin.Z) / Direction.Z;
-			if (Distance <= 0.0)
-			{
-				// Behind the camera. Without this a click on the sky lands on the plane's
-				// mirror image, dropping a node far off in the opposite direction.
-				UE_LOG(LogRoadBuild, Warning,
-					TEXT("Click ignored: the road plane is behind the camera there (distance %.0f)."), Distance);
-			}
-			else
-			{
-				UE_LOG(LogRoadBuild, Warning,
-					TEXT("Click ignored: the road plane is %.0f uu away there, past %.0f (%.1fx the view)."),
-					Distance, Furthest, MaxPlaceDistanceFactor);
-			}
+			break;
+
+		case RoadGeom::ERayToPlaneRefusal::BehindOrigin:
+			// Behind the camera. Without this a click on the sky lands on the plane's
+			// mirror image, dropping a node far off in the opposite direction.
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the road plane is behind the camera there."));
+			break;
+
+		case RoadGeom::ERayToPlaneRefusal::BeyondMaxDistance:
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the road plane is past %.0f uu away there (%.1fx the view)."),
+				Furthest, MaxPlaceDistanceFactor);
+			break;
+
+		case RoadGeom::ERayToPlaneRefusal::None:
+		default:
+			// Unreachable: RayToPlaneZ returned false, so Why is one of the three cases
+			// above. Left here rather than omitted so a fourth refusal added there is a
+			// compile warning here, not a silent no-op log.
+			break;
 		}
 	}
 	return false;
@@ -361,7 +365,7 @@ bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) 
 		return false;
 	}
 
-	return Session.ResolveSnap(Target->Network, Cursor, Out);
+	return Session.ResolveSnap(Target->Network, Cursor, MakeSnapSettings(), Out);
 }
 
 FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
@@ -392,28 +396,22 @@ bool ARoadBuildController::IsRemoveHeld() const
 	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 }
 
-FToolContext ARoadBuildController::MakeToolContext()
+FToolContext ARoadBuildController::MakeToolContext() const
 {
-	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
-	// this and the overlay draws it, so what is highlighted and what happens cannot come
-	// from two searches that merely tend to agree.
-	//
-	// Cursor is the RAW plane hit and the snap is carried BESIDE it - see
-	// FToolContext::SetCursor. This used to assign Context.Snap.Position to Cursor, which
-	// handed road-node semantics to every tool including the ones that place no road
-	// nodes: hovering a guideline node moved the cursor onto the junction it sits beside,
-	// and the route tool could never pick anything again.
 	FVector2D PlaneHit;
 	CursorOnRoadPlane(PlaneHit);
 
-	// Pushed into the session EVERY call rather than cached: PickRadius and friends are
-	// EditAnywhere, so a details-panel edit is meant to take effect on the very next click,
-	// the same reason PlayerTick pushes Target->PlacementLimits every frame below.
-	Session.Snap = MakeSnapSettings();
-	Session.Limits = MakePlacementLimits();
-	Session.ToolPickRadius = ToolPickRadius;
+	// Read fresh every call rather than cached, so a details-panel edit to PickRadius and
+	// friends takes effect on the very next click - see MakePlacementLimits' PlayerTick
+	// caller below for the same reasoning applied to the facade's own copy.
+	FBuildSessionTunables Tunables;
+	Tunables.Snap = MakeSnapSettings();
+	Tunables.Limits = MakePlacementLimits();
+	Tunables.ToolPickRadius = ToolPickRadius;
 
-	return Session.MakeContext(Target, PlaneHit, IsRemoveHeld(),
+	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
+	// it rather than being folded into it.
+	return Session.MakeContext(Target, PlaneHit, Tunables, IsRemoveHeld(),
 		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift));
 }
 

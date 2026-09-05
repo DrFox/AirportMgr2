@@ -5,6 +5,8 @@
 #include "GameFramework/PlayerController.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/RoadPlacement.h"
+#include "Tool/RoadSnap.h"
 #include "RoadBuildController.generated.h"
 
 class ARoadNetworkActor;
@@ -216,14 +218,8 @@ public:
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
 
-	/**
-	 * Everything the active tool needs to judge the current cursor.
-	 *
-	 * Not const: it pushes PickRadius and friends into Session before asking Session to
-	 * build the context, so a details-panel edit is live on the very next call rather than
-	 * the next PlayerTick.
-	 */
-	FToolContext MakeToolContext();
+	/** Everything the active tool needs to judge the current cursor. */
+	FToolContext MakeToolContext() const;
 
 	/**
 	 * What the next click would do, run through the snap chain. False only when the

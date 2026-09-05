@@ -44,9 +44,6 @@ private:
 	 */
 	static FString MakeToolName(int32 Index);
 
-	/** The four (now six) commands, in ToolRegistry() order. Shared by Enter and BindCommands so the two cannot list them in two different orders. */
-	static TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder(const class FRoadBuildEdModeCommands& Commands);
-
 	/** Escape: tell whichever build tool is active to drop what it was holding. */
 	void CancelActiveGesture();
 

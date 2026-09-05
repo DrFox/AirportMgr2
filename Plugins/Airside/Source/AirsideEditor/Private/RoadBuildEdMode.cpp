@@ -64,32 +64,27 @@ FString URoadBuildEdMode::MakeToolName(int32 Index)
 	return FString::Printf(TEXT("Airside_%s"), *ToolRegistry()[Index].Name.ToString());
 }
 
-TArray<TSharedPtr<FUICommandInfo>> URoadBuildEdMode::ToolCommandsInOrder(const FRoadBuildEdModeCommands& Commands)
-{
-	// In ToolRegistry() order - see FRoadBuildEdModeCommands, whose UI_COMMAND calls were
-	// written by hand to match. A mismatched Num() against the registry would mean a tool
-	// with no command or a command with no tool; Enter() asserts that rather than letting
-	// the two silently zip short.
-	return { Commands.DrawRoads, Commands.DrawAprons, Commands.PlaceStands,
-		Commands.FindRoutes, Commands.DrawGuidelines, Commands.PlaceRunways };
-}
-
 void URoadBuildEdMode::Enter()
 {
 	UEdMode::Enter();
 
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
-	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = ToolCommandsInOrder(Commands);
+	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
 	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
 
-	// Logged rather than a hard check(): the same choice ARoadBuildController::BeginPlay
-	// makes for the identical mismatch, because crashing the editor over a wiring mistake
-	// is a worse failure than a tool with no command.
+	// Logged rather than a hard check(): a crash over a wiring mistake is worse than a tool
+	// with no command. The runtime controller has no equivalent check any more - its tool
+	// list, its key bindings and its banner are ALL read from ToolRegistry() itself, so
+	// they cannot disagree by construction. This CAN still disagree:
+	// FRoadBuildEdModeCommands::ToolCommandsInOrder() is a hand-written UI_COMMAND list, a
+	// separate thing from ToolRegistry(), so this is the one place left that has to check
+	// the two agree rather than being able to assume it.
 	if (ToolCommands.Num() != Registry.Num())
 	{
 		UE_LOG(LogRoadBuildMode, Error,
-			TEXT("%d editor commands but %d registry entries - see FRoadBuildEdModeCommands "
-				 "and ToolCommandsInOrder. A tool past the shorter count gets no command."),
+			TEXT("%d editor commands but %d registry entries - see FRoadBuildEdModeCommands::"
+				 "ToolCommandsInOrder and ToolRegistry(). A tool past the shorter count gets "
+				 "no command."),
 			ToolCommands.Num(), Registry.Num());
 	}
 
@@ -143,7 +138,7 @@ void URoadBuildEdMode::BindCommands()
 		// processed by the viewport and therefore only once the viewport has keyboard
 		// focus - so 1/2/3 did nothing until you had clicked in it, and the click that
 		// gave it focus also started a road. Bound here as well, they work immediately.
-		const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = ToolCommandsInOrder(Commands);
+		const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
 		for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), ToolRegistry().Num()); ++Index)
 		{
 			Commands2->MapAction(ToolCommands[Index], StartToolAction(MakeToolName(Index)));

@@ -213,7 +213,7 @@ bool URoadBuildEditorTool::RayToPlane(const FRay& Ray, FVector2D& OutPosition) c
 		TNumericLimits<double>::Max(), OutPosition);
 }
 
-FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At)
+FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
 {
 	// Resolve the ray HERE, where a miss can fall back honestly. There is deliberately no
 	// "no ray" sentinel: FRay() defaults its direction to (0,0,1), which points straight
@@ -227,28 +227,27 @@ FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At)
 	return MakeContextAt(Plane);
 }
 
-FToolContext URoadBuildEditorTool::MakeHoverContext()
+FToolContext URoadBuildEditorTool::MakeHoverContext() const
 {
 	return MakeContextAt(HoverPosition);
 }
 
-FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane)
+FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 {
 	// How close counts as "on" something has to be a screen distance, not a world one.
 	// At the fixed 150 uu default, closing an apron meant clicking within 1.5 m of its
-	// first corner - unhittable when zoomed out over a runway. Pushed into Session before
-	// asking it to resolve and build, rather than passed as an argument MakeContext has no
-	// room for (its signature is shared with the runtime driver's call) - the same "push
-	// the tunable, then act" shape ARoadBuildController::MakeToolContext uses.
+	// first corner - unhittable when zoomed out over a runway. Passed to MakeContext as a
+	// local FBuildSessionTunables rather than pushed onto Session first - the session has
+	// no mutable tunables to push into any more, so MakeContextAt stays const.
 	const double SnapRadius = FMath::Max(150.0, ViewWorldWidth * 0.02);
-	Session.ToolPickRadius = SnapRadius;
-	Session.Snap.NodeRadius = SnapRadius;
-	Session.Snap.SegmentRadius = SnapRadius;
+	FBuildSessionTunables Tunables;
+	Tunables.ToolPickRadius = SnapRadius;
+	Tunables.Snap.NodeRadius = SnapRadius;
+	Tunables.Snap.SegmentRadius = SnapRadius;
 
-	// Through SetCursor, like the runtime driver, so the raw hit and the snapped answer
-	// cannot drift into meaning the same thing in one driver and different things in the
-	// other - which they did, and only one of them was right.
-	return Session.MakeContext(Target, Plane, bRemoveHeld, bInsertHeld);
+	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
+	// it rather than being folded into it.
+	return Session.MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)

@@ -39,14 +39,15 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
 }
 
+TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
+{
+	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways };
+}
+
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()
 {
-	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
-
 	TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> Palettes;
-	Palettes.Add(FName(TEXT("Build")), {
-		Commands.DrawRoads, Commands.DrawAprons, Commands.PlaceStands, Commands.FindRoutes,
-		Commands.DrawGuidelines, Commands.PlaceRunways });
+	Palettes.Add(FName(TEXT("Build")), FRoadBuildEdModeCommands::Get().ToolCommandsInOrder());
 	return Palettes;
 }
 

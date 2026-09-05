@@ -14,6 +14,18 @@ public:
 	/** Commands grouped by palette name, for UEdMode::GetModeCommands. */
 	static TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetCommands();
 
+	/**
+	 * The six tool commands, in ToolRegistry() order.
+	 *
+	 * The ONE list both GetCommands()'s palette and URoadBuildEdMode's RegisterTool/
+	 * BindCommands loops read from - see CLAUDE.md's "check where a list is CONSUMED, not
+	 * where it is declared". A second hard-coded copy of this ordering (the palette array
+	 * used to be one, spelled out again inside GetCommands()) is exactly the defect this
+	 * class exists to prevent: nothing checked that copy against this one, or against
+	 * ToolRegistry() itself.
+	 */
+	TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder() const;
+
 	TSharedPtr<FUICommandInfo> DrawRoads;
 	TSharedPtr<FUICommandInfo> DrawAprons;
 	TSharedPtr<FUICommandInfo> PlaceStands;

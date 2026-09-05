@@ -62,7 +62,8 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	ActiveTool = Index;
 }
 
-bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit, FRoadSnapResult& Out) const
+bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+	const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const
 {
 	Out = FRoadSnapResult();
 	Out.Position = PlaneHit;
@@ -75,12 +76,12 @@ bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& Pl
 }
 
 FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-	bool bRemoveModifier, bool bInsertModifier) const
+	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier) const
 {
 	FToolContext Context;
 	Context.Target = Target;
-	Context.Limits = Limits;
-	Context.SnapRadius = ToolPickRadius;
+	Context.Limits = Tunables.Limits;
+	Context.SnapRadius = Tunables.ToolPickRadius;
 	Context.bRemoveModifier = bRemoveModifier;
 	Context.bInsertModifier = bInsertModifier;
 
@@ -88,7 +89,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
 	// from two searches that merely tend to agree.
 	FRoadSnapResult Snapped;
-	ResolveSnap(Target != nullptr ? Target->GetNetwork() : nullptr, PlaneHit, Snapped);
+	ResolveSnap(Target != nullptr ? Target->GetNetwork() : nullptr, PlaneHit, Tunables.Snap, Snapped);
 
 	Context.SetCursor(PlaneHit, Snapped);
 	return Context;

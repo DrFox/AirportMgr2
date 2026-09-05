@@ -96,13 +96,8 @@ private:
 	/** Where a ray meets the road plane. False when it is parallel or points away. */
 	bool RayToPlane(const FRay& Ray, FVector2D& OutPosition) const;
 
-	/**
-	 * Everything the tool needs to judge this position, built fresh each event.
-	 *
-	 * Not const: it pushes the current view-relative snap radius into Session before
-	 * asking Session to build the context - see MakeContextAt.
-	 */
-	FToolContext MakeContext(const FInputDeviceRay& At);
+	/** Everything the tool needs to judge this position, built fresh each event. */
+	FToolContext MakeContext(const FInputDeviceRay& At) const;
 
 	/**
 	 * Context for the last known cursor, for callers that have no ray - Render, cancel,
@@ -112,10 +107,10 @@ private:
 	 * its direction to (0,0,1), so it hit the road plane at the world origin and reported
 	 * SUCCESS, and every preview was drawn against (0,0) while the model stayed correct.
 	 */
-	FToolContext MakeHoverContext();
+	FToolContext MakeHoverContext() const;
 
 	/** The shared body of both: everything that follows from a plane position. */
-	FToolContext MakeContextAt(const FVector2D& Plane);
+	FToolContext MakeContextAt(const FVector2D& Plane) const;
 
 	/** The network actor in the editor world, created if the level has none. */
 	ARoadNetworkActor* ResolveTarget() const;
@@ -123,12 +118,11 @@ private:
 	int32 ToolIndex = 0;
 
 	/**
-	 * The tool this instance wraps, and the snap/placement rules a click is judged against -
-	 * see FBuildSession. Session.Tools holds all six registry entries, of which only the one
-	 * at ToolIndex is ever asked for: wasteful in tool COUNT, cheap in reality, since these
-	 * are small state machines with nothing expensive to construct. The alternative - a
-	 * second, editor-only way to make just one - is exactly the kind of second copy issue
-	 * #33 exists to remove.
+	 * The tool this instance wraps - see FBuildSession. Session.Tools holds all six registry
+	 * entries, of which only the one at ToolIndex is ever asked for: wasteful in tool COUNT,
+	 * cheap in reality, since these are small state machines with nothing expensive to
+	 * construct. The alternative - a second, editor-only way to make just one - is exactly
+	 * the kind of second copy issue #33 exists to remove.
 	 */
 	FBuildSession Session;
 
