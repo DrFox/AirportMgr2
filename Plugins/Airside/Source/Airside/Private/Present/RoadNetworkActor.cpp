@@ -7,12 +7,10 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "EngineUtils.h"
-#include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadAgentActor.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Profiles/RoadProfile.h"
-#include "Solve/RunwayDesignator.h"
 
 ARoadNetworkActor::ARoadNetworkActor()
 {
@@ -77,9 +75,9 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	// The two objects issue #32 has split out of this actor so far - see each class's own
-	// header for its pattern, and each field's comment above for why CreateDefaultSubobject
-	// rather than UPROPERTY(Instanced). Agent dispatch and Tick are the next step.
+	// The three objects issue #32 split this actor into - see each class's own header for
+	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
+	// than UPROPERTY(Instanced).
 	Presenter = CreateDefaultSubobject<URoadSurfacePresenter>(TEXT("Presenter"));
 	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent);
 
@@ -90,6 +88,8 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// pointer to the presenter that does the rebuilding. This is the one place that wires
 	// the two back together.
 	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
+
+	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
 }
 
 URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
@@ -314,175 +314,41 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-
-	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
-	// by FRoadAgent::Advance now - see its own comment. This loop is left with exactly one
-	// job: hand the model's answer to the view, and drop an agent once it says Gone.
-	// TEMPORARY: moves to UAirsideTraffic::Advance in issue #32's next step.
-	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
-	{
-		FAgentSlot& Slot = Agents[Index];
-
-		FAgentMotion Motion;
-		if (!Slot.Agent.Advance(DeltaSeconds, Motion))
-		{
-			if (Slot.View != nullptr)
-			{
-				Slot.View->Destroy();
-			}
-			Agents.RemoveAt(Index);
-			continue;
-		}
-
-		if (Slot.View != nullptr)
-		{
-			Slot.View->SetMotion(Motion, SurfaceZ);
-		}
-	}
+	Traffic->Advance(DeltaSeconds, SurfaceZ);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
 {
-	UWorld* World = GetWorld();
-	if (World == nullptr || Network == nullptr)
+	if (Network == nullptr)
 	{
 		return false;
 	}
-
-	// WHICH RUNWAY, WHICH EXIT, WHICH STAND - none of that needs a world, so issue #29 moved
-	// it to Model/ArrivalPlanner. This is left with arming, spawning and logging the plan.
-	// TEMPORARY: moves to UAirsideTraffic::DispatchArrival in issue #32's next step.
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, Near, Airframe);
-
-	if (Plan.Why != EArrivalRefusal::NoRunway)
-	{
-		UE_LOG(LogAirsideTraffic, Log,
-			TEXT("Arrival: runway %s, %.0f uu long, %.0f needed to stop, %d usable exit(s), ")
-			TEXT("%d stand(s) on the airport."),
-			*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
-			Plan.ExitCount, Network->GetEntities().Num());
-	}
-
-	if (!Plan.IsValid())
-	{
-		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
-		return false;
-	}
-
-	FRoadAgent Agent;
-	if (!Agent.StartArrival(Plan.Threshold, Plan.Direction, Plan.RunwayLength, Airframe, Plan.VacateAt, Plan.TaxiIn))
-	{
-		return false;
-	}
-
-	Agent.ShutdownPause = ShutdownPauseSeconds;
-	FActorSpawnParameters Params;
-	Params.Owner = this;
-	Params.ObjectFlags |= RF_Transient;
-	FAgentSlot Slot;
-	Slot.View = World->SpawnActor<ARoadAgentActor>(FVector::ZeroVector, FRotator::ZeroRotator, Params);
-	if (Slot.View == nullptr)
-	{
-		return false;
-	}
-	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
-	{
-		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(), Content->AgentAnimClass.LoadSynchronous());
-	}
-
-	FAgentMotion Motion;
-	if (Agent.Advance(0.0, Motion))
-	{
-		Slot.View->SetMotion(Motion, SurfaceZ);
-	}
-
-	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Arrival on runway %s: %.0f uu available, %.0f needed, vacating at exit %d of %d, ")
-		TEXT("taxiing %.0f uu to a stand."),
-		*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
-		Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
-
-	Slot.Agent = MoveTemp(Agent);
-	Agents.Add(MoveTemp(Slot));
-	return true;
+	return Traffic->DispatchArrival(*Network, Near, Airframe, SurfaceZ, ShutdownPauseSeconds);
 }
 
 bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
 {
-	// TEMPORARY: moves to UAirsideTraffic::DispatchAgent in issue #32's next step.
-	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
-	{
-		return false;
-	}
-
-	UWorld* World = GetWorld();
-	if (World == nullptr)
-	{
-		return false;
-	}
-
-	FRoadAgent Agent;
-	Agent.StartTaxi(Plan, Airframe);
-	Agent.ShutdownPause = ShutdownPauseSeconds;
-
-	if (Network != nullptr && Plan.Polyline.Num() > 0 && Airframe.Climb.IsSet())
-	{
-		FVector2D Threshold;
-		FVector2D Direction;
-		double Length = 0.0;
-		if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length))
-		{
-			Agent.ArmDeparture(Threshold, Direction, Length);
-
-			UE_LOG(LogAirsideTraffic, Log,
-				TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
-				*RunwayDesignator::ToPairText(Direction), Length);
-		}
-	}
-
-	FActorSpawnParameters Params;
-	Params.Owner = this;
-	Params.ObjectFlags |= RF_Transient;
-
-	FAgentSlot Slot;
-	Slot.View = World->SpawnActor<ARoadAgentActor>(
-		FVector::ZeroVector, FRotator::ZeroRotator, Params);
-	if (Slot.View == nullptr)
-	{
-		return false;
-	}
-
-	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
-	{
-		Slot.View->SetAirframe(Content->AgentMesh.LoadSynchronous(),
-			Content->AgentAnimClass.LoadSynchronous());
-	}
-
-	{
-		FAgentMotion Motion;
-		if (Agent.Advance(0.0, Motion))
-		{
-			Slot.View->SetMotion(Motion, SurfaceZ);
-		}
-	}
-
-	Slot.Agent = MoveTemp(Agent);
-	Agents.Add(MoveTemp(Slot));
-	return true;
+	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds);
 }
 
 void ARoadNetworkActor::ClearAgents()
 {
-	// TEMPORARY: moves to UAirsideTraffic::ClearAgents in issue #32's next step.
-	for (FAgentSlot& Slot : Agents)
-	{
-		if (Slot.View != nullptr)
-		{
-			Slot.View->Destroy();
-		}
-	}
+	Traffic->ClearAgents();
+}
 
-	Agents.Reset();
+int32 ARoadNetworkActor::GetAgentCount() const
+{
+	return Traffic->GetAgentCount();
+}
+
+ARoadAgentActor* ARoadNetworkActor::GetNewestAgent() const
+{
+	return Traffic->GetNewestAgent();
+}
+
+int32 ARoadNetworkActor::AgentCountForTest() const
+{
+	return Traffic->GetAgentCount();
 }
 
 FRoutePlan ARoadNetworkActor::FindRoute(

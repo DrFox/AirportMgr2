@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Model/RoadAgent.h"
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
 #include "Present/RoadSurfacePresenter.h"
@@ -19,50 +18,28 @@ class UMaterialInterface;
 class URoadMaterialSet;
 class URoadEditHistory;
 class URoadEditFacade;
-
-/**
- * One agent, plus the cube standing where it is.
- *
- * THE VIEW POINTER LIVES HERE, NOT ON FRoadAgent. FRoadAgent is Model/ - world-free, and
- * testable with no actor to spawn - and ARoadAgentActor is a level-resident view, so
- * pairing them is a Present-layer job. Putting View back on the model struct would be
- * exactly the dependency CLAUDE.md's layering rule forbids: Model reaching up to Present.
- *
- * Runtime only. Neither field is saved with the level - see ARoadNetworkActor::Agents.
- * TEMPORARY: still declared here pending issue #32's Traffic step, which moves this and
- * every agent-handling member below to a new UAirsideTraffic.
- */
-USTRUCT()
-struct AIRSIDE_API FAgentSlot
-{
-	GENERATED_BODY()
-
-	UPROPERTY() FRoadAgent Agent;
-
-	UPROPERTY() TObjectPtr<ARoadAgentActor> View = nullptr;
-};
+class UAirsideTraffic;
 
 /**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident
- * COMPOSITION ROOT issue #32 is splitting into three objects: URoadSurfacePresenter (the
- * mesh, the aprons, the ghost preview) and URoadEditFacade (every graph mutator, query and
- * undo step) are split out already; agent dispatch and Tick are the next step and still live
- * here, on FAgentSlot above. Every responsibility already delegated is handed to exactly one
- * of the two existing objects in the .cpp; what remains here is: owning them, owning the
- * components and every level-authored UPROPERTY (because those are what the .umap actually
- * saves), PostRegisterAllComponents and Tick (because only an AActor has either), the
- * content Resolve* functions (because only the actor knows about UAirsideSettings'
- * defaults), and a thin forwarder for every member Blueprint, the game module or a test
- * could already call - see the banner comment above them for why they exist and must not
- * shrink.
+ * COMPOSITION ROOT for the three objects issue #32 split out of what used to be a single
+ * 1977 + 858 line class: URoadSurfacePresenter (the mesh, the aprons, the ghost preview),
+ * URoadEditFacade (every graph mutator, query and undo step), and UAirsideTraffic (agents
+ * and dispatch). Every responsibility this class still names below is delegated to exactly
+ * one of those three in the .cpp; what remains here is: owning them, owning the components
+ * and every level-authored UPROPERTY (because those are what the .umap actually saves),
+ * PostRegisterAllComponents and Tick (because only an AActor has either), the content
+ * Resolve* functions (because only the actor knows about UAirsideSettings' defaults), and a
+ * thin forwarder for every member Blueprint, the game module or a test could already call -
+ * see the banner comment above them for why they exist and must not shrink.
  *
  * Multiple inheritance from AActor plus IRoadEditTarget: ordinary UE C++, not a deviation
  * needing justification - IRoadEditTarget is a plain abstract class with no UPROPERTYs and
  * no reflection of its own, so it costs nothing to add to an actor's base list. See that
  * header for why the interface exists at all. Every IRoadEditTarget virtual is implemented
- * here by forwarding to whichever object owns the real work - mostly the facade, with
- * UpdateGhost/HideGhost/RebuildMesh going to the presenter and DispatchAgent still handled
- * inline; see each forwarder's own one-line comment for which.
+ * here by forwarding to whichever of the three owns the real work - mostly the facade, with
+ * UpdateGhost/HideGhost/RebuildMesh going to the presenter and DispatchAgent to traffic; see
+ * each forwarder's own one-line comment for which.
  */
 UCLASS()
 class AIRSIDE_API ARoadNetworkActor : public AActor, public IRoadEditTarget
@@ -118,8 +95,8 @@ public:
 	UFUNCTION(CallInEditor, Category = "Airside")
 	virtual void RebuildMesh() override;
 
-	/** Advances every agent and hands the model's answer to its view. TEMPORARY: moves to
-	 *  UAirsideTraffic::Advance in issue #32's next step. */
+	/** Advances Traffic; see UAirsideTraffic::Advance for the handover logic this used to do
+	 *  itself. */
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** True outside a game world, so dispatched agents move in the editor viewport too. */
@@ -127,48 +104,28 @@ public:
 
 	// --- Agents ----------------------------------------------------------------------
 	//
-	// Runtime only, and deliberately not part of URoadNetwork - see FAgentSlot's own comment.
-	// TEMPORARY: this whole section moves to UAirsideTraffic in issue #32's next step.
+	// Runtime only, and owned by Traffic rather than by this actor or by URoadNetwork - see
+	// UAirsideTraffic's class comment for why an agent belongs to neither.
 
-	/**
-	 * Lands an aircraft on the runway nearest a point and taxis it to a stand.
-	 *
-	 * WHICH RUNWAY, WHICH EXIT AND WHICH STAND ARE DECIDED BY ArrivalPlanner::Plan, before
-	 * anything is spawned - see its header. An arrival that cannot be completed leaves no
-	 * aircraft in the world, rather than one frozen on final or rolling to a runway it has
-	 * no way off. This function's own job is what is left once that choice is made: arm the
-	 * landing, spawn the view, and log the plan's own refusal or success - never re-derive
-	 * either.
-	 */
+	/** Lands an aircraft on the runway nearest a point and taxis it to a stand. Forwards to
+	 *  Traffic - see UAirsideTraffic::DispatchArrival for the arm/spawn/log this actor used
+	 *  to do itself, and Model/ArrivalPlanner for which runway, exit and stand are chosen. */
 	bool DispatchArrival(const FVector2D& Near, const FAirframe& Airframe);
 
-	/**
-	 * Sends one agent along a plan, spawning the cube that shows it. False if it cannot.
-	 *
-	 * Works in an editor world as well as in play: the cubes are spawned RF_Transient and
-	 * so are never saved, and the build tools this is driven from are used at design time.
-	 */
+	/** Sends one agent along a plan, spawning the cube that shows it. Forwards to Traffic. */
 	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
 
-	/** Removes every agent and its cube. */
+	/** Removes every agent and its cube. Forwards to Traffic. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")
 	void ClearAgents();
 
-	/** How many agents are currently under way or parked at their destination. */
+	/** How many agents are currently under way or parked at their destination. Forwards to
+	 *  Traffic. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	int32 GetAgentCount() const { return Agents.Num(); }
+	int32 GetAgentCount() const;
 
-	/**
-	 * The most recently dispatched agent's actor, or null when nothing is under way.
-	 *
-	 * The NEWEST rather than the nearest or the first: the one you just sent is the one you
-	 * want to watch, and any other rule makes "follow it" mean something different depending
-	 * on what else happens to be taxiing.
-	 */
-	ARoadAgentActor* GetNewestAgent() const
-	{
-		return Agents.Num() > 0 ? Agents.Last().View.Get() : nullptr;
-	}
+	/** The most recently dispatched agent's actor, or null. Forwards to Traffic. */
+	ARoadAgentActor* GetNewestAgent() const;
 
 	/** Route between two guideline nodes over the network this actor owns. Forwards to the
 	 *  facade, so a tool, a Blueprint and the HUD all ask the same question of the same
@@ -510,17 +467,11 @@ private:
 	 *
 	 * Not zero, and not a formality: an engine that stopped the instant the wheels did reads
 	 * as a stall rather than a shutdown. Real enough to watch, short enough not to wait for.
+	 * Private: only this actor's own DispatchArrival/DispatchAgent forwarders read it, to
+	 * copy it into Traffic's calls - see UAirsideTraffic::DispatchArrival's own comment on
+	 * why FRoadAgent cannot read it for itself.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside") double ShutdownPauseSeconds = 10.0;
-
-	/**
-	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
-	 * through a journey, not a fact about the airport: putting them in the network would
-	 * snapshot them into every undo Memento and serialise them into the saved level, so
-	 * re-opening a map would restore half-driven cubes that no longer have a route.
-	 * TEMPORARY: moves to UAirsideTraffic in issue #32's next step.
-	 */
-	UPROPERTY(Transient) TArray<FAgentSlot> Agents;
 
 	/**
 	 * Everything the road LOOKS like - see URoadSurfacePresenter's own header for the
@@ -541,6 +492,10 @@ private:
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<URoadEditFacade> Facade;
+
+	/** Agents and dispatch - see UAirsideTraffic's own header. Same CreateDefaultSubobject
+	 *  and Transient reasoning as Presenter. */
+	UPROPERTY(Transient) TObjectPtr<UAirsideTraffic> Traffic;
 
 	/** Builds the FSurfaceSettings a rebuild or a ghost update needs from this actor's own
 	 *  Resolve* functions and level-authored tunables. One place, so RebuildMesh and
@@ -578,8 +533,8 @@ public:
 	 */
 	int32 SurfaceTriangleCountForTest() const;
 
-	/** Agents alive right now, for Airside.Present.ArrivalDispatch. */
-	int32 AgentCountForTest() const { return Agents.Num(); }
+	/** Agents alive right now, for Airside.Present.ArrivalDispatch. Forwards to Traffic. */
+	int32 AgentCountForTest() const;
 
 	/** The stand definition this actor would use, for the same test. */
 	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
