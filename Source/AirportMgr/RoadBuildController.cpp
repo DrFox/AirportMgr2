@@ -6,14 +6,9 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/RoadNetwork.h"
-#include "Present/RoadNetworkActor.h"
-#include "Tool/ApronDrawTool.h"
-#include "Tool/RoadDrawTool.h"
-#include "Tool/GuidelineDrawTool.h"
-#include "Tool/RouteTool.h"
 #include "Present/RoadAgentActor.h"
-#include "Tool/RunwayTool.h"
-#include "Tool/StandPlaceTool.h"
+#include "Present/RoadNetworkActor.h"
+#include "Solve/RoadGeom.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
 
@@ -41,33 +36,34 @@ void ARoadBuildController::BeginPlay()
 		return;
 	}
 
-	// Key order: 1 is the first. Strategy, so adding a tool is appending to a list.
-	Tools.Add(MakeUnique<FRoadDrawTool>());
-	Tools.Add(MakeUnique<FApronDrawTool>());
-	Tools.Add(MakeUnique<FStandPlaceTool>());
-	Tools.Add(MakeUnique<FRouteTool>());
-	Tools.Add(MakeUnique<FGuidelineDrawTool>());
-	Tools.Add(MakeUnique<FRunwayTool>());
-
-	if (Tools.Num() != ToolKeyCount)
-	{
-		UE_LOG(LogRoadBuild, Error,
-			TEXT("%d tools but %d number keys bound. A tool with no key is unreachable and "
-				 "a key with no tool does nothing - see ARoadBuildController::ToolKeyCount."),
-			Tools.Num(), ToolKeyCount);
-	}
+	// Session is constructed from ToolRegistry() already - see FBuildSession's constructor.
+	// There is no second list here to fall out of step with it: the mismatch this project
+	// has shipped three times (a tool with no key, or a key with no tool) is now a mismatch
+	// the registry would have to disagree with ITSELF to produce.
 
 	if (bStartAbovePlane)
 	{
 		CreateBuildCamera();
 	}
 
+	// The key list is GENERATED from the same registry SetupInputComponent binds from, so
+	// this banner cannot advertise a key that goes nowhere - which the old hand-written one
+	// twice did.
+	FString ToolKeys;
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	{
+		ToolKeys += FString::Printf(TEXT("%s%d %s"),
+			Index == 0 ? TEXT("") : TEXT(", "),
+			Index + 1,
+			*Registry[Index].Name.ToString());
+	}
+
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. 1 roads, 2 aprons, 3 stands, 4 routes, 5 guideline links, 6 runway, "
-			 "7 lands an aircraft on the nearest runway. C watches the aircraft, G toggles the "
-			 "guideline overlay. WASD pans, Q/E rotate, wheel zooms."),
-		*Target->GetName());
+			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C watches the "
+			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms."),
+		*Target->GetName(), *ToolKeys);
 }
 
 void ARoadBuildController::ApplyViewLimits(FBuildCameraRig& Rig) const
@@ -206,16 +202,16 @@ void ARoadBuildController::SetupInputComponent()
 	// Numbered tools rather than a third modifier on one button. Drawing a polygon is
 	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
 	//
-	// ONE BINDING PER ENTRY IN Tools, and they are two lists that must agree. The route
-	// tool was appended to Tools and this line was not written, so the startup log
-	// advertised "4 routes" while EKeys::Four went nowhere - the log was the only thing
-	// claiming the binding existed, and it was wrong.
-	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &ARoadBuildController::SelectRoadTool);
-	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &ARoadBuildController::SelectApronTool);
-	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &ARoadBuildController::SelectStandTool);
-	InputComponent->BindKey(EKeys::Four, IE_Pressed, this, &ARoadBuildController::SelectRouteTool);
-	InputComponent->BindKey(EKeys::Five, IE_Pressed, this, &ARoadBuildController::SelectGuidelineTool);
-	InputComponent->BindKey(EKeys::Six, IE_Pressed, this, &ARoadBuildController::SelectRunwayTool);
+	// ONE BindKey PER REGISTRY ENTRY, all through the SAME handler - see SelectToolByKey.
+	// Before issue #33 this was six separate BindKey calls to six separate SelectXTool
+	// methods, a second list that had to agree with Tools by hand and once did not: the
+	// route tool was appended there and this list was not touched, so the startup log
+	// advertised "4 routes" while EKeys::Four went nowhere. Binding straight from the
+	// registry makes that specific disagreement impossible to write.
+	for (const FToolRegistration& Registration : ToolRegistry())
+	{
+		InputComponent->BindKey(Registration.Key, IE_Pressed, this, &ARoadBuildController::SelectToolByKey);
+	}
 
 	// AN ACTION, NOT A TOOL, so it is bound here and appears in no tool list. The banner above
 	// is updated in the same breath: this project has twice advertised a key that was never
@@ -281,59 +277,50 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 		return false;
 	}
 
-	// Parallel to the plane: no intersection to find.
-	if (FMath::IsNearlyZero(Direction.Z))
-	{
-		if (bLogRefusals)
-		{
-			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the view is edge-on to the road plane (dir.Z=%.6f)."), Direction.Z);
-		}
-		return false;
-	}
-
-	const double Distance = (Target->SurfaceZ - Origin.Z) / Direction.Z;
-
-	OutPosition = FVector2D(
-		Origin.X + Direction.X * Distance,
-		Origin.Y + Direction.Y * Distance);
-
 	// These guards were skipped while the build camera was orthographic, and skipping them
 	// was what stopped good clicks vanishing: under an orthographic projection the
 	// deprojected origin sits on the near plane rather than at the camera, so the
 	// ray/plane distance carries no information about where the click landed. The view is
 	// perspective now and they are live and necessary again - if an orthographic mode ever
 	// returns, it must exempt itself from both of them.
-
-	// Behind the camera. Without this a click on the sky lands on the plane's mirror
-	// image, dropping a node far off in the opposite direction.
-	if (Distance <= 0.0)
-	{
-		if (bLogRefusals)
-		{
-			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the road plane is behind the camera there (distance %.0f)."), Distance);
-		}
-		return false;
-	}
-
-	// Near the horizon the ray is almost parallel to the plane and this distance runs
-	// away, so a click a few pixels too high lands kilometres out. Measured against the
-	// current view distance rather than a fixed number, because the view spans a
-	// hundredfold range and no single cap suits both ends of it.
+	//
+	// Measured against the current view distance rather than a fixed number, because the
+	// view spans a hundredfold range and no single cap suits both ends of it.
 	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
-	if (Distance > Furthest)
+	if (RoadGeom::RayToPlaneZ(Origin, Direction, Target->SurfaceZ, Furthest, OutPosition))
 	{
-		if (bLogRefusals)
-		{
-			UE_LOG(LogRoadBuild, Warning,
-				TEXT("Click ignored: the road plane is %.0f uu away there, past %.0f (%.1fx the view)."),
-				Distance, Furthest, MaxPlaceDistanceFactor);
-		}
-		return false;
+		return true;
 	}
 
-	return true;
+	// RayToPlaneZ only says which of its three guards refused, not why the caller cares -
+	// so on refusal, and only then, re-derive which one it was to log something useful.
+	// Cheap to redo: this path is never taken by a click that succeeded.
+	if (bLogRefusals)
+	{
+		if (FMath::IsNearlyZero(Direction.Z))
+		{
+			UE_LOG(LogRoadBuild, Warning,
+				TEXT("Click ignored: the view is edge-on to the road plane (dir.Z=%.6f)."), Direction.Z);
+		}
+		else
+		{
+			const double Distance = (Target->SurfaceZ - Origin.Z) / Direction.Z;
+			if (Distance <= 0.0)
+			{
+				// Behind the camera. Without this a click on the sky lands on the plane's
+				// mirror image, dropping a node far off in the opposite direction.
+				UE_LOG(LogRoadBuild, Warning,
+					TEXT("Click ignored: the road plane is behind the camera there (distance %.0f)."), Distance);
+			}
+			else
+			{
+				UE_LOG(LogRoadBuild, Warning,
+					TEXT("Click ignored: the road plane is %.0f uu away there, past %.0f (%.1fx the view)."),
+					Distance, Furthest, MaxPlaceDistanceFactor);
+			}
+		}
+	}
+	return false;
 }
 
 void ARoadBuildController::ZoomIn()
@@ -374,18 +361,7 @@ bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) 
 		return false;
 	}
 
-	// Before the first node exists there is no network to search - the facade builds one
-	// lazily inside PlaceNode. Free at the cursor is the right answer here, not a
-	// refusal: treating a missing network as failure would make the first click of every
-	// session do nothing at all.
-	Out = FRoadSnapResult();
-	Out.Position = Cursor;
-
-	if (Target->Network != nullptr)
-	{
-		Out = SnapChain.Resolve(*Target->Network, Cursor, MakeSnapSettings());
-	}
-	return true;
+	return Session.ResolveSnap(Target->Network, Cursor, Out);
 }
 
 FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
@@ -398,7 +374,7 @@ FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
 
 IBuildTool* ARoadBuildController::GetActiveTool() const
 {
-	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
+	return Session.GetActiveTool();
 }
 
 void ARoadBuildController::OnToggleGuidelines()
@@ -416,16 +392,8 @@ bool ARoadBuildController::IsRemoveHeld() const
 	return IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
 }
 
-FToolContext ARoadBuildController::MakeToolContext() const
+FToolContext ARoadBuildController::MakeToolContext()
 {
-	FToolContext Context;
-	Context.Target = Target;
-	Context.Limits = MakePlacementLimits();
-	Context.SnapRadius = ToolPickRadius;
-	Context.bRemoveModifier = IsRemoveHeld();
-	Context.bInsertModifier =
-		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift);
-
 	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
 	// from two searches that merely tend to agree.
@@ -435,32 +403,35 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// handed road-node semantics to every tool including the ones that place no road
 	// nodes: hovering a guideline node moved the cursor onto the junction it sits beside,
 	// and the route tool could never pick anything again.
-	FRoadSnapResult Snapped;
-	ResolveSnap(Snapped);
-
-	FVector2D PlaneHit = Snapped.Position;
+	FVector2D PlaneHit;
 	CursorOnRoadPlane(PlaneHit);
 
-	Context.SetCursor(PlaneHit, Snapped);
-	return Context;
+	// Pushed into the session EVERY call rather than cached: PickRadius and friends are
+	// EditAnywhere, so a details-panel edit is meant to take effect on the very next click,
+	// the same reason PlayerTick pushes Target->PlacementLimits every frame below.
+	Session.Snap = MakeSnapSettings();
+	Session.Limits = MakePlacementLimits();
+	Session.ToolPickRadius = ToolPickRadius;
+
+	return Session.MakeContext(Target, PlaneHit, IsRemoveHeld(),
+		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift));
 }
 
-void ARoadBuildController::SelectTool(int32 Index)
+void ARoadBuildController::SelectToolByKey(FKey Key)
 {
-	if (!Tools.IsValidIndex(Index) || Index == ActiveTool)
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
 	{
-		return;
+		if (Registry[Index].Key == Key)
+		{
+			Session.SelectTool(Index, MakeToolContext());
+			if (IBuildTool* Active = Session.GetActiveTool())
+			{
+				UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Active->GetDisplayName().ToString());
+			}
+			return;
+		}
 	}
-
-	// The outgoing tool abandons whatever it had part-drawn. Left alone it would reappear
-	// on the next selection as a chain the player started minutes ago and has forgotten.
-	if (IBuildTool* Outgoing = GetActiveTool())
-	{
-		Outgoing->OnDeactivate(MakeToolContext());
-	}
-
-	ActiveTool = Index;
-	UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Tools[ActiveTool]->GetDisplayName().ToString());
 }
 
 void ARoadBuildController::OnUndo()
@@ -612,10 +583,7 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 
 void ARoadBuildController::OnCancelGesture()
 {
-	if (IBuildTool* Tool = GetActiveTool())
-	{
-		Tool->OnCancel(MakeToolContext());
-	}
+	Session.CancelActiveGesture(MakeToolContext());
 }
 
 void ARoadBuildController::OnClearNetwork()
