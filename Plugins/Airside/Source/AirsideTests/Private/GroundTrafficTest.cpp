@@ -1601,4 +1601,99 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficDeadPlanReleasesTest,
+	"Airside.Model.Traffic.DeadPlanReleases",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
+{
+	// A TAXIING AGENT WHOSE PLAN GOES BAD UNDER IT MUST GIVE EVERYTHING BACK, that tick.
+	//
+	// THE SEAM THIS EXISTS FOR is ClaimAhead's dead-plan branch (UGroundTraffic::
+	// ReleaseForDeadPlan). Every other Airside.Model.Traffic fixture drives agents whose
+	// plans stay valid, so before this test the branch had NO reader at all: deleting its
+	// release, or its `return`, or the branch itself, left 115 tests green while an agent's
+	// claims sat in the table for the rest of the session, blocking a junction nobody could
+	// ever be told was free.
+	//
+	// ONE TICK AND NOT TWO, deliberately. An invalid plan makes FRouteFollower::HasArrived
+	// true, so the agent becomes Parked at the END of the very tick that strands it, and
+	// from the NEXT tick onwards ClaimAhead takes its non-Taxiing branch, which releases
+	// everything anyway. Asserting after two ticks would therefore pass with the dead-plan
+	// branch deleted - the bug would simply have been one frame long, and one frame is
+	// enough for another agent to be refused a node this one no longer wants.
+	//
+	// WHAT IT DOES NOT CATCH, said out loud: substituting HoldRunwayOnly for
+	// ReleaseForDeadPlan. The two differ only in whether RunwayHeld is kept and re-claimed,
+	// and RunwayHeld is filled at the arrival/departure HANDOVER in Advance, so it is always
+	// empty on a Taxiing agent. For every reachable state the substitution is observationally
+	// identical, which makes it a rename rather than a defect.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 0.0, 20000.0);
+	const FGuidelineEdgeId AB = M2TrafficJoin(*Net, A, B);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
+		M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Van > 0)) { return false; }
+
+	// Under way, and holding: the edge it is on, plus the node it left while its tail is
+	// still within half a footprint of it. Two seconds is well short of the 20 km run.
+	M2TrafficRun(*Traffic, *Net, 2.0, [&](int32) { return true; });
+
+	auto ClaimsHeldBy = [&](int32 AgentId)
+	{
+		int32 Count = 0;
+		for (const FTrafficClaim& Claim : Traffic->GetOccupancy().GetClaims())
+		{
+			Count += Claim.AgentId == AgentId ? 1 : 0;
+		}
+		return Count;
+	};
+
+	const int32 HeldBefore = ClaimsHeldBy(Van);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("DeadPlanReleases measured: %d claim(s) held at %.0f uu before the plan died"),
+		HeldBefore, Traffic->FindAgent(Van)->Follower.Travelled);
+
+	if (!TestTrue(TEXT("the van is holding something before its plan dies"), HeldBefore > 0))
+	{
+		return false;
+	}
+	TestTrue(TEXT("including the edge it is driving on"),
+		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(AB), /*ExcludingAgent=*/0));
+	TestTrue(TEXT("and the node it left, while its tail is still in it"),
+		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(A), /*ExcludingAgent=*/0));
+
+	// THE PAVEMENT GOES AWAY UNDER IT. StrandForTest sets Result only - the follower keeps
+	// its polyline and its distance, so the agent is exactly where it was and the ONLY thing
+	// that has changed is that its plan no longer describes the airport.
+	if (!TestTrue(TEXT("stranded"), Traffic->StrandForTest(Van))) { return false; }
+	Traffic->Advance(0.05, Net);
+
+	const FRoadAgent* V = Traffic->FindAgent(Van);
+	if (!TestNotNull(TEXT("a stranded agent is not removed - it stops, it does not vanish"), V))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("and the table holds NOTHING for it, in the same tick"), ClaimsHeldBy(Van), 0);
+	TestFalse(TEXT("the edge it was on is free"),
+		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(AB), /*ExcludingAgent=*/0));
+	TestFalse(TEXT("and so is the node behind it"),
+		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(A), /*ExcludingAgent=*/0));
+
+	// THE ARBITRATION FIELDS GO WITH THE CLAIMS. A stranded agent still naming a blocker
+	// would feed the deadlock resolver's wait-for graph an edge out of an agent that is not
+	// waiting for anything - the same reason the non-Taxiing branch clears them.
+	TestEqual(TEXT("waiting on nobody"), V->WaitingOn, 0);
+	TestEqual(TEXT("blocked on no step"), V->BlockedStep, INDEX_NONE);
+	TestTrue(TEXT("and under no cap it could drive against"), V->StopWithin >= TNumericLimits<double>::Max());
+	return true;
+}
+
+
 #endif

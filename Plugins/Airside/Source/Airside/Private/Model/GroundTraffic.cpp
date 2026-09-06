@@ -182,6 +182,22 @@ const FRoadAgent* UGroundTraffic::FindAgent(int32 AgentId) const
 	return Index == INDEX_NONE ? nullptr : &Agents[Index];
 }
 
+bool UGroundTraffic::StrandForTest(int32 AgentId)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+
+	// THE RESULT ONLY. Steps, Polyline and Travelled are left exactly as they are, because
+	// the case being reproduced is a plan that has stopped describing the airport while the
+	// agent is still standing where it was - not an agent that has been moved or emptied.
+	// FRoutePlan::IsValid reads Result and nothing else, so this is the whole of it.
+	Agents[Index].Follower.Plan.Result = ERouteResult::Unreachable;
+	return true;
+}
+
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);

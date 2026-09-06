@@ -285,6 +285,23 @@ public:
 	 * prevent, which is why this says ForTest in its name.
 	 */
 	FTrafficOccupancy& OccupancyForTest() { return Occupancy; }
+
+	/**
+	 * Makes AgentId's plan unusable where it stands, keeping the agent and its position.
+	 * True if the id was known.
+	 *
+	 * IT STANDS IN FOR THE PAVEMENT GOING AWAY UNDER A MOVING AGENT - a rebuild that leaves
+	 * a step with no live edge and no route to replace it, or a redirect that lands a bad
+	 * plan on a live follower. Both end in ClaimAhead's dead-plan branch, which must release
+	 * every claim the agent holds; without a hook there is no world-free way to reach that
+	 * branch, and a seam no test reaches is one a later edit can quietly unwire (see
+	 * Airside.Model.Traffic.DeadPlanReleases).
+	 *
+	 * ForTest in its name for the same reason OccupancyForTest is: nothing in production
+	 * invalidates a plan by hand - OnGraphRebuilt truncates or strands through
+	 * ReResolvePlan, which is a decision, not an assignment.
+	 */
+	bool StrandForTest(int32 AgentId);
 	double GetSimSeconds() const { return SimSeconds; }
 
 	/**

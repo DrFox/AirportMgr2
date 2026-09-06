@@ -826,22 +826,22 @@ double UGroundTraffic::StopWithinFor(const FWantedClaim& Want, const FTrafficCla
 			: FMath::Max(0.0, Want.StepEnd - T - G);
 	}
 
-		// The node the agent is STANDING on, refused. It cannot stop short of where it
-		// already is, so the only honest answer is "do not move".
-		//
-		// ROUTINE, not exceptional: it fires whenever two agents' bodies are within half
-		// a footprint of one node - a follower dispatched from the stand its leader has
-		// not yet cleared (Airside.Model.Traffic.CarFollowing does exactly that), an
-		// agent redirected onto a node somebody is crossing, or an aircraft parked on a
-		// node a van drives over. It also fires for the node an agent has just left,
-		// which is why the tail claim exists at all.
-		//
-		// AND IT CATCHES THE CROSSING SURFACE TOO, which is a SURFACE with no ESurface
-		// tag: route zero's claim says "my body is on this strip", so a refusal there is
-		// the same statement as a refused node - somebody else is standing where this
-		// agent already is - and 0 is the same honest answer. The tagged RunwayEdge rule
-		// above must not take it: that one stops an agent a gap short of the step's
-		// start, which for ground the agent is already on would be a stop point behind it.
+	// The node the agent is STANDING on, refused. It cannot stop short of where it
+	// already is, so the only honest answer is "do not move".
+	//
+	// ROUTINE, not exceptional: it fires whenever two agents' bodies are within half
+	// a footprint of one node - a follower dispatched from the stand its leader has
+	// not yet cleared (Airside.Model.Traffic.CarFollowing does exactly that), an
+	// agent redirected onto a node somebody is crossing, or an aircraft parked on a
+	// node a van drives over. It also fires for the node an agent has just left,
+	// which is why the tail claim exists at all.
+	//
+	// AND IT CATCHES THE CROSSING SURFACE TOO, which is a SURFACE with no ESurface
+	// tag: route zero's claim says "my body is on this strip", so a refusal there is
+	// the same statement as a refused node - somebody else is standing where this
+	// agent already is - and 0 is the same honest answer. The tagged RunwayEdge rule
+	// above must not take it: that one stops an agent a gap short of the step's
+	// start, which for ground the agent is already on would be a stop point behind it.
 	return 0.0;
 }
 
