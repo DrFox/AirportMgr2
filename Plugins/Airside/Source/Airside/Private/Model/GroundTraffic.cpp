@@ -434,14 +434,16 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	// is ("clear line kept ahead of the nose"), and what makes spec §3.2's "a stopped agent
 	// still holds Footprint + Gap" arithmetically true: F/2 + F/2 + G.
 	//
-	// THE F/2 AHEAD IS NOT COSMETIC. Without it a stopped agent holds exactly up to the
-	// boundary it was told to stop G short of - the two touch, half-open intervals do not
-	// conflict when they touch, so it is GRANTED, accelerates, grows its window by the very
-	// next tick, is refused, brakes to a stop, and is granted again. Measured on the head-on
-	// fixture before this line existed: 2496 "Agent N resumes" lines in one test run, every
-	// waiter flickering between waiting and clear every tick. That flicker also resets
+	// THE REJECTED ALTERNATIVE IS Head = T + Window, spec §3.1's wording read without §3.2.
+	// It is not cosmetic. A stopped agent then holds exactly up to the boundary it was told
+	// to stop G short of - the two TOUCH, half-open intervals do not conflict when they
+	// touch, so it is GRANTED, accelerates, grows its window by the very next tick, is
+	// refused, brakes to a stop, and is granted again, for ever. Measured, both ways, on the
+	// head-on and node-yield fixtures: 2496 "Agent N resumes" lines in one test run without
+	// the F/2, against 4 in the whole 99-test suite with it. That flicker also reset
 	// StalledSeconds every other tick, which would have left Task 8's deadlock detection
-	// unable to see a single stalled agent.
+	// unable to see a single stalled agent - the bug would have surfaced two tasks later,
+	// as a resolver that never fires.
 	const double Head = T + F * 0.5 + Window;
 	const double Tail = T - F * 0.5;
 	const int32 Current = CurrentStep(Plan, T);
