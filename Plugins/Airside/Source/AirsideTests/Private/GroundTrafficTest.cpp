@@ -373,9 +373,12 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	// is why the discriminating measurement below is taken while the van is still on the
 	// run-up rather than at the end.
 	//
-	// The phantom sits on the end of the SECOND box, not the third as first drafted: with it
-	// on the third both rules offer the same stop point from the same moment, and the test
-	// would pass either way. Traced through the window arithmetic before it was written.
+	// THE PHANTOM SITS ON THE END OF THE SECOND BOX BECAUSE THAT BOX WAS CHOSEN, not because
+	// it is the only one that discriminates - which is what this comment claimed until the
+	// arithmetic was actually checked. On the THIRD box's end the two rules differ just as
+	// plainly (20900 against the chained rule's answer), so that fixture would have worked
+	// too. What makes THIS one discriminating is the pair of figures measured below: 20500
+	// offered while the van is still on the run-up, where the chained rule offers 20100.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FGuidelineNodeId N0 = M2TrafficNode(*Net, 0.0, 0.0);
 	const FGuidelineNodeId N1 = M2TrafficNode(*Net, 20000.0, 0.0);
@@ -445,6 +448,95 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 		Agent->Follower.Travelled <= 20101.0);
 	TestTrue(TEXT("stopped"), Agent->Follower.Speed < 1e-6);
 	TestEqual(TEXT("waiting on the phantom"), Agent->WaitingOn, Phantom);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficHoldShortTest,
+	"Airside.Model.Traffic.HoldShort",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
+{
+	// A taxiway that CROSSES a runway: S -> H (hold bar) -> X (on the runway centreline)
+	// -> N. The guideline edges are hand-built and carry no DerivedFrom, so the ONLY thing
+	// protecting the runway here is the hold-short node - which is what this test is about.
+	// The edge-derived-from-a-runway route to the same surface is exercised by the
+	// arrival dispatch test once landings hold the chain.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
+
+	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId H = M2TrafficNode(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X); M2TrafficJoin(*Net, X, N);
+	Net->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	// Someone holds the runway: a claim by a phantom agent 99, as a landing would make.
+	{
+		FTrafficClaim Hold; Hold.AgentId = 99; Hold.Resource = FTrafficResource::OfSurface(RunwaySeg); Hold.bOccupied = true; Hold.Rank = 2;
+		FTrafficClaim Blocker;
+		Traffic->OccupancyForTest().TryClaim(Hold, Blocker);
+	}
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+
+	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32) { return Traffic->FindAgent(Plane)->Follower.Speed > 1e-6 || Traffic->FindAgent(Plane)->Follower.Travelled < 1.0; });
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+
+	// MEASURED AND LOGGED, so a failure is read off the numbers rather than re-derived from
+	// the assertion text. The bar is the end of step 0, at 17000 uu of route distance.
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("HoldShort measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
+		P->Follower.Travelled, P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5,
+		P->Follower.Speed, P->WaitingOn, P->BlockedStep);
+
+	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
+	const double NoseAt = P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5;
+	TestTrue(FString::Printf(TEXT("nose within 50 uu of the hold bar and not past it (nose %.0f, bar 17000)"), NoseAt),
+		NoseAt <= 17000.0 + 1.0 && NoseAt >= 17000.0 - 50.0);
+	TestEqual(TEXT("waiting on the runway's holder"), P->WaitingOn, 99);
+
+	Traffic->OccupancyForTest().ReleaseAll(99);
+	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
+	TestEqual(TEXT("released, it crosses and arrives"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficArrivalRefusedRunwayOccupiedTest,
+	"Airside.Model.Traffic.ArrivalRefusedRunwayOccupied",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters)
+{
+	// The dispatch path, not just the planner: a runway held in the traffic's OWN table
+	// refuses through UGroundTraffic and fires the delegate with the new reason.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RA = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(120000.0, 0.0));
+	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	TArray<EArrivalRefusal> Refusals;
+	Traffic->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
+	{
+		FTrafficClaim Hold; Hold.AgentId = 99; Hold.Resource = FTrafficResource::OfSurface(RunwaySeg); Hold.bOccupied = true;
+		FTrafficClaim Blocker;
+		Traffic->OccupancyForTest().TryClaim(Hold, Blocker);
+	}
+	TestEqual(TEXT("refused"), Traffic->DispatchArrival(*Net, FVector2D(-1000.0, 0.0), UAirsideSettings::ResolveDefaultAirframe(), 1.0), 0);
+	TestTrue(TEXT("with RunwayOccupied"), Refusals.Num() == 1 && Refusals[0] == EArrivalRefusal::RunwayOccupied);
 	return true;
 }
 

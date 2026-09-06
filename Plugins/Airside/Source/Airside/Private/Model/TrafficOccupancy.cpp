@@ -136,6 +136,14 @@ void FTrafficOccupancy::ReleaseAll(int32 AgentId)
 	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
 }
 
+void FTrafficOccupancy::Release(int32 AgentId, const FTrafficResource& Resource)
+{
+	Claims.RemoveAllSwap([AgentId, &Resource](const FTrafficClaim& C)
+	{
+		return C.AgentId == AgentId && C.Resource == Resource;
+	});
+}
+
 void FTrafficOccupancy::ReleaseExcept(int32 AgentId, const TArray<FTrafficResource>& Keep)
 {
 	Claims.RemoveAllSwap([AgentId, &Keep](const FTrafficClaim& C)

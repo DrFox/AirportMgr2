@@ -201,6 +201,16 @@ struct AIRSIDE_API FRoadAgent
 	 *  Names the node a deadlock replan starts from (the step's FROM node). */
 	UPROPERTY() int32 BlockedStep = -1;
 
+	/**
+	 * Who this agent was last reported as OVERLAPPING - two bodies standing on one node or
+	 * one runway - or 0. Throttles that Warning to the transition.
+	 *
+	 * A FIELD OF ITS OWN rather than reusing WaitingOn, which was the first attempt and was
+	 * wrong: WaitingOn names the FIRST refusal in route order, so an overlap that is not the
+	 * first refusal never matched it and the Warning fired on every single tick.
+	 */
+	UPROPERTY() int32 LastOverlapWith = 0;
+
 	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
 	UPROPERTY() double StalledSeconds = 0.0;
 

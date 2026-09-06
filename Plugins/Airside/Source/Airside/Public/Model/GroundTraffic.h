@@ -222,13 +222,21 @@ private:
 	 * from it - by a higher rank, or by somebody standing on it - must find that out THIS
 	 * tick, or it drives a frame on a reservation it no longer holds.
 	 *
-	 * ONE pass and not a loop to a fixed point. The bound is NOT that rank inversions cannot
-	 * happen: a node's PriorityOverride inverts rank against the visit order deliberately,
-	 * which is the whole of Airside.Model.Traffic.PriorityOverride. It is that a re-claiming
-	 * agent asks for the IDENTICAL list - same Travelled, same speed, so the same window and
-	 * the same resources - and every claim in it either was granted before (and is an update
-	 * that preempts nothing new) or was refused. So the re-pass cannot take anything from
-	 * anybody, and a second round would have nothing to do.
+	 * ONE pass and not a loop to a fixed point, and the bound is WEAKER than "nothing can
+	 * change" - stated exactly here because an over-strong version of it was written first.
+	 * It is NOT that rank inversions cannot happen: a node's PriorityOverride inverts rank
+	 * against the visit order deliberately, which is the whole of
+	 * Airside.Model.Traffic.PriorityOverride.
+	 *
+	 * What holds is that a re-claiming agent asks for the IDENTICAL list - same Travelled,
+	 * same speed, so the same window and the same resources - so every claim it had GRANTED
+	 * is an update that preempts nothing new, and every claim it had REFUSED is refused
+	 * again by the same holder. The one thing that CAN differ: claims the first pass SKIPPED
+	 * past its own first refusal were neither granted nor refused, so if the blocker released
+	 * them later in the same pass the re-pass now reaches them, and may preempt a reservation
+	 * made after it. That loser re-claims on its next tick, so it is one frame stale at
+	 * worst - accepted rather than iterated to a fixed point, which would cost a pass per
+	 * agent per frame to close a one-frame window.
 	 */
 	void Arbitrate(const URoadNetwork& Network);
 
@@ -275,8 +283,20 @@ private:
 	 *    Airside.Model.Traffic.BoxEntryFirstOnly measures it, at 400 uu of line the chained
 	 *    rule kept a van out of while the box in front of it was empty.
 	 *
+	 * A RUNWAY SURFACE IS CLAIMED BY THE TWO TAXIING ROUTES OF SPEC §3.1, both raised in
+	 * route order beside the thing that implied them, so the first-refusal rule still decides:
+	 *
+	 *   - a step whose EDGE derives from a runway segment claims that segment's whole CHAIN,
+	 *     occupied on the step being stood on and reserved beyond, ranked as that edge is. A
+	 *     refusal stops the agent a gap short of the step's START - outside the strip;
+	 *   - a step whose END NODE carries HoldShortFor claims the chain that names, always
+	 *     RESERVED (nobody is occupied THROUGH a bar) and only once the window has reached
+	 *     the node. A refusal stops the agent with its NOSE on the bar, which is the one
+	 *     refusal that does not subtract the gap.
+	 *
 	 * A non-Taxiing agent claims only the runway segments in RunwayHeld, occupied, and
 	 * releases the rest: an arrival on the roll owns the strip and nothing on the taxiway.
+	 * The third route is that one, and the handovers that fill RunwayHeld live in Advance.
 	 */
 	void ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network);
 

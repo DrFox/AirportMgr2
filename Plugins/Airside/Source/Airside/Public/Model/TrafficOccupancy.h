@@ -126,6 +126,11 @@ struct AIRSIDE_API FTrafficOccupancy
 
 	void ReleaseAll(int32 AgentId);
 
+	/** Drops AgentId's claim on this one resource, if it has one. The handover's release:
+	 *  an arrival that has vacated gives the runway back in the tick it vacated, not on its
+	 *  next claim pass, because a landing refused in between would be refused for nothing. */
+	void Release(int32 AgentId, const FTrafficResource& Resource);
+
 	/** Drops every claim by AgentId whose resource is not in Keep. The per-tick "release
 	 *  what is behind me" in one call, so first-to-reserve survives across ticks: an agent
 	 *  that released everything and re-claimed would be a stranger to its own queue. */

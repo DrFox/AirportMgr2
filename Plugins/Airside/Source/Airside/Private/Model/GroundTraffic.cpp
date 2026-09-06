@@ -29,6 +29,23 @@ namespace
 	 */
 	struct FWantedClaim
 	{
+		/**
+		* Which of spec §3.1's routes to the runway surface raised this claim, when it was
+		* one of them. An ENUM and not two bools: the two can never both be true, and the
+		* refusal below has to pick exactly one stop-point rule from it - see the codebase's
+		* "a phase is an enum, never a set of bools".
+		*/
+		enum class ESurface : uint8
+		{
+			/** Not a surface claim at all - an edge or a node. */
+			None,
+			/** The step's edge derives from a runway: stop a GAP short of the edge's start,
+			*  outside the strip. */
+			RunwayEdge,
+			/** The step's end node carries a hold bar: stop with the NOSE on the bar. */
+			HoldShort,
+		};
+
 		FTrafficClaim Claim;
 
 		/** Index into Plan.Steps this claim was raised for. Becomes FRoadAgent::BlockedStep. */
@@ -45,6 +62,12 @@ namespace
 		double StepEnd = 0.0;
 		double EdgeLength = 0.0;
 		bool bReversed = false;
+
+		ESurface Surface = ESurface::None;
+
+		/** The node carrying the bar, for the log line. Set only when Surface == HoldShort;
+		*  the segment it protects is already on Claim.Resource. */
+		FGuidelineNodeId HoldNode;
 	};
 }
 
@@ -315,6 +338,30 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			continue;
 		}
 
+		// THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that made it.
+		//
+		// Waiting for the agent's next claim pass would leave a vacated runway held for a
+		// whole frame, and every landing offered in that frame refused for nothing -
+		// DispatchArrival refuses on ANY held claim (see ArrivalPlanner::Plan). Both
+		// chains come off the AGENT rather than a fresh lookup, because by now the graph
+		// may have been rebuilt under it; both were recorded at dispatch for that reason.
+		if (Before == EAgentPhase::Arriving && Agent.Phase == EAgentPhase::Taxiing)
+		{
+			for (const FRoadSegmentId Segment : Agent.RunwayHeld)
+			{
+				Occupancy.Release(Id, FTrafficResource::OfSurface(Segment));
+			}
+			Agent.RunwayHeld.Reset();
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
+		}
+		else if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Departing)
+		{
+			// The taxi that armed this departure has reached the threshold: what it held
+			// as a reservation over the runway edges it drove becomes the occupancy it
+			// keeps until Gone. ClaimAhead's non-Taxiing branch claims it from here on.
+			Agent.RunwayHeld = Agent.DepartureRunway;
+		}
+
 		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause
 		// is not stalled, and neither is one crawling through a turn. All three conditions
 		// together are what the deadlock pass (Task 8) means by a waiter, and the clock
@@ -387,6 +434,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		Agent.StopWithin = TNumericLimits<double>::Max();
 		Agent.WaitingOn = 0;
 		Agent.BlockedStep = INDEX_NONE;
+		Agent.LastOverlapWith = 0;
 
 		TArray<FTrafficResource> Surfaces;
 		Surfaces.Reserve(Agent.RunwayHeld.Num());
@@ -425,6 +473,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		Agent.StopWithin = TNumericLimits<double>::Max();
 		Agent.WaitingOn = 0;
 		Agent.BlockedStep = INDEX_NONE;
+		Agent.LastOverlapWith = 0;
 		return;
 	}
 
@@ -551,10 +600,44 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 			Want.EdgeLength = Length;
 			Want.bReversed = Step.bReversed;
 			Pending.Add(Want);
-		}
 
-		// The runway surface an edge derived from a runway segment implies (spec §3.1) lands
-		// in Task 6, with the hold-short node below it.
+			// THE RUNWAY UNDER THE EDGE - spec §3.1's first route to the surface rule.
+			// Raised HERE, immediately after the edge it belongs to, so Pending stays in
+			// ROUTE ORDER: the first refusal in that order is what decides where the agent
+			// stops, and a surface entry filed out of order would offer a stop point for
+			// line the agent reaches later than one it reaches sooner.
+			//
+			// THE WHOLE CHAIN, not the one segment this guideline was derived from: a runway
+			// is several segments once it has exits, and holding only the piece under this
+			// edge would let a second aircraft onto the same strip further down. The same
+			// reason DispatchArrival and ArmDepartureIfRunway both record chains.
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
+			if (Edge != nullptr && Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))
+			{
+				for (const FRoadSegmentId Segment : Network.RunwayChain(Edge->DerivedFrom))
+				{
+					// COPIED FROM THE EDGE CLAIM, rank included: the surface is claimed
+					// BECAUSE of that edge, and ranking the two differently would let an
+					// agent win the runway and lose the line onto it, or the reverse.
+					FWantedClaim OnRunway = Want;
+					OnRunway.Claim.Resource = FTrafficResource::OfSurface(Segment);
+
+					// A surface is held whole, so the interval fields mean nothing on it -
+					// cleared rather than left carrying the edge's, where a later reader
+					// would take them for a real extent.
+					OnRunway.Claim.From = 0.0;
+					OnRunway.Claim.To = 0.0;
+
+					// OCCUPIED ONLY ON THE STEP THE AGENT IS STANDING ON, the same rule the
+					// edge claim above uses and for the same reason: an aircraft actually on
+					// the strip may not be evicted from it, while one merely approaching
+					// holds a reservation a landing's occupancy can take.
+					OnRunway.Claim.bOccupied = (Index == Current);
+					OnRunway.Surface = FWantedClaim::ESurface::RunwayEdge;
+					Pending.Add(OnRunway);
+				}
+			}
+		}
 
 		if (End < Head || bBoxEntry)
 		{
@@ -574,10 +657,60 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 			Want.EdgeLength = Length;
 			Want.bReversed = Step.bReversed;
 			Pending.Add(Want);
-		}
 
-		// A node carrying HoldShortFor claims the chain it protects, so the stop is at the
-		// bar rather than at the runway edge (spec §3.1). Task 6.
+			// A NODE CARRYING A BAR CLAIMS THE RUNWAY IT PROTECTS - spec §3.1's second
+			// route to the surface rule - so the stop happens AT THE BAR rather than at the
+			// runway edge. On a taxiway that crosses a runway the crossing guideline is
+			// derived from the TAXIWAY, so the rule above sees nothing and the bar is the
+			// only thing between the agent and the strip.
+			//
+			// INSIDE the node-claim block, and so only once the window has reached the bar.
+			// The alternative - claiming it for every step this loop visits - reserves the
+			// strip from the far side of the airport, and ArrivalPlanner refuses a landing on
+			// ANY held claim, reserved or not: an aircraft merely ROUTED past a bar would
+			// close the runway for the whole of its taxi. Once End < Head the agent is within
+			// braking distance plus a gap of the bar, which is when it needs the answer.
+			//
+			// APPLIES TO EVERY CLASS. A van crossing a live runway is the case a bar is for;
+			// nothing here reads Agent.Class.
+			const FGuidelineNode* Node = Network.GetGuidelineNode(Step.To);
+			if (Node != nullptr && Node->HoldShortFor.IsSet())
+			{
+				// The chain, expanded HERE rather than stored at the bar, so an exit added to
+				// a runway after the bar was placed still protects the whole strip - see
+				// URoadNetwork::RunwayChain. Empty means the segment is no longer a runway
+				// (the profile changed under the mark) and the named segment alone is still
+				// honoured: a bar that silently stopped protecting anything is worse than one
+				// protecting a piece of what it used to.
+				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Node->HoldShortFor);
+				if (Chain.Num() == 0)
+				{
+					Chain.Add(Node->HoldShortFor);
+				}
+
+				for (const FRoadSegmentId Segment : Chain)
+				{
+					FWantedClaim Bar;
+					Bar.Claim.AgentId = Agent.Id;
+					Bar.Claim.Resource = FTrafficResource::OfSurface(Segment);
+
+					// RESERVED, NEVER OCCUPIED - nobody is ever occupied THROUGH a bar. An
+					// agent still short of one is by definition not on the runway, and an
+					// occupied claim cannot be preempted, so a queue at the bar would lock
+					// the strip against the very landing the bar exists to protect.
+					Bar.Claim.bOccupied = false;
+					Bar.Claim.Rank = RankAt(Network, Step.To, Agent.Class);
+					Bar.Step = Index;
+					Bar.StepStart = Start;
+					Bar.StepEnd = End;
+					Bar.EdgeLength = Length;
+					Bar.bReversed = Step.bReversed;
+					Bar.Surface = FWantedClaim::ESurface::HoldShort;
+					Bar.HoldNode = Step.To;
+					Pending.Add(Bar);
+				}
+			}
+		}
 	}
 
 	// WHAT WAS ACTUALLY CLAIMED, not what was wanted: the loop below stops reserving at the
@@ -595,7 +728,11 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	Wanted.Reserve(Pending.Num());
 
 	const int32 WasWaitingOn = Agent.WaitingOn;
+	const int32 WasBlockedStep = Agent.BlockedStep;
 	bool bHeld = false;
+
+	// Who this pass overlapped, for the Warning's throttle. See FRoadAgent::LastOverlapWith.
+	int32 OverlapWith = 0;
 
 	for (const FWantedClaim& Want : Pending)
 	{
@@ -625,11 +762,18 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// interval carries the agent's whole window as well as its body, so two of them
 		// overlapping is the ordinary head-on and queueing case, and warning about it would
 		// fire on every stopped queue on the airport.
-		if (Want.Claim.bOccupied && Want.Claim.Resource.Kind != ETrafficResourceKind::Edge
-			&& WasWaitingOn != Blocker.AgentId)
+		if (Want.Claim.bOccupied && Want.Claim.Resource.Kind != ETrafficResourceKind::Edge)
 		{
-			UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d overlaps agent %d on %s: both are standing on it"),
-				Agent.Id, Blocker.AgentId, *Want.Claim.Resource.Describe());
+			// THROTTLED ON THE OVERLAP'S OWN HISTORY, not on WaitingOn. WaitingOn names
+			// the FIRST refusal in route order, so an overlap that was not the first
+			// refusal never matched it and this Warning fired on every single tick for as
+			// long as the overlap lasted - which is how a log stops being read at all.
+			if (Agent.LastOverlapWith != Blocker.AgentId)
+			{
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d overlaps agent %d on %s: both are standing on it"),
+					Agent.Id, Blocker.AgentId, *Want.Claim.Resource.Describe());
+			}
+			OverlapWith = Blocker.AgentId;
 		}
 
 		if (bHeld)
@@ -642,7 +786,24 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		bHeld = true;
 		Agent.BlockedStep = Want.Step;
 
-		if (Want.Claim.Resource.Kind == ETrafficResourceKind::Edge)
+		if (Want.Surface == FWantedClaim::ESurface::RunwayEdge)
+		{
+			// A GAP SHORT OF WHERE THE RUNWAY BEGINS - the step's START, not its end.
+			// The refused thing is the strip this edge lies on, so stopping short of the
+			// edge's far end would leave the agent standing on the runway it was just
+			// refused. On the step it is already standing on this is 0, which is the only
+			// honest answer: it cannot stop short of where it already is.
+			Agent.StopWithin = FMath::Max(0.0, Want.StepStart - T - G);
+		}
+		else if (Want.Surface == FWantedClaim::ESurface::HoldShort)
+		{
+			// THE NOSE STOPS ON THE BAR, which is why this is the one refusal that does
+			// not subtract the gap: a bar is the position an aircraft is required to hold
+			// AT, and stopping G short would leave it short of the mark the player
+			// painted. Travelled is the CENTRE, so the nose is at T + F/2.
+			Agent.StopWithin = FMath::Max(0.0, Want.StepEnd - T - F * 0.5);
+		}
+		else if (Want.Claim.Resource.Kind == ETrafficResourceKind::Edge)
 		{
 			// The blocker's NEAREST boundary ahead, back in route distance. On a reversed
 			// step the agent is walking the edge from B, so the near end of the blocker's
@@ -677,7 +838,23 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 
 		// ON THE TRANSITION ONLY. Logged every tick this would be one line per agent per
 		// frame, which is how a log stops being read at all.
-		if (WasWaitingOn != Blocker.AgentId)
+		//
+		// A BAR GETS ITS OWN LINE INSTEAD OF THE GENERIC ONE - spec §10 lists "hold-short
+		// reached" separately from "stopped for a resource" - because it names the node
+		// and the segment as well as the holder, and one event must not produce two
+		// lines. Its transition test is the blocker OR the step: an agent already waiting
+		// on the same holder for something else is still newly held HERE, and BlockedStep
+		// is what changed when it became so.
+		if (Want.Surface == FWantedClaim::ESurface::HoldShort)
+		{
+			if (WasWaitingOn != Blocker.AgentId || WasBlockedStep != Want.Step)
+			{
+				UE_LOG(LogAirsideTraffic, Log,
+					TEXT("Agent %d holding short at node %d for runway segment %d held by agent %d"),
+					Agent.Id, Want.HoldNode.Index, Want.Claim.Resource.Surface.Index, Blocker.AgentId);
+			}
+		}
+		else if (WasWaitingOn != Blocker.AgentId)
 		{
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d stops %.0f uu short of %s held by agent %d"),
 				Agent.Id, Agent.StopWithin, *Blocker.Resource.Describe(), Blocker.AgentId);
@@ -689,6 +866,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// making this tick) but must go on claiming the ground the agent is standing on.
 	}
 
+	Agent.LastOverlapWith = OverlapWith;
 	Occupancy.ReleaseExcept(Agent.Id, Wanted);
 
 	if (!bHeld)
