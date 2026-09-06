@@ -194,7 +194,11 @@ int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
 
-	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading);
+	// The design wingspan is read HERE, in the one caller allowed to see the definition, and
+	// handed down - see PlaceEntity's comment on why Model/ cannot read it for itself.
+	const double DesignWingspan =
+		Stand->DesignAircraft != nullptr ? Stand->DesignAircraft->Footprint.Wingspan : 0.0;
+	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading, DesignWingspan);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

@@ -88,9 +88,9 @@ Recorded here so the reasoning survives.
   replaces the inbox.
 - **Clock: compressed 24-hour day, speed ×0/1/2/4/8.** A day cycle gives schedules,
   upkeep ticks and contract deliveries a natural period and the world a sky.
-- **Save/load in the first milestone.** Not because saving is urgent but because every
-  model field must be `UPROPERTY(SaveGame)` from its first commit. Retrofitting is how
-  saves break.
+- **Save/load in the first milestone.** Not because saving is urgent but because the
+  saved-state rule (§2.3: non-Transient UPROPERTYs are saved) must hold from every model
+  class's first commit. Retrofitting is how saves break.
 - **Staff: none.** Vehicles are the workers. A staff system doubles the agent count for
   no new decision the player makes.
 
@@ -123,8 +123,11 @@ own, and the composition-root-swallows-everything problem returns one level up.
 
 - Phase-transition events: agent entered `Parked`, agent `Gone`, arrival refused with its
   `EArrivalRefusal`. Today these are log lines only.
-- A ground-vehicle dispatch shaped as "go to anchor X at stand Y, dwell N seconds, return
-  to depot Z" rather than a raw `FRoutePlan`.
+- Agent primitives: `RedirectAgent(id, plan)` and `RetireAgent(id)` beside the existing
+  `DispatchAgent`, plus a stable per-agent id. *Amended 2026-09-05 (M1):* the first draft
+  asked Airside for "go to anchor, dwell, return" as one call. Dwell is a fact about the
+  job, so that shape belongs in the job board; Airside offers the three primitives and the
+  phase events, and AirportOps composes them.
 - A read-only capability query over the network (§3.1): longest runway and its surface,
   stands with size class and anchors. Pure function of the graph; lives in Airside `Model/`.
 
@@ -138,6 +141,10 @@ own, and the composition-root-swallows-everything problem returns one level up.
 - Nothing sim-side reads wall time or raw `DeltaSeconds`. Airside's
   `UAirsideTraffic::Advance(float, double)` stays wall-scaled; the game module multiplies by
   speed before calling it. Airside never learns the clock exists.
+  *Clarified 2026-09-05 (M1):* "speed" is the ×0/1/2/4/8 multiplier only. Day compression
+  (real seconds per game day) scales the clock, never movement; a truck driving 72× faster
+  because the day is twenty real minutes would be unwatchable. The multiplier reaches
+  Airside through `ARoadNetworkActor::SetSimTimeScale`, applied once in its `Tick`.
 - UE: a `UGameInstanceSubsystem`. Subsystems are engine-managed singletons scoped to a
   lifetime (engine / game instance / world / local player). Game-instance scope survives
   level loads, which the save/load flow needs. Tests build one with `NewObject` and never
@@ -165,7 +172,12 @@ own, and the composition-root-swallows-everything problem returns one level up.
   contracts, research state. Agents mid-taxi save as flight state plus guideline position
   and are re-dispatched on load. Views are never saved; `Present/` rebuilds from model,
   as the road mesh already does.
-- Rule from commit one: every new model field is `UPROPERTY(SaveGame)`.
+- *Amended 2026-09-05 (M1):* the archive does not set `ArIsSaveGame`.
+  `FProperty::ShouldSerializeValue` (Property.cpp:1052) would then skip every untagged
+  property, nested struct members included, so honouring "tag every field" meant tagging
+  all of Airside. Rule instead: **a model object's non-Transient UPROPERTYs are its saved
+  state**; mark what must not be saved `Transient`. Forgetting a Transient saves one field
+  too many (visible); forgetting a SaveGame would lose one (silent).
 
 ### 2.4 Events — `UOpsEvents`
 

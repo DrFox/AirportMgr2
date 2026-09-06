@@ -144,6 +144,30 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	return Settings;
 }
 
+void ARoadNetworkActor::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+	// See the header. Every construction path runs this, so the pointers are corrected for
+	// a duplicate and left alone for a spawn, where they already name these same objects.
+	// By NAME, not by re-creating: the constructor's Facade->OnChanged binding and
+	// Presenter->Initialize call were made on these objects, and a fresh one would not
+	// carry either.
+	Presenter = Cast<URoadSurfacePresenter>(GetDefaultSubobjectByName(TEXT("Presenter")));
+	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
+	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
+}
+
+UObject* ARoadNetworkActor::FacadeOuterForTest() const
+{
+	return Facade ? Facade->GetOuter() : nullptr;
+}
+
+UObject* ARoadNetworkActor::PresenterOuterForTest() const
+{
+	return Presenter ? Presenter->GetOuter() : nullptr;
+}
+
 void ARoadNetworkActor::PostRegisterAllComponents()
 {
 	Super::PostRegisterAllComponents();
@@ -359,7 +383,9 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	Traffic->Advance(DeltaSeconds, SurfaceZ);
+	// Scaled HERE, at the one place real frame time becomes agent time, so nothing below
+	// this line ever learns there is a speed setting. See SetSimTimeScale.
+	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)

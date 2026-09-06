@@ -1,0 +1,19 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1",
+	"FriendlyName": "AirportOps",
+	"Description": "Airport operations and economy: clock, flights, jobs, finance. Sits above Airside.",
+	"Category": "AirportMgr",
+	"CreatedBy": "DrFox",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{ "Name": "AirportOps", "Type": "Runtime", "LoadingPhase": "Default" },
+		{ "Name": "AirportOpsTests", "Type": "DeveloperTool", "LoadingPhase": "Default" }
+	],
+	"Plugins": [
+		{ "Name": "Airside", "Enabled": true }
+	]
+}

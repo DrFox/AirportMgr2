@@ -1,3 +1,4 @@
+#include "AirsideLog.h"
 #include "Tool/RoadDrawTool.h"
 
 #include "Model/RoadNetwork.h"
@@ -89,8 +90,20 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 	FRoadNodeId FromId;
 	if (Context.Target->MakeLiveNodeId(From, FromId))
 	{
+		// Guarded the same way BuildPreview is. The preview and the click used to disagree
+		// here - preview checked GetNetwork() for null, the click dereferenced it - and the
+		// click is where a null actually crashed (2026-09-06, RoadSlotMap.h:61 reading 0x40).
+		// Dropped to idle rather than silently ignored so the player is not left chaining
+		// from a node the network cannot see.
+		const URoadNetwork* Network = Context.Target->GetNetwork();
+		if (Network == nullptr)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Road chaining from node %d refused: the target's network is null although the node is live"), From);
+			return MakeUnique<FRoadIdleState>();
+		}
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Target->GetNetwork(), FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Network, FromId, Context.Snap, Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			return nullptr;

@@ -39,6 +39,7 @@ bool UAirsideTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	if (!Plan.IsValid())
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("%s"), *ArrivalPlanner::DescribeRefusal(Plan));
+		OnArrivalRefused.Broadcast(Plan.Why);
 		return false;
 	}
 
@@ -81,7 +82,7 @@ bool UAirsideTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
 
 	Slot.Agent = MoveTemp(Agent);
-	Agents.Add(MoveTemp(Slot));
+	Admit(MoveTemp(Slot));
 	return true;
 }
 
@@ -117,24 +118,7 @@ bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	// pause is copied in at dispatch - the only time the two ever need to meet.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
 
-	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
-	// is a fact about the network and the last polyline point is the only thing that knows
-	// where the route actually finished. A route that ends anywhere else simply taxis, which
-	// is what every route did before departures existed.
-	if (Network != nullptr && Plan.Polyline.Num() > 0 && Airframe.Climb.IsSet())
-	{
-		FVector2D Threshold;
-		FVector2D Direction;
-		double Length = 0.0;
-		if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length))
-		{
-			Agent.ArmDeparture(Threshold, Direction, Length);
-
-			UE_LOG(LogAirsideTraffic, Log,
-				TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
-				*RunwayDesignator::ToPairText(Direction), Length);
-		}
-	}
+	ArmDepartureIfRunway(Agent, Network, Plan);
 
 	FActorSpawnParameters Params;
 	Params.Owner = GetTypedOuter<AActor>();
@@ -168,7 +152,93 @@ bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	}
 
 	Slot.Agent = MoveTemp(Agent);
+	Admit(MoveTemp(Slot));
+	return true;
+}
+
+void UAirsideTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const
+{
+	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
+	// is a fact about the network and the last polyline point is the only thing that knows
+	// where the route actually finished. A route that ends anywhere else simply taxis, which
+	// is what every route did before departures existed.
+	if (Network == nullptr || Plan.Polyline.Num() == 0 || !Agent.Airframe.Climb.IsSet())
+	{
+		return;
+	}
+	FVector2D Threshold;
+	FVector2D Direction;
+	double Length = 0.0;
+	if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length))
+	{
+		Agent.ArmDeparture(Threshold, Direction, Length);
+
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
+			*RunwayDesignator::ToPairText(Direction), Length);
+	}
+}
+
+void UAirsideTraffic::Admit(FAgentSlot&& Slot)
+{
+	Slot.Id = NextAgentId++;
+	const EAgentPhase Born = Slot.Agent.Phase;
+	const int32 Id = Slot.Id;
 	Agents.Add(MoveTemp(Slot));
+	OnAgentPhaseChanged.Broadcast(Id, EAgentPhase::Gone, Born);
+}
+
+int32 UAirsideTraffic::FindSlot(int32 AgentId) const
+{
+	return Agents.IndexOfByPredicate([AgentId](const FAgentSlot& S) { return S.Id == AgentId; });
+}
+
+bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
+{
+	const int32 Index = FindSlot(AgentId);
+	if (Index == INDEX_NONE || !Plan.IsValid() || Plan.Polyline.Num() < 2)
+	{
+		return false;
+	}
+	FAgentSlot& Slot = Agents[Index];
+	const EAgentPhase Before = Slot.Agent.Phase;
+	if (Before != EAgentPhase::Parked && Before != EAgentPhase::Taxiing)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("RedirectAgent %d refused: agent is %s"),
+			AgentId, *UEnum::GetValueAsString(Before));
+		return false;
+	}
+
+	// The airframe is the agent's own - a redirect changes where it goes, not what it is.
+	// Copied out first: StartTaxi assigns Airframe from its argument, and handing it a
+	// reference to the very field it overwrites is a self-assignment nobody should rely on.
+	const FAirframe Own = Slot.Agent.Airframe;
+	Slot.Agent.StartTaxi(Plan, Own);
+	ArmDepartureIfRunway(Slot.Agent, Network, Plan);
+
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
+	if (Slot.Agent.Phase != Before)
+	{
+		OnAgentPhaseChanged.Broadcast(AgentId, Before, Slot.Agent.Phase);
+	}
+	return true;
+}
+
+bool UAirsideTraffic::RetireAgent(int32 AgentId)
+{
+	const int32 Index = FindSlot(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+	const EAgentPhase Before = Agents[Index].Agent.Phase;
+	if (Agents[Index].View != nullptr)
+	{
+		Agents[Index].View->Destroy();
+	}
+	Agents.RemoveAt(Index);
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
+	OnAgentPhaseChanged.Broadcast(AgentId, Before, EAgentPhase::Gone);
 	return true;
 }
 
@@ -182,6 +252,13 @@ void UAirsideTraffic::ClearAgents()
 		}
 	}
 
+	// Announced before Reset so a listener asking about the id still gets To == Gone for
+	// every agent it was tracking, the same promise Advance's removal path makes.
+	for (const FAgentSlot& Slot : Agents)
+	{
+		OnAgentPhaseChanged.Broadcast(Slot.Id, Slot.Agent.Phase, EAgentPhase::Gone);
+	}
+
 	Agents.Reset();
 }
 
@@ -193,6 +270,8 @@ void UAirsideTraffic::Advance(float DeltaSeconds, double SurfaceZ)
 	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
 		FAgentSlot& Slot = Agents[Index];
+		const EAgentPhase Before = Slot.Agent.Phase;
+		const int32 Id = Slot.Id;
 
 		FAgentMotion Motion;
 		if (!Slot.Agent.Advance(DeltaSeconds, Motion))
@@ -205,12 +284,20 @@ void UAirsideTraffic::Advance(float DeltaSeconds, double SurfaceZ)
 				Slot.View->Destroy();
 			}
 			Agents.RemoveAt(Index);
+			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
+			// agent already gone, which is what "To == Gone" promises.
+			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
 			continue;
 		}
 
 		if (Slot.View != nullptr)
 		{
 			Slot.View->SetMotion(Motion, SurfaceZ);
+		}
+
+		if (Slot.Agent.Phase != Before)
+		{
+			OnAgentPhaseChanged.Broadcast(Id, Before, Slot.Agent.Phase);
 		}
 	}
 }
