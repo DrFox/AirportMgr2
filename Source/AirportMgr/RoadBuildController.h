@@ -10,6 +10,7 @@
 #include "RoadBuildController.generated.h"
 
 class ARoadNetworkActor;
+class UBuildBarWidget;
 
 /**
  * What a plain click means right now. ONE ENUM: Remove and Insert can never both be lit,
@@ -40,7 +41,7 @@ enum class EClickModifier : uint8
  * is game-framework glue. The plugin must not depend on the game.
  */
 
-UCLASS()
+UCLASS(Config = Game)
 class AIRPORTMGR_API ARoadBuildController : public APlayerController
 {
 	GENERATED_BODY()
@@ -99,6 +100,17 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|View")
 	bool bShowGuidelines = true;
+
+	/**
+	 * The bar's Blueprint class. Config so DefaultGame.ini names WBP_BuildBar without a
+	 * Blueprint subclass of this controller existing to hold the default. Null means the
+	 * plain C++ bar, which works and says so in the log.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<UBuildBarWidget> BuildBarClass;
+
+	/** The bar on screen, created at BeginPlay. */
+	UPROPERTY(Transient) TObjectPtr<UBuildBarWidget> BuildBar;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))

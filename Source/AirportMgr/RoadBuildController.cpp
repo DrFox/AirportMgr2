@@ -1,6 +1,8 @@
 #include "RoadBuildController.h"
 
+#include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
+#include "BuildBarWidget.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
@@ -57,6 +59,18 @@ void ARoadBuildController::BeginPlay()
 	FInputModeGameAndUI Mode;
 	Mode.SetHideCursorDuringCapture(false);
 	SetInputMode(Mode);
+
+	// The bar. The configured Blueprint if there is one, else the C++ class itself - which
+	// builds every section in code, so a missing asset degrades rather than breaks.
+	const TSubclassOf<UBuildBarWidget> BarClass =
+		BuildBarClass != nullptr ? BuildBarClass : TSubclassOf<UBuildBarWidget>(UBuildBarWidget::StaticClass());
+	BuildBar = CreateWidget<UBuildBarWidget>(this, BarClass);
+	if (BuildBar != nullptr)
+	{
+		BuildBar->AddToViewport();
+		UE_LOG(LogRoadBuild, Log, TEXT("Build bar: %s"),
+			BuildBarClass != nullptr ? *BuildBarClass->GetName() : TEXT("code-only (no BuildBarClass configured)"));
+	}
 
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
 	// the bar builds from, so this banner cannot advertise a key that goes nowhere - which
