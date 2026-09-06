@@ -129,9 +129,13 @@ void FRouteTool::OnClick(const FToolContext& Context)
 
 	if (LastPlan.IsValid())
 	{
-		// Accepted in an editor world, deliberately - see UAirsideTraffic::DispatchAgent's
+		// Accepted in an editor world, deliberately - see UGroundTraffic::DispatchAgent's
 		// own comment for why refusing it there used to make the tool look broken.
-		Context.Target->DispatchAgent(LastPlan, Airframe);
+		//
+		// THE TOOL'S OWN Class, not Aircraft: the same class the route was found for. Before
+		// M2 the class reached FindRoute and stopped there, so a van dispatched down a
+		// vehicle-only route arrived at the model calling itself an aeroplane.
+		Context.Target->DispatchAgent(LastPlan, Airframe, Class);
 	}
 }
 

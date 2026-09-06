@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadHandles.h"
+#include "Model/RoadTraffic.h"
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
@@ -76,8 +78,8 @@ struct AIRSIDE_API FDepartureOrder
  * park and depart correctly" is testable by calling Advance in a loop with no actor, no
  * world and no view - see Airside.Model.RoadAgent.
  *
- * Runtime only. See UAirsideTraffic::Agents and FAgentSlot for why the view that renders
- * this is a separate, Present-layer field rather than living here.
+ * Runtime only. See UGroundTraffic::Agents, and UAirsideTraffic::Views for why the view
+ * that renders this is a separate, Present-layer field rather than living here.
  */
 USTRUCT()
 struct AIRSIDE_API FRoadAgent
@@ -171,6 +173,46 @@ struct AIRSIDE_API FRoadAgent
 	 * world origin. See Advance.
 	 */
 	UPROPERTY() FAgentMotion LastMotion;
+
+	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
+	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
+	 *  Model/ and the slot struct went with the view pointer it existed to carry. */
+	UPROPERTY() int32 Id = 0;
+
+	/** How this agent moves. Vehicles were dispatched with no class at all before M2, which
+	 *  is why priority could not be applied to them. */
+	UPROPERTY() ETraversalClass Class = ETraversalClass::Aircraft;
+
+	/** Where the current route is going, so a replan can aim at the same place. */
+	UPROPERTY() FGuidelineNodeId GoalNode;
+
+	// --- Written by UGroundTraffic's arbitration each tick; read by Advance ------------
+	//
+	// Arbitration writes, motion reads: there is no second evaluator of where the agent
+	// may go, only one input into the one follower.
+
+	/** Distance beyond which the follower may not go this tick. See FRouteFollower::Advance. */
+	UPROPERTY() double StopWithin = TNumericLimits<double>::Max();
+
+	/** Id of the agent holding what this one was refused, or 0. The wait-for graph's edge. */
+	UPROPERTY() int32 WaitingOn = 0;
+
+	/** Index into Follower.Plan.Steps of the step whose resource refused this agent, or -1.
+	 *  Names the node a deadlock replan starts from (the step's FROM node). */
+	UPROPERTY() int32 BlockedStep = -1;
+
+	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
+	UPROPERTY() double StalledSeconds = 0.0;
+
+	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never. */
+	UPROPERTY() double LastResolveAttempt = -1.0e9;
+
+	/** Runway segments this agent occupies in a phase that is not a taxi: an arrival from
+	 *  StartArrival until Vacated, a departure from the handover until Gone. */
+	UPROPERTY() TArray<FRoadSegmentId> RunwayHeld;
+
+	/** The chain a taxi ending on a runway will hold once it becomes a departure. */
+	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
 
 	/**
 	 * Spools the propeller one frame toward whatever the engine has been commanded to do.

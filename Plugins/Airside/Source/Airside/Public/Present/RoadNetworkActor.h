@@ -128,8 +128,13 @@ public:
 	 *  to do itself, and Model/ArrivalPlanner for which runway, exit and stand are chosen. */
 	bool DispatchArrival(const FVector2D& Near, const FAirframe& Airframe);
 
-	/** Sends one agent along a plan, spawning the cube that shows it. Forwards to Traffic. */
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
+	/** Sends one agent along a plan, spawning the cube that shows it. Forwards to Traffic.
+	 *  The `using` keeps IRoadEditTarget's two-argument (Aircraft) overload visible on this
+	 *  type: overriding one signature would otherwise HIDE the other for every caller
+	 *  holding an ARoadNetworkActor*, which is most of the tests. */
+	using IRoadEditTarget::DispatchAgent;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+		ETraversalClass Class) override;
 
 	/** Removes every agent and its cube. Forwards to Traffic. */
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Airside")

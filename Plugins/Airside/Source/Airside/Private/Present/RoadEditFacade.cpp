@@ -108,9 +108,10 @@ void URoadEditFacade::RebuildMesh()
 	Actor().RebuildMesh();
 }
 
-bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
+bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+	ETraversalClass Class)
 {
-	return Actor().DispatchAgent(Plan, Airframe);
+	return Actor().DispatchAgent(Plan, Airframe, Class);
 }
 
 bool URoadEditFacade::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const

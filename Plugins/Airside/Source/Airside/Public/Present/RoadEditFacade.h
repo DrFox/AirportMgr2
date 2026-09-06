@@ -98,7 +98,9 @@ public:
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
 	virtual void HideGhost() override;
 	virtual void RebuildMesh() override;
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
+	using IRoadEditTarget::DispatchAgent;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+		ETraversalClass Class) override;
 
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 

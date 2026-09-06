@@ -169,7 +169,10 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 	{
 		FVector2D FollowAt = At;
 		double FollowHeading = Heading;
-		if (Follower.Advance(DeltaSeconds, FollowAt, FollowHeading))
+		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one
+		// follower, and it defaults to unbounded, so an agent nobody has arbitrated for
+		// drives exactly as it did before M2.
+		if (Follower.Advance(DeltaSeconds, StopWithin, FollowAt, FollowHeading))
 		{
 			LastMotion = DescribeMotion(FollowAt, FollowHeading);
 			OutMotion = LastMotion;

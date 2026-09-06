@@ -96,7 +96,16 @@ public:
 	 * another, so the taxi and a later handover were never guaranteed to read the SAME
 	 * aeroplane. Issue #30 finished the collapse begun there.
 	 */
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) = 0;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+		ETraversalClass Class) = 0;
+
+	/** Aircraft by default - what every caller before M2 meant. A non-virtual overload,
+	 *  so implementers override one signature; they carry `using IRoadEditTarget::DispatchAgent;`
+	 *  so this one stays visible on the concrete type. */
+	bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
+	{
+		return DispatchAgent(Plan, Airframe, ETraversalClass::Aircraft);
+	}
 
 	virtual void RebuildMesh() = 0;
 };

@@ -385,7 +385,7 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	// Scaled HERE, at the one place real frame time becomes agent time, so nothing below
 	// this line ever learns there is a speed setting. See SetSimTimeScale.
-	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ);
+	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ, Network);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
@@ -397,9 +397,10 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 	return Traffic->DispatchArrival(*Network, Near, Airframe, SurfaceZ, ShutdownPauseSeconds);
 }
 
-bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+	ETraversalClass Class)
 {
-	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds);
+	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds, Class);
 }
 
 void ARoadNetworkActor::ClearAgents()
