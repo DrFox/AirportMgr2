@@ -545,9 +545,13 @@ private:
 	 *     the node. A refusal stops the agent with its NOSE on the bar, which is the one
 	 *     refusal that does not subtract the gap.
 	 *
-	 * A non-Taxiing agent claims only the runway segments in RunwayHeld, occupied, and
-	 * releases the rest: an arrival on the roll owns the strip and nothing on the taxiway.
-	 * The third route is that one, and the handovers that fill RunwayHeld live in Advance.
+	 * A non-Taxiing agent claims only SURFACES, occupied, and releases the rest: an arrival
+	 * on the roll owns the strip and nothing on the taxiway. Which surfaces is RunwayHeld -
+	 * the handovers that fill it live in Advance - PLUS the chain of any crossing still in
+	 * progress, because spec §3.4's "their surface" has to mean the one the body is on: an
+	 * aircraft whose plan dies mid-crossing is Parked by the end of that tick with RunwayHeld
+	 * empty, and holding nothing would show the strip free with an aeroplane on it. The third
+	 * route is that one.
 	 */
 	void ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network);
 
@@ -596,9 +600,10 @@ private:
 	 *  only three functions that build or read one live. */
 	struct FWantedClaim;
 
-	/** A non-Taxiing agent's whole claim pass: hold RunwayHeld, release everything else,
-	 *  and end any crossing. ClaimAhead's first branch. */
-	void HoldRunwayOnly(FRoadAgent& Agent);
+	/** A non-Taxiing agent's whole claim pass: hold RunwayHeld AND the chain its body is
+	 *  crossing, release everything else. Spec §3.4's "their surface and nothing else",
+	 *  where the surface includes the one it is standing on. ClaimAhead's first branch. */
+	void HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network);
 
 	/** A Taxiing agent whose plan went bad under it: give back every GUIDELINE, keep any
 	 *  runway surface and the crossing that describes it (a plan says nothing about where a

@@ -1842,6 +1842,40 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 					M2TrafficPiper(), &Air->GetOccupancy());
 				TestEqual(TEXT("and a landing offered in that same frame is refused: RunwayOccupied"),
 					Landing.Why, EArrivalRefusal::RunwayOccupied);
+
+				// AND IT KEEPS IT AFTER IT PARKS, WHICH IS THE FRAME THAT MATTERED.
+				//
+				// An invalid plan makes FRouteFollower::HasArrived true, so this agent is
+				// Parked by the end of the very tick that stranded it, and from the next tick
+				// on it takes ClaimAhead's non-Taxiing branch. That branch used to hold
+				// RunwayHeld and nothing else - and RunwayHeld is empty on an agent that
+				// never landed - so the strip it is physically standing on came free one tick
+				// after the fix above kept it. Holding for one tick and then letting go is not
+				// holding: the player's next press of 7 is not on that frame.
+				M2TrafficRun(*Air, *Cross, 3.0, [](int32) { return true; });
+				const FRoadAgent* Parked = Air->FindAgent(Plane);
+				if (TestNotNull(TEXT("it is still there three seconds later"), Parked))
+				{
+					UE_LOG(LogM2TrafficTest, Log,
+						TEXT("DeadPlanReleases parked measured: phase %s, crossing phase %d, strip %s"),
+						*UEnum::GetValueAsString(Parked->Phase), static_cast<int32>(Parked->CrossingPhase),
+						Air->GetOccupancy().IsHeld(Strip, 0) ? TEXT("HELD") : TEXT("free"));
+
+					TestEqual(TEXT("and it has parked where it stood"), Parked->Phase, EAgentPhase::Parked);
+					TestTrue(TEXT("a PARKED aircraft still holds the strip its body is on"),
+						Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
+
+					const FArrivalPlan Later = ArrivalPlanner::Plan(*Cross, FVector2D(-51000.0, 0.0),
+						M2TrafficPiper(), &Air->GetOccupancy());
+					TestEqual(TEXT("so a landing is still refused: RunwayOccupied, until the player retires it"),
+						Later.Why, EArrivalRefusal::RunwayOccupied);
+				}
+
+				// AND RETIRING IT IS WHAT GIVES THE RUNWAY BACK - the one path that should,
+				// and the reason the hold above is not a leak.
+				TestTrue(TEXT("retired"), Air->RetireAgent(Plane));
+				TestFalse(TEXT("and the strip is free again"),
+					Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
 			}
 		}
 	}

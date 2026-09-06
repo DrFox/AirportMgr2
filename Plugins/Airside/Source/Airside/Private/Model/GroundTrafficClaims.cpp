@@ -67,7 +67,7 @@ struct UGroundTraffic::FWantedClaim
 	FGuidelineNodeId HoldNode;
 };
 
-void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent)
+void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 {
 	// CLEARED, or the arbitration fields say whatever they said on the last tick this
 	// agent taxied. A parked aircraft still naming the vehicle it once queued behind
@@ -78,24 +78,46 @@ void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent)
 	Agent.BlockedStep = INDEX_NONE;
 	Agent.LastOverlaps.Reset();
 
-	// A CROSSING IS A TAXIING IDEA. Whatever phase this is now, RunwayHeld governs what
-	// it holds, so the field is cleared rather than left to name a chain nothing will
-	// ever release - and the release is announced, because the claim was.
-	if (Agent.CrossingPhase != ECrossingPhase::None)
-	{
-		// BOTH FIELDS, ALWAYS TOGETHER: the phase says whether, the seed says which, and
-		// a seed left behind a None phase is a chain nothing would ever release.
-		Agent.CrossingPhase = ECrossingPhase::None;
-		Agent.CrossingRunway = FRoadSegmentId();
-		UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
-	}
-
 	TArray<FTrafficResource> Surfaces;
-	Surfaces.Reserve(Agent.RunwayHeld.Num());
+	Surfaces.Reserve(Agent.RunwayHeld.Num() + 1);
 	for (const FRoadSegmentId Segment : Agent.RunwayHeld)
 	{
 		Surfaces.Add(FTrafficResource::OfSurface(Segment));
 	}
+
+	// AND THE SURFACE THE BODY IS STANDING ON, which is spec §3.4's "other phases hold
+	// their surface and nothing else" read the only way that is true of a physical
+	// aeroplane: the surface a NON-TAXIING agent holds is RunwayHeld plus whatever its
+	// body is on, and a crossing is exactly the second of those.
+	//
+	// A CROSSING WAS TREATED AS A TAXIING IDEA HERE AND CLEARED, which was wrong for the
+	// one case that matters: an aircraft whose plan dies mid-crossing is Parked by the end
+	// of that same tick (an invalid plan makes FRouteFollower::HasArrived true), and
+	// RunwayHeld is empty on anything that did not land - so the strip under it came free
+	// on the next tick and a landing could be cleared onto an aeroplane standing on the
+	// centreline. Keeping it costs nothing anywhere else: UpdateCrossing releases a
+	// crossing geometrically while the agent is still Taxiing, so an agent that reaches
+	// this branch with the phase still set is one whose body genuinely never left the
+	// asphalt. The fields are reset only where the agent itself goes - RetireAgent and
+	// Advance's removal path, both of which ReleaseAll - which is the player's decision,
+	// and the log line that announced a release lives at the geometric release, where the
+	// release actually happens.
+	if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
+	{
+		// THE WHOLE CHAIN, re-expanded per tick exactly as BuildPending's route zero does
+		// it: a runway is several segments once it has exits, and a rebuild may have
+		// changed which - so the seed is what is stored and the chain is what is claimed.
+		TArray<FRoadSegmentId> Chain = Network.RunwayChain(Agent.CrossingRunway);
+		if (Chain.Num() == 0)
+		{
+			Chain.Add(Agent.CrossingRunway);
+		}
+		for (const FRoadSegmentId Segment : Chain)
+		{
+			Surfaces.AddUnique(FTrafficResource::OfSurface(Segment));
+		}
+	}
+
 	Occupancy.ReleaseExcept(Agent.Id, Surfaces);
 
 	for (const FTrafficResource& Resource : Surfaces)
@@ -134,11 +156,14 @@ void UGroundTraffic::ReleaseForDeadPlan(FRoadAgent& Agent)
 	// THE CROSSING FIELDS SURVIVE WITH THE CLAIM THEY DESCRIBE. Clearing them here (which
 	// is what this did, in the breath that also dropped the claim) would leave the phase
 	// saying the agent is off the strip while the table says it is on it - and the release
-	// line it logged would have been a log that lies. The pair is cleared, with the claim,
-	// by HoldRunwayOnly on the next tick: an invalid plan makes FRouteFollower::HasArrived
-	// true, so this agent is Parked by the end of this one and takes the non-Taxiing branch
-	// from then on. That a parked agent then claims nothing is spec §3.4 as written, and
-	// M3's runway sequencer is where an aeroplane abandoned on a runway becomes its problem.
+	// line it logged would have been a log that lies.
+	//
+	// AND THEY GO ON SURVIVING. An invalid plan makes FRouteFollower::HasArrived true, so
+	// this agent is Parked by the end of this very tick and takes HoldRunwayOnly from the
+	// next one - which re-claims the crossing chain for exactly this reason. The hold ends
+	// where the agent does: RetireAgent, or Advance's removal path. A player who deletes the
+	// taxiway under a crossing aeroplane has an aeroplane on the runway, and the table says
+	// so until they retire it.
 
 	Agent.StopWithin = TNumericLimits<double>::Max();
 	Agent.WaitingOn = 0;
@@ -856,7 +881,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	// rather than needing a call of its own.
 	if (Agent.Phase != EAgentPhase::Taxiing)
 	{
-		HoldRunwayOnly(Agent);
+		HoldRunwayOnly(Agent, Network);
 		return;
 	}
 

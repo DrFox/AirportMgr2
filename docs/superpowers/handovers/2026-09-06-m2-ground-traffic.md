@@ -188,7 +188,7 @@ content default)`. Baseline at handover was 88/0/0.
 
 ### Log and comment deltas
 
-`UE_LOG` in Airside: 71 -> 95 (97 at Task 12; the final fix wave dropped the two
+`UE_LOG` in Airside: 71 -> 94 (97 at Task 12; the final fix wave dropped the three
 `"released the runway"` lines that no longer describe anything - a stranded or dead-plan
 agent keeps the strip its body is on). Comment lines across the split pair (`AirsideTraffic.h/.cpp` +
 `GroundTraffic.h` + `GroundTraffic*.cpp`, the four files the arbitration/rebuild/deadlock
@@ -281,11 +281,14 @@ One line each; full reasoning and cost-if-wrong is in `rulings.md`.
   by hand, not measured).
 
 **Arbitration, as designed (M3 input, not a defect)**
-- Parked agents claim nothing — spec §3.4. `ClaimAhead`'s non-Taxiing branch keeps only
-  `RunwayHeld`, and a Parked agent's is empty, so an aeroplane abandoned ON a runway (a
-  stranded agent that then parks) stops showing as an occupant a tick later. Whose problem
-  that is belongs to `URunwaySequencer` in M3, which is the object that decides who may use
-  a strip at all.
+- Parked agents keep the surface their body is on; other than that they claim nothing — spec
+  §3.4. `ClaimAhead`'s non-Taxiing branch holds `RunwayHeld` PLUS the chain of any crossing
+  still in progress, so an aeroplane abandoned ON a runway (a stranded agent that then parks)
+  goes on holding it until the player retires it, and a landing offered meanwhile is refused
+  `RunwayOccupied`. It holds no guideline edge or node: a parked agent blocks no taxiway.
+  What SHOULD happen to an aeroplane stuck on a strip — tow it, refuse the stand, warn the
+  player — is `URunwaySequencer`'s question in M3, which is the object that decides who may
+  use a runway at all.
 
 ### Follow-up issues to file
 

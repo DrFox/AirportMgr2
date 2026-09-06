@@ -314,6 +314,14 @@ Two passes so a claim by one agent is visible to every later agent in the same f
 Sorting by rank rather than list order is what makes aircraft-over-vehicle true when both
 reach a node in one frame.
 
+*Amended 2026-09-06, final review:* "their surface" in step 1 is `RunwayHeld` PLUS the chain
+of any crossing still in progress — the surface the agent's BODY is standing on, not only the
+one a landing or a take-off was granted. `RunwayHeld` is empty on anything that never landed,
+so the narrower reading gave the strip back one tick after an aircraft whose plan died
+mid-crossing parked on the centreline, and a landing could be cleared onto it. A parked agent
+still holds no guideline edge or node: it blocks no taxiway. The hold ends when the agent
+does — `RetireAgent`, or the tick that removes it.
+
 ---
 
 ## 4. Routing
