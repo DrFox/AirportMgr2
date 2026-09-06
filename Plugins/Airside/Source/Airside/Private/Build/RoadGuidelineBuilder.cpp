@@ -406,8 +406,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// Two rules, because the two kinds of node have DIFFERENT sources of truth, and
 		// URoadNetwork::SetHoldShort says which is which:
 		//   - Origin set: the MARK is the source and the flag is its cache, so the flag is
-		//     cleared unconditionally and the loop below writes it back. Rebuilding a cache
-		//     means emptying it, not merely adding to it.
+		//     cleared and the loop below writes it back. Rebuilding a cache means emptying
+		//     it, not merely adding to it - EXCEPT when this pass derived nothing for that
+		//     end. Ends is fully populated by now, so a missing EndKey here is the same
+		//     "unsolved end" the re-apply loop below deliberately skips; clearing the flag
+		//     and then not re-applying it would take the player's bar away for a pass over
+		//     a transient derivation failure, which is precisely what that loop refuses to
+		//     do. Leave the cache alone and let the next successful solve refresh it.
 		//   - Origin unset: no mark is ever stored, so the FLAG is the source. Wiping it
 		//     would delete the player's bar on every unrelated road edit. It is cleared only
 		//     when it names something that is no longer a live runway - the one case the
@@ -421,8 +426,15 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					continue;
 				}
 
-				const bool bMarkBacked = Live[Index].Origin.IsSet();
+				const FGuidelineEndRef& Origin = Live[Index].Origin;
+				const bool bMarkBacked = Origin.IsSet();
 				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldShortFor))
+				{
+					continue;
+				}
+
+				if (bMarkBacked
+					&& Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) == nullptr)
 				{
 					continue;
 				}
@@ -444,6 +456,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				// unsolved end, or a profile that lost the guideline the mark named. Leave
 				// the mark: the next successful solve puts the bar back, which is kinder
 				// than deleting a player's work over a transient derivation failure.
+				//
+				// The clear above skips this same case for the same reason - the two tests
+				// are the same lookup in the same map, so a flag is never cleared here only
+				// to be left unwritten there.
 				continue;
 			}
 

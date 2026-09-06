@@ -402,13 +402,20 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 
 	// HOISTED ABOVE THE SCOPE, so every refusal really does happen before the snapshot.
 	// URoadNetwork::SetHoldShort refuses a Protects that is not a live runway, and checking
-	// it only in there meant the one guard most likely to fire fired INSIDE the edit - the
-	// scope's own rollback covers that, but the comment below claimed a property the code
-	// did not have, and a comment that lies about a boundary is worse than none.
+	// it only in there meant the one guard most likely to fire fired INSIDE the edit.
+	//
+	// THERE IS NO ROLLBACK, so do not read the backstop below as one. ~FRoadEditScope calls
+	// AbandonEdit, which DISCARDS the pending snapshot and leaves the live graph exactly as
+	// the body left it - the stacks are untouched, the model is not restored. Returning
+	// false from inside a scope is safe here only because URoadNetwork::SetHoldShort
+	// refuses WITHOUT MUTATING, so there is nothing to put back. A future mutation followed
+	// by a return false inside a scope would leave a changed graph with no undo entry for
+	// it, which is a corruption no later undo can reach - hence the guard living out here.
 	if (Protects.IsSet() && !Network->IsRunwaySegment(Protects))
 	{
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetHoldShort refused at guideline node %d: segment %d is not a live runway"),
+			TEXT("SetHoldShort refused before the snapshot at guideline node %d: "
+				 "segment %d is not a live runway"),
 			NodeIndex, SegmentIndex);
 		return false;
 	}
@@ -423,8 +430,13 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("hold short"));
 	if (!Network->SetHoldShort(Node, Protects))
 	{
+		// The BACKSTOP, and reaching it means a guard above missed something - the node
+		// liveness check and the runway check together are meant to cover every refusal the
+		// model can make. Distinct text from the hoisted guard's, so the log says WHICH of
+		// the two fired rather than leaving the reader to guess.
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetHoldShort refused at guideline node %d: segment %d is not a live runway"),
+			TEXT("SetHoldShort refused inside the edit at guideline node %d for segment %d - "
+				 "the hoisted guard should have caught this"),
 			NodeIndex, SegmentIndex);
 		return false;
 	}

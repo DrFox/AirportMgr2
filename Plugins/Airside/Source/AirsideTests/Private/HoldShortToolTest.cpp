@@ -25,13 +25,20 @@ namespace
 	{
 		int32 HoldBars = 0;
 		int32 Refused = 0;
+		int32 Doomed = 0;
 		FString LastLabel;
 
-		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
-		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
-		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle Style) override
+		/** The last hold bar's direction of travel, so "across the taxiway" can be MEASURED. */
+		FVector2D LastAlong = FVector2D::ZeroVector;
+
+		virtual void Marker(const FVector2D&, EPreviewStyle Style) override
 		{
-			if (Style == EPreviewStyle::HoldShort) { ++HoldBars; }
+			if (Style == EPreviewStyle::Doomed) { ++Doomed; }
+		}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D& Along, EPreviewStyle Style) override
+		{
+			if (Style == EPreviewStyle::HoldShort) { ++HoldBars; LastAlong = Along; }
 		}
 		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
 		{
@@ -118,6 +125,21 @@ bool FHoldShortToolTest::RunTest(const FString& Parameters)
 	GuidelineOverlay::Draw(Net, Sink);
 	TestEqual(TEXT("the overlay draws one hold bar"), Sink.HoldBars, 1);
 
+	// ACROSS THE TAXIWAY, measured rather than asserted by name. CrossMark is handed the
+	// direction of TRAVEL and the HUD draws perpendicular to it, so a bar that reads
+	// correctly is one whose Along runs down the taxiway. This fixture's taxiway goes
+	// E(60000,0) -> X(60000,-20000), which is the -Y axis - and the node also carries turn
+	// paths onto the runway, so picking the wrong incident edge would show up here as an
+	// Along with an X component.
+	TestTrue(TEXT("the bar's Along runs down the taxiway, not off along a turn path"),
+		FMath::Abs(Sink.LastAlong.Y) > 0.99);
+
+	// The hover on a flagged node warns that a click would REMOVE the bar.
+	FM2HoldSink Flagged;
+	Tool.BuildPreview(Ctx, Flagged);
+	TestEqual(TEXT("hovering a flagged node marks it Doomed - the click would clear it"),
+		Flagged.Doomed, 1);
+
 	// Undo and redo hand back FRESH network objects, so the node is re-found through
 	// Actor->Network each time rather than through a handle captured before the snapshot.
 	TestTrue(TEXT("undoable"), Actor->Undo());
@@ -140,6 +162,14 @@ bool FHoldShortToolTest::RunTest(const FString& Parameters)
 	FM2HoldSink Sink2;
 	Tool.BuildPreview(Ctx, Sink2);
 	TestEqual(TEXT("the preview shows the refusal"), Sink2.Refused, 1);
+
+	// Cancel has no part-drawn gesture to abandon, so the only thing it can take back is
+	// the message - and it must, or a refusal from minutes ago follows the cursor forever.
+	Tool.OnCancel(Ctx);
+	TestTrue(TEXT("cancel clears the refusal"), Tool.LastRefusal.IsEmpty());
+	FM2HoldSink Sink3;
+	Tool.BuildPreview(Ctx, Sink3);
+	TestEqual(TEXT("and the preview stops showing it"), Sink3.Refused, 0);
 	return true;
 }
 

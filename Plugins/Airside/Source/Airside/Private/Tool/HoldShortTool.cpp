@@ -58,7 +58,16 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 	{
 		// A second click on a flagged node clears it - see the class comment for why this
 		// is a toggle rather than a modifier. INDEX_NONE is the facade's "clear".
-		Context.Target->SetHoldShort(Picked.Index, INDEX_NONE);
+		//
+		// The return is HONOURED rather than discarded: the facade refuses a dead slot, and
+		// swallowing that would leave the player clicking a bar that will not go away with
+		// nothing on screen to say why. The reason itself stays in the log, because it names
+		// slot indices that mean nothing to a player.
+		if (!Context.Target->SetHoldShort(Picked.Index, INDEX_NONE))
+		{
+			LastRefusal = TEXT("The facade refused; see the log");
+			return;
+		}
 		LastRefusal.Empty();
 		return;
 	}
@@ -78,12 +87,16 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	LastRefusal.Empty();
-
 	// INDICES, because that is what this seam takes: the facade re-derives the
 	// generation-checked handles and refuses a dead slot in one place - see
-	// IRoadEditTarget::SetHoldShort.
-	Context.Target->SetHoldShort(Picked.Index, Runway.Index);
+	// IRoadEditTarget::SetHoldShort. Honoured, for the reason given on the clear above.
+	if (!Context.Target->SetHoldShort(Picked.Index, Runway.Index))
+	{
+		LastRefusal = TEXT("The facade refused; see the log");
+		return;
+	}
+
+	LastRefusal.Empty();
 }
 
 void FHoldShortTool::OnCancel(const FToolContext& Context)
