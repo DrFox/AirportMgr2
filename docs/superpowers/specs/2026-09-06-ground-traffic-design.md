@@ -369,7 +369,11 @@ network field. `FGuidelineNode::HoldShortFor` stays the thing everything READS (
 it is the derived cache, and the builder re-applies every mark to whichever node now holds
 that identity as its last pass before the sweep. One source, one cache, rebuilt together.
 `Protects` names a segment, and segment ids are the surface model, not regenerated, so the
-mark itself needs no re-resolution.
+mark itself needs no re-resolution. *Noted 2026-09-06 during Task 10:* a mark whose
+taxiway segment is later SPLIT (a new junction placed on it) is pruned and the bar is lost -
+`SplitSegmentIn` retires the old segment handle by design, the same rule under which a
+hand-drawn edge over a vanished segment is killed rather than guessed at. Accepted for v1;
+re-attaching a bar across a split belongs with the turn-ban work the handover lists.
 
 ---
 
