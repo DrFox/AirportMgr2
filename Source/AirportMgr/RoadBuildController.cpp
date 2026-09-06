@@ -1,11 +1,15 @@
 #include "RoadBuildController.h"
 
+#include "Blueprint/UserWidget.h"
+#include "BuildActions.h"
+#include "BuildBarWidget.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
+#include "Model/AirsideCapability.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
@@ -50,26 +54,44 @@ void ARoadBuildController::BeginPlay()
 		CreateBuildCamera();
 	}
 
-	// The key list is GENERATED from the same registry SetupInputComponent binds from, so
-	// this banner cannot advertise a key that goes nowhere - which the old hand-written one
-	// twice did.
-	FString ToolKeys;
-	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
-	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	// Game AND UI: the bar's buttons must take a click before the road tool sees it, and the
+	// camera keys must keep working while the bar has focus.
+	FInputModeGameAndUI Mode;
+	Mode.SetHideCursorDuringCapture(false);
+	SetInputMode(Mode);
+
+	// The bar. The configured Blueprint if there is one, else the C++ class itself - which
+	// builds every section in code, so a missing asset degrades rather than breaks.
+	const TSubclassOf<UBuildBarWidget> BarClass =
+		BuildBarClass != nullptr ? BuildBarClass : TSubclassOf<UBuildBarWidget>(UBuildBarWidget::StaticClass());
+	BuildBar = CreateWidget<UBuildBarWidget>(this, BarClass);
+	if (BuildBar != nullptr)
 	{
-		ToolKeys += FString::Printf(TEXT("%s%d %s"),
-			Index == 0 ? TEXT("") : TEXT(", "),
-			Index + 1,
-			*Registry[Index].Name.ToString());
+		BuildBar->AddToViewport();
+		UE_LOG(LogRoadBuild, Log, TEXT("Build bar: %s"),
+			BuildBarClass != nullptr ? *BuildBarClass->GetName() : TEXT("code-only (no BuildBarClass configured)"));
+	}
+
+	// The key list is GENERATED from the same registry SetupInputComponent binds from and
+	// the bar builds from, so this banner cannot advertise a key that goes nowhere - which
+	// the old hand-written one twice did.
+	FString Keys;
+	for (const FBuildAction& Action : BuildActions())
+	{
+		if (!Action.Key.IsValid())
+		{
+			continue;
+		}
+		Keys += FString::Printf(TEXT("%s%s%s %s"), Keys.IsEmpty() ? TEXT("") : TEXT(", "),
+			Action.bRequiresCtrl ? TEXT("Ctrl+") : TEXT(""), *Action.Key.GetDisplayName().ToString(),
+			*Action.Label.ToString());
 	}
 
 	UE_LOG(LogRoadBuild, Log,
-		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain, "
-			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C orbits the "
-			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms - "
-			 "while building or watching. Comma/Period slow/speed the sim clock, P pauses, "
-			 "K quick-saves, L quick-loads."),
-		*Target->GetName(), *ToolKeys);
+		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain. ")
+		TEXT("Keys: %s. WASD pans, Q/E rotate, wheel zooms - while building or watching. ")
+		TEXT("Every key is also a button on the bar."),
+		*Target->GetName(), *Keys);
 }
 
 void ARoadBuildController::ApplyViewLimits(FBuildCameraRig& Rig) const
@@ -219,38 +241,36 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ARoadBuildController::OnPrimaryReleased);
 	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelGesture);
 
-	// Numbered tools rather than a third modifier on one button. Drawing a polygon is
-	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
+	// EVERY key comes from BuildActions(), the same table the bar and the banner read - so a
+	// key cannot exist without a button, nor a button without a key. This is the third form
+	// of the same rule: before issue #33 six SelectXTool binds had to agree with the tool
+	// list by hand and once did not ("4 routes" advertised while EKeys::Four went nowhere);
+	// issue #33 bound tools from ToolRegistry(); this binds EVERYTHING from one registry.
 	//
-	// ONE BindKey PER REGISTRY ENTRY, all through the SAME handler - see SelectToolByKey.
-	// Before issue #33 this was six separate BindKey calls to six separate SelectXTool
-	// methods, a second list that had to agree with Tools by hand and once did not: the
-	// route tool was appended there and this list was not touched, so the startup log
-	// advertised "4 routes" while EKeys::Four went nowhere. Binding straight from the
-	// registry makes that specific disagreement impossible to write.
-	for (const FToolRegistration& Registration : ToolRegistry())
+	// Ctrl actions bind the chord, which is what makes "Ctrl+Z" one fact rather than a bare
+	// Z plus a check inside the handler that a bar button could not share.
+	//
+	// Numbered tools rather than a third modifier on one button: drawing a polygon is
+	// inherently multi-click, so it cannot ride a modifier the way delete and insert do.
+	// K/L for save/load rather than F5/F9: PIE already owns the function keys.
+	for (const FBuildAction& Action : BuildActions())
 	{
-		InputComponent->BindKey(Registration.Key, IE_Pressed, this, &ARoadBuildController::SelectToolByKey);
+		if (!Action.Key.IsValid())
+		{
+			continue;
+		}
+		if (Action.bRequiresCtrl)
+		{
+			// A chord binding hands its handler no key, so every Ctrl action shares one
+			// handler that asks which of them was just pressed.
+			const FInputChord Chord(Action.Key, /*shift*/ false, /*ctrl*/ true, /*alt*/ false, /*cmd*/ false);
+			InputComponent->BindKey(Chord, IE_Pressed, this, &ARoadBuildController::OnCtrlActionKey);
+		}
+		else
+		{
+			InputComponent->BindKey(Action.Key, IE_Pressed, this, &ARoadBuildController::OnActionKey);
+		}
 	}
-
-	// AN ACTION, NOT A TOOL, so it is bound here and appears in no tool list. The banner above
-	// is updated in the same breath: this project has twice advertised a key that was never
-	// bound, and the log was the only thing claiming the binding existed.
-	InputComponent->BindKey(EKeys::Seven, IE_Pressed, this, &ARoadBuildController::OnLandAircraft);
-	InputComponent->BindKey(EKeys::G, IE_Pressed, this, &ARoadBuildController::OnToggleGuidelines);
-	InputComponent->BindKey(EKeys::C, IE_Pressed, this, &ARoadBuildController::ToggleWatchAgent);
-	InputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this, &ARoadBuildController::OnClearNetwork);
-	InputComponent->BindKey(EKeys::Z, IE_Pressed, this, &ARoadBuildController::OnUndo);
-	InputComponent->BindKey(EKeys::Y, IE_Pressed, this, &ARoadBuildController::OnRedo);
-
-	// Sim clock and quick save - see the header. Same rule as above: the banner names them.
-	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARoadBuildController::OnSpeedDown);
-	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARoadBuildController::OnSpeedUp);
-	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::OnTogglePause);
-	// K/L rather than F5/F9: PIE already owns the function keys, so those presses never
-	// reached this controller - the exact "key that goes nowhere" the banner rule exists for.
-	InputComponent->BindKey(EKeys::K, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
-	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
@@ -258,16 +278,23 @@ void ARoadBuildController::SetupInputComponent()
 
 void ARoadBuildController::OnLandAircraft()
 {
+	// Kept by name for anything that still calls it. The registry lands near the view
+	// focus, and so does this now: one action, one behaviour.
+	LandAircraftNearViewFocus();
+}
+
+void ARoadBuildController::LandAircraftNearViewFocus()
+{
 	if (Target == nullptr)
 	{
 		return;
 	}
 
-	FVector2D Cursor;
-	if (!CursorOnRoadPlane(Cursor))
-	{
-		return;
-	}
+	// The VIEW FOCUS rather than the cursor (which this used to read): the bar's Land button
+	// is clicked with the cursor on the bar, where "nearest the cursor" is meaningless, and
+	// the focus is where the player is looking either way.
+	UE_LOG(LogRoadBuild, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
+		TargetView.Focus.X, TargetView.Focus.Y);
 
 	// The SAME resolver FRouteTool falls back to, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
@@ -277,7 +304,7 @@ void ARoadBuildController::OnLandAircraft()
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
-	Target->DispatchArrival(Cursor, UAirsideSettings::ResolveDefaultAirframe());
+	Target->DispatchArrival(TargetView.Focus, UAirsideSettings::ResolveDefaultAirframe());
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
@@ -455,32 +482,113 @@ FToolContext ARoadBuildController::MakeToolContext() const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	return Session.MakeContext(Target, PlaneHit, Tunables, IsRemoveHeld(),
-		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift));
+	// The sticky modifier ORs with the held key: the bar's Remove button and a held Ctrl
+	// mean the same thing, and either lights the same button.
+	return Session.MakeContext(Target, PlaneHit, Tunables,
+		ClickModifier == EClickModifier::Remove || IsRemoveHeld(),
+		ClickModifier == EClickModifier::Insert
+			|| IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift));
 }
 
 void ARoadBuildController::SelectToolByKey(FKey Key)
 {
-	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
-	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	// Kept for callers by name; the registry route is OnActionKey -> SelectTool.
+	OnActionKey(Key);
+}
+
+void ARoadBuildController::OnActionKey(FKey Key)
+{
+	// The chord is already matched by the binding; Ctrl state is re-read only to pick between
+	// two actions on the same key that differ by it (none today, but the table allows it).
+	const bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+	for (const FBuildAction& Action : BuildActions())
 	{
-		if (Registry[Index].Key == Key)
+		if (Action.Key == Key && Action.bRequiresCtrl == bCtrl)
 		{
-			Session.SelectTool(Index, MakeToolContext());
-			if (IBuildTool* Active = Session.GetActiveTool())
-			{
-				UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Active->GetDisplayName().ToString());
-			}
+			Action.Execute(*this);
 			return;
 		}
 	}
 }
 
+void ARoadBuildController::OnCtrlActionKey()
+{
+	for (const FBuildAction& Action : BuildActions())
+	{
+		if (Action.bRequiresCtrl && Action.Key.IsValid() && WasInputKeyJustPressed(Action.Key))
+		{
+			Action.Execute(*this);
+			return;
+		}
+	}
+}
+
+void ARoadBuildController::SelectTool(int32 Index)
+{
+	if (!ToolRegistry().IsValidIndex(Index))
+	{
+		return;
+	}
+	Session.SelectTool(Index, MakeToolContext());
+	// A sticky modifier was chosen for the tool it was lit under. Dropping it here is what
+	// stops a Remove left on from the road tool deleting the first stand the player clicks.
+	ClickModifier = EClickModifier::None;
+	if (IBuildTool* Active = Session.GetActiveTool())
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Active->GetDisplayName().ToString());
+	}
+}
+
+int32 ARoadBuildController::GetActiveToolIndex() const
+{
+	return Session.GetActiveToolIndex();
+}
+
+void ARoadBuildController::ToggleClickModifier(EClickModifier Mode)
+{
+	ClickModifier = (ClickModifier == Mode) ? EClickModifier::None : Mode;
+	UE_LOG(LogRoadBuild, Log, TEXT("Click modifier: %s"), *UEnum::GetValueAsString(ClickModifier));
+}
+
+bool ARoadBuildController::CanUndo() const { return Target != nullptr && Target->CanUndo(); }
+bool ARoadBuildController::CanRedo() const { return Target != nullptr && Target->CanRedo(); }
+
+bool ARoadBuildController::HasNetworkContent() const
+{
+	return Target != nullptr && Target->Network != nullptr
+		&& (Target->Network->GetNodes().Num() > 0 || Target->Network->GetAprons().Num() > 0);
+}
+
+bool ARoadBuildController::HasRunway() const
+{
+	// One pass over the segments per query. The bar polls this every frame; at this
+	// project's segment counts that is nothing, and a cache would need invalidating on
+	// every edit - the facade's OnChanged - for a saving nobody would measure.
+	return Target != nullptr && Target->Network != nullptr
+		&& AirsideCapability::Summarise(*Target->Network).Runways.Num() > 0;
+}
+
+bool ARoadBuildController::HasAgent() const
+{
+	return Target != nullptr && Target->GetAgentCount() > 0;
+}
+
+bool ARoadBuildController::HasOpsRuntime() const
+{
+	return UOpsRuntimeSubsystem::Get(GetWorld()) != nullptr;
+}
+
+bool ARoadBuildController::IsPaused() const
+{
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	return Runtime != nullptr && Runtime->GetClock()->GetSpeed() == ESimSpeed::Paused;
+}
+
 void ARoadBuildController::OnUndo()
 {
-	// Ctrl+Z, read as a chord rather than bound as one: BindKey has no modifier form, and
-	// a bare Z would take back an edit every time the key was brushed.
-	if (Target == nullptr || !IsRemoveHeld())
+	// Ctrl+Z is bound as a chord from BuildActions(), so the bar's Undo button and the key
+	// reach here the same way; the handler no longer re-checks Ctrl.
+	if (Target == nullptr)
 	{
 		return;
 	}
@@ -503,7 +611,8 @@ void ARoadBuildController::OnUndo()
 
 void ARoadBuildController::OnRedo()
 {
-	if (Target == nullptr || !IsRemoveHeld())
+	// Ctrl+Y is a chord binding now, as Undo's is.
+	if (Target == nullptr)
 	{
 		return;
 	}
@@ -663,8 +772,7 @@ namespace
 	}
 }
 
-void ARoadBuildController::OnSpeedDown()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->StepSpeed(-1); } }
-void ARoadBuildController::OnSpeedUp()     { if (UOpsRuntime* R = RuntimeFor(*this)) { R->StepSpeed(+1); } }
-void ARoadBuildController::OnTogglePause() { if (UOpsRuntime* R = RuntimeFor(*this)) { R->TogglePause(); } }
-void ARoadBuildController::OnQuickSave()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->SaveToSlot(TEXT("QuickSave")); } }
-void ARoadBuildController::OnQuickLoad()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->LoadFromSlot(TEXT("QuickSave")); } }
+void ARoadBuildController::StepSpeed(int32 Delta) { if (UOpsRuntime* R = RuntimeFor(*this)) { R->StepSpeed(Delta); } }
+void ARoadBuildController::TogglePause()          { if (UOpsRuntime* R = RuntimeFor(*this)) { R->TogglePause(); } }
+void ARoadBuildController::QuickSave()            { if (UOpsRuntime* R = RuntimeFor(*this)) { R->SaveToSlot(TEXT("QuickSave")); } }
+void ARoadBuildController::QuickLoad()            { if (UOpsRuntime* R = RuntimeFor(*this)) { R->LoadFromSlot(TEXT("QuickSave")); } }

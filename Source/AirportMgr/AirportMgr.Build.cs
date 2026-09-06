@@ -13,10 +13,9 @@ public class AirportMgr : ModuleRules
 		// ever depends on the game, and AirportOps depends on Airside, never the reverse.
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Airside", "AirportOps" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] {  });
-
-		// Uncomment if you are using Slate UI
-		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
+		// UMG: the build bar. Slate/SlateCore: FInputChord (the registry's Ctrl bindings) and
+		// the UMG types' bases.
+		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

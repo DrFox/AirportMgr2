@@ -123,14 +123,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "1.0"))
 	float CrossMarkRadius = 9.0f;
 
-	/**
-	 * Name the active tool on screen.
-	 *
-	 * This is the first genuinely modal thing in the build tool, and a mode you cannot see
-	 * is the classic modal trap: one click means two different things and nothing says which.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	bool bDrawToolName = true;
+	// The active tool's name used to be drawn here (a mode you cannot see is the classic modal
+	// trap). It is the lit button on UBuildBarWidget now, so the flag that switched it is gone.
 
 	virtual void DrawHUD() override;
 
