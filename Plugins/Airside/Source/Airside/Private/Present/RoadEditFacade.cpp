@@ -368,6 +368,56 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	return Network->RemoveGuidelineEdge(Id);
 }
 
+bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
+{
+	URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return false;
+	}
+
+	const TArray<FGuidelineNode>& Nodes = Network->GetGuidelineNodes();
+	if (!Nodes.IsValidIndex(NodeIndex) || !Nodes[NodeIndex].bAlive)
+	{
+		return false;
+	}
+
+	FGuidelineNodeId Node;
+	Node.Index = NodeIndex;
+	Node.Generation = Nodes[NodeIndex].Generation;
+
+	// INDEX_NONE clears; anything else must be a live slot. Left unset otherwise, which is
+	// what URoadNetwork::SetHoldShort reads as "clear the bar".
+	FRoadSegmentId Protects;
+	if (SegmentIndex != INDEX_NONE)
+	{
+		const TArray<FRoadSegment>& Segments = Network->GetSegments();
+		if (!Segments.IsValidIndex(SegmentIndex) || !Segments[SegmentIndex].bAlive)
+		{
+			return false;
+		}
+		Protects.Index = SegmentIndex;
+		Protects.Generation = Segments[SegmentIndex].Generation;
+	}
+
+	// After the guards, which refuse without mutating - a rejected bar costs no snapshot.
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("hold short"));
+	if (!Network->SetHoldShort(Node, Protects))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SetHoldShort refused at guideline node %d: segment %d is not a live runway"),
+			NodeIndex, SegmentIndex);
+		return false;
+	}
+	Edit.Commit();
+
+	// NO OnChanged broadcast: a bar changes no pavement and no mesh. The overlay reads
+	// HoldShortFor when it draws, so rebuilding the surface here would be work for nothing.
+	UE_LOG(LogRoadMesh, Log, TEXT("Hold short %s at guideline node %d for segment %d"),
+		Protects.IsSet() ? TEXT("set") : TEXT("cleared"), NodeIndex, SegmentIndex);
+	return true;
+}
+
 int32 URoadEditFacade::FindNodeNear(FVector2D Where, double Radius) const
 {
 	const URoadNetwork* Network = GetNetwork();

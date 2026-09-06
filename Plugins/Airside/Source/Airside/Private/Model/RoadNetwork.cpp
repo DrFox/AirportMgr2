@@ -709,6 +709,124 @@ FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
+bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// A set Protects must be a live runway. Refusing beats storing it: the arbiter expands
+	// whatever a bar names through RunwayChain, and a taxiway named there would hand a
+	// crossing agent a strip made of the taxiway it is standing on.
+	if (Protects.IsSet() && !IsRunwaySegment(Protects))
+	{
+		return false;
+	}
+
+	Found->HoldShortFor = Protects;
+
+	const FGuidelineEndRef At = Found->Origin;
+	if (!At.IsSet())
+	{
+		// An ANCHOR or hand-placed node - not derived, never swept, and its handle survives
+		// every rebuild already (see FGuidelineNode::Origin). The flag on it is therefore
+		// durable by itself, and a mark would be a second source for the same fact - which
+		// is precisely the drift this pair of writes exists to avoid everywhere else.
+		return true;
+	}
+
+	for (int32 Index = 0; Index < HoldShortMarks.Num(); ++Index)
+	{
+		if (HoldShortMarks[Index].At == At)
+		{
+			if (Protects.IsSet())
+			{
+				HoldShortMarks[Index].Protects = Protects;
+			}
+			else
+			{
+				HoldShortMarks.RemoveAt(Index);
+			}
+			return true;
+		}
+	}
+
+	if (Protects.IsSet())
+	{
+		FHoldShortMark Mark;
+		Mark.At = At;
+		Mark.Protects = Protects;
+		HoldShortMarks.Add(MoveTemp(Mark));
+	}
+	return true;
+}
+
+void URoadNetwork::PruneHoldShortMarks()
+{
+	HoldShortMarks.RemoveAll([this](const FHoldShortMark& Mark)
+	{
+		// GetSegment is the generation-checked read, so a recycled slot fails it - which is
+		// the whole point, because the builder's Ends map is keyed on the segment INDEX
+		// alone and would happily re-apply a stale mark onto the road that took the index.
+		return GetSegment(Mark.At.Segment) == nullptr || !IsRunwaySegment(Mark.Protects);
+	});
+}
+
+FRoadSegmentId URoadNetwork::RunwayNearGuidelineNode(FGuidelineNodeId Node) const
+{
+	const FGuidelineNode* Found = GetGuidelineNode(Node);
+	if (Found == nullptr)
+	{
+		return FRoadSegmentId();
+	}
+
+	auto RunwayAmongIncident = [this](const FGuidelineNode& At) -> FRoadSegmentId
+	{
+		for (const FGuidelineEdgeId& Incident : At.Incident)
+		{
+			const FGuidelineEdge* Edge = GetGuidelineEdge(Incident);
+
+			// DerivedFrom unset means a turn path or a hand-drawn link, neither of which
+			// belongs to a surface at all - so neither can answer which runway is here.
+			if (Edge != nullptr && Edge->DerivedFrom.IsSet() && IsRunwaySegment(Edge->DerivedFrom))
+			{
+				return Edge->DerivedFrom;
+			}
+		}
+		return FRoadSegmentId();
+	};
+
+	const FRoadSegmentId Own = RunwayAmongIncident(*Found);
+	if (Own.IsSet())
+	{
+		return Own;
+	}
+
+	// ONE HOP - see the header. The turn paths out of a junction are what stand between a
+	// taxiway's end node and the runway's centreline nodes.
+	for (const FGuidelineEdgeId& Incident : Found->Incident)
+	{
+		const FGuidelineEdge* Edge = GetGuidelineEdge(Incident);
+		if (Edge == nullptr)
+		{
+			continue;
+		}
+		const FGuidelineNode* Neighbour = GetGuidelineNode(Edge->A == Node ? Edge->B : Edge->A);
+		if (Neighbour == nullptr)
+		{
+			continue;
+		}
+		const FRoadSegmentId Near = RunwayAmongIncident(*Neighbour);
+		if (Near.IsSet())
+		{
+			return Near;
+		}
+	}
+	return FRoadSegmentId();
+}
+
 TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 	FGuidelineNodeId Node, ETraversalClass Class) const
 {

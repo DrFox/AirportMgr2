@@ -236,6 +236,47 @@ public:
 	 */
 	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
 
+	// --- Hold-short bars ---------------------------------------------------------------
+
+	/**
+	 * Place, move or clear the hold bar at a guideline node. False when it refused.
+	 *
+	 * TWO WRITES, deliberately: the flag on the node (what the traffic model reads, every
+	 * tick) and a mark keyed by the node's Origin (what survives the next rebuild, since
+	 * FRoadGuidelineBuilder throws every derived node away). The mark is the SOURCE and the
+	 * flag the cache; keeping them in one function is what stops a bar existing in only one
+	 * of the two.
+	 *
+	 * An unset Protects clears the bar. A set one must name a live RUNWAY - a bar on a
+	 * taxiway would make the arbiter expand a chain that is not a strip - and a dead node
+	 * refuses, rather than writing a flag nothing will ever read.
+	 */
+	bool SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects);
+
+	const TArray<FHoldShortMark>& GetHoldShortMarks() const { return HoldShortMarks; }
+
+	/**
+	 * Drop marks whose node identity or whose protected runway no longer exists.
+	 *
+	 * PUBLIC because FRoadGuidelineBuilder calls it immediately before re-applying the rest
+	 * - but the invariant belongs to this class, not to the builder, which is why the
+	 * builder asks rather than filtering the array itself. Liveness is by GENERATION, not
+	 * by index: slots are recycled, and a mark left naming a recycled slot would silently
+	 * move a bar onto whatever road took the index over.
+	 */
+	void PruneHoldShortMarks();
+
+	/**
+	 * The runway a hold bar at this node would protect, or unset.
+	 *
+	 * The node's own incident derived edges first, then each neighbour's - ONE HOP, and no
+	 * further. A taxiway's end node at a runway junction is joined to the runway's own
+	 * centreline nodes by TURN PATHS, which carry no DerivedFrom, so the runway edge is
+	 * exactly one hop away and cannot be seen from the node itself. Two hops would let a
+	 * bar be placed a whole taxiway segment back from the runway it claims to guard.
+	 */
+	FRoadSegmentId RunwayNearGuidelineNode(FGuidelineNodeId Node) const;
+
 	/**
 	 * Edges an agent of this class may leave Node along, honouring access AND direction.
 	 *
@@ -364,6 +405,15 @@ private:
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
 	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
 	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
+
+	/**
+	 * SAVED, not transient: this is the only durable record that a bar was ever placed.
+	 *
+	 * The network is what the level serialises and what undo snapshots (URoadEditHistory
+	 * duplicates this object), so a Transient array here would lose every bar on save and
+	 * on the first Ctrl+Z.
+	 */
+	UPROPERTY() TArray<FHoldShortMark> HoldShortMarks;
 
 	UPROPERTY() TArray<FApronSurface> Aprons;
 	UPROPERTY() TArray<int32>         ApronFreeList;

@@ -384,6 +384,38 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
+	// --- Re-apply hold-short marks ------------------------------------------------------
+	//
+	// The flag lives on a node and every derived node above is FRESH, so a bar the player
+	// placed would vanish on the next road edit. The mark is stored by the same identity
+	// a hand-authored edge stores its ends by, and resolved through the same Ends map -
+	// one source (the mark), one cache (the flag), rebuilt together. Spec 2026-09-06 §6.
+	{
+		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
+		// Pruning first also means the loop below cannot re-apply a mark whose runway has
+		// been deleted, which would put a bar on a node protecting nothing.
+		Network.PruneHoldShortMarks();
+
+		for (const FHoldShortMark& Mark : Network.GetHoldShortMarks())
+		{
+			const FGuidelineNodeId* Found = Ends.Find(
+				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
+			if (Found == nullptr)
+			{
+				// The segment is alive (prune said so) but derived nothing this pass - an
+				// unsolved end, or a profile that lost the guideline the mark named. Leave
+				// the mark: the next successful solve puts the bar back, which is kinder
+				// than deleting a player's work over a transient derivation failure.
+				continue;
+			}
+
+			if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found))
+			{
+				Node->HoldShortFor = Mark.Protects;
+			}
+		}
+	}
+
 	// LAST, for the reason given where this used to live: every detachment above has now
 	// happened, so an idle derived node really is idle.
 	{

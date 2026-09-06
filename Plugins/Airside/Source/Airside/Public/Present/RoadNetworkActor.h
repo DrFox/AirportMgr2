@@ -217,6 +217,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
+	/** Place or clear a hold bar at a guideline node. SegmentIndex == -1 clears it. */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	virtual bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) override;
+
 	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 FindNodeNear(FVector2D Where, double Radius) const;

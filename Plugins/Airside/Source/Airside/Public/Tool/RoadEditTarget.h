@@ -56,6 +56,15 @@ public:
 	virtual double GetMinimumRunwayLength() const = 0;
 
 	virtual bool DisconnectGuideline(int32 EdgeIndex) = 0;
+
+	/**
+	 * Place or clear the hold bar at a guideline node. SegmentIndex == INDEX_NONE clears.
+	 *
+	 * INDICES, like every other call on this seam: a tool has picked a node out of
+	 * GetNetwork()'s arrays and has no business constructing generation-checked handles -
+	 * the facade makes them, and refuses a dead slot in one place.
+	 */
+	virtual bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) = 0;
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) = 0;
 	virtual bool DeleteNode(int32 NodeIndex) = 0;
 	virtual bool DeleteSegment(int32 SegmentIndex) = 0;
