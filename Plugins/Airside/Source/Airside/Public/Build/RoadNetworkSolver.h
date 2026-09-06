@@ -85,4 +85,27 @@ public:
 	 * be solved at all, so a caller never sees a floor it cannot reason about.
 	 */
 	static double ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode);
+
+	/**
+	 * Does the junction at Node PAVE this point? True when the point lies inside the
+	 * junction's own boundary polygon, scaled by Factor about the node (1.0 = the pavement
+	 * exactly). What the snap chain asks so a junction claims the cursor where there is
+	 * concrete under it and nowhere else.
+	 *
+	 * Replaces a circle of NodeReach: a tight corner's fitted cut runs deep along its arms,
+	 * and a circle of that radius covered open ground beside the junction too - the cursor
+	 * a hand's width off the pavement still read "same node" (2026-09-06). A node with no
+	 * polygon - a dead end, or one that failed to solve - falls back to that circle at the
+	 * half-width, which is the cap it does pave.
+	 */
+	static bool NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor = 1.0);
+
+	/**
+	 * How far along Segment, from AtNode, the junction there is paved: the arm's SOLVED cut
+	 * distance, fillet fitted. Where the segment's own pavement begins, so the segment snap
+	 * rule can stand off a junction by exactly what the junction covers - NodeReach adds a
+	 * half-width to that, which left a band of segment pavement that neither rule claimed
+	 * (2026-09-06). 0 when the node cannot be solved or Segment is not one of its arms.
+	 */
+	static double ArmCutDistance(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode);
 };

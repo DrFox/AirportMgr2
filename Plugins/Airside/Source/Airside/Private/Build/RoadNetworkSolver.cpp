@@ -2,6 +2,7 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadSolve, Log, All);
@@ -264,6 +265,80 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	}
 
 	return true;
+}
+
+bool FRoadNetworkSolver::NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor)
+{
+	if (Factor <= 0.0)
+	{
+		return false;
+	}
+	const FRoadNode* Live = Network.GetNode(Node);
+	if (Live == nullptr)
+	{
+		return false;
+	}
+
+	FRoadNodeCuts Cuts;
+	if (!SolveNodeCuts(Network, Node.Index, 4, Cuts) || !Cuts.Result.bValid)
+	{
+		return false;
+	}
+	FJunctionSolver::SolveBoundary(Cuts.Input, Cuts.Result);
+
+	// The rim is every boundary point but the trailing apex; fewer than three is a dead
+	// end (two cut vertices) with no polygon of its own.
+	const int32 RimCount = Cuts.Result.Boundary.Num() - 1;
+	if (RimCount < 3)
+	{
+		double HalfWidth = 0.0;
+		for (const FJunctionArm& Arm : Cuts.Input.Arms)
+		{
+			HalfWidth = FMath::Max(HalfWidth, FMath::Max(Arm.HalfWidthLeft, Arm.HalfWidthRight));
+		}
+		const double Reach = HalfWidth * Factor;
+		return FVector2D::DistSquared(Live->Position, Point) <= Reach * Reach;
+	}
+
+	TArray<FVector2D> Rim;
+	Rim.Reserve(RimCount);
+	for (int32 Slot = 0; Slot < RimCount; ++Slot)
+	{
+		Rim.Add(Live->Position + (Cuts.Result.Boundary[Slot] - Live->Position) * Factor);
+	}
+	if (RoadGeom::PointInPolygon(Rim, Point))
+	{
+		return true;
+	}
+
+	// The rim ITSELF is pavement: the arm's derived guideline node sits exactly on the cut
+	// line, and a point-in-polygon test is undefined on its own edge. One uu of tolerance
+	// is far below anything a cursor can express and far above double noise.
+	constexpr double EdgeTolerance = 1.0;
+	for (int32 Slot = 0; Slot < RimCount; ++Slot)
+	{
+		const FVector2D& A = Rim[Slot];
+		const FVector2D& B = Rim[(Slot + 1) % RimCount];
+		const FVector2D AB = B - A;
+		const double LengthSquared = AB.SizeSquared();
+		const double T = LengthSquared > 0.0 ? FMath::Clamp(FVector2D::DotProduct(Point - A, AB) / LengthSquared, 0.0, 1.0) : 0.0;
+		if (FVector2D::Distance(Point, A + AB * T) <= EdgeTolerance)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+double FRoadNetworkSolver::ArmCutDistance(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode)
+{
+	FRoadNodeCuts Cuts;
+	if (!SolveNodeCuts(Network, AtNode.Index, 4, Cuts) || !Cuts.Result.bValid)
+	{
+		return 0.0;
+	}
+	const int32 ArmIndex = Cuts.ArmSegments.IndexOfByKey(Segment);
+	return Cuts.Result.Arms.IsValidIndex(ArmIndex) ? Cuts.Result.Arms[ArmIndex].CutDistance : 0.0;
 }
 
 double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId Node,
