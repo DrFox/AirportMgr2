@@ -141,6 +141,17 @@ struct AIRSIDE_API FTrafficOccupancy
 	 */
 	void Release(int32 AgentId, const FTrafficResource& Resource);
 
+	/**
+	 * Drops AgentId's RESERVATIONS and keeps everything it is standing on.
+	 *
+	 * What a replan gives back (UGroundTraffic::ReplanAt): the line ahead belonged to a
+	 * journey nobody is making any more, but where the agent's BODY is is a fact no plan can
+	 * change. ReleaseAll was used here and was wrong - a replanned aircraft standing on a
+	 * runway showed the strip free to ArrivalPlanner for the frame before its next claim
+	 * pass, and a landing could be cleared onto it.
+	 */
+	void ReleaseReservations(int32 AgentId);
+
 	/** Drops every claim by AgentId whose resource is not in Keep. The per-tick "release
 	 *  what is behind me" in one call, so first-to-reserve survives across ticks: an agent
 	 *  that released everything and re-claimed would be a stranger to its own queue. */

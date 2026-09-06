@@ -151,10 +151,15 @@ public:
 	 * keeps Travelled, Speed and Heading, and the line up to the splice is byte-identical,
 	 * so the agent goes on driving the same metres it was already on.
 	 *
+	 * PRECONDITION: SpliceStep is AT OR AHEAD OF the step the agent is on. Travelled survives
+	 * the splice, so splicing behind the agent re-maps the same route distance onto different
+	 * geometry and the agent teleports sideways. Refused, not clamped - a caller asking for a
+	 * node the agent has already passed has the wrong node.
+	 *
 	 * FALSE AND NOTHING CHANGED when the agent is unknown or not Taxiing, when SpliceStep is
-	 * not a step of its plan, when no route to the goal survives the ban, or when the splice
-	 * precondition fails. The agent keeps the plan it had: a caller that ignored the return
-	 * would otherwise be driving something half-replanned.
+	 * not a step of its plan or is behind the agent, when no route to the goal survives the
+	 * ban, or when the splice fails. The agent keeps the plan it had: a caller that ignored
+	 * the return would otherwise be driving something half-replanned.
 	 *
 	 * Vehicles and aircraft alike - nothing here reads the class beyond handing it to the
 	 * query, because a van deadlocked in a service road is the same problem as an aircraft
@@ -175,8 +180,9 @@ public:
 	/**
 	 * One tick, in this order: Arbitrate (see it) writes every agent's StopWithin, then
 	 * each agent advances under that cap, accrues StalledSeconds while it is stopped and
-	 * waiting, and announces any phase change - dropping the agent once it says Gone. The
-	 * deadlock pass that reads StalledSeconds is still Task 8 and is not called from here.
+	 * waiting, and announces any phase change - dropping the agent once it says Gone. Then
+	 * ResolveDeadlocks (see it) reads those stall clocks, and may replan one agent per
+	 * wait-for cycle.
 	 *
 	 * ARBITRATION FIRST AND MOTION SECOND, never interleaved: a claim must be visible to
 	 * every agent before any of them moves on it, or the last agent in the list drives
@@ -207,6 +213,19 @@ public:
 	FTrafficOccupancy& OccupancyForTest() { return Occupancy; }
 	double GetSimSeconds() const { return SimSeconds; }
 
+	/**
+	 * How many DISTINCT wait-for cycles this session has logged, keyed by lowest member id.
+	 *
+	 * The one thing a test can ask that the logs would otherwise be the only record of. A
+	 * cycle re-detected inside its retry window is not a new one, and neither is the same
+	 * ring re-formed later: what is counted is what was LOGGED, so this is exactly the
+	 * "logged once per cycle" promise of spec §5, measured.
+	 */
+	int32 GetCyclesDetectedForTest() const { return CyclesSeen.Num(); }
+
+	/** Id of the last agent whose deadlock replan SUCCEEDED, or 0 if none ever has. */
+	int32 GetLastResolvedAgentForTest() const { return LastResolvedAgent; }
+
 private:
 	/**
 	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
@@ -223,6 +242,20 @@ private:
 
 	/** Sim seconds elapsed through Advance. The deadlock resolver's retry clock. */
 	UPROPERTY(Transient) double SimSeconds = 0.0;
+
+	/**
+	 * Every cycle key (the lowest member id) this session has LOGGED. Its only reader is
+	 * GetCyclesDetectedForTest.
+	 *
+	 * NOT a UPROPERTY, and transient by being a plain member: it is test-facing bookkeeping
+	 * about log lines, not state the simulation reads - nothing in the tick branches on it,
+	 * and an agent list that never reaches disk cannot leave a meaningful key behind for a
+	 * later session. Reflecting it would say it mattered to the model, which it does not.
+	 */
+	TSet<int32> CyclesSeen;
+
+	/** Last agent whose deadlock replan succeeded; 0 until one does. Test-facing, as above. */
+	int32 LastResolvedAgent = 0;
 
 	/** Assigns the id, stores the agent, announces Gone -> its phase. The one place all three happen. */
 	int32 Admit(FRoadAgent&& Agent);
@@ -332,6 +365,38 @@ private:
 	 * order. Spec §3.3, §5.4.
 	 */
 	int32 RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const;
+
+	/**
+	 * The wait-for graph, its cycles, and one replan per cycle per retry window. Spec §5.
+	 *
+	 * AT THE END OF THE TICK, after every agent has claimed and moved, so the WaitingOn edges
+	 * it reads are this frame's and not a mixture of two. Every agent stalled longer than
+	 * Rules.StallSeconds contributes ONE edge - id -> WaitingOn - which makes the graph a
+	 * functional one (out-degree at most 1), and the walk from any member therefore either
+	 * runs out of stalled waiters or closes into exactly one cycle. That is what bounds it:
+	 * each step adds an agent not already on the path, and there are finitely many agents.
+	 *
+	 * A CYCLE IS KEYED BY ITS LOWEST MEMBER ID, so it is handled once however many members
+	 * would have found it, and re-detecting it inside Rules.RetrySeconds does nothing at all -
+	 * the members' LastResolveAttempt stamp is what makes "logged once" true, and what makes
+	 * the player's later fix (a new edge out of the jam) get picked up on the next window.
+	 *
+	 * NO REVERSING - spec §1. The one move available is a member turning at the node it is
+	 * stopped at, so a cycle whose members are all mid-edge is logged and left, which is what
+	 * Airside.Model.Traffic.HeadOnStops measures.
+	 */
+	void ResolveDeadlocks(const URoadNetwork& Network);
+
+	/**
+	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.
+	 *
+	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep), and
+	 * is AT the node that step leaves from - within Gap + Footprint/2 short of it and not
+	 * past it. The alternative to a banned edge is another edge OUT of that node, so an agent
+	 * that has already entered the edge cannot take it without reversing, and one still a
+	 * whole edge short of the node would be replanned from a node it is nowhere near.
+	 */
+	bool CanReplanAtBlockedStep(const FRoadAgent& Agent) const;
 
 	/** Route distance at which Step begins - the previous step's end, or 0. */
 	static double StepStart(const FRoutePlan& Plan, int32 Step);

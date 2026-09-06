@@ -282,6 +282,16 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("both are still taxiing, not parked"), X->Phase == EAgentPhase::Taxiing && Y->Phase == EAgentPhase::Taxiing);
 	TestTrue(TEXT("each waits on the other"), X->WaitingOn == P2 && Y->WaitingOn == P1);
 	TestTrue(FString::Printf(TEXT("never closer than one footprint (%.0f)"), MinSeparation), MinSeparation >= Traffic->Rules.AircraftFootprint - 1.0);
+
+	// AND THE DEADLOCK PASS SEES IT, ONCE. Two aircraft nose to nose on one edge is a
+	// two-member cycle, so the detector must find it - but neither is AT the node where its
+	// refused edge begins (both are 19 km along it), so neither can turn without reversing,
+	// which spec §1 rules out of M2. The cycle is therefore logged and retried on the
+	// RetrySeconds cadence rather than resolved, and the count stays at one however many
+	// retry windows the 120 s run covers: the members' LastResolveAttempt stamp is what
+	// keeps a re-detected cycle from being a re-logged one.
+	TestEqual(TEXT("the all-aircraft cycle was detected once"), Traffic->GetCyclesDetectedForTest(), 1);
+	TestEqual(TEXT("nobody could turn, so nobody replanned"), Traffic->GetLastResolvedAgentForTest(), 0);
 	return true;
 }
 
@@ -619,31 +629,26 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// reservation replaced the occupancy, and a landing could then preempt an aeroplane
 	// standing on the centreline.
 	const FGuidelineNodeId Far = M2TrafficNode(*Net, 0.0, 3000.0);
-	const FGuidelineNodeId Out = M2TrafficNode(*Net, 0.0, 3500.0);
 	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
 	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X);
-	M2TrafficJoin(*Net, X, Far); M2TrafficJoin(*Net, Far, Out); M2TrafficJoin(*Net, Out, N);
+	M2TrafficJoin(*Net, X, Far); M2TrafficJoin(*Net, Far, N);
 	Net->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
 	Net->GetGuidelineNodeMutable(Far)->HoldShortFor = RunwaySeg;
 
 	// Route distances: the near bar at 17000, the centreline crossing X at 20000, the far
-	// bar at 23000, Out at 23500, the far node N at 40000. The strip's half width is 2250,
-	// so a tail clear of it is at 22250 - and the REJECTED "release at the next node" rule
-	// would hold on until 40000.
+	// bar at 23000, the far node N at 40000. The strip's half width is 2250, so a tail clear
+	// of it is at 22250 - and the REJECTED "release at the next node" rule would hold on
+	// until 40000.
 	//
-	// WHY Out EXISTS, MEASURED AT 25025 uu WITHOUT IT: leaving a bar RE-ARMS the crossing -
-	// the rule reads "the node this step left carries a bar" and so cannot tell entering a
-	// strip from leaving one - and the release is then suppressed for the WHOLE of that
-	// step, because it is guarded on that same flag. Straight from Far to N that is 17000 uu
-	// of runway held for an aeroplane already 3000 uu clear of the strip, and the test above
-	// measured exactly that: the hold never ended inside the run. Out ends the step 500 uu
-	// past the bar, so the release lands at 24000.
-	//
-	// A LIMITATION OF THE GEOMETRIC RULE, recorded here rather than worked around silently:
-	// a real crossing painted with a bar each side and a long leg beyond the far one closes
-	// the runway behind the aircraft that has already crossed it. Ending the crossing on the
-	// BODY against the strip, instead of on node positions, is the fix, and it is a change
-	// to spec §3.1 rather than a carry-over of this task.
+	// THE FAR LEG RUNS STRAIGHT FROM THE BAR TO N - 17000 uu of it - AND THAT IS THE POINT.
+	// This fixture used to carry an extra node 500 uu past the far bar, because leaving a bar
+	// RE-ARMED the crossing: the rule read "the node this step left carries a bar" and could
+	// not tell a strip being entered from one being left, so the release was suppressed for
+	// the whole of that step and the runway stayed held for 17000 uu behind an aeroplane
+	// already clear of it (measured at 25025 uu, i.e. never inside the run). Spec §3.1's
+	// "Refined 2026-09-06 during Task 7" arms the hold only when the step leaving the bar
+	// leads ONTO the strip, so the exit bar arms nothing and the extra node is not needed -
+	// which is what the long leg here measures.
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = M2TrafficPlane();
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
@@ -659,6 +664,9 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	double FirstReservedAt = -1.0;
 	bool bWasCrossing = false;
 	double CrossingEnded = -1.0;
+
+	/** Set if anything re-arms the crossing after the FAR bar - the exit-side defect. */
+	bool bCrossingPastTheFarBar = false;
 
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
 	{
@@ -678,6 +686,11 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 		// geometric release actually clears.
 		if (Q->CrossingRunway.IsSet()) { bWasCrossing = true; }
 		else if (bWasCrossing && CrossingEnded < 0.0) { CrossingEnded = Travelled; }
+
+		// THE EXIT BAR ARMS NOTHING. Past the far bar at 23000 the aeroplane is leaving the
+		// strip, and a rule that cannot tell that from entering it re-arms the hold here and
+		// keeps the runway shut for the whole 17000 uu leg to N.
+		if (Travelled > 23100.0 && Q->CrossingRunway.IsSet()) { bCrossingPastTheFarBar = true; }
 
 		// ON THE STRIP: centre past the bar, not yet at the far side. A landing offered now
 		// must be refused, which is the whole point of the rule.
@@ -735,9 +748,16 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// Read off the CROSSING and not the table, because with a bar on each side the table is
 	// held continuously across the whole crossing - the near bar hands over to the crossing
 	// and the crossing to the far bar, which is the correct answer and an uninformative one.
-	TestTrue(FString::Printf(TEXT("the crossing ends once the TAIL is clear of the strip (22250), not at the next node (%.0f)"), CrossingEnded),
-		CrossingEnded > 20000.0 && CrossingEnded < 23000.0);
-	TestTrue(FString::Printf(TEXT("and the hold ends with it, a tail's length past the far bar, not at the next node (%.0f)"), HoldEnded),
+	//
+	// THE BOUND IS THE GEOMETRY, not a round number: the centreline node is at 20000 and the
+	// tail is clear once it is a chain half width (2250) past it, so the CENTRE is clear at
+	// 22250 plus half a footprint (500), and 100 uu of slack covers the 50 uu tick.
+	const double ClearBy = 20000.0 + 2250.0 + Traffic->Rules.AircraftFootprint * 0.5 + 100.0;
+	TestTrue(FString::Printf(TEXT("the crossing ends once the TAIL is clear of the strip (by %.0f), not at the next node (%.0f)"), ClearBy, CrossingEnded),
+		CrossingEnded > 20000.0 && CrossingEnded <= ClearBy);
+	TestFalse(TEXT("and the bar on the way OUT arms nothing: the crossing is not re-armed past the far bar"),
+		bCrossingPastTheFarBar);
+	TestTrue(FString::Printf(TEXT("and the hold ends with it, not at the next node 17000 uu away (%.0f)"), HoldEnded),
 		HoldEnded > 22000.0 && HoldEnded < 25000.0);
 	TestFalse(TEXT("and the strip is free afterwards"), Traffic->GetOccupancy().IsHeld(Strip, 0));
 	TestFalse(TEXT("with nothing left naming a crossing"), P->CrossingRunway.IsSet());
@@ -928,6 +948,85 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and it is still on the one edge it had"), Only->FindAgent(Stuck)->Follower.Plan.Steps.Num(), 1);
 	TestEqual(TEXT("at the same distance"), Only->FindAgent(Stuck)->Follower.Travelled, StuckAt, 1e-9);
 	TestEqual(TEXT("at the same speed"), Only->FindAgent(Stuck)->Follower.Speed, StuckSpeed, 1e-9);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficDeadlockTriangleTest,
+	"Airside.Model.Traffic.DeadlockTriangle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficDeadlockTriangleTest::RunTest(const FString& Parameters)
+{
+	// One compound junction: a triangle of one-way 600 uu lanes A->B->C->A, shorter than a
+	// van's footprint + gap (800), so the box-entry rule applies to every edge. Three vans
+	// start ON the nodes, each bound for the node the next van stands on: V1 A->C via B,
+	// V2 B->A via C, V3 C->B via A. Nobody may enter its first edge while the far node is
+	// occupied, so all three are stopped at t = 0 waiting on each other - a genuine cycle.
+	// One escape: C->X->B, longer than C->A->B so V3 does not take it unprompted.
+	//
+	// THE SAME GEOMETRY AS Airside.Model.Traffic.BoxEntry, deliberately: that test pins that
+	// the gridlock FORMS with its members at nodes where they can turn, which is the
+	// precondition this one's resolver depends on. One fixture, two halves of one claim.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 600.0, 0.0);
+	const FGuidelineNodeId C = M2TrafficNode(*Net, 300.0, 519.6);
+	const FGuidelineNodeId X = M2TrafficNode(*Net, 1400.0, 519.6);
+	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, A, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, X, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X, B, EGuidelineDir::AToB);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, B, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all three routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0)) { return false; }
+	TestEqual(TEXT("V3's first plan goes via A (2 steps), not the escape"), Traffic->FindAgent(V3)->Follower.Plan.Steps.Num(), 2);
+
+	// All three stopped, each waiting on the next, before any resolution.
+	M2TrafficRun(*Traffic, *Net, 1.0, [](int32) { return true; });
+	TestTrue(TEXT("V1 waits on V2"), Traffic->FindAgent(V1)->WaitingOn == V2);
+	TestTrue(TEXT("V2 waits on V3"), Traffic->FindAgent(V2)->WaitingOn == V3);
+	TestTrue(TEXT("V3 waits on V1"), Traffic->FindAgent(V3)->WaitingOn == V1);
+	TestTrue(TEXT("nobody has moved"), Traffic->FindAgent(V1)->Follower.Travelled < 1.0 && Traffic->FindAgent(V2)->Follower.Travelled < 1.0 && Traffic->FindAgent(V3)->Follower.Travelled < 1.0);
+
+	double MaxJump = 0.0;
+	TMap<int32, FVector2D> Last;
+	int32 ResolvedAtTick = -1;
+	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32 Tick)
+	{
+		bool bAllParked = true;
+		for (const FRoadAgent& Agent : Traffic->GetAgents())
+		{
+			if (const FVector2D* Prev = Last.Find(Agent.Id)) { MaxJump = FMath::Max(MaxJump, FVector2D::Distance(*Prev, Agent.LastMotion.Position)); }
+			Last.Add(Agent.Id, Agent.LastMotion.Position);
+			bAllParked &= (Agent.Phase == EAgentPhase::Parked);
+		}
+		if (ResolvedAtTick < 0 && Traffic->GetLastResolvedAgentForTest() != 0) { ResolvedAtTick = Tick; }
+		return !bAllParked;
+	});
+
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("DeadlockTriangle measured: resolved at tick %d of the second run (bound %d), agent %d replanned, ")
+		TEXT("%d cycle(s) detected, max per-tick step %.1f uu"),
+		ResolvedAtTick, static_cast<int32>(Traffic->Rules.StallSeconds / 0.05) + 2,
+		Traffic->GetLastResolvedAgentForTest(), Traffic->GetCyclesDetectedForTest(), MaxJump);
+
+	TestEqual(TEXT("exactly one cycle was detected"), Traffic->GetCyclesDetectedForTest(), 1);
+	TestTrue(FString::Printf(TEXT("detected within StallSeconds + one tick (tick %d)"), ResolvedAtTick), ResolvedAtTick >= 0 && ResolvedAtTick <= static_cast<int32>(Traffic->Rules.StallSeconds / 0.05) + 2);
+	TestEqual(TEXT("the agent that replanned is the highest id"), Traffic->GetLastResolvedAgentForTest(), V3);
+	// Spliced at step 0 (V3 never left C), so the new plan IS the tail: C->X, X->B.
+	TestEqual(TEXT("V3 now has two steps via X"), Traffic->FindAgent(V3) ? Traffic->FindAgent(V3)->Follower.Plan.Steps.Num() : 0, 2);
+	TestEqual(TEXT("the first of which goes to X"), Traffic->FindAgent(V3)->Follower.Plan.Steps[0].To, X);
+	for (const int32 Id : { V1, V2, V3 })
+	{
+		TestEqual(FString::Printf(TEXT("agent %d reached its goal"), Id), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked);
+	}
+	TestTrue(FString::Printf(TEXT("no agent moved more than one frame's travel in any tick (%.1f uu)"), MaxJump), MaxJump <= 1000.0 * 0.05 + 1.0);
 	return true;
 }
 

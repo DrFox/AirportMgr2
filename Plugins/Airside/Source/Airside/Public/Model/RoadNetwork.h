@@ -119,6 +119,18 @@ public:
 		double* OutChainHalfWidth = nullptr) const;
 
 	/**
+	 * The same question about a bare POSITION, which is where the rule actually lives.
+	 *
+	 * IsGuidelineNodeOnRunway is this function applied to a node's position, and exists
+	 * because most callers have a node. The one that does not is the crossing hold arming
+	 * itself (spec §3.1, refined during Task 7): "is the agent's own centre already on the
+	 * strip" is asked of an agent standing between two nodes, and there is no node to hand.
+	 * One implementation so the two answers cannot drift - the second-evaluator rule.
+	 */
+	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+
+	/**
 	 * If Near sits on a runway, reports the departure from the threshold nearest it.
 	 *
 	 * WALKS THE WHOLE RUNWAY, not the one segment it lands on. Adding an exit splits a runway,

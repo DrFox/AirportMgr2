@@ -132,4 +132,35 @@ bool FTrafficOccupancyReleaseTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyReleaseReservationsTest,
+	"Airside.Model.Occupancy.ReleaseReservations",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficOccupancyReleaseReservationsTest::RunTest(const FString& Parameters)
+{
+	// WHAT A REPLAN GIVES BACK: the line ahead, which belongs to a journey nobody is making
+	// any more - and NOT the ground the agent is standing on, which is a fact about where its
+	// body is and no plan can change it. UGroundTraffic::ReplanAt called ReleaseAll, so a
+	// replanned aircraft standing on a runway showed the strip free to ArrivalPlanner for the
+	// frame before its next claim pass, and a landing could be cleared onto it.
+	FTrafficOccupancy Table;
+	FTrafficClaim Blocker;
+	Table.TryClaim(M2OccNodeClaim(1, 3, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccEdgeClaim(1, 7, 0.0, 1000.0, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(1, 4, /*bOccupied=*/false, 2), Blocker);
+	Table.TryClaim(M2OccEdgeClaim(1, 8, 0.0, 1000.0, /*bOccupied=*/false, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(2, 5, /*bOccupied=*/false, 2), Blocker);
+
+	Table.ReleaseReservations(1);
+
+	TestTrue(TEXT("the node the agent stands on survives"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(3)), 0));
+	TestTrue(TEXT("and the line under its body"), Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(7)), 0));
+	TestFalse(TEXT("the node it had merely reserved is given back"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(4)), 0));
+	TestFalse(TEXT("and so is the edge ahead"), Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(8)), 0));
+	TestTrue(TEXT("another agent's reservation is untouched"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(5)), 0));
+	TestEqual(TEXT("exactly the two reservations went"), Table.GetClaims().Num(), 3);
+	return true;
+}
+
 #endif

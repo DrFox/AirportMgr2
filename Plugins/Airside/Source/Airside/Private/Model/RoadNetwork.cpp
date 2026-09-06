@@ -155,14 +155,27 @@ bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
 	double* OutChainHalfWidth) const
 {
-	if (OutChainHalfWidth != nullptr)
-	{
-		*OutChainHalfWidth = 0.0;
-	}
+	// A NODE IS A POSITION HERE and nothing else, so the geometry lives in one function and
+	// the two callers cannot drift apart. An unknown node reports false with the half width
+	// still zeroed, which is what IsPointOnRunway does for a chain that is not a runway.
 	const FGuidelineNode* Point = GetGuidelineNode(Node);
 	if (Point == nullptr)
 	{
+		if (OutChainHalfWidth != nullptr)
+		{
+			*OutChainHalfWidth = 0.0;
+		}
 		return false;
+	}
+	return IsPointOnRunway(Point->Position, Seed, OutChainHalfWidth);
+}
+
+bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+	double* OutChainHalfWidth) const
+{
+	if (OutChainHalfWidth != nullptr)
+	{
+		*OutChainHalfWidth = 0.0;
 	}
 
 	bool bOnStrip = false;
@@ -205,7 +218,7 @@ bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId
 			continue;
 		}
 		const FVector2D Along = Axis / Length;
-		const FVector2D Offset = Point->Position - A->Position;
+		const FVector2D Offset = Position - A->Position;
 		const double Distance = FVector2D::DotProduct(Offset, Along);
 		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
 

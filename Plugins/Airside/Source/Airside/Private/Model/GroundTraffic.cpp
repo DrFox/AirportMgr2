@@ -290,6 +290,20 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 		return false;
 	}
 
+	// NEVER BEHIND THE AGENT. Travelled is preserved across the splice (that is the point of
+	// Replace), so splicing at a step the agent has already driven past re-maps the same
+	// route distance onto a DIFFERENT polyline - the agent would appear somewhere else on
+	// the airport in one frame, which is the lateral teleport every "no jump" test exists to
+	// catch. Refused rather than clamped: a caller asking to replan behind the agent has the
+	// wrong node, and quietly moving its splice point would hide that.
+	if (SpliceStep < CurrentStep(Plan, Agent.Follower.Travelled))
+	{
+		UE_LOG(LogAirsideTraffic, Warning,
+			TEXT("ReplanAt %d refused: splice step %d is behind the agent, which is on step %d"),
+			AgentId, SpliceStep, CurrentStep(Plan, Agent.Follower.Travelled));
+		return false;
+	}
+
 	FRouteQuery Query;
 	Query.Start = StepFromNode(Plan, SpliceStep);
 	Query.Goal = Agent.GoalNode;
@@ -324,11 +338,25 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
 	Agent.Follower.Replace(Spliced);
 
-	// EVERYTHING, because the claims were made for a route that no longer exists past the
-	// splice. The next Arbitrate re-claims from the new plan in the same tick this is called
-	// from; holding the old reservations until then would block the line the agent has just
-	// been re-routed away from, for a journey nobody is making.
-	Occupancy.ReleaseAll(AgentId);
+	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
+	// the splice, so holding them would block the line the agent has just been re-routed away
+	// from, for a journey nobody is making. What the agent is STANDING on is a different
+	// thing entirely and survives: this was ReleaseAll, and a replanned aircraft standing on
+	// a runway then showed the strip free to ArrivalPlanner for the frame before the next
+	// Arbitrate - long enough to clear a landing onto it.
+	//
+	// THAT FRAME IS REAL AND IT IS SAFE. The resolver runs at the END of Advance, so the
+	// agent holds no reservations until the next tick's claim pass, and in that window a
+	// higher-ranked agent may take the line ahead of it. It is safe because the agent is by
+	// construction STOPPED - it is a deadlocked waiter - and because the ground under it is
+	// still claimed, so nobody can be granted a node or a strip its body is on. The rejected
+	// alternative, re-claiming here, would be a second claim pass outside Arbitrate's order:
+	// this agent would claim after everyone had moved, which is exactly the interleaving
+	// Advance's header refuses.
+	//
+	// A stale OCCUPIED claim on an edge the new plan does not use is dropped by the next
+	// ClaimAhead's ReleaseExcept, which keeps only what was asked for this pass.
+	Occupancy.ReleaseReservations(AgentId);
 
 	// The wait is over BY CONSTRUCTION - the thing it was waiting for is not on its route
 	// any more - so the arbitration fields say so at once rather than a tick later. The
@@ -399,7 +427,7 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
 	// the phase, accrue the stall clock, drop an agent once it says Gone. The deadlock pass
-	// that READS that clock is still Task 8 and does not touch this order.
+	// that READS that clock runs after it, below, and does not touch this order.
 	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
 		FRoadAgent& Agent = Agents[Index];
@@ -483,7 +511,7 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 
 		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause
 		// is not stalled, and neither is one crawling through a turn. All three conditions
-		// together are what the deadlock pass (Task 8) means by a waiter, and the clock
+		// together are what ResolveDeadlocks means by a waiter, and the clock
 		// resets the moment any of them stops holding, so a junction wait that clears on its
 		// own leaves nothing behind.
 		Agent.StalledSeconds = (Agent.Phase == EAgentPhase::Taxiing && Agent.WaitingOn != 0
@@ -495,6 +523,227 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 		{
 			OnAgentPhaseChanged.Broadcast(Id, Before, Agent.Phase);
 		}
+	}
+
+	// LAST, after every agent has claimed, moved and announced. The wait-for edges it reads
+	// are then one frame's worth rather than a mixture of two, and an agent it replans starts
+	// the next tick at the top of Arbitrate - which is the pass that re-claims for the new
+	// plan. Running it before the motion loop would resolve on the previous frame's stalls
+	// and hand the follower a plan the arbiter had not yet been asked about.
+	if (Network != nullptr)
+	{
+		ResolveDeadlocks(*Network);
+	}
+}
+
+bool UGroundTraffic::CanReplanAtBlockedStep(const FRoadAgent& Agent) const
+{
+	if (Agent.Phase != EAgentPhase::Taxiing
+		|| Agent.Follower.Speed >= KINDA_SMALL_NUMBER
+		|| Agent.BlockedStep < 0)
+	{
+		return false;
+	}
+
+	const FRoutePlan& Plan = Agent.Follower.Plan;
+	if (Agent.BlockedStep >= Plan.Steps.Num())
+	{
+		// A BlockedStep that outran its plan - a replan between the refusal and here. Nothing
+		// to ban and no node to turn at, so this agent is not a candidate this window.
+		return false;
+	}
+
+	// AT THE NODE THE REFUSED STEP LEAVES FROM, which is where the alternatives are. Negative
+	// means the agent is INSIDE the edge it was refused, and taking another edge out of that
+	// node would mean reversing - out of M2 by spec §1. The upper bound is where the agent is
+	// actually allowed to stop: the box-entry rule parks it a GAP short of the box's start,
+	// and Travelled is the CENTRE, so its nose is half a footprint further on again.
+	const double ToNode = StepStart(Plan, Agent.BlockedStep) - Agent.Follower.Travelled;
+	return ToNode >= -KINDA_SMALL_NUMBER
+		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5;
+}
+
+void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
+{
+	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
+	// stopped and naming a blocker (see Advance), and ClaimAhead clears WaitingOn the moment
+	// an agent stops taxiing - so a parked or retired agent cannot contribute an edge, and a
+	// cycle through one is not representable rather than merely unlikely.
+	TMap<int32, int32> Waiting;
+	for (const FRoadAgent& Agent : Agents)
+	{
+		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.WaitingOn != 0)
+		{
+			Waiting.Add(Agent.Id, Agent.WaitingOn);
+		}
+	}
+	if (Waiting.Num() == 0)
+	{
+		return;
+	}
+
+	// Every agent whose walk has been made, this tick. Out-degree is one, so the walk from an
+	// agent already walked would follow the identical chain and find the identical cycle:
+	// skipping it is what makes this pass linear rather than quadratic, and what stops one
+	// cycle being handled once per member.
+	TSet<int32> Visited;
+
+	for (const TPair<int32, int32>& Start : Waiting)
+	{
+		if (Visited.Contains(Start.Key))
+		{
+			continue;
+		}
+
+		// THE WALK IS BOUNDED BY CONSTRUCTION: every step either stops or appends an agent
+		// not already on the path, and Waiting is finite - so no counter is needed and none
+		// is used, which is better than a guard whose limit would be a second rule about how
+		// big a jam may be. Position is the path membership test and the cycle's start index
+		// in one, because the cycle is the path FROM the revisited agent onward, not all of it
+		// (an agent can wait on a jam it is not part of).
+		TArray<int32> Path;
+		TMap<int32, int32> Position;
+		int32 At = Start.Key;
+		int32 CycleAt = INDEX_NONE;
+		while (true)
+		{
+			if (const int32* Where = Position.Find(At))
+			{
+				CycleAt = *Where;
+				break;
+			}
+			if (Visited.Contains(At))
+			{
+				break;
+			}
+			const int32* Next = Waiting.Find(At);
+			if (Next == nullptr)
+			{
+				// Waiting on somebody who is not a stalled waiter - a moving agent, or one
+				// that has not been stopped long enough. That is a queue, not a deadlock.
+				break;
+			}
+			Position.Add(At, Path.Num());
+			Path.Add(At);
+			At = *Next;
+		}
+		for (const int32 Walked : Path)
+		{
+			Visited.Add(Walked);
+		}
+		if (CycleAt == INDEX_NONE)
+		{
+			continue;
+		}
+
+		TArray<int32> Cycle;
+		Cycle.Append(Path.GetData() + CycleAt, Path.Num() - CycleAt);
+
+		// THE RETRY WINDOW, and it is the whole of "logged once". A cycle is re-detected on
+		// every tick for as long as it lasts; what makes it one report is that nothing is
+		// done - not even a log line - until some member has gone Rules.RetrySeconds without
+		// an attempt. Some member and not every member, because a cycle that has just gained
+		// a fresh waiter deserves the same retry the old members were already due.
+		bool bDue = false;
+		for (const int32 Id : Cycle)
+		{
+			const FRoadAgent* Member = FindAgent(Id);
+			bDue = bDue || (Member != nullptr && Member->LastResolveAttempt <= SimSeconds - Rules.RetrySeconds);
+		}
+		if (!bDue)
+		{
+			continue;
+		}
+
+		// THE LOWEST-RANKED WAITER THAT CAN ACTUALLY TURN. Lowest class priority first, so a
+		// van goes round rather than an aeroplane; ties to the HIGHEST id, which is the later
+		// arrival - the one with least of its journey already made.
+		int32 Candidate = 0;
+		int32 CandidateRank = 0;
+		bool bAllAircraft = true;
+		FString Members;
+		for (const int32 Id : Cycle)
+		{
+			const FRoadAgent* Member = FindAgent(Id);
+			if (Member == nullptr)
+			{
+				continue;
+			}
+			Members += Members.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
+			bAllAircraft = bAllAircraft && Member->Class == ETraversalClass::Aircraft;
+
+			if (!CanReplanAtBlockedStep(*Member))
+			{
+				continue;
+			}
+			const int32 Rank = TraversalPriority(Member->Class);
+			if (Candidate == 0 || Rank < CandidateRank || (Rank == CandidateRank && Id > Candidate))
+			{
+				Candidate = Id;
+				CandidateRank = Rank;
+			}
+		}
+
+		// STAMPED ON EVERY MEMBER, WHATEVER HAPPENS NEXT, and before the replan rather than
+		// after it: the stamp is what schedules the next attempt, and a cycle whose replan
+		// fails must not be re-tried on the very next tick for ever. A successful replan
+		// clears the stalled member's clock anyway (see ReplanAt).
+		for (const int32 Id : Cycle)
+		{
+			const int32 Index = FindIndex(Id);
+			if (Index != INDEX_NONE)
+			{
+				Agents[Index].LastResolveAttempt = SimSeconds;
+			}
+		}
+
+		bool bResolved = false;
+		if (Candidate != 0)
+		{
+			// READ BEFORE THE REPLAN, because ReplanAt rewrites the plan and clears
+			// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
+			// of the route that was just chosen.
+			const FRoadAgent* Turner = FindAgent(Candidate);
+			const int32 Step = Turner->BlockedStep;
+			const FGuidelineEdgeId Banned = Turner->Follower.Plan.Steps[Step].Edge;
+			bResolved = ReplanAt(Candidate, Network, Step, Banned);
+			if (bResolved)
+			{
+				LastResolvedAgent = Candidate;
+			}
+		}
+
+		// ALL-AIRCRAFT CYCLES ARE A DESIGN PROBLEM, NOT A TRAFFIC ONE - the input to the
+		// build-tool warning of the systems map §6 - so they are raised to Warning whatever
+		// the outcome. A cycle nobody can break is a Warning either way.
+		if (bResolved)
+		{
+			if (bAllAircraft)
+			{
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft Deadlock among agents [%s] resolved: agent %d replans"),
+					*Members, Candidate);
+			}
+			else
+			{
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Deadlock among agents [%s] resolved: agent %d replans"),
+					*Members, Candidate);
+			}
+		}
+		else
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]: no member can turn; retrying in %.0f s"),
+				bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *Members, Rules.RetrySeconds);
+		}
+
+		// COUNTED WHEN LOGGED, keyed by the lowest member id: the same ring re-formed later is
+		// the same jam to a player reading the log, and a cycle re-detected inside its retry
+		// window never got here at all.
+		int32 Key = Cycle[0];
+		for (const int32 Id : Cycle)
+		{
+			Key = FMath::Min(Key, Id);
+		}
+		CyclesSeen.Add(Key);
 	}
 }
 
@@ -684,13 +933,33 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		const FGuidelineNodeId FromId = StepFromNode(Plan, Current);
 		const FGuidelineNode* FromNode = Network.GetGuidelineNode(FromId);
 
-		// SET when the bar is the node the CURRENT step left, which is exactly "the centre
-		// has passed a bar it was granted": the agent is only ever on a step whose start it
-		// has reached, and it only reached this one because the bar claim was granted.
-		const bool bFromIsBar = FromNode != nullptr && FromNode->HoldShortFor.IsSet();
-		if (bFromIsBar)
+		// SET when the bar is the node the CURRENT step left AND that step leads ONTO the
+		// strip. The first half is exactly "the centre has passed a bar it was granted": the
+		// agent is only ever on a step whose start it has reached, and it only reached this
+		// one because the bar claim was granted.
+		//
+		// THE SECOND HALF IS SPEC §3.1'S "Refined 2026-09-06 during Task 7", and without it
+		// this rule cannot tell a crossing being ENTERED from one being LEFT. A crossing is
+		// painted with a bar on EACH side, so the far bar is also "a hold-short node the
+		// agent has just passed": arming there re-armed the hold on the way out and kept the
+		// runway occupied behind an aircraft that had already crossed, for the whole exit
+		// leg - measured at 17000 uu, i.e. the hold never ended at all.
+		//
+		// TWO WAYS ONTO THE STRIP, because either can be the true one: the step's END node
+		// lies on the runway (the ordinary crossing, whose middle node sits on the
+		// centreline), or the agent's own CENTRE already does (a bar placed so close to the
+		// strip that the body is on it before the next node is). The exit bar answers no to
+		// both - its step leads away and its body is clear - and so arms nothing.
+		bool bArmsCrossing = false;
+		if (FromNode != nullptr && FromNode->HoldShortFor.IsSet())
 		{
-			Agent.CrossingRunway = FromNode->HoldShortFor;
+			const FRoadSegmentId Bar = FromNode->HoldShortFor;
+			bArmsCrossing = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, Bar)
+				|| Network.IsPointOnRunway(Agent.LastMotion.Position, Bar);
+			if (bArmsCrossing)
+			{
+				Agent.CrossingRunway = Bar;
+			}
 		}
 
 		// CLEARED BY GEOMETRY, and only once the TAIL is past the node the step left.
@@ -706,7 +975,10 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// strip half width past that node, which is the widest the surface can be there.
 		// Route distance is at least straight-line distance, so that bound is conservative
 		// for a crossing; a route that runs ALONG a runway is held by DerivedFrom anyway.
-		if (Agent.CrossingRunway.IsSet() && !bFromIsBar)
+		// SUPPRESSED ONLY WHILE THE HOLD IS BEING ARMED, not for every step out of a bar:
+		// the flag is the ARMING one, so a step leaving the exit bar releases like any other
+		// step, which is the whole of the Task 7 refinement above.
+		if (Agent.CrossingRunway.IsSet() && !bArmsCrossing)
 		{
 			double ChainHalfWidth = 0.0;
 			const bool bOnStrip = Network.IsGuidelineNodeOnRunway(FromId, Agent.CrossingRunway, &ChainHalfWidth);

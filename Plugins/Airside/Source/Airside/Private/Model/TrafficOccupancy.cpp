@@ -144,6 +144,14 @@ void FTrafficOccupancy::Release(int32 AgentId, const FTrafficResource& Resource)
 	});
 }
 
+void FTrafficOccupancy::ReleaseReservations(int32 AgentId)
+{
+	// bOccupied IS THE WHOLE TEST, and it is the same one TryClaim arbitrates on: a claim
+	// that contains the agent's own position is where its body is, and nothing a caller does
+	// to its PLAN can move a body. See the header for the landing this cost.
+	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId && !C.bOccupied; });
+}
+
 void FTrafficOccupancy::ReleaseExcept(int32 AgentId, const TArray<FTrafficResource>& Keep)
 {
 	Claims.RemoveAllSwap([AgentId, &Keep](const FTrafficClaim& C)
