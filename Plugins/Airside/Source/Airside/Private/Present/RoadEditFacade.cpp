@@ -32,6 +32,16 @@ URoadNetwork& URoadEditFacade::EnsureNetwork()
 	ARoadNetworkActor& Owner = Actor();
 	if (Owner.Network == nullptr)
 	{
+		// Loud, not fatal: a facade that belongs to a class default object is a pointer that
+		// was copied from the CDO during duplication (see ARoadNetworkActor::PostInitProperties).
+		// Before that fix every PIE click built a private airport on the CDO in silence.
+		if (Owner.HasAnyFlags(RF_ClassDefaultObject))
+		{
+			UE_LOG(LogRoadMesh, Error,
+				TEXT("EnsureNetwork on %s: an edit is reaching the CLASS DEFAULT OBJECT. Some instance ")
+				TEXT("holds the CDO's facade instead of its own - see ARoadNetworkActor::PostInitProperties."),
+				*Owner.GetName());
+		}
 		Owner.Network = NewObject<URoadNetwork>(&Owner);
 	}
 	return *Owner.Network;
@@ -162,6 +172,14 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 		return INDEX_NONE;
 	}
 
+	// Success is logged as well as refusal: a lone node draws no mesh, so without this line
+	// "I clicked and nothing happened" and "I clicked and a node was placed" read the same
+	// in the log - and the census line below it counts slots, not live nodes.
+	// Names the actor and world too: the 2026-09-06 PIE bug was caught by this line saying
+	// "on Default__RoadNetworkActor in no world" - see ARoadNetworkActor::PostInitProperties.
+	UE_LOG(LogRoadMesh, Log, TEXT("Node %d placed at (%.0f, %.0f), generation %d - on %s in %s"),
+		Node.Index, Where.X, Where.Y, Node.Generation,
+		*Actor().GetName(), Actor().GetWorld() ? *Actor().GetWorld()->GetName() : TEXT("no world"));
 	Edit.Commit();
 	return Node.Index;
 }
@@ -199,6 +217,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
 		return false;
 	}
 
+	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d"), Segment.Index, FromIndex, ToIndex);
 	Edit.Commit();
 	return true;
 }

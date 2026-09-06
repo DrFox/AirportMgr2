@@ -101,6 +101,23 @@ public:
 	/** True outside a game world, so dispatched agents move in the editor viewport too. */
 	virtual bool ShouldTickIfViewportsOnly() const override;
 
+	/**
+	 * Re-points Presenter, Facade and Traffic at THIS actor's own subobjects.
+	 *
+	 * Duplication - which is how play-in-editor makes its copy of the level, and what
+	 * copy/paste does - constructs the copy with bCopyTransientsFromClassDefaults, and
+	 * FObjectInitializer::InitProperties then overwrites every Transient property that is
+	 * not an instanced reference with the CLASS DEFAULT OBJECT's value. These three are
+	 * Transient plain pointers, so a duplicated actor arrived holding the CDO's subobjects:
+	 * every PIE click went to the CDO's private network, the CDO rebuilt a mesh nobody could
+	 * see, and this actor's own Network stayed null (2026-09-06). The constructor has already
+	 * created the right objects by name; this puts the pointers back on them.
+	 * Rejected alternative: UPROPERTY(Instanced). It would also survive the copy, but it
+	 * changes editor and serialisation semantics for what is runtime-only state, and it
+	 * hides the reason in a specifier. See Airside.Present.DuplicatedActorOwnsItsSubobjects.
+	 */
+	virtual void PostInitProperties() override;
+
 	// --- Agents ----------------------------------------------------------------------
 	//
 	// Runtime only, and owned by Traffic rather than by this actor or by URoadNetwork - see
@@ -612,6 +629,10 @@ public:
 
 	/** The stand definition this actor would use, for the same test. */
 	UEntityDefinition* ResolveStandDefinitionForTest() const { return ResolveStandDefinition(); }
+
+	/** Whose subobject the facade / presenter is, for Airside.Present.DuplicatedActorOwnsItsSubobjects. */
+	UObject* FacadeOuterForTest() const;
+	UObject* PresenterOuterForTest() const;
 
 public:
 	/** Absolute world-space Z of the road surface, in uu. Not relative to the actor:
