@@ -1,0 +1,86 @@
+#include "CoreMinimal.h"
+#include "Misc/AutomationTest.h"
+#include "Model/TrafficOccupancy.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+namespace
+{
+	FGuidelineEdgeId M2OccEdge(int32 Index) { FGuidelineEdgeId Id; Id.Index = Index; Id.Generation = 1; return Id; }
+	FGuidelineNodeId M2OccNode(int32 Index) { FGuidelineNodeId Id; Id.Index = Index; Id.Generation = 1; return Id; }
+
+	FTrafficClaim M2OccEdgeClaim(int32 Agent, int32 Edge, double From, double To, bool bOccupied, int32 Rank)
+	{
+		FTrafficClaim C;
+		C.AgentId = Agent; C.Resource = FTrafficResource::OfEdge(M2OccEdge(Edge));
+		C.From = From; C.To = To; C.bOccupied = bOccupied; C.Rank = Rank;
+		return C;
+	}
+	FTrafficClaim M2OccNodeClaim(int32 Agent, int32 Node, bool bOccupied, int32 Rank)
+	{
+		FTrafficClaim C;
+		C.AgentId = Agent; C.Resource = FTrafficResource::OfNode(M2OccNode(Node));
+		C.bOccupied = bOccupied; C.Rank = Rank;
+		return C;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyClaimsTest,
+	"Airside.Model.Occupancy.Claims",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficOccupancyClaimsTest::RunTest(const FString& Parameters)
+{
+	FTrafficOccupancy Table;
+	FTrafficClaim Blocker;
+
+	// 1. Disjoint intervals on one edge coexist - that is a queue.
+	TestEqual(TEXT("agent 1 reserves [0,1000)"), Table.TryClaim(M2OccEdgeClaim(1, 7, 0.0, 1000.0, true, 2), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("agent 2 reserves [1000,2000) behind it - touching is not overlapping"), Table.TryClaim(M2OccEdgeClaim(2, 7, 1000.0, 2000.0, false, 2), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("two claims held"), Table.GetClaims().Num(), 2);
+
+	// 2. Overlap is refused and names the holder.
+	TestEqual(TEXT("agent 3 wants [500,1500) - held"), Table.TryClaim(M2OccEdgeClaim(3, 7, 500.0, 1500.0, false, 2), Blocker), EClaimResult::Held);
+	TestEqual(TEXT("the blocker named is agent 1, the occupied one found first"), Blocker.AgentId, 1);
+	TestEqual(TEXT("a refused claim adds nothing"), Table.GetClaims().Num(), 2);
+
+	// 3. Rank preempts a RESERVATION, never an OCCUPANCY.
+	TestEqual(TEXT("rank 3 preempts agent 2's reservation"), Table.TryClaim(M2OccEdgeClaim(4, 7, 1200.0, 1800.0, false, 3), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("rank 3 cannot preempt agent 1, who is standing there"), Table.TryClaim(M2OccEdgeClaim(4, 7, 200.0, 400.0, false, 3), Blocker), EClaimResult::Held);
+	{
+		const TSet<int32> Preempted = Table.TakePreempted();
+		TestTrue(TEXT("agent 2 is reported preempted, once"), Preempted.Num() == 1 && Preempted.Contains(2));
+		TestEqual(TEXT("and the report clears on read"), Table.TakePreempted().Num(), 0);
+	}
+
+	// 4. Equal rank: the holder keeps it (first-to-reserve).
+	TestEqual(TEXT("agent 5 at rank 3 cannot take agent 4's rank-3 reservation"), Table.TryClaim(M2OccEdgeClaim(5, 7, 1200.0, 1300.0, false, 3), Blocker), EClaimResult::Held);
+	TestEqual(TEXT("blocker is agent 4"), Blocker.AgentId, 4);
+
+	// 5. Re-claiming your own resource updates it rather than conflicting with yourself.
+	TestEqual(TEXT("agent 1 extends its own interval"), Table.TryClaim(M2OccEdgeClaim(1, 7, 0.0, 1100.0, true, 2), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("still one claim for agent 1 on that edge"), Table.GetClaims().FilterByPredicate([](const FTrafficClaim& C) { return C.AgentId == 1; }).Num(), 1);
+
+	// 6. Nodes are exclusive whatever the numbers say.
+	TestEqual(TEXT("agent 1 takes node 9"), Table.TryClaim(M2OccNodeClaim(1, 9, false, 2), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("agent 2 cannot"), Table.TryClaim(M2OccNodeClaim(2, 9, false, 2), Blocker), EClaimResult::Held);
+	int32 Holder = 0;
+	TestTrue(TEXT("IsHeld sees node 9 held by someone other than agent 2"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 2, &Holder) && Holder == 1);
+	TestFalse(TEXT("but not held by anyone other than agent 1"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 1));
+
+	// 7. HeldLengthOn sums OTHER agents' intervals - the routing cost's input.
+	TestEqual(TEXT("edge 7 as seen by a stranger: 1100 + 600"), Table.HeldLengthOn(M2OccEdge(7), 0), 1700.0, 1e-9);
+	TestEqual(TEXT("edge 7 as seen by agent 1 excludes its own 1100"), Table.HeldLengthOn(M2OccEdge(7), 1), 600.0, 1e-9);
+
+	// 8. Release.
+	Table.ReleaseExcept(1, { FTrafficResource::OfNode(M2OccNode(9)) });
+	TestEqual(TEXT("agent 1 keeps only the node"), Table.GetClaims().FilterByPredicate([](const FTrafficClaim& C) { return C.AgentId == 1; }).Num(), 1);
+	Table.ReleaseAll(1);
+	TestFalse(TEXT("after ReleaseAll node 9 is free"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 0));
+	Table.Clear();
+	TestEqual(TEXT("Clear empties the table"), Table.GetClaims().Num(), 0);
+	return true;
+}
+
+#endif
