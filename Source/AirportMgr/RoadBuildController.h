@@ -263,7 +263,7 @@ private:
 	void OnRedo();
 
 	/**
-	 * Sim clock and save: Comma slower, Period faster, P pause; F5 save, F9 load. Reach the
+	 * Sim clock and save: Comma slower, Period faster, P pause; K save, L load. Reach the
 	 * AirportOps runtime through the game instance, so they work only in play - the editor
 	 * mode has no game instance and its own driver, and these keys log that when pressed.
 	 */

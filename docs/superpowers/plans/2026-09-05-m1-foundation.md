@@ -67,7 +67,7 @@
 | File | Change |
 |---|---|
 | `Source/AirportMgr/AirportMgr.Build.cs` | Add `AirportOps` |
-| `Source/AirportMgr/RoadBuildController.h` / `.cpp` | Keys: Comma slower, Period faster, P pause, F5 save, F9 load |
+| `Source/AirportMgr/RoadBuildController.h` / `.cpp` | Keys: Comma slower, Period faster, P pause, K save, L load (F5/F9 are PIE's own) |
 | `Source/AirportMgr/RoadBuildHUD.cpp` | One clock line under the tool name |
 | `AirportMgr.uproject` | Enable `AirportOps` |
 | `Config/DefaultGame.ini` | Asset Manager scan for `Scenario` |
@@ -2438,7 +2438,7 @@ Note: `Tick(float DeltaTime)` receives real seconds already scaled by the engine
 
 `RoadBuildController.h` declarations (beside `OnUndo`):
 ```cpp
-	/** Sim clock. Comma slower, Period faster, P pause; F5 save, F9 load. Only in play: the ed mode has no game instance. */
+	/** Sim clock. Comma slower, Period faster, P pause; K save, L load (F5/F9 are PIE's own). Only in play: the ed mode has no game instance. */
 	void OnSpeedDown();
 	void OnSpeedUp();
 	void OnTogglePause();
@@ -2450,8 +2450,8 @@ Note: `Tick(float DeltaTime)` receives real seconds already scaled by the engine
 	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARoadBuildController::OnSpeedDown);
 	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARoadBuildController::OnSpeedUp);
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::OnTogglePause);
-	InputComponent->BindKey(EKeys::F5, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
-	InputComponent->BindKey(EKeys::F9, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
+	InputComponent->BindKey(EKeys::K, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
+	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
 ```
 Handlers:
 ```cpp
@@ -2474,7 +2474,7 @@ void ARoadBuildController::OnTogglePause() { if (UOpsRuntime* R = RuntimeFor(*th
 void ARoadBuildController::OnQuickSave()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->SaveToSlot(TEXT("QuickSave")); } }
 void ARoadBuildController::OnQuickLoad()   { if (UOpsRuntime* R = RuntimeFor(*this)) { R->LoadFromSlot(TEXT("QuickSave")); } }
 ```
-Includes: `#include "Present/OpsRuntime.h"`, `#include "Present/OpsRuntimeSubsystem.h"`, `#include "Model/SimClock.h"`. Extend the "Road building ready" banner `UE_LOG` text with `, comma/period speed, P pause, F5/F9 save/load`.
+Includes: `#include "Present/OpsRuntime.h"`, `#include "Present/OpsRuntimeSubsystem.h"`, `#include "Model/SimClock.h"`. Extend the "Road building ready" banner `UE_LOG` text with `, comma/period speed, P pause, K/L save/load`.
 
 Check the digit keys the tool registry binds do not include Comma/Period/P/F5/F9: `grep -rn "EKeys::" Plugins/Airside/Source/Airside/Private/Tool/*.cpp Source/AirportMgr/*.cpp | grep -v "LeftMouse\|RightMouse\|W)\|A)\|S)\|D)\|Q)\|E)"`.
 
@@ -2881,7 +2881,7 @@ Build line; then `./Tools/Run-AirsideTests.ps1`. Record both lines verbatim. `UE
 
 - [ ] **Step 3: Runtime check in PIE (user, or MCP shot)**
 
-Ask the user to open the editor, PIE, press Period twice and P once, then F5. The log should show, in order: `OpsRuntimeSubsystem initialised`, `OpsRuntime attached to RoadNetworkActor...`, `Sim speed x2`, `Sim speed x4`, `Sim speed x0`, `Captured snapshot: ...`, `Save to slot 'QuickSave': ok`. The HUD's second line reads `Day 1  HH:MM  x4 PAUSED`. If the `unreal` MCP is up, `python Tools/Mcp.py log LogAirportOps` and `python Tools/Mcp.py shot out.png` gather the same evidence.
+Ask the user to open the editor, PIE, press Period twice and P once, then K. The log should show, in order: `OpsRuntimeSubsystem initialised`, `OpsRuntime attached to RoadNetworkActor...`, `Sim speed x2`, `Sim speed x4`, `Sim speed x0`, `Captured snapshot: ...`, `Save to slot 'QuickSave': ok`. The HUD's second line reads `Day 1  HH:MM  x4 PAUSED`. If the `unreal` MCP is up, `python Tools/Mcp.py log LogAirportOps` and `python Tools/Mcp.py shot out.png` gather the same evidence.
 
 - [ ] **Step 4: Commit and PR**
 

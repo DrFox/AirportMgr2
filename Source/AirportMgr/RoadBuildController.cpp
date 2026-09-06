@@ -68,7 +68,7 @@ void ARoadBuildController::BeginPlay()
 			 "Backspace clears. %s, 7 lands an aircraft on the nearest runway. C orbits the "
 			 "aircraft, G toggles the guideline overlay. WASD pans, Q/E rotate, wheel zooms - "
 			 "while building or watching. Comma/Period slow/speed the sim clock, P pauses, "
-			 "F5 quick-saves, F9 quick-loads."),
+			 "K quick-saves, L quick-loads."),
 		*Target->GetName(), *ToolKeys);
 }
 
@@ -247,8 +247,10 @@ void ARoadBuildController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Comma, IE_Pressed, this, &ARoadBuildController::OnSpeedDown);
 	InputComponent->BindKey(EKeys::Period, IE_Pressed, this, &ARoadBuildController::OnSpeedUp);
 	InputComponent->BindKey(EKeys::P, IE_Pressed, this, &ARoadBuildController::OnTogglePause);
-	InputComponent->BindKey(EKeys::F5, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
-	InputComponent->BindKey(EKeys::F9, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
+	// K/L rather than F5/F9: PIE already owns the function keys, so those presses never
+	// reached this controller - the exact "key that goes nowhere" the banner rule exists for.
+	InputComponent->BindKey(EKeys::K, IE_Pressed, this, &ARoadBuildController::OnQuickSave);
+	InputComponent->BindKey(EKeys::L, IE_Pressed, this, &ARoadBuildController::OnQuickLoad);
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
