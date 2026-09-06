@@ -2,6 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/RunwayDesignator.h"
 
 double FTrafficRules::FootprintFor(ETraversalClass Class) const
@@ -366,12 +367,13 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	Agent.BlockedStep = INDEX_NONE;
 	Agent.StalledSeconds = 0.0;
 
-	// CrossingRunway IS DELIBERATELY LEFT ALONE. It says the agent's body is physically on a
-	// strip, which is a fact about where the aeroplane IS, not about where it is going: a
-	// replan cannot move it off the runway, and clearing it here would hand the strip back
-	// with an aeroplane standing on it. ClaimAhead's geometric rule ends the crossing, and
-	// it reads the SPLICED plan from the next tick on, which is the same line up to the
-	// splice - so the tail-clear test it makes is the one it would have made anyway.
+	// CrossingRunway AND CrossingPhase ARE DELIBERATELY LEFT ALONE. Between them they say the
+	// agent's body is physically on a strip, which is a fact about where the aeroplane IS,
+	// not about where it is going: a replan cannot move it off the runway, and clearing them
+	// here would hand the strip back with an aeroplane standing on it. ClaimAhead's body
+	// geometry ends the crossing, and it reads the SPLICED plan from the next tick on, which
+	// is the same line up to the splice - so the tail-clear test it makes is the one it would
+	// have made anyway.
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d replanned at step %d: %.0f uu remaining -> %.0f"),
 		AgentId, SpliceStep, WasRemaining, Spliced.Length - Agent.Follower.Travelled);
@@ -468,6 +470,12 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			if (Agent.RunwayHeld.Num() > 0)
 			{
 				Agent.CrossingRunway = Agent.RunwayHeld[0];
+
+				// OnStrip AND NOT Committed: an aircraft that has just finished its landing
+				// roll is ON the asphalt by definition, whatever the geometry of the exit it
+				// is about to take says. Committed would make the hold wait for its centre to
+				// be found on a strip it is already leaving.
+				Agent.CrossingPhase = ECrossingPhase::OnStrip;
 			}
 			Agent.RunwayHeld.Reset();
 		}
@@ -639,8 +647,10 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 		TArray<int32> Cycle;
 		Cycle.Append(Path.GetData() + CycleAt, Path.Num() - CycleAt);
 
-		// THE RETRY WINDOW, and it is the whole of "logged once". A cycle is re-detected on
-		// every tick for as long as it lasts; what makes it one report is that nothing is
+		// THE RETRY WINDOW, and it is what makes an unresolvable jam a CADENCE rather than a
+		// line per tick. (What makes one jam count ONCE is the min-id key below, which is a
+		// different mechanism - conflating the two is a comment defect this line was written
+		// to fix.) A cycle is re-detected on every tick for as long as it lasts; nothing is
 		// done - not even a log line - until some member has gone Rules.RetrySeconds without
 		// an attempt. Some member and not every member, because a cycle that has just gained
 		// a fresh waiter deserves the same retry the old members were already due.
@@ -735,9 +745,12 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 				bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *Members, Rules.RetrySeconds);
 		}
 
+		++DeadlockLogLines;
+
 		// COUNTED WHEN LOGGED, keyed by the lowest member id: the same ring re-formed later is
-		// the same jam to a player reading the log, and a cycle re-detected inside its retry
-		// window never got here at all.
+		// the same jam to a player reading the log. The KEY is why this set has one entry per
+		// jam however many lines the jam produced; DeadlockLogLines above is the line count,
+		// and the two answer different questions.
 		int32 Key = Cycle[0];
 		for (const int32 Id : Cycle)
 		{
@@ -807,8 +820,11 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// A CROSSING IS A TAXIING IDEA. Whatever phase this is now, RunwayHeld governs what
 		// it holds, so the field is cleared rather than left to name a chain nothing will
 		// ever release - and the release is announced, because the claim was.
-		if (Agent.CrossingRunway.IsSet())
+		if (Agent.CrossingPhase != ECrossingPhase::None)
 		{
+			// BOTH FIELDS, ALWAYS TOGETHER: the phase says whether, the seed says which, and
+			// a seed left behind a None phase is a chain nothing would ever release.
+			Agent.CrossingPhase = ECrossingPhase::None;
 			Agent.CrossingRunway = FRoadSegmentId();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
 		}
@@ -853,8 +869,11 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// return skips that loop - so leaving the field set would name a chain nothing will
 		// ever release, and ClaimAhead's header promise that a crossing cannot be stranded
 		// would be false for the one agent whose plan went bad under it.
-		if (Agent.CrossingRunway.IsSet())
+		if (Agent.CrossingPhase != ECrossingPhase::None)
 		{
+			// BOTH FIELDS, ALWAYS TOGETHER: the phase says whether, the seed says which, and
+			// a seed left behind a None phase is a chain nothing would ever release.
+			Agent.CrossingPhase = ECrossingPhase::None;
 			Agent.CrossingRunway = FRoadSegmentId();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
 		}
@@ -933,72 +952,152 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		const FGuidelineNodeId FromId = StepFromNode(Plan, Current);
 		const FGuidelineNode* FromNode = Network.GetGuidelineNode(FromId);
 
-		// SET when the bar is the node the CURRENT step left AND that step leads ONTO the
-		// strip. The first half is exactly "the centre has passed a bar it was granted": the
-		// agent is only ever on a step whose start it has reached, and it only reached this
-		// one because the bar claim was granted.
+		const bool bFromIsBar = FromNode != nullptr && FromNode->HoldShortFor.IsSet();
+
+		// THE BODY, NOT THE NODES. Nose, centre and tail as POSITIONS, read out of the ONE
+		// array the follower walks (GuidelineGeom::PointAtDistance over Plan.Polyline) so the
+		// hold cannot disagree with where the agent visibly is - the sample-once rule.
 		//
-		// THE SECOND HALF IS SPEC §3.1'S "Refined 2026-09-06 during Task 7", and without it
-		// this rule cannot tell a crossing being ENTERED from one being LEFT. A crossing is
-		// painted with a bar on EACH side, so the far bar is also "a hold-short node the
-		// agent has just passed": arming there re-armed the hold on the way out and kept the
-		// runway occupied behind an aircraft that had already crossed, for the whole exit
-		// leg - measured at 17000 uu, i.e. the hold never ended at all.
+		// THE NODE-BASED VERSION THIS REPLACES was right only for a crossing that HAS a node
+		// on the strip, which the generated graph guarantees and a hand-drawn bar-to-bar edge
+		// does not: on one edge straight across, it armed half a footprint late and released
+		// with up to half a footprint of tail still on the asphalt. Spec §3.1's fourth route
+		// exists to prevent exactly that, so the geometry it is written in has to be the
+		// body's, not the graph's.
 		//
-		// TWO WAYS ONTO THE STRIP, because either can be the true one: the step's END node
-		// lies on the runway (the ordinary crossing, whose middle node sits on the
-		// centreline), or the agent's own CENTRE already does (a bar placed so close to the
-		// strip that the body is on it before the next node is). The exit bar answers no to
-		// both - its step leads away and its body is clear - and so arms nothing.
-		bool bArmsCrossing = false;
-		if (FromNode != nullptr && FromNode->HoldShortFor.IsSet())
+		// All three or none: PointAtDistance fails only for a polyline too short to have a
+		// direction, which is a property of the array and not of the distance asked for.
+		FVector2D NosePoint;
+		FVector2D CentrePoint;
+		FVector2D TailPoint;
+		double Bearing = 0.0;
+		const bool bHaveBody =
+			GuidelineGeom::PointAtDistance(Plan.Polyline, T + F * 0.5, NosePoint, Bearing)
+			&& GuidelineGeom::PointAtDistance(Plan.Polyline, T, CentrePoint, Bearing)
+			&& GuidelineGeom::PointAtDistance(Plan.Polyline, T - F * 0.5, TailPoint, Bearing);
+
+		// 0a. COMMITTED: past a bar, on a step that leads ONTO the strip.
+		//
+		// THE THREE WAYS A STEP CAN LEAD ONTO THE STRIP, tried in that order because they cost
+		// that much: the step's END NODE is on it (the generated crossing, whose middle node
+		// sits on the centreline); some polyline VERTEX of this step is on it (a bend that
+		// crosses); or the NOSE is on it already (the hand-drawn bar-to-bar edge, where the
+		// first two find nothing because the only vertices are the two bars, both off the
+		// asphalt by construction). The last is the body test, and it is why the arming moment
+		// on such a crossing is "a wheel reaches the runway" rather than "a node says so".
+		//
+		// AND THIS IS WHAT TELLS AN ENTRY FROM AN EXIT - spec §3.1, refined during Task 7. A
+		// crossing is painted with a bar on EACH side, so the far bar is also "a bar the agent
+		// has just passed"; arming there re-armed the hold on the way out and kept the runway
+		// occupied behind an aircraft that had already crossed, for the whole exit leg
+		// (measured at 17000 uu, i.e. the hold never ended). The exit bar's step leads away
+		// and its body is clear, so all three tests answer no and it arms nothing.
+		if (Agent.CrossingPhase == ECrossingPhase::None && bFromIsBar)
 		{
 			const FRoadSegmentId Bar = FromNode->HoldShortFor;
-			bArmsCrossing = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, Bar)
-				|| Network.IsPointOnRunway(Agent.LastMotion.Position, Bar);
-			if (bArmsCrossing)
+			bool bOntoStrip = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, Bar);
+
+			if (!bOntoStrip)
+			{
+				// EndVertex is this step's last point in the plan's welded polyline, and the
+				// previous step's is its first - the map the plan already carries, rather than
+				// a second walk over distances.
+				const int32 FirstVertex = Current > 0 ? Plan.Steps[Current - 1].EndVertex : 0;
+				const int32 LastVertex = FMath::Min(Plan.Steps[Current].EndVertex, Plan.Polyline.Num() - 1);
+				for (int32 Vertex = FMath::Max(0, FirstVertex); Vertex <= LastVertex && !bOntoStrip; ++Vertex)
+				{
+					bOntoStrip = Network.IsPointOnRunway(Plan.Polyline[Vertex], Bar);
+				}
+			}
+
+			if (!bOntoStrip)
+			{
+				// FALLBACK ON LastMotion only when the polyline cannot be sampled at all. It
+				// is a tick stale, which is why it is not the first choice.
+				bOntoStrip = bHaveBody
+					? Network.IsPointOnRunway(NosePoint, Bar)
+					: Network.IsPointOnRunway(Agent.LastMotion.Position, Bar);
+			}
+
+			if (bOntoStrip)
 			{
 				Agent.CrossingRunway = Bar;
+				Agent.CrossingPhase = ECrossingPhase::Committed;
 			}
 		}
 
-		// CLEARED BY GEOMETRY, and only once the TAIL is past the node the step left.
+		// 0b. ON THE STRIP once the CENTRE is - checked every tick while Committed, and on
+		// whatever step the agent has reached by then: a bar may sit a step or more short of
+		// the asphalt, and the crossing does not begin at the bar, it begins at the edge of
+		// the surface.
+		if (Agent.CrossingPhase == ECrossingPhase::Committed && Agent.CrossingRunway.IsSet()
+			&& bHaveBody && Network.IsPointOnRunway(CentrePoint, Agent.CrossingRunway))
+		{
+			Agent.CrossingPhase = ECrossingPhase::OnStrip;
+		}
+
+		// 0c. RELEASED once the TAIL is off the strip, and not one metre before.
 		//
-		// REJECTED: releasing at the next node full stop. A runway node sits ON the strip -
-		// the crossing's own middle node is the obvious case - so that hands the runway back
-		// with half the aeroplane still on it, which is the very frame this rule exists for.
+		// REJECTED: releasing at the next route node. A runway node sits ON the strip - the
+		// crossing's own middle node is the obvious case - so that hands the runway back with
+		// half the aeroplane still on it, which is the very frame this rule exists for.
 		//
 		// REJECTED: waiting for a bar on the far side. A player may place one bar, or none,
 		// and a hold that waits for a bar that does not exist never ends.
-		//
-		// So: off the strip, the node itself ends it. ON the strip, the tail must be a full
-		// strip half width past that node, which is the widest the surface can be there.
-		// Route distance is at least straight-line distance, so that bound is conservative
-		// for a crossing; a route that runs ALONG a runway is held by DerivedFrom anyway.
-		// SUPPRESSED ONLY WHILE THE HOLD IS BEING ARMED, not for every step out of a bar:
-		// the flag is the ARMING one, so a step leaving the exit bar releases like any other
-		// step, which is the whole of the Task 7 refinement above.
-		if (Agent.CrossingRunway.IsSet() && !bArmsCrossing)
+		if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
 		{
-			double ChainHalfWidth = 0.0;
-			const bool bOnStrip = Network.IsGuidelineNodeOnRunway(FromId, Agent.CrossingRunway, &ChainHalfWidth);
-			const double TailPast = (T - F * 0.5) - StepStart(Plan, Current);
-			if (TailPast >= 0.0 && (!bOnStrip || TailPast > ChainHalfWidth))
+			bool bClear = false;
+			if (bHaveBody)
+			{
+				// NO PART OF THE BODY STILL ON IT - nose, centre and tail. "The tail is off
+				// the strip" ALONE is not the test and was tried: it is true on the way IN as
+				// well, so the hold ended 5000 uu early, with the aeroplane about to drive
+				// onto the asphalt (measured at route 17825 on the two-bar crossing, where the
+				// tail is off the strip while the nose is already on it).
+				const bool bBodyClear =
+					!Network.IsPointOnRunway(NosePoint, Agent.CrossingRunway)
+					&& !Network.IsPointOnRunway(CentrePoint, Agent.CrossingRunway)
+					&& !Network.IsPointOnRunway(TailPoint, Agent.CrossingRunway);
+
+				// WHICH SIDE the body is clear of is what the phase answers. OnStrip means the
+				// centre has been on the asphalt, so a clear body is one that has crossed.
+				// Committed with a clear body is only meaningful once the agent has left the
+				// step out of the bar: a bar whose step turned out not to reach the strip
+				// after all, which must not hold the runway for ever - before that, a clear
+				// body is simply an agent that has not arrived yet.
+				bClear = bBodyClear && (Agent.CrossingPhase == ECrossingPhase::OnStrip || !bFromIsBar);
+			}
+			else
+			{
+				// FALLBACK, for a plan whose polyline is too short to sample a body from: the
+				// NODE rule this replaced. Off the strip, the node the step left ends it; on
+				// it, the tail must be a full chain half width past that node. Kept rather
+				// than deleted because a two-point plan is still a plan, and an agent on one
+				// must not hold a runway for ever.
+				double ChainHalfWidth = 0.0;
+				const bool bNodeOnStrip = Network.IsGuidelineNodeOnRunway(FromId, Agent.CrossingRunway, &ChainHalfWidth);
+				const double TailPast = (T - F * 0.5) - StepStart(Plan, Current);
+				bClear = !bFromIsBar && TailPast >= 0.0 && (!bNodeOnStrip || TailPast > ChainHalfWidth);
+			}
+
+			if (bClear)
 			{
 				Agent.CrossingRunway = FRoadSegmentId();
+				Agent.CrossingPhase = ECrossingPhase::None;
 
 				// THE RELEASE LINE LIVES HERE, not at the Vacated handover where it started:
 				// vacating no longer gives the runway back, it hands it to this rule, and a
 				// line claiming otherwise would be a log that lies. Transition by
-				// construction - CrossingRunway is unset immediately after.
+				// construction - the phase is None immediately after.
 				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
 			}
 		}
 
 		// AT THE FRONT of Pending, so a refusal here binds before anything further along the
 		// route: the agent is standing on this surface, and nothing it might be told about a
-		// node ahead can matter more than that.
-		if (Agent.CrossingRunway.IsSet())
+		// node ahead can matter more than that. COMMITTED COUNTS AS STANDING ON IT: the body
+		// is a moment from the asphalt and nothing may be cleared onto it in between.
+		if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
 		{
 			TArray<FRoadSegmentId> Chain = Network.RunwayChain(Agent.CrossingRunway);
 			if (Chain.Num() == 0)

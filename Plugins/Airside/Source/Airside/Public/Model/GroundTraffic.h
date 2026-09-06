@@ -216,12 +216,24 @@ public:
 	/**
 	 * How many DISTINCT wait-for cycles this session has logged, keyed by lowest member id.
 	 *
-	 * The one thing a test can ask that the logs would otherwise be the only record of. A
-	 * cycle re-detected inside its retry window is not a new one, and neither is the same
-	 * ring re-formed later: what is counted is what was LOGGED, so this is exactly the
-	 * "logged once per cycle" promise of spec §5, measured.
+	 * The one thing a test can ask that the logs would otherwise be the only record of.
+	 *
+	 * THE KEY IS WHAT MAKES THIS ONE, not the retry stamp: a cycle re-detected on the next
+	 * tick, and the same ring re-formed an hour later, both key to the same lowest member id
+	 * and so count once. How many LINES that cycle produced is a different question and
+	 * GetDeadlockLogLinesForTest answers it - conflating the two was a comment defect on this
+	 * very pair, so the two accessors now say which is which.
 	 */
 	int32 GetCyclesDetectedForTest() const { return CyclesSeen.Num(); }
+
+	/**
+	 * How many deadlock lines - resolved or unresolvable - this session has emitted.
+	 *
+	 * THE RETRY STAMP IS WHAT MAKES THIS PERIODIC. An unresolvable cycle is re-detected on
+	 * every single tick; LastResolveAttempt is why it is reported once per Rules.RetrySeconds
+	 * instead, and this is the count that measures it.
+	 */
+	int32 GetDeadlockLogLinesForTest() const { return DeadlockLogLines; }
 
 	/** Id of the last agent whose deadlock replan SUCCEEDED, or 0 if none ever has. */
 	int32 GetLastResolvedAgentForTest() const { return LastResolvedAgent; }
@@ -256,6 +268,9 @@ private:
 
 	/** Last agent whose deadlock replan succeeded; 0 until one does. Test-facing, as above. */
 	int32 LastResolvedAgent = 0;
+
+	/** Deadlock lines emitted, resolved and unresolvable alike. Test-facing, as above. */
+	int32 DeadlockLogLines = 0;
 
 	/** Assigns the id, stores the agent, announces Gone -> its phase. The one place all three happen. */
 	int32 Admit(FRoadAgent&& Agent);
@@ -377,9 +392,11 @@ private:
 	 * each step adds an agent not already on the path, and there are finitely many agents.
 	 *
 	 * A CYCLE IS KEYED BY ITS LOWEST MEMBER ID, so it is handled once however many members
-	 * would have found it, and re-detecting it inside Rules.RetrySeconds does nothing at all -
-	 * the members' LastResolveAttempt stamp is what makes "logged once" true, and what makes
-	 * the player's later fix (a new edge out of the jam) get picked up on the next window.
+	 * would have found it - that key, and nothing else, is why one jam is one entry in
+	 * CyclesSeen. WHAT THE RETRY STAMP DOES IS SEPARATE: re-detecting a cycle inside
+	 * Rules.RetrySeconds does nothing at all, so an unresolvable jam is REPORTED on a cadence
+	 * rather than on every tick, and the player's later fix (a new edge out of it) is picked
+	 * up on the next window.
 	 *
 	 * NO REVERSING - spec §1. The one move available is a member turning at the node it is
 	 * stopped at, so a cycle whose members are all mid-edge is logged and left, which is what

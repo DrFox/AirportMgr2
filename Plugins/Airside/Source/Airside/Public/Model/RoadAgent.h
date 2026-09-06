@@ -38,6 +38,34 @@ enum class EAgentPhase : uint8
 };
 
 /**
+ * How far through a runway crossing a taxiing agent's BODY is. Spec §3.1's fourth route.
+ *
+ * AN ENUM AND NOT A PAIR OF BOOLS - this codebase's "a phase is an enum, never a set of
+ * bools". The two facts being tracked ("committed to the crossing" and "a wheel is actually
+ * on the asphalt") can never both be the current state, and the states are visited in one
+ * order, so the illegal combination stops being representable.
+ *
+ * AND NOT FRoadAgent::CrossingRunway EITHER, which was the first design: a set seed used to
+ * mean "holding", so the seed had to be cleared to say "not holding" and there was nowhere
+ * left to record that the body had reached the strip. The seed now says WHICH runway; this
+ * says whether, and how far.
+ */
+UENUM()
+enum class ECrossingPhase : uint8
+{
+	/** Not crossing. CrossingRunway is unset and nothing is held for a crossing. */
+	None,
+
+	/** Past a bar, onto a step that leads to the strip, body not yet on it. The chain is
+	 *  held OCCUPIED from here: the aeroplane is going to be on the asphalt shortly and
+	 *  nothing may be cleared onto it in between. */
+	Committed,
+
+	/** The agent's CENTRE is on the strip. Held until the TAIL leaves it. */
+	OnStrip
+};
+
+/**
  * What to do once the current taxi ends: fly a departure, or do nothing.
  *
  * DATA ABOUT AN INTENTION, not a phase - an agent taxiing toward a runway with a departure
@@ -236,8 +264,14 @@ struct AIRSIDE_API FRoadAgent
 	 * held by an agent that is crossing, and it is released by geometry (the tail clearing
 	 * the strip) rather than by a phase change. A seed rather than the expanded chain
 	 * because the chain is re-expanded per tick anyway, and a rebuild may have changed it.
+	 *
+	 * WHICH CHAIN, NOT WHETHER. CrossingPhase says whether the hold applies; this says which
+	 * runway it is over. Reading IsSet() as "holding" is the bug the phase exists to end.
 	 */
 	UPROPERTY() FRoadSegmentId CrossingRunway;
+
+	/** How far through a crossing this agent's BODY is. See ECrossingPhase. */
+	UPROPERTY() ECrossingPhase CrossingPhase = ECrossingPhase::None;
 
 	/**
 	 * Spools the propeller one frame toward whatever the engine has been commanded to do.
