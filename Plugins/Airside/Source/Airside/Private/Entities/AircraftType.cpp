@@ -359,9 +359,13 @@ FApproachPerformance UAircraftType::PiperMeridianApproach()
 	// The standard everywhere, and the one number here that is not about this airframe.
 	Approach.GlideslopeDegrees = 3.0;
 
-	// 100 m, so the approach is joined about 1.9 km out. Chosen to mirror ClearAltitude's
-	// reasoning from the other end: far enough to read as an approach, near enough to watch.
-	Approach.FinalAltitude = 10000.0;
+	// 20 m, so the approach is joined about 380 m out - nine seconds at Vref. It was 100 m
+	// (1.9 km, 43 s), chosen to mirror ClearAltitude from the other end, and in play that
+	// was 43 s of watching a dot before anything happened at the airport; the player asked
+	// for a shorter final (2026-09-06). Kept well above FlareHeight (9 m) so the approach
+	// still has a stable segment before the nose comes up. Revisit when DA_PiperMeridian
+	// exists (#30) - it becomes a details-panel number then.
+	Approach.FinalAltitude = 2000.0;
 
 	// Thirty feet, where a light twin's pilot starts raising the nose.
 	Approach.FlareHeight = 900.0;
