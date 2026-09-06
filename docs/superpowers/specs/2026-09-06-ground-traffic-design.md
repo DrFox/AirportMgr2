@@ -1,6 +1,7 @@
 # Ground Traffic — Design
 
-**Status:** design. Milestone 2 of `2026-09-05-game-systems-map-design.md` §3.8 and §5.3.
+**Status:** implemented 2026-09-06 (feature/m2-ground-traffic; PR pending). Milestone 2 of
+`2026-09-05-game-systems-map-design.md` §3.8 and §5.3.
 The one new system inside Airside; everything lands in `Plugins/Airside`, `Model/` first.
 
 **Goal:** two aircraft on the same field no longer pass through each other. An aircraft
@@ -31,6 +32,27 @@ vehicles clears itself or clears when the player builds a way out.
 Rejected outright: time-windowed reservations (resource × time interval, CBS-style). Correct
 and heavy; the speed profile would have to be honoured in time as well as distance. Named so
 it is not rediscovered.
+
+### 1.1 Amendments made during execution
+
+Design-level deviations found while implementing, each recorded in place at its section with
+a dated paragraph; listed here so a reviewer does not have to diff the whole document:
+
+- `FRoadAgent::CrossingRunway` — a runway chain stays occupied from a granted bar (or a
+  landing's `Vacated` handover) until the agent's tail is geometrically clear of the strip,
+  not just past the exit node. §3.1.
+- The hold above is armed only when the step leaving a bar leads ONTO the strip; a bar on the
+  exit side of a two-bar crossing arms nothing. §3.1.
+- The hold follows the agent's BODY, not a node: `ECrossingPhase { None, Committed, OnStrip }`
+  sampled at nose/centre/tail on the one guideline polyline. §3.1.
+- `OnGraphRebuilt` clears edge and node claims only; surface claims (keyed on the surface
+  model, not the guideline graph) survive a rebuild. §6.
+- A rebuild that cannot replan an agent's route TRUNCATES it to the last live node instead of
+  parking it where it stands; a goal node that no longer resolves keeps its old handle. §6.
+
+Other execution-time findings (implementation nuances that did not change spec text, plan
+corrections, and test-fixture decisions) are in
+`.superpowers/sdd/2026-09-06-m2-ground-traffic/rulings.md`.
 
 ---
 
