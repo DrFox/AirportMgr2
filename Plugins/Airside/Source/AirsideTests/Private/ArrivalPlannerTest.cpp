@@ -194,9 +194,14 @@ bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 	const FGuidelineNode* ExitNode = Airport.Network->GetGuidelineNode(Plan.Exit);
 	if (TestNotNull(TEXT("the chosen exit resolves to a guideline node"), ExitNode))
 	{
-		TestEqual(TEXT("and it sits at exit 1's JUNCTION, not exit 2's - the earlier one, ")
-			TEXT("despite its longer taxi to the stand"),
-			ExitNode->Position, Airport.Exit1At);
+		// At exit 1's ARC START since 2026-09-06: the builder splits the runway ExitLength
+		// (the profile default, 6000) before the junction and that is where the taxi-in
+		// leaves the centreline, so the earliest usable node is just short of the junction,
+		// on the centreline, and never at exit 2's.
+		const double Along = ExitNode->Position.X - Airport.Exit1At.X;
+		TestTrue(FString::Printf(TEXT("and it sits at exit 1's JUNCTION (its arc start, %.0f uu short of it), ")
+			TEXT("not exit 2's - the earlier one, despite its longer taxi to the stand"), -Along),
+			Along <= 0.0 && Along >= -6000.0 - 1.0 && FMath::Abs(ExitNode->Position.Y) < 1.0);
 	}
 
 	return true;

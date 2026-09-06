@@ -160,18 +160,24 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// Started from Airframe.Ground, NOT Follower.Ground: the follower has never been
 		// started before this point, so its Ground is still the struct default (Accel 100,
 		// SpeedCap 1000, turn rate 10) rather than the airframe's figures - see issue #27.
+		//
+		// AT THE ROLLOUT'S SPEED, not from rest: the landing run brakes to the taxi cap
+		// before VacateAt and the exit arc begins there, so the taxi carries on at the
+		// speed the wheels already have. Starting from zero here was the "stops dead at the
+		// exit, turns on the spot, pulls away" the player reported on 2026-09-06.
 		Phase = EAgentPhase::Taxiing;
-		Follower.Start(TaxiInPlan, Airframe.Ground);
+		// Speed, heading AND distance carry over: the rollout crossed VacateAt last frame
+		// and stopped this far past it, which is this far along the arc.
+		Follower.Start(TaxiInPlan, Airframe.Ground, Arrival.Speed, LastMotion.Heading,
+			Arrival.Travelled - Arrival.VacateAt);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Vacated; taxiing in."));
 
-		// THIS FRAME'S ARRIVAL ADVANCE DECLINED, so - same rule as every other decline -
-		// LastMotion is handed back UNRECOMPUTED rather than described afresh. Recomputing
-		// it here would read GroundSpeed off the follower Start() just reset to zero,
-		// which would report the aircraft as instantaneously stopping for one frame before
-		// its taxi speed ramps back up - a glitch the old Tick avoided by leaving the view
-		// untouched on exactly this frame.
-		OutMotion = LastMotion;
-		return true;
+		// AND TAXI THIS SAME FRAME. The landing run declined this frame without moving (it
+		// stops the tick AFTER it crosses VacateAt), so the frame's dt is the follower's.
+		// This used to hand LastMotion back unrecomputed, which hid the follower's speed
+		// reset to zero for one frame; a frame with no motion at all is exactly the step
+		// the handover-continuity test exists to catch.
+		[[fallthrough]];
 	}
 
 	case EAgentPhase::Taxiing:

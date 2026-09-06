@@ -87,6 +87,24 @@ public:
 	 */
 	UPROPERTY(EditAnywhere) bool bContinuousThroughJunctions = false;
 
+	/**
+	 * How far before a junction an exit from THIS profile begins, uu, measured along the
+	 * centreline - and the same distance back along the taxiway that meets it. Read only
+	 * from a continuous profile: the runway decides its own exits, per profile, so an 18 m
+	 * strip and a 45 m one can differ from the details panel.
+	 *
+	 * A LENGTH, NOT A RADIUS, deliberately. Equal tangent lengths L either side of an angle
+	 * theta make a near-circular arc of radius L / tan(theta / 2): at 60 m a 30 degree exit
+	 * gets 224 m, 45 degrees gets 145 m, 90 degrees gets 60 m. That is how real exits are
+	 * graded - rapid exits shallow and wide, right-angle exits tight - from one number the
+	 * player can read off the ground. A fixed radius would hand a 90 degree exit a 150 m
+	 * sweep that eats the taxiway.
+	 *
+	 * Per-aircraft figures are never consulted: taxi lines are infrastructure, sized for the
+	 * largest aircraft admitted, not for the one taxiing. See the runway exit arcs spec.
+	 */
+	UPROPERTY(EditAnywhere) double ExitLength = 6000.0;
+
 	double GetTotalWidth() const;
 	double GetHalfWidthLeft() const;
 	double GetHalfWidthRight() const;

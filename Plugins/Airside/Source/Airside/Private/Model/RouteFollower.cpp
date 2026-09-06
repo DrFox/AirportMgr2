@@ -2,27 +2,50 @@
 
 #include "Solve/GuidelineGeom.h"
 
-void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround)
+void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround, double InitialSpeed,
+	TOptional<double> InitialHeading, double InitialTravelled)
 {
 	Plan = InPlan;
-	Travelled = 0.0;
+	// Normally the polyline's first point. A handover from the rollout arrives a frame's
+	// worth PAST the plan's start - the landing run stops the tick after it crosses
+	// VacateAt, not on it - and restarting from zero threw that overshoot away: measured
+	// as 1.9 uu of motion on a frame that should have carried 16.7, an 890 uu/s step
+	// (2026-09-06). The overshoot is handed in and the taxi begins that far along the arc.
+	Travelled = FMath::Max(InitialTravelled, 0.0);
 	Ground = InGround;
-
-	// FROM REST. An aeroplane on a stand is stopped, and snapping to taxi speed on the first
-	// frame is the same defect as the corner this class was just taught about - an
-	// acceleration no airframe has - only at the one moment the player is certain to be
-	// looking, because they just dispatched it.
-	Speed = 0.0;
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
 	Profile.Build(Plan.Polyline, Ground);
 
+	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
+	// on the first frame is the same defect as the corner this class was just taught about
+	// - an acceleration no airframe has - only at the one moment the player is certain to
+	// be looking, because they just dispatched it.
+	//
+	// FROM THE CALLER'S SPEED WHEN IT HAS ONE. The Vacated handover used to start the taxi
+	// from rest while the rollout had just handed over at taxi speed, so the aircraft
+	// stopped dead at the exit for a frame and pulled away again (2026-09-06). Clamped to
+	// what the route permits at its first vertex, so a handover can never begin above the
+	// speed the profile would have braked to - the profile is the authority on speed,
+	// this is only where the number starts.
+	Speed = FMath::Clamp(InitialSpeed, 0.0, Profile.LimitAt(0.0));
+
 	// Seeded from the line, not left at zero. An agent that starts facing due east and
 	// slews to its actual heading pirouettes on the stand the instant it is dispatched -
 	// which reads as a routing bug rather than as an uninitialised field.
+	//
+	// OR FROM THE CALLER'S HEADING when it has one: a handover from the rollout arrives
+	// pointing down the runway, and the arc's first sampled span is a degree or two off
+	// that. Seeding from the line would turn the nose by that much in one frame; seeding
+	// from the aircraft lets the slew below close the gap at the airframe's rate, which
+	// is what heading-as-state exists to do.
 	FVector2D Unused;
-	if (!GuidelineGeom::PointAtDistance(Plan.Polyline, 0.0, Unused, Heading))
+	if (InitialHeading.IsSet())
+	{
+		Heading = InitialHeading.GetValue();
+	}
+	else if (!GuidelineGeom::PointAtDistance(Plan.Polyline, 0.0, Unused, Heading))
 	{
 		Heading = 0.0;
 	}

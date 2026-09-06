@@ -98,6 +98,15 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	// aircraft stops mid-edge where nobody can turn - a different, later story.
 	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
 	Runway->bContinuousThroughJunctions = true;
+	// THE GEOMETRY THE DEADLOCK HAPPENED ON. With exit arcs (ExitLength > 0, the default
+	// since 2026-09-06) the bar at H sits 60 m down the taxiway, an aircraft refused there
+	// has its tail clear of the strip, the geometric release lets the runway go and no
+	// cycle forms at all - the arcs doing their job (the whole-run measurement is
+	// Airside.Model.Traffic.VacatedHandoverIsContinuous). The RESOLVER still has to break
+	// the cycle when a bar IS within a fuselage of the asphalt - a stub taxiway, a profile
+	// authored with a short exit, a hand-placed bar - so this replay keeps the straight
+	// stubs it was recorded on by turning the arcs off for this runway.
+	Runway->ExitLength = 0.0;
 	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
 
 	const FRoadNodeId W = Net->AddNode(FVector2D(-40000.0, 0.0));

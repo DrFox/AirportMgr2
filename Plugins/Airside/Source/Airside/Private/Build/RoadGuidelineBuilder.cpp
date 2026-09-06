@@ -5,6 +5,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -103,6 +104,145 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 
+	// EXIT ARCS. A continuous arm (a runway) is never cut, so its guideline ended ON the
+	// node - and a turn path whose control point is the node was then a straight line from
+	// the taxiway's cut point into the centreline, meeting it at the taxiway's angle with an
+	// instantaneous heading change (samples/runwayexits.png, 2026-09-06). The taxiway-to-
+	// taxiway turn at the same node was a proper arc, because BOTH its ends sat back from the
+	// node. So: at a MIXED node - at least one continuous arm and at least one that is not -
+	// the continuous arm's guideline is split ExitLength before the node and the turns attach
+	// there, and the non-continuous arm's guideline ends ExitLength back from the node. The
+	// same control-at-the-node quadratic then comes out tangent at both ends. See the runway
+	// exit arcs spec (docs/superpowers/specs/2026-09-06-runway-exit-arcs-design.md).
+	//
+	// Keyed by segment end with guideline index 0: every guideline of one end shares the
+	// one set-back, which is a property of the junction, not of the lane.
+	TMap<uint64, double> SetBack;
+	TSet<uint64> ContinuousEnds;
+	// Where a continuous arm's TURNS attach at a mixed node (the split node), as opposed to
+	// where its guideline ends (still the node, so the runway's own through-turn is intact).
+	TMap<uint64, FGuidelineNodeId> Attach;
+
+	for (const TPair<int32, FJunctionResult>& Pair : Solved.NodeResults)
+	{
+		const TArray<FRoadSegmentId>* ArmSegments = Solved.NodeArmSegments.Find(Pair.Key);
+		if (ArmSegments == nullptr || !Pair.Value.bValid
+			|| Pair.Value.Arms.Num() != ArmSegments->Num())
+		{
+			continue;
+		}
+		const FRoadNode* Node = Network.GetNodes().IsValidIndex(Pair.Key)
+			? &Network.GetNodes()[Pair.Key] : nullptr;
+		if (Node == nullptr || !Node->bAlive)
+		{
+			continue;
+		}
+		FRoadNodeId NodeId;
+		NodeId.Index = Pair.Key;
+		NodeId.Generation = Node->Generation;
+
+		int32 ContinuousArms = 0;
+		double ExitLength = 0.0;
+		for (const FRoadSegmentId& ArmSeg : *ArmSegments)
+		{
+			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+			if (Profile != nullptr && Profile->bContinuousThroughJunctions)
+			{
+				++ContinuousArms;
+				// The runway decides its exits. Two runways crossing a taxiway at one node
+				// would disagree only by profile; the longer wins, which is the safer arc.
+				ExitLength = FMath::Max(ExitLength, Profile->ExitLength);
+			}
+		}
+		if (ContinuousArms == 0 || ContinuousArms == ArmSegments->Num() || ExitLength <= 0.0)
+		{
+			continue;
+		}
+
+		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
+		{
+			const FRoadSegmentId ArmSeg = (*ArmSegments)[ArmIndex];
+			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
+			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+			if (Arm == nullptr || Profile == nullptr)
+			{
+				continue;
+			}
+			const bool bContinuous = Profile->bContinuousThroughJunctions;
+			const bool bEndA = (Arm->A == NodeId);
+
+			// The guideline's own length, cut point to cut point: the set-back may not eat
+			// more than 45 percent of it, so two exits on one short runway half, or a stub
+			// taxiway, keep an arc at each end rather than crossing their own far end.
+			const FVector2D CutA = FRoadMeshBuilder::CutLinePoint(Arm->RightCutA, Arm->LeftCutA, 0.5);
+			const FVector2D CutB = FRoadMeshBuilder::CutLinePoint(Arm->LeftCutB, Arm->RightCutB, 0.5);
+			const double Chord = FVector2D::Distance(CutA, CutB);
+
+			double Length = ExitLength;
+			if (!bContinuous)
+			{
+				// Never inside the pavement cut it has today: the arc starts at or beyond
+				// where the straight stub used to.
+				Length = FMath::Max(Length, Pair.Value.Arms[ArmIndex].CutDistance);
+			}
+			Length = FMath::Min(Length, 0.45 * Chord);
+			if (Length <= 0.0)
+			{
+				continue;
+			}
+			const uint64 Key = EndKey(ArmSeg.Index, bEndA, 0);
+			SetBack.Add(Key, Length);
+			if (bContinuous)
+			{
+				ContinuousEnds.Add(Key);
+			}
+		}
+	}
+
+	// Splits a derived edge Length from one of its ends, exactly (de Casteljau; a runway's
+	// derived guideline is a straight chord, so the pieces are straight too). Both pieces
+	// keep the original's identity - DerivedFrom and index - which FindSparedEdge and the
+	// route search already tolerate, because FAnchorLink::Build has split taxiways for
+	// stand lead-ins this way since before there were exits. Returns the split node and
+	// hands back the id of the piece on the FAR side, so the other end can be split next.
+	auto SplitFromEnd = [&Network](FGuidelineEdgeId EdgeId, bool bFromA, double Length,
+		FGuidelineEdgeId& OutRest) -> FGuidelineNodeId
+	{
+		OutRest = EdgeId;
+		const FGuidelineEdge* Found = Network.GetGuidelineEdge(EdgeId);
+		if (Found == nullptr)
+		{
+			return FGuidelineNodeId();
+		}
+		const FGuidelineEdge Original = *Found;
+		const FVector2D PA = Network.GetGuidelineNode(Original.A)->Position;
+		const FVector2D PB = Network.GetGuidelineNode(Original.B)->Position;
+		const double Chord = FVector2D::Distance(PA, PB);
+		if (Chord <= Length || Chord <= 0.0)
+		{
+			return FGuidelineNodeId();
+		}
+		const double T = bFromA ? Length / Chord : 1.0 - Length / Chord;
+
+		FVector2D Mid, ControlLeft, ControlRight;
+		GuidelineGeom::Split(PA, Original.Control, PB, T, Mid, ControlLeft, ControlRight);
+		const FGuidelineNodeId Split = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
+
+		FGuidelineEdge Left = Original;
+		Left.B = Split;
+		Left.Control = ControlLeft;
+		FGuidelineEdge Right = Original;
+		Right.A = Split;
+		Right.Control = ControlRight;
+
+		Network.RemoveGuidelineEdge(EdgeId);
+		const FGuidelineEdgeId LeftId = Network.AddGuidelineEdge(MoveTemp(Left));
+		const FGuidelineEdgeId RightId = Network.AddGuidelineEdge(MoveTemp(Right));
+		OutRest = bFromA ? RightId : LeftId;
+		return Split;
+	};
+
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegment& Segment = Segments[Index];
@@ -151,10 +291,34 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 			// End B's cut line is authored from B's point of view, so its left is this
 			// segment's right walking A to B - swapped exactly as AddSegment swaps it.
-			const FVector2D AtA =
+			FVector2D AtA =
 				FRoadMeshBuilder::CutLinePoint(Segment.RightCutA, Segment.LeftCutA, Alpha);
-			const FVector2D AtB =
+			FVector2D AtB =
 				FRoadMeshBuilder::CutLinePoint(Segment.LeftCutB, Segment.RightCutB, Alpha);
+
+			// A taxiway meeting a runway ends where its exit arc begins - ExitLength back
+			// from the node along its own tangent - not at its pavement cut. The end node
+			// keeps its Origin, so a hold-short mark keyed by this end lands on the arc's
+			// start. The continuous arm is NOT moved here: its guideline still ends on the
+			// node and is split below instead, so the runway stays one line through.
+			const uint64 KeyA = EndKey(Index, true, 0);
+			const uint64 KeyB = EndKey(Index, false, 0);
+			if (const double* Back = SetBack.Find(KeyA); Back && !ContinuousEnds.Contains(KeyA))
+			{
+				if (const FRoadNode* NodeA = Network.GetNode(Segment.A))
+				{
+					AtA = NodeA->Position
+						+ Network.GetOutgoingTangent(SegmentId, Segment.A).GetSafeNormal() * (*Back);
+				}
+			}
+			if (const double* Back = SetBack.Find(KeyB); Back && !ContinuousEnds.Contains(KeyB))
+			{
+				if (const FRoadNode* NodeB = Network.GetNode(Segment.B))
+				{
+					AtB = NodeB->Position
+						+ Network.GetOutgoingTangent(SegmentId, Segment.B).GetSafeNormal() * (*Back);
+				}
+			}
 
 			FGuidelineEdge Edge;
 			Edge.A = Network.AddGuidelineNode(AtA);
@@ -188,7 +352,30 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Ends.Add(EndKey(Index, true,  Which), Edge.A);
 			Ends.Add(EndKey(Index, false, Which), Edge.B);
 
-			Network.AddGuidelineEdge(MoveTemp(Edge));
+			FGuidelineEdgeId EdgeId = Network.AddGuidelineEdge(MoveTemp(Edge));
+
+			// The runway side of the arc: split this half ExitLength from each mixed end and
+			// let the turns attach at the split. End A first, then B on whatever piece is
+			// now adjacent to B - two exits on one half must not split the same piece twice.
+			if (const double* Back = SetBack.Find(KeyA); Back && ContinuousEnds.Contains(KeyA))
+			{
+				FGuidelineEdgeId Rest;
+				const FGuidelineNodeId Split = SplitFromEnd(EdgeId, /*bFromA=*/true, *Back, Rest);
+				if (Split.IsSet())
+				{
+					Attach.Add(EndKey(Index, true, Which), Split);
+					EdgeId = Rest;
+				}
+			}
+			if (const double* Back = SetBack.Find(KeyB); Back && ContinuousEnds.Contains(KeyB))
+			{
+				FGuidelineEdgeId Rest;
+				const FGuidelineNodeId Split = SplitFromEnd(EdgeId, /*bFromA=*/false, *Back, Rest);
+				if (Split.IsSet())
+				{
+					Attach.Add(EndKey(Index, false, Which), Split);
+				}
+			}
 		}
 	}
 
@@ -244,10 +431,33 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 				for (int32 Which = 0; Which < Count; ++Which)
 				{
-					const FGuidelineNodeId* FromEnd =
-						Ends.Find(EndKey(FromSeg.Index, FromSegment->A == NodeId, Which));
-					const FGuidelineNodeId* ToEnd =
-						Ends.Find(EndKey(ToSeg.Index, ToSegment->A == NodeId, Which));
+					// A turn between a continuous arm and one that is not attaches to the
+					// continuous arm at its SPLIT node, ExitLength up the centreline, so the
+					// quadratic through the node is an arc. Two continuous arms (the runway's
+					// own halves) still meet at their node-ends: that is the zero-length
+					// through-turn that keeps the runway one line.
+					const bool bFromContinuous =
+						ContinuousEnds.Contains(EndKey(FromSeg.Index, FromSegment->A == NodeId, 0));
+					const bool bToContinuous =
+						ContinuousEnds.Contains(EndKey(ToSeg.Index, ToSegment->A == NodeId, 0));
+					const FGuidelineNodeId* FromEnd = nullptr;
+					const FGuidelineNodeId* ToEnd = nullptr;
+					if (bFromContinuous && !bToContinuous)
+					{
+						FromEnd = Attach.Find(EndKey(FromSeg.Index, FromSegment->A == NodeId, Which));
+					}
+					if (bToContinuous && !bFromContinuous)
+					{
+						ToEnd = Attach.Find(EndKey(ToSeg.Index, ToSegment->A == NodeId, Which));
+					}
+					if (FromEnd == nullptr)
+					{
+						FromEnd = Ends.Find(EndKey(FromSeg.Index, FromSegment->A == NodeId, Which));
+					}
+					if (ToEnd == nullptr)
+					{
+						ToEnd = Ends.Find(EndKey(ToSeg.Index, ToSegment->A == NodeId, Which));
+					}
 					if (FromEnd == nullptr || ToEnd == nullptr)
 					{
 						continue;

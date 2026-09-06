@@ -92,7 +92,8 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	UPROPERTY() FSpeedProfile Profile;
 
-	void Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround);
+	void Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround, double InitialSpeed = 0.0,
+		TOptional<double> InitialHeading = TOptional<double>(), double InitialTravelled = 0.0);
 
 	/**
 	 * Moves forward by DeltaSeconds and reports where that leaves the agent.
