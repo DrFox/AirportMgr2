@@ -2590,6 +2590,22 @@ git add -A Plugins/Airside && git commit -m "feat(airside): agents survive a gui
 
 ---
 
+### Task 9b: Split `ClaimAhead` (added during execution)
+
+*Added 2026-09-06 by controller ruling after Task 7's review measured `UGroundTraffic::ClaimAhead` at ~630 lines in a 1210-line file — the "every feature enters through one door" failure CLAUDE.md records for the actor.*
+
+**Files:**
+- Modify: `Private/Model/GroundTraffic.cpp` (extract file-local helpers), `Public/Model/GroundTraffic.h` (private declarations if any helper needs members)
+
+**Interfaces:** none new. Pure refactor: no behaviour change.
+
+- [ ] **Step 1: Count** `UE_LOG(` and comment lines in `GroundTraffic.cpp`; record.
+- [ ] **Step 2: Extract** at least: the non-Taxiing surface branch; the route-distance → edge-distance interval and boundary mapping (forward and reversed); the refusal → `StopWithin` switch; the crossing-hold arm/clear block. Each becomes a named function in the anonymous namespace or a private static, with its WHY comments moved intact. `ClaimAhead` reads as the numbered sequence of calls.
+- [ ] **Step 3: Build; `-Filter Airside.Model.Traffic`; full run** — the count is unchanged from Task 9's; 0 failed, 0 crashed.
+- [ ] **Step 4: Recount**; neither figure fell. Commit: `refactor(airside): ClaimAhead split into its named steps (logs N->N, comments N->M)`.
+
+---
+
 ### Task 10: Hold-short marks — model, builder, facade
 
 **Files:**
