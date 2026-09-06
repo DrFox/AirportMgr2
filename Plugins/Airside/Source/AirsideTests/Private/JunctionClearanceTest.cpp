@@ -129,10 +129,19 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 
 		const FRoadSnapChain Chain;
 
-		// Placed on the bisector, so the cursor is inside the junction rather than sitting
-		// on either arm's centreline where the segment rule would have claimed it anyway.
-		const double Inside = (150.0 + Reach) * 0.5;
-		const FVector2D Cursor = FVector2D(1.0, 1.0).GetSafeNormal() * Inside;
+		// Placed on the east arm's PAVEMENT - beyond NodeRadius, short of the cut, a little
+		// off the centreline - where the segment rule declines (it stands off a junction by
+		// the arm's cut) and only the node rule can answer. It used to sit on the bisector,
+		// which at a right angle is the concave notch BEYOND the inner fillet: open ground the
+		// old circle rule over-claimed, and exactly where a road could not be started from
+		// (2026-09-06, "same node"). The claim is the junction's polygon now.
+		//
+		// NodeReach is the cut plus a half-width; the junction's polygon runs to the CUT, and
+		// the segment's own pavement starts there. Halfway between NodeRadius and the cut is
+		// on the junction; halfway between the cut and the reach is on the segment.
+		const double HalfWidth = 100.0;   // ClearanceProfile is 200 wide
+		const double Cut = Reach - HalfWidth;
+		const FVector2D Cursor((150.0 + Cut) * 0.5, 30.0);
 
 		if (Reach > 150.0)
 		{
@@ -140,6 +149,14 @@ bool FJunctionClearanceTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("a cursor inside the junction resolves to the junction's node"),
 				Result.Kind == ERoadSnapKind::Node);
 			TestTrue(TEXT("and names that node, not a new one"), Result.Node == Centre);
+
+			// The band the old rules left to nobody: past the cut, short of the reach. It is
+			// the arm's own pavement, so the segment rule must claim it as a split - never
+			// Free, which built a second node inside existing concrete.
+			const FVector2D InBand((Cut + Reach) * 0.5, 30.0);
+			const FRoadSnapResult Band = Chain.Resolve(*Net, InBand, Settings);
+			TestTrue(TEXT("a cursor on the arm just past the junction's cut resolves to the segment"),
+				Band.Kind == ERoadSnapKind::Segment);
 		}
 		else
 		{

@@ -337,3 +337,22 @@ bool RoadGeom::PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector
 	}
 	return bInside;
 }
+
+bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, double Theta,
+	double& OutAlongA, double& OutAlongB)
+{
+	// Arm A along +X, arm B at Theta. The inner edge of A is y = HalfWidthA; the inner edge
+	// of B is B's line offset by HalfWidthB towards A. Intersecting them gives, along each
+	// arm, (other half-width + own half-width * cos Theta) / sin Theta - which reduces to the
+	// familiar w / tan(Theta / 2) when both widths are equal.
+	const double SinTheta = FMath::Sin(Theta);
+	if (SinTheta < 1e-9)
+	{
+		OutAlongA = OutAlongB = TNumericLimits<double>::Max();
+		return false;
+	}
+	const double CosTheta = FMath::Cos(Theta);
+	OutAlongA = FMath::Max(0.0, (HalfWidthB + HalfWidthA * CosTheta) / SinTheta);
+	OutAlongB = FMath::Max(0.0, (HalfWidthA + HalfWidthB * CosTheta) / SinTheta);
+	return true;
+}

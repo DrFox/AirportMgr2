@@ -65,7 +65,7 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 	{
 		// Dead end: cut back by the arm's own half-width so an end cap has room.
 		const FJunctionArm& Arm = Input.Arms[0];
-		Result.Arms[0].CutDistance = FMath::Max3(Arm.HalfWidthLeft, Arm.HalfWidthRight, 0.0);
+		Result.Arms[0].CutDistance = FMath::Min(FMath::Max3(Arm.HalfWidthLeft, Arm.HalfWidthRight, 0.0), Arm.MaxCutDistance);
 		Result.bValid = true;
 	}
 	else

@@ -127,6 +127,18 @@ namespace RoadGeom
 	 */
 	AIRSIDE_API FFillet SolveFillet(const FRay2D& A, const FRay2D& B, double Radius);
 
+	/**
+	 * How far along each arm the inner corner between two arms sits with NO fillet at all -
+	 * the floor no radius can go below. Theta is the angle between the two outgoing tangents
+	 * (0 = coincident, PI = straight through). Returns false, with both reaches infinite,
+	 * when the arms are so nearly coincident that the offset edges never meet.
+	 *
+	 * Closed form of the same intersection SolveFillet finds at Radius 0, kept here so the
+	 * placement rule can ask "will this corner ever fit" without building a junction input.
+	 */
+	AIRSIDE_API bool CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, double Theta,
+		double& OutAlongA, double& OutAlongB);
+
 	/** Sample an arc from TangentA to TangentB about Centre, inclusive of both ends. */
 	AIRSIDE_API void SampleArc(const FFillet& Fillet, int32 SegmentCount, TArray<FVector2D>& OutPoints);
 

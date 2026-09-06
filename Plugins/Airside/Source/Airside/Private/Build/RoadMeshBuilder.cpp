@@ -1,7 +1,10 @@
 #include "Build/RoadMeshBuilder.h"
 
+#include "AirsideLog.h"
+
 #include "Build/RoadProfileBands.h"
 #include "CompGeom/PolygonTriangulation.h"
+#include "IndexTypes.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
@@ -183,6 +186,66 @@ void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C, int32 MaterialID)
 	Buffers.MaterialIDs.Add(MaterialID);
 }
 
+void FRoadMeshBuilder::AddJunctionByEarClipping(const URoadNetwork& Network, int32 NodeIndex,
+	const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments)
+{
+	// The rim is every boundary point but the trailing apex slot - see SolveBoundary.
+	const int32 RimCount = Junction.Boundary.Num() - 1;
+	TArray<FVector2D> Rim;
+	Rim.Reserve(RimCount);
+	for (int32 Slot = 0; Slot < RimCount; ++Slot)
+	{
+		Rim.Add(Junction.Boundary[Slot]);
+	}
+
+	TArray<UE::Geometry::FIndex3i> Triangles;
+	PolygonTriangulation::TriangulateSimplePolygon<double>(Rim, Triangles, /*bOrientAsHoleFill*/ false);
+	if (Triangles.Num() == 0)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("Node %d: junction rim of %d points could not be triangulated; the corner is not paved"),
+			NodeIndex, RimCount);
+		return;
+	}
+
+	int32 StripSlot = 0;
+	int32 FanSlot = 0;
+	JunctionSlots(Network, ArmSegments, StripSlot, FanSlot);
+
+	TArray<int32> RimIndices;
+	RimIndices.Reserve(RimCount);
+	for (const FVector2D& Point : Rim)
+	{
+		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
+	}
+
+	// Emitted in the same order the fan path hands AddTriangle - counter-clockwise in the
+	// road plane - so the swap AddTriangle applies makes them face UP like every other
+	// triangle here. The triangulator's own orientation is not relied on.
+	int32 Emitted = 0;
+	for (const UE::Geometry::FIndex3i& Tri : Triangles)
+	{
+		const FVector2D& A = Rim[Tri.A];
+		const FVector2D& B = Rim[Tri.B];
+		const FVector2D& C = Rim[Tri.C];
+		const double Area2 = (B.X - A.X) * (C.Y - A.Y) - (B.Y - A.Y) * (C.X - A.X);
+		if (FMath::Abs(Area2) < UE_KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		if (Area2 > 0.0)
+		{
+			AddTriangle(RimIndices[Tri.A], RimIndices[Tri.B], RimIndices[Tri.C], FanSlot);
+		}
+		else
+		{
+			AddTriangle(RimIndices[Tri.A], RimIndices[Tri.C], RimIndices[Tri.B], FanSlot);
+		}
+		++Emitted;
+	}
+	UE_LOG(LogRoadMesh, Log, TEXT("Node %d: rim not star-shaped from any apex; ear-clipped %d triangles"), NodeIndex, Emitted);
+}
+
 void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments)
 {
@@ -195,8 +258,22 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 	// result beats a silently inverted one". Testing Boundary.Num() instead would resurrect
 	// exactly the inverted fan the solver declined to emit, and the fan below trusts the
 	// star-shaped guarantee that veto stands for.
-	if (!Junction.bValid || Junction.Triangles.Num() == 0 || Junction.Boundary.Num() < 4)
+	if (!Junction.bValid || Junction.Boundary.Num() < 4)
 	{
+		return;
+	}
+
+	if (Junction.Triangles.Num() == 0)
+	{
+		// The solver's veto, for the SECOND of its two cases: a rim no apex can see whole.
+		// A bend whose outer fillet bulges past the node puts the node outside its own rim,
+		// and the centroid of a bent rim is outside it too - so the fan was refused and the
+		// corner pavement simply went missing, silently (2026-09-06: "the road disappears at
+		// an acute junction", after the folded ribbon was fixed). Ear-clipping needs no apex
+		// and lives here rather than in the solver because it comes from GeometryCore, which
+		// Solve/ may not include. No shoulder ring on this path: the ring construction relies
+		// on the star shape the fan needed, and pavement without a shoulder blend beats a hole.
+		AddJunctionByEarClipping(Network, NodeIndex, Junction, ArmSegments);
 		return;
 	}
 
@@ -384,6 +461,26 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	// `along` runs from the A-end cut to the B-end cut, so it measures the ribbon rather
 	// than the node-to-node distance. Markings therefore start where the surface starts.
 	const double RibbonLength = FVector2D::Distance(LeftStart, LeftEnd);
+
+	// A FOLDED RIBBON IS NEVER EMITTED. If the two cut centres have passed each other the
+	// triangles below would wind backwards and face down - the road that "disappeared under
+	// the surface" on 2026-09-06. The solver now refuses such nodes; this is the last line
+	// of defence, and it says so rather than drawing it.
+	{
+		const FRoadNode* NodeA = Network.GetNode(Segment->A);
+		const FRoadNode* NodeB = Network.GetNode(Segment->B);
+		const FVector2D CentreStart = (Segment->LeftCutA + Segment->RightCutA) * 0.5;
+		const FVector2D CentreEnd = (Segment->LeftCutB + Segment->RightCutB) * 0.5;
+		if (NodeA != nullptr && NodeB != nullptr
+			&& FVector2D::DotProduct(CentreEnd - CentreStart, NodeB->Position - NodeA->Position) <= 0.0)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Segment %d not drawn: its two cuts have crossed (trims %.0f + %.0f over %.0f uu) - ")
+				TEXT("the ribbon would be folded and face down"),
+				SegmentId.Index, Segment->TrimA, Segment->TrimB, FVector2D::Distance(NodeA->Position, NodeB->Position));
+			return;
+		}
+	}
 
 	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile, Materials);
 	const int32 RailCount = Bands.Alphas.Num();

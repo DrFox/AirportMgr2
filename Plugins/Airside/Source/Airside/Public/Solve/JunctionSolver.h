@@ -14,6 +14,15 @@ struct FJunctionArm
 	double FilletRadius   = 0.0;
 
 	/**
+	 * The farthest this arm's cut may sit from the node, uu. Honoured by a DEAD END, whose
+	 * cap has no corner to respect and can simply be drawn shorter; a corner keeps its cut
+	 * at its tangent points and is fitted by shrinking the radius instead (see
+	 * FRoadNetworkSolver). Unbounded by default: a caller with no segment length in hand
+	 * gets the cut the half-width asks for.
+	 */
+	double MaxCutDistance = TNumericLimits<double>::Max();
+
+	/**
 	 * This arm PASSES THROUGH the node rather than ending at it, so it is never trimmed.
 	 *
 	 * A runway is the case: its edges run unbroken past an exit, and the fillets belong to

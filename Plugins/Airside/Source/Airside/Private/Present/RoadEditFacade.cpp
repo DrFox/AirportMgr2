@@ -11,6 +11,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/RoadPlacement.h"
 #include "Solve/RunwayDesignator.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/RoadEditHistory.h"
@@ -536,6 +537,15 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		{
 			return false;
 		}
+	}
+
+	// The corners a move would make, here and at every neighbour, refused before anything
+	// changes - so a drag cannot build the corner the solver would fail and leave a road
+	// undrawn (2026-09-06). Judged at the PROPOSED position without moving first, because a
+	// move-then-check would need an undo the drag never asked for.
+	if (!RoadPlacement::NodeCornersFit(*Owner.Network, Node, To))
+	{
+		return false;
 	}
 
 	// Joins a drag already in progress, so the whole drag is one undo step; on its own it

@@ -40,26 +40,24 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 			continue;
 		}
 
-		double RadiusSquared = FixedSquared;
+		bool bClaimed = DistanceSquared <= FixedSquared;
 
 		// Solved ONLY when the fixed radius has already declined. The common case - a
 		// cursor sitting on a node - never pays for a junction solve at all, and the rest
-		// costs one SolveCuts per candidate node on a graph of tens of nodes.
-		if (Settings.JunctionSnapFactor > 0.0 && DistanceSquared > FixedSquared)
+		// costs one solve per candidate node on a graph of tens of nodes.
+		//
+		// The claim is the junction's PAVEMENT, not a circle of its reach. A circle of the
+		// deepest cut covered open ground beside a tight corner, and the cursor a hand's
+		// width off the concrete still snapped to the node (2026-09-06, "same node").
+		if (!bClaimed && Settings.JunctionSnapFactor > 0.0)
 		{
 			FRoadNodeId Id;
 			Id.Index = Index;
 			Id.Generation = Nodes[Index].Generation;
-
-			const double Reach = FRoadNetworkSolver::NodeReach(Network, Id)
-				* Settings.JunctionSnapFactor;
-			if (Reach > Fixed)
-			{
-				RadiusSquared = Reach * Reach;
-			}
+			bClaimed = FRoadNetworkSolver::NodeClaims(Network, Id, Cursor, Settings.JunctionSnapFactor);
 		}
 
-		if (DistanceSquared <= RadiusSquared)
+		if (bClaimed)
 		{
 			BestSquared = DistanceSquared;
 			Best = Index;
@@ -136,16 +134,22 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 		// A split this close to an end leaves a stub the solver cannot trim: its two cut
 		// lines would cross, and the junction it feeds would fold through itself.
 		//
-		// The real exclusion is the endpoint's own junction reach - a split inside that
-		// puts a new node in pavement that already exists, which is the same overlap the
-		// node rule above now absorbs. MinSplitFromEndpoint survives as the floor for an
-		// endpoint that paves nothing to reach with.
+		// The real exclusion is the endpoint's own junction - a split inside it puts a new
+		// node in pavement that already exists, which is the overlap the node rule above
+		// absorbs. Stood off by the arm's CUT, which is exactly where the junction's polygon
+		// ends and this segment's pavement begins: NodeReach added a half-width to that and
+		// left a band of segment pavement claimed by neither rule, where a click built a node
+		// inside existing concrete (2026-09-06). MinSplitFromEndpoint survives as the floor
+		// for an endpoint that paves nothing to stand off from.
+		FRoadSegmentId SegmentId;
+		SegmentId.Index = Index;
+		SegmentId.Generation = Segment.Generation;
 		const double ClearA = FMath::Max(
 			Settings.MinSplitFromEndpoint,
-			FRoadNetworkSolver::NodeReach(Network, Segment.A) * Settings.JunctionSnapFactor);
+			FRoadNetworkSolver::ArmCutDistance(Network, SegmentId, Segment.A) * Settings.JunctionSnapFactor);
 		const double ClearB = FMath::Max(
 			Settings.MinSplitFromEndpoint,
-			FRoadNetworkSolver::NodeReach(Network, Segment.B) * Settings.JunctionSnapFactor);
+			FRoadNetworkSolver::ArmCutDistance(Network, SegmentId, Segment.B) * Settings.JunctionSnapFactor);
 
 		if (FVector2D::Distance(Point, EndA->Position) < ClearA
 			|| FVector2D::Distance(Point, EndB->Position) < ClearB)

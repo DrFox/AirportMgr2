@@ -16,6 +16,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
@@ -437,6 +438,15 @@ FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
 	FRoadPlacementLimits Limits;
 	Limits.MinSegmentLength = MinSegmentLength;
 	Limits.MinTurnDegrees = MinTurnDegrees;
+	// The corner-fit rule needs the width of the road about to be drawn, which only the
+	// actor's profile resolver knows.
+	if (Target != nullptr)
+	{
+		if (const URoadProfile* Profile = Target->ResolveProfile())
+		{
+			Limits.NewRoadHalfWidth = FMath::Max(Profile->GetHalfWidthLeft(), Profile->GetHalfWidthRight());
+		}
+	}
 	return Limits;
 }
 
