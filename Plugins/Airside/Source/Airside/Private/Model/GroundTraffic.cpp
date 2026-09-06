@@ -78,7 +78,36 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		*RunwayDesignator::ToPairText(Plan.Direction), Plan.RunwayLength, Plan.Needed,
 		Plan.ExitOrdinal, Plan.ExitCount, Plan.TaxiIn.Length);
 
-	return Admit(MoveTemp(Agent));
+	const int32 Id = Admit(MoveTemp(Agent));
+
+	// THE CLAIM IS RAISED HERE, NOT ON THE NEXT TICK'S CLAIM PASS - the same rule, and the
+	// same reason, as the Taxiing -> Departing handover below in Advance. Waiting a frame
+	// leaves the strip unheld with an aeroplane already committed to it, and DispatchArrival
+	// is exactly the call that reads the table BETWEEN ticks (ArrivalPlanner::Plan, above):
+	// a player pressing 7 twice in one frame had two aircraft cleared onto one runway, both
+	// planned against a table that said it was free. Nothing about "the next Advance will fix
+	// it" helps, because the second landing was already planned by then.
+	//
+	// FROM Plan.RunwayChain and not from the agent, which has just been moved into the array;
+	// they are the same chain - see Agent.RunwayHeld above.
+	//
+	// THE RESULT IS NOT ACTED ON, for the reason HoldRunwayOnly gives: a table cannot tell an
+	// aircraft on short final to stop, and the landing was already refused at the door if any
+	// segment was held. Nor is it logged: unlike the departure handover, a Held here says
+	// nothing new - ArrivalPlanner::Plan asked the same question of the same table three
+	// statements ago and refused on it.
+	for (const FRoadSegmentId Segment : Plan.RunwayChain)
+	{
+		FTrafficClaim Claim;
+		Claim.AgentId = Id;
+		Claim.Resource = FTrafficResource::OfSurface(Segment);
+		Claim.bOccupied = true;
+		Claim.Rank = TraversalPriority(ETraversalClass::Aircraft);
+		FTrafficClaim Blocker;
+		Occupancy.TryClaim(Claim, Blocker);
+	}
+
+	return Id;
 }
 
 int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,

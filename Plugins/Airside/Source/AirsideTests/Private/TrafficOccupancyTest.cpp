@@ -215,6 +215,28 @@ bool FTrafficOccupancyReleaseGuidelineClaimsTest::RunTest(const FString& Paramet
 	// reader who found only one of them would reasonably assume it was the only one.
 	Table.Clear();
 	TestEqual(TEXT("Clear takes the surfaces too"), Table.GetClaims().Num(), 0);
+
+	// AND THE PER-AGENT FORM, which is what a STRANDING gives back: one agent's guidelines,
+	// nobody else's, and not its runway. ReleaseAll was called at both stranding sites and
+	// took the strip claim of an aircraft standing on the asphalt with it - a landing could
+	// then be cleared onto it, the same window ReleaseGuidelineClaims exists to keep shut.
+	Table.TryClaim(M2OccNodeClaim(1, 3, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccEdgeClaim(1, 7, 0.0, 1000.0, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccSurfaceClaim(1, 2, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(5, 9, /*bOccupied=*/false, 2), Blocker);
+	Table.TryClaim(M2OccSurfaceClaim(5, 4, /*bOccupied=*/false, 2), Blocker);
+
+	Table.ReleaseGuidelineClaimsOf(1);
+
+	TestFalse(TEXT("the stranded agent's node goes"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(3)), 0));
+	TestFalse(TEXT("and the edge under it: it will never drive that line"),
+		Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(7)), 0));
+	TestTrue(TEXT("but the runway it is STANDING on stays held: a dead plan does not move a body"),
+		Table.IsHeld(FTrafficResource::OfSurface(M2OccSurface(2)), 0));
+	TestTrue(TEXT("and another agent's node is untouched - this is ONE agent, not a rebuild"),
+		Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 0));
+	TestTrue(TEXT("nor is another agent's runway"), Table.IsHeld(FTrafficResource::OfSurface(M2OccSurface(4)), 0));
+	TestEqual(TEXT("exactly the two guideline claims of agent 1 went"), Table.GetClaims().Num(), 3);
 	return true;
 }
 

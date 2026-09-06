@@ -195,13 +195,25 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	// 281 uu, never closer than 711 uu to the aircraft. Half the cap is the threshold
 	// because it is well clear of both the 1000 it was doing and the 335 it came down to,
 	// so this fails if the van merely dawdles and if it does not slow at all.
+	// FOUND BEFORE THEY ARE READ. A run loop can end with an agent removed - a phase change
+	// to Gone drops it - and every line below dereferences the result, so an unlucky failure
+	// here would be a CRASHED test rather than a failed one, which the runner has to diff the
+	// log to notice at all.
+	const FRoadAgent* PlaneNow = Traffic->FindAgent(Plane);
+	const FRoadAgent* VanNow = Traffic->FindAgent(Van);
+	if (!TestNotNull(TEXT("the aircraft is still there to be asked about"), PlaneNow)
+		|| !TestNotNull(TEXT("and the van"), VanNow))
+	{
+		return false;
+	}
+
 	TestTrue(TEXT("the van yielded: its speed fell below half its taxi cap while blocked"),
-		VanMinSpeedWhileWaiting < 0.5 * Traffic->FindAgent(Van)->Follower.Ground.Taxi.SpeedCap);
+		VanMinSpeedWhileWaiting < 0.5 * VanNow->Follower.Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
 	TestTrue(FString::Printf(TEXT("never closer than the van's own footprint (%.0f uu)"), MinSeparation), MinSeparation >= Traffic->Rules.VehicleFootprint - 1.0);
-	TestEqual(TEXT("both arrive"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
-	TestEqual(TEXT("both arrive (van)"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
+	TestEqual(TEXT("both arrive"), PlaneNow->Phase, EAgentPhase::Parked);
+	TestEqual(TEXT("both arrive (van)"), VanNow->Phase, EAgentPhase::Parked);
 	return true;
 }
 
@@ -671,6 +683,54 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 	}
 	TestEqual(TEXT("refused"), Traffic->DispatchArrival(*Net, FVector2D(-1000.0, 0.0), UAirsideSettings::ResolveDefaultAirframe(), 1.0), 0);
 	TestTrue(TEXT("with RunwayOccupied"), Refusals.Num() == 1 && Refusals[0] == EArrivalRefusal::RunwayOccupied);
+
+	// AND THE SAME REFUSAL WITH NO PHANTOM: TWO REAL ARRIVALS, BACK TO BACK, NO TICK BETWEEN.
+	//
+	// The block above plants the hold by hand, so it measures ArrivalPlanner reading the
+	// table - not that a landing ever PUTS anything in it. DispatchArrival recorded the chain
+	// on the agent and left the claim to the next Advance, which means the strip was free to
+	// the very next DispatchArrival: two aircraft cleared onto one runway for one frame, the
+	// window the Taxiing->Departing handover already raises its claim synchronously to avoid
+	// (see UGroundTraffic::Advance). A player pressing 7 twice is exactly that call pattern.
+	{
+		FVector2D Threshold;
+		const FAirframe Piper = M2TrafficPiper();
+		URoadNetwork* Airport = M2TrafficArrivalAirport(Piper, Threshold);
+		UGroundTraffic* Two = NewObject<UGroundTraffic>(GetTransientPackage());
+		TArray<EArrivalRefusal> Refused;
+		Two->OnArrivalRefused.AddLambda([&Refused](EArrivalRefusal Why) { Refused.Add(Why); });
+
+		const FVector2D Approach = Threshold - FVector2D(1000.0, 0.0);
+		const int32 First = Two->DispatchArrival(*Airport, Approach, Piper, 1.0);
+		if (TestTrue(TEXT("the first arrival onto a free runway is admitted"), First > 0))
+		{
+			// EVERY SEGMENT OF THE CHAIN, not just the seed: this airport's runway is split
+			// at its exit, and a landing that held only the piece it touched down on would
+			// leave the rest of the strip free for somebody to line up on.
+			const FRoadAgent* P = Two->FindAgent(First);
+			if (TestNotNull(TEXT("and the agent is there"), P))
+			{
+				int32 Held = 0;
+				for (const FRoadSegmentId Segment : P->RunwayHeld)
+				{
+					Held += Two->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Segment), 0) ? 1 : 0;
+				}
+				UE_LOG(LogM2TrafficTest, Log,
+					TEXT("ArrivalHoldsRunway measured: %d of %d chain segment(s) held before any tick"),
+					Held, P->RunwayHeld.Num());
+				TestTrue(TEXT("the whole chain is held in the dispatch call itself, before any Advance"),
+					P->RunwayHeld.Num() > 0 && Held == P->RunwayHeld.Num());
+			}
+
+			// NO Advance BETWEEN THEM. That is the whole point: the second press happens in
+			// the same frame as the first, and the refusal must not wait for a tick.
+			TestEqual(TEXT("a second arrival in the same frame is refused"),
+				Two->DispatchArrival(*Airport, Approach, Piper, 1.0), 0);
+			TestTrue(TEXT("with RunwayOccupied, not with a landing-distance reason"),
+				Refused.Num() == 1 && Refused[0] == EArrivalRefusal::RunwayOccupied);
+			TestEqual(TEXT("and nothing was admitted for it"), Two->GetAgentCount(), 1);
+		}
+	}
 	return true;
 }
 
@@ -1542,15 +1602,17 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("nothing stranded it: it is still Arriving"), P->Phase, EAgentPhase::Arriving);
 		}
 	}
-	// Case 5: the edge the agent is ON is deleted and the way round leaves from the node
-	// BEHIND it. Cases 2 and 3 both fail at a step AHEAD of the agent, so their replan starts
-	// from a node this function had already re-pointed on its way past. Here the failed step
-	// IS the current one, so the replan's Query.Start is StepFromNode of the current step -
-	// Steps[0].To, the node the agent has driven away from - and if a rebuild leaves that
-	// naming a freed slot the search answers NoStart, the replan fails for a reason that has
-	// nothing to do with the graph, and the truncation that follows writes the same dead
-	// handle into GoalNode. Three other readers of that node fail as quietly: the crossing
-	// arm, the tail-node claim and RankAt.
+	// Case 5: THE EDGE THE AGENT IS ON IS DELETED - it is STRANDED IN PLACE, spec §6.2's
+	// "only an agent whose current step itself is gone is stranded in place".
+	//
+	// Cases 2 and 3 both fail at a step AHEAD of the agent, and a bypass round those is
+	// something the agent can drive to. This one fails at the step UNDER it, and a replan
+	// there is not a re-route: the agent keeps Travelled across the splice, so the same route
+	// distance is re-read on different geometry and the van TELEPORTS - measured at 3310 uu
+	// sideways before this rule, unbounded in principle, and visible in the game as a vehicle
+	// jumping across the apron the instant a player deletes a taxiway. Truncating instead
+	// would be no better: there is no node behind the agent on a line that still exists.
+	// So the agent stops where it is and the player retires it, which is what Stranded means.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
@@ -1562,8 +1624,10 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		// 20000, so the agent is on step 1, and well short of the braking point for C at
 		// 37500, so it is still at cruise.
 		M2TrafficRun(*Traffic, *Net, 30.0, [](int32) { return true; });
-		const double Travelled = Traffic->FindAgent(Van)->Follower.Travelled;
-		const FVector2D WasAt = Traffic->FindAgent(Van)->LastMotion.Position;
+		const FRoadAgent* Before = Traffic->FindAgent(Van);
+		if (!TestNotNull(TEXT("the van survived the run up to the rebuild"), Before)) { return false; }
+		const double Travelled = Before->Follower.Travelled;
+		const FVector2D WasAt = Before->LastMotion.Position;
 		if (!TestTrue(FString::Printf(TEXT("the van is ON step 1, past B (%.0f uu)"), Travelled),
 			Travelled > 20000.0 && Travelled < 37000.0)) { return false; }
 
@@ -1573,30 +1637,49 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
 
 		// ONE TICK BEFORE THE POSITION IS READ: LastMotion is only written by Advance, so
-		// reading it straight after the rebuild would report where the agent was BEFORE, and
-		// the figure this line exists to record is the discontinuity the replan costs. The
-		// agent keeps Travelled across the splice, and past the splice point that same route
-		// distance now names a point on the bypass - so it steps sideways once, by design,
-		// because the line it was on has been deleted out from under it.
+		// reading it straight after the rebuild would report where the agent was BEFORE. The
+		// figure this line exists to record is the discontinuity - which is now the thing
+		// being ruled out rather than measured.
 		Traffic->Advance(0.05, Net);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
+		if (!TestNotNull(TEXT("a stranded agent is not removed - it stops, it does not vanish"), V))
+		{
+			return false;
+		}
+		const double Jump = FVector2D::Distance(WasAt, V->LastMotion.Position);
 		UE_LOG(LogM2TrafficTest, Log,
 			TEXT("GraphRebuild under-the-agent measured: was at %.0f uu (%.0f, %.0f), one tick after the ")
-			TEXT("replan (%.0f, %.0f) - %.0f uu sideways; %d replanned, %d truncated, %d stranded"),
-			Travelled, WasAt.X, WasAt.Y, V->LastMotion.Position.X, V->LastMotion.Position.Y,
-			FVector2D::Distance(WasAt, V->LastMotion.Position),
+			TEXT("rebuild (%.0f, %.0f) - %.0f uu moved; %d replanned, %d truncated, %d stranded"),
+			Travelled, WasAt.X, WasAt.Y, V->LastMotion.Position.X, V->LastMotion.Position.Y, Jump,
 			Summary.Replanned, Summary.Truncated, Summary.Stranded);
 
-		TestEqual(TEXT("the pavement under it went and it REPLANNED round it"), Summary.Replanned, 1);
-		TestEqual(TEXT("rather than truncating back to the node behind - which is what a dead from-node forces"),
-			Summary.Truncated, 0);
-		TestEqual(TEXT("and it was not stranded"), Summary.Stranded, 0);
-		TestNotNull(TEXT("the node the replan started from is live"), Net->GetGuidelineNode(V->Follower.Plan.Steps[0].To));
-		TestNotNull(TEXT("and so is the goal it searched to"), Net->GetGuidelineNode(V->GoalNode));
+		TestEqual(TEXT("the pavement under it went, so it was STRANDED IN PLACE"), Summary.Stranded, 1);
+		TestEqual(TEXT("not replanned onto geometry its own Travelled no longer means"), Summary.Replanned, 0);
+		TestEqual(TEXT("and not truncated back behind itself"), Summary.Truncated, 0);
 
-		M2TrafficRun(*Traffic, *Net, 150.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
-		TestEqual(TEXT("and it arrives"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
-		TestTrue(TEXT("at C"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 10.0);
+		// ONE TICK'S TRAVEL IS THE WHOLE BUDGET, at the cap of 1000 uu/s: this is the 3310 uu
+		// teleport, asserted away. Measured across the rebuild frame and then over five more
+		// seconds, per tick, because a replan that fired one frame late would show as a single
+		// large step somewhere in that window rather than at the rebuild itself.
+		const double PerTick = 1000.0 * 0.05 + 1.0;
+		TestTrue(FString::Printf(TEXT("it did not jump: %.0f uu across the rebuild frame, budget %.0f"), Jump, PerTick),
+			Jump <= PerTick);
+
+		double MaxStep = 0.0;
+		FVector2D Last = V->LastMotion.Position;
+		M2TrafficRun(*Traffic, *Net, 5.0, [&](int32)
+		{
+			const FRoadAgent* Q = Traffic->FindAgent(Van);
+			if (Q == nullptr) { return false; }
+			MaxStep = FMath::Max(MaxStep, FVector2D::Distance(Last, Q->LastMotion.Position));
+			Last = Q->LastMotion.Position;
+			return true;
+		});
+		UE_LOG(LogM2TrafficTest, Log,
+			TEXT("GraphRebuild under-the-agent: max per-tick displacement over the next 5 s %.1f uu"), MaxStep);
+		TestTrue(FString::Printf(TEXT("nor in the five seconds after it (max %.1f uu per tick, budget %.0f)"), MaxStep, PerTick),
+			MaxStep <= PerTick);
+		TestNotNull(TEXT("and it is still there to be retired"), Traffic->FindAgent(Van));
 	}
 	return true;
 }
@@ -1680,6 +1763,10 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// NOTHING, and that is still the right answer for a VAN: what it gave back is every
+	// GUIDELINE it held, and a van on a taxiway holds nothing else. An aircraft standing on a
+	// runway does - see the second half of this test, which is why the release is now
+	// ReleaseGuidelineClaimsOf rather than ReleaseAll.
 	TestEqual(TEXT("and the table holds NOTHING for it, in the same tick"), ClaimsHeldBy(Van), 0);
 	TestFalse(TEXT("the edge it was on is free"),
 		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(AB), /*ExcludingAgent=*/0));
@@ -1692,6 +1779,72 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("waiting on nobody"), V->WaitingOn, 0);
 	TestEqual(TEXT("blocked on no step"), V->BlockedStep, INDEX_NONE);
 	TestTrue(TEXT("and under no cap it could drive against"), V->StopWithin >= TNumericLimits<double>::Max());
+
+	// AND THE HALF A DEAD PLAN SAYS NOTHING ABOUT: AN AIRCRAFT'S BODY.
+	//
+	// A plan is a route, not a position. An aeroplane whose plan dies while it is standing on
+	// the centreline is still standing on the centreline, and ArrivalPlanner::Plan reads this
+	// table directly at DispatchArrival, BETWEEN ticks - so releasing its strip claim shows
+	// the runway free for as long as it takes the player to press 7, and a landing is cleared
+	// onto an aeroplane nobody can see is there. ReleaseAll did exactly that at both stranding
+	// sites; ReleaseGuidelineClaimsOf gives back the lines and keeps the surface.
+	//
+	// NO PHANTOM HOLDER: the strip is held by the crossing aircraft itself and by nothing
+	// else, so what the planner refuses on is this agent's own claim.
+	{
+		URoadNetwork* Cross = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Runway->bContinuousThroughJunctions = true;
+		const FRoadNodeId RA = Cross->AddNode(FVector2D(-50000.0, 0.0));
+		const FRoadNodeId RB = Cross->AddNode(FVector2D(50000.0, 0.0));
+		const FRoadSegmentId RunwaySeg = Cross->AddStraightSegment(RA, RB, Runway);
+
+		const FGuidelineNodeId S = M2TrafficNode(*Cross, 0.0, -20000.0);
+		const FGuidelineNodeId H = M2TrafficNode(*Cross, 0.0, -3000.0);
+		const FGuidelineNodeId X = M2TrafficNode(*Cross, 0.0, 0.0);
+		const FGuidelineNodeId N = M2TrafficNode(*Cross, 0.0, 20000.0);
+		M2TrafficJoin(*Cross, S, H); M2TrafficJoin(*Cross, H, X); M2TrafficJoin(*Cross, X, N);
+		Cross->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
+
+		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Plane = Air->DispatchAgent(Cross, M2TrafficRoute(*Cross, S, N, ETraversalClass::Aircraft),
+			M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+		if (TestTrue(TEXT("the crossing aircraft is dispatched"), Plane > 0))
+		{
+			M2TrafficRun(*Air, *Cross, 120.0, [&](int32)
+			{
+				const FRoadAgent* Q = Air->FindAgent(Plane);
+				return Q != nullptr && Q->CrossingPhase != ECrossingPhase::OnStrip;
+			});
+			const FRoadAgent* P = Air->FindAgent(Plane);
+			if (TestNotNull(TEXT("it is still under way"), P)
+				&& TestEqual(TEXT("and its body is ON the strip"), P->CrossingPhase, ECrossingPhase::OnStrip))
+			{
+				const FTrafficResource Strip = FTrafficResource::OfSurface(RunwaySeg);
+				TestTrue(TEXT("so it holds the runway before its plan dies"),
+					Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
+
+				TestTrue(TEXT("stranded mid-crossing"), Air->StrandForTest(Plane));
+				Air->Advance(0.05, Cross);
+
+				UE_LOG(LogM2TrafficTest, Log,
+					TEXT("DeadPlanReleases crossing measured: %d claim(s) left in the table after the ")
+					TEXT("plan died, strip %s"),
+					Air->GetOccupancy().GetClaims().Num(),
+					Air->GetOccupancy().IsHeld(Strip, 0) ? TEXT("HELD") : TEXT("free"));
+
+				TestTrue(TEXT("it STILL holds the strip it is standing on, one tick later"),
+					Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
+
+				// THE CONSUMER, not just the table: this is the question a player pressing 7
+				// asks between ticks, and the only one that matters.
+				const FArrivalPlan Landing = ArrivalPlanner::Plan(*Cross, FVector2D(-51000.0, 0.0),
+					M2TrafficPiper(), &Air->GetOccupancy());
+				TestEqual(TEXT("and a landing offered in that same frame is refused: RunwayOccupied"),
+					Landing.Why, EArrivalRefusal::RunwayOccupied);
+			}
+		}
+	}
 	return true;
 }
 

@@ -128,19 +128,24 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// THE GROUND UNDER THE AGENT IS GONE. There is no line left to put it on and no node
 		// to search from, so the plan is marked unreachable - which is what ClaimAhead and
 		// FRouteFollower::HasArrived both read to stop asking anything of it - and the agent
-		// stops being a claimant, because holding pavement that no longer exists would block
-		// whatever the player builds in its place.
+		// gives back every GUIDELINE it holds, because holding lines it will never drive
+		// would block whatever the player builds in their place.
 		Plan.Result = ERouteResult::Unreachable;
-		Occupancy.ReleaseAll(Agent.Id);
 
-		if (Agent.CrossingPhase != ECrossingPhase::None)
-		{
-			// BOTH FIELDS, ALWAYS TOGETHER: the phase says whether, the seed says which, and
-			// a seed left behind a None phase is a chain nothing would ever release.
-			Agent.CrossingPhase = ECrossingPhase::None;
-			Agent.CrossingRunway = FRoadSegmentId();
-			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
-		}
+		// AND KEEPS ITS RUNWAY. ReleaseAll was called here and was wrong: a rebuild does not
+		// move an aeroplane, so an aircraft stranded mid-crossing is still standing on the
+		// asphalt, and ArrivalPlanner::Plan reads this table directly at DispatchArrival,
+		// BETWEEN ticks. Dropping the strip claim showed the runway free for as long as it
+		// took the player to click - the window Task 7 closed, re-opened by the one path that
+		// stops the agent re-claiming on its next tick. See ReleaseGuidelineClaimsOf.
+		Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+
+		// THE CROSSING FIELDS SURVIVE TOO, and that is the same statement in the agent's own
+		// state: CrossingPhase says the body is on a strip and CrossingRunway says which, and
+		// neither has stopped being true because a route died. Cleared here (which is what
+		// this did) they would have contradicted the claim that is now kept, and the log line
+		// that announced the release would have been a log that lies. They are cleared
+		// together with the claim by ClaimAhead's non-Taxiing branch once the agent parks.
 
 		// A STRANDING IS FINAL, and that is a deliberate v1 limitation rather than an oversight.
 		// Result is now Unreachable, so OnGraphRebuilt's own "!Plan->IsValid()" filter skips
@@ -150,7 +155,17 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// within Rules.ResolveRadius of it - so "put it back" would mean choosing a place to
 		// teleport it to, and the honest answer is that the player retires it. The Warning
 		// above is what tells them there is something to retire.
-		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s"), Agent.Id, Why);
+		//
+		// AND IT NAMES THE RUNWAY WHEN THERE IS ONE. An agent stranded mid-crossing holds
+		// that strip until the player retires it, which is a runway out of service with no
+		// other evidence anywhere: the claim is visible only to the arbiter, and the next
+		// refused landing says "the runway is in use" without saying who by.
+		const FString Held = Agent.CrossingRunway.IsSet()
+			? FString::Printf(TEXT(" - and it is on runway segment %d, which it holds until it is retired"),
+				Agent.CrossingRunway.Index)
+			: FString();
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s%s"),
+			Agent.Id, Why, *Held);
 		return EReResolve::Stranded;
 	};
 
@@ -270,11 +285,40 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 
 	if (bDriving)
 	{
+		// THE STEP UNDER THE AGENT IS THE ONE THAT WENT: STRANDED IN PLACE, spec §6.2 - "only
+		// an agent whose current step itself is gone is stranded in place".
+		//
+		// NOT REPLANNED, and this is the one case where a replan is worse than no plan at all.
+		// ReplanAt keeps Travelled across the splice, which is what makes it seamless for a
+		// failure AHEAD of the agent: the metres already driven still name the same points.
+		// Splice at the CURRENT step and that stops being true - the same route distance is
+		// re-read on new geometry - and the agent steps sideways by however far the two lines
+		// differ, measured at 3310 uu on Airside.Model.Traffic.GraphRebuild's case 5 and
+		// unbounded in principle. In the game that is a vehicle jumping across the apron the
+		// instant a player deletes the taxiway under it.
+		//
+		// NOR TRUNCATED. Truncation keeps the longest prefix of the line that is still
+		// pavement, and there is none: the failure is at the step the agent is standing on,
+		// so the only node behind it is one it has already passed - the truncation would end
+		// the route BEHIND the agent, which FRouteFollower reads as arrived and which is a
+		// jump backwards for anything watching the position.
+		//
+		// So the agent stops where it is, keeps its runway claim if it has one, and the
+		// player retires it. See Strand.
+		if (Failed == FromStep)
+		{
+			return Strand(TEXT("the step it is driving on is gone - the pavement under it was deleted"));
+		}
+
 		// THROUGH ReplanAt, not through SpliceReplan directly: a plan under a moving follower
 		// needs Travelled preserved, the reservations ahead dropped and the stall clock reset,
 		// and that aftermath is the whole of what ReplanAt adds. The ban is UNSET - nothing
 		// here knows of an edge that must be avoided, and the edge that failed is not in the
 		// graph at all, so no search could pick it anyway.
+		//
+		// AHEAD OF THE AGENT ONLY, by the branch above: ReplanAt's own precondition is that
+		// the splice is at or ahead of the step the agent is on, and it is now the caller
+		// that guarantees the strict half of that rather than the callee that tolerates it.
 		if (ReplanAt(Agent.Id, Network, Failed, FGuidelineEdgeId()))
 		{
 			return EReResolve::Replanned;
@@ -311,9 +355,15 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	if (Failed == 0)
 	{
 		// NOTHING SURVIVES TO KEEP. Truncating to zero steps is not a route at all - it has no
-		// last step to take a length or a goal from - and an agent part way along step 0 has
-		// no earlier node to be put back at. That is the stranded case by definition, not a
-		// degenerate truncation dressed up as one.
+		// last step to take a length or a goal from. That is the stranded case by definition,
+		// not a degenerate truncation dressed up as one.
+		//
+		// REACHED ONLY BY A TAXI-IN PLAN NOW, since a driving agent whose failure is at its
+		// own step was stranded above and FromStep is 0 for the other caller. An ARRIVING
+		// aircraft is not standing on its taxi-in route - it is on the runway, and nothing it
+		// is driving has gone - so it gets its replan attempt first and is stranded only when
+		// no route to the stand survives at all. That is why the strand-in-place rule is
+		// written on the bDriving branch and not here.
 		return Strand(TEXT("its very next step is gone and no route replaces it"));
 	}
 

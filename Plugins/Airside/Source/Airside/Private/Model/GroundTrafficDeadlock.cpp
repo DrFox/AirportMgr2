@@ -1,4 +1,4 @@
-// UGroundTraffic's deadlock resolver and the replan it reaches for - spec 2026-09-06 §4, §5.
+﻿// UGroundTraffic's deadlock resolver and the replan it reaches for - spec 2026-09-06 §4, §5.
 // The wait-for graph, its cycles, the per-cycle retry window, and ReplanAt, which is the one
 // thing the resolver and a graph rebuild share. One class across four translation units; see
 // Model/GroundTraffic.h for which file holds what, and RoadEditFacadeSurfaces.cpp for the
@@ -250,6 +250,11 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 			const FRoadAgent* Member = FindAgent(Id);
 			if (Member == nullptr)
 			{
+				// A MEMBER NOBODY CAN FIND IS NOT AN AIRCRAFT. The flag raises the line to
+				// Warning because an all-aircraft cycle is a DESIGN problem the player must
+				// be told about, and a cycle it could not read the classes of is not something
+				// this can claim - a lookup miss must not be able to promote the line.
+				bAllAircraft = false;
 				continue;
 			}
 			Members += Members.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
@@ -303,7 +308,7 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 		{
 			if (bAllAircraft)
 			{
-				UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft Deadlock among agents [%s] resolved: agent %d replans"),
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft deadlock among agents [%s] resolved: agent %d replans"),
 					*Members, Candidate);
 			}
 			else

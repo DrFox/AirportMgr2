@@ -116,7 +116,17 @@ public:
 	DECLARE_MULTICAST_DELEGATE_OneParam(FOnArrivalRefused, EArrivalRefusal);
 	FOnArrivalRefused OnArrivalRefused;
 
-	UPROPERTY(EditAnywhere, Category = "Airside|Traffic") FTrafficRules Rules;
+	/**
+	 * The figures this tick arbitrates in. NOT the knob a designer turns.
+	 *
+	 * TRANSIENT AND NO LONGER EditAnywhere. This object is re-created every session and
+	 * re-pointed on a PIE duplication, so a value typed into its Details panel was never
+	 * saved and never survived the copy - it looked like a knob and was not one. The knob is
+	 * ARoadNetworkActor::TrafficRules, which the .umap saves; UAirsideTraffic::Advance
+	 * copies it in here every tick, so this field is always the level's answer and a
+	 * world-free test can still set it directly.
+	 */
+	UPROPERTY(Transient) FTrafficRules Rules;
 
 	/**
 	 * Lands an aircraft on the runway nearest Near and taxis it to a stand. Returns the new
@@ -210,12 +220,19 @@ public:
 	 * against it cannot move the agent by so much as a unit.
 	 *
 	 * THREE OUTCOMES PER AGENT, in order of how much the player would notice: every step
-	 * resolves and nothing changes but the handles; a step's edge is gone but a route to
-	 * the same goal survives, and that is spliced on from the last step that resolved; or
-	 * nothing replaces it and the route is TRUNCATED there, so the agent drives to a stop
-	 * on live pavement instead of off the end of the airport. An agent whose own ground no
-	 * longer has a node within Rules.ResolveRadius is stranded - the pavement under it was
-	 * deleted, and nothing this class can do puts it back on a line.
+	 * resolves and nothing changes but the handles; a step AHEAD of the agent has lost its
+	 * edge but a route to the same goal survives, and that is spliced on from the last step
+	 * that resolved; or nothing replaces it and the route is TRUNCATED there, so the agent
+	 * drives to a stop on live pavement instead of off the end of the airport.
+	 *
+	 * AND THE FOURTH, WHICH IS NOT A DEGREE OF THE OTHER THREE: the step the agent is
+	 * DRIVING ON is the one that went. Spec §6.2 - "only an agent whose current step itself
+	 * is gone is stranded in place" - and it is stranded rather than replanned because a
+	 * splice at the current step re-reads the agent's own Travelled on new geometry and
+	 * teleports it (3310 uu, measured; unbounded in principle), while a truncation there
+	 * would end the route behind it. So is an agent whose own ground no longer has a node
+	 * within Rules.ResolveRadius. A stranded agent keeps the runway surface it is standing
+	 * on - see ReResolvePlan's Strand - because a rebuild moves no aeroplanes.
 	 *
 	 * THEN THE GUIDELINE CLAIMS GO AND THE SURFACE CLAIMS STAY - FTrafficOccupancy::
 	 * ReleaseGuidelineClaims, not Clear(). The reason is NOT that a stale handle could name
@@ -583,8 +600,9 @@ private:
 	 *  and end any crossing. ClaimAhead's first branch. */
 	void HoldRunwayOnly(FRoadAgent& Agent);
 
-	/** A Taxiing agent whose plan went bad under it: release everything, end any crossing,
-	 *  clear the arbitration fields. ClaimAhead's second branch. */
+	/** A Taxiing agent whose plan went bad under it: give back every GUIDELINE, keep any
+	 *  runway surface and the crossing that describes it (a plan says nothing about where a
+	 *  body is), clear the arbitration fields. ClaimAhead's second branch. */
 	void ReleaseForDeadPlan(FRoadAgent& Agent);
 
 	/** T, F, G, Head, Tail and the current step for one pass. See FClaimWindow. */
@@ -691,6 +709,12 @@ private:
 	 * Applied to Follower.Plan from CurrentStep for a Taxiing agent, and to TaxiInPlan from
 	 * 0 for an Arriving one - the route it will fly when it vacates, which no follower is on
 	 * yet and which is just as dead after a rebuild as one being driven.
+	 *
+	 * WHICH OF THE TWO DECIDES WHAT A FAILURE AT FromStep MEANS. Under a moving follower it
+	 * is the ground the agent is on, so it strands in place (spec §6.2, and see the branch
+	 * itself for why a replan there teleports). A taxi-in plan is a route nobody has entered
+	 * - the aircraft is on the runway - so its first step failing is an ordinary replan, and
+	 * only a route that cannot be rebuilt at all strands it.
 	 *
 	 * MUTATES Agent.GoalNode when the goal position still resolves, because every replan
 	 * from here on searches to it: a goal handle left naming a freed slot would fail every

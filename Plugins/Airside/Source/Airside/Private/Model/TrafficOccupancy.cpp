@@ -212,6 +212,21 @@ void FTrafficOccupancy::ReleaseGuidelineClaims()
 	Preempted.Reset();
 }
 
+void FTrafficOccupancy::ReleaseGuidelineClaimsOf(int32 AgentId)
+{
+	// THE AGENT AND THE KIND, both: the guidelines this one agent will never drive go, and
+	// its runway surfaces stay because its BODY has not moved. Nothing is done to the
+	// preemption list here, unlike ReleaseGuidelineClaims: this is one agent giving ground
+	// back on a graph everybody else is still claiming over, and an agent that lost a
+	// reservation to a rival this tick still has to hear about it.
+	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C)
+	{
+		return C.AgentId == AgentId
+			&& (C.Resource.Kind == ETrafficResourceKind::Edge
+				|| C.Resource.Kind == ETrafficResourceKind::Node);
+	});
+}
+
 void FTrafficOccupancy::Clear()
 {
 	Claims.Reset();

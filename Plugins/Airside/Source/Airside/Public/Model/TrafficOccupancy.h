@@ -184,6 +184,24 @@ struct AIRSIDE_API FTrafficOccupancy
 	 */
 	void ReleaseGuidelineClaims();
 
+	/**
+	 * The same distinction for ONE agent: drops AgentId's edge and node claims, keeps its
+	 * runway surfaces.
+	 *
+	 * What a STRANDING gives back (UGroundTraffic::ReResolvePlan's Strand, and ClaimAhead's
+	 * dead-plan branch). ReleaseAll was used at both and was wrong for the same reason
+	 * Clear() was wrong above: an aircraft stranded mid-crossing, or one whose plan went bad
+	 * while it stood on the centreline, is still ON the asphalt - a plan says nothing about
+	 * where a body is - and ArrivalPlanner::Plan reads this table directly at
+	 * DispatchArrival, between ticks. Dropping its strip claim showed the runway free and a
+	 * landing could be cleared onto it.
+	 *
+	 * NOT ReleaseGuidelineClaims: that one is a rebuild, where the resources themselves have
+	 * ceased to exist for everybody. This one is one agent giving back the lines it will
+	 * never drive, on a graph everyone else is still using.
+	 */
+	void ReleaseGuidelineClaimsOf(int32 AgentId);
+
 	/** Agents whose reservation was removed by a preemption since the last call; clears. */
 	TSet<int32> TakePreempted();
 
