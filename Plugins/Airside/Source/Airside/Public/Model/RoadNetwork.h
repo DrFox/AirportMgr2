@@ -98,6 +98,27 @@ public:
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
 
 	/**
+	 * Does this guideline node stand ON the strip of the runway chain seeded at Seed?
+	 *
+	 * The question spec §3.1's fourth route asks: an agent crossing a runway holds it until
+	 * its TAIL is clear of the strip, and "clear" cannot be "past the next node" because a
+	 * node in the middle of a crossing sits on the runway itself. Geometry answers it; a bar
+	 * on the far side would not, because a player may place one bar or none.
+	 *
+	 * True when, for ANY segment of the chain, the node is within that segment's own profile
+	 * half width of its centreline AND its projection falls inside the segment's A..B extent
+	 * with that half width of slack at each end - the same slack RunwayExitNodes gives, and
+	 * for the same reason: a junction cut puts the node a little beyond the road node.
+	 *
+	 * OutChainHalfWidth, when given, reports the LARGEST half width in the chain whether or
+	 * not the node is on it. That is how far past the last on-strip node a tail must travel
+	 * to be clear of the widest part of the strip, which is the caller's next question when
+	 * the answer here is true.
+	 */
+	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+
+	/**
 	 * If Near sits on a runway, reports the departure from the threshold nearest it.
 	 *
 	 * WALKS THE WHOLE RUNWAY, not the one segment it lands on. Adding an exit splits a runway,

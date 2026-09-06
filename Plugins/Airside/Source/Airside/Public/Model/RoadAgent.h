@@ -202,14 +202,18 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() int32 BlockedStep = -1;
 
 	/**
-	 * Who this agent was last reported as OVERLAPPING - two bodies standing on one node or
-	 * one runway - or 0. Throttles that Warning to the transition.
+	 * Everyone this agent was reported as OVERLAPPING on the last claim pass - two bodies
+	 * standing on one node or one runway. Throttles that Warning to the transition.
 	 *
 	 * A FIELD OF ITS OWN rather than reusing WaitingOn, which was the first attempt and was
 	 * wrong: WaitingOn names the FIRST refusal in route order, so an overlap that is not the
 	 * first refusal never matched it and the Warning fired on every single tick.
+	 *
+	 * A LIST rather than the single last id, which was the second attempt: an agent can
+	 * overlap two things in one pass (its own node and the runway under it), and keeping
+	 * only the last let the other one re-log every tick. Never more than a few entries.
 	 */
-	UPROPERTY() int32 LastOverlapWith = 0;
+	UPROPERTY() TArray<int32> LastOverlaps;
 
 	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
 	UPROPERTY() double StalledSeconds = 0.0;
@@ -223,6 +227,17 @@ struct AIRSIDE_API FRoadAgent
 
 	/** The chain a taxi ending on a runway will hold once it becomes a departure. */
 	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
+
+	/**
+	 * Seed of a runway chain this agent is physically ON while taxiing, after passing a
+	 * hold-short bar or vacating a landing. Unset when none. Spec §3.1's fourth route.
+	 *
+	 * SEPARATE FROM RunwayHeld, which is the chain a NON-taxiing agent owns: this one is
+	 * held by an agent that is crossing, and it is released by geometry (the tail clearing
+	 * the strip) rather than by a phase change. A seed rather than the expanded chain
+	 * because the chain is re-expanded per tick anyway, and a rebuild may have changed it.
+	 */
+	UPROPERTY() FRoadSegmentId CrossingRunway;
 
 	/**
 	 * Spools the propeller one frame toward whatever the engine has been commanded to do.

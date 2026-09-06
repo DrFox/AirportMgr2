@@ -126,9 +126,19 @@ struct AIRSIDE_API FTrafficOccupancy
 
 	void ReleaseAll(int32 AgentId);
 
-	/** Drops AgentId's claim on this one resource, if it has one. The handover's release:
-	 *  an arrival that has vacated gives the runway back in the tick it vacated, not on its
-	 *  next claim pass, because a landing refused in between would be refused for nothing. */
+	/**
+	 * Drops AgentId's claim on this ONE resource, if it has one. Releasing something nobody
+	 * holds is not an error, so a handover that runs twice is harmless.
+	 *
+	 * NO PRODUCTION CALLER TODAY, and the comment says so rather than implying one. It was
+	 * written for the Vacated handover - give the runway back in the tick it was vacated -
+	 * and that handover became GEOMETRIC when spec §3.1 grew its fourth route: a landing
+	 * that has vacated now hands the chain to FRoadAgent::CrossingRunway and the claim pass
+	 * drops it through ReleaseExcept once the tail is clear. Kept because it is the only way
+	 * to hand back exactly one resource while an agent goes on holding the rest, which is
+	 * what M3's runway sequencer will need, and because Airside.Model.Occupancy.Release
+	 * pins the behaviour either way.
+	 */
 	void Release(int32 AgentId, const FTrafficResource& Resource);
 
 	/** Drops every claim by AgentId whose resource is not in Keep. The per-tick "release

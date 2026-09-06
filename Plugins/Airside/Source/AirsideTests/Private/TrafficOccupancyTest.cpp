@@ -102,4 +102,34 @@ bool FTrafficOccupancyClaimsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyReleaseTest,
+	"Airside.Model.Occupancy.Release",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficOccupancyReleaseTest::RunTest(const FString& Parameters)
+{
+	// ONE RESOURCE, not the agent. ReleaseAll and ReleaseExcept were the only two ways to
+	// drop a claim, and both are wrong for a handover that gives back exactly one thing -
+	// the runway an arrival has vacated - while the agent goes on holding the ground it is
+	// standing on.
+	FTrafficOccupancy Table;
+	FTrafficClaim Blocker;
+	Table.TryClaim(M2OccNodeClaim(1, 3, true, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(1, 4, true, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(2, 5, true, 2), Blocker);
+
+	Table.Release(1, FTrafficResource::OfNode(M2OccNode(3)));
+
+	TestFalse(TEXT("the named resource is released"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(3)), 0));
+	TestTrue(TEXT("the same agent's OTHER claim survives"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(4)), 0));
+	TestTrue(TEXT("and so does another agent's"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(5)), 0));
+	TestEqual(TEXT("exactly one claim went"), Table.GetClaims().Num(), 2);
+
+	// Releasing something nobody holds is not an error - a handover may run twice.
+	Table.Release(1, FTrafficResource::OfNode(M2OccNode(3)));
+	TestEqual(TEXT("releasing an unheld resource changes nothing"), Table.GetClaims().Num(), 2);
+	return true;
+}
+
 #endif

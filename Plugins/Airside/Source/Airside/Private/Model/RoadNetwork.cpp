@@ -152,6 +152,69 @@ bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 	return Profile != nullptr && Profile->bContinuousThroughJunctions;
 }
 
+bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
+	double* OutChainHalfWidth) const
+{
+	if (OutChainHalfWidth != nullptr)
+	{
+		*OutChainHalfWidth = 0.0;
+	}
+	const FGuidelineNode* Point = GetGuidelineNode(Node);
+	if (Point == nullptr)
+	{
+		return false;
+	}
+
+	bool bOnStrip = false;
+	for (const FRoadSegmentId& Id : RunwayChain(Seed))
+	{
+		const FRoadSegment* Segment = GetSegment(Id);
+		if (Segment == nullptr)
+		{
+			continue;
+		}
+		const FRoadNode* A = GetNode(Segment->A);
+		const FRoadNode* B = GetNode(Segment->B);
+		const URoadProfile* Profile = ProfileFor(*Segment);
+		if (A == nullptr || B == nullptr || Profile == nullptr)
+		{
+			continue;
+		}
+
+		// THE SEGMENT'S OWN HALF WIDTH, not a constant: a chain may mix profiles, and the
+		// bound has to scale with the strip - the same rule RunwayExitNodes uses.
+		const double HalfWidth = Profile->GetTotalWidth() * 0.5;
+		if (OutChainHalfWidth != nullptr)
+		{
+			*OutChainHalfWidth = FMath::Max(*OutChainHalfWidth, HalfWidth);
+		}
+		if (bOnStrip)
+		{
+			// Still walking the chain, but only to finish the half-width maximum above.
+			continue;
+		}
+
+		// THE ROAD NODES' POSITIONS, deliberately, not the sampled ribbon: this asks about
+		// the SURFACE model, and the surface's centreline is the segment A..B. A runway is
+		// straight in every case the game admits (bContinuousThroughJunctions), so the
+		// Bezier control point cannot bend it away from this line.
+		const FVector2D Axis = B->Position - A->Position;
+		const double Length = Axis.Size();
+		if (Length <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FVector2D Along = Axis / Length;
+		const FVector2D Offset = Point->Position - A->Position;
+		const double Distance = FVector2D::DotProduct(Offset, Along);
+		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
+
+		bOnStrip = Lateral <= HalfWidth
+			&& Distance >= -HalfWidth && Distance <= Length + HalfWidth;
+	}
+	return bOnStrip;
+}
+
 TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
 {
 	TArray<FRoadSegmentId> Out;

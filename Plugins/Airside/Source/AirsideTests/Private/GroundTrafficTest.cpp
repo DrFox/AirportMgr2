@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -488,8 +489,24 @@ bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32) { return Traffic->FindAgent(Plane)->Follower.Speed > 1e-6 || Traffic->FindAgent(Plane)->Follower.Travelled < 1.0; });
+	// A BAR MUST NOT CLOSE THE RUNWAY FOR THE WHOLE TAXI. Sampled while the plane is still
+	// more than one window (braking distance + gap, about 4500 uu here) short of the bar:
+	// the claim is raised only once the window reaches the node, so before that nothing but
+	// the phantom holds the strip. Excluding 99 asks "does anyone ELSE hold it".
+	bool bRunwayFreeEarly = false;
+	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	{
+		const FRoadAgent* Q = Traffic->FindAgent(Plane);
+		if (Q->Follower.Travelled < 10000.0
+			&& !Traffic->GetOccupancy().IsHeld(FTrafficResource::OfSurface(RunwaySeg), 99))
+		{
+			bRunwayFreeEarly = true;
+		}
+		return Q->Follower.Speed > 1e-6 || Q->Follower.Travelled < 1.0;
+	});
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	TestTrue(TEXT("the bar did not close the runway for the whole taxi - free while a window short of it"),
+		bRunwayFreeEarly);
 
 	// MEASURED AND LOGGED, so a failure is read off the numbers rather than re-derived from
 	// the assertion text. The bar is the end of step 0, at 17000 uu of route distance.
@@ -505,6 +522,34 @@ bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("waiting on the runway's holder"), P->WaitingOn, 99);
 
 	Traffic->OccupancyForTest().ReleaseAll(99);
+
+	// THE BAR'S OWN CLAIM IS A RESERVATION, never an occupancy - nobody is occupied THROUGH
+	// a bar, because an occupied claim cannot be preempted and a queue at the bar would then
+	// lock the strip against the very landing the bar exists to protect. Sampled after the
+	// phantom is gone and before the plane's centre reaches the bar, which is the only window
+	// in which the plane holds the surface for the BAR's reason rather than the crossing's.
+	bool bSawBarClaim = false;
+	bool bBarClaimWasOccupied = false;
+	M2TrafficRun(*Traffic, *Net, 5.0, [&](int32)
+	{
+		const FRoadAgent* Q = Traffic->FindAgent(Plane);
+		if (Q->Follower.Travelled >= 16999.0)
+		{
+			return false;
+		}
+		for (const FTrafficClaim& Claim : Traffic->GetOccupancy().GetClaims())
+		{
+			if (Claim.AgentId == Plane && Claim.Resource == FTrafficResource::OfSurface(RunwaySeg))
+			{
+				bSawBarClaim = true;
+				bBarClaimWasOccupied = bBarClaimWasOccupied || Claim.bOccupied;
+			}
+		}
+		return true;
+	});
+	TestTrue(TEXT("the plane claims the strip at the bar"), bSawBarClaim);
+	TestFalse(TEXT("and that claim is a RESERVATION: nobody is occupied through a bar"), bBarClaimWasOccupied);
+
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
 	TestEqual(TEXT("released, it crosses and arrives"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
 	return true;
@@ -537,6 +582,184 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 	}
 	TestEqual(TEXT("refused"), Traffic->DispatchArrival(*Net, FVector2D(-1000.0, 0.0), UAirsideSettings::ResolveDefaultAirframe(), 1.0), 0);
 	TestTrue(TEXT("with RunwayOccupied"), Refusals.Num() == 1 && Refusals[0] == EArrivalRefusal::RunwayOccupied);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficCrossingHoldsRunwayTest,
+	"Airside.Model.Traffic.CrossingHoldsRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
+{
+	// SPEC §3.1'S FOURTH ROUTE. The HoldShort geometry with NOBODY holding the runway: the
+	// plane is granted the bar and crosses, and the question is what happens AFTER the bar.
+	// Before this rule the bar node left the window as the plane passed it and the surface
+	// claim went with it, leaving an aeroplane standing on the centreline with the table
+	// saying the strip was free - so a landing could be cleared onto it. The crossing edges
+	// cannot cover the gap: here they are hand-built with no DerivedFrom, and in a DERIVED
+	// graph a junction's turn paths carry none either, by design.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
+
+	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId H = M2TrafficNode(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X); M2TrafficJoin(*Net, X, N);
+	Net->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
+
+	// Route distances: the bar at 17000, the centreline crossing X at 20000, the far node N
+	// at 40000. The strip's half width is 2250, so a tail clear of it is at 22250 - and the
+	// REJECTED "release at the next node" rule would hold on until 40000.
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = M2TrafficPlane();
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, S, N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+
+	const FTrafficResource Strip = FTrafficResource::OfSurface(RunwaySeg);
+	bool bFreeBeforeTheBar = false;
+	bool bHeldWhileCrossing = false;
+	bool bLandingRefusedWhileCrossing = false;
+	double HoldBegan = -1.0;
+	double HoldEnded = -1.0;
+
+	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	{
+		const FRoadAgent* Q = Traffic->FindAgent(Plane);
+		if (Q == nullptr) { return false; }
+		const double Travelled = Q->Follower.Travelled;
+		const bool bHeld = Traffic->GetOccupancy().IsHeld(Strip, 0);
+
+		if (Travelled < 10000.0 && !bHeld) { bFreeBeforeTheBar = true; }
+		if (bHeld && HoldBegan < 0.0) { HoldBegan = Travelled; }
+		if (!bHeld && HoldBegan >= 0.0 && HoldEnded < 0.0) { HoldEnded = Travelled; }
+
+		// ON THE STRIP: centre past the bar, not yet at the far side. A landing offered now
+		// must be refused, which is the whole point of the rule.
+		if (Travelled > 17500.0 && Travelled < 19500.0)
+		{
+			bHeldWhileCrossing = bHeldWhileCrossing || bHeld;
+			bLandingRefusedWhileCrossing = bLandingRefusedWhileCrossing
+				|| ArrivalPlanner::Plan(*Net, FVector2D(-60000.0, 0.0), Airframe, &Traffic->GetOccupancy()).Why
+					== EArrivalRefusal::RunwayOccupied;
+		}
+
+		// Well past a tail's clearance of the strip (22250) and far short of the next route
+		// node (40000), so the two candidate rules cannot both pass the assertions below.
+		return Travelled < 24000.0;
+	});
+
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("CrossingHoldsRunway measured: hold began at route %.0f uu, ended at %.0f uu ")
+		TEXT("(bar 17000, centreline 20000, tail clear 22250, next node 40000); stopped at %.0f"),
+		HoldBegan, HoldEnded, P->Follower.Travelled);
+
+	TestTrue(TEXT("the bar did not close the runway for the whole taxi"), bFreeBeforeTheBar);
+	TestTrue(FString::Printf(TEXT("the hold began before the bar, as the bar's reservation (%.0f)"), HoldBegan),
+		HoldBegan > 0.0 && HoldBegan < 17000.0);
+	TestTrue(TEXT("the strip is HELD while the plane is on the centreline"), bHeldWhileCrossing);
+	TestTrue(TEXT("so a landing offered mid-crossing is refused RunwayOccupied"), bLandingRefusedWhileCrossing);
+
+	// THE DISCRIMINATING ASSERTION. "Release at the next route node" would hold to 40000.
+	TestTrue(FString::Printf(TEXT("the hold ends once the TAIL is clear of the strip, not at the next node (%.0f)"), HoldEnded),
+		HoldEnded > 20000.0 && HoldEnded < 24000.0);
+	TestFalse(TEXT("and the strip is free afterwards"), Traffic->GetOccupancy().IsHeld(Strip, 0));
+	TestFalse(TEXT("with nothing left naming a crossing"), P->CrossingRunway.IsSet());
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRunwayEdgeClaimTest,
+	"Airside.Model.Traffic.RunwayEdgeClaim",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
+{
+	// SPEC §3.1'S FIRST ROUTE, and the CHAIN part of it. The runway is split at a road node
+	// into two segments; the guideline edge B->C names only the FAR one, and the phantom
+	// holds the NEAR one. An implementation that claimed only DerivedFrom would sail past.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
+	const FRoadSegmentId Near = Net->AddStraightSegment(RA, RM, Runway);
+	const FRoadSegmentId Far = Net->AddStraightSegment(RM, RB, Runway);
+	if (!TestEqual(TEXT("the split runway is a two-segment chain"), Net->RunwayChain(Far).Num(), 2))
+	{
+		return false;
+	}
+
+	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId C = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, A, B);
+	{
+		// Hand-built rather than through M2TrafficJoin, because DerivedFrom is the whole
+		// point of this fixture and the helper does not set it.
+		FGuidelineEdge Edge;
+		Edge.A = B; Edge.B = C;
+		Edge.Control = (Net->GetGuidelineNode(B)->Position + Net->GetGuidelineNode(C)->Position) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.DerivedFrom = Far;
+		Net->AddGuidelineEdge(MoveTemp(Edge));
+	}
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	{
+		FTrafficClaim Hold; Hold.AgentId = 99; Hold.Resource = FTrafficResource::OfSurface(Near); Hold.bOccupied = true;
+		FTrafficClaim Blocker;
+		Traffic->OccupancyForTest().TryClaim(Hold, Blocker);
+	}
+	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+
+	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	{
+		const FRoadAgent* Q = Traffic->FindAgent(Plane);
+		return Q->Follower.Speed > 1e-6 || Q->Follower.Travelled < 1.0;
+	});
+
+	const FRoadAgent* P = Traffic->FindAgent(Plane);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("RunwayEdgeClaim measured: stopped at route %.0f uu (want 18500 = the runway edge's ")
+		TEXT("start 20000 less the gap 1500), waiting on %d, blocked step %d"),
+		P->Follower.Travelled, P->WaitingOn, P->BlockedStep);
+
+	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
+	TestTrue(FString::Printf(TEXT("a gap short of where the runway edge BEGINS, not inside it (%.0f, want 18500)"),
+		P->Follower.Travelled),
+		FMath::Abs(P->Follower.Travelled - 18500.0) < 50.0);
+	TestEqual(TEXT("blocked on the step whose edge lies on the runway"), P->BlockedStep, 1);
+	TestEqual(TEXT("waiting on the holder of the OTHER segment of the same chain"), P->WaitingOn, 99);
+
+	Traffic->OccupancyForTest().ReleaseAll(99);
+	bool bPlaneHeldTheChain = false;
+	bool bSomebodyElseHeldIt = false;
+	M2TrafficRun(*Traffic, *Net, 180.0, [&](int32)
+	{
+		const FRoadAgent* Q = Traffic->FindAgent(Plane);
+		if (Q == nullptr) { return false; }
+		if (Q->Follower.Travelled > 21000.0 && Q->Follower.Travelled < 39000.0)
+		{
+			bPlaneHeldTheChain = bPlaneHeldTheChain || Traffic->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Near), 0);
+			bSomebodyElseHeldIt = bSomebodyElseHeldIt || Traffic->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Near), Plane);
+		}
+		return Q->Phase != EAgentPhase::Parked;
+	});
+
+	TestTrue(TEXT("released, the plane holds the whole chain while it is on the runway edge"), bPlaneHeldTheChain);
+	TestFalse(TEXT("and nobody else does"), bSomebodyElseHeldIt);
+	TestEqual(TEXT("and it reaches its goal"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
 	return true;
 }
 
