@@ -84,9 +84,26 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 			continue;
 		}
 
-		// Occupied is absolute. Equal rank keeps the holder - that IS first-to-reserve.
-		if (Claims[Index].bOccupied || Claims[Index].Rank >= Claim.Rank)
+		// OCCUPIED IS ABSOLUTE, from both sides.
+		//
+		// Nobody is evicted from ground they are standing on, so an existing occupancy
+		// refuses everything - including another occupancy, which is two bodies in one place
+		// and the caller's problem to report.
+		if (Claims[Index].bOccupied)
 		{
+			OutBlocker = Claims[Index];
+			return EClaimResult::Held;
+		}
+
+		// And PRESENCE BEATS A RESERVATION, whatever the ranks say: spec §3.3 promises the
+		// occupant will never be moved, so a reservation on ground somebody is already
+		// standing on was never a claim anyone could act on. Leaving it in the table cost a
+		// deadlock its cycle - the occupant was refused its OWN ground, abandoned the rest of
+		// its claim pass, and the wait-for graph became a fan into the reserver instead of a
+		// ring. See Airside.Model.Traffic.BoxEntry.
+		if (!Claim.bOccupied && Claims[Index].Rank >= Claim.Rank)
+		{
+			// Equal rank keeps the holder - that IS first-to-reserve.
 			OutBlocker = Claims[Index];
 			return EClaimResult::Held;
 		}

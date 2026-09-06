@@ -169,6 +169,15 @@ public:
 	const TArray<FRoadAgent>& GetAgents() const { return Agents; }
 	const FRoadAgent* FindAgent(int32 AgentId) const;
 	const FTrafficOccupancy& GetOccupancy() const { return Occupancy; }
+
+	/**
+	 * The table, writable, for a test that has to plant a claim no agent owns - the phantom
+	 * occupant Airside.Model.Traffic.BoxEntryFirstOnly parks on a node, or a runway held by
+	 * something the model has no agent for. Production code reaches the table only through
+	 * the claim pass; a second writer would be the second evaluator this class exists to
+	 * prevent, which is why this says ForTest in its name.
+	 */
+	FTrafficOccupancy& OccupancyForTest() { return Occupancy; }
 	double GetSimSeconds() const { return SimSeconds; }
 
 private:
@@ -210,10 +219,16 @@ private:
 	 * to be dispatched first.
 	 *
 	 * Then ONE re-pass over Occupancy.TakePreempted(): an agent whose reservation was taken
-	 * from it by a higher-ranked claimant must find that out THIS tick, or it drives a frame
-	 * on a reservation it no longer holds. One pass and not a loop to fixed point - a second
-	 * preemption is a rank inversion the ordering above already forbids, and a loop would be
-	 * unbounded work per tick for a case that cannot arise.
+	 * from it - by a higher rank, or by somebody standing on it - must find that out THIS
+	 * tick, or it drives a frame on a reservation it no longer holds.
+	 *
+	 * ONE pass and not a loop to a fixed point. The bound is NOT that rank inversions cannot
+	 * happen: a node's PriorityOverride inverts rank against the visit order deliberately,
+	 * which is the whole of Airside.Model.Traffic.PriorityOverride. It is that a re-claiming
+	 * agent asks for the IDENTICAL list - same Travelled, same speed, so the same window and
+	 * the same resources - and every claim in it either was granted before (and is an update
+	 * that preempts nothing new) or was refused. So the re-pass cannot take anything from
+	 * anybody, and a second round would have nothing to do.
 	 */
 	void Arbitrate(const URoadNetwork& Network);
 
@@ -232,16 +247,21 @@ private:
 	 *     min(Head, end)] mapped into edge distance - mirrored through the edge length on a
 	 *     reversed step - occupied on the step it is standing on, reserved beyond;
 	 *   - that step's END node, once the window passes it; and, by the BOX-JUNCTION ENTRY
-	 *     RULE, at the moment the window reaches the START of a step shorter than F + G
-	 *     that the agent has not yet entered. A box is an edge the agent cannot stand on
-	 *     without still blocking the node behind it, which is every junction turn path, so
-	 *     it must be granted the far end before it commits to the near one.
+	 *     RULE, at the moment the window reaches the START of the FIRST step shorter than
+	 *     F + G that the agent has not yet entered. A box is an edge the agent cannot stand
+	 *     on without still blocking the node behind it, which is every junction turn path,
+	 *     so it must be granted the far end before it commits to the near one. The FIRST
+	 *     such step only: a window routinely spans several boxes, and demanding the far end
+	 *     of each is the rejected alternative below.
 	 *
-	 * First refusal decides everything: WaitingOn is the blocker, BlockedStep the step, and
-	 * StopWithin the distance to G short of the refused thing - G short of the BOX's START
-	 * when the box was refused at entry, so the agent stops outside the junction where it
-	 * can still turn, rather than inside it where nobody can. All granted: StopWithin
-	 * unbounded, WaitingOn 0, BlockedStep -1.
+	 * First refusal in ROUTE ORDER decides everything: WaitingOn is the blocker, BlockedStep
+	 * the step, and StopWithin the distance to G short of the refused thing - G short of the
+	 * BOX's START when the box was refused at entry, so the agent stops outside the junction
+	 * where it can still turn, rather than inside it where nobody can. All granted:
+	 * StopWithin unbounded, WaitingOn 0, BlockedStep -1. Past the first refusal the agent
+	 * goes on claiming the ground it OCCUPIES and reserves nothing further: dropping its own
+	 * occupancies there let the agent that had merely reserved the node it stands on drive
+	 * into it.
 	 *
 	 * TWO ALTERNATIVES REJECTED, both traced by hand on the three-vehicle triangle:
 	 *
@@ -251,7 +271,9 @@ private:
 	 *    agent could step into the gap it had just opened in front of itself.
 	 *  - Extending the box requirement through every CONSECUTIVE short step. It deadlocks
 	 *    harder: an agent then refuses to move until a node two junctions ahead is free,
-	 *    and the agent holding that node is waiting on it. Spec §3.1 records the trace.
+	 *    and the agent holding that node is waiting on it. Spec §3.1 records the trace;
+	 *    Airside.Model.Traffic.BoxEntryFirstOnly measures it, at 400 uu of line the chained
+	 *    rule kept a van out of while the box in front of it was empty.
 	 *
 	 * A non-Taxiing agent claims only the runway segments in RunwayHeld, occupied, and
 	 * releases the rest: an arrival on the roll owns the strip and nothing on the taxiway.

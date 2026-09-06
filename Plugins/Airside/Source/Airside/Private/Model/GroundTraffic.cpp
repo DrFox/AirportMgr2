@@ -380,6 +380,14 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	// rather than needing a call of its own.
 	if (Agent.Phase != EAgentPhase::Taxiing)
 	{
+		// CLEARED, or the arbitration fields say whatever they said on the last tick this
+		// agent taxied. A parked aircraft still naming the vehicle it once queued behind
+		// would feed Task 8's wait-for graph an edge out of an agent that is not waiting for
+		// anything, and a cycle through it would be a phantom nobody could resolve.
+		Agent.StopWithin = TNumericLimits<double>::Max();
+		Agent.WaitingOn = 0;
+		Agent.BlockedStep = INDEX_NONE;
+
 		TArray<FTrafficResource> Surfaces;
 		Surfaces.Reserve(Agent.RunwayHeld.Num());
 		for (const FRoadSegmentId Segment : Agent.RunwayHeld)
@@ -451,6 +459,11 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	TArray<FWantedClaim> Pending;
 	Pending.Reserve(4);
 
+	// THE ENTRY RULE FIRES FOR ONE BOX PER PASS - the first the window reaches that the agent
+	// has not entered. See the loop below and ClaimAhead's header for the trace that rejected
+	// chaining it through every consecutive box.
+	bool bBoxEntryTaken = false;
+
 	// 1. THE NODE THE CURRENT STEP LEFT, while the centre is still within half a footprint
 	// of it. Without this an agent that had just crossed a junction would release it with
 	// its tail still inside, and the next claimant would drive into that tail.
@@ -484,10 +497,18 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// which is what every junction turn path is. Spec §3.1.
 		const bool bBox = Length < F + G;
 
-		// Entry only: once the agent is INSIDE the box (T past its start) a refused end node
-		// stops it short of that node like any other. Extending the requirement through
-		// consecutive boxes was traced and deadlocks harder - see ClaimAhead's header.
-		const bool bBoxEntry = bBox && T <= Start;
+		// ENTRY ONLY, AND THE FIRST BOX ONLY.
+		//
+		// Entry, because once the agent is INSIDE the box (T past its start) a refused end
+		// node stops it short of that node like any other. The FIRST, because the window
+		// routinely spans several boxes - three 400 uu junction paths sit inside a taxiing
+		// van's window - and demanding the far end of every one of them is spec §3.1's
+		// rejected alternative: the agent then refuses to move until a node two junctions
+		// ahead is free, and the agent holding that node is waiting on it. Measured on
+		// Airside.Model.Traffic.BoxEntryFirstOnly: chaining offered a stop point 400 uu short
+		// of where the held node actually was, keeping the van out of an empty box.
+		const bool bBoxEntry = bBox && T <= Start && !bBoxEntryTaken;
+		bBoxEntryTaken = bBoxEntryTaken || bBoxEntry;
 
 		const double Lo = FMath::Max(Tail, Start);
 		const double Hi = FMath::Min(Head, End);
@@ -559,26 +580,62 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// bar rather than at the runway edge (spec §3.1). Task 6.
 	}
 
-	// RELEASE BEFORE CLAIMING, with the WHOLE list: what is behind the agent is dropped and
-	// what is still wanted is left in place for TryClaim to update. Releasing everything and
-	// re-claiming was rejected - see ClaimAhead's header - because it opens a gap in front of
-	// the agent that a higher-ranked claimant can step into every single tick.
+	// WHAT WAS ACTUALLY CLAIMED, not what was wanted: the loop below stops reserving at the
+	// first refusal, so a resource further along the route was never asked for this pass and
+	// keeping the agent's stale hold on it would block everybody else for line the agent has
+	// just been told it cannot reach. Ground the agent is STANDING on is kept whether or not
+	// the claim was granted - it is standing there either way.
+	//
+	// Released AFTER the claims rather than before them, which is safe and was checked: the
+	// table skips an agent's own claims when it looks for conflicts, and no other agent
+	// claims between this ReleaseExcept and the ones above - Arbitrate runs one agent at a
+	// time. Releasing everything and re-claiming is still rejected (ClaimAhead's header):
+	// this drops only what was not asked for.
 	TArray<FTrafficResource> Wanted;
 	Wanted.Reserve(Pending.Num());
-	for (const FWantedClaim& Want : Pending)
-	{
-		Wanted.Add(Want.Claim.Resource);
-	}
-	Occupancy.ReleaseExcept(Agent.Id, Wanted);
 
 	const int32 WasWaitingOn = Agent.WaitingOn;
 	bool bHeld = false;
 
 	for (const FWantedClaim& Want : Pending)
 	{
-		FTrafficClaim Blocker;
-		if (Occupancy.TryClaim(Want.Claim, Blocker) == EClaimResult::Granted)
+		// PAST THE FIRST REFUSAL, only ground the agent occupies is still claimed. Skipping
+		// its own occupancies here was a defect: an agent refused a node it was STANDING on
+		// abandoned the rest of its own body, and the agent that had merely reserved that
+		// node drove into it.
+		if (bHeld && !Want.Claim.bOccupied)
 		{
+			continue;
+		}
+
+		FTrafficClaim Blocker;
+		const bool bGranted = Occupancy.TryClaim(Want.Claim, Blocker) == EClaimResult::Granted;
+		if (bGranted || Want.Claim.bOccupied)
+		{
+			Wanted.Add(Want.Claim.Resource);
+		}
+		if (bGranted)
+		{
+			continue;
+		}
+
+		// AN OCCUPIED CLAIM CAN ONLY BE REFUSED BY ANOTHER OCCUPANT (see TryClaim), and on a
+		// NODE or a SURFACE that means two bodies in one place - worth saying out loud, once
+		// per new blocker. On an EDGE it does not: one claim per agent per edge means the
+		// interval carries the agent's whole window as well as its body, so two of them
+		// overlapping is the ordinary head-on and queueing case, and warning about it would
+		// fire on every stopped queue on the airport.
+		if (Want.Claim.bOccupied && Want.Claim.Resource.Kind != ETrafficResourceKind::Edge
+			&& WasWaitingOn != Blocker.AgentId)
+		{
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d overlaps agent %d on %s: both are standing on it"),
+				Agent.Id, Blocker.AgentId, *Want.Claim.Resource.Describe());
+		}
+
+		if (bHeld)
+		{
+			// The first refusal in ROUTE ORDER decides where the agent stops; a later one
+			// cannot move that stop point nearer, and it is the nearest that binds.
 			continue;
 		}
 
@@ -607,8 +664,14 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		else
 		{
 			// The node the agent is STANDING on, refused. It cannot stop short of where it
-			// already is, so the only honest answer is "do not move". Not expected: two
-			// agents occupying one node is the thing the claims above exist to prevent.
+			// already is, so the only honest answer is "do not move".
+			//
+			// ROUTINE, not exceptional: it fires whenever two agents' bodies are within half
+			// a footprint of one node - a follower dispatched from the stand its leader has
+			// not yet cleared (Airside.Model.Traffic.CarFollowing does exactly that), an
+			// agent redirected onto a node somebody is crossing, or an aircraft parked on a
+			// node a van drives over. It also fires for the node an agent has just left,
+			// which is why the tail claim exists at all.
 			Agent.StopWithin = 0.0;
 		}
 
@@ -621,11 +684,12 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		}
 		Agent.WaitingOn = Blocker.AgentId;
 
-		// STOP AT THE FIRST REFUSAL. Claiming past it would reserve line beyond a thing the
-		// agent has just been told it cannot pass, holding it against everybody else for a
-		// journey it is not making this tick.
-		break;
+		// NO break: the loop above skips every RESERVATION past this point (claiming line
+		// beyond a refusal would hold it against everybody for a journey the agent is not
+		// making this tick) but must go on claiming the ground the agent is standing on.
 	}
+
+	Occupancy.ReleaseExcept(Agent.Id, Wanted);
 
 	if (!bHeld)
 	{

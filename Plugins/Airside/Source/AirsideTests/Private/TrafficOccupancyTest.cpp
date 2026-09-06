@@ -80,6 +80,25 @@ bool FTrafficOccupancyClaimsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("after ReleaseAll node 9 is free"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 0));
 	Table.Clear();
 	TestEqual(TEXT("Clear empties the table"), Table.GetClaims().Num(), 0);
+
+	// 9. PHYSICAL PRESENCE BEATS A RESERVATION, whatever the ranks say. Spec §3.3 promises
+	//    nobody is evicted from a node they are standing on - which means a RESERVATION on a
+	//    node somebody is already standing on was never a valid claim in the first place, and
+	//    leaving it in the table let the reserver drive into the occupant while the occupant,
+	//    refused its own ground, abandoned the rest of its claim pass.
+	TestEqual(TEXT("a rank-9 stranger reserves node 3"), Table.TryClaim(M2OccNodeClaim(6, 3, false, 9), Blocker), EClaimResult::Granted);
+	TestEqual(TEXT("a rank-0 agent STANDING on node 3 takes it anyway"), Table.TryClaim(M2OccNodeClaim(7, 3, true, 0), Blocker), EClaimResult::Granted);
+	{
+		const TSet<int32> Preempted = Table.TakePreempted();
+		TestTrue(TEXT("and the reserver is reported, so it re-claims this same tick"), Preempted.Num() == 1 && Preempted.Contains(6));
+	}
+	TestTrue(TEXT("the occupant holds node 3"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(3)), 6, &Holder) && Holder == 7);
+
+	// 10. Two OCCUPANTS of one node is the case that stays refused: presence beats a
+	//     reservation, but it cannot evict another body.
+	TestEqual(TEXT("a second agent standing on node 3 is Held"), Table.TryClaim(M2OccNodeClaim(8, 3, true, 9), Blocker), EClaimResult::Held);
+	TestEqual(TEXT("named by the occupant"), Blocker.AgentId, 7);
+	TestEqual(TEXT("nothing was preempted by a refused claim"), Table.TakePreempted().Num(), 0);
 	return true;
 }
 

@@ -113,6 +113,14 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * this table exists to end. Preempted agents are recorded for TakePreempted, so the
 	 * caller can re-run their claim pass in the same tick rather than let them drive one
 	 * frame on a reservation they no longer have.
+	 *
+	 * THREE OUTCOMES, and bOccupied decides two of them. An existing OCCUPANCY refuses
+	 * everything, rank included - nobody is evicted from ground they are standing on, and
+	 * two occupants of one node is a Held the caller reports as an overlap. An occupied
+	 * CLAIMANT preempts any conflicting reservation whatever the ranks are, because spec
+	 * §3.3's promise means a reservation on ground somebody already stands on was never a
+	 * claim anyone could act on. Only reservation against reservation is decided by rank,
+	 * and there ties keep the holder - which is first-to-reserve.
 	 */
 	EClaimResult TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker);
 

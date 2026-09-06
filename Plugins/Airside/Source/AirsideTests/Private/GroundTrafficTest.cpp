@@ -284,4 +284,168 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficBoxEntryTest,
+	"Airside.Model.Traffic.BoxEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
+{
+	// THE THREE-VEHICLE TRIANGLE spec §3.1 argues the box-entry rule from, and the fixture
+	// Task 8's resolver is built on. Three one-way 600 uu arms; every arm is a BOX for a van
+	// (600 < Footprint 500 + Gap 300), so no van can stand on one without still blocking the
+	// node behind it. Each van stands on a node and wants the node after next, so each needs
+	// the arm its neighbour is standing on.
+	//
+	// What is pinned here is that the gridlock forms AT THE NODES and is VISIBLE: every van
+	// stopped dead, every van naming the one it waits for, and the wait-for edges closing
+	// into a cycle. Without the entry rule a van drives into an arm and stops inside the
+	// junction, where a replan has nowhere to turn; without occupancy beating a stale
+	// reservation the wait-for graph is a fan into one van rather than a cycle, and Task 8
+	// would find nothing to resolve.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 600.0, 0.0);
+	const FGuidelineNodeId C = M2TrafficNode(*Net, 300.0, 519.6);
+	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, A, EGuidelineDir::AToB);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, B, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all three routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0)) { return false; }
+
+	// ONE tick. The cycle must be complete after the first arbitration pass and not after a
+	// settling period: Task 8 starts its stall clock from here.
+	Traffic->Advance(0.05, Net);
+
+	const FRoadAgent* Vans[3] = { Traffic->FindAgent(V1), Traffic->FindAgent(V2), Traffic->FindAgent(V3) };
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		const FRoadAgent* Van = Vans[Index];
+		if (!TestNotNull(TEXT("van still under way"), Van)) { return false; }
+		TestTrue(FString::Printf(TEXT("van %d never moved (speed %.3f)"), Van->Id, Van->Follower.Speed), Van->Follower.Speed < 1e-9);
+		TestEqual(FString::Printf(TEXT("van %d is stopped where it stands"), Van->Id), Van->StopWithin, 0.0);
+		TestEqual(FString::Printf(TEXT("van %d was refused on its first step"), Van->Id), Van->BlockedStep, 0);
+	}
+
+	UE_LOG(LogM2TrafficTest, Log, TEXT("BoxEntry measured: waits %d->%d, %d->%d, %d->%d"),
+		V1, Vans[0]->WaitingOn, V2, Vans[1]->WaitingOn, V3, Vans[2]->WaitingOn);
+
+	// The cycle, named: van 1 stands on A and wants B, which van 2 is standing on.
+	TestEqual(TEXT("van 1 waits on van 2"), Vans[0]->WaitingOn, V2);
+	TestEqual(TEXT("van 2 waits on van 3"), Vans[1]->WaitingOn, V3);
+	TestEqual(TEXT("van 3 waits on van 1"), Vans[2]->WaitingOn, V1);
+
+	// A second's worth of ticks changes nothing: this is a deadlock, and until Task 8 lands
+	// nothing is entitled to resolve it. Anyone who moved has driven into a junction.
+	M2TrafficRun(*Traffic, *Net, 1.0, [](int32) { return true; });
+	for (const int32 Id : { V1, V2, V3 })
+	{
+		const FRoadAgent* Van = Traffic->FindAgent(Id);
+		TestTrue(FString::Printf(TEXT("van %d still has not moved after 1 s (%.2f uu)"), Id, Van->Follower.Travelled),
+			Van->Follower.Travelled < 1.0);
+	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficBoxEntryFirstOnlyTest,
+	"Airside.Model.Traffic.BoxEntryFirstOnly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
+{
+	// THE ENTRY RULE APPLIES TO THE FIRST BOX THE WINDOW REACHES, NOT TO EVERY CONSECUTIVE
+	// ONE - spec §3.1's rejected alternative, the one that "deadlocks HARDER". A 20 km
+	// run-up, then three 400 uu boxes (400 < 500 + 300) end to end. The node at the end of
+	// the SECOND box is held by a phantom occupant no agent owns.
+	//
+	// Chained through consecutive boxes, the rule stops the van a gap short of the SECOND
+	// box's START - 20100 - while the first box's own end node is free and nothing is inside
+	// the first box at all. Applied to the first box only, the van claims the first box's end
+	// (free, granted) and stops against the held node itself, 20500, entering the first box
+	// as it should. The two rules AGREE once the van is standing before the second box, which
+	// is why the discriminating measurement below is taken while the van is still on the
+	// run-up rather than at the end.
+	//
+	// The phantom sits on the end of the SECOND box, not the third as first drafted: with it
+	// on the third both rules offer the same stop point from the same moment, and the test
+	// would pass either way. Traced through the window arithmetic before it was written.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId N0 = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N1 = M2TrafficNode(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId N2 = M2TrafficNode(*Net, 20400.0, 0.0);
+	const FGuidelineNodeId N3 = M2TrafficNode(*Net, 20800.0, 0.0);
+	const FGuidelineNodeId N4 = M2TrafficNode(*Net, 21200.0, 0.0);
+	M2TrafficJoin(*Net, N0, N1, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, N1, N2, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, N2, N3, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, N3, N4, EGuidelineDir::AToB);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, N0, N4, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Van > 0)) { return false; }
+
+	// The phantom: agent 99 exists only in the table, so nothing ever releases it. STANDING
+	// on the node rather than reserving it, so no rank can take it away.
+	const int32 Phantom = 99;
+	FTrafficClaim Sitting;
+	Sitting.AgentId = Phantom;
+	Sitting.Resource = FTrafficResource::OfNode(N3);
+	Sitting.bOccupied = true;
+	FTrafficClaim Blocker;
+	Traffic->OccupancyForTest().TryClaim(Sitting, Blocker);
+
+	// The stop point the arbiter offers while the van is still on the run-up, in route
+	// distance. 20500 is the held node less the van's gap; 20100 would be the second box's
+	// START less the gap, which is the chained rule's answer and 400 uu too early.
+	double EarliestStopPointOffered = TNumericLimits<double>::Max();
+	bool bBlockedBeforeTheBoxes = false;
+	bool bStoppedBeforeTheBoxes = false;
+	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	{
+		const FRoadAgent* Agent = Traffic->FindAgent(Van);
+		if (Agent == nullptr) { return false; }
+		if (Agent->Follower.Travelled < 20000.0 && Agent->StopWithin < 1.0e9)
+		{
+			EarliestStopPointOffered = FMath::Min(EarliestStopPointOffered, Agent->Follower.Travelled + Agent->StopWithin);
+			bBlockedBeforeTheBoxes = bBlockedBeforeTheBoxes || Agent->WaitingOn == Phantom;
+		}
+		if (Agent->Follower.Travelled > 100.0 && Agent->Follower.Travelled < 19999.0 && Agent->Follower.Speed < 1e-6)
+		{
+			bStoppedBeforeTheBoxes = true;
+		}
+		return true;
+	});
+
+	const FRoadAgent* Agent = Traffic->FindAgent(Van);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("BoxEntryFirstOnly measured: earliest stop point offered on the run-up %.0f uu ")
+		TEXT("(the chained rule offers 20100), finished at %.0f uu, speed %.4f, waiting on %d, blocked step %d"),
+		EarliestStopPointOffered, Agent->Follower.Travelled, Agent->Follower.Speed, Agent->WaitingOn, Agent->BlockedStep);
+
+	if (!TestTrue(TEXT("the van WAS refused for the held node while still on the run-up (otherwise this measures nothing)"),
+		bBlockedBeforeTheBoxes)) { return false; }
+
+	// THE DISCRIMINATING ASSERTION.
+	TestTrue(FString::Printf(
+		TEXT("while before the first box the stop point offered is the HELD NODE less the gap (20500), ")
+		TEXT("never a later box's start (20100): %.0f"), EarliestStopPointOffered),
+		EarliestStopPointOffered >= 20499.0);
+
+	TestFalse(TEXT("and it never came to rest before the first box"), bStoppedBeforeTheBoxes);
+	TestTrue(FString::Printf(TEXT("it entered the first box (%.0f uu)"), Agent->Follower.Travelled),
+		Agent->Follower.Travelled > 20000.0);
+	TestTrue(FString::Printf(TEXT("and stopped a gap short of the box whose end is held (%.0f uu, want 20100)"), Agent->Follower.Travelled),
+		Agent->Follower.Travelled <= 20101.0);
+	TestTrue(TEXT("stopped"), Agent->Follower.Speed < 1e-6);
+	TestEqual(TEXT("waiting on the phantom"), Agent->WaitingOn, Phantom);
+	return true;
+}
+
 #endif
