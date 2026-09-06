@@ -51,8 +51,11 @@ a dated paragraph; listed here so a reviewer does not have to diff the whole doc
   parking it where it stands; a goal node that no longer resolves keeps its old handle. §6.
 
 Other execution-time findings (implementation nuances that did not change spec text, plan
-corrections, and test-fixture decisions) are in
-`.superpowers/sdd/2026-09-06-m2-ground-traffic/rulings.md`.
+corrections, and test-fixture decisions) are listed in the handover's Outcome section
+(`docs/superpowers/handovers/2026-09-06-m2-ground-traffic.md`) and in PR #54's description;
+the plan's working directory that held the raw ledger was retired once the branch was pushed.
+Two PIE rounds on 2026-09-06 added the deadlock-resolver amendments in §5 and the airborne
+release in §3.1.
 
 ---
 
@@ -240,7 +243,14 @@ it — the sample-once rule.
   - a hold-short node claims the chain its `HoldShortFor` names, so the stop is at the bar,
     not at the runway edge;
   - `StartArrival` claims the chain and `Vacated` releases it; a departure holds it from
-    entering the runway edge until `Gone`.
+    entering the runway edge until `Gone`. *Amended 2026-09-06 from the second PIE report:*
+    until AIRBORNE - `FTakeoffRun` in its Climb phase - not until `Gone`. Gone is the top of
+    the climb, 300 m up and most of a minute after lift-off, and every arrival asked for in
+    that minute was refused "the runway is in use" over an empty strip. The strip is what the
+    table protects; the next arrival joins its approach minutes out and cannot touch down
+    under a climbing aircraft. Wake and separation between movements are M3's sequencer.
+    `Airside.Model.Traffic.DepartureReleasesWhenAirborne` measures the release within one
+    tick of lift-off.
 
 `DispatchArrival` refuses with `RunwayOccupied` while the chain is held.
 

@@ -415,6 +415,27 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			}
 		}
 
+		// AIRBORNE: THE RUNWAY IS FREE. A departure held the strip from the handover until
+		// Gone, and Gone is the top of the climb - 300 m up, most of a minute after the
+		// wheels left. In play (2026-09-06) every arrival dispatched in that minute was
+		// refused "the runway is in use" while the strip sat empty. The strip is what the
+		// table protects, and the strip is clear once the aircraft is established in the
+		// climb: the next arrival joins its approach minutes out (FLandingRun, 1.9 km on a
+		// 100 m glideslope) and cannot touch down under a climbing aircraft. Wake and
+		// separation between successive movements are URunwaySequencer's (M3), not this
+		// table's. Everything the departure held goes - RunwayHeld, the crossing it passed
+		// a bar to reach - and the fields are reset so HoldRunwayOnly claims nothing back.
+		if (Agent.Phase == EAgentPhase::Departing
+			&& Agent.Departure.Phase == ETakeoffPhase::Climb
+			&& (Agent.RunwayHeld.Num() > 0 || Agent.CrossingPhase != ECrossingPhase::None))
+		{
+			Occupancy.ReleaseAll(Id);
+			Agent.RunwayHeld.Reset();
+			Agent.CrossingRunway = FRoadSegmentId();
+			Agent.CrossingPhase = ECrossingPhase::None;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
+		}
+
 		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause
 		// is not stalled, and neither is one crawling through a turn. All three conditions
 		// together are what ResolveDeadlocks means by a waiter, and the clock
