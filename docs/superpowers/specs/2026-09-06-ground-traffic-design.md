@@ -1,6 +1,6 @@
 # Ground Traffic — Design
 
-**Status:** implemented 2026-09-06 (feature/m2-ground-traffic; PR pending). Milestone 2 of
+**Status:** implemented 2026-09-06 (feature/m2-ground-traffic, PR #54). Milestone 2 of
 `2026-09-05-game-systems-map-design.md` §3.8 and §5.3.
 The one new system inside Airside; everything lands in `Plugins/Airside`, `Model/` first.
 
