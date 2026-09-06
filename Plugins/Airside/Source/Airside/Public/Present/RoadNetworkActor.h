@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
 #include "Present/RoadSurfacePresenter.h"
@@ -524,6 +525,25 @@ public:
 	 *  rather than the Command layer design spec 7.3 specifies. Stays on the actor for the
 	 *  same saved-with-the-level reason as Network. */
 	UPROPERTY() TObjectPtr<URoadEditHistory> History;
+
+	/**
+	 * Footprints, gaps, stall and retry clocks - every number the traffic arbiter works in.
+	 * Spec 2026-09-06 §2.3; handed to UAirsideTraffic::Advance each tick.
+	 *
+	 * HERE AND NOT ON UGroundTraffic, which is where they used to be EditAnywhere: that
+	 * object is Transient and re-created per session, so a figure tuned in the Details panel
+	 * was never saved and never survived a PIE duplication. This actor is what the .umap
+	 * actually saves, which makes it the only place a level-authored figure can live - the
+	 * same reasoning as Network, History and ShutdownPauseSeconds.
+	 *
+	 * NOT UAirsideSettings either. That class resolves CONTENT defaults - which mesh, which
+	 * material, which airframe - in exactly one function each. These are per-airport gameplay
+	 * tuning a designer sets on the level, not a default asset to fall back on.
+	 *
+	 * PUBLIC, unlike ShutdownPauseSeconds: the level authors it and the seam test reads it
+	 * back off the model, so it is not a figure this actor keeps to itself.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Traffic") FTrafficRules TrafficRules;
 
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */

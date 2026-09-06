@@ -159,8 +159,17 @@ public:
 	 *
 	 * Network is what the model arbitrates over; null means every agent drives as if alone.
 	 * Passed per call and never held, so this object cannot outlive the graph.
+	 *
+	 * RULES ARE PASSED PER TICK for the same reason, and copied into the model each time.
+	 * They are ARoadNetworkActor::TrafficRules - level-authored gameplay figures, saved with
+	 * the .umap - and the model is Transient, so a PIE duplication (which re-points the
+	 * model subobject; see ARoadNetworkActor::PostInitProperties) would otherwise leave the
+	 * arbiter running on the CDO's defaults while the Details panel showed the level's.
+	 * Copying eight doubles per tick is cheaper than that class of bug is to find. A setter
+	 * called before Advance was the alternative: it is the same copy with one more way for a
+	 * caller to forget it.
 	 */
-	void Advance(float DeltaSeconds, double SurfaceZ, const URoadNetwork* Network);
+	void Advance(float DeltaSeconds, double SurfaceZ, const URoadNetwork* Network, const FTrafficRules& Rules);
 
 	/**
 	 * The newest agent's Phase, for Airside.Present.ArrivalDispatch - which drives a real

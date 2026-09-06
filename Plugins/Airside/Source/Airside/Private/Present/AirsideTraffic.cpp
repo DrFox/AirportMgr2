@@ -178,9 +178,19 @@ ARoadAgentActor* UAirsideTraffic::GetNewestAgent() const
 	return Views.FindRef(Model->GetNewestAgentId());
 }
 
-void UAirsideTraffic::Advance(float DeltaSeconds, double InSurfaceZ, const URoadNetwork* Network)
+void UAirsideTraffic::Advance(float DeltaSeconds, double InSurfaceZ, const URoadNetwork* Network,
+	const FTrafficRules& Rules)
 {
 	SurfaceZ = InSurfaceZ;
+
+	// EIGHT DOUBLES, EVERY TICK, and copied rather than pointed at. The model is Transient
+	// and re-pointed on a PIE duplication (see ARoadNetworkActor::PostInitProperties), so a
+	// value copied once at construction would be the CDO's for the whole play session while
+	// the Details panel showed the level's - the exact shape of the 2026-09-06 PIE bug, one
+	// layer down. A pointer back to the actor would work and is what this class does not do:
+	// UGroundTraffic is world-free and holds nothing that can outlive a graph.
+	Model->Rules = Rules;
+
 	Model->Advance(DeltaSeconds, Network);
 
 	// One pass over the model's own array, not the map: an agent the tick removed is already

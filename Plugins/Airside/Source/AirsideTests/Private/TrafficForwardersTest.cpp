@@ -90,11 +90,44 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("a view was spawned on the phase event"), View)) { return false; }
 	const FVector Before = View->GetActorLocation();
 
-	for (int32 Tick = 0; Tick < 40; ++Tick) { Traffic->Advance(0.05f, 0.0, &Net); }
+	for (int32 Tick = 0; Tick < 40; ++Tick) { Traffic->Advance(0.05f, 0.0, &Net, Actor->TrafficRules); }
 	TestTrue(TEXT("the view moved: Advance forwards and pushes LastMotion to the view"),
 		FVector::Dist(View->GetActorLocation(), Before) > 10.0);
 	TestTrue(TEXT("and the model's own position agrees with the view"),
 		FVector2D::Distance(Traffic->LastAgentPositionForTest(), FVector2D(View->GetActorLocation().X, View->GetActorLocation().Y)) < 1.0);
+
+	// THE RULES SEAM. FTrafficRules is a level-authored UPROPERTY on the ACTOR - the only
+	// object here the .umap saves - and the model that arbitrates on it is Transient and
+	// re-pointed on a PIE duplication, so the figures have to travel down the tick. Measured
+	// through ARoadNetworkActor::Tick rather than by calling Advance directly, because the
+	// forwarder under test is the actor's own line: with it deleted the model keeps its
+	// constructor default and every number a designer typed is silently ignored.
+	Actor->TrafficRules.VehicleGap = 777.0;
+	Actor->Tick(0.05f);
+	TestEqual(TEXT("a figure set on the ACTOR reaches the model's rules within one tick"),
+		Model->Rules.VehicleGap, 777.0, 1e-9);
+
+	// THE REBUILD SEAM, at the level of the composition: ARoadNetworkActor::RebuildMesh must
+	// call UGroundTraffic::OnGraphRebuilt. Airside.Model.Traffic.GraphRebuild pins what that
+	// function DOES, but it calls it by hand, so deleting the actor's three lines left every
+	// agent holding freed guideline handles with all 118 tests green. A road edit through the
+	// actor - PlaceNode, ConnectNodes, then the RebuildMesh every build tool calls after one
+	// (see RoadDrawTool.cpp) - is the real path, and the summary is the evidence it ran.
+	//
+	// FAR FROM THE VAN'S ROUTE, so what is measured is the CALL and not a re-route: the new
+	// pavement derives its own guidelines 100 km away, the van's authored A-B line survives
+	// the sweep by handle, and its plan comes through Intact.
+	const int32 FarA = Actor->PlaceNode(FVector2D(-100000.0, -80000.0));
+	const int32 FarB = Actor->PlaceNode(FVector2D(-100000.0, -60000.0));
+	if (TestTrue(TEXT("two road nodes placed through the actor"), FarA != INDEX_NONE && FarB != INDEX_NONE))
+	{
+		TestTrue(TEXT("and connected"), Actor->ConnectNodes(FarA, FarB));
+		Actor->RebuildMesh();
+		TestTrue(TEXT("the rebuild reached the traffic model: at least one agent re-resolved"),
+			Model->GetLastRebuildSummaryForTest().ReResolved >= 1);
+		TestEqual(TEXT("and the van was not stranded by pavement 100 km away"),
+			Model->GetLastRebuildSummaryForTest().Stranded, 0);
+	}
 
 	TestTrue(TEXT("RetireAgent forwards"), Traffic->RetireAgent(Id));
 	TestEqual(TEXT("the model dropped it"), Model->GetAgentCount(), 0);

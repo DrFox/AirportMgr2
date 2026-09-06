@@ -393,7 +393,11 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	// Scaled HERE, at the one place real frame time becomes agent time, so nothing below
 	// this line ever learns there is a speed setting. See SetSimTimeScale.
-	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ, Network);
+	// TrafficRules travels with the tick, not with construction: it is a level-authored
+	// UPROPERTY on this actor and the model that reads it is Transient, so handing it over
+	// every frame is what keeps a figure tuned in the Details panel true of the arbiter -
+	// see the property's own comment and UAirsideTraffic::Advance.
+	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ, Network, TrafficRules);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
