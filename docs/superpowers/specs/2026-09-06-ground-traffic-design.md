@@ -224,6 +224,14 @@ rather than a far-side bar, because a player may place one bar or none on the fa
 a hold that waits for a bar that does not exist never ends. Rejected: holding until the next
 node only — a runway node sits ON the strip, so that releases while the tail is still on it.
 
+*Refined 2026-09-06 during Task 7:* a bar cannot tell a crossing being ENTERED from one being
+LEFT — the far-side bar of a two-bar crossing is also "a hold-short node the agent has just
+passed", and arming the hold there kept the runway occupied behind an aircraft that had
+already crossed, for the whole exit leg. So the hold is armed only when the step leaving the
+bar leads ONTO the strip: its end node lies on the runway (`IsGuidelineNodeOnRunway`), or
+the agent's own centre already does. A bar whose step leads away from the strip is the
+exit bar and arms nothing.
+
 ### 3.2 Window
 
 `Window = Speed² / (2 · Taxi.Decel) + Gap[Class]`. A stopped agent still holds
