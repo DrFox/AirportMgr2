@@ -186,3 +186,5 @@ split and back through the hairpin. Two planner rules, both in `ArrivalPlanner::
 §4's "falls out without code" was wrong by exactly these two rules. Test:
 `Airside.Model.ArrivalTakesTheArcNotTheJunction`. 127 tests, 0 failed, 0 crashed, built on
 the main checkout.
+
+Verified in PIE by the player after this round, on the M_Starter level: "that works" (2026-09-06).
