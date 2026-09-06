@@ -358,9 +358,13 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 
 		// Due west of Northward. Its bearing to Centre swings from south to west, crossing
 		// its bearing to Far, so the two arms must swap places in Northward's own list.
-		TestTrue(TEXT("a node moves"), Actor->MoveNode(Centre, FVector2D(-5000.0, 5000.0)));
+		// (-2000, 2000), not the old (-5000, 5000): that target closed the 2300-wide arms to
+		// 27 degrees on a 5000 uu arm, a corner no radius fits (floor 4872 + 1150 at the far
+		// end) which the solver now refuses and which used to be drawn folded. A move that
+		// keeps every corner buildable is what this test is about.
+		TestTrue(TEXT("a node moves"), Actor->MoveNode(Centre, FVector2D(-2000.0, 2000.0)));
 		TestTrue(TEXT("and it is where it was put"),
-			Actor->Network->GetNodes()[Centre].Position == FVector2D(-5000.0, 5000.0));
+			Actor->Network->GetNodes()[Centre].Position == FVector2D(-2000.0, 2000.0));
 
 		// The control point has to travel with the node. Tangents - and so the bearing sort
 		// and the solver - are derived from Control, not from the endpoints, so a segment

@@ -76,4 +76,13 @@ public:
 	 * exactly tangent, where their rims would land on coincident edges.
 	 */
 	static double NodeReach(const URoadNetwork& Network, FRoadNodeId Node, int32 ArcSegments = 12);
+
+	/**
+	 * The LEAST a segment can be cut back at AtNode: the junction there solved with every
+	 * fillet at zero radius - the inner corner itself - or the half-width of an end cap for
+	 * a dead end. What the segment's OTHER end must leave room for, and what a placement
+	 * rule asks before creating a corner the solver could only fail. 0 when the node cannot
+	 * be solved at all, so a caller never sees a floor it cannot reason about.
+	 */
+	static double ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode);
 };

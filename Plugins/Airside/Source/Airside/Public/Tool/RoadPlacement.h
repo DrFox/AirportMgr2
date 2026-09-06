@@ -45,6 +45,14 @@ enum class ERoadPlacement : uint8
 	 * fault when the ghost is red at both.
 	 */
 	TooSharpAtEnd,
+
+	/**
+	 * A corner at either end whose arms are too short to hold it: the junction's cut, even
+	 * with no fillet at all, would reach past the allowance of one of the segments. The
+	 * solver would then fail that node and draw nothing from it (2026-09-06, the road that
+	 * vanished at an acute angle), so it is refused here where the ghost can say why.
+	 */
+	TooShortForCorner,
 };
 
 struct FRoadPlacementLimits
@@ -54,6 +62,13 @@ struct FRoadPlacementLimits
 
 	/** Tightest corner allowed against an existing arm at the start node, in degrees. */
 	double MinTurnDegrees = 25.0;
+
+	/**
+	 * Half-width of the road being drawn, uu, for the corner-fit check. 0 disables that
+	 * check, which is what a caller with no profile in hand gets and what every test that
+	 * predates the check relies on.
+	 */
+	double NewRoadHalfWidth = 0.0;
 };
 
 /**
@@ -86,4 +101,15 @@ namespace RoadPlacement
 
 	/** Short player-facing reason, for the overlay and the log. */
 	AIRSIDE_API const TCHAR* Describe(ERoadPlacement Result);
+
+	/**
+	 * Would every corner at Node, and every corner at its neighbours that its arms take
+	 * part in, still fit if Node stood at Position?
+	 *
+	 * The drag path: Validate judges a segment before it exists, but moving a node changes
+	 * the corners at that node AND at the far end of each incident segment, none of which
+	 * Validate sees. The facade asks this before accepting a move, so a drag cannot create
+	 * the corner the solver would then fail. True for a node with no arms.
+	 */
+	AIRSIDE_API bool NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Position);
 }

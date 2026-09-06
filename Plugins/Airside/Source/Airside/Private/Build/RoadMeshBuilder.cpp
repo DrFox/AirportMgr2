@@ -1,5 +1,7 @@
 #include "Build/RoadMeshBuilder.h"
 
+#include "AirsideLog.h"
+
 #include "Build/RoadProfileBands.h"
 #include "CompGeom/PolygonTriangulation.h"
 #include "Model/RoadNetwork.h"
@@ -384,6 +386,26 @@ void FRoadMeshBuilder::AddSegment(const URoadNetwork& Network, FRoadSegmentId Se
 	// `along` runs from the A-end cut to the B-end cut, so it measures the ribbon rather
 	// than the node-to-node distance. Markings therefore start where the surface starts.
 	const double RibbonLength = FVector2D::Distance(LeftStart, LeftEnd);
+
+	// A FOLDED RIBBON IS NEVER EMITTED. If the two cut centres have passed each other the
+	// triangles below would wind backwards and face down - the road that "disappeared under
+	// the surface" on 2026-09-06. The solver now refuses such nodes; this is the last line
+	// of defence, and it says so rather than drawing it.
+	{
+		const FRoadNode* NodeA = Network.GetNode(Segment->A);
+		const FRoadNode* NodeB = Network.GetNode(Segment->B);
+		const FVector2D CentreStart = (Segment->LeftCutA + Segment->RightCutA) * 0.5;
+		const FVector2D CentreEnd = (Segment->LeftCutB + Segment->RightCutB) * 0.5;
+		if (NodeA != nullptr && NodeB != nullptr
+			&& FVector2D::DotProduct(CentreEnd - CentreStart, NodeB->Position - NodeA->Position) <= 0.0)
+		{
+			UE_LOG(LogRoadMesh, Warning,
+				TEXT("Segment %d not drawn: its two cuts have crossed (trims %.0f + %.0f over %.0f uu) - ")
+				TEXT("the ribbon would be folded and face down"),
+				SegmentId.Index, Segment->TrimA, Segment->TrimB, FVector2D::Distance(NodeA->Position, NodeB->Position));
+			return;
+		}
+	}
 
 	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(SegProfile, Materials);
 	const int32 RailCount = Bands.Alphas.Num();

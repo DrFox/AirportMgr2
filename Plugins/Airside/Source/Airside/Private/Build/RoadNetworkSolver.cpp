@@ -2,21 +2,12 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RoadGeom.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadSolve, Log, All);
 
 namespace
 {
-	/**
-	 * Share of a segment's length one end may consume. Both ends are solved
-	 * independently and neither can see the other's radius, so capping each at a little
-	 * under half is what guarantees the two cuts never cross.
-	 */
-	constexpr double MaxCutFraction = 0.45;
-
-	/** How many times to shrink a node's radii before giving up. */
-	constexpr int32 MaxClampAttempts = 6;
-
 	/** Straight-line distance between a segment's endpoints. */
 	double SegmentChordLength(const URoadNetwork& Network, const FRoadSegment& Segment)
 	{
@@ -28,6 +19,84 @@ namespace
 		}
 		return FVector2D::Distance(A->Position, B->Position);
 	}
+}
+
+namespace
+{
+	/**
+	 * Each end's share of a segment's slack (its length less both ends' floors). UNDER a
+	 * half, so two ends that each take their whole share still leave a ribbon between them:
+	 * at exactly a half the cut centres would touch and the ribbon would have no length.
+	 */
+	constexpr double SlackShare = 0.45;
+
+	/**
+	 * One arm per live incident segment, in incidence order, with the profile's own widths
+	 * and preferred radius. The ONE place a node's junction input is assembled, so the solve
+	 * proper and the zero-radius floor query cannot describe the same node differently.
+	 */
+	bool BuildNodeInput(const URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
+		FJunctionInput& OutInput, TArray<FRoadSegmentId>& OutArmSegments)
+	{
+		const TArray<FRoadNode>& Nodes = Network.GetNodes();
+		if (!Nodes.IsValidIndex(NodeIndex))
+		{
+			return false;
+		}
+		const FRoadNode& Node = Nodes[NodeIndex];
+		if (!Node.bAlive || Node.Incident.Num() == 0)
+		{
+			return false;
+		}
+		FRoadNodeId NodeId;
+		NodeId.Index = NodeIndex;
+		NodeId.Generation = Node.Generation;
+
+		OutInput.Position = Node.Position;
+		OutInput.ArcSegments = ArcSegments;
+		for (const FRoadSegmentId SegmentId : Node.Incident)
+		{
+			const FRoadSegment* Segment = Network.GetSegment(SegmentId);
+			if (Segment == nullptr)
+			{
+				continue;
+			}
+			const URoadProfile* Profile = Network.ProfileFor(*Segment);
+
+			FJunctionArm Arm;
+			Arm.Tangent = Network.GetOutgoingTangent(SegmentId, NodeId);
+			Arm.HalfWidthLeft  = Profile ? Profile->GetHalfWidthLeft()  : 0.0;
+			Arm.HalfWidthRight = Profile ? Profile->GetHalfWidthRight() : 0.0;
+			Arm.FilletRadius   = Profile ? Profile->PreferredFilletRadius : 0.0;
+			// A runway passes through: never trimmed, never filleted. See FJunctionArm.
+			Arm.bContinuous    = Profile ? Profile->bContinuousThroughJunctions : false;
+			Arm.UserData = SegmentId.Index;
+			OutInput.Arms.Add(Arm);
+			OutArmSegments.Add(SegmentId);
+		}
+		return OutInput.Arms.Num() > 0;
+	}
+}
+
+double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegmentId Segment, FRoadNodeId AtNode)
+{
+	FJunctionInput Input;
+	TArray<FRoadSegmentId> ArmSegments;
+	if (!BuildNodeInput(Network, AtNode.Index, 4, Input, ArmSegments) || Input.Arms.Num() == 1)
+	{
+		return 0.0;   // no node, or a dead end - whose cap shrinks rather than holding a floor
+	}
+	for (FJunctionArm& Arm : Input.Arms)
+	{
+		Arm.FilletRadius = 0.0;
+	}
+	const FJunctionResult Result = FJunctionSolver::SolveCuts(Input);
+	if (!Result.bValid)
+	{
+		return 0.0;
+	}
+	const int32 ArmIndex = ArmSegments.IndexOfByKey(Segment);
+	return Result.Arms.IsValidIndex(ArmIndex) ? Result.Arms[ArmIndex].CutDistance : 0.0;
 }
 
 bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIndex,
@@ -52,106 +121,146 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	// Incident is maintained sorted by CCW bearing, which is exactly what
 	// FJunctionSolver requires. Do not re-sort here.
 	Out.Input = FJunctionInput();
-	Out.Input.Position = Node.Position;
-	Out.Input.ArcSegments = ArcSegments;
 	Out.ArmSegments.Reset();
-
-	// Preferred radii, kept aside so each clamping attempt scales the profile's own
-	// value rather than compounding the previous attempt's reduction.
-	TArray<double> PreferredRadii;
-
-	/** Longest cut this arm may take before its two cut lines would cross. */
-	TArray<double> ArmAllowance;
-
-	for (const FRoadSegmentId SegmentId : Node.Incident)
-	{
-		const FRoadSegment* Segment = Network.GetSegment(SegmentId);
-		if (Segment == nullptr)
-		{
-			continue;
-		}
-
-		const URoadProfile* Profile = Network.ProfileFor(*Segment);
-
-		FJunctionArm Arm;
-		Arm.Tangent = Network.GetOutgoingTangent(SegmentId, NodeId);
-		Arm.HalfWidthLeft  = Profile ? Profile->GetHalfWidthLeft()  : 0.0;
-		Arm.HalfWidthRight = Profile ? Profile->GetHalfWidthRight() : 0.0;
-		Arm.FilletRadius   = Profile ? Profile->PreferredFilletRadius : 0.0;
-
-		// A runway passes through its exits rather than ending at them. Read from the same
-		// profile as the widths, so a segment cannot be wide like a runway and cut like a
-		// taxiway - see URoadProfile::bContinuousThroughJunctions.
-		Arm.bContinuous    = Profile ? Profile->bContinuousThroughJunctions : false;
-		Arm.UserData = SegmentId.Index;
-		Out.Input.Arms.Add(Arm);
-		Out.ArmSegments.Add(SegmentId);
-		PreferredRadii.Add(Arm.FilletRadius);
-		ArmAllowance.Add(MaxCutFraction * SegmentChordLength(Network, *Segment));
-	}
-
-	if (Out.Input.Arms.Num() == 0)
+	if (!BuildNodeInput(Network, NodeIndex, ArcSegments, Out.Input, Out.ArmSegments))
 	{
 		return false;
 	}
 
-	// Clamp the fillet radius to what the incident segments can physically absorb.
-	//
-	// Design spec section 5 step 4 is explicit that the solver does NOT do this: the
-	// clamp needs a segment length the solver deliberately does not know, so "a caller
-	// that must fit a finite segment clamps the radius before calling", and section
-	// 4.3 has the radius "further clamped by what geometrically fits". This is that
-	// caller. Left unclamped, a corner's cut of reach + |R / tan(Theta/2)| can exceed
-	// the segment it is cutting, the two cut lines cross, and the ribbon renders
-	// inside-out - a black, back-facing surface rather than a road.
-	//
-	// Cut distance is affine in the radius, so dividing by the overshoot converges in
-	// a couple of passes; the loop re-measures rather than trusting that arithmetic.
-	double Scale = 1.0;
+	TArray<double> PreferredRadii;
+	for (const FJunctionArm& Arm : Out.Input.Arms)
+	{
+		PreferredRadii.Add(Arm.FilletRadius);
+	}
 
-	for (int32 Attempt = 0; Attempt < MaxClampAttempts; ++Attempt)
+	// THE ALLOWANCE IS SET BY BOTH ENDS. A segment holds its two cuts only if their sum is
+	// under its length. Each end is solved on its own and cannot see the other's fillet, so
+	// each is given its own zero-radius floor (the inner corner, or a dead end's cap) plus
+	// HALF the slack the segment has left once both floors are paid for. Two ends that each
+	// stay inside that can never cross. A flat fraction of the length was tried first and
+	// refused honest roads: a 2300-wide L bend with 2500 arms needs 1150 at the corner and
+	// 1150 at the cap, which fits, and a 45% cap said it did not.
+	FJunctionInput ZeroInput = Out.Input;
+	for (FJunctionArm& Arm : ZeroInput.Arms)
+	{
+		Arm.FilletRadius = 0.0;
+	}
+	const FJunctionResult ZeroHere = FJunctionSolver::SolveCuts(ZeroInput);
+	if (!ZeroHere.bValid)
+	{
+		// Nothing fits at any radius; the fit below reports the same and fails the node.
+		Out.Result = ZeroHere;
+		return true;
+	}
+
+	TArray<double> ArmAllowance;
+	for (int32 ArmIndex = 0; ArmIndex < Out.Input.Arms.Num(); ++ArmIndex)
+	{
+		const FRoadSegmentId SegmentId = Out.ArmSegments[ArmIndex];
+		const FRoadSegment* Segment = Network.GetSegment(SegmentId);
+		const double Length = Segment ? SegmentChordLength(Network, *Segment) : 0.0;
+		// A dead end's floor is ZERO: its cap has no corner to respect and is drawn shorter
+		// when the segment is short (FJunctionArm::MaxCutDistance). Only a corner has a floor.
+		const double MinHere = Out.Input.Arms.Num() == 1 ? 0.0 : ZeroHere.Arms[ArmIndex].CutDistance;
+		const double MinFar = Segment ? ZeroRadiusCut(Network, SegmentId, Network.GetOtherEnd(SegmentId, NodeId)) : 0.0;
+		const double Slack = Length - MinHere - MinFar;
+		if (Slack < 0.0)
+		{
+			// Even with no fillet at either end the two cuts cross: the segment is shorter
+			// than its own width and corners need. The node FAILS - its segments are then
+			// not drawn from this end rather than drawn folded and facing down (the road
+			// that vanished, 2026-09-06). RoadPlacement refuses this before it exists, so
+			// this line means a load, a heal or a drag got past that rule.
+			UE_LOG(LogRoadSolve, Warning,
+				TEXT("Node %d: segment %d is %.0f uu long but its two corners need %.0f + %.0f even ")
+				TEXT("with no fillet. Draw it longer, widen the angle, or use a narrower profile."),
+				NodeIndex, SegmentId.Index, Length, MinHere, MinFar);
+			Out.Result.bValid = false;
+			return true;
+		}
+		ArmAllowance.Add(MinHere + SlackShare * Slack);
+	}
+	for (int32 ArmIndex = 0; ArmIndex < Out.Input.Arms.Num(); ++ArmIndex)
+	{
+		Out.Input.Arms[ArmIndex].MaxCutDistance = ArmAllowance[ArmIndex];
+	}
+
+	// FIT THE RADII EXACTLY, in at most three solves. A cut distance is Reach + R * cot(Theta/2):
+	// a constant part (where the inner edges meet) plus a part proportional to the radius.
+	// The old loop divided the radii by the overshoot ratio and hoped, which is right only
+	// when the constant part is zero; for a tight corner it ran out of attempts still
+	// overshooting and said nothing, and at radius zero it warned and then carried on - both
+	// emitted a folded ribbon, which is the road that vanished (2026-09-06). Now: solve at
+	// the preferred radii; if any arm overshoots, solve at zero radius to learn the constant
+	// part; if even that overshoots, the node FAILS - nothing this solver can do - otherwise
+	// interpolate the scale that lands every arm inside its allowance and solve once more.
+	auto SolveAtScale = [&](double Scale)
 	{
 		for (int32 ArmIndex = 0; ArmIndex < Out.Input.Arms.Num(); ++ArmIndex)
 		{
 			Out.Input.Arms[ArmIndex].FilletRadius = PreferredRadii[ArmIndex] * Scale;
 		}
-
 		Out.Result = FJunctionSolver::SolveCuts(Out.Input);
-		if (!Out.Result.bValid)
-		{
-			break;
-		}
-
-		double WorstOvershoot = 1.0;
+	};
+	auto WorstOvershoot = [&]()
+	{
+		double Worst = 0.0;
 		for (int32 ArmIndex = 0; ArmIndex < Out.Result.Arms.Num(); ++ArmIndex)
 		{
-			const double Allowance = ArmAllowance[ArmIndex];
-			if (Allowance > 0.0)
+			if (ArmAllowance[ArmIndex] > 0.0)
 			{
-				WorstOvershoot = FMath::Max(
-					WorstOvershoot, Out.Result.Arms[ArmIndex].CutDistance / Allowance);
+				Worst = FMath::Max(Worst, Out.Result.Arms[ArmIndex].CutDistance / ArmAllowance[ArmIndex]);
 			}
 		}
+		return Worst;
+	};
 
-		if (WorstOvershoot <= 1.0)
+	SolveAtScale(1.0);
+	if (!Out.Result.bValid || WorstOvershoot() <= 1.0)
+	{
+		return true;
+	}
+	TArray<double> CutAtFull;
+	for (const FJunctionArmResult& Arm : Out.Result.Arms) { CutAtFull.Add(Arm.CutDistance); }
+
+	SolveAtScale(0.0);
+	if (!Out.Result.bValid)
+	{
+		return true;
+	}
+	if (WorstOvershoot() > 1.0)
+	{
+		// Unreachable by construction - every allowance is at least this node's own
+		// zero-radius cut - and kept as the last line of defence, saying so.
+		UE_LOG(LogRoadSolve, Warning,
+			TEXT("Node %d: zero-radius cut overshoots its allowance by %.0f%%; node failed"),
+			NodeIndex, (WorstOvershoot() - 1.0) * 100.0);
+		Out.Result.bValid = false;
+		return true;
+	}
+
+	// Cut(s) is convex piecewise-linear in the scale (each arm takes the max over its two
+	// corners, each linear), so the chord between Cut(0) and Cut(1) bounds it from above and
+	// the chord's crossing of the allowance is a scale that fits, with a hair to spare.
+	double Scale = 1.0;
+	for (int32 ArmIndex = 0; ArmIndex < Out.Result.Arms.Num(); ++ArmIndex)
+	{
+		const double Allowance = ArmAllowance[ArmIndex];
+		const double CutZero = Out.Result.Arms[ArmIndex].CutDistance;
+		const double Rise = CutAtFull[ArmIndex] - CutZero;
+		if (Allowance > 0.0 && Rise > 1e-9 && CutAtFull[ArmIndex] > Allowance)
 		{
-			break;
+			Scale = FMath::Min(Scale, (Allowance - CutZero) / Rise);
 		}
-
-		if (Scale <= 0.0)
-		{
-			// Already at a zero radius and still overshooting, so the fillet is not
-			// what does not fit - the segment is shorter than its own width needs.
-			// Nothing this solver can do; say so rather than emitting a folded ribbon.
-			UE_LOG(LogRoadSolve, Warning,
-				TEXT("Node %d: a segment is too short for its road width - the cut still "
-					 "overshoots by %.0f%% at a zero fillet radius. Draw it longer, or use a "
-					 "narrower profile."),
-				NodeIndex, (WorstOvershoot - 1.0) * 100.0);
-			break;
-		}
-
-		Scale = FMath::Max(0.0, Scale / WorstOvershoot);
+	}
+	SolveAtScale(FMath::Clamp(Scale * 0.999, 0.0, 1.0));
+	if (Out.Result.bValid && WorstOvershoot() > 1.0 + 1e-6)
+	{
+		// The bound above should make this unreachable; if it is ever reached, say so rather
+		// than let a folded ribbon out.
+		UE_LOG(LogRoadSolve, Warning, TEXT("Node %d: radius fit did not converge (overshoot %.3f); node failed"),
+			NodeIndex, WorstOvershoot());
+		Out.Result.bValid = false;
 	}
 
 	return true;
