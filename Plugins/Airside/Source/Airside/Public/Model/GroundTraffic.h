@@ -91,6 +91,16 @@ struct FGraphRebuildSummary
  * A UObject rather than a USTRUCT so the table and the agents are GC-visible UPROPERTYs
  * on something UAirsideTraffic can own by CreateDefaultSubobject, and so a test can
  * NewObject one. Transient throughout: agents never reach disk (see Agents).
+ *
+ * ONE CLASS, FOUR TRANSLATION UNITS - the shape URoadEditFacade already uses
+ * (RoadEditFacade.cpp beside RoadEditFacadeSurfaces.cpp). Split by CONCERN rather than by
+ * size, so a reader chasing a traffic report opens the file named after the rule:
+ *
+ *   - GroundTraffic.cpp          dispatch, admit, redirect/retire, Advance, Arbitrate, and
+ *                                the plan/step helpers the other three read;
+ *   - GroundTrafficClaims.cpp    ClaimAhead and the claim geometry it is built from (§3);
+ *   - GroundTrafficDeadlock.cpp  ResolveDeadlocks, CanReplanAtBlockedStep, ReplanAt (§4, §5);
+ *   - GroundTrafficRebuild.cpp   OnGraphRebuilt, ReResolvePlan, SpliceReplan (§6).
  */
 UCLASS()
 class AIRSIDE_API UGroundTraffic : public UObject
