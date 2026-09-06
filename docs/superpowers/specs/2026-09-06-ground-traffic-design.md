@@ -109,6 +109,22 @@ struct FTrafficOccupancy
 };
 ```
 
+*Amended 2026-09-06, final review — the block above is the design sketch; this is the API
+that shipped.* Rank moved ONTO `FTrafficClaim` (`int32 Rank`) rather than travelling beside
+it, because every caller had to hand the two over together and a rank that could be passed
+for the wrong claim was a bug nothing would catch. `TryClaim(const FTrafficClaim& Claim,
+FTrafficClaim& OutBlocker)` hands back the whole blocking CLAIM, not just its holder id: the
+refusal has to answer "how far may I go", which needs the blocker's interval as well as its
+owner. `ReleaseBehind` was never needed and does not exist; what the tick actually wants is
+the complement, `ReleaseExcept(AgentId, Keep)` — release everything of mine that is not on
+this pass's list — which keeps first-to-reserve across ticks in one call. Beside it:
+`ReleaseReservations(AgentId)` (a replan gives back the line ahead, never the ground under
+the body), `ReleaseGuidelineClaims()` (a graph rebuild: every edge and node claim, whoever
+holds it, surfaces kept), `ReleaseGuidelineClaimsOf(AgentId)` (one stranded agent's edges and
+nodes, its surfaces kept — the same distinction for one agent), `Release(AgentId, Resource)`
+and `ReleaseAll(AgentId)`. `TakePreempted()` reports the agents a preemption evicted this
+tick, which the sketch had no mechanism for at all.
+
 Rank is decided by the caller (§3.3); the table only compares. A claim on a resource whose
 existing claim is `bOccupied` is `Held` regardless of rank. Otherwise a higher rank preempts:
 the old claim is removed and its owner refuses on its own next claim pass. Two edge intervals
@@ -319,6 +335,17 @@ cost; splice the polyline from `Travelled` to `node` onto the new plan's polylin
 the follower on the spliced plan keeping `Speed` and `Heading`, so no jump. Releases the
 agent's reservations ahead. Logged with old and new remaining lengths.
 
+*Amended 2026-09-06, final review — what shipped.* The function is
+`ReplanAt(AgentId, Network, SpliceStep, BannedEdge)`: a STEP INDEX, not a node. Both callers
+— the deadlock resolver and the graph rebuild — hold the step they failed on and would have
+had to convert it to a node to call `ReplanFrom`, and the conversion is not injective: a
+route that revisits a node (a van sent out and back through one junction) gives two answers
+to "which step does this node leave from", and the wrong one splices behind the agent and
+teleports it. The index also makes the precondition checkable — `SpliceStep` at or ahead of
+`CurrentStep(Travelled)`, refused rather than clamped — which a node alone cannot express.
+`BannedEdge` is unset for the rebuild caller: the edge that failed is not in the graph at
+all, so no search could pick it.
+
 ---
 
 ## 5. Deadlock
@@ -376,6 +403,15 @@ down the same forwarder chain as the tick.
    claim until the next tick, and `DispatchArrival` reads the table between ticks. Handles
    are generation-checked, so a stale edge or node claim can never name new pavement - the
    reason to drop them is only that their resources are gone.
+
+*Amended 2026-09-06, final review:* the "stranded in place" rule above is now what the code
+does. A failure at the step the agent is DRIVING ON strands it — it is not replanned, because
+a splice at the current step re-reads the agent's own `Travelled` on new geometry and moves it
+sideways (3310 uu, measured on `Airside.Model.Traffic.GraphRebuild` case 5, unbounded in
+principle), and not truncated, because there is no node behind it on a line that survives. A
+stranded agent gives back its EDGE and NODE claims only (`ReleaseGuidelineClaimsOf`) and keeps
+any runway surface with the crossing fields that describe it: a rebuild deletes pavement, it
+does not move aeroplanes, and `ArrivalPlanner::Plan` reads the table between ticks.
 
 Aircraft are replanned here too — the §3.8 amendment above.
 

@@ -92,8 +92,8 @@ Ground traffic lives in **Airside `Model/`**, world-free, `NewObject`-testable.
 
 - `EAgentPhase { Arriving, Taxiing, Departing, Parked, Gone }`. `Gone` doubles as "did not
   exist": spawn broadcasts `Gone -> Arriving/Taxiing`, removal broadcasts `<phase> -> Gone`.
-- `UAirsideTraffic::Advance(DeltaSeconds, SurfaceZ)` is the one tick; the actor scales
-  `DeltaSeconds` by `SimTimeScale` (the x0..x8 multiplier only, never the day compression).
+- `UAirsideTraffic::Advance(DeltaSeconds, SurfaceZ, Network, Rules)` is the one tick; the
+  actor scales `DeltaSeconds` by `SimTimeScale` (the x0..x8 multiplier only, never the day compression).
   `FRoadAgent::Advance` owns every handover; `FRouteFollower` walks `FRoutePlan::Polyline`
   from `GuidelineGeom::Sample` — the ONE sampled array the search costs, the overlay draws
   and the follower walks. Do not add a second evaluator.
@@ -172,6 +172,13 @@ plan/rulings/progress ledger in `.superpowers/sdd/2026-09-06-m2-ground-traffic/`
 10. Hold-short marks stored by identity (`HoldShortMarks` + `FGuidelineEndRef`), survive a
     guideline rebuild by re-application, not by keeping the node; `URoadEditFacade::SetHoldShort`.
 11. Hold-short build tool on key 8; the overlay draws the bar; both drivers list it.
+12. Final fix wave (whole-branch review): `DispatchArrival` claims the runway synchronously,
+    so two presses of `7` in one frame cannot clear two landings onto one strip; a stranded
+    or dead-plan agent gives back its guidelines and KEEPS its runway surface
+    (`FTrafficOccupancy::ReleaseGuidelineClaimsOf`); a rebuild that deletes the step under an
+    agent strands it in place instead of teleporting it (spec §6.2); `FTrafficRules` became
+    a saved `ARoadNetworkActor::TrafficRules` handed down the tick; the
+    `RebuildMesh -> OnGraphRebuilt` seam gained a composition test (mutation-checked).
 
 ### Test and build
 
@@ -181,7 +188,9 @@ content default)`. Baseline at handover was 88/0/0.
 
 ### Log and comment deltas
 
-`UE_LOG` in Airside: 71 -> 97. Comment lines across the split pair (`AirsideTraffic.h/.cpp` +
+`UE_LOG` in Airside: 71 -> 95 (97 at Task 12; the final fix wave dropped the two
+`"released the runway"` lines that no longer describe anything - a stranded or dead-plan
+agent keeps the strip its body is on). Comment lines across the split pair (`AirsideTraffic.h/.cpp` +
 `GroundTraffic.h` + `GroundTraffic*.cpp`, the four files the arbitration/rebuild/deadlock
 logic actually lives in): 179 -> 1411.
 
@@ -243,9 +252,10 @@ One line each; full reasoning and cost-if-wrong is in `rulings.md`.
   the strip slab. Also: a bar two-plus steps short of the asphalt never arms; only one
   runway's crossing can be held at a time (a second runway isn't armed mid-hold of the
   first); `IsPointOnRunway` re-walks `RunwayChain` per call and should be hoisted.
-- `Strand` (rebuild) still calls `ReleaseAll`, dropping the surface claim of an aircraft
-  stranded mid-crossing. The `CrossingHoldsRunway` rebuild test is a no-op rebuild (pins
-  release only, not re-arming).
+- ~~`Strand` (rebuild) still calls `ReleaseAll`~~ FIXED in the final wave: it calls
+  `ReleaseGuidelineClaimsOf` and keeps the crossing fields, so an aircraft stranded
+  mid-crossing goes on holding the strip. The `CrossingHoldsRunway` rebuild test is still a
+  no-op rebuild (pins release only, not re-arming).
 
 **Deadlock / arbitration**
 - A preempted agent can be told to stop inside its own braking distance and halts abruptly
@@ -257,17 +267,50 @@ One line each; full reasoning and cost-if-wrong is in `rulings.md`.
   reservation on a revisited node — unreachable with today's routes.
 
 **Rebuild**
-- Case 5 of the rebuild test measured a replan-at-current-step teleport of 3310 uu sideways
-  when the pavement under the agent is deleted, unbounded. Flagged for the runtime
-  verification below rather than fixed blind.
+- ~~Case 5's 3310 uu teleport~~ FIXED in the final wave: a failure at the step the agent is
+  DRIVING ON now strands it in place (spec §6.2) instead of splicing a replan under it, and
+  case 5 asserts no per-tick displacement above one tick's travel. A stranded agent keeps the
+  runway surface it is standing on (`ReleaseGuidelineClaimsOf`), so a landing cannot be
+  cleared onto it.
 - The truncation-backwards case (an agent truncated to a point behind its current position)
-  is untested.
+  is untested — and is now unreachable for a driving agent, since the only way to reach it
+  was the current-step failure that strands instead.
 
 **Tool**
-- The guideline builder never clears `HoldShortFor` on surviving nodes after a prune — needs
-  a clear-then-reapply sweep, not just re-apply.
 - The hold-short tool's skip-when-absent path is untested (safe via the orphan sweep, traced
   by hand, not measured).
+
+**Arbitration, as designed (M3 input, not a defect)**
+- Parked agents claim nothing — spec §3.4. `ClaimAhead`'s non-Taxiing branch keeps only
+  `RunwayHeld`, and a Parked agent's is empty, so an aeroplane abandoned ON a runway (a
+  stranded agent that then parks) stops showing as an occupant a tick later. Whose problem
+  that is belongs to `URunwaySequencer` in M3, which is the object that decides who may use
+  a strip at all.
+
+### Follow-up issues to file
+
+Triaged by the final review; none blocks the merge, each is a separate piece of work.
+
+- **Bar-to-bar arming window.** A hand-drawn crossing with no on-strip node arms the hold
+  only when the NOSE reaches the asphalt — a measured 250 uu committed-but-unheld window.
+  Fix: arm when any polyline SPAN of the step leaving a bar intersects the runway SLAB,
+  rather than testing points. Also in that family: a bar two-plus steps short of the asphalt
+  never arms, and only one runway's crossing can be held at a time.
+- **`RunwayChain` re-walk.** `URoadNetwork::IsPointOnRunway` re-walks the whole chain per
+  call, and the claim pass calls it several times per agent per tick. Hoist it.
+- **`RunSearch` running length.** The route search re-measures lengths it has already walked;
+  carry the running length instead.
+- **A preempted agent stops hard.** It can be told to stop inside its own braking distance
+  (measured: 1525 uu given against 2500 needed). The follower clamps rather than overshoots,
+  so it is safe — just not smooth.
+- **`ConnectGuidelines`/`DisconnectGuideline` never `Commit()`.** Pre-existing, not M2: both
+  open an `FRoadEditScope` and never commit it, so a hand-drawn guideline link cannot be
+  undone.
+- **The builder's skip-when-absent path is untested.** Safe via the orphan sweep, traced by
+  hand, not measured.
+- **"Free at some tick" assertions.** Several crossing-hold assertions are weaker than their
+  prose claims: they check that a resource was free at SOME tick rather than at the tick the
+  prose names. Tighten them to the frame in question.
 
 ### Pre-existing bug found (not M2, proposed GitHub issue)
 
