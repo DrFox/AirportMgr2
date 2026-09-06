@@ -341,8 +341,19 @@ down the same forwarder chain as the tick.
    between consecutive resolved nodes admitting the class. Polyline and `EndDistance` are
    untouched; the follower never notices.
 2. First step that fails: replan from the last resolved node to `GoalNode` and splice
-   (§4). A goal that no longer resolves parks the agent where it stands, logged.
-3. `Occupancy.Clear()`; every agent re-claims on its next tick.
+   (§4). *Amended 2026-09-06 during Task 9 review:* a goal that no longer resolves keeps its
+   old handle, and a route that cannot be replanned is TRUNCATED to the last live node - the
+   agent drives there and parks, logged - rather than parking where it stands, which would
+   leave it stopped mid-taxiway for ever. Only an agent whose current step itself is gone is
+   stranded in place. The node behind the agent (the current step's from-node) is re-pointed
+   too: the crossing arm, the tail-node claim, rank and a replan's start all read it.
+3. Edge and node claims are cleared (`FTrafficOccupancy::ReleaseGuidelineClaims`); every
+   agent re-claims on its next tick. *Amended 2026-09-06 during Task 9 review:* SURFACE claims
+   are kept. They are keyed on segment ids, the surface model, which a guideline rebuild does
+   not regenerate; clearing them left an aircraft mid-crossing or rolling out with no strip
+   claim until the next tick, and `DispatchArrival` reads the table between ticks. Handles
+   are generation-checked, so a stale edge or node claim can never name new pavement - the
+   reason to drop them is only that their resources are gone.
 
 Aircraft are replanned here too — the §3.8 amendment above.
 
