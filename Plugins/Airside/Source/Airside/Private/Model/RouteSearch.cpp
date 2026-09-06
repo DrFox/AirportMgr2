@@ -3,6 +3,7 @@
 #include "Algo/Reverse.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -21,15 +22,32 @@ namespace
 		return true;
 	}
 
-	/** Negative when the edge cannot be measured, which is how the search skips it. */
-	double EdgeCost(const URoadNetwork& Network, const FGuidelineEdge& Edge)
+	/** Sampled length plus the query's congestion charge. Negative when the edge cannot be
+	 *  measured, which is how the search skips it. */
+	double EdgeCost(const URoadNetwork& Network, const FGuidelineEdge& Edge,
+		FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
 	{
 		TArray<FVector2D> Points;
 		if (!EdgePoints(Network, Edge, Points))
 		{
 			return -1.0;
 		}
-		return GuidelineGeom::PolylineLength(Points);
+		double Length = GuidelineGeom::PolylineLength(Points);
+
+		// Congestion: what others hold on this edge, weighted. Additive and non-negative,
+		// so the straight-line heuristic stays admissible and the first pop stays optimal.
+		// Nodes are not costed - a held node is a moment, a held edge is a queue.
+		//
+		// The querying agent's OWN claims are excluded by HeldLengthOn, or an agent
+		// replanning out of a jam would be charged for the very line it is standing on and
+		// route round itself. With a null table this is bitwise the search that ran before
+		// occupancy existed - see Airside.Model.RouteSearch.OccupancyCost's last assertion.
+		if (Query.Occupancy != nullptr)
+		{
+			Length += Query.CongestionWeight * Query.Occupancy->HeldLengthOn(EdgeId, Query.QueryingAgent);
+		}
+
+		return Length;
 	}
 
 	/**
@@ -132,7 +150,7 @@ namespace
 					continue;
 				}
 
-				const double Cost = EdgeCost(Network, *Edge);
+				const double Cost = EdgeCost(Network, *Edge, EdgeId, Query);
 				if (Cost < 0.0)
 				{
 					continue;

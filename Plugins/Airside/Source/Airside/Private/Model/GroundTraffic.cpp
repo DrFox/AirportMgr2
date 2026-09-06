@@ -268,6 +268,88 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	return true;
 }
 
+bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE)
+	{
+		return false;
+	}
+
+	FRoadAgent& Agent = Agents[Index];
+	const FRoutePlan& Plan = Agent.Follower.Plan;
+
+	// EVERY GUARD BEFORE ANYTHING IS WRITTEN, and that is the whole shape of this function:
+	// the agent is not touched until both the search and the splice have succeeded, so a
+	// refusal at any of them leaves it driving exactly the plan it had. An implementation
+	// that replaced the follower first and repaired afterwards would leave a stuck agent
+	// worse off than before it asked.
+	if (Agent.Phase != EAgentPhase::Taxiing || !Plan.IsValid()
+		|| SpliceStep < 0 || SpliceStep > Plan.Steps.Num())
+	{
+		return false;
+	}
+
+	FRouteQuery Query;
+	Query.Start = StepFromNode(Plan, SpliceStep);
+	Query.Goal = Agent.GoalNode;
+	Query.Class = Agent.Class;
+	Query.Wingspan = Agent.Airframe.Wingspan;
+	Query.BannedEdge = BannedEdge;
+
+	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
+	// the caller knows is hopeless; the congestion cost is what stops the new route from
+	// being the next queue along, which a plain shortest path would walk straight into.
+	Query.Occupancy = &Occupancy;
+	Query.QueryingAgent = AgentId;
+	Query.CongestionWeight = Rules.CongestionWeight;
+
+	const FRoutePlan Tail = RouteSearch::Find(Network, Query);
+	if (!Tail.IsValid())
+	{
+		return false;
+	}
+
+	const FRoutePlan Spliced = RouteSearch::Splice(Plan, SpliceStep, Tail);
+	if (!Spliced.IsValid())
+	{
+		return false;
+	}
+
+	// Read before Replace overwrites the plan under the reference, so the log line compares
+	// the two journeys rather than one journey against itself.
+	const double WasRemaining = Plan.Length - Agent.Follower.Travelled;
+
+	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
+	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
+	Agent.Follower.Replace(Spliced);
+
+	// EVERYTHING, because the claims were made for a route that no longer exists past the
+	// splice. The next Arbitrate re-claims from the new plan in the same tick this is called
+	// from; holding the old reservations until then would block the line the agent has just
+	// been re-routed away from, for a journey nobody is making.
+	Occupancy.ReleaseAll(AgentId);
+
+	// The wait is over BY CONSTRUCTION - the thing it was waiting for is not on its route
+	// any more - so the arbitration fields say so at once rather than a tick later. The
+	// stall clock resets with them, or the deadlock pass that asked for this replan would
+	// see the same stalled agent again on the very next tick and ask again.
+	Agent.WaitingOn = 0;
+	Agent.BlockedStep = INDEX_NONE;
+	Agent.StalledSeconds = 0.0;
+
+	// CrossingRunway IS DELIBERATELY LEFT ALONE. It says the agent's body is physically on a
+	// strip, which is a fact about where the aeroplane IS, not about where it is going: a
+	// replan cannot move it off the runway, and clearing it here would hand the strip back
+	// with an aeroplane standing on it. ClaimAhead's geometric rule ends the crossing, and
+	// it reads the SPLICED plan from the next tick on, which is the same line up to the
+	// splice - so the tail-clear test it makes is the one it would have made anyway.
+
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d replanned at step %d: %.0f uu remaining -> %.0f"),
+		AgentId, SpliceStep, WasRemaining, Spliced.Length - Agent.Follower.Travelled);
+	return true;
+}
+
 bool UGroundTraffic::RetireAgent(int32 AgentId)
 {
 	const int32 Index = FindIndex(AgentId);
@@ -383,7 +465,19 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 				Claim.bOccupied = true;
 				Claim.Rank = TraversalPriority(Agent.Class);
 				FTrafficClaim Blocker;
-				Occupancy.TryClaim(Claim, Blocker);
+
+				// THE RESULT IS NOT ACTED ON, BUT IT IS NOT SWALLOWED EITHER. Nothing can
+				// tell an aeroplane already at the threshold to stop, and who goes next is
+				// URunwaySequencer's question in M3 - but a Held here means the one thing
+				// this claim can ever reveal: somebody else is on the strip this departure
+				// is about to roll down. That must leave a line, or the only evidence of it
+				// is an aeroplane taking off through another.
+				if (Occupancy.TryClaim(Claim, Blocker) != EClaimResult::Granted)
+				{
+					UE_LOG(LogAirsideTraffic, Warning,
+						TEXT("Agent %d rolls for departure while agent %d holds runway segment %d"),
+						Id, Blocker.AgentId, Segment.Index);
+				}
 			}
 		}
 
@@ -504,6 +598,18 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 		// for the rest of the session.
 		const TArray<FTrafficResource> Nothing;
 		Occupancy.ReleaseExcept(Agent.Id, Nothing);
+
+		// AND THE CROSSING WITH THEM, exactly as the non-Taxiing branch above does it. A
+		// crossing is expressed as claims the loop below re-raises every tick, and this
+		// return skips that loop - so leaving the field set would name a chain nothing will
+		// ever release, and ClaimAhead's header promise that a crossing cannot be stranded
+		// would be false for the one agent whose plan went bad under it.
+		if (Agent.CrossingRunway.IsSet())
+		{
+			Agent.CrossingRunway = FRoadSegmentId();
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
+		}
+
 		Agent.StopWithin = TNumericLimits<double>::Max();
 		Agent.WaitingOn = 0;
 		Agent.BlockedStep = INDEX_NONE;
@@ -541,6 +647,31 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 
 	TArray<FWantedClaim> Pending;
 	Pending.Reserve(4);
+
+	/**
+	 * A RESERVED SURFACE CLAIM MUST NEVER OVERWRITE AN OCCUPIED ONE ALREADY WANTED THIS PASS.
+	 *
+	 * TryClaim treats a same-agent claim on the same resource as an UPDATE and writes it
+	 * over the old one WHOLESALE, bOccupied included. A crossing raises its chain occupied
+	 * at the front of Pending (route zero below), and two things later in route order raise
+	 * the SAME chain as a reservation: a hold-short bar on the FAR side of the crossing -
+	 * which is how a crossing is actually painted, one bar each side - and a runway edge on
+	 * a step the agent has not reached yet. Either one downgraded the crossing's occupancy
+	 * to a reservation, and a reservation is exactly what a landing may preempt: the table
+	 * would then clear an aircraft onto an aeroplane standing on the centreline.
+	 *
+	 * Skipped rather than re-ordered or merged. Route order is what the first-refusal rule
+	 * reads, so the entries cannot move; and there is nothing to ask for anyway - the agent
+	 * already holds that surface, more strongly than the entry being dropped would hold it.
+	 * Occupied entries are never skipped by this, so an occupancy raised later still lands.
+	 */
+	auto WantedOccupied = [&Pending](const FTrafficResource& Resource)
+	{
+		return Pending.ContainsByPredicate([&Resource](const FWantedClaim& Already)
+		{
+			return Already.Claim.bOccupied && Already.Claim.Resource == Resource;
+		});
+	};
 
 	// 0. THE RUNWAY THIS AGENT IS PHYSICALLY CROSSING - spec §3.1's fourth route, and the
 	// one that closes the hole the other three leave. Once the tail passes a bar the bar
@@ -746,6 +877,13 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 					// holds a reservation a landing's occupancy can take.
 					OnRunway.Claim.bOccupied = (Index == Current);
 					OnRunway.Surface = FWantedClaim::ESurface::RunwayEdge;
+
+					// See WantedOccupied: a reservation on a chain this agent is already
+					// standing on would be written over its own occupancy.
+					if (!OnRunway.Claim.bOccupied && WantedOccupied(OnRunway.Claim.Resource))
+					{
+						continue;
+					}
 					Pending.Add(OnRunway);
 				}
 			}
@@ -819,6 +957,16 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 					Bar.bReversed = Step.bReversed;
 					Bar.Surface = FWantedClaim::ESurface::HoldShort;
 					Bar.HoldNode = Step.To;
+
+					// THE FAR BAR OF A CROSSING, and the reason WantedOccupied exists: the
+					// agent is already ON this strip, holding it occupied, so there is
+					// nothing for a bar to protect it from and everything for the bar's
+					// reservation to spoil. Airside.Model.Traffic.CrossingHoldsRunway
+					// measures it with a bar on each side of the runway.
+					if (WantedOccupied(Bar.Claim.Resource))
+					{
+						continue;
+					}
 					Pending.Add(Bar);
 				}
 			}
@@ -966,6 +1114,13 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 			// agent redirected onto a node somebody is crossing, or an aircraft parked on a
 			// node a van drives over. It also fires for the node an agent has just left,
 			// which is why the tail claim exists at all.
+			//
+			// AND IT CATCHES THE CROSSING SURFACE TOO, which is a SURFACE with no ESurface
+			// tag: route zero's claim says "my body is on this strip", so a refusal there is
+			// the same statement as a refused node - somebody else is standing where this
+			// agent already is - and 0 is the same honest answer. The tagged RunwayEdge rule
+			// above must not take it: that one stops an agent a gap short of the step's
+			// start, which for ground the agent is already on would be a stop point behind it.
 			Agent.StopWithin = 0.0;
 		}
 

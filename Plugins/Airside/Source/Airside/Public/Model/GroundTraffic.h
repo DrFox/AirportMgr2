@@ -136,6 +136,33 @@ public:
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
 	/**
+	 * Re-routes a MOVING agent from SpliceStep onward, forbidding BannedEdge. Spec §4.
+	 *
+	 * HOW, NEVER WHEN. The deadlock resolver decides an agent is stuck and which edge to
+	 * ban; a graph rebuild decides a plan no longer describes the airport. Both then call
+	 * this, and it does the one thing they share: search from the node SpliceStep leaves
+	 * from to the agent's own goal, under the ban AND the congestion cost, splice the answer
+	 * onto the steps the agent has already driven, and hand the result to the follower.
+	 * Putting the trigger in here would mean two callers with two different notions of
+	 * "stuck" arguing over one function.
+	 *
+	 * NOT RedirectAgent. That one is a dispatch: StartTaxi resets the follower to rest at
+	 * the polyline's first point, which teleports an agent mid-edge back to its origin. This
+	 * keeps Travelled, Speed and Heading, and the line up to the splice is byte-identical,
+	 * so the agent goes on driving the same metres it was already on.
+	 *
+	 * FALSE AND NOTHING CHANGED when the agent is unknown or not Taxiing, when SpliceStep is
+	 * not a step of its plan, when no route to the goal survives the ban, or when the splice
+	 * precondition fails. The agent keeps the plan it had: a caller that ignored the return
+	 * would otherwise be driving something half-replanned.
+	 *
+	 * Vehicles and aircraft alike - nothing here reads the class beyond handing it to the
+	 * query, because a van deadlocked in a service road is the same problem as an aircraft
+	 * nose to nose on a taxiway.
+	 */
+	bool ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge);
+
+	/**
 	 * Removes an agent immediately, announcing <phase> -> Gone. For a service vehicle that
 	 * has returned to its depot: it does not fly away, so nothing else would ever remove it.
 	 * False for an unknown id.

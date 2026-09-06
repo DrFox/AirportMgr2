@@ -3,6 +3,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
+#include "Model/TrafficOccupancy.h"
 #include "Solve/GuidelineGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -10,7 +11,6 @@
 namespace
 {
 	// Prefixed against the unity build: RouteSearchTest already owns Join().
-	// (TrafficOccupancy.h is Task 2's; until then the include is absent and Task 7 adds it.)
 	FGuidelineEdgeId M2StepJoin(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B,
 		const FVector2D* Control = nullptr)
 	{
@@ -114,6 +114,63 @@ bool FRouteSpliceTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("no duplicated weld point at the splice"),
 		FVector2D::Distance(Spliced.Polyline[1], Spliced.Polyline[2]) > 1.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteOccupancyCostTest,
+	"Airside.Model.RouteSearch.OccupancyCost",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteOccupancyCostTest::RunTest(const FString& Parameters)
+{
+	// The diamond again, with the geometry stated because every assertion turns on it: the
+	// control point defaults to the midpoint, which makes each guideline a straight line, so
+	// west->south->east is 2 * sqrt(1000^2 + 100^2) = 2010 uu and west->north->east is
+	// 2 * sqrt(1000^2 + 2000^2) = 4472 uu. South is shorter by 2462. A queue of 2500 uu on
+	// the south edge at weight 2 costs 5000, which is MORE than the detour, so the search
+	// must go north; with no table, or with the querier's OWN claim, it must go south
+	// exactly as before.
+	//
+	// (The brief's fixture put north at (0, 4000), where the detour costs 6236 and a 5000
+	// congestion charge does not cover it - the search stayed south and the test could not
+	// have passed. North moved to (0, 2000) to keep the brief's queue and weight, which are
+	// the numbers under test, rather than inflating the queue to fit the geometry.)
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId West = Net->AddGuidelineNode(FVector2D(-1000.0, 0.0));
+	const FGuidelineNodeId East = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+	const FGuidelineNodeId North = Net->AddGuidelineNode(FVector2D(0.0, 2000.0));
+	const FGuidelineNodeId South = Net->AddGuidelineNode(FVector2D(0.0, -100.0));
+	M2StepJoin(*Net, West, North); M2StepJoin(*Net, North, East);
+	const FGuidelineEdgeId WestSouth = M2StepJoin(*Net, West, South);
+	M2StepJoin(*Net, South, East);
+
+	FTrafficOccupancy Table;
+	FTrafficClaim Queue; Queue.AgentId = 7; Queue.Resource = FTrafficResource::OfEdge(WestSouth); Queue.From = 0.0; Queue.To = 2500.0;
+	FTrafficClaim Blocker;
+	Table.TryClaim(Queue, Blocker);
+
+	FRouteQuery Q; Q.Start = West; Q.Goal = East; Q.Class = ETraversalClass::GroundVehicle;
+	const FRoutePlan Plain = RouteSearch::Find(*Net, Q);
+	if (!TestTrue(TEXT("the plain route exists"), Plain.IsValid() && Plain.Steps.Num() == 2)) { return false; }
+	TestEqual(TEXT("no table: south"), Plain.Steps[0].To, South);
+
+	Q.Occupancy = &Table; Q.QueryingAgent = 1; Q.CongestionWeight = 2.0;
+	const FRoutePlan Costed = RouteSearch::Find(*Net, Q);
+	if (!TestTrue(TEXT("the costed route exists"), Costed.IsValid())) { return false; }
+	TestEqual(TEXT("a queue on the south edge sends a stranger north"), Costed.Steps[0].To, North);
+
+	Q.QueryingAgent = 7;
+	const FRoutePlan Own = RouteSearch::Find(*Net, Q);
+	if (!TestTrue(TEXT("the owner's route exists"), Own.IsValid())) { return false; }
+	TestEqual(TEXT("the queue's own agent is not charged for itself: south"), Own.Steps[0].To, South);
+
+	// A NULL TABLE IS THE OLD SEARCH, POINT FOR POINT. The cost term is the one thing added
+	// to EdgeCost, and every caller that never heard of occupancy passes a bare query; a
+	// change that moved those routes by a metre would move every ghost the player is shown.
+	FRouteQuery Bare; Bare.Start = West; Bare.Goal = East; Bare.Class = ETraversalClass::GroundVehicle;
+	TestTrue(TEXT("the null-table plan is the old plan to the point"), Plain.Polyline == RouteSearch::Find(*Net, Bare).Polyline);
 	return true;
 }
 
