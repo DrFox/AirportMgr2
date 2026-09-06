@@ -146,6 +146,11 @@ bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, 
 	return Model->RedirectAgent(AgentId, Network, Plan);
 }
 
+void UAirsideTraffic::OnGraphRebuilt(const URoadNetwork& Network)
+{
+	Model->OnGraphRebuilt(Network);
+}
+
 bool UAirsideTraffic::RetireAgent(int32 AgentId)
 {
 	return Model->RetireAgent(AgentId);

@@ -11,7 +11,9 @@
 #include "Algo/Reverse.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
@@ -296,6 +298,27 @@ FRoutePlan URoadEditFacade::FindRoute(
 	Query.Goal = Goal;
 	Query.Class = Class;
 	Query.Wingspan = Wingspan;
+
+	// VEHICLES ALWAYS ROUTE WITH THE TABLE; AIRCRAFT NEVER DO. Spec §4. A van sent to a job
+	// should go round the queue that is there when it is dispatched, and it has no clearance
+	// to violate by doing so. An aircraft's route is fixed at clearance and stays fixed: a
+	// taxi clearance that quietly re-routed itself round traffic between being read out and
+	// being flown is not a clearance, and the only thing that may change an aircraft's route
+	// afterwards is UGroundTraffic::ReplanAt - a deadlock, or the graph itself changing.
+	//
+	// QueryingAgent stays 0: nothing has been dispatched yet, so there is no agent whose own
+	// claims should be discounted from the cost.
+	if (Class != ETraversalClass::Aircraft)
+	{
+		if (const UAirsideTraffic* Traffic = Actor().GetTraffic())
+		{
+			if (const UGroundTraffic* Model = Traffic->GetModel())
+			{
+				Query.Occupancy = &Model->GetOccupancy();
+				Query.CongestionWeight = Model->Rules.CongestionWeight;
+			}
+		}
+	}
 
 	return RouteSearch::Find(*Network, Query);
 }

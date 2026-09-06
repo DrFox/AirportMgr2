@@ -322,6 +322,14 @@ void ARoadNetworkActor::RebuildMesh()
 		return;
 	}
 	Presenter->Rebuild(*Network, MakeSurfaceSettings());
+
+	// The guideline graph was just regenerated with new handles. Every agent's route must be
+	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
+	// keyed on slots the builder has already freed - see UGroundTraffic::OnGraphRebuilt.
+	if (Traffic != nullptr)
+	{
+		Traffic->OnGraphRebuilt(*Network);
+	}
 }
 
 double ARoadNetworkActor::GetApronSurfaceZ() const

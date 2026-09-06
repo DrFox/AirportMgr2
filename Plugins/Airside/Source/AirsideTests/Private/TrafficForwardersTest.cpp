@@ -8,6 +8,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
+#include "Model/TrafficOccupancy.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
@@ -104,6 +105,53 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	Traffic->OnArrivalRefused.AddLambda([&Refusals](EArrivalRefusal Why) { Refusals.Add(Why); });
 	TestFalse(TEXT("no runway: arrival refused"), Actor->DispatchArrival(FVector2D::ZeroVector, UAirsideSettings::ResolveDefaultAirframe()));
 	TestEqual(TEXT("the refusal relayed"), Refusals.Num(), 1);
+
+	// AND THE ROUTING SIDE OF THE SAME SEAM. Spec §4: "vehicles always route with the table,
+	// aircraft never do" - the aircraft's route is fixed at clearance. That rule lives in
+	// URoadEditFacade::FindRoute, which is the only production caller with a traffic object to
+	// hand, so it can only be measured HERE and only through the actor. It is measured with a
+	// phantom claim rather than a second agent because what is under test is whether the QUERY
+	// carries the table at all: a real queue would take a whole convoy to build, and the answer
+	// would then depend on the arbiter's timing as well as on this one line.
+	//
+	// A DIAMOND, well away from A-B above so neither route can borrow the other's edges: the
+	// direct line RA->RC is 40000 uu and the detour through RD is 41231, so shortest-path takes
+	// the direct one by 1231 uu. The phantom holds 20000 uu of the direct edge, which at
+	// CongestionWeight 2.0 adds 40000 to its cost - far more than the detour is longer by.
+	const FGuidelineNodeId RA = Net.AddGuidelineNode(FVector2D(0.0, 60000.0), false);
+	const FGuidelineNodeId RC = Net.AddGuidelineNode(FVector2D(40000.0, 60000.0), false);
+	const FGuidelineNodeId RD = Net.AddGuidelineNode(FVector2D(20000.0, 65000.0), false);
+	const FGuidelineEdgeId Direct = M2FwdJoin(Net, RA, RC);
+	M2FwdJoin(Net, RA, RD);
+	M2FwdJoin(Net, RD, RC);
+
+	FTrafficClaim Phantom;
+	Phantom.AgentId = 9999;                                  // nobody: no agent has this id
+	Phantom.Resource = FTrafficResource::OfEdge(Direct);
+	Phantom.From = 0.0;
+	Phantom.To = 20000.0;
+	Phantom.bOccupied = true;
+	FTrafficClaim Blocker;
+	Model->OccupancyForTest().TryClaim(Phantom, Blocker);
+
+	const FRoutePlan VanRoute = Actor->FindRoute(RA, RC, ETraversalClass::GroundVehicle, 0.0);
+	const FRoutePlan PlaneRoute = Actor->FindRoute(RA, RC, ETraversalClass::Aircraft, 0.0);
+	if (TestTrue(TEXT("both classes find a route across the diamond"), VanRoute.IsValid() && PlaneRoute.IsValid()))
+	{
+		// THE TWO ANSWERS DIFFER, and that difference IS the forwarder: one query carried the
+		// table and the other did not. Asserted on the step count and on the edge, not on the
+		// length, so a failure names which line the router took.
+		TestEqual(TEXT("the van routes round the queue: two steps, via RD"), VanRoute.Steps.Num(), 2);
+		TestTrue(TEXT("and so does not touch the held edge"),
+			VanRoute.Steps.Num() == 2 && VanRoute.Steps[0].Edge != Direct && VanRoute.Steps[1].Edge != Direct);
+		TestEqual(TEXT("the aircraft takes the direct edge regardless: its route is fixed at clearance"),
+			PlaneRoute.Steps.Num(), 1);
+		if (PlaneRoute.Steps.Num() == 1)
+		{
+			TestEqual(TEXT("which is the held one"), PlaneRoute.Steps[0].Edge, Direct);
+		}
+	}
+	Model->OccupancyForTest().Clear();
 
 	// AND THE SAME UNDER DUPLICATION, which is how play-in-editor makes its copy of the
 	// level. Model is a Transient non-instanced pointer, so a duplicate arrives holding the

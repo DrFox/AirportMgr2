@@ -1,7 +1,13 @@
 #include "CoreMinimal.h"
+#include "Build/AnchorLink.h"
+#include "Build/RoadGuidelineBuilder.h"
+#include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/LandingRun.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -51,6 +57,61 @@ namespace
 		FAirframe A = UAirsideSettings::ResolveDefaultAirframe();
 		A.Climb = FClimbPerformance();
 		return A;
+	}
+
+	/** A Piper, which unlike M2TrafficPlane still has its Climb figures and so can land.
+	 *  Only Airside.Model.Traffic.GraphRebuild's arrival case needs one. */
+	FAirframe M2TrafficPiper()
+	{
+		FAirframe A;
+		A.Ground = UAircraftType::PiperMeridianGround();
+		A.Climb = UAircraftType::PiperMeridianClimb();
+		A.Approach = UAircraftType::PiperMeridianApproach();
+		A.Engine = UAircraftType::PiperMeridianEngine();
+		return A;
+	}
+
+	/**
+	 * The smallest airport an arrival can be dispatched into: a runway split at ONE exit (the
+	 * split is what puts a guideline node on the centreline for RunwayExitNodes to find), a
+	 * taxiway south from it, and a stand beside that taxiway facing east so its lead-in casts
+	 * west and meets the taxiway. Modelled on ArrivalPlannerTest's two-exit fixture, cut down
+	 * to the one exit this test needs, and M2-prefixed against the unity build.
+	 *
+	 * DERIVED THROUGHOUT, deliberately: every guideline in it comes from FRoadGuidelineBuilder,
+	 * so re-running the builder frees the whole graph and hands back fresh handles - which is
+	 * the event OnGraphRebuilt exists for, done by the real thing rather than by hand.
+	 */
+	URoadNetwork* M2TrafficArrivalAirport(const FAirframe& Airframe, FVector2D& OutThreshold)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		OutThreshold = FVector2D(0.0, 0.0);
+
+		const double Needed = FLandingRun::RequiredLandingDistance(
+			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+		const FVector2D ExitAt(Needed * 1.2, 0.0);
+		const FVector2D FarAt(Needed * 3.0, 0.0);
+
+		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+
+		const FRoadNodeId ThresholdNode = Net->AddNode(OutThreshold);
+		const FRoadNodeId ExitNode = Net->AddNode(ExitAt);
+		const FRoadNodeId FarNode = Net->AddNode(FarAt);
+		Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
+		Net->AddStraightSegment(ExitNode, FarNode, Runway);
+
+		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -20000.0));
+		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
+
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+		FRoadGuidelineBuilder::Build(*Net, Solved);
+
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+		FAnchorLink::Build(*Net);
+		return Net;
 	}
 
 	/** Ticks until Seconds elapse or Callback returns false. Returns ticks run. */
@@ -1294,6 +1355,138 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("nothing is left crossing past the far bar"), P->CrossingPhase, ECrossingPhase::None);
 	TestFalse(TEXT("with no chain left named"), P->CrossingRunway.IsSet());
 	TestFalse(TEXT("and the strip free behind it"), Traffic->GetOccupancy().IsHeld(Strip, 0));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficGraphRebuildTest,
+	"Airside.Model.Traffic.GraphRebuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
+{
+	// What FRoadGuidelineBuilder::Build does to the graph, done by hand: every derived node
+	// and edge removed and re-added at the same positions with NEW handles. Three cases:
+	//   1. same geometry -> the agent's step handles are re-pointed and it never notices;
+	//   2. the edge ahead is gone but a bypass exists -> replanned over the bypass;
+	//   3. the edge ahead is gone and nothing replaces it -> stops at the last live node.
+	auto Build = [](URoadNetwork& Net, bool bKeepBC, bool bBypass, FGuidelineNodeId* OutA, FGuidelineNodeId* OutC)
+	{
+		// Sweep everything (a rebuild removes derived edges, then idle derived nodes).
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 I = 0; I < Net.GetGuidelineEdges().Num(); ++I) { if (Net.GetGuidelineEdges()[I].bAlive) { FGuidelineEdgeId Id; Id.Index = I; Id.Generation = Net.GetGuidelineEdges()[I].Generation; Edges.Add(Id); } }
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 I = 0; I < Net.GetGuidelineNodes().Num(); ++I) { if (Net.GetGuidelineNodes()[I].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(I)); } }
+		const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
+		const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
+		const FGuidelineNodeId C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
+		M2TrafficJoin(Net, A, B);
+		if (bKeepBC) { M2TrafficJoin(Net, B, C); }
+		if (bBypass) { const FGuidelineNodeId D = Net.AddGuidelineNode(FVector2D(30000.0, 8000.0)); M2TrafficJoin(Net, B, D); M2TrafficJoin(Net, D, C); }
+		if (OutA) { *OutA = A; } if (OutC) { *OutC = C; }
+	};
+
+	auto Dispatch = [&](URoadNetwork& Net, UGroundTraffic& Traffic, FGuidelineNodeId A, FGuidelineNodeId C)
+	{
+		const int32 Id = Traffic.DispatchAgent(&Net, M2TrafficRoute(Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+		M2TrafficRun(Traffic, Net, 5.0, [](int32) { return true; });   // a few thousand uu along A->B
+		return Id;
+	};
+
+	// Case 1: same geometry.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Dispatch(*Net, *Traffic, A, C);
+		const FVector2D Before = Traffic->FindAgent(Van)->LastMotion.Position;
+		const FGuidelineEdgeId OldEdge = Traffic->FindAgent(Van)->Follower.Plan.Steps[1].Edge;
+		Build(*Net, true, false, nullptr, nullptr);
+		TestNull(TEXT("the old handle is dead after the rebuild"), Net->GetGuidelineEdge(OldEdge));
+		Traffic->OnGraphRebuilt(*Net);
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* V = Traffic->FindAgent(Van);
+		TestNotNull(TEXT("step 1's edge handle is live again"), Net->GetGuidelineEdge(V->Follower.Plan.Steps[1].Edge));
+		TestTrue(TEXT("position moved by at most one tick across the rebuild"), FVector2D::Distance(V->LastMotion.Position, Before) <= 1000.0 * 0.05 + 1.0);
+		M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TestEqual(TEXT("arrives"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
+		TestTrue(TEXT("at C"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 10.0);
+	}
+	// Case 2: B->C deleted, bypass added.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Dispatch(*Net, *Traffic, A, C);
+		Build(*Net, false, true, nullptr, nullptr);
+		Traffic->OnGraphRebuilt(*Net);
+		double MaxY = 0.0;
+		M2TrafficRun(*Traffic, *Net, 150.0, [&](int32) { MaxY = FMath::Max(MaxY, Traffic->FindAgent(Van)->LastMotion.Position.Y); return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TestEqual(TEXT("arrives over the bypass"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
+		TestTrue(FString::Printf(TEXT("via D (max Y %.0f)"), MaxY), MaxY > 7000.0);
+	}
+	// Case 3: B->C deleted, nothing replaces it.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Dispatch(*Net, *Traffic, A, C);
+		Build(*Net, false, false, nullptr, nullptr);
+		Traffic->OnGraphRebuilt(*Net);
+		M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TestEqual(TEXT("stops at the last live node"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
+		TestTrue(TEXT("which is B"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(20000.0, 0.0)) < 10.0);
+	}
+	// Case 4: an ARRIVING aircraft's TaxiInPlan, which no follower is on yet, re-resolved from
+	// step 0. It is the branch the three cases above cannot reach - they all replan a plan
+	// under a moving follower - and it is the one that matters most in a game, because a
+	// player builds while an aircraft is on final and the route it will vacate onto is derived
+	// geometry the next rebuild frees. Rebuilt by the REAL FRoadGuidelineBuilder here, not by
+	// hand, so what is measured is the actual event rather than this test's model of it.
+	{
+		FVector2D Threshold;
+		const FAirframe Piper = M2TrafficPiper();
+		URoadNetwork* Net = M2TrafficArrivalAirport(Piper, Threshold);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Plane = Traffic->DispatchArrival(*Net, Threshold - FVector2D(1000.0, 0.0), Piper, 1.0);
+		if (TestTrue(TEXT("the arrival is admitted"), Plane > 0))
+		{
+			const FRoadAgent* P = Traffic->FindAgent(Plane);
+			const int32 Steps = P->TaxiInPlan.Steps.Num();
+			const FGuidelineEdgeId OldFirst = Steps > 0 ? P->TaxiInPlan.Steps[0].Edge : FGuidelineEdgeId();
+			TestTrue(TEXT("with a taxi-in route to re-resolve"), Steps > 0);
+			TestEqual(TEXT("and it is Arriving, so nothing is following that route yet"), P->Phase, EAgentPhase::Arriving);
+
+			const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
+			FRoadGuidelineBuilder::Build(*Net, Again);
+			FAnchorLink::Build(*Net);
+			TestNull(TEXT("the builder freed the taxi-in route's first handle"), Net->GetGuidelineEdge(OldFirst));
+
+			Traffic->OnGraphRebuilt(*Net);
+
+			P = Traffic->FindAgent(Plane);
+			int32 Live = 0;
+			for (const FRouteStep& Step : P->TaxiInPlan.Steps)
+			{
+				if (Net->GetGuidelineEdge(Step.Edge) != nullptr && Net->GetGuidelineNode(Step.To) != nullptr) { ++Live; }
+			}
+			UE_LOG(LogM2TrafficTest, Log,
+				TEXT("GraphRebuild arrival measured: %d taxi-in steps before the rebuild, %d live after, ")
+				TEXT("goal node %s, %.0f uu"),
+				Steps, Live, Net->GetGuidelineNode(P->GoalNode) != nullptr ? TEXT("live") : TEXT("DEAD"),
+				P->TaxiInPlan.Length);
+
+			// EVERY step, not merely the first: re-resolution walks forward from one node to the
+			// next, so a break anywhere leaves the tail naming freed slots and the aircraft
+			// vacates onto nothing.
+			TestEqual(TEXT("every taxi-in step names a live edge and a live node again"), Live, P->TaxiInPlan.Steps.Num());
+			TestEqual(TEXT("and none was lost: the route is the same length in steps"), P->TaxiInPlan.Steps.Num(), Steps);
+			TestEqual(TEXT("the plan is still a route"), P->TaxiInPlan.Result, ERouteResult::Found);
+			TestNotNull(TEXT("and the goal it will search back to is live"), Net->GetGuidelineNode(P->GoalNode));
+			TestEqual(TEXT("nothing stranded it: it is still Arriving"), P->Phase, EAgentPhase::Arriving);
+		}
+	}
 	return true;
 }
 

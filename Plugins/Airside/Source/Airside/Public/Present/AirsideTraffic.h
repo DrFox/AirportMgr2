@@ -117,6 +117,18 @@ public:
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
 
 	/**
+	 * Tells the model the guideline graph has been regenerated. See UGroundTraffic::
+	 * OnGraphRebuilt for what that costs an agent, and ARoadNetworkActor::RebuildMesh for
+	 * where it is called from.
+	 *
+	 * A PLAIN FORWARDER and nothing more, exactly like the rest of this class: no view is
+	 * touched, because re-resolution moves no agent - it changes the handles a route names
+	 * and never the line it drives, so every cube is exactly where it was and the next
+	 * Advance pushes its position as usual.
+	 */
+	void OnGraphRebuilt(const URoadNetwork& Network);
+
+	/**
 	 * Removes an agent and its view immediately, announcing <phase> -> Gone. For a service
 	 * vehicle that has returned to its depot: it does not fly away, so nothing else would
 	 * ever remove it. False for an unknown id.

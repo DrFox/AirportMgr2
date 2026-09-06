@@ -168,6 +168,38 @@ public:
 	bool ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge);
 
 	/**
+	 * Re-points every agent's route at the graph that has just been rebuilt. Spec §6.
+	 *
+	 * BY POSITION, NEVER BY HANDLE, and that is forced rather than chosen:
+	 * FRoadGuidelineBuilder::Build frees every derived node and edge slot and allocates
+	 * fresh ones, so an agent's steps name handles that are dead the instant the builder
+	 * returns. The guideline graph shares its ends by HANDLE and deliberately has no
+	 * bitwise weld contract (see FGuidelineEdge), so the only identity that can cross a
+	 * rebuild is "the live node that now holds this step's end position". The polyline is
+	 * what survives it: it is the line the agent is physically driving, so re-resolving
+	 * against it cannot move the agent by so much as a unit.
+	 *
+	 * THREE OUTCOMES PER AGENT, in order of how much the player would notice: every step
+	 * resolves and nothing changes but the handles; a step's edge is gone but a route to
+	 * the same goal survives, and that is spliced on from the last step that resolved; or
+	 * nothing replaces it and the route is TRUNCATED there, so the agent drives to a stop
+	 * on live pavement instead of off the end of the airport. An agent whose own ground no
+	 * longer has a node within Rules.ResolveRadius is stranded - the pavement under it was
+	 * deleted, and nothing this class can do puts it back on a line.
+	 *
+	 * THEN THE WHOLE TABLE IS CLEARED. Every claim in it is keyed on a slot the builder has
+	 * already freed, and a freed slot is re-issued to a DIFFERENT node on the next rebuild -
+	 * so a surviving claim would not merely be stale, it would silently name somebody else's
+	 * pavement. Everyone re-claims on the next tick, which is safe because Advance arbitrates
+	 * BEFORE it moves anything: there is no frame in which an agent drives on an empty table.
+	 *
+	 * AIRCRAFT TOO, unlike dispatch-time routing (spec §4): a route fixed at clearance is
+	 * still a route over pavement, and pavement the player has just deleted is not something
+	 * an aircraft can be held to.
+	 */
+	void OnGraphRebuilt(const URoadNetwork& Network);
+
+	/**
 	 * Removes an agent immediately, announcing <phase> -> Gone. For a service vehicle that
 	 * has returned to its depot: it does not fly away, so nothing else would ever remove it.
 	 * False for an unknown id.
@@ -414,6 +446,54 @@ private:
 	 * whole edge short of the node would be replanned from a node it is nowhere near.
 	 */
 	bool CanReplanAtBlockedStep(const FRoadAgent& Agent) const;
+
+	/** What re-resolution did to one plan. Counted by OnGraphRebuilt for its one log line. */
+	enum class EReResolve : uint8
+	{
+		/** Every remaining step found its node and its edge again; only handles changed. */
+		Intact,
+		/** A step's edge was gone; a fresh route from there to the goal was spliced on. */
+		Replanned,
+		/** Gone with nothing to replace it: the route now ends at the last live node. */
+		Truncated,
+		/** Not even the ground under the agent resolved, or truncation left no route at all. */
+		Stranded,
+	};
+
+	/**
+	 * Re-points Plan's steps from FromStep onward at the rebuilt graph. See OnGraphRebuilt.
+	 *
+	 * FromStep IS THE FIRST STEP THE AGENT HAS NOT FINISHED, and everything behind it is
+	 * left exactly as it is: those steps name dead handles for ever, and that is correct,
+	 * because nothing ever reads them again - the follower walks the polyline, and the
+	 * arbiter only ever asks about the step the agent is on and the ones ahead. Re-resolving
+	 * driven steps would be work whose only effect could be to change a number the agent has
+	 * already passed.
+	 *
+	 * Applied to Follower.Plan from CurrentStep for a Taxiing agent, and to TaxiInPlan from
+	 * 0 for an Arriving one - the route it will fly when it vacates, which no follower is on
+	 * yet and which is just as dead after a rebuild as one being driven.
+	 *
+	 * MUTATES Agent.GoalNode when the goal position still resolves, because every replan
+	 * from here on searches to it: a goal handle left naming a freed slot would fail every
+	 * subsequent deadlock replan for the rest of the session, silently.
+	 */
+	EReResolve ReResolvePlan(FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network);
+
+	/**
+	 * Runs Query and splices its answer onto Plan's first KeepSteps steps, IN PLACE.
+	 *
+	 * True and Plan is the new journey; FALSE AND PLAN IS UNTOUCHED - the search or the
+	 * splice failed, and a caller that ignored the return would otherwise be driving
+	 * something half-replanned. That all-or-nothing shape is the whole reason this is one
+	 * function and not two calls at each site.
+	 *
+	 * NO AGENT AND NO FOLLOWER. ReplanAt needs the follower handled (Travelled survives, the
+	 * reservations drop, the stall clock resets); a TaxiInPlan has no follower on it at all
+	 * and must not touch one. What the two share is exactly this - search, splice, keep or
+	 * discard - so this is where it lives, and each caller adds its own aftermath.
+	 */
+	static bool SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query, int32 KeepSteps, FRoutePlan& Plan);
 
 	/** Route distance at which Step begins - the previous step's end, or 0. */
 	static double StepStart(const FRoutePlan& Plan, int32 Step);
