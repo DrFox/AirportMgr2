@@ -400,6 +400,25 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 		Protects.Generation = Segments[SegmentIndex].Generation;
 	}
 
+	// HOISTED ABOVE THE SCOPE, so every refusal really does happen before the snapshot.
+	// URoadNetwork::SetHoldShort refuses a Protects that is not a live runway, and checking
+	// it only in there meant the one guard most likely to fire fired INSIDE the edit - the
+	// scope's own rollback covers that, but the comment below claimed a property the code
+	// did not have, and a comment that lies about a boundary is worse than none.
+	if (Protects.IsSet() && !Network->IsRunwaySegment(Protects))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("SetHoldShort refused at guideline node %d: segment %d is not a live runway"),
+			NodeIndex, SegmentIndex);
+		return false;
+	}
+
+	// What the flag says now, read BEFORE the mutation, so a no-op can be recognised after
+	// it. A click that clears an already-clear bar changes nothing, and committing it would
+	// give the player an undo step that visibly does nothing and has to be pressed twice to
+	// get past - see URoadEditHistory's "Edit lifecycle" comment.
+	const FRoadSegmentId Before = Network->GetGuidelineNodes()[NodeIndex].HoldShortFor;
+
 	// After the guards, which refuse without mutating - a rejected bar costs no snapshot.
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("hold short"));
 	if (!Network->SetHoldShort(Node, Protects))
@@ -408,6 +427,17 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 			TEXT("SetHoldShort refused at guideline node %d: segment %d is not a live runway"),
 			NodeIndex, SegmentIndex);
 		return false;
+	}
+
+	if (Network->GetGuidelineNodes()[NodeIndex].HoldShortFor == Before)
+	{
+		// Succeeded and changed nothing. Leaving the scope uncommitted abandons the pending
+		// snapshot - the stacks are untouched and the live graph is not restored, which is
+		// exactly right here because nothing was altered to restore. True is still returned:
+		// the caller asked for a state, and that state holds.
+		UE_LOG(LogRoadMesh, Verbose,
+			TEXT("Hold short at guideline node %d already as asked - no undo step pushed"), NodeIndex);
+		return true;
 	}
 	Edit.Commit();
 

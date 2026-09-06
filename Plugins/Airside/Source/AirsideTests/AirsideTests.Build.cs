@@ -12,6 +12,7 @@ public class AirsideTests : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"GeometryCore",   // FDynamicMesh3, to test what the sink actually accepts
+			"InputCore",      // EKeys, to assert WHICH key a registry entry claims
 			"Airside"
 		});
 	}

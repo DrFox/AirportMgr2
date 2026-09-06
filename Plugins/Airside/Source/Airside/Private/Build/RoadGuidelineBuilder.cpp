@@ -396,6 +396,44 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// been deleted, which would put a bar on a node protecting nothing.
 		Network.PruneHoldShortMarks();
 
+		// CLEAR SURVIVING FLAGS BEFORE RE-APPLYING, because not every flagged node is fresh.
+		// Most derived nodes are made anew above and start unflagged, but a node the sweep
+		// SPARED, and every Origin-less node (an entity's pose or anchor - see
+		// FGuidelineNode::Origin), lives on with whatever flag it last had. Pruning above
+		// can therefore remove a mark whose runway was deleted and still leave the bar
+		// standing on the node, protecting a strip that no longer exists.
+		//
+		// Two rules, because the two kinds of node have DIFFERENT sources of truth, and
+		// URoadNetwork::SetHoldShort says which is which:
+		//   - Origin set: the MARK is the source and the flag is its cache, so the flag is
+		//     cleared unconditionally and the loop below writes it back. Rebuilding a cache
+		//     means emptying it, not merely adding to it.
+		//   - Origin unset: no mark is ever stored, so the FLAG is the source. Wiping it
+		//     would delete the player's bar on every unrelated road edit. It is cleared only
+		//     when it names something that is no longer a live runway - the one case the
+		//     prune above could not reach, since it is keyed by an Origin these nodes lack.
+		{
+			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
+			for (int32 Index = 0; Index < Live.Num(); ++Index)
+			{
+				if (!Live[Index].bAlive || !Live[Index].HoldShortFor.IsSet())
+				{
+					continue;
+				}
+
+				const bool bMarkBacked = Live[Index].Origin.IsSet();
+				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldShortFor))
+				{
+					continue;
+				}
+
+				if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(Network.GuidelineNodeIdAt(Index)))
+				{
+					Node->HoldShortFor = FRoadSegmentId();
+				}
+			}
+		}
+
 		for (const FHoldShortMark& Mark : Network.GetHoldShortMarks())
 		{
 			const FGuidelineNodeId* Found = Ends.Find(

@@ -96,11 +96,57 @@ bool FHoldShortSurvivesRebuildTest::RunTest(const FString& Parameters)
 	// the arbiter from expanding a chain that is not a strip.
 	TestFalse(TEXT("a taxiway cannot be held short of"), Net->SetHoldShort(BarCleared, Tx));
 
+	// AN ORIGIN-LESS NODE IS NOT EXEMPT FROM THE PRUNE. No mark is stored for one (see
+	// URoadNetwork::SetHoldShort: the flag itself is the source there), so PruneHoldShortMarks
+	// cannot reach it - and without the builder clearing it, the node would go on naming a
+	// runway that has been deleted, which is a bar guarding a strip that is not there.
+	{
+		const FGuidelineNodeId Loose = Net->AddGuidelineNode(FVector2D(60000.0, -5000.0), /*bDerived=*/false);
+		TestTrue(TEXT("an Origin-less node can be flagged"), Net->SetHoldShort(Loose, R1));
+		TestEqual(TEXT("but records no mark - the flag is its own source"),
+			Net->GetHoldShortMarks().Num(), 0);
+
+		M2HoldRebuild(*Net);
+		TestTrue(TEXT("and survives a rebuild while its runway lives"),
+			Net->GetGuidelineNode(Loose) != nullptr && Net->GetGuidelineNode(Loose)->HoldShortFor == R1);
+
+		Net->RemoveSegment(R1);
+		M2HoldRebuild(*Net);
+		if (!TestNotNull(TEXT("the node itself outlives the runway - it is never swept"),
+			Net->GetGuidelineNode(Loose)))
+		{
+			return false;
+		}
+		TestFalse(TEXT("but its flag is cleared with the runway it named"),
+			Net->GetGuidelineNode(Loose)->HoldShortFor.IsSet());
+	}
+
 	// A mark whose runway was deleted is pruned rather than left pointing at nothing.
-	Net->SetHoldShort(BarCleared, R1);
-	Net->RemoveSegment(R1);
+	const FRoadSegmentId R2 = Net->AddStraightSegment(T, E, Runway);
+	M2HoldRebuild(*Net);
+	const FGuidelineNodeId BarAgain = M2HoldNodeFor(*Net, Tx, true);
+	if (!TestTrue(TEXT("the taxiway end node exists again"), BarAgain.IsSet())) { return false; }
+	Net->SetHoldShort(BarAgain, R2);
+	Net->RemoveSegment(R2);
 	M2HoldRebuild(*Net);
 	TestEqual(TEXT("mark pruned with its runway"), Net->GetHoldShortMarks().Num(), 0);
+	TestFalse(TEXT("and the flag went with it"),
+		M2HoldNodeFor(*Net, Tx, true).IsSet()
+			&& Net->GetGuidelineNode(M2HoldNodeFor(*Net, Tx, true))->HoldShortFor.IsSet());
+
+	// A mark whose NODE identity is gone - At.Segment deleted - goes too. The taxiway is
+	// what carries the flagged end, so removing it must not leave a mark keyed on a segment
+	// slot that a later road can be handed.
+	const FRoadSegmentId R3 = Net->AddStraightSegment(T, E, Runway);
+	M2HoldRebuild(*Net);
+	const FGuidelineNodeId BarOnTx = M2HoldNodeFor(*Net, Tx, true);
+	if (!TestTrue(TEXT("a flagged taxiway end once more"), BarOnTx.IsSet())) { return false; }
+	TestTrue(TEXT("flagged"), Net->SetHoldShort(BarOnTx, R3));
+	TestEqual(TEXT("one mark again"), Net->GetHoldShortMarks().Num(), 1);
+	Net->RemoveSegment(Tx);
+	M2HoldRebuild(*Net);
+	TestEqual(TEXT("mark pruned with the taxiway its node was derived for"),
+		Net->GetHoldShortMarks().Num(), 0);
 	return true;
 }
 

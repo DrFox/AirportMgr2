@@ -2,6 +2,7 @@
 
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
+#include "Tool/HoldShortTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RouteTool.h"
@@ -13,7 +14,8 @@
 TConstArrayView<FToolRegistration> ToolRegistry()
 {
 	// A function-local static rather than a file-scope global: constructed exactly once,
-	// on first use, in the order written here - which IS the key order, 1 through 6. Never
+	// on first use, in the order written here - which IS the key order, 1 through 6 then 8
+	// (see the hold-short entry for why seven is skipped). Never
 	// mutated after that first construction, so handing out a view over it is safe from
 	// any thread that only reads.
 	//
@@ -28,6 +30,11 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::Four,  LOCTEXT("Route",     "Route"),     [] { return MakeUnique<FRouteTool>(); } },
 		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"), [] { return MakeUnique<FGuidelineDrawTool>(); } },
 		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),    [] { return MakeUnique<FRunwayTool>(); } },
+
+		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
+		// this table - see ARoadBuildController::OnLandAircraft. Numbering around it keeps
+		// the printed key on the bar and the key that actually works the same number.
+		{ EKeys::Eight, LOCTEXT("HoldShort", "Hold short"), [] { return MakeUnique<FHoldShortTool>(); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
