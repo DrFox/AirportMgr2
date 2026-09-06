@@ -122,6 +122,11 @@ namespace
 					continue;
 				}
 
+				if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
+				{
+					continue;
+				}
+
 				if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
 				{
 					continue;
@@ -199,8 +204,9 @@ namespace
 		// quadratic returns A and B themselves, so dropping each segment's first point
 		// leaves no gap and no duplicate.
 		Plan.Polyline.Add(StartNode->Position);
-		for (const FRouteStep& Step : Plan.Steps)
+		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
 		{
+			FRouteStep& Step = Plan.Steps[Index];
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
 			if (Edge == nullptr)
 			{
@@ -222,6 +228,12 @@ namespace
 			{
 				Plan.Polyline.Add(Points[At]);
 			}
+
+			// Measured off the array just appended, not off Points: the two are the same
+			// numbers today, and reading the plan's own polyline is what keeps them the same
+			// if the weld rule above ever changes.
+			Step.EndVertex = Plan.Polyline.Num() - 1;
+			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
 		}
 
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
@@ -270,6 +282,53 @@ namespace RouteSearch
 		}
 
 		return Plan;
+	}
+
+	FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail)
+	{
+		FRoutePlan Out;
+		Out.Result = ERouteResult::Unreachable;
+		if (!Head.IsValid() || !Tail.IsValid() || KeepSteps < 0 || KeepSteps > Head.Steps.Num()
+			|| Tail.Polyline.Num() < 2)
+		{
+			return Out;
+		}
+
+		const FGuidelineNodeId JoinNode = KeepSteps == 0 ? Head.Start : Head.Steps[KeepSteps - 1].To;
+		if (JoinNode != Tail.Start)
+		{
+			return Out;
+		}
+
+		const int32 JoinVertex = KeepSteps == 0 ? 0 : Head.Steps[KeepSteps - 1].EndVertex;
+		const double JoinDistance = KeepSteps == 0 ? 0.0 : Head.Steps[KeepSteps - 1].EndDistance;
+
+		Out.Result = ERouteResult::Found;
+		Out.Start = Head.Start;
+		for (int32 At = 0; At <= JoinVertex; ++At)
+		{
+			Out.Polyline.Add(Head.Polyline[At]);
+		}
+		for (int32 Index = 0; Index < KeepSteps; ++Index)
+		{
+			Out.Steps.Add(Head.Steps[Index]);
+		}
+
+		// The tail's first point IS the join node, so it is dropped - the same weld rule
+		// RunSearch applies between consecutive edges.
+		for (int32 At = 1; At < Tail.Polyline.Num(); ++At)
+		{
+			Out.Polyline.Add(Tail.Polyline[At]);
+		}
+		for (const FRouteStep& Step : Tail.Steps)
+		{
+			FRouteStep Rebased = Step;
+			Rebased.EndVertex += JoinVertex;
+			Rebased.EndDistance += JoinDistance;
+			Out.Steps.Add(Rebased);
+		}
+		Out.Length = GuidelineGeom::PolylineLength(Out.Polyline);
+		return Out;
 	}
 
 	FGuidelineNodeId FindNearestNode(

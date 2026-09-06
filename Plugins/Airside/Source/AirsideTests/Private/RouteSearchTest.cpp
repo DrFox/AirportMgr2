@@ -29,9 +29,15 @@ namespace
 	}
 }
 
+// Named as a child of RouteSearch, not the bare category name: Task 1 added
+// Airside.Model.RouteSearch.{EndDistance,Splice} as siblings, and UE's automation report
+// tree cannot have "RouteSearch" be both a leaf test and the parent of those - the leaf
+// silently stops being run at all, with no error, the moment a child is registered under
+// the same full name. Task 7 adds OccupancyCost as another sibling, so this needed a
+// specific name regardless of the collision: it exercises Find and FindNearestNode.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRouteSearchTest,
-	"Airside.Model.RouteSearch",
+	"Airside.Model.RouteSearch.Find",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FRouteSearchTest::RunTest(const FString& Parameters)

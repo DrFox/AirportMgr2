@@ -31,10 +31,13 @@
  * PLANS: FSpeedProfile works out what the whole route permits before the first frame, and
  * Advance follows it. That is the first predictive thing in this class.
  *
- * WHAT IS STILL NOT HERE: any awareness of another agent. Two aircraft pass straight through
- * each other, hold-short nodes are not consulted, and the right-of-way rules the graph
- * already carries are ignored. That is the traffic model, and it is still the thing this has
- * to work before - it has simply stopped being wrong about one aircraft on an empty airport.
+ * WHAT IS STILL NOT HERE: any awareness of WHO is ahead. StopWithin (see Advance) is the one
+ * number the traffic model is allowed to hand in - a distance, not a reason - so this class
+ * still does not know whether it is a hold-short node, another aircraft's tail, or a
+ * deadlock resolver that put the cap there. Two aircraft told nothing would still pass
+ * straight through each other, and the right-of-way rules the graph carries are still
+ * somebody else's job. That somebody is UGroundTraffic: it watches the other agents and the
+ * graph's own rules and turns what it sees into the one number this class understands.
  *
  * It is still world-free: FGroundPerformance is a handful of doubles, so the whole of "does
  * it round a corner like an aeroplane" is testable by calling Advance in a loop with no world
@@ -94,11 +97,33 @@ struct AIRSIDE_API FRouteFollower
 	/**
 	 * Moves forward by DeltaSeconds and reports where that leaves the agent.
 	 *
+	 * StopWithin is the ONE input the traffic model adds (spec 3.8): the distance, from
+	 * where the agent is at the start of this tick, beyond which it may not go. It becomes
+	 * a third cap on the target speed - sqrt(2 a s), the same shape the profile's own
+	 * braking curve has - and a clamp on Travelled, so a long frame cannot carry the agent
+	 * through a node it was told to hold at. Unbounded means today's behaviour exactly.
+	 *
 	 * False when there is no valid route to walk, leaving the outputs untouched - so a
 	 * caller that ignores the return value leaves its agent where it was rather than
 	 * teleporting it to the origin, which is this project's most-repeated bug.
 	 */
-	bool Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading);
+	bool Advance(double DeltaSeconds, double StopWithin, FVector2D& OutPosition, double& OutHeading);
+
+	/** Advance with nothing ahead. Kept so every caller and test from before the traffic
+	 *  model reads exactly as it did. */
+	bool Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading)
+	{
+		return Advance(DeltaSeconds, TNumericLimits<double>::Max(), OutPosition, OutHeading);
+	}
+
+	/**
+	 * Swaps the plan under a MOVING agent, keeping Travelled, Speed and Heading.
+	 *
+	 * Start() is for a dispatch: it resets to rest at the polyline's first point. A replan
+	 * spliced at a node the agent has not reached yet must not do that - the agent is part
+	 * way along a line that is unchanged up to the splice, so only the profile is rebuilt.
+	 */
+	void Replace(const FRoutePlan& NewPlan);
 
 	/** True once the whole polyline has been walked. Always true for an invalid plan. */
 	bool HasArrived() const;
