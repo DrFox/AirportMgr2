@@ -146,3 +146,24 @@ separate follow-up already filed in the M2 handover).
 - **Bar-to-bar arming window** (M2 follow-up): the arc is longer than the stub it replaces,
   so an aircraft on the arc is committed to the runway for longer before its nose is on the
   asphalt. The crossing rule is body-keyed; unchanged here, noted for that follow-up.
+
+## 9. Outcome (2026-09-06, same day)
+
+Implemented on `feature/runway-exit-arcs` in one commit after the spec and plan. Measured:
+
+- 45 degree exit: leaves the runway 0.32 degrees off tangent, meets the taxiway 0.32 off
+  (64-sample chords), worst chord turn 3.2 degrees at 16 samples. 90 degree exit at the
+  runway end: 0.46 / 0.46, worst 7.6. The entry in the roll direction from a 45 degree exit
+  is a 135 degree hairpin (worst chord 17.9) - tangent both ends, crawled by the profile.
+- The taxiway's end sits at `max(ExitLength, CutDistance)`: at an acute 45 degree corner the
+  cut is 6044 uu, so the lower bound in §3.4 binds there.
+- Handover on the real fixture: worst speed step 5 uu/s per tick (the rollout's braking),
+  worst heading step 0.33 degrees (the follower's slew), parked in 82 s. The first cut
+  showed an 888 uu/s step: the rollout stops the tick AFTER crossing `VacateAt`, and the
+  follower discarded that overshoot. `Start` now takes `InitialTravelled` as well.
+- Movers: `EarliestExitWins` (exit is the arc start, on the centreline, within
+  `ExitLength` of the junction); `HeadOnReplansRoundBarHolder` keeps `ExitLength = 0` - with
+  arcs a bar 60 m down the taxiway leaves the tail clear of the strip and the deadlock
+  never forms, so the replay pins the resolver on the geometry it was recorded on.
+- 126 tests, 0 failed, 0 crashed; `UE_LOG` 98 -> 98. Built in a detached worktree because
+  the editor was open; unverified in PIE.
