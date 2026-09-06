@@ -39,6 +39,15 @@ public:
  * State is POLLED each tick rather than subscribed: the fifteen booleans come from four
  * owners (session, controller, actor, runtime), and fifteen reads a frame cost nothing next
  * to four subscriptions and their lifetime rules.
+ *
+ * TO RESTYLE IN THE DESIGNER: make a Widget Blueprint with this class as parent, give it
+ * any layout you like, and name the panels you want filled TimeSection, ToolsSection,
+ * EditSection, AircraftSection, GameSection (any UPanelWidget; a HorizontalBox gets padded
+ * slots) plus TextBlocks ClockText and NotificationText. Set it as BuildBarClass on the
+ * controller (DefaultGame.ini, [/Script/AirportMgr.RoadBuildController]). Sections you
+ * leave out are built in code and a warning names them. Authoring that asset from Python
+ * was tried and is not possible on this engine build: UWidgetBlueprint::WidgetTree is not
+ * a scriptable property, so the code-built bar is the default look.
  */
 UCLASS()
 class AIRPORTMGR_API UBuildBarWidget : public UUserWidget
@@ -61,6 +70,8 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Bar|Style") FLinearColor DisabledTint = FLinearColor(0.10f, 0.10f, 0.12f);
 	UPROPERTY(EditAnywhere, Category = "Bar|Style") FMargin ButtonPadding = FMargin(10.0f, 6.0f);
 	UPROPERTY(EditAnywhere, Category = "Bar|Style") int32 FontSize = 12;
+	UPROPERTY(EditAnywhere, Category = "Bar|Style") FLinearColor BarTint = FLinearColor(0.06f, 0.07f, 0.09f, 0.92f);
+	UPROPERTY(EditAnywhere, Category = "Bar|Style", meta = (ClampMin = "24.0")) double BarHeight = 56.0;
 
 	/** Runs an action by registry index on the owning controller. Called by entries. */
 	void RunAction(int32 ActionIndex);

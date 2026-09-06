@@ -1,7 +1,10 @@
 #include "BuildBarWidget.h"
 
 #include "Blueprint/WidgetTree.h"
+#include "Components/Border.h"
 #include "Components/Button.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/TextBlock.h"
@@ -59,19 +62,40 @@ void UBuildBarWidget::EnsureSlots()
 {
 	// A root only if the asset gave none: BindWidgetOptional has already filled every slot
 	// the asset supplies, and a code-built root would replace the designer's bar.
+	//
+	// The code-built chrome is a real bottom bar, not a placeholder: a canvas with the bar
+	// anchored to the bottom edge and the notification line above it. Python cannot author
+	// the Blueprint on this engine build (UWidgetBlueprint::WidgetTree is not a scriptable
+	// property), so this IS the default look, and a Blueprint is an optional restyle.
 	UHorizontalBox* Fallback = nullptr;
 	if (WidgetTree->RootWidget == nullptr)
 	{
-		UVerticalBox* Root = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("FallbackRoot"));
+		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("FallbackRoot"));
 		WidgetTree->RootWidget = Root;
+
 		if (NotificationText == nullptr)
 		{
 			NotificationText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NotificationText"));
-			Root->AddChildToVerticalBox(NotificationText);
+			UCanvasPanelSlot* NoteSlot = Root->AddChildToCanvas(NotificationText);
+			NoteSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));
+			NoteSlot->SetAlignment(FVector2D(0.5, 1.0));
+			NoteSlot->SetAutoSize(true);
+			NoteSlot->SetPosition(FVector2D(0.0, -BarHeight - 16.0));
 		}
+
+		UBorder* Border = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BarBorder"));
+		Border->SetBrushColor(BarTint);
+		Border->SetPadding(FMargin(12.0f, 8.0f));
+		UCanvasPanelSlot* BarSlot = Root->AddChildToCanvas(Border);
+		// Stretched across the bottom edge: with both anchors on y=1, Offsets reads as
+		// (left margin, top margin, right margin, HEIGHT).
+		BarSlot->SetAnchors(FAnchors(0.0f, 1.0f, 1.0f, 1.0f));
+		BarSlot->SetAlignment(FVector2D(0.0, 1.0));
+		BarSlot->SetOffsets(FMargin(0.0f, 0.0f, 0.0f, static_cast<float>(BarHeight)));
+
 		Fallback = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("FallbackBar"));
-		Root->AddChildToVerticalBox(Fallback);
-		UE_LOG(LogBuildBar, Log, TEXT("No bar asset: building a plain code-only bar"));
+		Border->SetContent(Fallback);
+		UE_LOG(LogBuildBar, Log, TEXT("No bar asset: building the code-only bar"));
 	}
 
 	auto Ensure = [&](TObjectPtr<UPanelWidget>& Section, const TCHAR* Name)
@@ -83,7 +107,9 @@ void UBuildBarWidget::EnsureSlots()
 		UHorizontalBox* Box = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), Name);
 		if (Fallback != nullptr)
 		{
-			Fallback->AddChildToHorizontalBox(Box)->SetPadding(FMargin(12.0f, 0.0f));
+			UHorizontalBoxSlot* BoxSlot = Fallback->AddChildToHorizontalBox(Box);
+			BoxSlot->SetPadding(FMargin(12.0f, 0.0f));
+			BoxSlot->SetVerticalAlignment(VAlign_Center);
 		}
 		else if (UPanelWidget* Root = Cast<UPanelWidget>(WidgetTree->RootWidget))
 		{
@@ -103,7 +129,16 @@ void UBuildBarWidget::EnsureSlots()
 	if (ClockText == nullptr)
 	{
 		ClockText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ClockText"));
-		TimeSection->AddChild(ClockText);
+		if (UHorizontalBox* Box = Cast<UHorizontalBox>(TimeSection))
+		{
+			UHorizontalBoxSlot* ClockSlot = Box->AddChildToHorizontalBox(ClockText);
+			ClockSlot->SetPadding(FMargin(0.0f, 0.0f, 12.0f, 0.0f));
+			ClockSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		else
+		{
+			TimeSection->AddChild(ClockText);
+		}
 	}
 }
 

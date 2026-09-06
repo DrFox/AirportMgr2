@@ -126,6 +126,17 @@ TConstArrayView<FBuildAction> BuildActions();
 
 ## 5. The asset
 
+*Amended 2026-09-06 during implementation:* the Python route is closed on this engine build.
+`UWidgetBlueprint::WidgetTree` is a plain `UPROPERTY()` with no scripting exposure, so the
+script cannot reach the tree (`Failed to find property 'widget_tree'`). Per the plan's
+one-attempt rule the script was dropped. In its place the code-built fallback became real
+chrome: a canvas root, the bar in a tinted Border anchored across the bottom edge, the
+notification line above it, `BarTint`/`BarHeight` as style knobs. That is the default look.
+A Blueprint is now an optional restyle authored by hand from the seven slot names listed
+in `UBuildBarWidget`'s header comment; no config default is shipped until one exists.
+The original plan for this section follows for the record.
+
+
 `Tools/Python/build_bar_widget.py` creates `/Game/UI/WBP_BuildBar`, parent
 `UBuildBarWidget`: a Canvas root; a Border anchored to the bottom edge, full width; inside
 it a HorizontalBox holding five named HorizontalBoxes (`TimeSection` … `GameSection`)
