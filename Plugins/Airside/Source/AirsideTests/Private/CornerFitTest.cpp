@@ -168,6 +168,68 @@ bool FCornerFitTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBendJunctionPavedTest,
+	"Airside.Build.BendJunctionIsPaved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBendJunctionPavedTest::RunTest(const FString& Parameters)
+{
+	// THE SECOND WAY A ROAD VANISHED ON 2026-09-06. Rebuilt from the user's own log: a bend of
+	// ~93 degrees between two segments of 2127 and 1857 uu on the 400-wide default profile.
+	// The fitted fillet's outer arc bulges past the node, so the node is outside its own
+	// rim, the rim centroid is too, and the solver's fan refused - leaving the corner
+	// pavement missing while both ribbons drew. The builder must pave it anyway.
+	URoadProfile* Profile = URoadProfile::MakeTransient(400.0, 1500.0);
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	const FRoadNodeId N5 = Net->AddNode(FVector2D(1528.0, -2036.0));
+	const FRoadNodeId N4 = Net->AddNode(FVector2D(679.0, -86.0));
+	const FRoadNodeId N2 = Net->AddNode(FVector2D(2344.0, 737.0));
+	Net->AddStraightSegment(N5, N4, Profile);
+	Net->AddStraightSegment(N4, N2, Profile);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
+
+	const FJunctionResult* Bend = Solved.NodeResults.Find(N4.Index);
+	if (!TestNotNull(TEXT("the bend has a junction result"), Bend)) { return false; }
+	TestTrue(TEXT("the fixture reproduces the refused fan - the rim is present but the solver emitted no triangles"),
+		Bend->Triangles.Num() == 0 && Bend->Boundary.Num() >= 4);
+
+	FRoadMeshBuilder Builder(10.0);
+	const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(N4.Index);
+	const TArray<FRoadSegmentId> NoArms;
+	Builder.AddJunction(*Net, N4.Index, *Bend, Arms ? *Arms : NoArms);
+	const FRoadMeshBuffers& B = Builder.GetBuffers();
+	TestTrue(TEXT("the corner is paved"), B.Indices.Num() > 0);
+
+	// Measured, not narrated: every triangle faces up (negative signed area is the front
+	// face here - see ShortSegmentTest), and together they cover the rim's own area.
+	double Covered = 0.0;
+	int32 Down = 0;
+	for (int32 I = 0; I + 2 < B.Indices.Num(); I += 3)
+	{
+		const FVector3d& P0 = B.Positions[B.Indices[I]];
+		const FVector3d& P1 = B.Positions[B.Indices[I + 1]];
+		const FVector3d& P2 = B.Positions[B.Indices[I + 2]];
+		const double Area2 = (P1.X - P0.X) * (P2.Y - P0.Y) - (P1.Y - P0.Y) * (P2.X - P0.X);
+		if (Area2 > 0.0) { ++Down; }
+		Covered += FMath::Abs(Area2) * 0.5;
+	}
+	TestEqual(TEXT("no triangle faces down"), Down, 0);
+
+	double RimArea2 = 0.0;
+	const int32 RimCount = Bend->Boundary.Num() - 1;
+	for (int32 I = 0; I < RimCount; ++I)
+	{
+		const FVector2D& P = Bend->Boundary[I];
+		const FVector2D& Q = Bend->Boundary[(I + 1) % RimCount];
+		RimArea2 += P.X * Q.Y - Q.X * P.Y;
+	}
+	TestEqual(TEXT("the triangles cover the rim's area"), Covered, FMath::Abs(RimArea2) * 0.5, FMath::Abs(RimArea2) * 0.005);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCornerPlacementTest,
 	"Airside.Tool.PlacementRefusesCornerThatCannotFit",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

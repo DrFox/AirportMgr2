@@ -56,6 +56,14 @@ public:
 		const TArray<FRoadSegmentId>& ArmSegments);
 
 	/**
+	 * The junction pavement when the solver could find no fan apex that sees the whole rim
+	 * (FJunctionResult::Triangles empty with a rim present). Ear-clips the rim instead; no
+	 * shoulder ring. See the call site in AddJunction for why this is here and not in Solve/.
+	 */
+	void AddJunctionByEarClipping(const URoadNetwork& Network, int32 NodeIndex, const FJunctionResult& Junction,
+		const TArray<FRoadSegmentId>& ArmSegments);
+
+	/**
 	 * Append a segment's ribbon between its two stored cut lines.
 	 * RibbonSegments is the number of quads along the segment; 1 is correct for a
 	 * straight segment, more for a curve.
