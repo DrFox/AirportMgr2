@@ -315,6 +315,68 @@ public:
 	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
 	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
 
+	/**
+	 * The two maps between ROUTE distance - what the follower walks and what a stop point is
+	 * expressed in - and EDGE distance, which is what a claim's interval means. Pure
+	 * arithmetic on doubles: no member of this class, no network, no agent.
+	 *
+	 * PUBLIC AND NESTED, rather than private statics behind a ForTest forwarder. Both mirror
+	 * a reversed step, both are one line of arithmetic that is wrong in a way no fixture
+	 * reads back directly (a From > To interval conflicts with nothing at all, silently), so
+	 * they are worth pinning on their own and a test has to reach them. A ForTest wrapper on
+	 * UGroundTraffic would instead be a second door into the claim pass - the thing
+	 * OccupancyForTest's comment warns against - and two free functions in Model/ would stop
+	 * saying which pass they belong to. Nesting costs neither.
+	 *
+	 * Airside.Model.Traffic.ClaimGeometry is the test.
+	 */
+	struct FClaimGeometry
+	{
+		/** A claim's extent along one edge, in EDGE distance from that edge's A end. */
+		struct FEdgeInterval
+		{
+			double From = 0.0;
+			double To = 0.0;
+		};
+
+		/**
+		 * The route interval [Lo, Hi] on a step that begins at StepBegin and whose edge is
+		 * Length long, mapped into edge distance.
+		 *
+		 * Route distance to EDGE distance, measured from the edge's A end. A reversed
+		 * step is walked from B, so its interval mirrors through the edge length - and
+		 * the mirror swaps the ends, which is why From takes what Hi produced. Getting
+		 * this backwards would give From > To, and a half-open interval that way round
+		 * conflicts with nothing at all.
+		 */
+		static FEdgeInterval EdgeInterval(double Lo, double Hi, double StepBegin, double Length, bool bReversed)
+		{
+			FEdgeInterval Interval;
+			Interval.From = Lo - StepBegin;
+			Interval.To = Hi - StepBegin;
+			if (bReversed)
+			{
+				Interval.From = Length - (Hi - StepBegin);
+				Interval.To = Length - (Lo - StepBegin);
+			}
+			return Interval;
+		}
+
+		/**
+		 * Where a blocker's edge interval first bars the way, back in ROUTE distance, on a
+		 * step that begins at StepBegin and whose edge is Length long.
+		 *
+		 * The blocker's NEAREST boundary ahead, back in route distance. On a reversed
+		 * step the agent is walking the edge from B, so the near end of the blocker's
+		 * interval is its To, mirrored.
+		 */
+		static double BoundaryAhead(double StepBegin, double Length, bool bReversed,
+			double BlockerFrom, double BlockerTo)
+		{
+			return bReversed ? StepBegin + (Length - BlockerTo) : StepBegin + BlockerFrom;
+		}
+	};
+
 private:
 	/**
 	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
@@ -454,6 +516,84 @@ private:
 	 * The third route is that one, and the handovers that fill RunwayHeld live in Advance.
 	 */
 	void ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network);
+
+	/**
+	 * The numbers ONE claim pass works in: the agent's centre, its body and gap, and the
+	 * stretch of route the window covers. Read by four of the five steps below.
+	 *
+	 * ONE STRUCT rather than six parameters threaded through four helpers - the codebase's
+	 * "one struct per thing", and for its stated reason: a figure copied by hand into a
+	 * sibling call is a figure somebody will one day forget to copy, and the copy that
+	 * nobody set is how an arrival taxied on default figures.
+	 *
+	 * The names are the one-letter ones the rules are written in, because the rules are
+	 * arithmetic and T + F/2 reads as the nose while Travelled + Footprint/2 does not.
+	 */
+	struct FClaimWindow
+	{
+		/** Follower.Travelled: the agent's CENTRE, never its nose. */
+		double T = 0.0;
+		/** Footprint and gap for this agent's class. See FTrafficRules. */
+		double F = 0.0;
+		double G = 0.0;
+		/** T + F/2 + braking distance + G, and T - F/2. WindowFor says why the halves. */
+		double Head = 0.0;
+		double Tail = 0.0;
+		/** Index into Plan.Steps that T falls on. */
+		int32 Current = INDEX_NONE;
+	};
+
+	/**
+	 * Where the agent's nose, centre and tail are this tick, sampled ONCE per pass out of
+	 * the one array the follower walks. See SampleBody, and UpdateCrossing, which is the
+	 * only reader: all three rules of a crossing ask about the same three points, and
+	 * sampling per rule is the second evaluator this codebase's guideline invariant forbids.
+	 */
+	struct FClaimBody
+	{
+		/** All three or none - PointAtDistance fails on the polyline, not on the distance. */
+		bool bValid = false;
+		FVector2D Nose = FVector2D::ZeroVector;
+		FVector2D Centre = FVector2D::ZeroVector;
+		FVector2D Tail = FVector2D::ZeroVector;
+	};
+
+	/** One thing an agent wants this tick. Defined in GroundTrafficClaims.cpp, where the
+	 *  only three functions that build or read one live. */
+	struct FWantedClaim;
+
+	/** A non-Taxiing agent's whole claim pass: hold RunwayHeld, release everything else,
+	 *  and end any crossing. ClaimAhead's first branch. */
+	void HoldRunwayOnly(FRoadAgent& Agent);
+
+	/** A Taxiing agent whose plan went bad under it: release everything, end any crossing,
+	 *  clear the arbitration fields. ClaimAhead's second branch. */
+	void ReleaseForDeadPlan(FRoadAgent& Agent);
+
+	/** T, F, G, Head, Tail and the current step for one pass. See FClaimWindow. */
+	FClaimWindow WindowFor(const FRoadAgent& Agent) const;
+
+	/** Nose, centre and tail out of Plan.Polyline, once. See FClaimBody. */
+	static FClaimBody SampleBody(const FRoutePlan& Plan, const FClaimWindow& Window);
+
+	/** Step 0's phase machine: arm at a bar that leads onto the strip, note the centre
+	 *  reaching it, release when the whole body is off it. Spec §3.1's fourth route. */
+	void UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
+		const FClaimWindow& Window, const FClaimBody& Body) const;
+
+	/** Steps 0-2: everything the agent wants this tick, IN ROUTE ORDER, which is what the
+	 *  first-refusal rule reads. Nothing is asked of the table here. */
+	void BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
+		const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const;
+
+	/** Step 3: ask the table for each in turn, keep what was granted or occupied, and let
+	 *  the FIRST refusal write StopWithin, WaitingOn and BlockedStep. */
+	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const TArray<FWantedClaim>& Pending);
+
+	/** How far a refused claim lets the agent go, in route distance from T. A pure function
+	 *  of the refusal's kind, the step it was raised on, and the window. */
+	static double StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
+		const FClaimWindow& Window);
 
 	/**
 	 * Who goes first at Node. The node's PriorityOverride if it has one, else the class
