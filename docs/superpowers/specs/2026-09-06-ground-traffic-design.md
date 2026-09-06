@@ -142,6 +142,8 @@ second copy is the drift rule. Per-type lengths are a later refinement with one 
 | `int32 WaitingOn` | arbitration | deadlock detection; 0 = none |
 | `double StalledSeconds` | `Advance` | deadlock detection |
 | `double LastResolveAttempt` | resolver | retry cadence |
+| `int32 BlockedStep` | arbitration | the step whose resource refused; −1 when none. Names the node a replan starts from |
+| `TArray<FRoadSegmentId> RunwayHeld` | dispatch, departure handover | the chain an Arriving or Departing agent occupies each tick |
 
 Arbitration writes, motion reads. There is no second evaluator of where the agent may go.
 
@@ -163,8 +165,14 @@ it — the sample-once rule.
 
 - `TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const` — every segment continuous
   with `Seed` through junctions under a runway profile.
-- `RunwayExtentAt` / `NearestRunwayThreshold` gain an out `FRoadSegmentId`, carried on
-  `FArrivalPlan::RunwaySegment`.
+- `bool IsRunwaySegment(FRoadSegmentId) const` — the profile rule
+  (`bContinuousThroughJunctions`) in one place.
+- `RunwayExtentAt` / `NearestRunwayThreshold` gain a trailing `FRoadSegmentId* OutSegment =
+  nullptr`, carried on `FArrivalPlan::RunwaySegment` and `RunwayChain`.
+- `FRoadSegmentId RunwayNearGuidelineNode(FGuidelineNodeId) const` — the runway an edge
+  incident to this node, or to a neighbour, derives from; unset when none. What the
+  hold-short tool asks.
+- `HoldShortMarks` and `bool SetHoldShort(FGuidelineNodeId, FRoadSegmentId Protects)` — §6.
 - `EArrivalRefusal::RunwayOccupied`.
 
 ---
@@ -173,10 +181,22 @@ it — the sample-once rule.
 
 ### 3.1 What an agent holds
 
-- **Edge interval** `[Travelled − Footprint, min(Travelled + Window, edge end)]` in route
+- **Edge interval** `[Travelled − Footprint/2, min(Travelled + Window, edge end)]` in route
   distance, mapped onto the edge through `EndDistance`. Continues onto following edges while
-  the window has distance left.
-- **Node**: every `Steps[i].To` whose `EndDistance` lies inside the window. Exclusive.
+  the window has distance left. Half the footprint behind, because `Travelled` is the
+  agent's CENTRE: a vehicle 300 uu past a node with a 500 uu footprint has cleared it.
+- **Node**: every `Steps[i].To` whose `EndDistance` lies inside the window, and the node the
+  current step LEFT while `Travelled` is still within `Footprint/2` of it. Exclusive. A node
+  is *occupied* (never preemptable) while the agent's centre is within `Footprint/2` of it.
+- **Box-junction entry rule.** When the window reaches the START of a step shorter than
+  `Footprint + Gap` — an edge the agent cannot stand on without still blocking the node
+  behind it, which is what every junction turn path is — the step's END node must be
+  granted as well, and a refusal stops the agent `Gap` short of the step's start rather than
+  inside it. Only at entry: once inside, a blocked end node stops the agent short of that
+  node like any other. The alternative, extending the requirement through every consecutive
+  short step, was traced by hand on the three-vehicle triangle and deadlocks HARDER — an
+  agent then refuses to move until a node two junctions ahead is free, and the agent holding
+  that node is waiting on it. Traced, not measured; the triangle test measures it.
 - **Surface**: a runway chain, by three routes to one rule:
   - an edge whose `DerivedFrom` is a runway segment implies the chain;
   - a hold-short node claims the chain its `HoldShortFor` names, so the stop is at the bar,
@@ -247,17 +267,26 @@ agent's reservations ahead. Logged with old and new remaining lengths.
 `WaitingOn`. Reaching an agent already on the path is a cycle. A cycle is identified by its
 lowest member id, so it is reported and resolved once per tick, not once per member.
 
-**Resolver.** The cycle's lowest-ranked member — lowest class priority, ties to the highest
-id (the later arrival) — is the candidate.
+**Resolver.** *Refined 2026-09-06 while planning.* A member can replan only if it is stopped
+AT the node where the edge it was refused begins — within `Gap + Footprint/2` short of that
+node and not past it — because the alternative is another edge OUT of that node, and a
+waiter that has already entered the edge cannot take it without reversing. Every member
+records `BlockedStep`, the index of the step whose resource refused it, so the node is
+`FromNode(BlockedStep)` and the ban is `Steps[BlockedStep].Edge`. Among the members that
+qualify, the candidate is the lowest-ranked: lowest class priority, ties to the highest id
+(the later arrival).
 
-- **Has an alternative edge out of its node:** `ReplanFrom` with the blocked edge banned.
-- **Has none:** stays a waiter. `LastResolveAttempt` stamped; retried every
-  `Rules.RetrySeconds` and on every graph rebuild. Logged once with the members.
-- **All aircraft:** same two branches on the highest id. Logged at Warning as an
-  all-aircraft cycle: the input to the future build-tool warning (systems map §6).
+- **Its replan finds a route:** `ReplanFrom` with the ban and the occupancy cost. Spliced
+  at that node, so it drives the remaining `Gap` on the old line and turns onto the new.
+- **No member qualifies, or the candidate's replan fails:** the cycle stays. Each member's
+  `LastResolveAttempt` is stamped; retried every `Rules.RetrySeconds` and on every graph
+  rebuild. Logged once with the members.
+- **All aircraft:** the same rule; the highest id is the candidate. Logged at Warning as
+  an all-aircraft cycle: the input to the future build-tool warning (systems map §6).
 
-Mid-edge waiters need no case of their own: §3 keeps them creeping to their node, and the
-cycle is re-detected there.
+Mid-edge waiters need no case of their own: §3.1's box-entry rule is what makes a gridlock
+form with its members AT nodes, where they can turn, rather than inside the junction, where
+nobody can.
 
 ---
 
@@ -279,10 +308,19 @@ down the same forwarder chain as the tick.
 
 Aircraft are replanned here too — the §3.8 amendment above.
 
-**Hold-short survives.** A flagged node is made non-derived (`bDerived = false`) so the
-sweep keeps it, and derived edges re-attach to it through the existing `Origin` re-resolution
-a hand-drawn edge already relies on. `HoldShortFor` names a segment, and segment ids are the
-surface model, not regenerated, so the flag itself needs no re-resolution.
+**Hold-short survives — by identity, not by node.** *Corrected 2026-09-06 while planning:*
+the first draft made the flagged node non-derived so the sweep would keep it. Reading
+`FRoadGuidelineBuilder::Build` shows that is not enough: the builder allocates FRESH nodes
+for every derived edge end (`AddGuidelineNode` never deduplicates) and only hand-drawn
+EDGES are re-pointed at them through `Ends`. A kept node would survive with no incident
+edge — flagged, and routing nothing. So the flag is stored the way a hand-drawn edge stores
+its ends: `URoadNetwork::HoldShortMarks`, an array of `{FGuidelineEndRef At;
+FRoadSegmentId Protects;}`, saved with the level and snapshotted by undo like every other
+network field. `FGuidelineNode::HoldShortFor` stays the thing everything READS (spec 5.5);
+it is the derived cache, and the builder re-applies every mark to whichever node now holds
+that identity as its last pass before the sweep. One source, one cache, rebuilt together.
+`Protects` names a segment, and segment ids are the surface model, not regenerated, so the
+mark itself needs no re-resolution.
 
 ---
 
