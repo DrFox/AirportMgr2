@@ -2,20 +2,39 @@
 
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
 
 namespace ArrivalPlanner
 {
-	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe)
+	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
+		const FTrafficOccupancy* Occupancy)
 	{
 		FArrivalPlan Out;
 
 		// 1. WHICH RUNWAY. Nearest threshold to the query point, which is the user's own choice
 		//    of rule - there is no wind model, so nothing else could decide it.
-		if (!Network.NearestRunwayThreshold(Near, Out.Threshold, Out.Direction, Out.RunwayLength))
+		if (!Network.NearestRunwayThreshold(Near, Out.Threshold, Out.Direction, Out.RunwayLength, &Out.RunwaySegment))
 		{
 			Out.Why = EArrivalRefusal::NoRunway;
 			return Out;
+		}
+
+		Out.RunwayChain = Network.RunwayChain(Out.RunwaySegment);
+
+		// Asked before the length and exit steps, because those cannot change while the
+		// runway is busy and this can: a refusal that clears on its own is reported as
+		// itself, not as whichever later step happened to fail too.
+		if (Occupancy != nullptr)
+		{
+			for (const FRoadSegmentId& Segment : Out.RunwayChain)
+			{
+				if (Occupancy->IsHeld(FTrafficResource::OfSurface(Segment), 0))
+				{
+					Out.Why = EArrivalRefusal::RunwayOccupied;
+					return Out;
+				}
+			}
 		}
 
 		// The distance the model actually flies, plus its margin - see FLandingRun. The closed
@@ -156,6 +175,9 @@ namespace ArrivalPlanner
 				TEXT("Arrival refused: %d usable exit(s), but no route from any of them to a ")
 				TEXT("stand. Check the taxiway reaches the stands."),
 				Plan.ExitCount);
+
+		case EArrivalRefusal::RunwayOccupied:
+			return TEXT("Arrival refused: the runway is in use. Wait for it to clear.");
 
 		case EArrivalRefusal::None:
 		default:

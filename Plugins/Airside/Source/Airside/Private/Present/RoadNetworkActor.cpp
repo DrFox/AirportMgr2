@@ -322,6 +322,14 @@ void ARoadNetworkActor::RebuildMesh()
 		return;
 	}
 	Presenter->Rebuild(*Network, MakeSurfaceSettings());
+
+	// The guideline graph was just regenerated with new handles. Every agent's route must be
+	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
+	// keyed on slots the builder has already freed - see UGroundTraffic::OnGraphRebuilt.
+	if (Traffic != nullptr)
+	{
+		Traffic->OnGraphRebuilt(*Network);
+	}
 }
 
 double ARoadNetworkActor::GetApronSurfaceZ() const
@@ -385,7 +393,11 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 	// Scaled HERE, at the one place real frame time becomes agent time, so nothing below
 	// this line ever learns there is a speed setting. See SetSimTimeScale.
-	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ);
+	// TrafficRules travels with the tick, not with construction: it is a level-authored
+	// UPROPERTY on this actor and the model that reads it is Transient, so handing it over
+	// every frame is what keeps a figure tuned in the Details panel true of the arbiter -
+	// see the property's own comment and UAirsideTraffic::Advance.
+	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ, Network, TrafficRules);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
@@ -397,9 +409,10 @@ bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& 
 	return Traffic->DispatchArrival(*Network, Near, Airframe, SurfaceZ, ShutdownPauseSeconds);
 }
 
-bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe)
+bool ARoadNetworkActor::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+	ETraversalClass Class)
 {
-	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds);
+	return Traffic->DispatchAgent(Network, Plan, Airframe, SurfaceZ, ShutdownPauseSeconds, Class);
 }
 
 void ARoadNetworkActor::ClearAgents()
@@ -462,6 +475,11 @@ int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeInde
 bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
 {
 	return Facade->PlaceRunway(From, To, RunwayProfile);
+}
+
+bool ARoadNetworkActor::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
+{
+	return Facade->SetHoldShort(NodeIndex, SegmentIndex);
 }
 
 bool ARoadNetworkActor::DisconnectGuideline(int32 EdgeIndex)

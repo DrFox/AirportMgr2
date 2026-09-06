@@ -114,8 +114,15 @@ void URoadBuildEdMode::Enter()
 		Builder->ToolIndex = Index;
 		RegisterTool(ToolCommands[Index], MakeToolName(Index), Builder);
 
-		Banner += FString::Printf(TEXT("%s%d %s"),
-			Index == 0 ? TEXT("") : TEXT(", "), Index + 1, *Registry[Index].Name.ToString());
+		// THE REGISTRY'S OWN KEY, not Index + 1. The two agreed only while the table happened
+		// to run 1..N with no gaps, and the hold-short tool broke that - it sits at index 6
+		// but is bound to EIGHT, because key 7 is "land an aircraft" and is not a tool. The
+		// banner would then have advertised "7 Hold short" for a key that does nothing,
+		// which is precisely the defect CLAUDE.md records ("4 routes" against an unbound
+		// EKeys::Four): a log line describing a mechanism is not evidence of it.
+		Banner += FString::Printf(TEXT("%s%s %s"),
+			Index == 0 ? TEXT("") : TEXT(", "), *Registry[Index].Key.GetDisplayName().ToString(),
+			*Registry[Index].Name.ToString());
 	}
 
 	UE_LOG(LogRoadBuildMode, Log,

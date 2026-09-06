@@ -110,6 +110,14 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		TestTrue(FString::Printf(TEXT("it joins short of the threshold (%.0f uu)"), Run.Travelled),
 			Run.Travelled < 0.0);
 		TestEqual(TEXT("at the approach altitude"), Run.Altitude, Approach.FinalAltitude);
+
+		// A SHORT final, measured: the player waited 43 s for a 1.9 km approach and asked
+		// for less (2026-09-06). Under half a kilometre, and still joined above the flare
+		// so the approach has a stable leg before the nose comes up.
+		TestTrue(FString::Printf(TEXT("the final is short - joins %.0f uu out, under 40000"), -Run.Travelled),
+			-Run.Travelled < 40000.0);
+		TestTrue(TEXT("but above the flare height, so there is an approach before the flare"),
+			Approach.FinalAltitude > Approach.FlareHeight * 2.0);
 		TestEqual(TEXT("at Vref"), Run.Speed, Ground.Landing.SpeedCap);
 
 		// The nose sits where the SPEED puts it. On approach the wing needs its angle and

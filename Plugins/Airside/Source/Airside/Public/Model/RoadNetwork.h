@@ -70,7 +70,7 @@ public:
 	/**
 	 * The profile that governs Segment - its own, or DefaultProfile when it has none.
 	 *
-	 * THE ONLY WAY either the solver or the mesh builder should ask. They previously each
+	 * THE ONLY WAY the solver, the mesh builder or the guideline builder should ask. They previously each
 	 * tested Segment->Profile themselves and each treated null as "skip" - the solver by
 	 * taking zero half-widths, the builder by dropping the segment - so a null profile
 	 * produced a collapsed junction AND no ribbon, from two independent decisions that
@@ -78,6 +78,57 @@ public:
 	 * same rule the surface solver and GuidelineGeom already follow.
 	 */
 	const URoadProfile* ProfileFor(const FRoadSegment& Segment) const;
+
+	/**
+	 * The profile rule, in one place: a runway is a segment whose profile is continuous
+	 * through junctions. Every runway query below asked this inline; the traffic model asks
+	 * it per claim, and two spellings of one rule is how a taxiway ends up a runway.
+	 */
+	bool IsRunwaySegment(FRoadSegmentId Segment) const;
+
+	/**
+	 * Every segment continuous with Seed through nodes joining exactly two runway segments -
+	 * the same walk RunwayExtentAt makes to find the thresholds, returning the segments it
+	 * walked rather than the ends. Empty when Seed is not a live runway. Includes Seed.
+	 *
+	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
+	 * chain, a hold-short names one, and the arbiter expands it here - so an exit added to a
+	 * runway after the hold bar was placed still protects the whole strip.
+	 */
+	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
+
+	/**
+	 * Does this guideline node stand ON the strip of the runway chain seeded at Seed?
+	 *
+	 * The question spec §3.1's fourth route asks: an agent crossing a runway holds it until
+	 * its TAIL is clear of the strip, and "clear" cannot be "past the next node" because a
+	 * node in the middle of a crossing sits on the runway itself. Geometry answers it; a bar
+	 * on the far side would not, because a player may place one bar or none.
+	 *
+	 * True when, for ANY segment of the chain, the node is within that segment's own profile
+	 * half width of its centreline AND its projection falls inside the segment's A..B extent
+	 * with that half width of slack at each end - the same slack RunwayExitNodes gives, and
+	 * for the same reason: a junction cut puts the node a little beyond the road node.
+	 *
+	 * OutChainHalfWidth, when given, reports the LARGEST half width in the chain whether or
+	 * not the node is on it. That is how far past the last on-strip node a tail must travel
+	 * to be clear of the widest part of the strip, which is the caller's next question when
+	 * the answer here is true.
+	 */
+	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+
+	/**
+	 * The same question about a bare POSITION, which is where the rule actually lives.
+	 *
+	 * IsGuidelineNodeOnRunway is this function applied to a node's position, and exists
+	 * because most callers have a node. The one that does not is the crossing hold arming
+	 * itself (spec §3.1, refined during Task 7): "is the agent's own centre already on the
+	 * strip" is asked of an agent standing between two nodes, and there is no node to hand.
+	 * One implementation so the two answers cannot drift - the second-evaluator rule.
+	 */
+	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
 
 	/**
 	 * If Near sits on a runway, reports the departure from the threshold nearest it.
@@ -92,10 +143,11 @@ public:
 	 * so nothing here needs a runway type or a flag on the segment.
 	 *
 	 * Direction points from the near threshold toward the far one: the way you depart having
-	 * backtracked to that end. False when Near is not on a runway at all.
+	 * backtracked to that end. OutSegment, when given, receives the seed segment - the runway
+	 * segment whose end was nearest Near. False when Near is not on a runway at all.
 	 */
 	bool RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold, FVector2D& OutDirection,
-		double& OutLength) const;
+		double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
 
 	/**
 	 * The runway threshold nearest a point, however far away it is.
@@ -108,10 +160,11 @@ public:
 	 *
 	 * The threshold returned is the end NEAREST the query and the direction runs away from
 	 * it, so an aircraft lands toward the far end - the same convention as a departure, and
-	 * the reason both can share the walk.
+	 * the reason both can share the walk. OutSegment, when given, receives the seed segment -
+	 * the runway segment whose end was nearest Near.
 	 */
 	bool NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-		FVector2D& OutDirection, double& OutLength) const;
+		FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
 
 	/**
 	 * Guideline nodes lying on a runway, ordered by distance from its threshold.
@@ -182,6 +235,47 @@ public:
 	 * that RoadSlot::IsValid would then reject.
 	 */
 	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
+
+	// --- Hold-short bars ---------------------------------------------------------------
+
+	/**
+	 * Place, move or clear the hold bar at a guideline node. False when it refused.
+	 *
+	 * TWO WRITES, deliberately: the flag on the node (what the traffic model reads, every
+	 * tick) and a mark keyed by the node's Origin (what survives the next rebuild, since
+	 * FRoadGuidelineBuilder throws every derived node away). The mark is the SOURCE and the
+	 * flag the cache; keeping them in one function is what stops a bar existing in only one
+	 * of the two.
+	 *
+	 * An unset Protects clears the bar. A set one must name a live RUNWAY - a bar on a
+	 * taxiway would make the arbiter expand a chain that is not a strip - and a dead node
+	 * refuses, rather than writing a flag nothing will ever read.
+	 */
+	bool SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects);
+
+	const TArray<FHoldShortMark>& GetHoldShortMarks() const { return HoldShortMarks; }
+
+	/**
+	 * Drop marks whose node identity or whose protected runway no longer exists.
+	 *
+	 * PUBLIC because FRoadGuidelineBuilder calls it immediately before re-applying the rest
+	 * - but the invariant belongs to this class, not to the builder, which is why the
+	 * builder asks rather than filtering the array itself. Liveness is by GENERATION, not
+	 * by index: slots are recycled, and a mark left naming a recycled slot would silently
+	 * move a bar onto whatever road took the index over.
+	 */
+	void PruneHoldShortMarks();
+
+	/**
+	 * The runway a hold bar at this node would protect, or unset.
+	 *
+	 * The node's own incident derived edges first, then each neighbour's - ONE HOP, and no
+	 * further. A taxiway's end node at a runway junction is joined to the runway's own
+	 * centreline nodes by TURN PATHS, which carry no DerivedFrom, so the runway edge is
+	 * exactly one hop away and cannot be seen from the node itself. Two hops would let a
+	 * bar be placed a whole taxiway segment back from the runway it claims to guard.
+	 */
+	FRoadSegmentId RunwayNearGuidelineNode(FGuidelineNodeId Node) const;
 
 	/**
 	 * Edges an agent of this class may leave Node along, honouring access AND direction.
@@ -304,12 +398,22 @@ private:
 
 	/** RunwayExtentAt and NearestRunwayThreshold, which differ only in the proximity test. */
 	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const;
+		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
+		FRoadSegmentId* OutSegment) const;
 
 	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
 	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
 	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
+
+	/**
+	 * SAVED, not transient: this is the only durable record that a bar was ever placed.
+	 *
+	 * The network is what the level serialises and what undo snapshots (URoadEditHistory
+	 * duplicates this object), so a Transient array here would lose every bar on save and
+	 * on the first Ctrl+Z.
+	 */
+	UPROPERTY() TArray<FHoldShortMark> HoldShortMarks;
 
 	UPROPERTY() TArray<FApronSurface> Aprons;
 	UPROPERTY() TArray<int32>         ApronFreeList;

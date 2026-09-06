@@ -1,5 +1,6 @@
 #include "Build/AnchorLink.h"
 
+#include "AirsideLog.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -239,6 +240,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 	}
 
 	int32 Joined = 0;
+	int32 Unjoined = 0;
 
 	for (const FPendingLink& Link : Pending)
 	{
@@ -306,6 +308,16 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 
 		if (!BestEdge.IsSet())
 		{
+			// SAID, NOT SWALLOWED. An anchor with nothing to join is a stand no aircraft can
+			// be routed to, and until this line the only symptom was an arrival refused for
+			// "no route to a stand" with nothing in the log to say which stand or why. The
+			// heading is in degrees because a player reads the details panel in degrees.
+			++Unjoined;
+			UE_LOG(LogAirside, Warning,
+				TEXT("Anchor at (%.0f, %.0f) joins nothing: no derived %s guideline within %.0f uu along heading %.0f deg"),
+				Link.At.X, Link.At.Y,
+				Link.Class == ETraversalClass::Aircraft ? TEXT("aircraft") : TEXT("vehicle"),
+				MaxLeadIn, FMath::RadiansToDegrees(FMath::Atan2(Link.Dir.Y, Link.Dir.X)));
 			continue;
 		}
 
@@ -489,6 +501,15 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 		}
 
 		++Joined;
+	}
+
+	// One census line per pass, beside the guideline builder's: how many lead-ins were
+	// cast and how many found a line. Zero pending is the common idle rebuild and stays
+	// quiet.
+	if (Pending.Num() > 0)
+	{
+		UE_LOG(LogAirside, Log, TEXT("Anchor links: %d of %d lead-in(s) joined a guideline, %d unjoined"),
+			Joined, Pending.Num(), Unjoined);
 	}
 
 	return Joined;

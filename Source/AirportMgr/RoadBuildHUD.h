@@ -115,6 +115,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor RouteColour = FLinearColor(0.2f, 0.85f, 1.0f);
 
+	/**
+	 * Hold bars. Amber, because that is what one is painted on a real taxiway - and it
+	 * reads as a warning against the blue-grey guideline dots it sits among rather than
+	 * as one more piece of context.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
+	FLinearColor HoldShortColour = FLinearColor(1.0f, 0.8f, 0.1f);
+
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
 	float PreviewThickness = 3.0f;

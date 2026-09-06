@@ -141,31 +141,164 @@ const URoadProfile* URoadNetwork::ProfileFor(const FRoadSegment& Segment) const
 	return Segment.Profile != nullptr ? Segment.Profile.Get() : DefaultProfile.Get();
 }
 
-bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength) const
+bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 {
-	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength);
+	const FRoadSegment* Found = GetSegment(Segment);
+	if (Found == nullptr || !Found->bAlive)
+	{
+		return false;
+	}
+	const URoadProfile* Profile = ProfileFor(*Found);
+	return Profile != nullptr && Profile->bContinuousThroughJunctions;
+}
+
+bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
+	double* OutChainHalfWidth) const
+{
+	// A NODE IS A POSITION HERE and nothing else, so the geometry lives in one function and
+	// the two callers cannot drift apart. An unknown node reports false with the half width
+	// still zeroed, which is what IsPointOnRunway does for a chain that is not a runway.
+	const FGuidelineNode* Point = GetGuidelineNode(Node);
+	if (Point == nullptr)
+	{
+		if (OutChainHalfWidth != nullptr)
+		{
+			*OutChainHalfWidth = 0.0;
+		}
+		return false;
+	}
+	return IsPointOnRunway(Point->Position, Seed, OutChainHalfWidth);
+}
+
+bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+	double* OutChainHalfWidth) const
+{
+	if (OutChainHalfWidth != nullptr)
+	{
+		*OutChainHalfWidth = 0.0;
+	}
+
+	bool bOnStrip = false;
+	for (const FRoadSegmentId& Id : RunwayChain(Seed))
+	{
+		const FRoadSegment* Segment = GetSegment(Id);
+		if (Segment == nullptr)
+		{
+			continue;
+		}
+		const FRoadNode* A = GetNode(Segment->A);
+		const FRoadNode* B = GetNode(Segment->B);
+		const URoadProfile* Profile = ProfileFor(*Segment);
+		if (A == nullptr || B == nullptr || Profile == nullptr)
+		{
+			continue;
+		}
+
+		// THE SEGMENT'S OWN HALF WIDTH, not a constant: a chain may mix profiles, and the
+		// bound has to scale with the strip - the same rule RunwayExitNodes uses.
+		const double HalfWidth = Profile->GetTotalWidth() * 0.5;
+		if (OutChainHalfWidth != nullptr)
+		{
+			*OutChainHalfWidth = FMath::Max(*OutChainHalfWidth, HalfWidth);
+		}
+		if (bOnStrip)
+		{
+			// Still walking the chain, but only to finish the half-width maximum above.
+			continue;
+		}
+
+		// THE ROAD NODES' POSITIONS, deliberately, not the sampled ribbon: this asks about
+		// the SURFACE model, and the surface's centreline is the segment A..B. A runway is
+		// straight in every case the game admits (bContinuousThroughJunctions), so the
+		// Bezier control point cannot bend it away from this line.
+		const FVector2D Axis = B->Position - A->Position;
+		const double Length = Axis.Size();
+		if (Length <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+		const FVector2D Along = Axis / Length;
+		const FVector2D Offset = Position - A->Position;
+		const double Distance = FVector2D::DotProduct(Offset, Along);
+		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
+
+		bOnStrip = Lateral <= HalfWidth
+			&& Distance >= -HalfWidth && Distance <= Length + HalfWidth;
+	}
+	return bOnStrip;
+}
+
+TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
+{
+	TArray<FRoadSegmentId> Out;
+	if (!IsRunwaySegment(Seed))
+	{
+		return Out;
+	}
+	Out.Add(Seed);
+
+	// The same walk RunwayExtentInternal makes, collecting segments instead of stopping
+	// at the ends: from each end of Seed, step through nodes that join exactly two runway
+	// segments, and stop at a threshold (one arm) or anything stranger (a fork).
+	auto WalkFrom = [this, &Out](FRoadNodeId At, FRoadSegmentId Along)
+	{
+		for (int32 Guard = 0; Guard < 1024; ++Guard)
+		{
+			const FRoadNode* Node = GetNode(At);
+			if (Node == nullptr)
+			{
+				return;
+			}
+			FRoadSegmentId Next;
+			int32 RunwayArms = 0;
+			for (const FRoadSegmentId& Incident : Node->Incident)
+			{
+				if (!IsRunwaySegment(Incident))
+				{
+					continue;
+				}
+				++RunwayArms;
+				if (Incident != Along)
+				{
+					Next = Incident;
+				}
+			}
+			if (RunwayArms != 2 || !Next.IsSet() || Out.Contains(Next))
+			{
+				return;
+			}
+			Out.Add(Next);
+			At = GetOtherEnd(Next, At);
+			Along = Next;
+		}
+	};
+
+	const FRoadSegment* SeedSegment = GetSegment(Seed);
+	WalkFrom(SeedSegment->A, Seed);
+	WalkFrom(SeedSegment->B, Seed);
+	return Out;
+}
+
+bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
+	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
+{
+	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength, OutSegment);
 }
 
 bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength) const
+	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
 {
 	// NO PROXIMITY TEST, and that is the difference between the two. RunwayExtentAt answers
 	// "is this point ON a runway", which a departure asks of the place its taxi ended and
 	// which must say no for the rest of the airport. This answers "which runway would you
 	// land on", which is asked of a click that is deliberately nowhere near one.
-	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength);
+	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength, OutSegment);
 }
 
 bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const
+	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
+	FRoadSegmentId* OutSegment) const
 {
-	auto IsRunway = [this](const FRoadSegment& Segment)
-	{
-		const URoadProfile* Profile = ProfileFor(Segment);
-		return Profile != nullptr && Profile->bContinuousThroughJunctions;
-	};
-
 	// The runway segment with an END nearest the query. Ends rather than centres: a threshold
 	// is an end, and a long runway's midpoint can be closer to a query than the end that
 	// actually matters.
@@ -174,7 +307,8 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegment& Segment = Segments[Index];
-		if (!Segment.bAlive || !IsRunway(Segment))
+		const FRoadSegmentId Id{Index, Segment.Generation};
+		if (!IsRunwaySegment(Id))
 		{
 			continue;
 		}
@@ -219,13 +353,19 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		}
 	}
 
+	if (OutSegment != nullptr)
+	{
+		OutSegment->Index = Best;
+		OutSegment->Generation = Segments[Best].Generation;
+	}
+
 	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
 	// else - a threshold, or a node with a taxiway on it - ends the walk in that direction.
 	//
 	// Tracked by the node WALKED FROM rather than the segment walked along, because a node's
 	// Incident list already holds segment handles and building one from an index would mean
 	// reconstructing a generation counter that the slot map owns.
-	auto WalkFrom = [this, &IsRunway](FRoadNodeId At, FRoadNodeId CameFrom)
+	auto WalkFrom = [this](FRoadNodeId At, FRoadNodeId CameFrom)
 	{
 		for (int32 Guard = 0; Guard < 1024; ++Guard)
 		{
@@ -241,8 +381,7 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 
 			for (const FRoadSegmentId& Incident : Node->Incident)
 			{
-				const FRoadSegment* Other = GetSegment(Incident);
-				if (Other == nullptr || !Other->bAlive || !IsRunway(*Other))
+				if (!IsRunwaySegment(Incident))
 				{
 					continue;
 				}
@@ -568,6 +707,124 @@ FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
 FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 {
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
+}
+
+bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// A set Protects must be a live runway. Refusing beats storing it: the arbiter expands
+	// whatever a bar names through RunwayChain, and a taxiway named there would hand a
+	// crossing agent a strip made of the taxiway it is standing on.
+	if (Protects.IsSet() && !IsRunwaySegment(Protects))
+	{
+		return false;
+	}
+
+	Found->HoldShortFor = Protects;
+
+	const FGuidelineEndRef At = Found->Origin;
+	if (!At.IsSet())
+	{
+		// An ANCHOR or hand-placed node - not derived, never swept, and its handle survives
+		// every rebuild already (see FGuidelineNode::Origin). The flag on it is therefore
+		// durable by itself, and a mark would be a second source for the same fact - which
+		// is precisely the drift this pair of writes exists to avoid everywhere else.
+		return true;
+	}
+
+	for (int32 Index = 0; Index < HoldShortMarks.Num(); ++Index)
+	{
+		if (HoldShortMarks[Index].At == At)
+		{
+			if (Protects.IsSet())
+			{
+				HoldShortMarks[Index].Protects = Protects;
+			}
+			else
+			{
+				HoldShortMarks.RemoveAt(Index);
+			}
+			return true;
+		}
+	}
+
+	if (Protects.IsSet())
+	{
+		FHoldShortMark Mark;
+		Mark.At = At;
+		Mark.Protects = Protects;
+		HoldShortMarks.Add(MoveTemp(Mark));
+	}
+	return true;
+}
+
+void URoadNetwork::PruneHoldShortMarks()
+{
+	HoldShortMarks.RemoveAll([this](const FHoldShortMark& Mark)
+	{
+		// GetSegment is the generation-checked read, so a recycled slot fails it - which is
+		// the whole point, because the builder's Ends map is keyed on the segment INDEX
+		// alone and would happily re-apply a stale mark onto the road that took the index.
+		return GetSegment(Mark.At.Segment) == nullptr || !IsRunwaySegment(Mark.Protects);
+	});
+}
+
+FRoadSegmentId URoadNetwork::RunwayNearGuidelineNode(FGuidelineNodeId Node) const
+{
+	const FGuidelineNode* Found = GetGuidelineNode(Node);
+	if (Found == nullptr)
+	{
+		return FRoadSegmentId();
+	}
+
+	auto RunwayAmongIncident = [this](const FGuidelineNode& At) -> FRoadSegmentId
+	{
+		for (const FGuidelineEdgeId& Incident : At.Incident)
+		{
+			const FGuidelineEdge* Edge = GetGuidelineEdge(Incident);
+
+			// DerivedFrom unset means a turn path or a hand-drawn link, neither of which
+			// belongs to a surface at all - so neither can answer which runway is here.
+			if (Edge != nullptr && Edge->DerivedFrom.IsSet() && IsRunwaySegment(Edge->DerivedFrom))
+			{
+				return Edge->DerivedFrom;
+			}
+		}
+		return FRoadSegmentId();
+	};
+
+	const FRoadSegmentId Own = RunwayAmongIncident(*Found);
+	if (Own.IsSet())
+	{
+		return Own;
+	}
+
+	// ONE HOP - see the header. The turn paths out of a junction are what stand between a
+	// taxiway's end node and the runway's centreline nodes.
+	for (const FGuidelineEdgeId& Incident : Found->Incident)
+	{
+		const FGuidelineEdge* Edge = GetGuidelineEdge(Incident);
+		if (Edge == nullptr)
+		{
+			continue;
+		}
+		const FGuidelineNode* Neighbour = GetGuidelineNode(Edge->A == Node ? Edge->B : Edge->A);
+		if (Neighbour == nullptr)
+		{
+			continue;
+		}
+		const FRoadSegmentId Near = RunwayAmongIncident(*Neighbour);
+		if (Near.IsSet())
+		{
+			return Near;
+		}
+	}
+	return FRoadSegmentId();
 }
 
 TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(

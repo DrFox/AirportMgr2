@@ -1,7 +1,9 @@
 #include "CoreMinimal.h"
+#include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 
@@ -144,6 +146,92 @@ bool FProfileFallbackTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("its own profile wins over the network's default"),
 				Net->ProfileFor(*Segment), static_cast<const URoadProfile*>(Narrow));
+		}
+	}
+
+	return true;
+}
+
+/**
+ * THE THIRD READER. ProfileFallback above pinned the solver and the mesh builder to
+ * URoadNetwork::ProfileFor; the guideline builder was written afterwards and read
+ * Segment.Profile itself, so a level the player built in the editor, saved and reloaded
+ * came back with every taxiway PAVED and none of them ROUTABLE: 16 segments, 2 derived
+ * centrelines (the runways, whose profile is an asset), 42 stand lead-ins joining nothing,
+ * and every arrival refused for "no route to a stand" (M_Starter, 2026-09-06). The mesh
+ * had hidden the loss - the road looked right, so nobody asked whether the line under it
+ * was there.
+ *
+ * Named without a dot under ProfileFallback: the automation tree drops a bare-named test
+ * the moment a dotted child of it exists.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuidelineProfileFallbackTest,
+	"Airside.Build.GuidelineProfileFallback",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuidelineProfileFallbackTest::RunTest(const FString& Parameters)
+{
+	constexpr double Width = 2300.0;
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Fallback = URoadProfile::MakeTransient(Width, 1500.0, Width * 0.1);
+
+	const FRoadNodeId West   = Net->AddNode(FVector2D(-20000.0, 0.0));
+	const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId North  = Net->AddNode(FVector2D(0.0, 20000.0));
+
+	// nullptr deliberately, as in ProfileFallback: the reloaded state, not a tool's.
+	const FRoadSegmentId Arm1 = Net->AddStraightSegment(West, Centre, nullptr);
+	const FRoadSegmentId Arm2 = Net->AddStraightSegment(Centre, North, nullptr);
+	Net->DefaultProfile = Fallback;
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
+	FRoadGuidelineBuilder::Build(*Net, Solved);
+
+	// 1. THE MEASUREMENT. Each profile-less segment gets the centreline the fallback
+	//    declares, exactly as it gets the fallback's ribbon.
+	int32 FromArm1 = 0, FromArm2 = 0, TurnPaths = 0;
+	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+	{
+		if (!Edge.bAlive || !Edge.bDerived) { continue; }
+		FromArm1 += Edge.DerivedFrom == Arm1 ? 1 : 0;
+		FromArm2 += Edge.DerivedFrom == Arm2 ? 1 : 0;
+		TurnPaths += Edge.DerivedFrom.IsSet() ? 0 : 1;
+	}
+	TestEqual(TEXT("a segment with no profile of its own derives the fallback's centreline (arm 1)"), FromArm1, 1);
+	TestEqual(TEXT("a segment with no profile of its own derives the fallback's centreline (arm 2)"), FromArm2, 1);
+
+	// 2. And the junction between two such segments gets its turn paths, which read BOTH
+	//    ends' profiles and skipped the junction when either was null. One per direction
+	//    of the bidirectional centreline.
+	TestTrue(FString::Printf(TEXT("the junction between two fallback segments is turnable (%d turn path(s))"), TurnPaths),
+		TurnPaths >= 1);
+
+	// 3. A segment that HAS a profile still derives from its own, never the fallback -
+	//    measured by width, which is where an authored narrow profile differs.
+	{
+		URoadProfile* Narrow = URoadProfile::MakeTransient(Width * 0.5, 1500.0, Width * 0.05);
+		// MakeTransient leaves the centreline width at 0, the same as the fallback's; give
+		// the authored one a width so the assertion below can tell the two apart.
+		Narrow->Guidelines[0].Width = 500.0;
+		const FRoadNodeId East = Net->AddNode(FVector2D(20000.0, 0.0));
+		const FRoadSegmentId Own = Net->AddStraightSegment(Centre, East, Narrow);
+		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
+		FRoadGuidelineBuilder::Build(*Net, Again);
+
+		const FGuidelineEdge* OwnLine = nullptr;
+		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.bDerived && Edge.DerivedFrom == Own) { OwnLine = &Edge; }
+		}
+		if (TestNotNull(TEXT("the authored segment derives a centreline too"), OwnLine))
+		{
+			TestEqual(TEXT("its centreline carries its OWN profile's width, not the fallback's"),
+				OwnLine->Width, Narrow->Guidelines[0].Width);
+			TestNotEqual(TEXT("and the two profiles do differ, so the assertion above discriminates"),
+				Narrow->Guidelines[0].Width, Fallback->Guidelines[0].Width);
 		}
 	}
 

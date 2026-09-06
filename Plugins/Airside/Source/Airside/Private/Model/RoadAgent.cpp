@@ -145,8 +145,17 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		}
 
 		// VACATED: hand over to the taxi. The route was planned at dispatch - see
-		// UAirsideTraffic::DispatchArrival - so this cannot fail here and strand an
-		// aircraft on the runway with nowhere to go.
+		// UGroundTraffic::DispatchArrival - so a landing is never armed for a stand it has
+		// no way of reaching.
+		//
+		// ONE WAY IT CAN STILL BE UNUSABLE BY NOW, since 2026-09-06: the player rebuilt the
+		// guideline graph while this aircraft was on final, and UGroundTraffic::ReResolvePlan
+		// could not find live pavement for TaxiInPlan - so it marked it Unreachable (see
+		// OnGraphRebuilt). Start() on an invalid plan leaves the follower already arrived, so
+		// the aircraft becomes Taxiing and then Parked on the next tick, at the exit it
+		// vacated to, and ClaimAhead's invalid-plan branch hands the strip back. That is the
+		// intended outcome - a parked aeroplane off the runway, with a Warning in the log
+		// naming it - and not a runway blocked by an aircraft with nowhere to go.
 		//
 		// Started from Airframe.Ground, NOT Follower.Ground: the follower has never been
 		// started before this point, so its Ground is still the struct default (Accel 100,
@@ -169,7 +178,10 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 	{
 		FVector2D FollowAt = At;
 		double FollowHeading = Heading;
-		if (Follower.Advance(DeltaSeconds, FollowAt, FollowHeading))
+		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one
+		// follower, and it defaults to unbounded, so an agent nobody has arbitrated for
+		// drives exactly as it did before M2.
+		if (Follower.Advance(DeltaSeconds, StopWithin, FollowAt, FollowHeading))
 		{
 			LastMotion = DescribeMotion(FollowAt, FollowHeading);
 			OutMotion = LastMotion;
@@ -259,7 +271,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 			return true;
 		}
 
-		// Cleared. The aircraft has gone - see UAirsideTraffic::Advance for why the caller
+		// Cleared. The aircraft has gone - see UGroundTraffic::Advance for why the caller
 		// destroys the view and drops the agent the moment this returns false.
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Departure complete, agent despawned"));
 		Phase = EAgentPhase::Gone;

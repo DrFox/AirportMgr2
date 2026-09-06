@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
 #include "ArrivalPlanner.generated.h"
 
 class URoadNetwork;
+struct FTrafficOccupancy;
 
 /**
  * Why ArrivalPlanner::Plan could not produce a plan.
@@ -31,6 +33,13 @@ enum class EArrivalRefusal : uint8
 
 	/** At least one usable exit, but no route from any of them reaches a stand. */
 	NoRouteToStand,
+
+	/**
+	 * The runway exists and would do, but someone holds it - a landing rolling out, a
+	 * departure lining up, or an aircraft crossing at a hold-short. The one refusal that
+	 * clears on its own; M3's sequencer queues on it.
+	 */
+	RunwayOccupied,
 };
 
 /**
@@ -54,6 +63,11 @@ struct AIRSIDE_API FArrivalPlan
 
 	/** Runway available beyond Threshold, uu. */
 	UPROPERTY() double RunwayLength = 0.0;
+
+	/** The runway segment nearest the query, and every segment continuous with it. What the
+	 *  landing holds in the occupancy table from StartArrival until Vacated. */
+	UPROPERTY() FRoadSegmentId RunwaySegment;
+	UPROPERTY() TArray<FRoadSegmentId> RunwayChain;
 
 	/** Runway needed past Threshold to stop, uu - see FLandingRun::RequiredLandingDistance. */
 	UPROPERTY() double Needed = 0.0;
@@ -102,8 +116,13 @@ namespace ArrivalPlanner
 	 * rules, carried over unchanged from DispatchArrival: there is no wind model to choose
 	 * a runway by, and an aircraft takes the earliest turn-off it can rather than rolling to
 	 * the end in search of a marginally shorter taxi.
+	 *
+	 * Occupancy, when given, refuses RunwayOccupied while any segment of the chain is held.
+	 * Null is the pre-traffic answer, which is what a tool that only asks "could this land
+	 * here" still wants.
 	 */
-	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe);
+	AIRSIDE_API FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near,
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy = nullptr);
 
 	/**
 	 * The user-facing sentence for a refused plan - the same wording DispatchArrival used to

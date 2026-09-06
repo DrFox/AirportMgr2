@@ -381,8 +381,12 @@ struct AIRSIDE_API FApproachPerformance
 	 * Height at which the approach is joined, uu. The DISTANCE out is derived from this and
 	 * the glideslope rather than authored beside it: two numbers that must agree about a
 	 * triangle are two numbers that can disagree about it.
+	 *
+	 * 20 m at 3 degrees is about 380 m out, nine seconds at a light twin's Vref. Must stay
+	 * above FlareHeight or the aircraft joins mid-flare - see UAircraftType::PiperMeridianApproach
+	 * for why it came down from 100 m.
 	 */
-	UPROPERTY(EditAnywhere) double FinalAltitude = 10000.0;
+	UPROPERTY(EditAnywhere) double FinalAltitude = 2000.0;
 
 	/**
 	 * Height at which the flare begins, uu. 900 is about thirty feet, which is where a light

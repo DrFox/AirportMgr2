@@ -245,7 +245,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    of Tick -> Traffic->Advance that the arrival above cannot reach on its own: it only
 	//    parks (nothing arms a departure for it), so this dispatches a SEPARATE agent with a
 	//    plain DispatchAgent call on a two-point plan that ends on a runway, which is what
-	//    arms one (see UAirsideTraffic::DispatchAgent's own "DOES THIS ROUTE END ON A RUNWAY"
+	//    arms one (see UGroundTraffic::ArmDepartureIfRunway's "DOES THIS ROUTE END ON A RUNWAY"
 	//    comment). Ticking it to Gone exercises the SetMotion call every surviving frame takes
 	//    and the Gone-frame View->Destroy() + RemoveAt neither this test nor any other reaches.
 	//

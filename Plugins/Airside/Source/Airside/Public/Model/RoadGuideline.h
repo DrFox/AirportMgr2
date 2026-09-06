@@ -159,3 +159,30 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
+
+/**
+ * A player-placed hold bar, stored by IDENTITY so it survives the rebuild. Spec §6.
+ *
+ * The flag itself lives on FGuidelineNode::HoldShortFor, and every derived node is thrown
+ * away and re-made by FRoadGuidelineBuilder on each road edit - so the flag alone is a
+ * CACHE, and this is the source it is rebuilt from. At is the same key the builder's own
+ * Ends map uses, which is what lets the mark be resolved through the map the builder
+ * already computes rather than by hunting for a coincident node.
+ */
+USTRUCT()
+struct AIRSIDE_API FHoldShortMark
+{
+	GENERATED_BODY()
+
+	/** Which derived node: the same key the builder's Ends map uses. */
+	UPROPERTY() FGuidelineEndRef At;
+
+	/**
+	 * The runway segment the bar protects - ANY of its chain.
+	 *
+	 * Any, because URoadNetwork::RunwayChain expands one segment to the whole strip, so a
+	 * runway later split by an exit still protects end to end from the bar placed before
+	 * the split existed.
+	 */
+	UPROPERTY() FRoadSegmentId Protects;
+};

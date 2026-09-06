@@ -12,10 +12,18 @@
  * real editor world and save with the level, which is what makes an airport authorable at
  * all rather than a thing you rebuild every session.
  *
- * It registers one tool per ToolRegistry() entry, keyed 1 through 6 to match the runtime
- * shortcuts - see issue #33, which added the guideline and runway tools here; before it
- * this mode stopped at four, and the two build drivers had quietly drifted apart. Nothing
- * about what a click MEANS lives here - that is all in the shared tools.
+ * It registers one tool per ToolRegistry() entry, under THAT ENTRY'S OWN KEY, so a tool is
+ * reached by the same number in the editor as in play - see issue #33, which added the
+ * guideline and runway tools here; before it this mode stopped at four, and the two build
+ * drivers had quietly drifted apart.
+ *
+ * THE KEYS ARE NOT CONTIGUOUS, and nothing here may assume they are. Hold-short is the
+ * seventh entry and is bound to EIGHT, because seven is "land an aircraft" - a decision
+ * taken at the cursor, not a tool, so it is not in the table at all. Anywhere a key is
+ * printed or bound it comes from Registry[Index].Key; Index + 1 is a different number and
+ * was briefly used as if it were the same one.
+ *
+ * Nothing about what a click MEANS lives here - that is all in the shared tools.
  */
 UCLASS()
 class URoadBuildEdMode : public UEdMode

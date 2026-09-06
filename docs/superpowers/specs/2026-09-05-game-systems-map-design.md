@@ -285,17 +285,30 @@ consulted, and the right-of-way rules the graph already carries are ignored."
   Order: `PriorityOverride`, then class priority (aircraft over vehicles — already on the
   graph), then first-to-reserve. Hold-short nodes reserve the surface named by
   `HoldShortFor`; if held, the agent stops at the line. That is the whole hold-short rule.
+  *Amended 2026-09-06 (M2):* the flag is PLAYER-PLACED with a build-bar tool, never derived
+  by the guideline builder — a hold bar is airport design, not a consequence of geometry.
+  Spec 5.5's "the topology already exists" is true of the node, not the flag; nothing wrote
+  it until M2. Edge occupancy is INTERVAL, not block (spec 5.7's deferred choice): a block
+  per edge makes a 1 km taxiway hold one aircraft. See
+  `2026-09-06-ground-traffic-design.md`.
 - **Roads.** Lanes are separate guidelines, so opposing flows never conflict. Road–taxiway
   crossings are nodes under the node rule; vehicles yield to aircraft by class priority.
 - **Routing.** `RouteSearch` gains an occupancy cost term, so vehicles route around jams at
   plan time. Aircraft routes are fixed at clearance (as a real taxi clearance is) and may
   replan only while stopped at a node — an aircraft rerouting mid-edge leaves the line the
   player was shown, which is the invariant the guideline graph exists to protect.
+  *Amended 2026-09-06 (M2):* "fixed at clearance" holds against CONGESTION. A road edit
+  regenerates the guideline graph with new handles, and a route whose pavement was deleted
+  cannot be held to; such an aircraft is replanned from its next node, at a stop, and
+  logged. Freezing it would leave it on air.
 - **Deadlock.** Reservations form a wait-for graph; a cycle is a deadlock. The
   lowest-priority waiter releases and replans. Aircraft never reverse except pushback, so an
   all-aircraft cycle (two-way single taxiway, two aircraft) is a layout the build tool
   should warn about. v1 logs it and diverts the later arrival; the tool warning is a later
-  slice.
+  slice. *Amended 2026-09-06 (M2):* "releases and replans" happens at a NODE, with the
+  blocked edge banned; nobody reverses. A waiter with no alternative stays a waiter and
+  retries on a sim-time cadence and on every graph rebuild, so the player's bypass is
+  picked up when they finish it — the first wording, "logged once and left", was wrong.
 - **Tests, world-free.** Two agents converge on a node; one yields. An aircraft holds
   short while the runway is occupied and proceeds on release. Three vehicles in a cycle
   resolve without teleporting. Measured, not narrated.

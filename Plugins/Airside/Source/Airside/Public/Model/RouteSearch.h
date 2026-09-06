@@ -54,6 +54,16 @@ struct AIRSIDE_API FRouteStep
 
 	/** True when the edge is traversed B to A, which is what reverses its sampled points. */
 	UPROPERTY() bool bReversed = false;
+
+	/**
+	 * Cumulative route distance at which this step's edge ends, and the index of that point
+	 * in FRoutePlan::Polyline. Filled by RunSearch from the SAME polyline it appends - never
+	 * from the Bezier - so "which edge am I on at Travelled" is answered off the array the
+	 * follower walks. A step map derived from the curve would disagree on every bend, and
+	 * the arbiter would then stop an agent for a node it had already crossed.
+	 */
+	UPROPERTY() double EndDistance = 0.0;
+	UPROPERTY() int32 EndVertex = 0;
 };
 
 /**
@@ -82,6 +92,8 @@ struct AIRSIDE_API FRoutePlan
 	bool IsValid() const { return Result == ERouteResult::Found; }
 };
 
+struct FTrafficOccupancy;
+
 /** What is being routed, and what it is allowed to use. */
 USTRUCT()
 struct AIRSIDE_API FRouteQuery
@@ -102,6 +114,46 @@ struct AIRSIDE_API FRouteQuery
 	 * take it.
 	 */
 	UPROPERTY() double Wingspan = 0.0;
+
+	/**
+	 * An edge the search may not use. Set by a deadlock replan to forbid the edge the agent
+	 * was refused. One edge, not a set: the resolver bans exactly the thing it is stuck on
+	 * and lets the occupancy cost steer round the rest.
+	 */
+	UPROPERTY() FGuidelineEdgeId BannedEdge;
+
+	/**
+	 * A node the search may not pass through. Set by a deadlock replan when what refused
+	 * the agent was a NODE somebody is standing on: banning only the edge it was about to
+	 * take lets the search walk round the block and re-enter the same node from its other
+	 * arm - measured on 2026-09-06 as an aircraft looping a runway's end taxiway and coming
+	 * back to the very bar-holder it was refused by. The node is the wall; the edge is not.
+	 */
+	UPROPERTY() FGuidelineNodeId BannedNode;
+
+	/**
+	 * Skip every edge derived from a runway segment. Set by a deadlock replan: an agent
+	 * that has left the runway must not route back ALONG it to get round a queue, because
+	 * a taxi route on the strip re-reserves the surface (spec §3.1's first route) and
+	 * starves the departure that was waiting at the bar for exactly that surface. Crossing
+	 * a runway at a junction is unaffected - the crossing is a turn path and a node, and
+	 * turn paths carry no DerivedFrom.
+	 */
+	UPROPERTY() bool bAvoidRunways = false;
+
+	/**
+	 * Who holds what, for the congestion cost term - or null for a plain shortest route,
+	 * which is bitwise the search this class ran before occupancy existed. A raw pointer
+	 * rather than a UPROPERTY: a query lives on the stack for one call and the table it
+	 * reads outlives it.
+	 */
+	const FTrafficOccupancy* Occupancy = nullptr;
+
+	/** The agent asking, so its own claims do not cost it. 0 when nobody is. */
+	UPROPERTY() int32 QueryingAgent = 0;
+
+	/** Weight on held length. Ignored when Occupancy is null. */
+	UPROPERTY() double CongestionWeight = 2.0;
 };
 
 /**
@@ -121,6 +173,16 @@ struct AIRSIDE_API FRouteQuery
 namespace RouteSearch
 {
 	AIRSIDE_API FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query);
+
+	/**
+	 * Head's first KeepSteps steps followed by all of Tail, welded at the node Tail starts
+	 * from. Precondition: Tail.Start is the node Head's KeepSteps-th step arrives at (or
+	 * Head.Start when KeepSteps is 0). EndDistance and EndVertex are re-based so the
+	 * follower and the arbiter keep reading one set of numbers. Returns an invalid plan
+	 * when the precondition fails, because splicing two lines that do not meet would put a
+	 * jump in the polyline the agent would then drive across.
+	 */
+	AIRSIDE_API FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail);
 
 	/**
 	 * The nearest guideline node to a world position that this class could actually use.

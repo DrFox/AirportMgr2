@@ -28,12 +28,17 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& I
 	}
 }
 
-bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading)
+bool FRouteFollower::Advance(double DeltaSeconds, double StopWithin, FVector2D& OutPosition, double& OutHeading)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
 		return false;
 	}
+
+	// The stop point in route distance, fixed BEFORE the move: StopWithin was measured from
+	// where the agent was when the arbiter looked, and re-measuring it after moving would
+	// let the agent creep past it one frame at a time.
+	const double StopAt = FMath::Min(Plan.Length, Travelled + FMath::Max(0.0, StopWithin));
 
 	// Clamped rather than allowed to run on, so a long frame - a hitch, or a breakpoint -
 	// leaves the agent at its destination instead of somewhere past the end of the world.
@@ -42,7 +47,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double
 	// at the rate this is watched at, and it buys the whole loop a single PointAtDistance
 	// call: reading the line, deciding a speed and then moving would need two, one before
 	// the move and one after, on every agent on the airport.
-	Travelled = FMath::Clamp(Travelled + Speed * DeltaSeconds, 0.0, Plan.Length);
+	Travelled = FMath::Clamp(Travelled + Speed * DeltaSeconds, 0.0, StopAt);
 
 	// Where the LINE points here. Not where the aircraft points - those are now two
 	// different things, and that gap is the whole of this function.
@@ -83,7 +88,13 @@ bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double
 	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
 	const double CrabLimit = FMath::Max(Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap * Slowing);
 
-	const double Target = FMath::Min(Profile.LimitAt(Travelled), CrabLimit);
+	// The THIRD cap: what the stop point permits. sqrt(2 a s), the braking curve, so the
+	// agent arrives at the stop at rest having braked at the rate it actually has - the
+	// profile already does this for corners and the destination; this does it for whatever
+	// the arbiter put in the way this tick. Zero distance is zero speed, which is a stop.
+	const double StopCap = FMath::Sqrt(2.0 * Ground.Taxi.Decel * FMath::Max(0.0, StopAt - Travelled));
+
+	const double Target = FMath::Min3(Profile.LimitAt(Travelled), CrabLimit, StopCap);
 
 	// AND THE TARGET IS APPROACHED, NOT TAKEN. Speed used to be assigned outright, so
 	// meeting a corner cost 920 uu/s in a single frame - 552 m/s2, fifty-six g. Thrust and
@@ -94,6 +105,13 @@ bool FRouteFollower::Advance(double DeltaSeconds, FVector2D& OutPosition, double
 
 	OutHeading = Heading;
 	return true;
+}
+
+void FRouteFollower::Replace(const FRoutePlan& NewPlan)
+{
+	Plan = NewPlan;
+	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
+	Profile.Build(Plan.Polyline, Ground);
 }
 
 bool FRouteFollower::HasArrived() const

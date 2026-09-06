@@ -121,6 +121,10 @@ namespace
 			case EPreviewStyle::Refused: return FLinearColor(1.0f, 0.25f, 0.2f);
 			case EPreviewStyle::Guideline: return FLinearColor(0.35f, 0.45f, 0.6f);
 			case EPreviewStyle::Route:   return FLinearColor(0.2f, 0.85f, 1.0f);
+
+			// The SAME amber ARoadBuildHUD::HoldShortColour defaults to. A bar that changed
+			// colour between the editor and PIE would read as two different things.
+			case EPreviewStyle::HoldShort: return FLinearColor(1.0f, 0.8f, 0.1f);
 			case EPreviewStyle::Pending:
 			default:                     return FLinearColor(0.2f, 1.0f, 0.3f);
 			}

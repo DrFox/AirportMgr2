@@ -66,6 +66,7 @@ public:
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
 	virtual double GetMinimumRunwayLength() const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
+	virtual bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) override;
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
@@ -98,7 +99,9 @@ public:
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
 	virtual void HideGhost() override;
 	virtual void RebuildMesh() override;
-	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe) override;
+	using IRoadEditTarget::DispatchAgent;
+	virtual bool DispatchAgent(const FRoutePlan& Plan, const FAirframe& Airframe,
+		ETraversalClass Class) override;
 
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 

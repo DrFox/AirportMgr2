@@ -3,9 +3,12 @@
 #include "CoreMinimal.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadHandles.h"
+#include "Model/RoadTraffic.h"
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
+#include "Model/TrafficOccupancy.h"
 #include "RoadAgent.generated.h"
 
 /**
@@ -33,6 +36,34 @@ enum class EAgentPhase : uint8
 
 	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
 	Gone
+};
+
+/**
+ * How far through a runway crossing a taxiing agent's BODY is. Spec §3.1's fourth route.
+ *
+ * AN ENUM AND NOT A PAIR OF BOOLS - this codebase's "a phase is an enum, never a set of
+ * bools". The two facts being tracked ("committed to the crossing" and "a wheel is actually
+ * on the asphalt") can never both be the current state, and the states are visited in one
+ * order, so the illegal combination stops being representable.
+ *
+ * AND NOT FRoadAgent::CrossingRunway EITHER, which was the first design: a set seed used to
+ * mean "holding", so the seed had to be cleared to say "not holding" and there was nowhere
+ * left to record that the body had reached the strip. The seed now says WHICH runway; this
+ * says whether, and how far.
+ */
+UENUM()
+enum class ECrossingPhase : uint8
+{
+	/** Not crossing. CrossingRunway is unset and nothing is held for a crossing. */
+	None,
+
+	/** Past a bar, onto a step that leads to the strip, body not yet on it. The chain is
+	 *  held OCCUPIED from here: the aeroplane is going to be on the asphalt shortly and
+	 *  nothing may be cleared onto it in between. */
+	Committed,
+
+	/** The agent's CENTRE is on the strip. Held until the TAIL leaves it. */
+	OnStrip
 };
 
 /**
@@ -76,8 +107,8 @@ struct AIRSIDE_API FDepartureOrder
  * park and depart correctly" is testable by calling Advance in a loop with no actor, no
  * world and no view - see Airside.Model.RoadAgent.
  *
- * Runtime only. See UAirsideTraffic::Agents and FAgentSlot for why the view that renders
- * this is a separate, Present-layer field rather than living here.
+ * Runtime only. See UGroundTraffic::Agents, and UAirsideTraffic::Views for why the view
+ * that renders this is a separate, Present-layer field rather than living here.
  */
 USTRUCT()
 struct AIRSIDE_API FRoadAgent
@@ -126,7 +157,7 @@ struct AIRSIDE_API FRoadAgent
 	 *
 	 * A BOOL BESIDE THE STRUCT, not TOptional<FDepartureOrder>: TOptional is not
 	 * UHT-reflectable, and every FRoadAgent field must be a UPROPERTY because FRoadAgent
-	 * itself lives inside a UPROPERTY TArray (UAirsideTraffic::Agents) that only
+	 * itself lives inside a UPROPERTY TArray (UGroundTraffic::Agents) that only
 	 * serializes what UHT can see.
 	 */
 	UPROPERTY() bool bDepartureArmed = false;
@@ -171,6 +202,87 @@ struct AIRSIDE_API FRoadAgent
 	 * world origin. See Advance.
 	 */
 	UPROPERTY() FAgentMotion LastMotion;
+
+	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
+	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
+	 *  Model/ and the slot struct went with the view pointer it existed to carry. */
+	UPROPERTY() int32 Id = 0;
+
+	/** How this agent moves. Vehicles were dispatched with no class at all before M2, which
+	 *  is why priority could not be applied to them. */
+	UPROPERTY() ETraversalClass Class = ETraversalClass::Aircraft;
+
+	/** Where the current route is going, so a replan can aim at the same place. */
+	UPROPERTY() FGuidelineNodeId GoalNode;
+
+	// --- Written by UGroundTraffic's arbitration each tick; read by Advance ------------
+	//
+	// Arbitration writes, motion reads: there is no second evaluator of where the agent
+	// may go, only one input into the one follower.
+
+	/** Distance beyond which the follower may not go this tick. See FRouteFollower::Advance. */
+	UPROPERTY() double StopWithin = TNumericLimits<double>::Max();
+
+	/** Id of the agent holding what this one was refused, or 0. The wait-for graph's edge. */
+	UPROPERTY() int32 WaitingOn = 0;
+
+	/** Index into Follower.Plan.Steps of the step whose resource refused this agent, or -1.
+	 *  Names the node a deadlock replan starts from (the step's FROM node). */
+	UPROPERTY() int32 BlockedStep = -1;
+
+	/**
+	 * WHAT refused this agent at BlockedStep - the node, edge or runway segment - so the
+	 * deadlock resolver can ban the right thing. Banning the step's edge alone was the first
+	 * attempt and was wrong for a node: the search walked round the block and re-entered the
+	 * occupied node from its other arm, and the aircraft "turned around" at a bar to wait
+	 * on the same holder from the other side (PIE, 2026-09-06). Meaningless when BlockedStep
+	 * is -1.
+	 */
+	UPROPERTY() FTrafficResource BlockedResource;
+
+	/**
+	 * Everyone this agent was reported as OVERLAPPING on the last claim pass - two bodies
+	 * standing on one node or one runway. Throttles that Warning to the transition.
+	 *
+	 * A FIELD OF ITS OWN rather than reusing WaitingOn, which was the first attempt and was
+	 * wrong: WaitingOn names the FIRST refusal in route order, so an overlap that is not the
+	 * first refusal never matched it and the Warning fired on every single tick.
+	 *
+	 * A LIST rather than the single last id, which was the second attempt: an agent can
+	 * overlap two things in one pass (its own node and the runway under it), and keeping
+	 * only the last let the other one re-log every tick. Never more than a few entries.
+	 */
+	UPROPERTY() TArray<int32> LastOverlaps;
+
+	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
+	UPROPERTY() double StalledSeconds = 0.0;
+
+	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never. */
+	UPROPERTY() double LastResolveAttempt = -1.0e9;
+
+	/** Runway segments this agent occupies in a phase that is not a taxi: an arrival from
+	 *  StartArrival until Vacated, a departure from the handover until Gone. */
+	UPROPERTY() TArray<FRoadSegmentId> RunwayHeld;
+
+	/** The chain a taxi ending on a runway will hold once it becomes a departure. */
+	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
+
+	/**
+	 * Seed of a runway chain this agent is physically ON while taxiing, after passing a
+	 * hold-short bar or vacating a landing. Unset when none. Spec §3.1's fourth route.
+	 *
+	 * SEPARATE FROM RunwayHeld, which is the chain a NON-taxiing agent owns: this one is
+	 * held by an agent that is crossing, and it is released by geometry (the tail clearing
+	 * the strip) rather than by a phase change. A seed rather than the expanded chain
+	 * because the chain is re-expanded per tick anyway, and a rebuild may have changed it.
+	 *
+	 * WHICH CHAIN, NOT WHETHER. CrossingPhase says whether the hold applies; this says which
+	 * runway it is over. Reading IsSet() as "holding" is the bug the phase exists to end.
+	 */
+	UPROPERTY() FRoadSegmentId CrossingRunway;
+
+	/** How far through a crossing this agent's BODY is. See ECrossingPhase. */
+	UPROPERTY() ECrossingPhase CrossingPhase = ECrossingPhase::None;
 
 	/**
 	 * Spools the propeller one frame toward whatever the engine has been commanded to do.

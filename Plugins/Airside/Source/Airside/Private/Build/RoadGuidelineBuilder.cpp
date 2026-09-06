@@ -1,5 +1,6 @@
 #include "Build/RoadGuidelineBuilder.h"
 
+#include "AirsideLog.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -114,7 +115,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		SegmentId.Index = Index;
 		SegmentId.Generation = Segment.Generation;
 
-		const URoadProfile* Profile = Segment.Profile.Get();
+		// ProfileFor, NOT Segment.Profile - the THIRD reader to learn this. The solver and the
+		// mesh builder were pinned to the accessor when a reloaded level came back invisible;
+		// this builder was written afterwards and read the raw pointer, so the same reload
+		// came back PAVED but not ROUTABLE: every taxiway drawn, no centreline under any of
+		// them, every stand lead-in joining nothing, every arrival refused (M_Starter,
+		// 2026-09-06). The mesh hid the loss, which is why it survived two milestones.
+		const URoadProfile* Profile = Network.ProfileFor(Segment);
 		if (Profile == nullptr)
 		{
 			continue;
@@ -223,8 +230,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					continue;
 				}
 
-				const URoadProfile* FromProfile = FromSegment->Profile.Get();
-				const URoadProfile* ToProfile   = ToSegment->Profile.Get();
+				// Through the accessor for the same reason as the segment loop: a junction
+				// between two reloaded taxiways skipped its turn paths entirely.
+				const URoadProfile* FromProfile = Network.ProfileFor(*FromSegment);
+				const URoadProfile* ToProfile   = Network.ProfileFor(*ToSegment);
 				if (FromProfile == nullptr || ToProfile == nullptr)
 				{
 					continue;
@@ -384,6 +393,92 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
+	// --- Re-apply hold-short marks ------------------------------------------------------
+	//
+	// The flag lives on a node and every derived node above is FRESH, so a bar the player
+	// placed would vanish on the next road edit. The mark is stored by the same identity
+	// a hand-authored edge stores its ends by, and resolved through the same Ends map -
+	// one source (the mark), one cache (the flag), rebuilt together. Spec 2026-09-06 §6.
+	{
+		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
+		// Pruning first also means the loop below cannot re-apply a mark whose runway has
+		// been deleted, which would put a bar on a node protecting nothing.
+		Network.PruneHoldShortMarks();
+
+		// CLEAR SURVIVING FLAGS BEFORE RE-APPLYING, because not every flagged node is fresh.
+		// Most derived nodes are made anew above and start unflagged, but a node the sweep
+		// SPARED, and every Origin-less node (an entity's pose or anchor - see
+		// FGuidelineNode::Origin), lives on with whatever flag it last had. Pruning above
+		// can therefore remove a mark whose runway was deleted and still leave the bar
+		// standing on the node, protecting a strip that no longer exists.
+		//
+		// Two rules, because the two kinds of node have DIFFERENT sources of truth, and
+		// URoadNetwork::SetHoldShort says which is which:
+		//   - Origin set: the MARK is the source and the flag is its cache, so the flag is
+		//     cleared and the loop below writes it back. Rebuilding a cache means emptying
+		//     it, not merely adding to it - EXCEPT when this pass derived nothing for that
+		//     end. Ends is fully populated by now, so a missing EndKey here is the same
+		//     "unsolved end" the re-apply loop below deliberately skips; clearing the flag
+		//     and then not re-applying it would take the player's bar away for a pass over
+		//     a transient derivation failure, which is precisely what that loop refuses to
+		//     do. Leave the cache alone and let the next successful solve refresh it.
+		//   - Origin unset: no mark is ever stored, so the FLAG is the source. Wiping it
+		//     would delete the player's bar on every unrelated road edit. It is cleared only
+		//     when it names something that is no longer a live runway - the one case the
+		//     prune above could not reach, since it is keyed by an Origin these nodes lack.
+		{
+			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
+			for (int32 Index = 0; Index < Live.Num(); ++Index)
+			{
+				if (!Live[Index].bAlive || !Live[Index].HoldShortFor.IsSet())
+				{
+					continue;
+				}
+
+				const FGuidelineEndRef& Origin = Live[Index].Origin;
+				const bool bMarkBacked = Origin.IsSet();
+				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldShortFor))
+				{
+					continue;
+				}
+
+				if (bMarkBacked
+					&& Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) == nullptr)
+				{
+					continue;
+				}
+
+				if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(Network.GuidelineNodeIdAt(Index)))
+				{
+					Node->HoldShortFor = FRoadSegmentId();
+				}
+			}
+		}
+
+		for (const FHoldShortMark& Mark : Network.GetHoldShortMarks())
+		{
+			const FGuidelineNodeId* Found = Ends.Find(
+				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
+			if (Found == nullptr)
+			{
+				// The segment is alive (prune said so) but derived nothing this pass - an
+				// unsolved end, or a profile that lost the guideline the mark named. Leave
+				// the mark: the next successful solve puts the bar back, which is kinder
+				// than deleting a player's work over a transient derivation failure.
+				//
+				// The clear above skips this same case for the same reason - the two tests
+				// are the same lookup in the same map, so a flag is never cleared here only
+				// to be left unwritten there.
+				continue;
+			}
+
+			if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found))
+			{
+				Node->HoldShortFor = Mark.Protects;
+			}
+		}
+	}
+
 	// LAST, for the reason given where this used to live: every detachment above has now
 	// happened, so an idle derived node really is idle.
 	{
@@ -403,5 +498,29 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			Network.RemoveGuidelineNode(Id);
 		}
+	}
+
+	// THE CENSUS. This builder logged nothing for the whole of its life, and the first
+	// "none of the routes are there in PIE" report (2026-09-06) could not be read off the
+	// log at all: the mesh census said 16 segments and the traffic said "no route to a
+	// stand", and everything between the two was a guess. One line per build, so the next
+	// such report is answered by a grep.
+	{
+		int32 NodesAlive = 0, HoldShort = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
+		for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
+		{
+			NodesAlive += Node.bAlive ? 1 : 0;
+			HoldShort += (Node.bAlive && Node.HoldShortFor.IsSet()) ? 1 : 0;
+		}
+		for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
+		{
+			if (!Edge.bAlive) { continue; }
+			++EdgesAlive;
+			Authored += Edge.bDerived ? 0 : 1;
+			TurnPaths += (Edge.bDerived && !Edge.DerivedFrom.IsSet()) ? 1 : 0;
+		}
+		UE_LOG(LogAirside, Log,
+			TEXT("Guidelines: %d nodes (%d hold-short), %d edges (%d hand-authored, %d turn paths), %d hold-short mark(s) on file"),
+			NodesAlive, HoldShort, EdgesAlive, Authored, TurnPaths, Network.GetHoldShortMarks().Num());
 	}
 }

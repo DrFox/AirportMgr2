@@ -3,6 +3,7 @@
 #include "Algo/Reverse.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -21,15 +22,32 @@ namespace
 		return true;
 	}
 
-	/** Negative when the edge cannot be measured, which is how the search skips it. */
-	double EdgeCost(const URoadNetwork& Network, const FGuidelineEdge& Edge)
+	/** Sampled length plus the query's congestion charge. Negative when the edge cannot be
+	 *  measured, which is how the search skips it. */
+	double EdgeCost(const URoadNetwork& Network, const FGuidelineEdge& Edge,
+		FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
 	{
 		TArray<FVector2D> Points;
 		if (!EdgePoints(Network, Edge, Points))
 		{
 			return -1.0;
 		}
-		return GuidelineGeom::PolylineLength(Points);
+		double Length = GuidelineGeom::PolylineLength(Points);
+
+		// Congestion: what others hold on this edge, weighted. Additive and non-negative,
+		// so the straight-line heuristic stays admissible and the first pop stays optimal.
+		// Nodes are not costed - a held node is a moment, a held edge is a queue.
+		//
+		// The querying agent's OWN claims are excluded by HeldLengthOn, or an agent
+		// replanning out of a jam would be charged for the very line it is standing on and
+		// route round itself. With a null table this is bitwise the search that ran before
+		// occupancy existed - see Airside.Model.RouteSearch.OccupancyCost's last assertion.
+		if (Query.Occupancy != nullptr)
+		{
+			Length += Query.CongestionWeight * Query.Occupancy->HeldLengthOn(EdgeId, Query.QueryingAgent);
+		}
+
+		return Length;
 	}
 
 	/**
@@ -122,12 +140,32 @@ namespace
 					continue;
 				}
 
+				if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
+				{
+					continue;
+				}
+
+				// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
+				// blocker is an aircraft standing on the node, and an edge-only ban lets the
+				// search re-enter round the back. See FRouteQuery::BannedNode.
+				if (Query.BannedNode.IsSet()
+					&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
+				{
+					continue;
+				}
+
+				// Runway-derived edges are the strip itself; a replan must not taxi along it.
+				if (Query.bAvoidRunways && Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))
+				{
+					continue;
+				}
+
 				if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
 				{
 					continue;
 				}
 
-				const double Cost = EdgeCost(Network, *Edge);
+				const double Cost = EdgeCost(Network, *Edge, EdgeId, Query);
 				if (Cost < 0.0)
 				{
 					continue;
@@ -199,8 +237,9 @@ namespace
 		// quadratic returns A and B themselves, so dropping each segment's first point
 		// leaves no gap and no duplicate.
 		Plan.Polyline.Add(StartNode->Position);
-		for (const FRouteStep& Step : Plan.Steps)
+		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
 		{
+			FRouteStep& Step = Plan.Steps[Index];
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
 			if (Edge == nullptr)
 			{
@@ -222,6 +261,12 @@ namespace
 			{
 				Plan.Polyline.Add(Points[At]);
 			}
+
+			// Measured off the array just appended, not off Points: the two are the same
+			// numbers today, and reading the plan's own polyline is what keeps them the same
+			// if the weld rule above ever changes.
+			Step.EndVertex = Plan.Polyline.Num() - 1;
+			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
 		}
 
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
@@ -270,6 +315,53 @@ namespace RouteSearch
 		}
 
 		return Plan;
+	}
+
+	FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail)
+	{
+		FRoutePlan Out;
+		Out.Result = ERouteResult::Unreachable;
+		if (!Head.IsValid() || !Tail.IsValid() || KeepSteps < 0 || KeepSteps > Head.Steps.Num()
+			|| Tail.Polyline.Num() < 2)
+		{
+			return Out;
+		}
+
+		const FGuidelineNodeId JoinNode = KeepSteps == 0 ? Head.Start : Head.Steps[KeepSteps - 1].To;
+		if (JoinNode != Tail.Start)
+		{
+			return Out;
+		}
+
+		const int32 JoinVertex = KeepSteps == 0 ? 0 : Head.Steps[KeepSteps - 1].EndVertex;
+		const double JoinDistance = KeepSteps == 0 ? 0.0 : Head.Steps[KeepSteps - 1].EndDistance;
+
+		Out.Result = ERouteResult::Found;
+		Out.Start = Head.Start;
+		for (int32 At = 0; At <= JoinVertex; ++At)
+		{
+			Out.Polyline.Add(Head.Polyline[At]);
+		}
+		for (int32 Index = 0; Index < KeepSteps; ++Index)
+		{
+			Out.Steps.Add(Head.Steps[Index]);
+		}
+
+		// The tail's first point IS the join node, so it is dropped - the same weld rule
+		// RunSearch applies between consecutive edges.
+		for (int32 At = 1; At < Tail.Polyline.Num(); ++At)
+		{
+			Out.Polyline.Add(Tail.Polyline[At]);
+		}
+		for (const FRouteStep& Step : Tail.Steps)
+		{
+			FRouteStep Rebased = Step;
+			Rebased.EndVertex += JoinVertex;
+			Rebased.EndDistance += JoinDistance;
+			Out.Steps.Add(Rebased);
+		}
+		Out.Length = GuidelineGeom::PolylineLength(Out.Polyline);
+		return Out;
 	}
 
 	FGuidelineNodeId FindNearestNode(
