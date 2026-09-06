@@ -227,6 +227,21 @@ bool UGroundTraffic::StrandForTest(int32 AgentId)
 	return true;
 }
 
+bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE || Agents[Index].Phase != EAgentPhase::Taxiing)
+	{
+		return false;
+	}
+
+	// EXACTLY THE TWO FIELDS the Vacated handover writes (see Advance): the seed and the
+	// phase. No claim is raised here - the next Arbitrate raises it, as it does in play.
+	Agents[Index].CrossingRunway = RunwaySeed;
+	Agents[Index].CrossingPhase = ECrossingPhase::OnStrip;
+	return true;
+}
+
 bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	const int32 Index = FindIndex(AgentId);

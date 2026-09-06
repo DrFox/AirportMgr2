@@ -204,8 +204,17 @@ public:
 	 * Vehicles and aircraft alike - nothing here reads the class beyond handing it to the
 	 * query, because a van deadlocked in a service road is the same problem as an aircraft
 	 * nose to nose on a taxiway.
+	 *
+	 * BannedNode, when set, closes every arm into that node; BannedEdge closes one edge. The
+	 * resolver passes the node when a node refused the agent and the edge otherwise. Every
+	 * replan also avoids runway-derived edges (FRouteQuery::bAvoidRunways) - a replan that
+	 * taxied along the strip re-reserved it and starved the bar-holder it was trying to get
+	 * round. ALSO FALSE when the route found is the route the agent already has: a "replan"
+	 * that changes nothing must not count as a resolution, or the resolver logs a cycle as
+	 * resolved every window while nobody moves.
 	 */
-	bool ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge);
+	bool ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge,
+		FGuidelineNodeId BannedNode = FGuidelineNodeId());
 
 	/**
 	 * Re-points every agent's route at the graph that has just been rebuilt. Spec §6.
@@ -319,6 +328,16 @@ public:
 	 * ReResolvePlan, which is a decision, not an assignment.
 	 */
 	bool StrandForTest(int32 AgentId);
+
+	/**
+	 * Puts a Taxiing agent ON a runway the way the Vacated handover does - CrossingRunway
+	 * set, phase OnStrip - so a world-free test can stage an aircraft that has just landed
+	 * without a stand definition, which DispatchArrival needs and a bare automation run
+	 * has not got. Stands in for FRoadAgent::Advance's Arriving -> Taxiing frame and
+	 * nothing else; the geometric release then runs as in play. False for an unknown or
+	 * non-Taxiing agent.
+	 */
+	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
 	double GetSimSeconds() const { return SimSeconds; }
 
 	/**

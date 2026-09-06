@@ -8,6 +8,7 @@
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
 #include "Model/TakeoffRun.h"
+#include "Model/TrafficOccupancy.h"
 #include "RoadAgent.generated.h"
 
 /**
@@ -228,6 +229,16 @@ struct AIRSIDE_API FRoadAgent
 	/** Index into Follower.Plan.Steps of the step whose resource refused this agent, or -1.
 	 *  Names the node a deadlock replan starts from (the step's FROM node). */
 	UPROPERTY() int32 BlockedStep = -1;
+
+	/**
+	 * WHAT refused this agent at BlockedStep - the node, edge or runway segment - so the
+	 * deadlock resolver can ban the right thing. Banning the step's edge alone was the first
+	 * attempt and was wrong for a node: the search walked round the block and re-entered the
+	 * occupied node from its other arm, and the aircraft "turned around" at a bar to wait
+	 * on the same holder from the other side (PIE, 2026-09-06). Meaningless when BlockedStep
+	 * is -1.
+	 */
+	UPROPERTY() FTrafficResource BlockedResource;
 
 	/**
 	 * Everyone this agent was reported as OVERLAPPING on the last claim pass - two bodies

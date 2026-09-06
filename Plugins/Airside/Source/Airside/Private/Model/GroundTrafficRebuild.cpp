@@ -319,7 +319,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// AHEAD OF THE AGENT ONLY, by the branch above: ReplanAt's own precondition is that
 		// the splice is at or ahead of the step the agent is on, and it is now the caller
 		// that guarantees the strict half of that rather than the callee that tolerates it.
-		if (ReplanAt(Agent.Id, Network, Failed, FGuidelineEdgeId()))
+		if (ReplanAt(Agent.Id, Network, Failed, FGuidelineEdgeId(), FGuidelineNodeId()))
 		{
 			return EReResolve::Replanned;
 		}

@@ -9,7 +9,8 @@
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 
-bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge)
+bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge,
+	FGuidelineNodeId BannedNode)
 {
 	const int32 Index = FindIndex(AgentId);
 	if (Index == INDEX_NONE)
@@ -51,6 +52,14 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	Query.Class = Agent.Class;
 	Query.Wingspan = Agent.Airframe.Wingspan;
 	Query.BannedEdge = BannedEdge;
+	Query.BannedNode = BannedNode;
+
+	// NEVER ALONG A RUNWAY. The first replan this resolver ever made in play looped an
+	// arrival round a runway's end taxiway and back over a runway-derived edge; that edge
+	// re-reserved the strip (spec §3.1, route one) against the departure waiting at the
+	// bar, which was the very agent the loop was meant to get round. Crossings are turn
+	// paths and nodes, not runway edges, so they stay open. See FRouteQuery::bAvoidRunways.
+	Query.bAvoidRunways = true;
 
 	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
 	// the caller knows is hopeless; the congestion cost is what stops the new route from
@@ -64,6 +73,21 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	// paragraph above. The copy is the price of that promise, paid once per replan.
 	FRoutePlan Spliced = Plan;
 	if (!SpliceReplan(Network, Query, SpliceStep, Spliced))
+	{
+		return false;
+	}
+
+	// THE SAME ROUTE IS NOT A REPLAN. A ban that removes nothing the search wanted returns
+	// the plan the agent already has, and accepting it would report a deadlock "resolved"
+	// every retry window while nobody moved. Refused, so the resolver goes on to the next
+	// candidate - which is how a bar-holder with only one way out hands the turn to the
+	// aircraft that has two.
+	bool bSameRoute = Spliced.Steps.Num() == Plan.Steps.Num();
+	for (int32 StepIndex = 0; bSameRoute && StepIndex < Spliced.Steps.Num(); ++StepIndex)
+	{
+		bSameRoute = Spliced.Steps[StepIndex].Edge == Plan.Steps[StepIndex].Edge;
+	}
+	if (bSameRoute)
 	{
 		return false;
 	}
@@ -238,11 +262,14 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 			continue;
 		}
 
-		// THE LOWEST-RANKED WAITER THAT CAN ACTUALLY TURN. Lowest class priority first, so a
-		// van goes round rather than an aeroplane; ties to the HIGHEST id, which is the later
-		// arrival - the one with least of its journey already made.
-		int32 Candidate = 0;
-		int32 CandidateRank = 0;
+		// EVERY WAITER THAT CAN ACTUALLY TURN, in the order they should be asked: lowest
+		// class priority first, so a van goes round rather than an aeroplane; ties to the
+		// HIGHEST id, which is the later arrival - the one with least of its journey already
+		// made. A LIST rather than the single best, because the best candidate's replan can
+		// fail - a departure at a bar has exactly one way onto the runway - and the first
+		// version of this stopped there and logged "no member can turn" while the other
+		// member had a whole taxiway system to turn into (PIE, 2026-09-06).
+		TArray<int32> Candidates;
 		bool bAllAircraft = true;
 		FString Members;
 		for (const int32 Id : Cycle)
@@ -264,13 +291,28 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 			{
 				continue;
 			}
-			const int32 Rank = TraversalPriority(Member->Class);
-			if (Candidate == 0 || Rank < CandidateRank || (Rank == CandidateRank && Id > Candidate))
+
+			// AN AGENT REFUSED THE RUNWAY IT IS GOING TO cannot go round it. A departure at
+			// a bar was the first candidate the replay tried (higher id, the tie-break), and
+			// its "replan" was a detour through the junction's other arm to enter the same
+			// strip from the other side - a different route, so ReplanAt accepted it, and the
+			// cycle was logged resolved twice before the arrival, which had a whole taxiway
+			// system to turn into, was asked. What it was refused is the destination; no ban
+			// makes a route to it that avoids it.
+			if (Member->BlockedResource.Kind == ETrafficResourceKind::Surface
+				&& Network.IsGuidelineNodeOnRunway(Member->GoalNode, Member->BlockedResource.Surface))
 			{
-				Candidate = Id;
-				CandidateRank = Rank;
+				continue;
 			}
+
+			Candidates.Add(Id);
 		}
+		Candidates.Sort([this](const int32 A, const int32 B)
+		{
+			const int32 RankA = TraversalPriority(FindAgent(A)->Class);
+			const int32 RankB = TraversalPriority(FindAgent(B)->Class);
+			return RankA != RankB ? RankA < RankB : A > B;
+		});
 
 		// STAMPED ON EVERY MEMBER, WHATEVER HAPPENS NEXT, and before the replan rather than
 		// after it: the stamp is what schedules the next attempt, and a cycle whose replan
@@ -286,18 +328,29 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 		}
 
 		bool bResolved = false;
-		if (Candidate != 0)
+		int32 Candidate = 0;
+		for (const int32 Id : Candidates)
 		{
 			// READ BEFORE THE REPLAN, because ReplanAt rewrites the plan and clears
 			// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
 			// of the route that was just chosen.
-			const FRoadAgent* Turner = FindAgent(Candidate);
+			const FRoadAgent* Turner = FindAgent(Id);
 			const int32 Step = Turner->BlockedStep;
-			const FGuidelineEdgeId Banned = Turner->Follower.Plan.Steps[Step].Edge;
-			bResolved = ReplanAt(Candidate, Network, Step, Banned);
-			if (bResolved)
+			const FGuidelineEdgeId BannedEdge = Turner->Follower.Plan.Steps[Step].Edge;
+
+			// BAN WHAT REFUSED IT. A node with an aircraft standing on it is a wall from every
+			// direction, so the whole node goes; an edge or a runway surface bans the step's
+			// edge (and every replan already refuses runway-derived edges - see ReplanAt).
+			const FGuidelineNodeId BannedNode =
+				Turner->BlockedResource.Kind == ETrafficResourceKind::Node
+					? Turner->BlockedResource.Node : FGuidelineNodeId();
+
+			if (ReplanAt(Id, Network, Step, BannedEdge, BannedNode))
 			{
-				LastResolvedAgent = Candidate;
+				bResolved = true;
+				Candidate = Id;
+				LastResolvedAgent = Id;
+				break;
 			}
 		}
 

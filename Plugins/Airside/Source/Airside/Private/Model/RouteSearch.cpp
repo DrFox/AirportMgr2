@@ -145,6 +145,21 @@ namespace
 					continue;
 				}
 
+				// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
+				// blocker is an aircraft standing on the node, and an edge-only ban lets the
+				// search re-enter round the back. See FRouteQuery::BannedNode.
+				if (Query.BannedNode.IsSet()
+					&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
+				{
+					continue;
+				}
+
+				// Runway-derived edges are the strip itself; a replan must not taxi along it.
+				if (Query.bAvoidRunways && Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))
+				{
+					continue;
+				}
+
 				if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
 				{
 					continue;

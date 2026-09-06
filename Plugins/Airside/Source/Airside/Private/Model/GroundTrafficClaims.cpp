@@ -752,6 +752,25 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 
 		bHeld = true;
 		Agent.BlockedStep = Want.Step;
+		Agent.BlockedResource = Want.Claim.Resource;
+
+		// A BAR-HOLDER'S BLOCKED STEP IS THE ONE LEAVING THE BAR, not the one arriving at
+		// it. The refusal was raised for the step that ENDS at the bar node, and the agent
+		// stops with its nose on the bar - which is AT the start of the next step. The
+		// deadlock resolver asks "is this agent at the node its refused step leaves from",
+		// and measured against the arriving step a departure waiting at a bar was never a
+		// candidate: the one member of a bar-versus-arrival cycle who could have turned was
+		// never asked (PIE, 2026-09-06). Only when there IS a next step; a bar at the end of
+		// a route is the route's end.
+		if (Want.Surface == FWantedClaim::ESurface::HoldShort
+			&& Agent.Follower.Plan.Steps.IsValidIndex(Want.Step + 1))
+		{
+			Agent.BlockedStep = Want.Step + 1;
+		}
+		// The transition tests below compare against what was STORED last pass, so they
+		// read the stored value, not Want.Step - a bar refusal stores the next step, and
+		// comparing the raw one logged "holding short" on every tick.
+		const int32 NewBlockedStep = Agent.BlockedStep;
 
 		Agent.StopWithin = StopWithinFor(Want, Blocker, Window);
 
@@ -766,7 +785,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// is what changed when it became so.
 		if (Want.Surface == FWantedClaim::ESurface::HoldShort)
 		{
-			if (WasWaitingOn != Blocker.AgentId || WasBlockedStep != Want.Step)
+			if (WasWaitingOn != Blocker.AgentId || WasBlockedStep != NewBlockedStep)
 			{
 				UE_LOG(LogAirsideTraffic, Log,
 					TEXT("Agent %d holding short at node %d for runway segment %d held by agent %d"),

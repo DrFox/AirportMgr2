@@ -123,6 +123,25 @@ struct AIRSIDE_API FRouteQuery
 	UPROPERTY() FGuidelineEdgeId BannedEdge;
 
 	/**
+	 * A node the search may not pass through. Set by a deadlock replan when what refused
+	 * the agent was a NODE somebody is standing on: banning only the edge it was about to
+	 * take lets the search walk round the block and re-enter the same node from its other
+	 * arm - measured on 2026-09-06 as an aircraft looping a runway's end taxiway and coming
+	 * back to the very bar-holder it was refused by. The node is the wall; the edge is not.
+	 */
+	UPROPERTY() FGuidelineNodeId BannedNode;
+
+	/**
+	 * Skip every edge derived from a runway segment. Set by a deadlock replan: an agent
+	 * that has left the runway must not route back ALONG it to get round a queue, because
+	 * a taxi route on the strip re-reserves the surface (spec §3.1's first route) and
+	 * starves the departure that was waiting at the bar for exactly that surface. Crossing
+	 * a runway at a junction is unaffected - the crossing is a turn path and a node, and
+	 * turn paths carry no DerivedFrom.
+	 */
+	UPROPERTY() bool bAvoidRunways = false;
+
+	/**
 	 * Who holds what, for the congestion cost term - or null for a plain shortest route,
 	 * which is bitwise the search this class ran before occupancy existed. A raw pointer
 	 * rather than a UPROPERTY: a query lives on the stack for one call and the table it

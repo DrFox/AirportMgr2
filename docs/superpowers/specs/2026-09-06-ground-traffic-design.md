@@ -379,6 +379,31 @@ qualify, the candidate is the lowest-ranked: lowest class priority, ties to the 
 - **All aircraft:** the same rule; the highest id is the candidate. Logged at Warning as
   an all-aircraft cycle: the input to the future build-tool warning (systems map §6).
 
+*Amended 2026-09-06 from the first PIE deadlock (`samples/deadlock.png`, log 19:13-19:20):*
+an arrival vacating toward a runway's end met two departures queued at that end's bar on the
+same bidirectional taxiway. Three things the resolver got wrong, all fixed and pinned by
+`Airside.Model.Traffic.HeadOnReplansRoundBarHolder`, which rebuilds that airport on the
+real solver and builder:
+
+- **The ban must be what refused the agent.** A node with an aircraft standing on it is a
+  wall from every arm; banning only the edge the agent was about to take let the search
+  loop round the runway's end and re-enter the same node from its other arm. The agent
+  now records `BlockedResource`, and a node refusal bans the node (`FRouteQuery::BannedNode`).
+- **A replan never taxis along a runway** (`FRouteQuery::bAvoidRunways`). The loop route
+  used a runway-derived edge, re-reserved the strip, and starved the departure at the bar
+  for the very surface it was waiting for. Crossings are turn paths and nodes, so they stay
+  open.
+- **A bar-holder is a candidate, and candidates are tried in order.** The hold-short refusal
+  now names the step LEAVING the bar as `BlockedStep`, so an aircraft with its nose on the
+  bar qualifies; and the resolver walks every qualifying member in rank order until one
+  replan succeeds, refusing a "replan" that returns the route the agent already had. The
+  departure with one way out fails fast and the arrival with two turns.
+
+The route the player could see - the top taxiway, across at the crossing's bars, along the
+bottom - was legal throughout; it lost on distance to a route through a node nobody could
+enter. §4's "nodes are not costed" stands for routing at plan time; a stopped bar-holder is
+handled by the ban, not by a cost.
+
 Mid-edge waiters need no case of their own: §3.1's box-entry rule is what makes a gridlock
 form with its members AT nodes, where they can turn, rather than inside the junction, where
 nobody can.
