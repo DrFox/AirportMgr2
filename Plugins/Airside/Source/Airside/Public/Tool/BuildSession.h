@@ -88,6 +88,9 @@ public:
 	/** The tool the number keys selected, or null before any tool has been made. */
 	IBuildTool* GetActiveTool() const;
 
+	/** Registry index of the active tool. What the bar lights; what SelectTool takes. */
+	int32 GetActiveToolIndex() const { return ActiveTool; }
+
 	/** How many tools this session holds. For tests: must equal ToolRegistry().Num(). */
 	int32 NumTools() const { return Tools.Num(); }
 

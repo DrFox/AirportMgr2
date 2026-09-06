@@ -12,6 +12,20 @@
 class ARoadNetworkActor;
 
 /**
+ * What a plain click means right now. ONE ENUM: Remove and Insert can never both be lit,
+ * so the state that would need a rule to resolve is not representable (CLAUDE.md, "a phase
+ * is an enum, never a set of bools"). Ctrl and Shift held on the keyboard OR with this in
+ * MakeToolContext, so the keys keep working and light the same button.
+ */
+UENUM()
+enum class EClickModifier : uint8
+{
+	None,
+	Remove,
+	Insert
+};
+
+/**
  * Lets the player build the road graph while the game runs: click to drop a node,
  * click again to run a segment to it, chaining as you go.
  *
@@ -25,6 +39,7 @@ class ARoadNetworkActor;
  * It lives in the game module rather than the Airside plugin because a PlayerController
  * is game-framework glue. The plugin must not depend on the game.
  */
+
 UCLASS()
 class AIRPORTMGR_API ARoadBuildController : public APlayerController
 {
@@ -221,6 +236,48 @@ public:
 	/** Everything the active tool needs to judge the current cursor. */
 	FToolContext MakeToolContext() const;
 
+	// --- Actions ---------------------------------------------------------------------
+	//
+	// Everything below is what BuildActions() calls. The registry, not this class, decides
+	// which key and which button each maps to; these are the verbs and the state queries.
+
+	/** Selects a tool by registry index and clears the click modifier - see EClickModifier. */
+	void SelectTool(int32 Index);
+	int32 GetActiveToolIndex() const;
+
+	/** Lights Mode, or clears it if it was already lit. */
+	void ToggleClickModifier(EClickModifier Mode);
+	EClickModifier GetClickModifier() const { return ClickModifier; }
+
+	bool IsWatchingAgent() const { return bWatchingAgent; }
+	bool IsGuidelineOverlayOn() const { return bShowGuidelines; }
+	bool CanUndo() const;
+	bool CanRedo() const;
+	bool HasNetworkContent() const;
+	bool HasRunway() const;
+	bool HasAgent() const;
+	bool HasOpsRuntime() const;
+	bool IsPaused() const;
+
+	void StepSpeed(int32 Delta);
+	void TogglePause();
+	void QuickSave();
+	void QuickLoad();
+
+	/**
+	 * Lands at the runway nearest the VIEW FOCUS. The bar's Land button is clicked with the
+	 * cursor on the bar, where "nearest the cursor" is meaningless; the focus is where the
+	 * player is looking. The key does the same, for one-action-one-behaviour.
+	 */
+	void LandAircraftNearViewFocus();
+
+	void OnClearNetwork();
+	void OnUndo();
+	void OnRedo();
+
+	/** C: orbit the newest agent, or go back to the build view. */
+	void ToggleWatchAgent();
+
 	/**
 	 * What the next click would do, run through the snap chain. False only when the
 	 * cursor is not over the road plane at all.
@@ -258,20 +315,18 @@ private:
 	void UpdateDrag();
 
 	void OnCancelGesture();
-	void OnClearNetwork();
-	void OnUndo();
-	void OnRedo();
 
 	/**
-	 * Sim clock and save: Comma slower, Period faster, P pause; K save, L load. Reach the
-	 * AirportOps runtime through the game instance, so they work only in play - the editor
-	 * mode has no game instance and its own driver, and these keys log that when pressed.
+	 * The registry's key handler: finds the action whose key and Ctrl requirement match the
+	 * chord that fired. One handler for every key, so a binding cannot exist without an
+	 * action behind it.
 	 */
-	void OnSpeedDown();
-	void OnSpeedUp();
-	void OnTogglePause();
-	void OnQuickSave();
-	void OnQuickLoad();
+	void OnActionKey(FKey Key);
+
+	/** Chord bindings carry no key, so Ctrl actions share this and ask which key was just pressed. */
+	void OnCtrlActionKey();
+
+	UPROPERTY(Transient) EClickModifier ClickModifier = EClickModifier::None;
 
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
@@ -299,9 +354,6 @@ private:
 	// FBuildCameraRig::InFrame), so the wheel, WASD and Q/E do in watch mode exactly what
 	// they do while building: zoom, slide the look-at point, orbit. Two rigs rather than
 	// one re-aimed, so leaving watch mode lands on the build view where it was left.
-
-	/** C: orbit the newest agent, or go back to the build view. */
-	void ToggleWatchAgent();
 
 	/** True while the camera is riding with an agent. */
 	bool bWatchingAgent = false;
