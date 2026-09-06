@@ -72,8 +72,17 @@ namespace ArrivalPlanner
 		//    it - so it is dropped rather than paid for on every dispatch; a caller that wants
 		//    it back can run the MinDistance-0 query itself, the same cheap filter this used
 		//    to duplicate.
+		//
+		//    From the UNMARGINED distance since the exit arcs (2026-09-06). Needed carries
+		//    FLandingRun::LandingMargin, which is a refusal margin on the STRIP - a runway a
+		//    quarter shorter than the roll is refused - not a statement about which turn-off
+		//    is takeable: the aircraft is at taxi speed by the raw figure (measured: 29632 on
+		//    an unbounded strip against 37039 needed), and an arc whose start lay between
+		//    the two was skipped for the junction node behind it, which has no turn-off at
+		//    all. The player watched the aircraft roll straight past the exit it had built.
+		const double SlowedBy = Out.Needed / FLandingRun::LandingMargin;
 		const TArray<FGuidelineNodeId> Exits =
-			Network.RunwayExitNodes(Out.Threshold, Out.Direction, Out.RunwayLength, HalfWidth, Out.Needed);
+			Network.RunwayExitNodes(Out.Threshold, Out.Direction, Out.RunwayLength, HalfWidth, SlowedBy);
 		Out.ExitCount = Exits.Num();
 
 		if (Out.RunwayLength < Out.Needed)
@@ -90,45 +99,78 @@ namespace ArrivalPlanner
 		// 3. WHICH STAND. Shortest route, the user's rule - and taken from the FIRST exit that
 		//    reaches anything, because an aircraft takes the earliest turn-off it can rather
 		//    than rolling to the end in search of a marginally shorter taxi.
-		for (int32 Index = 0; Index < Exits.Num(); ++Index)
+		//
+		//    AN EXIT IS WHERE THE AIRCRAFT LEAVES THE RUNWAY, so the taxi-in is searched with
+		//    the runway's own edges off limits - the rule the deadlock replan already lives
+		//    by. Without it a junction's own node-end, which has no turn-off since the exit
+		//    arcs (the turns attach at the split nodes either side), "exited" by rolling on
+		//    to the downstream split and hairpinning back - the aircraft the player saw roll
+		//    straight past its exit - and an early exit lost to a later one because the
+		//    SHORTEST route from it ran down the strip. With the strip excluded a node-end
+		//    has no route at all and the earliest arc wins on its taxiways, as the rule says.
+		//    A FORWARD turn-off (the first span of the route heading down the runway) beats
+		//    a backtrack at any distance: an aircraft turns off ahead of itself if it can.
+		FGuidelineNodeId FirstForward, FirstBacktrack;
+		FRoutePlan ForwardRoute, BacktrackRoute;
+		int32 ForwardOrdinal = 0, BacktrackOrdinal = 0;
+		for (int32 Index = 0; Index < Exits.Num() && !FirstForward.IsSet(); ++Index)
 		{
 			const FGuidelineNodeId& Candidate = Exits[Index];
 			double BestLength = TNumericLimits<double>::Max();
 			FRoutePlan BestForExit;
-
 			for (const FEntityInstance& Stand : Network.GetEntities())
 			{
 				if (!Stand.bAlive || !Stand.PoseNode.IsSet())
 				{
 					continue;
 				}
-
 				FRouteQuery Query;
 				Query.Start = Candidate;
 				Query.Goal = Stand.PoseNode;
 				Query.Class = ETraversalClass::Aircraft;
 				Query.Wingspan = Airframe.Wingspan;
-
+				Query.bAvoidRunways = true;
 				const FRoutePlan Route = RouteSearch::Find(Network, Query);
-				if (!Route.IsValid() || Route.Polyline.Num() < 2)
+				if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
 				{
 					continue;
 				}
-
 				if (Route.Length < BestLength)
 				{
 					BestLength = Route.Length;
 					BestForExit = Route;
 				}
 			}
-
-			if (BestForExit.IsValid())
+			if (!BestForExit.IsValid())
 			{
-				Out.TaxiIn = BestForExit;
-				Out.Exit = Candidate;
-				Out.ExitOrdinal = Index + 1;
-				break;
+				continue;
 			}
+			const bool bForward =
+				FVector2D::DotProduct(BestForExit.Polyline[1] - BestForExit.Polyline[0], Out.Direction) > 0.0;
+			if (bForward)
+			{
+				FirstForward = Candidate;
+				ForwardRoute = BestForExit;
+				ForwardOrdinal = Index + 1;
+			}
+			else if (!FirstBacktrack.IsSet())
+			{
+				FirstBacktrack = Candidate;
+				BacktrackRoute = BestForExit;
+				BacktrackOrdinal = Index + 1;
+			}
+		}
+		if (FirstForward.IsSet())
+		{
+			Out.TaxiIn = ForwardRoute;
+			Out.Exit = FirstForward;
+			Out.ExitOrdinal = ForwardOrdinal;
+		}
+		else if (FirstBacktrack.IsSet())
+		{
+			Out.TaxiIn = BacktrackRoute;
+			Out.Exit = FirstBacktrack;
+			Out.ExitOrdinal = BacktrackOrdinal;
 		}
 
 		if (!Out.TaxiIn.IsValid())

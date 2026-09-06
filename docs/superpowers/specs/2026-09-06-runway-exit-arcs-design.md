@@ -167,3 +167,22 @@ Implemented on `feature/runway-exit-arcs` in one commit after the spec and plan.
   never forms, so the replay pins the resolver on the geometry it was recorded on.
 - 126 tests, 0 failed, 0 crashed; `UE_LOG` 98 -> 98. Built in a detached worktree because
   the editor was open; unverified in PIE.
+
+## 10. PIE round 1 (2026-09-06): "it rolled straight past the exit"
+
+Log: `vacating at exit 1 of 8` at 41402 - the junction node itself - then `taxiing 30275`
+where it had been 20658. The exit's arc start (35400) lay between the raw slowed-by distance
+(29632) and the margined `Needed` (37039), so `RunwayExitNodes` ruled it unusable; the
+junction's node-end qualified, and its only route off was along the strip to the downstream
+split and back through the hairpin. Two planner rules, both in `ArrivalPlanner::Plan`:
+
+- Exit usability is judged at `Needed / LandingMargin`. The margin is a refusal margin on the
+  strip, not a statement about which turn-off is takeable.
+- The taxi-in is searched with `bAvoidRunways` (the replan's rule): a node-end then has no
+  route at all, and the earliest arc wins on its taxiways rather than losing to a later exit
+  whose shortest route ran down the strip. A forward turn-off beats a backtrack at any
+  distance.
+
+§4's "falls out without code" was wrong by exactly these two rules. Test:
+`Airside.Model.ArrivalTakesTheArcNotTheJunction`. 127 tests, 0 failed, 0 crashed, built on
+the main checkout.

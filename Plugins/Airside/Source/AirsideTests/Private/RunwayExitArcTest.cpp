@@ -348,9 +348,10 @@ namespace
 		FVector2D Threshold = FVector2D(-40000.0, 0.0);
 	};
 
-	FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand)
+	FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDistance = 60000.0)
 	{
 		FExitArcAirport Out;
+		Out.XAt = FVector2D(-40000.0 + XDistance, 0.0);
 		Out.Net = NewObject<URoadNetwork>(Outer);
 		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
 		Runway->bContinuousThroughJunctions = true;
@@ -358,7 +359,7 @@ namespace
 		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
 		const FRoadNodeId W = Out.Net->AddNode(Out.Threshold);
 		const FRoadNodeId X = Out.Net->AddNode(Out.XAt);
-		const FRoadNodeId E = Out.Net->AddNode(FVector2D(60000.0, 0.0));
+		const FRoadNodeId E = Out.Net->AddNode(FVector2D(FMath::Max(60000.0, Out.XAt.X + 40000.0), 0.0));
 		const FRoadNodeId T = Out.Net->AddNode(Out.XAt + FVector2D(20000.0, -20000.0));
 		Out.RW1 = Out.Net->AddStraightSegment(W, X, Runway);
 		Out.RW2 = Out.Net->AddStraightSegment(X, E, Runway);
@@ -370,7 +371,7 @@ namespace
 			// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree
 			// taxiway at (34000, -14000), 11000 uu away - inside FAnchorLink's reach.
 			UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-			Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(45000.0, -14000.0), 0.0);
+			Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
 			FAnchorLink::Build(*Out.Net);
 		}
 		return Out;
@@ -548,6 +549,58 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("no heading step beyond one tick's turn (worst %.3f deg at %.2f s, allowed %.3f)"),
 			FMath::RadiansToDegrees(WorstHeadingStep), WorstHeadingAt, FMath::RadiansToDegrees(HeadingStepAllowed)),
 		WorstHeadingStep <= HeadingStepAllowed);
+	return true;
+}
+
+#include "Model/LandingRun.h"
+
+/**
+ * THE AIRCRAFT THAT ROLLED STRAIGHT PAST ITS EXIT (PIE, 2026-09-06, the first build with
+ * arcs). The exit arc began between the distance the aircraft is actually slowed by and the
+ * margined "needed" figure, so it was ruled unusable; the junction's own node-end, 6000 uu
+ * further on, was not - and from there the only way off is along the runway to the next
+ * split and back through the hairpin. Two rules, both measured here: usability is judged at
+ * the raw slowed-by distance, and a node whose route begins along the strip is no exit.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalTakesTheArcNotTheJunctionTest,
+	"Airside.Model.ArrivalTakesTheArcNotTheJunction",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalTakesTheArcNotTheJunctionTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const double Raw = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach);
+	const double Needed = Raw * FLandingRun::LandingMargin;
+	// The junction 3000 past the margined figure: its arc starts 3000 SHORT of it, and well
+	// past the raw one.
+	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/true, Needed + 3000.0);
+	const double ArcStart = Needed + 3000.0 - A.ExitLength;
+	TestTrue(FString::Printf(TEXT("fixture: arc start %.0f lies between slowed-by %.0f and needed %.0f"), ArcStart, Raw, Needed),
+		ArcStart > Raw && ArcStart < Needed);
+
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	if (!TestTrue(FString::Printf(TEXT("the arrival is planned: %s"), *ArrivalPlanner::DescribeRefusal(Plan)), Plan.IsValid()))
+	{
+		return false;
+	}
+	double Miss = 0.0;
+	const FGuidelineNodeId SUp = ExitArcNodeNear(*A.Net, A.XAt - FVector2D(A.ExitLength, 0.0), Miss);
+	TestTrue(TEXT("the upstream arc start exists"), Miss < 1.0);
+	TestTrue(FString::Printf(TEXT("the exit is the arc start (vacating at %.0f, arc start %.0f, junction %.0f)"),
+			Plan.VacateAt, ArcStart, Needed + 3000.0),
+		Plan.Exit == SUp && FMath::Abs(Plan.VacateAt - ArcStart) < 1.0);
+
+	bool bAlongRunway = false;
+	for (const FRouteStep& Step : Plan.TaxiIn.Steps)
+	{
+		const FGuidelineEdge* Edge = A.Net->GetGuidelineEdge(Step.Edge);
+		bAlongRunway = bAlongRunway || (Edge && Edge->DerivedFrom.IsSet() && A.Net->IsRunwaySegment(Edge->DerivedFrom));
+	}
+	TestFalse(TEXT("the taxi-in never runs along the runway - it turns off, forward, at the arc"), bAlongRunway);
+	TestTrue(TEXT("and its first span heads down the runway, not back"),
+		Plan.TaxiIn.Polyline.Num() > 1
+		&& FVector2D::DotProduct(Plan.TaxiIn.Polyline[1] - Plan.TaxiIn.Polyline[0], FVector2D(1.0, 0.0)) > 0.0);
 	return true;
 }
 
