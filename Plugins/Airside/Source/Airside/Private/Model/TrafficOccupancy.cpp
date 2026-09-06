@@ -193,6 +193,25 @@ TSet<int32> FTrafficOccupancy::TakePreempted()
 	return Out;
 }
 
+void FTrafficOccupancy::ReleaseGuidelineClaims()
+{
+	// THE KIND IS THE WHOLE TEST, and it is asked of the RESOURCE rather than of the holder:
+	// a rebuild frees guideline slots for everybody at once, so this is not one agent giving
+	// something back - it is a set of resources ceasing to exist. See the header for why
+	// Surface is not one of them.
+	Claims.RemoveAllSwap([](const FTrafficClaim& C)
+	{
+		return C.Resource.Kind == ETrafficResourceKind::Edge
+			|| C.Resource.Kind == ETrafficResourceKind::Node;
+	});
+
+	// The preemption list goes with them. It names agents that must re-claim THIS tick
+	// because a rival took a reservation; nothing here was taken by a rival, and every agent
+	// re-claims on the next pass regardless, so a leftover entry would only buy a redundant
+	// second claim pass.
+	Preempted.Reset();
+}
+
 void FTrafficOccupancy::Clear()
 {
 	Claims.Reset();

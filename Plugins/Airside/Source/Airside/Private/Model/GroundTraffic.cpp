@@ -427,8 +427,9 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		int32 FromStep = 0;
 		if (Agent.Phase == EAgentPhase::Taxiing && Agent.Follower.Plan.Steps.Num() > 0)
 		{
-			// FROM THE STEP THE AGENT IS ON: everything behind it is line the follower has
-			// already walked and nothing will read again. See ReResolvePlan.
+			// FROM THE STEP THE AGENT IS ON. Its own from-node is re-pointed too - four
+			// readers still ask for that one every tick - and only the steps behind THAT are
+			// left with dead handles. See ReResolvePlan.
 			Plan = &Agent.Follower.Plan;
 			FromStep = CurrentStep(Agent.Follower.Plan, Agent.Follower.Travelled);
 		}
@@ -460,15 +461,25 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		}
 	}
 
-	// THE WHOLE TABLE, AFTER the re-resolution and not before it - see the header for why it
-	// goes at all. After, because the replans above take the congestion cost, and the claims
-	// on the guidelines that SURVIVED the rebuild by handle (every hand-drawn one) are real
-	// queues that a route out of a deleted taxiway should still be steered around.
-	Occupancy.Clear();
+	// THE GUIDELINE CLAIMS ONLY - NOT Clear(), which would take the runway holds with them.
+	// See the header, and FTrafficOccupancy::ReleaseGuidelineClaims for the reason the two
+	// kinds part company here. AFTER the re-resolution and not before it, because the replans
+	// above take the congestion cost, and claims on the guidelines that survived the rebuild
+	// by handle (every hand-drawn one) are real queues a route out of a deleted taxiway
+	// should still be steered around.
+	Occupancy.ReleaseGuidelineClaims();
+
+	// RE-RESOLVED EXCLUDES THE STRANDED. An agent whose ground was deleted was not
+	// re-resolved into anything - it was given up on - and counting it in both columns made
+	// the line read as though something had been salvaged.
+	LastRebuild.ReResolved = Considered - Stranded;
+	LastRebuild.Replanned = Replanned;
+	LastRebuild.Truncated = Truncated;
+	LastRebuild.Stranded = Stranded;
 
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Graph rebuilt: %d agents re-resolved, %d replanned, %d truncated, %d stranded"),
-		Considered, Replanned, Truncated, Stranded);
+		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
 }
 
 UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
@@ -480,14 +491,6 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	// ReplanAt. A bool parameter would say the same thing and could be passed wrongly; this
 	// cannot be out of step with the reference it describes.
 	const bool bDriving = (&Plan == &Agent.Follower.Plan);
-
-	// Defensive, and both callers already check: this function indexes Polyline off step
-	// vertices, and an out-of-range read here would be a crash in the middle of a rebuild
-	// rather than one stranded agent.
-	if (Plan.Steps.Num() == 0 || FromStep < 0 || FromStep >= Plan.Steps.Num())
-	{
-		return EReResolve::Intact;
-	}
 
 	auto Strand = [this, &Agent, &Plan](const TCHAR* Why)
 	{
@@ -508,9 +511,27 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Agent.Id);
 		}
 
+		// A STRANDING IS FINAL, and that is a deliberate v1 limitation rather than an oversight.
+		// Result is now Unreachable, so OnGraphRebuilt's own "!Plan->IsValid()" filter skips
+		// this agent on every LATER rebuild: even if the player rebuilds the very pavement
+		// that was deleted, nothing re-resolves it and it never drives again. Accepted because
+		// a stranded agent is by definition standing off any live line - there is no node
+		// within Rules.ResolveRadius of it - so "put it back" would mean choosing a place to
+		// teleport it to, and the honest answer is that the player retires it. The Warning
+		// above is what tells them there is something to retire.
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s"), Agent.Id, Why);
 		return EReResolve::Stranded;
 	};
+
+	// Defensive, and both callers already check: this function indexes Polyline off step
+	// vertices, and an out-of-range read here would be a crash in the middle of a rebuild.
+	// STRANDED rather than Intact, because a caller bug counted as a clean re-resolution is
+	// a defect that reports itself as success - and the summary line is where anybody would
+	// look for it.
+	if (Plan.Steps.Num() == 0 || FromStep < 0 || FromStep >= Plan.Steps.Num())
+	{
+		return Strand(TEXT("its plan is malformed: no steps, or a current step off the end of them"));
+	}
 
 	const double Radius = Rules.ResolveRadius;
 	const int32 FromVertex = (FromStep == 0) ? 0 : Plan.Steps[FromStep - 1].EndVertex;
@@ -527,11 +548,20 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		return Strand(TEXT("no live node holds the position its current step starts from"));
 	}
 
+	// THE NODE THE AGENT IS DRIVING AWAY FROM IS RE-POINTED, and it is not optional: four
+	// readers ask StepFromNode for it every tick - the crossing arm, the tail-node claim,
+	// RankAt, and ReplanAt's own Query.Start when the failed step is the current one. See
+	// this function's header for what each of them does with a dead handle. The last of those
+	// is why this line has to come BEFORE the replan below rather than after it: without it
+	// the search starts from a freed slot, returns NoStart, and the truncation that follows
+	// writes that same dead handle into GoalNode.
 	if (FromStep == 0)
 	{
-		// Start is what StepFromNode answers for step 0, and every replan below searches from
-		// that answer - so a stale Start would send the search off a freed handle.
 		Plan.Start = Prev;
+	}
+	else
+	{
+		Plan.Steps[FromStep - 1].To = Prev;
 	}
 
 	// The first step that could NOT be re-resolved, or the step count when every one could.

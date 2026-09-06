@@ -16,6 +16,15 @@ namespace
 		C.From = From; C.To = To; C.bOccupied = bOccupied; C.Rank = Rank;
 		return C;
 	}
+	FRoadSegmentId M2OccSurface(int32 Index) { FRoadSegmentId Id; Id.Index = Index; Id.Generation = 1; return Id; }
+
+	FTrafficClaim M2OccSurfaceClaim(int32 Agent, int32 Segment, bool bOccupied, int32 Rank)
+	{
+		FTrafficClaim C;
+		C.AgentId = Agent; C.Resource = FTrafficResource::OfSurface(M2OccSurface(Segment));
+		C.bOccupied = bOccupied; C.Rank = Rank;
+		return C;
+	}
 	FTrafficClaim M2OccNodeClaim(int32 Agent, int32 Node, bool bOccupied, int32 Rank)
 	{
 		FTrafficClaim C;
@@ -160,6 +169,52 @@ bool FTrafficOccupancyReleaseReservationsTest::RunTest(const FString& Parameters
 	TestFalse(TEXT("and so is the edge ahead"), Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(8)), 0));
 	TestTrue(TEXT("another agent's reservation is untouched"), Table.IsHeld(FTrafficResource::OfNode(M2OccNode(5)), 0));
 	TestEqual(TEXT("exactly the two reservations went"), Table.GetClaims().Num(), 3);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyReleaseGuidelineClaimsTest,
+	"Airside.Model.Occupancy.ReleaseGuidelineClaims",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficOccupancyReleaseGuidelineClaimsTest::RunTest(const FString& Parameters)
+{
+	// WHAT A GRAPH REBUILD GIVES BACK: every guideline handle, because the builder has just
+	// freed the nodes and edges those claims name, and NOT the runway segments, because a
+	// guideline rebuild does not touch the road model - the strip under an aeroplane is as
+	// real afterwards as before. Clear() was used here first and was wrong: it handed back an
+	// aircraft's runway hold, and ArrivalPlanner::Plan reads this table directly at
+	// DispatchArrival, BETWEEN ticks, so a landing could be cleared onto a crossing.
+	//
+	// EVERYBODY'S, not one agent's: a rebuild is resources ceasing to exist, not an agent
+	// giving something up, so two agents are held here to say so.
+	FTrafficOccupancy Table;
+	FTrafficClaim Blocker;
+	Table.TryClaim(M2OccNodeClaim(1, 3, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccEdgeClaim(1, 7, 0.0, 1000.0, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccEdgeClaim(1, 8, 0.0, 1000.0, /*bOccupied=*/false, 2), Blocker);
+	Table.TryClaim(M2OccSurfaceClaim(1, 2, /*bOccupied=*/true, 2), Blocker);
+	Table.TryClaim(M2OccNodeClaim(5, 9, /*bOccupied=*/false, 2), Blocker);
+	Table.TryClaim(M2OccSurfaceClaim(5, 4, /*bOccupied=*/false, 2), Blocker);
+
+	Table.ReleaseGuidelineClaims();
+
+	TestFalse(TEXT("the node an agent was STANDING on goes: the node itself no longer exists"),
+		Table.IsHeld(FTrafficResource::OfNode(M2OccNode(3)), 0));
+	TestFalse(TEXT("and the edge under its body"), Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(7)), 0));
+	TestFalse(TEXT("and the edge it had reserved"), Table.IsHeld(FTrafficResource::OfEdge(M2OccEdge(8)), 0));
+	TestFalse(TEXT("and another agent's node with them - this is not one agent releasing"),
+		Table.IsHeld(FTrafficResource::OfNode(M2OccNode(9)), 0));
+	TestTrue(TEXT("the runway an aircraft is OCCUPYING survives: a rebuild does not move it off the strip"),
+		Table.IsHeld(FTrafficResource::OfSurface(M2OccSurface(2)), 0));
+	TestTrue(TEXT("and so does a runway merely RESERVED, whoever holds it"),
+		Table.IsHeld(FTrafficResource::OfSurface(M2OccSurface(4)), 0));
+	TestEqual(TEXT("exactly the four guideline claims went"), Table.GetClaims().Num(), 2);
+
+	// AND Clear() STILL MEANS CLEAR. The two are different calls for different events, and a
+	// reader who found only one of them would reasonably assume it was the only one.
+	Table.Clear();
+	TestEqual(TEXT("Clear takes the surfaces too"), Table.GetClaims().Num(), 0);
 	return true;
 }
 

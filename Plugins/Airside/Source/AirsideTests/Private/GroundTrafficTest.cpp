@@ -747,6 +747,10 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	/** Set if anything re-arms the crossing after the FAR bar - the exit-side defect. */
 	bool bCrossingPastTheFarBar = false;
 
+	/** One injected graph rebuild, taken while the BODY is on the strip. See below. */
+	bool bRebuiltMidCrossing = false;
+	bool bStripHeldAcrossRebuild = false;
+
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
@@ -801,6 +805,24 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 			}
 		}
 
+		// A GRAPH REBUILD MID-CROSSING MUST NOT HAND THE STRIP BACK. Injected ONCE, on the
+		// first tick the body is actually on the asphalt, and asserted IMMEDIATELY - before
+		// any Advance can re-raise the claim, because "the next tick puts it back" is exactly
+		// the answer that is not good enough: ArrivalPlanner::Plan reads this table directly
+		// at DispatchArrival, between ticks, for as long as it takes a player to click.
+		// Nothing about the graph changes here, so the re-resolution itself is a no-op and
+		// what is under test is the RELEASE - Clear() drops this aeroplane's surface claim
+		// and ReleaseGuidelineClaims does not.
+		//
+		// At the END of the lambda so this tick's other measurements were all taken against
+		// the table the arbiter actually left behind.
+		if (!bRebuiltMidCrossing && Q->CrossingPhase == ECrossingPhase::OnStrip)
+		{
+			bRebuiltMidCrossing = true;
+			Traffic->OnGraphRebuilt(*Net);
+			bStripHeldAcrossRebuild = Traffic->GetOccupancy().IsHeld(Strip, 0);
+		}
+
 		// Well past the tail's clearance of the FAR BAR (23500, itself 3000 uu clear of the
 		// strip) and far short of the next route node (40000), so the two candidate release
 		// rules cannot both pass the assertions below.
@@ -838,6 +860,9 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 		bCrossingPastTheFarBar);
 	TestTrue(FString::Printf(TEXT("and the hold ends with it, not at the next node 17000 uu away (%.0f)"), HoldEnded),
 		HoldEnded > 22000.0 && HoldEnded < 25000.0);
+	TestTrue(TEXT("the injected rebuild really did land while the body was on the strip"), bRebuiltMidCrossing);
+	TestTrue(TEXT("and it kept the strip held: a guideline rebuild frees guidelines, never surfaces"),
+		bStripHeldAcrossRebuild);
 	TestFalse(TEXT("and the strip is free afterwards"), Traffic->GetOccupancy().IsHeld(Strip, 0));
 	TestFalse(TEXT("with nothing left naming a crossing"), P->CrossingRunway.IsSet());
 	return true;
@@ -1401,13 +1426,43 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Van = Dispatch(*Net, *Traffic, A, C);
 		const FVector2D Before = Traffic->FindAgent(Van)->LastMotion.Position;
-		const FGuidelineEdgeId OldEdge = Traffic->FindAgent(Van)->Follower.Plan.Steps[1].Edge;
+		const FRoutePlan& Was = Traffic->FindAgent(Van)->Follower.Plan;
+		const FGuidelineEdgeId OldEdge = Was.Steps[1].Edge;
+
+		// RE-POINTED, NOT REPLACED - spec §6.1, and the thing every other case here would
+		// also pass without. An implementation that simply re-searched Start to Goal on each
+		// rebuild would satisfy "it arrives at C"; what it could not do is leave the polyline
+		// and the step boundaries bit for bit as they were, because a fresh search re-samples
+		// the curve and re-bases every EndDistance. These three numbers are that difference.
+		const int32 VertsWas = Was.Polyline.Num();
+		const int32 EndVertexWas = Was.Steps[1].EndVertex;
+		const double EndDistanceWas = Was.Steps[1].EndDistance;
+
 		Build(*Net, true, false, nullptr, nullptr);
 		TestNull(TEXT("the old handle is dead after the rebuild"), Net->GetGuidelineEdge(OldEdge));
 		Traffic->OnGraphRebuilt(*Net);
+
+		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+		TestEqual(TEXT("the van was re-resolved"), Summary.ReResolved, 1);
+		TestEqual(TEXT("and NOT replanned: identical geometry costs no search at all"), Summary.Replanned, 0);
+		TestEqual(TEXT("nor truncated"), Summary.Truncated, 0);
+		TestEqual(TEXT("nor stranded"), Summary.Stranded, 0);
+
 		Traffic->Advance(0.05, Net);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		TestNotNull(TEXT("step 1's edge handle is live again"), Net->GetGuidelineEdge(V->Follower.Plan.Steps[1].Edge));
+
+		// THE NODE THE CURRENT STEP LEAVES FROM. The van is on step 0 here, so StepFromNode
+		// answers Plan.Start - and four things read it every tick: the crossing arm, the
+		// tail-node claim, RankAt, and a replan's own Query.Start. A dead handle there is
+		// silent in all four.
+		TestNotNull(TEXT("and so is the node the current step leaves from (Plan.Start at step 0)"),
+			Net->GetGuidelineNode(V->Follower.Plan.Start));
+
+		TestEqual(TEXT("the polyline was not re-sampled: same point count"), V->Follower.Plan.Polyline.Num(), VertsWas);
+		TestEqual(TEXT("step 1 still ends at the same polyline vertex"), V->Follower.Plan.Steps[1].EndVertex, EndVertexWas);
+		TestEqual(TEXT("and at the same route distance, so Travelled still means what it did"),
+			V->Follower.Plan.Steps[1].EndDistance, EndDistanceWas, 1e-9);
 		TestTrue(TEXT("position moved by at most one tick across the rebuild"), FVector2D::Distance(V->LastMotion.Position, Before) <= 1000.0 * 0.05 + 1.0);
 		M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
 		TestEqual(TEXT("arrives"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
@@ -1486,6 +1541,62 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			TestNotNull(TEXT("and the goal it will search back to is live"), Net->GetGuidelineNode(P->GoalNode));
 			TestEqual(TEXT("nothing stranded it: it is still Arriving"), P->Phase, EAgentPhase::Arriving);
 		}
+	}
+	// Case 5: the edge the agent is ON is deleted and the way round leaves from the node
+	// BEHIND it. Cases 2 and 3 both fail at a step AHEAD of the agent, so their replan starts
+	// from a node this function had already re-pointed on its way past. Here the failed step
+	// IS the current one, so the replan's Query.Start is StepFromNode of the current step -
+	// Steps[0].To, the node the agent has driven away from - and if a rebuild leaves that
+	// naming a freed slot the search answers NoStart, the replan fails for a reason that has
+	// nothing to do with the graph, and the truncation that follows writes the same dead
+	// handle into GoalNode. Three other readers of that node fail as quietly: the crossing
+	// arm, the tail-node claim and RankAt.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle),
+			M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+
+		// PAST B. 30 s at Accel 100 to a cap of 1000 is 25000 uu - comfortably past B at
+		// 20000, so the agent is on step 1, and well short of the braking point for C at
+		// 37500, so it is still at cruise.
+		M2TrafficRun(*Traffic, *Net, 30.0, [](int32) { return true; });
+		const double Travelled = Traffic->FindAgent(Van)->Follower.Travelled;
+		const FVector2D WasAt = Traffic->FindAgent(Van)->LastMotion.Position;
+		if (!TestTrue(FString::Printf(TEXT("the van is ON step 1, past B (%.0f uu)"), Travelled),
+			Travelled > 20000.0 && Travelled < 37000.0)) { return false; }
+
+		Build(*Net, false, true, nullptr, nullptr);      // B->C gone, B->D->C in its place
+		Traffic->OnGraphRebuilt(*Net);
+
+		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+
+		// ONE TICK BEFORE THE POSITION IS READ: LastMotion is only written by Advance, so
+		// reading it straight after the rebuild would report where the agent was BEFORE, and
+		// the figure this line exists to record is the discontinuity the replan costs. The
+		// agent keeps Travelled across the splice, and past the splice point that same route
+		// distance now names a point on the bypass - so it steps sideways once, by design,
+		// because the line it was on has been deleted out from under it.
+		Traffic->Advance(0.05, Net);
+		const FRoadAgent* V = Traffic->FindAgent(Van);
+		UE_LOG(LogM2TrafficTest, Log,
+			TEXT("GraphRebuild under-the-agent measured: was at %.0f uu (%.0f, %.0f), one tick after the ")
+			TEXT("replan (%.0f, %.0f) - %.0f uu sideways; %d replanned, %d truncated, %d stranded"),
+			Travelled, WasAt.X, WasAt.Y, V->LastMotion.Position.X, V->LastMotion.Position.Y,
+			FVector2D::Distance(WasAt, V->LastMotion.Position),
+			Summary.Replanned, Summary.Truncated, Summary.Stranded);
+
+		TestEqual(TEXT("the pavement under it went and it REPLANNED round it"), Summary.Replanned, 1);
+		TestEqual(TEXT("rather than truncating back to the node behind - which is what a dead from-node forces"),
+			Summary.Truncated, 0);
+		TestEqual(TEXT("and it was not stranded"), Summary.Stranded, 0);
+		TestNotNull(TEXT("the node the replan started from is live"), Net->GetGuidelineNode(V->Follower.Plan.Steps[0].To));
+		TestNotNull(TEXT("and so is the goal it searched to"), Net->GetGuidelineNode(V->GoalNode));
+
+		M2TrafficRun(*Traffic, *Net, 150.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TestEqual(TEXT("and it arrives"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
+		TestTrue(TEXT("at C"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 10.0);
 	}
 	return true;
 }

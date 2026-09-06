@@ -165,6 +165,25 @@ struct AIRSIDE_API FTrafficOccupancy
 
 	const TArray<FTrafficClaim>& GetClaims() const { return Claims; }
 
+	/**
+	 * Drops every EDGE and NODE claim, whoever holds it, and KEEPS every SURFACE claim.
+	 *
+	 * What a guideline rebuild releases - see UGroundTraffic::OnGraphRebuilt. The distinction
+	 * is the whole point of having this beside Clear(). An edge and a node are guideline
+	 * handles, and the builder frees every derived one of them: those claims name resources
+	 * that have stopped existing, and no agent can re-claim them because the routes naming
+	 * them have been re-pointed at other handles. A SURFACE is an FRoadSegmentId - the road
+	 * model, which a guideline rebuild does not regenerate at all - so a runway an aeroplane
+	 * is standing on is exactly as real after the rebuild as before it.
+	 *
+	 * DROPPING SURFACE CLAIMS WOULD RE-OPEN THE WINDOW TASK 7 CLOSED. ArrivalPlanner::Plan
+	 * reads this table directly at DispatchArrival, BETWEEN ticks, so an aircraft mid-crossing,
+	 * rolling out or lined up would show its strip free for as long as it took the player to
+	 * click, and a landing could be cleared onto it. Clear() is still the right call for a
+	 * session ending; this one is the right call for a graph changing under a running airport.
+	 */
+	void ReleaseGuidelineClaims();
+
 	/** Agents whose reservation was removed by a preemption since the last call; clears. */
 	TSet<int32> TakePreempted();
 

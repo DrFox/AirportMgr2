@@ -48,6 +48,26 @@ struct AIRSIDE_API FTrafficRules
 };
 
 /**
+ * What one UGroundTraffic::OnGraphRebuilt did. Read by the test that pins spec §6.1's
+ * "re-pointed, not replaced": every case of Airside.Model.Traffic.GraphRebuild would also
+ * pass on an implementation that simply re-searched Start to Goal on every rebuild, and the
+ * difference between the two is a REPLAN COUNT of zero - which is a number, not a shape, and
+ * so needs an accessor rather than an assertion about geometry.
+ *
+ * NOT reflected and not a UPROPERTY: it is bookkeeping about the last call, nothing in the
+ * simulation branches on it, and an agent list that never reaches disk cannot leave a
+ * meaningful summary behind for a later session.
+ */
+struct FGraphRebuildSummary
+{
+	/** Agents whose plan was re-resolved, stranded ones EXCLUDED - see the log line. */
+	int32 ReResolved = 0;
+	int32 Replanned = 0;
+	int32 Truncated = 0;
+	int32 Stranded = 0;
+};
+
+/**
  * Every agent under way, the reservation table, and the tick that arbitrates between
  * them. Spec 2026-09-06 §2.2, §3.
  *
@@ -187,11 +207,23 @@ public:
 	 * longer has a node within Rules.ResolveRadius is stranded - the pavement under it was
 	 * deleted, and nothing this class can do puts it back on a line.
 	 *
-	 * THEN THE WHOLE TABLE IS CLEARED. Every claim in it is keyed on a slot the builder has
-	 * already freed, and a freed slot is re-issued to a DIFFERENT node on the next rebuild -
-	 * so a surviving claim would not merely be stale, it would silently name somebody else's
-	 * pavement. Everyone re-claims on the next tick, which is safe because Advance arbitrates
-	 * BEFORE it moves anything: there is no frame in which an agent drives on an empty table.
+	 * THEN THE GUIDELINE CLAIMS GO AND THE SURFACE CLAIMS STAY - FTrafficOccupancy::
+	 * ReleaseGuidelineClaims, not Clear(). The reason is NOT that a stale handle could name
+	 * new pavement: handles are generation-checked, so a claim on a freed slot simply matches
+	 * nothing. It is that the RESOURCES those claims name have stopped existing - every
+	 * derived node and edge was freed - and no agent will ever re-claim them, because the
+	 * routes that named them have just been re-pointed at other handles. They would sit in
+	 * the table for the rest of the session.
+	 *
+	 * A SURFACE IS NOT ONE OF THEM. FRoadSegmentId is the road model, which a guideline
+	 * rebuild does not regenerate, so the strip under an aeroplane is as real afterwards as
+	 * before - and ArrivalPlanner::Plan reads this table directly at DispatchArrival, between
+	 * ticks. Dropping those claims would show a crossing, a roll-out or a line-up as a free
+	 * runway for as long as it took the player to click: the window Task 7 closed.
+	 *
+	 * Everyone re-claims their guidelines on the next tick, which is safe because Advance
+	 * arbitrates BEFORE it moves anything - there is no frame in which an agent drives on a
+	 * table it has not claimed in.
 	 *
 	 * AIRCRAFT TOO, unlike dispatch-time routing (spec §4): a route fixed at clearance is
 	 * still a route over pavement, and pavement the player has just deleted is not something
@@ -270,6 +302,9 @@ public:
 	/** Id of the last agent whose deadlock replan SUCCEEDED, or 0 if none ever has. */
 	int32 GetLastResolvedAgentForTest() const { return LastResolvedAgent; }
 
+	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
+	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
+
 private:
 	/**
 	 * Runtime only, and deliberately not part of URoadNetwork. An agent is a thing part way
@@ -303,6 +338,9 @@ private:
 
 	/** Deadlock lines emitted, resolved and unresolvable alike. Test-facing, as above. */
 	int32 DeadlockLogLines = 0;
+
+	/** What the last OnGraphRebuilt did. Test-facing, as above. */
+	FGraphRebuildSummary LastRebuild;
 
 	/** Assigns the id, stores the agent, announces Gone -> its phase. The one place all three happen. */
 	int32 Admit(FRoadAgent&& Agent);
@@ -463,12 +501,25 @@ private:
 	/**
 	 * Re-points Plan's steps from FromStep onward at the rebuilt graph. See OnGraphRebuilt.
 	 *
-	 * FromStep IS THE FIRST STEP THE AGENT HAS NOT FINISHED, and everything behind it is
-	 * left exactly as it is: those steps name dead handles for ever, and that is correct,
-	 * because nothing ever reads them again - the follower walks the polyline, and the
-	 * arbiter only ever asks about the step the agent is on and the ones ahead. Re-resolving
-	 * driven steps would be work whose only effect could be to change a number the agent has
-	 * already passed.
+	 * FromStep IS THE FIRST STEP THE AGENT HAS NOT FINISHED, and the steps behind it keep
+	 * their dead handles - with ONE exception that is not optional. The node the current step
+	 * LEAVES FROM is Steps[FromStep-1].To (or Plan.Start at step 0), it is what StepFromNode
+	 * answers, and FOUR live readers ask for it every tick:
+	 *
+	 *   - ClaimAhead's crossing arm, which asks whether that node carries a HoldShortFor bar.
+	 *     A dead handle reads as no bar, so no crossing would ever arm again after a rebuild;
+	 *   - ClaimAhead's tail-node claim, OfNode(From), held while the body is still within
+	 *     Footprint/2 of it. On a dead handle that claim protects nothing and the junction
+	 *     BEHIND the agent is open for somebody to drive into;
+	 *   - RankAt, which falls back to the class order when the node cannot be found - so a
+	 *     node's PriorityOverride would silently stop applying;
+	 *   - ReplanAt's Query.Start when the failed step IS the current one, where a dead handle
+	 *     gives ERouteResult::NoStart - so that replan could never succeed, and the truncation
+	 *     that followed would write the same dead handle into GoalNode.
+	 *
+	 * So this function re-points that one node as soon as it has resolved it. Steps further
+	 * back are genuinely never read again - the follower walks the polyline - and are left
+	 * alone, because re-resolving them could only change numbers the agent has already passed.
 	 *
 	 * Applied to Follower.Plan from CurrentStep for a Taxiing agent, and to TaxiInPlan from
 	 * 0 for an Arriving one - the route it will fly when it vacates, which no follower is on
