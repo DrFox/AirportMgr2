@@ -4,9 +4,13 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+// ".RightOfWay", not the bare "Airside.Model.Traffic" this was: UE's automation tree drops
+// a bare-named test the moment a DOTTED CHILD of that name exists (Airside.Model.Traffic.
+// NodeYield, added in M2 task 5), so the two cannot both be registered. The class name is
+// unchanged - only the tree path moved.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadTrafficTest,
-	"Airside.Model.Traffic",
+	"Airside.Model.Traffic.RightOfWay",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FRoadTrafficTest::RunTest(const FString& Parameters)

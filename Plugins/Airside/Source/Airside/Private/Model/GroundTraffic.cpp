@@ -16,6 +16,38 @@ double FTrafficRules::GapFor(ETraversalClass Class) const
 	return Class == ETraversalClass::Aircraft ? AircraftGap : VehicleGap;
 }
 
+namespace
+{
+	/**
+	 * One thing an agent wants this tick, plus what the REFUSAL rule needs to know about it.
+	 *
+	 * The step geometry travels with the claim rather than being re-derived at the refusal,
+	 * because the refusal has to answer "how far may this agent go" in ROUTE distance while
+	 * the claim itself is in EDGE distance, and the map between them (which step, how long,
+	 * which way round) is exactly these fields. Re-deriving it from the blocker would mean a
+	 * second reading of the same step - the thing this codebase calls a second evaluator.
+	 */
+	struct FWantedClaim
+	{
+		FTrafficClaim Claim;
+
+		/** Index into Plan.Steps this claim was raised for. Becomes FRoadAgent::BlockedStep. */
+		int32 Step = INDEX_NONE;
+
+		/** True for the node at the END of Step; false for an edge or the node it left. */
+		bool bEndNode = false;
+
+		/** True when Step is shorter than Footprint + Gap AND the agent has not entered it -
+		 *  the box-junction entry case, which stops the agent short of the box's START. */
+		bool bBoxEntry = false;
+
+		double StepStart = 0.0;
+		double StepEnd = 0.0;
+		double EdgeLength = 0.0;
+		bool bReversed = false;
+	};
+}
+
 int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector2D& Near,
 	const FAirframe& Airframe, double ShutdownPauseSeconds)
 {
@@ -119,6 +151,12 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 
 void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const
 {
+	// CLEARED FIRST, and before every early return below. RedirectAgent sends an EXISTING
+	// agent along a new plan: one that had been armed for a runway and is now sent to a
+	// stand would otherwise keep the old chain and hold that runway against everybody for
+	// the rest of the session.
+	Agent.DepartureRunway.Reset();
+
 	// DOES THIS ROUTE END ON A RUNWAY? Asked here rather than by the tool, because the answer
 	// is a fact about the network and the last polyline point is the only thing that knows
 	// where the route actually finished. A route that ends anywhere else simply taxis, which
@@ -243,10 +281,20 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 {
 	SimSeconds += DeltaSeconds;
 
+	// CLAIMS FIRST, MOTION SECOND. Every agent's StopWithin is decided before any of them
+	// moves, so a node taken by the first agent in the order is already taken when the last
+	// one asks. Interleaving the two - arbitrate one agent, move it, arbitrate the next -
+	// would let the agent at the end of the list drive into a junction that was free when
+	// it was asked about and occupied by the time it got there.
+	if (Network != nullptr)
+	{
+		Arbitrate(*Network);
+	}
+
 	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
-	// the phase, drop an agent once it says Gone. Arbitration slots in ahead of it (Task 5)
-	// and the deadlock pass behind it (Task 8); neither touches this order.
+	// the phase, accrue the stall clock, drop an agent once it says Gone. The deadlock pass
+	// that READS that clock is still Task 8 and does not touch this order.
 	for (int32 Index = Agents.Num() - 1; Index >= 0; --Index)
 	{
 		FRoadAgent& Agent = Agents[Index];
@@ -267,9 +315,364 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			continue;
 		}
 
+		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause
+		// is not stalled, and neither is one crawling through a turn. All three conditions
+		// together are what the deadlock pass (Task 8) means by a waiter, and the clock
+		// resets the moment any of them stops holding, so a junction wait that clears on its
+		// own leaves nothing behind.
+		Agent.StalledSeconds = (Agent.Phase == EAgentPhase::Taxiing && Agent.WaitingOn != 0
+			&& Agent.Follower.Speed < KINDA_SMALL_NUMBER)
+			? Agent.StalledSeconds + DeltaSeconds
+			: 0.0;
+
 		if (Agent.Phase != Before)
 		{
 			OnAgentPhaseChanged.Broadcast(Id, Before, Agent.Phase);
+		}
+	}
+}
+
+int32 UGroundTraffic::CurrentStep(const FRoutePlan& Plan, double Travelled)
+{
+	for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+	{
+		if (Travelled < Plan.Steps[Index].EndDistance)
+		{
+			return Index;
+		}
+	}
+
+	// Past the end of the last step - an agent that has arrived, or one a rounding error
+	// put a fraction beyond its final EndDistance. The last step is still the one it is on;
+	// returning Steps.Num() would index off the end at every call site.
+	return FMath::Max(0, Plan.Steps.Num() - 1);
+}
+
+double UGroundTraffic::StepStart(const FRoutePlan& Plan, int32 Step)
+{
+	return Step <= 0 ? 0.0 : Plan.Steps[Step - 1].EndDistance;
+}
+
+FGuidelineNodeId UGroundTraffic::StepFromNode(const FRoutePlan& Plan, int32 Step)
+{
+	return Step <= 0 ? Plan.Start : Plan.Steps[Step - 1].To;
+}
+
+int32 UGroundTraffic::RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const
+{
+	const FGuidelineNode* Found = Network.GetGuidelineNode(Node);
+	if (Found != nullptr && Found->PriorityOverride.Num() > 0)
+	{
+		// Scaled by ten so an authored order can never tie with a default one - a tie keeps
+		// the holder, and an authored "vehicles first" that tied would mean nothing. A class
+		// the author left out of the list ranks below everything named in it.
+		const int32 Index = Found->PriorityOverride.Find(Class);
+		return Index == INDEX_NONE ? 0 : 10 * (Found->PriorityOverride.Num() - Index);
+	}
+	return TraversalPriority(Class);
+}
+
+void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
+{
+	// NOT TAXIING: hold the runway and nothing else. An arrival on the roll and a departure
+	// lining up own the strip; whatever either held on the taxiway before the handover is
+	// released here, which is what makes "Vacated releases the chain" fall out of the tick
+	// rather than needing a call of its own.
+	if (Agent.Phase != EAgentPhase::Taxiing)
+	{
+		TArray<FTrafficResource> Surfaces;
+		Surfaces.Reserve(Agent.RunwayHeld.Num());
+		for (const FRoadSegmentId Segment : Agent.RunwayHeld)
+		{
+			Surfaces.Add(FTrafficResource::OfSurface(Segment));
+		}
+		Occupancy.ReleaseExcept(Agent.Id, Surfaces);
+
+		for (const FTrafficResource& Resource : Surfaces)
+		{
+			FTrafficClaim Claim;
+			Claim.AgentId = Agent.Id;
+			Claim.Resource = Resource;
+			Claim.bOccupied = true;
+			Claim.Rank = TraversalPriority(Agent.Class);
+
+			// The result is not acted on: an aircraft already rolling cannot be told to stop
+			// by a table, and DispatchArrival refused the landing at the door if the chain
+			// was held (see ArrivalPlanner::Plan). Who is allowed onto a runway NEXT is
+			// URunwaySequencer's question in M3, asked before anything is dispatched.
+			FTrafficClaim Blocker;
+			Occupancy.TryClaim(Claim, Blocker);
+		}
+		return;
+	}
+
+	const FRoutePlan& Plan = Agent.Follower.Plan;
+	if (!Plan.IsValid() || Plan.Steps.Num() == 0)
+	{
+		// Nothing to walk, so nothing to hold. Released rather than left alone: an agent
+		// whose plan was replaced by an invalid one would otherwise keep its last claims
+		// for the rest of the session.
+		const TArray<FTrafficResource> Nothing;
+		Occupancy.ReleaseExcept(Agent.Id, Nothing);
+		Agent.StopWithin = TNumericLimits<double>::Max();
+		Agent.WaitingOn = 0;
+		Agent.BlockedStep = INDEX_NONE;
+		return;
+	}
+
+	const double T = Agent.Follower.Travelled;
+	const double F = Rules.FootprintFor(Agent.Class);
+	const double G = Rules.GapFor(Agent.Class);
+
+	// The follower's own braking figure, not the rules': the window has to be the distance
+	// THIS airframe needs, or an agent reserves less line than it can stop in.
+	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Follower.Ground.Taxi.Decel);
+	const double Window = Agent.Follower.Speed * Agent.Follower.Speed / (2.0 * Decel) + G;
+
+	// HALF the footprint each way, because Travelled is the CENTRE, and the window is
+	// measured from the NOSE - which is what FTrafficRules::AircraftGap already says the gap
+	// is ("clear line kept ahead of the nose"), and what makes spec §3.2's "a stopped agent
+	// still holds Footprint + Gap" arithmetically true: F/2 + F/2 + G.
+	//
+	// THE F/2 AHEAD IS NOT COSMETIC. Without it a stopped agent holds exactly up to the
+	// boundary it was told to stop G short of - the two touch, half-open intervals do not
+	// conflict when they touch, so it is GRANTED, accelerates, grows its window by the very
+	// next tick, is refused, brakes to a stop, and is granted again. Measured on the head-on
+	// fixture before this line existed: 2496 "Agent N resumes" lines in one test run, every
+	// waiter flickering between waiting and clear every tick. That flicker also resets
+	// StalledSeconds every other tick, which would have left Task 8's deadlock detection
+	// unable to see a single stalled agent.
+	const double Head = T + F * 0.5 + Window;
+	const double Tail = T - F * 0.5;
+	const int32 Current = CurrentStep(Plan, T);
+
+	TArray<FWantedClaim> Pending;
+	Pending.Reserve(4);
+
+	// 1. THE NODE THE CURRENT STEP LEFT, while the centre is still within half a footprint
+	// of it. Without this an agent that had just crossed a junction would release it with
+	// its tail still inside, and the next claimant would drive into that tail.
+	if (T - StepStart(Plan, Current) < F * 0.5)
+	{
+		const FGuidelineNodeId From = StepFromNode(Plan, Current);
+		FWantedClaim Want;
+		Want.Claim.AgentId = Agent.Id;
+		Want.Claim.Resource = FTrafficResource::OfNode(From);
+		Want.Claim.bOccupied = true;
+		Want.Claim.Rank = RankAt(Network, From, Agent.Class);
+		Want.Step = Current;
+		Want.StepStart = StepStart(Plan, Current);
+		Want.StepEnd = Plan.Steps[Current].EndDistance;
+		Pending.Add(Want);
+	}
+
+	// 2. Forward along the steps while the window still has distance left.
+	for (int32 Index = Current; Index < Plan.Steps.Num(); ++Index)
+	{
+		const FRouteStep& Step = Plan.Steps[Index];
+		const double Start = StepStart(Plan, Index);
+		if (Start >= Head)
+		{
+			break;
+		}
+		const double End = Step.EndDistance;
+		const double Length = End - Start;
+
+		// A BOX: an edge too short to stand on without still blocking the node behind it,
+		// which is what every junction turn path is. Spec §3.1.
+		const bool bBox = Length < F + G;
+
+		// Entry only: once the agent is INSIDE the box (T past its start) a refused end node
+		// stops it short of that node like any other. Extending the requirement through
+		// consecutive boxes was traced and deadlocks harder - see ClaimAhead's header.
+		const bool bBoxEntry = bBox && T <= Start;
+
+		const double Lo = FMath::Max(Tail, Start);
+		const double Hi = FMath::Min(Head, End);
+		if (Hi > Lo)
+		{
+			// Route distance to EDGE distance, measured from the edge's A end. A reversed
+			// step is walked from B, so its interval mirrors through the edge length - and
+			// the mirror swaps the ends, which is why From takes what Hi produced. Getting
+			// this backwards would give From > To, and a half-open interval that way round
+			// conflicts with nothing at all.
+			double From = Lo - Start;
+			double To = Hi - Start;
+			if (Step.bReversed)
+			{
+				From = Length - (Hi - Start);
+				To = Length - (Lo - Start);
+			}
+
+			FWantedClaim Want;
+			Want.Claim.AgentId = Agent.Id;
+			Want.Claim.Resource = FTrafficResource::OfEdge(Step.Edge);
+			Want.Claim.From = From;
+			Want.Claim.To = To;
+
+			// OCCUPIED on the step the agent is standing on - never preemptable, because
+			// nobody may be evicted from ground they are on. Everything beyond is a
+			// reservation a higher rank may take.
+			Want.Claim.bOccupied = (Index == Current);
+
+			// The node an edge leads INTO governs it: an authored "vehicles first" at a
+			// junction has to reach the approach, not just the junction itself. The step
+			// being stood on is ranked at the node it left, which is the one it is in.
+			Want.Claim.Rank = Index == Current
+				? RankAt(Network, StepFromNode(Plan, Current), Agent.Class)
+				: RankAt(Network, Step.To, Agent.Class);
+
+			Want.Step = Index;
+			Want.StepStart = Start;
+			Want.StepEnd = End;
+			Want.EdgeLength = Length;
+			Want.bReversed = Step.bReversed;
+			Pending.Add(Want);
+		}
+
+		// The runway surface an edge derived from a runway segment implies (spec §3.1) lands
+		// in Task 6, with the hold-short node below it.
+
+		if (End < Head || bBoxEntry)
+		{
+			FWantedClaim Want;
+			Want.Claim.AgentId = Agent.Id;
+			Want.Claim.Resource = FTrafficResource::OfNode(Step.To);
+
+			// Occupied only while the CENTRE is within half a footprint of the node, which
+			// is the same test the left-behind node above uses, read forwards.
+			Want.Claim.bOccupied = FMath::Abs(End - T) < F * 0.5;
+			Want.Claim.Rank = RankAt(Network, Step.To, Agent.Class);
+			Want.Step = Index;
+			Want.bEndNode = true;
+			Want.bBoxEntry = bBoxEntry;
+			Want.StepStart = Start;
+			Want.StepEnd = End;
+			Want.EdgeLength = Length;
+			Want.bReversed = Step.bReversed;
+			Pending.Add(Want);
+		}
+
+		// A node carrying HoldShortFor claims the chain it protects, so the stop is at the
+		// bar rather than at the runway edge (spec §3.1). Task 6.
+	}
+
+	// RELEASE BEFORE CLAIMING, with the WHOLE list: what is behind the agent is dropped and
+	// what is still wanted is left in place for TryClaim to update. Releasing everything and
+	// re-claiming was rejected - see ClaimAhead's header - because it opens a gap in front of
+	// the agent that a higher-ranked claimant can step into every single tick.
+	TArray<FTrafficResource> Wanted;
+	Wanted.Reserve(Pending.Num());
+	for (const FWantedClaim& Want : Pending)
+	{
+		Wanted.Add(Want.Claim.Resource);
+	}
+	Occupancy.ReleaseExcept(Agent.Id, Wanted);
+
+	const int32 WasWaitingOn = Agent.WaitingOn;
+	bool bHeld = false;
+
+	for (const FWantedClaim& Want : Pending)
+	{
+		FTrafficClaim Blocker;
+		if (Occupancy.TryClaim(Want.Claim, Blocker) == EClaimResult::Granted)
+		{
+			continue;
+		}
+
+		bHeld = true;
+		Agent.BlockedStep = Want.Step;
+
+		if (Want.Claim.Resource.Kind == ETrafficResourceKind::Edge)
+		{
+			// The blocker's NEAREST boundary ahead, back in route distance. On a reversed
+			// step the agent is walking the edge from B, so the near end of the blocker's
+			// interval is its To, mirrored.
+			const double Boundary = Want.bReversed
+				? Want.StepStart + (Want.EdgeLength - Blocker.To)
+				: Want.StepStart + Blocker.From;
+			Agent.StopWithin = FMath::Max(0.0, Boundary - T - G);
+		}
+		else if (Want.bEndNode)
+		{
+			// Refused at the ENTRY to a box: stop a gap short of the box's START, outside
+			// the junction, where this agent can still turn - never inside it, where nobody
+			// can and where it would block the node behind it as well.
+			Agent.StopWithin = Want.bBoxEntry
+				? FMath::Max(0.0, Want.StepStart - T - G)
+				: FMath::Max(0.0, Want.StepEnd - T - G);
+		}
+		else
+		{
+			// The node the agent is STANDING on, refused. It cannot stop short of where it
+			// already is, so the only honest answer is "do not move". Not expected: two
+			// agents occupying one node is the thing the claims above exist to prevent.
+			Agent.StopWithin = 0.0;
+		}
+
+		// ON THE TRANSITION ONLY. Logged every tick this would be one line per agent per
+		// frame, which is how a log stops being read at all.
+		if (WasWaitingOn != Blocker.AgentId)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d stops %.0f uu short of %s held by agent %d"),
+				Agent.Id, Agent.StopWithin, *Blocker.Resource.Describe(), Blocker.AgentId);
+		}
+		Agent.WaitingOn = Blocker.AgentId;
+
+		// STOP AT THE FIRST REFUSAL. Claiming past it would reserve line beyond a thing the
+		// agent has just been told it cannot pass, holding it against everybody else for a
+		// journey it is not making this tick.
+		break;
+	}
+
+	if (!bHeld)
+	{
+		Agent.StopWithin = TNumericLimits<double>::Max();
+		Agent.WaitingOn = 0;
+		Agent.BlockedStep = INDEX_NONE;
+		if (WasWaitingOn != 0)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d resumes"), Agent.Id);
+		}
+	}
+}
+
+void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
+{
+	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
+	// pass writes to the agents, so a copy would be arbitrating over stale ones.
+	TArray<int32> Order;
+	Order.Reserve(Agents.Num());
+	for (int32 Index = 0; Index < Agents.Num(); ++Index)
+	{
+		Order.Add(Index);
+	}
+	Order.Sort([this](int32 Left, int32 Right)
+	{
+		const int32 LeftRank = TraversalPriority(Agents[Left].Class);
+		const int32 RightRank = TraversalPriority(Agents[Right].Class);
+
+		// Ties to the lower id, which is first-to-be-dispatched. The per-node
+		// PriorityOverride does NOT reorder this pass: it changes who wins a contested
+		// resource (see RankAt), not who is asked first, and a per-node rule cannot decide a
+		// global order without asking every node about every agent.
+		return LeftRank != RightRank ? LeftRank > RightRank : Agents[Left].Id < Agents[Right].Id;
+	});
+
+	for (const int32 Index : Order)
+	{
+		ClaimAhead(Agents[Index], Network);
+	}
+
+	// ONE RE-PASS over whoever lost a reservation to a higher rank during that pass. Without
+	// it a preempted agent drives a whole frame on a reservation it no longer holds - into
+	// the very node that was just taken from it.
+	for (const int32 AgentId : Occupancy.TakePreempted())
+	{
+		const int32 Index = FindIndex(AgentId);
+		if (Index != INDEX_NONE)
+		{
+			ClaimAhead(Agents[Index], Network);
 		}
 	}
 }

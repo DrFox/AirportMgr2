@@ -10,7 +10,7 @@
 class URoadNetwork;
 
 /**
- * The numbers the arbiter works with. Spec 2026-09-06 2.3.
+ * The numbers the arbiter works with. Spec 2026-09-06 §2.3.
  *
  * Footprint and gap live HERE, per class, and not on FAirframe: the airframe has no
  * length figure today, and a second copy of a performance number is the drift this
@@ -49,7 +49,7 @@ struct AIRSIDE_API FTrafficRules
 
 /**
  * Every agent under way, the reservation table, and the tick that arbitrates between
- * them. Spec 2026-09-06 2.2, 3.
+ * them. Spec 2026-09-06 §2.2, §3.
  *
  * Pattern: Mediator - the one UAirsideTraffic was, moved down a layer. It moved because the
  * milestone's three tests ("two agents converge on a node; one yields", and the rest) must
@@ -123,7 +123,7 @@ public:
 	 * Sends an EXISTING agent along a new plan, keeping its id and its class.
 	 *
 	 * The seam AirportOps composes "go to the stand, dwell, return to the depot" from
-	 * (spec 2.0, amended by the M1 plan): DispatchAgent, then on the Parked event wait the
+	 * (spec §2.0, amended by the M1 plan): DispatchAgent, then on the Parked event wait the
 	 * dwell on the sim clock, then this, then RetireAgent on the second Parked. Dwell lives
 	 * with the job, not here, because how long a fuel truck stays is a fact about the fuel
 	 * job, and movement should not have to be told about jobs.
@@ -146,7 +146,15 @@ public:
 	void ClearAgents();
 
 	/**
-	 * One tick: arbitrate, advance every agent, resolve deadlocks, announce phase changes.
+	 * One tick, in this order: Arbitrate (see it) writes every agent's StopWithin, then
+	 * each agent advances under that cap, accrues StalledSeconds while it is stopped and
+	 * waiting, and announces any phase change - dropping the agent once it says Gone. The
+	 * deadlock pass that reads StalledSeconds is still Task 8 and is not called from here.
+	 *
+	 * ARBITRATION FIRST AND MOTION SECOND, never interleaved: a claim must be visible to
+	 * every agent before any of them moves on it, or the last agent in the list drives
+	 * through a node the first one took in the same frame.
+	 *
 	 * Network null means no arbitration - every agent drives as if alone, which is the
 	 * pre-M2 behaviour and what a caller with no graph yet gets.
 	 */
@@ -191,4 +199,78 @@ private:
 	 * "one struct per thing" rule exists to prevent.
 	 */
 	void ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const;
+
+	/**
+	 * One claim pass over every agent, highest rank first. Spec 2026-09-06 §3.4.
+	 *
+	 * Agents are ordered by TraversalPriority descending, then id ascending, and each
+	 * claims in turn, so a claim made by one is visible to every LATER agent in the same
+	 * frame. That order - not list order - is the whole of "the aircraft goes first when
+	 * both reach the node in one tick": list order would hand the node to whoever happened
+	 * to be dispatched first.
+	 *
+	 * Then ONE re-pass over Occupancy.TakePreempted(): an agent whose reservation was taken
+	 * from it by a higher-ranked claimant must find that out THIS tick, or it drives a frame
+	 * on a reservation it no longer holds. One pass and not a loop to fixed point - a second
+	 * preemption is a rank inversion the ordering above already forbids, and a loop would be
+	 * unbounded work per tick for a case that cannot arise.
+	 */
+	void Arbitrate(const URoadNetwork& Network);
+
+	/**
+	 * What one agent holds and reserves this tick, and how far it may go. Spec §3.1-§3.3.
+	 *
+	 * A Taxiing agent takes T = Travelled, F = footprint, G = gap, and a window
+	 * W = Speed^2 / (2 Decel) + G - braking distance plus the gap, so a fast agent reserves
+	 * far ahead and a stopped one still holds F/2 + G and keeps its place in a queue. It
+	 * then walks its remaining steps from Head = T + W back to Tail = T - F/2 (HALF the
+	 * footprint behind, because Travelled is the agent's CENTRE: a van 300 uu past a node
+	 * with a 500 uu footprint has cleared it) and asks for, in route order:
+	 *
+	 *   - the node the current step LEFT, while the centre is still within F/2 of it;
+	 *   - on each step the window touches, the edge interval [max(Tail, start),
+	 *     min(Head, end)] mapped into edge distance - mirrored through the edge length on a
+	 *     reversed step - occupied on the step it is standing on, reserved beyond;
+	 *   - that step's END node, once the window passes it; and, by the BOX-JUNCTION ENTRY
+	 *     RULE, at the moment the window reaches the START of a step shorter than F + G
+	 *     that the agent has not yet entered. A box is an edge the agent cannot stand on
+	 *     without still blocking the node behind it, which is every junction turn path, so
+	 *     it must be granted the far end before it commits to the near one.
+	 *
+	 * First refusal decides everything: WaitingOn is the blocker, BlockedStep the step, and
+	 * StopWithin the distance to G short of the refused thing - G short of the BOX's START
+	 * when the box was refused at entry, so the agent stops outside the junction where it
+	 * can still turn, rather than inside it where nobody can. All granted: StopWithin
+	 * unbounded, WaitingOn 0, BlockedStep -1.
+	 *
+	 * TWO ALTERNATIVES REJECTED, both traced by hand on the three-vehicle triangle:
+	 *
+	 *  - Release everything and re-claim. ReleaseExcept keeps what is still wanted, so
+	 *    first-to-reserve survives across ticks; an agent that dropped its holds and asked
+	 *    again would be a stranger to its own queue every frame, and any higher-ranked
+	 *    agent could step into the gap it had just opened in front of itself.
+	 *  - Extending the box requirement through every CONSECUTIVE short step. It deadlocks
+	 *    harder: an agent then refuses to move until a node two junctions ahead is free,
+	 *    and the agent holding that node is waiting on it. Spec §3.1 records the trace.
+	 *
+	 * A non-Taxiing agent claims only the runway segments in RunwayHeld, occupied, and
+	 * releases the rest: an arrival on the roll owns the strip and nothing on the taxiway.
+	 */
+	void ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network);
+
+	/**
+	 * Who goes first at Node. The node's PriorityOverride if it has one, else the class
+	 * order. Spec §3.3, §5.4.
+	 */
+	int32 RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const;
+
+	/** Route distance at which Step begins - the previous step's end, or 0. */
+	static double StepStart(const FRoutePlan& Plan, int32 Step);
+
+	/** The node Step leaves from: the previous step's To, or the plan's Start. */
+	static FGuidelineNodeId StepFromNode(const FRoutePlan& Plan, int32 Step);
+
+	/** Which step Travelled is on. The map from a distance to an edge, read off
+	 *  FRouteStep::EndDistance so it cannot disagree with the polyline the follower walks. */
+	static int32 CurrentStep(const FRoutePlan& Plan, double Travelled);
 };

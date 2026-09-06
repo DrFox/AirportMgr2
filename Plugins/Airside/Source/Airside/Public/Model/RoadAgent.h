@@ -128,7 +128,7 @@ struct AIRSIDE_API FRoadAgent
 	 *
 	 * A BOOL BESIDE THE STRUCT, not TOptional<FDepartureOrder>: TOptional is not
 	 * UHT-reflectable, and every FRoadAgent field must be a UPROPERTY because FRoadAgent
-	 * itself lives inside a UPROPERTY TArray (UAirsideTraffic::Agents) that only
+	 * itself lives inside a UPROPERTY TArray (UGroundTraffic::Agents) that only
 	 * serializes what UHT can see.
 	 */
 	UPROPERTY() bool bDepartureArmed = false;

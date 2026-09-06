@@ -107,7 +107,7 @@ public:
 	 * Sends an EXISTING agent along a new plan, keeping its id and its view.
 	 *
 	 * The seam AirportOps composes "go to the stand, dwell, return to the depot" from
-	 * (spec 2.0, amended by the M1 plan): DispatchAgent, then on the Parked event wait the
+	 * (spec §2.0, amended by the M1 plan): DispatchAgent, then on the Parked event wait the
 	 * dwell on the sim clock, then this, then RetireAgent on the second Parked. Dwell lives
 	 * with the job, not here, because how long a fuel truck stays is a fact about the fuel
 	 * job, and movement should not have to be told about jobs.

@@ -70,6 +70,12 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 	const FRoadAgent* Agent = Model->FindAgent(AgentId);
 	if (Agent == nullptr)
 	{
+		// A MISSING VIEW MUST NEVER BE SILENT. This is reached only if the model announced a
+		// phase change for an agent it no longer holds, which is a broken invariant rather
+		// than a situation - and the symptom on screen is an aeroplane that simply is not
+		// drawn, which no amount of staring at the level will explain.
+		UE_LOG(LogAirsideTraffic, Warning,
+			TEXT("Agent %d announced a phase change but is not in the model; no view spawned."), AgentId);
 		return;
 	}
 
@@ -80,6 +86,12 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		FVector::ZeroVector, FRotator::ZeroRotator, Params);
 	if (View == nullptr)
 	{
+		// SpawnActor declines rather than throwing (a world tearing down, a class that
+		// failed to load), and the model keeps simulating the agent regardless. Said out
+		// loud for the same reason as above: the alternative is an invisible aeroplane and
+		// nothing anywhere saying why.
+		UE_LOG(LogAirsideTraffic, Warning,
+			TEXT("Agent %d: SpawnActor returned null; model only, nothing to draw."), AgentId);
 		return;
 	}
 
