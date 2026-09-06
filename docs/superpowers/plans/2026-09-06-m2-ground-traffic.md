@@ -543,7 +543,7 @@ USTRUCT() struct AIRSIDE_API FTrafficOccupancy {
     void Clear();
 private: UPROPERTY() TArray<FTrafficClaim> Claims; TSet<int32> Preempted; };
 ```
-- Semantics of `TryClaim`: a claim by the same agent on the same resource REPLACES its old claim (Granted). Otherwise every conflicting claim is examined: if any is `bOccupied`, or has `Rank >= Claim.Rank`, the result is `Held` with that claim in `OutBlocker` and nothing changes. Else all conflicting claims are removed, their agents added to `Preempted`, the claim is added, `Granted`. Two edge claims conflict when `From < Other.To && Other.From < To` (half-open, so touching intervals do not conflict). Node and Surface claims on the same id always conflict.
+- Semantics of `TryClaim` (*corrected during execution, see ledger rulings; second correction: a claimant that is `bOccupied` preempts any NON-occupied holder regardless of rank — physical presence beats a reservation; two occupants still conflict*): a claim by the same agent on the same resource is an UPDATE — it is checked against every OTHER agent's claims exactly like a fresh claim, and only when granted overwrites the old claim in place; when held, the old claim stands. Unconditional replacement would grant a follower whose window grew into the leader's occupied interval. Every conflicting claim by another agent is examined: if any is `bOccupied`, or has `Rank >= Claim.Rank`, the result is `Held` with that claim in `OutBlocker` and nothing changes. Else all conflicting claims are removed, their agents added to `Preempted`, the claim is added, `Granted`. Two edge claims conflict when `From < Other.To && Other.From < To` (half-open, so touching intervals do not conflict). Node and Surface claims on the same id always conflict.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1767,12 +1767,12 @@ git add -A Plugins/Airside && git commit -m "refactor(airside): UGroundTraffic o
 - `Advance` calls `Arbitrate(*Network)` before the agent loop when `Network != nullptr`, and after the loop accrues `StalledSeconds`.
 - Test fixture (in `GroundTrafficTest.cpp`, anonymous namespace, `M2Traffic` prefix): `M2TrafficNode(Net, x, y)`, `M2TrafficJoin(Net, A, B, Direction = Bidirectional)`, `M2TrafficRoute(Net, A, B, Class)`, `M2TrafficVan()` (an `FAirframe` with `Ground` defaults but `MaxTurnRateDegPerSec = 90`, `Climb`/`Approach`/`Engine` unset, `Wingspan 0`), `M2TrafficPlane()` (`ResolveDefaultAirframe()` with `Climb` unset so nothing arms a departure), `M2TrafficRun(Traffic, Net, Seconds, Dt = 0.05, Callback)`.
 
-**Algorithm (`ClaimAhead`), spec §3.1–3.3.** For a `Taxiing` agent with a valid plan and at least one step; `T = Follower.Travelled`, `F = Rules.FootprintFor(Class)`, `G = Rules.GapFor(Class)`, `W = Speed²/(2·Ground.Taxi.Decel) + G`, `Head = T + W`, `Tail = T − F/2`, `s = CurrentStep(Plan, T)`. Build `Wanted` (resources) and claims in route order:
+**Algorithm (`ClaimAhead`), spec §3.1–3.3.** For a `Taxiing` agent with a valid plan and at least one step; `T = Follower.Travelled`, `F = Rules.FootprintFor(Class)`, `G = Rules.GapFor(Class)`, `W = Speed²/(2·Ground.Taxi.Decel) + G`, `Head = T + F/2 + W` (*corrected during execution: nose-based, spec §3.2; `T + W` made a stopped waiter flicker granted/held every tick*), `Tail = T − F/2`, `s = CurrentStep(Plan, T)`. Build `Wanted` (resources) and claims in route order:
 1. From-node of step `s` if `T − StepStart(s) < F/2`: node claim, occupied.
 2. For `i = s` while `i < Steps.Num()` and `StepStart(i) < Head`:
    - `Lo = max(Tail, StepStart(i))`, `Hi = min(Head, End(i))`; map to edge distance: `L = End(i) − StepStart(i)`; forward: `[Lo−Start, Hi−Start]`; reversed: `[L − (Hi−Start), L − (Lo−Start)]`. Occupied iff `i == s`. Rank = `RankAt(Network, Steps[i].To, Class)` (node rank governs the edge leading into it; for step `s` use the from-node's rank). Edge claim.
    - If the edge's `DerivedFrom` is a runway segment (Task 6).
-   - Box entry: `bBox = L < F + G`. Node `Steps[i].To` is wanted if `End(i) < Head`, OR (`bBox` and `Head ≥ StepStart(i)`). Node claim, occupied iff `|End(i) − T| < F/2`.
+   - Box entry: `bBox = L < F + G`. Node `Steps[i].To` is wanted if `End(i) < Head`, OR (`bBox` and `Head ≥ StepStart(i)` and `T ≤ StepStart(i)`) — *corrected during execution: for the FIRST box step the window reaches only; later boxes are ordinary steps*. Occupied entries are claimed first and unconditionally; the first-refusal short-circuit applies to reservations only. Node claim, occupied iff `|End(i) − T| < F/2`.
    - If node has `HoldShortFor` set (Task 6).
 3. Each claim in order: `TryClaim`. On `Held`: `WaitingOn = Blocker.AgentId`, `BlockedStep = i`, and `StopWithin`:
    - blocked EDGE interval: the blocker's nearest boundary ahead in edge distance mapped back to route distance (`Boundary = bReversed ? StepStart + (L − Blocker.To) : StepStart + Blocker.From`), `StopWithin = max(0, Boundary − T − G)`.
@@ -1897,7 +1897,12 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 		return !(P->Phase == EAgentPhase::Parked && V->Phase == EAgentPhase::Parked);
 	});
 
-	TestTrue(TEXT("the van was stopped short of the node (StopWithin reached 0)"), VanMinStopWithin < 1.0);
+	// *Corrected during execution (ledger ruling):* a yield is a speed drop while blocked,
+	// not necessarily a dead stop - a stop needs Gap + Footprint/2 >= braking distance, which
+	// this geometry does not give. Measured 335 of 1000 uu/s. The executor tracks
+	// VanMinSpeedWhileWaiting (min Speed on ticks where WaitingOn == Plane) instead.
+	TestTrue(TEXT("the van yielded: its speed fell below half its cap while waiting on the aircraft"),
+		VanMinSpeedWhileWaiting < 0.5 * Traffic->FindAgent(Van)->Follower.Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
 	TestTrue(FString::Printf(TEXT("never closer than the van's own footprint (%.0f uu)"), MinSeparation), MinSeparation >= Traffic->Rules.VehicleFootprint - 1.0);
@@ -1975,7 +1980,9 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 		const FRoadAgent* L = Traffic->FindAgent(Lead);
 		const FRoadAgent* Fo = Follow > 0 ? Traffic->FindAgent(Follow) : nullptr;
 		if (L == nullptr || Fo == nullptr) { return L != nullptr; }
-		if (L->Phase == EAgentPhase::Taxiing && Fo->Phase == EAgentPhase::Taxiing)
+		// *Corrected during execution:* sampled only once the follower is under way; the
+		// dispatch separation (205 uu measured) is taken before the arbiter is consulted.
+		if (L->Phase == EAgentPhase::Taxiing && Fo->Phase == EAgentPhase::Taxiing && Fo->Follower.Travelled > 0.0)
 		{
 			const double Gap = L->Follower.Travelled - Fo->Follower.Travelled;
 			MinGap = FMath::Min(MinGap, Gap);
@@ -2094,6 +2101,7 @@ git add -A Plugins/Airside && git commit -m "feat(airside): reservation window, 
 **Interfaces:** no new public names. Behaviour:
 - In `ClaimAhead` step 2, after the edge claim: `if (Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))`: for each segment of `Network.RunwayChain(Edge->DerivedFrom)`: Surface claim, occupied iff `i == s`. A refusal here: `StopWithin = max(0, StepStart(i) − T − G)`.
 - After the node claim: `if (Node->HoldShortFor.IsSet())`: for each segment of `Network.RunwayChain(Node->HoldShortFor)` (or just `HoldShortFor` if the chain is empty because the segment is no longer a runway): Surface claim, reserved (never occupied through a hold-short). A refusal: `StopWithin = max(0, End(i) − T − F/2)`.
+- *(Corrected during execution — spec §3.1 fourth route, see ledger):* an agent past a granted bar, or just vacated, sets `FRoadAgent::CrossingRunway` and holds the chain OCCUPIED until its tail passes a route node outside the strip (`URoadNetwork::IsGuidelineNodeOnRunway`). The Vacated handover sets `CrossingRunway` rather than releasing at the exit node. Original text follows.
 - In `Advance`'s agent loop: on `Before == Arriving && Phase == Taxiing`: `for seg in RunwayHeld: Occupancy.Release(Id, OfSurface(seg))` — add `void Release(int32 AgentId, const FTrafficResource&)` to `FTrafficOccupancy` (one-liner beside `ReleaseAll`); `RunwayHeld.Reset()`; `UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id)`. On `Before == Taxiing && Phase == Departing`: `RunwayHeld = DepartureRunway`.
 - Log at the hold-short: when `BlockedStep` changes to a hold-short refusal, `UE_LOG(... "Agent %d holding short at node %d for runway segment %d held by agent %d")`.
 

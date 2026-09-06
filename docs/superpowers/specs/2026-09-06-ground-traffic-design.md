@@ -206,6 +206,21 @@ it — the sample-once rule.
 
 `DispatchArrival` refuses with `RunwayOccupied` while the chain is held.
 
+*Amended 2026-09-06 during Task 6 review — a fourth route to the same rule.* The three above
+end exactly where the exposure begins: once an agent's tail passes the bar, the bar node
+leaves its window and the surface claim with it, while the agent is standing on the
+centreline; and a junction's turn paths carry no `DerivedFrom` (by design), so the crossing
+edges never imply the runway either. A landing could then be cleared onto an aircraft
+mid-crossing. So: **an agent that has passed a hold-short node, or has just vacated a
+landing, holds that runway's chain OCCUPIED until its tail is geometrically clear of the
+strip** — `FRoadAgent::CrossingRunway` names the chain's seed while it applies; it is set
+when the agent's centre passes a granted bar (and at the Vacated handover, in place of the
+immediate release), and cleared once the tail has passed a route node that lies outside the
+runway's half-width of its centreline (`URoadNetwork::IsGuidelineNodeOnRunway`). Geometry
+rather than a far-side bar, because a player may place one bar or none on the far side, and
+a hold that waits for a bar that does not exist never ends. Rejected: holding until the next
+node only — a runway node sits ON the strip, so that releases while the tail is still on it.
+
 ### 3.2 Window
 
 `Window = Speed² / (2 · Taxi.Decel) + Gap[Class]`. A stopped agent still holds
