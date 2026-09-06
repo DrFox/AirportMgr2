@@ -1,5 +1,6 @@
 #include "Build/RoadGuidelineBuilder.h"
 
+#include "AirsideLog.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -114,7 +115,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		SegmentId.Index = Index;
 		SegmentId.Generation = Segment.Generation;
 
-		const URoadProfile* Profile = Segment.Profile.Get();
+		// ProfileFor, NOT Segment.Profile - the THIRD reader to learn this. The solver and the
+		// mesh builder were pinned to the accessor when a reloaded level came back invisible;
+		// this builder was written afterwards and read the raw pointer, so the same reload
+		// came back PAVED but not ROUTABLE: every taxiway drawn, no centreline under any of
+		// them, every stand lead-in joining nothing, every arrival refused (M_Starter,
+		// 2026-09-06). The mesh hid the loss, which is why it survived two milestones.
+		const URoadProfile* Profile = Network.ProfileFor(Segment);
 		if (Profile == nullptr)
 		{
 			continue;
@@ -223,8 +230,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					continue;
 				}
 
-				const URoadProfile* FromProfile = FromSegment->Profile.Get();
-				const URoadProfile* ToProfile   = ToSegment->Profile.Get();
+				// Through the accessor for the same reason as the segment loop: a junction
+				// between two reloaded taxiways skipped its turn paths entirely.
+				const URoadProfile* FromProfile = Network.ProfileFor(*FromSegment);
+				const URoadProfile* ToProfile   = Network.ProfileFor(*ToSegment);
 				if (FromProfile == nullptr || ToProfile == nullptr)
 				{
 					continue;
@@ -489,5 +498,29 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			Network.RemoveGuidelineNode(Id);
 		}
+	}
+
+	// THE CENSUS. This builder logged nothing for the whole of its life, and the first
+	// "none of the routes are there in PIE" report (2026-09-06) could not be read off the
+	// log at all: the mesh census said 16 segments and the traffic said "no route to a
+	// stand", and everything between the two was a guess. One line per build, so the next
+	// such report is answered by a grep.
+	{
+		int32 NodesAlive = 0, HoldShort = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
+		for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
+		{
+			NodesAlive += Node.bAlive ? 1 : 0;
+			HoldShort += (Node.bAlive && Node.HoldShortFor.IsSet()) ? 1 : 0;
+		}
+		for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
+		{
+			if (!Edge.bAlive) { continue; }
+			++EdgesAlive;
+			Authored += Edge.bDerived ? 0 : 1;
+			TurnPaths += (Edge.bDerived && !Edge.DerivedFrom.IsSet()) ? 1 : 0;
+		}
+		UE_LOG(LogAirside, Log,
+			TEXT("Guidelines: %d nodes (%d hold-short), %d edges (%d hand-authored, %d turn paths), %d hold-short mark(s) on file"),
+			NodesAlive, HoldShort, EdgesAlive, Authored, TurnPaths, Network.GetHoldShortMarks().Num());
 	}
 }

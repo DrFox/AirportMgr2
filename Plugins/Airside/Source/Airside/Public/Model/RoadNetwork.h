@@ -70,7 +70,7 @@ public:
 	/**
 	 * The profile that governs Segment - its own, or DefaultProfile when it has none.
 	 *
-	 * THE ONLY WAY either the solver or the mesh builder should ask. They previously each
+	 * THE ONLY WAY the solver, the mesh builder or the guideline builder should ask. They previously each
 	 * tested Segment->Profile themselves and each treated null as "skip" - the solver by
 	 * taking zero half-widths, the builder by dropping the segment - so a null profile
 	 * produced a collapsed junction AND no ribbon, from two independent decisions that

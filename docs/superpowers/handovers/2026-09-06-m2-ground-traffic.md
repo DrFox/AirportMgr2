@@ -294,6 +294,17 @@ One line each; full reasoning and cost-if-wrong is in `rulings.md`.
 
 Triaged by the final review; none blocks the merge, each is a separate piece of work.
 
+- **A stand out of lead-in range is silent in-game.** PIE round 3 (2026-09-06): four stands
+  placed ~300 m from the nearest taxiway, facing away from it, joined nothing and nothing on
+  screen said so. `FAnchorLink::Build` now logs a `LogAirside` Warning per lead-in that
+  joins nothing (position, class, cast length, heading); the stand tool should show it -
+  a red lead-in ghost, or a refusal to place - so the player learns before an arrival is
+  refused for "no route to a stand".
+- **Vehicle anchors never join.** The taxiway profile declares only an aircraft centreline,
+  so every stand's five vehicle anchors are unjoined by construction (39 of 42 in that level).
+  Harmless until M4 ground vehicles; the Warning above will be noisy until then - demote or
+  filter by class when vehicle roads arrive.
+
 - **Bar-to-bar arming window.** A hand-drawn crossing with no on-strip node arms the hold
   only when the NOSE reaches the asphalt — a measured 250 uu committed-but-unheld window.
   Fix: arm when any polyline SPAN of the step leaving a bar intersects the runway SLAB,
@@ -321,6 +332,19 @@ Triaged by the final review; none blocks the merge, each is a separate piece of 
 undoable. Both open an `FRoadEditScope` and never call `Commit()` on it; a hand-drawn
 guideline link a player draws or removes cannot be undone. Found incidentally during Task 10
 (hold-short marks); out of M2 scope.
+
+### PIE round 3 (2026-09-06, editor-built level)
+
+"I built a simple runway and taxiway with stands in the editor, it loads, but none of the
+routes are in it when it runs in PIE." Root cause, read off `Airside.Probe.StarterMapRoutes`
+against the saved map: 14 of 16 segments reload with a null profile (the taxiway profile is
+transient; only runway profiles are assets), and `FRoadGuidelineBuilder` read `Segment.Profile`
+raw where the solver and mesh builder read `URoadNetwork::ProfileFor` - so the roads were paved
+and none had a centreline. Fixed by routing the builder (segment loop AND turn paths) through
+the accessor; `Airside.Build.GuidelineProfileFallback` pins it. The builder and the anchor
+linker now log a census per build (`LogAirside: Guidelines: ...`, `Anchor links: ...`) so the
+next such report is a grep. `Content/Maps/M_Starter.umap` is the user's level and was left
+uncommitted.
 
 ### Runtime verification (not done this session — no editor, no MCP)
 
