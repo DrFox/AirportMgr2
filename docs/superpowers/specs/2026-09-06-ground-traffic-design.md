@@ -232,6 +232,18 @@ bar leads ONTO the strip: its end node lies on the runway (`IsGuidelineNodeOnRun
 the agent's own centre already does. A bar whose step leads away from the strip is the
 exit bar and arms nothing.
 
+*Refined again 2026-09-06 during Task 8 review:* keyed on the BODY, not on nodes. A
+hand-drawn bar-to-bar edge with no node on the strip (parent spec R10 guarantees one only
+for generated crossings) armed ~half a footprint late and released with tail still on the
+runway. So the hold has a phase, `ECrossingPhase { None, Committed, OnStrip }`: Committed
+when the centre passes a bar whose step leads toward the strip (its end node on it, any
+sampled vertex of the step on it, or the nose point on it); OnStrip once the centre point
+is on it; released once OnStrip and the tail point is off it. Nose, centre and tail are
+`GuidelineGeom::PointAtDistance` on the one sampled polyline at `T ± Footprint/2` - never a
+second evaluator. The node-based clauses above survive only as the fallback for a polyline
+too short to sample. A phase, not two bools, because Committed-but-not-yet-on and
+On-but-tail-not-clear are the two states that must never be confused.
+
 ### 3.2 Window
 
 `Window = Speed² / (2 · Taxi.Decel) + Gap[Class]`. A stopped agent still holds
