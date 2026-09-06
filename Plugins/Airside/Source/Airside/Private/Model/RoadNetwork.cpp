@@ -141,31 +141,88 @@ const URoadProfile* URoadNetwork::ProfileFor(const FRoadSegment& Segment) const
 	return Segment.Profile != nullptr ? Segment.Profile.Get() : DefaultProfile.Get();
 }
 
-bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength) const
+bool URoadNetwork::IsRunwaySegment(FRoadSegmentId Segment) const
 {
-	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength);
+	const FRoadSegment* Found = GetSegment(Segment);
+	if (Found == nullptr || !Found->bAlive)
+	{
+		return false;
+	}
+	const URoadProfile* Profile = ProfileFor(*Found);
+	return Profile != nullptr && Profile->bContinuousThroughJunctions;
+}
+
+TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
+{
+	TArray<FRoadSegmentId> Out;
+	if (!IsRunwaySegment(Seed))
+	{
+		return Out;
+	}
+	Out.Add(Seed);
+
+	// The same walk RunwayExtentInternal makes, collecting segments instead of stopping
+	// at the ends: from each end of Seed, step through nodes that join exactly two runway
+	// segments, and stop at a threshold (one arm) or anything stranger (a fork).
+	auto WalkFrom = [this, &Out](FRoadNodeId At, FRoadSegmentId Along)
+	{
+		for (int32 Guard = 0; Guard < 1024; ++Guard)
+		{
+			const FRoadNode* Node = GetNode(At);
+			if (Node == nullptr)
+			{
+				return;
+			}
+			FRoadSegmentId Next;
+			int32 RunwayArms = 0;
+			for (const FRoadSegmentId& Incident : Node->Incident)
+			{
+				if (!IsRunwaySegment(Incident))
+				{
+					continue;
+				}
+				++RunwayArms;
+				if (Incident != Along)
+				{
+					Next = Incident;
+				}
+			}
+			if (RunwayArms != 2 || !Next.IsSet() || Out.Contains(Next))
+			{
+				return;
+			}
+			Out.Add(Next);
+			At = GetOtherEnd(Next, At);
+			Along = Next;
+		}
+	};
+
+	const FRoadSegment* SeedSegment = GetSegment(Seed);
+	WalkFrom(SeedSegment->A, Seed);
+	WalkFrom(SeedSegment->B, Seed);
+	return Out;
+}
+
+bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
+	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
+{
+	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength, OutSegment);
 }
 
 bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength) const
+	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
 {
 	// NO PROXIMITY TEST, and that is the difference between the two. RunwayExtentAt answers
 	// "is this point ON a runway", which a departure asks of the place its taxi ended and
 	// which must say no for the rest of the airport. This answers "which runway would you
 	// land on", which is asked of a click that is deliberately nowhere near one.
-	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength);
+	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength, OutSegment);
 }
 
 bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const
+	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
+	FRoadSegmentId* OutSegment) const
 {
-	auto IsRunway = [this](const FRoadSegment& Segment)
-	{
-		const URoadProfile* Profile = ProfileFor(Segment);
-		return Profile != nullptr && Profile->bContinuousThroughJunctions;
-	};
-
 	// The runway segment with an END nearest the query. Ends rather than centres: a threshold
 	// is an end, and a long runway's midpoint can be closer to a query than the end that
 	// actually matters.
@@ -174,7 +231,8 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegment& Segment = Segments[Index];
-		if (!Segment.bAlive || !IsRunway(Segment))
+		const FRoadSegmentId Id{Index, Segment.Generation};
+		if (!IsRunwaySegment(Id))
 		{
 			continue;
 		}
@@ -219,13 +277,19 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		}
 	}
 
+	if (OutSegment != nullptr)
+	{
+		OutSegment->Index = Best;
+		OutSegment->Generation = Segments[Best].Generation;
+	}
+
 	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
 	// else - a threshold, or a node with a taxiway on it - ends the walk in that direction.
 	//
 	// Tracked by the node WALKED FROM rather than the segment walked along, because a node's
 	// Incident list already holds segment handles and building one from an index would mean
 	// reconstructing a generation counter that the slot map owns.
-	auto WalkFrom = [this, &IsRunway](FRoadNodeId At, FRoadNodeId CameFrom)
+	auto WalkFrom = [this](FRoadNodeId At, FRoadNodeId CameFrom)
 	{
 		for (int32 Guard = 0; Guard < 1024; ++Guard)
 		{
@@ -241,8 +305,7 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 
 			for (const FRoadSegmentId& Incident : Node->Incident)
 			{
-				const FRoadSegment* Other = GetSegment(Incident);
-				if (Other == nullptr || !Other->bAlive || !IsRunway(*Other))
+				if (!IsRunwaySegment(Incident))
 				{
 					continue;
 				}

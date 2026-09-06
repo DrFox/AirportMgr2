@@ -80,6 +80,24 @@ public:
 	const URoadProfile* ProfileFor(const FRoadSegment& Segment) const;
 
 	/**
+	 * The profile rule, in one place: a runway is a segment whose profile is continuous
+	 * through junctions. Every runway query below asked this inline; the traffic model asks
+	 * it per claim, and two spellings of one rule is how a taxiway ends up a runway.
+	 */
+	bool IsRunwaySegment(FRoadSegmentId Segment) const;
+
+	/**
+	 * Every segment continuous with Seed through nodes joining exactly two runway segments -
+	 * the same walk RunwayExtentAt makes to find the thresholds, returning the segments it
+	 * walked rather than the ends. Empty when Seed is not a live runway. Includes Seed.
+	 *
+	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
+	 * chain, a hold-short names one, and the arbiter expands it here - so an exit added to a
+	 * runway after the hold bar was placed still protects the whole strip.
+	 */
+	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
+
+	/**
 	 * If Near sits on a runway, reports the departure from the threshold nearest it.
 	 *
 	 * WALKS THE WHOLE RUNWAY, not the one segment it lands on. Adding an exit splits a runway,
@@ -92,10 +110,11 @@ public:
 	 * so nothing here needs a runway type or a flag on the segment.
 	 *
 	 * Direction points from the near threshold toward the far one: the way you depart having
-	 * backtracked to that end. False when Near is not on a runway at all.
+	 * backtracked to that end. OutSegment, when given, receives the seed segment - the runway
+	 * segment whose end was nearest Near. False when Near is not on a runway at all.
 	 */
 	bool RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold, FVector2D& OutDirection,
-		double& OutLength) const;
+		double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
 
 	/**
 	 * The runway threshold nearest a point, however far away it is.
@@ -108,10 +127,11 @@ public:
 	 *
 	 * The threshold returned is the end NEAREST the query and the direction runs away from
 	 * it, so an aircraft lands toward the far end - the same convention as a departure, and
-	 * the reason both can share the walk.
+	 * the reason both can share the walk. OutSegment, when given, receives the seed segment -
+	 * the runway segment whose end was nearest Near.
 	 */
 	bool NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-		FVector2D& OutDirection, double& OutLength) const;
+		FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
 
 	/**
 	 * Guideline nodes lying on a runway, ordered by distance from its threshold.
@@ -304,7 +324,8 @@ private:
 
 	/** RunwayExtentAt and NearestRunwayThreshold, which differ only in the proximity test. */
 	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength) const;
+		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
+		FRoadSegmentId* OutSegment) const;
 
 	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
