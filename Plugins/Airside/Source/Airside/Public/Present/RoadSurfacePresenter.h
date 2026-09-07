@@ -85,7 +85,7 @@ public:
 	 * creates this presenter, and none of their lifetimes are this class's to manage.
 	 */
 	void Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
-		UDynamicMeshComponent* InApronComponent);
+		UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent = nullptr);
 
 	/** Solve every node, build the road and apron surfaces, and push them to their components. */
 	void Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings);
@@ -182,6 +182,9 @@ private:
 	/** Separate from the roads, which share nothing with it - see AddApron's own comment. */
 	void RebuildAprons(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
+	/** The holding-position paint, from the guideline graph the same Rebuild just derived. */
+	void RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
 	/** Append a solved node's fan to Builder, if that node solved at all. */
 	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
 
@@ -192,6 +195,8 @@ private:
 	UPROPERTY() TObjectPtr<UDynamicMeshComponent> MeshComponent;
 	UPROPERTY() TObjectPtr<UDynamicMeshComponent> GhostComponent;
 	UPROPERTY() TObjectPtr<UDynamicMeshComponent> ApronComponent;
+	/** May be null on an actor made before markings existed; RebuildMarkings then does nothing. */
+	UPROPERTY() TObjectPtr<UDynamicMeshComponent> MarkingComponent;
 
 	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
 	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;

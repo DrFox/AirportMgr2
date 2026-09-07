@@ -439,6 +439,15 @@ public:
 	TObjectPtr<UDynamicMeshComponent> ApronComponent;
 
 	/**
+	 * The holding-position paint: a fourth surface, half a unit above the road, drawn with
+	 * the road's own material - see FHoldingPositionMarkingBuilder. Its own component for
+	 * the same reason the apron has one: a rebuild of the roads must not be a rebuild of
+	 * everything that happens to be painted on them.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UDynamicMeshComponent> MarkingComponent;
+
+	/**
 	 * Name -> material for the road surface's profile bands. Null renders exactly as
 	 * before: one material, every triangle id 0.
 	 *

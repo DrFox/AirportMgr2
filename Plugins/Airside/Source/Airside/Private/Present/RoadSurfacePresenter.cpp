@@ -2,6 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Build/AnchorLink.h"
+#include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -45,9 +46,10 @@ namespace
 	}
 }
 
-void URoadSurfacePresenter::Initialize(UDynamicMeshComponent* InMeshComponent,
-	UDynamicMeshComponent* InGhostComponent, UDynamicMeshComponent* InApronComponent)
+void URoadSurfacePresenter::Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
+	UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent)
 {
+	MarkingComponent = InMarkingComponent;
 	MeshComponent = InMeshComponent;
 	GhostComponent = InGhostComponent;
 	ApronComponent = InApronComponent;
@@ -142,6 +144,29 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 	}
 }
 
+void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	if (MarkingComponent == nullptr)
+	{
+		return;
+	}
+	// Half a unit ABOVE the road, so the paint wins the depth test against the pavement it
+	// lies on - the road is the highest surface here (the apron sits below it, see
+	// GetApronSurfaceZ), so above the road is above everything.
+	const double MarkingZ = Settings.SurfaceZ + 0.5;
+	FRoadMeshBuffers Buffers;
+	const int32 Painted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, Buffers);
+	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface
+	// reads as "on the centreline" and paints MarkingColor across the whole quad. See
+	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect.
+	FDynamicMeshSink Sink(MarkingComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour);
+	Sink.Accept(Buffers);
+	MarkingComponent->SetVisibility(Painted > 0);
+	// Reported, not inferred - the same reason the aprons say what they built.
+	UE_LOG(LogRoadMesh, Log, TEXT("Holding positions: %d painted, %d triangle(s) at Z=%.1f"),
+		Painted, Buffers.Indices.Num() / 3, MarkingZ);
+}
+
 void URoadSurfacePresenter::InvalidateGhostCache()
 {
 	LastGhostFrom = INDEX_NONE;
@@ -193,6 +218,8 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt
 	// together so one call still means "make the world match the model".
 	RebuildAprons(Network, Settings);
+	// And the holding-position paint, from the graph derived above.
+	RebuildMarkings(Network, Settings);
 
 	if (Settings.bDebugDrawMesh)
 	{

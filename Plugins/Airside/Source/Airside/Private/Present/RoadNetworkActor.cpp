@@ -88,11 +88,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	MarkingComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("HoldingPositionMarkings"));
+	MarkingComponent->SetupAttachment(RootComponent);
+	MarkingComponent->SetUsingAbsoluteLocation(true);
+	MarkingComponent->SetUsingAbsoluteRotation(true);
+	MarkingComponent->SetUsingAbsoluteScale(true);
+	MarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MarkingComponent->SetCastShadow(false);
+
 	// The three objects issue #32 split this actor into - see each class's own header for
 	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
 	// than UPROPERTY(Instanced).
 	Presenter = CreateDefaultSubobject<URoadSurfacePresenter>(TEXT("Presenter"));
-	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent);
+	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent, MarkingComponent);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
