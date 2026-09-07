@@ -80,9 +80,11 @@ FJunctionResult FJunctionSolver::SolveCuts(const FJunctionInput& Input)
 			const FRay2D RightEdge = MakeRightEdge(Input, NextIndex);
 
 			// Where two profiles meet, the tighter radius wins; geometry may clamp
-			// it further inside SolveFillet.
-			const double Radius = FMath::Min(Input.Arms[Index].FilletRadius,
-			                                 Input.Arms[NextIndex].FilletRadius);
+			// it further inside SolveFillet. Unless the caller named this corner's own
+			// radius - the flare of a runway exit - which then stands as given.
+			const double Radius = Input.Arms[Index].FilletRadiusToNext > 0.0
+				? Input.Arms[Index].FilletRadiusToNext
+				: FMath::Min(Input.Arms[Index].FilletRadius, Input.Arms[NextIndex].FilletRadius);
 
 			Result.Corners[Index] = RoadGeom::SolveFillet(LeftEdge, RightEdge, Radius);
 			if (!Result.Corners[Index].bValid)

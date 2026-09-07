@@ -1,5 +1,7 @@
 #include "Build/RoadNetworkSolver.h"
 
+#include "Build/ExitGeometry.h"
+
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/JunctionSolver.h"
@@ -75,6 +77,40 @@ namespace
 			OutInput.Arms.Add(Arm);
 			OutArmSegments.Add(SegmentId);
 		}
+
+		// THE FLARE. At a node where a taxiway meets a runway, the corner an exit arc sweeps
+		// through gets a fillet that follows the arc - a taxiway's half width inside it -
+		// so the aircraft's wheels and wing are on pavement through the turn, not only its
+		// centreline (samples/runway2.png, 2026-09-07). ExitGeometry decides the arc's
+		// tangent length once for the solver and the guideline builder both; the formula
+		// gives less than the default on the acute corner and the flare on the obtuse one,
+		// so every corner between a runway arm and a taxiway arm is asked and the larger of
+		// the two answers stands. Arms are CCW-sorted, so corner i is the wedge from arm i
+		// to arm i + 1.
+		const double ExitLength = ExitGeometry::NodeExitLength(Network, NodeIndex, OutArmSegments);
+		if (ExitLength > 0.0 && OutInput.Arms.Num() >= 2)
+		{
+			const int32 Count = OutInput.Arms.Num();
+			for (int32 Index = 0; Index < Count; ++Index)
+			{
+				const FJunctionArm& Arm = OutInput.Arms[Index];
+				const FJunctionArm& Next = OutInput.Arms[(Index + 1) % Count];
+				if (Arm.bContinuous == Next.bContinuous)
+				{
+					continue;
+				}
+				const FJunctionArm& Taxiway = Arm.bContinuous ? Next : Arm;
+				const double TaxiwayHalfWidth = 0.5 * (FMath::Max(Taxiway.HalfWidthLeft, 0.0) + FMath::Max(Taxiway.HalfWidthRight, 0.0));
+				double Corner = FMath::Atan2(Next.Tangent.Y, Next.Tangent.X) - FMath::Atan2(Arm.Tangent.Y, Arm.Tangent.X);
+				while (Corner < 0.0) { Corner += 2.0 * PI; }
+				while (Corner >= 2.0 * PI) { Corner -= 2.0 * PI; }
+				// Every mixed corner is named: the flare where the arc asks for more than the
+				// default, and a small kerb where it asks for less - see AcuteCornerRadius for
+				// why the default is not left standing on the acute side.
+				const double Flare = ExitGeometry::FlareRadius(ExitLength, Corner, TaxiwayHalfWidth);
+				OutInput.Arms[Index].FilletRadiusToNext = FMath::Max(Flare, ExitGeometry::AcuteCornerRadius);
+			}
+		}
 		return OutInput.Arms.Num() > 0;
 	}
 }
@@ -90,6 +126,7 @@ double FRoadNetworkSolver::ZeroRadiusCut(const URoadNetwork& Network, FRoadSegme
 	for (FJunctionArm& Arm : Input.Arms)
 	{
 		Arm.FilletRadius = 0.0;
+		Arm.FilletRadiusToNext = 0.0;
 	}
 	const FJunctionResult Result = FJunctionSolver::SolveCuts(Input);
 	if (!Result.bValid)
@@ -129,9 +166,11 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	}
 
 	TArray<double> PreferredRadii;
+	TArray<double> PreferredCornerRadii;
 	for (const FJunctionArm& Arm : Out.Input.Arms)
 	{
 		PreferredRadii.Add(Arm.FilletRadius);
+		PreferredCornerRadii.Add(Arm.FilletRadiusToNext);
 	}
 
 	// THE ALLOWANCE IS SET BY BOTH ENDS. A segment holds its two cuts only if their sum is
@@ -145,6 +184,7 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 	for (FJunctionArm& Arm : ZeroInput.Arms)
 	{
 		Arm.FilletRadius = 0.0;
+		Arm.FilletRadiusToNext = 0.0;
 	}
 	const FJunctionResult ZeroHere = FJunctionSolver::SolveCuts(ZeroInput);
 	if (!ZeroHere.bValid)
@@ -200,6 +240,9 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		for (int32 ArmIndex = 0; ArmIndex < Out.Input.Arms.Num(); ++ArmIndex)
 		{
 			Out.Input.Arms[ArmIndex].FilletRadius = PreferredRadii[ArmIndex] * Scale;
+			// The flare scales with the rest: a corner that does not fit its arms shrinks
+			// as a whole, and a flare that stayed at full size would overshoot alone.
+			Out.Input.Arms[ArmIndex].FilletRadiusToNext = PreferredCornerRadii[ArmIndex] * Scale;
 		}
 		Out.Result = FJunctionSolver::SolveCuts(Out.Input);
 	};

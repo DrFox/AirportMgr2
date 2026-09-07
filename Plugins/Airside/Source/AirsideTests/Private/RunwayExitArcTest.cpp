@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Build/ExitGeometry.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Misc/AutomationTest.h"
@@ -177,18 +178,19 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("a strip node sits ExitLength upstream of X (off by %.1f uu)"), MissUp), MissUp < 1.0);
 	TestTrue(FString::Printf(TEXT("a strip node sits ExitLength downstream of X (off by %.1f uu)"), MissDown), MissDown < 1.0);
 
-	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or at its pavement cut if that is further,
-	//    which at an acute 45 degree corner it is (edge intersection plus the fillet's
-	//    tangent, about 6044 here) - and keeps its identity (a holding-position mark is keyed by it).
+	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or where it clears the runway slab if
+	//    that is further (it is not, at 45 degrees: about 2900) - and keeps its identity
+	//    (a holding-position mark is keyed by it). The pavement CUT is no longer the floor:
+	//    the flare fillet follows the arc and would push a cut-based floor down the taxiway.
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*Net, XT, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the taxiway's runway end exists by identity"), TEnd.IsSet())) { return false; }
 	{
 		const FVector2D At = Net->GetGuidelineNode(TEnd)->Position;
 		const double Along = FVector2D::DotProduct(At, TowardT);
 		const double Off = FMath::Abs(FVector2D::CrossProduct(At, TowardT));
-		const double Cut = ExitArcCutDistance(Solved, X.Index, XT);
-		const double Expected = FMath::Max(ExitLength, Cut);
-		TestTrue(FString::Printf(TEXT("taxiway end is max(ExitLength, cut %.0f) = %.0f down its own axis (%.1f) and on it (%.1f off)"), Cut, Expected, Along, Off),
+		const double Floor = ExitGeometry::TaxiwayEndFloor(900.0, 1150.0, PI / 4.0);
+		const double Expected = FMath::Max(ExitLength, Floor);
+		TestTrue(FString::Printf(TEXT("taxiway end is max(ExitLength, slab clearance %.0f) = %.0f down its own axis (%.1f) and on it (%.1f off)"), Floor, Expected, Along, Off),
 			FMath::Abs(Along - Expected) < 1.0 && Off < 1.0);
 	}
 
@@ -292,13 +294,14 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		if (TestTrue(TEXT("the short taxiway's ends exist"), ZEnd.IsSet() && ZFar.IsSet()) && Miss < 1.0)
 		{
 			const double Back = FVector2D::Distance(Net->GetGuidelineNode(ZEnd)->Position, EAt);
-			const double Cut = ExitArcCutDistance(Solved, E.Index, EZ);
-			// max(cut, node length): the pavement cut is a floor the clamp cannot undercut -
-			// measured on the chord between cuts, the first clamp found nothing left of a
-			// 55 m stub and put the end (and the holding position) inside the runway slab.
-			const double Expected = FMath::Max(Cut, NodeLength);
-			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(cut %.0f, %.0f) = %.0f (%.0f), never inside the pavement"), Cut, NodeLength, Expected, Back),
-				FMath::Abs(Back - Expected) < 1.0 && Back >= Cut - 1.0);
+			// max(slab clearance, node length): the end is never on the runway strip however
+			// the clamp comes out - the first clamp put a 55 m stub's end (and its holding
+			// position) inside the slab.
+			const double Floor = ExitGeometry::TaxiwayEndFloor(900.0, 1150.0, PI / 4.0);
+			const double Expected = FMath::Max(Floor, NodeLength);
+			const FVector2D EndAt = Net->GetGuidelineNode(ZEnd)->Position;
+			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(slab clearance %.0f, %.0f) = %.0f (%.0f), off the strip (%.0f from the centreline)"), Floor, NodeLength, Expected, Back, FMath::Abs(EndAt.Y)),
+				FMath::Abs(Back - Expected) < 1.0 && FMath::Abs(EndAt.Y) > 900.0);
 			const FGuidelineEdge* Turn = ExitArcTurnBetween(*Net, SE, ZEnd);
 			if (TestNotNull(TEXT("the short taxiway still gets its arc"), Turn))
 			{
@@ -739,6 +742,12 @@ bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 	const FRoadMeshBuffers& Paved = Pavement.GetBuffers();
 	TestTrue(TEXT("there is pavement to test against"), Paved.Indices.Num() > 0);
 
+	// THE SWEPT BAND, not only the centreline: an aircraft's wheels and wing ride either
+	// side of the line, so each sample is tested at the centre and 8 m to each side - the
+	// runway's own half width less a margin, so the band never asks more of the strip than
+	// the strip has. This is the property the flare fillet exists for, and it failed on
+	// every stub before the flare (samples/runway2.png, 2026-09-07).
+	constexpr double Band = 800.0;
 	int32 Arcs = 0, Points = 0, Off = 0;
 	FString Worst;
 	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
@@ -750,16 +759,23 @@ bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 		++Arcs;
 		TArray<FVector2D> Samples;
 		GuidelineGeom::Sample(A, Edge.Control, B, Samples, 16);
-		for (const FVector2D& P : Samples)
+		for (int32 Index = 0; Index < Samples.Num(); ++Index)
 		{
-			++Points;
-			if (!ExitArcOnPavement(P, Paved))
+			const FVector2D& P = Samples[Index];
+			const FVector2D Ahead = Samples[FMath::Min(Index + 1, Samples.Num() - 1)] - Samples[FMath::Max(Index - 1, 0)];
+			const FVector2D Side = FVector2D(-Ahead.Y, Ahead.X).GetSafeNormal();
+			const FVector2D Probe[3] = { P, P + Side * Band, P - Side * Band };
+			for (const FVector2D& Q : Probe)
 			{
-				++Off;
-				if (Worst.IsEmpty())
+				++Points;
+				if (!ExitArcOnPavement(Q, Paved))
 				{
-					Worst = FString::Printf(TEXT("first off-pavement point (%.0f, %.0f) on the turn %s -> %s"),
-						P.X, P.Y, *A.ToString(), *B.ToString());
+					++Off;
+					if (Worst.IsEmpty())
+					{
+						Worst = FString::Printf(TEXT("first off-pavement point (%.0f, %.0f) on the turn %s -> %s"),
+							Q.X, Q.Y, *A.ToString(), *B.ToString());
+					}
 				}
 			}
 		}
