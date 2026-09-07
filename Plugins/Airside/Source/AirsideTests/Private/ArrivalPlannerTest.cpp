@@ -334,4 +334,39 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// (g) NotAdmitted: the runway is there, long enough and free, but this aircraft may not
+// use it. Refused BEFORE occupancy and exits, with the admission decision on the plan and
+// the surface named in the sentence - the reason an aircraft is turned away must be the
+// one the player can act on.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalPlannerNotAdmittedTest,
+	"Airside.Model.ArrivalPlanner.NotAdmitted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe = MakePiperAirframe();
+	Airframe.Requirements = UAircraftType::PiperMeridianRequirements();
+	FTwoExitAirport A = BuildTwoExitAirport(GetTransientPackage(), Airframe);
+
+	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
+	if (!TestTrue(TEXT("the fixture has a runway"), A.Network->NearestRunwayThreshold(A.Threshold, Threshold, Direction, Length, &Seed))) { return false; }
+	FRunwayFacts Grass;
+	Grass.Surface = ERunwaySurface::Grass;
+	TestTrue(TEXT("the strip becomes grass"), A.Network->SetRunwayFacts(Seed, Grass));
+
+	const FArrivalPlan OnGrass = ArrivalPlanner::Plan(*A.Network, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	TestTrue(FString::Printf(TEXT("the Piper may land on grass: %s"), *ArrivalPlanner::DescribeRefusal(OnGrass)), OnGrass.IsValid());
+
+	Airframe.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
+	const FArrivalPlan Refused = ArrivalPlanner::Plan(*A.Network, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	TestEqual(TEXT("an aircraft needing tarmac is refused the grass strip as NotAdmitted"), Refused.Why, EArrivalRefusal::NotAdmitted);
+	TestEqual(TEXT("with the admission's own reason on the plan"), Refused.Admission.Why, ERunwayRefusal::Surface);
+	TestEqual(TEXT("and the chain it was refused for"), Refused.RunwayChain.Num(), 3);
+	const FString Sentence = ArrivalPlanner::DescribeRefusal(Refused);
+	TestTrue(FString::Printf(TEXT("the sentence names the surface: %s"), *Sentence), Sentence.Contains(TEXT("grass")));
+	return true;
+}
+
 #endif

@@ -215,9 +215,25 @@ def build_material(textures):
     marking_colour.set_editor_property("parameter_name", "MarkingColor")
     marking_colour.set_editor_property("default_value", unreal.LinearColor(0.85, 0.72, 0.05, 1.0))
 
+    # --- SurfaceTint: what makes a runway's pavement read as grass or concrete -----------
+    # A vector parameter multiplied into the albedo BEFORE the marking lerp, so the tint
+    # colours the pavement and never the paint. White by default, so M_RoadSurface itself
+    # renders exactly as it did; Tools/Python/build_runway_materials.py makes the three
+    # instances that set it. A parameter rather than three copies of this graph, because a
+    # graph typed three times is a graph that drifts.
+    surface_tint = lib.create_material_expression(
+        material, unreal.MaterialExpressionVectorParameter, -650, -350)
+    surface_tint.set_editor_property("parameter_name", "SurfaceTint")
+    surface_tint.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
+
+    tinted = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -400, -200)
+    lib.connect_material_expressions(albedo, "RGB", tinted, "A")
+    lib.connect_material_expressions(surface_tint, "", tinted, "B")
+
     base_colour = lib.create_material_expression(
         material, unreal.MaterialExpressionLinearInterpolate, -150, 0)
-    lib.connect_material_expressions(albedo, "RGB", base_colour, "A")
+    lib.connect_material_expressions(tinted, "", base_colour, "A")
     lib.connect_material_expressions(marking_colour, "", base_colour, "B")
     lib.connect_material_expressions(marking_amount, "", base_colour, "Alpha")
 

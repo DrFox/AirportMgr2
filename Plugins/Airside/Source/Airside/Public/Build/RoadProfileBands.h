@@ -50,9 +50,16 @@ struct AIRSIDE_API FRoadProfileBands
 	 *
 	 * A null Materials is the supported single-material state, not an error: every band
 	 * resolves to 0, which is what the network renders with today.
+	 *
+	 * SlotOverride, when named, is the slot EVERY band takes and the bands' own names are
+	 * not consulted: a runway's pavement is one surface across its whole width, chosen by
+	 * the facts on the segment (URoadMaterialSet::RunwaySlotName), not by the profile,
+	 * because the profile is the cross-section and is shared by every runway of that
+	 * width whatever it is paved with. An override the set does not declare counts once
+	 * in UnresolvedSlots and falls back to 0, like a misspelled band.
 	 */
 	static FRoadProfileBands FromProfile(const URoadProfile* Profile,
-		const URoadMaterialSet* Materials = nullptr);
+		const URoadMaterialSet* Materials = nullptr, FName SlotOverride = NAME_None);
 
 	/** The band containing Alpha, or INDEX_NONE when there are no bands. */
 	int32 BandAt(double Alpha) const;

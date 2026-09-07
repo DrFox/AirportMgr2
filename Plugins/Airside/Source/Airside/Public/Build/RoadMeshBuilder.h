@@ -145,6 +145,13 @@ private:
 	void JunctionSlots(const URoadNetwork& Network, const TArray<FRoadSegmentId>& ArmSegments,
 		int32& OutStripSlot, int32& OutFanSlot) const;
 
+	/**
+	 * The material slot a runway segment's whole width takes, from its surface fact, or
+	 * NAME_None for anything that is not a runway. The one place the builder asks; the
+	 * ribbon, the junction rim and the junction fan all go through it.
+	 */
+	static FName RunwaySlotFor(const URoadNetwork& Network, FRoadSegmentId Segment);
+
 	double ZHeight;
 	double TexelsPerUnit;
 	const URoadMaterialSet* Materials = nullptr;

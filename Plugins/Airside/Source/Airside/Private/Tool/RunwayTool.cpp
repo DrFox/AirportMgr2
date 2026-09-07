@@ -37,6 +37,42 @@ void FRunwayTool::NextWidth(const FToolContext& Context)
 	}
 }
 
+void FRunwayTool::NextSurface()
+{
+	Surface = static_cast<ERunwaySurface>((static_cast<uint8>(Surface) + 1) % 4);
+}
+
+void FRunwayTool::NextApproach()
+{
+	Approach = static_cast<ERunwayApproach>((static_cast<uint8>(Approach) + 1) % 3);
+}
+
+FRunwayFacts FRunwayTool::Facts() const
+{
+	FRunwayFacts Out;
+	Out.Surface = Surface;
+	Out.Approach = Approach;
+	return Out;
+}
+
+void FRunwayTool::OnReselect(const FToolContext& Context)
+{
+	// One choice per press, and the modifiers decide which. Remove wins over insert when
+	// both are held only because something must; neither is a gesture anyone makes.
+	if (Context.bRemoveModifier)
+	{
+		NextApproach();
+	}
+	else if (Context.bInsertModifier)
+	{
+		NextSurface();
+	}
+	else
+	{
+		NextWidth(Context);
+	}
+}
+
 void FRunwayTool::OnClick(const FToolContext& Context)
 {
 	if (Context.Target == nullptr)
@@ -60,7 +96,7 @@ void FRunwayTool::OnClick(const FToolContext& Context)
 	const FVector2D Far = Context.Cursor;
 	bHasThreshold = false;
 
-	Context.Target->PlaceRunway(Threshold, Far, ProfileForWidth());
+	Context.Target->PlaceRunway(Threshold, Far, ProfileForWidth(), Facts());
 }
 
 void FRunwayTool::OnCancel(const FToolContext& Context)
@@ -84,8 +120,11 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		Sink.Marker(Context.Cursor, EPreviewStyle::Pending);
 		if (Profile != nullptr)
 		{
+			// All three choices, so what the next click commits to is readable before it is
+			// committed - "45 m, concrete, precision".
 			Sink.Label(Context.Cursor,
-				FString::Printf(TEXT("%.0f m"), Profile->GetTotalWidth() / 100.0),
+				FString::Printf(TEXT("%.0f m, %s, %s"), Profile->GetTotalWidth() / 100.0,
+					RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
 				EPreviewStyle::Pending);
 		}
 		else
@@ -137,9 +176,10 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	if (Profile != nullptr)
 	{
 		Sink.Label((Threshold + Far) * 0.5,
-			FString::Printf(TEXT("%s  %.0f x %.0f m"),
+			FString::Printf(TEXT("%s  %.0f x %.0f m, %s, %s"),
 				*RunwayDesignator::ToPairText(Along),
-				Length / 100.0, Profile->GetTotalWidth() / 100.0),
+				Length / 100.0, Profile->GetTotalWidth() / 100.0,
+				RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
 			Style);
 	}
 }

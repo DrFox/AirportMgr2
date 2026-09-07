@@ -5,6 +5,7 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayFacts.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 
@@ -50,7 +51,20 @@ public:
 	virtual int32 PlaceNode(FVector2D Where) = 0;
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) = 0;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) = 0;
-	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) = 0;
+	/** Lays a runway with its surface and approach class written onto every segment of it. */
+	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) = 0;
+
+	/** The runway as the tool laid it before facts existed: tarmac, visual - the struct's defaults. */
+	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
+	{
+		return PlaceRunway(From, To, RunwayProfile, FRunwayFacts());
+	}
+
+	/**
+	 * Reclassify the runway SegmentIndex belongs to - every segment of its chain - as one
+	 * undoable edit. False for a dead slot or a segment that is not a runway.
+	 */
+	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) = 0;
 
 	/** MinimumRunwayLength, read-only: RunwayTool judges a drag against it but never sets it. */
 	virtual double GetMinimumRunwayLength() const = 0;

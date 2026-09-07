@@ -69,5 +69,10 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	// take a turn too tight for its own wing depending purely on whether content happened
 	// to be loaded.
 	Piper.Wingspan = UAircraftType::PiperMeridianWingspan();
+
+	// Same rule as Wingspan: the content branch reads Type->Requirements, so the fallback
+	// must carry the Piper's too, or admission would judge the same aircraft by 0 m field
+	// lengths (no claim) with content unloaded and by 800 m with it loaded.
+	Piper.Requirements = UAircraftType::PiperMeridianRequirements();
 	return Piper;
 }

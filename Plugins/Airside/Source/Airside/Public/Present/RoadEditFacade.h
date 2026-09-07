@@ -63,7 +63,9 @@ public:
 	virtual int32 PlaceNode(FVector2D Where) override;
 	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
-	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
+	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
+	using IRoadEditTarget::PlaceRunway;
+	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 	virtual double GetMinimumRunwayLength() const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;

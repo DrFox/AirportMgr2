@@ -85,7 +85,17 @@ public:
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
 
 	/**
-	 * The four performance structs plus Wingspan, bundled - see FAirframe for why.
+	 * What this type needs of a runway: surface, approach aids, published field lengths.
+	 *
+	 * Beside the performance structs and copied into the airframe with them, because the
+	 * admission check (Model/) holds an FAirframe and nothing else. The field lengths are
+	 * admission figures; the rolls the physics derives from Ground and Climb are for motion.
+	 */
+	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
+
+	/**
+	 * The four performance structs plus Wingspan and Requirements, bundled - see FAirframe
+	 * for why.
 	 *
 	 * Assembled on demand rather than stored, because the four already live here as the
 	 * authored source of truth; a cached FAirframe would be a second place they could drift
@@ -99,6 +109,7 @@ public:
 		Out.Approach = Approach;
 		Out.Engine = Engine;
 		Out.Wingspan = Footprint.Wingspan;
+		Out.Requirements = Requirements;
 		return Out;
 	}
 
@@ -172,4 +183,14 @@ public:
 	 * BuildPiperMeridian's own footprint cannot drift apart the way two copies would.
 	 */
 	static double PiperMeridianWingspan();
+
+	/**
+	 * The Meridian's runway requirements, for the same reason PiperMeridianGround exists.
+	 *
+	 * Grass, visual, and the POH ground rolls rounded up: 510 m take-off, 400 m landing
+	 * (the 50 ft figures include an obstacle the pavement does not have - see the .cpp).
+	 * Airside.Model.FieldLengthsCoverTheRoll checks these are never SHORTER than the
+	 * rolls the physics derives from Ground and Climb.
+	 */
+	static FRunwayRequirements PiperMeridianRequirements();
 };

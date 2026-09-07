@@ -102,6 +102,9 @@ public:
 	 * IRoadEditTarget of its own, so it has nothing to build one from. Every IBuildTool's
 	 * OnDeactivate already guards Context.Target for exactly this reason - passing a
 	 * default-constructed FToolContext is safe when there is nothing more specific yet.
+	 *
+	 * Selecting the tool that is ALREADY active is not a no-op: it is IBuildTool::OnReselect,
+	 * with the same context (its modifiers say what to cycle). See that method for why.
 	 */
 	void SelectTool(int32 Index, const FToolContext& DeactivateContext = FToolContext());
 

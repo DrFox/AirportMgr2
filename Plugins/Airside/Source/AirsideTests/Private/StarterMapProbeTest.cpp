@@ -2,6 +2,7 @@
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/RunwayMarkingBuilder.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
@@ -10,7 +11,9 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayAdmission.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RunwayDesignator.h"
 #include "UObject/Package.h"
 #include "UObject/UObjectIterator.h"
 
@@ -146,6 +149,40 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	// Every stand: does its pose node exist, is it joined to anything, and can an arrival's
 	// exit reach it?
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+
+	// Every runway chain: what it is (facts, width, length), what it admits the default
+	// airframe to do, and what the marking builder paints for it. This is the line to read
+	// when a runway on the player's level "has no numbers" or "refuses the Piper".
+	{
+		FRoadMeshBuffers Markings;
+		FRunwayMarkingCensus Census;
+		const int32 Painted = FRunwayMarkingBuilder::Build(*Net, 0.0, Markings, &Census);
+		UE_LOG(LogM2MapProbe, Log, TEXT("PROBE runway markings: %d runway(s), %d triangle(s): %d threshold stripes, %d designator strokes, %d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
+			Painted, Markings.Indices.Num() / 3, Census.ThresholdStripes, Census.DesignatorStrokes, Census.CentrelineDashes,
+			Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
+		TSet<int32> Seen;
+		for (int32 Index = 0; Index < Net->GetSegments().Num(); ++Index)
+		{
+			const FRoadSegment& Segment = Net->GetSegments()[Index];
+			if (!Segment.bAlive || Seen.Contains(Index)) { continue; }
+			FRoadSegmentId Id; Id.Index = Index; Id.Generation = Segment.Generation;
+			if (!Net->IsRunwaySegment(Id)) { continue; }
+			const TArray<FRoadSegmentId> Chain = Net->RunwayChain(Id);
+			for (const FRoadSegmentId& Member : Chain) { Seen.Add(Member.Index); }
+			FVector2D ChainThreshold, ChainDirection; double ChainLength = 0.0;
+			if (const FRoadNode* A = Net->GetNode(Segment.A)) { Net->RunwayExtentAt(A->Position, ChainThreshold, ChainDirection, ChainLength); }
+			const URoadProfile* Profile = Net->ProfileFor(Segment);
+			const FRunwayFacts Facts = Net->RunwayFactsFor(Id);
+			const FRunwayAdmission Landing = RunwayAdmission::Check(*Net, Id, Airframe, true);
+			const FRunwayAdmission Takeoff = RunwayAdmission::Check(*Net, Id, Airframe, false);
+			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE runway %s from segment %d: %d segment(s), %.0f uu long, %.0f uu wide, %s, %s approach; default airframe landing: %s; take-off: %s"),
+				*RunwayDesignator::ToPairText(ChainDirection), Index, Chain.Num(), ChainLength, Profile ? Profile->GetTotalWidth() : 0.0,
+				RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach),
+				*(Landing.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Landing)),
+				*(Takeoff.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Takeoff)));
+		}
+	}
+
 	FVector2D Threshold, Direction; double Length = 0.0;
 	const bool bRunway = Net->NearestRunwayThreshold(FVector2D::ZeroVector, Threshold, Direction, Length);
 	const FArrivalPlan Plan = bRunway ? ArrivalPlanner::Plan(*Net, Threshold - Direction * 1000.0, Airframe) : FArrivalPlan();

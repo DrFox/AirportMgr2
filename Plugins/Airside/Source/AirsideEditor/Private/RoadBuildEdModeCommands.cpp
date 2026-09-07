@@ -32,7 +32,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// never get a hand-drawn guideline link or a runway without a trip through PIE.
 	UI_COMMAND(DrawGuidelines, "Guidelines", "Draw a routing link the derivation never made: click a node, click another.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Five));
-	UI_COMMAND(PlaceRunways, "Runway", "Click one threshold, then the other.",
+	UI_COMMAND(PlaceRunways, "Runway", "Click one threshold, then the other. In play the runway key pressed again cycles the width, with Shift the surface, with Ctrl the approach.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Six));
 
 	// EIGHT, matching the registry: seven is "land an aircraft" at runtime and is not a

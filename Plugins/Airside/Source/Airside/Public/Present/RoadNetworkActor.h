@@ -196,9 +196,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 
-	/** Lays a runway from From to To in one edit, with its own profile. */
+	/**
+	 * Lays a runway from From to To in one edit, with its own profile and its facts.
+	 *
+	 * The three-argument form is the UFUNCTION (UHT allows no overloads) and lays tarmac /
+	 * visual - the facts' defaults, which is what every caller before the facts existed
+	 * meant; the four-argument form is the interface's, which the tool calls.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
+	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile);
+	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
+
+	/** Reclassify a runway's whole strip - surface and approach - as one undoable edit. */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 
 	/**
 	 * The shortest thing that may be called a runway, in uu. 500 m.
@@ -448,6 +459,14 @@ public:
 	TObjectPtr<UDynamicMeshComponent> MarkingComponent;
 
 	/**
+	 * The runway paint: a fifth surface, at the holding positions' height, drawn WHITE
+	 * through a dynamic instance of the road material - see
+	 * URoadSurfacePresenter::RebuildRunwayMarkings for why the colour needs a component.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UDynamicMeshComponent> RunwayMarkingComponent;
+
+	/**
 	 * Name -> material for the road surface's profile bands. Null renders exactly as
 	 * before: one material, every triangle id 0.
 	 *
@@ -641,6 +660,14 @@ public:
 	UEntityDefinition*  ResolveStandDefinition() const;
 
 	/**
+	 * A runway's pavement material by its surface fact, from the content set only - there
+	 * is no per-actor override, because a runway's look is a project-wide fact like its
+	 * markings. Null when the content set names none: the presenter then falls back to
+	 * the surface material, and the runway draws as a road.
+	 */
+	UMaterialInterface* ResolveRunwayMaterial(ERunwaySurface Surface) const;
+
+	/**
 	 * AUTHORED INPUT, READ AND NEVER WRITTEN save for the on-demand fallback cache - see
 	 * the .cpp. Public (moved from private by issue #32): URoadEditFacade::ConnectNodes and
 	 * ::DeleteNode call this directly, in place of the bare member access they used when
@@ -663,6 +690,12 @@ public:
 	 * Forwards to Presenter, which is what actually holds MeshComponent's built mesh.
 	 */
 	int32 SurfaceTriangleCountForTest() const;
+
+	/** Triangles in the runway paint, for Airside.Present.RunwayMarkingsDrawn. Forwards to Presenter. */
+	int32 RunwayMarkingTriangleCountForTest() const;
+
+	/** The material set the last rebuild skinned the mesh with. Forwards to Presenter. */
+	const URoadMaterialSet* EffectiveMaterialSetForTest() const;
 
 	/** Agents alive right now, for Airside.Present.ArrivalDispatch. Forwards to Traffic. */
 	int32 AgentCountForTest() const;

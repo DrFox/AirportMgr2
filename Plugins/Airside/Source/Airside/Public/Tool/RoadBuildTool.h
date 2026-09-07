@@ -187,6 +187,18 @@ struct AIRSIDE_API IBuildTool
 	 */
 	virtual void OnDeactivate(const FToolContext& Context) {}
 
+	/**
+	 * The active tool's OWN key pressed again, or its bar button clicked while lit.
+	 *
+	 * A tool with a choice to cycle does it here - the runway tool's width, surface and
+	 * approach - and reads Context's modifiers to tell which. This is the seam that was
+	 * missing: FRunwayTool::NextWidth existed through two milestones with NO CALLER,
+	 * because pressing 6 while the runway tool was active fell into SelectTool's "already
+	 * active, do nothing" branch and nothing else had a place to call it from. A default
+	 * that does nothing keeps every other tool as it was.
+	 */
+	virtual void OnReselect(const FToolContext& Context) {}
+
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;
 
 	/** True when nothing is part-drawn, so the owner can tell whether cancel means anything. */

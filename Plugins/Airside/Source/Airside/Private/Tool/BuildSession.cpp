@@ -54,8 +54,18 @@ IBuildTool* FBuildSession::GetActiveTool() const
 
 void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContext)
 {
-	if (!Tools.IsValidIndex(Index) || Index == ActiveTool)
+	if (!Tools.IsValidIndex(Index))
 	{
+		return;
+	}
+	if (Index == ActiveTool)
+	{
+		// The key the tool is already lit under: a reselect, not a switch. The context is
+		// the caller's, so its modifiers are the ones held with the key.
+		if (IBuildTool* Active = GetActiveTool())
+		{
+			Active->OnReselect(DeactivateContext);
+		}
 		return;
 	}
 

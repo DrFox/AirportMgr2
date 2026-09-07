@@ -211,6 +211,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->Climb = PiperMeridianClimb();
 	Type->Approach = PiperMeridianApproach();
 	Type->Engine = PiperMeridianEngine();
+	Type->Requirements = PiperMeridianRequirements();
 }
 
 FClimbPerformance UAircraftType::PiperMeridianClimb()
@@ -383,6 +384,30 @@ FApproachPerformance UAircraftType::PiperMeridianApproach()
 	Approach.FlareDecel = 90.0;
 
 	return Approach;
+}
+
+FRunwayRequirements UAircraftType::PiperMeridianRequirements()
+{
+	FRunwayRequirements Requirements;
+
+	// A turboprop single operates off grass strips routinely; nothing about the type
+	// needs pavement or approach aids, so it may use ANY runway this project can build.
+	Requirements.MinimumSurface = ERunwaySurface::Grass;
+	Requirements.ApproachNeeded = ERunwayApproach::Visual;
+
+	// GROUND ROLLS, not the 50 ft figures (2026-09-07, revised the same day). The POH's
+	// 2438 ft / 2110 ft include clearing a 15 m obstacle at the threshold, which is a
+	// statement about the approach path, not the pavement; the pavement the aircraft needs
+	// is the roll: 1650 ft (503 m) take-off, 1020 ft (311 m) landing, gross weight, sea
+	// level. Rounded up to 510 m and, for landing, to 400 m - the model's own rollout
+	// with FLandingRun::LandingMargin is about 370 m, longer than the real one, and a
+	// published figure may never be shorter than the model needs
+	// (Airside.Model.FieldLengthsCoverTheRoll). The 800 m first written here refused the
+	// player's 530 m strip that the aircraft had been landing on all week.
+	Requirements.TakeoffFieldLength = 51000.0;
+	Requirements.LandingFieldLength = 40000.0;
+
+	return Requirements;
 }
 
 #undef LOCTEXT_NAMESPACE

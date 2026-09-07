@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RunwayFacts.h"
 #include "RoadNode.generated.h"
 
 class URoadProfile;
@@ -32,6 +33,16 @@ struct AIRSIDE_API FRoadSegment
 	UPROPERTY() FVector2D Control = FVector2D::ZeroVector;
 
 	UPROPERTY() TObjectPtr<URoadProfile> Profile = nullptr;
+
+	/**
+	 * Surface and approach class, meaningful ONLY when the profile is a runway's.
+	 *
+	 * Every segment of one strip carries the same value: URoadNetwork::SetRunwayFacts
+	 * writes the whole chain and URoadEditFacade::SplitSegmentIn copies it onto both
+	 * halves, so RunwayFactsFor may read any member. Here rather than on a profile asset -
+	 * see FRunwayFacts for why. A taxiway carries the default and nothing reads it.
+	 */
+	UPROPERTY() FRunwayFacts Runway;
 
 	/** Written ONLY by FRoadNetworkSolver. Distance from each end at which the segment is cut. */
 	UPROPERTY() double TrimA = 0.0;
