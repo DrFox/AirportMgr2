@@ -7,6 +7,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 
 bool UGroundTraffic::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
@@ -73,6 +74,21 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			Plan = &Agent.TaxiInPlan;
 		}
 
+		// A PARKED AGENT'S GOAL IS WHERE IT STANDS, and the rebuild may have freed that node -
+		// every derived one was. Re-pointed by position, or every later search from it (a
+		// Depart, a stand re-offer) would start at a dead handle and fail for ever. The stand
+		// pose node itself is authored and survives, so this changes nothing for an aircraft
+		// parked on a stand.
+		if (Agent.Phase == EAgentPhase::Parked && Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
+		{
+			const FGuidelineNodeId Here = RouteSearch::FindNearestNode(
+				Network, Agent.LastMotion.Position, Agent.Class, Rules.ResolveRadius);
+			if (Here.IsSet())
+			{
+				Agent.GoalNode = Here;
+			}
+		}
+
 		// Parked, Departing and Gone hold nothing anybody is about to drive over the graph
 		// that just changed - a departure runs on FTakeoffRun and a parked agent's route is
 		// finished - so they are left alone rather than re-resolved into a truncation of a
@@ -100,6 +116,16 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// should still be steered around.
 	Occupancy.ReleaseGuidelineClaims();
 
+	// STAND CLAIMS COME BACK AT ONCE, not on the next tick: they are node claims, so the
+	// release above dropped them, and the planner may be asked between now and the next
+	// Advance - the player deletes a stand and presses 7 in the same breath. And a rebuild
+	// may have ADDED a stand, so the re-offer pass asks for every waiter.
+	for (FRoadAgent& Agent : Agents)
+	{
+		ClaimGoalNode(Agent, Network);
+	}
+	bStandsMayHaveFreed = true;
+
 	// RE-RESOLVED EXCLUDES THE STRANDED. An agent whose ground was deleted was not
 	// re-resolved into anything - it was given up on - and counting it in both columns made
 	// the line read as though something had been salvaged.
@@ -123,7 +149,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	// cannot be out of step with the reference it describes.
 	const bool bDriving = (&Plan == &Agent.Follower.Plan);
 
-	auto Strand = [this, &Agent, &Plan](const TCHAR* Why)
+	auto Strand = [this, &Agent, &Plan, bDriving](const TCHAR* Why)
 	{
 		// THE GROUND UNDER THE AGENT IS GONE. There is no line left to put it on and no node
 		// to search from, so the plan is marked unreachable - which is what ClaimAhead and
@@ -166,6 +192,15 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 			: FString();
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s%s"),
 			Agent.Id, Why, *Held);
+
+		// A STRANDED TAXI-IN STILL HAS A PLACE: the exit node the landing hands over at, which
+		// Plan.Start was re-pointed to when it could be. The re-offer (ReofferStands) searches
+		// from GoalNode, so a dead handle here would leave a waiting aircraft waiting for ever.
+		// Spec 2026-09-07-stand-occupancy §5, amended.
+		if (!bDriving && Agent.bAwaitingStand && Plan.Start.IsSet())
+		{
+			Agent.GoalNode = Plan.Start;
+		}
 		return EReResolve::Stranded;
 	};
 
@@ -276,6 +311,33 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	if (Goal.IsSet())
 	{
 		Agent.GoalNode = Goal;
+	}
+
+	// THE GOAL WAS A STAND AND THE STAND IS GONE - or a taxiway to it. An aircraft whose goal
+	// no longer resolves, and that is not lined up for a runway, is retargeted at whichever
+	// FREE stand is nearest the node it will replan from, BEFORE the replan below runs - so
+	// the replan searches to a live stand rather than to a freed handle and truncates. No
+	// stand: it is marked awaiting, and the truncation that follows gives it a node to wait
+	// at. Spec 2026-09-07-stand-occupancy §5. Vehicles and departures keep M2's rules.
+	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && !Agent.bDepartureArmed
+		&& Failed < Plan.Steps.Num())
+	{
+		const FGuidelineNodeId ReplanFrom = StepFromNode(Plan, Failed);
+		const FGuidelineNodeId NewStand = ArrivalPlanner::ChooseStand(
+			Network, ReplanFrom, Agent.Airframe, &Occupancy, Agent.Id);
+		if (NewStand.IsSet())
+		{
+			Agent.GoalNode = NewStand;
+			Agent.bAwaitingStand = false;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: its stand is gone; retargeting to the stand at node %d"),
+				Agent.Id, NewStand.Index);
+		}
+		else
+		{
+			Agent.bAwaitingStand = true;
+			UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d: its stand is gone and no free stand is reachable; it will wait"),
+				Agent.Id);
+		}
 	}
 
 	if (Failed == Plan.Steps.Num())

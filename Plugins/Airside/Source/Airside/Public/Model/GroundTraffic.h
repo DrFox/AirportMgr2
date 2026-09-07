@@ -659,6 +659,13 @@ private:
 	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
 
 	/**
+	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where
+	 * it stopped, through RedirectAgent. Runs at the end of Advance when bStandsMayHaveFreed;
+	 * one pass, then the flag clears whether or not anyone was placed.
+	 */
+	void ReofferStands(const URoadNetwork& Network);
+
+	/**
 	 * Set when a stand claim is released (redirect, retire, Gone) or the graph is rebuilt;
 	 * consumed by Advance's re-offer pass. A FLAG rather than an event: the table is rebuilt
 	 * per tick and the model is world-free, so one bool checked per frame is the cheapest

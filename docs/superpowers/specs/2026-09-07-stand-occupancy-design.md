@@ -68,6 +68,13 @@ in `FTrafficOccupancy` - the kind that already exists; nothing new is added to t
 - **Rank does not preempt a stand.** Only aircraft take pose-node goals, and equal rank means
   the first holder keeps it. A pose node is a dead end off the lead-in, so no through route
   is refused by the claim. Asserted by test, not assumed.
+- *Amended 2026-09-07 (Task 3):* a PARKED aircraft occupies whichever node it parked at,
+  stand or not, PROVIDED its route reached it - a dead (Unreachable) plan holds nothing, as
+  M2's `ReleaseForDeadPlan` already promises. The rebuild re-points a parked agent's goal
+  node by position, since every derived node is freed by a rebuild. The M2 rule "parked agents claim only the surface their body is on" left a
+  parked aircraft on a taxiway junction holding nothing, and §5's "holds whatever node it
+  stops at" needs this to be true. Also: a rebuild's `ReleaseGuidelineClaims` drops node
+  claims, so `OnGraphRebuilt` re-asserts every stand claim at once rather than a tick later.
 - A pose node whose stand has been deleted is a freed slot; the handle is generation-checked
   and matches nothing. The claim evaporates on the next tick's rebuild of the table.
 
@@ -98,6 +105,9 @@ a phase: the agent is Taxiing to the end of its prefix and then Parked there, an
 those may be true while it waits. Set by the rebuild path above and by nothing else in v1.
 While set: the agent holds whatever node it stops at (the Parked claim rule, unchanged), the
 status line reads `No stand - waiting`, and `Depart` remains available as the escape hatch.
+
+*Amended 2026-09-07 (Task 3):* a stranded taxi-in sets `GoalNode` to the exit node it will
+stop at, so the re-offer has a live node to search from.
 
 **Re-offer.** `UGroundTraffic` keeps a `bStandsMayHaveFreed` flag, set by `OnGraphRebuilt`
 and by every stand-claim release (redirect, retire, Gone). At the end of `Advance`, when the

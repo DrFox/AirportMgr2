@@ -3,6 +3,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 #include "Solve/RunwayDesignator.h"
 
 namespace InspectFacts
@@ -44,6 +45,10 @@ namespace InspectFacts
 
 	FString StatusOf(const FRoadAgent& Agent)
 	{
+		if (Agent.bAwaitingStand)
+		{
+			return TEXT("No stand - waiting");
+		}
 		if (Agent.bDepartureArmed && Agent.Phase == EAgentPhase::Taxiing)
 		{
 			return TEXT("Departure armed");
@@ -137,16 +142,17 @@ namespace InspectFacts
 			}
 		}
 		Out.OccupantAgent = 0;
+		Out.bOccupantParked = false;
 		if (Traffic != nullptr && E.PoseNode.IsSet())
 		{
-			for (const FRoadAgent& Agent : Traffic->GetAgents())
+			// THE CLAIM, not a scan of goals: the table is what the planner refuses on, so
+			// the panel shows the same answer the next arrival will get.
+			int32 Holder = 0;
+			if (Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(E.PoseNode), 0, &Holder))
 			{
-				if (Agent.GoalNode == E.PoseNode
-					&& (Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Taxiing))
-				{
-					Out.OccupantAgent = Agent.Id;
-					break;
-				}
+				Out.OccupantAgent = Holder;
+				const FRoadAgent* Agent = Traffic->FindAgent(Holder);
+				Out.bOccupantParked = Agent != nullptr && Agent->Phase == EAgentPhase::Parked;
 			}
 		}
 		return true;
