@@ -2158,4 +2158,95 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReplanTurnsOverFreeRunwayEndTest,
+	"Airside.Model.Traffic.ReplanTurnsOverFreeRunwayEnd",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters)
+{
+	// samples/routing.png, 2026-09-07: an aircraft sent round the whole taxiway loop when
+	// the loop through a free runway threshold beside it was a turnaround it could have
+	// taken. The resolver's replan asked the search to avoid every runway edge; it now asks
+	// it to avoid a runway somebody ELSE holds. This pins that query, through the same
+	// ReplanAt the resolver and the rebuild path call.
+	//
+	//   W --- A --- B --- E        taxiway; the agent is on it, and A->B is what gets banned
+	//         |     |
+	//        R1 === R2             the strip, derived from a runway segment
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1500.0));
+	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(4000.0, -1500.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -5000.0, 0.0);
+	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 4000.0, 0.0);
+	const FGuidelineNodeId E = M2TrafficNode(*Net, 9000.0, 0.0);
+	const FGuidelineNodeId R1 = M2TrafficNode(*Net, 0.0, -1500.0);
+	const FGuidelineNodeId R2 = M2TrafficNode(*Net, 4000.0, -1500.0);
+	M2TrafficJoin(*Net, W, A);
+	const FGuidelineEdgeId AB = M2TrafficJoin(*Net, A, B);
+	M2TrafficJoin(*Net, B, E);
+	M2TrafficJoin(*Net, A, R1);
+	M2TrafficJoin(*Net, R2, B);
+	{
+		FGuidelineEdge Along;
+		Along.A = R1; Along.B = R2;
+		Along.Control = FVector2D(2000.0, -1500.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		Net->AddGuidelineEdge(MoveTemp(Along));
+	}
+
+	auto UsesStrip = [&](const FRoutePlan& Plan)
+	{
+		for (const FRouteStep& Step : Plan.Steps)
+		{
+			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Step.Edge);
+			if (Edge != nullptr && Edge->DerivedFrom == Strip) { return true; }
+		}
+		return false;
+	};
+
+	// FREE: the replan from A with A->B banned goes A -> R1 -> R2 -> B -> E.
+	{
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+		const FRoadAgent* Before = Traffic->FindAgent(Plane);
+		TestTrue(TEXT("the cleared route is the taxiway, three steps, no strip"), Before->Follower.Plan.Steps.Num() == 3 && !UsesStrip(Before->Follower.Plan));
+
+		const bool bReplanned = Traffic->ReplanAtForTest(Plane, *Net, /*SpliceStep=*/1, AB);
+		const FRoadAgent* After = Traffic->FindAgent(Plane);
+		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: free strip - replanned %d, %d step(s), uses strip %d, %.0f uu"),
+			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan), After->Follower.Plan.Length);
+		TestTrue(TEXT("a free runway end is a turnaround: the replan succeeds"), bReplanned);
+		TestTrue(TEXT("and goes round the end of the strip"), UsesStrip(After->Follower.Plan));
+		TestTrue(TEXT("W -> A -> R1 -> R2 -> B -> E"), After->Follower.Plan.Steps.Num() == 5 && After->Follower.Plan.Steps[1].To == R1);
+	}
+
+	// HELD BY SOMEBODY ELSE: a phantom reservation on the strip - a departure at its bar -
+	// and the same replan has nowhere to go. The old ban and the new rule agree here; the
+	// difference is only the case above.
+	{
+		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+		FTrafficClaim Bar; Bar.AgentId = 99; Bar.Resource = FTrafficResource::OfSurface(Strip); Bar.bOccupied = false;
+		FTrafficClaim Blocker;
+		Traffic->OccupancyForTest().TryClaim(Bar, Blocker);
+		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+		const bool bReplanned = Traffic->ReplanAtForTest(Plane, *Net, /*SpliceStep=*/1, AB);
+		const FRoadAgent* After = Traffic->FindAgent(Plane);
+		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: held strip - replanned %d, %d step(s), uses strip %d"),
+			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan));
+		TestFalse(TEXT("a strip somebody else holds is not a turnaround: the replan fails"), bReplanned);
+		TestTrue(TEXT("and the agent keeps the route it had"), After->Follower.Plan.Steps.Num() == 3 && !UsesStrip(After->Follower.Plan));
+	}
+	return true;
+}
+
 #endif

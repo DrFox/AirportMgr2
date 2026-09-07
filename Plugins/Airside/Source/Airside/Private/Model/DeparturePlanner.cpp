@@ -78,7 +78,7 @@ namespace DeparturePlanner
 			Query.Goal = Candidate;
 			Query.Class = Class;
 			Query.Wingspan = Airframe.Wingspan;
-			Query.bAvoidRunways = true;
+			Query.AvoidRunways = ERunwayAvoidance::All;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{
@@ -107,7 +107,7 @@ namespace DeparturePlanner
 			Query.Goal = Candidate;
 			Query.Class = Class;
 			Query.Wingspan = Airframe.Wingspan;
-			Query.bAvoidRunways = false;
+			Query.AvoidRunways = ERunwayAvoidance::None;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{

@@ -4,6 +4,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -171,6 +172,79 @@ bool FRouteOccupancyCostTest::RunTest(const FString& Parameters)
 	// change that moved those routes by a metre would move every ghost the player is shown.
 	FRouteQuery Bare; Bare.Start = West; Bare.Goal = East; Bare.Class = ETraversalClass::GroundVehicle;
 	TestTrue(TEXT("the null-table plan is the old plan to the point"), Plain.Polyline == RouteSearch::Find(*Net, Bare).Polyline);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteRunwayAvoidanceTest,
+	"Airside.Model.RouteSearch.RunwayAvoidance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
+{
+	// A(0,0) to B(20000,0). The short way is round a runway's end: A -> R1 (1000 south),
+	// along the strip R1 -> R2 (20000, an edge DERIVED FROM a runway segment), R2 -> B
+	// (1000): 22000 uu. The long way is the taxiway detour over D(10000, 30000): 63246 uu.
+	// Which one the search takes is exactly what ERunwayAvoidance decides, and the phantom
+	// holder on the runway chain is what Held reads.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
+	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+	if (!TestTrue(TEXT("the strip is a runway segment"), Net->IsRunwaySegment(Strip))) { return false; }
+
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
+	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(10000.0, 30000.0));
+	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
+	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
+	M2StepJoin(*Net, A, D); M2StepJoin(*Net, D, B);
+	M2StepJoin(*Net, A, R1); M2StepJoin(*Net, R2, B);
+	{
+		FGuidelineEdge Along;
+		Along.A = R1; Along.B = R2;
+		Along.Control = FVector2D(10000.0, -1000.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		Net->AddGuidelineEdge(MoveTemp(Along));
+	}
+
+	auto ViaRunway = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; };
+	auto ViaDetour = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; };
+
+	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	TestTrue(TEXT("None: the runway end is ordinary line, the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
+
+	Q.AvoidRunways = ERunwayAvoidance::All;
+	TestTrue(TEXT("All: never along the strip, whatever the table - the detour"), ViaDetour(RouteSearch::Find(*Net, Q)));
+
+	Q.AvoidRunways = ERunwayAvoidance::Held;
+	TestTrue(TEXT("Held with no table: every runway is free - the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
+
+	FTrafficOccupancy Table;
+	Q.Occupancy = &Table; Q.QueryingAgent = 1;
+	TestTrue(TEXT("Held, empty table: the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
+
+	// A RESERVATION IS ENOUGH: a departure at the bar holds the strip reserved, not occupied,
+	// and it is exactly the agent the ban was written to protect.
+	FTrafficClaim Bar; Bar.AgentId = 7; Bar.Resource = FTrafficResource::OfSurface(Strip); Bar.bOccupied = false;
+	FTrafficClaim Blocker;
+	Table.TryClaim(Bar, Blocker);
+	TestTrue(TEXT("Held, a stranger's reservation on the chain: the detour"), ViaDetour(RouteSearch::Find(*Net, Q)));
+
+	Q.QueryingAgent = 7;
+	TestTrue(TEXT("Held, the querier's OWN reservation does not count: the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
+
+	// BUT ITS OWN BODY DOES. An aircraft standing on the strip (its claim occupied - the
+	// crossing rule, or a roll-out) must not be routed along it: the jam it is replanning
+	// out of is a queue for that strip, and the waiter at the bar holds nothing the table
+	// can show. Traffic.HeadOnReplansRoundBarHolder is the case in full.
+	FTrafficClaim Body; Body.AgentId = 7; Body.Resource = FTrafficResource::OfSurface(Strip); Body.bOccupied = true;
+	Table.TryClaim(Body, Blocker);
+	TestTrue(TEXT("Held, the querier is standing on the strip: the detour"), ViaDetour(RouteSearch::Find(*Net, Q)));
 	return true;
 }
 

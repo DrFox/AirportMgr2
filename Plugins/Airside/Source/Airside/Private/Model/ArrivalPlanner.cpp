@@ -26,7 +26,7 @@ namespace ArrivalPlanner
 			Query.Goal = Stand.PoseNode;
 			Query.Class = ETraversalClass::Aircraft;
 			Query.Wingspan = Airframe.Wingspan;
-			Query.bAvoidRunways = true;
+			Query.AvoidRunways = ERunwayAvoidance::All;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
 			{
