@@ -115,6 +115,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
 	FLinearColor RouteColour = FLinearColor(0.2f, 0.85f, 1.0f);
 
+	/** The pickable under the cursor - what a click would select. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
+	FLinearColor HoverColour = FLinearColor(1.0f, 1.0f, 1.0f);
+
+	/** The current selection. Warm, so it reads against the cyan route and grey nodes. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
+	FLinearColor SelectedColour = FLinearColor(1.0f, 0.75f, 0.2f);
+
 	/**
 	 * Hold bars. Amber, because that is what one is painted on a real taxiway - and it
 	 * reads as a warning against the blue-grey guideline dots it sits among rather than

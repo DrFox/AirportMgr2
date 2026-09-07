@@ -31,6 +31,7 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 	FBuildSession Session;
 	TestEqual(TEXT("a session holds exactly as many tools as the registry lists"),
 		Session.NumTools(), Registry.Num());
+	TestEqual(TEXT("a fresh session opens in registry index 0 (Select)"), Session.GetActiveToolIndex(), 0);
 
 	// 3. Selecting index i yields the tool the registry SAYS lives at i, by name - the
 	// check that would have caught the editor module carrying a shorter, silently

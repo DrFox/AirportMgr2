@@ -558,6 +558,9 @@ public:
 	/** IRoadEditTarget accessor for Network - see the property's own comment. */
 	virtual const URoadNetwork* GetNetwork() const override { return Network; }
 
+	/** IRoadEditTarget accessor for the agents: Traffic's model. Forwards to Traffic. */
+	virtual const UGroundTraffic* GetGroundTraffic() const override;
+
 	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
 	 *  rather than the Command layer design spec 7.3 specifies. Stays on the actor for the
 	 *  same saved-with-the-level reason as Network. */

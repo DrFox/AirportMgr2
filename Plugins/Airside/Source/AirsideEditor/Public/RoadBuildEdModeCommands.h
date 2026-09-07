@@ -26,6 +26,7 @@ public:
 	 */
 	TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder() const;
 
+	TSharedPtr<FUICommandInfo> SelectEntities;
 	TSharedPtr<FUICommandInfo> DrawRoads;
 	TSharedPtr<FUICommandInfo> DrawAprons;
 	TSharedPtr<FUICommandInfo> PlaceStands;

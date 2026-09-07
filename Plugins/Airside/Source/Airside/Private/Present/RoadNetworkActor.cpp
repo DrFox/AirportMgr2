@@ -478,6 +478,11 @@ ARoadAgentActor* ARoadNetworkActor::GetNewestAgent() const
 	return Traffic->GetNewestAgent();
 }
 
+const UGroundTraffic* ARoadNetworkActor::GetGroundTraffic() const
+{
+	return Traffic != nullptr ? Traffic->GetModel() : nullptr;
+}
+
 int32 ARoadNetworkActor::AgentCountForTest() const
 {
 	return Traffic->GetAgentCount();

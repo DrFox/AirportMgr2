@@ -104,7 +104,12 @@ follower's position is the nose gear, and clicking the tail should still work.
 `ARoadBuildController::OnCancelGesture` (and the editor mode's Escape) today: if the
 active tool is not idle, tool cancels; else nothing. New: else, if the active index is
 not 0, `SelectTool(0)`. Two cancels from mid-gesture in a build tool reach Select; one
-cancel from an idle build tool does. Same rule for both drivers.
+cancel from an idle build tool does.
+
+*Amended 2026-09-07 (Task 2):* the editor mode keeps cancel-in-place; return-to-Select is a
+play-driver behaviour. Each editor tool owns a session pinned to one palette entry, so a
+session that returned to Select would run under a palette button still naming Taxiway
+(see RoadBuildEditorTool.cpp).
 
 ## 4. Facts — `Model/InspectFacts.h`
 

@@ -82,6 +82,8 @@ FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 	case EPreviewStyle::Refused: return RefusedColour;
 	case EPreviewStyle::Guideline: return GuidelineColour;
 	case EPreviewStyle::Route:   return RouteColour;
+	case EPreviewStyle::Hover:   return HoverColour;
+	case EPreviewStyle::Selected: return SelectedColour;
 	case EPreviewStyle::RunwayHoldingPosition: return RunwayHoldingPositionColour;
 	case EPreviewStyle::IntermediateHoldingPosition: return IntermediateHoldingPositionColour;
 	case EPreviewStyle::Pending:
@@ -106,7 +108,7 @@ void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
 	const float Thickness = bContext ? PreviewThickness * 0.5f : PreviewThickness;
 
 	DrawRing(Screen, Radius, StyleColour(Style), Thickness);
-	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending)
+	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending || Style == EPreviewStyle::Selected)
 	{
 		DrawRing(Screen, NodeRingRadius * 1.6f, StyleColour(Style), PreviewThickness);
 	}

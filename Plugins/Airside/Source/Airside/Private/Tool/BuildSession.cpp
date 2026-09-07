@@ -6,6 +6,7 @@
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
+#include "Tool/SelectTool.h"
 #include "Tool/StandPlaceTool.h"
 
 #define LOCTEXT_NAMESPACE "BuildSession"
@@ -24,6 +25,11 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 	// which is exactly the class of bug this table exists to make impossible elsewhere.
 	static const FToolRegistration Registry[] =
 	{
+		// INDEX 0 IS THE DEFAULT STATE (spec 2026-09-07-entity-inspector §2): the session
+		// opens here and CancelActiveGesture returns here. Key 4 because that was the route
+		// tool's, whose slot this fills; the printed keys 1-3 keep their meaning.
+		{ EKeys::Four,  LOCTEXT("Select",    "Select"),    [] { return MakeUnique<FSelectTool>(); } },
+
 		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
 		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
@@ -76,6 +82,13 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	}
 
 	ActiveTool = Index;
+
+	// A build tool is modal over the airport, not over a thing in it: the selection closes
+	// with the panel when one opens, and does not come back when it is cancelled.
+	if (Index != 0)
+	{
+		Selection.Clear();
+	}
 }
 
 bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
@@ -92,10 +105,13 @@ bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& Pl
 }
 
 FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier) const
+	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
+	int32 HoverAgent) const
 {
 	FToolContext Context;
 	Context.Target = Target;
+	Context.HoverAgent = HoverAgent;
+	Context.Selection = &Selection;
 	Context.Limits = Tunables.Limits;
 	Context.SnapRadius = Tunables.ToolPickRadius;
 	Context.bRemoveModifier = bRemoveModifier;
@@ -113,9 +129,22 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 
 void FBuildSession::CancelActiveGesture(const FToolContext& Context)
 {
-	if (IBuildTool* Tool = GetActiveTool())
+	IBuildTool* Tool = GetActiveTool();
+	if (Tool == nullptr)
+	{
+		return;
+	}
+	if (!Tool->IsIdle())
 	{
 		Tool->OnCancel(Context);
+		return;
+	}
+	// Idle, and not in Select: cancel means "put the tool down". Two cancels from mid-gesture
+	// reach Select; one from an idle build tool does. In Select itself an idle cancel is a
+	// no-op rather than a toggle to anything.
+	if (ActiveTool != 0)
+	{
+		SelectTool(0, Context);
 	}
 }
 

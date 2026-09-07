@@ -447,6 +447,10 @@ void URoadBuildEditorTool::CancelGesture()
 		Target->Network->Modify();
 	}
 
+	// Not Session.CancelActiveGesture: each editor tool owns a session pinned to ONE palette
+	// entry (URoadBuildEditorToolBuilder::ToolIndex), so "return to Select" here would run the
+	// Select tool under a palette button that still says Taxiway. In the editor, Escape ends
+	// the gesture and the palette changes tools.
 	Tool->OnCancel(MakeHoverContext());
 	GEditor->EndTransaction();
 
