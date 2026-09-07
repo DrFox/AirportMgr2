@@ -5,6 +5,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
+#include "Build/AnchorLink.h"
 #include "Present/RoadSurfacePresenter.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
@@ -623,6 +624,34 @@ public:
 	 * back off the model, so it is not a figure this actor keeps to itself.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Traffic") FTrafficRules TrafficRules;
+
+	/**
+	 * How far a SERVICE connection may reach, in any direction, uu. 50 m by default.
+	 *
+	 * HERE AND NOT A CONSTANT, for the same reason TrafficRules is here: it is per-airport
+	 * gameplay tuning a designer sets on the level, not a content default to fall back on
+	 * (which is UAirsideSettings' business) and not a fact about a painted line (which is
+	 * FAnchorLink::DefaultMaxLeadIn, and stays a constant). An airport laid out with wide
+	 * service margins raises it; one that wants a stand to connect only to the road right
+	 * beside it lowers it.
+	 *
+	 * SHORT BY DEFAULT ON PURPOSE - see FAnchorLink::DefaultServiceLinkRadius for why a long
+	 * reach reintroduces exactly the failure the ray rule was protecting against.
+	 *
+	 * PUBLIC, like TrafficRules: the level authors it and the seam test reads it back off the
+	 * settings the presenter is actually handed.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Traffic")
+	double ServiceLinkRadius = FAnchorLink::DefaultServiceLinkRadius;
+
+	/**
+	 * MakeSurfaceSettings, for the seam test.
+	 *
+	 * The settings struct is the ONLY route from a level-authored figure to the build, so the
+	 * test reads THAT rather than re-deriving the number - which is the whole "check where a
+	 * list is CONSUMED" rule applied to a single knob.
+	 */
+	URoadSurfacePresenter::FSurfaceSettings MakeSurfaceSettingsForTest() { return MakeSurfaceSettings(); }
 
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */

@@ -1,9 +1,11 @@
 #include "CoreMinimal.h"
+#include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -211,6 +213,38 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the duplicate's relay is bound to the duplicate's model"), DupRelayed, 1);
 		TestNotNull(TEXT("and its view was spawned"), DupTraffic->GetNewestAgent());
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceLinkRadiusIsLevelAuthoredTest,
+	"Airside.Present.ServiceLinkRadiusIsLevelAuthored",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceLinkRadiusIsLevelAuthoredTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM, and the only test that fails if the property is left unwired. A figure the
+	// designer sets on the level that never reaches FAnchorLink is exactly the failure
+	// CLAUDE.md's "check where a list is CONSUMED" is about - a knob with nothing on the
+	// other end of it, which this codebase has shipped three times.
+	//
+	// Read off FSurfaceSettings rather than off FAnchorLink, because that struct IS the only
+	// route from the actor to the build - see URoadSurfacePresenter::FSurfaceSettings.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
+
+	TestEqual(TEXT("the default is FAnchorLink's own, not a second literal"),
+		Actor->ServiceLinkRadius, FAnchorLink::DefaultServiceLinkRadius);
+
+	Actor->ServiceLinkRadius = 777.0;
+	TestEqual(TEXT("and a level-authored figure reaches the presenter's settings unchanged"),
+		Actor->MakeSurfaceSettingsForTest().ServiceLinkRadius, 777.0);
 	return true;
 }
 

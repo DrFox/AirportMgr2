@@ -135,6 +135,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.bDebugDrawMesh = bDebugDrawMesh;
 	Settings.bDebugDrawAprons = bDebugDrawAprons;
 	Settings.DebugDrawSeconds = DebugDrawSeconds;
+	Settings.ServiceLinkRadius = ServiceLinkRadius;
 
 	// THROUGH THE RESOLVERS, never the raw properties - see ResolveMaterialSet's own
 	// comment for why a resolver that FILLED a null property changed a level.
