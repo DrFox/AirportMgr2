@@ -1,7 +1,16 @@
 # Service Connections and the Stand Service Loop — Design
 
-**Status:** design, agreed in conversation 2026-09-07 after PR #67 (the fuel service slice)
-was merged and PIE-verified. Sits between the fuel slice and M3.
+**Status:** IMPLEMENTED 2026-09-07 on `feature/service-connections`, plan at
+`docs/superpowers/plans/2026-09-07-service-connections.md`. 190 test(s) run, 0 failed, 0
+crashed. On M_Starter the probe reports `Service loops: 4 lane(s) laid, 20 anchor spur(s)`
+and `5 of 5 anchors joined` on every stand, and every lane then reports `REACHES NO a road`
+- correctly, because the committed level has no service road drawn near the stand row (every
+segment probes as `profile NULL`). The alongside-a-row case is pinned headlessly by
+`Airside.Build.RoadAlongsideARowOfStands`; it still wants one PIE session with a service road
+actually drawn.
+
+Designed, agreed in conversation 2026-09-07 after PR #67 (the fuel service slice) was merged
+and PIE-verified. Sits between the fuel slice and M3.
 
 **Parents:** `2026-09-07-fuel-service-slice-design.md` (the slice this fixes);
 `2026-09-06-ground-traffic-design.md` (classes, claims, the resolver);

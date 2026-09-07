@@ -77,6 +77,15 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraft
 		EServiceRole::Aircraft, EServiceRole::Fuel, EServiceRole::Baggage,
 		EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
 
+	// EVERY FIELD THIS BUILDER OWNS, SET, including the three that happen to want the
+	// constructor default. Not decoration: build_stand_asset.py re-authors an EXISTING asset
+	// in place (it must - deleting one that a level and another asset reference fails), so a
+	// field the builder leaves alone keeps whatever was last saved into it. Stating them is
+	// what makes "re-run the script" mean the same thing as "make it from scratch".
+	Definition->PoseRole = EServiceRole::Aircraft;   // the nose gear stop mark
+	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
+	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
+
 	// THE SERVICE LOOP: the closed lane the ground vehicles use, derived from what it has to
 	// enclose rather than typed. See UEntityDefinition::ServiceLoop for why it is computed
 	// here and not authored beside the anchors.
