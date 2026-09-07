@@ -522,7 +522,17 @@ int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeInde
 
 bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
 {
-	return Facade->PlaceRunway(From, To, RunwayProfile);
+	return PlaceRunway(From, To, RunwayProfile, FRunwayFacts());
+}
+
+bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts)
+{
+	return Facade->PlaceRunway(From, To, RunwayProfile, Facts);
+}
+
+bool ARoadNetworkActor::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts)
+{
+	return Facade->SetRunwayFacts(SegmentIndex, Facts);
 }
 
 bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)

@@ -196,9 +196,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 
-	/** Lays a runway from From to To in one edit, with its own profile. */
+	/**
+	 * Lays a runway from From to To in one edit, with its own profile and its facts.
+	 *
+	 * The three-argument form is the UFUNCTION (UHT allows no overloads) and lays tarmac /
+	 * visual - the facts' defaults, which is what every caller before the facts existed
+	 * meant; the four-argument form is the interface's, which the tool calls.
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
+	bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile);
+	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
+
+	/** Reclassify a runway's whole strip - surface and approach - as one undoable edit. */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 
 	/**
 	 * The shortest thing that may be called a runway, in uu. 500 m.

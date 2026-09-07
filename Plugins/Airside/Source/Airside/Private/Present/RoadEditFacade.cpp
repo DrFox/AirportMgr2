@@ -224,7 +224,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
 	return true;
 }
 
-bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile)
+bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts)
 {
 	ARoadNetworkActor& Owner = Actor();
 	if (Owner.Network == nullptr)
@@ -271,11 +271,48 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 		return false;
 	}
 
+	// The facts go on in the SAME edit as the pavement, so an undo takes both back: a
+	// runway that came back as tarmac after Ctrl+Z on its classification would be a
+	// runway the player never placed.
+	Owner.Network->SetRunwayFacts(Segment, Facts);
+
 	Edit.Commit();
 	OnChanged.Broadcast();
 
-	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide"),
-		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth());
+	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
+		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
+		RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
+	return true;
+}
+
+bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts)
+{
+	URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return false;
+	}
+	FRoadSegmentId Segment;
+	if (!MakeLiveSegmentId(SegmentIndex, Segment) || !Network->IsRunwaySegment(Segment))
+	{
+		// Refused BEFORE the snapshot, like every other guard on this seam - see
+		// SetIntermediateHoldingPosition for why a refusal inside the scope is not a rollback.
+		return false;
+	}
+	if (Network->RunwayFactsFor(Segment) == Facts)
+	{
+		// Already so. True, because the runway IS what was asked for - but no edit, since
+		// an undo step that changes nothing is a Ctrl+Z the player has to press twice.
+		return true;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("set runway facts"));
+	Network->SetRunwayFacts(Segment, Facts);
+	Edit.Commit();
+	OnChanged.Broadcast();
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
+		SegmentIndex, RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
 	return true;
 }
 
