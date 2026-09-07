@@ -89,9 +89,16 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	Definition->Anchors.Reset();
 
 	// ORIGIN IS THE TRUCK BAY - where a truck stands when it is home, and the node it is
-	// dispatched from and back to. +X faces the road, so the pose lead-in (heading + 180,
-	// see FAnchorLink) casts back out of the building at whatever the player aimed it at,
-	// exactly as a stand's runs back out to the movement area.
+	// dispatched from and back to.
+	//
+	// +X FACES AWAY FROM THE ROAD, exactly as a stand's +X faces the terminal: the pose
+	// lead-in leaves along heading PLUS 180 (see FAnchorLink), so it runs out of the BACK of
+	// the installation to the movement area. A depot is therefore aimed away from the road it
+	// serves, and the truck drives out behind it.
+	//
+	// Stated the wrong way round when this was first written ("+X faces the road"), which is
+	// self-contradictory given the +180 in the same sentence - and it is the sentence a
+	// player placing one would have followed.
 	Definition->PoseRole = EServiceRole::Fuel;
 
 	// HALF-extents: 12 m by 8 m overall. A tank, a pump, and room to turn a bowser round.
