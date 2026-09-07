@@ -149,7 +149,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	return Settings;
 }
 
-URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSettings()
+URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSettings(ERoadKind Kind)
 {
 	// Only what UpdateGhost/BuildGhostBuffers read - narrower than MakeSurfaceSettings so
 	// the ghost path never pays for SurfaceMaterial/ApronMaterial/MaterialSet, each a
@@ -160,7 +160,13 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	Settings.RibbonSegments = RibbonSegments;
 	Settings.GhostZOffset = GhostZOffset;
 	Settings.GhostMaterial = ResolveGhostMaterial();
-	Settings.Profile = ResolveProfile();
+
+	// THE KIND THE CLICK WILL ACTUALLY LAY, not always the taxiway. A ghost is a promise
+	// about what a click does, and a 23 m preview over a 6 m road is a promise the player
+	// then acts on. Null for a road with no profile is correct and needs no guard here: the
+	// presenter already draws nothing without half-widths, which is what the refusal in
+	// URoadEditFacade::ConnectNodes is about to say out loud.
+	Settings.Profile = Kind == ERoadKind::ServiceRoad ? ResolveServiceRoadProfile() : ResolveProfile();
 	return Settings;
 }
 
@@ -391,7 +397,8 @@ double ARoadNetworkActor::GetApronSurfaceZ() const
 	return Presenter->GetApronSurfaceZ(SurfaceZ, ApronZOffset);
 }
 
-void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
+void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+	ERoadKind Kind)
 {
 	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
 	// unchanged FromNodeIndex/Snap, and the cache already knows that without a Resolve*
@@ -406,13 +413,18 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 		return;
 	}
 
-	Presenter->UpdateGhost(Network, FromNodeIndex, Snap, bValid, MakeGhostSurfaceSettings());
+	Presenter->UpdateGhost(Network, FromNodeIndex, Snap, bValid, MakeGhostSurfaceSettings(Kind));
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(
 	int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers)
 {
-	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, Snap, MakeGhostSurfaceSettings(), OutBuffers);
+	// TAXIWAY, PASSED EXPLICITLY. This is the seam Airside.Present.AuthoredPropertiesUntouched
+	// measures - that building a preview leaves the real network bitwise unchanged - and it
+	// has no kind of its own to be given. Spelled out rather than defaulted so the choice is
+	// visible at the call site.
+	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, Snap,
+		MakeGhostSurfaceSettings(ERoadKind::Taxiway), OutBuffers);
 }
 
 void ARoadNetworkActor::HideGhost()
@@ -541,9 +553,9 @@ int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 	return Facade->PlaceNode(Where);
 }
 
-bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex)
+bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind)
 {
-	return Facade->ConnectNodes(FromIndex, ToIndex);
+	return Facade->ConnectNodes(FromIndex, ToIndex, Kind);
 }
 
 int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)

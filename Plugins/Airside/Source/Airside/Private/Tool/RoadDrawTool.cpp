@@ -63,7 +63,7 @@ TUniquePtr<IRoadDrawState> FRoadIdleState::OnClick(const FToolContext& Context)
 	}
 
 	Context.Target->RebuildMesh();
-	return MakeUnique<FRoadChainingState>(Started, bCreated);
+	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind);
 }
 
 TUniquePtr<IRoadDrawState> FRoadIdleState::OnCancel(const FToolContext& Context)
@@ -101,7 +101,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		{
 			UE_LOG(LogAirside, Warning,
 				TEXT("Road chaining from node %d refused: the target's network is null although the node is live"), From);
-			return MakeUnique<FRoadIdleState>();
+			return MakeUnique<FRoadIdleState>(Kind);
 		}
 		const ERoadPlacement Judgement =
 			RoadPlacement::Validate(*Network, FromId, Context.Snap, Context.Limits);
@@ -118,19 +118,19 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		return nullptr;
 	}
 
-	if (To != From && !Context.Target->ConnectNodes(From, To))
+	if (To != From && !Context.Target->ConnectNodes(From, To, Kind))
 	{
 		// The facade already logged why. Drop the chain rather than leaving the player
 		// clicking against a connection that will not form.
 		Context.Target->RebuildMesh();
-		return MakeUnique<FRoadIdleState>();
+		return MakeUnique<FRoadIdleState>(Kind);
 	}
 
 	Context.Target->RebuildMesh();
 
 	// Chain on from the node just reached, so a road is drawn click by click rather than
 	// a pair of clicks per segment.
-	return MakeUnique<FRoadChainingState>(To, bNextCreated);
+	return MakeUnique<FRoadChainingState>(To, bNextCreated, Kind);
 }
 
 TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Context)
@@ -151,7 +151,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Cont
 		}
 	}
 
-	return MakeUnique<FRoadIdleState>();
+	return MakeUnique<FRoadIdleState>(Kind);
 }
 
 void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
@@ -180,17 +180,24 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 
 // --- The tool -----------------------------------------------------------------------
 
-FRoadDrawTool::FRoadDrawTool()
-	: State(MakeUnique<FRoadIdleState>())
+FRoadDrawTool::FRoadDrawTool(ERoadKind InKind)
+	: State(MakeUnique<FRoadIdleState>(InKind))
+	, Kind(InKind)
 {
 }
 
 FText FRoadDrawTool::GetDisplayName() const
 {
-	// "Taxiway", not "Road": this tool lays the taxiway profile - an aircraft centreline
-	// and taxiway bands. A vehicle road tool is M4's, and until it exists a key labelled
-	// "Road" promises one that is not there (2026-09-07).
-	return LOCTEXT("RoadTool", "Taxiway");
+	// TWO NAMES FOR ONE TOOL, and they must match the registry's own Name for each entry -
+	// Airside.Tool.BuildSession asserts the two cannot drift, which is exactly the class of
+	// bug the registry exists to make impossible elsewhere.
+	//
+	// "Road" was once refused here on the grounds that a key labelled Road promised a
+	// vehicle tool that did not exist (2026-09-07). It exists now: key 9 lays the service
+	// road profile, with a GroundVehicle guideline, and key 1 keeps the taxiway.
+	return Kind == ERoadKind::ServiceRoad
+		? LOCTEXT("RoadTool", "Road")
+		: LOCTEXT("TaxiwayTool", "Taxiway");
 }
 
 bool FRoadDrawTool::IsIdle() const
@@ -223,7 +230,10 @@ void FRoadDrawTool::Remove(const FToolContext& Context)
 
 	// A deletion can take the node the chain was running from, so the chain ends rather
 	// than being checked. Its start may not exist any more.
-	State = MakeUnique<FRoadIdleState>();
+	// WITH THIS TOOL'S OWN KIND. Dropping to a default-constructed idle state would silently
+	// put the Road tool back into taxiway mode after a Ctrl+click removal, and the next
+	// click would lay a 23 m aircraft lane where the player was drawing a road.
+	State = MakeUnique<FRoadIdleState>(Kind);
 	Context.Target->RebuildMesh();
 }
 
@@ -343,7 +353,7 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
 		RoadPlacement::Validate(*Context.Target->GetNetwork(), FromId, Context.Snap, Context.Limits);
-	Context.Target->UpdateGhost(Pending, Context.Snap, Judgement == ERoadPlacement::Valid);
+	Context.Target->UpdateGhost(Pending, Context.Snap, Judgement == ERoadPlacement::Valid, Kind);
 }
 
 void FRoadDrawTool::OnDeactivate(const FToolContext& Context)

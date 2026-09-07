@@ -61,7 +61,8 @@ public:
 	virtual const URoadNetwork* GetNetwork() const override;
 
 	virtual int32 PlaceNode(FVector2D Where) override;
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) override;
+	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
 	using IRoadEditTarget::PlaceRunway;
@@ -98,7 +99,9 @@ public:
 	 * Nothing calls IRoadEditTarget through a facade-typed pointer today; this exists so
 	 * nothing would silently do the wrong thing if that ever changed.
 	 */
-	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+		ERoadKind Kind) override;
+	using IRoadEditTarget::UpdateGhost;
 	virtual void HideGhost() override;
 	virtual void RebuildMesh() override;
 	using IRoadEditTarget::DispatchAgent;

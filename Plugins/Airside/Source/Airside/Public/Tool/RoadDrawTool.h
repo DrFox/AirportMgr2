@@ -33,10 +33,17 @@ struct AIRSIDE_API IRoadDrawState
 class AIRSIDE_API FRoadIdleState : public IRoadDrawState
 {
 public:
+	/** Kind is carried by the STATE as well as by the tool because a state builds its own
+	 *  successor, and the successor must lay the same cross-section this one started. */
+	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway) : Kind(InKind) {}
+
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
 	virtual bool IsIdle() const override { return true; }
+
+private:
+	ERoadKind Kind = ERoadKind::Taxiway;
 };
 
 /**
@@ -48,7 +55,8 @@ public:
 class AIRSIDE_API FRoadChainingState : public IRoadDrawState
 {
 public:
-	FRoadChainingState(int32 InFrom, bool bInCreated) : From(InFrom), bCreated(bInCreated) {}
+	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway)
+		: From(InFrom), bCreated(bInCreated), Kind(InKind) {}
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
@@ -59,6 +67,9 @@ public:
 private:
 	int32 From = INDEX_NONE;
 	bool bCreated = false;
+
+	/** See FRoadIdleState::Kind. */
+	ERoadKind Kind = ERoadKind::Taxiway;
 };
 
 /**
@@ -73,7 +84,16 @@ private:
 class AIRSIDE_API FRoadDrawTool : public IBuildTool
 {
 public:
-	FRoadDrawTool();
+	/**
+	 * ONE TOOL, TWO REGISTRY ENTRIES - key 1 lays a taxiway and key 9 lays a service road.
+	 *
+	 * Drawing a road and drawing a taxiway are the SAME gesture with the same states, the
+	 * same snap chain and the same removal rules; only the cross-section differs. A second
+	 * class would be a copy of two hundred lines that must agree with this one for ever,
+	 * which is the duplication CLAUDE.md's "lists that must agree are ONE list" exists to
+	 * prevent - applied here to behaviour rather than to a table.
+	 */
+	explicit FRoadDrawTool(ERoadKind InKind = ERoadKind::Taxiway);
 
 	virtual FText GetDisplayName() const override;
 
@@ -101,4 +121,8 @@ private:
 
 	/** Node held by an in-progress drag, or INDEX_NONE. A gesture, not a drawing step. */
 	int32 DragNode = INDEX_NONE;
+
+	/** Which cross-section this tool lays. Fixed at construction by the registry entry that
+	 *  made it - a tool is picked, never transitioned into, so this never changes. */
+	ERoadKind Kind = ERoadKind::Taxiway;
 };

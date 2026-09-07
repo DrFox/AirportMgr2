@@ -197,7 +197,8 @@ public:
 
 	/** Join two placed nodes with a straight segment. Returns false, and logs, if it refused. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) override;
+	using IRoadEditTarget::ConnectNodes;
 
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -373,7 +374,9 @@ public:
 
 	/** Show the segment a click would build, as real solved pavement. Forwards to Presenter
 	 *  with a FSurfaceSettings built the same way RebuildMesh's is. */
-	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+		ERoadKind Kind) override;
+	using IRoadEditTarget::UpdateGhost;
 
 	/**
 	 * The ghost's triangles, without touching a component, a material or a renderer.
@@ -658,7 +661,7 @@ private:
 
 	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
 	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */
-	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings();
+	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings(ERoadKind Kind);
 
 public:
 	/**

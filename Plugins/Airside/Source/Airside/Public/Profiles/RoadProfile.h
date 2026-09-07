@@ -5,6 +5,34 @@
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
+/**
+ * Which authored cross-section a build gesture lays.
+ *
+ * A KIND, NOT A URoadProfile*, wherever a tool is involved: a tool has no business naming an
+ * asset, and resolving which profile a kind MEANS is the facade's job
+ * (ARoadNetworkActor::ResolveProfile / ::ResolveServiceRoadProfile) - in one place, where a
+ * missing one can be refused once. See Tool/RoadEditTarget.h, whose ConnectNodes and
+ * UpdateGhost take this.
+ *
+ * HERE RATHER THAN ON THE TOOL SEAM, where it was first written. Tool/RoadEditTarget.h has no
+ * .generated.h, so UHT never parses it and could not resolve the type when it appeared in
+ * ARoadNetworkActor's declarations - "Unable to find 'class', 'delegate', 'enum', or 'struct'
+ * with name 'ERoadKind'", before the compiler is reached. A forward declaration does not
+ * satisfy UHT either. This header is already parsed, and the enum names a kind of
+ * cross-section, which is what this file is about - so the constraint and the right home
+ * happen to agree.
+ *
+ * NOT ON FToolContext. The kind is a fact about the TOOL the player selected, not about the
+ * gesture, and a context field would let two tools disagree about it - the same distinction
+ * FRoadDrawTool draws between a drawing STATE and a drag.
+ */
+UENUM()
+enum class ERoadKind : uint8
+{
+	Taxiway,
+	ServiceRoad
+};
+
 UENUM(BlueprintType)
 enum class ERoadBandType : uint8
 {

@@ -14,8 +14,8 @@
 TConstArrayView<FToolRegistration> ToolRegistry()
 {
 	// A function-local static rather than a file-scope global: constructed exactly once,
-	// on first use, in the order written here - which IS the key order, 1 through 3, 5, 6
-	// then 8 (see the holding-position entry for why seven is skipped; 4 is the Select
+	// on first use, in the order written here - which IS the key order, 1 through 3, 5, 6,
+	// 8 then 9 (see the holding-position entry for why seven is skipped; 4 is the Select
 	// tool, added at index 0 - see FSelectTool). Never
 	// mutated after that first construction, so handing out a view over it is safe from
 	// any thread that only reads.
@@ -30,7 +30,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// tool's, whose slot this fills; the printed keys 1-3 keep their meaning.
 		{ EKeys::Four,  LOCTEXT("Select",    "Select"),    [] { return MakeUnique<FSelectTool>(); } },
 
-		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(); } },
+		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
 		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
 		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"), [] { return MakeUnique<FGuidelineDrawTool>(); } },
@@ -40,6 +40,11 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// this table - see ARoadBuildController::OnLandAircraft. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
 		{ EKeys::Eight, LOCTEXT("HoldingPosition", "Holding point"), [] { return MakeUnique<FHoldingPointTool>(); } },
+
+		// NINE: the SAME FRoadDrawTool, laying the service road cross-section instead of the
+		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
+		// for why this is not a second class.
+		{ EKeys::Nine,  LOCTEXT("Road",      "Road"),      [] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
