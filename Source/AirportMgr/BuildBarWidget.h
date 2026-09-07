@@ -42,7 +42,7 @@ public:
  *
  * TO RESTYLE IN THE DESIGNER: make a Widget Blueprint with this class as parent, give it
  * any layout you like, and name the panels you want filled TimeSection, ToolsSection,
- * EditSection, AircraftSection, GameSection (any UPanelWidget; a HorizontalBox gets padded
+ * EditSection, AircraftSection, SelectionSection, GameSection (any UPanelWidget; a HorizontalBox gets padded
  * slots) plus TextBlocks ClockText and NotificationText. Set it as BuildBarClass on the
  * controller (DefaultGame.ini, [/Script/AirportMgr.RoadBuildController]). Sections you
  * leave out are built in code and a warning names them. Authoring that asset from Python
@@ -60,6 +60,7 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> ToolsSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> EditSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> AircraftSection;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> SelectionSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> GameSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ClockText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> NotificationText;

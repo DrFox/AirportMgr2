@@ -124,6 +124,7 @@ void UBuildBarWidget::EnsureSlots()
 	Ensure(ToolsSection, TEXT("ToolsSection"));
 	Ensure(EditSection, TEXT("EditSection"));
 	Ensure(AircraftSection, TEXT("AircraftSection"));
+	Ensure(SelectionSection, TEXT("SelectionSection"));
 	Ensure(GameSection, TEXT("GameSection"));
 
 	if (ClockText == nullptr)
@@ -150,6 +151,7 @@ UPanelWidget* UBuildBarWidget::SectionPanel(EActionSection Section) const
 	case EActionSection::Tools:    return ToolsSection;
 	case EActionSection::Edit:     return EditSection;
 	case EActionSection::Aircraft: return AircraftSection;
+	case EActionSection::Selection: return SelectionSection;
 	case EActionSection::Game:     return GameSection;
 	}
 	return nullptr;

@@ -48,6 +48,12 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("tool %s appears once as an action"), *Tool.Name.ToString()), Found, 1);
 	}
 
+	// The inspector's verbs are rows of THIS table, so the panel's buttons and the C key
+	// cannot diverge. Depart is bar/panel only (no key); Follow took the old Watch key.
+	TestTrue(TEXT("selection.depart is registered"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.depart")) && A.Section == EActionSection::Selection && !A.Key.IsValid(); }));
+	TestTrue(TEXT("selection.follow is registered on C"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("selection.follow")) && A.Key == EKeys::C; }));
+	TestFalse(TEXT("aircraft.watch is gone - one verb for following"), Actions.ContainsByPredicate([](const FBuildAction& A) { return A.Id == FName(TEXT("aircraft.watch")); }));
+
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.
 	for (uint8 S = 0; S <= static_cast<uint8>(EActionSection::Game); ++S)

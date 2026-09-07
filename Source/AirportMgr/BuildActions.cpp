@@ -12,6 +12,7 @@ const TCHAR* ActionSectionName(EActionSection Section)
 	case EActionSection::Tools:    return TEXT("Tools");
 	case EActionSection::Edit:     return TEXT("Edit");
 	case EActionSection::Aircraft: return TEXT("Aircraft");
+	case EActionSection::Selection: return TEXT("Selection");
 	case EActionSection::Game:     return TEXT("Game");
 	}
 	return TEXT("?");
@@ -86,13 +87,20 @@ namespace
 		Out.Add(Make(TEXT("aircraft.land"), EActionSection::Aircraft, LOCTEXT("Land", "Land"), EKeys::Seven, false,
 			[](ARoadBuildController& C) { C.LandAircraftNearViewFocus(); }, Never,
 			[](const ARoadBuildController& C) { return C.HasRunway(); }));
-		Out.Add(Make(TEXT("aircraft.watch"), EActionSection::Aircraft, LOCTEXT("Watch", "Watch"), EKeys::C, false,
-			[](ARoadBuildController& C) { C.ToggleWatchAgent(); },
-			[](const ARoadBuildController& C) { return C.IsWatchingAgent(); },
-			[](const ARoadBuildController& C) { return C.HasAgent() || C.IsWatchingAgent(); }));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
 			[](ARoadBuildController& C) { C.OnToggleGuidelines(); },
 			[](const ARoadBuildController& C) { return C.IsGuidelineOverlayOn(); }, Always));
+
+		// --- Selection: the inspector's verbs. Rows HERE so the panel's buttons, the bar
+		// and the C key are one list (spec §6.2). Depart has no key: a key that departed
+		// whatever happened to be selected is a misclick away from an unintended take-off.
+		Out.Add(Make(TEXT("selection.depart"), EActionSection::Selection, LOCTEXT("Depart", "Depart"), EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.DepartSelected(); }, Never,
+			[](const ARoadBuildController& C) { return C.CanDepartSelected(); }));
+		Out.Add(Make(TEXT("selection.follow"), EActionSection::Selection, LOCTEXT("Follow", "Follow"), EKeys::C, false,
+			[](ARoadBuildController& C) { C.ToggleWatchAgent(); },
+			[](const ARoadBuildController& C) { return C.IsWatchingAgent(); },
+			[](const ARoadBuildController& C) { return C.HasSelectedAircraft() || C.HasAgent() || C.IsWatchingAgent(); }));
 
 		// --- Game ---
 		Out.Add(Make(TEXT("game.save"), EActionSection::Game, LOCTEXT("Save", "Save"), EKeys::K, false,

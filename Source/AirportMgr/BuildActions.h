@@ -12,6 +12,7 @@ enum class EActionSection : uint8
 	Tools,
 	Edit,
 	Aircraft,
+	Selection,
 	Game
 };
 
