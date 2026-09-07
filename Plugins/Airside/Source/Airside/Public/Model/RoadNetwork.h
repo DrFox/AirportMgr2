@@ -250,6 +250,16 @@ public:
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
 
 	/**
+	 * Bumped by every guideline mutation - node or edge added, removed or relinked - so a
+	 * table derived from the graph (FNodeReachCache) can tell it is stale without walking
+	 * it. Not saved: it dates a graph within one session, and a loaded graph starts at zero
+	 * with no derived table alive to fool. Node POSITIONS are not covered because nothing
+	 * moves a guideline node in place; the builder makes fresh ones. If that changes, the
+	 * mover bumps this too.
+	 */
+	uint32 GetGuidelineRevision() const { return GuidelineRevision; }
+
+	/**
 	 * The handle for a live slot index, for callers walking GetGuidelineNodes() by index.
 	 * Unset for a dead or out-of-range slot, so a caller cannot build a handle to a node
 	 * that RoadSlot::IsValid would then reject.
@@ -437,6 +447,9 @@ private:
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
 	UPROPERTY() TArray<FGuidelineEdge> GuidelineEdges;
 	UPROPERTY() TArray<int32>          GuidelineEdgeFreeList;
+
+	/** See GetGuidelineRevision. Plain, not a UPROPERTY - it is a session clock, not state. */
+	uint32 GuidelineRevision = 0;
 
 	/**
 	 * SAVED, not transient: this is the only durable record that a bar was ever placed.

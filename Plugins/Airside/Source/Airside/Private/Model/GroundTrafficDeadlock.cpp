@@ -141,7 +141,7 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	return true;
 }
 
-bool UGroundTraffic::CanReplanAtBlockedStep(const FRoadAgent& Agent) const
+bool UGroundTraffic::CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network) const
 {
 	if (Agent.Phase != EAgentPhase::Taxiing
 		|| Agent.Follower.Speed >= KINDA_SMALL_NUMBER
@@ -163,9 +163,20 @@ bool UGroundTraffic::CanReplanAtBlockedStep(const FRoadAgent& Agent) const
 	// node would mean reversing - out of M2 by spec §1. The upper bound is where the agent is
 	// actually allowed to stop: the box-entry rule parks it a GAP short of the box's start,
 	// and Travelled is the CENTRE, so its nose is half a footprint further on again.
+	//
+	// AND THE NODE'S REACH along the edge it is arriving on: a refusal at a node whose
+	// lines part late parks the agent that much further back again (StopWithinFor), and
+	// measured against the plain tolerance a waiter at a stand's join was never a
+	// candidate for the resolver that exists to turn it round.
 	const double ToNode = StepStart(Plan, Agent.BlockedStep) - Agent.Follower.Travelled;
+	double Excess = 0.0;
+	if (Network != nullptr && Agent.BlockedStep > 0)
+	{
+		Excess = ReachExcessAt(*Network, StepFromNode(Plan, Agent.BlockedStep),
+			Plan.Steps[Agent.BlockedStep - 1].Edge, Agent.Class);
+	}
 	return ToNode >= -KINDA_SMALL_NUMBER
-		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5;
+		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
 }
 
 void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
@@ -287,7 +298,7 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 			Members += Members.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
 			bAllAircraft = bAllAircraft && Member->Class == ETraversalClass::Aircraft;
 
-			if (!CanReplanAtBlockedStep(*Member))
+			if (!CanReplanAtBlockedStep(*Member, &Network))
 			{
 				continue;
 			}

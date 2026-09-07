@@ -35,6 +35,10 @@ bool UGroundTraffic::SpliceReplan(const URoadNetwork& Network, const FRouteQuery
 
 void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 {
+	// Every node and edge the reach table named has just been freed. The revision check
+	// would catch it on the next lookup; dropping it here says so where the rebuild is.
+	NodeReach.Invalidate();
+
 	int32 Considered = 0;
 	int32 Replanned = 0;
 	int32 Truncated = 0;

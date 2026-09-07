@@ -7,6 +7,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/LandingRun.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
@@ -1146,48 +1147,72 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FTrafficDeadlockTriangleTest,
-	"Airside.Model.Traffic.DeadlockTriangle",
+	FTrafficDeadlockRingTest,
+	"Airside.Model.Traffic.DeadlockRing",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FTrafficDeadlockTriangleTest::RunTest(const FString& Parameters)
+bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 {
-	// One compound junction: a triangle of one-way 600 uu lanes A->B->C->A, shorter than a
-	// van's footprint + gap (800), so the box-entry rule applies to every edge. Three vans
-	// start ON the nodes, each bound for the node the next van stands on: V1 A->C via B,
-	// V2 B->A via C, V3 C->B via A. Nobody may enter its first edge while the far node is
-	// occupied, so all three are stopped at t = 0 waiting on each other - a genuine cycle.
-	// One escape: C->X->B, longer than C->A->B so V3 does not take it unprompted.
+	// One compound junction: a square ring of one-way 750 uu lanes A->B->C->D->A, each
+	// shorter than a van's footprint + gap (800), so the box-entry rule applies to every
+	// edge. Four vans start ON the corners, each bound for the corner two ahead: V1 A->C via
+	// B, V2 B->D via C, V3 C->A via D, V4 D->B via A. Nobody may enter its first edge while
+	// the far node is occupied, so all four are stopped at t = 0 waiting on each other - a
+	// genuine cycle. One escape: D->X1->X2->X3->B round the outside, longer than D->A->B so
+	// V4 does not take it unprompted.
 	//
-	// THE SAME GEOMETRY AS Airside.Model.Traffic.BoxEntry, deliberately: that test pins that
-	// the gridlock FORMS with its members at nodes where they can turn, which is the
-	// precondition this one's resolver depends on. One fixture, two halves of one claim.
+	// A SQUARE, NOT THE TRIANGLE Airside.Model.Traffic.BoxEntry uses, and the difference is
+	// the corner angle. A van waiting at the entry of its NEXT box sits a gap (300) short of
+	// that box's start, i.e. 450 uu past the corner behind it. Node reach (NodeReach.h) holds
+	// a corner for as far as two bodies down its two edges stay within a footprint: at 90
+	// degrees that is F/sqrt(2) = 354, so the waiter has cleared the corner behind and the
+	// van waiting for THAT corner may take it. At 60 degrees it is F = 500, the waiter still
+	// blocks the corner, and the ring is a gridlock nothing can turn out of - which is the
+	// truth about a triangle of 600 uu lanes and 500 uu vans: measured on that fixture, the
+	// old half-footprint rule "resolved" it by driving one van 278 uu from another.
+	//
+	// THE ESCAPE MEETS THE RING SQUARE ON, for the same reason. Its last arm arrives at B
+	// along the x axis, at right angles to the lane leaving B; drawn to arrive 22 degrees
+	// off that lane (measured, first draft of this fixture) B's reach along the lane was the
+	// whole 750 uu, the van waiting in it never released B, and the ring re-locked with no
+	// member able to turn. An escape that hugs the lane it rejoins is not an escape.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 600.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 300.0, 519.6);
-	const FGuidelineNodeId X = M2TrafficNode(*Net, 1400.0, 519.6);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 750.0, 0.0);
+	const FGuidelineNodeId C = M2TrafficNode(*Net, 750.0, 750.0);
+	const FGuidelineNodeId D = M2TrafficNode(*Net, 0.0, 750.0);
+	const FGuidelineNodeId X1 = M2TrafficNode(*Net, -500.0, 1250.0);
+	const FGuidelineNodeId X2 = M2TrafficNode(*Net, 1500.0, 1250.0);
+	const FGuidelineNodeId X3 = M2TrafficNode(*Net, 1500.0, 0.0);
 	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
 	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, A, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, X, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X, B, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, D, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, D, A, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, D, X1, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X1, X2, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X2, X3, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X3, B, EGuidelineDir::AToB);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, B, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	if (!TestTrue(TEXT("all three routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0)) { return false; }
-	TestEqual(TEXT("V3's first plan goes via A (2 steps), not the escape"), Traffic->FindAgent(V3)->Follower.Plan.Steps.Num(), 2);
+	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 V4 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, D, B, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all four routed and dispatched"), V1 > 0 && V2 > 0 && V3 > 0 && V4 > 0)) { return false; }
+	TestEqual(TEXT("V4's first plan goes via A (2 steps), not the escape"), Traffic->FindAgent(V4)->Follower.Plan.Steps.Num(), 2);
 
-	// All three stopped, each waiting on the next, before any resolution.
+	// All four stopped, each waiting on the next, before any resolution.
 	M2TrafficRun(*Traffic, *Net, 1.0, [](int32) { return true; });
 	TestTrue(TEXT("V1 waits on V2"), Traffic->FindAgent(V1)->WaitingOn == V2);
 	TestTrue(TEXT("V2 waits on V3"), Traffic->FindAgent(V2)->WaitingOn == V3);
-	TestTrue(TEXT("V3 waits on V1"), Traffic->FindAgent(V3)->WaitingOn == V1);
-	TestTrue(TEXT("nobody has moved"), Traffic->FindAgent(V1)->Follower.Travelled < 1.0 && Traffic->FindAgent(V2)->Follower.Travelled < 1.0 && Traffic->FindAgent(V3)->Follower.Travelled < 1.0);
+	TestTrue(TEXT("V3 waits on V4"), Traffic->FindAgent(V3)->WaitingOn == V4);
+	TestTrue(TEXT("V4 waits on V1"), Traffic->FindAgent(V4)->WaitingOn == V1);
+	bool bNobodyMoved = true;
+	for (const int32 Id : { V1, V2, V3, V4 }) { bNobodyMoved &= Traffic->FindAgent(Id)->Follower.Travelled < 1.0; }
+	TestTrue(TEXT("nobody has moved"), bNobodyMoved);
 
 	double MaxJump = 0.0;
+	double MinSeparation = TNumericLimits<double>::Max();
 	TMap<int32, FVector2D> Last;
 	int32 ResolvedAtTick = -1;
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32 Tick)
@@ -1198,28 +1223,43 @@ bool FTrafficDeadlockTriangleTest::RunTest(const FString& Parameters)
 			if (const FVector2D* Prev = Last.Find(Agent.Id)) { MaxJump = FMath::Max(MaxJump, FVector2D::Distance(*Prev, Agent.LastMotion.Position)); }
 			Last.Add(Agent.Id, Agent.LastMotion.Position);
 			bAllParked &= (Agent.Phase == EAgentPhase::Parked);
+			for (const FRoadAgent& Other : Traffic->GetAgents())
+			{
+				if (Other.Id > Agent.Id && Agent.Phase == EAgentPhase::Taxiing && Other.Phase == EAgentPhase::Taxiing)
+				{
+					MinSeparation = FMath::Min(MinSeparation, FVector2D::Distance(Agent.LastMotion.Position, Other.LastMotion.Position));
+				}
+			}
 		}
 		if (ResolvedAtTick < 0 && Traffic->GetLastResolvedAgentForTest() != 0) { ResolvedAtTick = Tick; }
 		return !bAllParked;
 	});
 
 	UE_LOG(LogM2TrafficTest, Log,
-		TEXT("DeadlockTriangle measured: resolved at tick %d of the second run (bound %d), agent %d replanned, ")
-		TEXT("%d cycle(s) detected, max per-tick step %.1f uu"),
+		TEXT("DeadlockRing measured: resolved at tick %d of the second run (bound %d), agent %d replanned, ")
+		TEXT("%d cycle(s) detected, max per-tick step %.1f uu, min separation while taxiing %.0f uu"),
 		ResolvedAtTick, static_cast<int32>(Traffic->Rules.StallSeconds / 0.05) + 2,
-		Traffic->GetLastResolvedAgentForTest(), Traffic->GetCyclesDetectedForTest(), MaxJump);
+		Traffic->GetLastResolvedAgentForTest(), Traffic->GetCyclesDetectedForTest(), MaxJump, MinSeparation);
 
 	TestEqual(TEXT("exactly one cycle was detected"), Traffic->GetCyclesDetectedForTest(), 1);
 	TestTrue(FString::Printf(TEXT("detected within StallSeconds + one tick (tick %d)"), ResolvedAtTick), ResolvedAtTick >= 0 && ResolvedAtTick <= static_cast<int32>(Traffic->Rules.StallSeconds / 0.05) + 2);
-	TestEqual(TEXT("the agent that replanned is the highest id"), Traffic->GetLastResolvedAgentForTest(), V3);
-	// Spliced at step 0 (V3 never left C), so the new plan IS the tail: C->X, X->B.
-	TestEqual(TEXT("V3 now has two steps via X"), Traffic->FindAgent(V3) ? Traffic->FindAgent(V3)->Follower.Plan.Steps.Num() : 0, 2);
-	TestEqual(TEXT("the first of which goes to X"), Traffic->FindAgent(V3)->Follower.Plan.Steps[0].To, X);
-	for (const int32 Id : { V1, V2, V3 })
+	TestEqual(TEXT("the agent that replanned is the highest id"), Traffic->GetLastResolvedAgentForTest(), V4);
+	// Spliced at step 0 (V4 never left D), so the new plan IS the tail: D->X1->X2->X3->B.
+	TestEqual(TEXT("V4 now has four steps round the outside"), Traffic->FindAgent(V4) ? Traffic->FindAgent(V4)->Follower.Plan.Steps.Num() : 0, 4);
+	TestEqual(TEXT("the first of which goes to X1"), Traffic->FindAgent(V4)->Follower.Plan.Steps[0].To, X1);
+	for (const int32 Id : { V1, V2, V3, V4 })
 	{
 		TestEqual(FString::Printf(TEXT("agent %d reached its goal"), Id), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked);
 	}
 	TestTrue(FString::Printf(TEXT("no agent moved more than one frame's travel in any tick (%.1f uu)"), MaxJump), MaxJump <= 1000.0 * 0.05 + 1.0);
+	// THE RING RESOLVES WITHOUT ANYBODY DRIVING THROUGH ANYBODY, which is the claim the
+	// triangle could not make. The bound is CENTRES a gap short of one corner on two
+	// perpendicular arms - Gap * sqrt(2) = 424 - not a whole footprint: the nearest two
+	// bodies ever get here is both stopped a gap short of the same corner, noses 70 uu
+	// apart and pointing at right angles, which is a queue and not a collision. Measured
+	// 453 on the first run of this fixture.
+	TestTrue(FString::Printf(TEXT("never closer than two vans queued at one corner (%.0f uu)"), MinSeparation),
+		MinSeparation >= Traffic->Rules.VehicleGap * FMath::Sqrt(2.0) - 1.0);
 	return true;
 }
 
@@ -1231,39 +1271,52 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 {
-	// THE CLASS ARM OF THE CANDIDATE ORDERING, which DeadlockTriangle cannot test because all
-	// three of its members are vans and the tie-break decides everything. Same triangle, but
-	// the agent on C is an AIRCRAFT, and both it and the van on B have an escape available:
-	// C->X->B for the aircraft, B->Y->A for the van. Spec §5 says the LOWEST-ranked member
-	// that can turn goes round, so the van must be the one that replans and the aeroplane
-	// must be left on the route it was cleared for - which is the whole reason the rule is
-	// "lowest class priority first" and not "whoever is nearest a turn".
+	// THE CLASS ARM OF THE CANDIDATE ORDERING, which DeadlockRing cannot test because all
+	// four of its members are vans and the tie-break decides everything. Same ring, but the
+	// agent on C is an AIRCRAFT, and both it and the van on B have an escape available:
+	// C->X1->X2->X3->A for the aircraft, B->Y1->Y2->Y3->D for the van, both round the
+	// outside, and both leaving and rejoining the ring at right angles - see DeadlockRing
+	// for why an escape that rejoins at a shallow angle is no escape at all.
+	// Spec §5 says the LOWEST-ranked member that can turn goes round, so the van must be the
+	// one that replans and the aeroplane must be left on the route it was cleared for -
+	// which is the whole reason the rule is "lowest class priority first" and not "whoever
+	// is nearest a turn". The vans on A and D have no escape, so among the vans the one
+	// that CAN turn is the one that goes, whatever its id.
 	//
-	// Every arm is a box (600 uu against footprint + gap = 800), so the gridlock forms at the
-	// nodes exactly as in DeadlockTriangle - see the note on the rules below for why the
+	// Every arm is a box (750 uu against footprint + gap = 800), so the gridlock forms at the
+	// corners exactly as in DeadlockRing - see the note on the rules below for why the
 	// aeroplane is given the vehicle's figures to make that true of it too.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 600.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 300.0, 519.6);
-	const FGuidelineNodeId X = M2TrafficNode(*Net, 1400.0, 519.6);
-	const FGuidelineNodeId Y = M2TrafficNode(*Net, 1400.0, -600.0);
+	const FGuidelineNodeId B = M2TrafficNode(*Net, 750.0, 0.0);
+	const FGuidelineNodeId C = M2TrafficNode(*Net, 750.0, 750.0);
+	const FGuidelineNodeId D = M2TrafficNode(*Net, 0.0, 750.0);
+	const FGuidelineNodeId X1 = M2TrafficNode(*Net, 1500.0, 750.0);
+	const FGuidelineNodeId X2 = M2TrafficNode(*Net, 1500.0, -1000.0);
+	const FGuidelineNodeId X3 = M2TrafficNode(*Net, 0.0, -1000.0);
+	const FGuidelineNodeId Y1 = M2TrafficNode(*Net, 750.0, -750.0);
+	const FGuidelineNodeId Y2 = M2TrafficNode(*Net, -750.0, -750.0);
+	const FGuidelineNodeId Y3 = M2TrafficNode(*Net, -750.0, 750.0);
 	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
 	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, A, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, X, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X, B, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, B, Y, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, Y, A, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, D, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, D, A, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, C, X1, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X1, X2, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X2, X3, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, X3, A, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, B, Y1, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, Y1, Y2, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, Y2, Y3, EGuidelineDir::AToB);
+	M2TrafficJoin(*Net, Y3, D, EGuidelineDir::AToB);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-
 	// THE AEROPLANE IS GIVEN THE VEHICLE'S FOOTPRINT AND GAP, and that is the fixture's one
 	// deliberate lie. A default airframe is 1000 uu long and keeps 1500 uu ahead of its nose,
-	// so on 600 uu arms it stands on two nodes at once and its stop point for anything on the
+	// so on 750 uu arms it stands on two nodes at once and its stop point for anything on the
 	// next arm is behind where it already is: it cannot move at all, whatever the arbiter
 	// decides. That is the airport-geometry rule ("size ground geometry for the largest
-	// aircraft admitted"), not a traffic defect, and a triangle scaled up to admit a real
+	// aircraft admitted"), not a traffic defect, and a ring scaled up to admit a real
 	// aeroplane stops being a box for a van - so the gridlock would form mid-edge and no
 	// member could turn, which is a different test.
 	//
@@ -1272,19 +1325,17 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	// everywhere it matters.
 	Traffic->Rules.AircraftFootprint = Traffic->Rules.VehicleFootprint;
 	Traffic->Rules.AircraftGap = Traffic->Rules.VehicleGap;
-
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	const int32 P3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, B, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
-	if (!TestTrue(TEXT("all three routed and dispatched"), V1 > 0 && V2 > 0 && P3 > 0)) { return false; }
+	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	const int32 P3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	const int32 V4 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, D, B, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
+	if (!TestTrue(TEXT("all four routed and dispatched"), V1 > 0 && V2 > 0 && P3 > 0 && V4 > 0)) { return false; }
 	TestEqual(TEXT("the van on B goes via C (2 steps), not round Y"), Traffic->FindAgent(V2)->Follower.Plan.Steps.Num(), 2);
-	TestEqual(TEXT("and the aircraft via A, not round X"), Traffic->FindAgent(P3)->Follower.Plan.Steps.Num(), 2);
+	TestEqual(TEXT("and the aircraft via D, not round X"), Traffic->FindAgent(P3)->Follower.Plan.Steps.Num(), 2);
 
-	// FIRST RESOLUTION, not the last: what is under test is who the resolver PICKS out of a
-	// mixed cycle, and a later jam of the survivors would overwrite the last-resolved field
-	// with an answer to a different question.
 	int32 FirstResolved = 0;
 	bool bAircraftEverReplanned = false;
+	double MinSeparation = TNumericLimits<double>::Max();
 	M2TrafficRun(*Traffic, *Net, 180.0, [&](int32)
 	{
 		if (FirstResolved == 0) { FirstResolved = Traffic->GetLastResolvedAgentForTest(); }
@@ -1293,19 +1344,29 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		{
 			bAircraftEverReplanned = bAircraftEverReplanned
 				|| Plane->Follower.Plan.Steps.Num() != 2
-				|| (Plane->Follower.Plan.Steps.Num() == 2 && Plane->Follower.Plan.Steps[0].To == X);
+				|| (Plane->Follower.Plan.Steps.Num() == 2 && Plane->Follower.Plan.Steps[0].To == X1);
 		}
 		bool bAllParked = true;
-		for (const FRoadAgent& Agent : Traffic->GetAgents()) { bAllParked &= (Agent.Phase == EAgentPhase::Parked); }
+		for (const FRoadAgent& Agent : Traffic->GetAgents())
+		{
+			bAllParked &= (Agent.Phase == EAgentPhase::Parked);
+			for (const FRoadAgent& Other : Traffic->GetAgents())
+			{
+				if (Other.Id > Agent.Id && Agent.Phase == EAgentPhase::Taxiing && Other.Phase == EAgentPhase::Taxiing)
+				{
+					MinSeparation = FMath::Min(MinSeparation, FVector2D::Distance(Agent.LastMotion.Position, Other.LastMotion.Position));
+				}
+			}
+		}
 		return !bAllParked;
 	});
 
 	UE_LOG(LogM2TrafficTest, Log,
-		TEXT("DeadlockMixedClass measured: first resolved agent %d (van 1 = %d, van 2 = %d, aircraft = %d), ")
-		TEXT("%d cycle(s), %d line(s), aircraft plan %d step(s)"),
-		FirstResolved, V1, V2, P3, Traffic->GetCyclesDetectedForTest(),
+		TEXT("DeadlockMixedClass measured: first resolved agent %d (van 1 = %d, van 2 = %d, aircraft = %d, van 4 = %d), ")
+		TEXT("%d cycle(s), %d line(s), aircraft plan %d step(s), min separation while taxiing %.0f uu"),
+		FirstResolved, V1, V2, P3, V4, Traffic->GetCyclesDetectedForTest(),
 		Traffic->GetDeadlockLogLinesForTest(),
-		Traffic->FindAgent(P3) ? Traffic->FindAgent(P3)->Follower.Plan.Steps.Num() : 0);
+		Traffic->FindAgent(P3) ? Traffic->FindAgent(P3)->Follower.Plan.Steps.Num() : 0, MinSeparation);
 	for (const FRoadAgent& Agent : Traffic->GetAgents())
 	{
 		UE_LOG(LogM2TrafficTest, Log,
@@ -1316,10 +1377,13 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("the lowest-ranked member that can turn goes round: the van, not the aircraft"), FirstResolved, V2);
 	TestFalse(TEXT("and the aircraft keeps the route it was cleared for"), bAircraftEverReplanned);
-	for (const int32 Id : { V1, V2, P3 })
+	for (const int32 Id : { V1, V2, P3, V4 })
 	{
 		TestEqual(FString::Printf(TEXT("agent %d reached its goal"), Id), Traffic->FindAgent(Id)->Phase, EAgentPhase::Parked);
 	}
+	// The corner bound, as in DeadlockRing: a gap short of one corner on two arms.
+	TestTrue(FString::Printf(TEXT("never closer than two vans queued at one corner (%.0f uu)"), MinSeparation),
+		MinSeparation >= Traffic->Rules.VehicleGap * FMath::Sqrt(2.0) - 1.0);
 	return true;
 }
 
@@ -1882,5 +1946,103 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficDepartureMeetsArrivalOnTaxiwayTest,
+	"Airside.Model.Traffic.DepartureMeetsArrivalOnTaxiway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Parameters)
+{
+	// THE PLAY REPORT OF 2026-09-07: a parked aircraft is sent to depart while the next
+	// arrival is taxiing in on the same taxiway, and the two drive through each other. On
+	// the DERIVED graph - builder taxiway, anchor-link lead-ins, arrival planner, departure
+	// planner - not the hand-joined edge HeadOnStops uses, because that one stops.
+	FVector2D Threshold(0.0, 0.0);
+	const FAirframe Piper = M2TrafficPiper();
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	{
+		const double Needed = FLandingRun::RequiredLandingDistance(
+			Piper.Ground, Piper.Climb, Piper.Approach) * FLandingRun::LandingMargin;
+		const FVector2D ExitAt(Needed * 1.2, 0.0);
+		const FVector2D FarAt(Needed * 3.0, 0.0);
+		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		const FRoadNodeId ThresholdNode = Net->AddNode(Threshold);
+		const FRoadNodeId ExitNode = Net->AddNode(ExitAt);
+		const FRoadNodeId FarNode = Net->AddNode(FarAt);
+		Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
+		Net->AddStraightSegment(ExitNode, FarNode, Runway);
+		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -24000.0));
+		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+		FRoadGuidelineBuilder::Build(*Net, Solved);
+		// Two stands off the one taxiway, so the second arrival has somewhere to go while
+		// the first is parked.
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -12000.0), 0.0);
+		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -18000.0), 0.0);
+		FAnchorLink::Build(*Net);
+	}
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FVector2D Approach = Threshold - FVector2D(1000.0, 0.0);
+
+	const int32 First = Traffic->DispatchArrival(*Net, Approach, Piper, 1.0);
+	if (!TestTrue(TEXT("first arrival admitted"), First > 0)) { return false; }
+	M2TrafficRun(*Traffic, *Net, 400.0, [&](int32)
+	{
+		const FRoadAgent* A = Traffic->FindAgent(First);
+		return A != nullptr && A->Phase != EAgentPhase::Parked;
+	});
+	{
+		const FRoadAgent* A = Traffic->FindAgent(First);
+		if (!TestTrue(TEXT("first arrival parked"), A != nullptr && A->Phase == EAgentPhase::Parked)) { return false; }
+	}
+
+	const int32 Second = Traffic->DispatchArrival(*Net, Approach, Piper, 1.0);
+	if (!TestTrue(TEXT("second arrival admitted"), Second > 0)) { return false; }
+	M2TrafficRun(*Traffic, *Net, 200.0, [&](int32)
+	{
+		const FRoadAgent* B = Traffic->FindAgent(Second);
+		return B != nullptr && B->Phase != EAgentPhase::Taxiing;
+	});
+	{
+		const FRoadAgent* B = Traffic->FindAgent(Second);
+		if (!TestTrue(TEXT("second arrival is taxiing in"), B != nullptr && B->Phase == EAgentPhase::Taxiing)) { return false; }
+	}
+
+	const EDepartureRefusal Why = Traffic->DepartAgent(First, *Net);
+	if (!TestTrue(FString::Printf(TEXT("departure accepted (%d)"), static_cast<int32>(Why)), Why == EDepartureRefusal::None)) { return false; }
+
+	double MinSeparation = TNumericLimits<double>::Max();
+	int32 TicksBothTaxiing = 0;
+	int32 TicksFirstWaited = 0;
+	int32 TicksSecondWaited = 0;
+	M2TrafficRun(*Traffic, *Net, 300.0, [&](int32)
+	{
+		const FRoadAgent* A = Traffic->FindAgent(First);
+		const FRoadAgent* B = Traffic->FindAgent(Second);
+		if (A == nullptr || B == nullptr) { return false; }
+		if (A->Phase != EAgentPhase::Taxiing || B->Phase != EAgentPhase::Taxiing) { return B->Phase == EAgentPhase::Taxiing || A->Phase == EAgentPhase::Taxiing; }
+		++TicksBothTaxiing;
+		TicksFirstWaited += A->WaitingOn != 0 ? 1 : 0;
+		TicksSecondWaited += B->WaitingOn != 0 ? 1 : 0;
+		MinSeparation = FMath::Min(MinSeparation, FVector2D::Distance(A->LastMotion.Position, B->LastMotion.Position));
+		return true;
+	});
+
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("DepartureMeetsArrivalOnTaxiway measured: min separation %.0f uu over %d ticks both taxiing; ")
+		TEXT("departure waited %d tick(s), arrival waited %d tick(s)"),
+		MinSeparation, TicksBothTaxiing, TicksFirstWaited, TicksSecondWaited);
+
+	TestTrue(TEXT("they shared the taxiway for a while"), TicksBothTaxiing > 0);
+	TestTrue(FString::Printf(TEXT("never closer than one footprint (%.0f)"), MinSeparation),
+		MinSeparation >= Traffic->Rules.AircraftFootprint - 1.0);
+	TestTrue(TEXT("somebody was made to wait"), TicksFirstWaited + TicksSecondWaited > 0);
+	return true;
+}
 
 #endif
