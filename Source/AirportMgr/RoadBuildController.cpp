@@ -297,7 +297,7 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	UE_LOG(LogRoadBuild, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
 		TargetView.Focus.X, TargetView.Focus.Y);
 
-	// The SAME resolver FRouteTool falls back to, for the same reason: an aircraft that
+	// The SAME resolver every dispatch falls back to, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
 	// depending on which phase you were watching - see UAirsideSettings::
 	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave

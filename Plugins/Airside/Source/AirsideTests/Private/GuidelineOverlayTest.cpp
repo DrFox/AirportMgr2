@@ -8,7 +8,7 @@
 #include "Solve/GuidelineGeom.h"
 #include "Tool/GuidelineOverlay.h"
 #include "Tool/RoadBuildTool.h"
-#include "Tool/RouteTool.h"
+#include "Tool/RoadDrawTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -206,9 +206,10 @@ bool FGuidelineOverlayTest::RunTest(const FString& Parameters)
 				< Before.CountLines(EPreviewStyle::Guideline));
 	}
 
-	// 4. ONE EMITTER. The route tool must no longer draw the graph itself, or selecting it
-	//    draws every edge twice - and the overlay stops being the single place that decides
-	//    what the routing graph looks like.
+	// 4. ONE EMITTER. No tool draws the graph itself, or selecting it draws every edge twice
+	//    - and the overlay stops being the single place that decides what the routing graph
+	//    looks like. The taxiway tool is the one that would most plausibly want to: it
+	//    builds the thing the graph is derived from.
 	{
 		ARoadNetworkActor* Fresh = OverlayFixture();
 		if (TestNotNull(TEXT("second fixture built"), Fresh))
@@ -221,48 +222,14 @@ bool FGuidelineOverlayTest::RunTest(const FString& Parameters)
 			NoSnap.Position = FVector2D(50000.0, 50000.0);   // far from anything
 			Context.SetCursor(NoSnap.Position, NoSnap);
 
-			FRouteTool Tool;
+			FRoadDrawTool Tool;
 			FOverlaySink Sink;
 			Tool.BuildPreview(Context, Sink);
 
-			TestEqual(TEXT("the route tool draws no guideline lines of its own"),
+			TestEqual(TEXT("the taxiway tool draws no guideline lines of its own"),
 				Sink.CountLines(EPreviewStyle::Guideline), 0);
 			TestEqual(TEXT("nor guideline node markers"),
 				Sink.CountMarkers(EPreviewStyle::Guideline), 0);
-		}
-	}
-
-	// 5. But the route tool keeps its OWN preview. Extracting the graph must not have taken
-	//    the hover highlight with it - that is the thing the player aims at.
-	{
-		ARoadNetworkActor* Fresh = OverlayFixture();
-		if (TestNotNull(TEXT("third fixture built"), Fresh) && Fresh->Network != nullptr)
-		{
-			FVector2D Hover = FVector2D::ZeroVector;
-			double Nearest = TNumericLimits<double>::Max();
-			for (const FGuidelineNode& Node : Fresh->Network->GetGuidelineNodes())
-			{
-				if (Node.bAlive && Node.Position.Size() > 1.0 && Node.Position.Size() < Nearest)
-				{
-					Nearest = Node.Position.Size();
-					Hover = Node.Position;
-				}
-			}
-
-			FToolContext Context;
-			Context.Target = Fresh;
-			Context.SnapRadius = 150.0;
-
-			FRoadSnapResult AtNode;
-			AtNode.Position = Hover;
-			Context.SetCursor(Hover, AtNode);
-
-			FRouteTool Tool;
-			FOverlaySink Sink;
-			Tool.BuildPreview(Context, Sink);
-
-			TestTrue(TEXT("hovering a guideline node still highlights it"),
-				Sink.CountMarkers(EPreviewStyle::Snap) > 0);
 		}
 	}
 

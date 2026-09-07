@@ -220,12 +220,17 @@ nothing to undo). One list, three consumers.
 
 ## 7. Retirement
 
-Delete `Tool/RouteTool.h`, `Tool/RouteTool.cpp`, `RouteToolTest.cpp`. `AirframeFor`
-moves to `Model/DeparturePlanner.h` (it is "the airframe to route as at a node", a model
-question) and keeps `Airside.Tool.RouteTool.DefaultAirframe` renamed
-`Airside.Model.DeparturePlanner.DefaultAirframe`. The route-tool cases in
-`GuidelineOverlayTest` and `ToolCursorTest` are rewritten against `FSelectTool` where
-they test the cursor/overlay and dropped where they tested routing.
+Delete `Tool/RouteTool.h`, `Tool/RouteTool.cpp`, `RouteToolTest.cpp`. The route-tool cases in
+`GuidelineOverlayTest` and `ToolCursorTest` are rewritten against the taxiway tool and the
+session's context contract respectively, and dropped where they tested routing.
+
+*Amended 2026-09-07 (Task 1):* `AirframeFor` is DELETED with the tool, not moved to
+`Model/`. It includes `Entities/AircraftType.h` and `Content/AirsideSettings.h`, both of
+which `Model/` is forbidden (Check-Architecture rule 1), and the Route tool was its only
+caller. Its test (`Airside.Tool.RouteTool.DefaultAirframe`) pinned that the fallback
+agreed with `UAirsideSettings::ResolveDefaultAirframe`; with one resolver and no second
+caller there is nothing left to agree. Check-Architecture rule 4 (one Piper fallback site)
+still holds.
 
 `EPreviewStyle::Route` stays; the Select tool emits it for the selected agent's route.
 

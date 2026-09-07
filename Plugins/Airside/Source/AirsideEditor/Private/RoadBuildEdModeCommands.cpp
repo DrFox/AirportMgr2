@@ -25,9 +25,6 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	UI_COMMAND(PlaceStands, "Stands", "Place an aircraft stand: press to position, drag to aim, release.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Three));
 
-	UI_COMMAND(FindRoutes, "Routes", "Click a start then a destination to route between them; the guideline graph is drawn underneath.",
-		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Four));
-
 	// Issue #33: the editor had no way to make these two, so an airport authored here could
 	// never get a hand-drawn guideline link or a runway without a trip through PIE.
 	UI_COMMAND(DrawGuidelines, "Guidelines", "Draw a routing link the derivation never made: click a node, click another.",
@@ -47,7 +44,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 
 TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
 {
-	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
+	return { DrawRoads, DrawAprons, PlaceStands, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

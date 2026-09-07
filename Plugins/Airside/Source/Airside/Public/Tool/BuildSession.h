@@ -24,8 +24,8 @@ struct FToolRegistration
 };
 
 /**
- * The tools both drivers offer, in key order 1..6: Road, Apron, Stand, Route, Guideline,
- * Runway.
+ * The tools both drivers offer: Select (4), Taxiway (1), Apron (2), Stand (3), Guidelines
+ * (5), Runway (6), Holding point (8). Index 0 is Select, the default state.
  *
  * ONE table, read by both `ARoadBuildController` and `URoadBuildEditorTool` - see
  * CLAUDE.md's "check where a list is CONSUMED, not where it is declared". Before issue

@@ -49,7 +49,7 @@ void ARoadBuildHUD::DrawHUD()
 	// tool's own preview so the gesture sits on top of the context instead of under it.
 	//
 	// Not a tool's job: it is true whatever the gesture, and while it lived inside
-	// FRouteTool the graph you were building for was invisible while you built it.
+	// the old route tool the graph you were building for was invisible while you built it.
 	if (Controller->bShowGuidelines && Target->Network != nullptr)
 	{
 		GuidelineOverlay::Draw(*Target->Network, *this);

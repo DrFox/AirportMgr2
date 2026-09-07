@@ -29,7 +29,6 @@ public:
 	TSharedPtr<FUICommandInfo> DrawRoads;
 	TSharedPtr<FUICommandInfo> DrawAprons;
 	TSharedPtr<FUICommandInfo> PlaceStands;
-	TSharedPtr<FUICommandInfo> FindRoutes;
 
 	/**
 	 * Issue #33: the editor previously had four tools against the runtime's six, with no

@@ -5,7 +5,6 @@
 #include "Tool/HoldingPointTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
-#include "Tool/RouteTool.h"
 #include "Tool/RunwayTool.h"
 #include "Tool/StandPlaceTool.h"
 
@@ -14,8 +13,9 @@
 TConstArrayView<FToolRegistration> ToolRegistry()
 {
 	// A function-local static rather than a file-scope global: constructed exactly once,
-	// on first use, in the order written here - which IS the key order, 1 through 6 then 8
-	// (see the holding-position entry for why seven is skipped). Never
+	// on first use, in the order written here - which IS the key order, 1 through 3, 5, 6
+	// then 8 (see the holding-position entry for why seven is skipped; 4 is the Select
+	// tool, added at index 0 - see FSelectTool). Never
 	// mutated after that first construction, so handing out a view over it is safe from
 	// any thread that only reads.
 	//
@@ -27,7 +27,6 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
 		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
-		{ EKeys::Four,  LOCTEXT("Route",     "Route"),     [] { return MakeUnique<FRouteTool>(); } },
 		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"), [] { return MakeUnique<FGuidelineDrawTool>(); } },
 		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),    [] { return MakeUnique<FRunwayTool>(); } },
 
