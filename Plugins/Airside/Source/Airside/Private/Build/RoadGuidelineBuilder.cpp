@@ -1,6 +1,7 @@
 #include "Build/RoadGuidelineBuilder.h"
 
 #include "AirsideLog.h"
+#include "Build/ExitGeometry.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -172,22 +173,14 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// ONE LENGTH PER NODE, so every arc at it is SYMMETRIC: the same tangent length on
 		// the runway side as on the taxiway side. An uneven quadratic - 60 m along the
 		// runway, 30 m down a stub taxiway - bunches its curvature at the short end and
-		// swings wide of the fillet on the way (samples/runway1.png, 2026-09-07). The length
-		// is the tightest any arm at this node can afford: ExitLength, capped at 45 percent
-		// of each arm's node-to-node length so nothing crosses its own far end. A taxiway's
-		// pavement cut is still a floor on ITS side - a holding position on the asphalt is
-		// wrong, a slightly uneven arc merely imperfect - and that is the one asymmetry left.
-		double NodeLength = ExitLength;
-		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
-		{
-			const FRoadSegment* Arm = Network.GetSegment((*ArmSegments)[ArmIndex]);
-			const FRoadNode* ArmA = Arm ? Network.GetNode(Arm->A) : nullptr;
-			const FRoadNode* ArmB = Arm ? Network.GetNode(Arm->B) : nullptr;
-			if (ArmA && ArmB)
-			{
-				NodeLength = FMath::Min(NodeLength, 0.45 * FVector2D::Distance(ArmA->Position, ArmB->Position));
-			}
-		}
+		// swings wide of the fillet on the way (samples/runway1.png, 2026-09-07). Decided in
+		// ExitGeometry, the one place, because the junction solver sizes the flare fillet
+		// from the same length and two copies of the rule would be two arcs.
+		const double NodeLength = ExitGeometry::NodeExitLength(Network, Pair.Key, *ArmSegments);
+		const FRoadSegment* RunwaySegment = Network.GetSegment(RunwayHere);
+		const URoadProfile* RunwayProfile = RunwaySegment ? Network.ProfileFor(*RunwaySegment) : nullptr;
+		const double RunwayHalfWidth = RunwayProfile ? RunwayProfile->GetTotalWidth() * 0.5 : 0.0;
+		const FVector2D RunwayAxis = Network.GetOutgoingTangent(RunwayHere, NodeId);
 
 		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
 		{
@@ -204,7 +197,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			{
 				ProtectedBy.Add(EndKey(ArmSeg.Index, bEndA, 0), RunwayHere);
 			}
-			if (ExitLength <= 0.0)
+			if (NodeLength <= 0.0)
 			{
 				// Arcs off (a profile authored without an exit length): the ends stay at
 				// their cut lines, and the holding positions recorded above are all this
@@ -215,14 +208,18 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			double Length = NodeLength;
 			if (!bContinuous)
 			{
-				// NEVER INSIDE THE PAVEMENT CUT, whatever the clamp says: the arc starts at or
-				// beyond where the straight stub used to, which is the pre-arc behaviour a
-				// too-short taxiway falls back to. At an acute corner the runway-end cut alone
-				// is about 60 m, and the first cut of this clamp - measured on the chord
-				// between cuts - found nothing left of a 55 m stub and put the taxiway's end,
-				// holding position and all, a metre short of the junction INSIDE the runway
-				// slab (samples/holdlines.png, 2026-09-07).
-				Length = FMath::Max(Length, Pair.Value.Arms[ArmIndex].CutDistance);
+				// NEVER ON THE RUNWAY SLAB, whatever the clamp says: the end sits at least
+				// where the taxiway's far edge clears the strip, so the holding position on
+				// it is off the asphalt. The floor used to be the pavement CUT, and the first
+				// clamp - measured on the chord between cuts - found nothing left of a 55 m
+				// stub and put the end a metre short of the junction inside the slab
+				// (samples/holdlines.png). The cut is no longer the measure because the
+				// flare fillet now follows the arc and can push the cut far down a shallow
+				// exit; the strip's own width is what the position must clear.
+				const double TaxiwayHalfWidth = Profile->GetTotalWidth() * 0.5;
+				const FVector2D Axis = Network.GetOutgoingTangent(ArmSeg, NodeId);
+				const double AxisAngle = FMath::Acos(FMath::Clamp(FMath::Abs(FVector2D::DotProduct(Axis, RunwayAxis)), 0.0, 1.0));
+				Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
 			}
 			if (Length <= 0.0)
 			{

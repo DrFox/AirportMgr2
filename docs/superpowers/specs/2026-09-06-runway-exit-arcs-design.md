@@ -217,3 +217,30 @@ spin 180 degrees at the threshold.
 - Tests: `DeparturePlanner.Intersection`, `DeparturePlanner.Backtrack`,
   `Traffic.DepartureFromIntersectionIsContinuous` (handover frame step 0.6 uu, airborne).
   132 tests, 0 failed. `UE_LOG` 99 -> 100. Unverified in PIE at the time of writing.
+
+## 12. The flare (2026-09-07, `feature/exit-fillets`)
+
+`samples/runway2.png`: with symmetric arcs the centreline stays on the pavement, but the
+corner the forward arc sweeps through still had the profile's 15 m fillet, so the wheels and
+wing rode the pavement's edge. Real rapid exits carry a wide flared fillet whose inner edge
+follows the arc.
+
+- **`ExitGeometry` (Build/) is the one place the exit geometry is decided**, for the junction
+  solver's input and the guideline builder both: `NodeExitLength` (the symmetric tangent
+  length of §3.4), `FlareRadius(L, corner angle θ, taxiway half width) = L·tan(θ/2) − half
+  width` (an arc through a corner of angle θ turns by π − θ), `TaxiwayEndFloor` (below).
+- **A per-corner fillet radius**: `FJunctionArm::FilletRadiusToNext` names the corner between
+  an arm and the next CCW arm; the solver uses it when set, else the smaller of the two arms'
+  radii as before. `FRoadNetworkSolver` sets it on every corner between a runway arm and a
+  taxiway arm at a mixed node: the obtuse one gets the flare (60 m tangents at 150°: a 212 m
+  fillet), the acute one `max(its own hairpin arc's radius, AcuteCornerRadius = 3 m)` - NOT
+  the 15 m default, whose tangent on a stub forced the solver to shrink every radius at the
+  node, flare included. The flare scales with the rest when a node does not fit.
+- **The holding-position floor is the runway slab, not the pavement cut**: a big flare pushes
+  the cut down a shallow exit; `TaxiwayEndFloor = (runway half width + taxiway half width) /
+  sin(axis angle)` is where the taxiway's far edge clears the strip, and the guideline end
+  sits at least there.
+- Tests: `Airside.Solve.RunwayExitFlare` measures the solver's paved radii on a 30° exit
+  (flare exact, kerb 458, runway uncut); `RunwayExitArcOnPavement` now samples a swept band
+  8 m either side of every arc at 45/60/90° stubs: 480 of 480 points on the pavement (the
+  centreline alone passed before the flare; the band did not). 133 tests, 0 failed.

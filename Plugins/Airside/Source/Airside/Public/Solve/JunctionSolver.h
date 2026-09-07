@@ -14,6 +14,15 @@ struct FJunctionArm
 	double FilletRadius   = 0.0;
 
 	/**
+	 * The radius of the corner between this arm and the NEXT arm counter-clockwise, when
+	 * it is not simply the smaller of the two arms' FilletRadius. Zero means "use that
+	 * rule". Set by the caller for the flare of a runway exit (see ExitGeometry): the
+	 * fillet there follows the exit arc, not the profiles' preference, and it is one
+	 * corner of the junction, not both of an arm's.
+	 */
+	double FilletRadiusToNext = 0.0;
+
+	/**
 	 * The farthest this arm's cut may sit from the node, uu. Honoured by a DEAD END, whose
 	 * cap has no corner to respect and can simply be drawn shorter; a corner keeps its cut
 	 * at its tangent points and is fitted by shrinking the radius instead (see
