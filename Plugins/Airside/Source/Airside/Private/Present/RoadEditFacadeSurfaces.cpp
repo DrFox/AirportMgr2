@@ -218,7 +218,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	// PoseRole travels with DesignWingspan and for the same reason: this is the one caller
 	// allowed to see the definition, so it reads both and hands them down.
 	const FEntityInstanceId Placed = Net.PlaceEntity(Definition, Definition->Anchors, Where,
-		Heading, DesignWingspan, Definition->PoseRole);
+		Heading, DesignWingspan, Definition->PoseRole, Definition->Trucks);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

@@ -82,7 +82,8 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 		LayEastWest(*Net, 0.0, ETraversalClass::GroundVehicle, West, East);
 
 		const FEntityInstanceId Placed = Net->PlaceEntity(Depot, Depot->Anchors,
-			FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5, /*DesignWingspan=*/0.0, Depot->PoseRole);
+			FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5, /*DesignWingspan=*/0.0, Depot->PoseRole,
+			Depot->Trucks);
 		const FEntityInstance* Instance = Net->GetEntity(Placed);
 		if (!TestNotNull(TEXT("the depot resolves"), Instance)) { return false; }
 
@@ -113,7 +114,7 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 		LayEastWest(*Net, 0.0, ETraversalClass::Aircraft, West, East);
 
 		const FEntityInstanceId Placed = Net->PlaceEntity(Depot, Depot->Anchors,
-			FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5, 0.0, Depot->PoseRole);
+			FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5, 0.0, Depot->PoseRole, Depot->Trucks);
 		TestEqual(TEXT("a depot facing a taxiway joins nothing"), FAnchorLink::Build(*Net), 0);
 		TestEqual(TEXT("and its pose node is still an island"),
 			IncidentCount(*Net, Net->GetEntity(Placed)->PoseNode), 0);

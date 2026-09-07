@@ -353,10 +353,14 @@ public:
 	 * UEntityDefinition::PoseRole, which this layer may not. It decides which class of
 	 * guideline the pose's lead-in may join - see FEntityInstance::PoseRole. Defaulted to
 	 * Aircraft so every caller written before the fuel slice keeps meaning what it meant.
+	 *
+	 * Trucks is the third and last such capture - see FEntityInstance::Trucks for why a
+	 * fourth would become a struct instead.
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,
 		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading,
-		double DesignWingspan = 0.0, EServiceRole PoseRole = EServiceRole::Aircraft);
+		double DesignWingspan = 0.0, EServiceRole PoseRole = EServiceRole::Aircraft,
+		int32 Trucks = 0);
 
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to

@@ -642,6 +642,21 @@ struct AIRSIDE_API FEntityInstance
 	 */
 	UPROPERTY() EServiceRole PoseRole = EServiceRole::Aircraft;
 
+	/**
+	 * How many service vehicles this installation may have out at once, captured from
+	 * UEntityDefinition::Trucks at placement. 0 on a stand, where it means nothing.
+	 *
+	 * THE THIRD CAPTURED FACT, for the same reason as the two above - but note that it is
+	 * read from ANOTHER MODULE's Model/ layer (AirportOps' UFuelService), which
+	 * Check-Architecture.ps1 also forbids from including Entities/. So the snapshot is not
+	 * merely convenient here, it is the only way the number reaches the thing that counts
+	 * against it.
+	 *
+	 * If a FOURTH capture arrives, these become one struct passed by reference: three
+	 * trailing defaulted parameters on PlaceEntity is the most a caller can still get right.
+	 */
+	UPROPERTY() int32 Trucks = 0;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
