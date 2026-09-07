@@ -104,6 +104,16 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	bool bAnyDepot = false;
 	bool bAnyJoinedDepot = false;
 
+	// JOINED, NOT MERELY RESOLVED. This tested StandFuel.IsSet() alone, which is a fact about
+	// PLACEMENT and not about the airport: URoadNetwork::PlaceEntity creates a node for every
+	// anchor whether or not a lead-in ever reaches it, so the test was true for every Code C
+	// stand ever placed and StandUnjoined could not fire at all. Every hydrant that joined
+	// nothing was reported as NoRoute - "no road from depot" - which sends the player to look
+	// at the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
+	const FGuidelineNode* FuelNode =
+		StandFuel.IsSet() ? Network.GetGuidelineNode(StandFuel) : nullptr;
+	const bool bStandJoined = FuelNode != nullptr && FuelNode->Incident.Num() > 0;
+
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
@@ -136,8 +146,10 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 			continue;
 		}
 
-		if (!StandFuel.IsSet())
+		if (!bStandJoined)
 		{
+			// Nothing to route TO. Skipped here as well as reported below, so a stand with an
+			// unjoined hydrant does not cost a search per depot per tick.
 			continue;
 		}
 
@@ -183,7 +195,7 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	{
 		OutWhy = EFuelRefusal::NoRoad;
 	}
-	else if (!StandFuel.IsSet())
+	else if (!bStandJoined)
 	{
 		OutWhy = EFuelRefusal::StandUnjoined;
 	}
@@ -377,9 +389,29 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 				Demand.State = EFuelDemandState::Unserviceable;
 				Demand.Why = Why;
 				LastRefusedRevision = Revision;
+
+				// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player
+				// to look at the wrong end of the airport once already (PIE 2026-09-07); these
+				// three numbers say which end without a second repro.
+				int32 Depots = 0, DepotsOnRoad = 0;
+				for (const FEntityInstance& Each : Network.GetEntities())
+				{
+					if (!Each.bAlive || Each.PoseRole != EServiceRole::Fuel) { continue; }
+					++Depots;
+					const FGuidelineNode* Pose = Network.GetGuidelineNode(Each.PoseNode);
+					DepotsOnRoad += (Pose != nullptr && Pose->Incident.Num() > 0) ? 1 : 0;
+				}
+				const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
+				const FGuidelineNode* HydrantNode =
+					Hydrant.IsSet() ? Network.GetGuidelineNode(Hydrant) : nullptr;
+
 				UE_LOG(LogAirportOps, Warning,
-					TEXT("Fuel: aircraft %d at stand %d cannot be served: %s"),
-					Demand.AircraftId, Demand.Stand.Index, RefusalText(Why));
+					TEXT("Fuel: aircraft %d at stand %d cannot be served: %s. %d depot(s), %d on a "
+						 "road; the stand's hydrant %s. Check the 'Anchor links:' line."),
+					Demand.AircraftId, Demand.Stand.Index, RefusalText(Why), Depots, DepotsOnRoad,
+					HydrantNode == nullptr ? TEXT("has no node at all")
+						: HydrantNode->Incident.Num() > 0 ? TEXT("is on a road")
+						: TEXT("is NOT on a road"));
 				break;
 			}
 

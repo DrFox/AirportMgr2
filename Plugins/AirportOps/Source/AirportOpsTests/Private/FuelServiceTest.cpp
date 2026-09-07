@@ -46,7 +46,20 @@ namespace
 
 		double RoadY = -6000.0;
 
+		/** West end of the road. Default reaches under the stand; see Build_RoadReachesDepotOnly. */
+		double RoadFromX = -20000.0;
+
 		void Build(bool bWithRoad, bool bWithDepot = true);
+
+		/**
+		 * Lay the road only EAST of the stand, so the depot's pose ray reaches it and the
+		 * stand's hydrant ray - which leaves from x = -1200 - misses it entirely.
+		 *
+		 * The case StandUnjoined exists for, and which could not fire until 2026-09-07: the
+		 * test for it read StandFuel.IsSet(), a fact about placement rather than about the
+		 * airport, so an unjoined hydrant was reported as NoRoute instead.
+		 */
+		void Build_RoadReachesDepotOnly();
 		void JoinRoad();
 		int32 ParkAircraft();
 		void Advance(double Seconds);
@@ -100,7 +113,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	if (bWithRoad)
 	{
 		FGuidelineNodeId RoadWest, RoadEast;
-		LayLine(*Net, FVector2D(-20000.0, RoadY), FVector2D(20000.0, RoadY),
+		LayLine(*Net, FVector2D(RoadFromX, RoadY), FVector2D(20000.0, RoadY),
 			ETraversalClass::GroundVehicle, RoadWest, RoadEast);
 	}
 
@@ -150,6 +163,15 @@ void FFuelFixture::RelayPhases()
 		{
 			Bound->OnAgentPhase(*Model, *Graph, AgentId, From, To);
 		});
+}
+
+void FFuelFixture::Build_RoadReachesDepotOnly()
+{
+	// The hydrant casts down -Y from x = -1200; the depot's pose casts down -Y from x = 12000.
+	// A road that starts at x = 5000 is therefore crossed by the depot's ray and by nothing
+	// the stand owns.
+	RoadFromX = 5000.0;
+	Build(/*bWithRoad=*/true);
 }
 
 void FFuelFixture::JoinRoad()
@@ -353,6 +375,28 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		TestNotEqual(TEXT("the demand is live again once the road is drawn"),
 			static_cast<int32>(Fixture.Service->GetDemands()[0].State),
 			static_cast<int32>(EFuelDemandState::Unserviceable));
+	}
+
+	// THE DEPOT IS ON A ROAD AND THE STAND'S HYDRANT IS NOT.
+	//
+	// This case could not fire until 2026-09-07: the test read StandFuel.IsSet(), which is
+	// true for every stand ever placed (PlaceEntity makes a node per anchor whether anything
+	// reaches it or not), so an unjoined hydrant was reported as NoRoute - "no road from
+	// depot" - and sent the player to look at the wrong end of the airport. Seen in PIE
+	// before it was seen here, which is why it is pinned now.
+	{
+		FFuelFixture Fixture;
+		Fixture.Build_RoadReachesDepotOnly();
+		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+		Fixture.Advance(0.2);
+
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		TestEqual(TEXT("the reason names the STAND, not the depot"),
+			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
+			static_cast<int32>(EFuelRefusal::StandUnjoined));
+		TestEqual(TEXT("and the card says so"),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
+			FString(TEXT("stand not on a road")));
 	}
 	return true;
 }
