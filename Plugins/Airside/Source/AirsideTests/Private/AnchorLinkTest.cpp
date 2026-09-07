@@ -325,6 +325,55 @@ bool FGuidelineGeomTest::RunTest(const FString& Parameters)
 			GuidelineGeom::PointAtDistance(Single, 0.0, At, Heading));
 	}
 
+	// NEAREST POINT ON A SAMPLED POLYLINE. The proximity half of the link rule measures
+	// against the SAMPLES, like everything else that consumes this graph - a second
+	// evaluator here would let a link land somewhere the overlay does not draw.
+	{
+		const TArray<FVector2D> Line = {
+			FVector2D(0.0, 0.0), FVector2D(1000.0, 0.0), FVector2D(1000.0, 1000.0) };
+
+		int32 Index = -1;
+		double Fraction = -1.0;
+		const double Distance =
+			GuidelineGeom::NearestOnPolyline(Line, FVector2D(400.0, 300.0), Index, Fraction);
+
+		TestEqual(TEXT("the foot of the perpendicular, not an endpoint"), Distance, 300.0);
+		TestEqual(TEXT("on the first span"), Index, 0);
+		TestTrue(TEXT("four tenths along it"), FMath::IsNearlyEqual(Fraction, 0.4, 1e-9));
+
+		// PAST THE END. Clamped to the segment, so a query beyond the last vertex is
+		// answered by that vertex rather than by the infinite line.
+		GuidelineGeom::NearestOnPolyline(Line, FVector2D(3000.0, 1000.0), Index, Fraction);
+		TestEqual(TEXT("clamped to the far end's span"), Index, 1);
+		TestTrue(TEXT("at its end"), FMath::IsNearlyEqual(Fraction, 1.0, 1e-9));
+	}
+
+	// CLOSEST APPROACH BETWEEN TWO POLYLINES. Both directions are tried, because for two
+	// PARALLEL segments the closest pair contains no endpoint of the longer one - and a
+	// service road drawn alongside a row of stands is exactly that case. Measured on the
+	// SHORT one's own span, so a one-directional search reporting a corner would fail here.
+	{
+		const TArray<FVector2D> Lane = { FVector2D(-1000.0, 0.0), FVector2D(1000.0, 0.0) };
+		const TArray<FVector2D> Road = { FVector2D(-9000.0, -500.0), FVector2D(9000.0, -500.0) };
+
+		int32 LaneIndex = -1, RoadIndex = -1;
+		double LaneFraction = -1.0, RoadFraction = -1.0;
+		const double Distance = GuidelineGeom::NearestBetweenPolylines(
+			Lane, Road, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
+
+		TestEqual(TEXT("500 apart, whichever end you measure from"), Distance, 500.0);
+		TestEqual(TEXT("on the lane's only span"), LaneIndex, 0);
+		TestEqual(TEXT("and the road's only span"), RoadIndex, 0);
+
+		// A SHORT LINE OFF ONE END. Here the closest pair IS an endpoint, and the second
+		// sweep must not overwrite the answer the first one found.
+		const TArray<FVector2D> Stub = { FVector2D(4000.0, 0.0), FVector2D(4000.0, 400.0) };
+		const double Corner = GuidelineGeom::NearestBetweenPolylines(
+			Lane, Stub, LaneIndex, LaneFraction, RoadIndex, RoadFraction);
+		TestEqual(TEXT("end to end, 3000 apart"), Corner, 3000.0);
+		TestTrue(TEXT("at the lane's far end"), FMath::IsNearlyEqual(LaneFraction, 1.0, 1e-9));
+	}
+
 	return true;
 }
 

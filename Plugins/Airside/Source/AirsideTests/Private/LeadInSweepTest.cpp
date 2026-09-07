@@ -49,8 +49,7 @@ namespace
 		UAircraftType::BuildA320(Aircraft);
 
 		UEntityDefinition* Stand = NewObject<UEntityDefinition>(GetTransientPackage());
-		UEntityDefinition::BuildCodeCStand(Stand);
-		Stand->DesignAircraft = Aircraft;
+		UEntityDefinition::BuildCodeCStand(Stand, Aircraft);
 		return Stand;
 	}
 

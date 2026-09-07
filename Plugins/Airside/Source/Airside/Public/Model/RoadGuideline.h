@@ -169,6 +169,22 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() bool bDerived = true;
 
 	/**
+	 * The entity whose SERVICE LOOP or anchor spur this edge is. Unset for everything else,
+	 * which is almost every edge.
+	 *
+	 * Provenance, exactly as DerivedFrom is for a road's own guidelines, and needed for the
+	 * same reason turned inside out: a stand's lane is ITSELF a vehicle guideline, so a link
+	 * search that did not know which edges were the searcher's own would join a lane to
+	 * itself four metres away, report every stand connected, and route no truck anywhere.
+	 *
+	 * The LINK from a lane to a road deliberately does NOT carry this. It is a lead-in like
+	 * any other, and leaving it unowned is exactly what lets
+	 * URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
+	 * only ever reaches itself.
+	 */
+	UPROPERTY() FEntityInstanceId ServiceLoopOwner;
+
+	/**
 	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.
 	 *
 	 * Filled from the clicked nodes' Origin, and re-resolved after every derivation. Unset

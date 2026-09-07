@@ -13,7 +13,7 @@ puts a hold door in one place in code and another in content.
 Four assets, and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
-  DA_Stand_CodeC                        what the ground PROVIDES, and its fixed plant
+  DA_Stand_CodeC                        what the ground PROVIDES, its plant, and the lane
   DA_FuelDepot                          where the trucks live, and how many
 
 Both types park on the same Code C stand and put their hold doors metres apart, which is
@@ -98,8 +98,9 @@ def build_stand(design_aircraft):
     if stand is None:
         return None
 
-    unreal.EntityDefinition.build_code_c_stand(stand)
-    stand.set_editor_property("design_aircraft", design_aircraft)
+    # The design aircraft goes IN rather than being set afterwards: the stand's service loop
+    # is measured from the aeroplane it is sized for, so the builder has to know which one.
+    unreal.EntityDefinition.build_code_c_stand(stand, design_aircraft)
 
     if not unreal.EntityDefinition.has_usable_anchor_ids(stand):
         unreal.log_error("MARKER: DA_Stand_CodeC has empty or duplicate fixture ids")
@@ -113,6 +114,13 @@ def build_stand(design_aircraft):
         local = fixture.get_editor_property("local_position")
         unreal.log("MARKER:   %s at (%.0f, %.0f)" % (
             fixture.get_editor_property("id"), local.x, local.y))
+
+    # THE LANE, logged as its own fact. It is invisible in the editor - no mesh, no material,
+    # no marking builder - so this line is the only place its corners can be read back.
+    loop = stand.get_editor_property("service_loop")
+    unreal.log("MARKER: DA_Stand_CodeC service loop, %d corner(s)" % len(loop))
+    for corner in loop:
+        unreal.log("MARKER:   (%.0f, %.0f)" % (corner.x, corner.y))
     return stand
 
 

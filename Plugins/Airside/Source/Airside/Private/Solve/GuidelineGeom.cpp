@@ -1,5 +1,7 @@
 #include "Solve/GuidelineGeom.h"
 
+#include "Solve/RoadGeom.h"
+
 namespace GuidelineGeom
 {
 	FVector2D Eval(const FVector2D& A, const FVector2D& Control, const FVector2D& B, double T)
@@ -98,6 +100,89 @@ namespace GuidelineGeom
 			Total += FVector2D::Distance(Points[At - 1], Points[At]);
 		}
 		return Total;
+	}
+
+	double NearestOnPolyline(const TArray<FVector2D>& Points,
+		const FVector2D& Query, int32& OutIndex, double& OutFraction)
+	{
+		OutIndex = 0;
+		OutFraction = 0.0;
+		if (Points.Num() < 2)
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		double Best = TNumericLimits<double>::Max();
+		for (int32 At = 1; At < Points.Num(); ++At)
+		{
+			// RoadGeom's clamped parameter, so the answer is on the SEGMENT rather than on
+			// its infinite line: a query past the end is answered by the end, which is what
+			// a link measuring against a finite guideline needs.
+			const double T = RoadGeom::ClosestPointOnSegment(Points[At - 1], Points[At], Query);
+			const double Distance =
+				FVector2D::Distance(FMath::Lerp(Points[At - 1], Points[At], T), Query);
+			if (Distance < Best)
+			{
+				Best = Distance;
+				OutIndex = At - 1;
+				OutFraction = T;
+			}
+		}
+		return Best;
+	}
+
+	double NearestBetweenPolylines(
+		const TArray<FVector2D>& A, const TArray<FVector2D>& B,
+		int32& OutAIndex, double& OutAFraction, int32& OutBIndex, double& OutBFraction)
+	{
+		OutAIndex = 0; OutAFraction = 0.0;
+		OutBIndex = 0; OutBFraction = 0.0;
+		if (A.Num() < 2 || B.Num() < 2)
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		// The span a VERTEX sits on, expressed the way the outputs are: the last vertex is
+		// the END of the last span, never the start of a span that does not exist.
+		auto SpanOf = [](int32 Vertex, int32 Count, int32& OutSpan, double& OutFractionAt)
+		{
+			OutSpan = FMath::Clamp(Vertex, 0, Count - 2);
+			OutFractionAt = Vertex >= Count - 1 ? 1.0 : 0.0;
+		};
+
+		double Best = TNumericLimits<double>::Max();
+
+		for (int32 At = 0; At < A.Num(); ++At)
+		{
+			int32 Index = 0;
+			double Fraction = 0.0;
+			const double Distance = NearestOnPolyline(B, A[At], Index, Fraction);
+			if (Distance < Best)
+			{
+				Best = Distance;
+				SpanOf(At, A.Num(), OutAIndex, OutAFraction);
+				OutBIndex = Index;
+				OutBFraction = Fraction;
+			}
+		}
+
+		// THE SECOND SWEEP IS NOT REDUNDANT. For two parallel segments every vertex of A is
+		// the same distance from B, so the first sweep alone answers with A's first vertex -
+		// which is a corner of the lane, not the point on it nearest the road.
+		for (int32 At = 0; At < B.Num(); ++At)
+		{
+			int32 Index = 0;
+			double Fraction = 0.0;
+			const double Distance = NearestOnPolyline(A, B[At], Index, Fraction);
+			if (Distance < Best)
+			{
+				Best = Distance;
+				OutAIndex = Index;
+				OutAFraction = Fraction;
+				SpanOf(At, B.Num(), OutBIndex, OutBFraction);
+			}
+		}
+		return Best;
 	}
 
 	namespace

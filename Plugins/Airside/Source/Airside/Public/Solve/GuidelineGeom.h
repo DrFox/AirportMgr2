@@ -101,6 +101,36 @@ namespace GuidelineGeom
 	AIRSIDE_API double PolylineLength(const TArray<FVector2D>& Points);
 
 	/**
+	 * Distance from Query to the nearest point on an already-sampled polyline, with the span
+	 * index and the 0..1 fraction along that span written out.
+	 *
+	 * Against the SAMPLES, not against the curve, and deliberately: the samples are what the
+	 * search costs, the overlay draws and a follower walks, and a link measured against a
+	 * closed-form curve would be a second evaluator of the same geometry - see this
+	 * namespace's own header. Feed the two outputs to ParamAtSample for the curve parameter
+	 * a split needs.
+	 *
+	 * Returns a huge distance, and leaves the outputs at zero, for a polyline with fewer than
+	 * two points - which has no nearest point to report.
+	 */
+	AIRSIDE_API double NearestOnPolyline(const TArray<FVector2D>& Points,
+		const FVector2D& Query, int32& OutIndex, double& OutFraction);
+
+	/**
+	 * Closest approach between two already-sampled polylines, with the span index and
+	 * fraction of the closest point on EACH.
+	 *
+	 * BOTH DIRECTIONS ARE TRIED - every vertex of A against B, then every vertex of B against
+	 * A - because the closest pair of points on two segments contains an endpoint of one of
+	 * them only when they are not parallel. A service road drawn ALONGSIDE a row of stands is
+	 * parallel to the lane it has to join, and a one-directional search would measure the
+	 * corner rather than the side.
+	 */
+	AIRSIDE_API double NearestBetweenPolylines(
+		const TArray<FVector2D>& A, const TArray<FVector2D>& B,
+		int32& OutAIndex, double& OutAFraction, int32& OutBIndex, double& OutBFraction);
+
+	/**
 	 * The heading a follower is given AT a vertex, arriving at it and leaving it.
 	 *
 	 * The same function PointAtDistance interpolates between, exposed rather than reimplemented

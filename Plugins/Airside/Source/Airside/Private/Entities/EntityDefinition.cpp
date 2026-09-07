@@ -4,19 +4,23 @@
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
-	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
-	BuildCodeCStand(Definition);
-
-	// A stand with no design aircraft draws no envelope and offers no service positions,
-	// which in a test reads as "the feature is broken" rather than "the fixture is thin".
+	// A stand with no design aircraft draws no envelope, offers no service positions and -
+	// since the service loop is laid out around the aeroplane - gets no lane either, which in
+	// a test reads as "the feature is broken" rather than "the fixture is thin".
+	//
+	// BUILT FIRST now, because the layout is measured FROM it: this used to be set after
+	// BuildCodeCStand had already run, which was harmless only for as long as nothing in the
+	// layout depended on it.
 	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
 	UAircraftType::BuildA320(A320);
-	Definition->DesignAircraft = A320;
+
+	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
+	BuildCodeCStand(Definition, A320);
 
 	return Definition;
 }
 
-void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition)
+void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft)
 {
 	if (Definition == nullptr)
 	{
@@ -24,6 +28,11 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition)
 	}
 
 	Definition->Anchors.Reset();
+
+	// SET HERE, not by the caller afterwards - see the header. The service loop below is
+	// measured from this aeroplane, so the builder that lays the ground round it has to know
+	// which aeroplane that is.
+	Definition->DesignAircraft = Aircraft;
 
 	// A Code C contact stand: the ground half of a turnaround.
 	//
@@ -67,6 +76,55 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition)
 	Definition->AvailableServices = {
 		EServiceRole::Aircraft, EServiceRole::Fuel, EServiceRole::Baggage,
 		EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
+
+	// THE SERVICE LOOP: the closed lane the ground vehicles use, derived from what it has to
+	// enclose rather than typed. See UEntityDefinition::ServiceLoop for why it is computed
+	// here and not authored beside the anchors.
+	//
+	// The clearance is a CONSTANT and not a UPROPERTY, deliberately: it is a fact about how
+	// this stand type is laid out, decided at authoring time beside the anchors. A
+	// level-authored version would be a knob that silently reshaped stands already placed.
+	constexpr double LoopClearance = 300.0;
+
+	// THE UNION of the design aircraft's footprint AND every anchor. A footprint-only box
+	// leaves TugStand at +1400 outside it, because the tug waits nine metres ahead of a nose
+	// that stops at +507 - and an anchor outside the lane is an anchor whose spur has to
+	// cross it to get in.
+	double MinX = TNumericLimits<double>::Max(), MaxX = -TNumericLimits<double>::Max();
+	double MinY = TNumericLimits<double>::Max(), MaxY = -TNumericLimits<double>::Max();
+	auto Cover = [&MinX, &MaxX, &MinY, &MaxY](const FVector2D& Point)
+	{
+		MinX = FMath::Min(MinX, Point.X); MaxX = FMath::Max(MaxX, Point.X);
+		MinY = FMath::Min(MinY, Point.Y); MaxY = FMath::Max(MaxY, Point.Y);
+	};
+
+	if (Aircraft != nullptr && Aircraft->Footprint.IsSet())
+	{
+		const FEntityFootprint& Footprint = Aircraft->Footprint;
+		const double HalfSpan = Footprint.Wingspan * 0.5;
+		Cover(FVector2D(Footprint.NoseX,  HalfSpan));
+		Cover(FVector2D(Footprint.NoseX, -HalfSpan));
+		Cover(FVector2D(Footprint.TailX,  HalfSpan));
+		Cover(FVector2D(Footprint.TailX, -HalfSpan));
+	}
+	for (const FEntityAnchor& Anchor : Definition->Anchors)
+	{
+		Cover(Anchor.LocalPosition);
+	}
+
+	Definition->ServiceLoop.Reset();
+	if (MinX <= MaxX)
+	{
+		MinX -= LoopClearance; MaxX += LoopClearance;
+		MinY -= LoopClearance; MaxY += LoopClearance;
+
+		// FOUR-SIDED AND CLOSED. An open U round the nose was rejected: a closed loop gives
+		// entry from any side, including from behind the tail, and costs nothing because the
+		// lane is invisible. The first point is never repeated - the close is implicit.
+		Definition->ServiceLoop = {
+			FVector2D(MinX, MinY), FVector2D(MaxX, MinY),
+			FVector2D(MaxX, MaxY), FVector2D(MinX, MaxY) };
+	}
 }
 
 UEntityDefinition* UEntityDefinition::MakeFuelDepotTransient()
@@ -87,6 +145,11 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	// pose alone is its road connection. Reset rather than left alone so re-authoring an
 	// asset that once had some really does clear them.
 	Definition->Anchors.Reset();
+
+	// AND NO SERVICE LOOP. A lane encloses an aeroplane and the boxes round it; a depot has
+	// one pose and nothing parked at it, and its pose IS its road connection. Reset for the
+	// same reason Anchors is.
+	Definition->ServiceLoop.Reset();
 
 	// ORIGIN IS THE TRUCK BAY - where a truck stands when it is home, and the node it is
 	// dispatched from and back to.
