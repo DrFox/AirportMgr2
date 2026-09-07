@@ -348,10 +348,19 @@ public:
 	 * DesignWingspan is stored on the instance for the capability summary; the caller reads
 	 * it from the definition for the same Model/-must-not-see-Entities/ reason as Anchors.
 	 * Defaulted so the many test callers that never cared about size keep compiling.
+	 *
+	 * PoseRole travels the same way and for the same reason: the caller reads
+	 * UEntityDefinition::PoseRole, which this layer may not. It decides which class of
+	 * guideline the pose's lead-in may join - see FEntityInstance::PoseRole. Defaulted to
+	 * Aircraft so every caller written before the fuel slice keeps meaning what it meant.
+	 *
+	 * Trucks is the third and last such capture - see FEntityInstance::Trucks for why a
+	 * fourth would become a struct instead.
 	 */
 	FEntityInstanceId PlaceEntity(UEntityDefinition* Definition,
 		TConstArrayView<FEntityAnchor> Anchors, const FVector2D& Position, double Heading,
-		double DesignWingspan = 0.0);
+		double DesignWingspan = 0.0, EServiceRole PoseRole = EServiceRole::Aircraft,
+		int32 Trucks = 0);
 
 	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
@@ -429,6 +438,21 @@ public:
 	 * reading a UEntityDefinition, which is exactly the thing this layer must not do.
 	 */
 	bool RefreshResolvedAnchor(FEntityInstanceId Entity, FName AnchorId, double LocalHeading, EServiceRole Role);
+
+	/**
+	 * Overwrite an entity's own FEntityInstance::PoseRole. False when Entity is not live.
+	 *
+	 * THE SIBLING OF RefreshResolvedAnchor, and it exists for the same reason: the pose role
+	 * is a placement-time SNAPSHOT of a UEntityDefinition field, and a snapshot needs a
+	 * moment it gets refreshed at. An entity placed and saved before the field existed loads
+	 * with the UPROPERTY default (Aircraft) and nothing else ever corrects it - harmless for
+	 * every stand, and a depot stuck routing aeroplanes to its truck bay.
+	 *
+	 * A pure data write taking a VALUE rather than a UEntityDefinition, so Model/ still never
+	 * calls into the Entities layer. UEntityDefinition::RefreshResolvedAnchors is the caller,
+	 * because it is the one place both layers are known at once.
+	 */
+	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
 
 private:
 	void SortIncident(FRoadNodeId Node);

@@ -12,7 +12,12 @@
 
 FText FStandPlaceTool::GetDisplayName() const
 {
-	return LOCTEXT("StandTool", "Stand");
+	// TWO NAMES FOR ONE TOOL, and each must match the registry's own Name for its entry -
+	// Airside.Tool.BuildSession asserts the two cannot drift, which is exactly the class of
+	// bug the registry exists to make impossible elsewhere.
+	return Kind == EPlaceableEntity::FuelDepot
+		? LOCTEXT("FuelDepotTool", "Fuel depot")
+		: LOCTEXT("StandTool", "Stand");
 }
 
 double FStandPlaceTool::AimedHeading(const FToolContext& Context) const
@@ -85,10 +90,10 @@ void FStandPlaceTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	// A press that never travelled. It still places a stand - facing the way the last one
-	// did - because refusing would make the tool feel broken for the common case of a row
-	// of identically-oriented stands.
-	if (Context.Target->PlaceStand(Context.Cursor, LastHeading) != INDEX_NONE)
+	// A press that never travelled. It still places one - facing the way the last one did -
+	// because refusing would make the tool feel broken for the common case of a row of
+	// identically-oriented stands.
+	if (Context.Target->PlaceEntity(Context.Cursor, LastHeading, Kind) != INDEX_NONE)
 	{
 		Context.Target->RebuildMesh();
 	}
@@ -112,7 +117,7 @@ void FStandPlaceTool::PreviewPose(const FToolContext& Context, const FVector2D& 
 	// Shared with the editor's view of an already-placed stand, so the same object cannot
 	// be drawn two different ways depending on which code path found it.
 	const UEntityDefinition* Definition =
-		Context.Target != nullptr ? Context.Target->GetStandDefinition() : nullptr;
+		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
 
 	StandPreview::Describe(Definition, At, Heading, Sink);
 }
@@ -133,7 +138,9 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 			if (Entities.IsValidIndex(Under))
 			{
 				Sink.Marker(Entities[Under].Position, EPreviewStyle::Doomed);
-				Sink.Label(Entities[Under].Position, TEXT("remove stand"), EPreviewStyle::Doomed);
+				Sink.Label(Entities[Under].Position,
+					Kind == EPlaceableEntity::FuelDepot ? TEXT("remove fuel depot") : TEXT("remove stand"),
+					EPreviewStyle::Doomed);
 
 				// IN USE. The claim holder, read from the traffic table through the edit target
 				// (Model/, so a tool may see it). The click still deletes - the player owns the

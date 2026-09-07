@@ -932,7 +932,8 @@ const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
 
 FEntityInstanceId URoadNetwork::PlaceEntity(
 	UEntityDefinition* Definition, TConstArrayView<FEntityAnchor> Anchors,
-	const FVector2D& Position, double Heading, double DesignWingspan)
+	const FVector2D& Position, double Heading, double DesignWingspan, EServiceRole PoseRole,
+	int32 Trucks)
 {
 	if (Definition == nullptr)
 	{
@@ -947,6 +948,12 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	Instance.Heading = Heading;
 	Instance.Definition = Definition;
 	Instance.DesignWingspan = DesignWingspan;
+
+	// Captured for the same Model/-must-not-see-Entities/ reason as DesignWingspan, and read
+	// by FAnchorLink to decide which class of guideline the pose's lead-in may join.
+	Instance.PoseRole = PoseRole;
+	Instance.Trucks = Trucks;
+
 	Instance.ResolvedAnchors.Reserve(Anchors.Num());
 
 	// The stop position itself, as a node an aircraft can be routed to. NON-DERIVED for
@@ -1129,4 +1136,16 @@ bool URoadNetwork::RefreshResolvedAnchor(
 		}
 	}
 	return false;
+}
+
+bool URoadNetwork::SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole)
+{
+	FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return false;
+	}
+
+	Instance->PoseRole = PoseRole;
+	return true;
 }

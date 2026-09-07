@@ -817,8 +817,34 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			Authored += Edge.bDerived ? 0 : 1;
 			TurnPaths += (Edge.bDerived && !Edge.DerivedFrom.IsSet()) ? 1 : 0;
 		}
+
+		// ARM ENDS THAT LEAD NOWHERE FOR THEIR OWN CLASS. A service road drawn up to a
+		// taxiway's side, or up to a runway, makes a junction with turn paths for everybody
+		// EXCEPT the class that drew it - because a turn's mask is the INTERSECTION of the
+		// two arms' masks, and there is no second arm of its own class to intersect with.
+		//
+		// COUNTED AND NOT REFUSED, the same treatment the road tool gives a half-drawn
+		// crossing: the player may be about to draw the far side, and a crossing is drawn by
+		// clicking ON the thing being crossed and then chaining onward - so a tool that
+		// refused the first of those two clicks would make a crossing impossible to draw at
+		// all. This line is what turns "the truck says no route" into "look at the junction
+		// you left open".
+		int32 DeadEnds = 0;
+		for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
+		{
+			if (!Node.bAlive || !Node.bDerived || Node.Incident.Num() != 1) { continue; }
+
+			// Only a SEGMENT's own guideline end counts. A turn path with one end is
+			// impossible, and an anchor lead-in ending at a stand is not a dead end - it is
+			// the entire point of the stand.
+			const FGuidelineEdge* Only = Network.GetGuidelineEdge(Node.Incident[0]);
+			DeadEnds += (Only != nullptr && Only->DerivedFrom.IsSet()) ? 1 : 0;
+		}
+
 		UE_LOG(LogAirside, Log,
-			TEXT("Guidelines: %d nodes (%d holding-position), %d edges (%d hand-authored, %d turn paths), %d holding-position mark(s) on file"),
-			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths, Network.GetHoldingPositionMarks().Num());
+			TEXT("Guidelines: %d nodes (%d holding-position), %d edges (%d hand-authored, %d turn paths), "
+				 "%d holding-position mark(s) on file, %d arm end(s) with no through path for their class"),
+			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths,
+			Network.GetHoldingPositionMarks().Num(), DeadEnds);
 	}
 }

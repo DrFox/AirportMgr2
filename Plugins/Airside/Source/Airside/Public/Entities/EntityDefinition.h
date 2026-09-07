@@ -9,6 +9,28 @@
 class URoadNetwork;
 
 /**
+ * Which authored installation a placement gesture drops.
+ *
+ * A KIND, NOT A UEntityDefinition*, wherever a tool is involved: a tool has no business
+ * naming an asset, and resolving which definition a kind MEANS is the facade's job
+ * (ARoadNetworkActor::ResolveEntityDefinition) - in one place, so the PREVIEW and the
+ * PLACEMENT cannot resolve different objects. That is exactly what
+ * IRoadEditTarget::GetStandDefinition's own comment has always warned about, and it stops
+ * being hypothetical the moment there are two kinds.
+ *
+ * A UENUM in a UHT-parsed header rather than a plain enum on the tool seam, for the reason
+ * ERoadKind records at its own declaration: Tool/RoadEditTarget.h has no .generated.h, so
+ * UHT cannot resolve a type declared there when it appears in ARoadNetworkActor's members,
+ * and a forward declaration does not satisfy it either.
+ */
+UENUM()
+enum class EPlaceableEntity : uint8
+{
+	Stand,
+	FuelDepot
+};
+
+/**
  * Shared, immutable description of a kind of installation (Flyweight), matching
  * URoadProfile's role for cross-sections.
  *
@@ -49,6 +71,43 @@ public:
 	UPROPERTY(EditAnywhere) TArray<EServiceRole> AvailableServices;
 
 	/**
+	 * What this installation's OWN pose is for - a stand's aircraft stop mark, a depot's
+	 * truck bay.
+	 *
+	 * NOT AN ANCHOR, and deliberately (see FEntityInstance::PoseNode): an anchor is a
+	 * FIXTURE dug into or painted onto the concrete, and there is nothing at a stop mark but
+	 * paint. But the pose still has to be REACHED, and by something - so this says which
+	 * class of guideline its lead-in may join, through TraversalForRole.
+	 *
+	 * Aircraft by default, which is what every definition authored before this field existed
+	 * meant, and is why the Code C stand needs no edit.
+	 */
+	UPROPERTY(EditAnywhere) EServiceRole PoseRole = EServiceRole::Aircraft;
+
+	/**
+	 * Plan-view HALF-extents of the installation itself, uu, in its own local space.
+	 *
+	 * FOR THE PLACEMENT PREVIEW, and nothing else this slice. Zero draws nothing but the
+	 * pose mark, which is what a STAND wants: a stand's extent is its design aircraft's, and
+	 * a second rectangle round it would be a second opinion about how big the thing is.
+	 *
+	 * A BOX AND NOT FEntityFootprint. That struct is aircraft-shaped - nose, wingspan,
+	 * tailplane - and a fuel depot has none of those; filling it in for a building would be
+	 * authored numbers nothing could read correctly.
+	 */
+	UPROPERTY(EditAnywhere) FVector2D FootprintExtent = FVector2D::ZeroVector;
+
+	/**
+	 * How many vehicles this installation can have out at once.
+	 *
+	 * Read only from a definition whose PoseRole is a service role; 0 on a stand, where it
+	 * means nothing. SCAFFOLDING, named as such by the fuel-service spec (§0.1): M3's
+	 * UJobBoard bids by ETA over a real fleet, and this becomes the fleet's SIZE rather than
+	 * a number a service counts its own dispatches against.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 Trucks = 0;
+
+	/**
 	 * The aircraft this stand is sized for.
 	 *
 	 * Used to draw how the stand would be used - the envelope, and where that type's
@@ -80,6 +139,28 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildCodeCStand(UEntityDefinition* Definition);
+
+	/**
+	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.
+	 *
+	 * SCAFFOLDING, and named as such by the fuel-service spec (§0.1). M4 replaces this with a
+	 * UBuildingInstance carrying a road anchor node, add-on modules, a fleet and an
+	 * inventory. What SURVIVES that replacement is the road connection - a pose whose lead-in
+	 * joins a GroundVehicle guideline - which is why that part is a general mechanism here
+	 * (PoseRole) and the truck count is a bare number.
+	 *
+	 * NO ANCHORS, deliberately. The spec's first draft gave the depot a Fuel anchor as well
+	 * as a pose; two lead-ins from one small building into one road is a duplicate painted
+	 * line, and the pose is the node a truck is actually dispatched from and back to.
+	 *
+	 * Shared by MakeFuelDepotTransient and the commandlet that authors DA_FuelDepot, so the
+	 * tested layout and the shipped one are the same numbers rather than two transcriptions.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	static void BuildFuelDepot(UEntityDefinition* Definition);
+
+	/** BuildFuelDepot plus a NewObject, for tests and the debug gallery. */
+	static UEntityDefinition* MakeFuelDepotTransient();
 
 	/**
 	 * True when every anchor carries a non-empty id and no two share one.

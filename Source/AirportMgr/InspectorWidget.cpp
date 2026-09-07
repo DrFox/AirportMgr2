@@ -11,8 +11,11 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Model/FuelService.h"
 #include "Model/InspectFacts.h"
 #include "Model/RoadAgent.h"
+#include "Present/OpsRuntime.h"
+#include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
 
@@ -169,6 +172,22 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			*F.Destination, F.bEngineRunning ? TEXT("running") : TEXT("off"));
 		Status = F.Status;
 		bDepartEnabled = F.bCanDepart;
+
+		// THE FUEL LINE, from the layer that knows what fuel is. Reached through the ops
+		// subsystem rather than through Target, because the airport actor is Airside's and
+		// must not carry a pointer to a service it is forbidden to know about - see
+		// FAgentFacts::Fuel, the field this fills and DescribeAgent deliberately leaves empty.
+		if (const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+		{
+			if (const UFuelService* Fuel = Runtime->GetFuelService())
+			{
+				F.Fuel = Fuel->DescribeAgent(F.Id);
+			}
+		}
+		if (!F.Fuel.IsEmpty())
+		{
+			Facts += FString::Printf(TEXT("\nFuel %s"), *F.Fuel);
+		}
 	}
 	else
 	{
@@ -179,13 +198,29 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 			bDepartEnabled = false;
 			return;
 		}
-		Title = FString::Printf(TEXT("Stand %d"), S.Index);
-		Facts = FString::Printf(TEXT("Code %s (%.0f m span)\n%d service anchors\n%s"),
-			*S.SizeClass, S.DesignWingspan / 100.0, S.AnchorCount,
-			S.bReachable ? TEXT("Reachable by taxiway") : TEXT("NOT reachable - no taxiway joins it"));
-		Status = S.OccupantAgent == 0 ? FString(TEXT("Empty"))
-			: S.bOccupantParked ? FString::Printf(TEXT("Occupied by aircraft #%d"), S.OccupantAgent)
-			: FString::Printf(TEXT("Reserved for aircraft #%d"), S.OccupantAgent);
+		// AN ENTITY, NOT ALWAYS A STAND, since the fuel slice. PoseRole is what tells the two
+		// apart (see FStandFacts::PoseRole); a stand's own card is unchanged.
+		if (S.PoseRole == EServiceRole::Aircraft)
+		{
+			Title = FString::Printf(TEXT("Stand %d"), S.Index);
+			Facts = FString::Printf(TEXT("Code %s (%.0f m span)\n%d service anchors\n%s"),
+				*S.SizeClass, S.DesignWingspan / 100.0, S.AnchorCount,
+				S.bReachable ? TEXT("Reachable by taxiway") : TEXT("NOT reachable - no taxiway joins it"));
+			Status = S.OccupantAgent == 0 ? FString(TEXT("Empty"))
+				: S.bOccupantParked ? FString::Printf(TEXT("Occupied by aircraft #%d"), S.OccupantAgent)
+				: FString::Printf(TEXT("Reserved for aircraft #%d"), S.OccupantAgent);
+		}
+		else
+		{
+			// bReachable is the pose node having line on it, which for a depot means a
+			// SERVICE ROAD within its lead-in reach. The message names the fix rather than
+			// the symptom: the road is the thing the player goes and draws.
+			Title = FString::Printf(TEXT("Fuel depot %d"), S.Index);
+			Facts = S.bReachable
+				? FString(TEXT("On a service road"))
+				: FString(TEXT("Fuel depot: not on a road"));
+			Status = S.bReachable ? TEXT("Ready") : TEXT("Cannot dispatch");
+		}
 		bDepartEnabled = false;
 	}
 

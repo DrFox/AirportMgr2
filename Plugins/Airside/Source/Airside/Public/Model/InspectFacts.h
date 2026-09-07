@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadAgent.h"
+#include "Model/RoadEntity.h"
 
 class UGroundTraffic;
 class URoadNetwork;
@@ -33,6 +34,17 @@ struct FAgentFacts
 	bool bEngineRunning = false;
 	/** Phase == Parked - the one precondition DepartAgent checks. */
 	bool bCanDepart = false;
+
+	/**
+	 * What fuelling is doing for this aircraft - "truck en route", "no fuel depot" - or
+	 * empty when nothing is.
+	 *
+	 * FILLED BY AirportOps, NOT BY DescribeAgent, which leaves it empty. Airside must never
+	 * learn what a truck is FOR (see UFuelService), so the FIELD is here - because the panel
+	 * reads FAgentFacts and never FRoadAgent - and the SENTENCE comes from the layer that
+	 * knows. The same seam M3's UFlight fills its airline and off-block time through.
+	 */
+	FString Fuel;
 };
 
 struct FStandFacts
@@ -49,8 +61,19 @@ struct FStandFacts
 	/** The occupant is Parked (else inbound: reserved). */
 	bool bOccupantParked = false;
 	int32 AnchorCount = 0;
-	/** The pose node has at least one guideline edge - an aircraft can be routed here. */
+	/** The pose node has at least one guideline edge - the entity's own traffic can be
+	 *  routed here. For a stand that means a taxiway; for a depot, a service road. */
 	bool bReachable = false;
+
+	/**
+	 * What this entity's pose is FOR - see FEntityInstance::PoseRole. Aircraft is a stand;
+	 * anything else is a service installation, which the panel titles and describes
+	 * differently.
+	 *
+	 * The ROLE rather than a bIsDepot flag: a flag would need a second one the day a second
+	 * kind of installation arrives, and the enum already exists and already says it.
+	 */
+	EServiceRole PoseRole = EServiceRole::Aircraft;
 };
 
 namespace InspectFacts
@@ -58,7 +81,14 @@ namespace InspectFacts
 	/** False for an unknown agent id; Out untouched. Network may be null (no destination names). */
 	AIRSIDE_API bool DescribeAgent(const UGroundTraffic& Traffic, const URoadNetwork* Network, int32 AgentId, FAgentFacts& Out);
 
-	/** False for a dead or out-of-range entity index. Traffic may be null (no occupant). */
+	/**
+	 * False for a dead or out-of-range entity index. Traffic may be null (no occupant).
+	 *
+	 * DESCRIBES ANY ENTITY, not only a stand, since the fuel slice: PoseRole says which, and
+	 * SizeClass / DesignWingspan / OccupantAgent are meaningless for one with no design
+	 * aircraft. Not renamed, because the name is reached from four call sites and a rename
+	 * would buy nothing that this sentence does not.
+	 */
 	AIRSIDE_API bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out);
 
 	/**

@@ -85,17 +85,18 @@ double URoadEditFacade::GetMinimumRunwayLength() const
 	return Actor().MinimumRunwayLength;
 }
 
-const UEntityDefinition* URoadEditFacade::GetStandDefinition() const
+const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity Kind) const
 {
-	// RESOLVED, not the raw field: PlaceStand places from ResolveStandDefinition()'s
+	// RESOLVED, not the raw field: PlaceEntity places from ResolveEntityDefinition()'s
 	// content-default fallback, so the preview a tool draws from this must resolve the
 	// SAME object or the two can disagree about what a click will actually place.
-	return Actor().ResolveStandDefinition();
+	return Actor().ResolveEntityDefinition(Kind);
 }
 
-void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
+void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+	ERoadKind Kind)
 {
-	Actor().UpdateGhost(FromNodeIndex, Snap, bValid);
+	Actor().UpdateGhost(FromNodeIndex, Snap, bValid, Kind);
 }
 
 void URoadEditFacade::HideGhost()
@@ -186,7 +187,7 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 	return Node.Index;
 }
 
-bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
+bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind)
 {
 	if (FromIndex == ToIndex)
 	{
@@ -205,14 +206,36 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex)
 
 	ARoadNetworkActor& Owner = Actor();
 
+	// RESOLVED PER KIND, here rather than in the tool - see ERoadKind for why a tool never
+	// names an asset.
+	//
+	// A ROAD WITH NO PROFILE IS REFUSED, not laid as a taxiway. The same choice PlaceRunway
+	// makes below and for the same reason - the right shape on screen and the wrong
+	// behaviour at every junction, with nothing to say so - but worse here than there: a
+	// taxiway profile carries an AIRCRAFT guideline, so the silent fallback would admit
+	// aeroplanes onto a lane laid for vans. There is no transient fallback to reach for
+	// either; see ARoadNetworkActor::ResolveServiceRoadProfile.
+	URoadProfile* Chosen = Kind == ERoadKind::ServiceRoad
+		? Owner.ResolveServiceRoadProfile()
+		: Owner.ResolveProfile();
+	if (Chosen == nullptr && Kind == ERoadKind::ServiceRoad)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("ConnectNodes refused: %d -> %d, no service road profile. Author "
+				 "DA_RoadProfile_ServiceRoad with Tools/Python/build_road_profiles.py, or set "
+				 "ServiceRoadProfile on the actor."), FromIndex, ToIndex);
+		return false;
+	}
+
 	// Created after the guards above, all of which refuse without mutating anything, so a
 	// rejected connection never costs a snapshot.
-	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("connect nodes"));
+	FRoadEditScope Edit(HistoryForEdit(), Owner.Network,
+		Kind == ERoadKind::ServiceRoad ? TEXT("connect road nodes") : TEXT("connect nodes"));
 
 	// Straight only. The model stores a Bezier control point, but AddSegment still
 	// interpolates its interior samples in a straight line, so a curve authored here
 	// would render as a chord until slice 2b samples the curve properly.
-	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(From, To, Owner.ResolveProfile());
+	const FRoadSegmentId Segment = Owner.Network->AddStraightSegment(From, To, Chosen);
 	if (!Segment.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectNodes refused: %d -> %d"), FromIndex, ToIndex);

@@ -8,6 +8,7 @@
 class ARoadNetworkActor;
 class UOpsCatalog;
 class UOpsEvents;
+class UFuelService;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 
@@ -22,8 +23,9 @@ enum class EArrivalRefusal : uint8;
  * a lifetime in play. Same split as ARoadNetworkActor (composition root) over
  * UAirsideTraffic (testable subobject), for the same reason.
  *
- * It GROWS BY FORWARDING. Flight board, job board, ledger arrive as further owned
- * subobjects in later milestones; logic lands in them, not here.
+ * It GROWS BY FORWARDING. UFuelService is the first such subobject: this class gained a
+ * pointer, three lines in Attach/Tick/OnAgentPhase, and no logic at all. Flight board, job
+ * board and ledger arrive the same way in later milestones - logic lands in them, not here.
  */
 UCLASS()
 class AIRPORTOPS_API UOpsRuntime : public UObject
@@ -36,6 +38,10 @@ public:
 	USimClock* GetClock() const { return Clock; }
 	UOpsEvents* GetEvents() const { return Events; }
 	UOpsCatalog* GetCatalog() const { return Catalog; }
+
+	/** The fuel jobs. See UFuelService - this runtime owns it, feeds it the phase events and
+	 *  ticks it, and that is the whole of the wiring. */
+	UFuelService* GetFuelService() const { return FuelService; }
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
@@ -57,6 +63,7 @@ private:
 	UPROPERTY() TObjectPtr<USimClock> Clock;
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
 	UPROPERTY() TObjectPtr<UOpsCatalog> Catalog;
+	UPROPERTY() TObjectPtr<UFuelService> FuelService;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/** What TogglePause returns to. X1 if nothing was ever set. */

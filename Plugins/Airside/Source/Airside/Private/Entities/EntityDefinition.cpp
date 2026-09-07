@@ -69,6 +69,54 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition)
 		EServiceRole::Tug, EServiceRole::GPU, EServiceRole::Passenger, EServiceRole::Crew };
 }
 
+UEntityDefinition* UEntityDefinition::MakeFuelDepotTransient()
+{
+	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());
+	BuildFuelDepot(Definition);
+	return Definition;
+}
+
+void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
+{
+	if (Definition == nullptr)
+	{
+		return;
+	}
+
+	// NO ANCHORS. A depot has no plant an aircraft connects to - see the header for why the
+	// pose alone is its road connection. Reset rather than left alone so re-authoring an
+	// asset that once had some really does clear them.
+	Definition->Anchors.Reset();
+
+	// ORIGIN IS THE TRUCK BAY - where a truck stands when it is home, and the node it is
+	// dispatched from and back to.
+	//
+	// +X FACES AWAY FROM THE ROAD, exactly as a stand's +X faces the terminal: the pose
+	// lead-in leaves along heading PLUS 180 (see FAnchorLink), so it runs out of the BACK of
+	// the installation to the movement area. A depot is therefore aimed away from the road it
+	// serves, and the truck drives out behind it.
+	//
+	// Stated the wrong way round when this was first written ("+X faces the road"), which is
+	// self-contradictory given the +180 in the same sentence - and it is the sentence a
+	// player placing one would have followed.
+	Definition->PoseRole = EServiceRole::Fuel;
+
+	// HALF-extents: 12 m by 8 m overall. A tank, a pump, and room to turn a bowser round.
+	// A placeholder box, and the only geometry the depot has this slice.
+	Definition->FootprintExtent = FVector2D(600.0, 400.0);
+
+	// ONE truck. The number UFuelService counts trucks-out against; M3's job board replaces
+	// the counting, not the number.
+	Definition->Trucks = 1;
+
+	// What this installation can provide. Fuel and nothing else, which is the whole slice.
+	Definition->AvailableServices = { EServiceRole::Fuel };
+
+	// NO DesignAircraft, deliberately: nothing parks here, so there is no envelope to draw
+	// and no ICAO code letter to size a lead-in sweep by. FAnchorLink falls back to Code C's
+	// 2500 uu radius, which is generous for a van and costs nothing.
+}
+
 bool UEntityDefinition::HasUsableAnchorIds(const UEntityDefinition* Definition)
 {
 	if (Definition == nullptr)
@@ -108,6 +156,18 @@ int32 UEntityDefinition::RefreshResolvedAnchors(URoadNetwork& Network)
 		FEntityInstanceId EntityId;
 		EntityId.Index = Index;
 		EntityId.Generation = Instance.Generation;
+
+		// THE INSTANCE'S OWN POSE ROLE, for the same reason the anchors' snapshots are
+		// refreshed here: an entity placed and saved before FEntityInstance::PoseRole existed
+		// loads with the UPROPERTY default (Aircraft) and nothing else ever corrects it.
+		// Harmless for every entity that COULD have been saved then - they were all stands -
+		// and wrong for a depot whose definition is re-authored after placement, which would
+		// otherwise be stuck casting its lead-in at a taxiway for ever.
+		if (Instance.PoseRole != Instance.Definition->PoseRole
+			&& Network.SetEntityPoseRole(EntityId, Instance.Definition->PoseRole))
+		{
+			++ChangedCount;
+		}
 
 		for (const FResolvedAnchor& Resolved : Instance.ResolvedAnchors)
 		{

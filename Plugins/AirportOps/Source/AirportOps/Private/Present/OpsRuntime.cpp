@@ -3,6 +3,7 @@
 #include "Content/AirportOpsSettings.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
+#include "Model/FuelService.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -15,6 +16,7 @@ UOpsRuntime::UOpsRuntime()
 	Clock = CreateDefaultSubobject<USimClock>(TEXT("Clock"));
 	Events = CreateDefaultSubobject<UOpsEvents>(TEXT("Events"));
 	Catalog = CreateDefaultSubobject<UOpsCatalog>(TEXT("Catalog"));
+	FuelService = CreateDefaultSubobject<UFuelService>(TEXT("FuelService"));
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -39,8 +41,13 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario())
 	{
 		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
-		UE_LOG(LogAirportOps, Log, TEXT("Scenario '%s': %.0f real s per game day"),
-			*Scenario->GetName(), Scenario->RealSecondsPerGameDay);
+
+		// The two designer figures set from the same asset in the same breath, so neither can
+		// be the one somebody forgot to copy.
+		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Scenario '%s': %.0f real s per game day, %.0f s fuel dwell"),
+			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->FuelDwellSeconds);
 	}
 	ApplySpeed(Clock->GetSpeed());
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
@@ -64,6 +71,22 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		// The MULTIPLIER, not TimeScale(): movement runs at the player's speed setting,
 		// never at the day compression. See USimClock's class comment.
 		Target->SetSimTimeScale(USimClock::Multiplier(Clock->GetSpeed()));
+
+		// THE NETWORK IS READ FRESH, never cached: URoadEditFacade::ClearNetwork replaces the
+		// actor's network OBJECT rather than draining it, so a pointer held across a clear is
+		// stale - the same reason LoadFromSlot re-reads it.
+		//
+		// AND NOTHING IS SCALED HERE. The fuel service's own clock is
+		// UGroundTraffic::GetSimSeconds, which the actor's tick has already advanced by the
+		// speed multiplier; scaling again would run the dwell at the square of the player's
+		// speed setting.
+		if (Target->Network != nullptr && Target->GetTraffic() != nullptr)
+		{
+			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
+			{
+				FuelService->Tick(*Model, *Target->Network);
+			}
+		}
 	}
 }
 
@@ -110,6 +133,17 @@ void UOpsRuntime::TogglePause()
 
 void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
+	// THE SERVICE FIRST, THEN THE BUS. A Blueprint listener that asked the fuel service what
+	// an aircraft was doing would otherwise see the state from BEFORE the event it was woken
+	// by - one frame stale, and only sometimes, which is the worst kind.
+	if (Target != nullptr && Target->Network != nullptr && Target->GetTraffic() != nullptr)
+	{
+		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
+		{
+			FuelService->OnAgentPhase(*Model, *Target->Network, AgentId, From, To);
+		}
+	}
+
 	Events->NotifyAgentPhaseChanged(AgentId, From, To);
 }
 

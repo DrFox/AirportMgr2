@@ -36,4 +36,15 @@ public:
 	/** Real seconds one game day takes at x1. Copied into USimClock by UOpsRuntime at attach. */
 	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "1.0"))
 	double RealSecondsPerGameDay = 1200.0;
+
+	/**
+	 * How long a fuel truck stays at the hydrant, in the sim seconds a truck MOVES in - see
+	 * UFuelService::DwellSeconds, and its header for why that is not game time.
+	 *
+	 * Copied into UFuelService by UOpsRuntime at attach, exactly as RealSecondsPerGameDay is
+	 * copied into USimClock: a designer figure lives on the authored asset, and the object
+	 * that consumes it is transient.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0"))
+	double FuelDwellSeconds = 40.0;
 };

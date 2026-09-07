@@ -9,6 +9,7 @@ class UMaterialInterface;
 class URoadProfile;
 class UAnimInstance;
 class USkeletalMesh;
+class UStaticMesh;
 class UAircraftType;
 
 /**
@@ -91,9 +92,36 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TArray<TSoftObjectPtr<URoadProfile>> RunwayProfiles;
 
+	/**
+	 * The SERVICE ROAD cross-section a ground vehicle drives on.
+	 *
+	 * AN AUTHORED ASSET, for exactly the reason RunwayProfiles gives: a segment stores a
+	 * POINTER to its profile, and URoadNetwork::DefaultProfile repairs any segment whose
+	 * pointer came back null from a save - with the TAXIWAY profile. A transient service-road
+	 * profile would therefore not merely vanish on reload, it would come back as a taxiway:
+	 * the road widened to 23 m and, far worse, admitting AIRCRAFT onto a lane laid for vans,
+	 * with nothing anywhere to report it.
+	 *
+	 * Null is still legal, and means the road tool refuses to lay one and says which asset is
+	 * missing - the same treatment URoadEditFacade::PlaceRunway gives a missing runway profile,
+	 * and for the same reason: a silent fallback here is the wrong behaviour at every junction.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<URoadProfile> ServiceRoadProfile;
+
 	/** What the stand tool places. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;
+
+	/**
+	 * What the fuel depot tool places. See UEntityDefinition::BuildFuelDepot.
+	 *
+	 * SCAFFOLDING that M4's UBuildingInstance replaces (fuel-service spec §0.1) - but the
+	 * ASSET REFERENCE is not, which is why it is here rather than a path in C++: a depot
+	 * placed in a level names this definition, and a folder move must repoint it.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<UEntityDefinition> DefaultFuelDepot;
 
 	/**
 	 * The airframe a route wears when its start has no design aircraft to ask - most of the
@@ -117,6 +145,17 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<USkeletalMesh> AgentMesh;
+
+	/**
+	 * What a GROUND VEHICLE agent looks like. Null leaves the placeholder box.
+	 *
+	 * STATIC, not skeletal, and beside AgentMesh rather than replacing a branch inside it: a
+	 * truck's wheels turn and nothing else does, and there is no rig yet. The box it falls
+	 * back to is sized from FTrafficRules::VehicleFootprint, so what is on screen is the
+	 * length the arbiter actually keeps clear - see ARoadAgentActor::SetVehicleBody.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<UStaticMesh> VehicleMesh;
 
 	/**
 	 * What drives the airframe's moving parts. Null leaves it posed in its reference pose.

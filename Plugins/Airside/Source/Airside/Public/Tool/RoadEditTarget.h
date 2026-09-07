@@ -5,7 +5,9 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 
@@ -59,7 +61,19 @@ public:
 	// --- Nodes and segments --------------------------------------------------------------
 
 	virtual int32 PlaceNode(FVector2D Where) = 0;
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) = 0;
+
+	/** Runs a segment of Kind between two live nodes. See ERoadKind for why the KIND travels
+	 *  here and the profile does not. */
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) = 0;
+
+	/** A taxiway - what every caller before the fuel slice meant. A non-virtual overload,
+	 *  so implementers override one signature; they carry `using IRoadEditTarget::ConnectNodes;`
+	 *  so this one stays visible on the concrete type. */
+	bool ConnectNodes(int32 FromIndex, int32 ToIndex)
+	{
+		return ConnectNodes(FromIndex, ToIndex, ERoadKind::Taxiway);
+	}
+
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) = 0;
 	/** Lays a runway with its surface and approach class written onto every segment of it. */
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) = 0;
@@ -104,18 +118,46 @@ public:
 	virtual bool DeleteApron(int32 ApronIndex) = 0;
 	virtual int32 FindApronAt(FVector2D Where) const = 0;
 
-	// --- Stands ------------------------------------------------------------------------
+	// --- Entities ------------------------------------------------------------------------
 
-	virtual int32 PlaceStand(FVector2D Where, double Heading) = 0;
+	/** Drops one installation of Kind at a pose. See EPlaceableEntity for why the KIND
+	 *  travels here and the definition does not. */
+	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) = 0;
+
+	/** A stand - what every caller before the fuel slice meant. A non-virtual overload, so
+	 *  implementers override one signature; they carry `using IRoadEditTarget::PlaceStand;`
+	 *  where the name would otherwise be hidden. */
+	int32 PlaceStand(FVector2D Where, double Heading)
+	{
+		return PlaceEntity(Where, Heading, EPlaceableEntity::Stand);
+	}
+
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const = 0;
 
-	/** StandDefinition, read-only: a tool previews what would be placed, never authors it. */
-	virtual const UEntityDefinition* GetStandDefinition() const = 0;
+	/** The definition of Kind, read-only: a tool previews what would be placed, never
+	 *  authors it. RESOLVED, the same object PlaceEntity places from - see
+	 *  ARoadNetworkActor::ResolveEntityDefinition. */
+	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const = 0;
+
+	/** The stand's, for every caller written before there was a second kind. */
+	const UEntityDefinition* GetStandDefinition() const
+	{
+		return GetEntityDefinition(EPlaceableEntity::Stand);
+	}
 
 	// --- Ghost preview -------------------------------------------------------------------
 
-	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) = 0;
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+		ERoadKind Kind) = 0;
+
+	/** A taxiway, as ConnectNodes. The ghost must show the width the click will ACTUALLY
+	 *  lay: a 23 m preview over a 6 m road is a lie the player then acts on. */
+	void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
+	{
+		UpdateGhost(FromNodeIndex, Snap, bValid, ERoadKind::Taxiway);
+	}
+
 	virtual void HideGhost() = 0;
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const = 0;
 

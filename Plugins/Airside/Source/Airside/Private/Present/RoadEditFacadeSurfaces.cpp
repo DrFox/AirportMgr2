@@ -166,15 +166,29 @@ int32 URoadEditFacade::FindApronAt(FVector2D Where) const
 	return INDEX_NONE;
 }
 
-int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
+int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind)
 {
 	ARoadNetworkActor& Owner = Actor();
-	UEntityDefinition* Stand = Owner.ResolveStandDefinition();
-	if (Stand == nullptr)
+
+	// RESOLVED BY KIND, in one place - see ARoadNetworkActor::ResolveEntityDefinition, which
+	// the tool's preview goes through too so the two cannot pick different objects.
+	UEntityDefinition* Definition = Owner.ResolveEntityDefinition(Kind);
+	if (Definition == nullptr)
 	{
+		// REFUSED, never substituted. Falling back to the other kind would drop a stand where
+		// a building was asked for, which reads on screen as the tool working. The message
+		// names the ASSET AND THE SCRIPT that authors it, which is what turned "the stand
+		// tool does nothing" into a one-line fix the first time.
+		// ONE FORMAT STRING with the missing thing substituted, not a ternary between two
+		// literals: UE 5.8's format-string sanitiser needs a compile-time TCHAR array, and a
+		// ternary is not one. The message still names the ASSET AND THE SCRIPT that authors
+		// it, which is what turned "the stand tool does nothing" into a one-line fix.
+		const TCHAR* Missing = Kind == EPlaceableEntity::FuelDepot
+			? TEXT("FuelDepotDefinition (author DA_FuelDepot)")
+			: TEXT("StandDefinition (author DA_Stand_CodeC)");
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceStand refused: no StandDefinition. Author DA_Stand_CodeC with "
-				 "Tools/Python/build_stand_asset.py, or set one on the actor."));
+			TEXT("PlaceEntity refused: no %s with Tools/Python/build_stand_asset.py, or set "
+				 "one on the actor."), Missing);
 		return INDEX_NONE;
 	}
 
@@ -185,22 +199,26 @@ int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
 	// than fatal at the call site. But it IS a real fault - lookup is by id, so two anchors
 	// sharing one are indistinguishable and a query for either returns the first, which
 	// sends the fuel truck to the belt loader and reports success.
-	if (!UEntityDefinition::HasUsableAnchorIds(Stand))
+	if (!UEntityDefinition::HasUsableAnchorIds(Definition))
 	{
 		UE_LOG(LogRoadMesh, Error,
-			TEXT("PlaceStand: %s has anchors with empty or duplicate ids. Anchor lookups on "
+			TEXT("PlaceEntity: %s has anchors with empty or duplicate ids. Anchor lookups on "
 				 "this entity will be ambiguous."),
-			*Stand->GetName());
+			*Definition->GetName());
 	}
 
 	URoadNetwork& Net = EnsureNetwork();
-	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place stand"));
+	FRoadEditScope Edit(HistoryForEdit(), &Net,
+		Kind == EPlaceableEntity::FuelDepot ? TEXT("place fuel depot") : TEXT("place stand"));
 
 	// The design wingspan is read HERE, in the one caller allowed to see the definition, and
 	// handed down - see PlaceEntity's comment on why Model/ cannot read it for itself.
 	const double DesignWingspan =
-		Stand->DesignAircraft != nullptr ? Stand->DesignAircraft->Footprint.Wingspan : 0.0;
-	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading, DesignWingspan);
+		Definition->DesignAircraft != nullptr ? Definition->DesignAircraft->Footprint.Wingspan : 0.0;
+	// PoseRole travels with DesignWingspan and for the same reason: this is the one caller
+	// allowed to see the definition, so it reads both and hands them down.
+	const FEntityInstanceId Placed = Net.PlaceEntity(Definition, Definition->Anchors, Where,
+		Heading, DesignWingspan, Definition->PoseRole, Definition->Trucks);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

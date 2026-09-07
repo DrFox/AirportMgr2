@@ -8,8 +8,11 @@
 
 namespace
 {
-	/** Engine's unit cube is 100 uu, so the FALLBACK box is 4 m x 4 m x 2 m. */
+	/** Engine's unit cube is 100 uu, so a scale of 1 is a 1 m box. */
 	constexpr double CubeUnits = 100.0;
+
+	/** The AIRCRAFT fallback box: 4 m x 4 m x 2 m. A vehicle's is sized from its own
+	 *  footprint instead - see ARoadAgentActor::SetVehicleBody. */
 	constexpr double ScaleXY = 4.0;
 	constexpr double ScaleZ = 2.0;
 
@@ -34,6 +37,9 @@ ARoadAgentActor::ARoadAgentActor()
 	{
 		Placeholder->SetStaticMesh(Cube.Object);
 	}
+	// The member follows the scale, because SetMotion's lift is read off it and a van
+	// re-scales this component - see PlaceholderSizeUu.
+	PlaceholderSizeUu = FVector(CubeUnits * ScaleXY, CubeUnits * ScaleXY, CubeUnits * ScaleZ);
 	Placeholder->SetRelativeScale3D(FVector(ScaleXY, ScaleXY, ScaleZ));
 
 	// The world is flat and every pick is exact maths against the road plane, exactly as
@@ -61,7 +67,11 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// so it needs no lift. The CUBE does, because its pivot is at its centre, and applying
 	// the cube's lift to the aircraft flies it a metre above the taxiway: a mistake that
 	// reads as a physics or Z-order problem rather than as the arithmetic it is.
-	const double Lift = bHasAirframe ? 0.0 : (CubeUnits * ScaleZ) * 0.5;
+	//
+	// HALF THE BOX'S OWN HEIGHT, read off PlaceholderSizeUu rather than the aircraft
+	// constants: the box is no longer one size, and a van lifted by an aeroplane's half
+	// height floats above the road by exactly the difference.
+	const double Lift = bHasAirframe ? 0.0 : PlaceholderSizeUu.Z * 0.5;
 	const FVector At(Motion.Position.X, Motion.Position.Y,
 		SurfaceZ + Lift + Motion.Altitude);
 
@@ -130,4 +140,38 @@ void ARoadAgentActor::SetAirframe(USkeletalMesh* InAirframe, UClass* AnimClass)
 	// Changes what SetPose must do: the airframe's origin is on the ground, the cube's is at
 	// its centre. Applying the cube's lift to an aircraft flies it a metre above the taxiway.
 	bHasAirframe = true;
+}
+
+void ARoadAgentActor::SetVehicleBody(UStaticMesh* Mesh, const FVector& BoxSizeUu)
+{
+	bIsVehicle = true;
+
+	// SIZED FIRST, so a null mesh still leaves a correctly-sized box rather than an
+	// aircraft-sized one. The engine's unit cube is 100 uu, so the scale is the size over it.
+	PlaceholderSizeUu = BoxSizeUu;
+	if (Placeholder != nullptr)
+	{
+		Placeholder->SetRelativeScale3D(BoxSizeUu / CubeUnits);
+	}
+
+	if (Mesh == nullptr || Placeholder == nullptr)
+	{
+		// The box stands, deliberately, exactly as SetAirframe leaves the cube: a missing
+		// asset must look like a placeholder rather than like an agent that failed to spawn -
+		// one of those reads as a content problem and the other as a routing bug.
+		return;
+	}
+
+	// The mesh goes ON the placeholder component, not on the skeletal root: a static mesh
+	// cannot live in a skeletal one (see the header), and this is the component that already
+	// exists for exactly this shape.
+	Placeholder->EmptyOverrideMaterials();
+	Placeholder->SetStaticMesh(Mesh);
+
+	// SCALE 1 for a real asset, and the size taken FROM it. A truck modelled at its own size
+	// and then scaled to the footprint would put the mesh and FTrafficRules::VehicleFootprint
+	// - which the arbiter reserves line by - quietly out of step, the same trap SetAirframe
+	// records for the airframe and its wingspan.
+	Placeholder->SetRelativeScale3D(FVector::OneVector);
+	PlaceholderSizeUu = Mesh->GetBounds().BoxExtent * 2.0;
 }

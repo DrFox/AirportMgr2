@@ -197,7 +197,8 @@ public:
 
 	/** Join two placed nodes with a straight segment. Returns false, and logs, if it refused. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) override;
+	using IRoadEditTarget::ConnectNodes;
 
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -313,7 +314,8 @@ public:
 
 	/** Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual int32 PlaceStand(FVector2D Where, double Heading) override;
+	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	using IRoadEditTarget::PlaceStand;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -333,14 +335,25 @@ public:
 	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/**
+	 * What the fuel depot tool places. Unset falls back to the content set's DefaultFuelDepot.
+	 *
+	 * BESIDE StandDefinition rather than in a map keyed by EPlaceableEntity: there are two
+	 * kinds, and two asset pickers in the Details panel are easier to author than a map, for
+	 * no loss until a third arrives.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
+	TObjectPtr<UEntityDefinition> FuelDepotDefinition;
+
+	/**
 	 * IRoadEditTarget accessor for StandDefinition - RESOLVED, via ResolveStandDefinition(),
 	 * the same as PlaceStand places from: preview and placement must resolve the same
 	 * object, or a stand's ghost and the stand PlaceStand actually drops can disagree.
 	 */
-	virtual const UEntityDefinition* GetStandDefinition() const override
+	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override
 	{
-		return ResolveStandDefinition();
+		return ResolveEntityDefinition(Kind);
 	}
+	using IRoadEditTarget::GetStandDefinition;
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -373,7 +386,9 @@ public:
 
 	/** Show the segment a click would build, as real solved pavement. Forwards to Presenter
 	 *  with a FSurfaceSettings built the same way RebuildMesh's is. */
-	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid) override;
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+		ERoadKind Kind) override;
+	using IRoadEditTarget::UpdateGhost;
 
 	/**
 	 * The ghost's triangles, without touching a component, a material or a renderer.
@@ -398,6 +413,23 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside")
 	TObjectPtr<URoadProfile> Profile;
+
+	/**
+	 * Cross-section for SERVICE ROADS laid through this facade - see ERoadKind. Unset falls
+	 * back to the content set's ServiceRoadProfile.
+	 *
+	 * A SECOND PROPERTY rather than a map keyed by kind: there are two kinds, and two asset
+	 * pickers in the Details panel are easier to author than a map, for no loss until a
+	 * third kind exists.
+	 *
+	 * NO FallbackWidth TWIN, unlike Profile. That property's on-demand RuntimeProfile exists
+	 * so the FIRST click of a session lays something; a road that fell back to a transient
+	 * profile would come back from a save as a TAXIWAY (see UAirsideContent::ServiceRoadProfile
+	 * for why that is worse than nothing), so the road tool refuses instead and names the
+	 * asset that is missing.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside")
+	TObjectPtr<URoadProfile> ServiceRoadProfile;
 
 	/**
 	 * Material for the road surface. Defaults to M_RoadSurface, which reads UV0 for
@@ -641,7 +673,7 @@ private:
 
 	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
 	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */
-	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings();
+	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings(ERoadKind Kind);
 
 public:
 	/**
@@ -668,6 +700,32 @@ public:
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
+
+	/**
+	 * What the fuel depot tool places: the authored value if there is one, else the
+	 * configured content default. Null is a supported state - PlaceEntity refuses and names
+	 * the asset that is missing.
+	 */
+	UEntityDefinition*  ResolveFuelDepotDefinition() const;
+
+	/**
+	 * ResolveStandDefinition or ResolveFuelDepotDefinition, by kind.
+	 *
+	 * THE ONE PLACE the mapping lives, so a tool's preview and the facade's placement cannot
+	 * pick differently - which is the drift GetStandDefinition's own comment has always
+	 * warned about, and which only becomes possible once there are two kinds.
+	 */
+	UEntityDefinition*  ResolveEntityDefinition(EPlaceableEntity Kind) const;
+
+	/**
+	 * The service-road cross-section: the authored value if there is one, else the configured
+	 * content default. Null is a SUPPORTED state - the road tool refuses and says so, rather
+	 * than laying a taxiway under the name of a road.
+	 *
+	 * Const, unlike ResolveProfile, because there is nothing to cache: this never falls back
+	 * to a transient profile, for the reason ServiceRoadProfile's own comment gives.
+	 */
+	URoadProfile*       ResolveServiceRoadProfile() const;
 
 	/**
 	 * A runway's pavement material by its surface fact, from the content set only - there

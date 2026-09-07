@@ -5,6 +5,34 @@
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
+/**
+ * Which authored cross-section a build gesture lays.
+ *
+ * A KIND, NOT A URoadProfile*, wherever a tool is involved: a tool has no business naming an
+ * asset, and resolving which profile a kind MEANS is the facade's job
+ * (ARoadNetworkActor::ResolveProfile / ::ResolveServiceRoadProfile) - in one place, where a
+ * missing one can be refused once. See Tool/RoadEditTarget.h, whose ConnectNodes and
+ * UpdateGhost take this.
+ *
+ * HERE RATHER THAN ON THE TOOL SEAM, where it was first written. Tool/RoadEditTarget.h has no
+ * .generated.h, so UHT never parses it and could not resolve the type when it appeared in
+ * ARoadNetworkActor's declarations - "Unable to find 'class', 'delegate', 'enum', or 'struct'
+ * with name 'ERoadKind'", before the compiler is reached. A forward declaration does not
+ * satisfy UHT either. This header is already parsed, and the enum names a kind of
+ * cross-section, which is what this file is about - so the constraint and the right home
+ * happen to agree.
+ *
+ * NOT ON FToolContext. The kind is a fact about the TOOL the player selected, not about the
+ * gesture, and a context field would let two tools disagree about it - the same distinction
+ * FRoadDrawTool draws between a drawing STATE and a drag.
+ */
+UENUM()
+enum class ERoadKind : uint8
+{
+	Taxiway,
+	ServiceRoad
+};
+
 UENUM(BlueprintType)
 enum class ERoadBandType : uint8
 {
@@ -131,4 +159,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void Fill(URoadProfile* Profile, double TotalWidth, double FilletRadius,
 		double ShoulderWidth = 0.0);
+
+	/**
+	 * Fills Profile with the SERVICE ROAD cross-section: kerb | lane | kerb, and one
+	 * guideline of class GroundVehicle.
+	 *
+	 * A SECOND FILL RATHER THAN A PARAMETER ON THE FIRST, deliberately. Fill's taxiway is a
+	 * concrete lane between asphalt run-offs carrying ONE AIRCRAFT guideline; this is a
+	 * narrow kerbed lane carrying ONE VEHICLE guideline, and the two differ in band type,
+	 * band count, guideline class and exit length. A shared function taking five flags would
+	 * be a switch on "which road is this" spelled as parameters, and every caller would
+	 * still have to know which combination meant a road.
+	 *
+	 * NOT CONTINUOUS and NO EXIT LENGTH - see bContinuousThroughJunctions and ExitLength. A
+	 * road gives way to a paved junction; only a runway runs unbroken through one, and only
+	 * a runway grades its own exits.
+	 *
+	 * Exposed to script for the same reason Fill is: the authoring commandlet that writes
+	 * DA_RoadProfile_ServiceRoad must lay down the SAME bands the tests exercise, rather
+	 * than a second transcription of them that is free to drift.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	static void FillServiceRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
+		double FilletRadius);
+
+	/**
+	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
+	 *
+	 * The defaults are a 6 m lane with 0.6 m kerbs on a 5 m corner: wide enough for two vans
+	 * to pass, tight enough that a road reads as a road beside a 23 m taxiway.
+	 */
+	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
+		double KerbWidth = 60.0, double FilletRadius = 500.0);
 };

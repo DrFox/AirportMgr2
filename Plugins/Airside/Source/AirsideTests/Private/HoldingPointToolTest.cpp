@@ -123,7 +123,17 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 		M2HoldToolKind(Net, RunwayEnd) == EHoldingPositionKind::Runway);
 
 	// The registry knows the tool, under key 8, and the session builds it.
-	TestTrue(TEXT("registered under Eight"), ToolRegistry().Last().Key == EKeys::Eight);
+	//
+	// BY SEARCH, NOT BY POSITION. This read ToolRegistry().Last() and so quietly meant "the
+	// holding point tool is the last one registered" - a fact about the table's ORDER that
+	// nothing else depends on, and which the service road (key 9) broke the moment it was
+	// appended. The claim being made is that the tool is REGISTERED under that key.
+	bool bRegisteredUnderEight = false;
+	for (const FToolRegistration& Entry : ToolRegistry())
+	{
+		bRegisteredUnderEight |= Entry.Key == EKeys::Eight;
+	}
+	TestTrue(TEXT("registered under Eight"), bRegisteredUnderEight);
 	FBuildSession Session;
 	TestEqual(TEXT("the session holds every registered tool"), Session.NumTools(), ToolRegistry().Num());
 

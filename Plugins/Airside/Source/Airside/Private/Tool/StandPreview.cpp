@@ -10,8 +10,10 @@ void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D
 {
 	if (Definition == nullptr)
 	{
+		// NOT "no stand definition": this function now describes any installation, and naming
+		// one of the two kinds would be wrong half the time.
 		Sink.Marker(At, EPreviewStyle::Refused);
-		Sink.Label(At, TEXT("no stand definition"), EPreviewStyle::Refused);
+		Sink.Label(At, TEXT("nothing to place"), EPreviewStyle::Refused);
 		return;
 	}
 
@@ -42,6 +44,24 @@ void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D
 		for (const FEntityAnchor& Point : Design->ServicePoints)
 		{
 			Sink.Marker(ToWorld(Point.LocalPosition), EPreviewStyle::Pending);
+		}
+	}
+
+	// THE INSTALLATION'S OWN BOX, for something that is not an aeroplane. A stand leaves
+	// FootprintExtent at zero, because its extent IS its design aircraft's and a second
+	// rectangle round it would be a second opinion about how big the thing is; a fuel depot
+	// has no design aircraft and this is the only geometry it has.
+	if (Definition->FootprintExtent.X > 0.0 && Definition->FootprintExtent.Y > 0.0)
+	{
+		const FVector2D& Extent = Definition->FootprintExtent;
+		const FVector2D Corners[4] = {
+			ToWorld(FVector2D(+Extent.X, +Extent.Y)),
+			ToWorld(FVector2D(+Extent.X, -Extent.Y)),
+			ToWorld(FVector2D(-Extent.X, -Extent.Y)),
+			ToWorld(FVector2D(-Extent.X, +Extent.Y)) };
+		for (int32 Corner = 0; Corner < 4; ++Corner)
+		{
+			Sink.Line(Corners[Corner], Corners[(Corner + 1) % 4], EPreviewStyle::Snap);
 		}
 	}
 

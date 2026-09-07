@@ -80,6 +80,48 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE after rebuild: solved %d nodes (%d failed); guideline graph %d nodes, %d edges (%d hand-authored), %d holding-position nodes; anchor links joined this pass: %d"),
 		Solved.SolvedNodes, Solved.FailedNodes, GuidelineNodes, GuidelineEdges, AuthoredEdges, HoldingPositionNodes, Joined);
 
+	// FUEL READINESS, PER ENTITY, so "the truck never comes" is answered by a grep rather
+	// than by a PIE session: which stands can be fuelled at all, and which depots can
+	// dispatch. A stand whose Fuel anchor joins nothing is a stand no fuel service can ever
+	// serve; a depot whose pose joins nothing cannot send a truck anywhere.
+	{
+		int32 StandsWithJoinedFuel = 0, StandsTotal = 0, DepotsJoined = 0, DepotsTotal = 0;
+		for (int32 Index = 0; Index < Net->GetEntities().Num(); ++Index)
+		{
+			const FEntityInstance& Instance = Net->GetEntities()[Index];
+			if (!Instance.bAlive) { continue; }
+
+			const FEntityInstanceId Id = Net->EntityIdAt(Index);
+			const FGuidelineNode* Pose = Net->GetGuidelineNode(Instance.PoseNode);
+			const bool bPoseJoined = Pose != nullptr && Pose->Incident.Num() > 0;
+
+			if (Instance.PoseRole != EServiceRole::Aircraft)
+			{
+				++DepotsTotal;
+				DepotsJoined += bPoseJoined ? 1 : 0;
+				UE_LOG(LogM2MapProbe, Log,
+					TEXT("PROBE depot %d at (%.0f, %.0f): pose %s a road, %d truck(s)"),
+					Index, Instance.Position.X, Instance.Position.Y,
+					bPoseJoined ? TEXT("joins") : TEXT("JOINS NO"), Instance.Trucks);
+				continue;
+			}
+
+			++StandsTotal;
+			for (const FName FuelId : Net->GetAnchorIdsForRole(Id, EServiceRole::Fuel))
+			{
+				const FResolvedAnchor* Anchor = Net->FindResolvedAnchor(Id, FuelId);
+				const FGuidelineNode* Node = Anchor ? Net->GetGuidelineNode(Anchor->Node) : nullptr;
+				const bool bJoined = Node != nullptr && Node->Incident.Num() > 0;
+				StandsWithJoinedFuel += bJoined ? 1 : 0;
+				UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d anchor '%s' (Fuel): %s a road"),
+					Index, *FuelId.ToString(), bJoined ? TEXT("joins") : TEXT("JOINS NO"));
+			}
+		}
+		UE_LOG(LogM2MapProbe, Log,
+			TEXT("PROBE fuel readiness: %d of %d stand fuel anchor(s) on a road, %d of %d depot(s) on a road"),
+			StandsWithJoinedFuel, StandsTotal, DepotsJoined, DepotsTotal);
+	}
+
 	// The layout itself, so a lead-in that joins nothing can be judged against where the
 	// taxiways actually are rather than against a guess at the player's drawing.
 	{
