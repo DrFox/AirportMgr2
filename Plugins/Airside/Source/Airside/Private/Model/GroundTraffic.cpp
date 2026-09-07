@@ -6,6 +6,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/RunwayDesignator.h"
@@ -450,6 +451,15 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			continue;
 		}
 
+		// THE STAND IS OCCUPIED IN THE TICK THE AIRCRAFT PARKS, by the same rule as the runway
+		// below: the claim pass ran before motion, while this agent was still Taxiing, so its
+		// stand claim is the inbound reservation until the next pass - and the panel would
+		// read "Reserved for" over an aircraft standing on the stand for one frame.
+		if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Parked && Network != nullptr)
+		{
+			ClaimGoalNode(Agent, *Network);
+		}
+
 		// THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that made it.
 		//
 		// Waiting for the agent's next claim pass would leave a vacated runway held for a
@@ -563,6 +573,52 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	{
 		ResolveDeadlocks(*Network);
 	}
+
+	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been
+	// replanned, so its redirect starts the next tick at the top of Arbitrate like any other.
+	if (bStandsMayHaveFreed && Network != nullptr)
+	{
+		ReofferStands(*Network);
+	}
+}
+
+void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
+{
+	// ONE PASS, then the flag clears whether or not anyone was placed: a waiter that still
+	// found nothing will be asked again the next time something frees, not every frame.
+	bStandsMayHaveFreed = false;
+	TArray<int32> Waiting;
+	for (const FRoadAgent& Agent : Agents)
+	{
+		if (Agent.bAwaitingStand && Agent.GoalNode.IsSet()
+			&& (Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Taxiing))
+		{
+			Waiting.Add(Agent.Id);
+		}
+	}
+	// By id, not by reference: RedirectAgent writes into Agents and broadcasts.
+	for (const int32 Id : Waiting)
+	{
+		const FRoadAgent* Agent = FindAgent(Id);
+		if (Agent == nullptr)
+		{
+			continue;
+		}
+		FRoutePlan Route;
+		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent->GoalNode, Agent->Airframe, &Occupancy, Id, &Route);
+		if (!Stand.IsSet() || !Route.IsValid())
+		{
+			continue;
+		}
+		if (RedirectAgent(Id, &Network, Route))
+		{
+			Agents[FindIndex(Id)].bAwaitingStand = false;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Stand.Index);
+		}
+	}
+	// RedirectAgent re-raised the flag on releasing the old goal; nothing else has changed
+	// since this pass started, so it is cleared again rather than costing an empty pass.
+	bStandsMayHaveFreed = false;
 }
 
 int32 UGroundTraffic::CurrentStep(const FRoutePlan& Plan, double Travelled)
