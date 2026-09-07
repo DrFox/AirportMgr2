@@ -82,10 +82,12 @@ public:
 	virtual bool DeleteApron(int32 ApronIndex) override;
 	virtual int32 FindApronAt(FVector2D Where) const override;
 
-	virtual int32 PlaceStand(FVector2D Where, double Heading) override;
+	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	using IRoadEditTarget::PlaceStand;
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;
-	virtual const UEntityDefinition* GetStandDefinition() const override;
+	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override;
+	using IRoadEditTarget::GetStandDefinition;
 
 	/**
 	 * UpdateGhost, HideGhost, RebuildMesh and DispatchAgent are IRoadEditTarget virtuals

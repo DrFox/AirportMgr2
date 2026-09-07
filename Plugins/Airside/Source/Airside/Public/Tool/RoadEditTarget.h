@@ -5,6 +5,7 @@
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadHeal.h"
@@ -117,14 +118,33 @@ public:
 	virtual bool DeleteApron(int32 ApronIndex) = 0;
 	virtual int32 FindApronAt(FVector2D Where) const = 0;
 
-	// --- Stands ------------------------------------------------------------------------
+	// --- Entities ------------------------------------------------------------------------
 
-	virtual int32 PlaceStand(FVector2D Where, double Heading) = 0;
+	/** Drops one installation of Kind at a pose. See EPlaceableEntity for why the KIND
+	 *  travels here and the definition does not. */
+	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) = 0;
+
+	/** A stand - what every caller before the fuel slice meant. A non-virtual overload, so
+	 *  implementers override one signature; they carry `using IRoadEditTarget::PlaceStand;`
+	 *  where the name would otherwise be hidden. */
+	int32 PlaceStand(FVector2D Where, double Heading)
+	{
+		return PlaceEntity(Where, Heading, EPlaceableEntity::Stand);
+	}
+
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const = 0;
 
-	/** StandDefinition, read-only: a tool previews what would be placed, never authors it. */
-	virtual const UEntityDefinition* GetStandDefinition() const = 0;
+	/** The definition of Kind, read-only: a tool previews what would be placed, never
+	 *  authors it. RESOLVED, the same object PlaceEntity places from - see
+	 *  ARoadNetworkActor::ResolveEntityDefinition. */
+	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const = 0;
+
+	/** The stand's, for every caller written before there was a second kind. */
+	const UEntityDefinition* GetStandDefinition() const
+	{
+		return GetEntityDefinition(EPlaceableEntity::Stand);
+	}
 
 	// --- Ghost preview -------------------------------------------------------------------
 

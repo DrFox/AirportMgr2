@@ -15,7 +15,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 {
 	// A function-local static rather than a file-scope global: constructed exactly once,
 	// on first use, in the order written here - which IS the key order, 1 through 3, 5, 6,
-	// 8 then 9 (see the holding-position entry for why seven is skipped; 4 is the Select
+	// 8, 9 then 0 (see the holding-position entry for why seven is skipped; 4 is the Select
 	// tool, added at index 0 - see FSelectTool). Never
 	// mutated after that first construction, so handing out a view over it is safe from
 	// any thread that only reads.
@@ -32,7 +32,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 
 		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
-		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
+		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); } },
 		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"), [] { return MakeUnique<FGuidelineDrawTool>(); } },
 		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),    [] { return MakeUnique<FRunwayTool>(); } },
 
@@ -45,6 +45,10 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
 		// for why this is not a second class.
 		{ EKeys::Nine,  LOCTEXT("Road",      "Road"),      [] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
+
+		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
+		// number is spoken for. One FStandPlaceTool, two entries - see that class.
+		{ EKeys::Zero,  LOCTEXT("FuelDepot", "Fuel depot"), [] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::FuelDepot); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }

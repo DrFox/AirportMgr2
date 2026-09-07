@@ -9,6 +9,28 @@
 class URoadNetwork;
 
 /**
+ * Which authored installation a placement gesture drops.
+ *
+ * A KIND, NOT A UEntityDefinition*, wherever a tool is involved: a tool has no business
+ * naming an asset, and resolving which definition a kind MEANS is the facade's job
+ * (ARoadNetworkActor::ResolveEntityDefinition) - in one place, so the PREVIEW and the
+ * PLACEMENT cannot resolve different objects. That is exactly what
+ * IRoadEditTarget::GetStandDefinition's own comment has always warned about, and it stops
+ * being hypothetical the moment there are two kinds.
+ *
+ * A UENUM in a UHT-parsed header rather than a plain enum on the tool seam, for the reason
+ * ERoadKind records at its own declaration: Tool/RoadEditTarget.h has no .generated.h, so
+ * UHT cannot resolve a type declared there when it appears in ARoadNetworkActor's members,
+ * and a forward declaration does not satisfy it either.
+ */
+UENUM()
+enum class EPlaceableEntity : uint8
+{
+	Stand,
+	FuelDepot
+};
+
+/**
  * Shared, immutable description of a kind of installation (Flyweight), matching
  * URoadProfile's role for cross-sections.
  *

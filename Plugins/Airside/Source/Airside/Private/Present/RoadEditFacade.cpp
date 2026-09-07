@@ -85,12 +85,12 @@ double URoadEditFacade::GetMinimumRunwayLength() const
 	return Actor().MinimumRunwayLength;
 }
 
-const UEntityDefinition* URoadEditFacade::GetStandDefinition() const
+const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity Kind) const
 {
-	// RESOLVED, not the raw field: PlaceStand places from ResolveStandDefinition()'s
+	// RESOLVED, not the raw field: PlaceEntity places from ResolveEntityDefinition()'s
 	// content-default fallback, so the preview a tool draws from this must resolve the
 	// SAME object or the two can disagree about what a click will actually place.
-	return Actor().ResolveStandDefinition();
+	return Actor().ResolveEntityDefinition(Kind);
 }
 
 void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,

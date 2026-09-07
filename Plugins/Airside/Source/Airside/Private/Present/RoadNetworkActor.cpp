@@ -319,6 +319,18 @@ UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 	return Content != nullptr ? Content->DefaultStand.LoadSynchronous() : nullptr;
 }
 
+UEntityDefinition* ARoadNetworkActor::ResolveFuelDepotDefinition() const
+{
+	if (FuelDepotDefinition != nullptr) { return FuelDepotDefinition; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->DefaultFuelDepot.LoadSynchronous() : nullptr;
+}
+
+UEntityDefinition* ARoadNetworkActor::ResolveEntityDefinition(EPlaceableEntity Kind) const
+{
+	return Kind == EPlaceableEntity::FuelDepot ? ResolveFuelDepotDefinition() : ResolveStandDefinition();
+}
+
 URoadProfile* ARoadNetworkActor::ResolveServiceRoadProfile() const
 {
 	if (ServiceRoadProfile != nullptr)
@@ -653,9 +665,9 @@ int32 ARoadNetworkActor::FindApronAt(FVector2D Where) const
 	return Facade->FindApronAt(Where);
 }
 
-int32 ARoadNetworkActor::PlaceStand(FVector2D Where, double Heading)
+int32 ARoadNetworkActor::PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind)
 {
-	return Facade->PlaceStand(Where, Heading);
+	return Facade->PlaceEntity(Where, Heading, Kind);
 }
 
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)

@@ -314,7 +314,8 @@ public:
 
 	/** Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual int32 PlaceStand(FVector2D Where, double Heading) override;
+	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	using IRoadEditTarget::PlaceStand;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -334,14 +335,25 @@ public:
 	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/**
+	 * What the fuel depot tool places. Unset falls back to the content set's DefaultFuelDepot.
+	 *
+	 * BESIDE StandDefinition rather than in a map keyed by EPlaceableEntity: there are two
+	 * kinds, and two asset pickers in the Details panel are easier to author than a map, for
+	 * no loss until a third arrives.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
+	TObjectPtr<UEntityDefinition> FuelDepotDefinition;
+
+	/**
 	 * IRoadEditTarget accessor for StandDefinition - RESOLVED, via ResolveStandDefinition(),
 	 * the same as PlaceStand places from: preview and placement must resolve the same
 	 * object, or a stand's ghost and the stand PlaceStand actually drops can disagree.
 	 */
-	virtual const UEntityDefinition* GetStandDefinition() const override
+	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override
 	{
-		return ResolveStandDefinition();
+		return ResolveEntityDefinition(Kind);
 	}
+	using IRoadEditTarget::GetStandDefinition;
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -688,6 +700,22 @@ public:
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
+
+	/**
+	 * What the fuel depot tool places: the authored value if there is one, else the
+	 * configured content default. Null is a supported state - PlaceEntity refuses and names
+	 * the asset that is missing.
+	 */
+	UEntityDefinition*  ResolveFuelDepotDefinition() const;
+
+	/**
+	 * ResolveStandDefinition or ResolveFuelDepotDefinition, by kind.
+	 *
+	 * THE ONE PLACE the mapping lives, so a tool's preview and the facade's placement cannot
+	 * pick differently - which is the drift GetStandDefinition's own comment has always
+	 * warned about, and which only becomes possible once there are two kinds.
+	 */
+	UEntityDefinition*  ResolveEntityDefinition(EPlaceableEntity Kind) const;
 
 	/**
 	 * The service-road cross-section: the authored value if there is one, else the configured

@@ -19,6 +19,18 @@
 class AIRSIDE_API FStandPlaceTool : public IBuildTool
 {
 public:
+	/**
+	 * ONE TOOL, TWO REGISTRY ENTRIES - key 3 places a stand and key 0 places a fuel depot.
+	 *
+	 * The gesture is identical: press to set the pose, drag to aim it, release, click to
+	 * commit; Ctrl+click removes whatever is under the cursor. Only the DEFINITION differs,
+	 * and that is resolved by the facade from a kind (see EPlaceableEntity), never named
+	 * here. A second class would be a copy of this one that must agree with it for ever -
+	 * the duplication CLAUDE.md's "lists that must agree are ONE list" exists to prevent,
+	 * applied to behaviour rather than to a table.
+	 */
+	explicit FStandPlaceTool(EPlaceableEntity InKind = EPlaceableEntity::Stand) : Kind(InKind) {}
+
 	virtual FText GetDisplayName() const override;
 
 	virtual void OnClick(const FToolContext& Context) override;
@@ -53,4 +65,8 @@ private:
 	 * way, and re-aiming each from scratch would be the most tedious possible way to say so.
 	 */
 	double LastHeading = 0.0;
+
+	/** Which installation this tool drops. Fixed at construction by the registry entry that
+	 *  made it - a tool is picked, never transitioned into, so this never changes. */
+	EPlaceableEntity Kind = EPlaceableEntity::Stand;
 };

@@ -6,7 +6,7 @@ class UEntityDefinition;
 struct IToolPreviewSink;
 
 /**
- * Describes a stand at a pose to a preview sink.
+ * Describes an installation - a stand, a fuel depot - at a pose to a preview sink.
  *
  * Shared because a stand has to look the same whether it is being aimed and has no
  * existence in the model yet, or was placed ten minutes ago. It was written once inside

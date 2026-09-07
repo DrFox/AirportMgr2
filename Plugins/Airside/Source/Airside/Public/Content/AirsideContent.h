@@ -113,6 +113,16 @@ public:
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;
 
 	/**
+	 * What the fuel depot tool places. See UEntityDefinition::BuildFuelDepot.
+	 *
+	 * SCAFFOLDING that M4's UBuildingInstance replaces (fuel-service spec §0.1) - but the
+	 * ASSET REFERENCE is not, which is why it is here rather than a path in C++: a depot
+	 * placed in a level names this definition, and a folder move must repoint it.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<UEntityDefinition> DefaultFuelDepot;
+
+	/**
 	 * The airframe a route wears when its start has no design aircraft to ask - most of the
 	 * graph. See UAirsideSettings::ResolveDefaultAirframe, the one place this is read.
 	 *
