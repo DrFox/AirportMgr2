@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Model/RunwayFacts.h"
 #include "RoadMaterialSet.generated.h"
 
 class UMaterialInterface;
@@ -55,4 +56,13 @@ public:
 
 	/** Slots with no materials, for tests and headless construction. */
 	static URoadMaterialSet* MakeTransient(const TArray<FName>& Names);
+
+	/**
+	 * The slot a runway's bands select for a surface: RunwayGrass, RunwayTarmac or
+	 * RunwayConcrete - reinforced shares concrete's (spec 2026-09-07 §8). ONE spelling,
+	 * here: the mesh builder asks it per runway segment and the presenter declares the
+	 * same three names on the set it hands the builder, and a name typed at both sites
+	 * is a name that drifts.
+	 */
+	static FName RunwaySlotName(ERunwaySurface Surface);
 };

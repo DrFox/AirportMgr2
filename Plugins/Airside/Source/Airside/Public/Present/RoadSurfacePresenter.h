@@ -76,6 +76,16 @@ public:
 		UMaterialInterface* GhostMaterial = nullptr;
 		URoadMaterialSet* MaterialSet = nullptr;
 
+		/**
+		 * Already resolved - see ARoadNetworkActor::ResolveRunwayMaterial. What a runway's
+		 * bands are skinned with, by surface; null falls back to SurfaceMaterial. Three
+		 * pointers rather than a set, because MaterialSet may legitimately be null (the
+		 * single-material road) and these must still reach the mesh - see EffectiveMaterialSet.
+		 */
+		UMaterialInterface* RunwayGrassMaterial = nullptr;
+		UMaterialInterface* RunwayTarmacMaterial = nullptr;
+		UMaterialInterface* RunwayConcreteMaterial = nullptr;
+
 		/** Already resolved - see ARoadNetworkActor::ResolveProfile. */
 		URoadProfile* Profile = nullptr;
 	};
@@ -85,7 +95,8 @@ public:
 	 * creates this presenter, and none of their lifetimes are this class's to manage.
 	 */
 	void Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
-		UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent = nullptr);
+		UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent = nullptr,
+		UDynamicMeshComponent* InRunwayMarkingComponent = nullptr);
 
 	/** Solve every node, build the road and apron surfaces, and push them to their components. */
 	void Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings);
@@ -178,12 +189,46 @@ public:
 	/** Triangles currently in the road surface, for Airside.Present.MeshIsFreshAfterLoad. */
 	int32 SurfaceTriangleCountForTest() const;
 
+	/** Triangles currently in the runway paint, for Airside.Present.RunwayMarkingsDrawn. */
+	int32 RunwayMarkingTriangleCountForTest() const;
+
+	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
+	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
+
 private:
 	/** Separate from the roads, which share nothing with it - see AddApron's own comment. */
 	void RebuildAprons(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/** The holding-position paint, from the guideline graph the same Rebuild just derived. */
 	void RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
+	 * The runway paint - FRunwayMarkingBuilder's quads on their own component, drawn white.
+	 *
+	 * A SECOND marking component rather than more quads on the holding-position one,
+	 * because the two are painted different colours by the same material trick: UV1 = 0
+	 * paints a quad solid MarkingColor, and MarkingColor is a parameter of the material
+	 * instance, so two colours need two instances and therefore two components. No new
+	 * material asset either way.
+	 */
+	void RebuildRunwayMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
+	 * The material set the mesh is actually built and skinned with: the authored set's
+	 * slots (or, with none, one slot carrying SurfaceMaterial) FOLLOWED BY the three
+	 * runway surface slots.
+	 *
+	 * Composed here, per rebuild, into a transient set this presenter owns - never written
+	 * to the actor's MaterialSet, whose null is a deliberate state (see
+	 * ARoadNetworkActor::ResolveMaterialSet). The authored slots come first and in their
+	 * own order, so every material id a band resolved through the authored set is still
+	 * the same id in this one: the authored set is a PREFIX, which is what lets the
+	 * builder resolve band names against this set and see exactly what it saw before.
+	 */
+	const URoadMaterialSet* EffectiveMaterialSet(const FSurfaceSettings& Settings);
+
+	/** The runway paint's material instance: SurfaceMaterial with MarkingColor white. Cached like GhostMID. */
+	UMaterialInstanceDynamic* RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase);
 
 	/** Append a solved node's fan to Builder, if that node solved at all. */
 	void AddGhostJunction(FRoadMeshBuilder& Builder, const FRoadSolveResult& Solved, int32 NodeIndex) const;
@@ -197,6 +242,15 @@ private:
 	UPROPERTY() TObjectPtr<UDynamicMeshComponent> ApronComponent;
 	/** May be null on an actor made before markings existed; RebuildMarkings then does nothing. */
 	UPROPERTY() TObjectPtr<UDynamicMeshComponent> MarkingComponent;
+
+	/** The runway paint's own component - see RebuildRunwayMarkings. May be null likewise. */
+	UPROPERTY() TObjectPtr<UDynamicMeshComponent> RunwayMarkingComponent;
+
+	/** See EffectiveMaterialSet. Transient: composed from resolved settings on every rebuild. */
+	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> EffectiveSet;
+
+	/** See RunwayMarkingMaterialInstance. */
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;
 
 	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
 	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;

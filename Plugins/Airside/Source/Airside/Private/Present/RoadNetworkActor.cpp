@@ -96,11 +96,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 	MarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	MarkingComponent->SetCastShadow(false);
 
+	RunwayMarkingComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RunwayMarkings"));
+	RunwayMarkingComponent->SetupAttachment(RootComponent);
+	RunwayMarkingComponent->SetUsingAbsoluteLocation(true);
+	RunwayMarkingComponent->SetUsingAbsoluteRotation(true);
+	RunwayMarkingComponent->SetUsingAbsoluteScale(true);
+	RunwayMarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	RunwayMarkingComponent->SetCastShadow(false);
+
 	// The three objects issue #32 split this actor into - see each class's own header for
 	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
 	// than UPROPERTY(Instanced).
 	Presenter = CreateDefaultSubobject<URoadSurfacePresenter>(TEXT("Presenter"));
-	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent, MarkingComponent);
+	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent, MarkingComponent, RunwayMarkingComponent);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
@@ -133,6 +141,9 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.ApronMaterial = ResolveApronMaterial();
 	Settings.GhostMaterial = ResolveGhostMaterial();
 	Settings.MaterialSet = ResolveMaterialSet();
+	Settings.RunwayGrassMaterial = ResolveRunwayMaterial(ERunwaySurface::Grass);
+	Settings.RunwayTarmacMaterial = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
+	Settings.RunwayConcreteMaterial = ResolveRunwayMaterial(ERunwaySurface::Concrete);
 	Settings.Profile = ResolveProfile();
 	return Settings;
 }
@@ -275,6 +286,25 @@ URoadMaterialSet* ARoadNetworkActor::ResolveMaterialSet() const
 	return MaterialSet;
 }
 
+UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(ERunwaySurface Surface) const
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content == nullptr)
+	{
+		return nullptr;
+	}
+	switch (Surface)
+	{
+	case ERunwaySurface::Grass:  return Content->RunwayGrassMaterial.LoadSynchronous();
+	case ERunwaySurface::Tarmac: return Content->RunwayTarmacMaterial.LoadSynchronous();
+	// Reinforced shares concrete's material - URoadMaterialSet::RunwaySlotName says why.
+	case ERunwaySurface::Concrete:
+	case ERunwaySurface::Reinforced:
+	default:
+		return Content->RunwayConcreteMaterial.LoadSynchronous();
+	}
+}
+
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 {
 	if (StandDefinition != nullptr) { return StandDefinition; }
@@ -382,6 +412,16 @@ bool ARoadNetworkActor::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
 int32 ARoadNetworkActor::SurfaceTriangleCountForTest() const
 {
 	return Presenter->SurfaceTriangleCountForTest();
+}
+
+int32 ARoadNetworkActor::RunwayMarkingTriangleCountForTest() const
+{
+	return Presenter->RunwayMarkingTriangleCountForTest();
+}
+
+const URoadMaterialSet* ARoadNetworkActor::EffectiveMaterialSetForTest() const
+{
+	return Presenter->EffectiveMaterialSetForTest();
 }
 
 bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const

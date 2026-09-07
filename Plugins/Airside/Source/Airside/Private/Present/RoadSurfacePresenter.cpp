@@ -6,6 +6,7 @@
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Build/RunwayMarkingBuilder.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Debug/RoadRebuildCensus.h"
 #include "DrawDebugHelpers.h"
@@ -14,6 +15,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Present/DynamicMeshSink.h"
 #include "Present/RoadEditFacade.h"
+#include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
 namespace
@@ -47,9 +49,11 @@ namespace
 }
 
 void URoadSurfacePresenter::Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
-	UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent)
+	UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent,
+	UDynamicMeshComponent* InRunwayMarkingComponent)
 {
 	MarkingComponent = InMarkingComponent;
+	RunwayMarkingComponent = InRunwayMarkingComponent;
 	MeshComponent = InMeshComponent;
 	GhostComponent = InGhostComponent;
 	ApronComponent = InApronComponent;
@@ -62,6 +66,100 @@ int32 URoadSurfacePresenter::SurfaceTriangleCountForTest() const
 		return 0;
 	}
 	return MeshComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+}
+
+int32 URoadSurfacePresenter::RunwayMarkingTriangleCountForTest() const
+{
+	if (RunwayMarkingComponent == nullptr || RunwayMarkingComponent->GetDynamicMesh() == nullptr)
+	{
+		return 0;
+	}
+	return RunwayMarkingComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+}
+
+const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfaceSettings& Settings)
+{
+	if (EffectiveSet == nullptr)
+	{
+		EffectiveSet = NewObject<URoadMaterialSet>(this, NAME_None, RF_Transient);
+	}
+	EffectiveSet->Slots.Reset();
+
+	if (Settings.MaterialSet != nullptr)
+	{
+		// The authored slots FIRST and UNCHANGED - see the header: their indices are the
+		// ids the bands resolve to, and must survive the append.
+		EffectiveSet->Slots.Append(Settings.MaterialSet->Slots);
+	}
+	else
+	{
+		// The single-material road: one slot, the surface material, id 0 - which is what
+		// every band of a taxiway resolves to without a set, exactly as before.
+		FRoadMaterialSlot Surface;
+		Surface.Name = TEXT("Surface");
+		Surface.Material = Settings.SurfaceMaterial;
+		EffectiveSet->Slots.Add(Surface);
+	}
+
+	// The runway surfaces, appended, each falling back to the surface material so a
+	// project without the runway materials authored still draws its runways as roads. An
+	// authored set that already declares one of these names keeps its own binding: the
+	// name resolves to the earlier index, and the appended copy is never reached.
+	const struct { ERunwaySurface Surface; UMaterialInterface* Material; } Runway[] = {
+		{ ERunwaySurface::Grass, Settings.RunwayGrassMaterial },
+		{ ERunwaySurface::Tarmac, Settings.RunwayTarmacMaterial },
+		{ ERunwaySurface::Concrete, Settings.RunwayConcreteMaterial },
+	};
+	for (const auto& Entry : Runway)
+	{
+		FRoadMaterialSlot Slot;
+		Slot.Name = URoadMaterialSet::RunwaySlotName(Entry.Surface);
+		Slot.Material = Entry.Material != nullptr ? Entry.Material : Settings.SurfaceMaterial;
+		EffectiveSet->Slots.Add(Slot);
+	}
+	return EffectiveSet;
+}
+
+UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
+{
+	if (RunwayMarkingMID == nullptr && SurfaceMaterialBase != nullptr)
+	{
+		RunwayMarkingMID = UMaterialInstanceDynamic::Create(SurfaceMaterialBase, this);
+		// WHITE, the one thing that differs from the holding-position paint. The road
+		// material's MarkingColor parameter is the taxiway yellow by default; a runway's
+		// markings are white (ICAO Annex 14, 5.2.1.4) and this is the whole of the change.
+		RunwayMarkingMID->SetVectorParameterValue(TEXT("MarkingColor"), FLinearColor::White);
+	}
+	return RunwayMarkingMID;
+}
+
+void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	if (RunwayMarkingComponent == nullptr)
+	{
+		return;
+	}
+	// The same half unit above the road as the holding positions: both are paint on the
+	// pavement, and neither overlaps the other by construction (one lies on taxiways at
+	// their runway ends, the other on the runway itself).
+	const double MarkingZ = Settings.SurfaceZ + 0.5;
+	FRoadMeshBuffers Buffers;
+	FRunwayMarkingCensus Census;
+	const int32 Painted = FRunwayMarkingBuilder::Build(Network, MarkingZ, Buffers, &Census);
+	// The road material through a dynamic instance with MarkingColor white - see
+	// RunwayMarkingMaterialInstance. A null base material leaves the sink's own fallback.
+	UMaterialInterface* Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
+	FDynamicMeshSink Sink(RunwayMarkingComponent, Material != nullptr ? Material : Settings.SurfaceMaterial,
+		Settings.bUseConstantVertexColour);
+	Sink.Accept(Buffers);
+	RunwayMarkingComponent->SetVisibility(Painted > 0);
+	// The census, reported: which markings were painted says more about a runway's facts
+	// than a triangle count, and it is what the probe reads.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Runway markings: %d runway(s), %d triangle(s) at Z=%.1f - %d threshold stripes, %d designator strokes, ")
+		TEXT("%d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
+		Painted, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
+		Census.CentrelineDashes, Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
 }
 
 double URoadSurfacePresenter::GetApronSurfaceZ(double SurfaceZ, double ApronZOffset) const
@@ -206,13 +304,16 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	// material", and ARoadNetworkActor::ResolveMaterialSet supplies a content default without
 	// the actor being altered to say so - see that function for why. This class only ever
 	// sees the result.
-	FRoadMeshBuilder Builder(Settings.SurfaceZ, Settings.TexelsPerUnit, Settings.MaterialSet);
+	//
+	// THE EFFECTIVE SET, not Settings.MaterialSet itself: the authored slots plus the three
+	// runway surfaces (see EffectiveMaterialSet). A null authored set used to mean the
+	// single-slot sink path; it now means one surface slot at id 0, which skins every
+	// non-runway triangle with the same material it always had.
+	const URoadMaterialSet* Materials = EffectiveMaterialSet(Settings);
+	FRoadMeshBuilder Builder(Settings.SurfaceZ, Settings.TexelsPerUnit, Materials);
 	Builder.Build(Network, Solved, Settings.RibbonSegments);
 
-	// MaterialSet null keeps SurfaceMaterial and the single-slot path, so a level that has
-	// not been given a set renders exactly as it did before per-band materials.
-	FDynamicMeshSink Sink(MeshComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour,
-		Settings.MaterialSet);
+	FDynamicMeshSink Sink(MeshComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Materials);
 	Builder.Emit(Sink);
 
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt
@@ -220,6 +321,8 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	RebuildAprons(Network, Settings);
 	// And the holding-position paint, from the graph derived above.
 	RebuildMarkings(Network, Settings);
+	// And the runways' own paint, from their facts.
+	RebuildRunwayMarkings(Network, Settings);
 
 	if (Settings.bDebugDrawMesh)
 	{

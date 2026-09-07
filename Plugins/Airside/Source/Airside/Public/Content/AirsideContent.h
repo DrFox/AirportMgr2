@@ -51,6 +51,25 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
 	TSoftObjectPtr<UMaterialInterface> GhostMaterial;
 
+	/**
+	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts.
+	 *
+	 * Three, not four: reinforced is concrete with a stronger rating, and the difference
+	 * shows in the details panel and in what may land there, not on the ground (spec
+	 * 2026-09-07 §8). Each is an instance of the road surface with its centreline width
+	 * at zero, because the only line on a runway is the white one FRunwayMarkingBuilder
+	 * paints - authored by Tools/Python/build_runway_materials.py. Null falls back to
+	 * SurfaceMaterial, yellow line and all, which is what runways looked like before.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> RunwayGrassMaterial;
+
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> RunwayTarmacMaterial;
+
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> RunwayConcreteMaterial;
+
 	// NO MaterialSet HERE, deliberately. A null one on the actor is not an unset field, it is
 	// the single-material road - so offering a default silently converts every airport that
 	// chose it. Assign one on the actor to get per-band materials.

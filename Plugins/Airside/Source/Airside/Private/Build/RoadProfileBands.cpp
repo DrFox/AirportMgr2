@@ -26,9 +26,23 @@ int32 FRoadProfileBands::BandAt(double Alpha) const
 }
 
 FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile,
-	const URoadMaterialSet* Materials)
+	const URoadMaterialSet* Materials, FName SlotOverride)
 {
 	FRoadProfileBands Out;
+
+	// The override resolved ONCE, up front, so a runway whose surface the set does not
+	// declare is reported once rather than once per band - and so the degenerate
+	// no-band case below takes it too: a runway with no bands is still a runway.
+	int32 Override = INDEX_NONE;
+	if (!SlotOverride.IsNone())
+	{
+		Override = Materials != nullptr ? Materials->IndexOf(SlotOverride) : INDEX_NONE;
+		if (Override == INDEX_NONE)
+		{
+			++Out.UnresolvedSlots;
+		}
+	}
+	const bool bOverride = !SlotOverride.IsNone();
 
 	const double HalfLeft  = Profile ? FMath::Max(Profile->GetHalfWidthLeft(),  0.0) : 0.0;
 	const double HalfRight = Profile ? FMath::Max(Profile->GetHalfWidthRight(), 0.0) : 0.0;
@@ -42,7 +56,7 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile,
 		Out.Laterals = { static_cast<float>(-HalfRight), static_cast<float>(HalfLeft) };
 
 		// One notional band, so SlotForBand answers the same way here as anywhere else.
-		Out.SlotIndices = { 0 };
+		Out.SlotIndices = { FMath::Max(Override, 0) };
 		Out.CentrelineAlpha = Total > 0.0 ? HalfRight / Total : 0.5;
 		return Out;
 	}
@@ -88,7 +102,14 @@ FRoadProfileBands FRoadProfileBands::FromProfile(const URoadProfile* Profile,
 		const FProfileBand& Source = Profile->Bands[BandCount - 1 - Band];
 
 		int32 Slot = 0;
-		if (Materials != nullptr && !Source.MaterialSlot.IsNone())
+		if (bOverride)
+		{
+			// The surface is the segment's, not the band's - see the header. The band's
+			// own name is deliberately not consulted, so a runway profile authored with
+			// Asphalt bands still paints as the grass or concrete its facts say.
+			Slot = FMath::Max(Override, 0);
+		}
+		else if (Materials != nullptr && !Source.MaterialSlot.IsNone())
 		{
 			Slot = Materials->IndexOf(Source.MaterialSlot);
 			if (Slot == INDEX_NONE)
