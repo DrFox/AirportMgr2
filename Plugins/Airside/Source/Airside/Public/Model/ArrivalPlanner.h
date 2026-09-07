@@ -48,6 +48,10 @@ enum class EArrivalRefusal : uint8
 	 * because a refusal that never clears must not be reported as one that will.
 	 */
 	NotAdmitted,
+
+	/** Stands are reachable, but every one of them is held by another aircraft. Distinct from
+	 *  NoRouteToStand because the player's fix differs: wait (or build a stand), not a taxiway. */
+	NoFreeStand,
 };
 
 /**
@@ -119,6 +123,18 @@ struct AIRSIDE_API FArrivalPlan
  */
 namespace ArrivalPlanner
 {
+	/**
+	 * The best FREE stand reachable from From: shortest taxi with runway edges excluded, skipping
+	 * any stand whose pose node Occupancy says is held by an agent other than ExcludingAgent.
+	 * Unset when none. OutRoute receives the winning route; bOutSawHeld reports that at least one
+	 * reachable stand was skipped for being held, which is how Plan tells NoFreeStand from
+	 * NoRouteToStand. Factored out of Plan so the rebuild can ask it from a node that is not a
+	 * runway exit (UGroundTraffic::ReResolvePlan) and the re-offer from wherever a waiter stopped.
+	 */
+	AIRSIDE_API FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
+		FRoutePlan* OutRoute = nullptr, bool* bOutSawHeld = nullptr);
+
 	/**
 	 * Plans an arrival at the runway nearest Near, for an airframe with Airframe's
 	 * performance and wingspan.
