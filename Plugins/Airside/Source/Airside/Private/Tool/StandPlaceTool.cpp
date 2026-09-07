@@ -3,8 +3,10 @@
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Tool/StandPreview.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficOccupancy.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -132,6 +134,20 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 			{
 				Sink.Marker(Entities[Under].Position, EPreviewStyle::Doomed);
 				Sink.Label(Entities[Under].Position, TEXT("remove stand"), EPreviewStyle::Doomed);
+
+				// IN USE. The claim holder, read from the traffic table through the edit target
+				// (Model/, so a tool may see it). The click still deletes - the player owns the
+				// infrastructure - but not without being told who is about to lose a stand.
+				if (const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic())
+				{
+					int32 Holder = 0;
+					if (Entities[Under].PoseNode.IsSet()
+						&& Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(Entities[Under].PoseNode), 0, &Holder))
+					{
+						Sink.Label(Entities[Under].Position + FVector2D(0.0, 600.0),
+							FString::Printf(TEXT("in use by aircraft %d"), Holder), EPreviewStyle::Refused);
+					}
+				}
 			}
 		}
 		return;

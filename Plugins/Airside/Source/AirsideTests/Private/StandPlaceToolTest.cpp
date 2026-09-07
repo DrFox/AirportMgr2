@@ -2,10 +2,15 @@
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RouteSearch.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/StandPlaceTool.h"
@@ -34,6 +39,19 @@ namespace
 		}
 		return Alive;
 	}
+
+	struct FStandOccLabelSink : public IToolPreviewSink
+	{
+		TArray<FString> Labels;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle) override { Labels.Add(Text); }
+		bool Says(const FString& Fragment) const
+		{
+			return Labels.ContainsByPredicate([&](const FString& L) { return L.Contains(Fragment); });
+		}
+	};
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -309,6 +327,47 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 				Node->Position.Equals(Positions[Index], 0.01));
 			TestFalse(TEXT("and it is still not owned by the derivation"), Node->bDerived);
 		}
+	}
+
+	// A stand IN USE is labelled before it is deleted (spec 2026-09-07-stand-occupancy §6).
+	// The click still removes it; the label is the warning.
+	{
+		Actor->ClearNetwork();
+		FStandPlaceTool Tool;
+		Tool.OnClick(StandAt(Actor, FVector2D(3000.0, 3000.0)));
+		if (!TestEqual(TEXT("placed a stand to occupy"), LiveEntities(Actor), 1)) { return false; }
+		FGuidelineNodeId Pose;
+		for (const FEntityInstance& E : Actor->Network->GetEntities()) { if (E.bAlive) { Pose = E.PoseNode; } }
+		if (!TestTrue(TEXT("the stand has a pose node"), Pose.IsSet())) { return false; }
+
+		// An authored way in, so an aircraft can be sent to it without a taxiway.
+		const FGuidelineNodeId From = Actor->Network->AddGuidelineNode(FVector2D(-20000.0, 3000.0), false);
+		{
+			FGuidelineEdge Edge;
+			Edge.A = From; Edge.B = Pose;
+			Edge.Control = FVector2D(-8500.0, 3000.0);
+			Edge.AllowedTraffic = FTrafficMask::All();
+			Edge.Direction = EGuidelineDir::Bidirectional;
+			Edge.bDerived = false;
+			Actor->Network->AddGuidelineEdge(MoveTemp(Edge));
+		}
+		FRouteQuery Q; Q.Start = From; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+		if (!TestTrue(TEXT("an aircraft is sent to the stand"),
+			Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+		const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+		FToolContext Remove = StandAt(Actor, FVector2D(3000.0, 3000.0));
+		Remove.bRemoveModifier = true;
+		FStandOccLabelSink InUse;
+		Tool.BuildPreview(Remove, InUse);
+		TestTrue(TEXT("the remove preview names the aircraft using the stand"),
+			InUse.Says(FString::Printf(TEXT("in use by aircraft %d"), Id)));
+
+		Actor->GetTraffic()->RetireAgent(Id);
+		FStandOccLabelSink Free;
+		Tool.BuildPreview(Remove, Free);
+		TestTrue(TEXT("still says remove"), Free.Says(TEXT("remove stand")));
+		TestFalse(TEXT("a free stand carries no in-use label"), Free.Says(TEXT("in use")));
 	}
 
 	return true;
