@@ -115,6 +115,9 @@ enum class EPreviewStyle : uint8
 
 	/** A runway-holding position: the bar across a taxiway end at a runway. Context, like Guideline; derived since 2026-09-07. */
 	RunwayHoldingPosition,
+
+	/** An intermediate holding position: the player's single dashed line at a taxiway junction. */
+	IntermediateHoldingPosition,
 };
 
 /**

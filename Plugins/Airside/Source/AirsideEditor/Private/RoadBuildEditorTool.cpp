@@ -125,6 +125,7 @@ namespace
 			// The SAME amber ARoadBuildHUD::RunwayHoldingPositionColour defaults to. A bar that changed
 			// colour between the editor and PIE would read as two different things.
 			case EPreviewStyle::RunwayHoldingPosition: return FLinearColor(1.0f, 0.8f, 0.1f);
+			case EPreviewStyle::IntermediateHoldingPosition: return FLinearColor(1.0f, 0.8f, 0.1f, 0.5f);
 			case EPreviewStyle::Pending:
 			default:                     return FLinearColor(0.2f, 1.0f, 0.3f);
 			}

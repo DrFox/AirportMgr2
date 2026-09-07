@@ -40,9 +40,26 @@ struct AIRSIDE_API FGuidelineEndRef
 };
 
 /**
+ * The kinds of holding position, from the ground markings (spec 2026-09-07).
+ *
+ * A RUNWAY-holding position is infrastructure: two solid and two dashed lines across every
+ * taxiway that meets a runway, derived by FRoadGuidelineBuilder at the taxiway's end. An
+ * INTERMEDIATE one is a single dashed line at a taxiway junction where ATC may hold traffic;
+ * the player places it. "Hold short" is the instruction given AT one of these, not a kind
+ * of marking - it belongs to M3's sequencer, and nothing here means "hold" by itself.
+ */
+UENUM()
+enum class EHoldingPositionKind : uint8
+{
+	None,
+	Runway,
+	Intermediate,
+};
+
+/**
  * A point on the guideline graph where something happens.
  *
- * Nodes exist at junctions, crossings, holding-position positions and entity anchors - NOT at
+ * Nodes exist at junctions, crossings, holding positions and entity anchors - NOT at
  * a fixed interval. Spec 3: a node every N metres has nothing to say to anybody, and the
  * parent spec's R9 subdivision was justified by a pathing benefit that moved to this
  * graph when the two graphs were separated.
@@ -57,7 +74,13 @@ struct AIRSIDE_API FGuidelineNode
 	/** Maintained by URoadNetwork. Never edit from outside it. */
 	UPROPERTY() TArray<FGuidelineEdgeId> Incident;
 
-	/** Set when this node requires clearance; names the surface it protects. Spec 5.5. */
+	/**
+	 * What kind of holding position this node is, if any. Spec 2026-09-07. One enum, not
+	 * two flags: Runway iff HoldingPositionFor is set, and URoadNetwork keeps it so.
+	 */
+	UPROPERTY() EHoldingPositionKind HoldingPosition = EHoldingPositionKind::None;
+
+	/** The runway a Runway holding position protects (any segment of its chain). Unset otherwise. */
 	UPROPERTY() FRoadSegmentId HoldingPositionFor;
 
 	/**
@@ -174,15 +197,11 @@ struct AIRSIDE_API FHoldingPositionMark
 {
 	GENERATED_BODY()
 
-	/** Which derived node: the same key the builder's Ends map uses. */
-	UPROPERTY() FGuidelineEndRef At;
-
 	/**
-	 * The runway segment the bar protects - ANY of its chain.
+	 * Which derived node: the same key the builder's Ends map uses.
 	 *
-	 * Any, because URoadNetwork::RunwayChain expands one segment to the whole strip, so a
-	 * runway later split by an exit still protects end to end from the bar placed before
-	 * the split existed.
+	 * INTERMEDIATE positions only, since 2026-09-07. Runway-holding positions are derived
+	 * on every build from the junction itself and need no source of truth beyond the graph.
 	 */
-	UPROPERTY() FRoadSegmentId Protects;
+	UPROPERTY() FGuidelineEndRef At;
 };

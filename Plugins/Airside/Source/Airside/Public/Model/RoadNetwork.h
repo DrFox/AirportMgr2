@@ -191,7 +191,7 @@ public:
 	 * A guideline node.
 	 *
 	 * bDerived defaults true, which is right for everything FRoadGuidelineBuilder creates.
-	 * Pass false for a node somebody AUTHORED - an entity anchor, a holding-position position -
+	 * Pass false for a node somebody AUTHORED - an entity anchor, a holding position -
 	 * because the builder's orphan sweep removes idle DERIVED nodes, and an authored node
 	 * is idle from the moment it is placed until an edge is drawn to it.
 	 */
@@ -239,19 +239,27 @@ public:
 	// --- Holding-position bars ---------------------------------------------------------------
 
 	/**
-	 * Place, move or clear the hold bar at a guideline node. False when it refused.
+	 * Place or clear an INTERMEDIATE holding position at a guideline node. False when refused.
 	 *
-	 * TWO WRITES, deliberately: the flag on the node (what the traffic model reads, every
-	 * tick) and a mark keyed by the node's Origin (what survives the next rebuild, since
-	 * FRoadGuidelineBuilder throws every derived node away). The mark is the SOURCE and the
-	 * flag the cache; keeping them in one function is what stops a bar existing in only one
-	 * of the two.
+	 * TWO WRITES, deliberately: the kind on the node (what the overlay and, from M3, the
+	 * sequencer read) and a mark keyed by the node's Origin (what survives the next rebuild,
+	 * since FRoadGuidelineBuilder throws every derived node away). The mark is the SOURCE
+	 * and the node the cache; keeping them in one function is what stops a position existing
+	 * in only one of the two.
 	 *
-	 * An unset Protects clears the bar. A set one must name a live RUNWAY - a bar on a
-	 * taxiway would make the arbiter expand a chain that is not a strip - and a dead node
-	 * refuses, rather than writing a flag nothing will ever read.
+	 * Refuses a dead node, and a node that is a RUNWAY holding position: those are derived
+	 * from the junction and are not the player's to place or clear (spec 2026-09-07).
 	 */
-	bool SetIntermediateHoldingPosition(FGuidelineNodeId Node, FRoadSegmentId Protects);
+	bool SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bSet);
+
+	/**
+	 * Flags a node as a RUNWAY holding position protecting Protects, WITHOUT a mark.
+	 *
+	 * ForTest because in play the builder derives these from the junction; a test that
+	 * hand-builds its guidelines (every M2 traffic fixture) has no junction to derive from
+	 * and needs the flag the traffic rules read. Refuses a dead node or a non-runway.
+	 */
+	bool SetRunwayHoldingPositionForTest(FGuidelineNodeId Node, FRoadSegmentId Protects);
 
 	const TArray<FHoldingPositionMark>& GetHoldingPositionMarks() const { return HoldingPositionMarks; }
 

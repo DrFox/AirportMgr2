@@ -38,7 +38,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// EIGHT, matching the registry: seven is "land an aircraft" at runtime and is not a
 	// tool. The LABEL must equal ToolRegistry()'s "Holding point" exactly - URoadBuildEdMode::
 	// Enter compares the two BY STRING and logs an error when they drift.
-	UI_COMMAND(PlaceHoldingPoint, "Holding point", "Click a taxiway node beside a runway to place a hold bar; click it again to remove it.",
+	UI_COMMAND(PlaceHoldingPoint, "Holding point", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Eight));
 
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",

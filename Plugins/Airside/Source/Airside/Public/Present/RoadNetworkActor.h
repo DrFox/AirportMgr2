@@ -218,9 +218,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
-	/** Place or clear a holding position at a guideline node. SegmentIndex == -1 clears it. */
+	/** Place (bSet) or clear an intermediate holding position at a guideline node. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, int32 SegmentIndex) override;
+	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
 
 	/**
 	 * DEPRECATED NAME, kept so a Blueprint that bound "SetHoldShort" still compiles - the
@@ -229,7 +229,7 @@ public:
 	 * (spec 2026-09-07). New callers use SetIntermediateHoldingPosition.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside", meta = (DeprecatedFunction, DeprecationMessage = "Use SetIntermediateHoldingPosition"))
-	bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) { return SetIntermediateHoldingPosition(NodeIndex, SegmentIndex); }
+	bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) { return SetIntermediateHoldingPosition(NodeIndex, SegmentIndex != INDEX_NONE); }
 
 	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")

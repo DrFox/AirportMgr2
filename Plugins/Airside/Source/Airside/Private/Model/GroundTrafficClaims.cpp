@@ -262,6 +262,9 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	const FGuidelineNodeId FromId = StepFromNode(Plan, Current);
 	const FGuidelineNode* FromNode = Network.GetGuidelineNode(FromId);
 
+	// RUNWAY holding positions only: HoldingPositionFor is set iff the node is one. An
+	// INTERMEDIATE position protects nothing and is inert here until M3's sequencer
+	// issues instructions at it (spec 2026-09-07).
 	const bool bFromIsBar = FromNode != nullptr && FromNode->HoldingPositionFor.IsSet();
 	// 0a. COMMITTED: past a bar, on a step that leads ONTO the strip.
 	//

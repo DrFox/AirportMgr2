@@ -145,10 +145,17 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId Hn = M2HeadOnNodeFor(*Net, N2X, /*bEndA=*/false);
 	const FGuidelineNodeId Hs = M2HeadOnNodeFor(*Net, XB, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the four bar nodes exist"), H.IsSet() && H2.IsSet() && Hn.IsSet() && Hs.IsSet())) { return false; }
-	TestTrue(TEXT("bar at H"), Net->SetIntermediateHoldingPosition(H, RW1));
-	TestTrue(TEXT("bar at H2"), Net->SetIntermediateHoldingPosition(H2, RW1));
-	TestTrue(TEXT("bar north of the crossing"), Net->SetIntermediateHoldingPosition(Hn, RW2));
-	TestTrue(TEXT("bar south of the crossing"), Net->SetIntermediateHoldingPosition(Hs, RW2));
+	// DERIVED, not placed (2026-09-07): every taxiway end at the runway is a runway-holding
+	// position the moment the builder runs, ExitLength or no ExitLength.
+	auto IsRunwayPosition = [Net](FGuidelineNodeId N)
+	{
+		const FGuidelineNode* Node = Net->GetGuidelineNode(N);
+		return Node && Node->HoldingPosition == EHoldingPositionKind::Runway && Net->IsRunwaySegment(Node->HoldingPositionFor);
+	};
+	TestTrue(TEXT("holding position at H, derived"), IsRunwayPosition(H));
+	TestTrue(TEXT("holding position at H2, derived"), IsRunwayPosition(H2));
+	TestTrue(TEXT("holding position north of the crossing, derived"), IsRunwayPosition(Hn));
+	TestTrue(TEXT("holding position south of the crossing, derived"), IsRunwayPosition(Hs));
 
 	const FGuidelineNodeId RunwayW = M2HeadOnNodeFor(*Net, RW1, true);     // the threshold's own node
 	const FGuidelineNodeId RunwayX = M2HeadOnNodeFor(*Net, RW1, false);    // RW1's node at the crossing

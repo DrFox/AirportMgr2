@@ -29,8 +29,20 @@ namespace
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
 		FRoadGuidelineBuilder::Build(Net, Solved);
 	}
+
+	EHoldingPositionKind M2HoldKindAt(const URoadNetwork& Net, FGuidelineNodeId Node)
+	{
+		const FGuidelineNode* Found = Net.GetGuidelineNode(Node);
+		return Found ? Found->HoldingPosition : EHoldingPositionKind::None;
+	}
 }
 
+/**
+ * AN INTERMEDIATE HOLDING POSITION IS THE PLAYER'S AND SURVIVES A REBUILD (spec 2026-09-07,
+ * inheriting M2 §6's rule for the old hold-short mark): stored by identity, re-applied by
+ * the builder onto the FRESH node each rebuild allocates. A runway-holding position at the
+ * same airport is the junction's, not the player's, and refuses the tool.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FHoldingPositionSurvivesRebuildTest,
 	"Airside.Build.HoldingPositionSurvivesRebuild",
@@ -38,9 +50,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 {
-	// A runway with a taxiway joining it at E. The taxiway's end node at E is the holding-position
-	// candidate. The claim under test is spec §6: the flag is stored by identity and the
-	// builder re-applies it, so a rebuild - which allocates FRESH nodes - keeps the bar.
+	//   T ======= E ======= F        runway
+	//             |
+	//             X ----- Y          taxiway E-X, taxiway X-Y: X is a taxiway junction
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
 	Runway->bContinuousThroughJunctions = true;
@@ -51,102 +63,103 @@ bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 	const FRoadSegmentId R1 = Net->AddStraightSegment(T, E, Runway);
 	Net->AddStraightSegment(E, F, Runway);
 	const FRoadNodeId X = Net->AddNode(FVector2D(60000.0, -20000.0));
+	const FRoadNodeId Y = Net->AddNode(FVector2D(80000.0, -20000.0));
 	const FRoadSegmentId Tx = Net->AddStraightSegment(E, X, Taxiway);
+	const FRoadSegmentId Ty = Net->AddStraightSegment(X, Y, Taxiway);
 	M2HoldRebuild(*Net);
 
-	const FGuidelineNodeId Bar = M2HoldNodeFor(*Net, Tx, /*bEndA=*/true);
-	if (!TestTrue(TEXT("the taxiway's E-end guideline node exists"), Bar.IsSet())) { return false; }
+	// 1. THE RUNWAY END IS DERIVED and refuses the player.
+	const FGuidelineNodeId RunwayEnd = M2HoldNodeFor(*Net, Tx, /*bEndA=*/true);
+	if (!TestTrue(TEXT("the taxiway's E-end guideline node exists"), RunwayEnd.IsSet())) { return false; }
+	TestTrue(TEXT("the taxiway end at the runway is a runway-holding position, derived"),
+		M2HoldKindAt(*Net, RunwayEnd) == EHoldingPositionKind::Runway);
+	// A CHAIN MEMBER, not one named segment: E joins two continuous runway segments, and
+	// both ARE the runway, which is the only thing such a position can protect.
+	TestTrue(TEXT("protecting the strip it joins"),
+		Net->RunwayChain(R1).Contains(Net->GetGuidelineNode(RunwayEnd)->HoldingPositionFor));
+	TestFalse(TEXT("the player cannot clear it"), Net->SetIntermediateHoldingPosition(RunwayEnd, false));
+	TestEqual(TEXT("no mark is recorded for a derived position"), Net->GetHoldingPositionMarks().Num(), 0);
 
-	// A CHAIN MEMBER, not one named segment: E joins two continuous runway segments, so
-	// which of them the one-hop walk meets first is decided by the junction's arm order -
-	// and both are the same runway, which is the only thing a bar can protect.
-	const FRoadSegmentId Near = Net->RunwayNearGuidelineNode(Bar);
-	TestTrue(TEXT("the runway near that node is the one it joins"), Net->RunwayChain(R1).Contains(Near));
-	TestFalse(TEXT("the far end of the taxiway is near no runway"), Net->RunwayNearGuidelineNode(M2HoldNodeFor(*Net, Tx, false)).IsSet());
-
-	TestTrue(TEXT("set"), Net->SetIntermediateHoldingPosition(Bar, R1));
-	TestTrue(TEXT("the flag is on the node"), Net->GetGuidelineNode(Bar)->HoldingPositionFor == R1);
+	// 2. THE PLAYER PLACES AN INTERMEDIATE ONE at the taxiway junction X, on Tx's X end.
+	const FGuidelineNodeId Junction = M2HoldNodeFor(*Net, Tx, /*bEndA=*/false);
+	if (!TestTrue(TEXT("the taxiway's X-end guideline node exists"), Junction.IsSet())) { return false; }
+	TestTrue(TEXT("a taxiway junction node carries nothing by itself"),
+		M2HoldKindAt(*Net, Junction) == EHoldingPositionKind::None);
+	TestTrue(TEXT("set"), Net->SetIntermediateHoldingPosition(Junction, true));
+	TestTrue(TEXT("the node is an intermediate position"), M2HoldKindAt(*Net, Junction) == EHoldingPositionKind::Intermediate);
+	TestFalse(TEXT("protecting nothing - no runway is named"), Net->GetGuidelineNode(Junction)->HoldingPositionFor.IsSet());
 	TestEqual(TEXT("one mark recorded"), Net->GetHoldingPositionMarks().Num(), 1);
 
 	M2HoldRebuild(*Net);
-	TestNull(TEXT("the old node handle is dead - the builder made a fresh one"), Net->GetGuidelineNode(Bar));
-	const FGuidelineNodeId BarAfter = M2HoldNodeFor(*Net, Tx, true);
-	if (!TestTrue(TEXT("the fresh node exists"), BarAfter.IsSet())) { return false; }
-	TestTrue(TEXT("and carries the flag"), Net->GetGuidelineNode(BarAfter)->HoldingPositionFor == R1);
-	TestTrue(TEXT("and has edges - it is connected, not an orphan kept alive"), Net->GetGuidelineNode(BarAfter)->Incident.Num() > 0);
+	TestNull(TEXT("the old node handle is dead - the builder made a fresh one"), Net->GetGuidelineNode(Junction));
+	const FGuidelineNodeId JunctionAfter = M2HoldNodeFor(*Net, Tx, false);
+	if (!TestTrue(TEXT("the fresh node exists"), JunctionAfter.IsSet())) { return false; }
+	TestTrue(TEXT("and carries the intermediate position"), M2HoldKindAt(*Net, JunctionAfter) == EHoldingPositionKind::Intermediate);
+	TestTrue(TEXT("and has edges - it is connected, not an orphan kept alive"), Net->GetGuidelineNode(JunctionAfter)->Incident.Num() > 0);
+	TestTrue(TEXT("and the runway end is still derived after the rebuild"),
+		M2HoldKindAt(*Net, M2HoldNodeFor(*Net, Tx, true)) == EHoldingPositionKind::Runway);
 
 	// TWICE, because one rebuild could pass on a mark the builder consumed destructively.
 	M2HoldRebuild(*Net);
-	const FGuidelineNodeId BarTwice = M2HoldNodeFor(*Net, Tx, true);
-	if (!TestTrue(TEXT("the node after a second rebuild exists"), BarTwice.IsSet())) { return false; }
-	TestTrue(TEXT("and still carries the flag"), Net->GetGuidelineNode(BarTwice)->HoldingPositionFor == R1);
+	const FGuidelineNodeId JunctionTwice = M2HoldNodeFor(*Net, Tx, false);
+	if (!TestTrue(TEXT("the node after a second rebuild exists"), JunctionTwice.IsSet())) { return false; }
+	TestTrue(TEXT("and still carries it"), M2HoldKindAt(*Net, JunctionTwice) == EHoldingPositionKind::Intermediate);
 
-	TestTrue(TEXT("clear"), Net->SetIntermediateHoldingPosition(BarTwice, FRoadSegmentId()));
-	TestFalse(TEXT("flag gone"), Net->GetGuidelineNode(BarTwice)->HoldingPositionFor.IsSet());
+	TestTrue(TEXT("clear"), Net->SetIntermediateHoldingPosition(JunctionTwice, false));
+	TestTrue(TEXT("kind gone"), M2HoldKindAt(*Net, JunctionTwice) == EHoldingPositionKind::None);
 	TestEqual(TEXT("mark gone"), Net->GetHoldingPositionMarks().Num(), 0);
 
-	// And a cleared bar stays cleared - the mark, not a stale node flag, is the source.
+	// And a cleared position stays cleared - the mark, not a stale node flag, is the source.
 	M2HoldRebuild(*Net);
-	const FGuidelineNodeId BarCleared = M2HoldNodeFor(*Net, Tx, true);
-	if (!TestTrue(TEXT("the node after clearing exists"), BarCleared.IsSet())) { return false; }
-	TestFalse(TEXT("still no flag after a rebuild"),
-		Net->GetGuidelineNode(BarCleared)->HoldingPositionFor.IsSet());
+	const FGuidelineNodeId JunctionCleared = M2HoldNodeFor(*Net, Tx, false);
+	if (!TestTrue(TEXT("the node after clearing exists"), JunctionCleared.IsSet())) { return false; }
+	TestTrue(TEXT("still nothing after a rebuild"), M2HoldKindAt(*Net, JunctionCleared) == EHoldingPositionKind::None);
 
-	// A bar may only name a runway. A taxiway is not one, and refusing here is what keeps
-	// the arbiter from expanding a chain that is not a strip.
-	TestFalse(TEXT("a taxiway cannot be held short of"), Net->SetIntermediateHoldingPosition(BarCleared, Tx));
-
-	// AN ORIGIN-LESS NODE IS NOT EXEMPT FROM THE PRUNE. No mark is stored for one (see
-	// URoadNetwork::SetIntermediateHoldingPosition: the flag itself is the source there), so PruneHoldingPositionMarks
-	// cannot reach it - and without the builder clearing it, the node would go on naming a
-	// runway that has been deleted, which is a bar guarding a strip that is not there.
+	// 3. AN ORIGIN-LESS NODE: no mark is stored (the node is its own source), and an
+	//    intermediate position there survives every rebuild by itself.
 	{
-		const FGuidelineNodeId Loose = Net->AddGuidelineNode(FVector2D(60000.0, -5000.0), /*bDerived=*/false);
-		TestTrue(TEXT("an Origin-less node can be flagged"), Net->SetIntermediateHoldingPosition(Loose, R1));
-		TestEqual(TEXT("but records no mark - the flag is its own source"),
-			Net->GetHoldingPositionMarks().Num(), 0);
-
+		const FGuidelineNodeId Loose = Net->AddGuidelineNode(FVector2D(70000.0, -20000.0), /*bDerived=*/false);
+		TestTrue(TEXT("an Origin-less node can carry an intermediate position"), Net->SetIntermediateHoldingPosition(Loose, true));
+		TestEqual(TEXT("but records no mark - the node is its own source"), Net->GetHoldingPositionMarks().Num(), 0);
 		M2HoldRebuild(*Net);
-		TestTrue(TEXT("and survives a rebuild while its runway lives"),
-			Net->GetGuidelineNode(Loose) != nullptr && Net->GetGuidelineNode(Loose)->HoldingPositionFor == R1);
+		TestTrue(TEXT("and it survives a rebuild"), M2HoldKindAt(*Net, Loose) == EHoldingPositionKind::Intermediate);
 
+		// A RUNWAY kind on an Origin-less node (a hand-built fixture's, via the test setter)
+		// IS pruned when its runway goes: the one case the mark prune cannot reach.
+		const FGuidelineNodeId LooseRunway = Net->AddGuidelineNode(FVector2D(60000.0, -5000.0), /*bDerived=*/false);
+		TestTrue(TEXT("a runway kind can be set on it for a test"), Net->SetRunwayHoldingPositionForTest(LooseRunway, R1));
 		Net->RemoveSegment(R1);
 		M2HoldRebuild(*Net);
-		if (!TestNotNull(TEXT("the node itself outlives the runway - it is never swept"),
-			Net->GetGuidelineNode(Loose)))
+		if (TestNotNull(TEXT("the node itself outlives the runway - it is never swept"), Net->GetGuidelineNode(LooseRunway)))
 		{
-			return false;
+			TestTrue(TEXT("but its runway kind is cleared with the runway it named"),
+				M2HoldKindAt(*Net, LooseRunway) == EHoldingPositionKind::None
+				&& !Net->GetGuidelineNode(LooseRunway)->HoldingPositionFor.IsSet());
 		}
-		TestFalse(TEXT("but its flag is cleared with the runway it named"),
-			Net->GetGuidelineNode(Loose)->HoldingPositionFor.IsSet());
 	}
 
-	// A mark whose runway was deleted is pruned rather than left pointing at nothing.
-	const FRoadSegmentId R2 = Net->AddStraightSegment(T, E, Runway);
-	M2HoldRebuild(*Net);
-	const FGuidelineNodeId BarAgain = M2HoldNodeFor(*Net, Tx, true);
-	if (!TestTrue(TEXT("the taxiway end node exists again"), BarAgain.IsSet())) { return false; }
-	Net->SetIntermediateHoldingPosition(BarAgain, R2);
-	Net->RemoveSegment(R2);
-	M2HoldRebuild(*Net);
-	TestEqual(TEXT("mark pruned with its runway"), Net->GetHoldingPositionMarks().Num(), 0);
-	TestFalse(TEXT("and the flag went with it"),
-		M2HoldNodeFor(*Net, Tx, true).IsSet()
-			&& Net->GetGuidelineNode(M2HoldNodeFor(*Net, Tx, true))->HoldingPositionFor.IsSet());
+	// 4. A MARK WHOSE NODE IDENTITY IS GONE goes too. The taxiway carries the marked end, so
+	//    removing it must not leave a mark keyed on a segment slot a later road can be handed.
+	{
+		const FGuidelineNodeId OnTy = M2HoldNodeFor(*Net, Ty, /*bEndA=*/true);
+		if (!TestTrue(TEXT("Ty's X end exists"), OnTy.IsSet())) { return false; }
+		TestTrue(TEXT("set on Ty's end"), Net->SetIntermediateHoldingPosition(OnTy, true));
+		TestEqual(TEXT("one mark"), Net->GetHoldingPositionMarks().Num(), 1);
+		Net->RemoveSegment(Ty);
+		M2HoldRebuild(*Net);
+		TestEqual(TEXT("mark pruned with the taxiway its node was derived for"), Net->GetHoldingPositionMarks().Num(), 0);
+	}
 
-	// A mark whose NODE identity is gone - At.Segment deleted - goes too. The taxiway is
-	// what carries the flagged end, so removing it must not leave a mark keyed on a segment
-	// slot that a later road can be handed.
-	const FRoadSegmentId R3 = Net->AddStraightSegment(T, E, Runway);
-	M2HoldRebuild(*Net);
-	const FGuidelineNodeId BarOnTx = M2HoldNodeFor(*Net, Tx, true);
-	if (!TestTrue(TEXT("a flagged taxiway end once more"), BarOnTx.IsSet())) { return false; }
-	TestTrue(TEXT("flagged"), Net->SetIntermediateHoldingPosition(BarOnTx, R3));
-	TestEqual(TEXT("one mark again"), Net->GetHoldingPositionMarks().Num(), 1);
-	Net->RemoveSegment(Tx);
-	M2HoldRebuild(*Net);
-	TestEqual(TEXT("mark pruned with the taxiway its node was derived for"),
-		Net->GetHoldingPositionMarks().Num(), 0);
+	// 5. A TAXIWAY END THAT BECOMES A RUNWAY END: the derivation out-ranks the player's mark.
+	{
+		const FRoadSegmentId R2 = Net->AddStraightSegment(T, E, Runway);
+		M2HoldRebuild(*Net);
+		const FGuidelineNodeId End = M2HoldNodeFor(*Net, Tx, true);
+		if (TestTrue(TEXT("the runway is back and the end exists"), R2.IsSet() && End.IsSet()))
+		{
+			TestTrue(TEXT("the end is a runway-holding position again"), M2HoldKindAt(*Net, End) == EHoldingPositionKind::Runway);
+		}
+	}
 	return true;
 }
 

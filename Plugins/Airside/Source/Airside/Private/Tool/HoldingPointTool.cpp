@@ -36,9 +36,7 @@ void FHoldingPointTool::OnClick(const FToolContext& Context)
 	{
 		return;
 	}
-
 	const URoadNetwork& Network = *Context.Target->GetNetwork();
-
 	const FGuidelineNodeId Picked = PickNode(Context);
 	if (!Picked.IsSet())
 	{
@@ -47,55 +45,34 @@ void FHoldingPointTool::OnClick(const FToolContext& Context)
 		// was refused should not wipe the reason it was refused.
 		return;
 	}
-
 	const FGuidelineNode* Node = Network.GetGuidelineNode(Picked);
 	if (Node == nullptr)
 	{
 		return;
 	}
-
-	if (Node->HoldingPositionFor.IsSet())
+	if (Node->HoldingPosition == EHoldingPositionKind::Runway)
 	{
-		// A second click on a flagged node clears it - see the class comment for why this
-		// is a toggle rather than a modifier. INDEX_NONE is the facade's "clear".
-		//
-		// The return is HONOURED rather than discarded: the facade refuses a dead slot, and
-		// swallowing that would leave the player clicking a bar that will not go away with
-		// nothing on screen to say why. The reason itself stays in the log, because it names
-		// slot indices that mean nothing to a player.
-		if (!Context.Target->SetIntermediateHoldingPosition(Picked.Index, INDEX_NONE))
-		{
-			LastRefusal = TEXT("The facade refused; see the log");
-			return;
-		}
-		LastRefusal.Empty();
-		return;
-	}
-
-	// Asked of the network, not worked out here: RunwayNearGuidelineNode is a fact about
-	// the graph, and one that the graph's own tests already pin.
-	const FRoadSegmentId Runway = Network.RunwayNearGuidelineNode(Picked);
-	if (!Runway.IsSet())
-	{
-		LastRefusal = TEXT("No runway within one edge of this node");
-
-		// Logged as well as shown. "I clicked and nothing happened" is the report this
-		// project gets, and a line in AirportMgr.log settles it without a screenshot.
+		// Not the player's. A runway-holding position is derived at every taxiway end on a
+		// runway (spec 2026-09-07); clearing one would come back on the next rebuild and
+		// setting one is what the builder already did. Said on screen AND in the log: "I
+		// clicked and nothing happened" is the report this project gets.
+		LastRefusal = TEXT("Runway holding positions are derived from the runway");
 		UE_LOG(LogAirside, Log,
-			TEXT("Holding point refused at guideline node %d: no runway within one edge"),
+			TEXT("Holding point refused at guideline node %d: a runway-holding position is derived, not placed"),
 			Picked.Index);
 		return;
 	}
-
-	// INDICES, because that is what this seam takes: the facade re-derives the
-	// generation-checked handles and refuses a dead slot in one place - see
-	// IRoadEditTarget::SetIntermediateHoldingPosition. Honoured, for the reason given on the clear above.
-	if (!Context.Target->SetIntermediateHoldingPosition(Picked.Index, Runway.Index))
+	// A TOGGLE - see the class comment for why this is not a modifier. The return is
+	// HONOURED rather than discarded: the facade refuses a dead slot, and swallowing that
+	// would leave the player clicking a position that will not change with nothing on
+	// screen to say why. The reason itself stays in the log, because it names slot indices
+	// that mean nothing to a player.
+	const bool bSet = Node->HoldingPosition == EHoldingPositionKind::None;
+	if (!Context.Target->SetIntermediateHoldingPosition(Picked.Index, bSet))
 	{
 		LastRefusal = TEXT("The facade refused; see the log");
 		return;
 	}
-
 	LastRefusal.Empty();
 }
 
@@ -125,8 +102,11 @@ void FHoldingPointTool::BuildPreview(const FToolContext& Context, IToolPreviewSi
 			// DOOMED on a node that already carries a bar, not Snap. A style names what
 			// THIS click would do, and on a flagged node the click REMOVES the bar - so
 			// Snap would promise the exact opposite of what is about to happen.
+			// Refused on a runway-holding position - the click will do nothing but say so.
 			Sink.Marker(Node->Position,
-				Node->HoldingPositionFor.IsSet() ? EPreviewStyle::Doomed : EPreviewStyle::Snap);
+				Node->HoldingPosition == EHoldingPositionKind::Runway ? EPreviewStyle::Refused :
+				Node->HoldingPosition == EHoldingPositionKind::Intermediate ? EPreviewStyle::Doomed :
+				EPreviewStyle::Snap);
 		}
 	}
 

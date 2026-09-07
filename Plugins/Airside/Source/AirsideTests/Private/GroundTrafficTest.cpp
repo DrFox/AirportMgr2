@@ -578,7 +578,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
 	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
 	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X); M2TrafficJoin(*Net, X, N);
-	Net->GetGuidelineNodeMutable(H)->HoldingPositionFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	// Someone holds the runway: a claim by a phantom agent 99, as a landing would make.
@@ -771,8 +771,8 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
 	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X);
 	M2TrafficJoin(*Net, X, Far); M2TrafficJoin(*Net, Far, N);
-	Net->GetGuidelineNodeMutable(H)->HoldingPositionFor = RunwaySeg;
-	Net->GetGuidelineNodeMutable(Far)->HoldingPositionFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
+	Net->SetRunwayHoldingPositionForTest(Far, RunwaySeg);
 
 	// Route distances: the near bar at 17000, the centreline crossing X at 20000, the far
 	// bar at 23000, the far node N at 40000. The strip's half width is 2250, so a tail clear
@@ -1352,8 +1352,8 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	M2TrafficJoin(*Net, S, Hn);
 	M2TrafficJoin(*Net, Hn, Hf);   // ONE edge across the runway. No vertex on the strip.
 	M2TrafficJoin(*Net, Hf, N);
-	Net->GetGuidelineNodeMutable(Hn)->HoldingPositionFor = RunwaySeg;
-	Net->GetGuidelineNodeMutable(Hf)->HoldingPositionFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(Hn, RunwaySeg);
+	Net->SetRunwayHoldingPositionForTest(Hf, RunwaySeg);
 
 	// Route distances: near bar 17000, centreline 20000, far bar 23000, N 40000. Half width
 	// 2250, so the strip runs from 17750 to 22250 in route distance. Footprint 1000, so the
@@ -1804,7 +1804,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId X = M2TrafficNode(*Cross, 0.0, 0.0);
 		const FGuidelineNodeId N = M2TrafficNode(*Cross, 0.0, 20000.0);
 		M2TrafficJoin(*Cross, S, H); M2TrafficJoin(*Cross, H, X); M2TrafficJoin(*Cross, X, N);
-		Cross->GetGuidelineNodeMutable(H)->HoldingPositionFor = RunwaySeg;
+		Cross->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Plane = Air->DispatchAgent(Cross, M2TrafficRoute(*Cross, S, N, ETraversalClass::Aircraft),

@@ -66,7 +66,7 @@ public:
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile) override;
 	virtual double GetMinimumRunwayLength() const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
-	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, int32 SegmentIndex) override;
+	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
