@@ -229,6 +229,21 @@ it — the sample-once rule.
 - **Node**: every `Steps[i].To` whose `EndDistance` lies inside the window, and the node the
   current step LEFT while `Travelled` is still within `Footprint/2` of it. Exclusive. A node
   is *occupied* (never preemptable) while the agent's centre is within `Footprint/2` of it.
+  - *Amended 2026-09-07: node reach.* `Footprint/2` above is the floor, not the rule. A
+    node's claim reaches along each incident edge as far as a body that distance down it
+    and a body the same distance down another edge of the node are still within one
+    footprint of each other, measured on the sampled polylines (`NodeReach::Compute`).
+    That is exactly `Footprint/2` for a straight continuation, `Footprint/√2` at a right
+    angle, and roughly `√(2·R·Footprint)` where a stand's sweep arc leaves its taxiway
+    tangentially - 2454 of a 4058 uu arc on the two-stand fixture. Everywhere this section
+    says "within `Footprint/2` of the node" read "within the node's reach along that
+    edge"; the window asks for a node when it reaches the reach, not the node; and a
+    refused node's stop point is a gap short of where the reach begins. Why: two edges
+    that leave a node together are one resource for the length they run side by side,
+    and holding only the node let a departing aircraft on the arc drive alongside an
+    arrival on the taxiway 429 uu apart (`Traffic.DepartureMeetsArrivalOnTaxiway`). Why
+    equal distances and not point-to-line: point-to-line makes every straight split a
+    whole footprint long and a follower would brake for its leader's node.
 - **Box-junction entry rule.** When the window reaches the START of a step shorter than
   `Footprint + Gap` — an edge the agent cannot stand on without still blocking the node
   behind it, which is what every junction turn path is — the step's END node must be
@@ -373,7 +388,8 @@ all, so no search could pick it.
 lowest member id, so it is reported and resolved once per tick, not once per member.
 
 **Resolver.** *Refined 2026-09-06 while planning.* A member can replan only if it is stopped
-AT the node where the edge it was refused begins — within `Gap + Footprint/2` short of that
+AT the node where the edge it was refused begins — within `Gap + Footprint/2` (plus the
+node's reach beyond `Footprint/2`, amended 2026-09-07 with §3.1) short of that
 node and not past it — because the alternative is another edge OUT of that node, and a
 waiter that has already entered the edge cannot take it without reversing. Every member
 records `BlockedStep`, the index of the step whose resource refused it, so the node is
@@ -517,14 +533,16 @@ All `Airside.Model.*` unless stated, `NewObject`, no world, reason strings, meas
 | `Traffic.HoldShort` | chain held; aircraft stops within tolerance of the hold node at speed 0; chain released; it crosses |
 | `Traffic.CarFollowing` | two aircraft one edge: gap never below `Footprint + Gap`; follower speed tracks the leader's |
 | `Traffic.HeadOn` | bidirectional taxiway, nose to nose: both stop; all-aircraft cycle logged once; the later replans if a turn exists |
-| `Traffic.DeadlockTriangle` | one-way triangle with one escape arm: detected within `StallSeconds + one tick`; exactly one agent replans and it is the highest id; all reach goals; no per-tick displacement above `Speed · Delta + tolerance` |
+| `Traffic.DeadlockRing` | one-way square ring with one escape arm: detected within `StallSeconds + one tick`; exactly one agent replans and it is the highest id; all reach goals; no per-tick displacement above `Speed · Delta + tolerance`; never closer than a footprint. *Was a triangle until 2026-09-07:* at 60° a van waiting at the next box's entry is still inside the corner's reach, so a ring of 600 uu boxes and 500 uu vans is a true gridlock, and the triangle only ever "resolved" by driving vans 278 uu apart |
+| `Traffic.DepartureMeetsArrivalOnTaxiway` | builder graph, two stands: a parked aircraft departs while the next arrival taxis in; never closer than a footprint; somebody waits. The 2026-09-07 play report |
+| `NodeReach.StraightContinuation` / `RightAngle` / `TangentArc` / `CacheFollowsRevision` | reach is exactly `Footprint/2` straight on, `Footprint/√2` (+ one sample) at 90°, far past both on a tangent arc and equal from either edge; the cache re-measures after `AddGuidelineEdge` bumps the revision |
 | `Traffic.GraphRebuild` | delete a segment ahead, add a bypass: handles live after rebuild; displacement across the rebuild frame ≤ one tick's travel; goal reached over the bypass. No bypass: stops at the last live node, logged |
 | `Traffic.ArrivalRefusedRunwayOccupied` | dispatch while held refuses `RunwayOccupied` and the delegate fires |
 | `RouteSearch.OccupancyCost` | held edge routed around; null occupancy yields the old plan bitwise |
 | `Present.TrafficForwarders` | spawn the actor, tick: each `UAirsideTraffic` name reaches `UGroundTraffic`; views spawn and die on the events; both delegates re-broadcast |
 | `Tool.HoldShort` | click sets, click clears, refused off-runway, undo restores, overlay emits a `HoldShort` intent |
 
-The three §3.8 tests are `NodeYield`, `HoldShort`, `DeadlockTriangle`.
+The three §3.8 tests are `NodeYield`, `HoldShort`, `DeadlockRing` (`DeadlockTriangle` until 2026-09-07).
 
 ---
 

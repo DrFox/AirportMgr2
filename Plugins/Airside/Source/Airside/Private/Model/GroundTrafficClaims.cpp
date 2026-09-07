@@ -62,6 +62,13 @@ struct UGroundTraffic::FWantedClaim
 
 	ESurface Surface = ESurface::None;
 
+	/**
+	 * For an end-node claim: how far short of the node the lines have parted, beyond the
+	 * half footprint - UGroundTraffic::ReachExcessAt. Carried here so StopWithinFor can stay
+	 * a pure function of the claim, without the network.
+	 */
+	double ReachExcess = 0.0;
+
 	/** The node carrying the bar, for the log line. Set only when Surface == HoldingPosition;
 	*  the segment it protects is already on Claim.Resource. */
 	FGuidelineNodeId HoldNode;
@@ -460,9 +467,13 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	// 1. THE NODE THE CURRENT STEP LEFT, while the centre is still within half a footprint
 	// of it. Without this an agent that had just crossed a junction would release it with
 	// its tail still inside, and the next claimant would drive into that tail.
-	if (T - StepStart(Plan, Current) < F * 0.5)
+	//
+	// PLUS THE NODE'S REACH along this edge: where the edge leaves the node alongside
+	// another - a stand's sweep arc hugging its taxiway - half a footprint releases the
+	// node with the body still beside the other line. See NodeReach.h.
+	const FGuidelineNodeId From = StepFromNode(Plan, Current);
+	if (T - StepStart(Plan, Current) < F * 0.5 + ReachExcessAt(Network, From, Plan.Steps[Current].Edge, Agent.Class))
 	{
-		const FGuidelineNodeId From = StepFromNode(Plan, Current);
 		FWantedClaim Want;
 		Want.Claim.AgentId = Agent.Id;
 		Want.Claim.Resource = FTrafficResource::OfNode(From);
@@ -485,6 +496,11 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 		}
 		const double End = Step.EndDistance;
 		const double Length = End - Start;
+
+		// Where this edge has actually parted from the others at its end node, measured
+		// back from the node - the node's claim begins there, not at the node. 0 at an
+		// ordinary junction. See NodeReach.h.
+		const double ExcessTo = ReachExcessAt(Network, Step.To, Step.Edge, Agent.Class);
 
 		// A BOX: an edge too short to stand on without still blocking the node behind it,
 		// which is what every junction turn path is. Spec §3.1.
@@ -583,19 +599,24 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 			}
 		}
 
-		if (End < Head || bBoxEntry)
+		// THE NODE IS ASKED FOR when the window reaches its REACH, not the node itself:
+		// the stop point a refusal offers is that much further back, and a window that only
+		// reached the node would learn of the refusal with less than a braking distance left.
+		if (End - ExcessTo < Head || bBoxEntry)
 		{
 			FWantedClaim Want;
 			Want.Claim.AgentId = Agent.Id;
 			Want.Claim.Resource = FTrafficResource::OfNode(Step.To);
 
 			// Occupied only while the CENTRE is within half a footprint of the node, which
-			// is the same test the left-behind node above uses, read forwards.
-			Want.Claim.bOccupied = FMath::Abs(End - T) < F * 0.5;
+			// is the same test the left-behind node above uses, read forwards - and the
+			// same reach added, for the same reason.
+			Want.Claim.bOccupied = FMath::Abs(End - T) < F * 0.5 + ExcessTo;
 			Want.Claim.Rank = RankAt(Network, Step.To, Agent.Class);
 			Want.Step = Index;
 			Want.bEndNode = true;
 			Want.bBoxEntry = bBoxEntry;
+			Want.ReachExcess = ExcessTo;
 			Want.StepStart = Start;
 			Want.StepEnd = End;
 			Want.EdgeLength = Length;
@@ -871,9 +892,15 @@ double UGroundTraffic::StopWithinFor(const FWantedClaim& Want, const FTrafficCla
 		// Refused at the ENTRY to a box: stop a gap short of the box's START, outside
 		// the junction, where this agent can still turn - never inside it, where nobody
 		// can and where it would block the node behind it as well.
+		//
+		// AND A GAP SHORT OF WHERE THE NODE'S REACH BEGINS, not of the node: on a sweep
+		// arc that hugs its taxiway, a gap short of the join is still beside the taxiway,
+		// and the aircraft the node was refused for would pass through the waiter's wing.
+		// Measured before this term existed: 429 uu at the closest, against a 1000 uu
+		// footprint (Airside.Model.Traffic.DepartureMeetsArrivalOnTaxiway).
 		return Want.bBoxEntry
 			? FMath::Max(0.0, Want.StepStart - T - G)
-			: FMath::Max(0.0, Want.StepEnd - T - G);
+			: FMath::Max(0.0, Want.StepEnd - Want.ReachExcess - T - G);
 	}
 
 	// The node the agent is STANDING on, refused. It cannot stop short of where it

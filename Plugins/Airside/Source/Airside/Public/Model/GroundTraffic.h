@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/NodeReach.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadTraffic.h"
 #include "Model/TrafficOccupancy.h"
@@ -458,6 +459,15 @@ private:
 
 	UPROPERTY(Transient) FTrafficOccupancy Occupancy;
 
+	/**
+	 * How far each node's claim reaches along each of its edges - see NodeReach.h for the
+	 * bug this exists for. MUTABLE because the claim pass is const over the agent it is
+	 * building for and this is memoisation of the graph, not state of the simulation:
+	 * dropping it changes nothing an agent does, only how much geometry the next tick
+	 * re-samples.
+	 */
+	mutable FNodeReachCache NodeReach;
+
 	/** Sim seconds elapsed through Advance. The deadlock resolver's retry clock. */
 	UPROPERTY(Transient) double SimSeconds = 0.0;
 
@@ -710,6 +720,15 @@ private:
 	int32 RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const;
 
 	/**
+	 * How much FURTHER than half a footprint Node's claim reaches along Edge for this class,
+	 * in uu; 0 at an ordinary junction. The claim pass adds it wherever it used to compare a
+	 * distance to the node against F/2, and the stop point for a refused node moves back by
+	 * it, so a body told to wait for a node waits where the lines have actually parted.
+	 */
+	double ReachExcessAt(const URoadNetwork& Network, FGuidelineNodeId Node, FGuidelineEdgeId Edge,
+		ETraversalClass Class) const;
+
+	/**
 	 * The wait-for graph, its cycles, and one replan per cycle per retry window. Spec §5.
 	 *
 	 * AT THE END OF THE TICK, after every agent has claimed and moved, so the WaitingOn edges
@@ -741,7 +760,7 @@ private:
 	 * that has already entered the edge cannot take it without reversing, and one still a
 	 * whole edge short of the node would be replanned from a node it is nowhere near.
 	 */
-	bool CanReplanAtBlockedStep(const FRoadAgent& Agent) const;
+	bool CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network) const;
 
 	/** What re-resolution did to one plan. Counted by OnGraphRebuilt for its one log line. */
 	enum class EReResolve : uint8

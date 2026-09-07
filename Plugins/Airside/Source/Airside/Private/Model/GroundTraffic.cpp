@@ -661,6 +661,15 @@ int32 UGroundTraffic::RankAt(const URoadNetwork& Network, FGuidelineNodeId Node,
 	return TraversalPriority(Class);
 }
 
+double UGroundTraffic::ReachExcessAt(const URoadNetwork& Network, FGuidelineNodeId Node, FGuidelineEdgeId Edge,
+	ETraversalClass Class) const
+{
+	// Per class because the footprint is: a van's reach along the same arc is shorter than
+	// an aeroplane's, and the cache keys on the footprint it was asked for.
+	const double F = Rules.FootprintFor(Class);
+	return FMath::Max(0.0, NodeReach.Get(Network, Node, Edge, F) - F * 0.5);
+}
+
 void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 {
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim

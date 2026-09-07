@@ -607,6 +607,7 @@ FGuidelineNodeId URoadNetwork::AddGuidelineNode(const FVector2D& Position, bool 
 	FGuidelineNode Node;
 	Node.Position = Position;
 	Node.bDerived = bDerived;
+	++GuidelineRevision;
 	return RoadSlot::Add<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, MoveTemp(Node));
 }
 
@@ -632,6 +633,7 @@ FGuidelineEdgeId URoadNetwork::AddGuidelineEdge(FGuidelineEdge&& Edge)
 		GuidelineNodes[EndB.Index].Incident.Add(Handle);
 	}
 
+	++GuidelineRevision;
 	return Handle;
 }
 
@@ -658,6 +660,7 @@ bool URoadNetwork::RemoveGuidelineEdge(FGuidelineEdgeId Edge)
 		GuidelineNodes[EndB.Index].Incident.Remove(Edge);
 	}
 
+	++GuidelineRevision;
 	return RoadSlot::Remove<FGuidelineEdgeId>(GuidelineEdges, GuidelineEdgeFreeList, Edge);
 }
 
@@ -700,6 +703,7 @@ bool URoadNetwork::RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId N
 		GuidelineNodes[NewB.Index].Incident.AddUnique(Edge);
 	}
 
+	++GuidelineRevision;
 	return true;
 }
 
@@ -717,6 +721,7 @@ bool URoadNetwork::RemoveGuidelineNode(FGuidelineNodeId Node)
 		RemoveGuidelineEdge(Edge);
 	}
 
+	++GuidelineRevision;
 	return RoadSlot::Remove<FGuidelineNodeId>(GuidelineNodes, GuidelineNodeFreeList, Node);
 }
 
