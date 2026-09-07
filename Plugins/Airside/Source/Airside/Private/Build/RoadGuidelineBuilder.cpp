@@ -192,21 +192,29 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				continue;
 			}
 
-			// The guideline's own length, cut point to cut point: the set-back may not eat
-			// more than 45 percent of it, so two exits on one short runway half, or a stub
-			// taxiway, keep an arc at each end rather than crossing their own far end.
-			const FVector2D CutA = FRoadMeshBuilder::CutLinePoint(Arm->RightCutA, Arm->LeftCutA, 0.5);
-			const FVector2D CutB = FRoadMeshBuilder::CutLinePoint(Arm->LeftCutB, Arm->RightCutB, 0.5);
-			const double Chord = FVector2D::Distance(CutA, CutB);
+			// The segment's length NODE TO NODE: the set-back may not eat more than 45 percent
+			// of it, so two exits on one short runway half, or a stub taxiway, keep an arc at
+			// each end rather than crossing their own far end.
+			//
+			// Node to node, NOT cut point to cut point. The first cut measured the guideline's
+			// chord between its cuts, and at an acute corner the runway-end cut alone is about
+			// 60 m (edge intersection plus the fillet's tangent), so a 55 m exit stub had a
+			// chord of nothing, the clamp collapsed the set-back to nothing, and the taxiway's
+			// end - and the holding position on it - landed a metre short of the junction
+			// INSIDE the runway slab (samples/holdlines.png, 2026-09-07).
+			const FRoadNode* ArmA = Network.GetNode(Arm->A);
+			const FRoadNode* ArmB = Network.GetNode(Arm->B);
+			const double SegmentLength = (ArmA && ArmB) ? FVector2D::Distance(ArmA->Position, ArmB->Position) : 0.0;
 
-			double Length = ExitLength;
+			double Length = FMath::Min(ExitLength, 0.45 * SegmentLength);
 			if (!bContinuous)
 			{
-				// Never inside the pavement cut it has today: the arc starts at or beyond
-				// where the straight stub used to.
+				// NEVER INSIDE THE PAVEMENT CUT, whatever the clamp says: the arc starts at or
+				// beyond where the straight stub used to, which is the pre-arc behaviour a
+				// too-short taxiway falls back to. The lower bound wins over the upper one -
+				// a holding position on the asphalt is wrong; a short arc merely tight.
 				Length = FMath::Max(Length, Pair.Value.Arms[ArmIndex].CutDistance);
 			}
-			Length = FMath::Min(Length, 0.45 * Chord);
 			if (Length <= 0.0)
 			{
 				continue;

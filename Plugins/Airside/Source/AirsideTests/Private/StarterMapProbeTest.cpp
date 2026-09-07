@@ -116,6 +116,30 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Every holding position: where it is, what kind, which segment end it was derived for,
+	// and how far it sits from that segment's road node - a runway-holding position belongs
+	// ExitLength down the taxiway, never on the strip.
+	{
+		const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			const FGuidelineNode& Node = Nodes[Index];
+			if (!Node.bAlive || Node.HoldingPosition == EHoldingPositionKind::None) { continue; }
+			double FromRoadNode = -1.0;
+			FString Where = TEXT("no origin");
+			if (const FRoadSegment* Segment = Node.Origin.IsSet() ? Net->GetSegment(Node.Origin.Segment) : nullptr)
+			{
+				const FRoadNode* RoadNode = Net->GetNode(Node.Origin.bEndA ? Segment->A : Segment->B);
+				if (RoadNode) { FromRoadNode = FVector2D::Distance(Node.Position, RoadNode->Position); }
+				const URoadProfile* P = Net->ProfileFor(*Segment);
+				Where = FString::Printf(TEXT("segment %d end %s (%s)"), Node.Origin.Segment.Index, Node.Origin.bEndA ? TEXT("A") : TEXT("B"),
+					P ? *P->GetName() : TEXT("no profile"));
+			}
+			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE holding position: node %d at (%.0f, %.0f) kind %d for runway seg %d, derived for %s, %.0f uu from its road node, %d incident"),
+				Index, Node.Position.X, Node.Position.Y, static_cast<int32>(Node.HoldingPosition), Node.HoldingPositionFor.Index, *Where, FromRoadNode, Node.Incident.Num());
+		}
+	}
+
 	// Every stand: does its pose node exist, is it joined to anything, and can an arrival's
 	// exit reach it?
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();

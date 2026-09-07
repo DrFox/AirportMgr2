@@ -286,9 +286,15 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		{
 			const FVector2D EAt(40000.0, 0.0);
 			const double Back = FVector2D::Distance(Net->GetGuidelineNode(ZEnd)->Position, EAt);
-			const double Far = FVector2D::Distance(Net->GetGuidelineNode(ZFar)->Position, EAt);
-			TestTrue(FString::Printf(TEXT("short taxiway's end is set back less than ExitLength (%.0f) and short of its far end (%.0f)"), Back, Far),
-				Back < ExitLength - 1.0 && Back < Far * 0.5);
+			const double Cut = ExitArcCutDistance(Solved, E.Index, EZ);
+			const double SegmentLength = FVector2D::Distance(EAt, FVector2D(44000.0, -4000.0));
+			// max(cut, min(ExitLength, 45% of the segment)): the clamp measures the segment
+			// node to node, and the pavement cut is a floor the clamp cannot undercut - the
+			// first cut measured the chord between cuts, found nothing left of a 55 m stub,
+			// and put the end (and the holding position) inside the runway slab.
+			const double Expected = FMath::Max(Cut, FMath::Min(ExitLength, 0.45 * SegmentLength));
+			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(cut %.0f, 45%% of %.0f) = %.0f (%.0f), never inside the pavement"), Cut, SegmentLength, Expected, Back),
+				FMath::Abs(Back - Expected) < 1.0 && Back >= Cut - 1.0);
 			const FGuidelineEdge* Turn = ExitArcTurnBetween(*Net, SE, ZEnd);
 			if (TestNotNull(TEXT("the short taxiway still gets its arc"), Turn))
 			{

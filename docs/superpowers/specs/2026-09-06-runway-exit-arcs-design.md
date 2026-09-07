@@ -66,8 +66,11 @@ to the runway at `S` and to the taxiway at its end. Taxiway↔taxiway turns at t
 use the set-back taxiway ends too (a crossing taxiway's two arms are collinear, so their
 turn is straight, as now).
 
-**3.4 Clamps.** `L_t = clamp(ExitLength, taxiway CutDistance, 0.45 × taxiway guideline
-length)`; `L_r = clamp(ExitLength, 0, 0.45 × runway-half guideline length)`. The lower bound
+**3.4 Clamps.** `L_t = max(taxiway CutDistance, min(ExitLength, 0.45 × taxiway segment
+length))`; `L_r = min(ExitLength, 0.45 × runway-half segment length)`. *Amended 2026-09-07:*
+the length is NODE TO NODE and the cut is a floor the clamp cannot undercut - measured between
+cut points, a 55 m exit stub at an acute corner had no chord left and its end landed inside the
+runway slab (`samples/holdlines.png`). The lower bound
 on the taxiway keeps the end at or beyond the pavement cut it has today; the upper bounds
 keep two exits on one short runway half, or a short stub taxiway, from crossing their own
 far end. Each side clamps independently - the arc stays tangent at both ends whatever the
