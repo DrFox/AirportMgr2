@@ -200,7 +200,10 @@ int32 URoadEditFacade::PlaceStand(FVector2D Where, double Heading)
 	// handed down - see PlaceEntity's comment on why Model/ cannot read it for itself.
 	const double DesignWingspan =
 		Stand->DesignAircraft != nullptr ? Stand->DesignAircraft->Footprint.Wingspan : 0.0;
-	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading, DesignWingspan);
+	// PoseRole travels with DesignWingspan and for the same reason: this is the one caller
+	// allowed to see the definition, so it reads both and hands them down.
+	const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, Where, Heading,
+		DesignWingspan, Stand->PoseRole);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

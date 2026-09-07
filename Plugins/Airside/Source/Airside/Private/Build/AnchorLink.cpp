@@ -178,13 +178,19 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 				? Instance.Definition->DesignAircraft->Code
 				: FName());
 
-		// The stop position first. It is not an anchor - see FEntityInstance::PoseNode -
-		// but it needs a lead-in for exactly the same reason, and it is the one an
-		// AIRCRAFT is routed to.
+		// The pose first. It is not an anchor - see FEntityInstance::PoseNode - but it needs
+		// a lead-in for exactly the same reason, and it is the one the entity's OWN traffic
+		// is routed to: an aircraft to a stand's stop mark, a truck to a depot's bay.
 		//
-		// The ray leaves along the entity's heading PLUS 180: +X faces the terminal, so a
-		// stand's lead-in runs back out of it to the movement area. Cast the other way and
-		// every stand would try to join a guideline inside the building.
+		// The ray leaves along the entity's heading PLUS 180: +X faces the terminal (or, for
+		// a depot, its own building), so the lead-in runs back out of it to the movement
+		// area. Cast the other way and every stand would try to join a guideline inside the
+		// terminal.
+		//
+		// WHICH CLASS OF LINE IT MAY JOIN comes from the instance's PoseRole. This was
+		// Aircraft unconditionally, which is right for a stand and silently wrong for
+		// anything else: a fuel depot's pose found no aircraft guideline, joined nothing, and
+		// logged "joins nothing" on every rebuild for ever.
 		AnchorNodes.Add(Instance.PoseNode);
 		if (const FGuidelineNode* Pose = Network.GetGuidelineNode(Instance.PoseNode);
 			Pose != nullptr && Pose->Incident.Num() == 0)
@@ -195,8 +201,11 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			Link.Node = Instance.PoseNode;
 			Link.At = Pose->Position;
 			Link.Dir = FVector2D(FMath::Cos(Out), FMath::Sin(Out));
-			Link.Class = ETraversalClass::Aircraft;
-			Link.MaxWingspan = StandWingspan;
+			Link.Class = TraversalForRole(Instance.PoseRole);
+
+			// A span limit on a line no wing uses could never bind - 0 is UNLIMITED (see
+			// FProfileGuideline::MaxWingspan), and the CLASS has already refused aircraft.
+			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
 			Link.Radius = StandRadius;
 			Pending.Add(Link);
 		}

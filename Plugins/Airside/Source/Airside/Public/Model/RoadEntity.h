@@ -623,6 +623,25 @@ struct AIRSIDE_API FEntityInstance
 	 */
 	UPROPERTY() FGuidelineNodeId PoseNode;
 
+	/**
+	 * What the pose node is FOR: an aircraft's stop mark, or a service vehicle's home bay.
+	 *
+	 * CAPTURED AT PLACEMENT, exactly like DesignWingspan above and FResolvedAnchor::Role,
+	 * and for exactly the same reason: Model/ must not dereference the Entities layer (see
+	 * the top of this file), so the one field placement needs afterwards is copied in rather
+	 * than read live from UEntityDefinition::PoseRole.
+	 *
+	 * FAnchorLink reads it to decide which CLASS of guideline the pose lead-in may join. A
+	 * depot's home bay is on a road; a stand's stop mark is on a taxiway. Before this field
+	 * the lead-in was cast as Aircraft unconditionally, so a depot's pose found no aircraft
+	 * guideline, joined nothing, and logged a warning on every rebuild for ever.
+	 *
+	 * An instance saved before this existed loads as Aircraft, which is correct for every
+	 * entity that COULD have been saved then - they were all stands. See
+	 * UEntityDefinition::RefreshResolvedAnchors for where a later edit is picked up.
+	 */
+	UPROPERTY() EServiceRole PoseRole = EServiceRole::Aircraft;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
 };
