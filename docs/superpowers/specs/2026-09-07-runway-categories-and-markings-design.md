@@ -160,3 +160,43 @@ pavement classification numbers; taxiway markings beyond the holding positions.
 - Whether the tool should refuse to place a Precision approach on a runway shorter than
   the touchdown-zone markings need (about 900 m), or paint what fits. The spec says paint
   what fits, omitting pairs that would overlap the far end.
+
+## 9. Outcome (2026-09-07, `feature/runway-categories`)
+
+Built as specified, seven tasks, red-then-green each. Deviations and decisions made in execution:
+
+- **`FRunwayRequirements` lives in `Model/RunwayFacts.h`** beside the two scales, not in
+  `RoadEntity.h` as the plan said: the vocabulary and the struct that names it are one
+  header. `RoadEntity.h` includes it for `FAirframe::Requirements`.
+- **Admission returns a struct, not an enum.** `FRunwayAdmission` carries the refusal AND the
+  figures it was judged from (facts, requirements, lengths, wingspans), so `Describe` writes
+  the sentence from the decision rather than re-deriving it - the rule `FArrivalPlan` already
+  follows. Both plans carry one; `Admission.Why` is the plan's `ERunwayRefusal`.
+  `RunwayAdmission::Judge` is the comparison over figures, `Check` derives them from the
+  chain - the seam §1 asked for so declared distances can be added per end later.
+- **Admission is asked BEFORE occupancy** in both planners: a permanent refusal must not be
+  reported as one that clears, or M3's sequencer would queue an airliner for a grass strip.
+- **The junction is the dominant arm's pavement.** `FRoadMeshBuilder::JunctionSlots` already
+  let the widest arm pave the junction; a runway junction therefore takes the runway's surface
+  slot, exit flare included. A grass runway's exit flare is grass. Per-arm junction strips
+  would need the inset ring subdivided per arm, which it is not; revisit if it reads wrong.
+- **The effective material set.** The actor's `MaterialSet` may be null (the single-material
+  road, a deliberate state), so the presenter composes a transient set per rebuild: the
+  authored slots (or one `Surface` slot) followed by `RunwayGrass`, `RunwayTarmac`,
+  `RunwayConcrete`. The authored set is a prefix, so every band id means what it did.
+- **`M_RoadSurface` gained a `SurfaceTint` vector parameter** (white by default) so the three
+  runway materials are instances rather than copies of its graph. `build_road_material.py`
+  re-authors it; `build_runway_materials.py` makes the instances and points the content set.
+- **Reselect, not a new key.** Width, surface and approach cycle on the runway tool's own key
+  (6, Shift+6, Ctrl+6) through the new `IBuildTool::OnReselect`, which the session calls when
+  the active tool is selected again. The editor mode's toggle button does not reselect; the
+  cycle is play-only there and the tooltip says so.
+- **Piper field lengths are 800 m** (both), generous over the POH's 743 / 643 m. Fixture
+  runways of exactly 80000 uu admit it (`<`, not `<=`); a level runway under 800 m will refuse
+  the Piper by name, which the probe line `PROBE runway ...` reports.
+- **§8 resolved:** reinforced reads as concrete on the ground; a short precision runway paints
+  what fits (`Airside.Build.RunwayMarkings.ShortPrecision`).
+
+Tests: 133 -> 146 (+13). `UE_LOG` in the Airside module: 100 -> 102 (runway marking census;
+runway reclassified). The holding-position quad helper moved to `Build/MarkingQuads.h` with
+its winding comment (28 comment lines -> 13 + 30).
