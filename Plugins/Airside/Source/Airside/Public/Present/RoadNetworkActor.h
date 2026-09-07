@@ -21,6 +21,7 @@ class URoadEditHistory;
 class URoadEditFacade;
 class UAirsideTraffic;
 enum class EAgentPhase : uint8;
+enum class EDepartureRefusal : uint8;
 
 /**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident
@@ -148,6 +149,12 @@ public:
 
 	/** The most recently dispatched agent's actor, or null. Forwards to Traffic. */
 	ARoadAgentActor* GetNewestAgent() const;
+
+	/** Sends a parked agent to the runway and arms its take-off. Forwards to Traffic. */
+	EDepartureRefusal DepartAgent(int32 AgentId);
+
+	/** The actor showing an agent, or null. Forwards to Traffic. */
+	ARoadAgentActor* GetAgentView(int32 AgentId) const;
 
 	/**
 	 * The traffic mediator, for AirportOps to bind its delegates. READ ACCESS TO A SUBOBJECT,
@@ -557,6 +564,9 @@ public:
 
 	/** IRoadEditTarget accessor for Network - see the property's own comment. */
 	virtual const URoadNetwork* GetNetwork() const override { return Network; }
+
+	/** IRoadEditTarget accessor for the agents: Traffic's model. Forwards to Traffic. */
+	virtual const UGroundTraffic* GetGroundTraffic() const override;
 
 	/** Snapshots of the graph before each edit. See URoadEditHistory for why Memento
 	 *  rather than the Command layer design spec 7.3 specifies. Stays on the actor for the

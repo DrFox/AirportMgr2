@@ -7,10 +7,14 @@
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/Selection.h"
 #include "RoadBuildController.generated.h"
 
 class ARoadNetworkActor;
 class UBuildBarWidget;
+class UInspectorWidget;
+struct FAgentFacts;
+struct FStandFacts;
 
 /**
  * What a plain click means right now. ONE ENUM: Remove and Insert can never both be lit,
@@ -78,6 +82,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double ToolPickRadius = 400.0;
 
+	/**
+	 * How close, in PIXELS, the cursor must be to an aircraft's projected position to pick
+	 * it. Pixels, not uu: an aircraft on final is clicked in screen space (spec §3.3), and a
+	 * radius that shrank with distance would make the far ones unclickable.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
+	double AgentPickPixels = 24.0;
+
 	/** How close a click must land to split an existing segment, in uu. Snap rule 2. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
 	double SegmentSnapRadius = 150.0;
@@ -111,6 +123,13 @@ public:
 
 	/** The bar on screen, created at BeginPlay. */
 	UPROPERTY(Transient) TObjectPtr<UBuildBarWidget> BuildBar;
+
+	/** The inspector's Blueprint class; null means the plain C++ panel. Config, like the bar's. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<UInspectorWidget> InspectorClass;
+
+	/** The inspector on screen, created at BeginPlay beside the bar. */
+	UPROPERTY(Transient) TObjectPtr<UInspectorWidget> Inspector;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
@@ -287,8 +306,19 @@ public:
 	void OnUndo();
 	void OnRedo();
 
-	/** C: orbit the newest agent, or go back to the build view. */
+	/** C: orbit the SELECTED aircraft, or the newest when none is selected; or go back to
+	 *  the build view. */
 	void ToggleWatchAgent();
+
+	// --- Selection (the inspector's verbs) --------------------------------------------
+	const FSelection& GetSelection() const { return Session.GetSelection(); }
+	bool HasSelectedAircraft() const { return GetSelection().Kind == ESelectionKind::Aircraft; }
+	/** The selected aircraft's facts, or false when nothing is selected or it has gone. */
+	bool SelectedAgentFacts(FAgentFacts& Out) const;
+	bool SelectedStandFacts(FStandFacts& Out) const;
+	bool CanDepartSelected() const;
+	/** Depart the selected aircraft; logs the planner's answer. */
+	void DepartSelected();
 
 	/**
 	 * What the next click would do, run through the snap chain. False only when the
@@ -369,6 +399,12 @@ private:
 
 	/** True while the camera is riding with an agent. */
 	bool bWatchingAgent = false;
+
+	/** The agent the watch camera rides: the selected one at toggle time, else the newest. */
+	int32 WatchAgentId = 0;
+
+	/** The agent whose projected position is nearest the cursor within AgentPickPixels, or 0. */
+	int32 HoverAgentUnderCursor() const;
 
 	/** Where the watch rig is asked to be, and where it is; relative to the aircraft. */
 	FBuildCameraRig WatchTarget;

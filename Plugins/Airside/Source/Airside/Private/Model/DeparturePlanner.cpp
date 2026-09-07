@@ -1,5 +1,6 @@
 #include "Model/DeparturePlanner.h"
 
+#include "Model/AirsideCapability.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -130,6 +131,43 @@ namespace DeparturePlanner
 		return Out;
 	}
 
+	FDeparturePlan PlanAny(const URoadNetwork& Network, FGuidelineNodeId Start,
+		const FAirframe& Airframe, ETraversalClass Class)
+	{
+		// The capability summary already enumerates chains once each, by threshold pair;
+		// re-deriving that walk here would be a second enumerator to keep in step.
+		const FAirsideCapability Cap = AirsideCapability::Summarise(Network);
+
+		FDeparturePlan Best;
+		Best.Why = EDepartureRefusal::NoRunway;
+		bool bHaveRefusal = false;
+
+		for (const FRunwaySummary& R : Cap.Runways)
+		{
+			// A point just inside EACH end: RunwayExtentAt's proximity gate is against the
+			// nearest segment end, so a midpoint on a long segment is "not on a runway" and
+			// the threshold it hands back is the one nearest the point asked about.
+			const FVector2D Ends[2] = { R.Threshold + R.Direction * 10.0, R.Threshold + R.Direction * (R.Length - 10.0) };
+			for (const FVector2D& OnRunway : Ends)
+			{
+				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
+				if (Candidate.IsValid())
+				{
+					if (!Best.IsValid() || Candidate.Route.Length < Best.Route.Length)
+					{
+						Best = Candidate;
+					}
+				}
+				else if (!Best.IsValid() && !bHaveRefusal)
+				{
+					Best = Candidate;
+					bHaveRefusal = true;
+				}
+			}
+		}
+		return Best;
+	}
+
 	FString Describe(const FDeparturePlan& Plan)
 	{
 		switch (Plan.Why)
@@ -140,6 +178,7 @@ namespace DeparturePlanner
 			return FString::Printf(TEXT("Departure refused: no taxi route reaches the runway with %.0f uu left to roll."), Plan.Needed);
 		case EDepartureRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Departure refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
+		case EDepartureRefusal::NotParked:  return TEXT("Departure refused: the aircraft is not parked.");
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),

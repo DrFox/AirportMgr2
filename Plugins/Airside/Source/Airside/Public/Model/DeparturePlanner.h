@@ -22,6 +22,8 @@ enum class EDepartureRefusal : uint8
 	NoRoute,
 	/** The runway exists but this aircraft may not use it - FDeparturePlan::Admission says why. */
 	NotAdmitted,
+	/** DepartAgent only: the agent is not Parked, so there is nothing standing still to send. */
+	NotParked,
 };
 
 /**
@@ -93,6 +95,16 @@ namespace DeparturePlanner
 	 */
 	AIRSIDE_API FDeparturePlan Plan(const URoadNetwork& Network, FGuidelineNodeId Start,
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class);
+
+	/**
+	 * Plan a departure from Start onto WHICHEVER runway gives the shortest admitted taxi.
+	 * Both thresholds of every chain are tried through Plan. When none is valid the first
+	 * refusal is returned, so the log can say "grass strip, needs tarmac" rather than
+	 * "no runway". The inspector's Depart button; M3's sequencer replaces the choice, not
+	 * the shape.
+	 */
+	AIRSIDE_API FDeparturePlan PlanAny(const URoadNetwork& Network, FGuidelineNodeId Start,
+		const FAirframe& Airframe, ETraversalClass Class);
 
 	/** One line saying what Plan decided or refused, for a log. */
 	AIRSIDE_API FString Describe(const FDeparturePlan& Plan);

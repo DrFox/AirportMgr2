@@ -3,6 +3,7 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
+#include "InspectorWidget.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
@@ -10,14 +11,19 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/AirsideCapability.h"
+#include "Model/DeparturePlanner.h"
+#include "Model/GroundTraffic.h"
+#include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Present/OpsRuntime.h"
+#include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/ScreenPick.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
 
@@ -73,6 +79,18 @@ void ARoadBuildController::BeginPlay()
 			BuildBarClass != nullptr ? *BuildBarClass->GetName() : TEXT("code-only (no BuildBarClass configured)"));
 	}
 
+	// The inspector, same recipe as the bar. Z-order 1 so its card sits over the bar's
+	// canvas where the two overlap at the bottom-left.
+	const TSubclassOf<UInspectorWidget> PanelClass =
+		InspectorClass != nullptr ? InspectorClass : TSubclassOf<UInspectorWidget>(UInspectorWidget::StaticClass());
+	Inspector = CreateWidget<UInspectorWidget>(this, PanelClass);
+	if (Inspector != nullptr)
+	{
+		Inspector->AddToViewport(1);
+		UE_LOG(LogRoadBuild, Log, TEXT("Inspector: %s"),
+			InspectorClass != nullptr ? *InspectorClass->GetName() : TEXT("code-only (no InspectorClass configured)"));
+	}
+
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
 	// the bar builds from, so this banner cannot advertise a key that goes nowhere - which
 	// the old hand-written one twice did.
@@ -89,7 +107,7 @@ void ARoadBuildController::BeginPlay()
 	}
 
 	UE_LOG(LogRoadBuild, Log,
-		TEXT("Road building ready on %s. Left click places and connects, right click ends the chain. ")
+		TEXT("Road building ready on %s. Click an aircraft or stand to inspect it; pick a tool to build; right click puts a tool down. ")
 		TEXT("Keys: %s. WASD pans, Q/E rotate, wheel zooms - while building or watching. ")
 		TEXT("Every key is also a button on the bar."),
 		*Target->GetName(), *Keys);
@@ -159,7 +177,7 @@ void ARoadBuildController::UpdateView(float DeltaTime)
 	// despawned aircraft would leave the player looking at empty sky with no way to tell why.
 	if (bWatchingAgent)
 	{
-		if (ARoadAgentActor* Agent = Target->GetNewestAgent())
+		if (ARoadAgentActor* Agent = Target->GetAgentView(WatchAgentId))
 		{
 			ApplyWatchLimits(WatchTarget);
 			WatchTarget.Pan(Right, Forward, PanRate, DeltaTime);
@@ -198,18 +216,22 @@ void ARoadBuildController::ToggleWatchAgent()
 		return;
 	}
 
-	if (!bWatchingAgent && Target->GetNewestAgent() == nullptr)
+	// The SELECTED aircraft when there is one, else the newest - "follow" means the one you
+	// are looking at, and the newest is what you are looking at when nothing is selected.
+	const int32 Wanted = HasSelectedAircraft() ? GetSelection().Id : Target->GetTraffic()->GetNewestAgentId();
+	if (!bWatchingAgent && Target->GetAgentView(Wanted) == nullptr)
 	{
 		// Refused out loud. Silently staying on the build camera is indistinguishable from
 		// the key not being bound, which is a class of confusion this project has paid for.
 		UE_LOG(LogRoadBuild, Warning,
-			TEXT("Nothing to watch: dispatch an aircraft first (4, then click a start and a goal)."));
+			TEXT("Nothing to follow: select an aircraft, or land one (7) first."));
 		return;
 	}
 
 	bWatchingAgent = !bWatchingAgent;
 	if (bWatchingAgent)
 	{
+		WatchAgentId = Wanted;
 		// Reset on every entry rather than resuming: C is "show me the aircraft", and a
 		// view left zoomed into a wheel last time would answer with a wheel.
 		ApplyWatchLimits(WatchTarget);
@@ -220,7 +242,7 @@ void ARoadBuildController::ToggleWatchAgent()
 	}
 
 	UE_LOG(LogRoadBuild, Log, TEXT("Camera: %s"),
-		bWatchingAgent ? TEXT("watching the aircraft") : TEXT("build view"));
+		bWatchingAgent ? *FString::Printf(TEXT("following aircraft %d"), WatchAgentId) : TEXT("build view"));
 }
 
 void ARoadBuildController::ApplyWatchLimits(FBuildCameraRig& Rig) const
@@ -297,7 +319,7 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	UE_LOG(LogRoadBuild, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
 		TargetView.Focus.X, TargetView.Focus.Y);
 
-	// The SAME resolver FRouteTool falls back to, for the same reason: an aircraft that
+	// The SAME resolver every dispatch falls back to, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
 	// depending on which phase you were watching - see UAirsideSettings::
 	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave
@@ -497,7 +519,75 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	return Session.MakeContext(Target, PlaneHit, Tunables,
 		ClickModifier == EClickModifier::Remove || IsRemoveHeld(),
 		ClickModifier == EClickModifier::Insert
-			|| IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift));
+			|| IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
+		HoverAgentUnderCursor());
+}
+
+int32 ARoadBuildController::HoverAgentUnderCursor() const
+{
+	if (Target == nullptr || Target->GetTraffic() == nullptr || Target->GetTraffic()->GetModel() == nullptr)
+	{
+		return 0;
+	}
+	float MouseX = 0.0f, MouseY = 0.0f;
+	if (!GetMousePosition(MouseX, MouseY))
+	{
+		return 0;
+	}
+	// Project the VIEW's location, not the model's road-plane position: the view carries
+	// altitude, and an aircraft on final is picked where it is drawn.
+	TArray<FVector2D> Screen;
+	TArray<int32> Ids;
+	for (const FRoadAgent& Agent : Target->GetTraffic()->GetModel()->GetAgents())
+	{
+		const ARoadAgentActor* View = Target->GetAgentView(Agent.Id);
+		FVector2D At;
+		if (View != nullptr && ProjectWorldLocationToScreen(View->GetActorLocation(), At))
+		{
+			Screen.Add(At);
+			Ids.Add(Agent.Id);
+		}
+	}
+	const int32 Pick = ScreenPick::NearestWithin(Screen, FVector2D(MouseX, MouseY), AgentPickPixels);
+	return Pick != INDEX_NONE ? Ids[Pick] : 0;
+}
+
+bool ARoadBuildController::SelectedAgentFacts(FAgentFacts& Out) const
+{
+	const FSelection& Sel = GetSelection();
+	if (Sel.Kind != ESelectionKind::Aircraft || Target == nullptr || Target->GetGroundTraffic() == nullptr)
+	{
+		return false;
+	}
+	return InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Sel.Id, Out);
+}
+
+bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
+{
+	const FSelection& Sel = GetSelection();
+	if (Sel.Kind != ESelectionKind::Stand || Target == nullptr || Target->GetNetwork() == nullptr)
+	{
+		return false;
+	}
+	return InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Sel.Id, Out);
+}
+
+bool ARoadBuildController::CanDepartSelected() const
+{
+	FAgentFacts Facts;
+	return SelectedAgentFacts(Facts) && Facts.bCanDepart;
+}
+
+void ARoadBuildController::DepartSelected()
+{
+	if (!HasSelectedAircraft() || Target == nullptr)
+	{
+		UE_LOG(LogRoadBuild, Warning, TEXT("Depart: no aircraft selected."));
+		return;
+	}
+	const EDepartureRefusal Why = Target->DepartAgent(GetSelection().Id);
+	UE_LOG(LogRoadBuild, Log, TEXT("Depart aircraft %d: %s"), GetSelection().Id,
+		Why == EDepartureRefusal::None ? TEXT("accepted") : *UEnum::GetValueAsString(Why));
 }
 
 void ARoadBuildController::SelectToolByKey(FKey Key)

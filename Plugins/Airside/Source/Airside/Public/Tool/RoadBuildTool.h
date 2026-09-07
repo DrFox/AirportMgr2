@@ -4,6 +4,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/Selection.h"
 
 /**
  * Everything a tool needs to decide what an input means.
@@ -63,6 +64,22 @@ struct FToolContext
 	bool bInsertModifier = false;
 
 	/**
+	 * The agent under the cursor IN SCREEN SPACE, or 0. Filled by the driver, which owns the
+	 * camera: an aircraft on final is 2000 uu up and a road-plane cursor lands on the grass
+	 * beneath it, so the plane hit can never say "that aeroplane". The tool takes the id and
+	 * never sees a projection - which is what keeps FSelectTool in the plugin.
+	 */
+	int32 HoverAgent = 0;
+
+	/**
+	 * Where a selection is recorded. Points at FBuildSession::Selection; null in a driver or
+	 * test that has no session, in which case the Select tool selects nothing and says so.
+	 * A pointer rather than a copy because the tool WRITES it, and the panel reads the
+	 * session's copy, so there must be exactly one.
+	 */
+	FSelection* Selection = nullptr;
+
+	/**
 	 * Fill the cursor and the snap together, from the raw plane hit.
 	 *
 	 * Exists so the two cannot be conflated by a driver writing the assignments itself.
@@ -118,6 +135,12 @@ enum class EPreviewStyle : uint8
 
 	/** An intermediate holding position: the player's single dashed line at a taxiway junction. */
 	IntermediateHoldingPosition,
+
+	/** What a click would select right now: the pickable under the cursor. */
+	Hover,
+
+	/** What IS selected. Drawn every frame the selection stands, so it can be found again. */
+	Selected,
 };
 
 /**

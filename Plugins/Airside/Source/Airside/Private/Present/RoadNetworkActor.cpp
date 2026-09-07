@@ -7,6 +7,7 @@
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "EngineUtils.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
@@ -476,6 +477,21 @@ int32 ARoadNetworkActor::GetAgentCount() const
 ARoadAgentActor* ARoadNetworkActor::GetNewestAgent() const
 {
 	return Traffic->GetNewestAgent();
+}
+
+const UGroundTraffic* ARoadNetworkActor::GetGroundTraffic() const
+{
+	return Traffic != nullptr ? Traffic->GetModel() : nullptr;
+}
+
+EDepartureRefusal ARoadNetworkActor::DepartAgent(int32 AgentId)
+{
+	return Traffic->DepartAgent(AgentId, Network);
+}
+
+ARoadAgentActor* ARoadNetworkActor::GetAgentView(int32 AgentId) const
+{
+	return Traffic->GetAgentView(AgentId);
 }
 
 int32 ARoadNetworkActor::AgentCountForTest() const

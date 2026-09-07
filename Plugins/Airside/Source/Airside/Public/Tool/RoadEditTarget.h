@@ -11,6 +11,7 @@
 
 class URoadNetwork;
 class URoadProfile;
+class UGroundTraffic;
 class UEntityDefinition;
 
 /**
@@ -45,6 +46,15 @@ public:
 	 * mutation instead goes through a named method below that the facade can make undoable.
 	 */
 	virtual const URoadNetwork* GetNetwork() const = 0;
+
+	/**
+	 * The agents, read-only, for a tool that asks about them (Select). Model/, so Tool/ may
+	 * see it; the Present-layer UAirsideTraffic stays invisible here.
+	 *
+	 * A DEFAULT rather than pure virtual: URoadEditFacade implements this interface too and
+	 * genuinely has no traffic, and every other implementer forwards to the one that does.
+	 */
+	virtual const UGroundTraffic* GetGroundTraffic() const { return nullptr; }
 
 	// --- Nodes and segments --------------------------------------------------------------
 

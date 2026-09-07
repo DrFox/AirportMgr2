@@ -5,6 +5,7 @@
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/Selection.h"
 
 class URoadNetwork;
 class IRoadEditTarget;
@@ -24,8 +25,8 @@ struct FToolRegistration
 };
 
 /**
- * The tools both drivers offer, in key order 1..6: Road, Apron, Stand, Route, Guideline,
- * Runway.
+ * The tools both drivers offer: Select (4), Taxiway (1), Apron (2), Stand (3), Guidelines
+ * (5), Runway (6), Holding point (8). Index 0 is Select, the default state.
  *
  * ONE table, read by both `ARoadBuildController` and `URoadBuildEditorTool` - see
  * CLAUDE.md's "check where a list is CONSUMED, not where it is declared". Before issue
@@ -82,7 +83,7 @@ struct FBuildSessionTunables
 class AIRSIDE_API FBuildSession
 {
 public:
-	/** Builds Tools from ToolRegistry(), in registry order. The first tool starts active. */
+	/** Builds Tools from ToolRegistry(), in registry order. Index 0 - Select - starts active. */
 	FBuildSession();
 
 	/** The tool the number keys selected, or null before any tool has been made. */
@@ -93,6 +94,10 @@ public:
 
 	/** How many tools this session holds. For tests: must equal ToolRegistry().Num(). */
 	int32 NumTools() const { return Tools.Num(); }
+
+	/** What the Select tool has picked. Read by the panel and the HUD; written only through
+	 *  FToolContext::Selection, which MakeContext points here. */
+	const FSelection& GetSelection() const { return Selection; }
 
 	/**
 	 * Switches the active tool, deactivating the outgoing one first so nothing is left
@@ -129,11 +134,17 @@ public:
 	 * guideline node, the stand tool placing a pose) wants the raw mouse position, and
 	 * handing it a road-snapped value silently applies road-building semantics to work that
 	 * has none.
+	 *
+	 * HoverAgent is the driver's screen-space pick, 0 when none - see FToolContext::HoverAgent.
 	 */
 	FToolContext MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
-		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier) const;
+		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
+		int32 HoverAgent = 0) const;
 
-	/** Right click (or Escape, in the editor): step back out of whatever is part-drawn. */
+	/**
+	 * Right click (or Escape, in the editor): step back out of whatever is part-drawn. With
+	 * nothing part-drawn in a build tool, put the tool down and return to Select (index 0).
+	 */
 	void CancelActiveGesture(const FToolContext& Context);
 
 private:
@@ -146,6 +157,13 @@ private:
 	TArray<TUniquePtr<IBuildTool>> Tools;
 
 	int32 ActiveTool = 0;
+
+	/**
+	 * mutable: MakeContext is const (see FBuildSessionTunables for why that was fought for)
+	 * and must hand out a pointer the tool can write through. The selection is tool state
+	 * parked on the session so it outlives the tool being active.
+	 */
+	mutable FSelection Selection;
 
 	/**
 	 * Rule 1 then rule 2, in that order. Not a UPROPERTY: it owns its rules through

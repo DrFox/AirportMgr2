@@ -8,33 +8,9 @@
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadSnap.h"
-#include "Tool/RouteTool.h"
+#include "Tool/BuildSession.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	// Prefixed against the UNITY build: these test files share one translation unit, so a
-	// second anonymous-namespace FCountingSink collides with RoadDrawToolTest's.
-	struct FCursorPreviewSink : public IToolPreviewSink
-	{
-		TMap<EPreviewStyle, int32> Markers;
-
-		virtual void Marker(const FVector2D& At, EPreviewStyle Style) override
-		{
-			Markers.FindOrAdd(Style)++;
-		}
-		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
-		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
-		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
-
-		int32 Count(EPreviewStyle Style) const
-		{
-			const int32* Found = Markers.Find(Style);
-			return Found != nullptr ? *Found : 0;
-		}
-	};
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FToolCursorTest,
@@ -128,36 +104,21 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the junction really does claim the guideline node's neighbourhood"),
 			Snapped.Kind == ERoadSnapKind::Node);
 
-		FRouteTool Tool;
-
-		// Built the correct way: the raw hover point, with the snap carried beside it.
+		// THE MECHANISM, not a tool that happens to use it: FBuildSession::MakeContext must
+		// hand a tool the RAW hit as Cursor with the snap carried beside it. The tool that
+		// used to demonstrate the bug (the route tool picking a guideline node the snap had
+		// moved the cursor off) is gone; the contract it relied on is asserted directly.
 		{
-			FToolContext Context;
-			Context.Target = Actor;
-			Context.SnapRadius = 150.0;
-			Context.SetCursor(Hover, Snapped);
+			FBuildSession Session;
+			FBuildSessionTunables Tunables;
+			Tunables.Snap = Settings;
+			const FToolContext Context = Session.MakeContext(Actor, Hover, Tunables, false, false);
 
-			FCursorPreviewSink Sink;
-			Tool.BuildPreview(Context, Sink);
-
-			TestTrue(TEXT("hovering a guideline node highlights it"),
-				Sink.Count(EPreviewStyle::Snap) > 0);
-		}
-
-		// Built the way the runtime driver used to: cursor folded through the snap. This
-		// is the bug, asserted so the fix cannot be undone without a test going red.
-		{
-			FToolContext Context;
-			Context.Target = Actor;
-			Context.SnapRadius = 150.0;
-			Context.Cursor = Snapped.Position;
-			Context.Snap = Snapped;
-
-			FCursorPreviewSink Sink;
-			Tool.BuildPreview(Context, Sink);
-
-			TestEqual(TEXT("folding the cursor through the snap highlights nothing at all"),
-				Sink.Count(EPreviewStyle::Snap), 0);
+			TestTrue(TEXT("Cursor is the raw hover point"), Context.Cursor.Equals(Hover, 1e-6));
+			TestTrue(TEXT("the snap beside it still claims the junction"),
+				Context.Snap.Kind == ERoadSnapKind::Node);
+			TestFalse(TEXT("and the two differ - folding one into the other is the bug"),
+				Context.Snap.Position.Equals(Hover, 1.0));
 		}
 	}
 

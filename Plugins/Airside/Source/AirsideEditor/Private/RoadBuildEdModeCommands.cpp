@@ -18,15 +18,16 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// Same order as the runtime tool keys, so 1, 2 and 3 mean the same thing in the editor
 	// as they do in play. A tool that changed number between the two would be worse than
 	// having no shortcut at all.
+	// INDEX 0 in ToolCommandsInOrder, matching ToolRegistry(): the Select tool. Key 4 as at
+	// runtime. The label must equal the registry's "Select" exactly - see Enter's check.
+	UI_COMMAND(SelectEntities, "Select", "Click an aircraft or a stand to inspect it. Escape deselects.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Four));
 	UI_COMMAND(DrawRoads, "Taxiway", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::One));
-	UI_COMMAND(DrawAprons, "Aprons", "Draw a polygon of pavement; click the first corner again to close it.",
+	UI_COMMAND(DrawAprons, "Apron", "Draw a polygon of pavement; click the first corner again to close it.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Two));
-	UI_COMMAND(PlaceStands, "Stands", "Place an aircraft stand: press to position, drag to aim, release.",
+	UI_COMMAND(PlaceStands, "Stand", "Place an aircraft stand: press to position, drag to aim, release.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Three));
-
-	UI_COMMAND(FindRoutes, "Routes", "Click a start then a destination to route between them; the guideline graph is drawn underneath.",
-		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Four));
 
 	// Issue #33: the editor had no way to make these two, so an airport authored here could
 	// never get a hand-drawn guideline link or a runway without a trip through PIE.
@@ -47,7 +48,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 
 TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
 {
-	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
+	return { SelectEntities, DrawRoads, DrawAprons, PlaceStands, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()
