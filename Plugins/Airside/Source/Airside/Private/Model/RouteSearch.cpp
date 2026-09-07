@@ -94,6 +94,38 @@ namespace
 		TMap<FGuidelineNodeId, double> Best;
 		TMap<FGuidelineNodeId, FRouteStep> Arrived;
 		TSet<FGuidelineNodeId> Closed;
+
+		// Whether a runway's chain is in use - held by somebody other than the querier, or
+		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
+		// per runway segment seen: the chain walk and the table scan are not free, and every
+		// edge along a long strip would otherwise pay for both.
+		TMap<int32, bool> RunwayInUse;
+		auto IsRunwayHeld = [&Network, &Query, &RunwayInUse](FRoadSegmentId Seed)
+		{
+			if (const bool* Known = RunwayInUse.Find(Seed.Index))
+			{
+				return *Known;
+			}
+			bool bHeld = false;
+			if (Query.Occupancy != nullptr)
+			{
+				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Seed);
+				if (Chain.Num() == 0)
+				{
+					Chain.Add(Seed);
+				}
+				for (const FRoadSegmentId Segment : Chain)
+				{
+					const FTrafficResource Surface = FTrafficResource::OfSurface(Segment);
+					const FTrafficClaim* Own = Query.Occupancy->FindClaim(Query.QueryingAgent, Surface);
+					bHeld = bHeld
+						|| Query.Occupancy->IsHeld(Surface, Query.QueryingAgent)
+						|| (Own != nullptr && Own->bOccupied);
+				}
+			}
+			RunwayInUse.Add(Seed.Index, bHeld);
+			return bHeld;
+		};
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 
 		Best.Add(Query.Start, 0.0);
@@ -154,8 +186,11 @@ namespace
 					continue;
 				}
 
-				// Runway-derived edges are the strip itself; a replan must not taxi along it.
-				if (Query.bAvoidRunways && Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))
+				// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
+				// taxi along one and when.
+				if (Query.AvoidRunways != ERunwayAvoidance::None
+					&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
+					&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
 				{
 					continue;
 				}

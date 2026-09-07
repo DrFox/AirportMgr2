@@ -398,6 +398,21 @@ re-forms within `RetrySeconds` of a yield goes to the replan path. Any refusal a
 occupied claim means a body is in the way and the replan path applies as below. Test
 `Traffic.ReservationCycleYields`.
 
+**A free runway end is a turnaround.** *Amended 2026-09-07 (`samples/routing.png`).* The
+replan's search skipped every runway-derived edge, written against a replan that taxied back
+along a strip a departure was waiting at the bar for. That ban also refused the loop through
+a free runway threshold and sent an aircraft round the whole taxiway system instead. The
+query now carries `ERunwayAvoidance {None, Held, All}`: the replan asks for `Held` - skip a
+runway edge while the strip is in use: somebody else holds any segment of its chain in the
+table, reserved or occupied, or the querier's own claim on it is OCCUPIED. The querier's body
+counts and its reservation does not: in the bar-holder head-on the waiter at the bar holds
+nothing (its bar claim was refused), the strip is held by the arrival's own body, and a
+replan that kept it there would be the jam. That keeps the bar-holder case banned and opens
+a free end. Arrivals' taxi-in and intersection departures keep `All`;
+backtracks keep `None`. A runway used on a CLEARANCE is `URunwaySequencer`'s (M3). Tests
+`RouteSearch.RunwayAvoidance`, `Traffic.ReplanTurnsOverFreeRunwayEnd`;
+`Traffic.HeadOnReplansRoundBarHolder` is the held case.
+
 **Resolver.** *Refined 2026-09-06 while planning.* A member can replan only if it is stopped
 AT the node where the edge it was refused begins — within `Gap + Footprint/2` (plus the
 node's reach beyond `Footprint/2`, amended 2026-09-07 with §3.1) short of that
@@ -545,6 +560,8 @@ All `Airside.Model.*` unless stated, `NewObject`, no world, reason strings, meas
 | `Traffic.CarFollowing` | two aircraft one edge: gap never below `Footprint + Gap`; follower speed tracks the leader's |
 | `Traffic.HeadOn` | bidirectional taxiway, nose to nose: both stop; all-aircraft cycle logged once; the later replans if a turn exists |
 | `Traffic.DeadlockRing` | one-way square ring with one escape arm: detected within `StallSeconds + one tick`; exactly one agent replans and it is the highest id; all reach goals; no per-tick displacement above `Speed · Delta + tolerance`; never closer than a footprint. *Was a triangle until 2026-09-07:* at 60° a van waiting at the next box's entry is still inside the corner's reach, so a ring of 600 uu boxes and 500 uu vans is a true gridlock, and the triangle only ever "resolved" by driving vans 278 uu apart |
+| `RouteSearch.RunwayAvoidance` | a runway-end loop shorter than the taxiway detour: `None` and a free table take the loop; `All` detours; `Held` detours while a stranger holds the chain or the querier's own body is on it, not for the querier's own reservation |
+| `Traffic.ReplanTurnsOverFreeRunwayEnd` | the resolver's replan query: with the banned taxiway the only other way is the runway end - taken when free, refused while a phantom holds the chain |
 | `Traffic.ReservationCycleYields` | a stub shorter than a footprint between two junctions, one aircraft closing from each side, no alternative route: one reservation cycle, one yield by the later aircraft, no replan, both arrive |
 | `Traffic.DepartureMeetsArrivalOnTaxiway` | builder graph, two stands: a parked aircraft departs while the next arrival taxis in; never closer than a footprint; somebody waits. The 2026-09-07 play report |
 | `NodeReach.StraightContinuation` / `RightAngle` / `TangentArc` / `CacheFollowsRevision` | reach is exactly `Footprint/2` straight on, `Footprint/√2` (+ one sample) at 90°, far past both on a tangent arc and equal from either edge; the cache re-measures after `AddGuidelineEdge` bumps the revision |

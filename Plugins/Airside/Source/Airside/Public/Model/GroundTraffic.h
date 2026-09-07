@@ -218,7 +218,7 @@ public:
 	 *
 	 * BannedNode, when set, closes every arm into that node; BannedEdge closes one edge. The
 	 * resolver passes the node when a node refused the agent and the edge otherwise. Every
-	 * replan also avoids runway-derived edges (FRouteQuery::bAvoidRunways) - a replan that
+	 * replan also avoids runway-derived edges (FRouteQuery::AvoidRunways, Held) - a replan that
 	 * taxied along the strip re-reserved it and starved the bar-holder it was trying to get
 	 * round. ALSO FALSE when the route found is the route the agent already has: a "replan"
 	 * that changes nothing must not count as a resolution, or the resolver logs a cycle as
@@ -353,6 +353,18 @@ public:
 	 * non-Taxiing agent.
 	 */
 	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
+
+	/**
+	 * ReplanAt with no banned node, from outside the resolver. What the deadlock resolver
+	 * and OnGraphRebuilt call; exposed so a test can pin what a replan's SEARCH is allowed
+	 * to use - a free runway end, a held one - without staging the two-aircraft cycle that
+	 * would otherwise be the only way to make the resolver replan on demand. ForTest for the
+	 * same reason as the others above: in production a replan is a decision, never a call.
+	 */
+	bool ReplanAtForTest(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge)
+	{
+		return ReplanAt(AgentId, Network, SpliceStep, BannedEdge, FGuidelineNodeId());
+	}
 	double GetSimSeconds() const { return SimSeconds; }
 
 	/**

@@ -54,12 +54,16 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	Query.BannedEdge = BannedEdge;
 	Query.BannedNode = BannedNode;
 
-	// NEVER ALONG A RUNWAY. The first replan this resolver ever made in play looped an
-	// arrival round a runway's end taxiway and back over a runway-derived edge; that edge
-	// re-reserved the strip (spec §3.1, route one) against the departure waiting at the
-	// bar, which was the very agent the loop was meant to get round. Crossings are turn
-	// paths and nodes, not runway edges, so they stay open. See FRouteQuery::bAvoidRunways.
-	Query.bAvoidRunways = true;
+	// NEVER ALONG A RUNWAY SOMEBODY ELSE HOLDS. The first replan this resolver ever made in
+	// play looped an arrival round a runway's end taxiway and back over a runway-derived
+	// edge; that edge re-reserved the strip (spec §3.1, route one) against the departure
+	// waiting at the bar, which was the very agent the loop was meant to get round. That
+	// departure HELD the strip - a bar claim is a reservation on the chain - which is what
+	// Held reads. The outright ban this replaced (All) also refused a free runway end as a
+	// turnaround, and sent an aircraft round the whole taxiway loop past one it could have
+	// used (samples/routing.png, 2026-09-07). Crossings are turn paths and nodes, not
+	// runway edges, so they stay open either way. See ERunwayAvoidance.
+	Query.AvoidRunways = ERunwayAvoidance::Held;
 
 	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
 	// the caller knows is hopeless; the congestion cost is what stops the new route from
