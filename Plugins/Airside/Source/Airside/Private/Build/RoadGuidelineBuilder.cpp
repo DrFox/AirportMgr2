@@ -220,6 +220,31 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				const FVector2D Axis = Network.GetOutgoingTangent(ArmSeg, NodeId);
 				const double AxisAngle = FMath::Acos(FMath::Clamp(FMath::Abs(FVector2D::DotProduct(Axis, RunwayAxis)), 0.0, 1.0));
 				Length = FMath::Max(Length, ExitGeometry::TaxiwayEndFloor(RunwayHalfWidth, TaxiwayHalfWidth, AxisAngle));
+
+				// AND NEVER INSIDE THE FLARE: at least the pavement cut, which is where the
+				// ribbon begins at the taxiway's own width. Between the runway and that cut
+				// the flare fillet (PR #58) widens the pavement, and a holding position there
+				// is painted the taxiway's width across pavement that is wider - a bar that
+				// stops short of the edge (reported 2026-09-07). The cut is a FLOOR here,
+				// never the clamp it once was: a floor cannot put the end inside the slab,
+				// which is what the first cut-based clamp did to a 55 m stub. A stub shorter
+				// than its own cut is left at the slab floor and said so - its pavement is
+				// already degenerate (the mesh builder refuses crossed cuts).
+				const double Cut = bEndA ? Arm->TrimA : Arm->TrimB;
+				const FRoadNode* Far = Network.GetNode(bEndA ? Arm->B : Arm->A);
+				const FRoadNode* Near = Network.GetNode(NodeId);
+				const double ArmLength = (Far && Near) ? FVector2D::Distance(Far->Position, Near->Position) : 0.0;
+				if (Cut > Length && Cut < ArmLength - (bEndA ? Arm->TrimB : Arm->TrimA))
+				{
+					Length = Cut;
+				}
+				else if (Cut > Length)
+				{
+					UE_LOG(LogAirside, Warning,
+						TEXT("Taxiway segment %d is shorter than its own cut at the runway (%.0f uu of %.0f): ")
+						TEXT("its holding position stays at %.0f, inside the flare"),
+						ArmSeg.Index, ArmLength, Cut, Length);
+				}
 			}
 			if (Length <= 0.0)
 			{

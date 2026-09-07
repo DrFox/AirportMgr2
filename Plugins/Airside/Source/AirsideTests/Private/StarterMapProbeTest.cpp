@@ -120,15 +120,17 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	}
 
 	// Every holding position: where it is, what kind, which segment end it was derived for,
-	// and how far it sits from that segment's road node - a runway-holding position belongs
-	// ExitLength down the taxiway, never on the strip.
+	// how far it sits from that segment's road node and where that segment's pavement cut
+	// is - a runway-holding position belongs where the taxiway is its own width, at or
+	// beyond the cut, never inside the corner's fillet and never on the strip. (2026-09-07:
+	// six of six sat 100-900 uu inside their cuts before the cut became a floor.)
 	{
 		const TArray<FGuidelineNode>& Nodes = Net->GetGuidelineNodes();
 		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 		{
 			const FGuidelineNode& Node = Nodes[Index];
 			if (!Node.bAlive || Node.HoldingPosition == EHoldingPositionKind::None) { continue; }
-			double FromRoadNode = -1.0;
+			double FromRoadNode = -1.0, Cut = -1.0;
 			FString Where = TEXT("no origin");
 			if (const FRoadSegment* Segment = Node.Origin.IsSet() ? Net->GetSegment(Node.Origin.Segment) : nullptr)
 			{
@@ -137,9 +139,10 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 				const URoadProfile* P = Net->ProfileFor(*Segment);
 				Where = FString::Printf(TEXT("segment %d end %s (%s)"), Node.Origin.Segment.Index, Node.Origin.bEndA ? TEXT("A") : TEXT("B"),
 					P ? *P->GetName() : TEXT("no profile"));
+				Cut = Node.Origin.bEndA ? Segment->TrimA : Segment->TrimB;
 			}
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE holding position: node %d at (%.0f, %.0f) kind %d for runway seg %d, derived for %s, %.0f uu from its road node, %d incident"),
-				Index, Node.Position.X, Node.Position.Y, static_cast<int32>(Node.HoldingPosition), Node.HoldingPositionFor.Index, *Where, FromRoadNode, Node.Incident.Num());
+			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE holding position: node %d at (%.0f, %.0f) kind %d for runway seg %d, derived for %s, %.0f uu from its road node (its pavement cut is at %.0f), %d incident"),
+				Index, Node.Position.X, Node.Position.Y, static_cast<int32>(Node.HoldingPosition), Node.HoldingPositionFor.Index, *Where, FromRoadNode, Cut, Node.Incident.Num());
 		}
 	}
 
