@@ -12,11 +12,24 @@ namespace DeparturePlanner
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class)
 	{
 		FDeparturePlan Out;
-		if (!Network.RunwayExtentAt(OnRunway, Out.Threshold, Out.Direction, Out.RunwayLength))
+		FRoadSegmentId Seed;
+		if (!Network.RunwayExtentAt(OnRunway, Out.Threshold, Out.Direction, Out.RunwayLength, &Seed))
 		{
 			Out.Why = EDepartureRefusal::NoRunway;
 			return Out;
 		}
+
+		// May it use this runway at all - the same first question ArrivalPlanner asks, for
+		// the same reason: a refusal by surface or field length is permanent and must be
+		// named before any entry is searched for, or "no route" would be reported for a
+		// strip the aircraft could taxi to but never roll from.
+		Out.Admission = RunwayAdmission::Check(Network, Seed, Airframe, false);
+		if (!Out.Admission.IsAdmitted())
+		{
+			Out.Why = EDepartureRefusal::NotAdmitted;
+			return Out;
+		}
+
 		if (!Airframe.Ground.IsSet() || !Airframe.Ground.Takeoff.IsSet() || !Airframe.Climb.IsSet())
 		{
 			Out.Why = EDepartureRefusal::NoPerformance;
@@ -125,6 +138,8 @@ namespace DeparturePlanner
 		case EDepartureRefusal::NoPerformance: return TEXT("Departure refused: the airframe has no take-off or climb performance.");
 		case EDepartureRefusal::NoRoute:
 			return FString::Printf(TEXT("Departure refused: no taxi route reaches the runway with %.0f uu left to roll."), Plan.Needed);
+		case EDepartureRefusal::NotAdmitted:
+			return FString::Printf(TEXT("Departure refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),

@@ -4,6 +4,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayAdmission.h"
 #include "DeparturePlanner.generated.h"
 
 class URoadNetwork;
@@ -19,6 +20,8 @@ enum class EDepartureRefusal : uint8
 	NoPerformance,
 	/** No taxi route reaches the runway at all, forward or backtracking. */
 	NoRoute,
+	/** The runway exists but this aircraft may not use it - FDeparturePlan::Admission says why. */
+	NotAdmitted,
 };
 
 /**
@@ -31,6 +34,9 @@ struct AIRSIDE_API FDeparturePlan
 	GENERATED_BODY()
 
 	UPROPERTY() EDepartureRefusal Why = EDepartureRefusal::NoRunway;
+
+	/** The admission decision for this runway and airframe; Why == NotAdmitted when refused. */
+	UPROPERTY() FRunwayAdmission Admission;
 
 	/** The taxi out: from the start to the entry, ending ON the centreline. */
 	UPROPERTY() FRoutePlan Route;

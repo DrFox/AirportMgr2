@@ -4,6 +4,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
+#include "Model/RunwayAdmission.h"
 #include "ArrivalPlanner.generated.h"
 
 class URoadNetwork;
@@ -40,6 +41,13 @@ enum class EArrivalRefusal : uint8
 	 * clears on its own; M3's sequencer queues on it.
 	 */
 	RunwayOccupied,
+
+	/**
+	 * The runway exists but this aircraft may not use it: surface, approach, published
+	 * field length or width - FArrivalPlan::Admission says which. Asked BEFORE occupancy,
+	 * because a refusal that never clears must not be reported as one that will.
+	 */
+	NotAdmitted,
 };
 
 /**
@@ -68,6 +76,9 @@ struct AIRSIDE_API FArrivalPlan
 	 *  landing holds in the occupancy table from StartArrival until Vacated. */
 	UPROPERTY() FRoadSegmentId RunwaySegment;
 	UPROPERTY() TArray<FRoadSegmentId> RunwayChain;
+
+	/** The admission decision for this runway and airframe; Why == NotAdmitted when refused. */
+	UPROPERTY() FRunwayAdmission Admission;
 
 	/** Runway needed past Threshold to stop, uu - see FLandingRun::RequiredLandingDistance. */
 	UPROPERTY() double Needed = 0.0;

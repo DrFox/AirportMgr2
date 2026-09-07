@@ -22,6 +22,17 @@ namespace ArrivalPlanner
 
 		Out.RunwayChain = Network.RunwayChain(Out.RunwaySegment);
 
+		// 1a. MAY IT USE THIS RUNWAY AT ALL. Surface, approach, published field length and
+		//     width, in that order - before occupancy, because occupancy clears on its own
+		//     and this never does: M3's sequencer will queue on RunwayOccupied, and it must
+		//     not queue an airliner behind a Piper for a grass strip it can never land on.
+		Out.Admission = RunwayAdmission::Check(Network, Out.RunwaySegment, Airframe, true);
+		if (!Out.Admission.IsAdmitted())
+		{
+			Out.Why = EArrivalRefusal::NotAdmitted;
+			return Out;
+		}
+
 		// Asked before the length and exit steps, because those cannot change while the
 		// runway is busy and this can: a refusal that clears on its own is reported as
 		// itself, not as whichever later step happened to fail too.
@@ -220,6 +231,9 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::RunwayOccupied:
 			return TEXT("Arrival refused: the runway is in use. Wait for it to clear.");
+
+		case EArrivalRefusal::NotAdmitted:
+			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 
 		case EArrivalRefusal::None:
 		default:

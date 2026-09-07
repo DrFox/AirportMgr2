@@ -226,4 +226,38 @@ bool FDepartureFromIntersectionIsContinuousTest::RunTest(const FString& Paramete
 	return true;
 }
 
+/**
+ * NOT ADMITTED. The strip is reachable and long enough, but the aircraft needs tarmac and
+ * the strip is grass: refused before any entry is searched for, with the reason on the
+ * plan and the surface in the sentence.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeparturePlannerNotAdmittedTest,
+	"Airside.Model.DeparturePlanner.NotAdmitted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeparturePlannerNotAdmittedTest::RunTest(const FString& Parameters)
+{
+	FDepartureAirport A = BuildDepartureAirport(GetTransientPackage());
+	if (!TestTrue(TEXT("the stand is linked"), A.StandNode.IsSet())) { return false; }
+	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
+	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->RunwayExtentAt(A.XAt, Threshold, Direction, Length, &Seed))) { return false; }
+	FRunwayFacts Grass;
+	Grass.Surface = ERunwaySurface::Grass;
+	A.Net->SetRunwayFacts(Seed, Grass);
+
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	const FDeparturePlan OnGrass = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
+	TestTrue(FString::Printf(TEXT("the Piper may depart from grass: %s"), *DeparturePlanner::Describe(OnGrass)), OnGrass.IsValid());
+
+	Airframe.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
+	const FDeparturePlan Refused = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
+	TestEqual(TEXT("an aircraft needing tarmac is refused the grass strip as NotAdmitted"), Refused.Why, EDepartureRefusal::NotAdmitted);
+	TestEqual(TEXT("with the admission's own reason on the plan"), Refused.Admission.Why, ERunwayRefusal::Surface);
+	TestFalse(TEXT("and no route was planned"), Refused.Route.IsValid());
+	const FString Sentence = DeparturePlanner::Describe(Refused);
+	TestTrue(FString::Printf(TEXT("the sentence names the surface: %s"), *Sentence), Sentence.Contains(TEXT("grass")));
+	return true;
+}
+
 #endif
