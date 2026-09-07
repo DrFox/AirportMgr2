@@ -104,15 +104,20 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	bool bAnyDepot = false;
 	bool bAnyJoinedDepot = false;
 
-	// JOINED, NOT MERELY RESOLVED. This tested StandFuel.IsSet() alone, which is a fact about
-	// PLACEMENT and not about the airport: URoadNetwork::PlaceEntity creates a node for every
-	// anchor whether or not a lead-in ever reaches it, so the test was true for every Code C
-	// stand ever placed and StandUnjoined could not fire at all. Every hydrant that joined
-	// nothing was reported as NoRoute - "no road from depot" - which sends the player to look
-	// at the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
-	const FGuidelineNode* FuelNode =
-		StandFuel.IsSet() ? Network.GetGuidelineNode(StandFuel) : nullptr;
-	const bool bStandJoined = FuelNode != nullptr && FuelNode->Incident.Num() > 0;
+	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
+	//
+	// This tested StandFuel.IsSet() alone, which is a fact about PLACEMENT and not about the
+	// airport: URoadNetwork::PlaceEntity creates a node for every anchor whether or not a
+	// lead-in ever reaches it, so the test was true for every Code C stand ever placed and
+	// StandUnjoined could not fire at all. Counting incident edges fixed that, and then
+	// stopped working for the same shape of reason the moment stands grew SERVICE LANES: a
+	// hydrant is ALWAYS spurred to its own lane, so the count is true for a stand in the
+	// middle of a field. The question was never "does this node have a line on it" but "does
+	// that line go anywhere", which is a walk - see URoadNetwork::IsServiceNodeConnected.
+	//
+	// Both wrong answers reported NoRoute - "no road from depot" - which sends the player to
+	// look at the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
+	const bool bStandJoined = StandFuel.IsSet() && Network.IsServiceNodeConnected(StandFuel);
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -402,15 +407,13 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 					DepotsOnRoad += (Pose != nullptr && Pose->Incident.Num() > 0) ? 1 : 0;
 				}
 				const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
-				const FGuidelineNode* HydrantNode =
-					Hydrant.IsSet() ? Network.GetGuidelineNode(Hydrant) : nullptr;
 
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: aircraft %d at stand %d cannot be served: %s. %d depot(s), %d on a "
 						 "road; the stand's hydrant %s. Check the 'Anchor links:' line."),
 					Demand.AircraftId, Demand.Stand.Index, RefusalText(Why), Depots, DepotsOnRoad,
-					HydrantNode == nullptr ? TEXT("has no node at all")
-						: HydrantNode->Incident.Num() > 0 ? TEXT("is on a road")
+					!Hydrant.IsSet() ? TEXT("has no node at all")
+						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
 						: TEXT("is NOT on a road"));
 				break;
 			}

@@ -110,12 +110,32 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			for (const FName FuelId : Net->GetAnchorIdsForRole(Id, EServiceRole::Fuel))
 			{
 				const FResolvedAnchor* Anchor = Net->FindResolvedAnchor(Id, FuelId);
-				const FGuidelineNode* Node = Anchor ? Net->GetGuidelineNode(Anchor->Node) : nullptr;
-				const bool bJoined = Node != nullptr && Node->Incident.Num() > 0;
+
+				// THE WALK, not the incident count. A hydrant is always spurred to its own
+				// service lane, so counting edges here would report every stand ever placed as
+				// on a road - which is the exact shape of the defect this probe caught in
+				// StandFuel.IsSet() before it.
+				const bool bJoined = Anchor != nullptr && Net->IsServiceNodeConnected(Anchor->Node);
 				StandsWithJoinedFuel += bJoined ? 1 : 0;
 				UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d anchor '%s' (Fuel): %s a road"),
 					Index, *FuelId.ToString(), bJoined ? TEXT("joins") : TEXT("JOINS NO"));
 			}
+
+			// THE LANE ITSELF, so "the truck never comes" can be read off one line: a stand
+			// whose lane reaches no road wants a service road drawn near it, which is a
+			// different repair from a stand whose definition has no hydrant at all.
+			bool bLaneConnected = false;
+			int32 LaneEdges = 0;
+			for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+			{
+				LaneEdges += (Edge.bAlive && Edge.ServiceLoopOwner == Id) ? 1 : 0;
+			}
+			for (const FResolvedAnchor& Anchor : Instance.ResolvedAnchors)
+			{
+				bLaneConnected = bLaneConnected || Net->IsServiceNodeConnected(Anchor.Node);
+			}
+			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d service lane: %d edge(s), %s a road"),
+				Index, LaneEdges, bLaneConnected ? TEXT("reaches") : TEXT("REACHES NO"));
 		}
 		UE_LOG(LogM2MapProbe, Log,
 			TEXT("PROBE fuel readiness: %d of %d stand fuel anchor(s) on a road, %d of %d depot(s) on a road"),

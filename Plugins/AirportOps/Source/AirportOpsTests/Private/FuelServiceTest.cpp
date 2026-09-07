@@ -167,10 +167,15 @@ void FFuelFixture::RelayPhases()
 
 void FFuelFixture::Build_RoadReachesDepotOnly()
 {
-	// The hydrant casts down -Y from x = -1200; the depot's pose casts down -Y from x = 12000.
-	// A road that starts at x = 5000 is therefore crossed by the depot's ray and by nothing
-	// the stand owns.
-	RoadFromX = 5000.0;
+	// A ROAD THE STAND CANNOT REACH, and the number moved because the stand's reach did.
+	//
+	// The hydrant used to cast a RAY down -Y from x = -1200, and a road starting at x = 5000
+	// was simply not on it. A stand now offers its whole SERVICE LANE - a box out to
+	// (+1700, -2090) - and joins anything within 50 m of any part of it in any direction. At
+	// x = 5000 that leaves 51 m of margin, which is a fixture one rounding away from testing
+	// the opposite of what it says. The depot's pose at x = 12000 is 40 m from the road
+	// either way, so what this fixture means is unchanged.
+	RoadFromX = 9000.0;
 	Build(/*bWithRoad=*/true);
 }
 
