@@ -387,6 +387,17 @@ all, so no search could pick it.
 `WaitingOn`. Reaching an agent already on the path is a cycle. A cycle is identified by its
 lowest member id, so it is reported and resolved once per tick, not once per member.
 
+**Yield before replan.** *Amended 2026-09-07 (`samples/routing2.png`).* A cycle whose every
+refusal is against a RESERVATION - ground nobody is standing on - is not a deadlock: two
+aircraft closing on a 392 uu stub between two junctions had each reserved what the other
+needed while both were ~2000 uu short of it, and the resolver sent one round the whole loop.
+Such a cycle is settled by a yield: the member the replan would have picked (lowest class
+priority, then highest id) releases its reservations and keeps its body claims; it re-claims
+next pass, after the others - who arbitrate first - have taken what they needed. A cycle that
+re-forms within `RetrySeconds` of a yield goes to the replan path. Any refusal against an
+occupied claim means a body is in the way and the replan path applies as below. Test
+`Traffic.ReservationCycleYields`.
+
 **Resolver.** *Refined 2026-09-06 while planning.* A member can replan only if it is stopped
 AT the node where the edge it was refused begins — within `Gap + Footprint/2` (plus the
 node's reach beyond `Footprint/2`, amended 2026-09-07 with §3.1) short of that
@@ -534,6 +545,7 @@ All `Airside.Model.*` unless stated, `NewObject`, no world, reason strings, meas
 | `Traffic.CarFollowing` | two aircraft one edge: gap never below `Footprint + Gap`; follower speed tracks the leader's |
 | `Traffic.HeadOn` | bidirectional taxiway, nose to nose: both stop; all-aircraft cycle logged once; the later replans if a turn exists |
 | `Traffic.DeadlockRing` | one-way square ring with one escape arm: detected within `StallSeconds + one tick`; exactly one agent replans and it is the highest id; all reach goals; no per-tick displacement above `Speed · Delta + tolerance`; never closer than a footprint. *Was a triangle until 2026-09-07:* at 60° a van waiting at the next box's entry is still inside the corner's reach, so a ring of 600 uu boxes and 500 uu vans is a true gridlock, and the triangle only ever "resolved" by driving vans 278 uu apart |
+| `Traffic.ReservationCycleYields` | a stub shorter than a footprint between two junctions, one aircraft closing from each side, no alternative route: one reservation cycle, one yield by the later aircraft, no replan, both arrive |
 | `Traffic.DepartureMeetsArrivalOnTaxiway` | builder graph, two stands: a parked aircraft departs while the next arrival taxis in; never closer than a footprint; somebody waits. The 2026-09-07 play report |
 | `NodeReach.StraightContinuation` / `RightAngle` / `TangentArc` / `CacheFollowsRevision` | reach is exactly `Footprint/2` straight on, `Footprint/√2` (+ one sample) at 90°, far past both on a tangent arc and equal from either edge; the cache re-measures after `AddGuidelineEdge` bumps the revision |
 | `Traffic.GraphRebuild` | delete a segment ahead, add a bypass: handles live after rebuild; displacement across the rebuild frame ≤ one tick's travel; goal reached over the bypass. No bypass: stops at the last live node, logged |

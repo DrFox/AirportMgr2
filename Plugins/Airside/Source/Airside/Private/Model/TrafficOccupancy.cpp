@@ -131,6 +131,18 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 	return EClaimResult::Granted;
 }
 
+const FTrafficClaim* FTrafficOccupancy::FindClaim(int32 AgentId, const FTrafficResource& Resource) const
+{
+	for (const FTrafficClaim& Claim : Claims)
+	{
+		if (Claim.AgentId == AgentId && Claim.Resource == Resource)
+		{
+			return &Claim;
+		}
+	}
+	return nullptr;
+}
+
 void FTrafficOccupancy::ReleaseAll(int32 AgentId)
 {
 	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
