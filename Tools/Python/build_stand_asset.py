@@ -10,20 +10,33 @@ exposure, so the figures the tests exercise and the figures the shipped assets c
 the same figures rather than two transcriptions of them - the class of duplication that
 puts a hold door in one place in code and another in content.
 
-Three assets, and the split between them is the point:
+Four assets, and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
   DA_Stand_CodeC                        what the ground PROVIDES, and its fixed plant
+  DA_FuelDepot                          where the trucks live, and how many
 
 Both types park on the same Code C stand and put their hold doors metres apart, which is
 why the geometry cannot live on the concrete.
 
+The depot is here rather than in its own script because it is the same KIND of thing - a
+UEntityDefinition the player places - and it is authored the same way, from a C++ builder
+rather than from numbers typed here.
+
 Re-running replaces the assets, and that needs the editor CLOSED: a running editor holds
 the .uasset open and create_asset then refuses under -unattended.
+
+AND A CLOSED EDITOR IS NOT ALWAYS ENOUGH. An asset another LOADED asset references is held
+open by that reference, inside the commandlet itself: DA_Stand_CodeC names DA_Aircraft_A320
+as its design aircraft, so a re-run deletes the aircraft in memory, fails to recreate it, and
+skips the stand that depended on it (observed 2026-09-07). Nothing reaches disk when that
+happens - the originals are intact and the run is a no-op for those assets - but if the
+aircraft genuinely need re-authoring, delete their .uasset files from disk first.
 """
 import unreal
 
 ASSET_DIR = "/Game/Entities"
+CONTENT_SET = "/Game/DA_AirsideContent"
 
 
 def replace_asset(name, asset_class, factory):
@@ -103,6 +116,46 @@ def build_stand(design_aircraft):
     return stand
 
 
+def build_fuel_depot():
+    depot = replace_asset(
+        "DA_FuelDepot", unreal.EntityDefinition,
+        data_asset_factory(unreal.EntityDefinition))
+    if depot is None:
+        return None
+
+    unreal.EntityDefinition.build_fuel_depot(depot)
+    unreal.EditorAssetLibrary.save_asset("%s/DA_FuelDepot" % ASSET_DIR)
+
+    # ZERO ANCHORS IS THE CORRECT ANSWER, not a build that half ran: a depot's POSE is its
+    # road connection, and a second lead-in from the same small building into the same road
+    # would be a duplicate painted line. Logged so the zero reads as intended.
+    unreal.log("MARKER: DA_FuelDepot built, pose role %s, %d truck(s), %d anchors" % (
+        depot.get_editor_property("pose_role"),
+        depot.get_editor_property("trucks"),
+        len(depot.get_editor_property("anchors"))))
+    extent = depot.get_editor_property("footprint_extent")
+    unreal.log("MARKER:   footprint half-extent (%.0f, %.0f)" % (extent.x, extent.y))
+    return depot
+
+
+def wire_depot_into_content(depot):
+    """Point the content set's DefaultFuelDepot at it.
+
+    SET BY SCRIPT, like build_road_material_set.py's slots: what UAirsideContent removed was
+    a PATH IN C++, invisible to the editor and unfixable when a folder moves. What is written
+    here is a real asset reference inside a .uasset, which the editor repoints like any other.
+    """
+    content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
+    if content is None:
+        unreal.log_error("MARKER: %s not found - nothing to wire the depot into." % CONTENT_SET)
+        return
+
+    content.set_editor_property("default_fuel_depot", depot)
+    unreal.EditorAssetLibrary.save_asset(CONTENT_SET)
+    unreal.log("MARKER: %s.DefaultFuelDepot -> %s" % (
+        CONTENT_SET, content.get_editor_property("default_fuel_depot")))
+
+
 airbus = build_aircraft("DA_Aircraft_A320", unreal.AircraftType.build_a320)
 build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 
@@ -110,3 +163,7 @@ build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 # exist, occupancy replaces this with whatever is actually parked.
 if airbus is not None:
     build_stand(airbus)
+
+fuel_depot = build_fuel_depot()
+if fuel_depot is not None:
+    wire_depot_into_content(fuel_depot)

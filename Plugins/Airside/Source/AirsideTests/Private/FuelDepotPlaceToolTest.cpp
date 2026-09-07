@@ -1,6 +1,8 @@
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "InputCoreTypes.h"
 #include "Misc/AutomationTest.h"
@@ -28,8 +30,8 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
 
-	// No content set is configured in an automation run, so both definitions are assigned by
-	// hand - which is also what an actor with per-level overrides looks like.
+	// Assigned by hand on the ACTOR - the per-level override, which takes precedence over the
+	// content set, so this test says nothing about what is authored until the last block.
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	Actor->StandDefinition = UEntityDefinition::MakeStandTransient();
 
@@ -80,12 +82,35 @@ bool FFuelDepotPlaceToolTest::RunTest(const FString& Parameters)
 		Actor->GetStandDefinition(),
 		static_cast<const UEntityDefinition*>(Actor->StandDefinition.Get()));
 
-	// A REFUSAL, NOT A STAND. With no depot definition, the depot tool must place nothing
-	// rather than quietly drop a stand where a building was asked for.
+	// CLEARING THE ACTOR'S OVERRIDE FALLS BACK TO THE CONTENT SET, which since this slice
+	// names DA_FuelDepot. That is the resolver's whole contract, and what a player who never
+	// touches the Details panel gets.
 	Actor->FuelDepotDefinition = nullptr;
 	ToolContext.Cursor = FVector2D(9000.0, 9000.0);
 	DepotTool.OnClick(ToolContext);
-	TestEqual(TEXT("no depot definition places nothing"), Actor->Network->GetEntities().Num(), 2);
+	if (!TestEqual(TEXT("the content default places a third entity"),
+		Actor->Network->GetEntities().Num(), 3)) { return false; }
+	TestEqual(TEXT("and it is a depot, by its pose role"),
+		static_cast<int32>(Actor->Network->GetEntities()[2].PoseRole),
+		static_cast<int32>(EServiceRole::Fuel));
+
+	// A REFUSAL, NOT A STAND, when there is no depot definition ANYWHERE.
+	//
+	// The configured content set is cleared for this assertion and restored straight after:
+	// once DA_AirsideContent names the depot there is no other way to reach the branch, and
+	// the branch matters - substituting the OTHER kind would drop a stand where a building
+	// was asked for, which on screen reads as the tool working.
+	{
+		UAirsideSettings* Settings = GetMutableDefault<UAirsideSettings>();
+		const TSoftObjectPtr<UAirsideContent> Configured = Settings->Content;
+		Settings->Content.Reset();
+		ON_SCOPE_EXIT { Settings->Content = Configured; };
+
+		ToolContext.Cursor = FVector2D(15000.0, 15000.0);
+		DepotTool.OnClick(ToolContext);
+		TestEqual(TEXT("no depot definition anywhere places nothing"),
+			Actor->Network->GetEntities().Num(), 3);
+	}
 
 	// The registry is ONE list: the tool exists under key 0, named Fuel depot, and its own
 	// display name agrees with the table.

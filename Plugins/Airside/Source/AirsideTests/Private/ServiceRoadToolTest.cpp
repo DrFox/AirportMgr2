@@ -5,6 +5,8 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Model/RoadTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
@@ -29,9 +31,8 @@ bool FServiceRoadToolTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
 
-	// No content set is configured in an automation run, so the road profile is assigned by
-	// hand here - which is also exactly the state a project with no authored asset is in,
-	// and the reason the refusal at the end of this test is worth pinning.
+	// Assigned by hand on the ACTOR, which is the per-level override and takes precedence
+	// over the content set - so this half of the test says nothing about what is authored.
 	URoadProfile* RoadProfile = URoadProfile::MakeServiceRoadTransient();
 	Actor->ServiceRoadProfile = RoadProfile;
 
@@ -57,13 +58,36 @@ bool FServiceRoadToolTest::RunTest(const FString& Parameters)
 		Actor->Network->ProfileFor(Actor->Network->GetSegments()[1]),
 		static_cast<const URoadProfile*>(RoadProfile));
 
-	// A REFUSAL, NOT A SILENT TAXIWAY. With no road profile anywhere, laying a road must
-	// fail loudly rather than lay a 23 m aircraft lane the player finds out about later.
+	// CLEARING THE ACTOR'S OVERRIDE FALLS BACK TO THE CONTENT SET, which since this slice
+	// names DA_RoadProfile_ServiceRoad. That is the resolver's whole contract, and it is what
+	// a player who never touches the Details panel actually gets.
 	Actor->ServiceRoadProfile = nullptr;
 	const int32 D = Actor->PlaceNode(FVector2D(10000.0, 10000.0));
-	TestFalse(TEXT("no road profile refuses the road"),
+	TestTrue(TEXT("with no override, the content default lays the road"),
 		Actor->ConnectNodes(C, D, ERoadKind::ServiceRoad));
-	TestEqual(TEXT("and lays nothing"), Actor->Network->GetSegments().Num(), 2);
+	TestEqual(TEXT("and it is NOT the taxiway profile"),
+		Actor->Network->ProfileFor(Actor->Network->GetSegments()[2]) == Actor->ResolveProfileForTest(),
+		false);
+
+	// A REFUSAL, NOT A SILENT TAXIWAY, when there is no road profile ANYWHERE.
+	//
+	// The configured content set is cleared for exactly this assertion and restored straight
+	// after. It has to be: once DA_AirsideContent names the profile there is no other way to
+	// reach the branch, and the branch is the one that matters - a silent fallback to the
+	// taxiway would admit AIRCRAFT onto a lane laid for vans, and nothing would report it.
+	// This test passed for a while only because no service road asset existed yet.
+	{
+		UAirsideSettings* Settings = GetMutableDefault<UAirsideSettings>();
+		const TSoftObjectPtr<UAirsideContent> Configured = Settings->Content;
+		Settings->Content.Reset();
+		ON_SCOPE_EXIT { Settings->Content = Configured; };
+
+		const int32 E = Actor->PlaceNode(FVector2D(20000.0, 20000.0));
+		const int32 Before = Actor->Network->GetSegments().Num();
+		TestFalse(TEXT("no road profile anywhere refuses the road"),
+			Actor->ConnectNodes(D, E, ERoadKind::ServiceRoad));
+		TestEqual(TEXT("and lays nothing"), Actor->Network->GetSegments().Num(), Before);
+	}
 
 	// The registry is ONE list (CLAUDE.md): the tool exists, under key 9, named Road, and
 	// its own display name agrees with the table - which is what Airside.Tool.BuildSession
