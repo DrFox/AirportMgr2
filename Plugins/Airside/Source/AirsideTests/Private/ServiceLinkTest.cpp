@@ -120,4 +120,312 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAircraftLeadInStillCastsARayTest,
+	"Airside.Build.AircraftLeadInStillCastsARay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAircraftLeadInStillCastsARayTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE TEST THAT FAILS IF THE PROXIMITY RULE LEAKS INTO THE AIRCRAFT ONE.
+	//
+	// A stand's lead-in IS the painted line, so it is cast along the stand's own heading and
+	// a taxiway BEHIND the stand is behind the aircraft's tail. Nearest-guideline was rejected
+	// for aircraft precisely because nearest is regularly the taxiway on the far side of the
+	// terminal - see FAnchorLink's header. Ten metres behind is as near as it gets, and it
+	// must still not join.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId East;
+	Lay(*Net, FVector2D(-10000.0, 1000.0), FVector2D(10000.0, 1000.0),
+		ETraversalClass::Aircraft, East);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	// The stand sits at y = 2000 with the taxiway ten metres below it at y = 1000. Heading
+	// -90 aims the stand at -Y, so its pose ray leaves along heading + 180 - straight up +Y,
+	// directly AWAY from the taxiway it is sitting beside.
+	const FEntityInstanceId Placed =
+		PlaceStand(*Net, *Stand, FVector2D(0.0, 2000.0), -UE_DOUBLE_PI * 0.5);
+
+	FAnchorLink::Build(*Net);
+
+	const FGuidelineNode* Pose = Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode);
+	if (TestNotNull(TEXT("the stop position resolves"), Pose))
+	{
+		TestEqual(TEXT("a taxiway 10 m behind a stand is still not joined"),
+			Pose->Incident.Num(), 0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceLinkJoinsFromAnyDirectionTest,
+	"Airside.Build.ServiceLinkJoinsFromAnyDirection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE WHOLE POINT OF THE CHANGE. A stand's five service anchors nearly all cast the same
+	// way - three at -90, one at +90, one at 180 - so a road drawn the way a player draws
+	// one, ALONGSIDE the stands, was parallel to every ray and served none of them. A vehicle
+	// may genuinely arrive from any side, so a service link measures distance, not direction.
+	//
+	// The lane round a Code C stand at the origin, heading 0, is x in [-3550, +1700] and y in
+	// [-2090, +2090]. Each road below sits GapNear or GapFar beyond one of those four sides.
+	//
+	// 4500 rather than exactly the 5000 uu radius: a boundary case measures the comparison
+	// operator rather than the rule, and would flip on a rounding error.
+	constexpr double GapNear = 4500.0;
+	constexpr double GapFar = 20000.0;
+
+	struct FSide
+	{
+		const TCHAR* Name;
+		FVector2D From;
+		FVector2D To;
+	};
+
+	auto RoadsAt = [](double Gap) -> TArray<FSide>
+	{
+		return {
+			{ TEXT("south"), FVector2D(-20000.0, -2090.0 - Gap), FVector2D(20000.0, -2090.0 - Gap) },
+			{ TEXT("north"), FVector2D(-20000.0,  2090.0 + Gap), FVector2D(20000.0,  2090.0 + Gap) },
+			{ TEXT("west"),  FVector2D(-3550.0 - Gap, -20000.0), FVector2D(-3550.0 - Gap, 20000.0) },
+			{ TEXT("east"),  FVector2D( 1700.0 + Gap, -20000.0), FVector2D( 1700.0 + Gap, 20000.0) },
+		};
+	};
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	for (const FSide& Side : RoadsAt(GapNear))
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId Far;
+		const FGuidelineNodeId Near =
+			Lay(*Net, Side.From, Side.To, ETraversalClass::GroundVehicle, Far);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+		TestTrue(*FString::Printf(TEXT("a road to the %s reaches the lane"), Side.Name),
+			Net->IsServiceNodeConnected(Hydrant));
+
+		// AND A TRUCK CAN ACTUALLY GET THERE. Connectivity is the claim; a route is the proof,
+		// and "the search found nothing" would otherwise read like a broken search.
+		FRouteQuery Query;
+		Query.Start = Near;
+		Query.Goal = Hydrant;
+		Query.Class = ETraversalClass::GroundVehicle;
+		TestTrue(*FString::Printf(TEXT("and a truck routes from the %s to the hydrant"), Side.Name),
+			RouteSearch::Find(*Net, Query).IsValid());
+	}
+
+	for (const FSide& Side : RoadsAt(GapFar))
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId Far;
+		Lay(*Net, Side.From, Side.To, ETraversalClass::GroundVehicle, Far);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		// THE SHORT RADIUS IS WHAT KEEPS THE REJECTED CASE REJECTED: at 200 m the nearest
+		// vehicle line is regularly the service road on the far side of a terminal, and the
+		// link would run straight through the building with nothing to report it.
+		TestFalse(*FString::Printf(TEXT("a road 200 m to the %s does not"), Side.Name),
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceLoopDoesNotJoinItselfTest,
+	"Airside.Build.ServiceLoopDoesNotJoinItself",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceLoopDoesNotJoinItselfTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE LANE IS ITSELF A VEHICLE GUIDELINE. A search that failed to exclude the searcher's
+	// own geometry would find the nearest vehicle line a few metres away - the other side of
+	// its own box - report every stand connected, and route no truck anywhere.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	// A TAXIWAY within reach, so this is not merely an empty graph: the stand's own POSE must
+	// still join it, and the lane must still join nothing. The stand faces +X (heading 0) and
+	// its pose ray leaves along heading + 180, so it casts west at the line laid there.
+	//
+	// NORTH-SOUTH, and that matters: an east-west line at y = 0 would be COLLINEAR with the
+	// ray, which RayHitsSegment deliberately refuses - there is no single point to join and
+	// picking one would be arbitrary. Written the other way round first, and the test then
+	// failed for a reason that had nothing to do with service loops.
+	FGuidelineNodeId TaxiNorth;
+	Lay(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
+		ETraversalClass::Aircraft, TaxiNorth);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	FAnchorLink::Build(*Net);
+
+	TestTrue(TEXT("the aircraft half still works - the pose joins the taxiway"),
+		Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode)->Incident.Num() > 0);
+
+	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
+	{
+		TestFalse(TEXT("no service anchor is on a road, because there is no road"),
+			Net->IsServiceNodeConnected(Anchor.Node));
+	}
+
+	// A SECOND PASS JOINS NOTHING NEW, which is the ordinary case rather than an unusual one:
+	// the graph is rebuilt on every road edit and lane and links are laid again each time.
+	TestEqual(TEXT("a second pass joins nothing new"), FAnchorLink::Build(*Net), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAlongsideARowOfStandsTest,
+	"Airside.Build.RoadAlongsideARowOfStands",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE CASE THAT FAILED IN PIE ON 2026-09-07, and the one this whole design exists for:
+	// one service road drawn alongside a row of stands, which is how a player draws one.
+	// Measured then: 9 of 25 lead-ins joined, and the only service anchor that joined at any
+	// stand was TugStand - the one anchor that casts ACROSS the road instead of along it.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	constexpr double RoadY = -6000.0;
+	FGuidelineNodeId RoadEast;
+	const FGuidelineNodeId RoadWest =
+		Lay(*Net, FVector2D(-40000.0, RoadY), FVector2D(40000.0, RoadY),
+			ETraversalClass::GroundVehicle, RoadEast);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	TArray<FEntityInstanceId> Row;
+	for (int32 At = 0; At < 4; ++At)
+	{
+		// 8000 uu apart: a lane is 5250 uu wide, so that leaves 27 m of clear ground between
+		// neighbours and no lane is nearer to another lane than it is to the road.
+		Row.Add(PlaceStand(*Net, *Stand, FVector2D(-15000.0 + At * 8000.0, 0.0), 0.0));
+	}
+
+	FAnchorLink::Build(*Net);
+
+	for (int32 At = 0; At < Row.Num(); ++At)
+	{
+		const FGuidelineNodeId Hydrant = AnchorNode(*Net, Row[At], TEXT("HydrantPit"));
+		TestTrue(*FString::Printf(TEXT("stand %d's hydrant is on the road"), At),
+			Net->IsServiceNodeConnected(Hydrant));
+
+		FRouteQuery Query;
+		Query.Start = RoadWest;
+		Query.Goal = Hydrant;
+		Query.Class = ETraversalClass::GroundVehicle;
+		TestTrue(*FString::Printf(TEXT("and a truck routes to stand %d"), At),
+			RouteSearch::Find(*Net, Query).IsValid());
+	}
+
+	// EACH STAND GETS ITS OWN CONNECTION, which is what makes one road serving a row the
+	// normal case rather than a conflict.
+	FRouteQuery BetweenStands;
+	BetweenStands.Start = AnchorNode(*Net, Row[0], TEXT("HydrantPit"));
+	BetweenStands.Goal = AnchorNode(*Net, Row.Last(), TEXT("HydrantPit"));
+	BetweenStands.Class = ETraversalClass::GroundVehicle;
+	TestTrue(TEXT("and a truck can go from the first stand to the last down the road"),
+		RouteSearch::Find(*Net, BetweenStands).IsValid());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckReachesHydrantWithoutCrossingTheAircraftTest,
+	"Airside.Traffic.TruckReachesHydrantWithoutCrossingTheAircraft",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE INVARIANT, MEASURED ON A ROUTE. Airside.Entities.ServiceLoopClearsTheAircraft
+	// measures the definition; this measures what the SEARCH will actually hand a driver,
+	// which is the thing the player watches. A lane that cleared the aeroplane and a link
+	// that did not would pass the first test and fail here.
+	//
+	// The road is on the PORT side and the hydrant is under the STARBOARD wing, which is the
+	// arrangement that makes a straight spur cross 37 m of fuselage. That is exactly why the
+	// lane exists, and why joining each anchor directly to the road was rejected.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	// A SHORT road, so the journey's length is about the STAND rather than about how far
+	// down the road the start node happens to sit.
+	constexpr double RoadY = -6000.0;
+	FGuidelineNodeId RoadEast;
+	const FGuidelineNodeId RoadWest =
+		Lay(*Net, FVector2D(-9000.0, RoadY), FVector2D(9000.0, RoadY),
+			ETraversalClass::GroundVehicle, RoadEast);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	if (!TestNotNull(TEXT("a design aircraft to clear"), Stand->DesignAircraft.Get())) { return false; }
+
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net);
+
+	FRouteQuery Query;
+	Query.Start = RoadWest;
+	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+	Query.Class = ETraversalClass::GroundVehicle;
+
+	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+	if (!TestTrue(TEXT("a truck routes from the road to the hydrant"), Plan.IsValid())
+		|| Plan.Polyline.Num() < 2)
+	{
+		// Returning rather than reading on: a refused plan has an EMPTY polyline and the loop
+		// below would measure nothing while reporting success.
+		return false;
+	}
+
+	// The parked aircraft's centreline in WORLD space. The stand is at the origin facing +X,
+	// so local and world coincide - stated rather than assumed, because a fixture that
+	// rotated the stand and forgot to rotate this would measure the wrong line.
+	const FEntityFootprint& Footprint = Stand->DesignAircraft->Footprint;
+	const FVector2D Tail(Footprint.TailX, 0.0);
+	const FVector2D Nose(Footprint.NoseX, 0.0);
+
+	int32 Crossings = 0;
+	for (int32 At = 1; At < Plan.Polyline.Num(); ++At)
+	{
+		Crossings += RoadGeom::SegmentsCross(Plan.Polyline[At - 1], Plan.Polyline[At], Tail, Nose)
+			? 1 : 0;
+	}
+
+	// NOT "does not intersect the footprint", deliberately: that would forbid passing under a
+	// wing, which is normal and which the hydrant requires - the pit is under the starboard
+	// wing root because that is where a hydrant pit is.
+	TestEqual(TEXT("the truck's route never crosses the fuselage lengthwise"), Crossings, 0);
+
+	// AND THE ROUTE IS NOT ABSURD. A plan that went round the airport would cross nothing
+	// either, so the crossing count above passes vacuously on a truck that never came. Twice
+	// the straight-line distance is generous - the lane is a detour by construction - and far
+	// short of anything that could be called a tour.
+	const FGuidelineNode* Start = Net->GetGuidelineNode(RoadWest);
+	const FGuidelineNode* Goal = Net->GetGuidelineNode(Query.Goal);
+	if (Start != nullptr && Goal != nullptr)
+	{
+		TestTrue(TEXT("and it is a short journey, not a tour of the airport"),
+			GuidelineGeom::PolylineLength(Plan.Polyline)
+				< FVector2D::Distance(Start->Position, Goal->Position) * 2.0);
+	}
+	return true;
+}
+
 #endif

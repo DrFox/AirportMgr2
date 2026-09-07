@@ -1,6 +1,7 @@
 #include "Build/AnchorLink.h"
 
 #include "AirsideLog.h"
+#include "Build/ServiceLoopBuild.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -58,6 +59,25 @@ namespace
 
 		/** Sweep radius for this stand's painted line - see RadiusForCode. */
 		double Radius = 2500.0;
+
+		/**
+		 * How far this link may reach.
+		 *
+		 * The aircraft cap or the service radius, decided once where the link is built rather
+		 * than at the comparison - the two differ by a factor of four and the reasons are on
+		 * FAnchorLink::DefaultMaxLeadIn and ::DefaultServiceLinkRadius.
+		 */
+		double Reach = FAnchorLink::DefaultMaxLeadIn;
+
+		/**
+		 * Set when this link is a stand's whole service LANE rather than one node: the lane's
+		 * edges, to measure from.
+		 *
+		 * A lane has no single point to link from - the road may come nearest anywhere along
+		 * any side - so Node and At are filled in only once the search has said where, by
+		 * splitting the lane there. Empty for every ordinary anchor or pose link.
+		 */
+		TArray<FGuidelineEdgeId> Lane;
 	};
 
 	/**
@@ -143,12 +163,22 @@ namespace
 
 }
 
-int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
+int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double ServiceLinkRadius)
 {
+	// THE LANES FIRST. A service anchor spurred to its stand's loop is already joined by the
+	// time the walk below asks, so it is skipped there rather than cast at a road on the far
+	// side of the aeroplane - and the LANE becomes the thing that links.
+	const FServiceLoopBuild::FResult Loops = FServiceLoopBuild::Build(Network);
+
 	// Gathered up front, because joining one anchor adds and removes edges and an
 	// iteration over the graph must not be holding pointers into it while that happens.
 	TArray<FPendingLink> Pending;
-	TSet<FGuidelineNodeId> AnchorNodes;
+
+	// EVERY NODE A LINK MUST NOT TARGET: anchor and pose nodes as always, PLUS every node of
+	// every service lane and spur. A lane is itself a vehicle guideline, so without the
+	// second half a lane would join ITSELF - four metres away, across its own box - every
+	// stand would read as connected, and no truck would ever route anywhere.
+	TSet<FGuidelineNodeId> AnchorNodes = Loops.Nodes;
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -207,6 +237,11 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			// FProfileGuideline::MaxWingspan), and the CLASS has already refused aircraft.
 			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
 			Link.Radius = StandRadius;
+
+			// WHICH RULE, and therefore how far. An aircraft casts its painted line 200 m; a
+			// service pose - a depot's truck bay - measures 50 m in any direction, because a
+			// van is not following paint and the player has no way to see an authored heading.
+			Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
 			Pending.Add(Link);
 		}
 
@@ -244,18 +279,54 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			Link.Class = TraversalForRole(Declared->Role);
 			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
 			Link.Radius = StandRadius;
+			Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
 			Pending.Add(Link);
+		}
+
+		// THE LANE'S OWN LINK TO A ROAD. One per stand: a lane within reach of two roads takes
+		// the nearer, and a road within reach of two stands is joined by BOTH, each getting its
+		// own connection - which is the normal case, one service road serving a row, not a
+		// conflict.
+		if (const TArray<FGuidelineEdgeId>* Lane = Loops.Lanes.Find(EntityId))
+		{
+			// ALREADY CONNECTED is asked of the GRAPH rather than remembered, because the
+			// answer has to survive a pass that did not lay this lane - see
+			// URoadNetwork::IsServiceNodeConnected, and note that the link edge deliberately
+			// carries no owner, which is exactly what makes that walk able to answer.
+			const FGuidelineEdge* Any = Lane->Num() > 0 ? Network.GetGuidelineEdge((*Lane)[0]) : nullptr;
+			const FGuidelineNode* AnyEnd = Any != nullptr ? Network.GetGuidelineNode(Any->A) : nullptr;
+			if (AnyEnd != nullptr && !Network.IsServiceNodeConnected(Any->A))
+			{
+				FPendingLink Link;
+				Link.Lane = *Lane;
+				Link.Class = ETraversalClass::GroundVehicle;
+
+				// A placeholder until the search says where the road comes nearest, and the
+				// lane is split there. Only the unjoined WARNING reads it before then, and a
+				// corner of the lane is the right thing for that to name.
+				Link.At = AnyEnd->Position;
+				Link.MaxWingspan = 0.0;
+				Link.Radius = StandRadius;
+				Link.Reach = ServiceLinkRadius;
+				Pending.Add(Link);
+			}
 		}
 	}
 
 	int32 Joined = 0;
 	int32 Unjoined = 0;
 
-	for (const FPendingLink& Link : Pending)
+	// MUTABLE, because a link found by PROXIMITY has no direction of its own until the search
+	// says which way the road lies, and a LANE link has no node until the lane is split.
+	for (FPendingLink& Link : Pending)
 	{
 		FGuidelineEdgeId BestEdge;
-		double BestDistance = MaxLeadIn;
+		double BestDistance = Link.Reach;
 		double BestParam = 0.0;
+
+		// For a LANE link only: which of the lane's own edges came nearest, and where on it.
+		FGuidelineEdgeId BestLaneEdge;
+		double BestLaneParam = 0.0;
 
 		// Re-read each time: a previous anchor may have split the very guideline this one
 		// is about to hit, and it must see the halves rather than the edge that is gone.
@@ -290,6 +361,67 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			TArray<FVector2D> Points;
 			GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
 
+			FGuidelineEdgeId Id;
+			Id.Index = Index;
+			Id.Generation = Edge.Generation;
+
+			if (Link.Lane.Num() > 0)
+			{
+				// LANE TO ROAD: closest approach between two polylines, so a road drawn
+				// PARALLEL to the lane is measured side to side rather than corner to corner.
+				// That parallel case is the whole point - it is how a player draws a service
+				// road along a row of stands.
+				for (const FGuidelineEdgeId& LaneId : Link.Lane)
+				{
+					const FGuidelineEdge* LaneEdge = Network.GetGuidelineEdge(LaneId);
+					const FGuidelineNode* LaneA = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->A) : nullptr;
+					const FGuidelineNode* LaneB = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->B) : nullptr;
+					if (LaneA == nullptr || LaneB == nullptr)
+					{
+						continue;
+					}
+
+					TArray<FVector2D> LanePoints;
+					GuidelineGeom::Sample(LaneA->Position, LaneEdge->Control, LaneB->Position, LanePoints);
+
+					int32 LaneSpan = 0, RoadSpan = 0;
+					double LaneFraction = 0.0, RoadFraction = 0.0;
+					const double Distance = GuidelineGeom::NearestBetweenPolylines(
+						LanePoints, Points, LaneSpan, LaneFraction, RoadSpan, RoadFraction);
+
+					if (Distance <= LeadInWeldTolerance || Distance >= BestDistance)
+					{
+						continue;
+					}
+
+					BestDistance = Distance;
+					BestEdge = Id;
+					BestParam = GuidelineGeom::ParamAtSample(RoadSpan, RoadFraction, Points.Num());
+					BestLaneEdge = LaneId;
+					BestLaneParam = GuidelineGeom::ParamAtSample(LaneSpan, LaneFraction, LanePoints.Num());
+				}
+				continue;
+			}
+
+			if (Link.Class != ETraversalClass::Aircraft)
+			{
+				// PROXIMITY, ANY DIRECTION. A vehicle may genuinely arrive from any side, and
+				// an anchor's authored heading has no representation on screen for a player to
+				// aim by - so measuring a distance is the only rule they can actually satisfy.
+				int32 Span = 0;
+				double Fraction = 0.0;
+				const double Distance = GuidelineGeom::NearestOnPolyline(Points, Link.At, Span, Fraction);
+				if (Distance <= LeadInWeldTolerance || Distance >= BestDistance)
+				{
+					continue;
+				}
+
+				BestDistance = Distance;
+				BestParam = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
+				BestEdge = Id;
+				continue;
+			}
+
 			for (int32 At = 1; At < Points.Num(); ++At)
 			{
 				double AlongRay = 0.0;
@@ -307,10 +439,6 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 
 				BestDistance = AlongRay;
 				BestParam = GuidelineGeom::ParamAtSample(At - 1, AlongSegment, Points.Num());
-
-				FGuidelineEdgeId Id;
-				Id.Index = Index;
-				Id.Generation = Edge.Generation;
 				BestEdge = Id;
 			}
 		}
@@ -321,12 +449,21 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			// be routed to, and until this line the only symptom was an arrival refused for
 			// "no route to a stand" with nothing in the log to say which stand or why. The
 			// heading is in degrees because a player reads the details panel in degrees.
+			//
+			// WHICH RULE RAN IS IN THE LINE, because the two refuse for different reasons and
+			// the repair differs: an aircraft lead-in that joins nothing may be AIMED wrong,
+			// and a service link that joins nothing is simply too far from any road.
 			++Unjoined;
 			UE_LOG(LogAirside, Warning,
-				TEXT("Anchor at (%.0f, %.0f) joins nothing: no derived %s guideline within %.0f uu along heading %.0f deg"),
+				TEXT("%s at (%.0f, %.0f) joins nothing: no derived %s guideline within %.0f uu%s"),
+				Link.Lane.Num() > 0 ? TEXT("Service lane") : TEXT("Anchor"),
 				Link.At.X, Link.At.Y,
 				Link.Class == ETraversalClass::Aircraft ? TEXT("aircraft") : TEXT("vehicle"),
-				MaxLeadIn, FMath::RadiansToDegrees(FMath::Atan2(Link.Dir.Y, Link.Dir.X)));
+				Link.Reach,
+				Link.Class == ETraversalClass::Aircraft
+					? *FString::Printf(TEXT(" along heading %.0f deg"),
+						FMath::RadiansToDegrees(FMath::Atan2(Link.Dir.Y, Link.Dir.X)))
+					: TEXT(" in any direction"));
 			continue;
 		}
 
@@ -353,6 +490,76 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 		// control exactly here, which is the straight line again. The join has to MOVE.
 		const FVector2D Corner =
 			GuidelineGeom::Eval(PositionA, Original.Control, PositionB, BestParam);
+
+		if (Link.Lane.Num() > 0)
+		{
+			// THE LANE IS SPLIT TO MAKE THE LINK'S OWN END. Entry in the MIDDLE of a side, not
+			// at a corner: a corner-to-road connector would run diagonally across the very
+			// ground the lane exists to keep clear, and the split costs one node on a lane
+			// nobody can see.
+			//
+			// Safe here even though Original/PositionA/PositionB/Corner were captured above:
+			// those are values, not pointers, and nothing below touches the ROAD edge.
+			const FGuidelineEdge* LaneEdge = Network.GetGuidelineEdge(BestLaneEdge);
+			const FGuidelineNode* LaneA = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->A) : nullptr;
+			const FGuidelineNode* LaneB = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->B) : nullptr;
+			if (LaneEdge == nullptr || LaneA == nullptr || LaneB == nullptr)
+			{
+				continue;
+			}
+
+			const FGuidelineEdge LaneOriginal = *LaneEdge;
+			const FVector2D LanePositionA = LaneA->Position;
+			const FVector2D LanePositionB = LaneB->Position;
+
+			FVector2D LaneMid, LaneControlLeft, LaneControlRight;
+			GuidelineGeom::Split(LanePositionA, LaneOriginal.Control, LanePositionB, BestLaneParam,
+				LaneMid, LaneControlLeft, LaneControlRight);
+
+			if (FVector2D::Distance(LaneMid, LanePositionA) <= LeadInWeldTolerance)
+			{
+				Link.Node = LaneOriginal.A;
+			}
+			else if (FVector2D::Distance(LaneMid, LanePositionB) <= LeadInWeldTolerance)
+			{
+				Link.Node = LaneOriginal.B;
+			}
+			else
+			{
+				Link.Node = Network.AddGuidelineNode(LaneMid, /*bDerived=*/true);
+
+				// The halves inherit ServiceLoopOwner from the original, so the lane stays
+				// recognisable as this entity's after the split.
+				FGuidelineEdge Left = LaneOriginal;
+				Left.B = Link.Node;
+				Left.Control = LaneControlLeft;
+
+				FGuidelineEdge Right = LaneOriginal;
+				Right.A = Link.Node;
+				Right.Control = LaneControlRight;
+
+				Network.RemoveGuidelineEdge(BestLaneEdge);
+				Network.AddGuidelineEdge(MoveTemp(Left));
+				Network.AddGuidelineEdge(MoveTemp(Right));
+			}
+
+			// The link now has a real node to leave from, and LeadRoom below measures from it.
+			Link.At = Network.GetGuidelineNode(Link.Node)->Position;
+			AnchorNodes.Add(Link.Node);
+		}
+
+		if (Link.Class != ETraversalClass::Aircraft)
+		{
+			// The direction the join actually needs. A service link has no ray of its own - it
+			// was found by DISTANCE - but the fillet and the two sweeps below are all written
+			// in terms of a direction of arrival, and this is it.
+			const FVector2D Toward = Corner - Link.At;
+			if (!Toward.IsNearlyZero())
+			{
+				Link.Dir = Toward.GetSafeNormal();
+			}
+		}
+
 		const FVector2D TaxiDir =
 			GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, BestParam);
 
@@ -472,7 +679,13 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn)
 			SweepEnds.Add(FwdNode);
 		}
 
-		// The painted lead-in itself: still straight, because it is. Only the ENTRY sweeps.
+		// The lead-in itself: still straight, because it is. Only the ENTRY sweeps.
+		//
+		// PAINTED for an aircraft, and merely a connector for a service link - the lane it
+		// leaves is invisible, so nothing about this one is drawn either. It deliberately
+		// carries NO ServiceLoopOwner: leaving it unowned is what lets
+		// URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
+		// only reaches itself.
 		FGuidelineEdge Lead;
 		Lead.A = Link.Node;
 		Lead.B = LeadEnd;
