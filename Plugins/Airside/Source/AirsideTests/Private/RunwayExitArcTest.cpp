@@ -178,10 +178,11 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("a strip node sits ExitLength upstream of X (off by %.1f uu)"), MissUp), MissUp < 1.0);
 	TestTrue(FString::Printf(TEXT("a strip node sits ExitLength downstream of X (off by %.1f uu)"), MissDown), MissDown < 1.0);
 
-	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or where it clears the runway slab if
-	//    that is further (it is not, at 45 degrees: about 2900) - and keeps its identity
-	//    (a holding-position mark is keyed by it). The pavement CUT is no longer the floor:
-	//    the flare fillet follows the arc and would push a cut-based floor down the taxiway.
+	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or where it clears the runway slab, or
+	//    at its pavement cut, whichever is furthest (neither is, here: about 2900 and 5650)
+	//    - and keeps its identity (a holding-position mark is keyed by it). The cut is a
+	//    FLOOR since 2026-09-07, never the clamp it once was: the holding position must sit
+	//    where the taxiway is its own width - see Airside.Build.HoldingPositionAtFullWidth.
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*Net, XT, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the taxiway's runway end exists by identity"), TEnd.IsSet())) { return false; }
 	{
@@ -189,8 +190,12 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		const double Along = FVector2D::DotProduct(At, TowardT);
 		const double Off = FMath::Abs(FVector2D::CrossProduct(At, TowardT));
 		const double Floor = ExitGeometry::TaxiwayEndFloor(900.0, 1150.0, PI / 4.0);
-		const double Expected = FMath::Max(ExitLength, Floor);
-		TestTrue(FString::Printf(TEXT("taxiway end is max(ExitLength, slab clearance %.0f) = %.0f down its own axis (%.1f) and on it (%.1f off)"), Floor, Expected, Along, Off),
+		// And never inside the corner's fillet: the pavement cut is a floor too (the
+		// holding position must sit where the taxiway is its own width). Here the flare's
+		// cut lands just short of the arc start, so ExitLength still wins.
+		const double Cut = Net->GetSegment(XT)->TrimA;
+		const double Expected = FMath::Max(FMath::Max(ExitLength, Floor), Cut);
+		TestTrue(FString::Printf(TEXT("taxiway end is max(ExitLength, slab clearance %.0f, cut %.0f) = %.0f down its own axis (%.1f) and on it (%.1f off)"), Floor, Cut, Expected, Along, Off),
 			FMath::Abs(Along - Expected) < 1.0 && Off < 1.0);
 	}
 
@@ -298,9 +303,10 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 			// the clamp comes out - the first clamp put a 55 m stub's end (and its holding
 			// position) inside the slab.
 			const double Floor = ExitGeometry::TaxiwayEndFloor(900.0, 1150.0, PI / 4.0);
-			const double Expected = FMath::Max(Floor, NodeLength);
+			const double Cut = Net->GetSegment(EZ)->TrimA;
+			const double Expected = FMath::Max(FMath::Max(Floor, NodeLength), Cut);
 			const FVector2D EndAt = Net->GetGuidelineNode(ZEnd)->Position;
-			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(slab clearance %.0f, %.0f) = %.0f (%.0f), off the strip (%.0f from the centreline)"), Floor, NodeLength, Expected, Back, FMath::Abs(EndAt.Y)),
+			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(slab clearance %.0f, %.0f, cut %.0f) = %.0f (%.0f), off the strip (%.0f from the centreline)"), Floor, NodeLength, Cut, Expected, Back, FMath::Abs(EndAt.Y)),
 				FMath::Abs(Back - Expected) < 1.0 && FMath::Abs(EndAt.Y) > 900.0);
 			const FGuidelineEdge* Turn = ExitArcTurnBetween(*Net, SE, ZEnd);
 			if (TestNotNull(TEXT("the short taxiway still gets its arc"), Turn))
