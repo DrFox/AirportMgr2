@@ -502,6 +502,14 @@ struct AIRSIDE_API FAirframe
 
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
+
+	/**
+	 * The type's short code - "PA46" - for anything that has to SAY what this is. NAME_None
+	 * for an airframe assembled by hand (tests, the Piper fallback). Here rather than looked
+	 * up from the UAircraftType at display time because Model/ may not see Entities/, and
+	 * the agent carries no pointer to its type by design (FAirframe's own comment).
+	 */
+	UPROPERTY(EditAnywhere) FName TypeCode;
 };
 
 /** A connection point between an entity and the guideline graph, in the entity's local space. */

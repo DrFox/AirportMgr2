@@ -244,6 +244,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// FOR EVER - and DescribeMotion reads exactly that field as GroundSpeed
 				// regardless of phase, so a parked aircraft would report itself still rolling.
 				Follower.Speed = 0.0;
+				// AND RE-DESCRIBED, so the motion this frame hands back agrees with the phase
+				// it just entered: the pose computed above carried the arriving speed, and a
+				// panel reading "Parked, 0.4 m/s" for one frame is the small version of the
+				// bug the zeroing above exists to stop (Airside.Model.InspectFacts caught it).
+				LastMotion = DescribeMotion(FollowAt, FollowHeading);
+				OutMotion = LastMotion;
 				UE_LOG(LogAirsideTraffic, Log,
 					TEXT("Parked. Shutting down in %.0f s."), ShutdownCountdown);
 			}

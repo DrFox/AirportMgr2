@@ -358,6 +358,10 @@ public:
 	/** The handle for a live slot index, for callers walking GetEntities() by index. Unset if dead. */
 	FEntityInstanceId EntityIdAt(int32 Index) const;
 
+	/** Index of the live entity whose PoseNode is Node, or INDEX_NONE. A linear scan: the
+	 *  inspector asks once per frame for one node, and there are tens of stands. */
+	int32 FindEntityIndexByPoseNode(FGuidelineNodeId Node) const;
+
 	/**
 	 * World heading of an entity's anchor in radians: the instance's heading composed with
 	 * the anchor's own.

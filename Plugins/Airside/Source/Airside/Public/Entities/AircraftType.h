@@ -110,6 +110,7 @@ public:
 		Out.Engine = Engine;
 		Out.Wingspan = Footprint.Wingspan;
 		Out.Requirements = Requirements;
+		Out.TypeCode = Code;
 		return Out;
 	}
 

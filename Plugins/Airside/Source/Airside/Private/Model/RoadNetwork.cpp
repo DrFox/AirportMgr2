@@ -1012,6 +1012,22 @@ FEntityInstanceId URoadNetwork::EntityIdAt(int32 Index) const
 	return RoadSlot::HandleAt<FEntityInstanceId>(Entities, Index);
 }
 
+int32 URoadNetwork::FindEntityIndexByPoseNode(FGuidelineNodeId Node) const
+{
+	if (!Node.IsSet())
+	{
+		return INDEX_NONE;
+	}
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+	{
+		if (Entities[Index].bAlive && Entities[Index].PoseNode == Node)
+		{
+			return Index;
+		}
+	}
+	return INDEX_NONE;
+}
+
 const FResolvedAnchor* URoadNetwork::FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const
 {
 	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
