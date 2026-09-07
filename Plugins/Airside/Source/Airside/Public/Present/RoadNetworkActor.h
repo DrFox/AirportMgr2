@@ -400,6 +400,23 @@ public:
 	TObjectPtr<URoadProfile> Profile;
 
 	/**
+	 * Cross-section for SERVICE ROADS laid through this facade - see ERoadKind. Unset falls
+	 * back to the content set's ServiceRoadProfile.
+	 *
+	 * A SECOND PROPERTY rather than a map keyed by kind: there are two kinds, and two asset
+	 * pickers in the Details panel are easier to author than a map, for no loss until a
+	 * third kind exists.
+	 *
+	 * NO FallbackWidth TWIN, unlike Profile. That property's on-demand RuntimeProfile exists
+	 * so the FIRST click of a session lays something; a road that fell back to a transient
+	 * profile would come back from a save as a TAXIWAY (see UAirsideContent::ServiceRoadProfile
+	 * for why that is worse than nothing), so the road tool refuses instead and names the
+	 * asset that is missing.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside")
+	TObjectPtr<URoadProfile> ServiceRoadProfile;
+
+	/**
 	 * Material for the road surface. Defaults to M_RoadSurface, which reads UV0 for
 	 * asphalt and UV1 for markings. Left null, the surface falls back to the engine
 	 * default - which is WorldGridMaterial, the same world-aligned checker the template
@@ -668,6 +685,16 @@ public:
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
+
+	/**
+	 * The service-road cross-section: the authored value if there is one, else the configured
+	 * content default. Null is a SUPPORTED state - the road tool refuses and says so, rather
+	 * than laying a taxiway under the name of a road.
+	 *
+	 * Const, unlike ResolveProfile, because there is nothing to cache: this never falls back
+	 * to a transient profile, for the reason ServiceRoadProfile's own comment gives.
+	 */
+	URoadProfile*       ResolveServiceRoadProfile() const;
 
 	/**
 	 * A runway's pavement material by its surface fact, from the content set only - there

@@ -131,4 +131,36 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void Fill(URoadProfile* Profile, double TotalWidth, double FilletRadius,
 		double ShoulderWidth = 0.0);
+
+	/**
+	 * Fills Profile with the SERVICE ROAD cross-section: kerb | lane | kerb, and one
+	 * guideline of class GroundVehicle.
+	 *
+	 * A SECOND FILL RATHER THAN A PARAMETER ON THE FIRST, deliberately. Fill's taxiway is a
+	 * concrete lane between asphalt run-offs carrying ONE AIRCRAFT guideline; this is a
+	 * narrow kerbed lane carrying ONE VEHICLE guideline, and the two differ in band type,
+	 * band count, guideline class and exit length. A shared function taking five flags would
+	 * be a switch on "which road is this" spelled as parameters, and every caller would
+	 * still have to know which combination meant a road.
+	 *
+	 * NOT CONTINUOUS and NO EXIT LENGTH - see bContinuousThroughJunctions and ExitLength. A
+	 * road gives way to a paved junction; only a runway runs unbroken through one, and only
+	 * a runway grades its own exits.
+	 *
+	 * Exposed to script for the same reason Fill is: the authoring commandlet that writes
+	 * DA_RoadProfile_ServiceRoad must lay down the SAME bands the tests exercise, rather
+	 * than a second transcription of them that is free to drift.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside")
+	static void FillServiceRoad(URoadProfile* Profile, double LaneWidth, double KerbWidth,
+		double FilletRadius);
+
+	/**
+	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
+	 *
+	 * The defaults are a 6 m lane with 0.6 m kerbs on a 5 m corner: wide enough for two vans
+	 * to pass, tight enough that a road reads as a road beside a 23 m taxiway.
+	 */
+	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
+		double KerbWidth = 60.0, double FilletRadius = 500.0);
 };

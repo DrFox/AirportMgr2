@@ -91,6 +91,23 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TArray<TSoftObjectPtr<URoadProfile>> RunwayProfiles;
 
+	/**
+	 * The SERVICE ROAD cross-section a ground vehicle drives on.
+	 *
+	 * AN AUTHORED ASSET, for exactly the reason RunwayProfiles gives: a segment stores a
+	 * POINTER to its profile, and URoadNetwork::DefaultProfile repairs any segment whose
+	 * pointer came back null from a save - with the TAXIWAY profile. A transient service-road
+	 * profile would therefore not merely vanish on reload, it would come back as a taxiway:
+	 * the road widened to 23 m and, far worse, admitting AIRCRAFT onto a lane laid for vans,
+	 * with nothing anywhere to report it.
+	 *
+	 * Null is still legal, and means the road tool refuses to lay one and says which asset is
+	 * missing - the same treatment URoadEditFacade::PlaceRunway gives a missing runway profile,
+	 * and for the same reason: a silent fallback here is the wrong behaviour at every junction.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<URoadProfile> ServiceRoadProfile;
+
 	/** What the stand tool places. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;

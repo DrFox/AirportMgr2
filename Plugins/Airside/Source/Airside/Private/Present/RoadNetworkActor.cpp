@@ -313,6 +313,21 @@ UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 	return Content != nullptr ? Content->DefaultStand.LoadSynchronous() : nullptr;
 }
 
+URoadProfile* ARoadNetworkActor::ResolveServiceRoadProfile() const
+{
+	if (ServiceRoadProfile != nullptr)
+	{
+		return ServiceRoadProfile;
+	}
+
+	// NO TRANSIENT FALLBACK, unlike ResolveProfile below. A segment laid with a transient
+	// profile comes back from a save with a null pointer, which URoadNetwork::DefaultProfile
+	// repairs as a TAXIWAY - so a "helpful" default here would silently admit aircraft onto
+	// a service road the next time the level was loaded. Null instead, and the caller refuses.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->ServiceRoadProfile.LoadSynchronous() : nullptr;
+}
+
 URoadProfile* ARoadNetworkActor::ResolveProfile()
 {
 	// AUTHORED INPUT, READ AND NEVER WRITTEN. This briefly assigned Profile when it found it
