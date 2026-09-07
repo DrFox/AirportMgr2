@@ -343,11 +343,21 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	// a number chosen to make one airport work: a wider runway is correspondingly more
 	// forgiving about where its threshold is considered to begin, and a taxiway a hundred
 	// metres away is never mistaken for one.
+	//
+	// ON THE STRIP, not merely near an end (2026-09-07): since the exit arcs a taxi joins the
+	// runway at a split node ExitLength down the centreline, sixty metres from any runway
+	// node, and the old "within a width of an end" test refused it - so an intersection
+	// departure never armed and the aircraft parked on the runway. IsPointOnRunway is the
+	// one implementation of "is this on the strip" that occupancy and the planners share.
+	// Either test admits the point: on the strip anywhere along it, OR within a width of an
+	// end - the original rule, kept because a route drawn to a threshold ends at the strip's
+	// dead-end cut, a half width short of the road node the extent is measured from.
 	if (bRequireOnRunway)
 	{
+		const FRoadSegmentId Seed{Best, Segments[Best].Generation};
 		const URoadProfile* SeedProfile = ProfileFor(Segments[Best]);
 		const double Reach = SeedProfile != nullptr ? SeedProfile->GetTotalWidth() : 0.0;
-		if (BestDistance > Reach)
+		if (!IsPointOnRunway(Near, Seed) && BestDistance > Reach)
 		{
 			return false;
 		}

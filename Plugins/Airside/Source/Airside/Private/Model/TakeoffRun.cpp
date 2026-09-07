@@ -43,7 +43,7 @@ double FTakeoffRun::RequiredRoll(const FGroundPerformance& InGround,
 
 bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
 	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-	double InHeading)
+	double InHeading, double InEntryOffset, double InSpeed)
 {
 	Phase = ETakeoffPhase::Clear;
 
@@ -61,13 +61,16 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	}
 
 	const double Needed = RequiredRoll(InGround, InClimb);
-	if (InRunwayLength < Needed)
+	const double EntryOffset = FMath::Clamp(InEntryOffset, 0.0, InRunwayLength);
+	if (InRunwayLength - EntryOffset < Needed)
 	{
 		// The whole reason this returns a bool. A strip shorter than the roll to Vr is one
 		// this aircraft cannot leave, and rolling anyway simulates an overrun.
+		// Judged on what is AHEAD of the entry, not on the whole strip: an intersection
+		// departure has given the piece behind it up.
 		UE_LOG(LogAirsideTraffic, Warning,
-			TEXT("Departure refused: %.0f uu of runway, %.0f needed to reach %.0f uu/s."),
-			InRunwayLength, Needed, InGround.Takeoff.SpeedCap);
+			TEXT("Departure refused: %.0f uu of runway ahead of the entry (%.0f past the threshold), %.0f needed to reach %.0f uu/s."),
+			InRunwayLength - EntryOffset, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
 		return false;
 	}
 
@@ -77,19 +80,23 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Ground = InGround;
 	Climb = InClimb;
 
-	Travelled = 0.0;
+	// FROM THE ENTRY, which is the threshold only for a backtrack: the position this
+	// reports is Threshold + Direction * Travelled, so starting Travelled here is what
+	// keeps the aircraft where the taxi left it instead of jumping to the threshold.
+	Travelled = EntryOffset;
 	Altitude = 0.0;
 	Pitch = 0.0;
 	Heading = InHeading;
 
 	// Rolling, not stopped: it arrived under power and has to keep rolling to steer - the
-	// same rule the taxi model states in FGroundPerformance::MinTaxiSpeed.
-	Speed = Ground.MinTaxiSpeed;
+	// same rule the taxi model states in FGroundPerformance::MinTaxiSpeed. At the speed
+	// it arrived with, when the caller knows it, so the handover has no step.
+	Speed = FMath::Max(InSpeed, Ground.MinTaxiSpeed);
 	Phase = ETakeoffPhase::LineUp;
 
 	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Departure armed: %.0f uu runway, %.0f needed, rotate at %.0f uu/s."),
-		RunwayLength, Needed, Ground.Takeoff.SpeedCap);
+		TEXT("Departure armed: %.0f uu runway, joining %.0f past the threshold, %.0f needed, rotate at %.0f uu/s."),
+		RunwayLength, EntryOffset, Needed, Ground.Takeoff.SpeedCap);
 	return true;
 }
 

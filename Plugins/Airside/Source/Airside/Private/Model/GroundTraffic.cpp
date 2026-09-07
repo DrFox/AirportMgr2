@@ -173,7 +173,33 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 	FRoadSegmentId Seed;
 	if (Network->RunwayExtentAt(Plan.Polyline.Last(), Threshold, Direction, Length, &Seed))
 	{
-		Agent.ArmDeparture(Threshold, Direction, Length);
+		// WHERE THE ROUTE JOINS THE STRIP is where the roll starts. A route planned by
+		// DeparturePlanner ends on the entry arc's node; a hand-drawn one ends wherever it
+		// ends; either way the offset is measured from the route, not assumed to be the
+		// threshold - which it was, so every departure teleported to the threshold and
+		// spun round (samples/runway1.png, 2026-09-07).
+		double EntryOffset = FMath::Clamp(
+			FVector2D::DotProduct(Plan.Polyline.Last() - Threshold, Direction), 0.0, Length);
+		// WHICH WAY TO ROLL. RunwayExtentAt hands back the threshold NEAREST the route's end,
+		// which is right for a backtrack (taxied to an end, turn round, roll away from it)
+		// and wrong for an intersection entry past the midpoint: the nearer threshold is
+		// then the one AHEAD, and rolling toward it is rolling off the end. A mid-strip
+		// entry rolls the way the taxi arrived - the arc delivered it aligned - and an end
+		// entry, within the strip's own width of a threshold, rolls away from that end.
+		double HalfWidth = 0.0;
+		Network->IsPointOnRunway(Plan.Polyline.Last(), Seed, &HalfWidth);
+		const bool bAtAnEnd = EntryOffset <= HalfWidth * 2.0 || Length - EntryOffset <= HalfWidth * 2.0;
+		if (!bAtAnEnd && Plan.Polyline.Num() >= 2)
+		{
+			const FVector2D Arrived = Plan.Polyline.Last() - Plan.Polyline[Plan.Polyline.Num() - 2];
+			if (FVector2D::DotProduct(Arrived, Direction) < 0.0)
+			{
+				Threshold = Threshold + Direction * Length;
+				Direction = -Direction;
+				EntryOffset = Length - EntryOffset;
+			}
+		}
+		Agent.ArmDeparture(Threshold, Direction, Length, EntryOffset);
 
 		// THE WHOLE CHAIN, not the seed segment: a runway is several segments by the time it
 		// has exits, and a departure that held only the piece its taxi ended on would let a
@@ -182,8 +208,8 @@ void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork*
 		Agent.DepartureRunway = Network->RunwayChain(Seed);
 
 		UE_LOG(LogAirsideTraffic, Log,
-			TEXT("Route ends on runway %s: %.0f uu available, departure armed"),
-			*RunwayDesignator::ToPairText(Direction), Length);
+			TEXT("Route ends on runway %s %.0f uu past the threshold: %.0f uu available, departure armed"),
+			*RunwayDesignator::ToPairText(Direction), EntryOffset, Length - EntryOffset);
 	}
 }
 

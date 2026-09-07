@@ -169,6 +169,26 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			continue;
 		}
 
+		// ONE LENGTH PER NODE, so every arc at it is SYMMETRIC: the same tangent length on
+		// the runway side as on the taxiway side. An uneven quadratic - 60 m along the
+		// runway, 30 m down a stub taxiway - bunches its curvature at the short end and
+		// swings wide of the fillet on the way (samples/runway1.png, 2026-09-07). The length
+		// is the tightest any arm at this node can afford: ExitLength, capped at 45 percent
+		// of each arm's node-to-node length so nothing crosses its own far end. A taxiway's
+		// pavement cut is still a floor on ITS side - a holding position on the asphalt is
+		// wrong, a slightly uneven arc merely imperfect - and that is the one asymmetry left.
+		double NodeLength = ExitLength;
+		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
+		{
+			const FRoadSegment* Arm = Network.GetSegment((*ArmSegments)[ArmIndex]);
+			const FRoadNode* ArmA = Arm ? Network.GetNode(Arm->A) : nullptr;
+			const FRoadNode* ArmB = Arm ? Network.GetNode(Arm->B) : nullptr;
+			if (ArmA && ArmB)
+			{
+				NodeLength = FMath::Min(NodeLength, 0.45 * FVector2D::Distance(ArmA->Position, ArmB->Position));
+			}
+		}
+
 		for (int32 ArmIndex = 0; ArmIndex < ArmSegments->Num(); ++ArmIndex)
 		{
 			const FRoadSegmentId ArmSeg = (*ArmSegments)[ArmIndex];
@@ -192,27 +212,16 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				continue;
 			}
 
-			// The segment's length NODE TO NODE: the set-back may not eat more than 45 percent
-			// of it, so two exits on one short runway half, or a stub taxiway, keep an arc at
-			// each end rather than crossing their own far end.
-			//
-			// Node to node, NOT cut point to cut point. The first cut measured the guideline's
-			// chord between its cuts, and at an acute corner the runway-end cut alone is about
-			// 60 m (edge intersection plus the fillet's tangent), so a 55 m exit stub had a
-			// chord of nothing, the clamp collapsed the set-back to nothing, and the taxiway's
-			// end - and the holding position on it - landed a metre short of the junction
-			// INSIDE the runway slab (samples/holdlines.png, 2026-09-07).
-			const FRoadNode* ArmA = Network.GetNode(Arm->A);
-			const FRoadNode* ArmB = Network.GetNode(Arm->B);
-			const double SegmentLength = (ArmA && ArmB) ? FVector2D::Distance(ArmA->Position, ArmB->Position) : 0.0;
-
-			double Length = FMath::Min(ExitLength, 0.45 * SegmentLength);
+			double Length = NodeLength;
 			if (!bContinuous)
 			{
 				// NEVER INSIDE THE PAVEMENT CUT, whatever the clamp says: the arc starts at or
 				// beyond where the straight stub used to, which is the pre-arc behaviour a
-				// too-short taxiway falls back to. The lower bound wins over the upper one -
-				// a holding position on the asphalt is wrong; a short arc merely tight.
+				// too-short taxiway falls back to. At an acute corner the runway-end cut alone
+				// is about 60 m, and the first cut of this clamp - measured on the chord
+				// between cuts - found nothing left of a 55 m stub and put the taxiway's end,
+				// holding position and all, a metre short of the junction INSIDE the runway
+				// slab (samples/holdlines.png, 2026-09-07).
 				Length = FMath::Max(Length, Pair.Value.Arms[ArmIndex].CutDistance);
 			}
 			if (Length <= 0.0)

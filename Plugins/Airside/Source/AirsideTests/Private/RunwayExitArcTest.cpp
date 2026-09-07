@@ -280,20 +280,24 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 	{
 		const FGuidelineNodeId ZEnd = ExitArcNodeFor(*Net, EZ, true);
 		const FGuidelineNodeId ZFar = ExitArcNodeFor(*Net, EZ, false);
+		const FVector2D EAt(40000.0, 0.0);
+		const double SegmentLength = FVector2D::Distance(EAt, FVector2D(44000.0, -4000.0));
+		// ONE LENGTH PER NODE, symmetric: the tightest arm decides - here the 5657 uu stub -
+		// so the runway side is set back the same 45% of it, not ExitLength. An uneven arc
+		// (60 m along the runway, 25 m down the stub) swung wide of the fillet.
+		const double NodeLength = FMath::Min(ExitLength, FMath::Min(0.45 * SegmentLength, 0.45 * 40000.0));
 		double Miss = 0.0;
-		const FGuidelineNodeId SE = ExitArcNodeNear(*Net, FVector2D(40000.0 - ExitLength, 0.0), Miss);
+		const FGuidelineNodeId SE = ExitArcNodeNear(*Net, EAt - FVector2D(NodeLength, 0.0), Miss);
+		TestTrue(FString::Printf(TEXT("the runway side is set back the same %.0f as the stub (off by %.1f)"), NodeLength, Miss), Miss < 1.0);
 		if (TestTrue(TEXT("the short taxiway's ends exist"), ZEnd.IsSet() && ZFar.IsSet()) && Miss < 1.0)
 		{
-			const FVector2D EAt(40000.0, 0.0);
 			const double Back = FVector2D::Distance(Net->GetGuidelineNode(ZEnd)->Position, EAt);
 			const double Cut = ExitArcCutDistance(Solved, E.Index, EZ);
-			const double SegmentLength = FVector2D::Distance(EAt, FVector2D(44000.0, -4000.0));
-			// max(cut, min(ExitLength, 45% of the segment)): the clamp measures the segment
-			// node to node, and the pavement cut is a floor the clamp cannot undercut - the
-			// first cut measured the chord between cuts, found nothing left of a 55 m stub,
-			// and put the end (and the holding position) inside the runway slab.
-			const double Expected = FMath::Max(Cut, FMath::Min(ExitLength, 0.45 * SegmentLength));
-			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(cut %.0f, 45%% of %.0f) = %.0f (%.0f), never inside the pavement"), Cut, SegmentLength, Expected, Back),
+			// max(cut, node length): the pavement cut is a floor the clamp cannot undercut -
+			// measured on the chord between cuts, the first clamp found nothing left of a
+			// 55 m stub and put the end (and the holding position) inside the runway slab.
+			const double Expected = FMath::Max(Cut, NodeLength);
+			TestTrue(FString::Printf(TEXT("short taxiway's end sits at max(cut %.0f, %.0f) = %.0f (%.0f), never inside the pavement"), Cut, NodeLength, Expected, Back),
 				FMath::Abs(Back - Expected) < 1.0 && Back >= Cut - 1.0);
 			const FGuidelineEdge* Turn = ExitArcTurnBetween(*Net, SE, ZEnd);
 			if (TestNotNull(TEXT("the short taxiway still gets its arc"), Turn))
@@ -656,6 +660,113 @@ bool FArrivalTakesTheArcNotTheJunctionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and its first span heads down the runway, not back"),
 		Plan.TaxiIn.Polyline.Num() > 1
 		&& FVector2D::DotProduct(Plan.TaxiIn.Polyline[1] - Plan.TaxiIn.Polyline[0], FVector2D(1.0, 0.0)) > 0.0);
+	return true;
+}
+
+#include "Build/RoadMeshBuilder.h"
+
+namespace
+{
+	/** True when P lies in the triangle ABC, edges included, in the road plane. */
+	bool ExitArcInTriangle(const FVector2D& P, const FVector2D& A, const FVector2D& B, const FVector2D& C)
+	{
+		const double D1 = (P.X - B.X) * (A.Y - B.Y) - (A.X - B.X) * (P.Y - B.Y);
+		const double D2 = (P.X - C.X) * (B.Y - C.Y) - (B.X - C.X) * (P.Y - C.Y);
+		const double D3 = (P.X - A.X) * (C.Y - A.Y) - (C.X - A.X) * (P.Y - A.Y);
+		const bool bNeg = (D1 < -1.0e-6) || (D2 < -1.0e-6) || (D3 < -1.0e-6);
+		const bool bPos = (D1 > 1.0e-6) || (D2 > 1.0e-6) || (D3 > 1.0e-6);
+		return !(bNeg && bPos);
+	}
+
+	bool ExitArcOnPavement(const FVector2D& P, const FRoadMeshBuffers& Pavement)
+	{
+		for (int32 Slot = 0; Slot + 2 < Pavement.Indices.Num(); Slot += 3)
+		{
+			const FVector3d& A = Pavement.Positions[Pavement.Indices[Slot]];
+			const FVector3d& B = Pavement.Positions[Pavement.Indices[Slot + 1]];
+			const FVector3d& C = Pavement.Positions[Pavement.Indices[Slot + 2]];
+			if (ExitArcInTriangle(P, FVector2D(A.X, A.Y), FVector2D(B.X, B.Y), FVector2D(C.X, C.Y)))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+/**
+ * THE ARC STAYS ON THE PAVEMENT. samples/runway1.png (2026-09-07): an exit arc with 60 m of
+ * tangent on the runway side and 30 m on a stub taxiway swung wide of the fillet. Measured
+ * here the way the player saw it - every sampled point of every turn path at a runway
+ * junction, tested against the triangles the surface builder actually paves - on short
+ * stubs at 45, 60 and 90 degrees, which are the corners a real airport's exits are cut at.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayExitArcOnPavementTest,
+	"Airside.Build.RunwayExitArcOnPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
+	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+
+	//   W ===== X1 ===== X2 ===== E     three junctions, a 5500 uu stub at each
+	const FRoadNodeId W = Net->AddNode(FVector2D(-60000.0, 0.0));
+	const FRoadNodeId X1 = Net->AddNode(FVector2D(-20000.0, 0.0));
+	const FRoadNodeId X2 = Net->AddNode(FVector2D(20000.0, 0.0));
+	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
+	Net->AddStraightSegment(W, X1, Runway);
+	Net->AddStraightSegment(X1, X2, Runway);
+	Net->AddStraightSegment(X2, E, Runway);
+	constexpr double Stub = 5500.0;
+	const FRoadNodeId S45 = Net->AddNode(FVector2D(-20000.0, 0.0) + FVector2D(FMath::Cos(-PI / 4.0), FMath::Sin(-PI / 4.0)) * Stub);
+	const FRoadNodeId S60 = Net->AddNode(FVector2D(20000.0, 0.0) + FVector2D(FMath::Cos(-PI / 3.0), FMath::Sin(-PI / 3.0)) * Stub);
+	const FRoadNodeId S90 = Net->AddNode(FVector2D(60000.0, -Stub));
+	Net->AddStraightSegment(X1, S45, Taxiway);
+	Net->AddStraightSegment(X2, S60, Taxiway);
+	Net->AddStraightSegment(E, S90, Taxiway);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
+	FRoadGuidelineBuilder::Build(*Net, Solved);
+
+	// The pavement the player sees, from the same solve.
+	FRoadMeshBuilder Pavement(10.0);
+	Pavement.Build(*Net, Solved, 8);
+	const FRoadMeshBuffers& Paved = Pavement.GetBuffers();
+	TestTrue(TEXT("there is pavement to test against"), Paved.Indices.Num() > 0);
+
+	int32 Arcs = 0, Points = 0, Off = 0;
+	FString Worst;
+	for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
+	{
+		if (!Edge.bAlive || !Edge.bDerived || Edge.DerivedFrom.IsSet()) { continue; }
+		const FVector2D A = Net->GetGuidelineNode(Edge.A)->Position;
+		const FVector2D B = Net->GetGuidelineNode(Edge.B)->Position;
+		if (FVector2D::Distance(A, B) < 1.0) { continue; }   // the runway's through-turn
+		++Arcs;
+		TArray<FVector2D> Samples;
+		GuidelineGeom::Sample(A, Edge.Control, B, Samples, 16);
+		for (const FVector2D& P : Samples)
+		{
+			++Points;
+			if (!ExitArcOnPavement(P, Paved))
+			{
+				++Off;
+				if (Worst.IsEmpty())
+				{
+					Worst = FString::Printf(TEXT("first off-pavement point (%.0f, %.0f) on the turn %s -> %s"),
+						P.X, P.Y, *A.ToString(), *B.ToString());
+				}
+			}
+		}
+	}
+	UE_LOG(LogExitArcTest, Log, TEXT("On-pavement: %d arcs, %d sampled points, %d off the pavement. %s"), Arcs, Points, Off, *Worst);
+	TestTrue(TEXT("there are arcs to measure"), Arcs >= 6);
+	TestEqual(FString::Printf(TEXT("every sampled point of every arc lies on the pavement (%d of %d off). %s"), Off, Points, *Worst), Off, 0);
 	return true;
 }
 

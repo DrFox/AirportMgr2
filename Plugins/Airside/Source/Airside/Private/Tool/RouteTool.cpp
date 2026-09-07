@@ -1,8 +1,11 @@
 #include "Tool/RouteTool.h"
 
+#include "AirsideLog.h"
+
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
@@ -123,7 +126,25 @@ void FRouteTool::OnClick(const FToolContext& Context)
 	// FAirframe.
 	const FAirframe Airframe = AirframeFor(*Context.Target->GetNetwork(), StartNode);
 
-	LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Airframe.Wingspan);
+	const URoadNetwork& Network = *Context.Target->GetNetwork();
+	const FGuidelineNode* GoalNode = Network.GetGuidelineNode(Picked);
+	FVector2D Threshold, Direction;
+	double Length = 0.0;
+	if (GoalNode != nullptr && Network.RunwayExtentAt(GoalNode->Position, Threshold, Direction, Length))
+	{
+		// A GOAL ON A RUNWAY IS A DEPARTURE, and where it joins the strip is the planner's
+		// decision, not the click's: the first entry down the runway that leaves enough to
+		// roll, arrived at aligned, or a backtrack to the threshold when none does. A plain
+		// search to the clicked node drove onto the strip by the entry arc, east to the
+		// split, hairpin and back to the threshold (samples/runway1.png, 2026-09-07).
+		const FDeparturePlan Departure = DeparturePlanner::Plan(Network, StartNode, GoalNode->Position, Airframe, Class);
+		UE_LOG(LogAirside, Log, TEXT("%s"), *DeparturePlanner::Describe(Departure));
+		LastPlan = Departure.IsValid() ? Departure.Route : FRoutePlan();
+	}
+	else
+	{
+		LastPlan = Context.Target->FindRoute(StartNode, Picked, Class, Airframe.Wingspan);
+	}
 
 	bHasStart = false;
 

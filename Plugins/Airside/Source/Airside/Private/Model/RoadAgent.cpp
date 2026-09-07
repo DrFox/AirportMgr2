@@ -114,12 +114,14 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 	}
 }
 
-void FRoadAgent::ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength)
+void FRoadAgent::ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
+	double EntryOffset)
 {
 	bDepartureArmed = true;
 	DepartureOrder.Threshold = Threshold;
 	DepartureOrder.Direction = Direction;
 	DepartureOrder.RunwayLength = RunwayLength;
+	DepartureOrder.EntryOffset = EntryOffset;
 }
 
 bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
@@ -204,12 +206,16 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		{
 			if (bDepartureArmed)
 			{
-				// ARRIVED ON A RUNWAY: hand over. The heading it arrived on carries across,
-				// so the line-up turn starts from where the taxi actually left it rather
-				// than from a fresh guess - which is what makes a backtrack read as one.
+				// ARRIVED ON A RUNWAY: hand over. Heading, speed and WHERE it joined carry
+				// across, so the roll starts from where the taxi actually left it - aligned
+				// and rolling after an entry arc, or facing the wrong way at the threshold
+				// after a backtrack, where the line-up turn is then the right behaviour.
+				// Restarting at the threshold from creep was the teleport-and-spin of
+				// samples/runway1.png (2026-09-07).
 				bDepartureArmed = false;
 				if (Departure.Start(DepartureOrder.Threshold, DepartureOrder.Direction,
-					DepartureOrder.RunwayLength, Airframe.Ground, Airframe.Climb, LastMotion.Heading))
+					DepartureOrder.RunwayLength, Airframe.Ground, Airframe.Climb, LastMotion.Heading,
+					DepartureOrder.EntryOffset, Follower.Speed))
 				{
 					Phase = EAgentPhase::Departing;
 					UE_LOG(LogAirsideTraffic, Log, TEXT("Taxi complete; rolling for departure."));
