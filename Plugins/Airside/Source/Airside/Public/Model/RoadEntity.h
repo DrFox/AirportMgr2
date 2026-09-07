@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RunwayFacts.h"
 #include "RoadEntity.generated.h"
 
 class UEntityDefinition;
@@ -483,6 +484,10 @@ struct AIRSIDE_API FApproachPerformance
  * Wingspan travels with the other four despite living on FEntityFootprint on the type,
  * because a route search needs it in the same breath it needs Ground - see
  * UAircraftType::Airframe.
+ *
+ * Requirements travel here for the same reason: RunwayAdmission::Check is asked by the
+ * planners, which hold an FAirframe and no UAircraftType, and a fifth parameter beside
+ * the bundle is exactly the shape #27 came from.
  */
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FAirframe
@@ -494,6 +499,9 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
+
+	/** What this aircraft needs of a runway - see FRunwayRequirements. */
+	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 };
 
 /** A connection point between an entity and the guideline graph, in the entity's local space. */

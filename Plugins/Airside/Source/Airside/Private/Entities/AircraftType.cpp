@@ -211,6 +211,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->Climb = PiperMeridianClimb();
 	Type->Approach = PiperMeridianApproach();
 	Type->Engine = PiperMeridianEngine();
+	Type->Requirements = PiperMeridianRequirements();
 }
 
 FClimbPerformance UAircraftType::PiperMeridianClimb()
@@ -383,6 +384,26 @@ FApproachPerformance UAircraftType::PiperMeridianApproach()
 	Approach.FlareDecel = 90.0;
 
 	return Approach;
+}
+
+FRunwayRequirements UAircraftType::PiperMeridianRequirements()
+{
+	FRunwayRequirements Requirements;
+
+	// A turboprop single operates off grass strips routinely; nothing about the type
+	// needs pavement or approach aids, so it may use ANY runway this project can build.
+	Requirements.MinimumSurface = ERunwaySurface::Grass;
+	Requirements.ApproachNeeded = ERunwayApproach::Visual;
+
+	// 800 m each. The POH's 50 ft figures are 2438 ft (743 m) take-off and 2110 ft (643 m)
+	// landing at gross weight, sea level; rounded UP to one round figure because these are
+	// admission numbers and the safe error is refusing a strip the aircraft could just
+	// have used, never accepting one it cannot. The rolls the physics derives from Ground
+	// and Climb (about 230 m and 370 m with margin) sit well inside.
+	Requirements.TakeoffFieldLength = 80000.0;
+	Requirements.LandingFieldLength = 80000.0;
+
+	return Requirements;
 }
 
 #undef LOCTEXT_NAMESPACE

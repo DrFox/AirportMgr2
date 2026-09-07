@@ -515,6 +515,7 @@ FRoadNodeId URoadEditFacade::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Do
 	const FRoadNodeId KeepA = Segment->A;
 	const FRoadNodeId KeepB = Segment->B;
 	URoadProfile* KeepProfile = Segment->Profile;
+	const FRunwayFacts KeepFacts = Segment->Runway;
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
 
@@ -546,6 +547,19 @@ FRoadNodeId URoadEditFacade::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Do
 
 	const FRoadSegmentId First = Net.AddStraightSegment(KeepA, Middle, KeepProfile);
 	const FRoadSegmentId Second = Net.AddStraightSegment(Middle, KeepB, KeepProfile);
+
+	// The runway facts are the STRIP's and both halves are still the strip. Copied here
+	// rather than re-derived through SetRunwayFacts on the chain, because at this moment
+	// the chain is the two new segments and nothing else remembers what the doomed one
+	// said; without this, every exit added to a precision runway demoted the far half to
+	// the default and repainted it visual.
+	for (const FRoadSegmentId& Half : { First, Second })
+	{
+		if (FRoadSegment* Fresh = Net.GetSegmentMutable(Half))
+		{
+			Fresh->Runway = KeepFacts;
+		}
+	}
 
 	// Both endpoints were checked live and the middle node was just created, so the only
 	// way here is a model invariant having changed underneath. Loud rather than silent:

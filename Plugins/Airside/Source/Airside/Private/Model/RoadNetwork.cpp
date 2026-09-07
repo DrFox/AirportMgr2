@@ -279,6 +279,32 @@ TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
 	return Out;
 }
 
+FRunwayFacts URoadNetwork::RunwayFactsFor(FRoadSegmentId Seed) const
+{
+	// The seed's own, not a walk: SetRunwayFacts and the split keep every member of a
+	// chain equal, so the first member is as good as any and cheaper than the chain walk
+	// the marking builder would otherwise make per runway per rebuild.
+	const FRoadSegment* Segment = GetSegment(Seed);
+	return Segment != nullptr && Segment->bAlive ? Segment->Runway : FRunwayFacts();
+}
+
+bool URoadNetwork::SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts)
+{
+	const TArray<FRoadSegmentId> Chain = RunwayChain(Seed);
+	if (Chain.IsEmpty())
+	{
+		return false;
+	}
+	for (const FRoadSegmentId& Member : Chain)
+	{
+		if (FRoadSegment* Segment = GetSegmentMutable(Member))
+		{
+			Segment->Runway = Facts;
+		}
+	}
+	return true;
+}
+
 bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
 	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
 {

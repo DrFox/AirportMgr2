@@ -98,6 +98,26 @@ public:
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
 
 	/**
+	 * The surface and approach class of the runway Seed belongs to.
+	 *
+	 * Reads Seed's OWN segment: SetRunwayFacts writes every member of the chain and the
+	 * split copies them, so any member answers for the strip and no walk is needed here.
+	 * A dead or non-runway seed reads the struct default - the same answer an unclassified
+	 * runway gives, so a caller that must tell the two apart asks IsRunwaySegment first.
+	 */
+	FRunwayFacts RunwayFactsFor(FRoadSegmentId Seed) const;
+
+	/**
+	 * Write Facts onto EVERY segment of RunwayChain(Seed). False, and nothing written,
+	 * when Seed is not a live runway - a taxiway has no surface class to set.
+	 *
+	 * The chain rather than the one segment, because the facts are the strip's: a runway
+	 * split by two exits is three segments and one runway, and a tool that classified the
+	 * segment it clicked would leave the halves past each exit disagreeing with it.
+	 */
+	bool SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts);
+
+	/**
 	 * Does this guideline node stand ON the strip of the runway chain seeded at Seed?
 	 *
 	 * The question spec §3.1's fourth route asks: an agent crossing a runway holds it until
