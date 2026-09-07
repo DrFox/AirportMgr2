@@ -6,6 +6,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -302,6 +303,37 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	}
 	return true;
+}
+
+EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork& Network)
+{
+	const int32 Index = FindIndex(AgentId);
+	if (Index == INDEX_NONE || Agents[Index].Phase != EAgentPhase::Parked)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d refused: %s"), AgentId,
+			Index == INDEX_NONE ? TEXT("no such agent") : *UEnum::GetValueAsString(Agents[Index].Phase));
+		return EDepartureRefusal::NotParked;
+	}
+	const FRoadAgent& Agent = Agents[Index];
+	if (!Agent.GoalNode.IsSet())
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d refused: parked at no node."), AgentId);
+		return EDepartureRefusal::NoRoute;
+	}
+
+	// From where it PARKED - its goal node - not from its polyline position: the search is
+	// over the graph and the pose node is the graph's name for this stand.
+	const FDeparturePlan Plan = DeparturePlanner::PlanAny(Network, Agent.GoalNode, Agent.Airframe, Agent.Class);
+	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId, *DeparturePlanner::Describe(Plan));
+	if (!Plan.IsValid())
+	{
+		return Plan.Why;
+	}
+	if (!RedirectAgent(AgentId, &Network, Plan.Route))
+	{
+		return EDepartureRefusal::NoRoute;
+	}
+	return EDepartureRefusal::None;
 }
 
 bool UGroundTraffic::RetireAgent(int32 AgentId)

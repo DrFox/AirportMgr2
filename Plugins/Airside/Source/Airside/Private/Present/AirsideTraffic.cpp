@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadAgentActor.h"
@@ -144,6 +145,22 @@ bool UAirsideTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 bool UAirsideTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan)
 {
 	return Model->RedirectAgent(AgentId, Network, Plan);
+}
+
+EDepartureRefusal UAirsideTraffic::DepartAgent(int32 AgentId, const URoadNetwork* Network)
+{
+	if (Network == nullptr)
+	{
+		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d: no network to plan over."), AgentId);
+		return EDepartureRefusal::NoRoute;
+	}
+	return Model->DepartAgent(AgentId, *Network);
+}
+
+ARoadAgentActor* UAirsideTraffic::GetAgentView(int32 AgentId) const
+{
+	const TObjectPtr<ARoadAgentActor>* Found = Views.Find(AgentId);
+	return Found != nullptr ? Found->Get() : nullptr;
 }
 
 void UAirsideTraffic::OnGraphRebuilt(const URoadNetwork& Network)

@@ -10,6 +10,7 @@
 
 class URoadNetwork;
 class ARoadAgentActor;
+enum class EDepartureRefusal : uint8;
 
 /**
  * Every aircraft under way, seen from Present/: the cube that shows each one, and the relay
@@ -115,6 +116,12 @@ public:
 	 * See UGroundTraffic::RedirectAgent for which phases accept it and why.
 	 */
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
+
+	/** See UGroundTraffic::DepartAgent. A null Network is refused as NoRoute. */
+	EDepartureRefusal DepartAgent(int32 AgentId, const URoadNetwork* Network);
+
+	/** The actor showing agent AgentId, or null. For the follow camera and the picker. */
+	ARoadAgentActor* GetAgentView(int32 AgentId) const;
 
 	/**
 	 * Tells the model the guideline graph has been regenerated. See UGroundTraffic::

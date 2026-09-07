@@ -8,6 +8,7 @@
 #include "GroundTraffic.generated.h"
 
 class URoadNetwork;
+enum class EDepartureRefusal : uint8;
 
 /**
  * The numbers the arbiter works with. Spec 2026-09-06 §2.3.
@@ -174,6 +175,15 @@ public:
 	 * DispatchAgent does, through the same helper.
 	 */
 	bool RedirectAgent(int32 AgentId, const URoadNetwork* Network, const FRoutePlan& Plan);
+
+	/**
+	 * Sends a PARKED agent to whichever runway gives the shortest admitted taxi, with the
+	 * take-off armed - the inspector's Depart button. Anything not Parked is refused as
+	 * NotParked: a taxiing aircraft has a plan, an arriving one is not on the ground, a
+	 * departing one is already going. Composed from PlanAny and RedirectAgent so there is
+	 * one arming path (ArmDepartureIfRunway) and one engine restart (StartTaxi).
+	 */
+	EDepartureRefusal DepartAgent(int32 AgentId, const URoadNetwork& Network);
 
 	/**
 	 * Re-routes a MOVING agent from SpliceStep onward, forbidding BannedEdge. Spec §4.
