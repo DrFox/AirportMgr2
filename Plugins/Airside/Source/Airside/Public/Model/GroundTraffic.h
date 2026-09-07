@@ -313,6 +313,10 @@ public:
 	const FRoadAgent* FindAgent(int32 AgentId) const;
 	const FTrafficOccupancy& GetOccupancy() const { return Occupancy; }
 
+	/** True after a stand claim was released or a rebuild ran, until Advance's re-offer pass
+	 *  consumes it. For Airside.Model.Traffic.StandClaim. */
+	bool StandsMayHaveFreedForTest() const { return bStandsMayHaveFreed; }
+
 	/**
 	 * The table, writable, for a test that has to plant a claim no agent owns - the phantom
 	 * occupant Airside.Model.Traffic.BoxEntryFirstOnly parks on a node, or a runway held by
@@ -633,6 +637,34 @@ private:
 	 *  crossing, release everything else. Spec §3.4's "their surface and nothing else",
 	 *  where the surface includes the one it is standing on. ClaimAhead's first branch. */
 	void HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network);
+
+	/**
+	 * The one claim that is not about the ground under or ahead of the agent: its DESTINATION.
+	 * An Arriving or Taxiing aircraft RESERVES the stand pose node it is heading for, and a
+	 * Parked agent OCCUPIES the node it parked at - stand or not; the M2 rule "a parked agent
+	 * holds only its surface" left a parked aircraft on a taxiway junction holding nothing
+	 * (spec 2026-09-07-stand-occupancy §3, amended).
+	 *
+	 * DERIVED FROM GoalNode EVERY TICK, after the phase's own claim pass has run its
+	 * ReleaseExcept. Threading the stand through BuildPending/ApplyClaims was rejected: those
+	 * are route-ordered claims whose first refusal sets StopWithin, and a stand must never
+	 * stop an aircraft short - it is a reservation for a place, not a queue for a line. The
+	 * drop-and-reclaim inside one agent's pass is invisible: Arbitrate is synchronous and no
+	 * other agent has the same goal (the planner and the rebuild see to that).
+	 */
+	void ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network);
+
+	/** Claims Agent's GoalNode as a stand reservation right now, for the between-ticks
+	 *  window DispatchArrival reads the table in. Used by both dispatches and the redirect. */
+	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
+
+	/**
+	 * Set when a stand claim is released (redirect, retire, Gone) or the graph is rebuilt;
+	 * consumed by Advance's re-offer pass. A FLAG rather than an event: the table is rebuilt
+	 * per tick and the model is world-free, so one bool checked per frame is the cheapest
+	 * correct thing.
+	 */
+	bool bStandsMayHaveFreed = false;
 
 	/** A Taxiing agent whose plan went bad under it: give back every GUIDELINE, keep any
 	 *  runway surface and the crossing that describes it (a plan says nothing about where a

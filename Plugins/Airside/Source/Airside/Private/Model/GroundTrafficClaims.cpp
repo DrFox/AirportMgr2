@@ -904,6 +904,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	if (Agent.Phase != EAgentPhase::Taxiing)
 	{
 		HoldRunwayOnly(Agent, Network);
+		ClaimGoalNode(Agent, Network);
 		return;
 	}
 
@@ -911,6 +912,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	if (!Plan.IsValid() || Plan.Steps.Num() == 0)
 	{
 		ReleaseForDeadPlan(Agent);
+		ClaimGoalNode(Agent, Network);
 		return;
 	}
 
@@ -934,4 +936,33 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 
 	// 3. ASK THE TABLE, in that order. The FIRST refusal decides how far the agent may go.
 	ApplyClaims(Agent, Window, Pending);
+
+	// 4. AND THE STAND IT IS GOING TO, after the route pass has released what is behind it.
+	ClaimGoalNode(Agent, Network);
+}
+
+void UGroundTraffic::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network)
+{
+	if (!Agent.GoalNode.IsSet() || Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
+	{
+		return;
+	}
+	const bool bParked = Agent.Phase == EAgentPhase::Parked;
+	const bool bStandGoal = Network.FindEntityIndexByPoseNode(Agent.GoalNode) != INDEX_NONE;
+	// A reservation names a STAND only: an aircraft heading for a runway or a plain node
+	// reserves nothing ahead of itself beyond what the route pass already asks for. A parked
+	// body occupies wherever it is.
+	if (!bParked && (!bStandGoal || Agent.Class != ETraversalClass::Aircraft))
+	{
+		return;
+	}
+	FTrafficClaim Claim;
+	Claim.AgentId = Agent.Id;
+	Claim.Resource = FTrafficResource::OfNode(Agent.GoalNode);
+	Claim.bOccupied = bParked;
+	Claim.Rank = TraversalPriority(Agent.Class);
+	FTrafficClaim Blocker;
+	// Not acted on: a stand already held by someone else is a planning failure upstream (the
+	// planner and the rebuild both skip held stands), and a table cannot un-plan an aircraft.
+	Occupancy.TryClaim(Claim, Blocker);
 }
