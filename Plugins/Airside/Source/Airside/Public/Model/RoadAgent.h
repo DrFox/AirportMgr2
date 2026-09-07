@@ -171,6 +171,15 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() bool bDepartureArmed = false;
 
 	/**
+	 * No stand could be found for this aircraft: it stops at the end of what remains of its
+	 * route and is re-offered one whenever a stand may have freed. INTENT DATA, like
+	 * FDepartureOrder, not a phase - a waiting aircraft is Taxiing to its prefix's end and
+	 * then Parked there, and either is true while it waits. Set only by the rebuild path
+	 * (UGroundTraffic::ReResolvePlan) in v1; cleared by the re-offer (ReofferStands).
+	 */
+	UPROPERTY() bool bAwaitingStand = false;
+
+	/**
 	 * The engine is turning. NOT the same question as whether the aircraft is moving -
 	 * orthogonal to Phase, because an engine can run in ANY phase: idling while parked and
 	 * taxiing, at full power while departing, even while arriving (an arrival appears on

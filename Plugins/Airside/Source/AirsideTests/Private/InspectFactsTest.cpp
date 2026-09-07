@@ -72,6 +72,7 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a dead index yields no stand facts"), InspectFacts::DescribeStand(Traffic, *Net, 99, SF));
 	if (!TestTrue(TEXT("the stand yields facts"), InspectFacts::DescribeStand(Traffic, *Net, StandId.Index, SF))) { return false; }
 	TestEqual(TEXT("occupant is the inbound agent"), SF.OccupantAgent, Id);
+	TestFalse(TEXT("inbound: reserved, not parked"), SF.bOccupantParked);
 	TestEqual(TEXT("1800 uu (18 m) span is ICAO code B"), SF.SizeClass, FString(TEXT("B")));
 	TestTrue(TEXT("a pose node with an edge is reachable"), SF.bReachable);
 	TestEqual(TEXT("anchor count is the definition's"), SF.AnchorCount, Stand->Anchors.Num());
@@ -89,6 +90,7 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 
 	InspectFacts::DescribeStand(Traffic, *Net, StandId.Index, SF);
 	TestEqual(TEXT("the parked agent still occupies the stand"), SF.OccupantAgent, Id);
+	TestTrue(TEXT("and is reported parked"), SF.bOccupantParked);
 
 	// Status precedence: WaitingOn beats everything but an armed departure.
 	{

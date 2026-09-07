@@ -6,6 +6,7 @@
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/RunwayDesignator.h"
@@ -108,7 +109,30 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 		Occupancy.TryClaim(Claim, Blocker);
 	}
 
+	// AND THE STAND, for the same between-ticks reason. Agents.Last() is the agent Admit
+	// just appended.
+	ClaimGoalNodeAtDispatch(Agents.Last(), Id, Network);
+
 	return Id;
+}
+
+void UGroundTraffic::ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network)
+{
+	// THE SAME RULE AS THE RUNWAY CHAIN ABOVE: raised here, not on the next claim pass,
+	// because ArrivalPlanner reads the table between ticks and M3's sequencer will dispatch
+	// two arrivals in one frame. Class and goal are read off the agent as admitted.
+	if (Agent.Class != ETraversalClass::Aircraft || !Agent.GoalNode.IsSet()
+		|| Network.FindEntityIndexByPoseNode(Agent.GoalNode) == INDEX_NONE)
+	{
+		return;
+	}
+	FTrafficClaim Claim;
+	Claim.AgentId = Id;
+	Claim.Resource = FTrafficResource::OfNode(Agent.GoalNode);
+	Claim.bOccupied = false;
+	Claim.Rank = TraversalPriority(ETraversalClass::Aircraft);
+	FTrafficClaim Blocker;
+	Occupancy.TryClaim(Claim, Blocker);
 }
 
 int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,
@@ -149,7 +173,12 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	FAgentMotion Motion;
 	Agent.Advance(0.0, Motion);
 
-	return Admit(MoveTemp(Agent));
+	const int32 Id = Admit(MoveTemp(Agent));
+	if (Network != nullptr)
+	{
+		ClaimGoalNodeAtDispatch(Agents.Last(), Id, *Network);
+	}
+	return Id;
 }
 
 void UGroundTraffic::ArmDepartureIfRunway(FRoadAgent& Agent, const URoadNetwork* Network, const FRoutePlan& Plan) const
@@ -289,6 +318,16 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// Copied out first: StartTaxi assigns Airframe from its argument, and handing it a
 	// reference to the very field it overwrites is a self-assignment nobody should rely on.
 	const FAirframe Own = Agent.Airframe;
+
+	// THE OLD STAND FREES NOW, between ticks: the next claim pass would drop it anyway
+	// (ClaimGoalNode reads the new goal), but a planner asking in this frame must see it
+	// free. And the model notes that a stand may have freed, for the re-offer pass.
+	if (Agent.GoalNode.IsSet())
+	{
+		Occupancy.Release(AgentId, FTrafficResource::OfNode(Agent.GoalNode));
+		bStandsMayHaveFreed = true;
+	}
+
 	Agent.StartTaxi(Plan, Own);
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
@@ -296,6 +335,10 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// the goal moves, because that is the whole of what a redirect changes.
 	Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId();
 	ArmDepartureIfRunway(Agent, Network, Plan);
+	if (Network != nullptr)
+	{
+		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
+	}
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
 	if (Agent.Phase != Before)
@@ -349,6 +392,7 @@ bool UGroundTraffic::RetireAgent(int32 AgentId)
 	// The table outlives the agent unless somebody says so: a retired vehicle's reservations
 	// would block the junction it was standing in for the rest of the session.
 	Occupancy.ReleaseAll(AgentId);
+	bStandsMayHaveFreed = true;
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d retired"), AgentId);
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, EAgentPhase::Gone);
@@ -399,11 +443,21 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 			// goes with it. An agent that stayed in the table would hold a runway nothing
 			// could ever release.
 			Occupancy.ReleaseAll(Id);
+			bStandsMayHaveFreed = true;
 			Agents.RemoveAt(Index);
 			// Broadcast AFTER the removal so a listener that asks GetAgentCount sees the
 			// agent already gone, which is what "To == Gone" promises.
 			OnAgentPhaseChanged.Broadcast(Id, Before, EAgentPhase::Gone);
 			continue;
+		}
+
+		// THE STAND IS OCCUPIED IN THE TICK THE AIRCRAFT PARKS, by the same rule as the runway
+		// below: the claim pass ran before motion, while this agent was still Taxiing, so its
+		// stand claim is the inbound reservation until the next pass - and the panel would
+		// read "Reserved for" over an aircraft standing on the stand for one frame.
+		if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Parked && Network != nullptr)
+		{
+			ClaimGoalNode(Agent, *Network);
 		}
 
 		// THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that made it.
@@ -519,6 +573,52 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	{
 		ResolveDeadlocks(*Network);
 	}
+
+	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been
+	// replanned, so its redirect starts the next tick at the top of Arbitrate like any other.
+	if (bStandsMayHaveFreed && Network != nullptr)
+	{
+		ReofferStands(*Network);
+	}
+}
+
+void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
+{
+	// ONE PASS, then the flag clears whether or not anyone was placed: a waiter that still
+	// found nothing will be asked again the next time something frees, not every frame.
+	bStandsMayHaveFreed = false;
+	TArray<int32> Waiting;
+	for (const FRoadAgent& Agent : Agents)
+	{
+		if (Agent.bAwaitingStand && Agent.GoalNode.IsSet()
+			&& (Agent.Phase == EAgentPhase::Parked || Agent.Phase == EAgentPhase::Taxiing))
+		{
+			Waiting.Add(Agent.Id);
+		}
+	}
+	// By id, not by reference: RedirectAgent writes into Agents and broadcasts.
+	for (const int32 Id : Waiting)
+	{
+		const FRoadAgent* Agent = FindAgent(Id);
+		if (Agent == nullptr)
+		{
+			continue;
+		}
+		FRoutePlan Route;
+		const FGuidelineNodeId Stand = ArrivalPlanner::ChooseStand(Network, Agent->GoalNode, Agent->Airframe, &Occupancy, Id, &Route);
+		if (!Stand.IsSet() || !Route.IsValid())
+		{
+			continue;
+		}
+		if (RedirectAgent(Id, &Network, Route))
+		{
+			Agents[FindIndex(Id)].bAwaitingStand = false;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Stand.Index);
+		}
+	}
+	// RedirectAgent re-raised the flag on releasing the old goal; nothing else has changed
+	// since this pass started, so it is cleared again rather than costing an empty pass.
+	bStandsMayHaveFreed = false;
 }
 
 int32 UGroundTraffic::CurrentStep(const FRoutePlan& Plan, double Travelled)

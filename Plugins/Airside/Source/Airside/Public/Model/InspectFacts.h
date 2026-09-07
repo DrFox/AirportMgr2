@@ -41,10 +41,13 @@ struct FStandFacts
 	/** ICAO code letter A-F from the design wingspan. */
 	FString SizeClass;
 	double DesignWingspan = 0.0;
-	/** The agent whose goal is this stand's pose node and is Parked or Taxiing; 0 when none.
-	 *  REPORTED, not stored: an occupancy field on the entity would be a second source of
-	 *  truth traffic would have to keep in step. M3's allocator decides if it becomes one. */
+	/** The agent holding this stand's pose node in the traffic occupancy table, 0 when free.
+	 *  An inbound holder has RESERVED it; a parked one OCCUPIES it (bOccupantParked). Read
+	 *  from the claim, never stored on the entity: an occupancy field there would be a second
+	 *  source of truth traffic would have to keep in step. M3's allocator sits above this. */
 	int32 OccupantAgent = 0;
+	/** The occupant is Parked (else inbound: reserved). */
+	bool bOccupantParked = false;
 	int32 AnchorCount = 0;
 	/** The pose node has at least one guideline edge - an aircraft can be routed here. */
 	bool bReachable = false;
@@ -59,7 +62,7 @@ namespace InspectFacts
 	AIRSIDE_API bool DescribeStand(const UGroundTraffic* Traffic, const URoadNetwork& Network, int32 EntityIndex, FStandFacts& Out);
 
 	/**
-	 * One line, first match wins: Departure armed; Holding for aircraft N; Crossing runway;
+	 * One line, first match wins: No stand - waiting; Departure armed; Holding for aircraft N; Crossing runway;
 	 * Shutting down (Ns); Parked; On final / Landing roll; Rolling / Climbing; Taxiing.
 	 * A STRING, not an enum: presentation of several orthogonal model facts, and nothing
 	 * branches on it.

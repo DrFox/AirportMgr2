@@ -7,6 +7,50 @@
 
 namespace ArrivalPlanner
 {
+	FGuidelineNodeId ChooseStand(const URoadNetwork& Network, FGuidelineNodeId From,
+		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
+		FRoutePlan* OutRoute, bool* bOutSawHeld)
+	{
+		FGuidelineNodeId Best;
+		FRoutePlan BestRoute;
+		double BestLength = TNumericLimits<double>::Max();
+		bool bSawHeld = false;
+		for (const FEntityInstance& Stand : Network.GetEntities())
+		{
+			if (!Stand.bAlive || !Stand.PoseNode.IsSet())
+			{
+				continue;
+			}
+			FRouteQuery Query;
+			Query.Start = From;
+			Query.Goal = Stand.PoseNode;
+			Query.Class = ETraversalClass::Aircraft;
+			Query.Wingspan = Airframe.Wingspan;
+			Query.bAvoidRunways = true;
+			const FRoutePlan Route = RouteSearch::Find(Network, Query);
+			if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
+			{
+				continue;
+			}
+			// Held is asked AFTER reachability, so bSawHeld means "a stand this aircraft could
+			// have used" - the only reading under which NoFreeStand is the right word.
+			if (Occupancy != nullptr && Occupancy->IsHeld(FTrafficResource::OfNode(Stand.PoseNode), ExcludingAgent))
+			{
+				bSawHeld = true;
+				continue;
+			}
+			if (Route.Length < BestLength)
+			{
+				BestLength = Route.Length;
+				BestRoute = Route;
+				Best = Stand.PoseNode;
+			}
+		}
+		if (OutRoute != nullptr) { *OutRoute = BestRoute; }
+		if (bOutSawHeld != nullptr) { *bOutSawHeld = bSawHeld; }
+		return Best;
+	}
+
 	FArrivalPlan Plan(const URoadNetwork& Network, const FVector2D& Near, const FAirframe& Airframe,
 		const FTrafficOccupancy* Occupancy)
 	{
@@ -122,36 +166,19 @@ namespace ArrivalPlanner
 		//    A FORWARD turn-off (the first span of the route heading down the runway) beats
 		//    a backtrack at any distance: an aircraft turns off ahead of itself if it can.
 		FGuidelineNodeId FirstForward, FirstBacktrack;
+		bool bSawHeldStand = false;
 		FRoutePlan ForwardRoute, BacktrackRoute;
 		int32 ForwardOrdinal = 0, BacktrackOrdinal = 0;
 		for (int32 Index = 0; Index < Exits.Num() && !FirstForward.IsSet(); ++Index)
 		{
 			const FGuidelineNodeId& Candidate = Exits[Index];
-			double BestLength = TNumericLimits<double>::Max();
+			// The stand choice itself is ChooseStand's - one rule for the dispatch, the rebuild
+			// and the re-offer - asked here per exit with this aircraft excluded from nothing
+			// (0: it does not exist yet).
 			FRoutePlan BestForExit;
-			for (const FEntityInstance& Stand : Network.GetEntities())
-			{
-				if (!Stand.bAlive || !Stand.PoseNode.IsSet())
-				{
-					continue;
-				}
-				FRouteQuery Query;
-				Query.Start = Candidate;
-				Query.Goal = Stand.PoseNode;
-				Query.Class = ETraversalClass::Aircraft;
-				Query.Wingspan = Airframe.Wingspan;
-				Query.bAvoidRunways = true;
-				const FRoutePlan Route = RouteSearch::Find(Network, Query);
-				if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
-				{
-					continue;
-				}
-				if (Route.Length < BestLength)
-				{
-					BestLength = Route.Length;
-					BestForExit = Route;
-				}
-			}
+			bool bHeldHere = false;
+			ChooseStand(Network, Candidate, Airframe, Occupancy, 0, &BestForExit, &bHeldHere);
+			bSawHeldStand = bSawHeldStand || bHeldHere;
 			if (!BestForExit.IsValid())
 			{
 				continue;
@@ -186,7 +213,9 @@ namespace ArrivalPlanner
 
 		if (!Out.TaxiIn.IsValid())
 		{
-			Out.Why = EArrivalRefusal::NoRouteToStand;
+			// Two refusals for two fixes: no stand reachable at all means build a taxiway; every
+			// reachable stand held means wait, or build a stand.
+			Out.Why = bSawHeldStand ? EArrivalRefusal::NoFreeStand : EArrivalRefusal::NoRouteToStand;
 			return Out;
 		}
 
@@ -234,6 +263,9 @@ namespace ArrivalPlanner
 
 		case EArrivalRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
+
+		case EArrivalRefusal::NoFreeStand:
+			return TEXT("Arrival refused: every stand it could reach is taken. Wait for one to free, or build another.");
 
 		case EArrivalRefusal::None:
 		default:

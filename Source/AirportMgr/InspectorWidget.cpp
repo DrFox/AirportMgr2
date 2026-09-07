@@ -183,7 +183,9 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		Facts = FString::Printf(TEXT("Code %s (%.0f m span)\n%d service anchors\n%s"),
 			*S.SizeClass, S.DesignWingspan / 100.0, S.AnchorCount,
 			S.bReachable ? TEXT("Reachable by taxiway") : TEXT("NOT reachable - no taxiway joins it"));
-		Status = S.OccupantAgent != 0 ? FString::Printf(TEXT("Occupied by aircraft #%d"), S.OccupantAgent) : FString(TEXT("Empty"));
+		Status = S.OccupantAgent == 0 ? FString(TEXT("Empty"))
+			: S.bOccupantParked ? FString::Printf(TEXT("Occupied by aircraft #%d"), S.OccupantAgent)
+			: FString::Printf(TEXT("Reserved for aircraft #%d"), S.OccupantAgent);
 		bDepartEnabled = false;
 	}
 
