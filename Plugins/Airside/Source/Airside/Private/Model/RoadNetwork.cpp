@@ -709,23 +709,22 @@ FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
-bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
+bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bSet)
 {
 	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
 	if (Found == nullptr)
 	{
 		return false;
 	}
-
-	// A set Protects must be a live runway. Refusing beats storing it: the arbiter expands
-	// whatever a bar names through RunwayChain, and a taxiway named there would hand a
-	// crossing agent a strip made of the taxiway it is standing on.
-	if (Protects.IsSet() && !IsRunwaySegment(Protects))
+	// Not the player's: a runway-holding position is derived from the junction on every
+	// build, so a clear here would come back next rebuild and a set would be a no-op that
+	// looked like one. Refusing says so.
+	if (Found->HoldingPosition == EHoldingPositionKind::Runway)
 	{
 		return false;
 	}
-
-	Found->HoldShortFor = Protects;
+	Found->HoldingPosition = bSet ? EHoldingPositionKind::Intermediate : EHoldingPositionKind::None;
+	Found->HoldingPositionFor = FRoadSegmentId();
 
 	const FGuidelineEndRef At = Found->Origin;
 	if (!At.IsSet())
@@ -736,41 +735,49 @@ bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
 		// is precisely the drift this pair of writes exists to avoid everywhere else.
 		return true;
 	}
-
-	for (int32 Index = 0; Index < HoldShortMarks.Num(); ++Index)
+	for (int32 Index = 0; Index < HoldingPositionMarks.Num(); ++Index)
 	{
-		if (HoldShortMarks[Index].At == At)
+		if (HoldingPositionMarks[Index].At == At)
 		{
-			if (Protects.IsSet())
+			if (!bSet)
 			{
-				HoldShortMarks[Index].Protects = Protects;
-			}
-			else
-			{
-				HoldShortMarks.RemoveAt(Index);
+				HoldingPositionMarks.RemoveAt(Index);
 			}
 			return true;
 		}
 	}
-
-	if (Protects.IsSet())
+	if (bSet)
 	{
-		FHoldShortMark Mark;
+		FHoldingPositionMark Mark;
 		Mark.At = At;
-		Mark.Protects = Protects;
-		HoldShortMarks.Add(MoveTemp(Mark));
+		HoldingPositionMarks.Add(MoveTemp(Mark));
 	}
 	return true;
 }
 
-void URoadNetwork::PruneHoldShortMarks()
+bool URoadNetwork::SetRunwayHoldingPositionForTest(FGuidelineNodeId Node, FRoadSegmentId Protects)
 {
-	HoldShortMarks.RemoveAll([this](const FHoldShortMark& Mark)
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	// A set Protects must be a live runway. Refusing beats storing it: the arbiter expands
+	// whatever a position names through RunwayChain, and a taxiway named there would hand
+	// a crossing agent a strip made of the taxiway it is standing on.
+	if (Found == nullptr || !Protects.IsSet() || !IsRunwaySegment(Protects))
+	{
+		return false;
+	}
+	Found->HoldingPosition = EHoldingPositionKind::Runway;
+	Found->HoldingPositionFor = Protects;
+	return true;
+}
+
+void URoadNetwork::PruneHoldingPositionMarks()
+{
+	HoldingPositionMarks.RemoveAll([this](const FHoldingPositionMark& Mark)
 	{
 		// GetSegment is the generation-checked read, so a recycled slot fails it - which is
 		// the whole point, because the builder's Ends map is keyed on the segment INDEX
 		// alone and would happily re-apply a stale mark onto the road that took the index.
-		return GetSegment(Mark.At.Segment) == nullptr || !IsRunwaySegment(Mark.Protects);
+		return GetSegment(Mark.At.Segment) == nullptr;
 	});
 }
 

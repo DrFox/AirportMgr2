@@ -559,7 +559,7 @@ private:
 	 *   - a step whose EDGE derives from a runway segment claims that segment's whole CHAIN,
 	 *     occupied on the step being stood on and reserved beyond, ranked as that edge is. A
 	 *     refusal stops the agent a gap short of the step's START - outside the strip;
-	 *   - a step whose END NODE carries HoldShortFor claims the chain that names, always
+	 *   - a step whose END NODE carries HoldingPositionFor claims the chain that names, always
 	 *     RESERVED (nobody is occupied THROUGH a bar) and only once the window has reached
 	 *     the node. A refusal stops the agent with its NOSE on the bar, which is the one
 	 *     refusal that does not subtract the gap.
@@ -715,7 +715,7 @@ private:
 	 * LEAVES FROM is Steps[FromStep-1].To (or Plan.Start at step 0), it is what StepFromNode
 	 * answers, and FOUR live readers ask for it every tick:
 	 *
-	 *   - ClaimAhead's crossing arm, which asks whether that node carries a HoldShortFor bar.
+	 *   - ClaimAhead's crossing arm, which asks whether that node carries a HoldingPositionFor bar.
 	 *     A dead handle reads as no bar, so no crossing would ever arm again after a rebuild;
 	 *   - ClaimAhead's tail-node claim, OfNode(From), held while the body is still within
 	 *     Footprint/2 of it. On a dead handle that claim protects nothing and the junction

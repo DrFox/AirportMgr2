@@ -40,15 +40,15 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 	}
 
 	// Hold bars, AFTER the node loop so a bar draws over the dot it sits on rather than
-	// under it. Drawn HERE and not in FHoldShortTool for the same reason the graph is: a
+	// under it. Drawn HERE and not in FHoldingPointTool for the same reason the graph is: a
 	// bar is a standing fact about the airport, so it must be visible under every tool -
-	// one you can see only while the hold-short tool is selected is one you forget you
+	// one you can see only while the holding-position tool is selected is one you forget you
 	// placed, and a stop nobody expected then looks like a bug in the traffic model.
 	const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		const FGuidelineNode& Node = Nodes[Index];
-		if (!Node.bAlive || !Node.HoldShortFor.IsSet())
+		if (!Node.bAlive || Node.HoldingPosition == EHoldingPositionKind::None)
 		{
 			continue;
 		}
@@ -114,6 +114,11 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 			}
 		}
 
-		Sink.CrossMark(Node.Position, Along, EPreviewStyle::HoldShort);
+		// The style names the KIND: the runway pattern (two solid, two dashed) and the
+		// intermediate one (a single dashed line) are different markings on the ground.
+		Sink.CrossMark(Node.Position, Along,
+			Node.HoldingPosition == EHoldingPositionKind::Runway
+				? EPreviewStyle::RunwayHoldingPosition
+				: EPreviewStyle::IntermediateHoldingPosition);
 	}
 }

@@ -2,7 +2,7 @@
 
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
-#include "Tool/HoldShortTool.h"
+#include "Tool/HoldingPointTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RouteTool.h"
@@ -15,7 +15,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 {
 	// A function-local static rather than a file-scope global: constructed exactly once,
 	// on first use, in the order written here - which IS the key order, 1 through 6 then 8
-	// (see the hold-short entry for why seven is skipped). Never
+	// (see the holding-position entry for why seven is skipped). Never
 	// mutated after that first construction, so handing out a view over it is safe from
 	// any thread that only reads.
 	//
@@ -24,7 +24,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 	// which is exactly the class of bug this table exists to make impossible elsewhere.
 	static const FToolRegistration Registry[] =
 	{
-		{ EKeys::One,   LOCTEXT("Road",      "Road"),      [] { return MakeUnique<FRoadDrawTool>(); } },
+		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
 		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
 		{ EKeys::Four,  LOCTEXT("Route",     "Route"),     [] { return MakeUnique<FRouteTool>(); } },
@@ -34,7 +34,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
 		// this table - see ARoadBuildController::OnLandAircraft. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
-		{ EKeys::Eight, LOCTEXT("HoldShort", "Hold short"), [] { return MakeUnique<FHoldShortTool>(); } },
+		{ EKeys::Eight, LOCTEXT("HoldingPosition", "Holding point"), [] { return MakeUnique<FHoldingPointTool>(); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }

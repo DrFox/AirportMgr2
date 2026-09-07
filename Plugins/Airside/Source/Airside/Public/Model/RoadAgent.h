@@ -269,7 +269,7 @@ struct AIRSIDE_API FRoadAgent
 
 	/**
 	 * Seed of a runway chain this agent is physically ON while taxiing, after passing a
-	 * hold-short bar or vacating a landing. Unset when none. Spec §3.1's fourth route.
+	 * holding-position bar or vacating a landing. Unset when none. Spec §3.1's fourth route.
 	 *
 	 * SEPARATE FROM RunwayHeld, which is the chain a NON-taxiing agent owns: this one is
 	 * held by an agent that is crossing, and it is released by geometry (the tail clearing

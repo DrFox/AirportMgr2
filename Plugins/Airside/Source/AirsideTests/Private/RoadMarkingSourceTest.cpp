@@ -175,41 +175,33 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("with a real width"), Taxiway->GetTotalWidth() > 0.0);
 	}
 
-	// Hold bar <- a guideline node flagged hold-short.
+	// Hold bar <- a guideline node flagged holding-position.
 	//
-	// Nothing WRITES HoldShortFor yet - that is the build tool's job - so what section 6
+	// Nothing WRITES HoldingPositionFor yet - that is the build tool's job - so what section 6
 	// needs from the model here is that the node can CARRY the source. Asserting only that
 	// a node can be created would establish nothing about hold bars at all; this sets the
 	// field and reads it back through the network, which is the actual claim.
 	{
 		const FGuidelineNodeId Marked =
 			Net->AddGuidelineNode(FVector2D(1.0, 1.0), /*bDerived=*/false);
-		if (TestTrue(TEXT("a hold-short node can be created"), Marked.IsSet()))
+		if (TestTrue(TEXT("a holding-position node can be created"), Marked.IsSet()))
 		{
-			// Any live segment will do as the thing being protected; a runway is the real
-			// case, and the field is a plain FRoadSegmentId either way.
-			FRoadSegmentId Protected;
-			for (int32 Index = 0; Index < Net->GetSegments().Num(); ++Index)
-			{
-				if (Net->GetSegments()[Index].bAlive)
-				{
-					Protected.Index = Index;
-					Protected.Generation = Net->GetSegments()[Index].Generation;
-					break;
-				}
-			}
-			TestTrue(TEXT("there is a surface for it to protect"), Protected.IsSet());
+			// A RUNWAY, since 2026-09-07: a runway-holding position may protect nothing else,
+			// and the setter refuses a taxiway. Its own strip, far from the fixture's roads.
+			URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+			RunwayProfile->bContinuousThroughJunctions = true;
+			const FRoadNodeId StripA = Net->AddNode(FVector2D(300000.0, 300000.0));
+			const FRoadNodeId StripB = Net->AddNode(FVector2D(360000.0, 300000.0));
+			const FRoadSegmentId Protected = Net->AddStraightSegment(StripA, StripB, RunwayProfile);
+			TestTrue(TEXT("there is a runway for it to protect"), Protected.IsSet() && Net->IsRunwaySegment(Protected));
 
-			if (FGuidelineNode* Mutable = Net->GetGuidelineNodeMutable(Marked))
-			{
-				Mutable->HoldShortFor = Protected;
-			}
+			TestTrue(TEXT("flagged as a runway-holding position"), Net->SetRunwayHoldingPositionForTest(Marked, Protected));
 
 			const FGuidelineNode* ReadBack = Net->GetGuidelineNode(Marked);
-			if (TestNotNull(TEXT("the hold-short node resolves"), ReadBack))
+			if (TestNotNull(TEXT("the holding-position node resolves"), ReadBack))
 			{
 				TestTrue(TEXT("and carries the surface it protects"),
-					ReadBack->HoldShortFor == Protected);
+					ReadBack->HoldingPositionFor == Protected);
 			}
 		}
 	}

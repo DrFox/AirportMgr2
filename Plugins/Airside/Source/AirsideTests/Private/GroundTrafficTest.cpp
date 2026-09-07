@@ -555,15 +555,15 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FTrafficHoldShortTest,
-	"Airside.Model.Traffic.HoldShort",
+	FTrafficHoldingPositionTest,
+	"Airside.Model.Traffic.HoldingPosition",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
+bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 {
 	// A taxiway that CROSSES a runway: S -> H (hold bar) -> X (on the runway centreline)
 	// -> N. The guideline edges are hand-built and carry no DerivedFrom, so the ONLY thing
-	// protecting the runway here is the hold-short node - which is what this test is about.
+	// protecting the runway here is the holding-position node - which is what this test is about.
 	// The edge-derived-from-a-runway route to the same surface is exercised by the
 	// arrival dispatch test once landings hold the chain.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -578,7 +578,7 @@ bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
 	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
 	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X); M2TrafficJoin(*Net, X, N);
-	Net->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	// Someone holds the runway: a claim by a phantom agent 99, as a landing would make.
@@ -612,7 +612,7 @@ bool FTrafficHoldShortTest::RunTest(const FString& Parameters)
 	// MEASURED AND LOGGED, so a failure is read off the numbers rather than re-derived from
 	// the assertion text. The bar is the end of step 0, at 17000 uu of route distance.
 	UE_LOG(LogM2TrafficTest, Log,
-		TEXT("HoldShort measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
+		TEXT("HoldingPosition measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
 		P->Follower.Travelled, P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5,
 		P->Follower.Speed, P->WaitingOn, P->BlockedStep);
 
@@ -742,7 +742,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 {
-	// SPEC §3.1'S FOURTH ROUTE. The HoldShort geometry with NOBODY holding the runway: the
+	// SPEC §3.1'S FOURTH ROUTE. The HoldingPosition geometry with NOBODY holding the runway: the
 	// plane is granted the bar and crosses, and the question is what happens AFTER the bar.
 	// Before this rule the bar node left the window as the plane passed it and the surface
 	// claim went with it, leaving an aeroplane standing on the centreline with the table
@@ -771,8 +771,8 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
 	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X);
 	M2TrafficJoin(*Net, X, Far); M2TrafficJoin(*Net, Far, N);
-	Net->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
-	Net->GetGuidelineNodeMutable(Far)->HoldShortFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
+	Net->SetRunwayHoldingPositionForTest(Far, RunwaySeg);
 
 	// Route distances: the near bar at 17000, the centreline crossing X at 20000, the far
 	// bar at 23000, the far node N at 40000. The strip's half width is 2250, so a tail clear
@@ -1352,8 +1352,8 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	M2TrafficJoin(*Net, S, Hn);
 	M2TrafficJoin(*Net, Hn, Hf);   // ONE edge across the runway. No vertex on the strip.
 	M2TrafficJoin(*Net, Hf, N);
-	Net->GetGuidelineNodeMutable(Hn)->HoldShortFor = RunwaySeg;
-	Net->GetGuidelineNodeMutable(Hf)->HoldShortFor = RunwaySeg;
+	Net->SetRunwayHoldingPositionForTest(Hn, RunwaySeg);
+	Net->SetRunwayHoldingPositionForTest(Hf, RunwaySeg);
 
 	// Route distances: near bar 17000, centreline 20000, far bar 23000, N 40000. Half width
 	// 2250, so the strip runs from 17750 to 22250 in route distance. Footprint 1000, so the
@@ -1804,7 +1804,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId X = M2TrafficNode(*Cross, 0.0, 0.0);
 		const FGuidelineNodeId N = M2TrafficNode(*Cross, 0.0, 20000.0);
 		M2TrafficJoin(*Cross, S, H); M2TrafficJoin(*Cross, H, X); M2TrafficJoin(*Cross, X, N);
-		Cross->GetGuidelineNodeMutable(H)->HoldShortFor = RunwaySeg;
+		Cross->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Plane = Air->DispatchAgent(Cross, M2TrafficRoute(*Cross, S, N, ETraversalClass::Aircraft),

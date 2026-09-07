@@ -36,7 +36,7 @@ enum class EArrivalRefusal : uint8
 
 	/**
 	 * The runway exists and would do, but someone holds it - a landing rolling out, a
-	 * departure lining up, or an aircraft crossing at a hold-short. The one refusal that
+	 * departure lining up, or an aircraft crossing at a holding-position. The one refusal that
 	 * clears on its own; M3's sequencer queues on it.
 	 */
 	RunwayOccupied,

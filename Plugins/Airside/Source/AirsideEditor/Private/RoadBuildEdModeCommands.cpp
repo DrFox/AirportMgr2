@@ -18,7 +18,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// Same order as the runtime tool keys, so 1, 2 and 3 mean the same thing in the editor
 	// as they do in play. A tool that changed number between the two would be worse than
 	// having no shortcut at all.
-	UI_COMMAND(DrawRoads, "Roads", "Draw taxiways and roads: click to chain, ctrl to remove, shift to insert a node.",
+	UI_COMMAND(DrawRoads, "Taxiway", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::One));
 	UI_COMMAND(DrawAprons, "Aprons", "Draw a polygon of pavement; click the first corner again to close it.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Two));
@@ -36,9 +36,9 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Six));
 
 	// EIGHT, matching the registry: seven is "land an aircraft" at runtime and is not a
-	// tool. The LABEL must equal ToolRegistry()'s "Hold short" exactly - URoadBuildEdMode::
+	// tool. The LABEL must equal ToolRegistry()'s "Holding point" exactly - URoadBuildEdMode::
 	// Enter compares the two BY STRING and logs an error when they drift.
-	UI_COMMAND(PlaceHoldShort, "Hold short", "Click a taxiway node beside a runway to place a hold bar; click it again to remove it.",
+	UI_COMMAND(PlaceHoldingPoint, "Holding point", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Eight));
 
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
@@ -47,7 +47,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 
 TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
 {
-	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldShort };
+	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

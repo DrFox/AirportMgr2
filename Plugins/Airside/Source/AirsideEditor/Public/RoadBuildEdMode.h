@@ -17,7 +17,7 @@
  * guideline and runway tools here; before it this mode stopped at four, and the two build
  * drivers had quietly drifted apart.
  *
- * THE KEYS ARE NOT CONTIGUOUS, and nothing here may assume they are. Hold-short is the
+ * THE KEYS ARE NOT CONTIGUOUS, and nothing here may assume they are. Holding-position is the
  * seventh entry and is bound to EIGHT, because seven is "land an aircraft" - a decision
  * taken at the cursor, not a tool, so it is not in the table at all. Anywhere a key is
  * printed or bound it comes from Registry[Index].Key; Index + 1 is a different number and

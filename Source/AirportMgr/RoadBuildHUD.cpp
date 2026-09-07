@@ -82,7 +82,8 @@ FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 	case EPreviewStyle::Refused: return RefusedColour;
 	case EPreviewStyle::Guideline: return GuidelineColour;
 	case EPreviewStyle::Route:   return RouteColour;
-	case EPreviewStyle::HoldShort: return HoldShortColour;
+	case EPreviewStyle::RunwayHoldingPosition: return RunwayHoldingPositionColour;
+	case EPreviewStyle::IntermediateHoldingPosition: return IntermediateHoldingPositionColour;
 	case EPreviewStyle::Pending:
 	default:                     return PendingColour;
 	}

@@ -121,7 +121,10 @@ public:
 	 * as one more piece of context.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HoldShortColour = FLinearColor(1.0f, 0.8f, 0.1f);
+	FLinearColor RunwayHoldingPositionColour = FLinearColor(1.0f, 0.8f, 0.1f);
+	/** The same amber at half strength: the player's line, lighter than the runway's. */
+	UPROPERTY(EditAnywhere, Category = "Road Build")
+	FLinearColor IntermediateHoldingPositionColour = FLinearColor(1.0f, 0.8f, 0.1f, 0.5f);
 
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))

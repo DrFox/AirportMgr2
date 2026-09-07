@@ -179,7 +179,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 
 	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or at its pavement cut if that is further,
 	//    which at an acute 45 degree corner it is (edge intersection plus the fillet's
-	//    tangent, about 6044 here) - and keeps its identity (a hold-short mark is keyed by it).
+	//    tangent, about 6044 here) - and keeps its identity (a holding-position mark is keyed by it).
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*Net, XT, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the taxiway's runway end exists by identity"), TEnd.IsSet())) { return false; }
 	{
@@ -334,7 +334,7 @@ namespace
 {
 	/**
 	 * A runway long enough for the Piper to stop before the exit, one 45 degree taxiway, and
-	 * a stand beside it. Shared by the hold-short, planner and handover tests so all three
+	 * a stand beside it. Shared by the holding-position, planner and handover tests so all three
 	 * argue about the same junction. X sits 60000 uu from the W threshold because the exit
 	 * arc begins ExitLength before it, and that start must be past the landing distance
 	 * (about 37000) or the planner would rightly skip it for a later node.
@@ -379,37 +379,86 @@ namespace
 }
 
 /**
- * The hold-short bar is keyed by the taxiway's END (FGuidelineEndRef), and the end has
- * moved to the arc's start. The mark must follow it through a rebuild, or a bar the player
- * placed at a runway would come back on the wrong node - or nowhere.
+ * RUNWAY-HOLDING POSITIONS ARE DERIVED (spec 2026-09-07). Every taxiway end at a runway is
+ * one, protecting the strip it meets; the runway's own nodes and the split nodes are not;
+ * a rebuild reproduces them; and with the arcs off (ExitLength 0) the end sits at its cut
+ * line and is one all the same. The player cannot clear one - it is the junction's.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRunwayExitArcHoldShortTest,
-	"Airside.Build.RunwayExitArcHoldShort",
+	FRunwayHoldingPositionsAreDerivedTest,
+	"Airside.Build.RunwayHoldingPositionsAreDerived",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FRunwayExitArcHoldShortTest::RunTest(const FString& Parameters)
+bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 {
 	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/false);
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/true);
-	if (!TestTrue(TEXT("the taxiway's runway end exists"), TEnd.IsSet())) { return false; }
-	const FVector2D Before = A.Net->GetGuidelineNode(TEnd)->Position;
-	// At least ExitLength: the cut distance wins at this acute corner (see RunwayExitArc).
-	TestTrue(FString::Printf(TEXT("that end is the arc start, at least ExitLength from X (%.0f)"), FVector2D::Distance(Before, A.XAt)),
-		FVector2D::Distance(Before, A.XAt) >= A.ExitLength - 1.0);
-	TestTrue(TEXT("a bar is set on it"), A.Net->SetHoldShort(TEnd, A.RW1));
+	const FGuidelineNodeId TFar = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/false);
+	if (!TestTrue(TEXT("the taxiway's ends exist"), TEnd.IsSet() && TFar.IsSet())) { return false; }
+
+	const FGuidelineNode* End = A.Net->GetGuidelineNode(TEnd);
+	TestTrue(TEXT("the taxiway's runway end is a runway-holding position"),
+		End->HoldingPosition == EHoldingPositionKind::Runway);
+	TestTrue(TEXT("protecting the strip it meets"),
+		End->HoldingPositionFor.IsSet() && A.Net->RunwayChain(A.RW1).Contains(End->HoldingPositionFor));
+	TestTrue(TEXT("its far end is not"),
+		A.Net->GetGuidelineNode(TFar)->HoldingPosition == EHoldingPositionKind::None);
+
+	int32 RunwayPositions = 0, OnTheStrip = 0;
+	for (const FGuidelineNode& Node : A.Net->GetGuidelineNodes())
+	{
+		if (!Node.bAlive) { continue; }
+		RunwayPositions += Node.HoldingPosition == EHoldingPositionKind::Runway ? 1 : 0;
+		if (Node.HoldingPosition != EHoldingPositionKind::None && FMath::Abs(Node.Position.Y) < 1.0)
+		{
+			++OnTheStrip;
+		}
+	}
+	TestEqual(TEXT("exactly one: the one taxiway end at the runway"), RunwayPositions, 1);
+	TestEqual(TEXT("and none on the centreline - the runway's own nodes and the split nodes are not positions"), OnTheStrip, 0);
+
+	TestFalse(TEXT("the player cannot clear a derived position"), A.Net->SetIntermediateHoldingPosition(TEnd, false));
+	TestFalse(TEXT("nor place one over it"), A.Net->SetIntermediateHoldingPosition(TEnd, true));
+	TestEqual(TEXT("and no mark was recorded for it"), A.Net->GetHoldingPositionMarks().Num(), 0);
 
 	// Rebuild from scratch, as a save/load or any edit does.
+	const FVector2D Before = End->Position;
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*A.Net);
 	FRoadGuidelineBuilder::Build(*A.Net, Solved);
-
 	const FGuidelineNodeId After = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/true);
 	if (TestTrue(TEXT("the end still exists by identity after the rebuild"), After.IsSet()))
 	{
 		const FGuidelineNode* Node = A.Net->GetGuidelineNode(After);
-		TestTrue(TEXT("the bar came back on it"), Node->HoldShortFor == A.RW1);
+		TestTrue(TEXT("and is a runway-holding position again"), Node->HoldingPosition == EHoldingPositionKind::Runway);
 		TestTrue(FString::Printf(TEXT("at the same place (moved %.1f uu)"), FVector2D::Distance(Node->Position, Before)),
 			FVector2D::Distance(Node->Position, Before) < 1.0);
+	}
+
+	// ARCS OFF: the position is the junction's, not the arc's.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
+		Runway->bContinuousThroughJunctions = true;
+		Runway->ExitLength = 0.0;
+		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+		const FRoadNodeId W = Net->AddNode(FVector2D(-40000.0, 0.0));
+		const FRoadNodeId X = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId E = Net->AddNode(FVector2D(40000.0, 0.0));
+		const FRoadNodeId Q = Net->AddNode(FVector2D(0.0, -20000.0));
+		const FRoadSegmentId R1 = Net->AddStraightSegment(W, X, Runway);
+		Net->AddStraightSegment(X, E, Runway);
+		const FRoadSegmentId XQ = Net->AddStraightSegment(X, Q, Taxiway);
+		const FRoadSolveResult S2 = FRoadNetworkSolver::SolveAll(*Net);
+		FRoadGuidelineBuilder::Build(*Net, S2);
+		const FGuidelineNodeId QEnd = ExitArcNodeFor(*Net, XQ, true);
+		if (TestTrue(TEXT("arcs off: the taxiway end exists"), QEnd.IsSet()))
+		{
+			const FGuidelineNode* Node = Net->GetGuidelineNode(QEnd);
+			TestTrue(TEXT("arcs off: still a runway-holding position, at the cut line"),
+				Node->HoldingPosition == EHoldingPositionKind::Runway && Net->RunwayChain(R1).Contains(Node->HoldingPositionFor));
+			TestTrue(FString::Printf(TEXT("arcs off: within the pavement cut of the junction (%.0f uu from X)"), Node->Position.Size()),
+				Node->Position.Size() < 6000.0);
+		}
 	}
 	return true;
 }

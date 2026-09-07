@@ -88,11 +88,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 	ApronComponent->SetUsingAbsoluteScale(true);
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	MarkingComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("HoldingPositionMarkings"));
+	MarkingComponent->SetupAttachment(RootComponent);
+	MarkingComponent->SetUsingAbsoluteLocation(true);
+	MarkingComponent->SetUsingAbsoluteRotation(true);
+	MarkingComponent->SetUsingAbsoluteScale(true);
+	MarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	MarkingComponent->SetCastShadow(false);
+
 	// The three objects issue #32 split this actor into - see each class's own header for
 	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
 	// than UPROPERTY(Instanced).
 	Presenter = CreateDefaultSubobject<URoadSurfacePresenter>(TEXT("Presenter"));
-	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent);
+	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent, MarkingComponent);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
@@ -477,9 +485,9 @@ bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* 
 	return Facade->PlaceRunway(From, To, RunwayProfile);
 }
 
-bool ARoadNetworkActor::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
+bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 {
-	return Facade->SetHoldShort(NodeIndex, SegmentIndex);
+	return Facade->SetIntermediateHoldingPosition(NodeIndex, bSet);
 }
 
 bool ARoadNetworkActor::DisconnectGuideline(int32 EdgeIndex)

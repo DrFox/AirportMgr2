@@ -35,12 +35,12 @@ public:
 	 * Issue #33: the editor previously had four tools against the runtime's six, with no
 	 * way to draw a guideline link or lay a runway outside PIE. One command per
 	 * ToolRegistry() entry now, in the same order, so the two cannot drift apart again.
-	 * PlaceHoldShort (key 8) joined them for the same reason: a hold bar authored only in
+	 * PlaceHoldingPoint (key 8) joined them for the same reason: a hold bar authored only in
 	 * PIE is a bar that does not survive stopping play.
 	 */
 	TSharedPtr<FUICommandInfo> DrawGuidelines;
 	TSharedPtr<FUICommandInfo> PlaceRunways;
-	TSharedPtr<FUICommandInfo> PlaceHoldShort;
+	TSharedPtr<FUICommandInfo> PlaceHoldingPoint;
 
 	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.

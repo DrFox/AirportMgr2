@@ -119,6 +119,9 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// one set-back, which is a property of the junction, not of the lane.
 	TMap<uint64, double> SetBack;
 	TSet<uint64> ContinuousEnds;
+	// Every non-continuous arm end at a mixed node, and the runway it meets: the
+	// runway-holding positions to derive once the ends exist. Keyed like SetBack.
+	TMap<uint64, FRoadSegmentId> ProtectedBy;
 	// Where a continuous arm's TURNS attach at a mixed node (the split node), as opposed to
 	// where its guideline ends (still the node, so the runway's own through-turn is intact).
 	TMap<uint64, FGuidelineNodeId> Attach;
@@ -143,6 +146,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 		int32 ContinuousArms = 0;
 		double ExitLength = 0.0;
+		FRoadSegmentId RunwayHere;
 		for (const FRoadSegmentId& ArmSeg : *ArmSegments)
 		{
 			const FRoadSegment* Arm = Network.GetSegment(ArmSeg);
@@ -150,12 +154,17 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			if (Profile != nullptr && Profile->bContinuousThroughJunctions)
 			{
 				++ContinuousArms;
+				if (!RunwayHere.IsSet())
+				{
+					// Any member of the chain will do - RunwayChain expands it when read.
+					RunwayHere = ArmSeg;
+				}
 				// The runway decides its exits. Two runways crossing a taxiway at one node
 				// would disagree only by profile; the longer wins, which is the safer arc.
 				ExitLength = FMath::Max(ExitLength, Profile->ExitLength);
 			}
 		}
-		if (ContinuousArms == 0 || ContinuousArms == ArmSegments->Num() || ExitLength <= 0.0)
+		if (ContinuousArms == 0 || ContinuousArms == ArmSegments->Num())
 		{
 			continue;
 		}
@@ -171,6 +180,17 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			}
 			const bool bContinuous = Profile->bContinuousThroughJunctions;
 			const bool bEndA = (Arm->A == NodeId);
+			if (!bContinuous)
+			{
+				ProtectedBy.Add(EndKey(ArmSeg.Index, bEndA, 0), RunwayHere);
+			}
+			if (ExitLength <= 0.0)
+			{
+				// Arcs off (a profile authored without an exit length): the ends stay at
+				// their cut lines, and the holding positions recorded above are all this
+				// node derives.
+				continue;
+			}
 
 			// The guideline's own length, cut point to cut point: the set-back may not eat
 			// more than 45 percent of it, so two exits on one short runway half, or a stub
@@ -298,7 +318,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 			// A taxiway meeting a runway ends where its exit arc begins - ExitLength back
 			// from the node along its own tangent - not at its pavement cut. The end node
-			// keeps its Origin, so a hold-short mark keyed by this end lands on the arc's
+			// keeps its Origin, so a holding-position mark keyed by this end lands on the arc's
 			// start. The continuous arm is NOT moved here: its guideline still ends on the
 			// node and is split below instead, so the runway stays one line through.
 			const uint64 KeyA = EndKey(Index, true, 0);
@@ -603,7 +623,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
-	// --- Re-apply hold-short marks ------------------------------------------------------
+	// --- Re-apply holding-position marks ------------------------------------------------------
 	//
 	// The flag lives on a node and every derived node above is FRESH, so a bar the player
 	// placed would vanish on the next road edit. The mark is stored by the same identity
@@ -613,59 +633,85 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
 		// Pruning first also means the loop below cannot re-apply a mark whose runway has
 		// been deleted, which would put a bar on a node protecting nothing.
-		Network.PruneHoldShortMarks();
+		Network.PruneHoldingPositionMarks();
 
-		// CLEAR SURVIVING FLAGS BEFORE RE-APPLYING, because not every flagged node is fresh.
+		// CLEAR BEFORE DERIVING AND RE-APPLYING, because not every flagged node is fresh.
 		// Most derived nodes are made anew above and start unflagged, but a node the sweep
 		// SPARED, and every Origin-less node (an entity's pose or anchor - see
-		// FGuidelineNode::Origin), lives on with whatever flag it last had. Pruning above
-		// can therefore remove a mark whose runway was deleted and still leave the bar
-		// standing on the node, protecting a strip that no longer exists.
+		// FGuidelineNode::Origin), lives on with whatever it last had.
 		//
-		// Two rules, because the two kinds of node have DIFFERENT sources of truth, and
-		// URoadNetwork::SetHoldShort says which is which:
-		//   - Origin set: the MARK is the source and the flag is its cache, so the flag is
-		//     cleared and the loop below writes it back. Rebuilding a cache means emptying
-		//     it, not merely adding to it - EXCEPT when this pass derived nothing for that
-		//     end. Ends is fully populated by now, so a missing EndKey here is the same
-		//     "unsolved end" the re-apply loop below deliberately skips; clearing the flag
-		//     and then not re-applying it would take the player's bar away for a pass over
-		//     a transient derivation failure, which is precisely what that loop refuses to
-		//     do. Leave the cache alone and let the next successful solve refresh it.
-		//   - Origin unset: no mark is ever stored, so the FLAG is the source. Wiping it
-		//     would delete the player's bar on every unrelated road edit. It is cleared only
-		//     when it names something that is no longer a live runway - the one case the
-		//     prune above could not reach, since it is keyed by an Origin these nodes lack.
+		// Two rules, because the two kinds of node have DIFFERENT sources of truth:
+		//   - Origin set: the derivation (runway kind) or the MARK (intermediate kind) is
+		//     the source and the node is its cache, so it is cleared and rewritten below -
+		//     EXCEPT when this pass derived nothing for that end. Ends is fully populated by
+		//     now, so a missing EndKey is the "unsolved end" the re-apply loop deliberately
+		//     skips; clearing and then not rewriting would take the player's position away
+		//     over a transient derivation failure. Leave the cache alone and let the next
+		//     successful solve refresh it.
+		//   - Origin unset: no mark is ever stored, so the NODE is the source. A runway kind
+		//     there is cleared only when it names something that is no longer a live runway
+		//     - the one case the prune cannot reach; an intermediate kind is left alone.
 		{
 			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
 			for (int32 Index = 0; Index < Live.Num(); ++Index)
 			{
-				if (!Live[Index].bAlive || !Live[Index].HoldShortFor.IsSet())
+				if (!Live[Index].bAlive || Live[Index].HoldingPosition == EHoldingPositionKind::None)
 				{
 					continue;
 				}
-
 				const FGuidelineEndRef& Origin = Live[Index].Origin;
-				const bool bMarkBacked = Origin.IsSet();
-				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldShortFor))
+				bool bClear = false;
+				if (Origin.IsSet())
+				{
+					bClear = Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) != nullptr;
+				}
+				else
+				{
+					bClear = Live[Index].HoldingPosition == EHoldingPositionKind::Runway
+						&& !Network.IsRunwaySegment(Live[Index].HoldingPositionFor);
+				}
+				if (!bClear)
 				{
 					continue;
 				}
-
-				if (bMarkBacked
-					&& Ends.Find(EndKey(Origin.Segment.Index, Origin.bEndA, Origin.GuidelineIndex)) == nullptr)
-				{
-					continue;
-				}
-
 				if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(Network.GuidelineNodeIdAt(Index)))
 				{
-					Node->HoldShortFor = FRoadSegmentId();
+					Node->HoldingPosition = EHoldingPositionKind::None;
+					Node->HoldingPositionFor = FRoadSegmentId();
 				}
 			}
 		}
 
-		for (const FHoldShortMark& Mark : Network.GetHoldShortMarks())
+		// RUNWAY-HOLDING POSITIONS ARE DERIVED: every taxiway end at a runway, on every
+		// guideline of that end, protecting the strip it meets. Infrastructure, not a
+		// choice - a real one is painted at every such junction whether ATC ever says
+		// "hold short" there or not (spec 2026-09-07). Independent of ExitLength: with the
+		// arcs off the end sits at its cut line and is a holding position all the same.
+		for (const TPair<uint64, FRoadSegmentId>& Pair : ProtectedBy)
+		{
+			const int32 SegmentIndex = static_cast<int32>(Pair.Key >> 32);
+			const bool bEndA = (Pair.Key & 1ull) != 0;
+			const FRoadSegment* Arm = Segments.IsValidIndex(SegmentIndex) ? &Segments[SegmentIndex] : nullptr;
+			const URoadProfile* Profile = Arm ? Network.ProfileFor(*Arm) : nullptr;
+			if (Profile == nullptr)
+			{
+				continue;
+			}
+			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
+			{
+				const FGuidelineNodeId* End = Ends.Find(EndKey(SegmentIndex, bEndA, Which));
+				FGuidelineNode* Node = End ? Network.GetGuidelineNodeMutable(*End) : nullptr;
+				if (Node == nullptr)
+				{
+					continue;
+				}
+				Node->HoldingPosition = EHoldingPositionKind::Runway;
+				Node->HoldingPositionFor = Pair.Value;
+			}
+		}
+
+		// INTERMEDIATE positions are the player's, re-applied from their marks.
+		for (const FHoldingPositionMark& Mark : Network.GetHoldingPositionMarks())
 		{
 			const FGuidelineNodeId* Found = Ends.Find(
 				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
@@ -673,18 +719,21 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			{
 				// The segment is alive (prune said so) but derived nothing this pass - an
 				// unsolved end, or a profile that lost the guideline the mark named. Leave
-				// the mark: the next successful solve puts the bar back, which is kinder
-				// than deleting a player's work over a transient derivation failure.
+				// the mark: the next successful solve puts the position back, which is
+				// kinder than deleting a player's work over a transient derivation failure.
 				//
 				// The clear above skips this same case for the same reason - the two tests
 				// are the same lookup in the same map, so a flag is never cleared here only
 				// to be left unwritten there.
 				continue;
 			}
-
-			if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found))
+			FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found);
+			// A mark on an end that has since become a runway end is out-ranked by the
+			// derivation: the junction decides, and the stale mark is harmless.
+			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway)
 			{
-				Node->HoldShortFor = Mark.Protects;
+				Node->HoldingPosition = EHoldingPositionKind::Intermediate;
+				Node->HoldingPositionFor = FRoadSegmentId();
 			}
 		}
 	}
@@ -716,11 +765,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// stand", and everything between the two was a guess. One line per build, so the next
 	// such report is answered by a grep.
 	{
-		int32 NodesAlive = 0, HoldShort = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
+		int32 NodesAlive = 0, HoldingPosition = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
 		for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
 		{
 			NodesAlive += Node.bAlive ? 1 : 0;
-			HoldShort += (Node.bAlive && Node.HoldShortFor.IsSet()) ? 1 : 0;
+			HoldingPosition += (Node.bAlive && Node.HoldingPosition != EHoldingPositionKind::None) ? 1 : 0;
 		}
 		for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
 		{
@@ -730,7 +779,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			TurnPaths += (Edge.bDerived && !Edge.DerivedFrom.IsSet()) ? 1 : 0;
 		}
 		UE_LOG(LogAirside, Log,
-			TEXT("Guidelines: %d nodes (%d hold-short), %d edges (%d hand-authored, %d turn paths), %d hold-short mark(s) on file"),
-			NodesAlive, HoldShort, EdgesAlive, Authored, TurnPaths, Network.GetHoldShortMarks().Num());
+			TEXT("Guidelines: %d nodes (%d holding-position), %d edges (%d hand-authored, %d turn paths), %d holding-position mark(s) on file"),
+			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths, Network.GetHoldingPositionMarks().Num());
 	}
 }

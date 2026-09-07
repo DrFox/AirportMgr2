@@ -218,9 +218,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
-	/** Place or clear a hold bar at a guideline node. SegmentIndex == -1 clears it. */
+	/** Place (bSet) or clear an intermediate holding position at a guideline node. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) override;
+	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
+
+	/**
+	 * DEPRECATED NAME, kept so a Blueprint that bound "SetHoldShort" still compiles - the
+	 * refactor contract: every UFUNCTION stays reachable at its old name as a forwarder.
+	 * "Hold short" is an ATC instruction, not a place; the place is a holding position
+	 * (spec 2026-09-07). New callers use SetIntermediateHoldingPosition.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside", meta = (DeprecatedFunction, DeprecationMessage = "Use SetIntermediateHoldingPosition"))
+	bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) { return SetIntermediateHoldingPosition(NodeIndex, SegmentIndex != INDEX_NONE); }
 
 	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -428,6 +437,15 @@ public:
 	 */
 	UPROPERTY(VisibleAnywhere, Category = "Airside|Apron")
 	TObjectPtr<UDynamicMeshComponent> ApronComponent;
+
+	/**
+	 * The holding-position paint: a fourth surface, half a unit above the road, drawn with
+	 * the road's own material - see FHoldingPositionMarkingBuilder. Its own component for
+	 * the same reason the apron has one: a rebuild of the roads must not be a rebuild of
+	 * everything that happens to be painted on them.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UDynamicMeshComponent> MarkingComponent;
 
 	/**
 	 * Name -> material for the road surface's profile bands. Null renders exactly as
