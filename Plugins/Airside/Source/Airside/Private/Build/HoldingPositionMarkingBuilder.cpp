@@ -1,5 +1,6 @@
 #include "Build/HoldingPositionMarkingBuilder.h"
 
+#include "Build/MarkingQuads.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -8,51 +9,6 @@ namespace
 {
 	/** A taxiway with no profile to ask still gets a bar this wide. The standard taxiway. */
 	constexpr double MarkingFallbackWidth = 2300.0;
-
-	/**
-	 * One quad, corners in either rotational order, wound counter-clockwise as seen from +Z
-	 * by measurement - the maths convention every builder here works in - and emitted with
-	 * the SAME flip FRoadMeshBuilder::AddTriangle applies: Unreal is left-handed, so a
-	 * counter-clockwise triangle faces DOWN and is culled from above. The flip lives in one
-	 * place per builder, never at a call site.
-	 */
-	void MarkingAddQuad(FRoadMeshBuffers& Out, double Z,
-		const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3)
-	{
-		const int32 Base = Out.Positions.Num();
-		FVector2D Corners[4] = { P0, P1, P2, P3 };
-		// MEASURED, not trusted. The first cut of this builder handed its corners over
-		// "counter-clockwise" by inspection and every one of them was clockwise: 112 of 112
-		// vertex normals pointed down in Airside.Build.HoldingPositionMarking. A bar's corner
-		// order depends on which way Toward and Across happen to point, so the signed area
-		// decides here and the caller's order is a hint at most.
-		double TwiceArea = 0.0;
-		for (int32 Index = 0; Index < 4; ++Index)
-		{
-			const FVector2D& A = Corners[Index];
-			const FVector2D& B = Corners[(Index + 1) % 4];
-			TwiceArea += A.X * B.Y - B.X * A.Y;
-		}
-		if (TwiceArea < 0.0)
-		{
-			Swap(Corners[1], Corners[3]);
-		}
-		const FVector2f UV0s[4] = { FVector2f(0.f, 0.f), FVector2f(1.f, 0.f), FVector2f(1.f, 1.f), FVector2f(0.f, 1.f) };
-		for (int32 Index = 0; Index < 4; ++Index)
-		{
-			Out.Positions.Add(FVector3d(Corners[Index].X, Corners[Index].Y, Z));
-			Out.UV0.Add(UV0s[Index]);
-			// Lateral 0 everywhere: the whole quad is centreline as far as the material can
-			// tell, which is what paints it MarkingColor - see the header.
-			Out.UV1.Add(FVector2f(0.f, 0.f));
-			Out.UV2.Add(FVector2f(0.f, 0.f));
-		}
-		// (0,1,2) and (0,2,3) counter-clockwise, flipped to (0,2,1) and (0,3,2).
-		Out.Indices.Append({ Base + 0, Base + 2, Base + 1 });
-		Out.MaterialIDs.Add(0);
-		Out.Indices.Append({ Base + 0, Base + 3, Base + 2 });
-		Out.MaterialIDs.Add(0);
-	}
 
 	/**
 	 * One bar across the taxiway: solid, or dashed from one edge. Toward is the unit
@@ -67,7 +23,7 @@ namespace
 		const FVector2D FarLine = Node + Toward * Far;
 		if (!bDashed)
 		{
-			MarkingAddQuad(Out, Z,
+			MarkingQuads::AddQuad(Out, Z,
 				NearLine - Across * HalfWidth, NearLine + Across * HalfWidth,
 				FarLine + Across * HalfWidth, FarLine - Across * HalfWidth);
 			return;
@@ -76,7 +32,7 @@ namespace
 		for (double Start = -HalfWidth; Start < HalfWidth; Start += Period)
 		{
 			const double End = FMath::Min(Start + FHoldingPositionMarkingBuilder::DashLength, HalfWidth);
-			MarkingAddQuad(Out, Z,
+			MarkingQuads::AddQuad(Out, Z,
 				NearLine + Across * Start, NearLine + Across * End,
 				FarLine + Across * End, FarLine + Across * Start);
 		}
