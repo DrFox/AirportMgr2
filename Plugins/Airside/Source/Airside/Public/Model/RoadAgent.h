@@ -88,6 +88,14 @@ struct AIRSIDE_API FDepartureOrder
 
 	/** Runway available beyond the threshold, uu. */
 	UPROPERTY() double RunwayLength = 0.0;
+
+	/**
+	 * How far past the threshold the taxi joins the strip, uu. The roll starts THERE - an
+	 * intersection departure - with RunwayLength minus this to reach Vr in. Zero is the
+	 * backtrack case: taxied to the threshold, turned round, the whole runway ahead.
+	 * See DeparturePlanner.
+	 */
+	UPROPERTY() double EntryOffset = 0.0;
 };
 
 /**
@@ -313,7 +321,8 @@ struct AIRSIDE_API FRoadAgent
 	void StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe);
 
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
-	void ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength);
+	void ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
+		double EntryOffset = 0.0);
 
 	/**
 	 * Advances whichever phase is current by one frame, and reports what to show.

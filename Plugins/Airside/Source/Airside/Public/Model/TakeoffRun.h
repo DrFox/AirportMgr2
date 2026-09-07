@@ -81,9 +81,14 @@ struct AIRSIDE_API FTakeoffRun
 	 * v^2 / 2a, which is a published figure for every airframe, and a strip shorter than it
 	 * is one the aircraft cannot leave. Rolling anyway and running off the end would be a
 	 * simulation of an accident, not of a departure.
+	 *
+	 * InEntryOffset is how far past the threshold the aircraft joins (an intersection
+	 * departure rolls from there and is judged on the runway REMAINING); InSpeed is the
+	 * speed it arrives at, floored at MinTaxiSpeed. Both default to the backtrack case.
 	 */
 	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FGroundPerformance& InGround, const FClimbPerformance& InClimb, double InHeading);
+		const FGroundPerformance& InGround, const FClimbPerformance& InClimb, double InHeading,
+		double InEntryOffset = 0.0, double InSpeed = 0.0);
 
 	/**
 	 * Flies one frame. False once the departure is over, leaving the outputs untouched.

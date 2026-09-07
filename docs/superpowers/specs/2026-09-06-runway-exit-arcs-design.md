@@ -66,8 +66,11 @@ to the runway at `S` and to the taxiway at its end. Taxiway↔taxiway turns at t
 use the set-back taxiway ends too (a crossing taxiway's two arms are collinear, so their
 turn is straight, as now).
 
-**3.4 Clamps.** `L_t = clamp(ExitLength, taxiway CutDistance, 0.45 × taxiway guideline
-length)`; `L_r = clamp(ExitLength, 0, 0.45 × runway-half guideline length)`. The lower bound
+**3.4 Clamps.** `L_t = max(taxiway CutDistance, min(ExitLength, 0.45 × taxiway segment
+length))`; `L_r = min(ExitLength, 0.45 × runway-half segment length)`. *Amended 2026-09-07:*
+the length is NODE TO NODE and the cut is a floor the clamp cannot undercut - measured between
+cut points, a 55 m exit stub at an acute corner had no chord left and its end landed inside the
+runway slab (`samples/holdlines.png`). The lower bound
 on the taxiway keeps the end at or beyond the pavement cut it has today; the upper bounds
 keep two exits on one short runway half, or a short stub taxiway, from crossing their own
 far end. Each side clamps independently - the arc stays tangent at both ends whatever the
@@ -188,3 +191,29 @@ split and back through the hairpin. Two planner rules, both in `ArrivalPlanner::
 the main checkout.
 
 Verified in PIE by the player after this round, on the M_Starter level: "that works" (2026-09-06).
+
+## 11. PIE round 2 (2026-09-07): symmetric arcs and intersection departures
+
+`samples/runway1.png` showed two things. An exit arc with 60 m of tangent on the runway side
+and ~30 m on a stub taxiway swung wide of the fillet; and a departure routed to the threshold
+node drove onto the runway by the entry arc, east to the split, hairpinned and came back to
+spin 180 degrees at the threshold.
+
+- **§3.4 amended again: ONE length per node, symmetric.** `L = min(ExitLength, 0.45 × every
+  arm's node-to-node length)`, the same on the runway side and the taxiway side; a taxiway's
+  pavement cut remains a floor on its own side. `Airside.Build.RunwayExitArcOnPavement`
+  samples every arc at 45/60/90 degree stubs against the triangles the surface builder paves:
+  160 of 160 points on the pavement.
+- **§4 corrected: departures did NOT fall out.** `DeparturePlanner::Plan` (Model/) mirrors the
+  arrival planner: the first strip node from the threshold that leaves at least the roll
+  needed, reachable with runway edges excluded, arrived at heading down the runway - an
+  intersection departure; else the threshold with runway edges allowed - a backtrack, where
+  the 180 at the end is right. `FDepartureOrder::EntryOffset`; `FTakeoffRun::Start` takes the
+  entry offset and the arrival speed, judges the roll on the runway REMAINING and starts
+  `Travelled` at the entry so nothing jumps. `ArmDepartureIfRunway` measures the offset from
+  the route's end, admits any point ON the strip (`RunwayExtentAt` was "within a width of a
+  runway node", which a split node 60 m out never is), and rolls the way the taxi arrived for
+  a mid-strip entry. The Route tool sends a runway goal through the planner.
+- Tests: `DeparturePlanner.Intersection`, `DeparturePlanner.Backtrack`,
+  `Traffic.DepartureFromIntersectionIsContinuous` (handover frame step 0.6 uu, airborne).
+  132 tests, 0 failed. `UE_LOG` 99 -> 100. Unverified in PIE at the time of writing.
