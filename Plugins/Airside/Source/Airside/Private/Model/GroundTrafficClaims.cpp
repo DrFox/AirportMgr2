@@ -947,6 +947,16 @@ void UGroundTraffic::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Networ
 	{
 		return;
 	}
+	// A DEAD PLAN HOLDS NOTHING, exactly as ReleaseForDeadPlan says: an agent whose route went
+	// Unreachable is not at its goal and is not going there, so neither a reservation on the
+	// stand nor an occupation of the goal node describes anything true. Airside.Model.Traffic.
+	// DeadPlanReleases pins "the table holds NOTHING for it". An arrival's route is its
+	// taxi-in, which the follower has not started yet.
+	const FRoutePlan& Route = Agent.Phase == EAgentPhase::Arriving ? Agent.TaxiInPlan : Agent.Follower.Plan;
+	if (!Route.IsValid())
+	{
+		return;
+	}
 	const bool bParked = Agent.Phase == EAgentPhase::Parked;
 	const bool bStandGoal = Network.FindEntityIndexByPoseNode(Agent.GoalNode) != INDEX_NONE;
 	// A reservation names a STAND only: an aircraft heading for a runway or a plain node
