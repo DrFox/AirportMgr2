@@ -147,3 +147,20 @@ The overlay bar stays: it is the design-time symbol; the mesh is the paint.
 
 ILS critical-area positions; enhanced centreline dashes; the sequencer and its
 instructions (M3); mandatory red signs; any change to occupancy semantics.
+
+## 10. Outcome (2026-09-07, same day)
+
+Four commits on `feature/holding-positions`: the rename (no behaviour change, 127 tests),
+derived runway positions + intermediate tool (127), painted markings (128). Measured:
+
+- Every taxiway end at a runway is `Runway` after a build, arcs on or off; the runway's
+  own nodes and the split nodes are `None`; a rebuild reproduces them; the player's set and
+  clear are refused there and record no mark.
+- An intermediate position at a taxiway junction survives two rebuilds by identity, clears
+  and stays clear, lives on an Origin-less node without a mark, is pruned with its segment,
+  and is out-ranked by the derivation when its end becomes a runway end.
+- The runway pattern: 210 uu deep on the junction side of the node starting AT the node,
+  the taxiway's full width, in the road plane, UV1 = 0, every engine-computed vertex normal
+  up. The first cut had all 112 normals down - the quad helper now measures its winding.
+- The head-on deadlock replay no longer places bars: the four it relied on are derived.
+- `UE_LOG` 98 -> 99. Unverified in PIE at the time of writing.
