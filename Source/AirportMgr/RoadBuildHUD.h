@@ -121,7 +121,7 @@ public:
 	 * as one more piece of context.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HoldShortColour = FLinearColor(1.0f, 0.8f, 0.1f);
+	FLinearColor RunwayHoldingPositionColour = FLinearColor(1.0f, 0.8f, 0.1f);
 
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))

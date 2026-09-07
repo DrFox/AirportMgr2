@@ -33,7 +33,7 @@
  *
  * WHAT IS STILL NOT HERE: any awareness of WHO is ahead. StopWithin (see Advance) is the one
  * number the traffic model is allowed to hand in - a distance, not a reason - so this class
- * still does not know whether it is a hold-short node, another aircraft's tail, or a
+ * still does not know whether it is a holding-position node, another aircraft's tail, or a
  * deadlock resolver that put the cap there. Two aircraft told nothing would still pass
  * straight through each other, and the right-of-way rules the graph carries are still
  * somebody else's job. That somebody is UGroundTraffic: it watches the other agents and the

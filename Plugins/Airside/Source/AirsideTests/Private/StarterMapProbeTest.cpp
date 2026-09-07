@@ -64,18 +64,18 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	int32 GuidelineNodesSaved = 0, GuidelineEdgesSaved = 0, AuthoredEdgesSaved = 0;
 	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { GuidelineNodesSaved += N.bAlive ? 1 : 0; }
 	for (const FGuidelineEdge& E : Net->GetGuidelineEdges()) { if (E.bAlive) { ++GuidelineEdgesSaved; AuthoredEdgesSaved += E.bDerived ? 0 : 1; } }
-	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE saved level: %d live segments, %d entities, %d hold-short marks; guideline graph AS SAVED: %d nodes, %d edges (%d hand-authored)"),
-		SegmentsAlive, Net->GetEntities().Num(), Net->GetHoldShortMarks().Num(), GuidelineNodesSaved, GuidelineEdgesSaved, AuthoredEdgesSaved);
+	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE saved level: %d live segments, %d entities, %d holding-position marks; guideline graph AS SAVED: %d nodes, %d edges (%d hand-authored)"),
+		SegmentsAlive, Net->GetEntities().Num(), Net->GetHoldingPositionMarks().Num(), GuidelineNodesSaved, GuidelineEdgesSaved, AuthoredEdgesSaved);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	FRoadGuidelineBuilder::Build(*Net, Solved);
 	const int32 Joined = FAnchorLink::Build(*Net);
 
-	int32 GuidelineNodes = 0, GuidelineEdges = 0, AuthoredEdges = 0, HoldShortNodes = 0;
-	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { if (N.bAlive) { ++GuidelineNodes; HoldShortNodes += N.HoldShortFor.IsSet() ? 1 : 0; } }
+	int32 GuidelineNodes = 0, GuidelineEdges = 0, AuthoredEdges = 0, HoldingPositionNodes = 0;
+	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { if (N.bAlive) { ++GuidelineNodes; HoldingPositionNodes += N.HoldingPositionFor.IsSet() ? 1 : 0; } }
 	for (const FGuidelineEdge& E : Net->GetGuidelineEdges()) { if (E.bAlive) { ++GuidelineEdges; AuthoredEdges += E.bDerived ? 0 : 1; } }
-	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE after rebuild: solved %d nodes (%d failed); guideline graph %d nodes, %d edges (%d hand-authored), %d hold-short nodes; anchor links joined this pass: %d"),
-		Solved.SolvedNodes, Solved.FailedNodes, GuidelineNodes, GuidelineEdges, AuthoredEdges, HoldShortNodes, Joined);
+	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE after rebuild: solved %d nodes (%d failed); guideline graph %d nodes, %d edges (%d hand-authored), %d holding-position nodes; anchor links joined this pass: %d"),
+		Solved.SolvedNodes, Solved.FailedNodes, GuidelineNodes, GuidelineEdges, AuthoredEdges, HoldingPositionNodes, Joined);
 
 	// The layout itself, so a lead-in that joins nothing can be judged against where the
 	// taxiways actually are rather than against a guess at the player's drawing.

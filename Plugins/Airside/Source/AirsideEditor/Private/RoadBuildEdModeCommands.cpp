@@ -36,9 +36,9 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Six));
 
 	// EIGHT, matching the registry: seven is "land an aircraft" at runtime and is not a
-	// tool. The LABEL must equal ToolRegistry()'s "Hold short" exactly - URoadBuildEdMode::
+	// tool. The LABEL must equal ToolRegistry()'s "Holding point" exactly - URoadBuildEdMode::
 	// Enter compares the two BY STRING and logs an error when they drift.
-	UI_COMMAND(PlaceHoldShort, "Hold short", "Click a taxiway node beside a runway to place a hold bar; click it again to remove it.",
+	UI_COMMAND(PlaceHoldingPoint, "Holding point", "Click a taxiway node beside a runway to place a hold bar; click it again to remove it.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Eight));
 
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
@@ -47,7 +47,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 
 TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
 {
-	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldShort };
+	return { DrawRoads, DrawAprons, PlaceStands, FindRoutes, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

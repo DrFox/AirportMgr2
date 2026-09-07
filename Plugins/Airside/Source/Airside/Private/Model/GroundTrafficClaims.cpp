@@ -40,7 +40,7 @@ struct UGroundTraffic::FWantedClaim
 		*  outside the strip. */
 		RunwayEdge,
 		/** The step's end node carries a hold bar: stop with the NOSE on the bar. */
-		HoldShort,
+		HoldingPosition,
 	};
 
 	FTrafficClaim Claim;
@@ -62,7 +62,7 @@ struct UGroundTraffic::FWantedClaim
 
 	ESurface Surface = ESurface::None;
 
-	/** The node carrying the bar, for the log line. Set only when Surface == HoldShort;
+	/** The node carrying the bar, for the log line. Set only when Surface == HoldingPosition;
 	*  the segment it protects is already on Claim.Resource. */
 	FGuidelineNodeId HoldNode;
 };
@@ -262,7 +262,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	const FGuidelineNodeId FromId = StepFromNode(Plan, Current);
 	const FGuidelineNode* FromNode = Network.GetGuidelineNode(FromId);
 
-	const bool bFromIsBar = FromNode != nullptr && FromNode->HoldShortFor.IsSet();
+	const bool bFromIsBar = FromNode != nullptr && FromNode->HoldingPositionFor.IsSet();
 	// 0a. COMMITTED: past a bar, on a step that leads ONTO the strip.
 	//
 	// THE THREE WAYS A STEP CAN LEAD ONTO THE STRIP, tried in that order because they cost
@@ -281,7 +281,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	// and its body is clear, so all three tests answer no and it arms nothing.
 	if (Agent.CrossingPhase == ECrossingPhase::None && bFromIsBar)
 	{
-		const FRoadSegmentId Bar = FromNode->HoldShortFor;
+		const FRoadSegmentId Bar = FromNode->HoldingPositionFor;
 		bool bOntoStrip = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, Bar);
 
 		if (!bOntoStrip)
@@ -400,7 +400,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	 * TryClaim treats a same-agent claim on the same resource as an UPDATE and writes it
 	 * over the old one WHOLESALE, bOccupied included. A crossing raises its chain occupied
 	 * at the front of Pending (route zero below), and two things later in route order raise
-	 * the SAME chain as a reservation: a hold-short bar on the FAR side of the crossing -
+	 * the SAME chain as a reservation: a holding-position bar on the FAR side of the crossing -
 	 * which is how a crossing is actually painted, one bar each side - and a runway edge on
 	 * a step the agent has not reached yet. Either one downgraded the crossing's occupancy
 	 * to a reservation, and a reservation is exactly what a landing may preempt: the table
@@ -615,7 +615,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 			// APPLIES TO EVERY CLASS. A van crossing a live runway is the case a bar is for;
 			// nothing here reads Agent.Class.
 			const FGuidelineNode* Node = Network.GetGuidelineNode(Step.To);
-			if (Node != nullptr && Node->HoldShortFor.IsSet())
+			if (Node != nullptr && Node->HoldingPositionFor.IsSet())
 			{
 				// The chain, expanded HERE rather than stored at the bar, so an exit added to
 				// a runway after the bar was placed still protects the whole strip - see
@@ -623,10 +623,10 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 				// (the profile changed under the mark) and the named segment alone is still
 				// honoured: a bar that silently stopped protecting anything is worse than one
 				// protecting a piece of what it used to.
-				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Node->HoldShortFor);
+				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Node->HoldingPositionFor);
 				if (Chain.Num() == 0)
 				{
-					Chain.Add(Node->HoldShortFor);
+					Chain.Add(Node->HoldingPositionFor);
 				}
 
 				for (const FRoadSegmentId Segment : Chain)
@@ -646,7 +646,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 					Bar.StepEnd = End;
 					Bar.EdgeLength = Length;
 					Bar.bReversed = Step.bReversed;
-					Bar.Surface = FWantedClaim::ESurface::HoldShort;
+					Bar.Surface = FWantedClaim::ESurface::HoldingPosition;
 					Bar.HoldNode = Step.To;
 
 					// THE FAR BAR OF A CROSSING, and the reason WantedOccupied exists: the
@@ -762,7 +762,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// candidate: the one member of a bar-versus-arrival cycle who could have turned was
 		// never asked (PIE, 2026-09-06). Only when there IS a next step; a bar at the end of
 		// a route is the route's end.
-		if (Want.Surface == FWantedClaim::ESurface::HoldShort
+		if (Want.Surface == FWantedClaim::ESurface::HoldingPosition
 			&& Agent.Follower.Plan.Steps.IsValidIndex(Want.Step + 1))
 		{
 			Agent.BlockedStep = Want.Step + 1;
@@ -777,13 +777,13 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// ON THE TRANSITION ONLY. Logged every tick this would be one line per agent per
 		// frame, which is how a log stops being read at all.
 		//
-		// A BAR GETS ITS OWN LINE INSTEAD OF THE GENERIC ONE - spec §10 lists "hold-short
+		// A BAR GETS ITS OWN LINE INSTEAD OF THE GENERIC ONE - spec §10 lists "holding-position
 		// reached" separately from "stopped for a resource" - because it names the node
 		// and the segment as well as the holder, and one event must not produce two
 		// lines. Its transition test is the blocker OR the step: an agent already waiting
 		// on the same holder for something else is still newly held HERE, and BlockedStep
 		// is what changed when it became so.
-		if (Want.Surface == FWantedClaim::ESurface::HoldShort)
+		if (Want.Surface == FWantedClaim::ESurface::HoldingPosition)
 		{
 			if (WasWaitingOn != Blocker.AgentId || WasBlockedStep != NewBlockedStep)
 			{
@@ -836,7 +836,7 @@ double UGroundTraffic::StopWithinFor(const FWantedClaim& Want, const FTrafficCla
 		return FMath::Max(0.0, Want.StepStart - T - G);
 	}
 
-	if (Want.Surface == FWantedClaim::ESurface::HoldShort)
+	if (Want.Surface == FWantedClaim::ESurface::HoldingPosition)
 	{
 		// THE NOSE STOPS ON THE BAR, which is why this is the one refusal that does
 		// not subtract the gap: a bar is the position an aircraft is required to hold

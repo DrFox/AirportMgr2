@@ -709,7 +709,7 @@ FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
-bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
+bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, FRoadSegmentId Protects)
 {
 	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
 	if (Found == nullptr)
@@ -725,7 +725,7 @@ bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
 		return false;
 	}
 
-	Found->HoldShortFor = Protects;
+	Found->HoldingPositionFor = Protects;
 
 	const FGuidelineEndRef At = Found->Origin;
 	if (!At.IsSet())
@@ -737,17 +737,17 @@ bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
 		return true;
 	}
 
-	for (int32 Index = 0; Index < HoldShortMarks.Num(); ++Index)
+	for (int32 Index = 0; Index < HoldingPositionMarks.Num(); ++Index)
 	{
-		if (HoldShortMarks[Index].At == At)
+		if (HoldingPositionMarks[Index].At == At)
 		{
 			if (Protects.IsSet())
 			{
-				HoldShortMarks[Index].Protects = Protects;
+				HoldingPositionMarks[Index].Protects = Protects;
 			}
 			else
 			{
-				HoldShortMarks.RemoveAt(Index);
+				HoldingPositionMarks.RemoveAt(Index);
 			}
 			return true;
 		}
@@ -755,17 +755,17 @@ bool URoadNetwork::SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects)
 
 	if (Protects.IsSet())
 	{
-		FHoldShortMark Mark;
+		FHoldingPositionMark Mark;
 		Mark.At = At;
 		Mark.Protects = Protects;
-		HoldShortMarks.Add(MoveTemp(Mark));
+		HoldingPositionMarks.Add(MoveTemp(Mark));
 	}
 	return true;
 }
 
-void URoadNetwork::PruneHoldShortMarks()
+void URoadNetwork::PruneHoldingPositionMarks()
 {
-	HoldShortMarks.RemoveAll([this](const FHoldShortMark& Mark)
+	HoldingPositionMarks.RemoveAll([this](const FHoldingPositionMark& Mark)
 	{
 		// GetSegment is the generation-checked read, so a recycled slot fails it - which is
 		// the whole point, because the builder's Ends map is keyed on the segment INDEX

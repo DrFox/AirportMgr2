@@ -15,7 +15,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2HeadOnTest, Log, All);
 
 namespace
 {
-	// Prefixed against the unity build: GroundTrafficTest.cpp and HoldShortMarkTest.cpp
+	// Prefixed against the unity build: GroundTrafficTest.cpp and HoldingPositionMarkTest.cpp
 	// own the unprefixed names.
 
 	/** The guideline node derived for one end of Segment, or unset. */
@@ -145,10 +145,10 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId Hn = M2HeadOnNodeFor(*Net, N2X, /*bEndA=*/false);
 	const FGuidelineNodeId Hs = M2HeadOnNodeFor(*Net, XB, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the four bar nodes exist"), H.IsSet() && H2.IsSet() && Hn.IsSet() && Hs.IsSet())) { return false; }
-	TestTrue(TEXT("bar at H"), Net->SetHoldShort(H, RW1));
-	TestTrue(TEXT("bar at H2"), Net->SetHoldShort(H2, RW1));
-	TestTrue(TEXT("bar north of the crossing"), Net->SetHoldShort(Hn, RW2));
-	TestTrue(TEXT("bar south of the crossing"), Net->SetHoldShort(Hs, RW2));
+	TestTrue(TEXT("bar at H"), Net->SetIntermediateHoldingPosition(H, RW1));
+	TestTrue(TEXT("bar at H2"), Net->SetIntermediateHoldingPosition(H2, RW1));
+	TestTrue(TEXT("bar north of the crossing"), Net->SetIntermediateHoldingPosition(Hn, RW2));
+	TestTrue(TEXT("bar south of the crossing"), Net->SetIntermediateHoldingPosition(Hs, RW2));
 
 	const FGuidelineNodeId RunwayW = M2HeadOnNodeFor(*Net, RW1, true);     // the threshold's own node
 	const FGuidelineNodeId RunwayX = M2HeadOnNodeFor(*Net, RW1, false);    // RW1's node at the crossing

@@ -368,7 +368,7 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	return Network->RemoveGuidelineEdge(Id);
 }
 
-bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
+bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, int32 SegmentIndex)
 {
 	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr)
@@ -387,7 +387,7 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 	Node.Generation = Nodes[NodeIndex].Generation;
 
 	// INDEX_NONE clears; anything else must be a live slot. Left unset otherwise, which is
-	// what URoadNetwork::SetHoldShort reads as "clear the bar".
+	// what URoadNetwork::SetIntermediateHoldingPosition reads as "clear the bar".
 	FRoadSegmentId Protects;
 	if (SegmentIndex != INDEX_NONE)
 	{
@@ -401,20 +401,20 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 	}
 
 	// HOISTED ABOVE THE SCOPE, so every refusal really does happen before the snapshot.
-	// URoadNetwork::SetHoldShort refuses a Protects that is not a live runway, and checking
+	// URoadNetwork::SetIntermediateHoldingPosition refuses a Protects that is not a live runway, and checking
 	// it only in there meant the one guard most likely to fire fired INSIDE the edit.
 	//
 	// THERE IS NO ROLLBACK, so do not read the backstop below as one. ~FRoadEditScope calls
 	// AbandonEdit, which DISCARDS the pending snapshot and leaves the live graph exactly as
 	// the body left it - the stacks are untouched, the model is not restored. Returning
-	// false from inside a scope is safe here only because URoadNetwork::SetHoldShort
+	// false from inside a scope is safe here only because URoadNetwork::SetIntermediateHoldingPosition
 	// refuses WITHOUT MUTATING, so there is nothing to put back. A future mutation followed
 	// by a return false inside a scope would leave a changed graph with no undo entry for
 	// it, which is a corruption no later undo can reach - hence the guard living out here.
 	if (Protects.IsSet() && !Network->IsRunwaySegment(Protects))
 	{
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetHoldShort refused before the snapshot at guideline node %d: "
+			TEXT("SetIntermediateHoldingPosition refused before the snapshot at guideline node %d: "
 				 "segment %d is not a live runway"),
 			NodeIndex, SegmentIndex);
 		return false;
@@ -424,38 +424,38 @@ bool URoadEditFacade::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
 	// it. A click that clears an already-clear bar changes nothing, and committing it would
 	// give the player an undo step that visibly does nothing and has to be pressed twice to
 	// get past - see URoadEditHistory's "Edit lifecycle" comment.
-	const FRoadSegmentId Before = Network->GetGuidelineNodes()[NodeIndex].HoldShortFor;
+	const FRoadSegmentId Before = Network->GetGuidelineNodes()[NodeIndex].HoldingPositionFor;
 
 	// After the guards, which refuse without mutating - a rejected bar costs no snapshot.
-	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("hold short"));
-	if (!Network->SetHoldShort(Node, Protects))
+	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("holding point"));
+	if (!Network->SetIntermediateHoldingPosition(Node, Protects))
 	{
 		// The BACKSTOP, and reaching it means a guard above missed something - the node
 		// liveness check and the runway check together are meant to cover every refusal the
 		// model can make. Distinct text from the hoisted guard's, so the log says WHICH of
 		// the two fired rather than leaving the reader to guess.
 		UE_LOG(LogRoadMesh, Warning,
-			TEXT("SetHoldShort refused inside the edit at guideline node %d for segment %d - "
+			TEXT("SetIntermediateHoldingPosition refused inside the edit at guideline node %d for segment %d - "
 				 "the hoisted guard should have caught this"),
 			NodeIndex, SegmentIndex);
 		return false;
 	}
 
-	if (Network->GetGuidelineNodes()[NodeIndex].HoldShortFor == Before)
+	if (Network->GetGuidelineNodes()[NodeIndex].HoldingPositionFor == Before)
 	{
 		// Succeeded and changed nothing. Leaving the scope uncommitted abandons the pending
 		// snapshot - the stacks are untouched and the live graph is not restored, which is
 		// exactly right here because nothing was altered to restore. True is still returned:
 		// the caller asked for a state, and that state holds.
 		UE_LOG(LogRoadMesh, Verbose,
-			TEXT("Hold short at guideline node %d already as asked - no undo step pushed"), NodeIndex);
+			TEXT("Holding point at guideline node %d already as asked - no undo step pushed"), NodeIndex);
 		return true;
 	}
 	Edit.Commit();
 
 	// NO OnChanged broadcast: a bar changes no pavement and no mesh. The overlay reads
-	// HoldShortFor when it draws, so rebuilding the surface here would be work for nothing.
-	UE_LOG(LogRoadMesh, Log, TEXT("Hold short %s at guideline node %d for segment %d"),
+	// HoldingPositionFor when it draws, so rebuilding the surface here would be work for nothing.
+	UE_LOG(LogRoadMesh, Log, TEXT("Holding point %s at guideline node %d for segment %d"),
 		Protects.IsSet() ? TEXT("set") : TEXT("cleared"), NodeIndex, SegmentIndex);
 	return true;
 }

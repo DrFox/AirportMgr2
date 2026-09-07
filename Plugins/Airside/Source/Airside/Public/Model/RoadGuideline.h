@@ -42,7 +42,7 @@ struct AIRSIDE_API FGuidelineEndRef
 /**
  * A point on the guideline graph where something happens.
  *
- * Nodes exist at junctions, crossings, hold-short positions and entity anchors - NOT at
+ * Nodes exist at junctions, crossings, holding-position positions and entity anchors - NOT at
  * a fixed interval. Spec 3: a node every N metres has nothing to say to anybody, and the
  * parent spec's R9 subdivision was justified by a pathing benefit that moved to this
  * graph when the two graphs were separated.
@@ -58,7 +58,7 @@ struct AIRSIDE_API FGuidelineNode
 	UPROPERTY() TArray<FGuidelineEdgeId> Incident;
 
 	/** Set when this node requires clearance; names the surface it protects. Spec 5.5. */
-	UPROPERTY() FRoadSegmentId HoldShortFor;
+	UPROPERTY() FRoadSegmentId HoldingPositionFor;
 
 	/**
 	 * Overrides the default class priority at this node. Empty - the overwhelmingly
@@ -163,14 +163,14 @@ struct AIRSIDE_API FGuidelineEdge
 /**
  * A player-placed hold bar, stored by IDENTITY so it survives the rebuild. Spec §6.
  *
- * The flag itself lives on FGuidelineNode::HoldShortFor, and every derived node is thrown
+ * The flag itself lives on FGuidelineNode::HoldingPositionFor, and every derived node is thrown
  * away and re-made by FRoadGuidelineBuilder on each road edit - so the flag alone is a
  * CACHE, and this is the source it is rebuilt from. At is the same key the builder's own
  * Ends map uses, which is what lets the mark be resolved through the map the builder
  * already computes rather than by hunting for a coincident node.
  */
 USTRUCT()
-struct AIRSIDE_API FHoldShortMark
+struct AIRSIDE_API FHoldingPositionMark
 {
 	GENERATED_BODY()
 

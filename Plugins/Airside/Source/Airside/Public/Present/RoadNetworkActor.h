@@ -218,9 +218,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 
-	/** Place or clear a hold bar at a guideline node. SegmentIndex == -1 clears it. */
+	/** Place or clear a holding position at a guideline node. SegmentIndex == -1 clears it. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) override;
+	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, int32 SegmentIndex) override;
+
+	/**
+	 * DEPRECATED NAME, kept so a Blueprint that bound "SetHoldShort" still compiles - the
+	 * refactor contract: every UFUNCTION stays reachable at its old name as a forwarder.
+	 * "Hold short" is an ATC instruction, not a place; the place is a holding position
+	 * (spec 2026-09-07). New callers use SetIntermediateHoldingPosition.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Airside", meta = (DeprecatedFunction, DeprecationMessage = "Use SetIntermediateHoldingPosition"))
+	bool SetHoldShort(int32 NodeIndex, int32 SegmentIndex) { return SetIntermediateHoldingPosition(NodeIndex, SegmentIndex); }
 
 	/** Index of the nearest live node within Radius of Where, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")

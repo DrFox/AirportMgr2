@@ -18,7 +18,7 @@
  * URoadNetwork::RunwayNearGuidelineNode is a fact about the graph - the one-hop walk over
  * derived edges past the turn paths that join a taxiway end to a runway centreline - and
  * facts about the graph belong to the graph, where they can be tested with no world, no
- * actor and no tool at all (Airside.Build.HoldShortSurvivesRebuild does exactly that). A
+ * actor and no tool at all (Airside.Build.HoldingPositionSurvivesRebuild does exactly that). A
  * copy of that walk in here would be a second answer to the same question, and the two
  * would drift the first time the derivation changed.
  *
@@ -27,7 +27,7 @@
  * a toggle in the player's head ("is this junction guarded?"), which is exactly what a
  * click-to-flip reads as. The remove modifier the road tool uses is deliberately ignored.
  */
-class AIRSIDE_API FHoldShortTool : public IBuildTool
+class AIRSIDE_API FHoldingPointTool : public IBuildTool
 {
 public:
 	virtual FText GetDisplayName() const override;

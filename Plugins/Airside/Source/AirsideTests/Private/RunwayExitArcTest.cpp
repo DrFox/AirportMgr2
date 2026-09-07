@@ -179,7 +179,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 
 	// 2. THE TAXIWAY ENDS ExitLength BACK FROM X - or at its pavement cut if that is further,
 	//    which at an acute 45 degree corner it is (edge intersection plus the fillet's
-	//    tangent, about 6044 here) - and keeps its identity (a hold-short mark is keyed by it).
+	//    tangent, about 6044 here) - and keeps its identity (a holding-position mark is keyed by it).
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*Net, XT, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the taxiway's runway end exists by identity"), TEnd.IsSet())) { return false; }
 	{
@@ -334,7 +334,7 @@ namespace
 {
 	/**
 	 * A runway long enough for the Piper to stop before the exit, one 45 degree taxiway, and
-	 * a stand beside it. Shared by the hold-short, planner and handover tests so all three
+	 * a stand beside it. Shared by the holding-position, planner and handover tests so all three
 	 * argue about the same junction. X sits 60000 uu from the W threshold because the exit
 	 * arc begins ExitLength before it, and that start must be past the landing distance
 	 * (about 37000) or the planner would rightly skip it for a later node.
@@ -379,16 +379,16 @@ namespace
 }
 
 /**
- * The hold-short bar is keyed by the taxiway's END (FGuidelineEndRef), and the end has
+ * The holding-position bar is keyed by the taxiway's END (FGuidelineEndRef), and the end has
  * moved to the arc's start. The mark must follow it through a rebuild, or a bar the player
  * placed at a runway would come back on the wrong node - or nowhere.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FRunwayExitArcHoldShortTest,
-	"Airside.Build.RunwayExitArcHoldShort",
+	FRunwayExitArcHoldingPositionTest,
+	"Airside.Build.RunwayExitArcHoldingPosition",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FRunwayExitArcHoldShortTest::RunTest(const FString& Parameters)
+bool FRunwayExitArcHoldingPositionTest::RunTest(const FString& Parameters)
 {
 	FExitArcAirport A = ExitArcBuildAirport(GetTransientPackage(), /*bWithStand=*/false);
 	const FGuidelineNodeId TEnd = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/true);
@@ -397,7 +397,7 @@ bool FRunwayExitArcHoldShortTest::RunTest(const FString& Parameters)
 	// At least ExitLength: the cut distance wins at this acute corner (see RunwayExitArc).
 	TestTrue(FString::Printf(TEXT("that end is the arc start, at least ExitLength from X (%.0f)"), FVector2D::Distance(Before, A.XAt)),
 		FVector2D::Distance(Before, A.XAt) >= A.ExitLength - 1.0);
-	TestTrue(TEXT("a bar is set on it"), A.Net->SetHoldShort(TEnd, A.RW1));
+	TestTrue(TEXT("a bar is set on it"), A.Net->SetIntermediateHoldingPosition(TEnd, A.RW1));
 
 	// Rebuild from scratch, as a save/load or any edit does.
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*A.Net);
@@ -407,7 +407,7 @@ bool FRunwayExitArcHoldShortTest::RunTest(const FString& Parameters)
 	if (TestTrue(TEXT("the end still exists by identity after the rebuild"), After.IsSet()))
 	{
 		const FGuidelineNode* Node = A.Net->GetGuidelineNode(After);
-		TestTrue(TEXT("the bar came back on it"), Node->HoldShortFor == A.RW1);
+		TestTrue(TEXT("the bar came back on it"), Node->HoldingPositionFor == A.RW1);
 		TestTrue(FString::Printf(TEXT("at the same place (moved %.1f uu)"), FVector2D::Distance(Node->Position, Before)),
 			FVector2D::Distance(Node->Position, Before) < 1.0);
 	}

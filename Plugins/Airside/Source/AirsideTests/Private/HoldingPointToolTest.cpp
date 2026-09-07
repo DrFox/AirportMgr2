@@ -8,14 +8,14 @@
 #include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
 #include "Tool/GuidelineOverlay.h"
-#include "Tool/HoldShortTool.h"
+#include "Tool/HoldingPointTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 namespace
 {
 	/**
-	 * Counts what a hold-short gesture emits. NOT a HUD: the styles are meanings, so a
+	 * Counts what a holding-position gesture emits. NOT a HUD: the styles are meanings, so a
 	 * test is exactly as valid a sink as a canvas - see IToolPreviewSink.
 	 *
 	 * The M2Hold prefix is deliberate. AirsideTests is a UNITY build, so a bare FHoldSink
@@ -38,7 +38,7 @@ namespace
 		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
 		virtual void CrossMark(const FVector2D&, const FVector2D& Along, EPreviewStyle Style) override
 		{
-			if (Style == EPreviewStyle::HoldShort) { ++HoldBars; LastAlong = Along; }
+			if (Style == EPreviewStyle::RunwayHoldingPosition) { ++HoldBars; LastAlong = Along; }
 		}
 		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
 		{
@@ -63,11 +63,11 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FHoldShortToolTest,
-	"Airside.Tool.HoldShort",
+	FHoldingPointToolTest,
+	"Airside.Tool.HoldingPosition",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FHoldShortToolTest::RunTest(const FString& Parameters)
+bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 {
 	// A REAL WORLD AND A REAL ACTOR, not the model alone: the claim under test reaches
 	// through the facade to the undo stack, and a bar placed on a URoadNetwork by hand
@@ -107,7 +107,7 @@ bool FHoldShortToolTest::RunTest(const FString& Parameters)
 	FBuildSession Session;
 	TestEqual(TEXT("the session holds every registered tool"), Session.NumTools(), ToolRegistry().Num());
 
-	FHoldShortTool Tool;
+	FHoldingPointTool Tool;
 	FToolContext Ctx;
 	Ctx.Target = Actor;
 	Ctx.SnapRadius = 400.0;
@@ -116,11 +116,11 @@ bool FHoldShortToolTest::RunTest(const FString& Parameters)
 	Tool.OnClick(Ctx);
 
 	// A CHAIN MEMBER, not the one segment named above - the same reason
-	// Airside.Build.HoldShortSurvivesRebuild states: E joins two continuous runway segments,
+	// Airside.Build.HoldingPositionSurvivesRebuild states: E joins two continuous runway segments,
 	// so which of them RunwayNearGuidelineNode's one-hop walk meets first is decided by the
 	// junction's arm order. Both ARE the runway, and a bar can protect nothing else.
 	TestTrue(TEXT("click sets the bar for the runway it joins"),
-		Net.RunwayChain(R1).Contains(Net.GetGuidelineNode(Bar)->HoldShortFor));
+		Net.RunwayChain(R1).Contains(Net.GetGuidelineNode(Bar)->HoldingPositionFor));
 	FM2HoldSink Sink;
 	GuidelineOverlay::Draw(Net, Sink);
 	TestEqual(TEXT("the overlay draws one hold bar"), Sink.HoldBars, 1);
@@ -144,20 +144,20 @@ bool FHoldShortToolTest::RunTest(const FString& Parameters)
 	// Actor->Network each time rather than through a handle captured before the snapshot.
 	TestTrue(TEXT("undoable"), Actor->Undo());
 	TestFalse(TEXT("undo clears it"),
-		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldShortFor.IsSet());
+		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldingPositionFor.IsSet());
 	TestTrue(TEXT("redo"), Actor->Redo());
 	TestTrue(TEXT("redo restores it"),
-		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldShortFor.IsSet());
+		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldingPositionFor.IsSet());
 
 	Ctx.Cursor = Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->Position;
 	Tool.OnClick(Ctx);
 	TestFalse(TEXT("second click clears"),
-		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldShortFor.IsSet());
+		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, true))->HoldingPositionFor.IsSet());
 
 	Ctx.Cursor = Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, false))->Position;
 	Tool.OnClick(Ctx);
 	TestFalse(TEXT("a node with no runway near is refused"),
-		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, false))->HoldShortFor.IsSet());
+		Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, false))->HoldingPositionFor.IsSet());
 	TestFalse(TEXT("with a reason"), Tool.LastRefusal.IsEmpty());
 	FM2HoldSink Sink2;
 	Tool.BuildPreview(Ctx, Sink2);

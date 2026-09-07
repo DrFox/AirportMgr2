@@ -175,16 +175,16 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("with a real width"), Taxiway->GetTotalWidth() > 0.0);
 	}
 
-	// Hold bar <- a guideline node flagged hold-short.
+	// Hold bar <- a guideline node flagged holding-position.
 	//
-	// Nothing WRITES HoldShortFor yet - that is the build tool's job - so what section 6
+	// Nothing WRITES HoldingPositionFor yet - that is the build tool's job - so what section 6
 	// needs from the model here is that the node can CARRY the source. Asserting only that
 	// a node can be created would establish nothing about hold bars at all; this sets the
 	// field and reads it back through the network, which is the actual claim.
 	{
 		const FGuidelineNodeId Marked =
 			Net->AddGuidelineNode(FVector2D(1.0, 1.0), /*bDerived=*/false);
-		if (TestTrue(TEXT("a hold-short node can be created"), Marked.IsSet()))
+		if (TestTrue(TEXT("a holding-position node can be created"), Marked.IsSet()))
 		{
 			// Any live segment will do as the thing being protected; a runway is the real
 			// case, and the field is a plain FRoadSegmentId either way.
@@ -202,14 +202,14 @@ bool FRoadMarkingSourceTest::RunTest(const FString& Parameters)
 
 			if (FGuidelineNode* Mutable = Net->GetGuidelineNodeMutable(Marked))
 			{
-				Mutable->HoldShortFor = Protected;
+				Mutable->HoldingPositionFor = Protected;
 			}
 
 			const FGuidelineNode* ReadBack = Net->GetGuidelineNode(Marked);
-			if (TestNotNull(TEXT("the hold-short node resolves"), ReadBack))
+			if (TestNotNull(TEXT("the holding-position node resolves"), ReadBack))
 			{
 				TestTrue(TEXT("and carries the surface it protects"),
-					ReadBack->HoldShortFor == Protected);
+					ReadBack->HoldingPositionFor == Protected);
 			}
 		}
 	}

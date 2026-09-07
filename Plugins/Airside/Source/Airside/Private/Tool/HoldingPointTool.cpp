@@ -1,4 +1,4 @@
-#include "Tool/HoldShortTool.h"
+#include "Tool/HoldingPointTool.h"
 
 #include "AirsideLog.h"
 #include "Model/RoadGuideline.h"
@@ -8,14 +8,14 @@
 
 #define LOCTEXT_NAMESPACE "Airside"
 
-FText FHoldShortTool::GetDisplayName() const
+FText FHoldingPointTool::GetDisplayName() const
 {
 	// The SAME string the registry carries - Airside.Tool.BuildSession asserts the two
 	// agree, and the editor mode logs an error if its command label disagrees with either.
-	return LOCTEXT("HoldShort", "Hold short");
+	return LOCTEXT("HoldingPosition", "Holding point");
 }
 
-FGuidelineNodeId FHoldShortTool::PickNode(const FToolContext& Context) const
+FGuidelineNodeId FHoldingPointTool::PickNode(const FToolContext& Context) const
 {
 	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
@@ -30,7 +30,7 @@ FGuidelineNodeId FHoldShortTool::PickNode(const FToolContext& Context) const
 		*Context.Target->GetNetwork(), Context.Cursor, ETraversalClass::Aircraft, Context.SnapRadius);
 }
 
-void FHoldShortTool::OnClick(const FToolContext& Context)
+void FHoldingPointTool::OnClick(const FToolContext& Context)
 {
 	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
@@ -54,7 +54,7 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	if (Node->HoldShortFor.IsSet())
+	if (Node->HoldingPositionFor.IsSet())
 	{
 		// A second click on a flagged node clears it - see the class comment for why this
 		// is a toggle rather than a modifier. INDEX_NONE is the facade's "clear".
@@ -63,7 +63,7 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 		// swallowing that would leave the player clicking a bar that will not go away with
 		// nothing on screen to say why. The reason itself stays in the log, because it names
 		// slot indices that mean nothing to a player.
-		if (!Context.Target->SetHoldShort(Picked.Index, INDEX_NONE))
+		if (!Context.Target->SetIntermediateHoldingPosition(Picked.Index, INDEX_NONE))
 		{
 			LastRefusal = TEXT("The facade refused; see the log");
 			return;
@@ -82,15 +82,15 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 		// Logged as well as shown. "I clicked and nothing happened" is the report this
 		// project gets, and a line in AirportMgr.log settles it without a screenshot.
 		UE_LOG(LogAirside, Log,
-			TEXT("Hold short refused at guideline node %d: no runway within one edge"),
+			TEXT("Holding point refused at guideline node %d: no runway within one edge"),
 			Picked.Index);
 		return;
 	}
 
 	// INDICES, because that is what this seam takes: the facade re-derives the
 	// generation-checked handles and refuses a dead slot in one place - see
-	// IRoadEditTarget::SetHoldShort. Honoured, for the reason given on the clear above.
-	if (!Context.Target->SetHoldShort(Picked.Index, Runway.Index))
+	// IRoadEditTarget::SetIntermediateHoldingPosition. Honoured, for the reason given on the clear above.
+	if (!Context.Target->SetIntermediateHoldingPosition(Picked.Index, Runway.Index))
 	{
 		LastRefusal = TEXT("The facade refused; see the log");
 		return;
@@ -99,13 +99,13 @@ void FHoldShortTool::OnClick(const FToolContext& Context)
 	LastRefusal.Empty();
 }
 
-void FHoldShortTool::OnCancel(const FToolContext& Context)
+void FHoldingPointTool::OnCancel(const FToolContext& Context)
 {
 	// Nothing is ever part-drawn, so the only thing a cancel can take back is the message.
 	LastRefusal.Empty();
 }
 
-void FHoldShortTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
+void FHoldingPointTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
 	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
 	{
@@ -117,7 +117,7 @@ void FHoldShortTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// The bars themselves are NOT drawn here. GuidelineOverlay is their only emitter, so
 	// they are visible under every tool rather than only this one - the same rule the
 	// guideline graph follows, and for the same reason: a bar you can see only while the
-	// hold-short tool is selected is a bar you forget you placed.
+	// holding-position tool is selected is a bar you forget you placed.
 	if (const FGuidelineNodeId Hover = PickNode(Context); Hover.IsSet())
 	{
 		if (const FGuidelineNode* Node = Network.GetGuidelineNode(Hover))
@@ -126,7 +126,7 @@ void FHoldShortTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 			// THIS click would do, and on a flagged node the click REMOVES the bar - so
 			// Snap would promise the exact opposite of what is about to happen.
 			Sink.Marker(Node->Position,
-				Node->HoldShortFor.IsSet() ? EPreviewStyle::Doomed : EPreviewStyle::Snap);
+				Node->HoldingPositionFor.IsSet() ? EPreviewStyle::Doomed : EPreviewStyle::Snap);
 		}
 	}
 

@@ -298,7 +298,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 			// A taxiway meeting a runway ends where its exit arc begins - ExitLength back
 			// from the node along its own tangent - not at its pavement cut. The end node
-			// keeps its Origin, so a hold-short mark keyed by this end lands on the arc's
+			// keeps its Origin, so a holding-position mark keyed by this end lands on the arc's
 			// start. The continuous arm is NOT moved here: its guideline still ends on the
 			// node and is split below instead, so the runway stays one line through.
 			const uint64 KeyA = EndKey(Index, true, 0);
@@ -603,7 +603,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 	}
 
-	// --- Re-apply hold-short marks ------------------------------------------------------
+	// --- Re-apply holding-position marks ------------------------------------------------------
 	//
 	// The flag lives on a node and every derived node above is FRESH, so a bar the player
 	// placed would vanish on the next road edit. The mark is stored by the same identity
@@ -613,7 +613,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// The network owns this invariant, not the builder - it merely knows WHEN to ask.
 		// Pruning first also means the loop below cannot re-apply a mark whose runway has
 		// been deleted, which would put a bar on a node protecting nothing.
-		Network.PruneHoldShortMarks();
+		Network.PruneHoldingPositionMarks();
 
 		// CLEAR SURVIVING FLAGS BEFORE RE-APPLYING, because not every flagged node is fresh.
 		// Most derived nodes are made anew above and start unflagged, but a node the sweep
@@ -623,7 +623,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		// standing on the node, protecting a strip that no longer exists.
 		//
 		// Two rules, because the two kinds of node have DIFFERENT sources of truth, and
-		// URoadNetwork::SetHoldShort says which is which:
+		// URoadNetwork::SetIntermediateHoldingPosition says which is which:
 		//   - Origin set: the MARK is the source and the flag is its cache, so the flag is
 		//     cleared and the loop below writes it back. Rebuilding a cache means emptying
 		//     it, not merely adding to it - EXCEPT when this pass derived nothing for that
@@ -640,14 +640,14 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			const TArray<FGuidelineNode>& Live = Network.GetGuidelineNodes();
 			for (int32 Index = 0; Index < Live.Num(); ++Index)
 			{
-				if (!Live[Index].bAlive || !Live[Index].HoldShortFor.IsSet())
+				if (!Live[Index].bAlive || !Live[Index].HoldingPositionFor.IsSet())
 				{
 					continue;
 				}
 
 				const FGuidelineEndRef& Origin = Live[Index].Origin;
 				const bool bMarkBacked = Origin.IsSet();
-				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldShortFor))
+				if (!bMarkBacked && Network.IsRunwaySegment(Live[Index].HoldingPositionFor))
 				{
 					continue;
 				}
@@ -660,12 +660,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 				if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(Network.GuidelineNodeIdAt(Index)))
 				{
-					Node->HoldShortFor = FRoadSegmentId();
+					Node->HoldingPositionFor = FRoadSegmentId();
 				}
 			}
 		}
 
-		for (const FHoldShortMark& Mark : Network.GetHoldShortMarks())
+		for (const FHoldingPositionMark& Mark : Network.GetHoldingPositionMarks())
 		{
 			const FGuidelineNodeId* Found = Ends.Find(
 				EndKey(Mark.At.Segment.Index, Mark.At.bEndA, Mark.At.GuidelineIndex));
@@ -684,7 +684,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 			if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found))
 			{
-				Node->HoldShortFor = Mark.Protects;
+				Node->HoldingPositionFor = Mark.Protects;
 			}
 		}
 	}
@@ -716,11 +716,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 	// stand", and everything between the two was a guess. One line per build, so the next
 	// such report is answered by a grep.
 	{
-		int32 NodesAlive = 0, HoldShort = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
+		int32 NodesAlive = 0, HoldingPosition = 0, EdgesAlive = 0, Authored = 0, TurnPaths = 0;
 		for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
 		{
 			NodesAlive += Node.bAlive ? 1 : 0;
-			HoldShort += (Node.bAlive && Node.HoldShortFor.IsSet()) ? 1 : 0;
+			HoldingPosition += (Node.bAlive && Node.HoldingPositionFor.IsSet()) ? 1 : 0;
 		}
 		for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
 		{
@@ -730,7 +730,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			TurnPaths += (Edge.bDerived && !Edge.DerivedFrom.IsSet()) ? 1 : 0;
 		}
 		UE_LOG(LogAirside, Log,
-			TEXT("Guidelines: %d nodes (%d hold-short), %d edges (%d hand-authored, %d turn paths), %d hold-short mark(s) on file"),
-			NodesAlive, HoldShort, EdgesAlive, Authored, TurnPaths, Network.GetHoldShortMarks().Num());
+			TEXT("Guidelines: %d nodes (%d holding-position), %d edges (%d hand-authored, %d turn paths), %d holding-position mark(s) on file"),
+			NodesAlive, HoldingPosition, EdgesAlive, Authored, TurnPaths, Network.GetHoldingPositionMarks().Num());
 	}
 }

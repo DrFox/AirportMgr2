@@ -12,7 +12,7 @@ enum class ETrafficResourceKind : uint8
 	Edge,
 	/** A guideline node. Exclusive: junctions and crossings are the conflict points. */
 	Node,
-	/** One segment of a runway. A landing holds every segment of the chain; a hold-short
+	/** One segment of a runway. A landing holds every segment of the chain; a holding-position
 	 *  node names one and the arbiter expands it. */
 	Surface,
 };

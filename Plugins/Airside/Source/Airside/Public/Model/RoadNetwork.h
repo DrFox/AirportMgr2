@@ -92,7 +92,7 @@ public:
 	 * walked rather than the ends. Empty when Seed is not a live runway. Includes Seed.
 	 *
 	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
-	 * chain, a hold-short names one, and the arbiter expands it here - so an exit added to a
+	 * chain, a holding-position names one, and the arbiter expands it here - so an exit added to a
 	 * runway after the hold bar was placed still protects the whole strip.
 	 */
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
@@ -191,7 +191,7 @@ public:
 	 * A guideline node.
 	 *
 	 * bDerived defaults true, which is right for everything FRoadGuidelineBuilder creates.
-	 * Pass false for a node somebody AUTHORED - an entity anchor, a hold-short position -
+	 * Pass false for a node somebody AUTHORED - an entity anchor, a holding-position position -
 	 * because the builder's orphan sweep removes idle DERIVED nodes, and an authored node
 	 * is idle from the moment it is placed until an edge is drawn to it.
 	 */
@@ -220,7 +220,7 @@ public:
 	/**
 	 * Mutable access to a guideline node.
 	 *
-	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldShortFor and
+	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldingPositionFor and
 	 * PriorityOverride live on the NODE, and until the build tool can author them there is
 	 * otherwise no way for anything - including a test - to write either.
 	 */
@@ -236,7 +236,7 @@ public:
 	 */
 	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
 
-	// --- Hold-short bars ---------------------------------------------------------------
+	// --- Holding-position bars ---------------------------------------------------------------
 
 	/**
 	 * Place, move or clear the hold bar at a guideline node. False when it refused.
@@ -251,9 +251,9 @@ public:
 	 * taxiway would make the arbiter expand a chain that is not a strip - and a dead node
 	 * refuses, rather than writing a flag nothing will ever read.
 	 */
-	bool SetHoldShort(FGuidelineNodeId Node, FRoadSegmentId Protects);
+	bool SetIntermediateHoldingPosition(FGuidelineNodeId Node, FRoadSegmentId Protects);
 
-	const TArray<FHoldShortMark>& GetHoldShortMarks() const { return HoldShortMarks; }
+	const TArray<FHoldingPositionMark>& GetHoldingPositionMarks() const { return HoldingPositionMarks; }
 
 	/**
 	 * Drop marks whose node identity or whose protected runway no longer exists.
@@ -264,7 +264,7 @@ public:
 	 * by index: slots are recycled, and a mark left naming a recycled slot would silently
 	 * move a bar onto whatever road took the index over.
 	 */
-	void PruneHoldShortMarks();
+	void PruneHoldingPositionMarks();
 
 	/**
 	 * The runway a hold bar at this node would protect, or unset.
@@ -413,7 +413,7 @@ private:
 	 * duplicates this object), so a Transient array here would lose every bar on save and
 	 * on the first Ctrl+Z.
 	 */
-	UPROPERTY() TArray<FHoldShortMark> HoldShortMarks;
+	UPROPERTY() TArray<FHoldingPositionMark> HoldingPositionMarks;
 
 	UPROPERTY() TArray<FApronSurface> Aprons;
 	UPROPERTY() TArray<int32>         ApronFreeList;

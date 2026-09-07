@@ -477,9 +477,9 @@ bool ARoadNetworkActor::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* 
 	return Facade->PlaceRunway(From, To, RunwayProfile);
 }
 
-bool ARoadNetworkActor::SetHoldShort(int32 NodeIndex, int32 SegmentIndex)
+bool ARoadNetworkActor::SetIntermediateHoldingPosition(int32 NodeIndex, int32 SegmentIndex)
 {
-	return Facade->SetHoldShort(NodeIndex, SegmentIndex);
+	return Facade->SetIntermediateHoldingPosition(NodeIndex, SegmentIndex);
 }
 
 bool ARoadNetworkActor::DisconnectGuideline(int32 EdgeIndex)

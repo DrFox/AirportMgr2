@@ -113,8 +113,8 @@ enum class EPreviewStyle : uint8
 	/** A route that was found, and would be driven. */
 	Route,
 
-	/** A hold bar: a player-placed line an aircraft stops at. Context, like Guideline, but authored. */
-	HoldShort,
+	/** A runway-holding position: the bar across a taxiway end at a runway. Context, like Guideline; derived since 2026-09-07. */
+	RunwayHoldingPosition,
 };
 
 /**
