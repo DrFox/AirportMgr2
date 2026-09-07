@@ -166,6 +166,13 @@ struct AIRSIDE_API FTrafficOccupancy
 	const TArray<FTrafficClaim>& GetClaims() const { return Claims; }
 
 	/**
+	 * The one claim AgentId holds on Resource, or null. What the deadlock resolver reads to
+	 * tell a blocker that is standing on the ground (bOccupied) from one that has merely
+	 * reserved it - the difference between a jam and a yield. See ResolveDeadlocks.
+	 */
+	const FTrafficClaim* FindClaim(int32 AgentId, const FTrafficResource& Resource) const;
+
+	/**
 	 * Drops every EDGE and NODE claim, whoever holds it, and KEEPS every SURFACE claim.
 	 *
 	 * What a guideline rebuild releases - see UGroundTraffic::OnGraphRebuilt. The distinction

@@ -380,6 +380,12 @@ public:
 	/** Id of the last agent whose deadlock replan SUCCEEDED, or 0 if none ever has. */
 	int32 GetLastResolvedAgentForTest() const { return LastResolvedAgent; }
 
+	/** How many reservation cycles were settled by a yield rather than a replan. See §5. */
+	int32 GetYieldsForTest() const { return Yields; }
+
+	/** Id of the last agent that yielded its reservations, or 0 if none has. */
+	int32 GetLastYieldedAgentForTest() const { return LastYieldedAgent; }
+
 	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
 	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
 
@@ -484,6 +490,19 @@ private:
 
 	/** Last agent whose deadlock replan succeeded; 0 until one does. Test-facing, as above. */
 	int32 LastResolvedAgent = 0;
+
+	/**
+	 * When each cycle key last settled by a YIELD (SimSeconds). Read by the tick, unlike the
+	 * sets above: a cycle that re-forms within Rules.RetrySeconds of yielding is one a yield
+	 * did not fix - the other member wanted something a third party holds - and goes to the
+	 * replan path instead of yielding for ever. Plain member for the same reason as CyclesSeen:
+	 * agents never reach disk, so a key could not mean anything to a later session.
+	 */
+	TMap<int32, double> YieldedAt;
+
+	/** Reservation cycles settled by a yield; and who yielded last. Test-facing. */
+	int32 Yields = 0;
+	int32 LastYieldedAgent = 0;
 
 	/** Deadlock lines emitted, resolved and unresolvable alike. Test-facing, as above. */
 	int32 DeadlockLogLines = 0;

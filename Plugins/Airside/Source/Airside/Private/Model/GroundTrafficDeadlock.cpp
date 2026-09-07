@@ -273,6 +273,83 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 			continue;
 		}
 
+		// THE KEY: the lowest member id. Used twice below - once to remember a yield, once to
+		// count the cycle - and computed once so the two cannot disagree.
+		int32 Key = Cycle[0];
+		for (const int32 Id : Cycle)
+		{
+			Key = FMath::Min(Key, Id);
+		}
+
+		// A CYCLE OF RESERVATIONS IS A YIELD, NOT A DEADLOCK. Spec §5, amended 2026-09-07.
+		//
+		// The wait-for graph does not know whether a blocker is STANDING on the contested
+		// ground or has merely reserved it ahead of its nose, and the two are different
+		// situations. Two aircraft closing on a 392 uu stub between two junctions from
+		// opposite sides, each ~2000 uu short of it (samples/routing2.png): the first had
+		// reserved the stub, the second had reserved the node at its far end - the node's
+		// reach asks for it earlier than the window reaches the stub - and each was refused
+		// the other's reservation. Nobody was in anybody's way. Read as a deadlock, the
+		// resolver replanned the second round the whole taxiway loop, 135 km of taxi in place
+		// of 16, when all it had to do was let go of a node it was not standing on.
+		//
+		// So: when EVERY refusal in the cycle is against a reservation, the member the replan
+		// below would have chosen gives up its reservations instead. It keeps the ground its
+		// body is on (ReleaseReservations, not ReleaseAll - see that function), and re-claims
+		// on its next pass, by which time the other member has taken what it needed: the
+		// yielder is the lowest-ranked, highest-id member, and Arbitrate asks higher ranks
+		// first and lower ids first, so the others always claim before it does.
+		//
+		// GUARDED BY YieldedAt: a cycle that re-forms within a retry window of yielding is
+		// one a yield could not settle - the other member is also refused something a third
+		// party holds - and takes the replan path rather than yielding on every window.
+		bool bAllReservations = true;
+		for (const int32 Id : Cycle)
+		{
+			const FRoadAgent* Member = FindAgent(Id);
+			const FTrafficClaim* Blocking = Member != nullptr
+				? Occupancy.FindClaim(Member->WaitingOn, Member->BlockedResource) : nullptr;
+			// A blocker nobody can find is treated as standing there: the replan path is the
+			// conservative one, and a stale refusal must not be able to talk the resolver
+			// into releasing anything.
+			bAllReservations = bAllReservations && Blocking != nullptr && !Blocking->bOccupied;
+		}
+		const double* LastYield = YieldedAt.Find(Key);
+		if (bAllReservations && (LastYield == nullptr || *LastYield < SimSeconds - Rules.RetrySeconds))
+		{
+			TArray<int32> ByYieldOrder = Cycle;
+			ByYieldOrder.Sort([this](const int32 A, const int32 B)
+			{
+				const FRoadAgent* AgentA = FindAgent(A);
+				const FRoadAgent* AgentB = FindAgent(B);
+				const int32 RankA = AgentA ? TraversalPriority(AgentA->Class) : 0;
+				const int32 RankB = AgentB ? TraversalPriority(AgentB->Class) : 0;
+				return RankA != RankB ? RankA < RankB : A > B;
+			});
+			const int32 Yielder = ByYieldOrder[0];
+
+			FString YieldMembers;
+			for (const int32 Id : Cycle)
+			{
+				const int32 Index = FindIndex(Id);
+				if (Index != INDEX_NONE)
+				{
+					Agents[Index].LastResolveAttempt = SimSeconds;
+				}
+				YieldMembers += YieldMembers.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
+			}
+
+			Occupancy.ReleaseReservations(Yielder);
+			YieldedAt.Add(Key, SimSeconds);
+			++Yields;
+			LastYieldedAgent = Yielder;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Reservation cycle among agents [%s]: agent %d yields its reservations"),
+				*YieldMembers, Yielder);
+			++DeadlockLogLines;
+			CyclesSeen.Add(Key);
+			continue;
+		}
+
 		// EVERY WAITER THAT CAN ACTUALLY TURN, in the order they should be asked: lowest
 		// class priority first, so a van goes round rather than an aeroplane; ties to the
 		// HIGHEST id, which is the later arrival - the one with least of its journey already
@@ -393,11 +470,6 @@ void UGroundTraffic::ResolveDeadlocks(const URoadNetwork& Network)
 		// the same jam to a player reading the log. The KEY is why this set has one entry per
 		// jam however many lines the jam produced; DeadlockLogLines above is the line count,
 		// and the two answer different questions.
-		int32 Key = Cycle[0];
-		for (const int32 Id : Cycle)
-		{
-			Key = FMath::Min(Key, Id);
-		}
 		CyclesSeen.Add(Key);
 	}
 }

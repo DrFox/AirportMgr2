@@ -2045,4 +2045,117 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficReservationCycleYieldsTest,
+	"Airside.Model.Traffic.ReservationCycleYields",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
+{
+	// samples/routing2.png, 2026-09-07. A 392 uu stub of taxiway between two junctions;
+	// one aircraft closing on it from each side, both still ~2000 uu short. Green (here:
+	// First) holds the far node of the stub - its junction's arms hug each other, so the
+	// node's reach asks for it long before the window reaches the stub - and Second holds
+	// the stub. Each is refused the other's RESERVATION. Nobody is in anybody's way, yet the
+	// wait-for graph is a two-member cycle, and the resolver sent the later aircraft round
+	// the whole loop. Here there is NO alternative route at all: the old resolver logged "no
+	// member can turn" and both waited for ever. The yield rule lets one of them drop what
+	// it has not reached, the other passes, and both arrive without a replan.
+	//
+	// THE GRAPH. Stub n30 (0,0) - n31 (0,-392). From n31, two arms leave southward as tangent
+	// arcs (control (0, -392-R)) and curve apart to E1 and W1 - a junction's turn paths, which
+	// share the arm's tangent at the node. Their reach at n31 is what asks for the node
+	// early and stages the cycle. R IS SMALL, 600, so the arcs are ~940 uu and the reach is
+	// capped there: First's stop point for the node-30 refusal is 1315 short of n31, and with
+	// the 2582 uu arcs of NodeReach.TangentArc (reach 2500) it rolled INSIDE n31's zone, its
+	// claim became an occupancy, and the resolver rightly said a body was in the way - on
+	// those arcs Second's exit really would pass within a footprint of First. The junction in
+	// routing2.png has ~1200 uu turn paths and the aircraft stopped 1956 short, outside.
+	// From n30: a spur east to NR (1900,0), Second's start, and the line north to NN
+	// (0,8000), First's goal.
+	const double R = 600.0;
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId N30 = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N31 = M2TrafficNode(*Net, 0.0, -392.0);
+	const FGuidelineNodeId NN = M2TrafficNode(*Net, 0.0, 8000.0);
+	const FGuidelineNodeId NR = M2TrafficNode(*Net, 1900.0, 0.0);
+	const FGuidelineNodeId E1 = M2TrafficNode(*Net, R, -392.0 - R);
+	const FGuidelineNodeId W1 = M2TrafficNode(*Net, -R, -392.0 - R);
+	const FGuidelineNodeId E = M2TrafficNode(*Net, R + 8000.0, -392.0 - R);
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -R - 8000.0, -392.0 - R);
+	const FGuidelineEdgeId Stub = M2TrafficJoin(*Net, N30, N31);
+	M2TrafficJoin(*Net, N30, NN);
+	M2TrafficJoin(*Net, N30, NR);
+	M2TrafficJoin(*Net, E1, E);
+	M2TrafficJoin(*Net, W1, W);
+	for (const FGuidelineNodeId Arm : { E1, W1 })
+	{
+		FGuidelineEdge Arc;
+		Arc.A = N31; Arc.B = Arm;
+		Arc.Control = FVector2D(0.0, -392.0 - R);
+		Arc.AllowedTraffic = FTrafficMask::All();
+		Net->AddGuidelineEdge(MoveTemp(Arc));
+	}
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// FIRST goes W -> W1 -> n31 -> stub -> n30 -> NN. Run it until it holds n31 and not yet
+	// the stub: the reach has asked for the node, the window has not reached the edge.
+	const int32 First = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, NN, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("first dispatched"), First > 0)) { return false; }
+	const int32 FirstSteps = Traffic->FindAgent(First)->Follower.Plan.Steps.Num();
+	bool bStaged = false;
+	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	{
+		int32 Holder = 0;
+		const bool bNodeHeld = Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(N31), 0, &Holder) && Holder == First;
+		const bool bStubHeld = Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(Stub), 0);
+		bStaged = bNodeHeld && !bStubHeld;
+		return !bStaged;
+	});
+	if (!TestTrue(TEXT("staged: First holds n31 and nobody holds the stub"), bStaged)) { return false; }
+
+	// SECOND starts 1900 uu east of n30, at rest: its window (F/2 + G = 2000) covers n30 and
+	// the near end of the stub, and stops 392 short of n31 - so it reserves the stub and
+	// never asks for the node First already holds. Route NR -> n30 -> stub -> n31 -> E1 -> E.
+	const int32 Second = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, NR, E, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("second dispatched"), Second > 0)) { return false; }
+	const int32 SecondSteps = Traffic->FindAgent(Second)->Follower.Plan.Steps.Num();
+
+	bool bCycleFormed = false;
+	int32 CycleTick = -1;
+	M2TrafficRun(*Traffic, *Net, 200.0, [&](int32 Tick)
+	{
+		const FRoadAgent* A = Traffic->FindAgent(First);
+		const FRoadAgent* B = Traffic->FindAgent(Second);
+		if (A == nullptr || B == nullptr) { return false; }
+		if (!bCycleFormed && A->WaitingOn == Second && B->WaitingOn == First)
+		{
+			bCycleFormed = true;
+			CycleTick = Tick;
+		}
+		return A->Phase != EAgentPhase::Parked || B->Phase != EAgentPhase::Parked;
+	});
+
+	const FRoadAgent* A = Traffic->FindAgent(First);
+	const FRoadAgent* B = Traffic->FindAgent(Second);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("ReservationCycleYields measured: cycle formed at tick %d; yields %d (last yielder %d, Second = %d); replans %d; ")
+		TEXT("cycles %d; First %s %d step(s) (was %d), Second %s %d step(s) (was %d)"),
+		CycleTick, Traffic->GetYieldsForTest(), Traffic->GetLastYieldedAgentForTest(), Second, Traffic->GetLastResolvedAgentForTest(),
+		Traffic->GetCyclesDetectedForTest(),
+		A ? *UEnum::GetValueAsString(A->Phase) : TEXT("gone"), A ? A->Follower.Plan.Steps.Num() : 0, FirstSteps,
+		B ? *UEnum::GetValueAsString(B->Phase) : TEXT("gone"), B ? B->Follower.Plan.Steps.Num() : 0, SecondSteps);
+
+	TestTrue(TEXT("the reservation cycle formed: each waited on the other"), bCycleFormed);
+	TestEqual(TEXT("it was settled by exactly one yield"), Traffic->GetYieldsForTest(), 1);
+	TestEqual(TEXT("by the later aircraft"), Traffic->GetLastYieldedAgentForTest(), Second);
+	TestEqual(TEXT("and nobody replanned"), Traffic->GetLastResolvedAgentForTest(), 0);
+	TestTrue(TEXT("both arrived"), A != nullptr && B != nullptr && A->Phase == EAgentPhase::Parked && B->Phase == EAgentPhase::Parked);
+	TestTrue(TEXT("on the routes they were cleared for"),
+		A != nullptr && B != nullptr && A->Follower.Plan.Steps.Num() == FirstSteps && B->Follower.Plan.Steps.Num() == SecondSteps);
+	return true;
+}
+
 #endif
