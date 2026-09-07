@@ -18,6 +18,31 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
 
+namespace
+{
+	/**
+	 * Shows or hides the card - the visible chrome - BY NAME rather than through a bound slot:
+	 * the code-built card is named InspectorCard, and a Blueprint restyle names its own card
+	 * the same to get the hide-when-nothing-selected behaviour. A free function rather than a
+	 * member so this fix was a function-body change Live Coding could apply.
+	 */
+	void ShowInspectorCard(UWidgetTree* Tree, bool bShown)
+	{
+		UWidget* Card = Tree != nullptr ? Tree->FindWidget(TEXT("InspectorCard")) : nullptr;
+		if (Card == nullptr)
+		{
+			return;
+		}
+		Card->SetVisibility(bShown ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
+
+	bool IsInspectorCardShown(UWidgetTree* Tree)
+	{
+		UWidget* Card = Tree != nullptr ? Tree->FindWidget(TEXT("InspectorCard")) : nullptr;
+		return Card != nullptr && Card->GetVisibility() != ESlateVisibility::Collapsed;
+	}
+}
+
 ARoadBuildController* UInspectorWidget::Controller() const
 {
 	if (APlayerController* Owning = GetOwningPlayer())
@@ -38,7 +63,12 @@ bool UInspectorWidget::Initialize()
 	EnsureSlots();
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
-	SetVisibility(ESlateVisibility::Collapsed);
+	// THE ROOT IS NEVER COLLAPSED. Slate ticks a widget from its paint pass, and a Collapsed
+	// widget is not arranged, so it is not painted, so NativeTick never runs - and the tick
+	// is the only thing that would un-collapse it (PIE 2026-09-07: panel created, never
+	// shown). The root stays laid out and click-transparent; only the CARD hides.
+	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	ShowInspectorCard(WidgetTree, false);
 	return bOk;
 }
 
@@ -115,7 +145,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 {
 	if (Target == nullptr || !Selection.IsSet())
 	{
-		SetVisibility(ESlateVisibility::Collapsed);
+		ShowInspectorCard(WidgetTree, false);
 		bDepartEnabled = false;
 		return;
 	}
@@ -127,7 +157,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FAgentFacts F;
 		if (Target->GetGroundTraffic() == nullptr || !InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Selection.Id, F))
 		{
-			SetVisibility(ESlateVisibility::Collapsed);
+			ShowInspectorCard(WidgetTree, false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -145,7 +175,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
 		{
-			SetVisibility(ESlateVisibility::Collapsed);
+			ShowInspectorCard(WidgetTree, false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -170,9 +200,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	// The root itself takes no clicks - an empty canvas that swallowed them would eat the
-	// tool's clicks under the panel - but its children (the buttons) do.
-	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+	ShowInspectorCard(WidgetTree, true);
 }
 
 void UInspectorWidget::RunActionById(FName Id)
@@ -201,6 +229,6 @@ void UInspectorWidget::RunActionById(FName Id)
 void UInspectorWidget::HandleDepart() { RunActionById(TEXT("selection.depart")); }
 void UInspectorWidget::HandleFollow() { RunActionById(TEXT("selection.follow")); }
 
-bool UInspectorWidget::IsShownForTest() const { return GetVisibility() != ESlateVisibility::Collapsed; }
+bool UInspectorWidget::IsShownForTest() const { return IsInspectorCardShown(WidgetTree); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
