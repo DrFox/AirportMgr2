@@ -189,6 +189,11 @@ Authoring priority per crossing was rejected: laborious, and wrong the moment a 
 
 ### 5.5 Hold-short
 
+> **Amended 2026-09-07** by `2026-09-07-holding-positions-design.md`: the flag is a
+> *holding position* (`EHoldingPositionKind` + `HoldingPositionFor`), not a "hold-short".
+> Runway-holding positions are derived by the builder at every taxiway end on a runway;
+> the player places intermediate ones. "Hold short" is an instruction and belongs to M3.
+
 A flag on a guideline **node**, naming the surface whose clearance it protects. Parent R10 guarantees a runway crossing produces a real node, so the topology already exists.
 
 ### 5.6 Size limits
