@@ -96,12 +96,30 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		return;
 	}
 
-	// The airframe MESH, not to be confused with the FAirframe performance struct. Pushed in,
-	// like the pose: a view that fetched its own mesh by path was how a content move turned
-	// every aircraft into a cube - see ARoadAgentActor::SetAirframe.
-	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
+	// The MESH, not to be confused with the FAirframe performance struct. Pushed in, like the
+	// pose: a view that fetched its own mesh by path was how a content move turned every
+	// aircraft into a cube - see ARoadAgentActor::SetAirframe.
+	//
+	// BY THE AGENT'S CLASS, because an aircraft and a truck are different assets of different
+	// KINDS - one skeletal, one static. Decided HERE rather than inside the view, so the view
+	// still knows nothing about traffic classes and stays the dumb thing its header promises.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Agent->Class == ETraversalClass::Aircraft)
 	{
-		View->SetAirframe(Content->AgentMesh.LoadSynchronous(), Content->AgentAnimClass.LoadSynchronous());
+		if (Content != nullptr)
+		{
+			View->SetAirframe(Content->AgentMesh.LoadSynchronous(), Content->AgentAnimClass.LoadSynchronous());
+		}
+	}
+	else
+	{
+		// THE BOX IS THE FOOTPRINT THE ARBITER RESERVES, read off the rules rather than
+		// written here a second time: what the player sees stopping at a junction is then the
+		// length that actually stopped. Half the length across and half again tall, which is
+		// a van's proportions.
+		const double Length = Model->Rules.FootprintFor(Agent->Class);
+		View->SetVehicleBody(Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr,
+			FVector(Length, Length * 0.5, Length * 0.5));
 	}
 
 	// Posed before its first tick, so it appears at the start of its route rather than at the

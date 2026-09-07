@@ -9,6 +9,7 @@ class UMaterialInterface;
 class URoadProfile;
 class UAnimInstance;
 class USkeletalMesh;
+class UStaticMesh;
 class UAircraftType;
 
 /**
@@ -144,6 +145,17 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<USkeletalMesh> AgentMesh;
+
+	/**
+	 * What a GROUND VEHICLE agent looks like. Null leaves the placeholder box.
+	 *
+	 * STATIC, not skeletal, and beside AgentMesh rather than replacing a branch inside it: a
+	 * truck's wheels turn and nothing else does, and there is no rig yet. The box it falls
+	 * back to is sized from FTrafficRules::VehicleFootprint, so what is on screen is the
+	 * length the arbiter actually keeps clear - see ARoadAgentActor::SetVehicleBody.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<UStaticMesh> VehicleMesh;
 
 	/**
 	 * What drives the airframe's moving parts. Null leaves it posed in its reference pose.

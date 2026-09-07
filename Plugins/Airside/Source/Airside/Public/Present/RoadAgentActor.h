@@ -49,6 +49,28 @@ public:
 
 	void SetAirframe(USkeletalMesh* InAirframe, UClass* AnimClass = nullptr);
 
+	/**
+	 * Dress this view as a GROUND VEHICLE: Mesh if one was configured, else a box of
+	 * BoxSizeUu.
+	 *
+	 * THE SIBLING OF SetAirframe, on this actor rather than in a second class, because
+	 * everything else about showing an agent - the pose, the motion, the no-collision rule,
+	 * the outliner sprite - is identical, and a second AActor would be a copy of all of it
+	 * that must agree for ever.
+	 *
+	 * BoxSizeUu is the FULL size, X forward, so the caller passes the footprint the traffic
+	 * arbiter actually reserves rather than a scale factor this class would have to know how
+	 * to interpret. See UAirsideTraffic::SpawnView, which reads it off FTrafficRules.
+	 */
+	void SetVehicleBody(UStaticMesh* Mesh, const FVector& BoxSizeUu);
+
+	/** True once SetVehicleBody has dressed this view. For Airside.Present.VehicleAgentView. */
+	bool HasVehicleBodyForTest() const { return bIsVehicle; }
+
+	/** What the placeholder was sized to, uu. For the same test, which checks it against
+	 *  FTrafficRules rather than against a literal. */
+	FVector PlaceholderSizeForTest() const { return PlaceholderSizeUu; }
+
 private:
 	/**
 	 * The aircraft. SKELETAL, so the propeller and wheels can turn - see UAirsideAgentAnim.
@@ -78,6 +100,24 @@ private:
 	 * never serialised anyway.
 	 */
 	bool bHasAirframe = false;
+
+	/**
+	 * The placeholder's world size in uu, so SetMotion's lift follows whatever the box was
+	 * scaled to.
+	 *
+	 * A MEMBER RATHER THAN A CONSTANT, because the box is no longer one size: an aircraft's
+	 * stand-in is 4 m x 4 m x 2 m and a van's is its own footprint. The lift is half the
+	 * HEIGHT, and reading it off a constant after the scale changed would sink a van into
+	 * the road by exactly the difference.
+	 *
+	 * NOT a UPROPERTY, for the reason bHasAirframe is not: it is decided by construction or
+	 * by a dressing call, and agents are transient and never serialised.
+	 */
+	FVector PlaceholderSizeUu = FVector(400.0, 400.0, 200.0);
+
+	/** False for an aircraft view. Only records WHAT dressed this actor - the pose maths is
+	 *  the same either way, and reads PlaceholderSizeUu rather than this. */
+	bool bIsVehicle = false;
 
 	/**
 	 * What the model last said this agent was doing.

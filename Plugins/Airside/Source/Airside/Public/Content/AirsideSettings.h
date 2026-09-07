@@ -60,4 +60,26 @@ public:
 	 * at all, which every automation test still is.
 	 */
 	static FAirframe ResolveDefaultAirframe();
+
+	/**
+	 * The performance a SERVICE VEHICLE moves with - the one place a truck's figures live.
+	 *
+	 * AN FAirframe FOR A THING WITH NO AIRFRAME, and that is scaffolding, named as such by
+	 * the fuel-service spec (§0.1). FRouteFollower, FRoadAgent and the arbiter all take one
+	 * FAirframe, so giving a truck anything else this slice would mean a second follower
+	 * before there is a second KIND of movement to justify one. M3 replaces this with a
+	 * vehicle-shaped performance bundle when the fleet arrives.
+	 *
+	 * ONLY Ground IS SET, and Climb and Approach are deliberately ZEROED so IsSet() answers
+	 * false for both. Their struct defaults are a light twin's and are all non-zero, so a
+	 * van left at them would report itself landable to anything that asked - and both
+	 * ArrivalPlanner and FRoadAgent branch on exactly that call. Nothing asks today; that is
+	 * the reason to make it false by construction rather than by nobody having got round to
+	 * it. Engine is the one exception, for the reason given at the assignment.
+	 *
+	 * Wingspan 0 because 0 is UNLIMITED in the edge test (FRouteQuery::Wingspan) - the right
+	 * answer rather than a lax one, since a road guideline carries no span limit either, so
+	 * neither side of that comparison means anything for a van.
+	 */
+	static FAirframe ResolveDefaultVehicle();
 };
