@@ -18,7 +18,7 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// Same order as the runtime tool keys, so 1, 2 and 3 mean the same thing in the editor
 	// as they do in play. A tool that changed number between the two would be worse than
 	// having no shortcut at all.
-	UI_COMMAND(DrawRoads, "Roads", "Draw taxiways and roads: click to chain, ctrl to remove, shift to insert a node.",
+	UI_COMMAND(DrawRoads, "Taxiway", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::One));
 	UI_COMMAND(DrawAprons, "Aprons", "Draw a polygon of pavement; click the first corner again to close it.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Two));

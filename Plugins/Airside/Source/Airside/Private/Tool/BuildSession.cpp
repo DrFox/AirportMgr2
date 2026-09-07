@@ -24,7 +24,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 	// which is exactly the class of bug this table exists to make impossible elsewhere.
 	static const FToolRegistration Registry[] =
 	{
-		{ EKeys::One,   LOCTEXT("Road",      "Road"),      [] { return MakeUnique<FRoadDrawTool>(); } },
+		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(); } },
 		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
 		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(); } },
 		{ EKeys::Four,  LOCTEXT("Route",     "Route"),     [] { return MakeUnique<FRouteTool>(); } },

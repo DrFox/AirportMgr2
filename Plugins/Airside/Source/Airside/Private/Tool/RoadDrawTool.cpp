@@ -187,7 +187,10 @@ FRoadDrawTool::FRoadDrawTool()
 
 FText FRoadDrawTool::GetDisplayName() const
 {
-	return LOCTEXT("RoadTool", "Road");
+	// "Taxiway", not "Road": this tool lays the taxiway profile - an aircraft centreline
+	// and taxiway bands. A vehicle road tool is M4's, and until it exists a key labelled
+	// "Road" promises one that is not there (2026-09-07).
+	return LOCTEXT("RoadTool", "Taxiway");
 }
 
 bool FRoadDrawTool::IsIdle() const
