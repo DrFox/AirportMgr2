@@ -27,12 +27,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRunwayAdmissionTest::RunTest(const FString& Parameters)
 {
-	// A 1000 m, 23 m tarmac visual runway and the Piper: grass-capable, visual, 800 m
-	// field lengths, 13 m span. Every refusal below is one fact moved past what it needs.
+	// A 1000 m, 23 m tarmac visual runway and the Piper: grass-capable, visual, 510 m /
+	// 400 m field lengths, 13 m span. Every refusal below is one fact moved past what it needs.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	const FRoadSegmentId RW = MakeRunway(*Net, 100000.0, 2300.0);
 	const FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
-	TestEqual(TEXT("the fixture's Piper publishes a landing field length"), Piper.Requirements.LandingFieldLength, 80000.0);
+	TestEqual(TEXT("the fixture's Piper publishes a landing field length"), Piper.Requirements.LandingFieldLength, 40000.0);
+	TestEqual(TEXT("and a take-off field length"), Piper.Requirements.TakeoffFieldLength, 51000.0);
 
 	TestEqual(TEXT("the Piper is admitted to a tarmac visual runway"),
 		RunwayAdmission::Check(*Net, RW, Piper, true).Why, ERunwayRefusal::None);

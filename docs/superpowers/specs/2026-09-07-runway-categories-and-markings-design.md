@@ -59,8 +59,11 @@ USTRUCT() struct FRunwayRequirements
 };
 ```
 
-The Piper fallback: Grass, Visual, take-off 80000, landing 80000 (about the POH's
-50-ft figures, generous). The physics keeps its derived rolls for MOTION;
+The Piper fallback: Grass, Visual, take-off 51000, landing 40000. REVISED 2026-09-07
+from 80000 / 80000: the 50-ft figures (743 / 643 m) include clearing a 15 m obstacle at
+the threshold, which is about the approach and not the pavement; the POH ground rolls
+are 503 / 311 m, rounded up, landing lifted to 400 m to stay above the model's own
+370 m rollout. The physics keeps its derived rolls for MOTION;
 `Airside.Model.FieldLengthsCoverTheRoll` pins `RequiredRoll <= TakeoffFieldLength` and
 `RequiredLandingDistance * LandingMargin <= LandingFieldLength` for every aircraft the
 content set resolves, so a published figure can never be shorter than what the model
@@ -191,9 +194,10 @@ Built as specified, seven tasks, red-then-green each. Deviations and decisions m
   (6, Shift+6, Ctrl+6) through the new `IBuildTool::OnReselect`, which the session calls when
   the active tool is selected again. The editor mode's toggle button does not reselect; the
   cycle is play-only there and the tooltip says so.
-- **Piper field lengths are 800 m** (both), generous over the POH's 743 / 643 m. Fixture
-  runways of exactly 80000 uu admit it (`<`, not `<=`); a level runway under 800 m will refuse
-  the Piper by name, which the probe line `PROBE runway ...` reports.
+- **Piper field lengths are the ground rolls**, 510 m take-off and 400 m landing (§3.2 as
+  revised). The 800 m first written refused the player's 530 m strip; the 50-ft figures it
+  came from include an obstacle the pavement does not have. A level runway under these will
+  refuse the Piper by name, which the probe line `PROBE runway ...` reports.
 - **§8 resolved:** reinforced reads as concrete on the ground; a short precision runway paints
   what fits (`Airside.Build.RunwayMarkings.ShortPrecision`).
 

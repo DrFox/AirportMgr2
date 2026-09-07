@@ -395,13 +395,17 @@ FRunwayRequirements UAircraftType::PiperMeridianRequirements()
 	Requirements.MinimumSurface = ERunwaySurface::Grass;
 	Requirements.ApproachNeeded = ERunwayApproach::Visual;
 
-	// 800 m each. The POH's 50 ft figures are 2438 ft (743 m) take-off and 2110 ft (643 m)
-	// landing at gross weight, sea level; rounded UP to one round figure because these are
-	// admission numbers and the safe error is refusing a strip the aircraft could just
-	// have used, never accepting one it cannot. The rolls the physics derives from Ground
-	// and Climb (about 230 m and 370 m with margin) sit well inside.
-	Requirements.TakeoffFieldLength = 80000.0;
-	Requirements.LandingFieldLength = 80000.0;
+	// GROUND ROLLS, not the 50 ft figures (2026-09-07, revised the same day). The POH's
+	// 2438 ft / 2110 ft include clearing a 15 m obstacle at the threshold, which is a
+	// statement about the approach path, not the pavement; the pavement the aircraft needs
+	// is the roll: 1650 ft (503 m) take-off, 1020 ft (311 m) landing, gross weight, sea
+	// level. Rounded up to 510 m and, for landing, to 400 m - the model's own rollout
+	// with FLandingRun::LandingMargin is about 370 m, longer than the real one, and a
+	// published figure may never be shorter than the model needs
+	// (Airside.Model.FieldLengthsCoverTheRoll). The 800 m first written here refused the
+	// player's 530 m strip that the aircraft had been landing on all week.
+	Requirements.TakeoffFieldLength = 51000.0;
+	Requirements.LandingFieldLength = 40000.0;
 
 	return Requirements;
 }

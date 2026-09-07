@@ -187,10 +187,10 @@ public:
 	/**
 	 * The Meridian's runway requirements, for the same reason PiperMeridianGround exists.
 	 *
-	 * Grass, visual, and 800 m for both field lengths - about the POH's 50 ft figures
-	 * (take-off 2438 ft, landing 2110 ft), rounded up generously. Generous is the safe
-	 * direction: Airside.Model.FieldLengthsCoverTheRoll checks these are never SHORTER
-	 * than the rolls the physics derives from Ground and Climb.
+	 * Grass, visual, and the POH ground rolls rounded up: 510 m take-off, 400 m landing
+	 * (the 50 ft figures include an obstacle the pavement does not have - see the .cpp).
+	 * Airside.Model.FieldLengthsCoverTheRoll checks these are never SHORTER than the
+	 * rolls the physics derives from Ground and Climb.
 	 */
 	static FRunwayRequirements PiperMeridianRequirements();
 };
