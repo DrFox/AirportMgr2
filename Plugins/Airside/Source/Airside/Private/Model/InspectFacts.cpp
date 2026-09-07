@@ -127,6 +127,10 @@ namespace InspectFacts
 		Out.DesignWingspan = E.DesignWingspan;
 		Out.SizeClass = IcaoCodeForWingspan(E.DesignWingspan);
 		Out.AnchorCount = E.ResolvedAnchors.Num();
+
+		// Captured at placement - see FEntityInstance::PoseRole. It is how the panel tells a
+		// stand from a service installation without this layer knowing what either is for.
+		Out.PoseRole = E.PoseRole;
 		Out.bReachable = false;
 		if (Network.GetGuidelineNode(E.PoseNode) != nullptr)
 		{
