@@ -80,10 +80,12 @@ void URoadBuildEdMode::Enter()
 	// separate thing from ToolRegistry(), so this is the one place left that has to check
 	// the two agree rather than being able to assume it.
 	//
-	// A RUNTIME check, not an automation test, and that is a real gap rather than a stylistic
-	// choice: AirsideTests does not depend on AirsideEditor (Model/Present/Tool are tested
-	// world-free with no editor module loaded at all), so nothing short of opening this mode
-	// exercises FRoadBuildEdModeCommands. This log line is what stands in for that test.
+	// KEPT even though Airside.Editor.ToolCommandsMatchRegistry now asserts the same thing
+	// headlessly (RoadBuildEdModeCommandsTest.cpp, in THIS module - AirsideTests depends on
+	// Airside alone and must not be made to depend on an editor module). The test is the
+	// guard; this line is the diagnosis, and the two are worth having separately - the gap
+	// they cover between them cost a slice in which key 9 was unbound, so nine left the
+	// PREVIOUS tool running and a player drew a taxiway believing it was a service road.
 	if (ToolCommands.Num() != Registry.Num())
 	{
 		UE_LOG(LogRoadBuildMode, Error,

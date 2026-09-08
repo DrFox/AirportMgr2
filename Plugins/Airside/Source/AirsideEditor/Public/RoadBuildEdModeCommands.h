@@ -43,6 +43,19 @@ public:
 	TSharedPtr<FUICommandInfo> PlaceHoldingPoint;
 
 	/**
+	 * Keys 9 and 0, the pair the registry grew for service traffic.
+	 *
+	 * They were missing for a slice, and the failure was not "no shortcut": an unbound key
+	 * leaves the PREVIOUS tool running, so nine drew a taxiway. A taxiway's derived guideline
+	 * is Aircraft-only, so every stand lane and depot anchor near it reported "joins nothing:
+	 * no derived vehicle guideline" while the player was looking straight at the road they
+	 * had just drawn. An editor road authored here is also the only kind that SURVIVES
+	 * stopping play - the same reason PlaceHoldingPoint was added.
+	 */
+	TSharedPtr<FUICommandInfo> DrawServiceRoads;
+	TSharedPtr<FUICommandInfo> PlaceFuelDepots;
+
+	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.
 	 *
 	 * Exists because RIGHT-CLICK CANNOT DO THIS IN THE EDITOR. At runtime right-click
