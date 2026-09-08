@@ -44,6 +44,20 @@ namespace
 		FGuidelineNodeId DepotPose;
 		FGuidelineNodeId TaxiwayFarEnd;
 
+		/** A SECOND stand, for the queue case. Unset unless bSecondStand was set before Build. */
+		FEntityInstanceId Stand2;
+		FGuidelineNodeId StandPose2;
+
+		/**
+		 * Place a second stand east of the first, on the same road and the same taxiway.
+		 *
+		 * Off by default: every other test in this file is about ONE demand, and a second
+		 * stand would put a second lane on the graph for them to trip over. The queue case
+		 * needs two, because one depot with one truck cannot be busy for the aircraft that
+		 * is using the truck.
+		 */
+		bool bSecondStand = false;
+
 		double RoadY = -6000.0;
 
 		/** West end of the road. Default reaches under the stand; see Build_RoadReachesDepotOnly. */
@@ -62,6 +76,9 @@ namespace
 		void Build_RoadReachesDepotOnly();
 		void JoinRoad();
 		int32 ParkAircraft();
+
+		/** ParkAircraft, at a named stand's pose. */
+		int32 ParkAircraftAt(FGuidelineNodeId Pose);
 		void Advance(double Seconds);
 
 		/**
@@ -121,6 +138,16 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Stand = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(0.0, 0.0), 0.0,
 		/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
 
+	if (bSecondStand)
+	{
+		// SIX THOUSAND EAST. A Code C lane is 5250 uu wide, so at x = 6000 the two lanes
+		// clear each other by 750 uu and each is nearer the road (3910 uu) than the other -
+		// and this stand's pose ray still reaches the taxiway 16 000 uu west, inside the
+		// 20 000 uu aircraft cap.
+		Stand2 = Net->PlaceEntity(StandDef, StandDef->Anchors, FVector2D(6000.0, 0.0), 0.0,
+			/*DesignWingspan=*/3600.0, StandDef->PoseRole, StandDef->Trucks);
+	}
+
 	if (bWithDepot)
 	{
 		UEntityDefinition* DepotDef = UEntityDefinition::MakeFuelDepotTransient();
@@ -133,6 +160,10 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 
 	RunAnchorLinks();
 	StandPose = Net->GetEntity(Stand)->PoseNode;
+	if (Stand2.IsSet())
+	{
+		StandPose2 = Net->GetEntity(Stand2)->PoseNode;
+	}
 	if (Depot.IsSet())
 	{
 		DepotPose = Net->GetEntity(Depot)->PoseNode;
@@ -189,9 +220,14 @@ void FFuelFixture::JoinRoad()
 
 int32 FFuelFixture::ParkAircraft()
 {
+	return ParkAircraftAt(StandPose);
+}
+
+int32 FFuelFixture::ParkAircraftAt(FGuidelineNodeId Pose)
+{
 	FRouteQuery Query;
 	Query.Start = TaxiwayFarEnd;
-	Query.Goal = StandPose;
+	Query.Goal = Pose;
 	Query.Class = ETraversalClass::Aircraft;
 	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 	if (!Plan.IsValid())
@@ -448,6 +484,89 @@ bool FFuelServiceAircraftLeavesTest::RunTest(const FString& Parameters)
 	if (!TestEqual(TEXT("it has a demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
 	TestTrue(TEXT("and the depot has a truck for it"),
 		Fixture.Service->GetDemands()[0].TruckId != 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelQueuesOnABusyDepotTest, "AirportOps.Ops.FuelQueuesOnABusyDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
+{
+	// A DEPOT WITH ITS ONLY TRUCK OUT IS BUSY, NOT BROKEN - and until this test it was
+	// reported as NoRoute, "no road from depot", which is a lie about the AIRPORT and it
+	// stuck: Unserviceable is only re-offered when the guideline revision changes, and a
+	// truck coming home changes no guideline. The second aircraft therefore waited for ever
+	// while the player was sent to look at a road that was already there. Seen in PIE
+	// 2026-09-08.
+	//
+	// ChooseDepot's busy branch always meant to leave the demand alone - "Busy, not broken.
+	// Deliberately does NOT set a refusal" - but the else-chain below it assigned one
+	// unconditionally, so the branch's intent never reached the caller. A comment describing
+	// behaviour the code does not have; see CLAUDE.md.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+
+	const int32 First = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
+
+	// The one truck goes out for it.
+	if (!TestTrue(TEXT("the depot dispatches its truck"),
+		Fixture.AdvanceUntil([&Fixture]
+		{
+			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
+				? &Fixture.Service->GetDemands()[0] : nullptr;
+			return Demand != nullptr && Demand->TruckId != 0;
+		}, 30.0)))
+	{
+		return false;
+	}
+
+	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
+	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
+
+	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
+	{
+		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		{
+			if (Demand.AircraftId == Second) { return &Demand; }
+		}
+		return nullptr;
+	};
+
+	if (!TestNotNull(TEXT("the second aircraft made a demand"), SecondDemand())) { return false; }
+
+	// A tick or two is all it takes: the state machine offers a Needed demand every tick.
+	Fixture.Advance(0.5);
+
+	const FFuelDemand* Waiting = SecondDemand();
+	if (!TestNotNull(TEXT("the second demand survives"), Waiting)) { return false; }
+
+	// THE DEFECT, DIRECTLY. Not "the card reads oddly" - Unserviceable is TERMINAL until the
+	// graph changes, so this state is the aircraft never being fuelled.
+	TestEqual(TEXT("a demand waiting on a busy truck stays Needed, not Unserviceable"),
+		static_cast<int32>(Waiting->State), static_cast<int32>(EFuelDemandState::Needed));
+	TestEqual(TEXT("and carries no refusal, because nothing about the airport is wrong"),
+		static_cast<int32>(Waiting->Why), static_cast<int32>(EFuelRefusal::None));
+
+	// AND THE QUEUE ACTUALLY DRAINS, with NO edit to the airport. This is the half a
+	// state-only assertion would miss: Needed is worth nothing if the demand is never
+	// re-offered once the truck is home. 300 s covers the first truck's drive out, its
+	// 40 s dwell and its drive home, and is a bound rather than a wait.
+	TestTrue(TEXT("and once the truck is home the second aircraft gets it"),
+		Fixture.AdvanceUntil([&SecondDemand]
+		{
+			const FFuelDemand* Demand = SecondDemand();
+			return Demand != nullptr && Demand->TruckId != 0;
+		}, 300.0));
+
+	// The card never said anything false along the way.
+	if (const FFuelDemand* Served = SecondDemand())
+	{
+		TestEqual(TEXT("and was never marked unserviceable on the way"),
+			static_cast<int32>(Served->Why), static_cast<int32>(EFuelRefusal::None));
+	}
 	return true;
 }
 

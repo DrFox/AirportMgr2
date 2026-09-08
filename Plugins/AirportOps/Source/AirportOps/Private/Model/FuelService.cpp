@@ -104,6 +104,15 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	bool bAnyDepot = false;
 	bool bAnyJoinedDepot = false;
 
+	/**
+	 * A joined depot with a fleet, all of it already out.
+	 *
+	 * SEPARATE FROM EVERY OTHER REASON because it is the only one that resolves ITSELF. The
+	 * chain below reports facts about the airport, which change only when the player edits
+	 * it; a truck comes home on its own.
+	 */
+	bool bAnyBusyDepot = false;
+
 	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
 	//
 	// This tested StandFuel.IsSet() alone, which is a fact about PLACEMENT and not about the
@@ -143,11 +152,27 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 		bAnyJoinedDepot = true;
 
 		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
-		if (Instance.Trucks <= 0 || TrucksOutFor(DepotId) >= Instance.Trucks)
+
+		// NO FLEET AT ALL IS NOT "BUSY", and the two were one condition until 2026-09-08.
+		// A depot with no trucks never frees up, so treating it as busy would make a demand
+		// wait for ever in silence. It falls through to the chain below and is reported.
+		if (Instance.Trucks <= 0)
 		{
-			// Busy, not broken. Deliberately does NOT set a refusal: a demand whose only
-			// depot is out on another job is Needed and will be offered again next tick, not
-			// Unserviceable, which is terminal until the graph changes.
+			continue;
+		}
+
+		if (TrucksOutFor(DepotId) >= Instance.Trucks)
+		{
+			// BUSY, NOT BROKEN. A demand whose only depot is out on another job is Needed and
+			// will be offered again next tick, not Unserviceable - which is TERMINAL until
+			// the guideline revision changes, and a truck driving home changes no guideline.
+			//
+			// This branch always said so and could not deliver it: the else-chain below
+			// assigned a refusal unconditionally whenever nothing was chosen, so busy came
+			// out as NoRoute - "no road from depot" - and the aircraft was never fuelled
+			// while the player was sent to look at a road that was already there. Seen in
+			// PIE 2026-09-08. The flag is what carries this branch's intent to the chain.
+			bAnyBusyDepot = true;
 			continue;
 		}
 
@@ -203,6 +228,17 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	else if (!bStandJoined)
 	{
 		OutWhy = EFuelRefusal::StandUnjoined;
+	}
+	else if (bAnyBusyDepot)
+	{
+		// NOTHING IS WRONG - WAIT. None keeps the demand Needed and re-offered every tick,
+		// which is the queue: see the Needed case in Tick.
+		//
+		// AFTER the three facts above, deliberately. Those are things the player can go and
+		// fix and should be told about even while a truck happens to be out; being busy is
+		// not. And DEFERRING a genuine NoRoute costs nothing: the moment the truck is home
+		// the depot is idle, this branch stops firing, and the real reason is reported.
+		OutWhy = EFuelRefusal::None;
 	}
 	else
 	{
