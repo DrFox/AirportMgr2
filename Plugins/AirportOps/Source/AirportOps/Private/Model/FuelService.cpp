@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -452,6 +453,35 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
 						: TEXT("is NOT on a road"));
 				break;
+			}
+
+			// THE ROUTE ITSELF, not its length. A truck that reaches the hydrant the long way
+			// round the lane and one that turns straight in are both "a valid plan" and both
+			// log identically without this - and the difference is the whole of what the
+			// player watches.
+			//
+			// At LOG, not Verbose: a fuel dispatch happens once per turnaround, not per tick,
+			// so this costs one line an aircraft - and a line the player has to switch on is
+			// a line that is not there in the session that needed it.
+			{
+				// CAPPED. A route the length of the airport is a hundred points, and a log
+				// line nobody can read is the same as no log line. The HEAD is the half that
+				// matters: the journey out of the lane is what this exists to show.
+				constexpr int32 MostPoints = 40;
+				FString Path;
+				for (int32 At = 0; At < FMath::Min(Plan.Polyline.Num(), MostPoints); ++At)
+				{
+					Path += FString::Printf(TEXT("(%.0f,%.0f) "),
+						Plan.Polyline[At].X, Plan.Polyline[At].Y);
+				}
+				if (Plan.Polyline.Num() > MostPoints)
+				{
+					Path += FString::Printf(TEXT("... +%d more"), Plan.Polyline.Num() - MostPoints);
+				}
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Fuel route: aircraft %d, depot %d to stand %d, %.0f uu over %d point(s): %s"),
+					Demand.AircraftId, Depot.Index, Demand.Stand.Index,
+					GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *Path);
 			}
 
 			// ShutdownPause 0 - see TruckShutdownPause. The AIRFRAME is the vehicle default,
