@@ -25,7 +25,8 @@ namespace
 	 * truck could reach and not leave.
 	 */
 	FGuidelineEdge MakeServiceEdge(FGuidelineNodeId A, FGuidelineNodeId B,
-		const FVector2D& PositionA, const FVector2D& PositionB, FEntityInstanceId Owner)
+		const FVector2D& PositionA, const FVector2D& PositionB, FEntityInstanceId Owner,
+		bool bSpur)
 	{
 		FGuidelineEdge Edge;
 		Edge.A = A;
@@ -48,6 +49,11 @@ namespace
 		Edge.MaxWingspan = 0.0;
 		Edge.bDerived = true;
 		Edge.ServiceLoopOwner = Owner;
+
+		// WHICH OF THE TWO THIS IS, said rather than worked out from the endpoints later -
+		// see FGuidelineEdge::bServiceSpur for what reading it off the endpoints cost. The
+		// two splits below copy from Original, so a spur cut in half stays a spur.
+		Edge.bServiceSpur = bSpur;
 		return Edge;
 	}
 }
@@ -133,7 +139,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 			const FVector2D PositionA = Network.GetGuidelineNode(A)->Position;
 			const FVector2D PositionB = Network.GetGuidelineNode(B)->Position;
 
-			Lane.Add(Network.AddGuidelineEdge(MakeServiceEdge(A, B, PositionA, PositionB, EntityId)));
+			Lane.Add(Network.AddGuidelineEdge(MakeServiceEdge(A, B, PositionA, PositionB, EntityId, /*bSpur=*/false)));
 			Result.Nodes.Add(A);
 			Result.Nodes.Add(B);
 		}
@@ -244,7 +250,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 
 			const FVector2D JoinAt = Network.GetGuidelineNode(Join)->Position;
 			Lane.Add(Network.AddGuidelineEdge(
-				MakeServiceEdge(Resolved.Node, Join, At, JoinAt, EntityId)));
+				MakeServiceEdge(Resolved.Node, Join, At, JoinAt, EntityId, /*bSpur=*/true)));
 			++Result.SpursBuilt;
 		}
 	}

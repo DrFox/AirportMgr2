@@ -347,6 +347,147 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+namespace ServiceLinkFixture
+{
+	/**
+	 * Every lane node that carries a link to a road - an incident edge no service loop owns.
+	 *
+	 * The link edge's OTHER end is on the road, and the road's own splits and fillets are
+	 * unowned too, so the test has to start from the LANE side. Counting nodes rather than
+	 * edges is what makes an entry welded onto a shared corner count once.
+	 */
+	TArray<FVector2D> EntryPoints(const URoadNetwork& Net)
+	{
+		TSet<FGuidelineNodeId> LaneNodes;
+		for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
+		{
+			if (Edge.bAlive && Edge.ServiceLoopOwner.IsSet())
+			{
+				LaneNodes.Add(Edge.A);
+				LaneNodes.Add(Edge.B);
+			}
+		}
+
+		TArray<FVector2D> Entries;
+		for (const FGuidelineNodeId& Id : LaneNodes)
+		{
+			const FGuidelineNode* Node = Net.GetGuidelineNode(Id);
+			if (Node == nullptr) { continue; }
+			for (const FGuidelineEdgeId& Incident : Node->Incident)
+			{
+				const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Incident);
+				if (Edge != nullptr && Edge->bAlive && !Edge->ServiceLoopOwner.IsSet())
+				{
+					Entries.AddUnique(Node->Position);
+					break;
+				}
+			}
+		}
+		return Entries;
+	}
+
+	/** Is one of these points within Tolerance of At? */
+	bool Has(const TArray<FVector2D>& Points, const FVector2D& At, double Tolerance = 50.0)
+	{
+		for (const FVector2D& Point : Points)
+		{
+			if (FVector2D::Distance(Point, At) <= Tolerance) { return true; }
+		}
+		return false;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceLaneEntersOnEverySideWithinReachTest,
+	"Airside.Build.ServiceLaneEntersOnEverySideWithinReach",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// A ROAD ALONGSIDE, 4 m clear of the lane's south side. The whole case: a service road
+	// running past a row of stands, which is how a player builds one.
+	//
+	// The Code C ring is local X -3550..+1700, Y -2090..+2090 - see
+	// UEntityDefinition::BuildCodeCStand, where it is derived from the design aircraft's
+	// footprint and the anchors rather than typed. The stand sits at the origin facing +X so
+	// local and world coincide, stated rather than assumed.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FGuidelineNodeId East;
+	const FGuidelineNodeId West = Lay(*Net, FVector2D(-30000.0, -2490.0), FVector2D(30000.0, -2490.0),
+		ETraversalClass::GroundVehicle, East);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net);
+
+	const TArray<FVector2D> Entries = EntryPoints(*Net);
+
+	// THREE, not one. The near side reaches the road along its whole length; the two END
+	// sides reach it at the corner each shares with the near side. One entry made the ring a
+	// cul-de-sac a truck had to drive half way round; three make it a drive-through.
+	// THE POSITIONS ARE IN THE MESSAGE, not just the count. A bare "expected 3, got 5" says
+	// nothing about WHICH two sides linked wrongly, and every failure this test found while
+	// it was being written was diagnosed from exactly this list.
+	FString Where;
+	for (const FVector2D& Entry : Entries)
+	{
+		Where += FString::Printf(TEXT("(%.0f,%.0f) "), Entry.X, Entry.Y);
+	}
+	TestEqual(*FString::Printf(TEXT("the lane joins the road on all three sides within reach - at %s"), *Where),
+		Entries.Num(), 3);
+
+	// THE NEAR SIDE, IN THE MIDDLE OF ITS OVERLAP WITH THE ROAD - not at the first corner
+	// that tied. Halfway between -3550 and +1700 is -925. This is the assertion that fails
+	// without GuidelineGeom::NearestBetweenPolylines breaking its tie at the middle.
+	TestTrue(TEXT("the near side is entered at its middle"),
+		Has(Entries, FVector2D(-925.0, -2090.0)));
+
+	// THE END SIDES, at the corner each brings nearest the road. A corner here is right where
+	// it was wrong on the near side: it genuinely IS the nearest point, and the connector
+	// leaving it runs away from the lane rather than across it.
+	TestTrue(TEXT("the tail end side joins at its near corner"),
+		Has(Entries, FVector2D(-3550.0, -2090.0)));
+	TestTrue(TEXT("the nose end side joins at its near corner"),
+		Has(Entries, FVector2D(1700.0, -2090.0)));
+
+	// AND THE FAR SIDE DOES NOT, though it is 4580 uu from the road and the service radius is
+	// 5000. Its connector would run the whole depth of the stand, through the parked
+	// aircraft, to reach a road the near side already touches. Refused by measuring the
+	// crossing, not by shortening the radius - the radius is the player's knob for how far a
+	// stand may sit from its road and must not silently double as this rule.
+	for (const FVector2D& Entry : Entries)
+	{
+		TestTrue(TEXT("no entry is on the far side of the lane"), Entry.Y < 0.0);
+	}
+
+	// IDEMPOTENT. The graph is rebuilt on every road edit and this runs each time; a pass
+	// that could not see its own previous links would stack an entry per side per rebuild.
+	FAnchorLink::Build(*Net);
+	TestEqual(TEXT("a second pass adds no further entries"), EntryPoints(*Net).Num(), 3);
+
+	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600) and spurs to the
+	// EAST side; with one entry at the tail corner a truck drove the length of the stand and
+	// back to reach it. From the nose corner it is 1490 up the east side plus a 1400 spur.
+	{
+		FRouteQuery Query;
+		Query.Start = East;
+		Query.Goal = AnchorNode(*Net, Placed, TEXT("FixedGPU"));
+		Query.Class = ETraversalClass::GroundVehicle;
+
+		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		if (TestTrue(TEXT("a truck routes from the road to the ground power"), Plan.IsValid()))
+		{
+			// Measured from the ROAD's east end, so the figure is the journey and not an
+			// arbitrary start: 28300 of road, then under 3500 inside the stand.
+			TestTrue(TEXT("and turns in at the nearest corner rather than touring the lane"),
+				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 3500.0);
+		}
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTruckReachesHydrantWithoutCrossingTheAircraftTest,
 	"Airside.Traffic.TruckReachesHydrantWithoutCrossingTheAircraft",
