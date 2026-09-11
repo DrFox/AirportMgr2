@@ -6,6 +6,7 @@
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Entities/AircraftType.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadEntity.h"
@@ -289,9 +290,19 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	// only ever rendered on screen - the log could not tell "no stand free" from "the runway
 	// is 900 m short", and those have completely different fixes. ArrivalPlanner::Plan with
 	// no occupancy is the same question the inbox asks, so this cannot drift from it.
-	for (TObjectIterator<UAircraftType> It; It; ++It)
+	// EVERY AUTHORED TYPE, loaded from the registry - not TObjectIterator, which sees only
+	// what happens to be in memory. The first version of this probe reported on the A320
+	// alone, because M_Starter's stand references it and nothing had pulled the others in;
+	// "which aircraft can this field take" answered for one aircraft is not an answer.
+	TArray<FAssetData> TypeAssets;
+	FAssetRegistryModule& Registry =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	Registry.Get().SearchAllAssets(true);
+	Registry.Get().GetAssetsByClass(UAircraftType::StaticClass()->GetClassPathName(), TypeAssets);
+
+	for (const FAssetData& Asset : TypeAssets)
 	{
-		const UAircraftType* Type = *It;
+		const UAircraftType* Type = Cast<UAircraftType>(Asset.GetAsset());
 		if (Type == nullptr || Type->HasAnyFlags(RF_ClassDefaultObject))
 		{
 			continue;

@@ -20,6 +20,7 @@ ENTITY_DIR = "/Game/Entities"
 
 A320 = "/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320"
 B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
+PIPER = "/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -27,8 +28,14 @@ B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
 # for one offer that often. Six and four are a starting pair, not a balance decision - the
 # numbers live on the asset precisely so they can be changed without a build.
 AIRLINES = {
+    # The jets. On a 15 m GA strip NOTHING of theirs is offered, and that is the design
+    # working: the inbox says so, and a wider runway is what unlocks them.
     "DA_Airline_Meridian": ("Meridian", [A320, B738], 6.0),
-    "DA_Airline_Cumbria": ("Cumbria Air", [A320], 4.0),
+
+    # The light operator, whose Meridian fits a 15 m strip - so the starting field has
+    # traffic from the first minute. 2026-09-11: this used to fly an A320 too, which meant
+    # the starter map could offer nothing at all and every Accept was greyed out.
+    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER], 4.0),
 }
 
 
