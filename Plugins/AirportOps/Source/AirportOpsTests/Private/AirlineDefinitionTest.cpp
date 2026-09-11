@@ -33,4 +33,38 @@ bool FAirlineDefinitionCatalogTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAirlineAssetsAreScannedTest,
+	"AirportOps.Content.AirlineDefinition.TheAssetManagerScansThem",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAirlineAssetsAreScannedTest::RunTest(const FString& Parameters)
+{
+	// THE ONE FAILURE NOTHING ELSE CATCHES. UOpsDefinition::GetPrimaryAssetId derives the
+	// type from the class name minus its prefix, so a missing or misspelt
+	// PrimaryAssetTypesToScan line in DefaultGame.ini means the catalog scans nothing, loads
+	// nothing, and reports no airlines - with no error at any point. The game then runs
+	// perfectly with an inbox that never fills, which reads as a broken generator.
+	//
+	// Content-dependent by design: it asserts the shipped assets are reachable, which is the
+	// claim being made. If it fails after adding an airline, check the .ini before the code.
+	UOpsCatalog* Catalog = NewObject<UOpsCatalog>();
+	Catalog->LoadFromAssetManager();
+
+	const TArray<UAirlineDefinition*> Airlines = Catalog->All<UAirlineDefinition>();
+	TestTrue(TEXT("the asset manager scans and loads at least one airline"), Airlines.Num() > 0);
+
+	for (const UAirlineDefinition* Airline : Airlines)
+	{
+		if (Airline == nullptr)
+		{
+			continue;
+		}
+		// An airline with an empty fleet offers nothing, for ever, and says nothing about it.
+		TestTrue(TEXT("every shipped airline has a fleet"), Airline->Fleet.Num() > 0);
+		TestTrue(TEXT("and asks for flights"), Airline->OffersPerDay > 0.0);
+	}
+	return true;
+}
+
 #endif
