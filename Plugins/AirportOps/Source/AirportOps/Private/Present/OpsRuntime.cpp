@@ -3,7 +3,14 @@
 #include "Content/AirportOpsSettings.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
+#include "Entities/AircraftType.h"
+#include "Model/AirlineDefinition.h"
+#include "Model/AirsideCapability.h"
+#include "Model/Flight.h"
+#include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
+#include "Model/OfferGenerator.h"
+#include "Model/StandAllocator.h"
 #include "Model/OpsEvents.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -17,6 +24,72 @@ UOpsRuntime::UOpsRuntime()
 	Events = CreateDefaultSubobject<UOpsEvents>(TEXT("Events"));
 	Catalog = CreateDefaultSubobject<UOpsCatalog>(TEXT("Catalog"));
 	FuelService = CreateDefaultSubobject<UFuelService>(TEXT("FuelService"));
+
+	// GROWS BY FORWARDING, as UFuelService established: the board and the generator are
+	// subobjects this class feeds and ticks, and it holds no logic of theirs.
+	FlightBoard = CreateDefaultSubobject<UFlightBoard>(TEXT("FlightBoard"));
+	FlightBoard->Allocator = CreateDefaultSubobject<UStandAllocator>(TEXT("StandAllocator"));
+	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
+	FlightBoard->Generator = OfferGenerator;
+}
+
+TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
+{
+	// THE CROSSING. Model/ may not read a UAircraftType, so the definitions are flattened
+	// into airframes here, where Entities/ is legal - the same division of labour
+	// URoadNetwork::PlaceEntity uses for a design wingspan.
+	TArray<FOfferCandidate> Out;
+	for (const UAirlineDefinition* Airline : Catalog->All<UAirlineDefinition>())
+	{
+		if (Airline == nullptr)
+		{
+			continue;
+		}
+		for (const TObjectPtr<UAircraftType>& Type : Airline->Fleet)
+		{
+			if (Type == nullptr)
+			{
+				continue;
+			}
+			FOfferCandidate Candidate;
+			Candidate.Airframe = Type->Airframe();
+			Candidate.AirlineName = Airline->DisplayName;
+			Candidate.TypeName = Type->DisplayName;
+			Out.Add(Candidate);
+		}
+	}
+	return Out;
+}
+
+void UOpsRuntime::GenerateOffer()
+{
+	if (Target == nullptr || Target->Network == nullptr)
+	{
+		return;
+	}
+
+	const TArray<FOfferCandidate> Candidates = CandidatesFromCatalog();
+	if (Candidates.Num() == 0)
+	{
+		// No airlines loaded. Almost always the missing PrimaryAssetTypesToScan line rather
+		// than an empty world - see UAirlineDefinition's header.
+		return;
+	}
+
+	const FAirsideCapability Airport = AirsideCapability::Summarise(*Target->Network);
+	UFlight* Offer = OfferGenerator->MakeOffer(Airport, Candidates, Clock->Now(),
+		FlightBoard->TakeNextId());
+	if (Offer == nullptr)
+	{
+		UE_LOG(LogAirportOps, Verbose,
+			TEXT("Offers: nothing in any fleet fits a %.0f uu runway and %d stand(s)"),
+			Airport.LongestRunway(), Airport.Stands.Num());
+		return;
+	}
+
+	FlightBoard->AddOffer(Offer);
+	UE_LOG(LogAirportOps, Log, TEXT("Offer %d: %s, %s, landing at %.0f"),
+		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
 
 void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
@@ -49,6 +122,35 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 			TEXT("Scenario '%s': %.0f real s per game day, %.0f s fuel dwell"),
 			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->FuelDwellSeconds);
 	}
+	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
+	// captured raw pointer would keep a dead actor alive - or worse, be used.
+	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
+	FlightBoard->Dispatcher = [WeakTarget](const FVector2D& Near, const FAirframe& Airframe)
+	{
+		ARoadNetworkActor* Actor = WeakTarget.Get();
+		return Actor != nullptr && Actor->DispatchArrival(Near, Airframe);
+	};
+
+	// One repeating offer for the airport as a whole, at the average rate the airlines ask
+	// for between them. Per-airline scheduling is a refinement the inbox cannot yet show.
+	double OffersPerDay = 0.0;
+	for (const UAirlineDefinition* Airline : Catalog->All<UAirlineDefinition>())
+	{
+		OffersPerDay += Airline != nullptr ? Airline->OffersPerDay : 0.0;
+	}
+	if (OffersPerDay > 0.0)
+	{
+		const double GameSecondsPerDay = 86400.0;
+		OfferHandle = Clock->Every(GameSecondsPerDay / OffersPerDay, [this]() { GenerateOffer(); });
+		UE_LOG(LogAirportOps, Log, TEXT("Offers: %.1f per game day across %d airline(s)"),
+			OffersPerDay, Catalog->All<UAirlineDefinition>().Num());
+	}
+	else
+	{
+		UE_LOG(LogAirportOps, Warning,
+			TEXT("Offers: no airline offers anything, so the inbox will stay empty"));
+	}
+
 	ApplySpeed(Clock->GetSpeed());
 	UE_LOG(LogAirportOps, Log, TEXT("OpsRuntime attached to %s"), *Target->GetName());
 }
@@ -60,6 +162,14 @@ void UOpsRuntime::Detach()
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
 		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
 	}
+	if (OfferHandle != INDEX_NONE)
+	{
+		Clock->Cancel(OfferHandle);
+		OfferHandle = INDEX_NONE;
+	}
+	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
+	// after a detach would put an aeroplane on a field this runtime no longer drives.
+	FlightBoard->Dispatcher = nullptr;
 	Target = nullptr;
 }
 
@@ -88,6 +198,9 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 			}
 		}
 	}
+
+	// Offers lapse on the game clock whether or not a network is attached.
+	FlightBoard->Tick(*Clock);
 }
 
 void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
@@ -141,6 +254,7 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 		{
 			FuelService->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
+			FlightBoard->OnAgentPhase(*Model, *Target->Network, AgentId, From, To);
 		}
 	}
 

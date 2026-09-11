@@ -13,7 +13,10 @@
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UInspectorWidget;
+class UOpsRuntime;
+class UFlightBoard;
 struct FAgentFacts;
+struct FAirframe;
 struct FStandFacts;
 
 /**
@@ -301,6 +304,15 @@ public:
 	 * player is looking. The key does the same, for one-action-one-behaviour.
 	 */
 	void LandAircraftNearViewFocus();
+
+	/**
+	 * The land key's flight-board path: one flight with an immediate ETA, accepted at once.
+	 *
+	 * Split out rather than inlined so that the no-runtime fallback above it stays legible -
+	 * the editor mode has no game instance, and so no board, and the key must still work
+	 * there. Logs the refusal sentence when the airport cannot take it.
+	 */
+	void LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board, const FAirframe& Airframe);
 
 	void OnClearNetwork();
 	void OnUndo();

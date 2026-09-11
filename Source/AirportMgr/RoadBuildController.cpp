@@ -16,6 +16,9 @@
 #include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
+#include "Model/Flight.h"
+#include "Model/FlightBoard.h"
+#include "Model/GroundTraffic.h"
 #include "Present/OpsRuntime.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
@@ -324,10 +327,66 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	// depending on which phase you were watching - see UAirsideSettings::
 	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave
 	// DispatchArrival the same shape ResolveDefaultAirframe already returns.
+	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+
+	// THROUGH THE BOARD WHEN THERE IS ONE. Two doors onto arrival is how this codebase has
+	// shipped three lists-that-must-agree bugs: an aeroplane dispatched here directly would
+	// belong to no flight, so nothing would ever give its stand back or know it had landed.
+	// The key keeps its meaning - an aeroplane now, near the focus - it just becomes a
+	// flight with an immediate ETA, which is the same thing said properly.
+	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
+	{
+		if (UFlightBoard* Board = Runtime->GetFlightBoard())
+		{
+			LandThroughTheBoard(*Runtime, *Board, Airframe);
+			return;
+		}
+	}
+
+	// No runtime: the editor mode, which has no game instance and so no board. The direct
+	// dispatch stays for it rather than the key silently doing nothing.
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
-	Target->DispatchArrival(TargetView.Focus, UAirsideSettings::ResolveDefaultAirframe());
+	Target->DispatchArrival(TargetView.Focus, Airframe);
+}
+
+void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board,
+	const FAirframe& Airframe)
+{
+	USimClock* Clock = Runtime.GetClock();
+	UGroundTraffic* Traffic = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	if (Clock == nullptr || Traffic == nullptr || Target->Network == nullptr)
+	{
+		return;
+	}
+
+	UFlight* Flight = NewObject<UFlight>(&Board);
+	Flight->Airframe = Airframe;
+	Flight->AirlineName = NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)");
+	Flight->TypeName = FText::FromName(Airframe.TypeCode);
+
+	// NOW, not the generator's lead time: the key exists to put an aeroplane on the field
+	// this second, and it would stop being a debug key if it made you wait a quarter hour.
+	Flight->ArrivesAt = Clock->Now();
+	Flight->ExpiresAt = Clock->Now();
+	Flight->OffBlockAt = Clock->Now() + Airframe.TurnaroundSeconds;
+
+	// The board aims every arrival at its own focus, so the key's choice of runway has to
+	// travel with it - otherwise the aeroplane lands at wherever the last offer was aimed.
+	Board.ApproachFocus = TargetView.Focus;
+	Board.AddOffer(Flight);
+
+	if (!Board.Accept(*Traffic, *Target->Network, *Clock, *Flight))
+	{
+		// The key used to do nothing at all when the airport was full. Now it says which of
+		// the seven refusals it was, in the sentence the inbox would show.
+		const EArrivalRefusal Why = Board.WhyNotAcceptable(*Traffic, *Target->Network, *Flight);
+		FArrivalPlan Plan;
+		Plan.Why = Why;
+		UE_LOG(LogRoadBuild, Warning, TEXT("Land: no flight. %s"),
+			*ArrivalPlanner::DescribeRefusal(Plan));
+	}
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
