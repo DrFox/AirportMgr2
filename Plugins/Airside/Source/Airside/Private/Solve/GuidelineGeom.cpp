@@ -1,5 +1,7 @@
 #include "Solve/GuidelineGeom.h"
 
+#include "Solve/RoadGeom.h"
+
 namespace GuidelineGeom
 {
 	FVector2D Eval(const FVector2D& A, const FVector2D& Control, const FVector2D& B, double T)
@@ -98,6 +100,139 @@ namespace GuidelineGeom
 			Total += FVector2D::Distance(Points[At - 1], Points[At]);
 		}
 		return Total;
+	}
+
+	double NearestOnPolyline(const TArray<FVector2D>& Points,
+		const FVector2D& Query, int32& OutIndex, double& OutFraction)
+	{
+		OutIndex = 0;
+		OutFraction = 0.0;
+		if (Points.Num() < 2)
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		double Best = TNumericLimits<double>::Max();
+		for (int32 At = 1; At < Points.Num(); ++At)
+		{
+			// RoadGeom's clamped parameter, so the answer is on the SEGMENT rather than on
+			// its infinite line: a query past the end is answered by the end, which is what
+			// a link measuring against a finite guideline needs.
+			const double T = RoadGeom::ClosestPointOnSegment(Points[At - 1], Points[At], Query);
+			const double Distance =
+				FVector2D::Distance(FMath::Lerp(Points[At - 1], Points[At], T), Query);
+			if (Distance < Best)
+			{
+				Best = Distance;
+				OutIndex = At - 1;
+				OutFraction = T;
+			}
+		}
+		return Best;
+	}
+
+	double NearestBetweenPolylines(
+		const TArray<FVector2D>& A, const TArray<FVector2D>& B,
+		int32& OutAIndex, double& OutAFraction, int32& OutBIndex, double& OutBFraction)
+	{
+		OutAIndex = 0; OutAFraction = 0.0;
+		OutBIndex = 0; OutBFraction = 0.0;
+		if (A.Num() < 2 || B.Num() < 2)
+		{
+			return TNumericLimits<double>::Max();
+		}
+
+		// The span a VERTEX sits on, expressed the way the outputs are: the last vertex is
+		// the END of the last span, never the start of a span that does not exist.
+		auto SpanOf = [](int32 Vertex, int32 Count, int32& OutSpan, double& OutFractionAt)
+		{
+			OutSpan = FMath::Clamp(Vertex, 0, Count - 2);
+			OutFractionAt = Vertex >= Count - 1 ? 1.0 : 0.0;
+		};
+
+		// EVERY CANDIDATE, KEPT, because the answer is decided in two passes: the first finds
+		// how near the lines come, and the second finds the MIDDLE of everything that came
+		// that near. A single strict-less-than pass cannot do both - it answers with whichever
+		// tied member it happened to examine first.
+		struct FCandidate
+		{
+			double Distance;
+			double ParamOnA;
+		};
+		TArray<FCandidate, TInlineAllocator<32>> Candidates;
+		Candidates.Reserve(A.Num() + B.Num());
+
+		for (int32 At = 0; At < A.Num(); ++At)
+		{
+			int32 Index = 0;
+			double Fraction = 0.0;
+			const double Distance = NearestOnPolyline(B, A[At], Index, Fraction);
+
+			int32 SpanOnA = 0;
+			double FractionOnA = 0.0;
+			SpanOf(At, A.Num(), SpanOnA, FractionOnA);
+			Candidates.Add({ Distance, ParamAtSample(SpanOnA, FractionOnA, A.Num()) });
+		}
+
+		// THE SECOND SWEEP IS NOT REDUNDANT. For two parallel segments every vertex of A is
+		// the same distance from B, so A's vertices alone describe a tie whose ends are A's
+		// own corners - and where B is the SHORTER line, the tie ends part way along a span
+		// of A that no vertex of A sits at. B's vertices, projected onto A, are those ends.
+		for (int32 At = 0; At < B.Num(); ++At)
+		{
+			int32 Index = 0;
+			double Fraction = 0.0;
+			const double Distance = NearestOnPolyline(A, B[At], Index, Fraction);
+			Candidates.Add({ Distance, ParamAtSample(Index, Fraction, A.Num()) });
+		}
+
+		double Best = TNumericLimits<double>::Max();
+		for (const FCandidate& Candidate : Candidates)
+		{
+			Best = FMath::Min(Best, Candidate.Distance);
+		}
+
+		// THE MIDDLE OF THE TIE. Two parallel lines are equally near along a whole INTERVAL,
+		// so "the nearest point" is not a point at all, and answering with an end of that
+		// interval is answering with a corner. FAnchorLink then splits the lane there, against
+		// its own comment saying entry is in the middle of a side - and a truck entering at a
+		// corner has to drive round the lane to reach anything.
+		//
+		// ABSOLUTE, in uu, not a relative epsilon: these are distances between guidelines on
+		// an airport, where a hundredth of a centimetre apart is the same place, and a
+		// relative test would widen the tie as the lines got further apart.
+		constexpr double TieTolerance = 1e-2;
+		double Lowest = TNumericLimits<double>::Max();
+		double Highest = -TNumericLimits<double>::Max();
+		for (const FCandidate& Candidate : Candidates)
+		{
+			if (Candidate.Distance <= Best + TieTolerance)
+			{
+				Lowest = FMath::Min(Lowest, Candidate.ParamOnA);
+				Highest = FMath::Max(Highest, Candidate.ParamOnA);
+			}
+		}
+
+		// A single winner leaves Lowest == Highest, so this is the ordinary answer too and
+		// needs no branch: the midpoint of a degenerate interval is the winner itself.
+		const double ParamOnA = FMath::Clamp((Lowest + Highest) * 0.5, 0.0, 1.0);
+
+		// ParamAtSample read backwards, and exactly as it is written: samples are evenly
+		// spaced in the PARAMETER, not in arc length, so this is its inverse and not an
+		// approximation of one. Kept here rather than published beside it - nothing else has
+		// ever needed to go this way, and a second public spelling of the same mapping is a
+		// second thing to keep in step.
+		const double Position = ParamOnA * (A.Num() - 1);
+		OutAIndex = FMath::Clamp(static_cast<int32>(FMath::FloorToDouble(Position)), 0, A.Num() - 2);
+		OutAFraction = FMath::Clamp(Position - OutAIndex, 0.0, 1.0);
+
+		// B FOLLOWS A, rather than being carried along from whichever sweep won. The point on
+		// B has to be the one nearest the point on A that was actually chosen - carrying it
+		// would pair the middle of the lane with a corner of the road.
+		const FVector2D PointOnA =
+			FMath::Lerp(A[OutAIndex], A[OutAIndex + 1], OutAFraction);
+		NearestOnPolyline(B, PointOnA, OutBIndex, OutBFraction);
+		return Best;
 	}
 
 	namespace

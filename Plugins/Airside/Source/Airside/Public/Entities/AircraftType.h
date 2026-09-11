@@ -94,6 +94,16 @@ public:
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 
 	/**
+	 * How long this type occupies a stand, in GAME seconds - see FAirframe::TurnaroundSeconds
+	 * for which clock and why, and for why it travels in the bundle rather than being read
+	 * from here by the service that needs it.
+	 *
+	 * Authored per TYPE and not once for the airport, because a widebody and a turboprop turn
+	 * round in visibly different times and the player watches both on the same apron.
+	 */
+	UPROPERTY(EditAnywhere) double TurnaroundSeconds = 1800.0;
+
+	/**
 	 * The four performance structs plus Wingspan and Requirements, bundled - see FAirframe
 	 * for why.
 	 *
@@ -111,6 +121,7 @@ public:
 		Out.Wingspan = Footprint.Wingspan;
 		Out.Requirements = Requirements;
 		Out.TypeCode = Code;
+		Out.TurnaroundSeconds = TurnaroundSeconds;
 		return Out;
 	}
 

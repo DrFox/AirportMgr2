@@ -42,13 +42,28 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	UI_COMMAND(PlaceHoldingPoint, "Holding point", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway.",
 		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Eight));
 
+	// NINE and ZERO, the two the registry grew after this list was written. Their absence was
+	// not a missing shortcut: key 9 simply left the PREVIOUS tool active, so a player aiming
+	// for a service road drew a TAXIWAY - an Aircraft-only guideline (see
+	// RoadGuidelineBuilder's FTrafficMask::Only(Declared.Class)) that no stand's service lane
+	// and no fuel depot anchor can ever join. The only symptom was "joins nothing: no derived
+	// vehicle guideline" against a road plainly on screen.
+	//
+	// The LABELS must equal ToolRegistry()'s "Road" and "Fuel depot" exactly - URoadBuildEdMode::
+	// Enter compares the two BY STRING, index for index.
+	UI_COMMAND(DrawServiceRoads, "Road", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Nine));
+	UI_COMMAND(PlaceFuelDepots, "Fuel depot", "Place a fuel depot: press to position, drag to aim, release. It needs a service road within reach to be of any use.",
+		EUserInterfaceActionType::ToggleButton, FInputChord(EKeys::Zero));
+
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
 		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
 }
 
 TArray<TSharedPtr<FUICommandInfo>> FRoadBuildEdModeCommands::ToolCommandsInOrder() const
 {
-	return { SelectEntities, DrawRoads, DrawAprons, PlaceStands, DrawGuidelines, PlaceRunways, PlaceHoldingPoint };
+	return { SelectEntities, DrawRoads, DrawAprons, PlaceStands, DrawGuidelines, PlaceRunways,
+		PlaceHoldingPoint, DrawServiceRoads, PlaceFuelDepots };
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

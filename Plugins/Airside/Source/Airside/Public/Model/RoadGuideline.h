@@ -169,6 +169,38 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() bool bDerived = true;
 
 	/**
+	 * The entity whose SERVICE LOOP or anchor spur this edge is. Unset for everything else,
+	 * which is almost every edge.
+	 *
+	 * Provenance, exactly as DerivedFrom is for a road's own guidelines, and needed for the
+	 * same reason turned inside out: a stand's lane is ITSELF a vehicle guideline, so a link
+	 * search that did not know which edges were the searcher's own would join a lane to
+	 * itself four metres away, report every stand connected, and route no truck anywhere.
+	 *
+	 * The LINK from a lane to a road deliberately does NOT carry this. It is a lead-in like
+	 * any other, and leaving it unowned is exactly what lets
+	 * URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
+	 * only ever reaches itself.
+	 */
+	UPROPERTY() FEntityInstanceId ServiceLoopOwner;
+
+	/**
+	 * True for a SPUR - the stub from a service anchor to the ring - and false for a side of
+	 * the ring itself. Meaningless unless ServiceLoopOwner is set.
+	 *
+	 * STATED, not inferred. It was read off the endpoints - "a spur touches an anchor node" -
+	 * which is true of a spur nobody has split and false the moment a second anchor spurs
+	 * onto the first, leaving an inner piece with an anchor node at neither end. That piece
+	 * then read as a ring side, took a link of its own, and the truck drove from the road
+	 * across the aeroplane to reach it.
+	 *
+	 * It has to live on the EDGE rather than in the builder's result, because the result is
+	 * re-gathered from the graph on every later pass - see FServiceLoopBuild::Build's opening
+	 * block - and a pass that did not lay the lane has nothing else to tell the two apart.
+	 */
+	UPROPERTY() bool bServiceSpur = false;
+
+	/**
 	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.
 	 *
 	 * Filled from the clicked nodes' Origin, and re-resolved after every derivation. Unset

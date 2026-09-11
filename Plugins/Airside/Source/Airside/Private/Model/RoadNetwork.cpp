@@ -915,6 +915,51 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 	return Out;
 }
 
+bool URoadNetwork::IsServiceNodeConnected(FGuidelineNodeId Node) const
+{
+	// Breadth-first over OWNED edges only. The frontier is tiny - a lane is four sides and
+	// five spurs - so a plain array of node ids costs nothing, and the visited set is what
+	// terminates it on a lane that is by construction a ring.
+	TSet<FGuidelineNodeId> Seen;
+	TArray<FGuidelineNodeId> Frontier;
+	Seen.Add(Node);
+	Frontier.Add(Node);
+
+	while (Frontier.Num() > 0)
+	{
+		const FGuidelineNodeId At = Frontier.Pop();
+		const FGuidelineNode* Found = RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, At);
+		if (Found == nullptr)
+		{
+			continue;
+		}
+
+		for (const FGuidelineEdgeId Id : Found->Incident)
+		{
+			const FGuidelineEdge* Edge = RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Id);
+			if (Edge == nullptr)
+			{
+				continue;
+			}
+
+			if (!Edge->ServiceLoopOwner.IsSet())
+			{
+				// Something that is not this stand's own lane. That is the whole question,
+				// and it is why the link from a lane to a road deliberately carries no owner.
+				return true;
+			}
+
+			const FGuidelineNodeId Other = Edge->A == At ? Edge->B : Edge->A;
+			if (!Seen.Contains(Other))
+			{
+				Seen.Add(Other);
+				Frontier.Add(Other);
+			}
+		}
+	}
+	return false;
+}
+
 FApronId URoadNetwork::AddApron(FApronSurface&& Apron)
 {
 	return RoadSlot::Add<FApronId>(Aprons, ApronFreeList, MoveTemp(Apron));

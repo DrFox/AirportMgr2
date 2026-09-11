@@ -60,6 +60,32 @@ public:
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> Anchors;
 
 	/**
+	 * A closed, INVISIBLE vehicle lane enclosing the parked aircraft and every anchor, in
+	 * the entity's own local space. Empty means none.
+	 *
+	 * CLOSED IMPLICITLY: the last point joins the first, and the array does NOT repeat it.
+	 * Storing the repeat would be a value that must agree with another value in the same
+	 * array, which is exactly the drift FResolvedAnchor exists to remove.
+	 *
+	 * WHY A LOOP AT ALL, rather than joining each anchor straight to the road by proximity:
+	 * the anchors sit AROUND the aeroplane - the hydrant pit under the starboard wing, fixed
+	 * ground power off the port bow - so a straight spur from a road on one side to a box on
+	 * the other crosses 37 m of fuselage, and nothing in the guideline graph has ever had an
+	 * opinion about geometry crossing an aeroplane. Anchors spur to this; roads join this.
+	 *
+	 * COMPUTED by the builder that lays the anchors, never authored beside them. Four
+	 * hand-typed corners would be a third authored thing that must agree with the aircraft
+	 * AND with the anchors, and would drift from both. Deriving it at rebuild time was also
+	 * rejected: that is a runtime algorithm's opinion with no override, and a second
+	 * evaluator of the same geometry.
+	 *
+	 * INVISIBLE, and that is a decision rather than an omission: no marking builder, no
+	 * material, no mesh. It exists only as guideline nodes and edges, and shows in the G
+	 * overlay because everything in the graph does. It is a routing lane, not paint.
+	 */
+	UPROPERTY(EditAnywhere) TArray<FVector2D> ServiceLoop;
+
+	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
 	 * that drives up.
 	 *
@@ -136,9 +162,17 @@ public:
 	 * Shared by MakeStandTransient and the commandlet that authors the DA_Stand_CodeC data
 	 * asset, so the tested layout and the shipped one are the same numbers rather than two
 	 * transcriptions of them.
+	 *
+	 * TAKES THE DESIGN AIRCRAFT, and sets it. Named Aircraft rather than DesignAircraft
+	 * because UHT refuses a UFUNCTION parameter that shadows a UPROPERTY of the same class. Both callers used to set DesignAircraft
+	 * afterwards, which was harmless only for as long as nothing in the layout depended on
+	 * it - and ServiceLoop does: a stand's geometry is laid out AROUND the aircraft it is
+	 * sized for, so the builder has to know which one that is. A null aircraft is allowed and
+	 * gives a lane round the anchors alone, which is what a definition with no envelope to
+	 * clear actually wants.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	static void BuildCodeCStand(UEntityDefinition* Definition);
+	static void BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

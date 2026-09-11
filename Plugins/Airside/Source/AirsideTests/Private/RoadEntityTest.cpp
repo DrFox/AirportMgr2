@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadTraffic.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -450,6 +451,63 @@ bool FResolvedAnchorRefreshTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a second refresh with nothing stale changes nothing"),
 		UEntityDefinition::RefreshResolvedAnchors(*Net), 0);
 
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FServiceNodeConnectedTest,
+	"Airside.Model.ServiceNodeConnected",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FServiceNodeConnectedTest::RunTest(const FString& Parameters)
+{
+	// THE QUESTION THIS ANSWERS, and why the incident count stopped answering it: once a
+	// stand carries a service loop, its hydrant ALWAYS has a spur on it, so "has an edge" is
+	// true for a stand in the middle of a field. What the player needs to know is whether the
+	// lane reaches a road, which is a walk and not a count.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	FEntityInstanceId Owner;
+	Owner.Index = 7;
+	Owner.Generation = 1;
+
+	const FGuidelineNodeId Anchor = Net->AddGuidelineNode(FVector2D(0.0, 0.0), /*bDerived=*/false);
+	const FGuidelineNodeId LaneA  = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+	const FGuidelineNodeId LaneB  = Net->AddGuidelineNode(FVector2D(1000.0, 1000.0));
+	const FGuidelineNodeId Road   = Net->AddGuidelineNode(FVector2D(9000.0, 1000.0));
+
+	auto Join = [Net](FGuidelineNodeId A, FGuidelineNodeId B, FEntityInstanceId Owned)
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A;
+		Edge.B = B;
+		Edge.Control = (Net->GetGuidelineNode(A)->Position + Net->GetGuidelineNode(B)->Position) * 0.5;
+		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = true;
+		Edge.ServiceLoopOwner = Owned;
+		Net->AddGuidelineEdge(MoveTemp(Edge));
+	};
+
+	// The spur and one side of the lane, both owned. Nothing else.
+	Join(Anchor, LaneA, Owner);
+	Join(LaneA, LaneB, Owner);
+
+	TestFalse(TEXT("an anchor whose only line is its own lane is not on a road"),
+		Net->IsServiceNodeConnected(Anchor));
+
+	// Now the lane reaches something that is not the lane.
+	Join(LaneB, Road, FEntityInstanceId());
+
+	TestTrue(TEXT("once the lane joins a road, the anchor is"),
+		Net->IsServiceNodeConnected(Anchor));
+
+	// A NODE WITH NO LANE AT ALL - a depot's pose - is answered by its own lead-in, with the
+	// walk having nothing to walk. This is the case the fuel service asks about most.
+	const FGuidelineNodeId Pose = Net->AddGuidelineNode(FVector2D(-9000.0, 0.0), false);
+	TestFalse(TEXT("an island is not on a road"), Net->IsServiceNodeConnected(Pose));
+	Join(Pose, Road, FEntityInstanceId());
+	TestTrue(TEXT("a bare lead-in is enough on its own"), Net->IsServiceNodeConnected(Pose));
 	return true;
 }
 

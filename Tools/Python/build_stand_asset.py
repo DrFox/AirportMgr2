@@ -13,7 +13,7 @@ puts a hold door in one place in code and another in content.
 Four assets, and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
-  DA_Stand_CodeC                        what the ground PROVIDES, and its fixed plant
+  DA_Stand_CodeC                        what the ground PROVIDES, its plant, and the lane
   DA_FuelDepot                          where the trucks live, and how many
 
 Both types park on the same Code C stand and put their hold doors metres apart, which is
@@ -23,15 +23,20 @@ The depot is here rather than in its own script because it is the same KIND of t
 UEntityDefinition the player places - and it is authored the same way, from a C++ builder
 rather than from numbers typed here.
 
-Re-running replaces the assets, and that needs the editor CLOSED: a running editor holds
-the .uasset open and create_asset then refuses under -unattended.
+Re-running RE-AUTHORS IN PLACE, and needs the editor CLOSED: a running editor holds the
+.uasset open and the save then fails.
 
-AND A CLOSED EDITOR IS NOT ALWAYS ENOUGH. An asset another LOADED asset references is held
-open by that reference, inside the commandlet itself: DA_Stand_CodeC names DA_Aircraft_A320
-as its design aircraft, so a re-run deletes the aircraft in memory, fails to recreate it, and
-skips the stand that depended on it (observed 2026-09-07). Nothing reaches disk when that
-happens - the originals are intact and the run is a no-op for those assets - but if the
-aircraft genuinely need re-authoring, delete their .uasset files from disk first.
+IN PLACE, not delete-and-recreate, since 2026-09-07. Deleting was tried and cannot work here:
+an asset another LOADED asset references is held open by that reference inside the commandlet
+itself - DA_Stand_CodeC names DA_Aircraft_A320 as its design aircraft, and M_Starter names
+DA_Stand_CodeC - so a re-run deleted the aircraft in memory, could not recreate it, and
+skipped the stand that depended on it. Deleting the .uasset files from disk instead would
+break the level's reference to them, which is worse.
+
+The trade of re-authoring in place is that a field the C++ builder does NOT set keeps
+whatever was last saved into it. So each builder sets every field it owns, defaults
+included - see UEntityDefinition::BuildCodeCStand, which states PoseRole, FootprintExtent
+and Trucks explicitly for exactly this reason.
 """
 import unreal
 
@@ -40,24 +45,41 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 
 
 def replace_asset(name, asset_class, factory):
-    """Delete any existing asset of this name and create a fresh one."""
+    """The asset to author: the existing one if there is one, else a fresh one.
+
+    Returns the SAME UObject every level and asset already points at, so re-running never
+    breaks a reference - see the module docstring for why deleting cannot work here.
+    """
     path = "%s/%s" % (ASSET_DIR, name)
 
     if unreal.EditorAssetLibrary.does_asset_exist(path):
         existing = unreal.EditorAssetLibrary.load_asset(path)
         if existing is not None:
-            unreal.EditorAssetLibrary.delete_loaded_asset(existing)
-        else:
-            unreal.EditorAssetLibrary.delete_asset(path)
-        unreal.log("MARKER: replaced existing %s" % path)
+            unreal.log("MARKER: re-authoring existing %s in place" % path)
+            return existing
+        unreal.log_error("MARKER: %s exists but will not load - re-author it by hand." % path)
+        return None
 
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     created = tools.create_asset(name, ASSET_DIR, asset_class, factory)
     if created is None:
-        unreal.log_error(
-            "MARKER: create_asset returned None for %s - the asset is still loaded. "
-            "Close the editor, or delete the .uasset from disk, and re-run." % path)
+        unreal.log_error("MARKER: create_asset returned None for %s." % path)
     return created
+
+
+def save(name):
+    """Write the asset to disk, DIRTY OR NOT.
+
+    only_if_is_dirty defaults to True and that silently did nothing here: the C++ builders
+    write the object's properties directly and nothing marks the package dirty, so an asset
+    re-authored in place was rebuilt in memory and never reached disk. Invisible while this
+    script created every asset from scratch - a brand new package is dirty by construction -
+    and it cost a run to find the first time a re-author kept the existing object
+    (2026-09-07). The save is cheap and the assets are small; always write.
+    """
+    path = "%s/%s" % (ASSET_DIR, name)
+    if not unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False):
+        unreal.log_error("MARKER: save_asset refused %s - nothing reached disk." % path)
 
 
 def data_asset_factory(asset_class):
@@ -80,7 +102,7 @@ def build_aircraft(name, builder):
         unreal.log_error("MARKER: %s has empty or duplicate service point ids" % name)
         return None
 
-    unreal.EditorAssetLibrary.save_asset("%s/%s" % (ASSET_DIR, name))
+    save(name)
 
     points = aircraft.get_editor_property("service_points")
     unreal.log("MARKER: %s built, %d service points" % (name, len(points)))
@@ -98,14 +120,15 @@ def build_stand(design_aircraft):
     if stand is None:
         return None
 
-    unreal.EntityDefinition.build_code_c_stand(stand)
-    stand.set_editor_property("design_aircraft", design_aircraft)
+    # The design aircraft goes IN rather than being set afterwards: the stand's service loop
+    # is measured from the aeroplane it is sized for, so the builder has to know which one.
+    unreal.EntityDefinition.build_code_c_stand(stand, design_aircraft)
 
     if not unreal.EntityDefinition.has_usable_anchor_ids(stand):
         unreal.log_error("MARKER: DA_Stand_CodeC has empty or duplicate fixture ids")
         return None
 
-    unreal.EditorAssetLibrary.save_asset("%s/DA_Stand_CodeC" % ASSET_DIR)
+    save("DA_Stand_CodeC")
 
     fixtures = stand.get_editor_property("anchors")
     unreal.log("MARKER: DA_Stand_CodeC built, %d ground fixtures" % len(fixtures))
@@ -113,6 +136,13 @@ def build_stand(design_aircraft):
         local = fixture.get_editor_property("local_position")
         unreal.log("MARKER:   %s at (%.0f, %.0f)" % (
             fixture.get_editor_property("id"), local.x, local.y))
+
+    # THE LANE, logged as its own fact. It is invisible in the editor - no mesh, no material,
+    # no marking builder - so this line is the only place its corners can be read back.
+    loop = stand.get_editor_property("service_loop")
+    unreal.log("MARKER: DA_Stand_CodeC service loop, %d corner(s)" % len(loop))
+    for corner in loop:
+        unreal.log("MARKER:   (%.0f, %.0f)" % (corner.x, corner.y))
     return stand
 
 
@@ -124,7 +154,7 @@ def build_fuel_depot():
         return None
 
     unreal.EntityDefinition.build_fuel_depot(depot)
-    unreal.EditorAssetLibrary.save_asset("%s/DA_FuelDepot" % ASSET_DIR)
+    save("DA_FuelDepot")
 
     # ZERO ANCHORS IS THE CORRECT ANSWER, not a build that half ran: a depot's POSE is its
     # road connection, and a second lead-in from the same small building into the same road
@@ -151,7 +181,7 @@ def wire_depot_into_content(depot):
         return
 
     content.set_editor_property("default_fuel_depot", depot)
-    unreal.EditorAssetLibrary.save_asset(CONTENT_SET)
+    unreal.EditorAssetLibrary.save_asset(CONTENT_SET, only_if_is_dirty=False)
     unreal.log("MARKER: %s.DefaultFuelDepot -> %s" % (
         CONTENT_SET, content.get_editor_property("default_fuel_depot")))
 

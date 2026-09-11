@@ -510,6 +510,27 @@ struct AIRSIDE_API FAirframe
 	 * the agent carries no pointer to its type by design (FAirframe's own comment).
 	 */
 	UPROPERTY(EditAnywhere) FName TypeCode;
+
+	/**
+	 * How long this type spends on a stand before it is ready to go again, in GAME seconds.
+	 *
+	 * GAME seconds, on USimClock, and NOT the UGroundTraffic::GetSimSeconds a fuel dwell is
+	 * timed on. The two are opposite cases of the same day compression: a 40-SECOND dwell on
+	 * the game clock would be over in half a real second before the truck had stopped rolling,
+	 * which is why UFuelService times that on the movement clock; a 30-MINUTE turnaround on
+	 * the movement clock would be thirty real minutes. Compressed it is about 25 real seconds
+	 * at normal speed, which is what USimClock's header means by authoring turnarounds in game
+	 * time.
+	 *
+	 * IT TRAVELS IN THE BUNDLE for the reason the bundle exists: UFuelService decides when an
+	 * aircraft may leave, it lives in Model/, and Check-Architecture forbids Model/ including
+	 * Entities/ - so it can no more read a UAircraftType for this than for the pose role.
+	 *
+	 * It is also the grace period for an aircraft nothing can serve. One figure, not two: an
+	 * aircraft whose fuel went Unserviceable waits exactly as long as one being fuelled, and
+	 * then leaves without it.
+	 */
+	UPROPERTY(EditAnywhere) double TurnaroundSeconds = 1800.0;
 };
 
 /** A connection point between an entity and the guideline graph, in the entity's local space. */

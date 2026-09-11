@@ -298,7 +298,11 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	// Anchor lead-ins go second and must: they join stands to guidelines that only exist
 	// once the line above has run, and both are swept and rebuilt together.
 	FRoadGuidelineBuilder::Build(Network, Solved);
-	FAnchorLink::Build(Network);
+	//
+	// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
+	// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
+	// per-airport gameplay tuning and the other is a fact about a painted line.
+	FAnchorLink::Build(Network, FAnchorLink::DefaultMaxLeadIn, Settings.ServiceLinkRadius);
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single
 	// material", and ARoadNetworkActor::ResolveMaterialSet supplies a content default without

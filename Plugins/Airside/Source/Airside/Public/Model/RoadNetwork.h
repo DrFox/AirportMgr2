@@ -323,6 +323,20 @@ public:
 	 */
 	TArray<FGuidelineEdgeId> GetOutgoingGuidelines(FGuidelineNodeId Node, ETraversalClass Class) const;
 
+	/**
+	 * True when Node has line on it that leads OFF the service geometry it belongs to.
+	 *
+	 * "Does this anchor have an edge on it" used to be the same question, and stopped being
+	 * it the moment stands grew SERVICE LOOPS: a hydrant is always incident to its own spur,
+	 * so the count is true for a stand in the middle of a field. This walks only the edges
+	 * marked FGuidelineEdge::ServiceLoopOwner - the lane and its spurs - and reports whether
+	 * the component they reach touches anything that is not one of them.
+	 *
+	 * A node with no service geometry at all is answered by its own first edge, so a depot's
+	 * pose and a hand-drawn node both give the obvious answer without a walk.
+	 */
+	bool IsServiceNodeConnected(FGuidelineNodeId Node) const;
+
 	// --- Apron surfaces --------------------------------------------------------------
 	// Polygon pavement. Deliberately NOT in the segment list: the junction solver walks
 	// segments, and an apron has nothing for it to solve.

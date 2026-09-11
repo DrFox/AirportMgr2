@@ -8,6 +8,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Model/SimClock.h"
+#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -104,15 +106,29 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	bool bAnyDepot = false;
 	bool bAnyJoinedDepot = false;
 
-	// JOINED, NOT MERELY RESOLVED. This tested StandFuel.IsSet() alone, which is a fact about
-	// PLACEMENT and not about the airport: URoadNetwork::PlaceEntity creates a node for every
-	// anchor whether or not a lead-in ever reaches it, so the test was true for every Code C
-	// stand ever placed and StandUnjoined could not fire at all. Every hydrant that joined
-	// nothing was reported as NoRoute - "no road from depot" - which sends the player to look
-	// at the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
-	const FGuidelineNode* FuelNode =
-		StandFuel.IsSet() ? Network.GetGuidelineNode(StandFuel) : nullptr;
-	const bool bStandJoined = FuelNode != nullptr && FuelNode->Incident.Num() > 0;
+	/**
+	 * A joined depot with a fleet, all of it already out.
+	 *
+	 * SEPARATE FROM EVERY OTHER REASON because it is the only one that resolves ITSELF. The
+	 * chain below reports facts about the airport, which change only when the player edits
+	 * it; a truck comes home on its own.
+	 */
+	bool bAnyBusyDepot = false;
+
+	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
+	//
+	// This tested StandFuel.IsSet() alone, which is a fact about PLACEMENT and not about the
+	// airport: URoadNetwork::PlaceEntity creates a node for every anchor whether or not a
+	// lead-in ever reaches it, so the test was true for every Code C stand ever placed and
+	// StandUnjoined could not fire at all. Counting incident edges fixed that, and then
+	// stopped working for the same shape of reason the moment stands grew SERVICE LANES: a
+	// hydrant is ALWAYS spurred to its own lane, so the count is true for a stand in the
+	// middle of a field. The question was never "does this node have a line on it" but "does
+	// that line go anywhere", which is a walk - see URoadNetwork::IsServiceNodeConnected.
+	//
+	// Both wrong answers reported NoRoute - "no road from depot" - which sends the player to
+	// look at the depot when the road they need is at the stand. Observed in PIE 2026-09-07.
+	const bool bStandJoined = StandFuel.IsSet() && Network.IsServiceNodeConnected(StandFuel);
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -138,11 +154,27 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 		bAnyJoinedDepot = true;
 
 		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
-		if (Instance.Trucks <= 0 || TrucksOutFor(DepotId) >= Instance.Trucks)
+
+		// NO FLEET AT ALL IS NOT "BUSY", and the two were one condition until 2026-09-08.
+		// A depot with no trucks never frees up, so treating it as busy would make a demand
+		// wait for ever in silence. It falls through to the chain below and is reported.
+		if (Instance.Trucks <= 0)
 		{
-			// Busy, not broken. Deliberately does NOT set a refusal: a demand whose only
-			// depot is out on another job is Needed and will be offered again next tick, not
-			// Unserviceable, which is terminal until the graph changes.
+			continue;
+		}
+
+		if (TrucksOutFor(DepotId) >= Instance.Trucks)
+		{
+			// BUSY, NOT BROKEN. A demand whose only depot is out on another job is Needed and
+			// will be offered again next tick, not Unserviceable - which is TERMINAL until
+			// the guideline revision changes, and a truck driving home changes no guideline.
+			//
+			// This branch always said so and could not deliver it: the else-chain below
+			// assigned a refusal unconditionally whenever nothing was chosen, so busy came
+			// out as NoRoute - "no road from depot" - and the aircraft was never fuelled
+			// while the player was sent to look at a road that was already there. Seen in
+			// PIE 2026-09-08. The flag is what carries this branch's intent to the chain.
+			bAnyBusyDepot = true;
 			continue;
 		}
 
@@ -199,6 +231,17 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 	{
 		OutWhy = EFuelRefusal::StandUnjoined;
 	}
+	else if (bAnyBusyDepot)
+	{
+		// NOTHING IS WRONG - WAIT. None keeps the demand Needed and re-offered every tick,
+		// which is the queue: see the Needed case in Tick.
+		//
+		// AFTER the three facts above, deliberately. Those are things the player can go and
+		// fix and should be told about even while a truck happens to be out; being busy is
+		// not. And DEFERRING a genuine NoRoute costs nothing: the moment the truck is home
+		// the depot is idle, this branch stops firing, and the real reason is reported.
+		OutWhy = EFuelRefusal::None;
+	}
 	else
 	{
 		OutWhy = EFuelRefusal::NoRoute;
@@ -250,7 +293,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 }
 
 void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
-	int32 AgentId, EAgentPhase From, EAgentPhase To)
+	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under
 	// the player's hand. Any open demand for it is dropped and any truck out for it turns
@@ -339,13 +382,24 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	Demand.AircraftId = AgentId;
 	Demand.Stand = Stand;
 	Demand.State = EFuelDemandState::Needed;
+
+	// THE CLOCK STARTS WHEN THE WHEELS STOP, not when the fuelling finishes. A turnaround is
+	// the time on stand, and the services happen INSIDE it - which is what lets baggage and
+	// catering be added later without lengthening anything.
+	//
+	// The figure rides on the AGENT, in its airframe bundle, because this class may not
+	// include Entities/ and so cannot ask the aircraft's type - the same reason the pose role
+	// is read off FEntityInstance above. See FAirframe::TurnaroundSeconds.
+	Demand.TurnaroundEndsAt = Clock.Now() + Agent->Airframe.TurnaroundSeconds;
 	Demands.Add(Demand);
 
-	UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d parked at stand %d; needs fuel"),
-		AgentId, Stand.Index);
+	UE_LOG(LogAirportOps, Log,
+		TEXT("Fuel: aircraft %d parked at stand %d; needs fuel, away in %.0f game s"),
+		AgentId, Stand.Index, Agent->Airframe.TurnaroundSeconds);
 }
 
-void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
+void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock)
 {
 	const double Now = Traffic.GetSimSeconds();
 	const uint32 Revision = Network.GetGuidelineRevision();
@@ -402,17 +456,44 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 					DepotsOnRoad += (Pose != nullptr && Pose->Incident.Num() > 0) ? 1 : 0;
 				}
 				const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
-				const FGuidelineNode* HydrantNode =
-					Hydrant.IsSet() ? Network.GetGuidelineNode(Hydrant) : nullptr;
 
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: aircraft %d at stand %d cannot be served: %s. %d depot(s), %d on a "
 						 "road; the stand's hydrant %s. Check the 'Anchor links:' line."),
 					Demand.AircraftId, Demand.Stand.Index, RefusalText(Why), Depots, DepotsOnRoad,
-					HydrantNode == nullptr ? TEXT("has no node at all")
-						: HydrantNode->Incident.Num() > 0 ? TEXT("is on a road")
+					!Hydrant.IsSet() ? TEXT("has no node at all")
+						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
 						: TEXT("is NOT on a road"));
 				break;
+			}
+
+			// THE ROUTE ITSELF, not its length. A truck that reaches the hydrant the long way
+			// round the lane and one that turns straight in are both "a valid plan" and both
+			// log identically without this - and the difference is the whole of what the
+			// player watches.
+			//
+			// At LOG, not Verbose: a fuel dispatch happens once per turnaround, not per tick,
+			// so this costs one line an aircraft - and a line the player has to switch on is
+			// a line that is not there in the session that needed it.
+			{
+				// CAPPED. A route the length of the airport is a hundred points, and a log
+				// line nobody can read is the same as no log line. The HEAD is the half that
+				// matters: the journey out of the lane is what this exists to show.
+				constexpr int32 MostPoints = 40;
+				FString Path;
+				for (int32 At = 0; At < FMath::Min(Plan.Polyline.Num(), MostPoints); ++At)
+				{
+					Path += FString::Printf(TEXT("(%.0f,%.0f) "),
+						Plan.Polyline[At].X, Plan.Polyline[At].Y);
+				}
+				if (Plan.Polyline.Num() > MostPoints)
+				{
+					Path += FString::Printf(TEXT("... +%d more"), Plan.Polyline.Num() - MostPoints);
+				}
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Fuel route: aircraft %d, depot %d to stand %d, %.0f uu over %d point(s): %s"),
+					Demand.AircraftId, Depot.Index, Demand.Stand.Index,
+					GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *Path);
 			}
 
 			// ShutdownPause 0 - see TruckShutdownPause. The AIRFRAME is the vehicle default,
@@ -466,6 +547,79 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 		default:
 			break;
 		}
+	}
+
+	DepartTheReady(Traffic, Network, Clock);
+}
+
+void UFuelService::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock)
+{
+	// GATHERED FIRST, DEPARTED AFTER. UGroundTraffic::DepartAgent broadcasts the phase change
+	// synchronously, OnAgentPhase is on the other end of that broadcast, and it drops the
+	// aircraft's demand - so departing inside a loop over Demands would mutate the array
+	// being walked. Ids, not pointers, for the same reason.
+	TArray<int32> Ready;
+	for (const FFuelDemand& Demand : Demands)
+	{
+		if (Clock.Now() < Demand.TurnaroundEndsAt)
+		{
+			continue;
+		}
+
+		// STILL BEING SERVED, so the deadline does not apply. A truck that is on its way or
+		// at the hydrant is finishing a job the aircraft asked for, and cutting it off would
+		// strand the truck at a stand nobody is at - see OnAgentPhase's recall, which exists
+		// precisely because that is expensive. Needed is here too: the airport may be about
+		// to gain the depot the demand is waiting for.
+		if (Demand.State != EFuelDemandState::Done
+			&& Demand.State != EFuelDemandState::Unserviceable)
+		{
+			continue;
+		}
+		Ready.Add(Demand.AircraftId);
+	}
+
+	for (const int32 AircraftId : Ready)
+	{
+		// RE-FOUND EACH TIME: an earlier departure in this same loop removed its own demand,
+		// and may in principle have disturbed another's.
+		FFuelDemand* Demand = FindByAircraft(AircraftId);
+		if (Demand == nullptr)
+		{
+			continue;
+		}
+
+		const bool bUnfuelled = Demand->State == EFuelDemandState::Unserviceable;
+		const EFuelRefusal Why = Demand->Why;
+		const int32 Stand = Demand->Stand.Index;
+
+		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
+		if (Refusal != EDepartureRefusal::None)
+		{
+			// LOGGED ON A CHANGE OF REASON, not every tick. A runway the player has left
+			// occupied refuses this for as long as they leave it, and a line a tick would
+			// bury every other line in the file - the busy-depot branch above is quiet for
+			// the same reason. Demand re-found because DepartAgent may have moved the array.
+			if (FFuelDemand* Still = FindByAircraft(AircraftId);
+				Still != nullptr && Still->LastDepartureRefusal != Refusal)
+			{
+				Still->LastDepartureRefusal = Refusal;
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Fuel: aircraft %d is ready to leave stand %d but cannot: %s"),
+					AircraftId, Stand, *UEnum::GetValueAsString(Refusal));
+			}
+			continue;
+		}
+
+		// SAID WHEN IT LEAVES WITHOUT FUEL. The 'cannot be served' warning fired when the
+		// demand went Unserviceable and named what was missing; this says the airport lost
+		// the turnaround rather than the stand, which is the consequence the player sees.
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Fuel: aircraft %d departs stand %d%s"), AircraftId, Stand,
+			bUnfuelled
+				? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
+				: TEXT(" after its turnaround"));
 	}
 }
 

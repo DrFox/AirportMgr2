@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Tool/RoadSnap.h"
@@ -69,6 +70,15 @@ public:
 		bool bDebugDrawMesh = false;
 		bool bDebugDrawAprons = false;
 		double DebugDrawSeconds = 30.0;
+
+		/**
+		 * How far a SERVICE connection may reach, in any direction, uu.
+		 *
+		 * The one link figure that comes down from the LEVEL - see
+		 * ARoadNetworkActor::ServiceLinkRadius. The aircraft cap does not: 200 m is a fact
+		 * about a painted lead-in, not per-airport tuning.
+		 */
+		double ServiceLinkRadius = FAnchorLink::DefaultServiceLinkRadius;
 
 		/** Already resolved - see ARoadNetworkActor::ResolveSurfaceMaterial and its siblings. */
 		UMaterialInterface* SurfaceMaterial = nullptr;
