@@ -1,13 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "UObject/Object.h"
 
 #include "Flight.generated.h"
 
-class UAircraftType;
-class UAirlineDefinition;
 enum class EAgentPhase : uint8;
 
 /**
@@ -60,8 +59,20 @@ public:
 	/** Ids start at 1. HolderId() depends on that, so never renumber from 0. */
 	UPROPERTY() int32 Id = 0;
 
-	UPROPERTY() TObjectPtr<UAirlineDefinition> Airline = nullptr;
-	UPROPERTY() TObjectPtr<UAircraftType> Type = nullptr;
+	/**
+	 * What is flying, FLATTENED OUT OF THE DEFINITION rather than pointed at.
+	 *
+	 * Model/ may not see Entities/ - Check-Architecture enforces it - and FAirframe exists
+	 * for exactly this crossing: its own comment says the agent carries no pointer to its
+	 * type by design. Whoever makes the offer reads UAircraftType::Airframe() once, the same
+	 * way URoadNetwork::PlaceEntity takes a design wingspan instead of a definition.
+	 */
+	UPROPERTY() FAirframe Airframe;
+
+	/** For the inbox to print. Captured with the airframe, and for the same reason. */
+	UPROPERTY() FText AirlineName;
+	UPROPERTY() FText TypeName;
+
 	UPROPERTY() EFlightPhase Phase = EFlightPhase::Offered;
 
 	/**
