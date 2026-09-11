@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Model/SimClock.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -292,7 +293,7 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 }
 
 void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
-	int32 AgentId, EAgentPhase From, EAgentPhase To)
+	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
 	// AN AIRCRAFT LEAVING ITS STAND, first: it departs, or is retired, or is deleted under
 	// the player's hand. Any open demand for it is dropped and any truck out for it turns
@@ -381,13 +382,24 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 	Demand.AircraftId = AgentId;
 	Demand.Stand = Stand;
 	Demand.State = EFuelDemandState::Needed;
+
+	// THE CLOCK STARTS WHEN THE WHEELS STOP, not when the fuelling finishes. A turnaround is
+	// the time on stand, and the services happen INSIDE it - which is what lets baggage and
+	// catering be added later without lengthening anything.
+	//
+	// The figure rides on the AGENT, in its airframe bundle, because this class may not
+	// include Entities/ and so cannot ask the aircraft's type - the same reason the pose role
+	// is read off FEntityInstance above. See FAirframe::TurnaroundSeconds.
+	Demand.TurnaroundEndsAt = Clock.Now() + Agent->Airframe.TurnaroundSeconds;
 	Demands.Add(Demand);
 
-	UE_LOG(LogAirportOps, Log, TEXT("Fuel: aircraft %d parked at stand %d; needs fuel"),
-		AgentId, Stand.Index);
+	UE_LOG(LogAirportOps, Log,
+		TEXT("Fuel: aircraft %d parked at stand %d; needs fuel, away in %.0f game s"),
+		AgentId, Stand.Index, Agent->Airframe.TurnaroundSeconds);
 }
 
-void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
+void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock)
 {
 	const double Now = Traffic.GetSimSeconds();
 	const uint32 Revision = Network.GetGuidelineRevision();
@@ -535,6 +547,79 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network)
 		default:
 			break;
 		}
+	}
+
+	DepartTheReady(Traffic, Network, Clock);
+}
+
+void UFuelService::DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	const USimClock& Clock)
+{
+	// GATHERED FIRST, DEPARTED AFTER. UGroundTraffic::DepartAgent broadcasts the phase change
+	// synchronously, OnAgentPhase is on the other end of that broadcast, and it drops the
+	// aircraft's demand - so departing inside a loop over Demands would mutate the array
+	// being walked. Ids, not pointers, for the same reason.
+	TArray<int32> Ready;
+	for (const FFuelDemand& Demand : Demands)
+	{
+		if (Clock.Now() < Demand.TurnaroundEndsAt)
+		{
+			continue;
+		}
+
+		// STILL BEING SERVED, so the deadline does not apply. A truck that is on its way or
+		// at the hydrant is finishing a job the aircraft asked for, and cutting it off would
+		// strand the truck at a stand nobody is at - see OnAgentPhase's recall, which exists
+		// precisely because that is expensive. Needed is here too: the airport may be about
+		// to gain the depot the demand is waiting for.
+		if (Demand.State != EFuelDemandState::Done
+			&& Demand.State != EFuelDemandState::Unserviceable)
+		{
+			continue;
+		}
+		Ready.Add(Demand.AircraftId);
+	}
+
+	for (const int32 AircraftId : Ready)
+	{
+		// RE-FOUND EACH TIME: an earlier departure in this same loop removed its own demand,
+		// and may in principle have disturbed another's.
+		FFuelDemand* Demand = FindByAircraft(AircraftId);
+		if (Demand == nullptr)
+		{
+			continue;
+		}
+
+		const bool bUnfuelled = Demand->State == EFuelDemandState::Unserviceable;
+		const EFuelRefusal Why = Demand->Why;
+		const int32 Stand = Demand->Stand.Index;
+
+		const EDepartureRefusal Refusal = Traffic.DepartAgent(AircraftId, Network);
+		if (Refusal != EDepartureRefusal::None)
+		{
+			// LOGGED ON A CHANGE OF REASON, not every tick. A runway the player has left
+			// occupied refuses this for as long as they leave it, and a line a tick would
+			// bury every other line in the file - the busy-depot branch above is quiet for
+			// the same reason. Demand re-found because DepartAgent may have moved the array.
+			if (FFuelDemand* Still = FindByAircraft(AircraftId);
+				Still != nullptr && Still->LastDepartureRefusal != Refusal)
+			{
+				Still->LastDepartureRefusal = Refusal;
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Fuel: aircraft %d is ready to leave stand %d but cannot: %s"),
+					AircraftId, Stand, *UEnum::GetValueAsString(Refusal));
+			}
+			continue;
+		}
+
+		// SAID WHEN IT LEAVES WITHOUT FUEL. The 'cannot be served' warning fired when the
+		// demand went Unserviceable and named what was missing; this says the airport lost
+		// the turnaround rather than the stand, which is the consequence the player sees.
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Fuel: aircraft %d departs stand %d%s"), AircraftId, Stand,
+			bUnfuelled
+				? *FString::Printf(TEXT(" UNFUELLED - %s"), RefusalText(Why))
+				: TEXT(" after its turnaround"));
 	}
 }
 

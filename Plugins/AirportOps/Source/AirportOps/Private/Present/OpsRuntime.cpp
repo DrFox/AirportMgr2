@@ -84,7 +84,7 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		{
 			if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 			{
-				FuelService->Tick(*Model, *Target->Network);
+				FuelService->Tick(*Model, *Target->Network, *Clock);
 			}
 		}
 	}
@@ -140,7 +140,7 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 	{
 		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 		{
-			FuelService->OnAgentPhase(*Model, *Target->Network, AgentId, From, To);
+			FuelService->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
 		}
 	}
 

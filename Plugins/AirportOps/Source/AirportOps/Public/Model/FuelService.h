@@ -1,9 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/DeparturePlanner.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
 #include "UObject/Object.h"
+
+class USimClock;
 #include "FuelService.generated.h"
 
 class UGroundTraffic;
@@ -98,6 +101,28 @@ struct AIRPORTOPS_API FFuelDemand
 	UPROPERTY() double DwellEndsAt = 0.0;
 
 	UPROPERTY() EFuelRefusal Why = EFuelRefusal::None;
+
+	/**
+	 * USimClock::Now at which this aircraft is free to push back. Set when it parks.
+	 *
+	 * THE GAME CLOCK, not the DwellEndsAt one two fields up, and the pair is the clearest
+	 * statement of why this class has to see both - see FAirframe::TurnaroundSeconds. A dwell
+	 * is seconds and is watched; a turnaround is tens of minutes and is compressed.
+	 *
+	 * ALSO THE GRACE PERIOD when nothing can serve the aircraft. One deadline, not two: an
+	 * aircraft whose fuel went Unserviceable waits exactly as long as one being fuelled, and
+	 * then leaves without it.
+	 */
+	UPROPERTY() double TurnaroundEndsAt = 0.0;
+
+	/**
+	 * The last reason a departure was refused, so the retry does not log every tick.
+	 *
+	 * A departure can be refused for as long as the player leaves a runway occupied, and this
+	 * runs every tick - see the busy-depot branch in Tick for the same problem solved the same
+	 * way. None means nothing has been refused yet.
+	 */
+	UPROPERTY() EDepartureRefusal LastDepartureRefusal = EDepartureRefusal::None;
 };
 
 /**
@@ -120,7 +145,12 @@ struct AIRPORTOPS_API FFuelDemand
  * module as much as in Airside's. So everything it needs from a UEntityDefinition (the pose
  * role, the truck count) is read off FEntityInstance, where placement captured it.
  *
- * TIME COMES FROM UGroundTraffic::GetSimSeconds, NOT FROM USimClock. The clock is
+ * IT SEES BOTH CLOCKS, and which one answers which question is the whole of the paragraph
+ * below. A DWELL is timed on UGroundTraffic::GetSimSeconds; a TURNAROUND is timed on
+ * USimClock - see FFuelDemand::TurnaroundEndsAt and FAirframe::TurnaroundSeconds. They are
+ * opposite cases of the same compression and neither reading generalises to the other.
+ *
+ * THE DWELL COMES FROM UGroundTraffic::GetSimSeconds, NOT FROM USimClock. The clock is
  * day-compressed - at the default 1200 real seconds per game day a 40 s dwell would be 0.55
  * real seconds - while the truck's MOTION runs on the speed multiplier alone. A dwell timed
  * on the clock would be over before the truck had finished rolling to a stop. USimClock's own
@@ -156,14 +186,15 @@ public:
 	 * hydrant starts the dwell; a truck reaching Parked at its depot is retired; an aircraft
 	 * LEAVING Parked drops its demand and sends any truck home.
 	 */
-	void OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network, int32 AgentId,
+	void OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
+		int32 AgentId,
 		EAgentPhase From, EAgentPhase To);
 
 	/**
 	 * One pass: offer every Needed demand a truck, run the dwells down, and re-offer the
 	 * unserviceable ones when the graph has changed under them.
 	 */
-	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network);
+	void Tick(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock);
 
 	/**
 	 * The one line the inspector's aircraft card shows for this agent, or empty when it has
@@ -182,6 +213,20 @@ public:
 	int32 TrucksGoingHomeForTest() const { return GoingHome.Num(); }
 
 private:
+	/**
+	 * Send every aircraft whose turnaround has run out and whose services are finished.
+	 *
+	 * Its own function and not a fifth case in Tick's switch, because it is a pass OVER the
+	 * demands rather than a transition of one: departing an aircraft removes its demand, so
+	 * this cannot run inside the loop that walks them. See its body.
+	 *
+	 * THE SEAM M3 TAKES OVER. "All services done" is one demand today because fuel is the
+	 * only service; UJobBoard replaces this with a flight's whole set, and this function is
+	 * where that question is asked. See this class's header on being scaffolding.
+	 */
+	void DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock);
+
 	UPROPERTY() TArray<FFuelDemand> Demands;
 
 	/**

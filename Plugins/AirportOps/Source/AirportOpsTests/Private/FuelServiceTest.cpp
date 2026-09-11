@@ -11,6 +11,8 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Model/SimClock.h"
+#include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -38,6 +40,13 @@ namespace
 		UGroundTraffic* Traffic = nullptr;
 		UFuelService* Service = nullptr;
 
+		/**
+		 * The DAY-COMPRESSED clock, beside the traffic's own seconds - the pair UFuelService
+		 * now takes. RealSecondsPerGameDay is left at its default so Advance(real seconds)
+		 * moves game time 72x faster, exactly as a session does.
+		 */
+		USimClock* Clock = nullptr;
+
 		FEntityInstanceId Stand;
 		FEntityInstanceId Depot;
 		FGuidelineNodeId StandPose;
@@ -57,6 +66,26 @@ namespace
 		 * is using the truck.
 		 */
 		bool bSecondStand = false;
+
+		/**
+		 * Seconds of GAME time an aircraft dispatched by this fixture spends on stand, or 0
+		 * to leave FAirframe's authored default alone.
+		 *
+		 * Set BEFORE parking, because the demand's deadline is computed from the agent's own
+		 * airframe the moment it parks - which is exactly the path under test. Overriding it
+		 * afterwards would test a number the production code never read.
+		 */
+		double TurnaroundSeconds = 0.0;
+
+		/**
+		 * Lay a runway north of the taxiway, and a guideline onto it.
+		 *
+		 * Off by default: the fuel tests are about demands and trucks, and every one of them
+		 * predates an aircraft that could leave on its own. With no runway a departure is
+		 * refused NoRunway, which those tests want - their aircraft are supposed to sit there.
+		 * The turnaround tests need one, because what they assert is the aeroplane going.
+		 */
+		bool bWithRunway = false;
 
 		double RoadY = -6000.0;
 
@@ -121,6 +150,7 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Net = NewObject<URoadNetwork>(GetTransientPackage());
 	Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	Service = NewObject<UFuelService>(GetTransientPackage());
+	Clock = NewObject<USimClock>(GetTransientPackage());
 
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
@@ -132,6 +162,40 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 		FGuidelineNodeId RoadWest, RoadEast;
 		LayLine(*Net, FVector2D(RoadFromX, RoadY), FVector2D(20000.0, RoadY),
 			ETraversalClass::GroundVehicle, RoadWest, RoadEast);
+	}
+
+	if (bWithRunway)
+	{
+		// THE SAME RECIPE Airside.Model.Traffic.DepartAgent uses - PAVEMENT split at the
+		// point the guideline meets it, and a wide continuous profile. No SetRunwayFacts: the
+		// defaults admit the default airframe, and a fixture that authored facts would be
+		// asserting admission rules this test says nothing about.
+		//
+		// NORTH of the taxiway's far end, so a departure taxis AWAY from the stand and the
+		// leaving is unmistakable on the phase.
+		URoadProfile* Strip = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Strip->bContinuousThroughJunctions = true;
+		const FRoadNodeId West = Net->AddNode(FVector2D(-50000.0, 20000.0));
+		const FRoadNodeId Mid = Net->AddNode(FVector2D(-10000.0, 20000.0));
+		const FRoadNodeId East = Net->AddNode(FVector2D(50000.0, 20000.0));
+		Net->AddStraightSegment(West, Mid, Strip);
+		Net->AddStraightSegment(Mid, East, Strip);
+
+		// FROM THE TAXIWAY'S OWN NORTH NODE, not from a fresh one at the same place. LayLine
+		// adds nodes, so a second call at (-10000, 10000) puts a SECOND node there joined to
+		// nothing - the runway was then found and refused NoRoute, which is a graph with two
+		// components and no way between them.
+		const FGuidelineNodeId OnStrip = Net->AddGuidelineNode(FVector2D(-10000.0, 20000.0), false);
+		FGuidelineEdge ToStrip;
+		ToStrip.A = TaxiNorth;
+		ToStrip.B = OnStrip;
+		ToStrip.Control = FVector2D(-10000.0, 15000.0);
+		ToStrip.AllowedTraffic = FTrafficMask::Only(ETraversalClass::Aircraft);
+		ToStrip.AllowedTraffic.Add(ETraversalClass::Emergency);
+		ToStrip.Direction = EGuidelineDir::Bidirectional;
+		ToStrip.Width = 600.0;
+		ToStrip.bDerived = true;
+		Net->AddGuidelineEdge(MoveTemp(ToStrip));
 	}
 
 	UEntityDefinition* StandDef = UEntityDefinition::MakeStandTransient();
@@ -189,10 +253,11 @@ void FFuelFixture::RelayPhases()
 	UFuelService* Bound = Service;
 	URoadNetwork* Graph = Net;
 	UGroundTraffic* Model = Traffic;
+	USimClock* Time = Clock;
 	Traffic->OnAgentPhaseChanged.AddLambda(
-		[Bound, Graph, Model](int32 AgentId, EAgentPhase From, EAgentPhase To)
+		[Bound, Graph, Model, Time](int32 AgentId, EAgentPhase From, EAgentPhase To)
 		{
-			Bound->OnAgentPhase(*Model, *Graph, AgentId, From, To);
+			Bound->OnAgentPhase(*Model, *Graph, *Time, AgentId, From, To);
 		});
 }
 
@@ -235,8 +300,14 @@ int32 FFuelFixture::ParkAircraftAt(FGuidelineNodeId Pose)
 		return 0;
 	}
 
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	if (TurnaroundSeconds > 0.0)
+	{
+		Airframe.TurnaroundSeconds = TurnaroundSeconds;
+	}
+
 	const int32 Id = Traffic->DispatchAgent(Net, Plan,
-		UAirsideSettings::ResolveDefaultAirframe(), ETraversalClass::Aircraft, /*Shutdown=*/0.0);
+		Airframe, ETraversalClass::Aircraft, /*Shutdown=*/0.0);
 
 	// Run it in. 120 s is generous for a 20 000 uu taxi and is a bound, not a wait.
 	for (int32 Step = 0; Step < 3600; ++Step)
@@ -259,7 +330,11 @@ void FFuelFixture::Advance(double Seconds)
 	for (double Elapsed = 0.0; Elapsed < Seconds; Elapsed += Step)
 	{
 		Traffic->Advance(Step, Net);
-		Service->Tick(*Traffic, *Net);
+
+		// THE CLOCK MOVES TOO, in the order UOpsRuntime runs it: game time first, then the
+		// service reads both it and the movement seconds the traffic just advanced.
+		Clock->Advance(Step);
+		Service->Tick(*Traffic, *Net, *Clock);
 	}
 }
 
@@ -567,6 +642,108 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and was never marked unserviceable on the way"),
 			static_cast<int32>(Served->Why), static_cast<int32>(EFuelRefusal::None));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelTurnaroundDepartsTest,
+	"AirportOps.Model.TurnaroundDeparts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelTurnaroundDepartsTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+
+	// LONG ENOUGH THAT THE TRUCK IS STILL OUT WHEN IT EXPIRES, which is the first assertion
+	// below and the reason this is not simply the authored 1800. The clock runs 72x real at
+	// the default day, so 1800 game seconds is 25 real ones - comfortably inside the drive
+	// out and the 40 s dwell, and therefore not a number that has to be tuned to stay true.
+	Fixture.TurnaroundSeconds = 1800.0;
+	Fixture.bWithRunway = true;
+	Fixture.Build(/*bWithRoad=*/true);
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+
+	auto Demand = [&Fixture, Aircraft]() -> const FFuelDemand*
+	{
+		for (const FFuelDemand& Each : Fixture.Service->GetDemands())
+		{
+			if (Each.AircraftId == Aircraft) { return &Each; }
+		}
+		return nullptr;
+	};
+	auto Phase = [&Fixture, Aircraft]
+	{
+		const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
+		return Agent != nullptr ? Agent->Phase : EAgentPhase::Gone;
+	};
+
+	if (!TestNotNull(TEXT("it demanded fuel"), Demand())) { return false; }
+	const double Deadline = Demand()->TurnaroundEndsAt;
+
+	// THE DEADLINE IS NOT A GUILLOTINE. Advanced until it has passed, then asserted that an
+	// aircraft still being served has NOT been sent - a job it asked for is finished first,
+	// which is what stops a truck being stranded at a hydrant nobody is at.
+	TestTrue(TEXT("the turnaround runs out"),
+		Fixture.AdvanceUntil([&Fixture, Deadline] { return Fixture.Clock->Now() >= Deadline; }, 120.0));
+
+	if (const FFuelDemand* Now = Demand();
+		TestNotNull(TEXT("and the demand is still open"), Now))
+	{
+		TestNotEqual(TEXT("because the truck has not finished"),
+			static_cast<int32>(Now->State), static_cast<int32>(EFuelDemandState::Done));
+		TestEqual(TEXT("so the aircraft is still on its stand"),
+			static_cast<int32>(Phase()), static_cast<int32>(EAgentPhase::Parked));
+	}
+
+	// AND THEN IT GOES, on its own, with nothing pressing Depart. Measured on the PHASE,
+	// which is what the player watches; asserting the demand was dropped would assert the
+	// cause from its own effect, since leaving is what drops it.
+	TestTrue(TEXT("once fuelled and out of time it departs by itself"),
+		Fixture.AdvanceUntil([&Phase] { return Phase() != EAgentPhase::Parked; }, 300.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelUnserviceableStillDepartsTest,
+	"AirportOps.Model.UnserviceableStillDeparts",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
+{
+	FFuelFixture Fixture;
+	Fixture.TurnaroundSeconds = 1800.0;
+	Fixture.bWithRunway = true;
+
+	// NO DEPOT AT ALL, so the demand goes Unserviceable for a real reason rather than by
+	// being written there - the same airport AirportOps.Model.FuelServiceRefusals uses.
+	Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked"), Aircraft != 0)) { return false; }
+
+	TestTrue(TEXT("nothing can serve it"), Fixture.AdvanceUntil([&Fixture, Aircraft]
+	{
+		for (const FFuelDemand& Each : Fixture.Service->GetDemands())
+		{
+			if (Each.AircraftId == Aircraft)
+			{
+				return Each.State == EFuelDemandState::Unserviceable;
+			}
+		}
+		return false;
+	}, 60.0));
+
+	// THE STAND FREES ITSELF. The whole reason the grace period IS the turnaround and not a
+	// second figure: an airport with no depot costs the player a turnaround of throughput,
+	// and does not silt up with aircraft that can never leave.
+	TestTrue(TEXT("an aircraft nothing can serve leaves anyway once its turnaround is up"),
+		Fixture.AdvanceUntil([&Fixture, Aircraft]
+		{
+			const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
+			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
+		}, 300.0));
 	return true;
 }
 
