@@ -6,6 +6,7 @@
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/PackageName.h"
+#include "Entities/AircraftType.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -280,6 +281,29 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			StandIndex, Stand.Position.X, Stand.Position.Y, Stand.Heading,
 			Pose ? TEXT("live") : TEXT("DEAD"), Pose ? Pose->Incident.Num() : 0,
 			AnchorsJoined, Stand.ResolvedAnchors.Num(), *Reach);
+	}
+
+	// WHICH AIRCRAFT THIS FIELD CAN ACTUALLY TAKE, per type, with the reason when it cannot.
+	//
+	// Added 2026-09-11 because the offer inbox greyed out every Accept and the refusal was
+	// only ever rendered on screen - the log could not tell "no stand free" from "the runway
+	// is 900 m short", and those have completely different fixes. ArrivalPlanner::Plan with
+	// no occupancy is the same question the inbox asks, so this cannot drift from it.
+	for (TObjectIterator<UAircraftType> It; It; ++It)
+	{
+		const UAircraftType* Type = *It;
+		if (Type == nullptr || Type->HasAnyFlags(RF_ClassDefaultObject))
+		{
+			continue;
+		}
+		const FAirframe TypeAirframe = Type->Airframe();
+		const FArrivalPlan TypePlan = ArrivalPlanner::Plan(*Net, FVector2D::ZeroVector, TypeAirframe, nullptr);
+		UE_LOG(LogM2MapProbe, Log,
+			TEXT("PROBE admits %s (%.0f uu span, %.0f uu published landing): %s%s needs %.0f uu of %.0f uu"),
+			*Type->GetName(), TypeAirframe.Wingspan, TypeAirframe.Requirements.LandingFieldLength,
+			TypePlan.IsValid() ? TEXT("YES") : TEXT("NO - "),
+			TypePlan.IsValid() ? TEXT("") : *ArrivalPlanner::DescribeRefusal(TypePlan),
+			TypePlan.Needed, TypePlan.RunwayLength);
 	}
 	return true;
 }

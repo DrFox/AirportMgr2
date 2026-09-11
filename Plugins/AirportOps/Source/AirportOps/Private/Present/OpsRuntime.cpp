@@ -76,14 +76,29 @@ void UOpsRuntime::GenerateOffer()
 		return;
 	}
 
+	// AIMED AT THE LONGEST RUNWAY, not at wherever the land key last looked. ArrivalPlanner
+	// chooses the runway by nearest threshold to the focus, so an offer generated with the
+	// board's default (0,0) focus would be planned against whichever strip happens to sit
+	// nearest the world origin - and then accepted against a different one.
 	const FAirsideCapability Airport = AirsideCapability::Summarise(*Target->Network);
-	UFlight* Offer = OfferGenerator->MakeOffer(Airport, Candidates, Clock->Now(),
-		FlightBoard->TakeNextId());
+	const FRunwaySummary* Longest = nullptr;
+	for (const FRunwaySummary& Runway : Airport.Runways)
+	{
+		if (Longest == nullptr || Runway.Length > Longest->Length)
+		{
+			Longest = &Runway;
+		}
+	}
+	if (Longest != nullptr)
+	{
+		FlightBoard->ApproachFocus = Longest->Threshold;
+	}
+
+	UFlight* Offer = OfferGenerator->MakeOffer(*Target->Network, FlightBoard->ApproachFocus,
+		Candidates, Clock->Now(), FlightBoard->TakeNextId());
 	if (Offer == nullptr)
 	{
-		UE_LOG(LogAirportOps, Verbose,
-			TEXT("Offers: nothing in any fleet fits a %.0f uu runway and %d stand(s)"),
-			Airport.LongestRunway(), Airport.Stands.Num());
+		// MakeOffer has already logged which refusal, and for which aeroplane.
 		return;
 	}
 

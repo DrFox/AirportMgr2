@@ -1,43 +1,73 @@
 #include "Model/OfferGenerator.h"
 
+#include "AirportOpsLog.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/RoadNetwork.h"
 
-bool UOfferGenerator::AirportAdmits(const FAirsideCapability& Airport, const FAirframe& Airframe)
+bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 {
-	// 0 means "no published claim" in FRunwayRequirements, and no length refusal with it -
-	// asking otherwise would ground every light aircraft whose figures nobody typed in.
-	const double Needed = Airframe.Requirements.LandingFieldLength;
-	if (Needed > 0.0 && Airport.LongestRunway() < Needed)
+	switch (Why)
 	{
+	case EArrivalRefusal::None:
 		return false;
-	}
 
-	// A runway it can land on is no use without somewhere to park: the arrival would plan,
-	// taxi, and then be refused a stand - which the player would read as the game breaking.
-	for (const FStandSummary& Stand : Airport.Stands)
-	{
-		if (Stand.DesignWingspan >= Airframe.Wingspan)
-		{
-			return true;
-		}
+	// These clear on their own: the runway empties, an aeroplane leaves a stand. An offer
+	// refused for one of them is still worth making - the player answers it minutes before
+	// it lands, and the row shows the live reason meanwhile.
+	case EArrivalRefusal::RunwayOccupied:
+	case EArrivalRefusal::NoFreeStand:
+		return false;
+
+	// These need the player to BUILD something. NoRunway, RunwayTooShort, NotAdmitted,
+	// NoExit, NoRouteToStand.
+	default:
+		return true;
 	}
-	return false;
 }
 
-UFlight* UOfferGenerator::MakeOffer(const FAirsideCapability& Airport,
+bool UOfferGenerator::CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
+	const FAirframe& Airframe, EArrivalRefusal& OutWhy)
+{
+	// No occupancy: the question is what this FIELD can take, not what is free this second.
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Focus, Airframe, nullptr);
+	OutWhy = Plan.Why;
+	return !IsPermanentRefusal(Plan.Why);
+}
+
+UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D& Focus,
 	const TArray<FOfferCandidate>& Fleet, double Now, int32 NextId)
 {
 	TArray<const FOfferCandidate*> Admissible;
+	EArrivalRefusal FirstRefusal = EArrivalRefusal::None;
+	FAirframe FirstRefused;
+
 	for (const FOfferCandidate& Candidate : Fleet)
 	{
-		if (AirportAdmits(Airport, Candidate.Airframe))
+		EArrivalRefusal Why = EArrivalRefusal::None;
+		if (CouldEverAdmit(Network, Focus, Candidate.Airframe, Why))
 		{
 			Admissible.Add(&Candidate);
 		}
+		else if (FirstRefusal == EArrivalRefusal::None)
+		{
+			FirstRefusal = Why;
+			FirstRefused = Candidate.Airframe;
+		}
 	}
+
 	if (Admissible.Num() == 0)
 	{
+		// SAYS WHY, and names the aeroplane. An inbox that is simply empty is
+		// indistinguishable from a generator that is not running - which is exactly how the
+		// 2026-09-11 width refusal presented, and it cost a PIE session to tell apart.
+		FArrivalPlan Explain;
+		Explain.Why = FirstRefusal;
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Offers: nothing in any fleet can use this airport. %s (the first refused "
+				"has a %.0f uu wingspan and wants %.0f uu of runway)"),
+			*ArrivalPlanner::DescribeRefusal(Explain), FirstRefused.Wingspan,
+			FirstRefused.Requirements.LandingFieldLength);
 		return nullptr;
 	}
 

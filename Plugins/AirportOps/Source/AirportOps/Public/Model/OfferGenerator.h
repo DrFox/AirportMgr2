@@ -1,12 +1,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/ArrivalPlanner.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
 
 #include "OfferGenerator.generated.h"
 
 class UFlight;
+class URoadNetwork;
 struct FAirsideCapability;
 
 /**
@@ -29,15 +31,19 @@ struct AIRPORTOPS_API FOfferCandidate
 /**
  * Where offers come from.
  *
- * THE CHEAP HALF OF CAPABILITY, and only that. This asks FAirsideCapability - the longest
- * runway and the stands that exist - because it runs on a clock tick over every airline.
- * Whether a given offer can ACTUALLY be accepted is ArrivalPlanner::Plan's answer, asked
- * once when the player looks at the inbox: that one knows about occupancy and routes and
- * costs a search.
+ * ONE EVALUATOR, NOT TWO. This asks ArrivalPlanner::Plan - the same question the inbox asks
+ * when the player looks at a row - with the occupancy left out, so it answers "could this
+ * field EVER take this aeroplane" rather than "is it free right now".
  *
- * Two questions, two costs, and ONE EVALUATOR EACH. A third function that re-decided "can
- * this airport take a 737" would be a second source of truth, and the two would disagree
- * the first time a stand was deleted.
+ * It used to filter on FAirsideCapability alone (longest runway, widest stand) on the
+ * grounds that generation is cheap and acceptance is dear. That shipped an inbox in which
+ * every single Accept was greyed out on 2026-09-11: the cheap filter knew nothing about
+ * RunwayAdmission, so it happily offered A320s to a 15 m-wide GA strip that admits a 15 m
+ * wingspan. A filter that disagrees with the gate behind it is worse than no filter - it
+ * fills the inbox with decisions the player is not allowed to make.
+ *
+ * The cost is one route search per candidate per offer tick, a handful of each, minutes
+ * apart. That is not a price worth a second source of truth.
  */
 UCLASS()
 class AIRPORTOPS_API UOfferGenerator : public UObject
@@ -59,13 +65,22 @@ public:
 	double OfferLifeSeconds = 600.0;
 
 	/**
-	 * Whether the airfield could take this airframe at all: runway length, and a stand wide
-	 * enough to park it on.
+	 * Whether this field could EVER take this airframe, and why not when it could not.
 	 *
-	 * Static because it reads its two arguments and nothing else, and because the test wants
-	 * to ask it without owning a generator.
+	 * PERMANENT refusals only. RunwayOccupied and NoFreeStand clear on their own, so an
+	 * aeroplane refused for those is still worth offering - the player answers the offer
+	 * minutes before it lands, and the row shows the live reason meanwhile. RunwayTooShort,
+	 * NotAdmitted, NoExit and NoRouteToStand do not clear without the player building
+	 * something, so offering them is offering a button that can never be pressed.
+	 *
+	 * Static because it reads its arguments and nothing else, and because the tests want to
+	 * ask it without owning a generator.
 	 */
-	static bool AirportAdmits(const FAirsideCapability& Airport, const FAirframe& Airframe);
+	static bool CouldEverAdmit(const URoadNetwork& Network, const FVector2D& Focus,
+		const FAirframe& Airframe, EArrivalRefusal& OutWhy);
+
+	/** True for a refusal no amount of waiting will clear. See CouldEverAdmit. */
+	static bool IsPermanentRefusal(EArrivalRefusal Why);
 
 	/**
 	 * One offer from these candidates, or nullptr if the airport can take none of them.
@@ -73,6 +88,6 @@ public:
 	 * NextId is the board's counter: the generator does not own numbering, because the board
 	 * is what has to keep ids unique across a save.
 	 */
-	UFlight* MakeOffer(const FAirsideCapability& Airport, const TArray<FOfferCandidate>& Fleet,
-		double Now, int32 NextId);
+	UFlight* MakeOffer(const URoadNetwork& Network, const FVector2D& Focus,
+		const TArray<FOfferCandidate>& Fleet, double Now, int32 NextId);
 };

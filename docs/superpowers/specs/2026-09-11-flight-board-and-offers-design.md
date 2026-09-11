@@ -63,10 +63,21 @@ exist and are better than a rewrite:
 
 So capability in this slice is a WRAPPER, not a rival evaluator:
 
-- **Offer generation** filters on `Summarise` (longest runway against the type's field
-  length; stand wingspans against the type's). Cheap, called on the clock.
-- **Acceptability** runs the real `Plan` with the live occupancy table. If it refuses, the
+- **Offer generation** runs `Plan` with NO occupancy - "could this field ever take this
+  aeroplane" - and drops candidates whose refusal is permanent (`RunwayTooShort`,
+  `NotAdmitted`, `NoExit`, `NoRouteToStand`). Transient refusals (`RunwayOccupied`,
+  `NoFreeStand`) are still offered: they clear on their own, and the offer is answered
+  minutes before it lands.
+- **Acceptability** runs the same `Plan` WITH the live occupancy table. If it refuses, the
   offer is un-acceptable and `DescribeRefusal` says why.
+
+**Amended 2026-09-11, after the first PIE session.** This section originally had generation
+filter on `Summarise` alone - longest runway and stand wingspans - on the grounds that
+generation is cheap and acceptance is dear. That shipped an inbox in which every Accept was
+greyed out: `Summarise` knows nothing about `RunwayAdmission`, so it offered A320s to
+`M_Starter`'s 15 m strip, which admits a 15 m wingspan. **A filter that disagrees with the
+gate behind it is worse than no filter** - it fills the inbox with decisions the player is
+not allowed to make. One evaluator, asked twice with different occupancy, is the rule.
 
 A second "what can the airport handle" function would be a second source of truth, and the
 two would drift the way the Piper's figures did at seven call sites. The building half of
