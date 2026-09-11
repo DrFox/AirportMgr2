@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/AirsideCapability.h"
+#include "Model/FlightBoard.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -39,13 +40,19 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	Clock->Advance(3.0);
 	const double SavedNow = Clock->Now();
 
+	// An empty board: this test is about the clock and the network, and a board with no
+	// flights is what a game that never opened the inbox actually saves.
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Source, Snapshot);
+	OpsSave::Capture(*Clock, *Source, *Board, Snapshot);
 	TestTrue(TEXT("the snapshot holds bytes for both objects"), Snapshot.Clock.Num() > 0 && Snapshot.Network.Num() > 0);
 
 	URoadNetwork* Restored = NewObject<URoadNetwork>();
 	USimClock* RestoredClock = NewObject<USimClock>();
-	if (!TestTrue(TEXT("restore succeeds"), OpsSave::Restore(Snapshot, *RestoredClock, *Restored))) { return false; }
+	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot, *RestoredClock, *Restored, *RestoredBoard))) { return false; }
 
 	TestEqual(TEXT("game time survives"), RestoredClock->Now(), SavedNow, 1e-9);
 	TestEqual(TEXT("speed survives"), RestoredClock->GetSpeed(), ESimSpeed::X4);

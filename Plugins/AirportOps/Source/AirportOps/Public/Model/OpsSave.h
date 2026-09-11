@@ -6,6 +6,7 @@
 
 class USimClock;
 class URoadNetwork;
+class UFlightBoard;
 
 /**
  * Everything a save holds, as opaque byte blobs per model object.
@@ -20,9 +21,23 @@ struct AIRPORTOPS_API FOpsSnapshot
 {
 	GENERATED_BODY()
 
-	UPROPERTY() int32 Version = 1;
+	/**
+	 * 2 since flights. A v1 snapshot is a game from before the flight board and loads with
+	 * an empty inbox rather than being refused - an old save must still open.
+	 */
+	UPROPERTY() int32 Version = 2;
 	UPROPERTY() TArray<uint8> Clock;
 	UPROPERTY() TArray<uint8> Network;
+
+	/**
+	 * The flight board's non-Transient UPROPERTYs.
+	 *
+	 * The board's CLOCK HANDLES are not among them, deliberately: USimClock does not save its
+	 * queue either, so a restored handle would name a callback that no longer exists and
+	 * cancelling it would take somebody else's. UFlight::ArrivesAt is the saved truth, and
+	 * UFlightBoard::RearmSchedules rebuilds the handles from it.
+	 */
+	UPROPERTY() TArray<uint8> Flights;
 };
 
 /** The USaveGame wrapper UGameplayStatics needs for a slot on disk. Holds a snapshot and nothing else. */
@@ -56,10 +71,12 @@ namespace OpsSave
 	AIRPORTOPS_API void SerializeObject(UObject& Object, TArray<uint8>& OutBytes);
 	AIRPORTOPS_API void DeserializeObject(UObject& Object, const TArray<uint8>& Bytes);
 
-	AIRPORTOPS_API void Capture(const USimClock& Clock, const URoadNetwork& Network, FOpsSnapshot& Out);
+	AIRPORTOPS_API void Capture(const USimClock& Clock, const URoadNetwork& Network,
+		const UFlightBoard& Board, FOpsSnapshot& Out);
 
 	/** False only when a blob is present and fails to deserialise. Missing blobs leave the target untouched. */
-	AIRPORTOPS_API bool Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network);
+	AIRPORTOPS_API bool Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network,
+		UFlightBoard& Board);
 
 	AIRPORTOPS_API bool WriteSlot(const FString& SlotName, const FOpsSnapshot& Snapshot);
 	AIRPORTOPS_API bool ReadSlot(const FString& SlotName, FOpsSnapshot& Out);

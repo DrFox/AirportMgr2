@@ -274,7 +274,7 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Target->Network, Snapshot);
+	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
@@ -300,7 +300,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
-	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network))
+	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard))
 	{
 		return false;
 	}
@@ -313,6 +313,17 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Present rebuilds from model: the mesh and the derived guideline graph are both
 	// produced by the presenter's Rebuild, which is what RebuildMesh runs.
 	Target->RebuildMesh();
+
+	// IN THIS ORDER, and both are needed. RebuildMesh regenerates the guideline graph, which
+	// takes every node claim with it (FTrafficOccupancy::ReleaseGuidelineClaims), so the
+	// restored flights' stand holds have to be re-made against the new nodes BEFORE anything
+	// can allocate. Then the arrivals go back on the clock, whose queue was never saved.
+	if (UGroundTraffic* Model = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr)
+	{
+		FlightBoard->OnGraphRebuilt(*Model, *Target->Network);
+		FlightBoard->RearmSchedules(*Model, *Target->Network, *Clock);
+	}
+
 	ApplySpeed(Clock->GetSpeed());
 	Events->NotifyNotification(FString::Printf(TEXT("Loaded '%s'"), *SlotName));
 	return true;
