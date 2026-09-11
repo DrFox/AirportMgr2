@@ -13,6 +13,7 @@
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UInspectorWidget;
+class UOfferInboxWidget;
 class UOpsRuntime;
 class UFlightBoard;
 struct FAgentFacts;
@@ -133,6 +134,13 @@ public:
 
 	/** The inspector on screen, created at BeginPlay beside the bar. */
 	UPROPERTY(Transient) TObjectPtr<UInspectorWidget> Inspector;
+
+	/** The offer inbox's Blueprint class; null means the plain C++ panel, as above. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<UOfferInboxWidget> OfferInboxClass;
+
+	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
+	UPROPERTY(Transient) TObjectPtr<UOfferInboxWidget> OfferInbox;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))

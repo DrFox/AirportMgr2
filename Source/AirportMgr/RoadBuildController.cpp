@@ -3,6 +3,7 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
+#include "OfferInboxWidget.h"
 #include "InspectorWidget.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -92,6 +93,18 @@ void ARoadBuildController::BeginPlay()
 		Inspector->AddToViewport(1);
 		UE_LOG(LogRoadBuild, Log, TEXT("Inspector: %s"),
 			InspectorClass != nullptr ? *InspectorClass->GetName() : TEXT("code-only (no InspectorClass configured)"));
+	}
+
+	// The inbox, same recipe again. Z-order 1 with the inspector: the two never overlap -
+	// the inspector anchors bottom-left, the inbox bottom-right.
+	const TSubclassOf<UOfferInboxWidget> InboxClass =
+		OfferInboxClass != nullptr ? OfferInboxClass : TSubclassOf<UOfferInboxWidget>(UOfferInboxWidget::StaticClass());
+	OfferInbox = CreateWidget<UOfferInboxWidget>(this, InboxClass);
+	if (OfferInbox != nullptr)
+	{
+		OfferInbox->AddToViewport(1);
+		UE_LOG(LogRoadBuild, Log, TEXT("Offer inbox: %s"),
+			OfferInboxClass != nullptr ? *OfferInboxClass->GetName() : TEXT("code-only (no OfferInboxClass configured)"));
 	}
 
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
