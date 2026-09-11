@@ -155,6 +155,46 @@ Departing, Departed` plus `Declined` and `Expired`. `Pushback` waits for the job
 (slice D); `Diverted` and `Cancelled` wait for the sequencer (slice E). A phase nothing can
 enter is a lie in an enum.
 
+### D10. The UI stack is MVVM plus `UListView`, not HTML
+
+Considered and rejected: `WebBrowserWidget`. It is alive in 5.8 (only
+`UWebBrowserAssetManager` carries a 5.8 deprecation), but it is CEF in a separate process
+rendering to a texture, every model read becomes a JS bridge, and the widget tests that
+already run headlessly — `BuildBarWidgetTest`, `InspectorWidgetTest`, `BuildActionsTest` —
+would have nothing to test. A UI the test harness cannot see is a UI that rots silently.
+
+What ships instead:
+
+- **`ModelViewViewModel`** (Epic's "UMG Viewmodel", **Beta** in 5.8) enabled in
+  `AirportMgr.uproject`, with `ModelViewViewModel` in the game module's Build.cs. A
+  viewmodel derives `UMVVMViewModelBase` and pushes changes with
+  `UE_MVVM_SET_PROPERTY_VALUE`, which broadcasts the field to whatever is bound.
+- **`UListView`** for the offer rows. `SetListItems` takes `TArray<UObject*>` and `UFlight`
+  is already a `UObject`, so the board's offers go in with no adapter. Rows are virtualized,
+  which matters when the inbox is busy.
+- **`UMVVMViewListViewBaseClassExtension`** hands each row's entry widget its own entry
+  viewmodel — the engine's intended path for a list of viewmodels, not a thing to hand-roll.
+
+**Viewmodels live in the game module beside the widgets, never in `Model/`.** `UFlight` and
+`UFlightBoard` must not depend on the MVVM runtime, for the same reason Airside `Model/`
+includes nothing above it: a model that knows about its view cannot be tested without one.
+The viewmodel observes `UOpsEvents` and the board, and exposes flat display fields.
+
+**Two hazards to write down now**, because both have cost this project a session before:
+
+- MVVM bindings are authored in the Widget Blueprint's Viewmodels panel, so **a renamed or
+  retyped C++ viewmodel field needs the BP recompiled and resaved** or the old binding runs
+  against the new class. This is the stale-Blueprint failure the project notes already warn
+  about, in a new place.
+- The plugin is **Beta**. If a binding misbehaves, the fallback is a plain C++ widget
+  reading the board directly, as `InspectorWidget` does today — not a redesign.
+
+A sortable multi-column table is NOT built here. UMG has no column table; the engine's real
+one is Slate's `SHeaderRow` with `SMultiColumnTableRow`, which the editor's own panels use.
+The inbox is a handful of rows with two buttons and does not need it. It is the right answer
+for the **flight board proper** — every live flight, sortable by ETA, stand and airline —
+which arrives with the HUD in slice C.
+
 ## 4. The model
 
 `Plugins/AirportOps/Source/AirportOps/`, `Model/`, world-free and testable with `NewObject`:
@@ -201,15 +241,20 @@ watch it arrive. Without that test this fails silently and only in a saved game.
 ## 6. Presentation
 
 Game module, following `BuildBarWidget` and `InspectorWidget` — UMG C++ base, Blueprint
-widget for layout:
+widget for layout — with the MVVM stack of D10:
 
 - A bottom-bar section (horizontal, sectioned, the established Cities-Skylines shape) with
-  an offers button and a count badge.
-- A panel listing pending offers: airline, type, code letter, ETA, Accept and Decline. An
-  un-acceptable offer is disabled and carries `ArrivalPlanner::DescribeRefusal`'s sentence. No fee
-  column until slice C.
-- No widget mutates the model. Accept and Decline go through the board, which is the one
-  door for undo, save and tests.
+  an offers button and a count badge, the badge bound to the viewmodel's pending count.
+- `UOfferInboxViewModel` — the list of offers, the pending count, and the Accept/Decline
+  commands. `UOfferViewModel` per row — airline, type, ICAO code letter, ETA as a string,
+  whether it is acceptable, and the refusal sentence when it is not. No fee column until
+  slice C, though `UFlight` already carries the figure (D8).
+- A `UListView` of offers, each row's entry widget given its `UOfferViewModel` by the
+  ListView extension.
+- An un-acceptable offer is disabled and carries `ArrivalPlanner::DescribeRefusal`'s
+  sentence.
+- No widget and no viewmodel mutates the model. Accept and Decline are viewmodel commands
+  that call the board, which is the one door for undo, save and tests.
 
 ## 7. Tests
 
@@ -226,6 +271,9 @@ Seam tests at the composition, because that is the level the refactor contract a
   rather than silently double-booking.
 - Editing the network while flights hold reservations leaves the reservations honoured (D3).
 - Save with an inbound flight, reload, and it still arrives (§5).
+- The offer viewmodel's pending count follows the board when an offer is accepted — the
+  test that fails if the MVVM field is set without `UE_MVVM_SET_PROPERTY_VALUE` and so
+  never broadcasts.
 
 ## 8. Out of scope, recorded so it is not forgotten
 
