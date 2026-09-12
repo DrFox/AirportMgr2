@@ -21,6 +21,7 @@ ENTITY_DIR = "/Game/Entities"
 A320 = "/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320"
 B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
 PIPER = "/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"
+PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -35,7 +36,15 @@ AIRLINES = {
     # The light operator, whose Meridian fits a 15 m strip - so the starting field has
     # traffic from the first minute. 2026-09-11: this used to fly an A320 too, which meant
     # the starter map could offer nothing at all and every Accept was greyed out.
-    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER], 4.0),
+    #
+    # 2026-09-12: the Twin Otter joins it, and the pair is deliberately unequal in the same
+    # way the two airlines are. The Meridian's 13.11 m span fits a 15 m strip; the Twin
+    # Otter's 19.75 m does not, so on the starting field Cumbria offers only the Meridian
+    # and the Twin Otter appears once the player widens a runway. It needs far LESS length
+    # than the Meridian (366 m against 510) while needing more WIDTH, which is the first
+    # time those two requirements pull in opposite directions - and the clearest thing in
+    # the game so far that says the two are separate decisions.
+    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE2], 4.0),
 }
 
 
