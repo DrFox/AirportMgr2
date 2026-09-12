@@ -479,8 +479,9 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	{
 		// The one place a good hit is recorded, so every refusal path below - and
 		// MakeToolContext, which cannot afford to skip a frame - can fall back to where
-		// the cursor last actually was.
-		LastPlaneHit = OutPosition;
+		// the cursor last actually was. Recorded on FBuildSession (see RecordPlaneHit) so
+		// the editor tool's identical fallback cannot drift from this one - issue #92.
+		Session.RecordPlaneHit(OutPosition);
 		return true;
 	}
 
@@ -607,7 +608,7 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// its default constructor did (uninitialised), so a refused frame fed garbage into
 	// Session.MakeContext -> ResolveSnap -> SnapChain.Resolve. Same fallback
 	// URoadBuildEditorTool::MakeContext already uses with HoverPosition.
-	FVector2D PlaneHit = LastPlaneHit;
+	FVector2D PlaneHit = Session.LastPlaneHit();
 	CursorOnRoadPlane(PlaneHit);
 
 	// Read fresh every call rather than cached, so a details-panel edit to PickRadius and
@@ -837,37 +838,37 @@ void ARoadBuildController::OnRedo()
 
 void ARoadBuildController::OnPrimaryPressed()
 {
-	bPrimaryDown = true;
-	bDragging = false;
-
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	GetMousePosition(MouseX, MouseY);
-	PressScreen = FVector2D(MouseX, MouseY);
+	Gesture.Press(FVector2D(MouseX, MouseY));
 }
 
 void ARoadBuildController::UpdateDrag()
 {
 	IBuildTool* Tool = GetActiveTool();
-	if (!bPrimaryDown || Tool == nullptr || Target == nullptr)
+	if (!Gesture.IsPressed() || Tool == nullptr || Target == nullptr)
 	{
 		return;
 	}
 
-	if (!bDragging)
-	{
-		// The threshold is the controller's business: it is a fact about the mouse, not
-		// about what dragging means. Without it every slightly imprecise click would be
-		// read as a drag and the click interactions would be impossible to perform.
-		float MouseX = 0.0f;
-		float MouseY = 0.0f;
-		if (!GetMousePosition(MouseX, MouseY)
-			|| FVector2D::Distance(FVector2D(MouseX, MouseY), PressScreen) < DragThresholdPixels)
-		{
-			return;
-		}
+	// The threshold is the controller's business: it is a fact about the mouse, not about
+	// what dragging means. Without it every slightly imprecise click would be read as a
+	// drag and the click interactions would be impossible to perform. GetMousePosition can
+	// fail if the mouse has left the viewport; DragThresholdPixels is unreachable by any
+	// real screen delta, so Move reports None rather than promoting on stale coordinates.
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	const FVector2D Screen = GetMousePosition(MouseX, MouseY)
+		? FVector2D(MouseX, MouseY) : FVector2D(TNumericLimits<float>::Max());
+	const EGestureStep Step = Gesture.Move(Screen, DragThresholdPixels);
 
-		bDragging = true;
+	if (Step == EGestureStep::None)
+	{
+		return;
+	}
+	if (Step == EGestureStep::DragBegan)
+	{
 		Tool->OnDragBegin(MakeToolContext());
 	}
 
@@ -876,19 +877,17 @@ void ARoadBuildController::UpdateDrag()
 
 void ARoadBuildController::OnPrimaryReleased()
 {
-	const bool bWasDragging = bDragging;
-	bPrimaryDown = false;
-	bDragging = false;
+	const EGestureEnd End = Gesture.Release();
 
 	IBuildTool* Tool = GetActiveTool();
-	if (Tool == nullptr || Target == nullptr)
+	if (Tool == nullptr || Target == nullptr || End == EGestureEnd::Nothing)
 	{
 		return;
 	}
 
 	// A press that never travelled was a click after all.
 	const FToolContext Context = MakeToolContext();
-	if (bWasDragging)
+	if (End == EGestureEnd::DragEnd)
 	{
 		Tool->OnDragEnd(Context);
 	}
