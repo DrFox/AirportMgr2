@@ -13,6 +13,7 @@ class UOfferInboxViewModel;
 class UOfferViewModel;
 class UTextBlock;
 class UVerticalBox;
+class UWidget;
 
 /**
  * One row's two buttons, bound by index.
@@ -28,6 +29,20 @@ class UOfferRowEntry : public UObject
 public:
 	UPROPERTY() int32 RowIndex = INDEX_NONE;
 	UPROPERTY() TWeakObjectPtr<UOfferInboxWidget> Owner;
+
+	/**
+	 * The pieces of this row, HELD rather than found again by child index.
+	 *
+	 * The repaint used to reach back in with GetChildAt(0) for the label and GetChildAt(1)
+	 * for the Accept button, so the layout and the repaint were two descriptions of the same
+	 * tree that had to agree - insert one widget and the wrong thing gets the airline's name.
+	 * Holding them makes the layout the only place that knows the shape.
+	 */
+	UPROPERTY() TObjectPtr<UTextBlock> AirlineText;
+	UPROPERTY() TObjectPtr<UTextBlock> TypeText;
+	UPROPERTY() TObjectPtr<UTextBlock> EtaText;
+	UPROPERTY() TObjectPtr<UTextBlock> RefusalText;
+	UPROPERTY() TObjectPtr<UButton> AcceptButton;
 
 	UFUNCTION() void HandleAccept();
 	UFUNCTION() void HandleDecline();
@@ -84,12 +99,32 @@ public:
 	void AcceptRow(int32 RowIndex);
 	void DeclineRow(int32 RowIndex);
 
+	/** How many offer CARDS are built, as opposed to how many the viewmodel holds. */
+	int32 RowWidgetCountForTest() const;
+
+	/** Paint from the viewmodel without a tick. A headless test never paints, so NativeTick
+	 *  never runs - the same seam UInspectorWidget's test uses. */
+	void PaintRowsForTest() { PaintRows(); }
+
+	/** Where the refusal sentence wraps, uu. The card is sized from this. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowWrapWidth = 260.0f;
+
+	/** Gap between offer cards, so two offers do not read as one. */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowGap = 6.0f;
+
 protected:
 	virtual bool Initialize() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
 	UPROPERTY() TObjectPtr<UOfferInboxViewModel> Inbox;
+
+	/** One offer card: airline and countdown, airframe, refusal, then the two answers. */
+	UWidget* BuildRow(const class UUIStyle& Style, UOfferRowEntry& Entry, int32 Index);
+
+	/** A rounded Accept or Decline. See its body for why the ROUNDING goes on the style. */
+	UButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
+		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
 
 	/** Built once, in Initialize. The bar's own rule: chrome only where the asset gave none. */

@@ -76,9 +76,21 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 
 	// Accepting through the widget's own entry point is what a button click does, so this is
 	// the click path without a click.
+	// THE CARDS THEMSELVES, which nothing covered before: this test drove the VIEWMODEL and
+	// stopped there, so PaintRows - the whole code-built path a player actually sees - could
+	// have built nothing at all and this still passed. Refresh through the widget is what
+	// builds them.
+	Widget->PaintRowsForTest();
+	TestEqual(TEXT("one card is built per offer, so the code-built path really draws them"),
+		Widget->RowWidgetCountForTest(), 2);
+
 	Widget->AcceptRow(0);
 	TestEqual(TEXT("accepting a row takes it out of the inbox"),
 		Widget->GetInbox()->GetPendingCount(), 1);
+
+	// And the cards follow the viewmodel down, rather than leaving a stale third card.
+	Widget->PaintRowsForTest();
+	TestEqual(TEXT("the cards follow the offers down"), Widget->RowWidgetCountForTest(), 1);
 	return true;
 }
 
