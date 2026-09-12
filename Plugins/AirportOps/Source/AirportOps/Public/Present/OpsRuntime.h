@@ -60,7 +60,17 @@ public:
 	/** Advances the clock and pushes the speed multiplier into the actor. Real seconds in. */
 	void Tick(double RealDeltaSeconds);
 
-	/** Speed control. StepSpeed(+1) goes X1->X2->X4->X8 and stops; -1 the other way down to X1. */
+	/**
+	 * The rungs StepSpeed walks, in order, fastest last. Paused is deliberately NOT a rung:
+	 * it is TogglePause's business, and "step faster" from paused means resume, not unpause
+	 * into the slowest speed.
+	 *
+	 * Public because it is a list that must agree with ESimSpeed and something has to be
+	 * able to check that - see its definition.
+	 */
+	static TArrayView<const ESimSpeed> SpeedLadder();
+
+	/** Speed control. StepSpeed(+1) climbs SpeedLadder() and stops at the top; -1 descends. */
 	void StepSpeed(int32 Delta);
 	/** Paused <-> the speed that was set before pausing. */
 	void TogglePause();

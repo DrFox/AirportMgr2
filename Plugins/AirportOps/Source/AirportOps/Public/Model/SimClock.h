@@ -16,7 +16,9 @@ enum class ESimSpeed : uint8
 	X1,
 	X2,
 	X4,
-	X8
+	X8,
+	X16,
+	X32
 };
 
 /**
@@ -75,6 +77,18 @@ public:
 	 * times inside one step fires that many times.
 	 */
 	void Advance(double RealDeltaSeconds);
+
+	/**
+	 * Put the clock at a time of day on day one, for a NEW GAME.
+	 *
+	 * Call it before anything is scheduled: Every() books its first firing at
+	 * Now() + Interval, so moving the clock afterwards leaves every repeating entry due at
+	 * a time that no longer means what it did when it was booked.
+	 *
+	 * Not for loading a save - Restore deserialises GameSeconds straight off the snapshot,
+	 * which is the whole point of saving it.
+	 */
+	void StartAtHour(double Hour);
 
 	/** Fire once at an absolute game time. Returns a handle for Cancel. A past time fires on the next Advance. */
 	int32 At(double GameTime, TFunction<void()> Callback);
