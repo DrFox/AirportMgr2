@@ -41,7 +41,7 @@ public:
 
 	/** The dusk floor. The sun never drops below this - see FSunPath for why. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Sky", meta = (ClampMin = "0.0", ClampMax = "89.0"))
-	double MinElevationDegrees = 8.0;
+	double MinElevationDegrees = 15.0;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Sky")
 	double NoonAzimuthDegrees = 150.0;
@@ -50,14 +50,14 @@ public:
 	float NoonTemperatureKelvin = 5800.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Sky")
-	float DuskTemperatureKelvin = 3200.0f;
+	float DuskTemperatureKelvin = 4300.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Sky")
 	float NoonIntensity = 10.0f;
 
 	/** Floor brightness as a fraction of noon. Decides whether dusk is playable. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Sky", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float DuskIntensityFraction = 0.35f;
+	float DuskIntensityFraction = 0.45f;
 
 	/**
 	 * Where in the day this clock is, as a fraction in [0, 1). Noon when Clock is null.

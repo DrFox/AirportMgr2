@@ -38,16 +38,46 @@ struct FSunPath
 	/** Elevation at noon. The angle the art direction was judged against. */
 	double MaxElevationDegrees = 42.0;
 
-	/** The dusk floor: the sun never goes below this. See the struct comment. */
-	double MinElevationDegrees = 8.0;
+	/**
+	 * The dusk floor: the sun never goes below this. See the struct comment for why there
+	 * is a floor at all.
+	 *
+	 * THIS, NOT DuskIntensityFraction, IS THE LEVER THAT SETS HOW DARK NIGHT GETS, because
+	 * ground illumination scales with the SINE of elevation. At 8 degrees the sun delivers
+	 * sin(8)/sin(42) = 21% of its noon contribution before the fraction is even applied, so
+	 * no fraction can rescue a grazing sun.
+	 *
+	 * Measured in PIE against the daylight ground (mean sRGB #86862F, luminance 0.2232):
+	 *
+	 *    8 deg / 0.35  ->  #341A00,  3.93 stops below noon - near black AND sepia
+	 *   22 deg / 0.55  ->  #6D5D0E,  1.01 stops           - barely reads as night at all
+	 *   15 deg / 0.45  ->  #503F05,  2.10 stops           - dark, readable, clearly night
+	 *
+	 * 15 and 0.45 are those measurements, not a guess. Two stops is the band where the
+	 * field still reads as a field and the player can still see what they are building,
+	 * which is the whole bargain the floor exists to strike.
+	 */
+	double MinElevationDegrees = 15.0;
 
 	/** Compass bearing the sun sits at when it is at MaxElevationDegrees. */
 	double NoonAzimuthDegrees = 150.0;
 
 	float NoonTemperatureKelvin = 5800.0f;
 
-	/** Warmer at the floor. Warmth is most of what sells time of day. */
-	float DuskTemperatureKelvin = 3200.0f;
+	/**
+	 * Warmer at the floor, but only mildly - 4300, not the 3200 this started at.
+	 *
+	 * Warmth sells a SUNSET, and 3200 K is tungsten. The catch is that on a floored arc
+	 * the floor is held all night, so a sunset temperature becomes the colour of midnight:
+	 * measured in PIE at 3200 K the grass rendered brown (#341A00) with no green left in
+	 * it, which reads as sepia rather than as night.
+	 *
+	 * A single elevation-to-temperature mapping cannot tell sunset from midnight, because
+	 * on this curve they are the same elevation. Real night is BLUE - sky-dominated - so
+	 * the honest fix is a second curve on the day fraction. Until that exists, 4300 K is
+	 * the compromise: still warmer than noon, not orange enough to stain the ground.
+	 */
+	float DuskTemperatureKelvin = 4300.0f;
 
 	/** The engine's own directional default is 10, and Slice A leaves it there. */
 	float NoonIntensity = 10.0f;
@@ -58,7 +88,7 @@ struct FSunPath
 	 * Once exposure is locked to a daylight EV this decides whether dusk is playable, so it
 	 * is the figure most likely to move after the first screenshot of a sunset.
 	 */
-	float DuskIntensityFraction = 0.35f;
+	float DuskIntensityFraction = 0.45f;
 
 	/**
 	 * The sun at DayFraction, where 0 is midnight and 0.5 is noon.
