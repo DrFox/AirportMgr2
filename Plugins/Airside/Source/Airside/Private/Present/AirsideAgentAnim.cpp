@@ -30,7 +30,13 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	// WHEELS: v = wr, so the rate is speed over radius. Guarded because a radius of zero is
 	// a configuration mistake, and dividing by it would put NaN into a bone transform - which
 	// does not show up as a fast wheel, it shows up as an aircraft that vanishes.
-	if (MainWheelRadius > KINDA_SMALL_NUMBER)
+	//
+	// AND ONLY WHILE THE WHEELS ARE ON THE GROUND. Ground speed does not fall to zero at
+	// rotation - a climbing aeroplane is still travelling, and faster than it ever did on the
+	// runway - so integrating it regardless spun the wheels harder than ever as the aircraft
+	// climbed away. Real gear spins down over a few seconds in the airflow; stopping is not
+	// that, but it is far closer than accelerating.
+	if (MainWheelRadius > KINDA_SMALL_NUMBER && !bAirborne)
 	{
 		const float RadiansPerSecond = GroundSpeed / MainWheelRadius;
 		WheelAngleDegrees = FMath::Fmod(

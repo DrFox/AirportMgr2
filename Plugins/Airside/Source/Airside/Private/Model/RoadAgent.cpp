@@ -36,9 +36,21 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	Motion.Altitude = Altitude;
 	Motion.PitchDegrees = PitchDegrees;
 
-	// Whichever phase is driving. The follower's speed is meaningless once a departure has
-	// taken over, and the departure's is meaningless before it.
-	Motion.GroundSpeed = Phase == EAgentPhase::Departing ? Departure.Speed : Follower.Speed;
+	// WHICHEVER PHASE IS DRIVING, and that is three of them, not two. The follower's speed is
+	// meaningless once a departure has taken over, the departure's is meaningless before it -
+	// and the ARRIVAL's was missing entirely, so every landing reported the follower's speed,
+	// which is zero until the follower starts at the exit.
+	//
+	// What that looked like: an aeroplane touching down at 70 knots with its wheels perfectly
+	// still, which began to turn only as it swung off the runway and the taxi took over. The
+	// view reads this figure and nothing else - see UAirsideAgentAnim, where wheel rate is
+	// speed over radius - so a phase missing from this line is a phase with stopped wheels.
+	switch (Phase)
+	{
+	case EAgentPhase::Arriving:  Motion.GroundSpeed = Arrival.Speed;   break;
+	case EAgentPhase::Departing: Motion.GroundSpeed = Departure.Speed; break;
+	default:                     Motion.GroundSpeed = Follower.Speed;  break;
+	}
 
 	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
 	// turning propeller, which is what this used to get wrong.
