@@ -403,6 +403,28 @@ def run():
     # Content/Aircraft/PiperMeridian holds both an SM_ and an SK_; that is history, not a
     # convention worth copying into an airframe that was rigged before it was ever imported.
 
+    # THE SKELETAL USAGE FLAG, without which every one of these renders as grey clay.
+    #
+    # Interchange generated these materials during an import that produced a STATIC mesh, so
+    # bUsedWithSkeletalMesh is false on all of them. A material without that flag cannot
+    # compile for the skeletal vertex factory, and the renderer silently substitutes the
+    # DEFAULT material - so the component holds eight correct materials, logs eight correct
+    # names, and draws a grey aeroplane. That is exactly how it was reported: "when the
+    # twotter spawned none of its materials were set".
+    #
+    # The editor sets the flag itself on first use and recompiles - which is why the mesh
+    # looks right in the skeletal mesh editor and wrong in PIE - but that marks the material
+    # DIRTY rather than saving it, so the fix evaporates with the session. Set and saved here
+    # instead, where the materials are made.
+    flagged = 0
+    for path in unreal.EditorAssetLibrary.list_assets("%s/Materials" % MESH_DIR, recursive=True):
+        material = unreal.EditorAssetLibrary.load_asset(path)
+        if not isinstance(material, unreal.Material):
+            continue
+        material.set_editor_property("used_with_skeletal_mesh", True)
+        flagged += 1
+    say("set the skeletal usage flag on %d material(s)" % flagged)
+
     # SAVE EVERYTHING THE IMPORT MADE, not just the mesh.
     #
     # This is the failure CLAUDE.md names and it cost a full round trip: saving only the
@@ -421,6 +443,19 @@ def run():
     probe = "%s/Materials/plane2_livery" % MESH_DIR
     if unreal.EditorAssetLibrary.does_asset_exist(probe):
         say("PASS %s exists on disk" % probe)
+
+        # READ THE FLAG BACK, because it is the one that turns a correct material into a
+        # grey one and nothing on screen distinguishes the two until an aircraft spawns.
+        unflagged = []
+        for path in unreal.EditorAssetLibrary.list_assets("%s/Materials" % MESH_DIR, recursive=True):
+            material = unreal.EditorAssetLibrary.load_asset(path)
+            if isinstance(material, unreal.Material) and not material.get_editor_property(
+                    "used_with_skeletal_mesh"):
+                unflagged.append(path.split("/")[-1].split(".")[0])
+        if unflagged:
+            fail("these would render as grey clay on a skeletal mesh: %s" % ", ".join(unflagged))
+        else:
+            say("PASS every material is flagged for skeletal meshes")
     else:
         fail("%s is not on disk - the mesh's slots will resolve to nothing and the aircraft "
              "will render in default grey" % probe)

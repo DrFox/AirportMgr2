@@ -75,7 +75,45 @@ def wire(type_path, mesh_path, abp_path, short_code):
 
     aircraft.set_editor_property("short_code", unreal.Name(short_code))
     unreal.EditorAssetLibrary.save_asset(type_path, only_if_is_dirty=False)
+
+    flagged, already = flag_materials(mesh)
+    say("%s: %d material(s) newly flagged for skeletal use, %d already were"
+        % (type_path.split("/")[-1], flagged, already))
     return type_path
+
+
+def flag_materials(mesh):
+    """Every material on this mesh marked as usable on a SKELETAL mesh.
+
+    THE FLAG THAT TURNS A CORRECT MATERIAL GREY. A UMaterial without
+    bUsedWithSkeletalMesh cannot compile for the skeletal vertex factory, and the renderer
+    substitutes the DEFAULT material rather than failing - so a component holds the right
+    eight materials, logs the right eight names, and draws a grey aeroplane. Reported as
+    "when the twotter spawned none of its materials were set".
+
+    It bites glTF materials in particular: Interchange generates them during an import that
+    produced a STATIC mesh, so the skeletal flag is false. The editor sets it itself on first
+    use and recompiles - which is why such a mesh looks right in the skeletal mesh editor and
+    wrong in play - but that only marks the material DIRTY, so the fix dies with the session
+    unless somebody saves it.
+    """
+    flagged, already = 0, 0
+    for slot in mesh.get_editor_property("materials"):
+        interface = slot.material_interface
+        if interface is None:
+            continue
+        # A material instance inherits the flag from its parent, so the parent is what to set.
+        material = interface.get_base_material() if hasattr(interface, "get_base_material") else interface
+        if not isinstance(material, unreal.Material):
+            continue
+        if material.get_editor_property("used_with_skeletal_mesh"):
+            already += 1
+            continue
+        material.set_editor_property("used_with_skeletal_mesh", True)
+        unreal.EditorAssetLibrary.save_asset(
+            material.get_path_name().split(".")[0], only_if_is_dirty=False)
+        flagged += 1
+    return flagged, already
 
 
 def verify():
@@ -95,7 +133,21 @@ def verify():
         if mesh is None:
             fail("%s still has no mesh; it would wear the game-wide default" % name)
             continue
-        say("PASS %-22s %-6s wears %s" % (name, code, mesh.get_name()))
+        unflagged = []
+        for slot in mesh.get_editor_property("materials"):
+            interface = slot.material_interface
+            if interface is None:
+                continue
+            base = interface.get_base_material() if hasattr(interface, "get_base_material") else interface
+            if isinstance(base, unreal.Material) and not base.get_editor_property(
+                    "used_with_skeletal_mesh"):
+                unflagged.append(base.get_name())
+        if unflagged:
+            fail("%s would draw as grey clay: %s lack the skeletal usage flag"
+                 % (name, ", ".join(unflagged)))
+        else:
+            say("PASS %-22s %-6s wears %s, every material skeletal-ready"
+                % (name, code, mesh.get_name()))
         seen.setdefault(mesh.get_path_name(), []).append(name)
 
     for mesh_path, users in seen.items():

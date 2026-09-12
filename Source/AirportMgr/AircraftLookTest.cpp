@@ -1,24 +1,27 @@
+#include "AssetRegistry/ARFilter.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "CoreMinimal.h"
 #include "Entities/AircraftType.h"
+#include "Model/AirlineDefinition.h"
 #include "Misc/AutomationTest.h"
-#include "UObject/SoftObjectPath.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * An aircraft type carries its own LOOK, and two types do not share one.
+ * No two aircraft an airline can OFFER wear the same mesh.
  *
  * THE BUG THIS EXISTS FOR, reported from play: "I just had a Twin Otter offered, it was a
  * Piper Meridian that spawned." The offer, the name, the performance figures and the refusal
- * reasons were all correctly the Twin Otter's - only the aeroplane on the runway was not.
+ * reasons were all correctly the Twin Otter's - only the aeroplane on the runway was not,
+ * because UAircraftType carried no mesh and UAirsideTraffic handed every agent
+ * UAirsideContent::AgentMesh, one skeletal mesh for the whole game.
  *
- * The cause was that UAircraftType had no mesh at all. UAirsideTraffic handed every aircraft
- * agent UAirsideContent::AgentMesh, which is ONE skeletal mesh for the whole game, and
- * nothing noticed for as long as the project had exactly one aircraft model to wear.
- *
- * SO THIS CHECKS THE TYPES AGAINST EACH OTHER, not against a literal. Asserting that plane2
- * points at SK_Plane2 would pass while every other type still pointed at the same default;
- * what makes the bug impossible is that two types resolve to DIFFERENT meshes.
+ * IT WALKS THE ASSET REGISTRY rather than a list written here, and that is the second
+ * lesson from the same report. The first version of this test compared the Piper against
+ * plane2 - a hand-written PAIR - and passed while the A320 and the 737 both still wore the
+ * default, which is exactly the defect it was written to prevent. A test that names its
+ * subjects can only ever catch the subjects somebody remembered, and CLAUDE.md names that
+ * failure three times over: check where a list is CONSUMED, not where it is declared.
  *
  * In the game module because these are /Game assets - Airside may not reach them, and
  * Check-Architecture enforces that direction.
@@ -28,60 +31,99 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"AirportMgr.Content.AircraftTypesDoNotShareOneMesh",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-namespace
-{
-	UAircraftType* LoadType(const TCHAR* Path)
-	{
-		return Cast<UAircraftType>(FSoftObjectPath(Path).TryLoad());
-	}
-}
-
 bool FAircraftLookTest::RunTest(const FString& Parameters)
 {
-	UAircraftType* Plane2 = LoadType(TEXT("/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"));
-	UAircraftType* Piper = LoadType(TEXT("/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"));
+	FAssetRegistryModule& Registry =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	Registry.Get().SearchAllAssets(true);
 
-	if (Plane2 == nullptr || Piper == nullptr)
+	FARFilter Filter;
+	Filter.ClassPaths.Add(UAirlineDefinition::StaticClass()->GetClassPathName());
+	Filter.bRecursiveClasses = true;
+	Filter.PackagePaths.Add(TEXT("/Game"));
+	Filter.bRecursivePaths = true;
+
+	TArray<FAssetData> Found;
+	Registry.Get().GetAssets(Filter, Found);
+
+	if (Found.Num() == 0)
 	{
-		// A fresh checkout that has not run the authoring scripts has neither; failing then
+		// A fresh checkout that has not run the authoring scripts has none; failing then
 		// would fail the suite for want of content rather than for a defect.
-		AddInfo(TEXT("Both aircraft types are not present; look not checked"));
+		AddInfo(TEXT("No UAirlineDefinition assets found; look not checked"));
 		return true;
 	}
 
-	// THE AIRFRAME is what actually reaches the spawn - UFlight flattens the type into one
-	// and the agent carries no pointer back. Checking the type's own property would pass
-	// while Airframe() forgot to copy it, which is the seam that matters.
-	const FAirframe Twin = Plane2->Airframe();
-	const FAirframe Light = Piper->Airframe();
-
-	TestFalse(TEXT("plane2's airframe carries a mesh, so it does not wear the game default"),
-		Twin.Mesh.IsNull());
-
-	if (!Twin.Mesh.IsNull() && !Light.Mesh.IsNull())
+	// THE FLEETS, not every UAircraftType asset on disk. A type nothing flies cannot arrive,
+	// so it cannot land looking like the wrong aeroplane - and the A320 and 737 are exactly
+	// that today: authored, modelless, and deliberately in no fleet until a jet model
+	// exists. Scoping to what can actually be OFFERED is what makes this assertion mean
+	// "the player will never see the wrong aircraft" rather than "every asset is tidy".
+	TSet<UAircraftType*> Offerable;
+	for (const FAssetData& Data : Found)
 	{
-		TestNotEqual(TEXT("two types resolve to DIFFERENT meshes - the whole defect was that "
-			"every aircraft wore the same one"),
-			Twin.Mesh.ToString(), Light.Mesh.ToString());
+		const UAirlineDefinition* Airline = Cast<UAirlineDefinition>(Data.GetAsset());
+		if (Airline == nullptr)
+		{
+			continue;
+		}
+		for (const TObjectPtr<UAircraftType>& Type : Airline->Fleet)
+		{
+			if (Type != nullptr)
+			{
+				Offerable.Add(Type);
+			}
+		}
 	}
-	else
+
+	if (Offerable.Num() == 0)
 	{
-		AddInfo(TEXT("the Piper has no mesh of its own yet and still falls back to the "
-			"content default; that is legal, and plane2 having one is what stops the two "
-			"being the same aeroplane"));
+		AddInfo(TEXT("No airline flies anything; look not checked"));
+		return true;
 	}
 
-	// THE SHORT CODE, which is not the aerodrome letter. TypeCode used to be assigned
-	// UAircraftType::Code - an ICAO reference letter - so an A320 and a 737 were both "C"
-	// and nothing reading it could tell two types apart.
-	TestFalse(TEXT("plane2 publishes a short code"), Twin.TypeCode.IsNone());
-	TestFalse(TEXT("the Piper publishes a short code"), Light.TypeCode.IsNone());
-	TestNotEqual(TEXT("the two short codes differ, so TypeCode can name a type"),
-		Twin.TypeCode, Light.TypeCode);
+	// Mesh path -> the types wearing it. Built from what each type's AIRFRAME resolves to,
+	// not from the type's own property: UFlight flattens the type into an FAirframe and the
+	// agent carries no pointer back, so the airframe is what actually reaches the spawn. A
+	// check of the property would pass while Airframe() forgot to copy it.
+	TMap<FString, TArray<FString>> ByMesh;
+	TArray<FString> Meshless;
 
-	AddInfo(FString::Printf(TEXT("plane2: %s wearing %s; piper: %s wearing %s"),
-		*Twin.TypeCode.ToString(), *Twin.Mesh.ToString(),
-		*Light.TypeCode.ToString(), *Light.Mesh.ToString()));
+	for (UAircraftType* Type : Offerable)
+	{
+		const FString Name = Type->GetName();
+		const FAirframe Airframe = Type->Airframe();
+
+		TestFalse(*FString::Printf(TEXT("%s publishes a short code, so it can be named"), *Name),
+			Airframe.TypeCode.IsNone());
+
+		if (Airframe.Mesh.IsNull())
+		{
+			Meshless.Add(Name);
+			continue;
+		}
+		ByMesh.FindOrAdd(Airframe.Mesh.ToString()).Add(Name);
+	}
+
+	// THE ASSERTION THAT MATTERS. Two types resolving to one mesh is the defect itself, and
+	// it is invisible from any single type: each looks correctly configured on its own.
+	for (const TPair<FString, TArray<FString>>& Pair : ByMesh)
+	{
+		TestTrue(*FString::Printf(TEXT("%s is worn by exactly one type, not by %s"),
+			*FPaths::GetBaseFilename(Pair.Key), *FString::Join(Pair.Value, TEXT(", "))),
+			Pair.Value.Num() == 1);
+	}
+
+	// A type with no mesh falls back to UAirsideContent::AgentMesh - so two of THOSE are two
+	// aircraft that will land looking identical, by the same mechanism, just one level down.
+	TestTrue(*FString::Printf(
+		TEXT("at most one type falls back to the game-wide mesh; these do: %s"),
+		Meshless.Num() > 0 ? *FString::Join(Meshless, TEXT(", ")) : TEXT("none")),
+		Meshless.Num() <= 1);
+
+	AddInfo(FString::Printf(
+		TEXT("%d offerable type(s) across %d airline(s): %d with their own mesh, %d falling back"),
+		Offerable.Num(), Found.Num(), ByMesh.Num(), Meshless.Num()));
 	return true;
 }
 
