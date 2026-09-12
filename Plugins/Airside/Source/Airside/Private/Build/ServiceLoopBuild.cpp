@@ -208,43 +208,22 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 				continue;
 			}
 
-			// Copied before anything is removed: the pointer is into the slot array, and
-			// adding the halves can reallocate it.
-			const FGuidelineEdge Original = *Network.GetGuidelineEdge(BestEdge);
-			const FVector2D PositionA = Network.GetGuidelineNode(Original.A)->Position;
-			const FVector2D PositionB = Network.GetGuidelineNode(Original.B)->Position;
-
 			FGuidelineNodeId Join;
-			if (FVector2D::Distance(BestPoint, PositionA) <= LaneWeldTolerance)
+			FGuidelineEdgeId Head, Tail;
+			if (!Network.SplitGuidelineEdge(BestEdge, BestParam, LaneWeldTolerance, Join, Head, Tail))
 			{
-				Join = Original.A;
+				continue;
 			}
-			else if (FVector2D::Distance(BestPoint, PositionB) <= LaneWeldTolerance)
+
+			if (Head.IsSet() && Tail.IsSet())
 			{
-				Join = Original.B;
-			}
-			else
-			{
-				FVector2D Mid, ControlLeft, ControlRight;
-				GuidelineGeom::Split(PositionA, Original.Control, PositionB, BestParam,
-					Mid, ControlLeft, ControlRight);
-
-				Join = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
-
-				// The halves inherit the owner from Original, which is what keeps the whole
-				// lane recognisable as one entity's after any number of splits.
-				FGuidelineEdge Left = Original;
-				Left.B = Join;
-				Left.Control = ControlLeft;
-
-				FGuidelineEdge Right = Original;
-				Right.A = Join;
-				Right.Control = ControlRight;
-
-				Network.RemoveGuidelineEdge(BestEdge);
+				// An actual split, not a weld to an existing endpoint: the halves inherit the
+				// owner from the original edge (SplitGuidelineEdge copies every field but the
+				// endpoint and control that moved), which is what keeps the whole lane
+				// recognisable as one entity's after any number of splits.
 				Lane.Remove(BestEdge);
-				Lane.Add(Network.AddGuidelineEdge(MoveTemp(Left)));
-				Lane.Add(Network.AddGuidelineEdge(MoveTemp(Right)));
+				Lane.Add(Head);
+				Lane.Add(Tail);
 				Result.Nodes.Add(Join);
 			}
 

@@ -239,6 +239,24 @@ public:
 	 */
 	bool RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId NewA, FGuidelineNodeId NewB);
 
+	/**
+	 * Splits Edge at curve parameter T (GuidelineGeom::Split), replacing it with two edges
+	 * that together trace the original curve. Both halves copy every field of the original
+	 * (AllowedTraffic, ServiceLoopOwner, DerivedFrom, ...) except A/B/Control, so provenance
+	 * survives the split exactly as it did at each of this method's five former call sites.
+	 *
+	 * Within WeldTolerance of an existing endpoint, no split happens: OutNode is that
+	 * endpoint and Edge is left alone, reported back as OutTail (weld to A) or OutHead (weld
+	 * to B) so a caller chaining splits can keep walking the same edge. This is the "reuse
+	 * the endpoint" guard every copy of this surgery used to duplicate by hand.
+	 *
+	 * Returns false, and leaves every output unset, if Edge does not resolve. Chain two
+	 * calls through OutTail (re-deriving T for the remainder) for a three-way split - see
+	 * FRoadGuidelineBuilder and FAnchorLink's two-cut sweep.
+	 */
+	bool SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double WeldTolerance,
+		FGuidelineNodeId& OutNode, FGuidelineEdgeId& OutHead, FGuidelineEdgeId& OutTail);
+
 	const FGuidelineNode* GetGuidelineNode(FGuidelineNodeId Node) const;
 	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);

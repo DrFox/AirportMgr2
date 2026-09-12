@@ -6,7 +6,6 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
-#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -269,9 +268,8 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			return FGuidelineNodeId();
 		}
-		const FGuidelineEdge Original = *Found;
-		const FVector2D PA = Network.GetGuidelineNode(Original.A)->Position;
-		const FVector2D PB = Network.GetGuidelineNode(Original.B)->Position;
+		const FVector2D PA = Network.GetGuidelineNode(Found->A)->Position;
+		const FVector2D PB = Network.GetGuidelineNode(Found->B)->Position;
 		const double Chord = FVector2D::Distance(PA, PB);
 		if (Chord <= Length || Chord <= 0.0)
 		{
@@ -279,21 +277,16 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		}
 		const double T = bFromA ? Length / Chord : 1.0 - Length / Chord;
 
-		FVector2D Mid, ControlLeft, ControlRight;
-		GuidelineGeom::Split(PA, Original.Control, PB, T, Mid, ControlLeft, ControlRight);
-		const FGuidelineNodeId Split = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
-
-		FGuidelineEdge Left = Original;
-		Left.B = Split;
-		Left.Control = ControlLeft;
-		FGuidelineEdge Right = Original;
-		Right.A = Split;
-		Right.Control = ControlRight;
-
-		Network.RemoveGuidelineEdge(EdgeId);
-		const FGuidelineEdgeId LeftId = Network.AddGuidelineEdge(MoveTemp(Left));
-		const FGuidelineEdgeId RightId = Network.AddGuidelineEdge(MoveTemp(Right));
-		OutRest = bFromA ? RightId : LeftId;
+		// T is strictly inside (0,1) - Chord > Length was just checked - so this is never a
+		// snap to an existing endpoint; WeldTolerance is 0 rather than the LeadInWeldTolerance
+		// AnchorLink and ServiceLoopBuild use for their own, unrelated proximity joins.
+		FGuidelineNodeId Split;
+		FGuidelineEdgeId Head, Tail;
+		if (!Network.SplitGuidelineEdge(EdgeId, T, /*WeldTolerance=*/0.0, Split, Head, Tail))
+		{
+			return FGuidelineNodeId();
+		}
+		OutRest = bFromA ? Tail : Head;
 		return Split;
 	};
 
