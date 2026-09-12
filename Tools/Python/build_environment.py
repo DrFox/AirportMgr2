@@ -6,17 +6,16 @@ volume. Run headless:
 Every result line is prefixed MARKER: so it can be grepped out of the log, because print()
 goes to the log rather than stdout under the commandlet.
 
-THE EXPOSURE LOCK IS THE POINT. Auto-exposure re-brightens the frame as the player pans
-across a dark hangar, which reads as a rendering bug in a builder and makes judging a
-colour impossible because nothing holds still. Scene.h:1988 - "Eye Adaptation is disabled
-if Min = Max".
+THE EXPOSURE LOCK IS THE POINT, EVENTUALLY. Auto-exposure re-brightens the frame as the
+player pans across a dark hangar, which reads as a rendering bug in a builder and makes
+judging a colour impossible because nothing holds still. Scene.h:1988 - "Eye Adaptation is
+disabled if Min = Max".
 
-AND THE UNITS ARE EV100, NOT LINEAR. Config/DefaultEngine.ini sets
-r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True, which per Scene.cpp:499-506
-switches Min/Max to EV100. A sunlit exterior is near EV100 14; a value of 1 is a dim
-interior and the screen blows out white. An earlier draft of the spec said 1.0, which is
-right mechanism and wrong units - the kind of mistake that gets debugged as a lighting
-problem for hours.
+BUT THE VALUE IS MEASURED, NOT GUESSED, AND IT CANNOT BE MEASURED YET. See
+LOCK_EXPOSURE_EV100 below. The units are EV100 (Config/DefaultEngine.ini sets
+ExtendDefaultLuminanceRange, and Scene.cpp:499-506 switches Min/Max to EV100 when it is),
+but knowing the units does not tell you the number - that depends on what this level's sun
+and sky actually put on the ground, and there is no ground until Slice B.
 
 APPLIES, THEN RELOADS AND VERIFIES. A headless level edit can report success and write
 nothing (a locked .umap does exactly that), so returning without reading the values back
@@ -26,8 +25,24 @@ import unreal
 
 LEVEL = "/Game/Maps/M_Starter"
 
-# EV100. Tuned by eye against the screenshots; see spec section 4.1.
-EXPOSURE_EV100 = 14.0
+# The locked exposure, in EV100, or None to leave auto-exposure alone.
+#
+# NONE UNTIL THE GROUND EXISTS, and that ordering is the point. Locking exposure means
+# choosing an absolute brightness to expose FOR, and there is nothing to meter against
+# until Slice B's Landscape is in: this level currently has no ground at all, because
+# Slice A deletes the template floor.
+#
+# Locked at EV100 14 with no ground, the entire viewport rendered BLACK - and a black
+# frame is indistinguishable from the sun, sky or atmosphere being broken, which is
+# exactly the kind of false trail that costs a session. 14 came from the real-world
+# photographic scale (sunny-16 is about EV 15); this level's sun is at the engine default
+# Intensity of 10, which produces nothing like that luminance.
+#
+# Measuring it headlessly does not work either: a -run=pythonscript commandlet has no live
+# rendering pipeline, so SceneCapture2D plus ExportRenderTarget writes nothing and logs
+# "render target has been released". The value has to be read in the interactive editor,
+# from the viewport's exposure readout, once there is grass under the camera.
+LOCK_EXPOSURE_EV100 = None
 
 # Spec section 4.2. Slice G turns this pair into the noon point of a curve.
 SUN_PITCH = -42.0
@@ -109,10 +124,14 @@ def add_post_process():
     # set back - the single most common way a Python post-process edit silently no-ops.
     s = ppv.get_editor_property("settings")
 
-    s.set_editor_property("override_auto_exposure_min_brightness", True)
-    s.set_editor_property("auto_exposure_min_brightness", EXPOSURE_EV100)
-    s.set_editor_property("override_auto_exposure_max_brightness", True)
-    s.set_editor_property("auto_exposure_max_brightness", EXPOSURE_EV100)
+    # EXPOSURE IS DELIBERATELY LEFT ON AUTO HERE. See LOCK_EXPOSURE_EV100 above for why:
+    # the value cannot be chosen before the ground exists, and a wrong lock renders the
+    # whole frame black, which is indistinguishable from the lighting itself being broken.
+    if LOCK_EXPOSURE_EV100 is not None:
+        s.set_editor_property("override_auto_exposure_min_brightness", True)
+        s.set_editor_property("auto_exposure_min_brightness", LOCK_EXPOSURE_EV100)
+        s.set_editor_property("override_auto_exposure_max_brightness", True)
+        s.set_editor_property("auto_exposure_max_brightness", LOCK_EXPOSURE_EV100)
 
     s.set_editor_property("override_bloom_intensity", True)
     s.set_editor_property("bloom_intensity", 0.4)
@@ -133,7 +152,10 @@ def add_post_process():
     s.set_editor_property("color_saturation_shadows", unreal.Vector4(1.0, 1.0, 1.08, 1.0))
 
     ppv.set_editor_property("settings", s)
-    say("post process volume added, exposure locked at EV100 %.1f" % EXPOSURE_EV100)
+    if LOCK_EXPOSURE_EV100 is None:
+        say("post process volume added, exposure left on AUTO (see LOCK_EXPOSURE_EV100)")
+    else:
+        say("post process volume added, exposure locked at EV100 %.1f" % LOCK_EXPOSURE_EV100)
     return ppv
 
 
@@ -160,11 +182,13 @@ def verify():
     if ppv is None:
         return False
     s = ppv.get_editor_property("settings")
-    for prop, expected in (("auto_exposure_min_brightness", EXPOSURE_EV100),
-                           ("auto_exposure_max_brightness", EXPOSURE_EV100),
-                           ("motion_blur_amount", 0.0),
-                           ("vignette_intensity", 0.0),
-                           ("bloom_intensity", 0.4)):
+    checks = [("motion_blur_amount", 0.0),
+              ("vignette_intensity", 0.0),
+              ("bloom_intensity", 0.4)]
+    if LOCK_EXPOSURE_EV100 is not None:
+        checks += [("auto_exposure_min_brightness", LOCK_EXPOSURE_EV100),
+                   ("auto_exposure_max_brightness", LOCK_EXPOSURE_EV100)]
+    for prop, expected in checks:
         got = s.get_editor_property(prop)
         if abs(got - expected) > 1e-4:
             fail("%s is %r, expected %r" % (prop, got, expected))
