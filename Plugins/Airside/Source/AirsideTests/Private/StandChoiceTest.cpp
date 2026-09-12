@@ -1,8 +1,8 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -29,16 +29,6 @@ namespace
 		FEntityInstanceId StandA, StandB;
 	};
 
-	FAirframe StandOcc2Piper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-
 	/** Solve, derive guidelines and re-link every stand: what the facade's RebuildMesh does. */
 	void StandOcc2Rebuild(URoadNetwork& Net)
 	{
@@ -51,7 +41,7 @@ namespace
 	{
 		FStandOcc2Airport Out;
 		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FAirframe Airframe = StandOcc2Piper();
+		const FAirframe Airframe = TestAirframes::Piper();
 		const double Needed = FLandingRun::RequiredLandingDistance(
 			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 		Out.ExitAt = FVector2D(Needed * 1.2, 0.0);
@@ -110,7 +100,7 @@ bool FStandChoiceTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId PoseA = StandOcc2Pose(A, A.StandA);
 	const FGuidelineNodeId PoseB = StandOcc2Pose(A, A.StandB);
 	if (!TestTrue(TEXT("both stands linked"), PoseA.IsSet() && PoseB.IsSet())) { return false; }
-	const FAirframe Piper = StandOcc2Piper();
+	const FAirframe Piper = TestAirframes::Piper();
 
 	// Planner level: with the first choice held by agent 7, the plan goes to the other; with
 	// both held, NoFreeStand.
@@ -155,7 +145,7 @@ bool FStandChoiceTwoArrivalsTest::RunTest(const FString& Parameters)
 	// A third, once the second has vacated too, is refused for want of a stand.
 	FStandOcc2Airport A = StandOcc2Build();
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const FAirframe Piper = StandOcc2Piper();
+	const FAirframe Piper = TestAirframes::Piper();
 
 	const int32 First = Traffic->DispatchArrival(*A.Net, A.Threshold, Piper, 1.0);
 	if (!TestTrue(TEXT("first dispatched"), First > 0)) { return false; }

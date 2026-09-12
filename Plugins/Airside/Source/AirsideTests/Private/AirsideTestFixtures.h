@@ -16,6 +16,7 @@
 class ARoadNetworkActor;
 class UWorld;
 class URoadProfile;
+struct FRunwayRequirements;
 
 /**
  * A world and a network actor to test through the composition root rather than the model
@@ -56,9 +57,31 @@ int32 TickUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds
 	return Ticks;
 }
 
-/** Airframes built by hand for tests that need one without going through content. */
+/**
+ * Airframes built by hand for tests that need one without going through content. THE RAW
+ * FALLBACK, not UAirsideSettings::ResolveDefaultAirframe(), because these tests need a
+ * fixed, known airframe (an aircraft that can land, or one that deliberately cannot) rather
+ * than whatever DefaultAirside.ini currently names as the default - a content change should
+ * not silently change what these tests measure. Check-Architecture rule 4 enforces that
+ * PiperMeridian*() is called from nowhere else in a test module.
+ */
 namespace TestAirframes
 {
+	/** A Piper Meridian: Ground, Climb, Approach and Engine, so it can both land and taxi. */
+	FAirframe Piper();
+
+	/** Ground defaults (Accel 100, Decel 200, cap 1000), a nimble nosewheel so corners do
+	 *  not dominate the clock, and nothing that could arm a departure. */
+	FAirframe Van();
+
+	/** The content-set default airframe with Climb cleared, so it taxis but never lands or
+	 *  departs - a ground vehicle in everything but name. */
+	FAirframe GroundOnly();
+
+	/** The Piper's own published field-length requirements, independent of Piper() above:
+	 *  Airside.Model.ArrivalPlanner.NotAdmitted tests admission against the PUBLISHED
+	 *  figures on their own, not bundled into a flyable airframe. */
+	FRunwayRequirements PiperRequirements();
 }
 
 /** Runway and taxiway profiles authored by hand, MakeTransient so no asset is touched. */

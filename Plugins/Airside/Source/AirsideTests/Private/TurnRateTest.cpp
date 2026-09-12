@@ -1,5 +1,5 @@
 #include "CoreMinimal.h"
-#include "Entities/AircraftType.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
@@ -119,7 +119,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTurnRateTest::RunTest(const FString& Parameters)
 {
-	const FGroundPerformance Piper = UAircraftType::PiperMeridianGround();
+	const FGroundPerformance Piper = TestAirframes::Piper().Ground;
 
 	// Issue #83: FRouteFollower no longer stores Ground - Start and Advance take the bundle
 	// by reference instead, same as FRoadAgent hands its own Airframe in.

@@ -1,6 +1,5 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
-#include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/GroundTraffic.h"
@@ -13,19 +12,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 DEFINE_LOG_CATEGORY_STATIC(LogM2DepTest, Log, All);
-
-namespace
-{
-	FAirframe M2DepPiper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-}
 
 /**
  * THE SECOND PIE REPORT OF 2026-09-06: "an aircraft taking off never releases the runway".
@@ -64,11 +50,11 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	const int32 Plane = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), M2DepPiper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	if (!TestTrue(TEXT("the route ends on the runway, so the departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
 
-	const FAirframe Airframe = M2DepPiper();
+	const FAirframe Airframe = TestAirframes::Piper();
 	auto StripHeld = [&]()
 	{
 		return Traffic->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Near), 0)

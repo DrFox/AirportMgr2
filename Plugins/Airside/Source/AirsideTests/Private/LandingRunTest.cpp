@@ -1,5 +1,5 @@
 #include "CoreMinimal.h"
-#include "Entities/AircraftType.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/LandingRun.h"
 
@@ -88,9 +88,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FLandingRunTest::RunTest(const FString& Parameters)
 {
-	const FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
-	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
-	const FApproachPerformance Approach = UAircraftType::PiperMeridianApproach();
+	const FAirframe Piper = TestAirframes::Piper();
+	const FGroundPerformance& Ground = Piper.Ground;
+	const FClimbPerformance& Climb = Piper.Climb;
+	const FApproachPerformance& Approach = Piper.Approach;
 
 	// Issue #83: FLandingRun no longer stores Ground/Climb/Approach - Start and Advance take
 	// the bundle by reference instead, same as FRoadAgent hands its own Airframe in.

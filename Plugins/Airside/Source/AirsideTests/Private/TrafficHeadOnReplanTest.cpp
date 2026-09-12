@@ -2,7 +2,6 @@
 #include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
@@ -16,16 +15,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2HeadOnTest, Log, All);
 
 namespace
 {
-	FAirframe M2HeadOnPiper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-
 	FRoutePlan M2HeadOnRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
 	{
 		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
@@ -176,8 +165,8 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("spliced"), ArrivalPlan.IsValid())) { return false; }
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Arrival = Traffic->DispatchAgent(Net, ArrivalPlan, M2HeadOnPiper(), ETraversalClass::Aircraft, 1.0);
-	const int32 Dep1 = Traffic->DispatchAgent(Net, M2HeadOnRoute(*Net, Bottom, RunwayW), M2HeadOnPiper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Arrival = Traffic->DispatchAgent(Net, ArrivalPlan, TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Dep1 = Traffic->DispatchAgent(Net, M2HeadOnRoute(*Net, Bottom, RunwayW), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("both dispatched"), Arrival > 0 && Dep1 > 0)) { return false; }
 
 	// THE ARRIVAL HOLDS THE STRIP BY ITS BODY, as one that has just vacated does (spec §3.1,

@@ -1,5 +1,5 @@
 #include "CoreMinimal.h"
-#include "Entities/AircraftType.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/TakeoffRun.h"
 
@@ -22,8 +22,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FTakeoffRunTest::RunTest(const FString& Parameters)
 {
-	const FGroundPerformance Piper = UAircraftType::PiperMeridianGround();
-	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
+	const FAirframe PiperAirframe = TestAirframes::Piper();
+	const FGroundPerformance& Piper = PiperAirframe.Ground;
+	const FClimbPerformance& Climb = PiperAirframe.Climb;
 
 	// Issue #83: FTakeoffRun no longer stores Ground/Climb - Start and Advance take the
 	// bundle by reference instead, same as FRoadAgent hands its own Airframe in.

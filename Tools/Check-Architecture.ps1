@@ -19,8 +19,9 @@
       3. No stacked doc comments in headers: a */ followed by /** with no declaration between
          means one of them lost its subject. (Issue #34.)
       4. The Piper fallback is called from exactly one production site. Any other call of a
-         PiperMeridian*() function outside AircraftType.* and UAirsideSettings is a second
-         source of truth for one aeroplane. (Issue #30.)
+         PiperMeridian*() function outside AircraftType.*, UAirsideSettings and, in the test
+         modules, AirsideTestFixtures.cpp (TestAirframes::Piper(), #100) is a second source of
+         truth for one aeroplane. (Issue #30.)
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -123,15 +124,28 @@ foreach ($tree in $trees) {
     }
 }
 
-# --- 4. Piper fallback has one production caller ----------------------------------------
-$allowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp')
+# --- 4. Piper fallback has one production caller, one test-fixture caller ---------------
+# Production code: only AircraftType.* and AirsideSettings.cpp. The two test modules are a
+# unity build and once exempted this rule entirely (#100's evidence: 51 call sites across 14
+# files) - now they get the same "one source of truth" rule, with AirsideTestFixtures.cpp
+# (TestAirframes::Piper()) as their one allowed caller, exactly as AircraftType.cpp is
+# production's.
+$allowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp', 'AirsideTestFixtures.cpp')
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
-        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
         if ($allowed -contains $file.Name) { continue }
-        $hits = Select-String -Path $file.FullName -Pattern 'PiperMeridian\w*\s*\('
+        # Word-boundary before "PiperMeridian" so BuildPiperMeridian() - a different concern,
+        # constructing the content asset rather than reading a fallback figure - is not
+        # mistaken for one of the accessor fallbacks (Ground/Climb/Approach/Engine/Wingspan/
+        # Requirements) this rule exists to keep to one source of truth.
+        $hits = Select-String -Path $file.FullName -Pattern '(?<![A-Za-z])PiperMeridian\w*\s*\('
         foreach ($h in $hits) {
-            $failures.Add("content-default: $($file.FullName):$($h.LineNumber) calls a PiperMeridian*() fallback; go through UAirsideSettings::ResolveDefaultAirframe")
+            $reason = if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') {
+                'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
+            } else {
+                'go through UAirsideSettings::ResolveDefaultAirframe'
+            }
+            $failures.Add("content-default: $($file.FullName):$($h.LineNumber) calls a PiperMeridian*() fallback; $reason")
         }
     }
 }

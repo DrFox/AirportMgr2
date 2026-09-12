@@ -3,8 +3,11 @@
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Entities/AircraftType.h"
+#include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
 
 FAirsideTestWorld::FAirsideTestWorld()
@@ -21,6 +24,35 @@ FAirsideTestWorld::~FAirsideTestWorld()
 	if (World == nullptr) { return; }
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
+}
+
+FAirframe TestAirframes::Piper()
+{
+	FAirframe A;
+	A.Ground = UAircraftType::PiperMeridianGround();
+	A.Climb = UAircraftType::PiperMeridianClimb();
+	A.Approach = UAircraftType::PiperMeridianApproach();
+	A.Engine = UAircraftType::PiperMeridianEngine();
+	return A;
+}
+
+FAirframe TestAirframes::Van()
+{
+	FAirframe A;
+	A.Ground.MaxTurnRateDegPerSec = 90.0;
+	return A;
+}
+
+FAirframe TestAirframes::GroundOnly()
+{
+	FAirframe A = UAirsideSettings::ResolveDefaultAirframe();
+	A.Climb = FClimbPerformance();
+	return A;
+}
+
+FRunwayRequirements TestAirframes::PiperRequirements()
+{
+	return UAircraftType::PiperMeridianRequirements();
 }
 
 FGuidelineNodeId TestGraph::Node(URoadNetwork& Net, double X, double Y)

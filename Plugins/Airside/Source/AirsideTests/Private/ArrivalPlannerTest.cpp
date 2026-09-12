@@ -1,8 +1,8 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -15,16 +15,6 @@
 namespace
 {
 	// Prefixed against the UNITY build - these test files share one translation unit.
-
-	FAirframe MakePiperAirframe()
-	{
-		FAirframe Airframe;
-		Airframe.Ground = UAircraftType::PiperMeridianGround();
-		Airframe.Climb = UAircraftType::PiperMeridianClimb();
-		Airframe.Approach = UAircraftType::PiperMeridianApproach();
-		Airframe.Engine = UAircraftType::PiperMeridianEngine();
-		return Airframe;
-	}
 
 	/**
 	 * A runway with TWO exits, a taxiway off each, both eventually reaching ONE stand - but
@@ -116,7 +106,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FArrivalPlannerNoRunwayTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, MakePiperAirframe());
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, TestAirframes::Piper());
 
 	TestEqual(TEXT("a network with no runway refuses NoRunway"), Plan.Why, EArrivalRefusal::NoRunway);
 	TestFalse(TEXT("and the plan is not valid"), Plan.IsValid());
@@ -133,7 +123,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = MakePiperAirframe();
+	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
@@ -170,7 +160,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = MakePiperAirframe();
+	const FAirframe Airframe = TestAirframes::Piper();
 	const FTwoExitAirport Airport = BuildTwoExitAirport(GetTransientPackage(), Airframe);
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Network, Airport.Threshold, Airframe);
@@ -217,7 +207,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerVacateAtTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = MakePiperAirframe();
+	const FAirframe Airframe = TestAirframes::Piper();
 	const FTwoExitAirport Airport = BuildTwoExitAirport(GetTransientPackage(), Airframe);
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Network, Airport.Threshold, Airframe);
@@ -259,7 +249,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerNoExitTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = MakePiperAirframe();
+	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
@@ -293,7 +283,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 {
-	const FAirframe Airframe = MakePiperAirframe();
+	const FAirframe Airframe = TestAirframes::Piper();
 	const double Needed = FLandingRun::RequiredLandingDistance(
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 	const double RunwayLength = Needed * 1.5;
@@ -346,8 +336,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
 {
-	FAirframe Airframe = MakePiperAirframe();
-	Airframe.Requirements = UAircraftType::PiperMeridianRequirements();
+	FAirframe Airframe = TestAirframes::Piper();
+	Airframe.Requirements = TestAirframes::PiperRequirements();
 	FTwoExitAirport A = BuildTwoExitAirport(GetTransientPackage(), Airframe);
 
 	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;

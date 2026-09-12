@@ -1,8 +1,8 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -29,16 +29,6 @@ namespace
 		FEntityInstanceId StandA, StandB;
 	};
 
-	FAirframe StandOcc3Piper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-
 	void StandOcc3Rebuild(URoadNetwork& Net)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
@@ -50,7 +40,7 @@ namespace
 	{
 		FStandOcc3Airport Out;
 		Out.Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const FAirframe Airframe = StandOcc3Piper();
+		const FAirframe Airframe = TestAirframes::Piper();
 		const double Needed = FLandingRun::RequiredLandingDistance(
 			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 		Out.ExitAt = FVector2D(Needed * 1.2, 0.0);
@@ -110,7 +100,7 @@ bool FStandRetargetTest::RunTest(const FString& Parameters)
 	// strand; and go the moment a stand appears.
 	FStandOcc3Airport A = StandOcc3Build();
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const FAirframe Piper = StandOcc3Piper();
+	const FAirframe Piper = TestAirframes::Piper();
 
 	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold, Piper, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }

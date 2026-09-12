@@ -1,7 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/LandingRun.h"
@@ -56,7 +56,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
 		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
 
-	FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
+	FGroundPerformance Ground = TestAirframes::Piper().Ground;
 
 	// DISTINCTIVE, not authored: 1000 is the Piper's own Taxi.SpeedCap AND what a
 	// default-constructed FGroundPerformance carries, so leaving the figure alone could not
@@ -65,8 +65,8 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// #27 describes. 1234 belongs to neither, so only the real handover proves it.
 	Ground.Taxi.SpeedCap = 1234.0;
 
-	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
-	const FApproachPerformance Approach = UAircraftType::PiperMeridianApproach();
+	const FClimbPerformance Climb = TestAirframes::Piper().Climb;
+	const FApproachPerformance Approach = TestAirframes::Piper().Approach;
 
 	// THE RUNWAY IS SIZED FROM THE AIRCRAFT, not chosen. A strip shorter than the landing
 	// distance is correctly refused, so a fixture that picked a length out of the air would
