@@ -62,13 +62,15 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> TitleText;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> BadgeText;
 
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") FLinearColor PanelTint = FLinearColor(0.06f, 0.07f, 0.09f, 0.92f);
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") FLinearColor ButtonTint = FLinearColor(0.18f, 0.20f, 0.24f);
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") FLinearColor DisabledTint = FLinearColor(0.10f, 0.10f, 0.12f);
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") int32 FontSize = 12;
-
-	/** Distance from the bottom of the screen for the code-built card, so it clears the bar. */
-	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float BottomOffset = 120.0f;
+	/**
+	 * Distance from the TOP of the screen for the code-built card.
+	 *
+	 * TOP RIGHT, moved from bottom right (spec section 6.2). Two things forced it: the feed
+	 * now owns the bottom-right corner, and the two-row bar is 138 uu tall against the 56 it
+	 * was, so the old 120 uu bottom offset put the card behind it. An offer must never be
+	 * the thing that scrolls away or hides - missing one costs money.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float TopOffset = 12.0f;
 
 	UOfferInboxViewModel* GetInbox() const { return Inbox; }
 

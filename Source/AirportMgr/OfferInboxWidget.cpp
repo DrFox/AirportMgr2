@@ -8,6 +8,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
@@ -18,6 +19,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
+#include "UIStyle.h"
 
 // Its own category, and its own NAME: the module is a unity build, and two
 // DEFINE_LOG_CATEGORY_STATIC of one name compile alone and collide together.
@@ -59,31 +61,41 @@ bool UOfferInboxWidget::Initialize()
 
 void UOfferInboxWidget::EnsureSlots()
 {
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+
 	// Code-built chrome only where the asset gave none - the same rule as the bar and the
-	// inspector. A bottom-right card: a title with a count, then one row per offer.
+	// inspector. A TOP-right card: a title with a count, then one row per offer. Top, not
+	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
+	// enough to have swallowed the old placement (spec section 6.2).
 	if (WidgetTree->RootWidget == nullptr)
 	{
 		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("InboxRoot"));
 		WidgetTree->RootWidget = Root;
 
 		UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("InboxCard"));
-		Card->SetBrushColor(PanelTint);
+		Card->SetBrushColor(Style->Panel);
 		Card->SetPadding(FMargin(12.0f, 10.0f));
 
 		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(Card);
-		CardSlot->SetAnchors(FAnchors(1.0f, 1.0f, 1.0f, 1.0f));
-		CardSlot->SetAlignment(FVector2D(1.0, 1.0));
+		CardSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+		CardSlot->SetAlignment(FVector2D(1.0, 0.0));
 		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(FVector2D(-12.0, -BottomOffset));
+		CardSlot->SetPosition(FVector2D(-12.0, TopOffset));
 
 		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxColumn"));
 		Card->SetContent(Column);
 
 		TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxTitle"));
-		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "Offers"));
+		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
+		TitleText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
+		FSlateFontInfo TitleFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : TitleText->GetFont();
+		TitleFont.Size = 9;
+		TitleFont.LetterSpacing = 120;   // the same heading treatment the bar's sections take
+		TitleText->SetFont(TitleFont);
 		Column->AddChildToVerticalBox(TitleText);
 
 		BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxBadge"));
+		BadgeText->SetColorAndOpacity(FSlateColor(Style->Text));
 		Column->AddChildToVerticalBox(BadgeText);
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
@@ -154,6 +166,8 @@ void UOfferInboxWidget::PaintRows()
 
 	// The code-only path. Rebuilt when the COUNT changes rather than every tick: a rebuild
 	// every frame would drop a half-pressed button and churn the widget tree.
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+
 	if (Entries.Num() != Rows.Num())
 	{
 		OfferColumn->ClearChildren();
@@ -171,7 +185,8 @@ void UOfferInboxWidget::PaintRows()
 
 			UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(
 				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferLabel%d"), Index));
-			Row->AddChildToHorizontalBox(Label);
+			Label->SetColorAndOpacity(FSlateColor(Style->Text));
+			Row->AddChildToHorizontalBox(Label)->SetVerticalAlignment(VAlign_Center);
 
 			UButton* AcceptButton = WidgetTree->ConstructWidget<UButton>(
 				UButton::StaticClass(), *FString::Printf(TEXT("OfferAccept%d"), Index));
@@ -179,8 +194,9 @@ void UOfferInboxWidget::PaintRows()
 			UTextBlock* AcceptLabel = WidgetTree->ConstructWidget<UTextBlock>(
 				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferAcceptText%d"), Index));
 			AcceptLabel->SetText(NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"));
+			AcceptLabel->SetColorAndOpacity(FSlateColor(Style->PanelDark));
 			AcceptButton->AddChild(AcceptLabel);
-			Row->AddChildToHorizontalBox(AcceptButton);
+			Row->AddChildToHorizontalBox(AcceptButton)->SetPadding(FMargin(8.0f, 0.0f, 0.0f, 0.0f));
 
 			UButton* DeclineButton = WidgetTree->ConstructWidget<UButton>(
 				UButton::StaticClass(), *FString::Printf(TEXT("OfferDecline%d"), Index));
@@ -188,8 +204,10 @@ void UOfferInboxWidget::PaintRows()
 			UTextBlock* DeclineLabel = WidgetTree->ConstructWidget<UTextBlock>(
 				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferDeclineText%d"), Index));
 			DeclineLabel->SetText(NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"));
+			DeclineLabel->SetColorAndOpacity(FSlateColor(Style->Text));
+			DeclineButton->SetBackgroundColor(Style->Button);
 			DeclineButton->AddChild(DeclineLabel);
-			Row->AddChildToHorizontalBox(DeclineButton);
+			Row->AddChildToHorizontalBox(DeclineButton)->SetPadding(FMargin(6.0f, 0.0f, 0.0f, 0.0f));
 
 			OfferColumn->AddChildToVerticalBox(Row);
 		}
@@ -217,7 +235,12 @@ void UOfferInboxWidget::PaintRows()
 			// DISABLED, not hidden: the player needs to see the offer and the reason it
 			// cannot be taken, which is what tells them to build another stand.
 			AcceptButton->SetIsEnabled(Row->IsAcceptable());
-			AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? ButtonTint : DisabledTint);
+
+			// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
+			// colour on the armed tool and nothing else; here it is the affirmative verb,
+			// and the two never share a screen region - a Decline in the same yellow would
+			// cost the player the glance that tells the two buttons apart.
+			AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? Style->Accent : Style->Button);
 		}
 	}
 }
