@@ -4,6 +4,7 @@
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
 #include "OfferInboxWidget.h"
+#include "ToastStackWidget.h"
 #include "InspectorWidget.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -105,6 +106,19 @@ void ARoadBuildController::BeginPlay()
 		OfferInbox->AddToViewport(1);
 		UE_LOG(LogRoadBuild, Log, TEXT("Offer inbox: %s"),
 			OfferInboxClass != nullptr ? *OfferInboxClass->GetName() : TEXT("code-only (no OfferInboxClass configured)"));
+	}
+
+	// The feed. Z-order 2, above the bar and the inbox: a toast is the newest thing the game
+	// has to say, and anything drawn over it is a toast the player never saw - which is the
+	// defect this whole surface exists to fix, in a new form.
+	const TSubclassOf<UToastStackWidget> ToastClass =
+		ToastStackClass != nullptr ? ToastStackClass : TSubclassOf<UToastStackWidget>(UToastStackWidget::StaticClass());
+	ToastStack = CreateWidget<UToastStackWidget>(this, ToastClass);
+	if (ToastStack != nullptr)
+	{
+		ToastStack->AddToViewport(2);
+		UE_LOG(LogRoadBuild, Log, TEXT("Toast stack: %s"),
+			ToastStackClass != nullptr ? *ToastStackClass->GetName() : TEXT("code-only (no ToastStackClass configured)"));
 	}
 
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and

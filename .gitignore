@@ -73,3 +73,5 @@ UpgradeLog*.htm
 
 # Reference screenshots kept alongside the project, not part of it
 samples/
+
+.superpowers/

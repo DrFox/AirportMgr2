@@ -231,15 +231,49 @@ namespace ArrivalPlanner
 		return Out;
 	}
 
-	FString DescribeRefusal(const FArrivalPlan& Plan)
+	FString DescribeRefusal(EArrivalRefusal Why)
 	{
-		// Exactly the three refusal branches DispatchArrival used to choose between inline,
-		// moved here so the actor logs from the plan it acted on rather than re-deriving why.
-		switch (Plan.Why)
+		// The figure-free wording, for a listener that has the reason and not the plan. The
+		// plan overload below defers to this wherever it has no figures to add, so one
+		// refusal cannot end up with two different sentences.
+		switch (Why)
 		{
 		case EArrivalRefusal::NoRunway:
 			return TEXT("No runway to land on - draw one first.");
 
+		case EArrivalRefusal::RunwayTooShort:
+			return TEXT("Arrival refused: the runway is too short for this aircraft to stop.");
+
+		case EArrivalRefusal::NoExit:
+			return TEXT("Arrival refused: nothing joins the runway far enough down to be an exit.");
+
+		case EArrivalRefusal::NoRouteToStand:
+			return TEXT("Arrival refused: no route from any usable exit to a stand.");
+
+		case EArrivalRefusal::RunwayOccupied:
+			return TEXT("Arrival refused: the runway is in use. Wait for it to clear.");
+
+		case EArrivalRefusal::NoFreeStand:
+			return TEXT("Arrival refused: every stand it could reach is taken. Wait for one to free, or build another.");
+
+		case EArrivalRefusal::NotAdmitted:
+			return TEXT("Arrival refused: this aircraft is not admitted to that runway.");
+
+		case EArrivalRefusal::None:
+		default:
+			return FString();
+		}
+	}
+
+	FString DescribeRefusal(const FArrivalPlan& Plan)
+	{
+		// Exactly the three refusal branches DispatchArrival used to choose between inline,
+		// moved here so the actor logs from the plan it acted on rather than re-deriving why.
+		//
+		// Only the branches that have FIGURES are spelled out here; the rest defer to the
+		// reason-only overload above, which is the one source for that wording.
+		switch (Plan.Why)
+		{
 		case EArrivalRefusal::RunwayTooShort:
 			return FString::Printf(
 				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to ")
@@ -258,18 +292,13 @@ namespace ArrivalPlanner
 				TEXT("stand. Check the taxiway reaches the stands."),
 				Plan.ExitCount);
 
-		case EArrivalRefusal::RunwayOccupied:
-			return TEXT("Arrival refused: the runway is in use. Wait for it to clear.");
-
 		case EArrivalRefusal::NotAdmitted:
 			return FString::Printf(TEXT("Arrival refused: %s."), *RunwayAdmission::Describe(Plan.Admission));
 
-		case EArrivalRefusal::NoFreeStand:
-			return TEXT("Arrival refused: every stand it could reach is taken. Wait for one to free, or build another.");
-
-		case EArrivalRefusal::None:
 		default:
-			return FString();
+			// NoRunway, RunwayOccupied, NoFreeStand and None carry no figures, so their
+			// wording is the reason-only overload's and is not repeated here.
+			return DescribeRefusal(Plan.Why);
 		}
 	}
 }

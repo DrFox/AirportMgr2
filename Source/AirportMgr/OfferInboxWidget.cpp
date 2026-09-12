@@ -8,9 +8,13 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
 #include "Components/ListView.h"
 #include "Components/TextBlock.h"
+#include "Components/Spacer.h"
 #include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
+#include "Styling/SlateBrush.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
 #include "OfferViewModels.h"
@@ -18,6 +22,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
+#include "UIStyle.h"
 
 // Its own category, and its own NAME: the module is a unity build, and two
 // DEFINE_LOG_CATEGORY_STATIC of one name compile alone and collide together.
@@ -59,32 +64,62 @@ bool UOfferInboxWidget::Initialize()
 
 void UOfferInboxWidget::EnsureSlots()
 {
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+
 	// Code-built chrome only where the asset gave none - the same rule as the bar and the
-	// inspector. A bottom-right card: a title with a count, then one row per offer.
+	// inspector. A TOP-right card: a title with a count, then one row per offer. Top, not
+	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
+	// enough to have swallowed the old placement (spec section 6.2).
 	if (WidgetTree->RootWidget == nullptr)
 	{
 		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("InboxRoot"));
 		WidgetTree->RootWidget = Root;
 
 		UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("InboxCard"));
-		Card->SetBrushColor(PanelTint);
+		// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON.
+		// A flat Panel here made the container and its rows one surface, and the offers read
+		// as lines of text in a box rather than as things awaiting an answer.
+		Card->SetBrush(FSlateRoundedBoxBrush(Style->PanelDark, Style->CornerRadius));
 		Card->SetPadding(FMargin(12.0f, 10.0f));
 
 		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(Card);
-		CardSlot->SetAnchors(FAnchors(1.0f, 1.0f, 1.0f, 1.0f));
-		CardSlot->SetAlignment(FVector2D(1.0, 1.0));
+		CardSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
+		CardSlot->SetAlignment(FVector2D(1.0, 0.0));
 		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(FVector2D(-12.0, -BottomOffset));
+		CardSlot->SetPosition(FVector2D(-12.0, TopOffset));
 
 		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxColumn"));
 		Card->SetContent(Column);
 
+		// HEADING AND COUNT ON ONE LINE. The count used to be FText::AsNumber on a line of
+		// its OWN directly under the word OFFERS - a bare "1" floating in the card, which is
+		// what a debug readout looks like rather than a panel heading.
+		UHorizontalBox* HeadingRow = WidgetTree->ConstructWidget<UHorizontalBox>(
+			UHorizontalBox::StaticClass(), TEXT("InboxHeading"));
+
 		TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxTitle"));
-		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "Offers"));
-		Column->AddChildToVerticalBox(TitleText);
+		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
+		TitleText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
+		FSlateFontInfo TitleFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : TitleText->GetFont();
+		TitleFont.Size = 9;
+		TitleFont.LetterSpacing = 120;   // the same heading treatment the bar's sections take
+		TitleText->SetFont(TitleFont);
+		HeadingRow->AddChildToHorizontalBox(TitleText)->SetVerticalAlignment(VAlign_Center);
+
+		UHorizontalBoxSlot* HeadGap = HeadingRow->AddChildToHorizontalBox(
+			WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+		HeadGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 		BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxBadge"));
-		Column->AddChildToVerticalBox(BadgeText);
+		BadgeText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
+		FSlateFontInfo BadgeFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : BadgeText->GetFont();
+		BadgeFont.Size = 9;
+		BadgeText->SetFont(BadgeFont);
+		UHorizontalBoxSlot* BadgeSlot = HeadingRow->AddChildToHorizontalBox(BadgeText);
+		BadgeSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
+		BadgeSlot->SetVerticalAlignment(VAlign_Center);
+
+		Column->AddChildToVerticalBox(HeadingRow)->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 8.0f));
 
 		OfferColumn = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxRows"));
 		Column->AddChildToVerticalBox(OfferColumn);
@@ -136,7 +171,11 @@ void UOfferInboxWidget::PaintRows()
 
 	if (BadgeText != nullptr)
 	{
-		BadgeText->SetText(FText::AsNumber(Inbox->GetPendingCount()));
+		// "none" rather than "0": the player is being told a STATE, and a zero is a value.
+		const int32 Pending = Inbox->GetPendingCount();
+		BadgeText->SetText(Pending == 0
+			? NSLOCTEXT("AirportMgr", "InboxNone", "none")
+			: FText::AsNumber(Pending));
 	}
 
 	// The Blueprint path: the list view owns the rows and MVVM gives each entry widget its
@@ -152,6 +191,8 @@ void UOfferInboxWidget::PaintRows()
 		return;
 	}
 
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+
 	// The code-only path. Rebuilt when the COUNT changes rather than every tick: a rebuild
 	// every frame would drop a half-pressed button and churn the widget tree.
 	if (Entries.Num() != Rows.Num())
@@ -166,60 +207,175 @@ void UOfferInboxWidget::PaintRows()
 			Entry->Owner = this;
 			Entries.Add(Entry);
 
-			UHorizontalBox* Row = WidgetTree->ConstructWidget<UHorizontalBox>(
-				UHorizontalBox::StaticClass(), *FString::Printf(TEXT("OfferRow%d"), Index));
-
-			UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(
-				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferLabel%d"), Index));
-			Row->AddChildToHorizontalBox(Label);
-
-			UButton* AcceptButton = WidgetTree->ConstructWidget<UButton>(
-				UButton::StaticClass(), *FString::Printf(TEXT("OfferAccept%d"), Index));
-			AcceptButton->OnClicked.AddDynamic(Entry, &UOfferRowEntry::HandleAccept);
-			UTextBlock* AcceptLabel = WidgetTree->ConstructWidget<UTextBlock>(
-				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferAcceptText%d"), Index));
-			AcceptLabel->SetText(NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"));
-			AcceptButton->AddChild(AcceptLabel);
-			Row->AddChildToHorizontalBox(AcceptButton);
-
-			UButton* DeclineButton = WidgetTree->ConstructWidget<UButton>(
-				UButton::StaticClass(), *FString::Printf(TEXT("OfferDecline%d"), Index));
-			DeclineButton->OnClicked.AddDynamic(Entry, &UOfferRowEntry::HandleDecline);
-			UTextBlock* DeclineLabel = WidgetTree->ConstructWidget<UTextBlock>(
-				UTextBlock::StaticClass(), *FString::Printf(TEXT("OfferDeclineText%d"), Index));
-			DeclineLabel->SetText(NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"));
-			DeclineButton->AddChild(DeclineLabel);
-			Row->AddChildToHorizontalBox(DeclineButton);
-
-			OfferColumn->AddChildToVerticalBox(Row);
+			// A GAP BETWEEN CARDS, or the rounded corners meet and two offers read as one.
+			UVerticalBoxSlot* CardSlot =
+				OfferColumn->AddChildToVerticalBox(BuildRow(*Style, *Entry, Index));
+			if (CardSlot != nullptr)
+			{
+				CardSlot->SetPadding(FMargin(0.0f, Index == 0 ? 0.0f : RowGap, 0.0f, 0.0f));
+			}
 		}
 	}
 
 	// Text and enabled state are repainted every refresh, because the ETA counts down and a
 	// stand freeing makes a greyed-out offer acceptable again without the count changing.
-	for (int32 Index = 0; Index < Rows.Num() && Index < OfferColumn->GetChildrenCount(); ++Index)
+	for (int32 Index = 0; Index < Rows.Num() && Index < Entries.Num(); ++Index)
 	{
 		const UOfferViewModel* Row = Rows[Index];
-		UHorizontalBox* Box = Cast<UHorizontalBox>(OfferColumn->GetChildAt(Index));
-		if (Row == nullptr || Box == nullptr || Box->GetChildrenCount() < 3)
+		UOfferRowEntry* Entry = Entries[Index];
+		if (Row == nullptr || Entry == nullptr)
 		{
 			continue;
 		}
 
-		if (UTextBlock* Label = Cast<UTextBlock>(Box->GetChildAt(0)))
+		// EACH FIELD IN ITS OWN WIDGET. These four used to be one FText::Format joined by
+		// double spaces - "Cumbria Air  PA-46-500TP Meridian  in 9 min  " - which gave the
+		// airline, the airframe and the countdown identical weight and read as a log line
+		// rather than as something with an answer expected.
+		if (Entry->AirlineText != nullptr) { Entry->AirlineText->SetText(Row->GetAirline()); }
+		if (Entry->TypeText != nullptr)    { Entry->TypeText->SetText(Row->GetTypeName()); }
+		if (Entry->EtaText != nullptr)     { Entry->EtaText->SetText(Row->GetEta()); }
+
+		if (Entry->RefusalText != nullptr)
 		{
-			Label->SetText(FText::Format(
-				NSLOCTEXT("AirportMgr", "OfferRow", "{0}  {1}  {2}  {3}"),
-				Row->GetAirline(), Row->GetTypeName(), Row->GetEta(), Row->GetRefusal()));
+			// COLLAPSED, not blanked: an empty text block still takes its line height, so a
+			// card would change height when a stand freed and jog the whole stack.
+			const bool bShow = !Row->IsAcceptable() && !Row->GetRefusal().IsEmpty();
+			Entry->RefusalText->SetVisibility(
+				bShow ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+			if (bShow)
+			{
+				Entry->RefusalText->SetText(Row->GetRefusal());
+			}
 		}
-		if (UButton* AcceptButton = Cast<UButton>(Box->GetChildAt(1)))
+
+		if (Entry->AcceptButton != nullptr)
 		{
 			// DISABLED, not hidden: the player needs to see the offer and the reason it
 			// cannot be taken, which is what tells them to build another stand.
-			AcceptButton->SetIsEnabled(Row->IsAcceptable());
-			AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? ButtonTint : DisabledTint);
+			Entry->AcceptButton->SetIsEnabled(Row->IsAcceptable());
+
+			// ACCEPT IS THE ONE THING ON THIS CARD THAT TAKES ACCENT. The bar spends that
+			// colour on the armed tool and nothing else; here it is the affirmative verb,
+			// and the two never share a screen region.
+			Entry->AcceptButton->SetBackgroundColor(Row->IsAcceptable() ? Style->Accent : Style->Button);
 		}
 	}
+}
+
+UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entry, int32 Index)
+{
+	// ONE CARD PER OFFER, Panel over the inbox's PanelDark ground, so a row reads as a thing
+	// that can be answered rather than as a line of text. Rounded from the style's own
+	// CornerRadius, which sat in the asset unread while everything drew as square slabs.
+	UBorder* Card = WidgetTree->ConstructWidget<UBorder>(
+		UBorder::StaticClass(), *FString::Printf(TEXT("OfferCard%d"), Index));
+	Card->SetBrush(FSlateRoundedBoxBrush(Style.Panel, Style.CornerRadius));
+	Card->SetPadding(FMargin(10.0f, 8.0f));
+
+	UVerticalBox* Lines = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass());
+	Card->SetContent(Lines);
+
+	// LINE ONE: who is asking, and how long is left. The countdown sits hard right because it
+	// is the field that MOVES, and a moving number is easier to read in a column of its own
+	// than buried mid-sentence.
+	UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Entry.AirlineText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.AirlineText->SetColorAndOpacity(FSlateColor(Style.Text));
+	FSlateFontInfo AirlineFont = Style.TitleFont.HasValidFont() ? Style.TitleFont : Entry.AirlineText->GetFont();
+	AirlineFont.Size = 13;
+	Entry.AirlineText->SetFont(AirlineFont);
+	Head->AddChildToHorizontalBox(Entry.AirlineText)->SetVerticalAlignment(VAlign_Center);
+
+	UHorizontalBoxSlot* GapSlot = Head->AddChildToHorizontalBox(
+		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+	GapSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+
+	Entry.EtaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.EtaText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
+	FSlateFontInfo EtaFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.EtaText->GetFont();
+	EtaFont.Size = 11;
+	Entry.EtaText->SetFont(EtaFont);
+	UHorizontalBoxSlot* EtaSlot = Head->AddChildToHorizontalBox(Entry.EtaText);
+	EtaSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
+	EtaSlot->SetVerticalAlignment(VAlign_Center);
+	Lines->AddChildToVerticalBox(Head)->SetHorizontalAlignment(HAlign_Fill);
+
+	// LINE TWO: the airframe, quieter. It matters while deciding, not while scanning.
+	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.TypeText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
+	FSlateFontInfo TypeFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.TypeText->GetFont();
+	TypeFont.Size = 10;
+	Entry.TypeText->SetFont(TypeFont);
+	Lines->AddChildToVerticalBox(Entry.TypeText);
+
+	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
+	// see the Collapsed comment in the repaint above.
+	Entry.RefusalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Entry.RefusalText->SetColorAndOpacity(FSlateColor(Style.Warning));
+	FSlateFontInfo RefusalFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.RefusalText->GetFont();
+	RefusalFont.Size = 10;
+	Entry.RefusalText->SetFont(RefusalFont);
+	Entry.RefusalText->SetAutoWrapText(true);
+	Entry.RefusalText->SetWrapTextAt(RowWrapWidth);
+	Entry.RefusalText->SetVisibility(ESlateVisibility::Collapsed);
+	Lines->AddChildToVerticalBox(Entry.RefusalText)->SetPadding(FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+
+	// LINE FOUR: the two answers, right-aligned beneath what they answer.
+	UHorizontalBox* Answers = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	UHorizontalBoxSlot* PushSlot = Answers->AddChildToHorizontalBox(
+		WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass()));
+	PushSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+
+	Entry.AcceptButton = MakeAnswerButton(Style, TEXT("Accept"),
+		NSLOCTEXT("AirportMgr", "OfferAccept", "Accept"), Style.Accent, Style.PanelDark, Index);
+	Entry.AcceptButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleAccept);
+	Answers->AddChildToHorizontalBox(Entry.AcceptButton)->SetPadding(FMargin(0.0f, 0.0f, 6.0f, 0.0f));
+
+	UButton* DeclineButton = MakeAnswerButton(Style, TEXT("Decline"),
+		NSLOCTEXT("AirportMgr", "OfferDecline", "Decline"), Style.Button, Style.Text, Index);
+	DeclineButton->OnClicked.AddDynamic(&Entry, &UOfferRowEntry::HandleDecline);
+	Answers->AddChildToHorizontalBox(DeclineButton);
+
+	Lines->AddChildToVerticalBox(Answers)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
+	return Card;
+}
+
+UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR* Name,
+	const FText& Label, const FLinearColor& Fill, const FLinearColor& Ink, int32 Index)
+{
+	UButton* Button = WidgetTree->ConstructWidget<UButton>(
+		UButton::StaticClass(), *FString::Printf(TEXT("Offer%s%d"), Name, Index));
+
+	// ROUNDED THROUGH THE BUTTON STYLE, not through a background tint. UButton draws its own
+	// FButtonStyle brushes, so SetBrush on the widget is ignored and SetBackgroundColor only
+	// tints whichever brush the style already has - which was the engine's flat default box,
+	// and is why these read as stock editor buttons. The brushes are left WHITE so that
+	// SetBackgroundColor stays the one place a state colour is chosen, as the repaint does.
+	FButtonStyle ButtonStyle = Button->GetStyle();
+	const FSlateRoundedBoxBrush Rounded(FLinearColor::White, Style.CornerRadius);
+	ButtonStyle.SetNormal(Rounded);
+	ButtonStyle.SetHovered(Rounded);
+	ButtonStyle.SetPressed(Rounded);
+	ButtonStyle.SetDisabled(Rounded);
+	ButtonStyle.SetNormalPadding(FMargin(12.0f, 5.0f));
+	ButtonStyle.SetPressedPadding(FMargin(12.0f, 5.0f));
+	Button->SetStyle(ButtonStyle);
+	Button->SetBackgroundColor(Fill);
+
+	UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Text->SetText(Label);
+	Text->SetColorAndOpacity(FSlateColor(Ink));
+	FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Text->GetFont();
+	Font.Size = 11;
+	Text->SetFont(Font);
+	Button->AddChild(Text);
+	return Button;
+}
+
+int32 UOfferInboxWidget::RowWidgetCountForTest() const
+{
+	return OfferColumn != nullptr ? OfferColumn->GetChildrenCount() : 0;
 }
 
 void UOfferInboxWidget::AcceptRow(int32 RowIndex)

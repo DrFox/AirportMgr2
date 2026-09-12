@@ -14,6 +14,7 @@ class ARoadNetworkActor;
 class UBuildBarWidget;
 class UInspectorWidget;
 class UOfferInboxWidget;
+class UToastStackWidget;
 class UOpsRuntime;
 class UFlightBoard;
 struct FAgentFacts;
@@ -141,6 +142,13 @@ public:
 
 	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
 	UPROPERTY(Transient) TObjectPtr<UOfferInboxWidget> OfferInbox;
+
+	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<UToastStackWidget> ToastStackClass;
+
+	/** The feed on screen. Owns the notification centre; see UToastStackWidget. */
+	UPROPERTY(Transient) TObjectPtr<UToastStackWidget> ToastStack;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
