@@ -11,6 +11,9 @@
 #include "Model/TrafficOccupancy.h"
 #include "RoadAgent.generated.h"
 
+// Forward declared only for the friend below - see FRoadAgent::CrossingRunway.
+class UGroundTraffic;
+
 /**
  * Where an agent has got to. Replaces five independent bools - bArriving, bDeparting,
  * bDepartOnArrival, bParked, plus the implicit "none of the above means taxiing" - that
@@ -229,7 +232,8 @@ struct AIRSIDE_API FRoadAgent
 	 *  is why priority could not be applied to them. */
 	UPROPERTY() ETraversalClass Class = ETraversalClass::Aircraft;
 
-	/** Where the current route is going, so a replan can aim at the same place. */
+	/** Where the current route is going, so a replan can aim at the same place. See
+	 *  SetGoalFrom, which is how this should be set from a fresh plan. */
 	UPROPERTY() FGuidelineNodeId GoalNode;
 
 	// --- Written by UGroundTraffic's arbitration each tick; read by Advance ------------
@@ -246,6 +250,16 @@ struct AIRSIDE_API FRoadAgent
 	/** Index into Follower.Plan.Steps of the step whose resource refused this agent, or -1.
 	 *  Names the node a deadlock replan starts from (the step's FROM node). */
 	UPROPERTY() int32 BlockedStep = -1;
+
+	/**
+	 * Resets StopWithin, WaitingOn and BlockedStep to "nothing is refusing this agent" - the
+	 * three-line reset that was hand-written, verbatim, at HoldRunwayOnly, ReleaseForDeadPlan
+	 * and ApplyClaims's not-held branch (issue #82). LastOverlaps is NOT included: it is either
+	 * reset alongside this one by the caller (HoldRunwayOnly, ReleaseForDeadPlan) or has
+	 * already been overwritten with this pass's freshly-computed overlaps before the caller
+	 * gets here (ApplyClaims) - folding it in here would stomp that computed value.
+	 */
+	void ClearArbitration();
 
 	/**
 	 * WHAT refused this agent at BlockedStep - the node, edge or runway segment - so the
@@ -285,6 +299,34 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
 
 	/**
+	 * Whether a runway crossing is current. Public read of the private CrossingPhase/
+	 * CrossingRunway pair below, for callers outside UGroundTraffic (InspectFacts, tests).
+	 */
+	bool IsCrossing() const { return CrossingPhase != ECrossingPhase::None; }
+
+	/** How far through a crossing this agent's BODY is. See ECrossingPhase. Read-only outside
+	 *  UGroundTraffic - see BeginCrossing/EndCrossing. */
+	ECrossingPhase GetCrossingPhase() const { return CrossingPhase; }
+
+	/** Which runway a current crossing is over. See CrossingRunway. Read-only outside
+	 *  UGroundTraffic - see BeginCrossing/EndCrossing. */
+	FRoadSegmentId GetCrossingRunway() const { return CrossingRunway; }
+
+	/**
+	 * Arms or advances a runway crossing: CrossingRunway becomes Seed and CrossingPhase becomes
+	 * InPhase, together - see CrossingRunway for why they must agree. Also how an already-
+	 * Committed crossing advances to OnStrip: call it again with the same seed and the new
+	 * phase, rather than writing CrossingPhase alone and leaving CrossingRunway to be read as
+	 * "still valid" by assumption.
+	 */
+	void BeginCrossing(FRoadSegmentId Seed, ECrossingPhase InPhase);
+
+	/** Ends a runway crossing: CrossingRunway and CrossingPhase both go back to unset/None
+	 *  together, for the same reason BeginCrossing sets them together. */
+	void EndCrossing();
+
+private:
+	/**
 	 * Seed of a runway chain this agent is physically ON while taxiing, after passing a
 	 * holding-position bar or vacating a landing. Unset when none. Spec §3.1's fourth route.
 	 *
@@ -295,12 +337,22 @@ struct AIRSIDE_API FRoadAgent
 	 *
 	 * WHICH CHAIN, NOT WHETHER. CrossingPhase says whether the hold applies; this says which
 	 * runway it is over. Reading IsSet() as "holding" is the bug the phase exists to end.
+	 *
+	 * PRIVATE, WITH UGroundTraffic AS A FRIEND (issue #82): the friendship is for the many
+	 * existing READS in the claim pass (Agent.CrossingPhase == ...), which stay direct field
+	 * access rather than a getter call at every one. WRITES go through BeginCrossing/
+	 * EndCrossing everywhere, including inside UGroundTraffic - the friendship makes that a
+	 * convention this type documents, not a rule the compiler can enforce on its own friend.
 	 */
 	UPROPERTY() FRoadSegmentId CrossingRunway;
 
-	/** How far through a crossing this agent's BODY is. See ECrossingPhase. */
+	/** How far through a crossing this agent's BODY is. See ECrossingPhase. Private for the
+	 *  same reason as CrossingRunway, and by the same friend. */
 	UPROPERTY() ECrossingPhase CrossingPhase = ECrossingPhase::None;
 
+	friend class UGroundTraffic;
+
+public:
 	/**
 	 * Spools the propeller one frame toward whatever the engine has been commanded to do.
 	 *
@@ -345,6 +397,15 @@ struct AIRSIDE_API FRoadAgent
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
 		double EntryOffset = 0.0);
+
+	/**
+	 * Sets GoalNode from a plan's own last step, or clears it when the plan has none.
+	 *
+	 * DispatchArrival, DispatchAgent and RedirectAgent each wrote this same ternary by hand
+	 * (issue #82) - a caller handing this agent a fresh plan calls this instead of repeating
+	 * "Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId()" a fourth time.
+	 */
+	void SetGoalFrom(const FRoutePlan& Plan);
 
 	/**
 	 * Advances whichever phase is current by one frame, and reports what to show.

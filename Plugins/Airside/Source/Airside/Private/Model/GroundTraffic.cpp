@@ -63,7 +63,7 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// in here - the only time the two ever need to meet.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
 	Agent.Class = ETraversalClass::Aircraft;
-	Agent.GoalNode = Plan.TaxiIn.Steps.Num() > 0 ? Plan.TaxiIn.Steps.Last().To : FGuidelineNodeId();
+	Agent.SetGoalFrom(Plan.TaxiIn);
 
 	// THE RUNWAY IS HELD FROM NOW. Claimed as occupied every tick by Advance while the phase
 	// is Arriving; released at the Vacated handover. Held on the agent rather than looked
@@ -163,7 +163,7 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	// pause is copied in at dispatch - the only time the two ever need to meet.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
 	Agent.Class = Class;
-	Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId();
+	Agent.SetGoalFrom(Plan);
 
 	ArmDepartureIfRunway(Agent, Network, Plan);
 
@@ -291,10 +291,10 @@ bool UGroundTraffic::BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySe
 		return false;
 	}
 
-	// EXACTLY THE TWO FIELDS the Vacated handover writes (see Advance): the seed and the
-	// phase. No claim is raised here - the next Arbitrate raises it, as it does in play.
-	Agents[Index].CrossingRunway = RunwaySeed;
-	Agents[Index].CrossingPhase = ECrossingPhase::OnStrip;
+	// EXACTLY WHAT THE Vacated HANDOVER ARMS (see Advance): the seed and the phase, together
+	// through BeginCrossing. No claim is raised here - the next Arbitrate raises it, as it
+	// does in play.
+	Agents[Index].BeginCrossing(RunwaySeed, ECrossingPhase::OnStrip);
 	return true;
 }
 
@@ -341,7 +341,7 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
 	// the goal moves, because that is the whole of what a redirect changes.
-	Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId();
+	Agent.SetGoalFrom(Plan);
 	ArmDepartureIfRunway(Agent, Network, Plan);
 	if (Network != nullptr)
 	{
@@ -548,13 +548,11 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// between here and the release cannot leave it holding segments that have gone.
 			if (Agent.RunwayHeld.Num() > 0)
 			{
-				Agent.CrossingRunway = Agent.RunwayHeld[0];
-
 				// OnStrip AND NOT Committed: an aircraft that has just finished its landing
 				// roll is ON the asphalt by definition, whatever the geometry of the exit it
 				// is about to take says. Committed would make the hold wait for its centre to
 				// be found on a strip it is already leaving.
-				Agent.CrossingPhase = ECrossingPhase::OnStrip;
+				Agent.BeginCrossing(Agent.RunwayHeld[0], ECrossingPhase::OnStrip);
 			}
 			Agent.RunwayHeld.Reset();
 		}
@@ -612,8 +610,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		{
 			Occupancy.ReleaseAll(Id);
 			Agent.RunwayHeld.Reset();
-			Agent.CrossingRunway = FRoadSegmentId();
-			Agent.CrossingPhase = ECrossingPhase::None;
+			Agent.EndCrossing();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
 		}
 

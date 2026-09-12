@@ -442,7 +442,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	Plan.Steps.SetNum(Failed);
 	Plan.Polyline.SetNum(Plan.Steps.Last().EndVertex + 1);
 	Plan.Length = Plan.Steps.Last().EndDistance;
-	Agent.GoalNode = Plan.Steps.Last().To;
+	Agent.SetGoalFrom(Plan);
 
 	if (bDriving)
 	{

@@ -828,13 +828,13 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 		// alone can no longer say when the crossing ended - and when the crossing ends is
 		// the rule under test. Measured off the agent's own field, which is what the
 		// geometric release actually clears.
-		if (Q->CrossingRunway.IsSet()) { bWasCrossing = true; }
+		if (Q->GetCrossingRunway().IsSet()) { bWasCrossing = true; }
 		else if (bWasCrossing && CrossingEnded < 0.0) { CrossingEnded = Travelled; }
 
 		// THE EXIT BAR ARMS NOTHING. Past the far bar at 23000 the aeroplane is leaving the
 		// strip, and a rule that cannot tell that from entering it re-arms the hold here and
 		// keeps the runway shut for the whole 17000 uu leg to N.
-		if (Travelled > 23100.0 && Q->CrossingRunway.IsSet()) { bCrossingPastTheFarBar = true; }
+		if (Travelled > 23100.0 && Q->GetCrossingRunway().IsSet()) { bCrossingPastTheFarBar = true; }
 
 		// ON THE STRIP: centre past the bar, not yet at the far side. A landing offered now
 		// must be refused, which is the whole point of the rule.
@@ -877,7 +877,7 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 		//
 		// At the END of the lambda so this tick's other measurements were all taken against
 		// the table the arbiter actually left behind.
-		if (!bRebuiltMidCrossing && Q->CrossingPhase == ECrossingPhase::OnStrip)
+		if (!bRebuiltMidCrossing && Q->GetCrossingPhase() == ECrossingPhase::OnStrip)
 		{
 			bRebuiltMidCrossing = true;
 			Traffic->OnGraphRebuilt(*Net);
@@ -925,7 +925,7 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and it kept the strip held: a guideline rebuild frees guidelines, never surfaces"),
 		bStripHeldAcrossRebuild);
 	TestFalse(TEXT("and the strip is free afterwards"), Traffic->GetOccupancy().IsHeld(Strip, 0));
-	TestFalse(TEXT("with nothing left naming a crossing"), P->CrossingRunway.IsSet());
+	TestFalse(TEXT("with nothing left naming a crossing"), P->GetCrossingRunway().IsSet());
 	return true;
 }
 
@@ -1466,9 +1466,9 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 		// nothing has any business holding the strip yet.
 		if (T < 10000.0 && !bHeld) { bFreeWellBeforeTheBar = true; }
 
-		if (ArmedAt < 0.0 && Q->CrossingPhase != ECrossingPhase::None) { ArmedAt = T; }
-		if (ArmedAt >= 0.0 && ReleasedAt < 0.0 && Q->CrossingPhase == ECrossingPhase::None) { ReleasedAt = T; }
-		if (T > 23100.0 && Q->CrossingPhase != ECrossingPhase::None) { bCrossingPastTheFarBar = true; }
+		if (ArmedAt < 0.0 && Q->GetCrossingPhase() != ECrossingPhase::None) { ArmedAt = T; }
+		if (ArmedAt >= 0.0 && ReleasedAt < 0.0 && Q->GetCrossingPhase() == ECrossingPhase::None) { ReleasedAt = T; }
+		if (T > 23100.0 && Q->GetCrossingPhase() != ECrossingPhase::None) { bCrossingPastTheFarBar = true; }
 
 		// ANY PART OF THE BODY ON THE ASPHALT: nose in at 17750, tail out at 22250. The
 		// strip must be held, and held OCCUPIED - a reservation is exactly what a landing
@@ -1519,8 +1519,8 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within one tick after (%.0f, want 22750)"), ReleasedAt),
 		ReleasedAt >= 20000.0 + HalfWidth + Half && ReleasedAt <= 20000.0 + HalfWidth + Half + OneTick);
 	TestFalse(TEXT("and the bar on the way OUT arms nothing"), bCrossingPastTheFarBar);
-	TestEqual(TEXT("nothing is left crossing past the far bar"), P->CrossingPhase, ECrossingPhase::None);
-	TestFalse(TEXT("with no chain left named"), P->CrossingRunway.IsSet());
+	TestEqual(TEXT("nothing is left crossing past the far bar"), P->GetCrossingPhase(), ECrossingPhase::None);
+	TestFalse(TEXT("with no chain left named"), P->GetCrossingRunway().IsSet());
 	TestFalse(TEXT("and the strip free behind it"), Traffic->GetOccupancy().IsHeld(Strip, 0));
 	return true;
 }
@@ -1896,11 +1896,11 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 			M2TrafficRun(*Air, *Cross, 120.0, [&](int32)
 			{
 				const FRoadAgent* Q = Air->FindAgent(Plane);
-				return Q != nullptr && Q->CrossingPhase != ECrossingPhase::OnStrip;
+				return Q != nullptr && Q->GetCrossingPhase() != ECrossingPhase::OnStrip;
 			});
 			const FRoadAgent* P = Air->FindAgent(Plane);
 			if (TestNotNull(TEXT("it is still under way"), P)
-				&& TestEqual(TEXT("and its body is ON the strip"), P->CrossingPhase, ECrossingPhase::OnStrip))
+				&& TestEqual(TEXT("and its body is ON the strip"), P->GetCrossingPhase(), ECrossingPhase::OnStrip))
 			{
 				const FTrafficResource Strip = FTrafficResource::OfSurface(RunwaySeg);
 				TestTrue(TEXT("so it holds the runway before its plan dies"),
@@ -1940,7 +1940,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				{
 					UE_LOG(LogM2TrafficTest, Log,
 						TEXT("DeadPlanReleases parked measured: phase %s, crossing phase %d, strip %s"),
-						*UEnum::GetValueAsString(Parked->Phase), static_cast<int32>(Parked->CrossingPhase),
+						*UEnum::GetValueAsString(Parked->Phase), static_cast<int32>(Parked->GetCrossingPhase()),
 						Air->GetOccupancy().IsHeld(Strip, 0) ? TEXT("HELD") : TEXT("free"));
 
 					TestEqual(TEXT("and it has parked where it stood"), Parked->Phase, EAgentPhase::Parked);
