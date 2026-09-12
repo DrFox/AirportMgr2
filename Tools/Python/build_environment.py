@@ -53,6 +53,36 @@ SUN_TEMPERATURE = 5800.0
 # edges. The concept renders have a soft penumbra, and widening the source is nearly free.
 SUN_SOURCE_ANGLE = 1.5
 
+# Cloud shadows. OFF in the engine by default (bCastCloudShadows = 0), which is why the
+# volumetric clouds overhead were not landing anything on the grass.
+#
+# THE EXTENT IS THE WHOLE TRICK, AND THE DEFAULT IS WRONG FOR THIS PLOT. It is a RADIUS IN
+# KILOMETRES around the camera, defaulting to 150 - 300 km across, sampled into a shadow map
+# whose base resolution is 512. That is about 586 m per texel, so on a 3 km airfield the
+# entire plot spans five texels and cloud shadows arrive as a vague brightness wobble rather
+# than as shapes moving over the ground.
+#
+# SIZING IT TO THE PLOT IS THE MISTAKE, and it was made here first: 6 km radius covers the
+# 3,024 m field comfortably and produced NO cloud shadows at all. The extent has to contain
+# the CLOUDS THAT CAST ONTO the field, not the field. Cloud layers sit 5-10 km up, and with
+# the sun at 42 degrees a cloud's shadow lands altitude/tan(42) - between 6 and 11 km -
+# away horizontally, so a 6 km map does not hold them.
+#
+# r.VolumetricCloud.ShadowMap.SnapLength confirms it independently: the map's position
+# snaps to a 20 km grid by default, which is larger than a 6 km map, so the map could sit
+# entirely off the plot.
+#
+# 25 km radius holds the casting clouds at any sun angle the day cycle reaches. At a
+# resolution scale of 4 (512 * 4 = 2048, exactly the ShadowMap.MaxResolution clamp) that is
+# 50,000 / 2048 = 24 m per texel - about 125 texels across the plot, and ample, because a
+# real cloud shadow is hundreds of metres across with soft edges.
+CLOUD_SHADOW_EXTENT_KM = 25.0
+CLOUD_SHADOW_RESOLUTION_SCALE = 4.0
+
+# Below 1.0 because section 1 wants a calm ground. Full-strength cloud shadow is a hard
+# dark patch that competes with the aircraft and vehicles for attention.
+CLOUD_SHADOW_STRENGTH = 0.8
+
 # SkyAtmosphere's aerial perspective already gives distance haze; the stock fog is grey
 # and flattens everything behind it.
 FOG_DENSITY = 0.005
@@ -88,7 +118,15 @@ def set_sun(light):
     comp.set_editor_property("light_source_angle", SUN_SOURCE_ANGLE)
     comp.set_editor_property("use_temperature", True)
     comp.set_editor_property("temperature", SUN_TEMPERATURE)
-    say("sun set: pitch %.1f yaw %.1f source angle %.2f" % (SUN_PITCH, SUN_YAW, SUN_SOURCE_ANGLE))
+
+    comp.set_editor_property("cast_cloud_shadows", True)
+    comp.set_editor_property("cloud_shadow_extent", CLOUD_SHADOW_EXTENT_KM)
+    comp.set_editor_property("cloud_shadow_map_resolution_scale", CLOUD_SHADOW_RESOLUTION_SCALE)
+    comp.set_editor_property("cloud_shadow_strength", CLOUD_SHADOW_STRENGTH)
+    comp.set_editor_property("cloud_shadow_on_surface_strength", CLOUD_SHADOW_STRENGTH)
+    say("sun set: pitch %.1f yaw %.1f source angle %.2f, cloud shadows on at %.0f km / x%.0f"
+        % (SUN_PITCH, SUN_YAW, SUN_SOURCE_ANGLE, CLOUD_SHADOW_EXTENT_KM,
+           CLOUD_SHADOW_RESOLUTION_SCALE))
 
 
 def set_sky_light(sky):
@@ -211,6 +249,14 @@ def verify():
             ok = False
         else:
             say("PASS light_source_angle = %r" % angle)
+
+        if not comp.get_editor_property("cast_cloud_shadows"):
+            fail("cloud shadows are off")
+            ok = False
+        else:
+            say("PASS cloud shadows on, extent %.0f km, resolution scale x%.0f"
+                % (comp.get_editor_property("cloud_shadow_extent"),
+                   comp.get_editor_property("cloud_shadow_map_resolution_scale")))
 
         pitch = sun.get_actor_rotation().pitch
         if abs(pitch - SUN_PITCH) > 1e-3:

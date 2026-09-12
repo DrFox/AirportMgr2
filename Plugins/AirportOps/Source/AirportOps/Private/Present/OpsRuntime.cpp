@@ -126,6 +126,8 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	{
 		Catalog->LoadFromAssetManager();
 	}
+	// Never null - it falls back to UScenario's CDO, so the defaults are actually applied
+	// rather than skipped. See ResolveDefaultScenario.
 	if (const UScenario* Scenario = UAirportOpsSettings::ResolveDefaultScenario())
 	{
 		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
