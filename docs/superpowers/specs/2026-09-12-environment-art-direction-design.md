@@ -375,3 +375,38 @@ with reasons recorded; this is the record.
   (`RoadBuildController.h:199`), so the constructor default may already be overridden by
   `BP_RoadBuildGameMode` or a level instance. Read the instance before changing the
   constructor.
+
+## 11. Considered and rejected
+
+Two Fab products were weighed against this spec on 2026-09-12. Both are in the library;
+neither was installed for 5.8 at the time (UDS's content was a 5.4 build, and deleted;
+Landscape Background's cached manifest was 5.1).
+
+**Landscape Background** - rejected on look. Reviewed against the concept sheet and judged
+not to fit the stylised direction section 1 sets. Slice D stays hand-built, which also
+keeps the plot edge under our own control.
+
+**Ultra Dynamic Sky** - rejected, despite being a genuinely good fit on paper. It would
+have subsumed Slice G entirely: it carries its own Time of Day, and its moon, stars and
+configurable night brightness solve the hard part of section 5 - the dusk floor becomes
+tuning rather than a curve we write.
+
+Rejected anyway for two reasons that outweigh that:
+
+- **It is photoreal by default.** Reaching the stylised look of section 1 would mean
+  fighting a system built for the opposite, across hundreds of parameters. A small system
+  that starts where we want to end up beats a large one tuned backwards into it.
+- **It is Blueprint.** Section 5 rests on `FSunPath` being a plain world-free struct with
+  unit tests - noon elevation, the floor, azimuth continuity across midnight. None of
+  those tests can exist against a Blueprint. That trade runs against how this whole
+  codebase is built.
+
+Secondary: it is a content pack, so it lands in `Content/` and the repository grows by its
+size; and per-frame Blueprint plus volumetric clouds is a poor trade in a top-down builder
+where the sky is a small fraction of the frame.
+
+**What NOT to lose with it.** UDS bundled a weather system, and weather is a real airport
+mechanic rather than decoration - crosswind limits, low visibility holding inbounds, snow
+closing a runway. **None of that needs UDS.** It is `Model/` code, world-free and testable
+like everything else there, and its visual side is modest. Dropping the plugin is not a
+decision about weather; that remains open and worth doing.
