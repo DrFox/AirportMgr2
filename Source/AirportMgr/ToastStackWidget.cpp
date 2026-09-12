@@ -201,10 +201,7 @@ void UToastStackWidget::Rebuild(const UUIStyle& Style)
 
 		UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Words->SetText(Entry.Text);
-		Words->SetColorAndOpacity(FSlateColor(Style.Text));
-		FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Words->GetFont();
-		Font.Size = 12;
-		Words->SetFont(Font);
+		Style.ApplyText(*Words, EUITextRole::Body, Style.Text);
 
 		// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
 		// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across

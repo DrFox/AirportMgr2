@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Components/TextBlock.h"
 #include "Misc/AutomationTest.h"
 #include "UIStyle.h"
 #include "BuildActions.h"
@@ -67,6 +68,43 @@ bool FUIStyleIconsTest::RunTest(const FString& Parameters)
 			"something to draw for it"), *Action.Id.ToString()),
 			Style->IconsByActionId.Contains(Action.Id));
 	}
+	return true;
+}
+
+/**
+ * THE SEAM ApplyText REPLACES, EXERCISED. Eleven call sites used to build this
+ * fallback/size/letter-spacing/colour recipe by hand (issue #89); this proves the one
+ * function that now does it actually reaches a real UTextBlock, per role, not just that the
+ * per-role UPROPERTYs exist and are never read - the "declared but never consumed" bug
+ * CLAUDE.md names three times, in a new place.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleApplyTextTest,
+	"AirportMgr.UI.ApplyTextSetsRoleFontAndColour",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleApplyTextTest::RunTest(const FString& Parameters)
+{
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
+
+	UTextBlock* Text = NewObject<UTextBlock>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a text block to paint"), Text)) { return false; }
+
+	Style->ApplyText(*Text, EUITextRole::Heading, Style->TextMuted);
+	TestEqual(TEXT("Heading takes the style's HeadingSize"), Text->GetFont().Size, Style->HeadingSize);
+	TestEqual(TEXT("Heading is widely spaced, so it reads as a heading and not a short label"),
+		Text->GetFont().LetterSpacing, 120);
+	TestEqual(TEXT("colour is the passed-in one, not baked into the role"),
+		Text->GetColorAndOpacity().GetSpecifiedColor(), Style->TextMuted);
+
+	Style->ApplyText(*Text, EUITextRole::Label, Style->Text);
+	TestEqual(TEXT("Label takes the style's LabelSize, distinct from Heading"),
+		Text->GetFont().Size, Style->LabelSize);
+	TestEqual(TEXT("Label carries no extra letter-spacing"), Text->GetFont().LetterSpacing, 0);
+
+	Style->ApplyText(*Text, EUITextRole::Clock, Style->Text);
+	TestEqual(TEXT("Clock takes its own size, kept apart from Title"), Text->GetFont().Size, Style->ClockSize);
 	return true;
 }
 

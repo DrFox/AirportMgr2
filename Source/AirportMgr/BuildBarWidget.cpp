@@ -177,11 +177,9 @@ void UBuildBarWidget::EnsureSlots()
 		// retyped string here would be a second list to keep in agreement.
 		UTextBlock* Heading = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Heading->SetText(FText::FromString(FString(ActionSectionName(Which)).ToUpper()));
-		Heading->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo HeadingFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : Heading->GetFont();
-		HeadingFont.Size = 9;
-		HeadingFont.LetterSpacing = 120;   // a heading reads as a heading, not as a short label
-		Heading->SetFont(HeadingFont);
+		// Fallback/size/letter-spacing/colour: see UUIStyle::ApplyText (issue #89). The wide
+		// spacing that makes a heading read as a heading, not a short label, lives there now.
+		Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
 		Group->AddChildToVerticalBox(Heading)->SetHorizontalAlignment(HAlign_Left);
 		Group->AddChildToVerticalBox(Box);
 
@@ -210,10 +208,7 @@ void UBuildBarWidget::EnsureSlots()
 	if (ClockText == nullptr)
 	{
 		ClockText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ClockText"));
-		ClockText->SetColorAndOpacity(FSlateColor(Style->Text));
-		FSlateFontInfo ClockFont = Style->TitleFont.HasValidFont() ? Style->TitleFont : ClockText->GetFont();
-		ClockFont.Size = 13;
-		ClockText->SetFont(ClockFont);
+		Style->ApplyText(*ClockText, EUITextRole::Clock, Style->Text);
 		if (UHorizontalBox* Box = Cast<UHorizontalBox>(TimeSection))
 		{
 			UHorizontalBoxSlot* ClockSlot = Box->AddChildToHorizontalBox(ClockText);
@@ -293,10 +288,7 @@ void UBuildBarWidget::BuildButtons()
 		// which is most of what made the bar read as a debug menu. It moves to the tooltip,
 		// where it still teaches the shortcut without shouting it on every button forever.
 		Entry->Label->SetText(Action.Label);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Style->Text));
-		FSlateFontInfo LabelFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : Entry->Label->GetFont();
-		LabelFont.Size = 9;
-		Entry->Label->SetFont(LabelFont);
+		Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Text);
 		Stack->AddChildToVerticalBox(Entry->Label)->SetHorizontalAlignment(HAlign_Center);
 
 		Entry->Button->SetContent(Stack);

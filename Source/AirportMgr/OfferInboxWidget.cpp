@@ -99,11 +99,8 @@ void UOfferInboxWidget::EnsureSlots()
 
 		TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxTitle"));
 		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
-		TitleText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo TitleFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : TitleText->GetFont();
-		TitleFont.Size = 9;
-		TitleFont.LetterSpacing = 120;   // the same heading treatment the bar's sections take
-		TitleText->SetFont(TitleFont);
+		// The same heading treatment the bar's sections take - see UUIStyle::ApplyText (#89).
+		Style->ApplyText(*TitleText, EUITextRole::Heading, Style->TextMuted);
 		HeadingRow->AddChildToHorizontalBox(TitleText)->SetVerticalAlignment(VAlign_Center);
 
 		UHorizontalBoxSlot* HeadGap = HeadingRow->AddChildToHorizontalBox(
@@ -111,10 +108,7 @@ void UOfferInboxWidget::EnsureSlots()
 		HeadGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 		BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxBadge"));
-		BadgeText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo BadgeFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : BadgeText->GetFont();
-		BadgeFont.Size = 9;
-		BadgeText->SetFont(BadgeFont);
+		Style->ApplyText(*BadgeText, EUITextRole::Label, Style->TextMuted);
 		UHorizontalBoxSlot* BadgeSlot = HeadingRow->AddChildToHorizontalBox(BadgeText);
 		BadgeSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		BadgeSlot->SetVerticalAlignment(VAlign_Center);
@@ -281,10 +275,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	// than buried mid-sentence.
 	UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Entry.AirlineText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.AirlineText->SetColorAndOpacity(FSlateColor(Style.Text));
-	FSlateFontInfo AirlineFont = Style.TitleFont.HasValidFont() ? Style.TitleFont : Entry.AirlineText->GetFont();
-	AirlineFont.Size = 13;
-	Entry.AirlineText->SetFont(AirlineFont);
+	Style.ApplyText(*Entry.AirlineText, EUITextRole::Title, Style.Text);
 	Head->AddChildToHorizontalBox(Entry.AirlineText)->SetVerticalAlignment(VAlign_Center);
 
 	UHorizontalBoxSlot* GapSlot = Head->AddChildToHorizontalBox(
@@ -292,10 +283,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	GapSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 	Entry.EtaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.EtaText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
-	FSlateFontInfo EtaFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.EtaText->GetFont();
-	EtaFont.Size = 11;
-	Entry.EtaText->SetFont(EtaFont);
+	Style.ApplyText(*Entry.EtaText, EUITextRole::Label, Style.TextMuted);
 	UHorizontalBoxSlot* EtaSlot = Head->AddChildToHorizontalBox(Entry.EtaText);
 	EtaSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
 	EtaSlot->SetVerticalAlignment(VAlign_Center);
@@ -303,19 +291,13 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 
 	// LINE TWO: the airframe, quieter. It matters while deciding, not while scanning.
 	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.TypeText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
-	FSlateFontInfo TypeFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.TypeText->GetFont();
-	TypeFont.Size = 10;
-	Entry.TypeText->SetFont(TypeFont);
+	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.TextMuted);
 	Lines->AddChildToVerticalBox(Entry.TypeText);
 
 	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
 	// see the Collapsed comment in the repaint above.
 	Entry.RefusalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.RefusalText->SetColorAndOpacity(FSlateColor(Style.Warning));
-	FSlateFontInfo RefusalFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.RefusalText->GetFont();
-	RefusalFont.Size = 10;
-	Entry.RefusalText->SetFont(RefusalFont);
+	Style.ApplyText(*Entry.RefusalText, EUITextRole::Body, Style.Warning);
 	Entry.RefusalText->SetAutoWrapText(true);
 	Entry.RefusalText->SetWrapTextAt(RowWrapWidth);
 	Entry.RefusalText->SetVisibility(ESlateVisibility::Collapsed);
@@ -365,10 +347,7 @@ UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR*
 
 	UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Text->SetText(Label);
-	Text->SetColorAndOpacity(FSlateColor(Ink));
-	FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Text->GetFont();
-	Font.Size = 11;
-	Text->SetFont(Font);
+	Style.ApplyText(*Text, EUITextRole::Label, Ink);
 	Button->AddChild(Text);
 	return Button;
 }
