@@ -1,5 +1,7 @@
 #include "RoadBuildEditorTool.h"
 
+#include "RoadBuildEdMode.h"
+
 #include "BaseBehaviors/ClickDragBehavior.h"
 #include "BaseBehaviors/MouseHoverBehavior.h"
 #include "EngineUtils.h"
@@ -140,6 +142,21 @@ UInteractiveTool* URoadBuildEditorToolBuilder::BuildTool(const FToolBuilderState
 {
 	URoadBuildEditorTool* Tool = NewObject<URoadBuildEditorTool>(SceneState.ToolManager);
 	Tool->SetToolIndex(ToolIndex);
+
+	// THE MODE'S SESSION, not one of this tool's own. The builder is created with the mode as
+	// its outer (URoadBuildEdMode::Enter), so the mode is reachable without threading it
+	// through FToolBuilderState. Without this the session - and every runway width chosen in
+	// it - is rebuilt on each activation; see URoadBuildEdMode::GetSession.
+	if (URoadBuildEdMode* Mode = Cast<URoadBuildEdMode>(GetOuter()))
+	{
+		Tool->SetSharedSession(&Mode->GetSession());
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("Airside editor tool built without a mode: tool state will not persist "
+				 "across activations, so a runway's width resets each time it is picked."));
+	}
 	return Tool;
 }
 
@@ -149,12 +166,12 @@ void URoadBuildEditorTool::Setup()
 
 	// Session is constructed with all six registry tools already - see FBuildSession's
 	// constructor - so selecting this instance's one is a switch, not a make.
-	Session.SelectTool(ToolIndex);
+	Sess().SelectTool(ToolIndex);
 
 	Target = ResolveTarget();
 
 	UE_LOG(LogTemp, Log, TEXT("Airside ed tool active: %s, target %s"),
-		Session.GetActiveTool() != nullptr ? *Session.GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),
+		Sess().GetActiveTool() != nullptr ? *Sess().GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),
 		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
 
 	UClickDragInputBehavior* Drag = NewObject<UClickDragInputBehavior>(this);
@@ -180,7 +197,7 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 	// Leaving the tool abandons whatever it had part-drawn, exactly as switching tools does
 	// at runtime. A chain resumed after a mode change would be a click landing on something
 	// begun before the user went away.
-	if (IBuildTool* Tool = Session.GetActiveTool(); Tool != nullptr && Target != nullptr)
+	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
 		Tool->OnDeactivate(MakeHoverContext());
 	}
@@ -252,7 +269,7 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	return Session.MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld);
+	return Sess().MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
@@ -286,7 +303,7 @@ void URoadBuildEditorTool::OnClickPress(const FInputDeviceRay& PressPos)
 
 void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 {
-	IBuildTool* Tool = Session.GetActiveTool();
+	IBuildTool* Tool = Sess().GetActiveTool();
 	if (!bPressed || Tool == nullptr)
 	{
 		return;
@@ -319,7 +336,7 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 
 void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 {
-	IBuildTool* Tool = Session.GetActiveTool();
+	IBuildTool* Tool = Sess().GetActiveTool();
 	if (!bPressed || Tool == nullptr)
 	{
 		bPressed = false;
@@ -359,7 +376,7 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 		// Escape during a drag. Cancel the transaction rather than committing a half-aimed
 		// stand, and tell the tool so it drops whatever it was holding.
 		GEditor->CancelTransaction(0);
-		if (IBuildTool* Tool = Session.GetActiveTool())
+		if (IBuildTool* Tool = Sess().GetActiveTool())
 		{
 			Tool->OnCancel(MakeHoverContext());
 		}
@@ -379,7 +396,7 @@ bool URoadBuildEditorTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 {
 	bHoverValid = RayToPlane(DevicePos.WorldRay, HoverPosition);
 
-	if (IBuildTool* Tool = Session.GetActiveTool(); Tool != nullptr && Target != nullptr)
+	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
 		Tool->Tick(MakeContext(DevicePos));
 	}
@@ -432,7 +449,7 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 
 void URoadBuildEditorTool::CancelGesture()
 {
-	IBuildTool* Tool = Session.GetActiveTool();
+	IBuildTool* Tool = Sess().GetActiveTool();
 	if (Tool == nullptr || Target == nullptr)
 	{
 		return;
@@ -447,10 +464,12 @@ void URoadBuildEditorTool::CancelGesture()
 		Target->Network->Modify();
 	}
 
-	// Not Session.CancelActiveGesture: each editor tool owns a session pinned to ONE palette
-	// entry (URoadBuildEditorToolBuilder::ToolIndex), so "return to Select" here would run the
+	// Not Sess().CancelActiveGesture, and the reason survives the session moving to the mode:
+	// each editor tool INSTANCE is still pinned to ONE palette entry
+	// (URoadBuildEditorToolBuilder::ToolIndex), so "return to Select" here would run the
 	// Select tool under a palette button that still says Taxiway. In the editor, Escape ends
-	// the gesture and the palette changes tools.
+	// the gesture and the palette changes tools. What changed is only WHERE the session
+	// lives, not which tool this instance speaks for.
 	Tool->OnCancel(MakeHoverContext());
 	GEditor->EndTransaction();
 
@@ -460,7 +479,7 @@ void URoadBuildEditorTool::CancelGesture()
 
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
-	IBuildTool* Tool = Session.GetActiveTool();
+	IBuildTool* Tool = Sess().GetActiveTool();
 	if (Tool == nullptr || Target == nullptr || RenderAPI == nullptr)
 	{
 		return;

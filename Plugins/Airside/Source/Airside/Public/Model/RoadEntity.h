@@ -6,6 +6,9 @@
 #include "Model/RunwayFacts.h"
 #include "RoadEntity.generated.h"
 
+class UAnimInstance;
+class USkeletalMesh;
+
 class UEntityDefinition;
 
 /**
@@ -504,12 +507,38 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 
 	/**
-	 * The type's short code - "PA46" - for anything that has to SAY what this is. NAME_None
-	 * for an airframe assembled by hand (tests, the Piper fallback). Here rather than looked
-	 * up from the UAircraftType at display time because Model/ may not see Entities/, and
-	 * the agent carries no pointer to its type by design (FAirframe's own comment).
+	 * The type's short code - "PA46", "DHC6" - for anything that has to SAY what this is.
+	 * NAME_None for an airframe assembled by hand (tests, the Piper fallback). Here rather
+	 * than looked up from the UAircraftType at display time because Model/ may not see
+	 * Entities/, and the agent carries no pointer to its type by design.
+	 *
+	 * NOT the ICAO aerodrome reference letter. It was assigned UAircraftType::Code for a
+	 * while, which IS that letter, so this said "A" for a Meridian and "C" for both an A320
+	 * and a 737 - while its own comment promised "PA46". A code that cannot tell two types
+	 * apart is no use to anything that has to name one.
 	 */
 	UPROPERTY(EditAnywhere) FName TypeCode;
+
+	/**
+	 * What this aeroplane LOOKS like. Null falls back to UAirsideContent::AgentMesh.
+	 *
+	 * HERE, WITH THE FIGURES, for the reason Wingspan and Requirements are here: the thing
+	 * that spawns a view holds an FAirframe and no UAircraftType, and a mesh passed beside
+	 * the bundle is exactly the shape #27 came from. FRoadAgent calls this struct "every
+	 * fact about this aeroplane, in one place", and what it looks like is such a fact.
+	 *
+	 * THIS EXISTS BECAUSE A TWIN OTTER ARRIVED AS A MERIDIAN. Every aircraft agent wore
+	 * UAirsideContent::AgentMesh - one mesh for the whole game - so the offer, the name and
+	 * every performance figure were the type's and only the aeroplane on the runway was not.
+	 * Nothing caught it while the project had a single aircraft model.
+	 *
+	 * A SOFT path, not a hard one: Model/ must stay loadable without pulling a skeletal mesh
+	 * and its skeleton in behind it, and the view resolves this at spawn.
+	 */
+	UPROPERTY(EditAnywhere) TSoftObjectPtr<USkeletalMesh> Mesh;
+
+	/** The anim Blueprint that drives Mesh. Null falls back to the content default. */
+	UPROPERTY(EditAnywhere) TSoftClassPtr<UAnimInstance> AnimClass;
 
 	/**
 	 * How long this type spends on a stand before it is ready to go again, in GAME seconds.

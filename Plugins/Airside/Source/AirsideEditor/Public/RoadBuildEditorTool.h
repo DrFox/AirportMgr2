@@ -58,6 +58,18 @@ class URoadBuildEditorTool : public UInteractiveTool, public IClickDragBehaviorT
 public:
 	void SetToolIndex(int32 InToolIndex) { ToolIndex = InToolIndex; }
 
+	/**
+	 * The mode's session, handed over at build time so tool state outlives this instance.
+	 *
+	 * ITF builds a new tool object per activation; the session must not be rebuilt with it
+	 * or a runway's chosen width dies the moment the tool is picked - see
+	 * URoadBuildEdMode::GetSession for the whole account.
+	 */
+	void SetSharedSession(FBuildSession* InSession) { SharedSession = InSession; }
+
+	/** Which session this instance is actually driving. For a test that it is the mode's. */
+	const FBuildSession* SessionForTest() const { return SharedSession; }
+
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
@@ -118,13 +130,26 @@ private:
 	int32 ToolIndex = 0;
 
 	/**
-	 * The tool this instance wraps - see FBuildSession. Session.Tools holds all six registry
-	 * entries, of which only the one at ToolIndex is ever asked for: wasteful in tool COUNT,
-	 * cheap in reality, since these are small state machines with nothing expensive to
-	 * construct. The alternative - a second, editor-only way to make just one - is exactly
-	 * the kind of second copy issue #33 exists to remove.
+	 * The mode's session, or this instance's own when none was supplied.
+	 *
+	 * Session.Tools holds every registry entry, of which only the one at ToolIndex is ever
+	 * asked for: wasteful in tool COUNT, cheap in reality, since these are small state
+	 * machines with nothing expensive to construct. The alternative - a second, editor-only
+	 * way to make just one - is exactly the kind of second copy issue #33 exists to remove.
 	 */
-	FBuildSession Session;
+	FBuildSession& Sess() { return SharedSession != nullptr ? *SharedSession : OwnSession; }
+	const FBuildSession& Sess() const { return SharedSession != nullptr ? *SharedSession : OwnSession; }
+
+	/** Set by the builder from URoadBuildEdMode::GetSession. Null only outside the mode. */
+	FBuildSession* SharedSession = nullptr;
+
+	/**
+	 * The fallback, used only when this tool was built without a mode - which no shipping
+	 * path does. Kept rather than asserting so a tool constructed in isolation still works,
+	 * and because a null session would crash where a private one merely loses state nobody
+	 * outside the mode is keeping.
+	 */
+	FBuildSession OwnSession;
 
 	UPROPERTY()
 	TObjectPtr<ARoadNetworkActor> Target;

@@ -12,6 +12,7 @@
 
 class ARoadNetworkActor;
 class UBuildBarWidget;
+class UAircraftType;
 class UInspectorWidget;
 class UOfferInboxWidget;
 class UToastStackWidget;
@@ -142,6 +143,22 @@ public:
 
 	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
 	UPROPERTY(Transient) TObjectPtr<UOfferInboxWidget> OfferInbox;
+
+	/**
+	 * What key 7 lands. Null - the shipping state - lands the content set's default.
+	 *
+	 * A TESTING OVERRIDE, and deliberately shaped so it cannot quietly become the game's
+	 * behaviour: it is consulted by the Land key and by nothing else, so offers, dispatch and
+	 * every arrival that comes from the flight board still resolve their own type. What it
+	 * buys is not having to wait for an offer to see a particular aeroplane on the runway.
+	 *
+	 * CONFIG, so setting it is one line in DefaultGame.ini and unsetting it is deleting that
+	 * line - no rebuild either way. The log says which type the key used every time, so a
+	 * forgotten override reads as a line in the log rather than as the wrong aircraft
+	 * mysteriously landing.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|Testing")
+	TSoftObjectPtr<UAircraftType> LandAircraftType;
 
 	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")

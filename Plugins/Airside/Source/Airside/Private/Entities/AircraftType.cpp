@@ -77,6 +77,7 @@ void UAircraftType::BuildA320(UAircraftType* Type)
 	}
 
 	Type->Code = TEXT("C");
+	Type->ShortCode = TEXT("A320");
 	Type->DisplayName = LOCTEXT("A320", "A320-200");
 	Type->ServicePoints.Reset();
 
@@ -131,6 +132,7 @@ void UAircraftType::Build737(UAircraftType* Type)
 	}
 
 	Type->Code = TEXT("C");
+	Type->ShortCode = TEXT("B738");
 	Type->DisplayName = LOCTEXT("B738", "737-800");
 	Type->ServicePoints.Reset();
 
@@ -170,6 +172,7 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	}
 
 	Type->Code = TEXT("A");
+	Type->ShortCode = TEXT("PA46");
 	Type->DisplayName = LOCTEXT("PA46", "PA-46-500TP Meridian");
 	Type->ServicePoints.Reset();
 

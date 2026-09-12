@@ -1,5 +1,6 @@
 #include "Tool/RunwayTool.h"
 
+#include "AirsideLog.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Profiles/RoadProfile.h"
@@ -31,10 +32,26 @@ void FRunwayTool::NextWidth(const FToolContext& Context)
 {
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	const int32 Count = Content != nullptr ? Content->RunwayProfiles.Num() : 0;
-	if (Count > 0)
+	if (Count <= 0)
 	{
-		WidthIndex = (WidthIndex + 1) % Count;
+		// SAID OUT LOUD. This used to return in silence, which is indistinguishable from a
+		// key that never arrived: the player presses the tool's key again, the width does
+		// not change, and nothing anywhere says why. A content set with no runway profiles
+		// is a real state - it is what a fresh project has - and it deserves a line.
+		UE_LOG(LogAirside, Warning,
+			TEXT("Runway width unchanged: the content set declares no runway profiles, so "
+				 "there is nothing to cycle through"));
+		return;
 	}
+
+	WidthIndex = (WidthIndex + 1) % Count;
+
+	// The width is otherwise visible ONLY in the drag preview, so a player who has not
+	// started a drag has no way to tell whether the key did anything. One line per press,
+	// naming the width in metres, is what makes "the key does nothing" answerable.
+	const URoadProfile* Profile = ProfileForWidth();
+	UE_LOG(LogAirside, Log, TEXT("Runway width -> %d of %d, %.0f m"),
+		WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
 }
 
 void FRunwayTool::NextSurface()
@@ -57,6 +74,12 @@ FRunwayFacts FRunwayTool::Facts() const
 
 void FRunwayTool::OnReselect(const FToolContext& Context)
 {
+	// AT THE BOUNDARY, because "pressing the key again does nothing" has two causes that
+	// look identical from the outside: the reselect never reached the tool, or it reached it
+	// and cycled something else. This line distinguishes them before the next repro.
+	UE_LOG(LogAirside, Log, TEXT("Runway tool reselected (remove=%d insert=%d)"),
+		Context.bRemoveModifier ? 1 : 0, Context.bInsertModifier ? 1 : 0);
+
 	// One choice per press, and the modifiers decide which. Remove wins over insert when
 	// both are held only because something must; neither is a gesture anyone makes.
 	if (Context.bRemoveModifier)

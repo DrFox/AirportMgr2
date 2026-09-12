@@ -10,6 +10,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Model/AirsideCapability.h"
@@ -354,7 +355,27 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	// depending on which phase you were watching - see UAirsideSettings::
 	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave
 	// DispatchArrival the same shape ResolveDefaultAirframe already returns.
-	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	//
+	// UNLESS A TYPE IS CONFIGURED FOR THE KEY. That override exists so a particular aeroplane
+	// can be put on the runway without waiting for the board to offer one, and it is read
+	// HERE and nowhere else - offers and their arrivals still resolve their own type, so this
+	// cannot become the game's behaviour by being forgotten. Which type the key used is
+	// logged every time, so a forgotten override is a line in the log rather than the wrong
+	// aircraft landing for no visible reason.
+	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
+	if (const UAircraftType* Configured = LandAircraftType.LoadSynchronous())
+	{
+		Airframe = Configured->Airframe();
+		UE_LOG(LogRoadBuild, Log,
+			TEXT("Land: using the configured test type %s (%s) rather than the default - "
+				 "clear LandAircraftType in DefaultGame.ini to restore it"),
+			*Configured->GetName(), *Airframe.TypeCode.ToString());
+	}
+	else
+	{
+		UE_LOG(LogRoadBuild, Log, TEXT("Land: using the content default airframe (%s)"),
+			*Airframe.TypeCode.ToString());
+	}
 
 	// THROUGH THE BOARD WHEN THERE IS ONE. Two doors onto arrival is how this codebase has
 	// shipped three lists-that-must-agree bugs: an aeroplane dispatched here directly would

@@ -1,5 +1,7 @@
 #include "Present/AirsideTraffic.h"
 
+#include "Engine/SkeletalMesh.h"
+
 #include "AirsideLog.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
@@ -106,10 +108,34 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	if (Agent->Class == ETraversalClass::Aircraft)
 	{
-		if (Content != nullptr)
+		// THE AGENT'S OWN AIRFRAME FIRST, the content default only as a fallback.
+		//
+		// This used to read Content->AgentMesh unconditionally - ONE mesh for every aircraft
+		// in the game - so a Twin Otter was offered, dispatched and landed as a Meridian:
+		// the name, the figures and the refusal reasons were all the right type's, and only
+		// the aeroplane on the runway was not. It went unnoticed for as long as there was
+		// exactly one aircraft model to wear.
+		USkeletalMesh* Mesh = Agent->Airframe.Mesh.LoadSynchronous();
+		UClass* AnimClass = Agent->Airframe.AnimClass.LoadSynchronous();
+		if (Mesh == nullptr && Content != nullptr)
 		{
-			View->SetAirframe(Content->AgentMesh.LoadSynchronous(), Content->AgentAnimClass.LoadSynchronous());
+			Mesh = Content->AgentMesh.LoadSynchronous();
+			AnimClass = Content->AgentAnimClass.LoadSynchronous();
 		}
+		else if (Mesh != nullptr && AnimClass == nullptr && Content != nullptr)
+		{
+			// A type with a mesh but no anim Blueprint: the default one drives bones by
+			// name, so it is the right fallback rather than no animation at all.
+			AnimClass = Content->AgentAnimClass.LoadSynchronous();
+		}
+
+		if (Mesh != nullptr)
+		{
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d wears %s (%s)"),
+				AgentId, *Mesh->GetName(),
+				Agent->Airframe.Mesh.IsNull() ? TEXT("content default") : TEXT("its own type"));
+		}
+		View->SetAirframe(Mesh, AnimClass);
 	}
 	else
 	{
