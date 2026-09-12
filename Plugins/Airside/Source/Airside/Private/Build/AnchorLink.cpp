@@ -692,47 +692,16 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 			//
 			// Safe here even though Original/PositionA/PositionB/Corner were captured above:
 			// those are values, not pointers, and nothing below touches the ROAD edge.
-			const FGuidelineEdge* LaneEdge = Network.GetGuidelineEdge(BestLaneEdge);
-			const FGuidelineNode* LaneA = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->A) : nullptr;
-			const FGuidelineNode* LaneB = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->B) : nullptr;
-			if (LaneEdge == nullptr || LaneA == nullptr || LaneB == nullptr)
+			//
+			// SplitGuidelineEdge welds to an existing endpoint within LeadInWeldTolerance, or
+			// splits and hands the halves Original's fields (ServiceLoopOwner included), which
+			// is what keeps the lane recognisable as this entity's after the split. Link.Node
+			// IS the join it reports either way; the piece ids themselves are not needed here.
+			FGuidelineEdgeId LaneHead, LaneTail;
+			if (!Network.SplitGuidelineEdge(BestLaneEdge, BestLaneParam, LeadInWeldTolerance,
+				Link.Node, LaneHead, LaneTail))
 			{
 				continue;
-			}
-
-			const FGuidelineEdge LaneOriginal = *LaneEdge;
-			const FVector2D LanePositionA = LaneA->Position;
-			const FVector2D LanePositionB = LaneB->Position;
-
-			FVector2D LaneMid, LaneControlLeft, LaneControlRight;
-			GuidelineGeom::Split(LanePositionA, LaneOriginal.Control, LanePositionB, BestLaneParam,
-				LaneMid, LaneControlLeft, LaneControlRight);
-
-			if (FVector2D::Distance(LaneMid, LanePositionA) <= LeadInWeldTolerance)
-			{
-				Link.Node = LaneOriginal.A;
-			}
-			else if (FVector2D::Distance(LaneMid, LanePositionB) <= LeadInWeldTolerance)
-			{
-				Link.Node = LaneOriginal.B;
-			}
-			else
-			{
-				Link.Node = Network.AddGuidelineNode(LaneMid, /*bDerived=*/true);
-
-				// The halves inherit ServiceLoopOwner from the original, so the lane stays
-				// recognisable as this entity's after the split.
-				FGuidelineEdge Left = LaneOriginal;
-				Left.B = Link.Node;
-				Left.Control = LaneControlLeft;
-
-				FGuidelineEdge Right = LaneOriginal;
-				Right.A = Link.Node;
-				Right.Control = LaneControlRight;
-
-				Network.RemoveGuidelineEdge(BestLaneEdge);
-				Network.AddGuidelineEdge(MoveTemp(Left));
-				Network.AddGuidelineEdge(MoveTemp(Right));
 			}
 
 			// The link now has a real node to leave from, and LeadRoom below measures from it.
@@ -792,33 +761,11 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 			// rather than emit folded geometry: an ugly corner is recoverable, an inverted
 			// arc is not. The junction solver clamps its fillets for the same reason.
 			FGuidelineNodeId Join;
-			if (FVector2D::Distance(Corner, PositionA) <= LeadInWeldTolerance)
+			FGuidelineEdgeId JoinHead, JoinTail;
+			if (!Network.SplitGuidelineEdge(BestEdge, BestParam, LeadInWeldTolerance,
+				Join, JoinHead, JoinTail))
 			{
-				Join = Original.A;
-			}
-			else if (FVector2D::Distance(Corner, PositionB) <= LeadInWeldTolerance)
-			{
-				Join = Original.B;
-			}
-			else
-			{
-				FVector2D Mid, ControlLeft, ControlRight;
-				GuidelineGeom::Split(PositionA, Original.Control, PositionB, BestParam,
-					Mid, ControlLeft, ControlRight);
-
-				Join = Network.AddGuidelineNode(Mid, /*bDerived=*/true);
-
-				FGuidelineEdge Left = Original;
-				Left.B = Join;
-				Left.Control = ControlLeft;
-
-				FGuidelineEdge Right = Original;
-				Right.A = Join;
-				Right.Control = ControlRight;
-
-				Network.RemoveGuidelineEdge(BestEdge);
-				Network.AddGuidelineEdge(MoveTemp(Left));
-				Network.AddGuidelineEdge(MoveTemp(Right));
+				continue;
 			}
 
 			LeadEnd = Join;
@@ -826,42 +773,31 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 		else
 		{
 			// Cut the taxiway at BOTH tangent points and keep the piece between them: an
-			// aircraft taxiing PAST the stand still needs a way through.
+			// aircraft taxiing PAST the stand still needs a way through. Two chained
+			// SplitGuidelineEdge calls rather than one three-way split: the second cut's
+			// param is taken in the REMAINING piece's own parameter space, because that is
+			// the curve it is now being taken from, and OutTail from the first call IS that
+			// piece - see FRoadGuidelineBuilder's SplitFromEnd for the same technique.
 			const double ParamBack = ParamAtArcOffset(Curve, BestParam, -Offset);
 			const double ParamFwd  = ParamAtArcOffset(Curve, BestParam, +Offset);
 
-			FVector2D BackAt, ControlToBack, ControlFromBack;
-			GuidelineGeom::Split(PositionA, Original.Control, PositionB, ParamBack,
-				BackAt, ControlToBack, ControlFromBack);
+			FGuidelineNodeId BackNode;
+			FGuidelineEdgeId HeadEdge, RestEdge;
+			if (!Network.SplitGuidelineEdge(BestEdge, ParamBack, LeadInWeldTolerance,
+				BackNode, HeadEdge, RestEdge))
+			{
+				continue;
+			}
 
-			// The forward cut expressed in the REMAINING piece's own parameter, because
-			// that is the curve it is now being taken from.
 			const double ParamFwdInRest = (ParamFwd - ParamBack) / FMath::Max(1.0 - ParamBack, UE_DOUBLE_SMALL_NUMBER);
 
-			FVector2D FwdAt, ControlMiddle, ControlTail;
-			GuidelineGeom::Split(BackAt, ControlFromBack, PositionB, ParamFwdInRest,
-				FwdAt, ControlMiddle, ControlTail);
-
-			const FGuidelineNodeId BackNode = Network.AddGuidelineNode(BackAt, /*bDerived=*/true);
-			const FGuidelineNodeId FwdNode = Network.AddGuidelineNode(FwdAt, /*bDerived=*/true);
-
-			FGuidelineEdge Head = Original;
-			Head.B = BackNode;
-			Head.Control = ControlToBack;
-
-			FGuidelineEdge Middle = Original;
-			Middle.A = BackNode;
-			Middle.B = FwdNode;
-			Middle.Control = ControlMiddle;
-
-			FGuidelineEdge Tail = Original;
-			Tail.A = FwdNode;
-			Tail.Control = ControlTail;
-
-			Network.RemoveGuidelineEdge(BestEdge);
-			Network.AddGuidelineEdge(MoveTemp(Head));
-			Network.AddGuidelineEdge(MoveTemp(Middle));
-			Network.AddGuidelineEdge(MoveTemp(Tail));
+			FGuidelineNodeId FwdNode;
+			FGuidelineEdgeId MiddleEdge, TailEdge;
+			if (!Network.SplitGuidelineEdge(RestEdge, ParamFwdInRest, LeadInWeldTolerance,
+				FwdNode, MiddleEdge, TailEdge))
+			{
+				continue;
+			}
 
 			// The straight lead-in now stops short of the corner; the sweeps take over.
 			const FVector2D LeadEndAt = Corner - Link.Dir * Offset;

@@ -1,6 +1,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -704,6 +705,71 @@ bool URoadNetwork::RelinkGuidelineEdge(FGuidelineEdgeId Edge, FGuidelineNodeId N
 	}
 
 	++GuidelineRevision;
+	return true;
+}
+
+bool URoadNetwork::SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double WeldTolerance,
+	FGuidelineNodeId& OutNode, FGuidelineEdgeId& OutHead, FGuidelineEdgeId& OutTail)
+{
+	OutNode = FGuidelineNodeId();
+	OutHead = FGuidelineEdgeId();
+	OutTail = FGuidelineEdgeId();
+
+	const FGuidelineEdge* Found = GetGuidelineEdge(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+
+	// Copied before anything is removed: Found points into the slot array, and adding the
+	// halves below can reallocate it - the same trap every one of the five former call
+	// sites guarded against individually.
+	const FGuidelineEdge Original = *Found;
+	const FGuidelineNode* NodeA = GetGuidelineNode(Original.A);
+	const FGuidelineNode* NodeB = GetGuidelineNode(Original.B);
+	if (NodeA == nullptr || NodeB == nullptr)
+	{
+		return false;
+	}
+	const FVector2D PositionA = NodeA->Position;
+	const FVector2D PositionB = NodeB->Position;
+
+	FVector2D Mid, ControlLeft, ControlRight;
+	GuidelineGeom::Split(PositionA, Original.Control, PositionB, T, Mid, ControlLeft, ControlRight);
+
+	// Within tolerance of an existing endpoint: reuse it rather than splitting off a stub
+	// nobody can see. Edge is untouched, and is handed back as whichever side of the
+	// (un-made) split still has it - OutTail welding to A, OutHead welding to B - so a
+	// caller chaining splits (the three-way sweep) can keep walking from the right piece.
+	if (FVector2D::Distance(Mid, PositionA) <= WeldTolerance)
+	{
+		OutNode = Original.A;
+		OutTail = Edge;
+		return true;
+	}
+	if (FVector2D::Distance(Mid, PositionB) <= WeldTolerance)
+	{
+		OutNode = Original.B;
+		OutHead = Edge;
+		return true;
+	}
+
+	OutNode = AddGuidelineNode(Mid, /*bDerived=*/true);
+
+	// Both halves inherit every field of Original - identity (DerivedFrom, ServiceLoopOwner,
+	// ...) included - which is what keeps a split lane or taxiway recognisable as the same
+	// thing it was before. Only the endpoint and control that actually moved are overridden.
+	FGuidelineEdge Head = Original;
+	Head.B = OutNode;
+	Head.Control = ControlLeft;
+
+	FGuidelineEdge Tail = Original;
+	Tail.A = OutNode;
+	Tail.Control = ControlRight;
+
+	RemoveGuidelineEdge(Edge);
+	OutHead = AddGuidelineEdge(MoveTemp(Head));
+	OutTail = AddGuidelineEdge(MoveTemp(Tail));
 	return true;
 }
 
