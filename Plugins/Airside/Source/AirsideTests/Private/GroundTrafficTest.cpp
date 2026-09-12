@@ -2427,4 +2427,108 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * THE POSED AIRCRAFT NEVER REVERSES OR SNAPS, across a whole arrival.
+ *
+ * Written while chasing judder reported from play (2026-09-12). It turned out to be
+ * presentation and not the model - see r.VSync in Config/DefaultEngine.ini - but nothing
+ * covered the property the report NAMED, and the investigation took a day partly because
+ * there was no test that could answer "is the model smooth?" in one run.
+ *
+ * MEASURES THE SYMPTOM'S OWN WORDS. "Jerking back and forwards" is the step VECTOR
+ * reversing, which is a sign test with no threshold to argue about. An earlier attempt
+ * compared distance moved against speed x dt and read 1.00 on every frame forever - the
+ * follower computes the position FROM speed x dt, so that assertion was measuring its own
+ * input. A test that cannot fail is worse than no test, because it is believed.
+ *
+ * Walks the phases a plain dispatch never reaches, which is where a discontinuity would
+ * live: Arriving -> the vacate handover -> the taxi follower. Frame times jitter, because a
+ * constant delta would hide anything that only shows on an uneven one.
+ *
+ * Yaw is asserted as well as position: a nose that stepped while the body ran smooth would
+ * look exactly like judder and would pass every positional check here.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficPoseContinuityTest,
+	"Airside.Model.Traffic.PoseNeverReversesOrSnaps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficPoseContinuityTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = M2TrafficPiper();
+	FVector2D Threshold;
+	URoadNetwork* Net = M2TrafficArrivalAirport(Airframe, Threshold);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchArrival(*Net, Threshold, Airframe, 0.0);
+	if (!TestTrue(TEXT("arrival dispatched"), Id > 0)) { return false; }
+
+	FRandomStream Frames(4242);
+	FVector2D PrevPos = Traffic->FindAgent(Id)->LastMotion.Position;
+	double PrevYaw = Traffic->FindAgent(Id)->LastMotion.Heading;
+	FVector2D LastStep = FVector2D::ZeroVector;
+	double LastLen = 0.0;
+
+	int32 Reversals = 0, Lurches = 0, YawSnaps = 0, Ticks = 0;
+	double WorstCos = 1.0, WorstYaw = 0.0;
+	FString Where;
+
+	while (Ticks < 20000)
+	{
+		const double Dt = Frames.FRandRange(0.014, 0.020);
+		Traffic->Advance(Dt, Net);
+		++Ticks;
+
+		const FRoadAgent* A = Traffic->FindAgent(Id);
+		if (A == nullptr) { break; }
+
+		const FVector2D Pos = A->LastMotion.Position;
+		const FVector2D Step = Pos - PrevPos;
+		const double Len = Step.Size();
+		const double Yaw = FMath::RadiansToDegrees(FMath::UnwindRadians(A->LastMotion.Heading - PrevYaw));
+
+		if (Len > KINDA_SMALL_NUMBER && LastLen > KINDA_SMALL_NUMBER)
+		{
+			const double Cos = FVector2D::DotProduct(Step / Len, LastStep / LastLen);
+			if (Cos < 0.0)
+			{
+				++Reversals;
+				if (Cos < WorstCos)
+				{
+					WorstCos = Cos;
+					Where = FString::Printf(TEXT("phase %d at %.0f,%.0f tick %d"),
+						static_cast<int32>(A->Phase), Pos.X, Pos.Y, Ticks);
+				}
+			}
+			if (Len > LastLen * 2.0 || Len * 2.0 < LastLen) { ++Lurches; }
+		}
+		if (FMath::Abs(Yaw) > 5.0)
+		{
+			++YawSnaps;
+			if (FMath::Abs(Yaw) > FMath::Abs(WorstYaw)) { WorstYaw = Yaw; }
+		}
+
+		LastStep = Step; LastLen = Len; PrevPos = Pos; PrevYaw = A->LastMotion.Heading;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("pose continuity: %d ticks, %d reversals (worst cos %.3f %s), %d lurches, %d yaw snaps (worst %+.2f deg)"),
+		Ticks, Reversals, WorstCos, *Where, Lurches, YawSnaps, WorstYaw));
+
+	TestTrue(TEXT("the arrival actually flew, so the walk means something"), Ticks > 100);
+	TestEqual(*FString::Printf(
+		TEXT("the body never moves backwards (worst cos %.3f, %s)"), WorstCos, *Where),
+		Reversals, 0);
+	TestEqual(*FString::Printf(
+		TEXT("and the nose never steps (worst %+.2f deg in one frame)"), WorstYaw),
+		YawSnaps, 0);
+
+	// LURCHES ARE NOT ASSERTED. A frame twice as long as the last one MUST carry twice the
+	// distance - that is the delta being honoured, not a defect - and every lurch seen in
+	// play paired with a frame time that had genuinely changed. Counted and reported because
+	// the number is worth reading when this test is being used to chase something.
+	return true;
+}
+
 #endif
