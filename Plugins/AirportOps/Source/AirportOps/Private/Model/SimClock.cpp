@@ -30,8 +30,21 @@ double USimClock::Multiplier(ESimSpeed InSpeed)
 	case ESimSpeed::X2:     return 2.0;
 	case ESimSpeed::X4:     return 4.0;
 	case ESimSpeed::X8:     return 8.0;
+	case ESimSpeed::X16:    return 16.0;
+	case ESimSpeed::X32:    return 32.0;
 	}
 	return 1.0;
+}
+
+void USimClock::StartAtHour(double Hour)
+{
+	// BEFORE ANYTHING IS SCHEDULED. USimClock::Every registers its first firing at
+	// Now() + Interval, so moving the clock afterwards would leave every repeating entry
+	// due at a time that no longer means what it did when it was booked.
+	GameSeconds = FMath::Fmod(FMath::Max(0.0, Hour), 24.0) * 3600.0;
+	UE_LOG(LogAirportOps, Log, TEXT("Clock starts at day %d, %02d:%02d"),
+		Day() + 1, static_cast<int32>(TimeOfDay() / 3600.0),
+		static_cast<int32>(FMath::Fmod(TimeOfDay() / 60.0, 60.0)));
 }
 
 double USimClock::TimeScale() const

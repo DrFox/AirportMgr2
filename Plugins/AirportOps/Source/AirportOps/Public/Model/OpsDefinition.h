@@ -38,6 +38,16 @@ public:
 	double RealSecondsPerGameDay = 1200.0;
 
 	/**
+	 * Hour of day a NEW GAME starts at, 0-24. Copied into USimClock by UOpsRuntime.
+	 *
+	 * 09:00 rather than midnight, because the first thing a new player sees should be the
+	 * airfield in daylight with the day ahead of it. Starting at 00:00 opened on the sun
+	 * parked at its dusk floor and nothing due for six game hours.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Scenario", meta = (ClampMin = "0.0", ClampMax = "24.0"))
+	double StartHour = 9.0;
+
+	/**
 	 * How long a fuel truck stays at the hydrant, in the sim seconds a truck MOVES in - see
 	 * UFuelService::DwellSeconds, and its header for why that is not game time.
 	 *

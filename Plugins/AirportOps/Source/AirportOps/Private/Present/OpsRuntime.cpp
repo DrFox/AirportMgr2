@@ -130,12 +130,18 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	{
 		Clock->RealSecondsPerGameDay = Scenario->RealSecondsPerGameDay;
 
-		// The two designer figures set from the same asset in the same breath, so neither can
-		// be the one somebody forgot to copy.
+		// BEFORE THE OFFER SCHEDULE BELOW, and that ordering is load-bearing: Every() books
+		// its first firing at Now() + Interval, so moving the clock after scheduling would
+		// leave the first offer due at a time that no longer means what it did.
+		Clock->StartAtHour(Scenario->StartHour);
+
+		// The designer figures set from the same asset in the same breath, so none of them
+		// is the one somebody forgot to copy.
 		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f real s per game day, %.0f s fuel dwell"),
-			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->FuelDwellSeconds);
+			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell"),
+			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
+			Scenario->FuelDwellSeconds);
 	}
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
@@ -228,10 +234,23 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 	Events->NotifySpeedChanged(Speed);
 }
 
+TArrayView<const ESimSpeed> UOpsRuntime::SpeedLadder()
+{
+	// A SECOND LIST THAT MUST AGREE WITH ESimSpeed, and exactly the kind CLAUDE.md names.
+	// A speed added to the enum but not to this ladder compiles, runs, and is simply
+	// unreachable: the player presses "faster" at the top rung and nothing happens, with
+	// no error anywhere. It is exposed rather than a static local precisely so a test can
+	// read it - AirportOps.Model.SimClock.SpeedLadderCoversEveryRung walks StaticEnum and
+	// fails if the two ever drift apart.
+	static const ESimSpeed Ladder[] = {
+		ESimSpeed::X1, ESimSpeed::X2, ESimSpeed::X4, ESimSpeed::X8, ESimSpeed::X16, ESimSpeed::X32 };
+	return MakeArrayView(Ladder, UE_ARRAY_COUNT(Ladder));
+}
+
 void UOpsRuntime::StepSpeed(int32 Delta)
 {
-	static const ESimSpeed Ladder[] = { ESimSpeed::X1, ESimSpeed::X2, ESimSpeed::X4, ESimSpeed::X8 };
-	constexpr int32 Rungs = UE_ARRAY_COUNT(Ladder);
+	const TArrayView<const ESimSpeed> Ladder = SpeedLadder();
+	const int32 Rungs = Ladder.Num();
 
 	// Stepping while paused steps from ResumeSpeed, which is what a player pressing
 	// "faster" while paused means: resume, one notch up from where they were.

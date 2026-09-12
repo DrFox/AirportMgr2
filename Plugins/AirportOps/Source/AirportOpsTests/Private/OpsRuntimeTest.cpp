@@ -79,10 +79,20 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Runtime->TogglePause();
 		TestEqual(TEXT("unpause restores the previous speed"), Actor->GetSimTimeScale(), 2.0, 1e-12);
 
-		Runtime->StepSpeed(+5);
-		TestEqual(TEXT("stepping past the top clamps at x8"), Actor->GetSimTimeScale(), 8.0, 1e-12);
-		Runtime->StepSpeed(-9);
-		TestEqual(TEXT("stepping past the bottom clamps at x1, never paused"), Actor->GetSimTimeScale(), 1.0, 1e-12);
+		// Asked of the LADDER rather than a literal, so adding a rung does not turn this
+		// into a failing test that says nothing about the behaviour it guards. It used to
+		// read 8.0 and duly failed the day x16 and x32 were added, which is a maintenance
+		// cost with no diagnostic value.
+		const TArrayView<const ESimSpeed> Ladder = UOpsRuntime::SpeedLadder();
+		const double Fastest = USimClock::Multiplier(Ladder.Last());
+		const double Slowest = USimClock::Multiplier(Ladder[0]);
+
+		Runtime->StepSpeed(+Ladder.Num() + 2);
+		TestEqual(TEXT("stepping past the top clamps at the fastest rung"),
+			Actor->GetSimTimeScale(), Fastest, 1e-12);
+		Runtime->StepSpeed(-Ladder.Num() - 4);
+		TestEqual(TEXT("stepping past the bottom clamps at the slowest rung, never paused"),
+			Actor->GetSimTimeScale(), Slowest, 1e-12);
 
 		Runtime->Tick(1.0);
 		TestTrue(TEXT("ticking the runtime advances the clock"), Runtime->GetClock()->Now() > 0.0);
