@@ -104,6 +104,16 @@ public:
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
 
 	/**
+	 * RunwayChain(Seed), or a one-segment chain of just Seed when that comes back empty.
+	 *
+	 * The idiom four call sites (GroundTrafficClaims x3, RouteSearch) used to spell out
+	 * separately - Seed dropped to a taxiway under a claim still made or a bar still
+	 * placed should protect the one segment named rather than nothing at all. One
+	 * implementation instead of four copies that could stop agreeing - see #86.
+	 */
+	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
+
+	/**
 	 * The surface and approach class of the runway Seed belongs to.
 	 *
 	 * Reads Seed's OWN segment: SetRunwayFacts writes every member of the chain and the

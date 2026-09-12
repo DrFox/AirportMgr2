@@ -114,11 +114,7 @@ void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Netwo
 		// THE WHOLE CHAIN, re-expanded per tick exactly as BuildPending's route zero does
 		// it: a runway is several segments once it has exits, and a rebuild may have
 		// changed which - so the seed is what is stored and the chain is what is claimed.
-		TArray<FRoadSegmentId> Chain = Network.RunwayChain(Agent.CrossingRunway);
-		if (Chain.Num() == 0)
-		{
-			Chain.Add(Agent.CrossingRunway);
-		}
+		const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Agent.CrossingRunway);
 		for (const FRoadSegmentId Segment : Chain)
 		{
 			Surfaces.AddUnique(FTrafficResource::OfSurface(Segment));
@@ -437,11 +433,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	// is a moment from the asphalt and nothing may be cleared onto it in between.
 	if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
 	{
-		TArray<FRoadSegmentId> Chain = Network.RunwayChain(Agent.CrossingRunway);
-		if (Chain.Num() == 0)
-		{
-			Chain.Add(Agent.CrossingRunway);
-		}
+		const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Agent.CrossingRunway);
 		for (const FRoadSegmentId Segment : Chain)
 		{
 			FWantedClaim Crossing;
@@ -647,11 +639,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 				// (the profile changed under the mark) and the named segment alone is still
 				// honoured: a bar that silently stopped protecting anything is worse than one
 				// protecting a piece of what it used to.
-				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Node->HoldingPositionFor);
-				if (Chain.Num() == 0)
-				{
-					Chain.Add(Node->HoldingPositionFor);
-				}
+				const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Node->HoldingPositionFor);
 
 				for (const FRoadSegmentId Segment : Chain)
 				{

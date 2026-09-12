@@ -284,6 +284,20 @@ TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
 	return Out;
 }
 
+TArray<FRoadSegmentId> URoadNetwork::RunwayChainOrSeed(FRoadSegmentId Seed) const
+{
+	// The idiom four call sites spelled out separately (#86): RunwayChain is empty when
+	// Seed is not a live runway (a rebuild dropped it to a taxiway under a stored claim,
+	// say), and dropping the claim entirely reads as "nothing to protect" rather than
+	// "protect the one segment I still know about" - so the seed itself stands in.
+	TArray<FRoadSegmentId> Chain = RunwayChain(Seed);
+	if (Chain.Num() == 0)
+	{
+		Chain.Add(Seed);
+	}
+	return Chain;
+}
+
 FRunwayFacts URoadNetwork::RunwayFactsFor(FRoadSegmentId Seed) const
 {
 	// The seed's own, not a walk: SetRunwayFacts and the split keep every member of a
@@ -400,59 +414,41 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		OutSegment->Generation = Segments[Best].Generation;
 	}
 
-	// Walk out to both extremes through nodes that join exactly two runway segments. Anything
-	// else - a threshold, or a node with a taxiway on it - ends the walk in that direction.
-	//
-	// Tracked by the node WALKED FROM rather than the segment walked along, because a node's
-	// Incident list already holds segment handles and building one from an index would mean
-	// reconstructing a generation counter that the slot map owns.
-	auto WalkFrom = [this](FRoadNodeId At, FRoadNodeId CameFrom)
+	// THE CHAIN IS THE WALK (#86): RunwayChain already walks out through nodes that join
+	// exactly two runway segments, stopping at a threshold or a fork - the same rule this
+	// used to walk a second time, node by node, to find the very same two ends. The ends
+	// are simply the chain's own nodes touched by exactly one of its segments; a second
+	// walk could only ever agree with the first or silently stop doing so.
+	const FRoadSegmentId SeedId{Best, Segments[Best].Generation};
+	const TArray<FRoadSegmentId> Chain = RunwayChainOrSeed(SeedId);
+
+	TMap<FRoadNodeId, int32> ChainArms;
+	ChainArms.Reserve(Chain.Num() * 2);
+	for (const FRoadSegmentId& Member : Chain)
 	{
-		for (int32 Guard = 0; Guard < 1024; ++Guard)
+		if (const FRoadSegment* MemberSegment = GetSegment(Member))
 		{
-			const FRoadNode* Node = GetNode(At);
-			if (Node == nullptr)
-			{
-				break;
-			}
-
-			FRoadSegmentId Next;
-			FRoadNodeId Beyond;
-			int32 RunwayArms = 0;
-
-			for (const FRoadSegmentId& Incident : Node->Incident)
-			{
-				if (!IsRunwaySegment(Incident))
-				{
-					continue;
-				}
-				++RunwayArms;
-
-				const FRoadNodeId Far = GetOtherEnd(Incident, At);
-				if (Far != CameFrom)
-				{
-					Next = Incident;
-					Beyond = Far;
-				}
-			}
-
-			// One runway arm means this node is a threshold. More than two would be a fork,
-			// which a runway does not have - stopping there is the safe reading.
-			if (RunwayArms != 2 || !Next.IsSet() || !Beyond.IsSet())
-			{
-				break;
-			}
-
-			CameFrom = At;
-			At = Beyond;
+			++ChainArms.FindOrAdd(MemberSegment->A);
+			++ChainArms.FindOrAdd(MemberSegment->B);
 		}
+	}
 
-		return At;
-	};
-
-	const FRoadSegment& Seed = Segments[Best];
-	const FRoadNodeId EndA = WalkFrom(Seed.A, Seed.B);
-	const FRoadNodeId EndB = WalkFrom(Seed.B, Seed.A);
+	FRoadNodeId EndA, EndB;
+	for (const TPair<FRoadNodeId, int32>& Arm : ChainArms)
+	{
+		if (Arm.Value != 1)
+		{
+			continue;
+		}
+		if (!EndA.IsSet())
+		{
+			EndA = Arm.Key;
+		}
+		else
+		{
+			EndB = Arm.Key;
+		}
+	}
 
 	const FRoadNode* NodeA = GetNode(EndA);
 	const FRoadNode* NodeB = GetNode(EndB);
