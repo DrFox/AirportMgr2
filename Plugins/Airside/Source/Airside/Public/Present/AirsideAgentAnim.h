@@ -28,6 +28,16 @@ public:
 	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
 
 	/**
+	 * How far the propeller may turn this frame, degrees - the real rotation or the most the
+	 * frame rate can show, whichever is less. See PropMaxStepPerRepeat for why.
+	 *
+	 * Static and free of the instance so it can be tested without an actor or a skeleton,
+	 * which is the same reason the wheel and propeller arithmetic lives in this class rather
+	 * than in the Animation Blueprint at all.
+	 */
+	static float PropStepDegrees(float RPM, float DeltaSeconds, int32 BladeCount, float MaxStepPerRepeat);
+
+	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
 	 *
 	 * WRAPPED to 0..360 rather than allowed to run on: at 2000 RPM this gains 12,000 degrees
@@ -74,4 +84,36 @@ public:
 	/** Above this many RPM the blades are replaced by a disc. */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float PropDiscRPM = 400.0f;
+
+	/**
+	 * How many blades the modelled propeller has, which is how often it repeats itself.
+	 *
+	 * A three-blade propeller looks identical every 120 degrees, so THAT is the angle the
+	 * frame rate has to resolve - not a full turn. Getting this wrong in either direction
+	 * only changes how fast the blades appear to turn, never whether they alias.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "1"))
+	int32 PropBladeCount = 3;
+
+	/**
+	 * The most of one blade-repeat the propeller may turn in a single frame.
+	 *
+	 * WHY THE RENDERED PROPELLER IS DELIBERATELY SLOWER THAN THE REAL ONE. At 2200 RPM a
+	 * propeller turns 36.7 times a second. No frame rate this game will ever run at can sample
+	 * that: the blades alias, and because the alias depends on the frame rate, the apparent
+	 * speed changes with it. Measured 2026-09-12 for this airframe - +6.67 rev/s at 90 fps,
+	 * DEAD STILL at 110, backwards at 120 and 144. Reported from play as the propeller
+	 * changing speed with the camera, which it was: zooming in fills more screen, costs more
+	 * to draw, and lands on a different alias.
+	 *
+	 * Below half a repeat the blades read as turning forwards at any frame rate (Nyquist on
+	 * the repeat angle, not on the full turn). A third leaves margin and still looks fast.
+	 *
+	 * THE MODEL IS NOT TOUCHED. FAgentMotion::EngineRPM stays the real figure and everything
+	 * that reasons about the engine still reads it; this is the VIEW choosing a rotation it
+	 * can actually show. The honest fix is a blurred disc above PropDiscRPM - see that flag -
+	 * and this is what keeps the blades readable until the art for it exists.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.01", ClampMax = "0.5"))
+	float PropMaxStepPerRepeat = 0.333f;
 };
