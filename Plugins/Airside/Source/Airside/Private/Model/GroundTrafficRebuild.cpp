@@ -409,6 +409,11 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		{
 			// The destination has not moved - the splice ends where the old plan did - but the
 			// last step's To is now a LIVE handle, and that is what a later replan searches to.
+			//
+			// NOT SetGoalFrom (issue #82): that clears GoalNode to unset when Steps is empty,
+			// which is right for a fresh dispatch but wrong here - FRoutePlan::IsValid() does
+			// NOT guarantee Steps.Num() > 0, and a valid-but-empty splice must leave the goal
+			// exactly where it was rather than blank it out from under a later replan.
 			Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode;
 
 			UE_LOG(LogAirsideTraffic, Log,
