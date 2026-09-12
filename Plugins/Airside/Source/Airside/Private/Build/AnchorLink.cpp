@@ -778,12 +778,24 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 			// param is taken in the REMAINING piece's own parameter space, because that is
 			// the curve it is now being taken from, and OutTail from the first call IS that
 			// piece - see FRoadGuidelineBuilder's SplitFromEnd for the same technique.
+			//
+			// WeldTolerance is 0, NOT LeadInWeldTolerance, on both cuts - unlike every other
+			// SplitGuidelineEdge call in this file. The sweep needs two REAL nodes to hang its
+			// arcs on: a weld here would return an existing endpoint as BackNode or FwdNode,
+			// leaving one arc with no far end (SweepEnds gets the wrong node, or - if the
+			// first cut welds to B - RestEdge comes back unset and the second call fails
+			// outright). It would also silently break ParamFwdInRest's assumption that the
+			// remaining piece STARTS at ParamBack, true only when the first cut actually made
+			// a cut. Old code never welded here either: Behind/Ahead already keep both cuts at
+			// least LeadInWeldTolerance of ARC LENGTH from either endpoint, but arc length
+			// exceeds chord length on a bend, so that bound alone would not stop the WELD
+			// TEST - which compares the chord - from firing anyway.
 			const double ParamBack = ParamAtArcOffset(Curve, BestParam, -Offset);
 			const double ParamFwd  = ParamAtArcOffset(Curve, BestParam, +Offset);
 
 			FGuidelineNodeId BackNode;
 			FGuidelineEdgeId HeadEdge, RestEdge;
-			if (!Network.SplitGuidelineEdge(BestEdge, ParamBack, LeadInWeldTolerance,
+			if (!Network.SplitGuidelineEdge(BestEdge, ParamBack, /*WeldTolerance=*/0.0,
 				BackNode, HeadEdge, RestEdge))
 			{
 				continue;
@@ -793,7 +805,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 
 			FGuidelineNodeId FwdNode;
 			FGuidelineEdgeId MiddleEdge, TailEdge;
-			if (!Network.SplitGuidelineEdge(RestEdge, ParamFwdInRest, LeadInWeldTolerance,
+			if (!Network.SplitGuidelineEdge(RestEdge, ParamFwdInRest, /*WeldTolerance=*/0.0,
 				FwdNode, MiddleEdge, TailEdge))
 			{
 				continue;
