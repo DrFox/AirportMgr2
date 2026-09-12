@@ -1,4 +1,7 @@
 #include "CoreMinimal.h"
+#include "BuildActions.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -66,6 +69,57 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("Depart lights once parked"), Panel->IsDepartEnabledForTest());
+	return true;
+}
+
+/**
+ * THE SEAM issue #91 INTRODUCES. The two verbs used to hard-code the caption "Follow (C)" and
+ * the ids selection.depart/selection.follow; now EnsureSlots finds them by walking BuildActions()
+ * positionally and the caption/key are read off the row. Left unwired, two buttons would still
+ * get built - FInspectorWidgetTest would not notice - just with no caption or key on them.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorVerbsFromRegistryTest,
+	"AirportMgr.Inspector.VerbsComeFromBuildActions",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorVerbsFromRegistryTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Ctx.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+	if (!TestNotNull(TEXT("Depart button is built"), Panel->DepartButton.Get())) { return false; }
+	if (!TestNotNull(TEXT("Follow button is built"), Panel->FollowButton.Get())) { return false; }
+
+	const FBuildAction* DepartAction = nullptr;
+	const FBuildAction* FollowAction = nullptr;
+	for (const FBuildAction& A : BuildActions())
+	{
+		if (A.Id == FName(TEXT("selection.depart"))) { DepartAction = &A; }
+		if (A.Id == FName(TEXT("selection.follow"))) { FollowAction = &A; }
+	}
+	if (!TestNotNull(TEXT("the registry has a depart row"), DepartAction)) { return false; }
+	if (!TestNotNull(TEXT("the registry has a follow row"), FollowAction)) { return false; }
+
+	const UTextBlock* DepartLabel = Cast<UTextBlock>(Panel->DepartButton->GetContent());
+	const UTextBlock* FollowLabel = Cast<UTextBlock>(Panel->FollowButton->GetContent());
+	if (!TestNotNull(TEXT("depart button has a label"), DepartLabel)) { return false; }
+	if (!TestNotNull(TEXT("follow button has a label"), FollowLabel)) { return false; }
+	TestEqual(TEXT("depart's caption comes from the registry, not a literal"),
+		DepartLabel->GetText().ToString(), DepartAction->Label.ToString());
+	TestEqual(TEXT("follow's caption comes from the registry, not a literal"),
+		FollowLabel->GetText().ToString(), FollowAction->Label.ToString());
+
+	// KEY IN THE TOOLTIP, not the caption: Follow has one (C), Depart does not.
+	TestTrue(TEXT("follow's key reaches the tooltip"),
+		Panel->FollowButton->GetToolTipText().ToString().Contains(FollowAction->Key.GetDisplayName().ToString()));
+	TestFalse(TEXT("depart's caption no longer carries a parenthesised key"),
+		DepartLabel->GetText().ToString().Contains(TEXT("(")));
 	return true;
 }
 

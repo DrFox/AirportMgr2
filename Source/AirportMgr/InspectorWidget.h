@@ -39,10 +39,9 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
 
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor PanelTint = FLinearColor(0.06f, 0.07f, 0.09f, 0.92f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor ButtonTint = FLinearColor(0.18f, 0.20f, 0.24f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor DisabledTint = FLinearColor(0.10f, 0.10f, 0.12f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") int32 FontSize = 12;
+	// PanelTint/ButtonTint/DisabledTint/FontSize are GONE (issue #91) - EVERY COLOUR AND FONT
+	// COMES FROM UUIStyle now, the rule UBuildBarWidget's own header already states. Only
+	// metrics this panel alone needs (its width, how far it floats) stay as knobs.
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 	/** Distance above the bottom edge, so it clears the build bar. */
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BottomOffset = 72.0;
@@ -67,8 +66,18 @@ protected:
 private:
 	bool bDepartEnabled = false;
 
+	/**
+	 * INDICES INTO BuildActions(), never ids to look up - the same reason UBuildBarEntry
+	 * holds one. Found once, in EnsureSlots, by walking the Selection section positionally:
+	 * BuildActions.cpp adds selection.depart then selection.follow so the panel, the bar and
+	 * the C key stay one list (its own comment, spec §6.2) - the pair this panel needs is
+	 * exactly those two rows, in that order.
+	 */
+	int32 DepartActionIndex = INDEX_NONE;
+	int32 FollowActionIndex = INDEX_NONE;
+
 	void EnsureSlots();
-	void RunActionById(FName Id);
+	void RunAction(int32 ActionIndex);
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
