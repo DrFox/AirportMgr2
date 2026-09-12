@@ -124,15 +124,11 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 bool URoadEditFacade::DeleteApron(int32 ApronIndex)
 {
 	URoadNetwork* Network = Actor().Network;
-	if (Network == nullptr || !Network->GetAprons().IsValidIndex(ApronIndex)
-		|| !Network->GetAprons()[ApronIndex].bAlive)
+	const FApronId Doomed = Network != nullptr ? Network->ApronIdAt(ApronIndex) : FApronId();
+	if (!Doomed.IsSet())
 	{
 		return false;
 	}
-
-	FApronId Doomed;
-	Doomed.Index = ApronIndex;
-	Doomed.Generation = Network->GetAprons()[ApronIndex].Generation;
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete apron"));
 
@@ -231,15 +227,11 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 {
 	URoadNetwork* Network = Actor().Network;
-	if (Network == nullptr || !Network->GetEntities().IsValidIndex(EntityIndex)
-		|| !Network->GetEntities()[EntityIndex].bAlive)
+	const FEntityInstanceId Doomed = Network != nullptr ? Network->EntityIdAt(EntityIndex) : FEntityInstanceId();
+	if (!Doomed.IsSet())
 	{
 		return false;
 	}
-
-	FEntityInstanceId Doomed;
-	Doomed.Index = EntityIndex;
-	Doomed.Generation = Network->GetEntities()[EntityIndex].Generation;
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete stand"));
 

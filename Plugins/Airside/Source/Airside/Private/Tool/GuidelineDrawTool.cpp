@@ -24,8 +24,7 @@ namespace
 			if (Distance <= BestDistance)
 			{
 				BestDistance = Distance;
-				Best.Index = Index;
-				Best.Generation = Nodes[Index].Generation;
+				Best = Network.GuidelineNodeIdAt(Index);
 			}
 		}
 		return Best;
@@ -65,8 +64,7 @@ namespace
 			if (Distance <= BestDistance)
 			{
 				BestDistance = Distance;
-				Best.Index = Index;
-				Best.Generation = Edge.Generation;
+				Best = Network.GuidelineEdgeIdAt(Index);
 			}
 		}
 		return Best;

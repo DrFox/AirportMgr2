@@ -18,36 +18,6 @@
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
-namespace
-{
-	/**
-	 * Mirrors URoadEditFacade::MakeLiveNodeId - see that function for why IsSet() alone is
-	 * not enough. Kept as its own small copy rather than a shared call into the facade: the
-	 * presenter must not depend on the facade for anything but the one static graph-surgery
-	 * function it already shares (SplitSegmentIn) - reaching into it for this too would make
-	 * "how does a presenter validate a node" a second, growing surface between the two.
-	 */
-	bool MakeLiveNodeIdIn(const URoadNetwork& Network, int32 Index, FRoadNodeId& OutId)
-	{
-		if (!Network.GetNodes().IsValidIndex(Index))
-		{
-			return false;
-		}
-
-		FRoadNodeId Candidate;
-		Candidate.Index = Index;
-		Candidate.Generation = Network.GetNodes()[Index].Generation;
-
-		if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Network.GetNodes(), Candidate))
-		{
-			return false;
-		}
-
-		OutId = Candidate;
-		return true;
-	}
-}
-
 void URoadSurfacePresenter::Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
 	UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent,
 	UDynamicMeshComponent* InRunwayMarkingComponent)
@@ -398,8 +368,8 @@ void URoadSurfacePresenter::HideGhost()
 bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromNodeIndex,
 	const FRoadSnapResult& Snap, const FSurfaceSettings& Settings, FRoadMeshBuffers& OutBuffers)
 {
-	FRoadNodeId From;
-	if (Network == nullptr || !MakeLiveNodeIdIn(*Network, FromNodeIndex, From))
+	const FRoadNodeId From = Network != nullptr ? Network->NodeIdAt(FromNodeIndex) : FRoadNodeId();
+	if (!From.IsSet())
 	{
 		return false;
 	}
@@ -472,8 +442,8 @@ bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 F
 	// Mirrors UpdateGhost's own opening guard exactly: a node that is not currently live
 	// is never a cache hit, so a caller that sees false here and falls through to
 	// UpdateGhost gets the same HideGhost() it would have gotten before this query existed.
-	FRoadNodeId From;
-	if (Network == nullptr || GhostComponent == nullptr || !MakeLiveNodeIdIn(*Network, FromNodeIndex, From))
+	const FRoadNodeId From = Network != nullptr ? Network->NodeIdAt(FromNodeIndex) : FRoadNodeId();
+	if (GhostComponent == nullptr || !From.IsSet())
 	{
 		return false;
 	}
@@ -511,8 +481,8 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 	// IsGhostCacheHit and SetGhostValidity, which exist so the caller can skip resolving
 	// Settings at all on a still drag. This function always does the full rebuild; a
 	// caller that already knows it has a cache hit must not reach here.
-	FRoadNodeId From;
-	if (Network == nullptr || GhostComponent == nullptr || !MakeLiveNodeIdIn(*Network, FromNodeIndex, From))
+	const FRoadNodeId From = Network != nullptr ? Network->NodeIdAt(FromNodeIndex) : FRoadNodeId();
+	if (GhostComponent == nullptr || !From.IsSet())
 	{
 		HideGhost();
 		return;

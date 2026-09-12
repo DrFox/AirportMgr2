@@ -63,10 +63,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			if (Existing[Index].bAlive && Existing[Index].bDerived)
 			{
-				FGuidelineEdgeId Id;
-				Id.Index = Index;
-				Id.Generation = Existing[Index].Generation;
-				Doomed.Add(Id);
+				Doomed.Add(Network.GuidelineEdgeIdAt(Index));
 			}
 		}
 		for (const FGuidelineEdgeId Id : Doomed)
@@ -141,9 +138,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			continue;
 		}
-		FRoadNodeId NodeId;
-		NodeId.Index = Pair.Key;
-		NodeId.Generation = Node->Generation;
+		const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
 
 		int32 ContinuousArms = 0;
 		double ExitLength = 0.0;
@@ -310,9 +305,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			continue;
 		}
 
-		FRoadSegmentId SegmentId;
-		SegmentId.Index = Index;
-		SegmentId.Generation = Segment.Generation;
+		const FRoadSegmentId SegmentId = Network.SegmentIdAt(Index);
 
 		// ProfileFor, NOT Segment.Profile - the THIRD reader to learn this. The solver and the
 		// mesh builder were pinned to the accessor when a reloaded level came back invisible;
@@ -634,9 +627,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				continue;
 			}
 
-			FGuidelineEdgeId Id;
-			Id.Index = Index;
-			Id.Generation = Edge.Generation;
+			const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
 
 			FGuidelineNodeId NewA = Edge.A;
 			FGuidelineNodeId NewB = Edge.B;
@@ -786,10 +777,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 		{
 			if (Nodes[Index].bAlive && Nodes[Index].bDerived && Nodes[Index].Incident.Num() == 0)
 			{
-				FGuidelineNodeId Id;
-				Id.Index = Index;
-				Id.Generation = Nodes[Index].Generation;
-				Orphans.Add(Id);
+				Orphans.Add(Network.GuidelineNodeIdAt(Index));
 			}
 		}
 		for (const FGuidelineNodeId Id : Orphans)
