@@ -242,9 +242,9 @@ TArray<FRoadSegmentId> URoadNetwork::RunwayChain(FRoadSegmentId Seed) const
 	}
 	Out.Add(Seed);
 
-	// The same walk RunwayExtentInternal makes, collecting segments instead of stopping
-	// at the ends: from each end of Seed, step through nodes that join exactly two runway
-	// segments, and stop at a threshold (one arm) or anything stranger (a fork).
+	// RunwayExtentAt reads its thresholds off this chain (#86) rather than walking a second
+	// time: from each end of Seed, step through nodes that join exactly two runway segments,
+	// and stop at a threshold (one arm) or anything stranger (a fork).
 	auto WalkFrom = [this, &Out](FRoadNodeId At, FRoadSegmentId Along)
 	{
 		for (int32 Guard = 0; Guard < 1024; ++Guard)
@@ -419,8 +419,11 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	// used to walk a second time, node by node, to find the very same two ends. The ends
 	// are simply the chain's own nodes touched by exactly one of its segments; a second
 	// walk could only ever agree with the first or silently stop doing so.
+	//
+	// Plain RunwayChain, not RunwayChainOrSeed: Best was found by IsRunwaySegment in the
+	// search above, so the chain is never empty here.
 	const FRoadSegmentId SeedId{Best, Segments[Best].Generation};
-	const TArray<FRoadSegmentId> Chain = RunwayChainOrSeed(SeedId);
+	const TArray<FRoadSegmentId> Chain = RunwayChain(SeedId);
 
 	TMap<FRoadNodeId, int32> ChainArms;
 	ChainArms.Reserve(Chain.Num() * 2);
@@ -433,25 +436,33 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		}
 	}
 
-	FRoadNodeId EndA, EndB;
+	// The two nodes touched by exactly one chain segment - order from TMap iteration is
+	// NOT deterministic, so collect both before choosing which is "EndA".
+	TArray<FRoadNodeId, TInlineAllocator<2>> Thresholds;
 	for (const TPair<FRoadNodeId, int32>& Arm : ChainArms)
 	{
-		if (Arm.Value != 1)
+		if (Arm.Value == 1)
 		{
-			continue;
-		}
-		if (!EndA.IsSet())
-		{
-			EndA = Arm.Key;
-		}
-		else
-		{
-			EndB = Arm.Key;
+			Thresholds.Add(Arm.Key);
 		}
 	}
 
-	const FRoadNode* NodeA = GetNode(EndA);
-	const FRoadNode* NodeB = GetNode(EndB);
+	const FRoadNode* NodeA = nullptr;
+	const FRoadNode* NodeB = nullptr;
+	if (Thresholds.Num() == 2)
+	{
+		// EndA is explicitly whichever threshold is nearer Segments[Best].A - not "whichever
+		// the map iterated first", which a hash reshuffle could change - so a query exactly
+		// equidistant from both ends (bNearA below, on <=) resolves the same way every run.
+		const FRoadNode* SeedNodeA = GetNode(Segments[Best].A);
+		const FRoadNode* First = GetNode(Thresholds[0]);
+		const FRoadNode* Second = GetNode(Thresholds[1]);
+		const bool bFirstIsA = SeedNodeA != nullptr && First != nullptr && Second != nullptr
+			&& FVector2D::DistSquared(SeedNodeA->Position, First->Position)
+				<= FVector2D::DistSquared(SeedNodeA->Position, Second->Position);
+		NodeA = bFirstIsA ? First : Second;
+		NodeB = bFirstIsA ? Second : First;
+	}
 	if (NodeA == nullptr || NodeB == nullptr)
 	{
 		return false;

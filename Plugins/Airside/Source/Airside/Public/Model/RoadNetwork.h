@@ -93,9 +93,9 @@ public:
 	bool IsRunwaySegment(FRoadSegmentId Segment) const;
 
 	/**
-	 * Every segment continuous with Seed through nodes joining exactly two runway segments -
-	 * the same walk RunwayExtentAt makes to find the thresholds, returning the segments it
-	 * walked rather than the ends. Empty when Seed is not a live runway. Includes Seed.
+	 * Every segment continuous with Seed through nodes joining exactly two runway segments,
+	 * returning the segments walked rather than the ends - RunwayExtentAt reads its
+	 * thresholds off this chain. Empty when Seed is not a live runway. Includes Seed.
 	 *
 	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
 	 * chain, a holding-position names one, and the arbiter expands it here - so an exit added to a
@@ -106,10 +106,9 @@ public:
 	/**
 	 * RunwayChain(Seed), or a one-segment chain of just Seed when that comes back empty.
 	 *
-	 * The idiom four call sites (GroundTrafficClaims x3, RouteSearch) used to spell out
-	 * separately - Seed dropped to a taxiway under a claim still made or a bar still
-	 * placed should protect the one segment named rather than nothing at all. One
-	 * implementation instead of four copies that could stop agreeing - see #86.
+	 * Seed dropped to a taxiway under a claim still made or a bar still placed should
+	 * protect the one segment named rather than nothing at all - one implementation
+	 * instead of every caller spelling out the same fallback. See #86.
 	 */
 	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
 
