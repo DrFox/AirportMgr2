@@ -157,4 +157,16 @@ namespace ArrivalPlanner
 	 * from the SAME decision it acted on rather than a second opinion about why.
 	 */
 	AIRSIDE_API FString DescribeRefusal(const FArrivalPlan& Plan);
+
+	/**
+	 * The same sentence for a reason with no plan behind it - what a listener on the outcome
+	 * bus has, since that bus carries the reason and not the plan.
+	 *
+	 * FIGURE-FREE, and that is the difference. The plan overload can say "the runway is 900
+	 * uu and this aircraft needs 1200"; this one has neither number, and printing a zero
+	 * where a measurement belongs would be worse than omitting it. The wording still lives
+	 * in ONE switch - the plan overload defers to this and then adds its figures - so the
+	 * two cannot drift into describing the same refusal differently.
+	 */
+	AIRSIDE_API FString DescribeRefusal(EArrivalRefusal Why);
 }

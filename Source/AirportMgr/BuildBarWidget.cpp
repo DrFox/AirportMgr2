@@ -52,27 +52,23 @@ bool UBuildBarWidget::Initialize()
 	EnsureSlots();
 	BuildButtons();
 
-	// The first UI consumer of the outcome bus (systems spec §5.1): the latest notification
-	// shows above the bar. Bound here rather than polled because a notification is an event
-	// with a text, not a state to read back.
-	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
-	{
-		Runtime->GetEvents()->OnNotification.AddDynamic(this, &UBuildBarWidget::OnNotification);
-	}
+	// THE BAR IS NOT A NOTIFICATION SURFACE ANY MORE. It used to bind OnNotification to a
+	// single UTextBlock that every notification overwrote and nothing ever cleared, so two
+	// events in one second left only the second. One widget driving the tools AND showing
+	// messages is how that came about; UToastStackWidget owns the feed now.
 	return bOk;
 }
 
-float UBuildBarWidget::BarHeightFor(const UUIStyle& Style) const
+float UBuildBarWidget::BarHeightFor(const UUIStyle& Style)
 {
 	// DERIVED, so raising ButtonSize in the asset does not crop the buttons off the bottom
-	// of the screen. BarHeight survives as a floor, not as the height - see its declaration.
-	// Each term names the band it pays for, so a layout change here is one line, not a
-	// re-measured magic number.
-	const float StatusStrip = 8.0f * 2.0f + 18.0f;                  // padding + the clock line
-	const float SectionFrame = Style.SectionPadding * 2.0f + 8.0f;  // row padding + frame padding
+	// of the screen. Each term names the band it pays for, so a layout change here is one
+	// line rather than a re-measured magic number.
+	const float StatusStrip = 6.0f * 2.0f + 20.0f;                  // padding + the clock line
+	const float SectionFrame = 6.0f * 2.0f + 6.0f;                  // row padding + frame padding
 	const float Heading = 15.0f;                                    // the section's name
 	const float ButtonStack = Style.ButtonSize * 0.5f + 25.0f;      // icon + label + button padding
-	return FMath::Max(static_cast<float>(BarHeight), StatusStrip + SectionFrame + Heading + ButtonStack);
+	return StatusStrip + SectionFrame + Heading + ButtonStack;
 }
 
 void UBuildBarWidget::EnsureSlots()
@@ -83,7 +79,8 @@ void UBuildBarWidget::EnsureSlots()
 	// the asset supplies, and a code-built root would replace the designer's bar.
 	//
 	// The code-built chrome is a real bottom bar, not a placeholder: a canvas with the bar
-	// anchored to the bottom edge and the notification line above it. Python cannot author
+	// anchored to the bottom edge. The feed that used to sit above it is UToastStackWidget's
+	// now, and is a separate widget for exactly that reason. Python cannot author
 	// the Blueprint on this engine build (UWidgetBlueprint::WidgetTree is not a scriptable
 	// property), so this IS the default look, and a Blueprint is an optional restyle.
 	UHorizontalBox* ToolsRow = nullptr;
@@ -92,17 +89,8 @@ void UBuildBarWidget::EnsureSlots()
 		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("FallbackRoot"));
 		WidgetTree->RootWidget = Root;
 
-		const float Height = BarHeightFor(*Style);
-
-		if (NotificationText == nullptr)
-		{
-			NotificationText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("NotificationText"));
-			UCanvasPanelSlot* NoteSlot = Root->AddChildToCanvas(NotificationText);
-			NoteSlot->SetAnchors(FAnchors(0.5f, 1.0f, 0.5f, 1.0f));
-			NoteSlot->SetAlignment(FVector2D(0.5, 1.0));
-			NoteSlot->SetAutoSize(true);
-			NoteSlot->SetPosition(FVector2D(0.0, -Height - 16.0));
-		}
+		// BarHeight is the floor; the style's own metrics decide the rest.
+		const float Height = FMath::Max(static_cast<float>(BarHeight), BarHeightFor(*Style));
 
 		UBorder* Border = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("BarBorder"));
 		Border->SetBrushColor(Style->PanelDark);
@@ -423,14 +411,6 @@ void UBuildBarWidget::RefreshClock()
 	ClockText->SetText(FText::FromString(FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
 		Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
 		Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""))));
-}
-
-void UBuildBarWidget::OnNotification(const FString& Text)
-{
-	if (NotificationText != nullptr)
-	{
-		NotificationText->SetText(FText::FromString(Text));
-	}
 }
 
 int32 UBuildBarWidget::ButtonCountForTest(EActionSection Section) const

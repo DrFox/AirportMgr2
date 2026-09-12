@@ -54,7 +54,7 @@ public:
  * TO RESTYLE IN THE DESIGNER: make a Widget Blueprint with this class as parent, give it
  * any layout you like, and name the panels you want filled TimeSection, ToolsSection,
  * EditSection, AircraftSection, SelectionSection, GameSection (any UPanelWidget; a HorizontalBox gets padded
- * slots) plus TextBlocks ClockText and NotificationText. Set it as BuildBarClass on the
+ * slots) plus a TextBlock named ClockText. Set it as BuildBarClass on the
  * controller (DefaultGame.ini, [/Script/AirportMgr.RoadBuildController]). Sections you
  * leave out are built in code and a warning names them. Authoring that asset from Python
  * was tried and is not possible on this engine build: UWidgetBlueprint::WidgetTree is not
@@ -74,7 +74,6 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> SelectionSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> GameSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ClockText;
-	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> NotificationText;
 
 	/**
 	 * The upper row: clock, the time controls, and the reserved ledger slot.
@@ -98,6 +97,15 @@ public:
 	/** Runs an action by registry index on the owning controller. Called by entries. */
 	void RunAction(int32 ActionIndex);
 
+	/**
+	 * How tall the two rows need to be for this style, before BarHeight's floor is applied.
+	 *
+	 * PUBLIC AND STATIC because the bar is not the only thing that needs the answer: the
+	 * toast stack floats above it and would sit behind it the moment ButtonSize changed, if
+	 * it carried its own copy of this arithmetic. One formula, two consumers, no drift.
+	 */
+	static float BarHeightFor(const UUIStyle& Style);
+
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
 
@@ -120,15 +128,10 @@ private:
 	bool bBuilt = false;
 
 	ARoadBuildController* Controller() const;
-
-	/** How tall the two rows need to be for this style. BarHeight is the floor. */
-	float BarHeightFor(const UUIStyle& Style) const;
-
 	UPanelWidget* SectionPanel(EActionSection Section) const;
 	void EnsureSlots();
 	void BuildButtons();
 	void RefreshState();
 	void RefreshClock();
 
-	UFUNCTION() void OnNotification(const FString& Text);
 };
