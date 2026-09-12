@@ -82,4 +82,7 @@ protected:
 private:
 	/** So a missing Sun warns once rather than every frame. */
 	bool bWarnedAboutMissingSun = false;
+
+	/** Last elevation written to the log, so the trail is movements and not every tick. */
+	double LastLoggedElevation = -1000.0;
 };

@@ -66,10 +66,31 @@ void ASunDriver::ApplyToSun()
 	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
 	const USimClock* Clock = Runtime != nullptr ? Runtime->GetClock() : nullptr;
 
-	const FSunLighting Lighting = MakePath().At(ResolveDayFraction(Clock));
+	const double DayFraction = ResolveDayFraction(Clock);
+	const FSunLighting Lighting = MakePath().At(DayFraction);
 	Sun->SetActorRotation(Lighting.Rotation);
 	Component->SetTemperature(Lighting.TemperatureKelvin);
 	Component->SetIntensity(Lighting.Intensity);
+
+	// A TRAIL, NOT A SPAM. Logging every tick would bury the log; logging only at BeginPlay
+	// would prove the driver ran once and nothing about whether it keeps up with the clock.
+	// Two degrees of elevation is roughly eight minutes of game time at this curve's
+	// steepest, so the trail is a handful of lines per game day and each one is a real
+	// movement. Without it "the sun is not moving" is a guess about a clock, a subsystem,
+	// a tick and a curve at once.
+	const double Elevation = -Lighting.Rotation.Pitch;
+	if (FMath::Abs(Elevation - LastLoggedElevation) >= 2.0)
+	{
+		LastLoggedElevation = Elevation;
+		UE_LOG(LogSunDriver, Log,
+			TEXT("Sun at day fraction %.4f (%02d:%02d): elevation %.1f, azimuth %.1f, "
+			     "intensity %.2f, %.0fK%s"),
+			DayFraction,
+			static_cast<int32>(DayFraction * 24.0),
+			static_cast<int32>(FMath::Fmod(DayFraction * 1440.0, 60.0)),
+			Elevation, Lighting.Rotation.Yaw, Lighting.Intensity, Lighting.TemperatureKelvin,
+			Clock == nullptr ? TEXT(" (NO CLOCK - parked at noon)") : TEXT(""));
+	}
 }
 
 void ASunDriver::BeginPlay()
