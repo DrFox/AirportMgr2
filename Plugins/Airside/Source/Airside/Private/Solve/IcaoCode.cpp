@@ -42,9 +42,15 @@ namespace IcaoCode
 		const FRow* Nearest = &Rows[0];
 		for (const FRow& Row : Rows)
 		{
-			// <=, not <: on a tie (D and E both 45 m) the LATER row wins, which is the
-			// wider letter - the figure the shared width was actually chosen for.
-			if (FMath::Abs(Row.RunwayWidth - TotalWidth) <= FMath::Abs(Nearest->RunwayWidth - TotalWidth))
+			const double Dist = FMath::Abs(Row.RunwayWidth - TotalWidth);
+			const double BestDist = FMath::Abs(Nearest->RunwayWidth - TotalWidth);
+
+			// Strictly nearer wins outright. A TIE only breaks toward the later row when
+			// both rows share the same RunwayWidth (D and E, both 45 m) - there the wider
+			// letter is the figure that width was actually chosen for. A tie between rows
+			// of DIFFERENT widths (an odd width exactly between two codes) keeps the
+			// earlier, narrower one, as it always has.
+			if (Dist < BestDist || (Dist == BestDist && Row.RunwayWidth == Nearest->RunwayWidth))
 			{
 				Nearest = &Row;
 			}

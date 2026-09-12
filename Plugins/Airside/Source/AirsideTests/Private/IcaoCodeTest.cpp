@@ -34,6 +34,13 @@ bool FIcaoCodeTest::RunTest(const FString& Parameters)
 		// width was actually chosen for (see the table's own comment).
 		TestEqual(TEXT("45 m resolves to E, the wider of the two it serves"),
 			IcaoCode::MaxWingspanForWidth(4500.0), 6500.0);
+
+		// 26.5 m is equidistant between B (23 m) and C (30 m) - two DIFFERENT widths, not
+		// one width shared by two letters, so this tie keeps the EARLIER, narrower row
+		// rather than reusing the D/E rule. Pinned so that rule cannot drift to cover ties
+		// it was never meant for.
+		TestEqual(TEXT("an odd width exactly between two different codes keeps the earlier one"),
+			IcaoCode::MaxWingspanForWidth(2650.0), 2400.0);
 	}
 
 	// 3. RADIUS FOR LETTER. Case-insensitive, and an unrecognised letter falls back to C
