@@ -57,7 +57,7 @@ namespace InspectFacts
 		{
 			return FString::Printf(TEXT("Holding for aircraft %d"), Agent.WaitingOn);
 		}
-		if (Agent.CrossingPhase != ECrossingPhase::None)
+		if (Agent.IsCrossing())
 		{
 			return TEXT("Crossing runway");
 		}

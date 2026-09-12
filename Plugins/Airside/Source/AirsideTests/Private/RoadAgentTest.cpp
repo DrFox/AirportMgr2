@@ -254,4 +254,71 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+// Issue #82: FRoadAgent's own invariant-preserving methods, called directly rather than
+// through a whole claim pass - each one fails if the method is unwired or writes only half
+// of the pair it promises to keep together.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAgentInvariantMethodsTest,
+	"Airside.Model.RoadAgent.InvariantMethods",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
+{
+	FRoadAgent Agent;
+
+	// BeginCrossing: CrossingRunway and CrossingPhase move together. Read back through the
+	// getters, since issue #82 also made both fields private.
+	FRoadSegmentId Seed;
+	Seed.Index = 3;
+	Agent.BeginCrossing(Seed, ECrossingPhase::Committed);
+	TestTrue(TEXT("BeginCrossing arms IsCrossing()"), Agent.IsCrossing());
+	TestEqual(TEXT("BeginCrossing sets the phase asked for"),
+		Agent.GetCrossingPhase(), ECrossingPhase::Committed);
+	TestTrue(TEXT("BeginCrossing sets the seed asked for"),
+		Agent.GetCrossingRunway() == Seed);
+
+	// Advancing a crossing (Committed -> OnStrip) is the same call with the same seed - not a
+	// bare phase write - so the seed survives the transition too.
+	Agent.BeginCrossing(Seed, ECrossingPhase::OnStrip);
+	TestEqual(TEXT("BeginCrossing again advances the phase"),
+		Agent.GetCrossingPhase(), ECrossingPhase::OnStrip);
+	TestTrue(TEXT("and keeps the same seed"), Agent.GetCrossingRunway() == Seed);
+
+	// EndCrossing: both fields go back to unset/None together.
+	Agent.EndCrossing();
+	TestFalse(TEXT("EndCrossing clears IsCrossing()"), Agent.IsCrossing());
+	TestEqual(TEXT("EndCrossing clears the phase"), Agent.GetCrossingPhase(), ECrossingPhase::None);
+	TestFalse(TEXT("EndCrossing clears the seed"), Agent.GetCrossingRunway().IsSet());
+
+	// ClearArbitration: StopWithin, WaitingOn and BlockedStep reset; LastOverlaps is
+	// deliberately NOT touched - see the declaration - so a caller that just computed it
+	// this pass is not stomped by calling this afterwards.
+	Agent.StopWithin = 1234.0;
+	Agent.WaitingOn = 7;
+	Agent.BlockedStep = 2;
+	Agent.LastOverlaps = { 9 };
+	Agent.ClearArbitration();
+	TestEqual(TEXT("ClearArbitration resets StopWithin to unbounded"),
+		Agent.StopWithin, TNumericLimits<double>::Max());
+	TestEqual(TEXT("ClearArbitration resets WaitingOn"), Agent.WaitingOn, 0);
+	TestEqual(TEXT("ClearArbitration resets BlockedStep"), Agent.BlockedStep, INDEX_NONE);
+	TestEqual(TEXT("ClearArbitration leaves LastOverlaps alone"), Agent.LastOverlaps.Num(), 1);
+
+	// SetGoalFrom: the goal follows a plan's own last step.
+	FRoutePlan Plan = StraightPlan(FVector2D(0.0, 0.0), FVector2D(1000.0, 0.0));
+	FRouteStep Step;
+	Step.To.Index = 5;
+	Plan.Steps.Add(Step);
+	Agent.SetGoalFrom(Plan);
+	TestTrue(TEXT("SetGoalFrom takes the last step's To"), Agent.GoalNode == Step.To);
+
+	// An empty plan clears the goal rather than leaving a stale one - the ternary's other arm.
+	FRoutePlan Empty;
+	Agent.SetGoalFrom(Empty);
+	TestFalse(TEXT("SetGoalFrom clears the goal when the plan has no steps"), Agent.GoalNode.IsSet());
+
+	return true;
+}
+
 #endif

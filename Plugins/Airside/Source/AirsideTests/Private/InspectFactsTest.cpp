@@ -103,7 +103,11 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 		Scripted.bDepartureArmed = true;
 		TestEqual(TEXT("armed departure outranks holding"), InspectFacts::StatusOf(Scripted), FString(TEXT("Departure armed")));
 		Scripted.bDepartureArmed = false; Scripted.WaitingOn = 0;
-		Scripted.CrossingPhase = ECrossingPhase::OnStrip;
+		// The seed's value does not matter to StatusOf - only IsCrossing() does - but
+		// BeginCrossing needs one to keep CrossingRunway/CrossingPhase together (issue #82).
+		FRoadSegmentId ScriptedRunway;
+		ScriptedRunway.Index = 0;
+		Scripted.BeginCrossing(ScriptedRunway, ECrossingPhase::OnStrip);
 		TestEqual(TEXT("crossing"), InspectFacts::StatusOf(Scripted), FString(TEXT("Crossing runway")));
 	}
 

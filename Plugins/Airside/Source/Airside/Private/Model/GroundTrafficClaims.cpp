@@ -80,9 +80,7 @@ void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Netwo
 	// agent taxied. A parked aircraft still naming the vehicle it once queued behind
 	// would feed Task 8's wait-for graph an edge out of an agent that is not waiting for
 	// anything, and a cycle through it would be a phantom nobody could resolve.
-	Agent.StopWithin = TNumericLimits<double>::Max();
-	Agent.WaitingOn = 0;
-	Agent.BlockedStep = INDEX_NONE;
+	Agent.ClearArbitration();
 	Agent.LastOverlaps.Reset();
 
 	TArray<FTrafficResource> Surfaces;
@@ -172,9 +170,7 @@ void UGroundTraffic::ReleaseForDeadPlan(FRoadAgent& Agent)
 	// taxiway under a crossing aeroplane has an aeroplane on the runway, and the table says
 	// so until they retire it.
 
-	Agent.StopWithin = TNumericLimits<double>::Max();
-	Agent.WaitingOn = 0;
-	Agent.BlockedStep = INDEX_NONE;
+	Agent.ClearArbitration();
 	Agent.LastOverlaps.Reset();
 }
 
@@ -318,8 +314,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 
 		if (bOntoStrip)
 		{
-			Agent.CrossingRunway = Bar;
-			Agent.CrossingPhase = ECrossingPhase::Committed;
+			Agent.BeginCrossing(Bar, ECrossingPhase::Committed);
 		}
 	}
 
@@ -330,7 +325,9 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	if (Agent.CrossingPhase == ECrossingPhase::Committed && Agent.CrossingRunway.IsSet()
 		&& bHaveBody && Network.IsPointOnRunway(CentrePoint, Agent.CrossingRunway))
 	{
-		Agent.CrossingPhase = ECrossingPhase::OnStrip;
+		// SAME SEED, NEW PHASE: BeginCrossing again rather than the phase alone, so the pair
+		// is written together even on this advance-in-place transition.
+		Agent.BeginCrossing(Agent.CrossingRunway, ECrossingPhase::OnStrip);
 	}
 
 	// 0c. RELEASED once the TAIL is off the strip, and not one metre before.
@@ -379,8 +376,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 
 		if (bClear)
 		{
-			Agent.CrossingRunway = FRoadSegmentId();
-			Agent.CrossingPhase = ECrossingPhase::None;
+			Agent.EndCrossing();
 
 			// THE RELEASE LINE LIVES HERE, not at the Vacated handover where it started:
 			// vacating no longer gives the runway back, it hands it to this rule, and a
@@ -833,9 +829,9 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 
 	if (!bHeld)
 	{
-		Agent.StopWithin = TNumericLimits<double>::Max();
-		Agent.WaitingOn = 0;
-		Agent.BlockedStep = INDEX_NONE;
+		// LastOverlaps is NOT reset here: it was already assigned this pass's real value just
+		// above, and ClearArbitration deliberately leaves it alone - see the declaration.
+		Agent.ClearArbitration();
 		if (WasWaitingOn != 0)
 		{
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d resumes"), Agent.Id);

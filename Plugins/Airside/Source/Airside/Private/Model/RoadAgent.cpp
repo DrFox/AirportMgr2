@@ -2,6 +2,36 @@
 
 #include "AirsideLog.h"
 
+void FRoadAgent::ClearArbitration()
+{
+	// See the declaration for why LastOverlaps is not touched here: some callers reset it
+	// alongside this, one has already overwritten it with a freshly computed list.
+	StopWithin = TNumericLimits<double>::Max();
+	WaitingOn = 0;
+	BlockedStep = INDEX_NONE;
+}
+
+void FRoadAgent::BeginCrossing(FRoadSegmentId Seed, ECrossingPhase InPhase)
+{
+	// InPhase != None IS THE WHOLE INVARIANT (see CrossingPhase): EndCrossing is the call for
+	// leaving a crossing, so this is never asked to arm "no crossing" with a seed attached.
+	checkf(InPhase != ECrossingPhase::None,
+		TEXT("BeginCrossing needs a real phase; call EndCrossing to leave a crossing"));
+	CrossingRunway = Seed;
+	CrossingPhase = InPhase;
+}
+
+void FRoadAgent::EndCrossing()
+{
+	CrossingRunway = FRoadSegmentId();
+	CrossingPhase = ECrossingPhase::None;
+}
+
+void FRoadAgent::SetGoalFrom(const FRoutePlan& Plan)
+{
+	GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : FGuidelineNodeId();
+}
+
 void FRoadAgent::StartEngineAtSpeed()
 {
 	bEngineRunning = true;
