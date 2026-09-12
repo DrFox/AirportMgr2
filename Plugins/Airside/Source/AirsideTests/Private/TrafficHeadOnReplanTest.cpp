@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Entities/AircraftType.h"
@@ -15,23 +16,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2HeadOnTest, Log, All);
 
 namespace
 {
-	// Prefixed against the unity build: GroundTrafficTest.cpp and HoldingPositionMarkTest.cpp
-	// own the unprefixed names.
-
-	/** The guideline node derived for one end of Segment, or unset. */
-	FGuidelineNodeId M2HeadOnNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-
 	FAirframe M2HeadOnPiper()
 	{
 		FAirframe A;
@@ -140,10 +124,10 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	}
 
 	// The bars the player placed: both arms at W, and both approaches to the crossing at X.
-	const FGuidelineNodeId H = M2HeadOnNodeFor(*Net, T1, /*bEndA=*/true);
-	const FGuidelineNodeId H2 = M2HeadOnNodeFor(*Net, Top1, /*bEndA=*/true);
-	const FGuidelineNodeId Hn = M2HeadOnNodeFor(*Net, N2X, /*bEndA=*/false);
-	const FGuidelineNodeId Hs = M2HeadOnNodeFor(*Net, XB, /*bEndA=*/true);
+	const FGuidelineNodeId H = TestGraph::NodeFor(*Net, T1, /*bEndA=*/true);
+	const FGuidelineNodeId H2 = TestGraph::NodeFor(*Net, Top1, /*bEndA=*/true);
+	const FGuidelineNodeId Hn = TestGraph::NodeFor(*Net, N2X, /*bEndA=*/false);
+	const FGuidelineNodeId Hs = TestGraph::NodeFor(*Net, XB, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the four bar nodes exist"), H.IsSet() && H2.IsSet() && Hn.IsSet() && Hs.IsSet())) { return false; }
 	// DERIVED, not placed (2026-09-07): every taxiway end at the runway is a runway-holding
 	// position the moment the builder runs, ExitLength or no ExitLength.
@@ -157,10 +141,10 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("holding position north of the crossing, derived"), IsRunwayPosition(Hn));
 	TestTrue(TEXT("holding position south of the crossing, derived"), IsRunwayPosition(Hs));
 
-	const FGuidelineNodeId RunwayW = M2HeadOnNodeFor(*Net, RW1, true);     // the threshold's own node
-	const FGuidelineNodeId RunwayX = M2HeadOnNodeFor(*Net, RW1, false);    // RW1's node at the crossing
-	const FGuidelineNodeId Bottom = M2HeadOnNodeFor(*Net, T1, false);      // T1's S1 end
-	const FGuidelineNodeId Goal = M2HeadOnNodeFor(*Net, S1G, false);       // S1->G's G end, the stand side
+	const FGuidelineNodeId RunwayW = TestGraph::NodeFor(*Net, RW1, true);     // the threshold's own node
+	const FGuidelineNodeId RunwayX = TestGraph::NodeFor(*Net, RW1, false);    // RW1's node at the crossing
+	const FGuidelineNodeId Bottom = TestGraph::NodeFor(*Net, T1, false);      // T1's S1 end
+	const FGuidelineNodeId Goal = TestGraph::NodeFor(*Net, S1G, false);       // S1->G's G end, the stand side
 	if (!TestTrue(TEXT("the route endpoints exist"), RunwayW.IsSet() && RunwayX.IsSet() && Bottom.IsSet() && Goal.IsSet())) { return false; }
 
 	// THE ARRIVAL'S FIXED ROUTE: along the runway to W, then the west taxiway - built the way

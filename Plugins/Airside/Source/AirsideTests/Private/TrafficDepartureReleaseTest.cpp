@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
@@ -15,12 +16,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2DepTest, Log, All);
 
 namespace
 {
-	// Prefixed against the unity build.
-	FGuidelineNodeId M2DepNode(URoadNetwork& Net, double X, double Y)
-	{
-		return Net.AddGuidelineNode(FVector2D(X, Y), /*bDerived=*/false);
-	}
-
 	FAirframe M2DepPiper()
 	{
 		FAirframe A;
@@ -57,8 +52,8 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 	const FRoadSegmentId Near = Net->AddStraightSegment(RA, RM, Runway);
 	const FRoadSegmentId Far = Net->AddStraightSegment(RM, RB, Runway);
 
-	const FGuidelineNodeId A = M2DepNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId B = M2DepNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
 	{
 		FGuidelineEdge Edge;
 		Edge.A = A; Edge.B = B;

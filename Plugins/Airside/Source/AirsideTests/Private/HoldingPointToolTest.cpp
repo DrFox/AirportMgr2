@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
@@ -49,21 +50,6 @@ namespace
 		}
 	};
 
-	/** The guideline node derived for one end of Segment, or unset. */
-	FGuidelineNodeId M2HoldToolNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment
-				&& Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-
 	EHoldingPositionKind M2HoldToolKind(const URoadNetwork& Net, FGuidelineNodeId Node)
 	{
 		const FGuidelineNode* Found = Net.GetGuidelineNode(Node);
@@ -86,13 +72,9 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 	// A REAL WORLD AND A REAL ACTOR, not the model alone: the claim under test reaches
 	// through the facade to the undo stack, and a position placed on a URoadNetwork by
 	// hand would prove nothing about whether the player can take it back.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 	// Far from everything the test then builds, so it snaps to nothing: it exists only to
 	// make the facade construct its network before the model edits below.
@@ -116,8 +98,8 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 	Net.AddStraightSegment(X, Y, Taxiway);
 	Actor->RebuildMesh();
 
-	const FGuidelineNodeId RunwayEnd = M2HoldToolNodeFor(Net, Tx, true);
-	const FGuidelineNodeId Junction = M2HoldToolNodeFor(Net, Tx, false);
+	const FGuidelineNodeId RunwayEnd = TestGraph::NodeFor(Net, Tx, true);
+	const FGuidelineNodeId Junction = TestGraph::NodeFor(Net, Tx, false);
 	if (!TestTrue(TEXT("both taxiway end nodes exist"), RunwayEnd.IsSet() && Junction.IsSet())) { return false; }
 	TestTrue(TEXT("the runway end is a derived runway-holding position before any click"),
 		M2HoldToolKind(Net, RunwayEnd) == EHoldingPositionKind::Runway);
@@ -193,18 +175,18 @@ bool FHoldingPointToolTest::RunTest(const FString& Parameters)
 	//    Actor->Network each time rather than through a handle captured before the snapshot.
 	TestTrue(TEXT("undoable"), Actor->Undo());
 	TestTrue(TEXT("undo clears it"),
-		M2HoldToolKind(*Actor->Network, M2HoldToolNodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
+		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
 	TestTrue(TEXT("and undo never touched the derived runway end"),
-		M2HoldToolKind(*Actor->Network, M2HoldToolNodeFor(*Actor->Network, Tx, true)) == EHoldingPositionKind::Runway);
+		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, true)) == EHoldingPositionKind::Runway);
 	TestTrue(TEXT("redo"), Actor->Redo());
 	TestTrue(TEXT("redo restores it"),
-		M2HoldToolKind(*Actor->Network, M2HoldToolNodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::Intermediate);
+		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::Intermediate);
 
 	// 4. A SECOND CLICK CLEARS.
-	Ctx.Cursor = Actor->Network->GetGuidelineNode(M2HoldToolNodeFor(*Actor->Network, Tx, false))->Position;
+	Ctx.Cursor = Actor->Network->GetGuidelineNode(TestGraph::NodeFor(*Actor->Network, Tx, false))->Position;
 	Tool.OnClick(Ctx);
 	TestTrue(TEXT("second click clears"),
-		M2HoldToolKind(*Actor->Network, M2HoldToolNodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
+		M2HoldToolKind(*Actor->Network, TestGraph::NodeFor(*Actor->Network, Tx, false)) == EHoldingPositionKind::None);
 
 	return true;
 }

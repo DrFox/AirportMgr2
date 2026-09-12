@@ -1,8 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
@@ -58,12 +57,9 @@ bool FRunwayToolTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the content set is configured (DefaultAirside.ini)"), Content)) { return false; }
 	if (!TestTrue(TEXT("and names at least two runway widths"), Content->RunwayProfiles.Num() >= 2)) { return false; }
 
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
-	WorldContext.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D(0.0, 90000.0));   // brings the network into being; contributes no surface
 

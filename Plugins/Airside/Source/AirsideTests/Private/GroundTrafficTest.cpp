@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -22,22 +23,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2TrafficTest, Log, All);
 
 namespace
 {
-	FGuidelineNodeId M2TrafficNode(URoadNetwork& Net, double X, double Y)
-	{
-		return Net.AddGuidelineNode(FVector2D(X, Y), /*bDerived=*/false);
-	}
-
-	FGuidelineEdgeId M2TrafficJoin(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B,
-		EGuidelineDir Direction = EGuidelineDir::Bidirectional)
-	{
-		FGuidelineEdge Edge;
-		Edge.A = A; Edge.B = B;
-		Edge.Control = (Net.GetGuidelineNode(A)->Position + Net.GetGuidelineNode(B)->Position) * 0.5;
-		Edge.AllowedTraffic = FTrafficMask::All();
-		Edge.Direction = Direction;
-		return Net.AddGuidelineEdge(MoveTemp(Edge));
-	}
-
 	FRoutePlan M2TrafficRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
 	{
 		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = Class;
@@ -114,19 +99,6 @@ namespace
 		FAnchorLink::Build(*Net);
 		return Net;
 	}
-
-	/** Ticks until Seconds elapse or Callback returns false. Returns ticks run. */
-	template <typename F>
-	int32 M2TrafficRun(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds, F Callback, double Dt = 0.05)
-	{
-		int32 Ticks = 0;
-		for (double Clock = 0.0; Clock < Seconds; Clock += Dt, ++Ticks)
-		{
-			Traffic.Advance(Dt, &Net);
-			if (!Callback(Ticks)) { break; }
-		}
-		return Ticks;
-	}
 }
 
 // ---------------------------------------------------------------------------------------
@@ -140,13 +112,13 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	// A crossing: aircraft west->east through J, van south->north through J, both 20 km
 	// out so they reach J in the same second. Spec 3.8: the vehicle yields by class.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
-	const FGuidelineNodeId E = M2TrafficNode(*Net, 20000.0, 0.0);
-	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
-	M2TrafficJoin(*Net, W, J); M2TrafficJoin(*Net, J, E);
-	M2TrafficJoin(*Net, S, J); M2TrafficJoin(*Net, J, N);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	TestGraph::Join(*Net, W, J); TestGraph::Join(*Net, J, E);
+	TestGraph::Join(*Net, S, J); TestGraph::Join(*Net, J, N);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
@@ -159,7 +131,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	double VanMinSpeedWhileWaiting = TNumericLimits<double>::Max();
 	int32 VanBlockedTicks = 0;
 	bool bVanWaitedOnPlane = false;
-	const int32 Ticks = M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	const int32 Ticks = TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* P = Traffic->FindAgent(Plane);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
@@ -228,13 +200,13 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 {
 	// Same crossing, but J says vehicles first (spec 5.4's per-node exception).
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
-	const FGuidelineNodeId E = M2TrafficNode(*Net, 20000.0, 0.0);
-	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
-	M2TrafficJoin(*Net, W, J); M2TrafficJoin(*Net, J, E);
-	M2TrafficJoin(*Net, S, J); M2TrafficJoin(*Net, J, N);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	TestGraph::Join(*Net, W, J); TestGraph::Join(*Net, J, E);
+	TestGraph::Join(*Net, S, J); TestGraph::Join(*Net, J, N);
 	Net->GetGuidelineNodeMutable(J)->PriorityOverride = { ETraversalClass::GroundVehicle, ETraversalClass::Aircraft };
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -243,7 +215,7 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 
 	bool bPlaneWaitedOnVan = false;
 	bool bVanWaitedOnPlane = false;
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* P = Traffic->FindAgent(Plane);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
@@ -269,9 +241,9 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 	// Spec 3.8: "the agent ahead's reservation is the stop point" - the follower must never
 	// close inside footprint + gap, and must never pass.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 60000.0, 0.0);
-	M2TrafficJoin(*Net, A, B);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 60000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
 	const FRoutePlan Plan = M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -288,7 +260,7 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 	// anything this class did. Both are logged; the assertion uses the second.
 	double MinGapUnderWay = TNumericLimits<double>::Max();
 	bool bFollowerCaughtUp = false;
-	const int32 Ticks = M2TrafficRun(*Traffic, *Net, 200.0, [&](int32 Tick)
+	const int32 Ticks = TickUntil(*Traffic, *Net, 200.0, [&](int32 Tick)
 	{
 		if (Tick == 40) { Follow = Traffic->DispatchAgent(Net, Plan, M2TrafficPlane(), ETraversalClass::Aircraft, 1.0); }
 		const FRoadAgent* L = Traffic->FindAgent(Lead);
@@ -330,14 +302,14 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	// Nose to nose on a bidirectional taxiway with nowhere to turn. Both must STOP - the
 	// pass-through-each-other defect the follower's header names. Resolution is Task 8's.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 40000.0, 0.0);
-	M2TrafficJoin(*Net, A, B);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 40000.0, 0.0);
+	TestGraph::Join(*Net, A, B);
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 P1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
 	const int32 P2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, A, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
 	double MinSeparation = TNumericLimits<double>::Max();
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* X = Traffic->FindAgent(P1);
 		const FRoadAgent* Y = Traffic->FindAgent(P2);
@@ -408,12 +380,12 @@ bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
 	// reservation the wait-for graph is a fan into one van rather than a cycle, and Task 8
 	// would find nothing to resolve.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 600.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 300.0, 519.6);
-	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, A, EGuidelineDir::AToB);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 600.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 300.0, 519.6);
+	TestGraph::Join(*Net, A, B, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, B, C, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, C, A, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
@@ -445,7 +417,7 @@ bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
 
 	// A second's worth of ticks changes nothing: this is a deadlock, and until Task 8 lands
 	// nothing is entitled to resolve it. Anyone who moved has driven into a junction.
-	M2TrafficRun(*Traffic, *Net, 1.0, [](int32) { return true; });
+	TickUntil(*Traffic, *Net, 1.0, [](int32) { return true; });
 	for (const int32 Id : { V1, V2, V3 })
 	{
 		const FRoadAgent* Van = Traffic->FindAgent(Id);
@@ -483,15 +455,15 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	// too. What makes THIS one discriminating is the pair of figures measured below: 20500
 	// offered while the van is still on the run-up, where the chained rule offers 20100.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId N0 = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N1 = M2TrafficNode(*Net, 20000.0, 0.0);
-	const FGuidelineNodeId N2 = M2TrafficNode(*Net, 20400.0, 0.0);
-	const FGuidelineNodeId N3 = M2TrafficNode(*Net, 20800.0, 0.0);
-	const FGuidelineNodeId N4 = M2TrafficNode(*Net, 21200.0, 0.0);
-	M2TrafficJoin(*Net, N0, N1, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, N1, N2, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, N2, N3, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, N3, N4, EGuidelineDir::AToB);
+	const FGuidelineNodeId N0 = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N1 = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId N2 = TestGraph::Node(*Net, 20400.0, 0.0);
+	const FGuidelineNodeId N3 = TestGraph::Node(*Net, 20800.0, 0.0);
+	const FGuidelineNodeId N4 = TestGraph::Node(*Net, 21200.0, 0.0);
+	TestGraph::Join(*Net, N0, N1, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, N1, N2, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, N2, N3, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, N3, N4, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, N0, N4, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
@@ -513,7 +485,7 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	double EarliestStopPointOffered = TNumericLimits<double>::Max();
 	bool bBlockedBeforeTheBoxes = false;
 	bool bStoppedBeforeTheBoxes = false;
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
 	{
 		const FRoadAgent* Agent = Traffic->FindAgent(Van);
 		if (Agent == nullptr) { return false; }
@@ -574,11 +546,11 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
 	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
 
-	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId H = M2TrafficNode(*Net, 0.0, -3000.0);
-	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X); M2TrafficJoin(*Net, X, N);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId H = TestGraph::Node(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId X = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, S, H); TestGraph::Join(*Net, H, X); TestGraph::Join(*Net, X, N);
 	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -596,7 +568,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	// the claim is raised only once the window reaches the node, so before that nothing but
 	// the phantom holds the strip. Excluding 99 asks "does anyone ELSE hold it".
 	bool bRunwayFreeEarly = false;
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q->Follower.Travelled < 10000.0
@@ -632,7 +604,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	// in which the plane holds the surface for the BAR's reason rather than the crossing's.
 	bool bSawBarClaim = false;
 	bool bBarClaimWasOccupied = false;
-	M2TrafficRun(*Traffic, *Net, 5.0, [&](int32)
+	TickUntil(*Traffic, *Net, 5.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q->Follower.Travelled >= 16999.0)
@@ -652,7 +624,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the plane claims the strip at the bar"), bSawBarClaim);
 	TestFalse(TEXT("and that claim is a RESERVATION: nobody is occupied through a bar"), bBarClaimWasOccupied);
 
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
+	TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
 	TestEqual(TEXT("released, it crosses and arrives"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
 	return true;
 }
@@ -757,9 +729,9 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
 	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
 
-	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId H = M2TrafficNode(*Net, 0.0, -3000.0);
-	const FGuidelineNodeId X = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId H = TestGraph::Node(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId X = TestGraph::Node(*Net, 0.0, 0.0);
 
 	// A SECOND BAR ON THE FAR SIDE, protecting the SAME runway, because that is how a
 	// crossing is actually painted - one bar each side - and it is the case that broke the
@@ -768,10 +740,10 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// update written over the old one wholesale: without the skip in ClaimAhead the
 	// reservation replaced the occupancy, and a landing could then preempt an aeroplane
 	// standing on the centreline.
-	const FGuidelineNodeId Far = M2TrafficNode(*Net, 0.0, 3000.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, S, H); M2TrafficJoin(*Net, H, X);
-	M2TrafficJoin(*Net, X, Far); M2TrafficJoin(*Net, Far, N);
+	const FGuidelineNodeId Far = TestGraph::Node(*Net, 0.0, 3000.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, S, H); TestGraph::Join(*Net, H, X);
+	TestGraph::Join(*Net, X, Far); TestGraph::Join(*Net, Far, N);
 	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 	Net->SetRunwayHoldingPositionForTest(Far, RunwaySeg);
 
@@ -812,7 +784,7 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	bool bRebuiltMidCrossing = false;
 	bool bStripHeldAcrossRebuild = false;
 
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q == nullptr) { return false; }
@@ -953,12 +925,12 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, A, B);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, A, B);
 	{
-		// Hand-built rather than through M2TrafficJoin, because DerivedFrom is the whole
+		// Hand-built rather than through TestGraph::Join, because DerivedFrom is the whole
 		// point of this fixture and the helper does not set it.
 		FGuidelineEdge Edge;
 		Edge.A = B; Edge.B = C;
@@ -977,7 +949,7 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::Aircraft), M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		return Q->Follower.Speed > 1e-6 || Q->Follower.Travelled < 1.0;
@@ -999,7 +971,7 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	Traffic->OccupancyForTest().ReleaseAll(99);
 	bool bPlaneHeldTheChain = false;
 	bool bSomebodyElseHeldIt = false;
-	M2TrafficRun(*Traffic, *Net, 180.0, [&](int32)
+	TickUntil(*Traffic, *Net, 180.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q == nullptr) { return false; }
@@ -1028,17 +1000,17 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	// A -> B -> C with a bypass B -> X -> C. A van under way on A->B is replanned at B with
 	// B->C banned: it must keep driving the SAME line to B (no jump), then take X.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 20000.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 40000.0, 0.0);
-	const FGuidelineNodeId X = M2TrafficNode(*Net, 30000.0, 15000.0);
-	M2TrafficJoin(*Net, A, B);
-	const FGuidelineEdgeId BC = M2TrafficJoin(*Net, B, C);
-	M2TrafficJoin(*Net, B, X); M2TrafficJoin(*Net, X, C);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 40000.0, 0.0);
+	const FGuidelineNodeId X = TestGraph::Node(*Net, 30000.0, 15000.0);
+	TestGraph::Join(*Net, A, B);
+	const FGuidelineEdgeId BC = TestGraph::Join(*Net, B, C);
+	TestGraph::Join(*Net, B, X); TestGraph::Join(*Net, X, C);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	M2TrafficRun(*Traffic, *Net, 8.0, [](int32) { return true; });
+	TickUntil(*Traffic, *Net, 8.0, [](int32) { return true; });
 	const FRoadAgent* V = Traffic->FindAgent(Van);
 	const FVector2D Before = V->LastMotion.Position;
 	const double SpeedBefore = V->Follower.Speed;
@@ -1078,7 +1050,7 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	// past would map the same route distance onto different geometry and put the van
 	// somewhere else on the airport in one frame. Measured here rather than argued: the van
 	// is part way along step 1, so step 0 is behind it.
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
 	{
 		Sample();
 		return Traffic->FindAgent(Van)->Follower.Travelled < 21000.0;
@@ -1097,7 +1069,7 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("at the same route distance"), V->Follower.Travelled, TravelledBehind, 1e-9);
 	TestEqual(TEXT("at the same speed"), V->Follower.Speed, SpeedBehind, 1e-9);
 
-	M2TrafficRun(*Traffic, *Net, 200.0, [&](int32)
+	TickUntil(*Traffic, *Net, 200.0, [&](int32)
 	{
 		Sample();
 		return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked;
@@ -1127,13 +1099,13 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 	// back Unreachable, and the agent must be left driving what it had - the case a deadlock
 	// resolver hits every time it bans the only line out of a dead end.
 	URoadNetwork* Dead = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId P = M2TrafficNode(*Dead, 0.0, 0.0);
-	const FGuidelineNodeId Qn = M2TrafficNode(*Dead, 20000.0, 0.0);
-	const FGuidelineEdgeId PQ = M2TrafficJoin(*Dead, P, Qn);
+	const FGuidelineNodeId P = TestGraph::Node(*Dead, 0.0, 0.0);
+	const FGuidelineNodeId Qn = TestGraph::Node(*Dead, 20000.0, 0.0);
+	const FGuidelineEdgeId PQ = TestGraph::Join(*Dead, P, Qn);
 
 	UGroundTraffic* Only = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Stuck = Only->DispatchAgent(Dead, M2TrafficRoute(*Dead, P, Qn, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-	M2TrafficRun(*Only, *Dead, 5.0, [](int32) { return true; });
+	TickUntil(*Only, *Dead, 5.0, [](int32) { return true; });
 	const double StuckAt = Only->FindAgent(Stuck)->Follower.Travelled;
 	const double StuckSpeed = Only->FindAgent(Stuck)->Follower.Speed;
 	TestTrue(TEXT("the dead-end van is under way"), StuckSpeed > 100.0);
@@ -1177,21 +1149,21 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	// whole 750 uu, the van waiting in it never released B, and the ring re-locked with no
 	// member able to turn. An escape that hugs the lane it rejoins is not an escape.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 750.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 750.0, 750.0);
-	const FGuidelineNodeId D = M2TrafficNode(*Net, 0.0, 750.0);
-	const FGuidelineNodeId X1 = M2TrafficNode(*Net, -500.0, 1250.0);
-	const FGuidelineNodeId X2 = M2TrafficNode(*Net, 1500.0, 1250.0);
-	const FGuidelineNodeId X3 = M2TrafficNode(*Net, 1500.0, 0.0);
-	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, D, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, D, A, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, D, X1, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X1, X2, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X2, X3, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X3, B, EGuidelineDir::AToB);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 750.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 750.0, 750.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 0.0, 750.0);
+	const FGuidelineNodeId X1 = TestGraph::Node(*Net, -500.0, 1250.0);
+	const FGuidelineNodeId X2 = TestGraph::Node(*Net, 1500.0, 1250.0);
+	const FGuidelineNodeId X3 = TestGraph::Node(*Net, 1500.0, 0.0);
+	TestGraph::Join(*Net, A, B, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, B, C, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, C, D, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, D, A, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, D, X1, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X1, X2, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X2, X3, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X3, B, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
@@ -1202,7 +1174,7 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("V4's first plan goes via A (2 steps), not the escape"), Traffic->FindAgent(V4)->Follower.Plan.Steps.Num(), 2);
 
 	// All four stopped, each waiting on the next, before any resolution.
-	M2TrafficRun(*Traffic, *Net, 1.0, [](int32) { return true; });
+	TickUntil(*Traffic, *Net, 1.0, [](int32) { return true; });
 	TestTrue(TEXT("V1 waits on V2"), Traffic->FindAgent(V1)->WaitingOn == V2);
 	TestTrue(TEXT("V2 waits on V3"), Traffic->FindAgent(V2)->WaitingOn == V3);
 	TestTrue(TEXT("V3 waits on V4"), Traffic->FindAgent(V3)->WaitingOn == V4);
@@ -1215,7 +1187,7 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	double MinSeparation = TNumericLimits<double>::Max();
 	TMap<int32, FVector2D> Last;
 	int32 ResolvedAtTick = -1;
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32 Tick)
+	TickUntil(*Traffic, *Net, 120.0, [&](int32 Tick)
 	{
 		bool bAllParked = true;
 		for (const FRoadAgent& Agent : Traffic->GetAgents())
@@ -1287,28 +1259,28 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	// corners exactly as in DeadlockRing - see the note on the rules below for why the
 	// aeroplane is given the vehicle's figures to make that true of it too.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 750.0, 0.0);
-	const FGuidelineNodeId C = M2TrafficNode(*Net, 750.0, 750.0);
-	const FGuidelineNodeId D = M2TrafficNode(*Net, 0.0, 750.0);
-	const FGuidelineNodeId X1 = M2TrafficNode(*Net, 1500.0, 750.0);
-	const FGuidelineNodeId X2 = M2TrafficNode(*Net, 1500.0, -1000.0);
-	const FGuidelineNodeId X3 = M2TrafficNode(*Net, 0.0, -1000.0);
-	const FGuidelineNodeId Y1 = M2TrafficNode(*Net, 750.0, -750.0);
-	const FGuidelineNodeId Y2 = M2TrafficNode(*Net, -750.0, -750.0);
-	const FGuidelineNodeId Y3 = M2TrafficNode(*Net, -750.0, 750.0);
-	M2TrafficJoin(*Net, A, B, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, B, C, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, D, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, D, A, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, C, X1, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X1, X2, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X2, X3, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, X3, A, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, B, Y1, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, Y1, Y2, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, Y2, Y3, EGuidelineDir::AToB);
-	M2TrafficJoin(*Net, Y3, D, EGuidelineDir::AToB);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 750.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 750.0, 750.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 0.0, 750.0);
+	const FGuidelineNodeId X1 = TestGraph::Node(*Net, 1500.0, 750.0);
+	const FGuidelineNodeId X2 = TestGraph::Node(*Net, 1500.0, -1000.0);
+	const FGuidelineNodeId X3 = TestGraph::Node(*Net, 0.0, -1000.0);
+	const FGuidelineNodeId Y1 = TestGraph::Node(*Net, 750.0, -750.0);
+	const FGuidelineNodeId Y2 = TestGraph::Node(*Net, -750.0, -750.0);
+	const FGuidelineNodeId Y3 = TestGraph::Node(*Net, -750.0, 750.0);
+	TestGraph::Join(*Net, A, B, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, B, C, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, C, D, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, D, A, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, C, X1, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X1, X2, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X2, X3, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, X3, A, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, B, Y1, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, Y1, Y2, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, Y2, Y3, { EGuidelineDir::AToB });
+	TestGraph::Join(*Net, Y3, D, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	// THE AEROPLANE IS GIVEN THE VEHICLE'S FOOTPRINT AND GAP, and that is the fixture's one
@@ -1336,7 +1308,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	int32 FirstResolved = 0;
 	bool bAircraftEverReplanned = false;
 	double MinSeparation = TNumericLimits<double>::Max();
-	M2TrafficRun(*Traffic, *Net, 180.0, [&](int32)
+	TickUntil(*Traffic, *Net, 180.0, [&](int32)
 	{
 		if (FirstResolved == 0) { FirstResolved = Traffic->GetLastResolvedAgentForTest(); }
 		const FRoadAgent* Plane = Traffic->FindAgent(P3);
@@ -1409,13 +1381,13 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
 	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
 
-	const FGuidelineNodeId S = M2TrafficNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId Hn = M2TrafficNode(*Net, 0.0, -3000.0);
-	const FGuidelineNodeId Hf = M2TrafficNode(*Net, 0.0, 3000.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, S, Hn);
-	M2TrafficJoin(*Net, Hn, Hf);   // ONE edge across the runway. No vertex on the strip.
-	M2TrafficJoin(*Net, Hf, N);
+	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId Hn = TestGraph::Node(*Net, 0.0, -3000.0);
+	const FGuidelineNodeId Hf = TestGraph::Node(*Net, 0.0, 3000.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, S, Hn);
+	TestGraph::Join(*Net, Hn, Hf);   // ONE edge across the runway. No vertex on the strip.
+	TestGraph::Join(*Net, Hf, N);
 	Net->SetRunwayHoldingPositionForTest(Hn, RunwaySeg);
 	Net->SetRunwayHoldingPositionForTest(Hf, RunwaySeg);
 
@@ -1454,7 +1426,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// the model coarser than this, whatever the speed multiplier.
 	double SeenByTheArbiter = 0.0;
 
-	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
+	TickUntil(*Traffic, *Net, 120.0, [&](int32)
 	{
 		const FRoadAgent* Q = Traffic->FindAgent(Plane);
 		if (Q == nullptr) { return false; }
@@ -1548,16 +1520,16 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0));
 		const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0));
 		const FGuidelineNodeId C = Net.AddGuidelineNode(FVector2D(40000.0, 0.0));
-		M2TrafficJoin(Net, A, B);
-		if (bKeepBC) { M2TrafficJoin(Net, B, C); }
-		if (bBypass) { const FGuidelineNodeId D = Net.AddGuidelineNode(FVector2D(30000.0, 8000.0)); M2TrafficJoin(Net, B, D); M2TrafficJoin(Net, D, C); }
+		TestGraph::Join(Net, A, B);
+		if (bKeepBC) { TestGraph::Join(Net, B, C); }
+		if (bBypass) { const FGuidelineNodeId D = Net.AddGuidelineNode(FVector2D(30000.0, 8000.0)); TestGraph::Join(Net, B, D); TestGraph::Join(Net, D, C); }
 		if (OutA) { *OutA = A; } if (OutC) { *OutC = C; }
 	};
 
 	auto Dispatch = [&](URoadNetwork& Net, UGroundTraffic& Traffic, FGuidelineNodeId A, FGuidelineNodeId C)
 	{
 		const int32 Id = Traffic.DispatchAgent(&Net, M2TrafficRoute(Net, A, C, ETraversalClass::GroundVehicle), M2TrafficVan(), ETraversalClass::GroundVehicle, 1.0);
-		M2TrafficRun(Traffic, Net, 5.0, [](int32) { return true; });   // a few thousand uu along A->B
+		TickUntil(Traffic, Net, 5.0, [](int32) { return true; });   // a few thousand uu along A->B
 		return Id;
 	};
 
@@ -1606,7 +1578,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and at the same route distance, so Travelled still means what it did"),
 			V->Follower.Plan.Steps[1].EndDistance, EndDistanceWas, 1e-9);
 		TestTrue(TEXT("position moved by at most one tick across the rebuild"), FVector2D::Distance(V->LastMotion.Position, Before) <= 1000.0 * 0.05 + 1.0);
-		M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
 		TestEqual(TEXT("arrives"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
 		TestTrue(TEXT("at C"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(40000.0, 0.0)) < 10.0);
 	}
@@ -1619,7 +1591,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		Build(*Net, false, true, nullptr, nullptr);
 		Traffic->OnGraphRebuilt(*Net);
 		double MaxY = 0.0;
-		M2TrafficRun(*Traffic, *Net, 150.0, [&](int32) { MaxY = FMath::Max(MaxY, Traffic->FindAgent(Van)->LastMotion.Position.Y); return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TickUntil(*Traffic, *Net, 150.0, [&](int32) { MaxY = FMath::Max(MaxY, Traffic->FindAgent(Van)->LastMotion.Position.Y); return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
 		TestEqual(TEXT("arrives over the bypass"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
 		TestTrue(FString::Printf(TEXT("via D (max Y %.0f)"), MaxY), MaxY > 7000.0);
 	}
@@ -1631,7 +1603,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		const int32 Van = Dispatch(*Net, *Traffic, A, C);
 		Build(*Net, false, false, nullptr, nullptr);
 		Traffic->OnGraphRebuilt(*Net);
-		M2TrafficRun(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
+		TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
 		TestEqual(TEXT("stops at the last live node"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
 		TestTrue(TEXT("which is B"), FVector2D::Distance(Traffic->FindAgent(Van)->LastMotion.Position, FVector2D(20000.0, 0.0)) < 10.0);
 	}
@@ -1705,7 +1677,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		// PAST B. 30 s at Accel 100 to a cap of 1000 is 25000 uu - comfortably past B at
 		// 20000, so the agent is on step 1, and well short of the braking point for C at
 		// 37500, so it is still at cruise.
-		M2TrafficRun(*Traffic, *Net, 30.0, [](int32) { return true; });
+		TickUntil(*Traffic, *Net, 30.0, [](int32) { return true; });
 		const FRoadAgent* Before = Traffic->FindAgent(Van);
 		if (!TestNotNull(TEXT("the van survived the run up to the rebuild"), Before)) { return false; }
 		const double Travelled = Before->Follower.Travelled;
@@ -1749,7 +1721,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 
 		double MaxStep = 0.0;
 		FVector2D Last = V->LastMotion.Position;
-		M2TrafficRun(*Traffic, *Net, 5.0, [&](int32)
+		TickUntil(*Traffic, *Net, 5.0, [&](int32)
 		{
 			const FRoadAgent* Q = Traffic->FindAgent(Van);
 			if (Q == nullptr) { return false; }
@@ -1796,9 +1768,9 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	// empty on a Taxiing agent. For every reachable state the substitution is observationally
 	// identical, which makes it a rename rather than a defect.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 0.0, 20000.0);
-	const FGuidelineEdgeId AB = M2TrafficJoin(*Net, A, B);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 20000.0);
+	const FGuidelineEdgeId AB = TestGraph::Join(*Net, A, B);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::GroundVehicle),
@@ -1807,7 +1779,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 
 	// Under way, and holding: the edge it is on, plus the node it left while its tail is
 	// still within half a footprint of it. Two seconds is well short of the 20 km run.
-	M2TrafficRun(*Traffic, *Net, 2.0, [&](int32) { return true; });
+	TickUntil(*Traffic, *Net, 2.0, [&](int32) { return true; });
 
 	auto ClaimsHeldBy = [&](int32 AgentId)
 	{
@@ -1881,11 +1853,11 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 		const FRoadNodeId RB = Cross->AddNode(FVector2D(50000.0, 0.0));
 		const FRoadSegmentId RunwaySeg = Cross->AddStraightSegment(RA, RB, Runway);
 
-		const FGuidelineNodeId S = M2TrafficNode(*Cross, 0.0, -20000.0);
-		const FGuidelineNodeId H = M2TrafficNode(*Cross, 0.0, -3000.0);
-		const FGuidelineNodeId X = M2TrafficNode(*Cross, 0.0, 0.0);
-		const FGuidelineNodeId N = M2TrafficNode(*Cross, 0.0, 20000.0);
-		M2TrafficJoin(*Cross, S, H); M2TrafficJoin(*Cross, H, X); M2TrafficJoin(*Cross, X, N);
+		const FGuidelineNodeId S = TestGraph::Node(*Cross, 0.0, -20000.0);
+		const FGuidelineNodeId H = TestGraph::Node(*Cross, 0.0, -3000.0);
+		const FGuidelineNodeId X = TestGraph::Node(*Cross, 0.0, 0.0);
+		const FGuidelineNodeId N = TestGraph::Node(*Cross, 0.0, 20000.0);
+		TestGraph::Join(*Cross, S, H); TestGraph::Join(*Cross, H, X); TestGraph::Join(*Cross, X, N);
 		Cross->SetRunwayHoldingPositionForTest(H, RunwaySeg);
 
 		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -1893,7 +1865,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 			M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
 		if (TestTrue(TEXT("the crossing aircraft is dispatched"), Plane > 0))
 		{
-			M2TrafficRun(*Air, *Cross, 120.0, [&](int32)
+			TickUntil(*Air, *Cross, 120.0, [&](int32)
 			{
 				const FRoadAgent* Q = Air->FindAgent(Plane);
 				return Q != nullptr && Q->GetCrossingPhase() != ECrossingPhase::OnStrip;
@@ -1934,7 +1906,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				// never landed - so the strip it is physically standing on came free one tick
 				// after the fix above kept it. Holding for one tick and then letting go is not
 				// holding: the player's next press of 7 is not on that frame.
-				M2TrafficRun(*Air, *Cross, 3.0, [](int32) { return true; });
+				TickUntil(*Air, *Cross, 3.0, [](int32) { return true; });
 				const FRoadAgent* Parked = Air->FindAgent(Plane);
 				if (TestNotNull(TEXT("it is still there three seconds later"), Parked))
 				{
@@ -2009,7 +1981,7 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 
 	const int32 First = Traffic->DispatchArrival(*Net, Approach, Piper, 1.0);
 	if (!TestTrue(TEXT("first arrival admitted"), First > 0)) { return false; }
-	M2TrafficRun(*Traffic, *Net, 400.0, [&](int32)
+	TickUntil(*Traffic, *Net, 400.0, [&](int32)
 	{
 		const FRoadAgent* A = Traffic->FindAgent(First);
 		return A != nullptr && A->Phase != EAgentPhase::Parked;
@@ -2021,7 +1993,7 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 
 	const int32 Second = Traffic->DispatchArrival(*Net, Approach, Piper, 1.0);
 	if (!TestTrue(TEXT("second arrival admitted"), Second > 0)) { return false; }
-	M2TrafficRun(*Traffic, *Net, 200.0, [&](int32)
+	TickUntil(*Traffic, *Net, 200.0, [&](int32)
 	{
 		const FRoadAgent* B = Traffic->FindAgent(Second);
 		return B != nullptr && B->Phase != EAgentPhase::Taxiing;
@@ -2038,7 +2010,7 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 	int32 TicksBothTaxiing = 0;
 	int32 TicksFirstWaited = 0;
 	int32 TicksSecondWaited = 0;
-	M2TrafficRun(*Traffic, *Net, 300.0, [&](int32)
+	TickUntil(*Traffic, *Net, 300.0, [&](int32)
 	{
 		const FRoadAgent* A = Traffic->FindAgent(First);
 		const FRoadAgent* B = Traffic->FindAgent(Second);
@@ -2094,19 +2066,19 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 	// (0,8000), First's goal.
 	const double R = 600.0;
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId N30 = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N31 = M2TrafficNode(*Net, 0.0, -392.0);
-	const FGuidelineNodeId NN = M2TrafficNode(*Net, 0.0, 8000.0);
-	const FGuidelineNodeId NR = M2TrafficNode(*Net, 1900.0, 0.0);
-	const FGuidelineNodeId E1 = M2TrafficNode(*Net, R, -392.0 - R);
-	const FGuidelineNodeId W1 = M2TrafficNode(*Net, -R, -392.0 - R);
-	const FGuidelineNodeId E = M2TrafficNode(*Net, R + 8000.0, -392.0 - R);
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -R - 8000.0, -392.0 - R);
-	const FGuidelineEdgeId Stub = M2TrafficJoin(*Net, N30, N31);
-	M2TrafficJoin(*Net, N30, NN);
-	M2TrafficJoin(*Net, N30, NR);
-	M2TrafficJoin(*Net, E1, E);
-	M2TrafficJoin(*Net, W1, W);
+	const FGuidelineNodeId N30 = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N31 = TestGraph::Node(*Net, 0.0, -392.0);
+	const FGuidelineNodeId NN = TestGraph::Node(*Net, 0.0, 8000.0);
+	const FGuidelineNodeId NR = TestGraph::Node(*Net, 1900.0, 0.0);
+	const FGuidelineNodeId E1 = TestGraph::Node(*Net, R, -392.0 - R);
+	const FGuidelineNodeId W1 = TestGraph::Node(*Net, -R, -392.0 - R);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, R + 8000.0, -392.0 - R);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -R - 8000.0, -392.0 - R);
+	const FGuidelineEdgeId Stub = TestGraph::Join(*Net, N30, N31);
+	TestGraph::Join(*Net, N30, NN);
+	TestGraph::Join(*Net, N30, NR);
+	TestGraph::Join(*Net, E1, E);
+	TestGraph::Join(*Net, W1, W);
 	for (const FGuidelineNodeId Arm : { E1, W1 })
 	{
 		FGuidelineEdge Arc;
@@ -2124,7 +2096,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("first dispatched"), First > 0)) { return false; }
 	const int32 FirstSteps = Traffic->FindAgent(First)->Follower.Plan.Steps.Num();
 	bool bStaged = false;
-	M2TrafficRun(*Traffic, *Net, 60.0, [&](int32)
+	TickUntil(*Traffic, *Net, 60.0, [&](int32)
 	{
 		int32 Holder = 0;
 		const bool bNodeHeld = Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(N31), 0, &Holder) && Holder == First;
@@ -2143,7 +2115,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 
 	bool bCycleFormed = false;
 	int32 CycleTick = -1;
-	M2TrafficRun(*Traffic, *Net, 200.0, [&](int32 Tick)
+	TickUntil(*Traffic, *Net, 200.0, [&](int32 Tick)
 	{
 		const FRoadAgent* A = Traffic->FindAgent(First);
 		const FRoadAgent* B = Traffic->FindAgent(Second);
@@ -2200,17 +2172,17 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(4000.0, -1500.0));
 	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
 
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -5000.0, 0.0);
-	const FGuidelineNodeId A = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId B = M2TrafficNode(*Net, 4000.0, 0.0);
-	const FGuidelineNodeId E = M2TrafficNode(*Net, 9000.0, 0.0);
-	const FGuidelineNodeId R1 = M2TrafficNode(*Net, 0.0, -1500.0);
-	const FGuidelineNodeId R2 = M2TrafficNode(*Net, 4000.0, -1500.0);
-	M2TrafficJoin(*Net, W, A);
-	const FGuidelineEdgeId AB = M2TrafficJoin(*Net, A, B);
-	M2TrafficJoin(*Net, B, E);
-	M2TrafficJoin(*Net, A, R1);
-	M2TrafficJoin(*Net, R2, B);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -5000.0, 0.0);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 4000.0, 0.0);
+	const FGuidelineNodeId E = TestGraph::Node(*Net, 9000.0, 0.0);
+	const FGuidelineNodeId R1 = TestGraph::Node(*Net, 0.0, -1500.0);
+	const FGuidelineNodeId R2 = TestGraph::Node(*Net, 4000.0, -1500.0);
+	TestGraph::Join(*Net, W, A);
+	const FGuidelineEdgeId AB = TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, E);
+	TestGraph::Join(*Net, A, R1);
+	TestGraph::Join(*Net, R2, B);
 	{
 		FGuidelineEdge Along;
 		Along.A = R1; Along.B = R2;
@@ -2301,11 +2273,11 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 	// A right-angle turn, because a bend is where step size shows. On a straight the error is
 	// only the integration of the acceleration; through a corner it is the overshoot as well.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
-	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, W, J);
-	M2TrafficJoin(*Net, J, N);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, W, J);
+	TestGraph::Join(*Net, J, N);
 
 	// One network for all three: it is read-only while agents advance, and sharing it removes
 	// any chance the runs differ because their geometry did.
@@ -2385,11 +2357,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
-	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
-	M2TrafficJoin(*Net, W, J);
-	M2TrafficJoin(*Net, J, N);
+	const FGuidelineNodeId W = TestGraph::Node(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
+	TestGraph::Join(*Net, W, J);
+	TestGraph::Join(*Net, J, N);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FAirframe Airframe = M2TrafficPlane();

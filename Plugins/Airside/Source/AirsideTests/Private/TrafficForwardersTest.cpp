@@ -1,11 +1,10 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
-#include "Misc/ScopeExit.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -16,23 +15,6 @@
 #include "Present/RoadNetworkActor.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	/** Two nodes and one authored edge. Authored (bDerived false) for the reason
-	 *  AgentRedirectTest names: a surface rebuild sweeps DERIVED guidelines, and a fixture
-	 *  that vanished mid-test would look like a broken forwarder. Named M2Fwd* because the
-	 *  tests module is a unity build and RouteSearchTest already owns a Join(). */
-	FGuidelineEdgeId M2FwdJoin(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
-	{
-		FGuidelineEdge Edge;
-		Edge.A = A; Edge.B = B;
-		Edge.Control = (Net.GetGuidelineNode(A)->Position + Net.GetGuidelineNode(B)->Position) * 0.5;
-		Edge.AllowedTraffic = FTrafficMask::All();
-		Edge.bDerived = false;
-		return Net.AddGuidelineEdge(MoveTemp(Edge));
-	}
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficForwardersTest,
@@ -46,13 +28,9 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	// both delegates must re-broadcast - because AirportOps binds to UAirsideTraffic's,
 	// and a relay that was never wired would leave the flight board deaf without any
 	// compile error to say so.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to spawn into"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	URoadNetwork& Net = *Actor->Network;
@@ -65,7 +43,10 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 
 	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
 	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(30000.0, 0.0), false);
-	M2FwdJoin(Net, A, B);
+	// AUTHORED (bDerived false) for the reason AgentRedirectTest names: a surface rebuild
+	// sweeps DERIVED guidelines, and a fixture that vanished mid-test would look like a
+	// broken forwarder.
+	TestGraph::Join(Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
 	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Plan = RouteSearch::Find(Net, Q);
 	if (!TestTrue(TEXT("route found"), Plan.IsValid())) { return false; }
@@ -156,9 +137,9 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId RA = Net.AddGuidelineNode(FVector2D(0.0, 60000.0), false);
 	const FGuidelineNodeId RC = Net.AddGuidelineNode(FVector2D(40000.0, 60000.0), false);
 	const FGuidelineNodeId RD = Net.AddGuidelineNode(FVector2D(20000.0, 65000.0), false);
-	const FGuidelineEdgeId Direct = M2FwdJoin(Net, RA, RC);
-	M2FwdJoin(Net, RA, RD);
-	M2FwdJoin(Net, RD, RC);
+	const FGuidelineEdgeId Direct = TestGraph::Join(Net, RA, RC, { EGuidelineDir::Bidirectional, nullptr, false });
+	TestGraph::Join(Net, RA, RD, { EGuidelineDir::Bidirectional, nullptr, false });
+	TestGraph::Join(Net, RD, RC, { EGuidelineDir::Bidirectional, nullptr, false });
 
 	FTrafficClaim Phantom;
 	Phantom.AgentId = 9999;                                  // nobody: no agent has this id
@@ -194,7 +175,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	// layer further down. The RELAY is the half a pointer check alone would miss: bound in
 	// the constructor it would be bound to the CDO's model, and the duplicate's own agents
 	// would spawn no view and tell AirportOps nothing, with no compile error to say so.
-	ARoadNetworkActor* Dup = DuplicateObject<ARoadNetworkActor>(Actor, World->PersistentLevel);
+	ARoadNetworkActor* Dup = DuplicateObject<ARoadNetworkActor>(Actor, TestWorld.World->PersistentLevel);
 	if (!TestNotNull(TEXT("the actor duplicates"), Dup)) { return false; }
 	UAirsideTraffic* DupTraffic = Dup->GetTraffic();
 	if (!TestNotNull(TEXT("the duplicate has a traffic object"), DupTraffic)) { return false; }
@@ -230,13 +211,9 @@ bool FServiceLinkRadiusIsLevelAuthoredTest::RunTest(const FString& Parameters)
 	//
 	// Read off FSurfaceSettings rather than off FAnchorLink, because that struct IS the only
 	// route from the actor to the build - see URoadSurfacePresenter::FSurfaceSettings.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
 
 	TestEqual(TEXT("the default is FAnchorLink's own, not a second literal"),

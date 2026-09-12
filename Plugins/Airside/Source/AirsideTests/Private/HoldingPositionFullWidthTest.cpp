@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -9,23 +10,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	/** The guideline node derived for one end of Segment, or unset. M2FullWidth prefix: unity build. */
-	FGuidelineNodeId M2FullWidthNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-}
 
 /**
  * THE HOLDING POSITION SITS WHERE THE TAXIWAY IS ITS OWN WIDTH. The flare fillet (PR #58)
@@ -77,7 +61,7 @@ bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 		FRoadGuidelineBuilder::Build(*Net, Solved);
 
 		const FRoadSegment* Segment = Net->GetSegment(XT);
-		const FGuidelineNodeId End = M2FullWidthNodeFor(*Net, XT, /*bEndA=*/true);
+		const FGuidelineNodeId End = TestGraph::NodeFor(*Net, XT, /*bEndA=*/true);
 		if (!TestTrue(TEXT("the taxiway's runway end exists"), Segment != nullptr && End.IsSet())) { continue; }
 		const FGuidelineNode* Node = Net->GetGuidelineNode(End);
 		TestEqual(TEXT("and is the derived runway-holding position"), Node->HoldingPosition, EHoldingPositionKind::Runway);

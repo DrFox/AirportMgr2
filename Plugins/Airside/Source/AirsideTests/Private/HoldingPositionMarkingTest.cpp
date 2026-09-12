@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -10,22 +11,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	FGuidelineNodeId M2MarkingNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-}
 
 /**
  * THE PAINT IS WHERE THE STOP IS. Measured on the buffers the component receives: the
@@ -59,8 +44,8 @@ bool FHoldingPositionMarkingTest::RunTest(const FString& Parameters)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	FRoadGuidelineBuilder::Build(*Net, Solved);
 
-	const FGuidelineNodeId RunwayEnd = M2MarkingNodeFor(*Net, Tx, true);
-	const FGuidelineNodeId FarEnd = M2MarkingNodeFor(*Net, Tx, false);
+	const FGuidelineNodeId RunwayEnd = TestGraph::NodeFor(*Net, Tx, true);
+	const FGuidelineNodeId FarEnd = TestGraph::NodeFor(*Net, Tx, false);
 	if (!TestTrue(TEXT("both taxiway ends exist"), RunwayEnd.IsSet() && FarEnd.IsSet())) { return false; }
 	TestTrue(TEXT("the runway end is a derived runway-holding position"),
 		Net->GetGuidelineNode(RunwayEnd)->HoldingPosition == EHoldingPositionKind::Runway);
