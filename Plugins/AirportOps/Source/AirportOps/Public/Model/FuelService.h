@@ -112,6 +112,10 @@ struct AIRPORTOPS_API FFuelDemand
 	 * ALSO THE GRACE PERIOD when nothing can serve the aircraft. One deadline, not two: an
 	 * aircraft whose fuel went Unserviceable waits exactly as long as one being fuelled, and
 	 * then leaves without it.
+	 *
+	 * THE SINGLE OFF-BLOCK TRUTH. UFlight used to carry its own OffBlockAt, computed from the
+	 * ETA at offer time; this is computed from the actual park time and the two disagreed the
+	 * moment an arrival was late. Departure is decided here and nowhere else - see issue #97.
 	 */
 	UPROPERTY() double TurnaroundEndsAt = 0.0;
 

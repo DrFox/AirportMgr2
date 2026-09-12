@@ -418,7 +418,6 @@ void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoar
 	// this second, and it would stop being a debug key if it made you wait a quarter hour.
 	Flight->ArrivesAt = Clock->Now();
 	Flight->ExpiresAt = Clock->Now();
-	Flight->OffBlockAt = Clock->Now() + Airframe.TurnaroundSeconds;
 
 	// The board aims every arrival at its own focus, so the key's choice of runway has to
 	// travel with it - otherwise the aeroplane lands at wherever the last offer was aimed.

@@ -86,9 +86,6 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	// stand for something landing in the past.
 	Offer->ExpiresAt = Now + FMath::Min(OfferLifeSeconds, LeadTimeSeconds);
 
-	// Off-block is measured from the ETA, not from now: a turnaround starts when it parks.
-	Offer->OffBlockAt = Offer->ArrivesAt + Chosen.Airframe.TurnaroundSeconds;
-
 	// Fees are deliberately left at zero. Nothing banks them until the ledger exists, and a
 	// number nothing reads is a number that will be wrong by the time something does.
 	return Offer;
