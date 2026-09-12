@@ -321,10 +321,22 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 	}
 
 	const TArray<FGuidelineNode>& Nodes = Network->GetGuidelineNodes();
+	if (!Nodes.IsValidIndex(FromNodeIndex) || !Nodes.IsValidIndex(ToNodeIndex))
+	{
+		return INDEX_NONE;
+	}
+
 	const FGuidelineNodeId From = Network->GuidelineNodeIdAt(FromNodeIndex);
 	const FGuidelineNodeId To = Network->GuidelineNodeIdAt(ToNodeIndex);
 	if (!From.IsSet() || !To.IsSet())
 	{
+		// A valid INDEX whose slot is no longer alive - GuidelineNodeIdAt reports that with
+		// an unset handle rather than a reason, so this used to fall through to Validate()
+		// below and log from there. Logged here now with the same text Validate() would have
+		// given (NoStart, "nothing to link here"), so a dead node still says why (2026-09-13
+		// review of #79).
+		UE_LOG(LogRoadMesh, Warning, TEXT("ConnectGuidelines refused: %s"),
+			FGuidelineDrawTool::Describe(EGuidelineLink::NoStart));
 		return INDEX_NONE;
 	}
 
