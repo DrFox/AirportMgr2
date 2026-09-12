@@ -477,6 +477,34 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 	return World != nullptr && !World->IsGameWorld();
 }
 
+double ARoadNetworkActor::EvenDelta(double RealDeltaSeconds)
+{
+	if (RealDeltaSeconds <= 0.0)
+	{
+		return 0.0;
+	}
+
+	// Seeded from the first real frame rather than from zero, so the first second of play is
+	// not an aeroplane accelerating out of a standstill the model never asked for.
+	if (SmoothedDeltaSeconds <= 0.0)
+	{
+		SmoothedDeltaSeconds = RealDeltaSeconds;
+	}
+	SmoothedDeltaSeconds = FMath::Lerp(SmoothedDeltaSeconds, RealDeltaSeconds,
+		FMath::Clamp(DeltaSmoothingRate, 0.0, 1.0));
+
+	// WHAT IS OWED, so evening the step cannot turn into losing time. The average is paid out
+	// each frame and the difference banked; the clamp below is what stops the bank growing.
+	OwedSeconds += RealDeltaSeconds;
+
+	const double Bound = FMath::Max(MaxOwedSeconds, 0.0);
+	const double Step = FMath::Max(
+		FMath::Clamp(SmoothedDeltaSeconds, OwedSeconds - Bound, OwedSeconds + Bound), 0.0);
+
+	OwedSeconds -= Step;
+	return Step;
+}
+
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -486,7 +514,7 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	// UPROPERTY on this actor and the model that reads it is Transient, so handing it over
 	// every frame is what keeps a figure tuned in the Details panel true of the arbiter -
 	// see the property's own comment and UAirsideTraffic::Advance.
-	Traffic->Advance(static_cast<float>(DeltaSeconds * SimTimeScale), SurfaceZ, Network, TrafficRules);
+	Traffic->Advance(static_cast<float>(EvenDelta(DeltaSeconds) * SimTimeScale), SurfaceZ, Network, TrafficRules);
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)

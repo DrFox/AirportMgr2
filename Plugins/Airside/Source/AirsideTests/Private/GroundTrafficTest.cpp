@@ -1442,6 +1442,16 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// route distance the agent was at when the tick began. Comparing this tick's claims
 	// against this tick's position would fail every threshold by one frame's travel and would
 	// be measuring the tick order, not the crossing rule.
+	//
+	// THAT BOOKKEEPING IS ONLY VALID WHILE ONE CALL IS ONE PASS, which is why the tick below
+	// is the substep and not the 0.05 the other fixtures use. Advance now splits a long delta
+	// into bounded substeps (see UGroundTraffic::MaxSubstepSeconds), and a call holding two
+	// passes arbitrates twice - at the start pose and half a tick later - while this variable
+	// still names only the first. Every threshold here would then be read against a pose the
+	// agent had already left, which is measuring the substep count rather than the crossing
+	// rule. Ticking at the substep keeps the call a single pass, and has the better property
+	// of measuring the crossing at the granularity PRODUCTION now runs it: no frame reaches
+	// the model coarser than this, whatever the speed multiplier.
 	double SeenByTheArbiter = 0.0;
 
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
@@ -1476,7 +1486,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 			}
 		}
 		return Q->Follower.Travelled < 25000.0;
-	});
+	}, Traffic->MaxSubstepSeconds);
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	UE_LOG(LogM2TrafficTest, Log,
@@ -1492,14 +1502,22 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// THE TWO DISCRIMINATING NUMBERS. Armed no later than the nose reaching the asphalt, and
 	// released no earlier than the tail leaving it - the node rule managed neither on this
 	// graph, because there is no node between the bars to hang either answer on.
-	// One tick's travel of slack on the arming bound and nothing more: at cruise the agent
-	// covers 50 uu per tick, so "armed on the tick the nose reached the asphalt" cannot be
-	// measured tighter than that. The release bound needs no such slack downward - a release
-	// before the tail is off would be the defect itself - only the 100 uu upward.
+	// One tick's travel of slack on the arming bound and nothing more: the fixture ticks at
+	// the substep and the agent cruises at 1000 uu/s (M2TrafficPlane's taxi cap), so a tick
+	// is about 34 uu and "armed on the tick the nose reached the asphalt" cannot be measured
+	// tighter than that. The release bound needs no such slack downward - a release before
+	// the tail is off would be the defect itself - only the one tick upward.
+	//
+	// THESE WERE 60 AND 100 while the fixture ticked at 0.05, which is coarser than any frame
+	// production now hands the model. Measured at the substep the crossing arms ON 17250 and
+	// releases 33 uu past 22750 - a tick, exactly - so the wider bounds were tolerance for the
+	// sampling rate and not for the rule. Tightening them is the point of ticking finer: at 60
+	// the arming could drift more than a whole tick late and this test would still pass.
+	const double OneTick = Traffic->MaxSubstepSeconds * 1000.0 + 1.0;
 	TestTrue(FString::Printf(TEXT("armed no later than the nose entered the strip (%.0f, bound 17250 + one tick)"), ArmedAt),
-		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + 60.0);
-	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within 100 uu after (%.0f, want 22750)"), ReleasedAt),
-		ReleasedAt >= 20000.0 + HalfWidth + Half && ReleasedAt <= 20000.0 + HalfWidth + Half + 100.0);
+		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + OneTick);
+	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within one tick after (%.0f, want 22750)"), ReleasedAt),
+		ReleasedAt >= 20000.0 + HalfWidth + Half && ReleasedAt <= 20000.0 + HalfWidth + Half + OneTick);
 	TestFalse(TEXT("and the bar on the way OUT arms nothing"), bCrossingPastTheFarBar);
 	TestEqual(TEXT("nothing is left crossing past the far bar"), P->CrossingPhase, ECrossingPhase::None);
 	TestFalse(TEXT("with no chain left named"), P->CrossingRunway.IsSet());
@@ -2246,6 +2264,270 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		TestFalse(TEXT("a strip somebody else holds is not a turnaround: the replan fails"), bReplanned);
 		TestTrue(TEXT("and the agent keeps the route it had"), After->Follower.Plan.Steps.Num() == 3 && !UsesStrip(After->Follower.Plan));
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A LONG FRAME IS SPLIT INTO BOUNDED STEPS, so what the model does stops depending on how
+ * fast the player is running the game.
+ *
+ * UAirsideTraffic hands UGroundTraffic the frame time MULTIPLIED by the speed multiplier,
+ * so at x8 a healthy 16 ms frame arrives as 133 ms of simulation. Taken in one go, an agent
+ * covers 133 ms of ground in a single jump - and a jump that overshoots the bend it is
+ * turning onto puts it off the guideline, to be pulled back on the next frame. That is the
+ * rubber-banding reported from play: absent at x1, visible at x2, worse above it, which is
+ * the signature of a step that scales with the multiplier.
+ *
+ * PINS THE SEAM, NOT THE SYMPTOM. Advance splitting the delta is not observable from
+ * outside - there is no counter to read - so this measures the only thing that matters
+ * about it: a long frame must land the agent where the short frames would have landed it.
+ * Two identical agents are run over identical total time, one fed whole frames and one fed
+ * substep-sized ones, and they must agree EXACTLY. 0.09 is chosen because it is three whole
+ * substeps at 1/30 and divides exactly, so the two runs take the same sequence of steps;
+ * an equality rather than a tolerance is what makes an unwired split fail this.
+ *
+ * The third agent is the control, and it is why the equality has teeth: with the split
+ * disabled it takes the frame in one step and lands somewhere else. Without it, deleting
+ * the split would leave the first assertion passing for a fixture too gentle to diverge.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficSubstepTest,
+	"Airside.Model.Traffic.LongFrameIsSplitIntoBoundedSteps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficSubstepTest::RunTest(const FString& Parameters)
+{
+	// A right-angle turn, because a bend is where step size shows. On a straight the error is
+	// only the integration of the acceleration; through a corner it is the overshoot as well.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, W, J);
+	M2TrafficJoin(*Net, J, N);
+
+	// One network for all three: it is read-only while agents advance, and sharing it removes
+	// any chance the runs differ because their geometry did.
+	int32 Ids[3] = { 0, 0, 0 };
+	UGroundTraffic* Runs[3] = { nullptr, nullptr, nullptr };
+	const double Longest[3] = { 1.0 / 30.0, 1.0 / 30.0, 1000.0 };
+	for (int32 Which = 0; Which < 3; ++Which)
+	{
+		Runs[Which] = NewObject<UGroundTraffic>(GetTransientPackage());
+		Runs[Which]->MaxSubstepSeconds = Longest[Which];
+		Ids[Which] = Runs[Which]->DispatchAgent(Net,
+			M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft),
+			M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	}
+	if (!TestTrue(TEXT("all three dispatched"), Ids[0] > 0 && Ids[1] > 0 && Ids[2] > 0))
+	{
+		return false;
+	}
+
+	const double Frame = 0.09;        // a 60 Hz frame at x5, and three whole substeps
+	const double Substep = Frame / 3.0;
+	for (int32 Tick = 0; Tick < 300; ++Tick)
+	{
+		Runs[0]->Advance(Substep, Net);
+		Runs[0]->Advance(Substep, Net);
+		Runs[0]->Advance(Substep, Net);
+		Runs[1]->Advance(Frame, Net);
+		Runs[2]->Advance(Frame, Net);
+	}
+
+	const FRoadAgent* Fine = Runs[0]->FindAgent(Ids[0]);
+	const FRoadAgent* Split = Runs[1]->FindAgent(Ids[1]);
+	const FRoadAgent* Unsplit = Runs[2]->FindAgent(Ids[2]);
+	if (!TestTrue(TEXT("all three still exist"), Fine && Split && Unsplit)) { return false; }
+
+	const double SplitGap = FMath::Abs(Split->Follower.Travelled - Fine->Follower.Travelled);
+	const double UnsplitGap = FMath::Abs(Unsplit->Follower.Travelled - Fine->Follower.Travelled);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("Substep measured: travelled fine %.3f, split %.3f, unsplit %.3f; ")
+		TEXT("split gap %.4f uu, unsplit gap %.4f uu"),
+		Fine->Follower.Travelled, Split->Follower.Travelled, Unsplit->Follower.Travelled,
+		SplitGap, UnsplitGap);
+
+	TestTrue(TEXT("the agent moved at all, so the comparison means something"),
+		Fine->Follower.Travelled > 1000.0);
+	TestTrue(*FString::Printf(
+		TEXT("a whole frame split into substeps lands exactly where the substeps land (%.6f uu apart)"),
+		SplitGap), SplitGap <= 0.001);
+	TestTrue(*FString::Printf(
+		TEXT("and taking the frame in one step does not (%.4f uu apart)"), UnsplitGap),
+		UnsplitGap > 1.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECTED AIRCRAFT ALREADY HAS ITS ENGINES RUNNING.
+ *
+ * REPORTED FROM PLAY: "when departing there is no time for the prop to spin up, it is still
+ * coming up to speed when the aircraft is taxiing at full speed."
+ *
+ * FRoadAgent::StartTaxi deliberately starts COLD, so a propeller winds up as the aircraft
+ * first rolls - which is right for a plain dispatch and wrong for everything that reaches
+ * RedirectAgent. A departure has spent a turnaround on a stand with its engines started
+ * minutes before it moved; the taxi out is not an engine start. Winding up from zero there
+ * meant the prop was still accelerating while the aeroplane was already at taxi speed.
+ *
+ * ASSERTS BOTH HALVES, because the fix is a difference between two paths and an assertion
+ * on only the redirect would pass just as well if StartTaxi had been changed to start warm
+ * too - which would lose the wind-up on a genuine cold start.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficWarmRedirectTest,
+	"Airside.Model.Traffic.RedirectStartsTheEngineAtSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, W, J);
+	M2TrafficJoin(*Net, J, N);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = M2TrafficPlane();
+
+	// The same fallback StartEngineAtSpeed uses, so an airframe with no authored engine still
+	// has an expected figure rather than the test asserting against zero.
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	const int32 Id = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, W, J, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	// Measured before any tick: the wind-up is what is under test, so letting it run would
+	// be measuring the ramp rate instead of where it started.
+	const FRoadAgent* Cold = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent exists"), Cold != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("a plain dispatch still starts the engine cold, so a cold start still winds up (%.0f RPM)"),
+		Cold->EngineRPM), Cold->EngineRPM < AtSpeed);
+
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// Re-fetched: RedirectAgent may have moved the agent array out from under the pointer.
+	const FRoadAgent* Warm = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Warm != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("but a redirect finds the engines already running at speed (%.0f RPM, want %.0f)"),
+		Warm->EngineRPM, AtSpeed), FMath::IsNearlyEqual(Warm->EngineRPM, AtSpeed, 0.01));
+	TestTrue(TEXT("and running"), Warm->bEngineRunning);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * THE POSED AIRCRAFT NEVER REVERSES OR SNAPS, across a whole arrival.
+ *
+ * Written while chasing judder reported from play (2026-09-12). It turned out to be
+ * presentation and not the model - see r.VSync in Config/DefaultEngine.ini - but nothing
+ * covered the property the report NAMED, and the investigation took a day partly because
+ * there was no test that could answer "is the model smooth?" in one run.
+ *
+ * MEASURES THE SYMPTOM'S OWN WORDS. "Jerking back and forwards" is the step VECTOR
+ * reversing, which is a sign test with no threshold to argue about. An earlier attempt
+ * compared distance moved against speed x dt and read 1.00 on every frame forever - the
+ * follower computes the position FROM speed x dt, so that assertion was measuring its own
+ * input. A test that cannot fail is worse than no test, because it is believed.
+ *
+ * Walks the phases a plain dispatch never reaches, which is where a discontinuity would
+ * live: Arriving -> the vacate handover -> the taxi follower. Frame times jitter, because a
+ * constant delta would hide anything that only shows on an uneven one.
+ *
+ * Yaw is asserted as well as position: a nose that stepped while the body ran smooth would
+ * look exactly like judder and would pass every positional check here.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficPoseContinuityTest,
+	"Airside.Model.Traffic.PoseNeverReversesOrSnaps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficPoseContinuityTest::RunTest(const FString& Parameters)
+{
+	const FAirframe Airframe = M2TrafficPiper();
+	FVector2D Threshold;
+	URoadNetwork* Net = M2TrafficArrivalAirport(Airframe, Threshold);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const int32 Id = Traffic->DispatchArrival(*Net, Threshold, Airframe, 0.0);
+	if (!TestTrue(TEXT("arrival dispatched"), Id > 0)) { return false; }
+
+	FRandomStream Frames(4242);
+	FVector2D PrevPos = Traffic->FindAgent(Id)->LastMotion.Position;
+	double PrevYaw = Traffic->FindAgent(Id)->LastMotion.Heading;
+	FVector2D LastStep = FVector2D::ZeroVector;
+	double LastLen = 0.0;
+
+	int32 Reversals = 0, Lurches = 0, YawSnaps = 0, Ticks = 0;
+	double WorstCos = 1.0, WorstYaw = 0.0;
+	FString Where;
+
+	while (Ticks < 20000)
+	{
+		const double Dt = Frames.FRandRange(0.014, 0.020);
+		Traffic->Advance(Dt, Net);
+		++Ticks;
+
+		const FRoadAgent* A = Traffic->FindAgent(Id);
+		if (A == nullptr) { break; }
+
+		const FVector2D Pos = A->LastMotion.Position;
+		const FVector2D Step = Pos - PrevPos;
+		const double Len = Step.Size();
+		const double Yaw = FMath::RadiansToDegrees(FMath::UnwindRadians(A->LastMotion.Heading - PrevYaw));
+
+		if (Len > KINDA_SMALL_NUMBER && LastLen > KINDA_SMALL_NUMBER)
+		{
+			const double Cos = FVector2D::DotProduct(Step / Len, LastStep / LastLen);
+			if (Cos < 0.0)
+			{
+				++Reversals;
+				if (Cos < WorstCos)
+				{
+					WorstCos = Cos;
+					Where = FString::Printf(TEXT("phase %d at %.0f,%.0f tick %d"),
+						static_cast<int32>(A->Phase), Pos.X, Pos.Y, Ticks);
+				}
+			}
+			if (Len > LastLen * 2.0 || Len * 2.0 < LastLen) { ++Lurches; }
+		}
+		if (FMath::Abs(Yaw) > 5.0)
+		{
+			++YawSnaps;
+			if (FMath::Abs(Yaw) > FMath::Abs(WorstYaw)) { WorstYaw = Yaw; }
+		}
+
+		LastStep = Step; LastLen = Len; PrevPos = Pos; PrevYaw = A->LastMotion.Heading;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("pose continuity: %d ticks, %d reversals (worst cos %.3f %s), %d lurches, %d yaw snaps (worst %+.2f deg)"),
+		Ticks, Reversals, WorstCos, *Where, Lurches, YawSnaps, WorstYaw));
+
+	TestTrue(TEXT("the arrival actually flew, so the walk means something"), Ticks > 100);
+	TestEqual(*FString::Printf(
+		TEXT("the body never moves backwards (worst cos %.3f, %s)"), WorstCos, *Where),
+		Reversals, 0);
+	TestEqual(*FString::Printf(
+		TEXT("and the nose never steps (worst %+.2f deg in one frame)"), WorstYaw),
+		YawSnaps, 0);
+
+	// LURCHES ARE NOT ASSERTED. A frame twice as long as the last one MUST carry twice the
+	// distance - that is the delta being honoured, not a defect - and every lurch seen in
+	// play paired with a frame time that had genuinely changed. Counted and reported because
+	// the number is worth reading when this test is being used to chase something.
 	return true;
 }
 

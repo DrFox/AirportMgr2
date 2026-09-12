@@ -172,6 +172,15 @@ public:
 	 * not about the level, so it must not be saved into the map or a game save.
 	 */
 	void SetSimTimeScale(double Scale) { SimTimeScale = FMath::Max(0.0, Scale); }
+
+	/** Sets the delta evening and clears what it has accumulated. 1.0 hands the raw frame
+	 *  delta through, which is the only way a test can measure what the evening removes. */
+	void SetDeltaSmoothingForTest(double Rate)
+	{
+		DeltaSmoothingRate = FMath::Clamp(Rate, 0.0, 1.0);
+		SmoothedDeltaSeconds = 0.0;
+		OwedSeconds = 0.0;
+	}
 	double GetSimTimeScale() const { return SimTimeScale; }
 
 	/** Route between two guideline nodes over the network this actor owns. Forwards to the
@@ -694,6 +703,48 @@ private:
 
 	/** See SetSimTimeScale. 1.0 is real time, which is what every caller before AirportOps got. */
 	UPROPERTY(Transient) double SimTimeScale = 1.0;
+
+	/**
+	 * How fast the evened-out frame delta follows the real one, per frame. 1.0 disables the
+	 * evening entirely and hands the model raw frame time, which is what tests that assert on
+	 * an exact delta want.
+	 *
+	 * WHY THE DELTA IS EVENED AT ALL. The display presents frames on a fixed cadence - vsync
+	 * holds each one for a whole number of refreshes - while DeltaSeconds is real measured
+	 * wall-clock and jitters by several percent frame to frame. An agent advancing
+	 * Speed x DeltaSeconds therefore covers a DIFFERENT distance in each equally-long display
+	 * slot, and that is a velocity flicker, not a position error: measured from a play session
+	 * on 2026-09-12, mean 5.1%, p95 16.8%, worst 36%.
+	 *
+	 * It matches every part of the report. The error is a fixed distance in world space, so it
+	 * grows on screen as the camera closes in. It scales with speed - 1.64 uu a frame on a
+	 * landing rollout against 0.14 uu in a tight turn - so a landing judders and a slow corner
+	 * does not. And it is invisible to every test of the model, because the model is right:
+	 * the aircraft really is where it says it is, at a time that is not evenly spaced.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.001", ClampMax = "1.0"))
+	double DeltaSmoothingRate = 0.1;
+
+	/**
+	 * How far simulated time may run ahead of or behind the wall clock before the step is
+	 * clamped to pull it back.
+	 *
+	 * A BOUND, NOT A BUDGET. Evening the delta means paying out the average rather than what
+	 * the frame actually took, so a hitch leaves time owed and a fast frame pays it back. Left
+	 * unbounded that is a slow drift between the agents and USimClock; bounded, it is a
+	 * fraction of a second that closes itself and nobody can see.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
+	double MaxOwedSeconds = 0.25;
+
+	/** Running average of the frame delta. See DeltaSmoothingRate. */
+	UPROPERTY(Transient) double SmoothedDeltaSeconds = 0.0;
+
+	/** Simulated time owed to the wall clock, positive when behind. See MaxOwedSeconds. */
+	UPROPERTY(Transient) double OwedSeconds = 0.0;
+
+	/** Turns a jittering real frame delta into the even step the display will present. */
+	double EvenDelta(double RealDeltaSeconds);
 
 	/** Builds the FSurfaceSettings RebuildMesh needs from this actor's own Resolve*
 	 *  functions and level-authored tunables. One place, so a rebuild cannot read the

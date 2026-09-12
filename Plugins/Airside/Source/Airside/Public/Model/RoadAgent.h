@@ -311,6 +311,19 @@ struct AIRSIDE_API FRoadAgent
 	void AdvanceEngine(double DeltaSeconds);
 
 	/**
+	 * The engine is running and already at speed, as it is for an aeroplane that has spent a
+	 * turnaround on a stand before taxiing out.
+	 *
+	 * StartTaxi deliberately starts a PLAIN DISPATCH from cold, so the propeller winds up as
+	 * the aircraft first moves. That is wrong for a departure: the engines were started
+	 * during the turnaround, minutes before the aeroplane rolled, and starting from zero
+	 * there meant the propeller was still winding up while the aircraft was already taxiing
+	 * at full speed - which is what was reported. Called by the redirect that sends a parked
+	 * aircraft to the runway.
+	 */
+	void StartEngineAtSpeed();
+
+	/**
 	 * What to show for this agent right now: where it is, and what it is doing.
 	 *
 	 * A pure function of the agent's own state, so Airside.Present.AgentMotion can ask it
