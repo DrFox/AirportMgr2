@@ -71,6 +71,11 @@ public:
 	/** Which session this instance is actually driving. For a test that it is the mode's. */
 	const FBuildSession* SessionForTest() const { return SharedSession; }
 
+	/** The press/drag/release recogniser this instance drives. For a test that ITF's click
+	 *  and drag callbacks actually reach FBuildGesture, rather than a copy nothing calls -
+	 *  same precedent as SessionForTest, see issue #92. */
+	const FBuildGesture& GestureForTest() const { return Gesture; }
+
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;

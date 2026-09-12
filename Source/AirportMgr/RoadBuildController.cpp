@@ -854,14 +854,21 @@ void ARoadBuildController::UpdateDrag()
 
 	// The threshold is the controller's business: it is a fact about the mouse, not about
 	// what dragging means. Without it every slightly imprecise click would be read as a
-	// drag and the click interactions would be impossible to perform. GetMousePosition can
-	// fail if the mouse has left the viewport; DragThresholdPixels is unreachable by any
-	// real screen delta, so Move reports None rather than promoting on stale coordinates.
+	// drag and the click interactions would be impossible to perform.
+	//
+	// GetMousePosition can fail if the mouse has left the viewport. Feeding Move a sentinel
+	// position on that frame is wrong, not merely stale: any large sentinel measures as
+	// farther than the threshold from the press, so a lost cursor would PROMOTE a click to a
+	// drag rather than leave it alone - the opposite of "stale coordinates should not count".
+	// A press already dragging still needs feeding (Move(Dragging) does nothing with the
+	// position it did not get), so only a fresh, not-yet-dragging press bails here.
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
-	const FVector2D Screen = GetMousePosition(MouseX, MouseY)
-		? FVector2D(MouseX, MouseY) : FVector2D(TNumericLimits<float>::Max());
-	const EGestureStep Step = Gesture.Move(Screen, DragThresholdPixels);
+	if (!GetMousePosition(MouseX, MouseY) && !Gesture.IsDragging())
+	{
+		return;
+	}
+	const EGestureStep Step = Gesture.Move(FVector2D(MouseX, MouseY), DragThresholdPixels);
 
 	if (Step == EGestureStep::None)
 	{
