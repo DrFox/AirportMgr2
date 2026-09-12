@@ -381,6 +381,35 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 	return RuntimeProfile;
 }
 
+FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
+{
+	// The corner-fit rule needs the width of the road about to be drawn, which only the
+	// actor's own profile resolver knows - refreshed on PlacementLimits itself, not just the
+	// Tunables copy, so URoadEditFacade::PlanNodeDeletion (which reads PlacementLimits
+	// directly, not through here) judges a rejoin against the same width a click just did.
+	// NewRoadHalfWidth is deliberately not a UPROPERTY - see FRoadPlacementLimits - so this
+	// is a cache refresh, the same shape as RuntimeProfile, not a write to authored state.
+	if (const URoadProfile* ProfileForLimits = ResolveProfile())
+	{
+		PlacementLimits.NewRoadHalfWidth =
+			FMath::Max(ProfileForLimits->GetHalfWidthLeft(), ProfileForLimits->GetHalfWidthRight());
+	}
+
+	FBuildSessionTunables Tunables;
+	Tunables.Snap = Snap;
+	Tunables.Limits = PlacementLimits;
+
+	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the
+	// editor tool) and wants a radius that stays clickable at any zoom - the same 2% floor
+	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the
+	// runtime driver) has its own ToolPickRadius and overwrites this right after - see
+	// ARoadBuildController::MakeToolContext.
+	Tunables.ToolPickRadius = ViewWorldWidth > 0.0 ? FMath::Max(150.0, ViewWorldWidth * 0.02)
+		: FBuildSessionTunables().ToolPickRadius;
+
+	return Tunables;
+}
+
 void ARoadNetworkActor::RebuildMesh()
 {
 	// Unconditional, matching the pre-split RebuildMesh exactly: even the path below that
@@ -410,14 +439,14 @@ double ARoadNetworkActor::GetApronSurfaceZ() const
 	return Presenter->GetApronSurfaceZ(SurfaceZ, ApronZOffset);
 }
 
-void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
 	ERoadKind Kind)
 {
 	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
-	// unchanged FromNodeIndex/Snap, and the cache already knows that without a Resolve*
+	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
 	// call. Only a validity flip on an otherwise-unchanged ghost costs one (GhostMaterial).
 	bool bValidityChanged = false;
-	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, Snap, bValid, bValidityChanged))
+	if (Presenter->IsGhostCacheHit(Network, FromNodeIndex, SnapResult, bValid, bValidityChanged))
 	{
 		if (bValidityChanged)
 		{
@@ -426,17 +455,17 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 		return;
 	}
 
-	Presenter->UpdateGhost(Network, FromNodeIndex, Snap, bValid, MakeGhostSurfaceSettings(Kind));
+	Presenter->UpdateGhost(Network, FromNodeIndex, SnapResult, bValid, MakeGhostSurfaceSettings(Kind));
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(
-	int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers)
+	int32 FromNodeIndex, const FRoadSnapResult& SnapResult, FRoadMeshBuffers& OutBuffers)
 {
 	// TAXIWAY, PASSED EXPLICITLY. This is the seam Airside.Present.AuthoredPropertiesUntouched
 	// measures - that building a preview leaves the real network bitwise unchanged - and it
 	// has no kind of its own to be given. Spelled out rather than defaulted so the choice is
 	// visible at the call site.
-	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, Snap,
+	return Presenter->BuildGhostBuffers(Network, FromNodeIndex, SnapResult,
 		MakeGhostSurfaceSettings(ERoadKind::Taxiway), OutBuffers);
 }
 

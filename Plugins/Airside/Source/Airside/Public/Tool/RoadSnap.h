@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "RoadSnap.generated.h"
 
 class URoadNetwork;
 
@@ -42,15 +43,38 @@ struct FRoadSnapResult
 	double SegmentT = 0.0;
 };
 
-/** Tuning shared by every rule, passed per call so it can be edited live. */
-struct FRoadSnapSettings
+/**
+ * Tuning shared by every rule, passed per call so it can be edited live.
+ *
+ * PER-AIRPORT, not per-driver: `ARoadNetworkActor::Snap` is the one UPROPERTY(EditAnywhere)
+ * copy both `ARoadBuildController` and `URoadBuildEditorTool` build their
+ * `FBuildSessionTunables` from, via `ARoadNetworkActor::MakeTunables` - see issue #93. Before
+ * that, each driver held its own set of these numbers (the controller as seven separate
+ * UPROPERTYs mirroring this struct field-for-field; the editor tool left most of them at
+ * these class defaults, undocumented), so the same click could snap differently in PIE and
+ * in the editor mode depending only on which driver was open. BlueprintType so it can sit as
+ * a UPROPERTY on an actor.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FRoadSnapSettings
 {
+	GENERATED_BODY()
+
 	/** How close, in uu, the cursor must be to a node to reuse it. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double NodeRadius = 150.0;
 
 	/** How close, in uu, the cursor must be to a segment to split it. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double SegmentRadius = 150.0;
 
+	/**
+	 * Let a click land on a segment and split it.
+	 *
+	 * Off, a junction can only ever form where a node was already placed, so a road run
+	 * into one already drawn just crosses over it.
+	 */
+	UPROPERTY(EditAnywhere)
 	bool bSnapToSegments = true;
 
 	/**
@@ -61,6 +85,7 @@ struct FRoadSnapSettings
 	 * a node whose junction reaches 550 uu drops a new node inside existing pavement. This
 	 * still stands as the answer for a node that has no junction to reach anywhere.
 	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double MinSplitFromEndpoint = 50.0;
 
 	/**
@@ -79,6 +104,7 @@ struct FRoadSnapSettings
 	 *
 	 * Zero restores the old fixed-radius behaviour, for a test that needs it.
 	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double JunctionSnapFactor = 1.0;
 };
 

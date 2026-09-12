@@ -263,16 +263,20 @@ FToolContext URoadBuildEditorTool::MakeHoverContext() const
 
 FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 {
-	// How close counts as "on" something has to be a screen distance, not a world one.
-	// At the fixed 150 uu default, closing an apron meant clicking within 1.5 m of its
-	// first corner - unhittable when zoomed out over a runway. Passed to MakeContext as a
-	// local FBuildSessionTunables rather than pushed onto Session first - the session has
-	// no mutable tunables to push into any more, so MakeContextAt stays const.
-	const double SnapRadius = FMath::Max(150.0, ViewWorldWidth * 0.02);
-	FBuildSessionTunables Tunables;
-	Tunables.ToolPickRadius = SnapRadius;
-	Tunables.Snap.NodeRadius = SnapRadius;
-	Tunables.Snap.SegmentRadius = SnapRadius;
+	// Snap/Limits are the airport's own now, not this tool's - see ARoadNetworkActor::
+	// MakeTunables and issue #93. Before this, MakeContextAt built its OWN Snap from a
+	// view-derived radius and never set Limits at all, so a corner PIE would refuse as
+	// TooSharp the editor mode happily drew, and a click-to-split radius here disagreed
+	// with the runtime driver's PickRadius for no reason either driver chose.
+	//
+	// ViewWorldWidth > 0 asks MakeTunables for the same view-scaled ToolPickRadius/snap
+	// floor this used to compute inline (how close counts as "on" something has to be a
+	// screen distance, not a world one - at a fixed 150 uu default, closing an apron meant
+	// clicking within 1.5 m of its first corner, unhittable when zoomed out over a runway).
+	// Passed as a local FBuildSessionTunables rather than pushed onto Session first - the
+	// session has no mutable tunables to push into any more, so MakeContextAt stays const.
+	const FBuildSessionTunables Tunables = Target != nullptr
+		? Target->MakeTunables(ViewWorldWidth) : FBuildSessionTunables();
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.

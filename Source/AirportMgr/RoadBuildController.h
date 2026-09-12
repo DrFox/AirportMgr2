@@ -61,30 +61,16 @@ public:
 	ARoadBuildController();
 
 	/**
-	 * How close a click must land to reuse an existing node instead of adding one, in uu.
-	 * Roughly the road's own width: much wider and the cursor snaps to junctions you were
-	 * trying to draw past.
-	 *
-	 * This is the snap chain's rule 1 radius; it keeps its old name because it is the same
-	 * number it always was.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
-	double PickRadius = 150.0;
-
-	/**
 	 * How close, in uu, the cursor counts as "on" something a tool is asking about - a
 	 * guideline node to route from, a stand to pick up, an apron's first corner.
 	 *
-	 * SEPARATE from PickRadius, and larger. The two answer different questions and only
-	 * looked like one number by coincidence: PickRadius decides where a road NODE goes, and
-	 * wants to be tight or roads land where you did not click. This decides what the cursor
-	 * is POINTING AT, and 150 uu is a punishing target - a guideline node is a dimensionless
-	 * point on a road 200 uu wide, viewed from 8000 uu out, so the route tool read as doing
-	 * nothing at all when it was simply being missed.
-	 *
-	 * Road snapping no longer depends on this number anyway: a junction claims the cursor
-	 * out to its own pavement (FRoadSnapSettings::JunctionSnapFactor), so widening the fixed
-	 * radius here would only have made BARE nodes grabbier for no gain.
+	 * A VIEW FACT, not an airport one - see ARoadNetworkActor::Snap for the road-snap radii
+	 * this used to sit beside (moved there by issue #93, now that both drivers judge a click
+	 * by the same per-airport rules). This one stays here: it is the runtime driver's own
+	 * answer to "what is the cursor pointing at", 400 uu because a guideline node is a
+	 * dimensionless point on a road 200 uu wide viewed from 8000 uu out - the editor tool
+	 * asks the same question from ARoadNetworkActor::MakeTunables' view-scaled default
+	 * instead, since it has no fixed view distance of its own to size a constant from.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double ToolPickRadius = 400.0;
@@ -96,19 +82,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
 	double AgentPickPixels = 24.0;
-
-	/** How close a click must land to split an existing segment, in uu. Snap rule 2. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
-	double SegmentSnapRadius = 150.0;
-
-	/**
-	 * Let a click land on a segment and split it.
-	 *
-	 * Off, a junction can only ever form where a node was already placed, so a road run
-	 * into one already drawn just crosses over it.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Snap")
-	bool bSnapToSegments = true;
 
 	/**
 	 * Draw the guideline graph - the routes agents follow - under every tool. Toggled by G.
@@ -167,26 +140,6 @@ public:
 
 	/** The feed on screen. Owns the notification centre; see UToastStackWidget. */
 	UPROPERTY(Transient) TObjectPtr<UToastStackWidget> ToastStack;
-
-	/** Nearest a split may happen to the ends of the segment being split, in uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
-	double MinSplitFromEndpoint = 50.0;
-
-	/**
-	 * How far a junction claims the cursor, as a multiple of the pavement it actually
-	 * covers. See FRoadSnapSettings::JunctionSnapFactor.
-	 *
-	 * PickRadius is a fixed 150 uu while a junction reaches HalfWidth + |R/tan(Theta/2)| -
-	 * 300 uu even for a plain 90 degree corner on the default profile. Clicking in the gap
-	 * used to build a second node inside the first junction's pavement, which is two
-	 * junction polygons at one Z and therefore z-fighting. At 1.0 a click anywhere on a
-	 * junction closes onto it instead.
-	 *
-	 * Raise it to keep new roads further off existing junctions; zero restores the old
-	 * fixed-radius behaviour.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
-	double JunctionSnapFactor = 1.0;
 
 	/**
 	 * Furthest a click may place a node, as a MULTIPLE of the current view distance.
@@ -280,14 +233,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside")
 	bool bDrawBuildPreview = true;
-
-	/** Shortest segment a click may build, in uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Placement", meta = (ClampMin = "0.0"))
-	double MinSegmentLength = 250.0;
-
-	/** Tightest corner a click may make against a road already leaving the start node. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Placement", meta = (ClampMin = "0.0", ClampMax = "180.0"))
-	double MinTurnDegrees = 25.0;
 
 	// --- Read side, for ARoadBuildHUD ------------------------------------------------
 	//
@@ -524,11 +469,6 @@ private:
 
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
-
-	/** Radii and toggles above, gathered into the form the chain takes. */
-	FRoadSnapSettings MakeSnapSettings() const;
-
-	FRoadPlacementLimits MakePlacementLimits() const;
 
 	void CreateBuildCamera();
 

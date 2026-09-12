@@ -27,7 +27,6 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
-#include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/ScreenPick.h"
 
@@ -540,17 +539,6 @@ void ARoadBuildController::ZoomBy(double Notches)
 		bWatchingAgent ? TEXT("Watch") : TEXT("View"), View.Distance, View.PitchDegrees());
 }
 
-FRoadSnapSettings ARoadBuildController::MakeSnapSettings() const
-{
-	FRoadSnapSettings Settings;
-	Settings.NodeRadius = PickRadius;
-	Settings.SegmentRadius = SegmentSnapRadius;
-	Settings.bSnapToSegments = bSnapToSegments;
-	Settings.MinSplitFromEndpoint = MinSplitFromEndpoint;
-	Settings.JunctionSnapFactor = JunctionSnapFactor;
-	return Settings;
-}
-
 bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) const
 {
 	FVector2D Cursor;
@@ -559,24 +547,9 @@ bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) 
 		return false;
 	}
 
-	return Session.ResolveSnap(Target->Network, Cursor, MakeSnapSettings(), Out);
-}
-
-FRoadPlacementLimits ARoadBuildController::MakePlacementLimits() const
-{
-	FRoadPlacementLimits Limits;
-	Limits.MinSegmentLength = MinSegmentLength;
-	Limits.MinTurnDegrees = MinTurnDegrees;
-	// The corner-fit rule needs the width of the road about to be drawn, which only the
-	// actor's profile resolver knows.
-	if (Target != nullptr)
-	{
-		if (const URoadProfile* Profile = Target->ResolveProfile())
-		{
-			Limits.NewRoadHalfWidth = FMath::Max(Profile->GetHalfWidthLeft(), Profile->GetHalfWidthRight());
-		}
-	}
-	return Limits;
+	// Snap is the airport's own now, not this driver's - see ARoadNetworkActor::Snap and
+	// issue #93.
+	return Session.ResolveSnap(Target->Network, Cursor, Target->Snap, Out);
 }
 
 IBuildTool* ARoadBuildController::GetActiveTool() const
@@ -611,12 +584,15 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	FVector2D PlaneHit = Session.LastPlaneHit();
 	CursorOnRoadPlane(PlaneHit);
 
-	// Read fresh every call rather than cached, so a details-panel edit to PickRadius and
-	// friends takes effect on the very next click - see MakePlacementLimits' PlayerTick
-	// caller below for the same reasoning applied to the facade's own copy.
-	FBuildSessionTunables Tunables;
-	Tunables.Snap = MakeSnapSettings();
-	Tunables.Limits = MakePlacementLimits();
+	// Read fresh every call rather than cached, so a details-panel edit to the airport's own
+	// Snap/PlacementLimits takes effect on the very next click. Target->MakeTunables is the
+	// one place both drivers build this now - see issue #93 - and also refreshes
+	// Target->PlacementLimits.NewRoadHalfWidth in place, which is what keeps the deletion
+	// planner's own corner-fit check current (see ARoadNetworkActor::PlacementLimits).
+	FBuildSessionTunables Tunables = Target != nullptr ? Target->MakeTunables(0.0) : FBuildSessionTunables();
+
+	// ToolPickRadius is this driver's own view fact, not an airport tunable - see its
+	// declaration on this class.
 	Tunables.ToolPickRadius = ToolPickRadius;
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
@@ -933,8 +909,10 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	}
 
 	// The deletion planner judges its rejoins by the same rules a click obeys, so the two
-	// cannot drift apart. Pushed every frame so a details-panel edit takes effect at once.
-	Target->PlacementLimits = MakePlacementLimits();
+	// cannot drift apart - Target->MakeTunables (called below, from MakeToolContext, every
+	// tick there is an active tool - always, after BeginPlay) refreshes
+	// Target->PlacementLimits.NewRoadHalfWidth in place for exactly this reason. See
+	// ARoadNetworkActor::PlacementLimits and issue #93.
 
 	UpdateDrag();
 

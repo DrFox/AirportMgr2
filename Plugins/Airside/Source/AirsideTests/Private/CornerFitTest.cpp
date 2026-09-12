@@ -4,7 +4,9 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/BuildSession.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 
@@ -244,7 +246,7 @@ bool FCornerPlacementTest::RunTest(const FString& Parameters)
 	Limits.MinTurnDegrees = 25.0;
 	Limits.NewRoadHalfWidth = 200.0;
 
-	auto Judge = [&](double ArmLength)
+	auto JudgeWith = [&](double ArmLength, const FRoadPlacementLimits& WithLimits)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>();
 		const FRoadNodeId Centre = Net->AddNode(FVector2D(0.0, 0.0));
@@ -255,8 +257,9 @@ bool FCornerPlacementTest::RunTest(const FString& Parameters)
 		FRoadSnapResult To;
 		To.Kind = ERoadSnapKind::Free;
 		To.Position = FVector2D(ArmLength * FMath::Cos(R), ArmLength * FMath::Sin(R));
-		return RoadPlacement::Validate(*Net, Centre, To, Limits);
+		return RoadPlacement::Validate(*Net, Centre, To, WithLimits);
 	};
+	auto Judge = [&](double ArmLength) { return JudgeWith(ArmLength, Limits); };
 
 	// The new road's corner needs 746 at the start; its far end is a dead end with no floor.
 	TestEqual(TEXT("30 degrees with 3000 uu arms is a corner the solver can fit"), Judge(3000.0), ERoadPlacement::Valid);
@@ -286,6 +289,41 @@ bool FCornerPlacementTest::RunTest(const FString& Parameters)
 			RoadPlacement::NodeCornersFit(*Net, Centre, FVector2D(3400.0, -1000.0)));
 		TestTrue(TEXT("a dead end moved nearer keeps a corner that still fits"),
 			RoadPlacement::NodeCornersFit(*Net, East, FVector2D(2000.0, 0.0)));
+	}
+
+	// THROUGH MakeTunables, not a hand-built FRoadPlacementLimits - issue #93. Before that
+	// issue, only the runtime driver ever resolved NewRoadHalfWidth from a live profile; the
+	// editor tool's own Limits never got one at all, so a corner it drew here would have
+	// judged Valid where PIE judged TooShortForCorner. Both drivers now go through this one
+	// function, so this is the seam that makes such a divergence impossible again.
+	{
+		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		if (!TestNotNull(TEXT("actor constructed"), Actor))
+		{
+			return false;
+		}
+		Actor->Profile = Profile;
+		Actor->PlacementLimits.MinSegmentLength = 250.0;
+		Actor->PlacementLimits.MinTurnDegrees = 25.0;
+		Actor->Snap.NodeRadius = 321.0;
+
+		const FBuildSessionTunables Tunables = Actor->MakeTunables(0.0);
+		TestEqual(TEXT("MakeTunables resolves NewRoadHalfWidth from the actor's own profile"),
+			Tunables.Limits.NewRoadHalfWidth, 200.0);
+		TestEqual(TEXT("MakeTunables carries the actor's own Snap through unchanged"),
+			Tunables.Snap.NodeRadius, 321.0);
+		TestEqual(TEXT("ViewWorldWidth 0 leaves ToolPickRadius at the class default, for the "
+			"caller (the runtime driver) that overwrites it with its own view fact"),
+			Tunables.ToolPickRadius, FBuildSessionTunables().ToolPickRadius);
+
+		const FBuildSessionTunables ViewScaled = Actor->MakeTunables(20000.0);
+		TestEqual(TEXT("a positive ViewWorldWidth sizes ToolPickRadius off it instead"),
+			ViewScaled.ToolPickRadius, 20000.0 * 0.02);
+
+		TestEqual(TEXT("MakeTunables' Limits refuse the same 700 uu corner Judge() does"),
+			JudgeWith(700.0, Tunables.Limits), ERoadPlacement::TooShortForCorner);
+		TestEqual(TEXT("and accept the same 3000 uu one"),
+			JudgeWith(3000.0, Tunables.Limits), ERoadPlacement::Valid);
 	}
 	return true;
 }
