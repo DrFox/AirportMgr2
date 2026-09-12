@@ -317,6 +317,8 @@ Roughness constant per layer, metallic zero.
 from colour, and the surface detail comes from the grass clumps in Slice C. Adding normals
 now would be work that Slice C makes invisible.
 
+Scriptable: **verified**, see section 11.1 for the working recipe and the readback gotcha.
+
 ## 7. Authoring and division of labour
 
 ### 7.1 Who does what
@@ -409,20 +411,37 @@ Also checked and dismissed as irrelevant:
   `Tools/Python/build_*.py` use `unreal.MaterialEditingLibrary.create_material_expression`
   throughout.
 
-### 11.1 The one open risk: wiring the layer blend from Python
+### 11.1 Wiring the layer blend from Python - RESOLVED, it works
 
-`UMaterialExpressionLandscapeLayerBlend` holds `TArray<FLayerBlendInput> Layers`
-(`MaterialExpressionLandscapeLayerBlend.h:64-71`). `FLayerBlendInput` is a plain
-`USTRUCT()` - **not** `BlueprintType` - and each layer's connection is an
-`FExpressionInput` reached through a dynamically named input rather than a fixed pin.
+Spiked headlessly on 2026-09-12 and settled by measurement, not argument. The recipe,
+verified end to end:
 
-Whether `MaterialEditingLibrary.connect_material_expressions` can reach those per-layer
-inputs is **unverified**, and it is the crux of whether section 6.2 is scriptable at all.
+```python
+blend = lib.create_material_expression(mat, unreal.MaterialExpressionLandscapeLayerBlend, x, y)
 
-**Settle it with a spike before planning section 6.2**, not by argument: author a
-throwaway material headlessly with one layer blend and two layers, and open it. If the
-connections are unreachable, the fallback is to build `M_Ground` by hand once alongside
-the Landscape - the same trade section 7.2 already accepts, and for the same reason.
+item = unreal.LayerBlendInput()
+item.set_editor_property("layer_name", "GrassMown")
+item.set_editor_property("blend_type", unreal.LandscapeLayerBlendType.LB_WEIGHT_BLEND)
+item.set_editor_property("preview_weight", 1.0)
+blend.set_editor_property("layers", [item, ...])
+
+# The per-layer pin is named "Layer <LayerName>".
+lib.connect_material_expressions(colour, "", blend, "Layer GrassMown")
+lib.connect_material_property(blend, "", unreal.MaterialProperty.MP_BASE_COLOR)
+```
+
+**The gotcha, recorded so it is not rediscovered.** `FLayerBlendInput` exposes
+`layer_name`, `blend_type`, `preview_weight`, `const_layer_input` and `const_height_input`
+to Python, but **NOT `layer_input` or `height_input`** - those two are `UPROPERTY` with no
+`EditAnywhere`, so reflection skips them and `get_editor_property("layer_input")` raises
+*"Failed to find property"*. Connections therefore cannot be read back through the normal
+property API.
+
+That matters because `connect_material_expressions` returning `True` is not evidence the
+wiring survived a save. **Read it back with `export_text()` on the layer struct**, which
+serialises the whole `FExpressionInput`. After the spike's save and reload, the two layers
+carried distinct expressions - `MaterialExpressionConstant3Vector_0` and `_1` - which is
+the proof.
 
 ## 12. Considered and rejected
 
