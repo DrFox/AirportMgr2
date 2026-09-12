@@ -83,9 +83,9 @@ namespace RunwayAdmission
 	 * that first.
 	 *
 	 * Length is the chain's (RunwayExtentAt). Width is the profile's first guideline
-	 * MaxWingspan where declared, else the ICAO code letter the total width implies:
-	 * 18 m is code A (15 m span), 23 m B (24 m), 30 m C (36 m), 45 m D/E (65 m), 60 m F
-	 * (80 m), nearest width wins - so a 36 m airliner is refused a 23 m strip.
+	 * MaxWingspan where declared, else the ICAO code letter the total width implies -
+	 * see Solve/IcaoCode.h for the table and its provenance; nearest width wins, so a
+	 * 36 m airliner is refused a 23 m strip.
 	 */
 	AIRSIDE_API FRunwayAdmission Check(const URoadNetwork& Network, FRoadSegmentId Seed,
 		const FAirframe& Airframe, bool bLanding);

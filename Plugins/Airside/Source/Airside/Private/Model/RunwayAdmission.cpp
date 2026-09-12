@@ -3,6 +3,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/IcaoCode.h"
 
 const TCHAR* RunwaySurfaceName(ERunwaySurface Surface)
 {
@@ -31,27 +32,10 @@ namespace RunwayAdmission
 {
 	double MaxWingspanForWidth(double TotalWidth)
 	{
-		// ICAO Annex 14 Table 1-1, the code letter each runway width is built for, in uu.
-		// A table rather than a formula because the relation is a standard, not a curve:
-		// a 45 m runway serves both D (52 m) and E (65 m) and the wider figure is the one
-		// the width was chosen for.
-		struct FCode { double Width; double Wingspan; };
-		static const FCode Codes[] = {
-			{ 1800.0, 1500.0 },   // A
-			{ 2300.0, 2400.0 },   // B
-			{ 3000.0, 3600.0 },   // C
-			{ 4500.0, 6500.0 },   // D/E
-			{ 6000.0, 8000.0 },   // F
-		};
-		const FCode* Nearest = &Codes[0];
-		for (const FCode& Code : Codes)
-		{
-			if (FMath::Abs(Code.Width - TotalWidth) < FMath::Abs(Nearest->Width - TotalWidth))
-			{
-				Nearest = &Code;
-			}
-		}
-		return Nearest->Wingspan;
+		// The table itself is Solve/IcaoCode.h now - shared with InspectFacts (wingspan ->
+		// letter) and AnchorLink (letter -> stand radius), so the three no longer risk
+		// typing the same ICAO Annex 14 rows in three different orderings. See #85.
+		return IcaoCode::MaxWingspanForWidth(TotalWidth);
 	}
 
 	FRunwayAdmission Judge(const FRunwayFacts& Facts, double RunwayLength, double MaxWingspan,
