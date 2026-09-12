@@ -159,7 +159,7 @@ bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 
-	TestEqual(TEXT("no runway, no runway paint"), Actor->RunwayMarkingTriangleCountForTest(), 0);
+	TestEqual(TEXT("no runway, no runway paint"), Actor->GetPresenter()->RunwayMarkingTriangleCountForTest(), 0);
 
 	// The network is created on demand by the first node placed through the actor, and
 	// PlaceRunway refuses a null network rather than creating one (see the facade). The
@@ -172,8 +172,8 @@ bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("a runway is placed through the actor"),
 		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(150000.0, 0.0), Runway))) { return false; }
 
-	TestTrue(TEXT("the runway paint component now holds triangles"), Actor->RunwayMarkingTriangleCountForTest() > 0);
-	const URoadMaterialSet* Effective = Actor->EffectiveMaterialSetForTest();
+	TestTrue(TEXT("the runway paint component now holds triangles"), Actor->GetPresenter()->RunwayMarkingTriangleCountForTest() > 0);
+	const URoadMaterialSet* Effective = Actor->GetPresenter()->EffectiveMaterialSetForTest();
 	if (!TestNotNull(TEXT("the mesh was skinned with an effective set"), Effective)) { return false; }
 	TestNotEqual(TEXT("which declares the tarmac slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Tarmac)), (int32)INDEX_NONE);
 	TestNotEqual(TEXT("and the grass slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass)), (int32)INDEX_NONE);

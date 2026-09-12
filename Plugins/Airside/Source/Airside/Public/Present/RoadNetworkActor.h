@@ -166,9 +166,12 @@ public:
 	UAirsideTraffic* GetTraffic() const { return Traffic; }
 
 	/**
-	 * The surface presenter, for a caller that wants it directly rather than through one of
-	 * the *ForTest forwarders below. Added alongside GetTraffic() by issue #80 for the same
-	 * reason: read access to a subobject, not a forwarder per method.
+	 * The surface presenter, for a caller that wants it directly rather than through a
+	 * forwarder on this actor. Added alongside GetTraffic() by issue #80 for the same reason:
+	 * read access to a subobject, not a forwarder per method - and used exactly that way by
+	 * MeshFreshnessTest.cpp and RunwaySurfaceTest.cpp (Actor->GetPresenter()->
+	 * SurfaceTriangleCountForTest() and friends) once code review pointed out that keeping the
+	 * three-line forwarders AND this accessor was the growth this whole issue was about.
 	 */
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
 
@@ -757,7 +760,9 @@ private:
 	 * A BOUND, NOT A BUDGET. Evening the delta means paying out the average rather than what
 	 * the frame actually took, so a hitch leaves time owed and a fast frame pays it back. Left
 	 * unbounded that is a slow drift between the agents and USimClock; bounded, it is a
-	 * fraction of a second that closes itself and nobody can see.
+	 * fraction of a second that closes itself - see FFrameDeltaSmoother::Advance's own
+	 * "OWED-BANK RECOVERY" for the actual mechanism, and its world-free test
+	 * (Airside.Present.FrameDeltaSmoother) for the numbers - and nobody can see.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double MaxOwedSeconds = 0.25;
@@ -849,17 +854,12 @@ public:
 	 */
 	const URoadProfile* ResolveProfileForTest() { return ResolveProfile(); }
 
-	/**
-	 * Triangles currently in the road surface, for Airside.Present.MeshIsFreshAfterLoad.
-	 * Forwards to Presenter, which is what actually holds MeshComponent's built mesh.
-	 */
-	int32 SurfaceTriangleCountForTest() const;
-
-	/** Triangles in the runway paint, for Airside.Present.RunwayMarkingsDrawn. Forwards to Presenter. */
-	int32 RunwayMarkingTriangleCountForTest() const;
-
-	/** The material set the last rebuild skinned the mesh with. Forwards to Presenter. */
-	const URoadMaterialSet* EffectiveMaterialSetForTest() const;
+	// SurfaceTriangleCountForTest/RunwayMarkingTriangleCountForTest/EffectiveMaterialSetForTest
+	// deleted (code review on issue #80's PR): they forwarded to Presenter with nothing added,
+	// and GetPresenter() above exists precisely so a test can ask the presenter itself instead
+	// of the actor growing one forwarder per presenter query. Callers (MeshFreshnessTest.cpp,
+	// RunwaySurfaceTest.cpp) now call Actor->GetPresenter()->SurfaceTriangleCountForTest() etc.
+	// directly - see URoadSurfacePresenter's own header for those three.
 
 	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
 	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */

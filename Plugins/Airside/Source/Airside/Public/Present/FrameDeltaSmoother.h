@@ -46,20 +46,46 @@ struct FFrameDeltaSmoother
 	 * Turns RawDeltaSeconds into the evened step the display will present, and updates both
 	 * members above in the process.
 	 *
-	 * HITCH EXCLUSION (2026-09-13). A frame many times the running average - an editor
-	 * hitch, an asset load, PIE's own long first frame - used to be Lerp'd straight into
-	 * SmoothedSeconds like any other sample, which is backwards: that is exactly the kind of
-	 * frame the average exists to smooth OVER, not learn from. One measured 0.4 s hitch
-	 * against a ~0.008 s baseline used to take ~22 frames to decay back under 1.5x normal.
-	 * A frame this far outside the average still banks its real time into OwedSeconds below -
-	 * nothing is lost - it just does not get to move the average.
+	 * HITCH WINSORISING (2026-09-13, revised 2026-09-13 in code review). A frame many times
+	 * the running average - an editor hitch, an asset load, PIE's own long first frame - used
+	 * to be Lerp'd straight into SmoothedSeconds like any other sample, which is backwards:
+	 * that is exactly the kind of frame the average exists to smooth OVER, not learn from. One
+	 * measured 0.4 s hitch against a ~0.008 s baseline used to take ~22 frames to decay back
+	 * under 1.5x normal.
 	 *
-	 * OWED-BANK DECAY (2026-09-13). OwedSeconds used to be paid out only by Step below, and
-	 * Step tracks SmoothedSeconds closely by design - so once a hitch pushed the bank to the
-	 * MaxOwedSeconds clamp, nothing ever pulled it back: a long first PIE frame pinned Owed at
-	 * -MaxOwedSeconds for the rest of the session. A proportional decay every call, applied
-	 * before the clamp, guarantees the bank actually empties instead of merely being stopped
-	 * from growing further.
+	 * NOT excluded outright, though - the first version of this fix skipped the Lerp entirely
+	 * whenever a frame was too far above the average, which review caught as its own bug: a
+	 * SUSTAINED rise (dropping from 120 Hz to a steady 30 fps) is also "too far above the old
+	 * average" on every single frame, so the average never re-learns it, and the sim keeps
+	 * running as if still at 120 Hz for good. Instead the value FED to the Lerp is capped at
+	 * HitchMultiple times the current average - a one-frame spike is heavily dampened (one
+	 * 0.4 s hitch moves the average by 1.3x, not by the frame's full 50x) but a sustained rise
+	 * still pulls the cap up with it every frame and the average catches up geometrically
+	 * within a couple of hundred frames, same as an ordinary EMA. This also means the fix does
+	 * NOT reach a huge FIRST frame's seeding above - see the field comment on SmoothedSeconds -
+	 * but that is what OWED-BANK RECOVERY below is for.
+	 *
+	 * OWED-BANK RECOVERY (2026-09-13, revised 2026-09-13 in code review). Without any of this,
+	 * a hitch (or a huge first frame, which SEEDS SmoothedSeconds directly and is not subject
+	 * to the winsorising above) pushes OwedSeconds to the MaxOwedSeconds clamp and it stays
+	 * there: paying out SmoothedSeconds every frame moves Owed by (RawDeltaSeconds -
+	 * SmoothedSeconds), and while the clamp is engaged that difference is exactly what keeps
+	 * Owed pinned at the clamp - a long first PIE frame pinned it there for the rest of the
+	 * session.
+	 *
+	 * The first fix decayed OwedSeconds by a fixed fraction every call, BEFORE computing Step -
+	 * which review also caught: while the clamp is engaged, Step is defined as
+	 * (post-decay Owed + Bound), so decaying Owed first does not shrink the bank at all, it
+	 * INFLATES Step by the same amount the decay just removed, handing the sim extra time
+	 * every single frame the bank is being paid down (measured: 300 frames of a real 2.4 s
+	 * following a 2.0 s hitch delivered 3.68 sim-seconds, not 2.4). The fix decays Owed only on
+	 * a frame where the clamp did NOT engage - i.e. Step already equalled the smoothed rate
+	 * unclamped - which cannot perturb Step (Step is not computed from the decayed value on
+	 * those frames) and still lets a genuinely near-zero bank bleed off any residual rather
+	 * than drifting on jitter alone. The clamped recovery itself needs no help: with Owed
+	 * pinned at the clamp, Step already equals RawDeltaSeconds exactly every frame (real-time
+	 * passthrough, provably neither fast nor slow), and the pin releases on its own once
+	 * SmoothedSeconds decays close enough to the live average for the clamp to stop engaging.
 	 */
 	double Advance(double RawDeltaSeconds, double SmoothingRate, double MaxOwedSeconds)
 	{
@@ -71,29 +97,45 @@ struct FFrameDeltaSmoother
 		const double Rate = FMath::Clamp(SmoothingRate, 0.0, 1.0);
 		if (SmoothedSeconds <= 0.0)
 		{
+			// Not winsorised: there is nothing to cap against yet. See "OWED-BANK RECOVERY".
 			SmoothedSeconds = RawDeltaSeconds;
 		}
-
-		// Excluded from the average, not from the bank - see "HITCH EXCLUSION" above.
-		constexpr double HitchMultiple = 4.0;
-		if (RawDeltaSeconds <= SmoothedSeconds * HitchMultiple)
+		else
 		{
-			SmoothedSeconds = FMath::Lerp(SmoothedSeconds, RawDeltaSeconds, Rate);
+			// Capped, not dropped - see "HITCH WINSORISING" above for why a sustained rise
+			// must still move this, just not by a single frame's full amount. A CODE
+			// CONSTANT, not a tunable - unlike SmoothingRate/MaxOwedSeconds above, nothing
+			// about "how many multiples of the average counts as a hitch" is per-airport.
+			constexpr double HitchMultiple = 4.0;
+			const double Capped = FMath::Min(RawDeltaSeconds, SmoothedSeconds * HitchMultiple);
+			SmoothedSeconds = FMath::Lerp(SmoothedSeconds, Capped, Rate);
 		}
 
-		// WHAT IS OWED, so evening the step cannot turn into losing time. The average is
-		// paid out each call and the difference banked; the clamp below is what stops the
-		// bank growing, and the decay is what makes it actually shrink - see "OWED-BANK
-		// DECAY" above.
-		OwedSeconds += RawDeltaSeconds;
-		constexpr double OwedDecayRate = 0.1;
-		OwedSeconds -= OwedSeconds * OwedDecayRate;
-
+		// WHAT IS OWED, so evening the step cannot turn into losing time. The average is paid
+		// out each call and the difference banked; the clamp below is what stops the bank
+		// growing further.
+		const double OwedBeforeStep = OwedSeconds + RawDeltaSeconds;
 		const double Bound = FMath::Max(MaxOwedSeconds, 0.0);
-		const double Step = FMath::Max(
-			FMath::Clamp(SmoothedSeconds, OwedSeconds - Bound, OwedSeconds + Bound), 0.0);
+		const double Unclamped = FMath::Max(SmoothedSeconds, 0.0);
+		const double BoundedByOwed = FMath::Clamp(Unclamped, OwedBeforeStep - Bound, OwedBeforeStep + Bound);
+		const double Step = FMath::Max(BoundedByOwed, 0.0);
 
-		OwedSeconds -= Step;
+		OwedSeconds = OwedBeforeStep - Step;
+
+		// Only when the owed-bound clamp did not just decide Step FOR us - see "OWED-BANK
+		// RECOVERY" for why decaying a clamped frame's bank only inflates the very step it was
+		// meant to shrink. Checked against BoundedByOwed (before the final floor at zero, which
+		// is a different, much rarer clamp) with FMath::IsNearlyEqual, not ==: both sides come
+		// through FP arithmetic that need not land on the same bit pattern even when neither
+		// bound was the binding constraint.
+		if (FMath::IsNearlyEqual(BoundedByOwed, Unclamped, 1e-9))
+		{
+			// Also a CODE CONSTANT: how fast a residual bleeds off is an implementation
+			// detail of the smoothing, not a per-airport figure.
+			constexpr double OwedDecayRate = 0.1;
+			OwedSeconds -= OwedSeconds * OwedDecayRate;
+		}
+
 		return Step;
 	}
 };

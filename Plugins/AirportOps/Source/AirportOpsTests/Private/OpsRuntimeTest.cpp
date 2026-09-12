@@ -102,7 +102,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		// rebuild, so the baseline and the cleared state are each rebuilt explicitly before
 		// they are read; the LOAD path is the one under test and gets no such help.
 		Actor->RebuildMesh();
-		const int32 TrisBefore = Actor->SurfaceTriangleCountForTest();
+		const int32 TrisBefore = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 		TestTrue(TEXT("the road produced a surface to measure"), TrisBefore > 0);
 		const FString Slot = TEXT("AirportOpsTest_Runtime");
 		if (!TestTrue(TEXT("save writes"), Runtime->SaveToSlot(Slot))) { return false; }
@@ -110,11 +110,11 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Actor->ClearNetwork();
 		Actor->RebuildMesh();
 		TestEqual(TEXT("cleared network has no nodes"), Actor->Network->GetNodes().Num(), 0);
-		TestEqual(TEXT("and no surface"), Actor->SurfaceTriangleCountForTest(), 0);
+		TestEqual(TEXT("and no surface"), Actor->GetPresenter()->SurfaceTriangleCountForTest(), 0);
 
 		if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
 		TestEqual(TEXT("the nodes are back"), Actor->Network->GetNodes().Num(), 2);
-		TestEqual(TEXT("and the surface mesh was rebuilt from them"), Actor->SurfaceTriangleCountForTest(), TrisBefore);
+		TestEqual(TEXT("and the surface mesh was rebuilt from them"), Actor->GetPresenter()->SurfaceTriangleCountForTest(), TrisBefore);
 		TestEqual(TEXT("agents do not survive a load - they were never saved"), Actor->GetTraffic()->GetAgentCount(), 0);
 		TestFalse(TEXT("a load is a new undo baseline"), Actor->CanUndo());
 		TestFalse(TEXT("a missing slot is refused, not a crash"), Runtime->LoadFromSlot(TEXT("AirportOpsTest_NoSuchRuntimeSlot")));

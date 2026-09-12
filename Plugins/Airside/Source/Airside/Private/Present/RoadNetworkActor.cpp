@@ -441,21 +441,6 @@ bool ARoadNetworkActor::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
 	return Facade->MakeLiveNodeId(Index, OutId);
 }
 
-int32 ARoadNetworkActor::SurfaceTriangleCountForTest() const
-{
-	return Presenter->SurfaceTriangleCountForTest();
-}
-
-int32 ARoadNetworkActor::RunwayMarkingTriangleCountForTest() const
-{
-	return Presenter->RunwayMarkingTriangleCountForTest();
-}
-
-const URoadMaterialSet* ARoadNetworkActor::EffectiveMaterialSetForTest() const
-{
-	return Presenter->EffectiveMaterialSetForTest();
-}
-
 bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 {
 	// Ticks in the EDITOR viewport, not only in play. The build tools work at design time,
