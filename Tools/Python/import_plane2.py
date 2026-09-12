@@ -32,7 +32,9 @@ anim Blueprint (see ARoadAgentActor::Airframe and UAirsideAgentAnim), which this
 no skeleton for. When plane2 is rigged, the skeletal asset is what the sim will use and this
 static mesh stays what the editor and the content browser show.
 """
+import json
 import os
+import struct
 
 import unreal
 
@@ -48,11 +50,39 @@ PIPELINE_NAME = "PL_Plane2_Combine"
 # length 15.94 m on glTF Z, height 8.41 m on glTF Y. Asserted after import so a re-export
 # that changes scale is caught HERE rather than as an aircraft that looks fine and makes
 # every clearance number in the sim quietly false.
-# root plus prop_L/R, wheel_L/R, nosewheel_L/R - the joints the export's skin declares.
-EXPECTED_BONES = 7
 
 EXPECTED_SPAN_UU = 1975.0
 TOLERANCE_UU = 20.0
+
+
+def joint_names():
+    """The joint names the .glb's skin declares, read from the file itself.
+
+    NOT A CONSTANT IN THIS SCRIPT. It was one - EXPECTED_BONES = 7 - and the very next
+    export dropped the split nosewheel for a single one, which would have failed this import
+    for a change that was entirely intended. The export is the authority on its own rig, so
+    the check becomes "the skeleton has a bone per joint the skin declares" and stops needing
+    an edit every time the rig changes.
+
+    A glb is a 12-byte header then a length-prefixed JSON chunk; no dependency needed, and
+    the editor's Python has no glTF reader anyway.
+    """
+    try:
+        with open(SOURCE, "rb") as handle:
+            handle.read(12)
+            length = struct.unpack("<I4s", handle.read(8))[0]
+            doc = json.loads(handle.read(length).decode("utf-8"))
+    except Exception as exc:
+        fail("could not read the skin from %s: %s" % (SOURCE, exc))
+        return []
+
+    nodes = doc.get("nodes", [])
+    names = []
+    for skin in doc.get("skins", []):
+        for index in skin.get("joints", []):
+            if 0 <= index < len(nodes):
+                names.append(nodes[index].get("name", "?"))
+    return names
 
 
 def say(msg):
@@ -297,16 +327,21 @@ def report_skeleton(skeletal_mesh):
 
     bones = skeleton.get_editor_property("bone_tree")
     count = len(bones)
+    joints = joint_names()
     say("bones: %d" % count)
-    if count == EXPECTED_BONES:
-        say("PASS %d bones, matching the export's 'plane2_rig' skin (root plus prop_L/R, "
-            "wheel_L/R, nosewheel_L/R)" % count)
+    say("the export's skin declares %d joint(s): %s" % (len(joints), ", ".join(joints)))
+
+    if not joints:
+        fail("the .glb declares no skin - a skinless glTF yields no skeletal mesh at all, "
+             "and Interchange will not invent a rig from a flat node hierarchy")
+    elif count == len(joints):
+        say("PASS a bone per joint the export declares")
     elif count <= 1:
         fail("%d bone(s) - the mesh bound to a single root and nothing can turn "
              "independently. The export lost its skin." % count)
     else:
-        fail("%d bones, expected %d - the rig changed; check which joints the export's skin "
-             "now declares" % (count, EXPECTED_BONES))
+        fail("%d bones against %d joints in the export's skin - the import dropped or "
+             "invented bones" % (count, len(joints)))
 
 
 def report_materials(mesh):
