@@ -133,10 +133,26 @@ is the stock UE Basic template.
 
 Unbounded (`bUnbound = true`). **The highest-value change in this spec.**
 
-- **Exposure locked** - auto-exposure min brightness = max brightness = 1.0.
+- **Exposure locked** - `AutoExposureMinBrightness` = `AutoExposureMaxBrightness`,
+  both overridden, **at an EV100 of roughly 13-15**, tuned by eye against a screenshot.
   Auto-exposure re-brightens the frame as the player pans across a dark hangar, which
   reads as a rendering bug in a builder, and it makes colour judgement impossible because
   nothing holds still. This is the single most common cause of a UE scene "looking wrong".
+
+  **The units are the trap.** `Scene.h:1988-1991`: *"Eye Adaptation is disabled if Min =
+  Max ... The Min/Max are expressed in pixel luminance (cd/m2) or in EV100 when using
+  ExtendDefaultLuminanceRange."* This project **does** set
+  `r.DefaultFeature.AutoExposure.ExtendDefaultLuminanceRange=True`, so
+  `Scene.cpp:499-506` gives the engine defaults as -10.0 and 20.0 **in EV100**. A sunlit
+  exterior sits near EV100 13-15; a value of 1 would be a dim indoor room and the screen
+  would blow out white. An earlier draft of this spec said "min = max = 1.0" - right
+  mechanism, wrong units. Setting `AutoExposureMethod = AEM_Manual` is the alternative
+  lock, driven by aperture/shutter/ISO instead; Min = Max is simpler and is what this
+  spec uses.
+
+  Slice G inherits this: with exposure pinned to a daylight EV, dusk genuinely darkens
+  rather than being compensated. That is the intent, and it is why section 5's floor
+  intensity has to be measured.
 - Bloom 0.4. Vignette 0. Chromatic aberration 0. Film grain 0. Stylised means clean.
 - **Motion blur off.** A panning top-down camera plus motion blur is nausea.
 - Grade: global saturation x1.05; shadows tinted slightly blue. The blue shadow tint fakes
@@ -376,7 +392,39 @@ with reasons recorded; this is the record.
   `BP_RoadBuildGameMode` or a level instance. Read the instance before changing the
   constructor.
 
-## 11. Considered and rejected
+## 11. What is verified, and what is not
+
+Checked in session against engine source or this repository, each cited at its file and
+line above: no toon shading model; Landscape unreachable from Python; the DirectionalLight
+and SkyLight defaults; `SurfaceZ`; the camera range; the SimClock two-clock contract; the
+field-length test; the exposure units; the landscape arithmetic; the palette.
+
+Also checked and dismissed as irrelevant:
+
+- **Substrate is off.** `r.Substrate` defaults to 0 (`RenderUtils.cpp:2068`) and the
+  comment there confirms an existing project stays off. Material authoring is classic PBR.
+- **MegaLights is off**, `r.MegaLights.EnableForProject` = 0, and its own description says
+  it *"does not support Directional Lights"* - so it cannot matter to a sun-lit exterior.
+- **Python can author material node graphs**, not just instances: the existing
+  `Tools/Python/build_*.py` use `unreal.MaterialEditingLibrary.create_material_expression`
+  throughout.
+
+### 11.1 The one open risk: wiring the layer blend from Python
+
+`UMaterialExpressionLandscapeLayerBlend` holds `TArray<FLayerBlendInput> Layers`
+(`MaterialExpressionLandscapeLayerBlend.h:64-71`). `FLayerBlendInput` is a plain
+`USTRUCT()` - **not** `BlueprintType` - and each layer's connection is an
+`FExpressionInput` reached through a dynamically named input rather than a fixed pin.
+
+Whether `MaterialEditingLibrary.connect_material_expressions` can reach those per-layer
+inputs is **unverified**, and it is the crux of whether section 6.2 is scriptable at all.
+
+**Settle it with a spike before planning section 6.2**, not by argument: author a
+throwaway material headlessly with one layer blend and two layers, and open it. If the
+connections are unreachable, the fallback is to build `M_Ground` by hand once alongside
+the Landscape - the same trade section 7.2 already accepts, and for the same reason.
+
+## 12. Considered and rejected
 
 Two Fab products were weighed against this spec on 2026-09-12. Both are in the library;
 neither was installed for 5.8 at the time (UDS's content was a 5.4 build, and deleted;
@@ -410,3 +458,32 @@ mechanic rather than decoration - crosswind limits, low visibility holding inbou
 closing a runway. **None of that needs UDS.** It is `Model/` code, world-free and testable
 like everything else there, and its visual side is modest. Dropping the plugin is not a
 decision about weather; that remains open and worth doing.
+
+**Cel shading** - rejected, 2026-09-12. UE 5.8 has no toon shading model
+(`EngineTypes.h:709-721` lists all thirteen), so it would mean one of: forking the engine
+to add `MSM_Toon` (this project builds against stock `D:/Epic/UE_5.8`); a post-process
+blendable that quantises the final image, which bands the sky and clouds too and fights
+Lumen; or unlit materials with hand-computed N.L, which discards Lumen, shadows and the
+sun entirely.
+
+The decisive argument is not cost, though. **Cel shading and Slice A are substitutes, not
+complements.** Quantising to three bands throws away precisely what section 4's stack was
+chosen to buy - Lumen's bounce into a hangar, the 1.5 deg soft penumbra, the real-time sky
+capture, and Slice G's light warming toward evening. Adopting it would mean DELETING most
+of Slice A, not adding to it. And the concept sheet has no banded terminators anywhere:
+the clubhouse and hangar are shaded with smooth gradients and corner occlusion.
+
+**The stylisation is already here, it just is not in the shading.** It lives in the
+geometry and the materials - hard-edged low-poly forms, flat base colours, no normal maps
+(section 6.2), restrained bloom, zero grain (section 4.1). The hard edges come from
+silhouettes, not from light.
+
+If this is ever revisited, **decide it before Slice A rather than after**: the engine-fork
+question is far cheaper to answer before a level is tuned against Lumen.
+
+**Outlines are a separate question and stay open.** A post-process Sobel on depth plus
+normals gives a dark line on silhouettes and creases without any banding, and in a
+top-down builder it is arguably functional - it separates a building from the apron it
+stands on. Risk: at 600 m every grass clump and road edge gets a line too, so the depth
+threshold needs tuning by eye and it may simply read as noise. Worth trying once Slice C
+exists and there is something worth outlining.
