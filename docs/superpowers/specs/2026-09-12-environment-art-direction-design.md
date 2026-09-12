@@ -201,9 +201,13 @@ see what it adds before dropping it. Revisit after the first screenshots.
 ### 4.6 Deletions
 
 - `Floor_0` (`SM_Template_Map_Floor`) - replaced by the Landscape.
-- `StaticMeshActor_0` (`SM_SkySphere` on `M_SimpleSkyDome`) - **only if measured.** The
-  suspicion is that this legacy dome occludes SkyAtmosphere and the clouds, but that is a
-  guess. Screenshot with it present and absent, compare, then decide.
+- `StaticMeshActor_0` (`SM_SkySphere` on `M_SimpleSkyDome`) - **deleted 2026-09-12, and
+  measured first.** It contributes nothing: a before/after pair at the same locked exposure
+  differs by 0.37 / 255 mean (max 2) in the band below the horizon where it would show.
+  Note the trap that nearly gave the wrong answer - the WHOLE-image diff read 12.7 / 255,
+  which looks like a real contribution and is entirely the volumetric clouds animating
+  between the two captures (18.94 in the sky band, 0.37 below the horizon). **Diff by band,
+  not by frame**, whenever anything in shot animates.
 
 ### 4.7 What is NOT changed, and why
 
@@ -381,6 +385,11 @@ with reasons recorded; this is the record.
   `GeometryScripting` plugin enabled if the clumps are to be authored headlessly.
 - **Slice D**, the surround: farmland fields, hedgerows and trees beyond the plot, so the
   3 km square does not end in void. The concept sheet's in-game view shows exactly this.
+  **Raised in priority 2026-09-12, after the first screenshots.** From 200 m the landscape
+  edge is plainly visible and everything past it is a flat dark navy band up to the horizon
+  - the SkyAtmosphere's ground, with nothing on it. It reads as the world ending, and it is
+  considerably more prominent than this spec assumed when it deferred the slice. Not caused
+  by the SkySphere: see section 4.6 for the measurement that rules that out.
 - **Slice E**, field-length compression. One named factor,
   `UAirsideSettings::FieldScale = 0.6`, applied in exactly one function. Authored assets
   keep the **real POH figures** - reality stays the source of truth - and the scale is
