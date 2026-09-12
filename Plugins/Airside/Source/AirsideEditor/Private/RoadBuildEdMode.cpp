@@ -169,7 +169,7 @@ void URoadBuildEdMode::BindCommands()
 		const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
 		for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), ToolRegistry().Num()); ++Index)
 		{
-			Commands2->MapAction(ToolCommands[Index], StartToolAction(MakeToolName(Index)));
+			Commands2->MapAction(ToolCommands[Index], StartToolAction(Index));
 		}
 	}
 
@@ -180,17 +180,29 @@ void URoadBuildEdMode::BindCommands()
 	}
 }
 
-FExecuteAction URoadBuildEdMode::StartToolAction(const FString& ToolName)
+FExecuteAction URoadBuildEdMode::StartToolAction(int32 ToolIndex)
 {
-	return FExecuteAction::CreateLambda([this, ToolName]()
+	return FExecuteAction::CreateLambda([this, ToolIndex]()
 	{
+		const FString ToolName = MakeToolName(ToolIndex);
 		UE_LOG(LogRoadBuildMode, Log, TEXT("Tool switch requested: %s"), *ToolName);
 
-		// Guarded because both command lists can carry the same key: restarting the tool
-		// already running would silently abandon a chain half-drawn.
+		// Still refused, and for the reason it always was: restarting the tool already
+		// running would silently abandon a chain half-drawn.
+		//
+		// BUT REFUSING TO RESTART IS NOT THE SAME AS DOING NOTHING, which is what this did
+		// before. The key pressed on the already-active tool is a RESELECT - the gesture
+		// that cycles a runway's width, surface and approach - and it went nowhere in the
+		// editor while working in PIE, because the runtime driver routes the same press
+		// through FBuildSession::SelectTool and this returned early.
 		UInteractiveToolManager* Manager = GetToolManager();
 		if (Manager != nullptr && Manager->GetActiveToolName(EToolSide::Mouse) == ToolName)
 		{
+			// The session's own SelectTool sees Index == ActiveTool and calls OnReselect.
+			// No context: the editor's modifiers are read per-gesture from the viewport, not
+			// held as the sticky state the runtime bar keeps, so a plain reselect is what a
+			// bare key press means here.
+			Session.SelectTool(ToolIndex);
 			return;
 		}
 

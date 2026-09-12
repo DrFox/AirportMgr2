@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Tool/BuildSession.h"
 #include "Tools/UEdMode.h"
 #include "RoadBuildEdMode.generated.h"
 
@@ -35,6 +36,26 @@ public:
 
 	URoadBuildEdMode();
 
+	/**
+	 * THE ONE SESSION, and the reason it lives on the MODE rather than on the tool.
+	 *
+	 * It used to be a member of URoadBuildEditorTool, and the InteractiveTools framework
+	 * builds a NEW tool object on every activation - so the session, and with it every
+	 * FRunwayTool's WidthIndex, was destroyed and rebuilt each time a tool was picked. Two
+	 * consequences, both invisible until somebody tried to lay a wider runway:
+	 *
+	 *   a fresh session always has ActiveTool 0, so selecting a tool was always a SWITCH and
+	 *   IBuildTool::OnReselect could never be reached in the editor at all;
+	 *
+	 *   and even had it been reached, the width it chose would have gone with the session.
+	 *
+	 * The runtime driver has always held one long-lived FBuildSession on the
+	 * PlayerController, which is why width, surface and approach cycle in PIE and did not
+	 * here. That is the drift issue #33 named; this closes it for tool STATE as #33 closed
+	 * it for the tool LIST.
+	 */
+	FBuildSession& GetSession() { return Session; }
+
 	virtual void Enter() override;
 	virtual void CreateToolkit() override;
 	virtual TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetModeCommands() const override;
@@ -55,6 +76,16 @@ private:
 	/** Escape: tell whichever build tool is active to drop what it was holding. */
 	void CancelActiveGesture();
 
-	/** Starts a tool by name, unless it is already the active one. */
-	FExecuteAction StartToolAction(const FString& ToolName);
+	/**
+	 * Starts the tool at this registry index - or, when it is already running, RESELECTS it.
+	 *
+	 * Taking the index rather than the name because a reselect has to reach the session, and
+	 * the session speaks indices. Restarting the running tool is still refused: that would
+	 * silently abandon a half-drawn chain, which is what the old guard was protecting. What
+	 * changed is that refusing to restart no longer means doing nothing.
+	 */
+	FExecuteAction StartToolAction(int32 ToolIndex);
+
+	/** Shared by every editor tool instance - see GetSession. */
+	FBuildSession Session;
 };
