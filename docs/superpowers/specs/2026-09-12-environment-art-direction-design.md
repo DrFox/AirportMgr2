@@ -411,6 +411,30 @@ Also checked and dismissed as irrelevant:
   `Tools/Python/build_*.py` use `unreal.MaterialEditingLibrary.create_material_expression`
   throughout.
 
+### 11.0 Mechanism is verified; craft is not
+
+Everything above is *mechanism* - how the engine behaves - and it is grepped from engine
+source. **Craft is a different question and is not verified.** Section 6.2's "flat base
+colour times two octaves of noise" is reasoning, not a cited technique, and stylised grass
+(Slice C) has known pitfalls that a naive `LandscapeGrassType` setup walks straight into.
+
+So **Slices B and C each open with a short technique research step**, done just before the
+slice rather than now - research against a real screenshot beats research against an
+imagined one, and Slice A needs none of it.
+
+Two things to confirm rather than assume when that happens:
+
+- Grass clump normals probably need pushing toward the landscape normal (or straight up)
+  rather than using the mesh's own, or blades self-shade into dark noise. Believed to be
+  the standard fix; unverified in 5.8.
+- The landscape's own colour has to match the grass colour at the cull distance, or a
+  visible ring appears where clumps stop. Confident in the principle, not in the numbers.
+
+**Caution on sources.** Most published "stylised UE landscape" work targets a saturated
+Ghibli or Zelda look - the opposite of section 1's muted ground with colour reserved for
+vehicles. The concept sheet is a better reference for LOOK than anything findable;
+research is for TECHNIQUE only.
+
 ### 11.1 Wiring the layer blend from Python - RESOLVED, it works
 
 Spiked headlessly on 2026-09-12 and settled by measurement, not argument. The recipe,
