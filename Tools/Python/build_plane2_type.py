@@ -22,6 +22,7 @@ import unreal
 TYPE_PATH = "/Game/Entities"
 TYPE_NAME = "DA_Aircraft_Plane2"
 ABP = "/Game/Aircraft/Plane2/ABP_Plane2"
+SHORT_CODE = "DHC6"
 MESH = "/Game/Aircraft/Plane2/SK_Plane2"
 
 # --- Measured off SK_Plane2, uu (a uu is a centimetre) --------------------------------
@@ -121,7 +122,30 @@ def author_type():
         return None
 
     asset.set_editor_property("code", unreal.Name("B"))
+
+    # SHORT CODE, which is not the aerodrome letter above. Code is the ICAO reference letter
+    # and cannot tell two types apart - an A320 and a 737 are both C - so FAirframe::TypeCode
+    # takes this instead. Anything that has to SAY what an aircraft is reads that.
+    asset.set_editor_property("short_code", unreal.Name(SHORT_CODE))
     asset.set_editor_property("display_name", unreal.Text("DHC-6 Twin Otter"))
+
+    # WHAT IT LOOKS LIKE, which until now no aircraft type carried: every agent wore
+    # UAirsideContent::AgentMesh, one mesh for the whole game, so a Twin Otter was offered
+    # and a Meridian landed. The anim Blueprint travels with it because plane2 is a TWIN -
+    # ABP_PiperMeridian drives one prop bone and this needs two.
+    mesh = unreal.EditorAssetLibrary.load_asset(MESH)
+    if mesh is None:
+        fail("no %s to point the type at" % MESH)
+    else:
+        asset.set_editor_property("mesh", mesh)
+
+    abp = unreal.EditorAssetLibrary.load_asset(ABP)
+    if abp is None:
+        fail("no %s to point the type at" % ABP)
+    elif abp.generated_class() is None:
+        fail("%s has no generated class; compile it before running this" % ABP)
+    else:
+        asset.set_editor_property("anim_class", abp.generated_class())
     asset.set_editor_property("main_wheel_radius", MAIN_WHEEL_RADIUS)
     asset.set_editor_property("propeller_diameter", PROPELLER_DIAMETER)
     asset.set_editor_property("turnaround_seconds", TURNAROUND_SECONDS)
@@ -209,6 +233,21 @@ def verify(path):
         fail("wingspan read back as %.1f" % span)
     else:
         say("PASS footprint wingspan %.1f uu" % span)
+
+    # The three that decide whether the right aeroplane turns up at all.
+    for prop, want in (("short_code", SHORT_CODE),):
+        got = str(asset.get_editor_property(prop))
+        if got != want:
+            fail("%s read back as %s, expected %s" % (prop, got, want))
+        else:
+            say("PASS %s = %s" % (prop, got))
+    for prop in ("mesh", "anim_class"):
+        got = asset.get_editor_property(prop)
+        if got is None:
+            fail("%s is unset - the agent would fall back to the game-wide default mesh, "
+                 "which is how a Twin Otter arrived as a Meridian" % prop)
+        else:
+            say("PASS %s = %s" % (prop, got.get_name()))
 
     requirements = asset.get_editor_property("requirements")
     takeoff = requirements.get_editor_property("takeoff_field_length")

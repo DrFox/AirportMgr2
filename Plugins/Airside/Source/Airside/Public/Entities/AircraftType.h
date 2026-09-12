@@ -5,6 +5,9 @@
 #include "Model/RoadEntity.h"
 #include "AircraftType.generated.h"
 
+class UAnimInstance;
+class USkeletalMesh;
+
 /**
  * One aircraft type: how big it is, and where on it each service is REQUIRED.
  *
@@ -29,8 +32,28 @@ class AIRSIDE_API UAircraftType : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	/** ICAO aerodrome reference code letter - C for an A320, E for a 777. */
+	/** ICAO aerodrome reference code letter - C for an A320, E for a 777. NOT unique: an
+	 *  A320 and a 737 are both C, which is why ShortCode exists beside it. */
 	UPROPERTY(EditAnywhere) FName Code;
+
+	/**
+	 * The type's own short code - "PA46", "DHC6" - unique to this aircraft.
+	 *
+	 * SEPARATE FROM Code, which is the aerodrome reference letter and cannot tell two types
+	 * apart. FAirframe::TypeCode used to be assigned Code and therefore inherited that
+	 * ambiguity while its comment promised a short code. Falls back to Code when unset so an
+	 * un-migrated asset still says something rather than nothing.
+	 */
+	UPROPERTY(EditAnywhere) FName ShortCode;
+
+	/**
+	 * What this type looks like. Null leaves UAirsideContent::AgentMesh, the game-wide
+	 * default - which is what every aircraft used to wear regardless of type.
+	 */
+	UPROPERTY(EditAnywhere) TSoftObjectPtr<USkeletalMesh> Mesh;
+
+	/** The anim Blueprint for Mesh. Null leaves UAirsideContent::AgentAnimClass. */
+	UPROPERTY(EditAnywhere) TSoftClassPtr<UAnimInstance> AnimClass;
 
 	/** Shown in the overlay and the tool. */
 	UPROPERTY(EditAnywhere) FText DisplayName;
@@ -120,7 +143,13 @@ public:
 		Out.Engine = Engine;
 		Out.Wingspan = Footprint.Wingspan;
 		Out.Requirements = Requirements;
-		Out.TypeCode = Code;
+		// ShortCode, falling back to Code. Assigning Code alone was the defect: it is the
+		// aerodrome letter, so TypeCode could not tell an A320 from a 737.
+		Out.TypeCode = ShortCode.IsNone() ? Code : ShortCode;
+
+		// The LOOK travels with the figures - see FAirframe::Mesh for why it lives there.
+		Out.Mesh = Mesh;
+		Out.AnimClass = AnimClass;
 		Out.TurnaroundSeconds = TurnaroundSeconds;
 		return Out;
 	}
