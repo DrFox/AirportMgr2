@@ -55,17 +55,21 @@ public:
 	/**
 	 * A node with no incident segments. It draws no pavement whatsoever, so without a
 	 * marker of its own it is invisible.
+	 *
+	 * Default seeded from PreviewPalette::Default(NodeStub) in the constructor, not typed
+	 * here, so this and GraphOverlay's colour agree without anyone re-typing the number -
+	 * this UPROPERTY still lets a designer override it per level afterwards.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor StubColour = FLinearColor(1.0f, 0.55f, 0.1f);
+	FLinearColor StubColour;
 
 	/** One or two incident segments: a dead end, or a straight-through node. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor EndColour = FLinearColor(0.85f, 0.85f, 0.85f);
+	FLinearColor EndColour;
 
 	/** Three or more incident segments - a real junction, with a solved boundary. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor JunctionColour = FLinearColor(0.15f, 0.85f, 1.0f);
+	FLinearColor JunctionColour;
 
 	/** Draw a marker at every placed stand's anchors, and the way it faces. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
@@ -73,11 +77,11 @@ public:
 
 	/** The aircraft stop position - the thing a stand IS. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
-	FLinearColor StandColour = FLinearColor(0.25f, 0.7f, 1.0f);
+	FLinearColor StandColour;
 
 	/** Where the service vehicles park. Consequences of where the aircraft sits. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
-	FLinearColor ServiceAnchorColour = FLinearColor(0.9f, 0.6f, 0.2f);
+	FLinearColor ServiceAnchorColour;
 
 	/** Radius of a service anchor's ring, in pixels. Smaller than a road node's. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands", meta = (ClampMin = "1.0"))
@@ -92,36 +96,40 @@ public:
 	// One colour per EPreviewStyle. A tool names a MEANING and this maps it to a look, so
 	// the plugin holds no colours, the palette can be retuned without touching a tool, and
 	// every tool reads the same way for the same meaning.
+	//
+	// None of these are typed here any more - see the constructor. PreviewPalette::Default
+	// is the one place the number lives; this class just seeds its own UPROPERTYs from it so
+	// a designer can still override any one per level afterwards.
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor PendingColour = FLinearColor(0.2f, 1.0f, 0.3f);
+	FLinearColor PendingColour;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor SnapColour = FLinearColor(1.0f, 0.9f, 0.15f);
+	FLinearColor SnapColour;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor DoomedColour = FLinearColor(1.0f, 0.15f, 0.1f);
+	FLinearColor DoomedColour;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HealColour = FLinearColor(0.3f, 1.0f, 0.5f);
+	FLinearColor HealColour;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RefusedColour = FLinearColor(1.0f, 0.25f, 0.2f);
+	FLinearColor RefusedColour;
 
 	/** Context, not intent - so it must read as BEHIND everything else the tools draw. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor GuidelineColour = FLinearColor(0.35f, 0.45f, 0.6f);
+	FLinearColor GuidelineColour;
 
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RouteColour = FLinearColor(0.2f, 0.85f, 1.0f);
+	FLinearColor RouteColour;
 
 	/** The pickable under the cursor - what a click would select. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HoverColour = FLinearColor(1.0f, 1.0f, 1.0f);
+	FLinearColor HoverColour;
 
 	/** The current selection. Warm, so it reads against the cyan route and grey nodes. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor SelectedColour = FLinearColor(1.0f, 0.75f, 0.2f);
+	FLinearColor SelectedColour;
 
 	/**
 	 * Hold bars. Amber, because that is what one is painted on a real taxiway - and it
@@ -129,10 +137,10 @@ public:
 	 * as one more piece of context.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RunwayHoldingPositionColour = FLinearColor(1.0f, 0.8f, 0.1f);
+	FLinearColor RunwayHoldingPositionColour;
 	/** The same amber at half strength: the player's line, lighter than the runway's. */
 	UPROPERTY(EditAnywhere, Category = "Road Build")
-	FLinearColor IntermediateHoldingPositionColour = FLinearColor(1.0f, 0.8f, 0.1f, 0.5f);
+	FLinearColor IntermediateHoldingPositionColour;
 
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
@@ -144,6 +152,8 @@ public:
 
 	// The active tool's name used to be drawn here (a mode you cannot see is the classic modal
 	// trap). It is the lit button on UBuildBarWidget now, so the flag that switched it is gone.
+
+	ARoadBuildHUD();
 
 	virtual void DrawHUD() override;
 
@@ -157,11 +167,22 @@ private:
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;
 
-	/** Rings for every live node, coloured by degree. This class's own view of the model. */
-	void DrawNodes(const ARoadNetworkActor& Target);
+	/**
+	 * Node index text, gated on bDrawNodeIndices alone.
+	 *
+	 * The rings themselves come from GraphOverlay::Describe now - see DrawHUD - so this is
+	 * only the label loop that used to live inside DrawNodes. Off by default; it clutters a
+	 * dense graph.
+	 */
+	void DrawNodeIndices(const ARoadNetworkActor& Target);
 
-	/** Placed stands: the stop position, its anchors, and which way it faces. */
-	void DrawStands(const ARoadNetworkActor& Target);
+	/**
+	 * Anchor id text, gated on bDrawAnchorIds alone.
+	 *
+	 * The anchor rings themselves come from GraphOverlay::Describe now - see DrawHUD - so
+	 * this is only the label loop that used to live inside DrawStands.
+	 */
+	void DrawAnchorIds(const ARoadNetworkActor& Target);
 
 	FLinearColor StyleColour(EPreviewStyle Style) const;
 

@@ -141,6 +141,33 @@ enum class EPreviewStyle : uint8
 
 	/** What IS selected. Drawn every frame the selection stands, so it can be found again. */
 	Selected,
+
+	// --- GraphOverlay's own context styles ---------------------------------------------
+	//
+	// The committed road graph and its placed entities, like Guideline above: true whatever
+	// the gesture, not something the current one would do. See GraphOverlay.h.
+
+	/** A road node with no incident segments. It draws no pavement, so it needs its own mark. */
+	NodeStub,
+
+	/** One or two incident segments: a dead end, or a straight-through node. */
+	NodeThrough,
+
+	/** Three or more incident segments - a real junction, with a solved boundary. */
+	NodeJunction,
+
+	/**
+	 * A placed entity's own committed pose - the thing it IS, not Pending's "a gesture would
+	 * put one here". StandPreview::Describe marks the same position again as Pending,
+	 * because that call is shared with an in-progress placement; GraphOverlay draws THIS
+	 * marker afterwards and at a different radius (see ARoadBuildHUD::Marker's StandPose
+	 * case) so the two remain distinguishable on screen instead of one ring simply
+	 * overdrawing the other.
+	 */
+	StandPose,
+
+	/** A resolved anchor: the guideline node a vehicle will actually route to on this stand. */
+	ServiceAnchor,
 };
 
 /**
