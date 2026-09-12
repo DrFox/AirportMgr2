@@ -100,12 +100,13 @@ Z = 0 is safe: `RoadNetworkActor.h:819` sets `SurfaceZ = 10.0`, so road plates s
 proud of the landscape. No z-fighting, and the 10 cm lip reads as the kerb that already
 exists.
 
-## 3. Scope: four slices, two in this spec
+## 3. Scope: seven slices, three in this spec
 
 | | Slice | This spec |
 |---|---|---|
 | A | Lighting, sky, post-process | yes |
 | B | Landscape + `M_Ground` | yes |
+| G | Sun tracks the game clock, floored at dusk | yes, after A and B |
 | C | Grass scatter - `LandscapeGrassType` + clump meshes | no |
 | D | The surround - farmland, hedgerows, trees past the fence | no |
 | E | Field-length compression (section 2.2) | no - own spec |
@@ -116,9 +117,12 @@ exists.
 the view read correctly at the height the game is actually played at. C pays off on close
 zoom, D at the plot edge.
 
+**G lands after A and B**, not beside them: a fixed sun has to look right first,
+because the editor viewport and the first PIE frame both have no time of day to read.
+
 **E and F are excluded deliberately.** E is gameplay code with a test contract to honour,
 not environment work, and nothing in A-D depends on it - the landscape is 3,024 m either
-way. F is a one-property change whose default may already be dead (see 6.2).
+way. F is a one-property change whose default may already be dead (see 7.2).
 
 ## 4. Slice A - lighting
 
@@ -149,7 +153,8 @@ Already Movable. Set:
 
 - `Atmosphere Sun Light` on, so SkyAtmosphere takes its sun from this light.
 - Rotation pitch -42 deg, yaw 150 deg. Chosen by eye against the sheet's shadow direction;
-  a starting value, not a finding.
+  a starting value, not a finding. **Slice G turns this pair into the noon point of a
+  curve** rather than a magic number - see section 5.
 - Temperature ~5800 K for a slightly warm sun.
 - **`LightSourceAngle` 0.5357 -> 1.5 deg.** The engine default
   (`DirectionalLightComponent.cpp:1050`) is the real sun's angular diameter, which gives
@@ -193,14 +198,93 @@ like a shadow cut-off waiting to happen. Virtual Shadow Maps are on
 nothing consuming that field. So it is left alone and **verified by a zoomed-out
 screenshot** rather than pre-emptively changed.
 
-## 5. Slice B - ground
+## 5. Slice G - the sun tracks the game clock
 
-### 5.1 Layer info assets
+Lands **after** A and B are on screen. A and B must stand on their own with a fixed sun,
+because the editor viewport and PIE-before-the-clock-ticks both have no time of day.
+
+### Why floored, and not a real day/night cycle
+
+`RealSecondsPerGameDay = 1200` (`SimClock.h:57`) - 20 real minutes per game day at x1. A
+literal sun sweeps **360 deg in 20 minutes (18 deg/min)**, and **144 deg/min at x8**.
+Roughly 40% of a day is dark, so a literal cycle spends about 8 of every 20 real minutes
+in the dark.
+
+That dark would be total. There are no runway edge lights, no taxiway centreline lights,
+no apron floods, no lit windows, no headlights - and section 4.1 deliberately locks
+exposure, so nothing compensates. An unreadable 40% of play time is a defect, not a mood.
+
+The concept sheet already anticipated this: the Lighting Mast is captioned *"For when you
+operate later."* **Night operations are a designed progression unlock.** Arriving at night
+before the lights exist gets the order backwards.
+
+So: the sun follows the clock across an arc **floored above the horizon**. The player gets
+what is actually worth having - shadows rotating and lengthening, light warming toward
+evening, the field reading differently at 08:00 and 17:00 - with no unplayable dark and no
+new assets. When the lighting mast and runway lights land, the floor lifts and true night
+becomes the unlock the sheet implies.
+
+### Shape
+
+Azimuth sweeps the full 360 deg over the game day, continuously, so shadows rotate right
+round and there is no jump at midnight. Elevation follows a sine peaking at noon and
+**clamped to `MinElevationDegrees`** rather than going negative. Between 18:00 and 06:00
+the sun therefore sits low while its azimuth continues north - which reads as a long
+high-latitude twilight, and is a real thing the sky does.
+
+Starting values, all tunable, none of them findings:
+
+| | Value | Note |
+|---|---|---|
+| `MaxElevationDegrees` | 42 | section 4.2's -42 deg pitch, now the noon peak |
+| `NoonAzimuthDegrees` | 150 | section 4.2's yaw |
+| `MinElevationDegrees` | 8 | the dusk floor |
+| Temperature | 3200 K at floor -> 5800 K at noon | warmth is most of what sells time of day |
+| Intensity | ~35% of noon at floor | with exposure locked, this sets how dark dusk reads |
+
+The intensity and temperature ends are the values most likely to move. With exposure
+locked and SkyAtmosphere reddening a low sun, dusk may land too dark to play - that is
+measured against a screenshot, not argued.
+
+### Structure
+
+`FSunPath` - a **plain struct**, no UObject, no world: it maps a time-of-day fraction to a
+rotation, a colour temperature and an intensity, and knows nothing about lights, actors or
+clocks. Same shape and same reasoning as `FBuildCameraRig` (`BuildCameraRig.h:5-17`), and
+world-free means it is unit-testable with `NewObject` and no level.
+
+`ASunDriver` - a small actor in `Source/AirportMgr`, holding
+`UPROPERTY(EditAnywhere) TObjectPtr<ADirectionalLight> Sun` and the `FSunPath` tunables.
+It reads `UOpsRuntimeSubsystem` -> `OpsRuntime::GetClock()` (`OpsRuntime.h:41`;
+`AirportMgr.Build.cs` already has `AirportOps` as a public dependency) and applies the
+result. A forwarder, nothing more.
+
+An explicit level-authored light pointer rather than a `TActorIterator<ADirectionalLight>`
+search: the search silently picks one of two lights, and this project puts knobs in
+properties on purpose. **Falls back to noon when there is no clock**, which is what the
+editor viewport and the first PIE frame both need.
+
+### Tests
+
+`FSunPath` is world-free, so these are plain automation tests:
+
+- noon returns `MaxElevationDegrees`
+- elevation never drops below `MinElevationDegrees`, at any fraction including midnight
+- azimuth is continuous across midnight - no wrap discontinuity
+- elevation rises monotonically from dawn to noon
+- `ASunDriver` with no clock applies the noon rotation
+
+The last one is the seam test the refactor contract asks for: it fails if the driver is
+spawned but never wired.
+
+## 6. Slice B - ground
+
+### 6.1 Layer info assets
 
 Three `ULandscapeLayerInfoObject` assets in `/Game/Environment/`:
 `LI_GrassMown`, `LI_GrassRough`, `LI_Dirt`.
 
-### 5.2 M_Ground
+### 6.2 M_Ground
 
 A `Landscape Layer Blend` node over three layers:
 
@@ -217,9 +301,9 @@ Roughness constant per layer, metallic zero.
 from colour, and the surface detail comes from the grass clumps in Slice C. Adding normals
 now would be work that Slice C makes invisible.
 
-## 6. Authoring and division of labour
+## 7. Authoring and division of labour
 
-### 6.1 Who does what
+### 7.1 Who does what
 
 **You, in the editor (once):** create the Landscape with the section 2.3 parameters, and
 assign `M_Ground` to it.
@@ -229,7 +313,7 @@ assign `M_Ground` to it.
 follows the existing `Tools/Python/build_*.py` convention - headless commandlet, every
 result line prefixed `MARKER:` so it can be grepped out of the log.
 
-### 6.2 Why the Landscape is not scripted
+### 7.2 Why the Landscape is not scripted
 
 **It cannot be.** `ALandscapeProxy::Import` (`LandscapeProxy.h:1418`) is the only function
 that creates one, it sits inside the `#if WITH_EDITOR` block opened at line 1326, and it
@@ -246,7 +330,7 @@ an engine-internal signature for a job done once. Not worth it for a single Land
 The consequence is stated plainly: **the map is not rebuildable from zero.** One manual
 step stands in the way. Everything else is.
 
-## 7. Verification
+## 8. Verification
 
 No claim of "looks right" without an image. After the script runs:
 
@@ -260,14 +344,19 @@ Specific things the screenshots must answer, because reasoning cannot:
 - Do shadows survive to the far edge of the frame at 600 m (4.7)?
 - Does the 10 cm road lip read as a kerb or as a floating plate from 20 m (2.3)?
 - Is the VolumetricCloud actor visible enough to justify its cost (4.5)?
+- **After Slice G:** does a sun sweeping 144 deg/min at x8 make Lumen shimmer or
+  ghost, with a RealTimeCapture SkyLight recapturing behind it (section 5)? This was
+  flagged as Lumen's known weakness when the stack was chosen. Screenshot at x8;
+  do not reason about it.
+- **After Slice G:** is the dusk floor still playable with exposure locked (section 5)?
 
-## 8. GDD change
+## 9. GDD change
 
 `docs/AirportManagerGDD.md` line 30 currently reads **"Visual style: realism."** It is
 replaced by a reference to this document. Design decisions in this project are revisable
 with reasons recorded; this is the record.
 
-## 9. Out of scope, named so it is not forgotten
+## 10. Out of scope, named so it is not forgotten
 
 - **Slice C**, grass scatter: `LandscapeGrassType` assets driven from an
   `M_Ground` Landscape Grass Output, plus low-poly clump meshes. Needs the
