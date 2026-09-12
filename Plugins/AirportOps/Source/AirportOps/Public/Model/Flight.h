@@ -88,6 +88,17 @@ public:
 	UPROPERTY() double ExpiresAt = 0.0;
 
 	/**
+	 * Where THIS flight is aimed. ArrivalPlanner chooses the runway by nearest threshold to
+	 * this point.
+	 *
+	 * PER-FLIGHT, not read off UFlightBoard::ApproachFocus at accept time: that board-level
+	 * field is a scratch value the generator and the debug key both write, and whichever
+	 * wrote it LAST decided every later offer's WhyNotAcceptable and DispatchNow - one
+	 * flight's aim leaking into another's. Set once, at the offer, and carried from there.
+	 */
+	UPROPERTY() FVector2D ApproachFocus = FVector2D::ZeroVector;
+
+	/**
 	 * The stand HELD from the accept, and then the stand actually parked on.
 	 *
 	 * THE TWO CAN DIFFER, and that is by design: the hold guarantees A stand exists for this

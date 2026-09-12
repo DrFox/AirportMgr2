@@ -409,30 +409,17 @@ void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoar
 		return;
 	}
 
-	UFlight* Flight = NewObject<UFlight>(&Board);
-	Flight->Airframe = Airframe;
-	Flight->AirlineName = NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)");
-	Flight->TypeName = FText::FromName(Airframe.TypeCode);
-
-	// NOW, not the generator's lead time: the key exists to put an aeroplane on the field
-	// this second, and it would stop being a debug key if it made you wait a quarter hour.
-	Flight->ArrivesAt = Clock->Now();
-	Flight->ExpiresAt = Clock->Now();
-
-	// The board aims every arrival at its own focus, so the key's choice of runway has to
-	// travel with it - otherwise the aeroplane lands at wherever the last offer was aimed.
-	Board.ApproachFocus = TargetView.Focus;
-	Board.AddOffer(Flight);
-
-	if (!Board.Accept(*Traffic, *Target->Network, *Clock, *Flight))
+	// ONE CALL: make, aim, add and accept the debug flight are all UFlightBoard's job now -
+	// see AcceptImmediate's own header (issue #96). Focus travels with the flight it builds,
+	// so it lands where aimed without re-aiming the board for every later offer.
+	const EArrivalRefusal Why = Board.AcceptImmediate(*Traffic, *Target->Network, *Clock, Airframe,
+		TargetView.Focus, NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)"));
+	if (Why != EArrivalRefusal::None)
 	{
 		// The key used to do nothing at all when the airport was full. Now it says which of
 		// the seven refusals it was, in the sentence the inbox would show.
-		const EArrivalRefusal Why = Board.WhyNotAcceptable(*Traffic, *Target->Network, *Flight);
-		FArrivalPlan Plan;
-		Plan.Why = Why;
 		UE_LOG(LogRoadBuild, Warning, TEXT("Land: no flight. %s"),
-			*ArrivalPlanner::DescribeRefusal(Plan));
+			*ArrivalPlanner::DescribeRefusal(Why));
 	}
 }
 

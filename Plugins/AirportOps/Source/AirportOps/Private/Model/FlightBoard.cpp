@@ -97,7 +97,7 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 		Allocator->Release(Traffic, Flight);
 	}
 
-	if (!Dispatcher(ApproachFocus, Flight.Airframe))
+	if (!Dispatcher(Flight.ApproachFocus, Flight.Airframe))
 	{
 		// Stays Accepted, with no hold. Queueing this properly is the sequencer's job and it
 		// does not exist yet; saying so is what stops it being a silent disappearance.
@@ -127,9 +127,54 @@ void UFlightBoard::Decline(UFlight& Flight)
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const UFlight& Flight) const
 {
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, ApproachFocus, Flight.Airframe,
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
 		&Traffic.GetOccupancy());
 	return Plan.Why;
+}
+
+EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline)
+{
+	UFlight* Flight = NewObject<UFlight>(this);
+	Flight->Airframe = Airframe;
+	Flight->AirlineName = Airline;
+	Flight->TypeName = FText::FromName(Airframe.TypeCode);
+
+	// NOW, not the generator's lead time: AcceptImmediate exists to put an aeroplane on the
+	// field this second - see its own header.
+	Flight->ArrivesAt = Clock.Now();
+	Flight->ExpiresAt = Clock.Now();
+	Flight->ApproachFocus = Focus;
+
+	AddOffer(Flight);
+
+	if (Accept(Traffic, Network, Clock, *Flight))
+	{
+		return EArrivalRefusal::None;
+	}
+
+	// Says WHICH refusal, the same sentence the inbox would show for it - see
+	// ArrivalPlanner::DescribeRefusal. The flight is left in the inbox rather than removed:
+	// an offer nobody could accept yet is exactly what the board already does for one the
+	// generator makes, and a player watching the inbox sees the same row either way.
+	return WhyNotAcceptable(Traffic, Network, *Flight);
+}
+
+void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
+{
+	// A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
+	// OpsSave::Restore. Before UFlight::ApproachFocus existed (issue #96) every flight
+	// shared this one board-wide field, so a v1/v2 blob's flights have no per-flight focus
+	// at all; tagged-property load leaves the new field at FVector2D::ZeroVector, which
+	// would aim every restored flight at the world origin rather than wherever it was
+	// actually saved aimed.
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		if (Each != nullptr)
+		{
+			Each->ApproachFocus = ApproachFocus;
+		}
+	}
 }
 
 void UFlightBoard::Tick(USimClock& Clock)
