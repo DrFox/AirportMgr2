@@ -117,47 +117,20 @@ bool URoadEditFacade::DispatchAgent(const FRoutePlan& Plan, const FAirframe& Air
 
 bool URoadEditFacade::MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const
 {
-	const URoadNetwork* Network = GetNetwork();
-	if (Network == nullptr || !Network->GetNodes().IsValidIndex(Index))
-	{
-		return false;
-	}
-
-	// Build the handle from the slot's own generation and then check liveness properly.
+	// NodeIdAt already returns unset for a dead or out-of-range slot - see RoadSlot::HandleAt.
 	// FRoadNodeId::IsSet() would only report that a handle was assigned, which is the
-	// check this codebase renamed precisely to stop people reaching for it here.
-	FRoadNodeId Candidate;
-	Candidate.Index = Index;
-	Candidate.Generation = Network->GetNodes()[Index].Generation;
-
-	if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Network->GetNodes(), Candidate))
-	{
-		return false;
-	}
-
-	OutId = Candidate;
-	return true;
+	// check this codebase renamed precisely to stop people reaching for it here; IsSet()
+	// on a handle NodeIdAt produced is the liveness check, since a dead slot never gets one.
+	const URoadNetwork* Network = GetNetwork();
+	OutId = Network != nullptr ? Network->NodeIdAt(Index) : FRoadNodeId();
+	return OutId.IsSet();
 }
 
 bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const
 {
 	const URoadNetwork* Network = GetNetwork();
-	if (Network == nullptr || !Network->GetSegments().IsValidIndex(Index))
-	{
-		return false;
-	}
-
-	FRoadSegmentId Candidate;
-	Candidate.Index = Index;
-	Candidate.Generation = Network->GetSegments()[Index].Generation;
-
-	if (!RoadSlot::IsValid<FRoadSegmentId, FRoadSegment>(Network->GetSegments(), Candidate))
-	{
-		return false;
-	}
-
-	OutId = Candidate;
-	return true;
+	OutId = Network != nullptr ? Network->SegmentIdAt(Index) : FRoadSegmentId();
+	return OutId.IsSet();
 }
 
 int32 URoadEditFacade::PlaceNode(FVector2D Where)
@@ -348,18 +321,12 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 	}
 
 	const TArray<FGuidelineNode>& Nodes = Network->GetGuidelineNodes();
-	if (!Nodes.IsValidIndex(FromNodeIndex) || !Nodes.IsValidIndex(ToNodeIndex))
+	const FGuidelineNodeId From = Network->GuidelineNodeIdAt(FromNodeIndex);
+	const FGuidelineNodeId To = Network->GuidelineNodeIdAt(ToNodeIndex);
+	if (!From.IsSet() || !To.IsSet())
 	{
 		return INDEX_NONE;
 	}
-
-	FGuidelineNodeId From;
-	From.Index = FromNodeIndex;
-	From.Generation = Nodes[FromNodeIndex].Generation;
-
-	FGuidelineNodeId To;
-	To.Index = ToNodeIndex;
-	To.Generation = Nodes[ToNodeIndex].Generation;
 
 	if (FGuidelineDrawTool::Validate(*Network, From, To) != EGuidelineLink::Valid)
 	{
@@ -405,7 +372,8 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	}
 
 	const TArray<FGuidelineEdge>& Edges = Network->GetGuidelineEdges();
-	if (!Edges.IsValidIndex(EdgeIndex) || !Edges[EdgeIndex].bAlive)
+	const FGuidelineEdgeId Id = Network->GuidelineEdgeIdAt(EdgeIndex);
+	if (!Id.IsSet())
 	{
 		return false;
 	}
@@ -421,10 +389,6 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	}
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("unlink guidelines"));
-
-	FGuidelineEdgeId Id;
-	Id.Index = EdgeIndex;
-	Id.Generation = Edges[EdgeIndex].Generation;
 	return Network->RemoveGuidelineEdge(Id);
 }
 
@@ -436,13 +400,11 @@ bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 		return false;
 	}
 	const TArray<FGuidelineNode>& Nodes = Network->GetGuidelineNodes();
-	if (!Nodes.IsValidIndex(NodeIndex) || !Nodes[NodeIndex].bAlive)
+	const FGuidelineNodeId Node = Network->GuidelineNodeIdAt(NodeIndex);
+	if (!Node.IsSet())
 	{
 		return false;
 	}
-	FGuidelineNodeId Node;
-	Node.Index = NodeIndex;
-	Node.Generation = Nodes[NodeIndex].Generation;
 
 	// HOISTED ABOVE THE SCOPE, so every refusal really does happen before the snapshot.
 	// URoadNetwork::SetIntermediateHoldingPosition refuses a runway-holding position, and

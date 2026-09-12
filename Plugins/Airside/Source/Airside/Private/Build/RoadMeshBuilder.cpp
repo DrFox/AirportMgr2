@@ -679,9 +679,7 @@ void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult
 			continue;
 		}
 
-		FRoadSegmentId SegmentId;
-		SegmentId.Index = Index;
-		SegmentId.Generation = Segments[Index].Generation;
+		const FRoadSegmentId SegmentId = Network.SegmentIdAt(Index);
 		AddSegment(Network, SegmentId, RibbonSegments);
 	}
 

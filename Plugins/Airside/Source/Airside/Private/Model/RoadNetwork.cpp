@@ -134,6 +134,11 @@ const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const
 	return RoadSlot::Get<FRoadNodeId>(Nodes, Node);
 }
 
+FRoadNodeId URoadNetwork::NodeIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FRoadNodeId>(Nodes, Index);
+}
+
 const URoadProfile* URoadNetwork::ProfileFor(const FRoadSegment& Segment) const
 {
 	// Its own first, always. DefaultProfile is for segments that never had one or lost it
@@ -544,6 +549,11 @@ const FRoadSegment* URoadNetwork::GetSegment(FRoadSegmentId Segment) const
 	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
 }
 
+FRoadSegmentId URoadNetwork::SegmentIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FRoadSegmentId>(Segments, Index);
+}
+
 FRoadSegment* URoadNetwork::GetSegmentMutable(FRoadSegmentId Segment)
 {
 	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
@@ -738,6 +748,11 @@ FGuidelineNodeId URoadNetwork::GuidelineNodeIdAt(int32 Index) const
 const FGuidelineEdge* URoadNetwork::GetGuidelineEdge(FGuidelineEdgeId Edge) const
 {
 	return RoadSlot::Get<FGuidelineEdgeId>(GuidelineEdges, Edge);
+}
+
+FGuidelineEdgeId URoadNetwork::GuidelineEdgeIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FGuidelineEdgeId>(GuidelineEdges, Index);
 }
 
 FGuidelineEdge* URoadNetwork::GetGuidelineEdgeMutable(FGuidelineEdgeId Edge)
@@ -973,6 +988,11 @@ bool URoadNetwork::RemoveApron(FApronId Apron)
 const FApronSurface* URoadNetwork::GetApron(FApronId Apron) const
 {
 	return RoadSlot::Get<FApronId>(Aprons, Apron);
+}
+
+FApronId URoadNetwork::ApronIdAt(int32 Index) const
+{
+	return RoadSlot::HandleAt<FApronId>(Aprons, Index);
 }
 
 FEntityInstanceId URoadNetwork::PlaceEntity(

@@ -46,6 +46,12 @@ public:
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
 	FRoadSegment*       GetSegmentMutable(FRoadSegmentId Segment);
 
+	/** The handle for a live slot index, for callers walking GetNodes() by index. Unset if dead. */
+	FRoadNodeId NodeIdAt(int32 Index) const;
+
+	/** The handle for a live slot index, for callers walking GetSegments() by index. Unset if dead. */
+	FRoadSegmentId SegmentIdAt(int32 Index) const;
+
 	/** Normalised tangent at AtNode, pointing away from that node along the segment. */
 	FVector2D GetOutgoingTangent(FRoadSegmentId Segment, FRoadNodeId AtNode) const;
 
@@ -266,6 +272,9 @@ public:
 	 */
 	FGuidelineNodeId GuidelineNodeIdAt(int32 Index) const;
 
+	/** The handle for a live slot index, for callers walking GetGuidelineEdges() by index. Unset if dead. */
+	FGuidelineEdgeId GuidelineEdgeIdAt(int32 Index) const;
+
 	// --- Holding-position bars ---------------------------------------------------------------
 
 	/**
@@ -345,6 +354,9 @@ public:
 	bool RemoveApron(FApronId Apron);
 	const FApronSurface* GetApron(FApronId Apron) const;
 	const TArray<FApronSurface>& GetAprons() const { return Aprons; }
+
+	/** The handle for a live slot index, for callers walking GetAprons() by index. Unset if dead. */
+	FApronId ApronIdAt(int32 Index) const;
 
 	// --- Entities --------------------------------------------------------------------
 

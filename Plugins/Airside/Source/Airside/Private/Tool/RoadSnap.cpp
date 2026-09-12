@@ -51,9 +51,7 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 		// width off the concrete still snapped to the node (2026-09-06, "same node").
 		if (!bClaimed && Settings.JunctionSnapFactor > 0.0)
 		{
-			FRoadNodeId Id;
-			Id.Index = Index;
-			Id.Generation = Nodes[Index].Generation;
+			const FRoadNodeId Id = Network.NodeIdAt(Index);
 			bClaimed = FRoadNetworkSolver::NodeClaims(Network, Id, Cursor, Settings.JunctionSnapFactor);
 		}
 
@@ -70,8 +68,7 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 	}
 
 	Out.Kind = ERoadSnapKind::Node;
-	Out.Node.Index = Best;
-	Out.Node.Generation = Nodes[Best].Generation;
+	Out.Node = Network.NodeIdAt(Best);
 
 	// The node's stored position, copied - never the cursor, and never recomputed. A
 	// click that reuses a node has to land on the coordinates the graph already holds.
@@ -141,9 +138,7 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 		// left a band of segment pavement claimed by neither rule, where a click built a node
 		// inside existing concrete (2026-09-06). MinSplitFromEndpoint survives as the floor
 		// for an endpoint that paves nothing to stand off from.
-		FRoadSegmentId SegmentId;
-		SegmentId.Index = Index;
-		SegmentId.Generation = Segment.Generation;
+		const FRoadSegmentId SegmentId = Network.SegmentIdAt(Index);
 		const double ClearA = FMath::Max(
 			Settings.MinSplitFromEndpoint,
 			FRoadNetworkSolver::ArmCutDistance(Network, SegmentId, Segment.A) * Settings.JunctionSnapFactor);
@@ -169,8 +164,7 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 	}
 
 	Out.Kind = ERoadSnapKind::Segment;
-	Out.Segment.Index = Best;
-	Out.Segment.Generation = Segments[Best].Generation;
+	Out.Segment = Network.SegmentIdAt(Best);
 	Out.SegmentT = BestT;
 	Out.Position = BestPoint;
 	return true;
