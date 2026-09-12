@@ -7,6 +7,7 @@
 
 #include "OfferGenerator.generated.h"
 
+class UAirlineDefinition;
 class UFlight;
 class URoadNetwork;
 struct FAirsideCapability;
@@ -90,4 +91,18 @@ public:
 	 */
 	UFlight* MakeOffer(const URoadNetwork& Network, const FVector2D& Focus,
 		const TArray<FOfferCandidate>& Fleet, double Now, int32 NextId);
+
+	/**
+	 * Seconds between offers for the airport as a whole, at the combined rate every airline
+	 * asks for - USimClock::SecondsPerDay over the sum of Airlines' OffersPerDay. Zero when
+	 * nothing offers anything, which is not an error: the caller decides what an airport
+	 * with no traffic is worth logging.
+	 *
+	 * MOVED OUT OF UOpsRuntime::Attach (issue #98), which summed the same figure against a
+	 * LOCAL 86400.0 that duplicated USimClock::SecondsPerDay - the two would drift the day
+	 * the compressed day length ever became configurable at that constant's site rather than
+	 * this one. Static and world-free for the same reason CouldEverAdmit is: it reads its
+	 * argument and nothing else, so a test can ask it without owning a generator.
+	 */
+	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines);
 };

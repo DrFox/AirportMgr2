@@ -9,6 +9,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+#include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -260,6 +261,43 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("dispatched at the FIRST flight's own focus, not the second's or the board's"),
 			DispatchedNear[0], Focus);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardDefaultApproachFocusTest,
+	"AirportOps.Model.FlightBoard.DefaultApproachFocusIsTheLongestRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardDefaultApproachFocusTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	FVector2D Focus = FVector2D(999.0, 999.0);
+
+	TestFalse(TEXT("an airport with no runway has no default focus"),
+		UFlightBoard::DefaultApproachFocus(*Net, Focus));
+	TestEqual(TEXT("and OutFocus is left untouched on refusal"), Focus, FVector2D(999.0, 999.0));
+
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+
+	// The SHORTER runway, placed first.
+	const FRoadNodeId A0 = Net->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId A1 = Net->AddNode(FVector2D(30000.0, 0.0));
+	Net->AddStraightSegment(A0, A1, Runway);
+
+	TestTrue(TEXT("one runway is the default"), UFlightBoard::DefaultApproachFocus(*Net, Focus));
+	TestEqual(TEXT("its own threshold"), Focus, FVector2D(0.0, 0.0));
+
+	// A LONGER, separate runway - THE POINT OF THE TEST: the longest wins, not the first
+	// found or the last added, matching AirsideCapability's own LongestRunway().
+	const FRoadNodeId B0 = Net->AddNode(FVector2D(0.0, 100000.0));
+	const FRoadNodeId B1 = Net->AddNode(FVector2D(60000.0, 100000.0));
+	Net->AddStraightSegment(B0, B1, Runway);
+
+	TestTrue(TEXT("the longer runway is still a default"),
+		UFlightBoard::DefaultApproachFocus(*Net, Focus));
+	TestEqual(TEXT("its threshold, not the shorter runway's"), Focus, FVector2D(0.0, 100000.0));
 	return true;
 }
 

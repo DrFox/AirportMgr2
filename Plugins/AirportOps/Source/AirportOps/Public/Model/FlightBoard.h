@@ -63,6 +63,25 @@ public:
 	 */
 	UPROPERTY() FVector2D ApproachFocus = FVector2D::ZeroVector;
 
+	/**
+	 * The longest runway's threshold, for the next generated offer to aim at. False, and
+	 * OutFocus untouched, when the airport has no runway yet.
+	 *
+	 * MOVED OUT OF UOpsRuntime (issue #98): choosing a runway is a pure function of the
+	 * graph, the same kind of decision ArrivalPlanner::Plan makes, and Present/ may hold no
+	 * logic of its own - see OpsRuntime.h's own header. AIMED AT THE LONGEST RUNWAY, not
+	 * wherever the land key last looked: ArrivalPlanner chooses by nearest threshold to the
+	 * focus, so an offer generated with a stale or default focus would be planned against
+	 * whichever strip happens to sit nearest it and then accepted against a different one.
+	 *
+	 * BOOL AND AN OUT-PARAMETER, not FVector2D::ZeroVector on "none": zero is a valid
+	 * threshold, and a caller that cannot tell "no runway" from "a runway starting at the
+	 * origin" would overwrite a perfectly good ApproachFocus with a false one the moment
+	 * every runway was removed - see CLAUDE.md, "honour the return of anything that fills an
+	 * out-parameter."
+	 */
+	static bool DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus);
+
 	/** Takes ownership of an offer and gives it the next id if it has none. */
 	void AddOffer(UFlight* Offer);
 

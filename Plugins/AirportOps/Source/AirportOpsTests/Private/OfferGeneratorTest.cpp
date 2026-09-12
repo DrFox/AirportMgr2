@@ -4,10 +4,12 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "Model/AirlineDefinition.h"
 #include "Model/Flight.h"
 #include "Model/LandingRun.h"
 #include "Model/OfferGenerator.h"
 #include "Model/RoadNetwork.h"
+#include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -194,6 +196,39 @@ bool FOfferGeneratorNothingFitsTest::RunTest(const FString& Parameters)
 
 	TestNull(TEXT("nothing is offered rather than something unlandable"),
 		Generator->MakeOffer(*Tiny, FVector2D::ZeroVector, {TooBig}, 0.0, 1));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferGeneratorIntervalTest,
+	"AirportOps.Model.OfferGenerator.OfferIntervalIsADayOverTheCombinedRate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferGeneratorIntervalTest::RunTest(const FString& Parameters)
+{
+	TestEqual(TEXT("no airline at all means no interval"),
+		UOfferGenerator::OfferIntervalSeconds({}), 0.0);
+
+	UAirlineDefinition* Meridian = NewObject<UAirlineDefinition>();
+	Meridian->OffersPerDay = 4.0;
+	UAirlineDefinition* Regional = NewObject<UAirlineDefinition>();
+	Regional->OffersPerDay = 2.0;
+
+	// SIX a day between them: USimClock::SecondsPerDay over the COMBINED rate, the same
+	// figure UOpsRuntime used to compute against its own local 86400.0 - the duplicate this
+	// seam exists to remove.
+	TestEqual(TEXT("the interval is a day's seconds over the combined rate"),
+		UOfferGenerator::OfferIntervalSeconds({Meridian, Regional}),
+		USimClock::SecondsPerDay / 6.0, 1e-6);
+
+	UAirlineDefinition* Idle = NewObject<UAirlineDefinition>();
+	Idle->OffersPerDay = 0.0;
+	TestEqual(TEXT("an airline offering nothing contributes nothing"),
+		UOfferGenerator::OfferIntervalSeconds({Idle}), 0.0);
+
+	TestEqual(TEXT("a null entry is skipped, not a crash"),
+		UOfferGenerator::OfferIntervalSeconds({nullptr, Meridian}),
+		USimClock::SecondsPerDay / 4.0, 1e-6);
 	return true;
 }
 
