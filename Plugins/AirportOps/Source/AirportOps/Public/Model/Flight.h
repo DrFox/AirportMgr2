@@ -84,9 +84,6 @@ public:
 	 */
 	UPROPERTY() double ArrivesAt = 0.0;
 
-	/** USimClock::Now at which it is due off the stand, from the type's TurnaroundSeconds. */
-	UPROPERTY() double OffBlockAt = 0.0;
-
 	/** USimClock::Now at which an unanswered offer lapses. Before ArrivesAt, always. */
 	UPROPERTY() double ExpiresAt = 0.0;
 

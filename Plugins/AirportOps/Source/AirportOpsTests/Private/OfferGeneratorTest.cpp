@@ -147,8 +147,6 @@ bool FOfferGeneratorEtaTest::RunTest(const FString& Parameters)
 		Offer->ArrivesAt, 1000.0 + Generator->LeadTimeSeconds, 1e-9);
 	TestTrue(TEXT("the expiry is BEFORE the ETA, or an offer could lapse mid-approach"),
 		Offer->ExpiresAt < Offer->ArrivesAt);
-	TestEqual(TEXT("off-block is a turnaround after it lands, not after it was offered"),
-		Offer->OffBlockAt, Offer->ArrivesAt + 1800.0, 1e-9);
 	TestEqual(TEXT("the airframe travelled onto the flight"), Offer->Airframe.Wingspan, 3000.0);
 	return true;
 }
