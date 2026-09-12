@@ -4,8 +4,10 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 {
 	// Values as they stood split across ARoadBuildHUD's UPROPERTY defaults and
 	// FViewportPreviewSink::Colour before this table - moved here verbatim so nothing on
-	// screen shifts on this refactor, per the contract. Deliberately no `default:`; see the
-	// header for why a missing case must fail to compile rather than fall through.
+	// screen shifts on this refactor, per the contract. Deliberately no `default:`: this
+	// project does not build switches as exhaustive-or-error (UBT's SwitchWarningLevel is
+	// off), so a missing case does not fail to compile - checkNoEntry() below is what
+	// actually catches it, at the first frame that asks for the missing style's colour.
 	switch (Style)
 	{
 	case EPreviewStyle::Pending:                     return FLinearColor(0.2f, 1.0f, 0.3f);
@@ -33,8 +35,9 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	case EPreviewStyle::ServiceAnchor:                return FLinearColor(0.9f, 0.6f, 0.2f);
 	}
 
-	// Unreachable while the switch above stays exhaustive - the compiler warns on a style
-	// added without a case. Not a `default:` return, which is what let this go quiet before.
+	// Reached only if EPreviewStyle grew a value with no case above - not caught at compile
+	// time here (see the top of this function), so this check is the actual backstop. Not a
+	// `default:` return, which is what let this go quiet before.
 	checkNoEntry();
 	return FLinearColor::Black;
 }

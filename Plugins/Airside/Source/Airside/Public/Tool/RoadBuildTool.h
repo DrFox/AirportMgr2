@@ -158,9 +158,11 @@ enum class EPreviewStyle : uint8
 
 	/**
 	 * A placed entity's own committed pose - the thing it IS, not Pending's "a gesture would
-	 * put one here". StandPreview::Describe draws the same position again as Pending, because
-	 * that call is shared with an in-progress placement; this ring is what a viewer uses to
-	 * tell "already here" from "about to be placed" apart on screen.
+	 * put one here". StandPreview::Describe marks the same position again as Pending,
+	 * because that call is shared with an in-progress placement; GraphOverlay draws THIS
+	 * marker afterwards and at a different radius (see ARoadBuildHUD::Marker's StandPose
+	 * case) so the two remain distinguishable on screen instead of one ring simply
+	 * overdrawing the other.
 	 */
 	StandPose,
 

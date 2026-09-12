@@ -6,7 +6,7 @@
 #include "Tool/RoadBuildTool.h"
 #include "Tool/StandPreview.h"
 
-void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
+void GraphOverlay::DescribeNodes(const URoadNetwork& Network, IToolPreviewSink& Sink)
 {
 	// Degree is the whole point of drawing these: it is what separates a junction from a
 	// straight-through node, and the pavement looks identical either way.
@@ -24,7 +24,10 @@ void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
 
 		Sink.Marker(Node.Position, Style);
 	}
+}
 
+void GraphOverlay::DescribeStands(const URoadNetwork& Network, IToolPreviewSink& Sink)
+{
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
 		if (!Entity.bAlive)
@@ -32,18 +35,29 @@ void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
 			continue;
 		}
 
-		// The committed pose itself - context, not a gesture. StandPreview::Describe below
-		// marks the same position again as Pending, because that call is shared with an
-		// in-progress placement and must not learn it is being asked for a committed one;
-		// this ring is what lets a viewer tell "already here" from "about to be placed"
-		// apart on screen, which used to be the runtime HUD's double ring and nothing at all
-		// in the editor.
-		Sink.Marker(Entity.Position, EPreviewStyle::StandPose);
-
-		// The full description - aircraft footprint, service points, fixtures - the SAME
-		// call a placement tool's own preview makes, so a placed stand and an aimed one read
-		// as one object. See StandPreview.h for why this used to be two.
+		// The full description FIRST - the SAME call a placement tool's own preview makes,
+		// so a placed stand and an aimed one read as one object. See StandPreview.h for why
+		// this used to be two.
+		//
+		// The footprint matters because a stand aimed 180 degrees out looks identical to a
+		// correct one until something tries to taxi onto it - the heading has to be
+		// unmistakable, which is the whole reason StandPreview draws the aircraft rather
+		// than a single point at the stop. Its service points are recomputed on every call
+		// rather than stored, because they belong to whatever is PARKED here - today the
+		// type the stand was sized for, tomorrow whatever actually occupies it - and a
+		// stored copy would be a claim about an aircraft that has not arrived.
 		StandPreview::Describe(Entity.Definition, Entity.Position, Entity.Heading, Sink);
+
+		// THEN the committed-pose marker, AFTER StandPreview rather than before it, and at a
+		// DIFFERENT radius from its own (see ARoadBuildHUD::Marker's StandPose case).
+		// StandPreview's own last call is Sink.Marker(Entity.Position, Pending) at this
+		// EXACT position - two rings at the same radius drawn there would simply overdraw
+		// one another regardless of which runs second, which is what made this marker
+		// invisible against the stop mark it was meant to be told apart from. Order still
+		// matters for a sink with no radius-per-style logic of its own - the editor
+		// viewport draws every style at one size (see FViewportPreviewSink::Marker) - and
+		// there this is the one that legitimately wins, because it is the one drawn last.
+		Sink.Marker(Entity.Position, EPreviewStyle::StandPose);
 
 		// The RESOLVED anchors - guideline nodes a vehicle will actually route to - read
 		// from the INSTANCE rather than recomputed from the definition, same as the HUD
@@ -59,4 +73,10 @@ void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
 			}
 		}
 	}
+}
+
+void GraphOverlay::Describe(const URoadNetwork& Network, IToolPreviewSink& Sink)
+{
+	DescribeNodes(Network, Sink);
+	DescribeStands(Network, Sink);
 }

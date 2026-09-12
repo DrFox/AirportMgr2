@@ -61,13 +61,18 @@ void ARoadBuildHUD::DrawHUD()
 
 	// The graph first, so the tool's intent overdraws it rather than hiding beneath it.
 	//
-	// One call for both nodes and stands - GraphOverlay::Describe draws the committed graph
-	// exactly as GuidelineOverlay::Draw draws the routing graph below, with no per-feature
-	// toggle inside the overlay itself. RoadBuildEditorTool::DrawPersistentState makes the
-	// identical call, which is the whole point: see GraphOverlay.h.
-	if ((bDrawNodes || bDrawStands) && Target->Network != nullptr)
+	// Two calls, not one: bDrawNodes and bDrawStands are INDEPENDENT toggles, and
+	// GraphOverlay::Describe would force them to rise and fall together. See GraphOverlay.h
+	// for why the split exists and why RoadBuildEditorTool::DrawPersistentState - which has
+	// no such toggle - calls Describe instead.
+	if (bDrawNodes && Target->Network != nullptr)
 	{
-		GraphOverlay::Describe(*Target->Network, *this);
+		GraphOverlay::DescribeNodes(*Target->Network, *this);
+	}
+
+	if (bDrawStands && Target->Network != nullptr)
+	{
+		GraphOverlay::DescribeStands(*Target->Network, *this);
 	}
 
 	// Text labels only - the rings above already drew the geometry. Kept as their own loops,
@@ -114,9 +119,12 @@ ARoadBuildController* ARoadBuildHUD::GetBuildController() const
 
 FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 {
-	// No `default:` - see PreviewPalette.h. A style added to EPreviewStyle without a case
-	// here now warns at compile time instead of silently reusing Pending's colour, which is
-	// what the old default: did for Hover and Selected before this issue.
+	// No `default:` - see PreviewPalette.h. This project does not build with switch
+	// exhaustiveness as an error (UBT's SwitchWarningLevel is off), so a style added to
+	// EPreviewStyle without a case here still compiles; what actually catches it is the
+	// checkNoEntry() below, at the first frame that draws the missing style. That is worse
+	// than a compile error, but still better than the old `default:`, which fell through to
+	// Pending's colour and never reported anything at all.
 	switch (Style)
 	{
 	case EPreviewStyle::Pending:  return PendingColour;
@@ -170,14 +178,21 @@ void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
 		Radius = ServiceAnchorRadius;
 		Thickness = NodeRingThickness;
 	}
+	else if (Style == EPreviewStyle::StandPose)
+	{
+		// DELIBERATELY not NodeRingRadius. GraphOverlay::DescribeStands emits this marker
+		// AFTER StandPreview::Describe's own Pending stop mark, at the SAME Entity.Position -
+		// a ring at the same radius would just overdraw that mark (or be overdrawn by it,
+		// depending on draw order) rather than sit visibly alongside it. A distinctly larger
+		// halo is what makes "this is committed" a fact a viewer can actually see around the
+		// preview, rather than one colour silently replacing another.
+		Radius = NodeRingRadius * 2.2f;
+		Thickness = NodeRingThickness;
+	}
 
 	DrawRing(Screen, Radius, StyleColour(Style), Thickness);
-	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending
-		|| Style == EPreviewStyle::Selected || Style == EPreviewStyle::StandPose)
+	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending || Style == EPreviewStyle::Selected)
 	{
-		// The double ring a stand's committed pose always wore in DrawStands - "the aircraft
-		// stop position" is drawn heavier than everything else at the pose, per that
-		// UPROPERTY's own doc comment.
 		DrawRing(Screen, NodeRingRadius * 1.6f, StyleColour(Style), PreviewThickness);
 	}
 }
@@ -253,6 +268,11 @@ void ARoadBuildHUD::Label(const FVector2D& At, const FString& Text, EPreviewStyl
 
 void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 {
+	if (GEngine == nullptr)
+	{
+		return;
+	}
+
 	// The rings themselves come from GraphOverlay::Describe - see DrawHUD. Degree still
 	// decides the colour here so the label reads the same as the ring it labels.
 	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
@@ -260,7 +280,7 @@ void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		const FRoadNode& Node = Nodes[Index];
-		if (!Node.bAlive || GEngine == nullptr)
+		if (!Node.bAlive)
 		{
 			continue;
 		}
@@ -285,6 +305,11 @@ void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 
 void ARoadBuildHUD::DrawAnchorIds(const ARoadNetworkActor& Target)
 {
+	if (GEngine == nullptr)
+	{
+		return;
+	}
+
 	// The anchor rings themselves come from GraphOverlay::Describe - see DrawHUD. This walks
 	// the SAME ResolvedAnchors, read from the INSTANCE rather than recomputed from the
 	// definition, for the id text alone.
@@ -304,7 +329,7 @@ void ARoadBuildHUD::DrawAnchorIds(const ARoadNetworkActor& Target)
 			}
 
 			FVector2D Screen;
-			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen) || GEngine == nullptr)
+			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen))
 			{
 				continue;
 			}

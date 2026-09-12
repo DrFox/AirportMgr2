@@ -181,7 +181,36 @@ bool FGraphOverlayTest::RunTest(const FString& Parameters)
 			Sink.CountMarkers(EPreviewStyle::Pending) >= AliveEntities);
 	}
 
-	// 3. Killing a node takes its marker off the screen, same contract GuidelineOverlay's
+	// 3. DescribeNodes/DescribeStands stay INDEPENDENT - ARoadBuildHUD gates them on
+	//    separate bDrawNodes/bDrawStands flags, so a caller asking for only one must get
+	//    none of the other's styles. A single combined function (what Describe itself is)
+	//    would force the two to rise and fall together, which is exactly the coupling
+	//    issue #95's reviewer rejected.
+	{
+		FGraphSink NodesOnly;
+		GraphOverlay::DescribeNodes(Network, NodesOnly);
+
+		TestTrue(TEXT("DescribeNodes alone draws the node styles"),
+			NodesOnly.CountMarkers(EPreviewStyle::NodeStub) + NodesOnly.CountMarkers(EPreviewStyle::NodeThrough)
+				+ NodesOnly.CountMarkers(EPreviewStyle::NodeJunction) > 0);
+		TestEqual(TEXT("DescribeNodes alone draws no StandPose"),
+			NodesOnly.CountMarkers(EPreviewStyle::StandPose), 0);
+		TestEqual(TEXT("DescribeNodes alone draws no ServiceAnchor"),
+			NodesOnly.CountMarkers(EPreviewStyle::ServiceAnchor), 0);
+
+		FGraphSink StandsOnly;
+		GraphOverlay::DescribeStands(Network, StandsOnly);
+
+		TestTrue(TEXT("DescribeStands alone draws StandPose"),
+			StandsOnly.CountMarkers(EPreviewStyle::StandPose) > 0);
+		TestTrue(TEXT("DescribeStands alone draws ServiceAnchor"),
+			StandsOnly.CountMarkers(EPreviewStyle::ServiceAnchor) > 0);
+		TestEqual(TEXT("DescribeStands alone draws no node style"),
+			StandsOnly.CountMarkers(EPreviewStyle::NodeStub) + StandsOnly.CountMarkers(EPreviewStyle::NodeThrough)
+				+ StandsOnly.CountMarkers(EPreviewStyle::NodeJunction), 0);
+	}
+
+	// 4. Killing a node takes its marker off the screen, same contract GuidelineOverlay's
 	//    dead-edge test measures - a road removed in the model must not linger in the
 	//    overlay.
 	{
