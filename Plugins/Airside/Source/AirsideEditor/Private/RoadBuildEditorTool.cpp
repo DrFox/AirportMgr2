@@ -7,14 +7,13 @@
 #include "EngineUtils.h"
 #include "InteractiveToolManager.h"
 #include "Model/RoadNetwork.h"
-#include "Model/RoadEntity.h"
-#include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
-#include "Tool/StandPreview.h"
+#include "Tool/PreviewPalette.h"
 #include "ToolContextInterfaces.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEditorTool"
@@ -113,24 +112,17 @@ namespace
 		double PerDistance = 0.0;
 		double FixedRadius = 0.0;
 
+		/**
+		 * The SAME table ARoadBuildHUD seeds its UPROPERTYs from - see PreviewPalette.h.
+		 *
+		 * This used to retype the whole table by hand, and its `default:` silently mapped
+		 * Hover and Selected to Pending's green because neither had its own case - the exact
+		 * bug PreviewPalette exists to make impossible. The viewport has no per-level
+		 * designer override to preserve, so calling straight through is the whole function.
+		 */
 		static FLinearColor Colour(EPreviewStyle Style)
 		{
-			switch (Style)
-			{
-			case EPreviewStyle::Snap:    return FLinearColor(1.0f, 0.9f, 0.15f);
-			case EPreviewStyle::Doomed:  return FLinearColor(1.0f, 0.15f, 0.1f);
-			case EPreviewStyle::Heal:    return FLinearColor(0.3f, 1.0f, 0.5f);
-			case EPreviewStyle::Refused: return FLinearColor(1.0f, 0.25f, 0.2f);
-			case EPreviewStyle::Guideline: return FLinearColor(0.35f, 0.45f, 0.6f);
-			case EPreviewStyle::Route:   return FLinearColor(0.2f, 0.85f, 1.0f);
-
-			// The SAME amber ARoadBuildHUD::RunwayHoldingPositionColour defaults to. A bar that changed
-			// colour between the editor and PIE would read as two different things.
-			case EPreviewStyle::RunwayHoldingPosition: return FLinearColor(1.0f, 0.8f, 0.1f);
-			case EPreviewStyle::IntermediateHoldingPosition: return FLinearColor(1.0f, 0.8f, 0.1f, 0.5f);
-			case EPreviewStyle::Pending:
-			default:                     return FLinearColor(0.2f, 1.0f, 0.3f);
-			}
+			return PreviewPalette::Default(Style);
 		}
 
 		FPrimitiveDrawInterface* PDI = nullptr;
@@ -419,32 +411,10 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 	// visibility change is not the place to take that on.
 	GuidelineOverlay::Draw(*Target->Network, Sink);
 
-	for (const FRoadNode& Node : Target->Network->GetNodes())
-	{
-		if (!Node.bAlive)
-		{
-			continue;
-		}
-
-		// Same reading as the HUD: degree separates a junction from a straight-through
-		// node, and the pavement looks identical either way.
-		const int32 Degree = Node.Incident.Num();
-		const EPreviewStyle Style = (Degree == 0) ? EPreviewStyle::Refused
-			: (Degree >= 3) ? EPreviewStyle::Snap
-			: EPreviewStyle::Heal;
-
-		Sink.Marker(Node.Position, Style);
-	}
-
-	for (const FEntityInstance& Entity : Target->Network->GetEntities())
-	{
-		if (Entity.bAlive)
-		{
-			// The full stand - aircraft footprint, service points, fixtures - not the
-			// ring and tick this used to draw.
-			StandPreview::Describe(Entity.Definition, Entity.Position, Entity.Heading, Sink);
-		}
-	}
+	// The road graph and every placed entity - the SAME call ARoadBuildHUD::DrawHUD makes
+	// for the runtime view, so the two cannot draw this differently again. See
+	// GraphOverlay.h for the three independent renderings this replaced.
+	GraphOverlay::Describe(*Target->Network, Sink);
 }
 
 void URoadBuildEditorTool::CancelGesture()

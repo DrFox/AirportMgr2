@@ -3,13 +3,38 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Model/RoadNetwork.h"
-#include "Entities/AircraftType.h"
-#include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
+#include "Tool/PreviewPalette.h"
+
+ARoadBuildHUD::ARoadBuildHUD()
+{
+	// Seeded from the one canonical table instead of typed here - see PreviewPalette.h and
+	// the header's comment on each of these UPROPERTYs. Assigning in the constructor rather
+	// than as member-initialisers still leaves every one of them a designer-overridable
+	// default on the CDO; only where the literal value LIVES has moved.
+	StubColour = PreviewPalette::Default(EPreviewStyle::NodeStub);
+	EndColour = PreviewPalette::Default(EPreviewStyle::NodeThrough);
+	JunctionColour = PreviewPalette::Default(EPreviewStyle::NodeJunction);
+	StandColour = PreviewPalette::Default(EPreviewStyle::StandPose);
+	ServiceAnchorColour = PreviewPalette::Default(EPreviewStyle::ServiceAnchor);
+
+	PendingColour = PreviewPalette::Default(EPreviewStyle::Pending);
+	SnapColour = PreviewPalette::Default(EPreviewStyle::Snap);
+	DoomedColour = PreviewPalette::Default(EPreviewStyle::Doomed);
+	HealColour = PreviewPalette::Default(EPreviewStyle::Heal);
+	RefusedColour = PreviewPalette::Default(EPreviewStyle::Refused);
+	GuidelineColour = PreviewPalette::Default(EPreviewStyle::Guideline);
+	RouteColour = PreviewPalette::Default(EPreviewStyle::Route);
+	HoverColour = PreviewPalette::Default(EPreviewStyle::Hover);
+	SelectedColour = PreviewPalette::Default(EPreviewStyle::Selected);
+	RunwayHoldingPositionColour = PreviewPalette::Default(EPreviewStyle::RunwayHoldingPosition);
+	IntermediateHoldingPositionColour = PreviewPalette::Default(EPreviewStyle::IntermediateHoldingPosition);
+}
 
 void ARoadBuildHUD::DrawHUD()
 {
@@ -35,14 +60,29 @@ void ARoadBuildHUD::DrawHUD()
 	PlaneZ = Target->SurfaceZ;
 
 	// The graph first, so the tool's intent overdraws it rather than hiding beneath it.
-	if (bDrawNodes && Target->Network != nullptr)
+	//
+	// One call for both nodes and stands - GraphOverlay::Describe draws the committed graph
+	// exactly as GuidelineOverlay::Draw draws the routing graph below, with no per-feature
+	// toggle inside the overlay itself. RoadBuildEditorTool::DrawPersistentState makes the
+	// identical call, which is the whole point: see GraphOverlay.h.
+	if ((bDrawNodes || bDrawStands) && Target->Network != nullptr)
 	{
-		DrawNodes(*Target);
+		GraphOverlay::Describe(*Target->Network, *this);
 	}
 
-	if (bDrawStands && Target->Network != nullptr)
+	// Text labels only - the rings above already drew the geometry. Kept as their own loops,
+	// each gated on its own flag, rather than folded into GraphOverlay: the overlay is a
+	// shared fact both the runtime and the editor draw, and index/id text is a HUD-only
+	// debugging aid the editor viewport has no use for (PrimitiveDrawInterface draws no text
+	// at all - see FViewportPreviewSink::Label).
+	if (bDrawNodes && bDrawNodeIndices && Target->Network != nullptr)
 	{
-		DrawStands(*Target);
+		DrawNodeIndices(*Target);
+	}
+
+	if (bDrawStands && bDrawAnchorIds && Target->Network != nullptr)
+	{
+		DrawAnchorIds(*Target);
 	}
 
 	// The routing graph, under EVERY tool rather than only the route tool. Drawn BEFORE the
@@ -74,8 +114,12 @@ ARoadBuildController* ARoadBuildHUD::GetBuildController() const
 
 FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 {
+	// No `default:` - see PreviewPalette.h. A style added to EPreviewStyle without a case
+	// here now warns at compile time instead of silently reusing Pending's colour, which is
+	// what the old default: did for Hover and Selected before this issue.
 	switch (Style)
 	{
+	case EPreviewStyle::Pending:  return PendingColour;
 	case EPreviewStyle::Snap:    return SnapColour;
 	case EPreviewStyle::Doomed:  return DoomedColour;
 	case EPreviewStyle::Heal:    return HealColour;
@@ -86,9 +130,15 @@ FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
 	case EPreviewStyle::Selected: return SelectedColour;
 	case EPreviewStyle::RunwayHoldingPosition: return RunwayHoldingPositionColour;
 	case EPreviewStyle::IntermediateHoldingPosition: return IntermediateHoldingPositionColour;
-	case EPreviewStyle::Pending:
-	default:                     return PendingColour;
+	case EPreviewStyle::NodeStub:      return StubColour;
+	case EPreviewStyle::NodeThrough:   return EndColour;
+	case EPreviewStyle::NodeJunction:  return JunctionColour;
+	case EPreviewStyle::StandPose:     return StandColour;
+	case EPreviewStyle::ServiceAnchor: return ServiceAnchorColour;
 	}
+
+	checkNoEntry();
+	return PendingColour;
 }
 
 void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
@@ -104,12 +154,30 @@ void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
 	// them and they are context, so they get a dot rather than a ring that would swamp
 	// every mark a tool actually wants read.
 	const bool bContext = (Style == EPreviewStyle::Guideline);
-	const float Radius = bContext ? NodeRingRadius * 0.35f : NodeRingRadius;
-	const float Thickness = bContext ? PreviewThickness * 0.5f : PreviewThickness;
+	float Radius = bContext ? NodeRingRadius * 0.35f : NodeRingRadius;
+	float Thickness = bContext ? PreviewThickness * 0.5f : PreviewThickness;
+
+	// GraphOverlay's own styles keep the sizing DrawNodes/DrawStands drew them with before
+	// the two calls were unified: PreviewThickness is tuned for a tool's own sparse preview
+	// lines, and NodeRingRadius would swamp the small anchor rings a stand carries eight of.
+	if (Style == EPreviewStyle::NodeStub || Style == EPreviewStyle::NodeThrough
+		|| Style == EPreviewStyle::NodeJunction)
+	{
+		Thickness = NodeRingThickness;
+	}
+	else if (Style == EPreviewStyle::ServiceAnchor)
+	{
+		Radius = ServiceAnchorRadius;
+		Thickness = NodeRingThickness;
+	}
 
 	DrawRing(Screen, Radius, StyleColour(Style), Thickness);
-	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending || Style == EPreviewStyle::Selected)
+	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending
+		|| Style == EPreviewStyle::Selected || Style == EPreviewStyle::StandPose)
 	{
+		// The double ring a stand's committed pose always wore in DrawStands - "the aircraft
+		// stop position" is drawn heavier than everything else at the pose, per that
+		// UPROPERTY's own doc comment.
 		DrawRing(Screen, NodeRingRadius * 1.6f, StyleColour(Style), PreviewThickness);
 	}
 }
@@ -183,14 +251,16 @@ void ARoadBuildHUD::Label(const FVector2D& At, const FString& Text, EPreviewStyl
 		GEngine->GetSmallFont());
 }
 
-void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target)
+void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 {
+	// The rings themselves come from GraphOverlay::Describe - see DrawHUD. Degree still
+	// decides the colour here so the label reads the same as the ring it labels.
 	const TArray<FRoadNode>& Nodes = Target.Network->GetNodes();
 
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		const FRoadNode& Node = Nodes[Index];
-		if (!Node.bAlive)
+		if (!Node.bAlive || GEngine == nullptr)
 		{
 			continue;
 		}
@@ -201,27 +271,23 @@ void ARoadBuildHUD::DrawNodes(const ARoadNetworkActor& Target)
 			continue;
 		}
 
-		// Degree is the whole point of drawing these: it is what separates a junction from
-		// a straight-through node, and the pavement looks identical either way.
 		const int32 Degree = Node.Incident.Num();
 		const FLinearColor Colour = (Degree == 0) ? StubColour
 			: (Degree >= 3) ? JunctionColour
 			: EndColour;
 
-		DrawRing(Screen, NodeRingRadius, Colour, NodeRingThickness);
-
-		if (bDrawNodeIndices && GEngine != nullptr)
-		{
-			DrawText(FString::FromInt(Index), Colour,
-				static_cast<float>(Screen.X) + NodeRingRadius + 3.0f,
-				static_cast<float>(Screen.Y) - NodeRingRadius,
-				GEngine->GetSmallFont());
-		}
+		DrawText(FString::FromInt(Index), Colour,
+			static_cast<float>(Screen.X) + NodeRingRadius + 3.0f,
+			static_cast<float>(Screen.Y) - NodeRingRadius,
+			GEngine->GetSmallFont());
 	}
 }
 
-void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
+void ARoadBuildHUD::DrawAnchorIds(const ARoadNetworkActor& Target)
 {
+	// The anchor rings themselves come from GraphOverlay::Describe - see DrawHUD. This walks
+	// the SAME ResolvedAnchors, read from the INSTANCE rather than recomputed from the
+	// definition, for the id text alone.
 	for (const FEntityInstance& Entity : Target.Network->GetEntities())
 	{
 		if (!Entity.bAlive)
@@ -229,80 +295,6 @@ void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
 			continue;
 		}
 
-		FVector2D StopScreen;
-		const bool bStopVisible = ProjectPlanePoint(Entity.Position, Target.SurfaceZ, StopScreen);
-		if (bStopVisible)
-		{
-			DrawRing(StopScreen, NodeRingRadius, StandColour, NodeRingThickness);
-			DrawRing(StopScreen, NodeRingRadius * 1.6f, StandColour, NodeRingThickness);
-		}
-
-		// The aircraft's plan extent, so the anchors have something to be read against and
-		// the heading is unmistakable. A stand aimed 180 degrees out looks identical to a
-		// correct one until something tries to taxi onto it.
-		//
-		// Dimensions come from the DEFINITION. An overlay carrying its own would be a
-		// second opinion about how big an A320 is.
-		const UAircraftType* Design =
-			Entity.Definition != nullptr ? Entity.Definition->DesignAircraft.Get() : nullptr;
-		if (Design != nullptr)
-		{
-			TArray<FVector2D> Outline;
-			UAircraftType::BuildFootprintLines(Design->Footprint, Outline);
-
-			const double Cos = FMath::Cos(Entity.Heading);
-			const double Sin = FMath::Sin(Entity.Heading);
-
-			for (int32 Index = 0; Index + 1 < Outline.Num(); Index += 2)
-			{
-				auto ToWorld = [&Entity, Cos, Sin](const FVector2D& Local)
-				{
-					return FVector2D(
-						Entity.Position.X + Local.X * Cos - Local.Y * Sin,
-						Entity.Position.Y + Local.X * Sin + Local.Y * Cos);
-				};
-
-				FVector2D FromScreen;
-				FVector2D ToScreen;
-				if (ProjectPlanePoint(ToWorld(Outline[Index]), Target.SurfaceZ, FromScreen)
-					&& ProjectPlanePoint(ToWorld(Outline[Index + 1]), Target.SurfaceZ, ToScreen))
-				{
-					DrawLine(
-						static_cast<float>(FromScreen.X), static_cast<float>(FromScreen.Y),
-						static_cast<float>(ToScreen.X), static_cast<float>(ToScreen.Y),
-						StandColour, NodeRingThickness);
-				}
-			}
-		}
-
-		// Where the design aircraft would need each service. Recomputed rather than stored,
-		// because these belong to whatever is PARKED here - today the type the stand was
-		// sized for, tomorrow whatever actually occupies it - and a stored copy would be a
-		// claim about an aircraft that has not arrived.
-		if (Design != nullptr)
-		{
-			const double Cos = FMath::Cos(Entity.Heading);
-			const double Sin = FMath::Sin(Entity.Heading);
-
-			for (const FEntityAnchor& Point : Design->ServicePoints)
-			{
-				const FVector2D World(
-					Entity.Position.X + Point.LocalPosition.X * Cos - Point.LocalPosition.Y * Sin,
-					Entity.Position.Y + Point.LocalPosition.X * Sin + Point.LocalPosition.Y * Cos);
-
-				FVector2D Screen;
-				if (ProjectPlanePoint(World, Target.SurfaceZ, Screen))
-				{
-					DrawRing(Screen, ServiceAnchorRadius * 0.7f, StandColour, NodeRingThickness);
-				}
-			}
-		}
-
-		// The stand's FIXTURES, read from the INSTANCE rather than recomputed from the
-		// definition.
-		// These are the guideline nodes vehicles will actually route to; drawing the
-		// definition's local positions transformed again would be a second opinion about
-		// where they are, and the two could disagree without anything reporting it.
 		for (const FResolvedAnchor& Anchor : Entity.ResolvedAnchors)
 		{
 			const FGuidelineNode* Node = Target.Network->GetGuidelineNode(Anchor.Node);
@@ -312,20 +304,15 @@ void ARoadBuildHUD::DrawStands(const ARoadNetworkActor& Target)
 			}
 
 			FVector2D Screen;
-			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen))
+			if (!ProjectPlanePoint(Node->Position, Target.SurfaceZ, Screen) || GEngine == nullptr)
 			{
 				continue;
 			}
 
-			DrawRing(Screen, ServiceAnchorRadius, ServiceAnchorColour, NodeRingThickness);
-
-			if (bDrawAnchorIds && GEngine != nullptr)
-			{
-				DrawText(Anchor.Id.ToString(), ServiceAnchorColour,
-					static_cast<float>(Screen.X) + ServiceAnchorRadius + 3.0f,
-					static_cast<float>(Screen.Y) - ServiceAnchorRadius,
-					GEngine->GetSmallFont());
-			}
+			DrawText(Anchor.Id.ToString(), ServiceAnchorColour,
+				static_cast<float>(Screen.X) + ServiceAnchorRadius + 3.0f,
+				static_cast<float>(Screen.Y) - ServiceAnchorRadius,
+				GEngine->GetSmallFont());
 		}
 	}
 }
