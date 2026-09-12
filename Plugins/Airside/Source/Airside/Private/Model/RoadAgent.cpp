@@ -2,6 +2,15 @@
 
 #include "AirsideLog.h"
 
+void FRoadAgent::StartEngineAtSpeed()
+{
+	bEngineRunning = true;
+
+	// The same fallback AdvanceEngine uses when nothing is authored, so an airframe with no
+	// engine figures still shows a turning propeller rather than a stopped one.
+	EngineRPM = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+}
+
 void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 {
 	if (!Airframe.Engine.IsSet())

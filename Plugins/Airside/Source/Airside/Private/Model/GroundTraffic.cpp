@@ -330,6 +330,14 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 
 	Agent.StartTaxi(Plan, Own);
 
+	// AND THE ENGINE IS ALREADY TURNING. StartTaxi starts from cold, which is right for a
+	// plain dispatch and wrong for everything that reaches here: an aeroplane redirected has
+	// either been taxiing already, or has spent a turnaround on a stand where its engines
+	// were started long before it rolled. Left cold, the propeller was still winding up while
+	// the aircraft taxied out at full speed - reported from play as the prop never having
+	// time to spin up on departure.
+	Agent.StartEngineAtSpeed();
+
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
 	// the goal moves, because that is the whole of what a redirect changes.
@@ -443,6 +451,37 @@ bool UGroundTraffic::IsStandHeld(FGuidelineNodeId PoseNode, int32 ExcludingHolde
 }
 
 void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
+{
+	// SPLIT BEFORE STEPPING. The delta handed in is the frame time TIMES the player's speed
+	// multiplier, so it grows with x2, x4, x8 - and a single step that large lets an agent
+	// overshoot the waypoint it is turning onto and be corrected back next frame. On screen
+	// that is an aeroplane jerking forwards and backwards; it was reported from play as
+	// rubber-banding that appeared at x2 and was absent at x1, which is what named the cause.
+	//
+	// Everything inside a step stays exactly as it was - claims first, motion second, and
+	// the whole handover chain - so this changes the SIZE of a step and nothing about what
+	// one does.
+	if (DeltaSeconds <= 0.0)
+	{
+		return;
+	}
+
+	const double Longest = FMath::Max(MaxSubstepSeconds, KINDA_SMALL_NUMBER);
+	const int32 Steps = FMath::Clamp(
+		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(MaxSubsteps, 1));
+
+	// Divided rather than repeatedly subtracted: the steps then sum to exactly DeltaSeconds,
+	// so SimSeconds and every integration inside stay in step with the caller's clock. Past
+	// the ceiling this simply makes each step longer than Longest, which is the documented
+	// trade - see MaxSubsteps.
+	const double Step = DeltaSeconds / Steps;
+	for (int32 Index = 0; Index < Steps; ++Index)
+	{
+		AdvanceOnce(Step, Network);
+	}
+}
+
+void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network)
 {
 	SimSeconds += DeltaSeconds;
 

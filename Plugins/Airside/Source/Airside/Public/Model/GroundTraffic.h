@@ -335,6 +335,33 @@ public:
 	 */
 	void Advance(double DeltaSeconds, const URoadNetwork* Network);
 
+	/**
+	 * The longest step the model will take in one go, in sim seconds.
+	 *
+	 * THE FRAME IS NOT THE STEP. UAirsideTraffic hands this the frame time multiplied by the
+	 * player's speed, so at x8 a 16 ms frame arrives as 133 ms of simulation - and an
+	 * aeroplane crossing 133 ms of ground in one jump can pass the waypoint it was turning
+	 * onto and be pulled back onto the line next frame. That is the rubber-banding reported
+	 * from play, and it appeared at x2 and got worse from there while x1 looked perfect,
+	 * which is exactly the signature of a step that scales with the multiplier.
+	 *
+	 * Substepping costs arbitration and motion passes in proportion to the speed multiplier,
+	 * which is the right place to spend: the player asked for more simulation per second.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.001"))
+	double MaxSubstepSeconds = 1.0 / 30.0;
+
+	/**
+	 * The most substeps one call will take, whatever the delta.
+	 *
+	 * A CEILING RATHER THAN A PROMISE. A frame that hitches badly - a level loading, a
+	 * breakpoint - would otherwise ask for hundreds of steps and hitch the next frame too,
+	 * which is the spiral that turns one stutter into a freeze. Past this the remaining time
+	 * is taken in one longer step: slightly wrong once beats compounding.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1"))
+	int32 MaxSubsteps = 8;
+
 	/** How many agents are currently under way or parked at their destination. */
 	int32 GetAgentCount() const { return Agents.Num(); }
 
@@ -595,6 +622,9 @@ private:
 	 * agent per frame to close a one-frame window.
 	 */
 	void Arbitrate(const URoadNetwork& Network);
+
+	/** One bounded step. Advance splits a long frame into these - see MaxSubstepSeconds. */
+	void AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network);
 
 	/**
 	 * What one agent holds and reserves this tick, and how far it may go. Spec §3.1-§3.3.

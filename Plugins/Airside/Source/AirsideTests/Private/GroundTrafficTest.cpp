@@ -1442,6 +1442,16 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// route distance the agent was at when the tick began. Comparing this tick's claims
 	// against this tick's position would fail every threshold by one frame's travel and would
 	// be measuring the tick order, not the crossing rule.
+	//
+	// THAT BOOKKEEPING IS ONLY VALID WHILE ONE CALL IS ONE PASS, which is why the tick below
+	// is the substep and not the 0.05 the other fixtures use. Advance now splits a long delta
+	// into bounded substeps (see UGroundTraffic::MaxSubstepSeconds), and a call holding two
+	// passes arbitrates twice - at the start pose and half a tick later - while this variable
+	// still names only the first. Every threshold here would then be read against a pose the
+	// agent had already left, which is measuring the substep count rather than the crossing
+	// rule. Ticking at the substep keeps the call a single pass, and has the better property
+	// of measuring the crossing at the granularity PRODUCTION now runs it: no frame reaches
+	// the model coarser than this, whatever the speed multiplier.
 	double SeenByTheArbiter = 0.0;
 
 	M2TrafficRun(*Traffic, *Net, 120.0, [&](int32)
@@ -1476,7 +1486,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 			}
 		}
 		return Q->Follower.Travelled < 25000.0;
-	});
+	}, Traffic->MaxSubstepSeconds);
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	UE_LOG(LogM2TrafficTest, Log,
@@ -1492,14 +1502,22 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// THE TWO DISCRIMINATING NUMBERS. Armed no later than the nose reaching the asphalt, and
 	// released no earlier than the tail leaving it - the node rule managed neither on this
 	// graph, because there is no node between the bars to hang either answer on.
-	// One tick's travel of slack on the arming bound and nothing more: at cruise the agent
-	// covers 50 uu per tick, so "armed on the tick the nose reached the asphalt" cannot be
-	// measured tighter than that. The release bound needs no such slack downward - a release
-	// before the tail is off would be the defect itself - only the 100 uu upward.
+	// One tick's travel of slack on the arming bound and nothing more: the fixture ticks at
+	// the substep and the agent cruises at 1000 uu/s (M2TrafficPlane's taxi cap), so a tick
+	// is about 34 uu and "armed on the tick the nose reached the asphalt" cannot be measured
+	// tighter than that. The release bound needs no such slack downward - a release before
+	// the tail is off would be the defect itself - only the one tick upward.
+	//
+	// THESE WERE 60 AND 100 while the fixture ticked at 0.05, which is coarser than any frame
+	// production now hands the model. Measured at the substep the crossing arms ON 17250 and
+	// releases 33 uu past 22750 - a tick, exactly - so the wider bounds were tolerance for the
+	// sampling rate and not for the rule. Tightening them is the point of ticking finer: at 60
+	// the arming could drift more than a whole tick late and this test would still pass.
+	const double OneTick = Traffic->MaxSubstepSeconds * 1000.0 + 1.0;
 	TestTrue(FString::Printf(TEXT("armed no later than the nose entered the strip (%.0f, bound 17250 + one tick)"), ArmedAt),
-		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + 60.0);
-	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within 100 uu after (%.0f, want 22750)"), ReleasedAt),
-		ReleasedAt >= 20000.0 + HalfWidth + Half && ReleasedAt <= 20000.0 + HalfWidth + Half + 100.0);
+		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + OneTick);
+	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within one tick after (%.0f, want 22750)"), ReleasedAt),
+		ReleasedAt >= 20000.0 + HalfWidth + Half && ReleasedAt <= 20000.0 + HalfWidth + Half + OneTick);
 	TestFalse(TEXT("and the bar on the way OUT arms nothing"), bCrossingPastTheFarBar);
 	TestEqual(TEXT("nothing is left crossing past the far bar"), P->CrossingPhase, ECrossingPhase::None);
 	TestFalse(TEXT("with no chain left named"), P->CrossingRunway.IsSet());
@@ -2246,6 +2264,99 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		TestFalse(TEXT("a strip somebody else holds is not a turnaround: the replan fails"), bReplanned);
 		TestTrue(TEXT("and the agent keeps the route it had"), After->Follower.Plan.Steps.Num() == 3 && !UsesStrip(After->Follower.Plan));
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A LONG FRAME IS SPLIT INTO BOUNDED STEPS, so what the model does stops depending on how
+ * fast the player is running the game.
+ *
+ * UAirsideTraffic hands UGroundTraffic the frame time MULTIPLIED by the speed multiplier,
+ * so at x8 a healthy 16 ms frame arrives as 133 ms of simulation. Taken in one go, an agent
+ * covers 133 ms of ground in a single jump - and a jump that overshoots the bend it is
+ * turning onto puts it off the guideline, to be pulled back on the next frame. That is the
+ * rubber-banding reported from play: absent at x1, visible at x2, worse above it, which is
+ * the signature of a step that scales with the multiplier.
+ *
+ * PINS THE SEAM, NOT THE SYMPTOM. Advance splitting the delta is not observable from
+ * outside - there is no counter to read - so this measures the only thing that matters
+ * about it: a long frame must land the agent where the short frames would have landed it.
+ * Two identical agents are run over identical total time, one fed whole frames and one fed
+ * substep-sized ones, and they must agree EXACTLY. 0.09 is chosen because it is three whole
+ * substeps at 1/30 and divides exactly, so the two runs take the same sequence of steps;
+ * an equality rather than a tolerance is what makes an unwired split fail this.
+ *
+ * The third agent is the control, and it is why the equality has teeth: with the split
+ * disabled it takes the frame in one step and lands somewhere else. Without it, deleting
+ * the split would leave the first assertion passing for a fixture too gentle to diverge.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficSubstepTest,
+	"Airside.Model.Traffic.LongFrameIsSplitIntoBoundedSteps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficSubstepTest::RunTest(const FString& Parameters)
+{
+	// A right-angle turn, because a bend is where step size shows. On a straight the error is
+	// only the integration of the acceleration; through a corner it is the overshoot as well.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, W, J);
+	M2TrafficJoin(*Net, J, N);
+
+	// One network for all three: it is read-only while agents advance, and sharing it removes
+	// any chance the runs differ because their geometry did.
+	int32 Ids[3] = { 0, 0, 0 };
+	UGroundTraffic* Runs[3] = { nullptr, nullptr, nullptr };
+	const double Longest[3] = { 1.0 / 30.0, 1.0 / 30.0, 1000.0 };
+	for (int32 Which = 0; Which < 3; ++Which)
+	{
+		Runs[Which] = NewObject<UGroundTraffic>(GetTransientPackage());
+		Runs[Which]->MaxSubstepSeconds = Longest[Which];
+		Ids[Which] = Runs[Which]->DispatchAgent(Net,
+			M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft),
+			M2TrafficPlane(), ETraversalClass::Aircraft, 1.0);
+	}
+	if (!TestTrue(TEXT("all three dispatched"), Ids[0] > 0 && Ids[1] > 0 && Ids[2] > 0))
+	{
+		return false;
+	}
+
+	const double Frame = 0.09;        // a 60 Hz frame at x5, and three whole substeps
+	const double Substep = Frame / 3.0;
+	for (int32 Tick = 0; Tick < 300; ++Tick)
+	{
+		Runs[0]->Advance(Substep, Net);
+		Runs[0]->Advance(Substep, Net);
+		Runs[0]->Advance(Substep, Net);
+		Runs[1]->Advance(Frame, Net);
+		Runs[2]->Advance(Frame, Net);
+	}
+
+	const FRoadAgent* Fine = Runs[0]->FindAgent(Ids[0]);
+	const FRoadAgent* Split = Runs[1]->FindAgent(Ids[1]);
+	const FRoadAgent* Unsplit = Runs[2]->FindAgent(Ids[2]);
+	if (!TestTrue(TEXT("all three still exist"), Fine && Split && Unsplit)) { return false; }
+
+	const double SplitGap = FMath::Abs(Split->Follower.Travelled - Fine->Follower.Travelled);
+	const double UnsplitGap = FMath::Abs(Unsplit->Follower.Travelled - Fine->Follower.Travelled);
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("Substep measured: travelled fine %.3f, split %.3f, unsplit %.3f; ")
+		TEXT("split gap %.4f uu, unsplit gap %.4f uu"),
+		Fine->Follower.Travelled, Split->Follower.Travelled, Unsplit->Follower.Travelled,
+		SplitGap, UnsplitGap);
+
+	TestTrue(TEXT("the agent moved at all, so the comparison means something"),
+		Fine->Follower.Travelled > 1000.0);
+	TestTrue(*FString::Printf(
+		TEXT("a whole frame split into substeps lands exactly where the substeps land (%.6f uu apart)"),
+		SplitGap), SplitGap <= 0.001);
+	TestTrue(*FString::Printf(
+		TEXT("and taking the frame in one step does not (%.4f uu apart)"), UnsplitGap),
+		UnsplitGap > 1.0);
 	return true;
 }
 
