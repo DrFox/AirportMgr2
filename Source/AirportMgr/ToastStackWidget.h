@@ -3,9 +3,9 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Model/ArrivalPlanner.h"
+#include "NotificationCentre.h"
 #include "ToastStackWidget.generated.h"
 
-class UNotificationCentre;
 class UPanelWidget;
 class UUIStyle;
 
@@ -37,7 +37,13 @@ public:
 	 * style. Asking UBuildBarWidget rather than retyping a number is what stops the two
 	 * drifting the first time ButtonSize changes and the toasts end up behind the bar.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float BottomOffset = 12.0f;
+	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float BottomOffset = 16.0f;
+
+	/** Card metrics. Wrap width is the one that stops a long refusal becoming a ribbon. */
+	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float ToastWrapWidth = 300.0f;
+	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float ToastIconSize = 22.0f;
+	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float ToastGap = 6.0f;
+	UPROPERTY(EditAnywhere, Category = "Toasts|Style") float ToastOutlineWidth = 1.5f;
 
 	/** The centre this draws. Public so a test can post to it without a world's event bus. */
 	UNotificationCentre* Centre() const { return Notifications; }
@@ -53,6 +59,9 @@ public:
 
 	int32 ToastCountForTest() const;
 
+	/** The first card's brush, so a test can read the corner radius actually drawn. */
+	bool FirstToastBrushForTest(struct FSlateBrush& OutBrush) const;
+
 protected:
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
@@ -62,6 +71,10 @@ private:
 
 	void EnsureSlots();
 	void Rebuild(const UUIStyle& Style);
+
+	/** Severity to palette slot, and to icon. Static: they read the style, not the widget. */
+	static FLinearColor ColourFor(const UUIStyle& Style, ENotificationSeverity Severity);
+	static UTexture2D* IconFor(const UUIStyle& Style, ENotificationSeverity Severity);
 
 	/** Both are FEED: they happened, they are worth knowing, and they need no decision. */
 	UFUNCTION() void OnNotification(const FString& Text);

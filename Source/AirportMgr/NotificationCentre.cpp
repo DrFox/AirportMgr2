@@ -2,10 +2,11 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogNotify, Log, All);
 
-void UNotificationCentre::PostFeed(const FText& Text)
+void UNotificationCentre::PostFeed(const FText& Text, ENotificationSeverity Severity)
 {
 	FNotificationEntry Entry;
 	Entry.Kind = ENotificationKind::Feed;
+	Entry.Severity = Severity;
 	Entry.Text = Text;
 	Entry.RaisedAtRealSeconds = NowRealSeconds;
 	List.Add(Entry);
@@ -26,7 +27,7 @@ void UNotificationCentre::PostFeed(const FText& Text)
 	UE_LOG(LogNotify, Log, TEXT("Feed: %s"), *Text.ToString());
 }
 
-void UNotificationCentre::RaiseAlert(FName SourceId, const FText& Text)
+void UNotificationCentre::RaiseAlert(FName SourceId, const FText& Text, ENotificationSeverity Severity)
 {
 	// Keyed, because a condition re-detected every tick would otherwise stack a copy a frame.
 	for (FNotificationEntry& Entry : List)
@@ -34,12 +35,14 @@ void UNotificationCentre::RaiseAlert(FName SourceId, const FText& Text)
 		if (Entry.Kind == ENotificationKind::Alert && Entry.SourceId == SourceId)
 		{
 			Entry.Text = Text;
+			Entry.Severity = Severity;
 			return;
 		}
 	}
 
 	FNotificationEntry Entry;
 	Entry.Kind = ENotificationKind::Alert;
+	Entry.Severity = Severity;
 	Entry.Text = Text;
 	Entry.SourceId = SourceId;
 	Entry.RaisedAtRealSeconds = NowRealSeconds;

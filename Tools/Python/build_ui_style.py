@@ -61,6 +61,10 @@ COLOURS = {
     "accent":     "F4BA38",
     "text":       "E4E0D9",
     "text_muted": "9FB0BD",
+    # Severity. Added beyond the spec's six because a toast could not say "this went badly"
+    # without spending Accent, which means the armed tool and nothing else.
+    "warning":    "C45D45",
+    "positive":   "7E9C6B",
 }
 
 
@@ -95,14 +99,27 @@ def run():
         manifest = json.load(handle)
 
     icons = {}
-    for action_id, asset_path in sorted(manifest.items()):
+    for action_id, asset_path in sorted(manifest.get("actions", {}).items()):
         texture = unreal.EditorAssetLibrary.load_asset(asset_path)
         if texture is None:
             fail("manifest names %s for '%s' but it did not load" % (asset_path, action_id))
             continue
         icons[unreal.Name(action_id)] = texture
     style.set_editor_property("icons_by_action_id", icons)
-    say("mapped %d icons from the manifest" % len(icons))
+    say("mapped %d action icons from the manifest" % len(icons))
+
+    # NAMED FIELDS, not a map: a severity whose icon is missing would draw a blank chip that
+    # nobody notices, and three fields cannot be missing a key. See UUIStyle::IconInfo.
+    notes = manifest.get("notifications", {})
+    for severity, prop in (("info", "icon_info"), ("success", "icon_success"),
+                           ("warning", "icon_warning")):
+        asset_path = notes.get(severity)
+        texture = unreal.EditorAssetLibrary.load_asset(asset_path) if asset_path else None
+        if texture is None:
+            fail("no notification icon for '%s' (%s)" % (severity, asset_path))
+            continue
+        style.set_editor_property(prop, texture)
+        say("mapped notification icon %s -> %s" % (severity, asset_path))
 
     # Forced: save_asset does nothing for an asset the editor does not think is dirty.
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
@@ -131,6 +148,19 @@ def run():
         fail("'tool.holding point' is not in the map - the space-bearing ids did not survive")
     else:
         say("PASS 'tool.holding point' is keyed by its real id, space and all")
+
+    for prop in ("icon_info", "icon_success", "icon_warning"):
+        if reloaded.get_editor_property(prop) is None:
+            fail("%s is unset after the save - a severity would draw a blank chip" % prop)
+        else:
+            say("PASS %s survived the save" % prop)
+
+    got_warning = reloaded.get_editor_property("warning")
+    want_warning = srgb(COLOURS["warning"])
+    if abs(got_warning.r - want_warning.r) > 1e-4:
+        fail("warning colour read back as %r" % got_warning)
+    else:
+        say("PASS warning colour survived the save")
 
     say("ALL VERIFIED")
     say("DONE")

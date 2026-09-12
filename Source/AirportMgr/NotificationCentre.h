@@ -22,12 +22,33 @@ enum class ENotificationKind : uint8
 	Alert
 };
 
+/**
+ * How much the thing that happened matters. SEPARATE FROM KIND, because the two answer
+ * different questions: Kind is what the notification NEEDS of the player (nothing, or a
+ * standing condition), Severity is how the news READS. A feed entry can be routine or
+ * alarming without changing what the player must do about it.
+ *
+ * Drives colour and icon and nothing else - a severity that changed behaviour would be a
+ * Kind wearing a disguise.
+ */
+UENUM()
+enum class ENotificationSeverity : uint8
+{
+	/** It happened. No judgement. */
+	Info,
+	/** It worked. */
+	Success,
+	/** It did not work, or it will not, and the player may want to act. */
+	Warning
+};
+
 USTRUCT()
 struct FNotificationEntry
 {
 	GENERATED_BODY()
 
 	UPROPERTY() ENotificationKind Kind = ENotificationKind::Feed;
+	UPROPERTY() ENotificationSeverity Severity = ENotificationSeverity::Info;
 	UPROPERTY() FText Text;
 	/** Alerts only: the condition's identity, so re-raising does not stack. */
 	UPROPERTY() FName SourceId;
@@ -66,8 +87,9 @@ public:
 	/** Oldest are dropped past this, so a long session cannot grow the list without bound. */
 	UPROPERTY() int32 MaxEntries = 50;
 
-	void PostFeed(const FText& Text);
-	void RaiseAlert(FName SourceId, const FText& Text);
+	void PostFeed(const FText& Text, ENotificationSeverity Severity = ENotificationSeverity::Info);
+	void RaiseAlert(FName SourceId, const FText& Text,
+		ENotificationSeverity Severity = ENotificationSeverity::Warning);
 	void ClearAlert(FName SourceId);
 
 	/** RAW frame seconds in - never multiplied by Multiplier() and never by TimeScale(). */

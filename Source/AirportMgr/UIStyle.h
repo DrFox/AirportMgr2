@@ -14,8 +14,10 @@ class UTexture2D;
  * SEMANTIC SLOTS, NOT PER-WIDGET COLOURS, and that is the whole reason this asset exists.
  * A slot is named for what it IS - Panel, Accent - never for where it appears
  * (BarBackground, SelectedToolTint). Three whole visual directions were mocked up during
- * design and each is reachable from these six values alone; name them for their location
- * and a re-skin becomes a hunt through widgets instead of six edits in a Details panel.
+ * design and each is reachable from these few values alone; name them for their location
+ * and a re-skin becomes a hunt through widgets instead of a handful of edits in a Details
+ * panel. Six were specified; Warning and Positive were added when the toasts needed to say
+ * "this went badly" without spending Accent - see their own comment.
  *
  * The defaults below are the concept sheet's BUILDINGS row, so the UI is literally the
  * colour the hangars and terminal will be - see the art direction spec, section 1.1.
@@ -51,12 +53,35 @@ public:
 	/** Section headings and disabled labels. */
 	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor TextMuted = FLinearColor::FromSRGBColor(FColor(0x9F, 0xB0, 0xBD));
 
+	/**
+	 * Something went wrong, or will. A brick that sits with the slate rather than a signal
+	 * red, because it appears on a toast the player reads, not on a klaxon.
+	 *
+	 * A SEVENTH AND EIGHTH SLOT, added deliberately. Six could not express "this went badly"
+	 * without spending Accent, and Accent means the armed tool and nothing else - the moment
+	 * a warning shared it, the one glance that says which tool is live would be gone. These
+	 * two are still SEMANTIC (named for what they mean, not where they appear), so the
+	 * re-skin promise in section 2.1 of the spec holds.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Warning = FLinearColor::FromSRGBColor(FColor(0xC4, 0x5D, 0x45));
+
+	/** It worked. A sage that belongs to the same field as the grass, not a UI green. */
+	UPROPERTY(EditAnywhere, Category = "Colours") FLinearColor Positive = FLinearColor::FromSRGBColor(FColor(0x7E, 0x9C, 0x6B));
+
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo TitleFont;
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo LabelFont;
 
 	/** Square edge of a tool button, uu. Today's bar is about 30 and is hard to hit. */
 	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "32.0")) float ButtonSize = 56.0f;
 
+	/**
+	 * Corner rounding, uu. CONSUMED by the toast cards through FSlateRoundedBoxBrush.
+	 *
+	 * It sat here unread for a while and the toasts drew as flat square slabs because of it -
+	 * the declared-but-never-consumed bug CLAUDE.md names three times, in a new place.
+	 * AirportMgr.UI.ToastCardUsesTheStyleCornerRadius reads it back off the brush so it
+	 * cannot quietly stop being used again.
+	 */
 	UPROPERTY(EditAnywhere, Category = "Metrics") float CornerRadius = 5.0f;
 	UPROPERTY(EditAnywhere, Category = "Metrics") float SectionPadding = 14.0f;
 
@@ -69,6 +94,17 @@ public:
 	 * Id keeps the dependency pointing one way.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Icons") TMap<FName, TSoftObjectPtr<UTexture2D>> IconsByActionId;
+
+	/**
+	 * The notification icons, one per severity.
+	 *
+	 * NAMED FIELDS, not a map keyed by severity. A map can be missing a key and then draws
+	 * nothing, which is a blank chip nobody notices; three fields cannot. The action icons
+	 * above are a map for the opposite reason - their keys come from a registry that grows.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Icons") TSoftObjectPtr<UTexture2D> IconInfo;
+	UPROPERTY(EditAnywhere, Category = "Icons") TSoftObjectPtr<UTexture2D> IconSuccess;
+	UPROPERTY(EditAnywhere, Category = "Icons") TSoftObjectPtr<UTexture2D> IconWarning;
 
 	/** The icon for an action, or null when none is mapped. Loads on first use. */
 	UTexture2D* IconFor(FName ActionId) const;

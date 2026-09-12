@@ -5,6 +5,9 @@
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/HorizontalBox.h"
+#include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
@@ -12,6 +15,7 @@
 #include "Model/OpsEvents.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
+#include "Styling/SlateBrush.h"
 #include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogToasts, Log, All);
@@ -94,7 +98,9 @@ void UToastStackWidget::OnArrivalRefused(EArrivalRefusal Why)
 	const FString Sentence = ArrivalPlanner::DescribeRefusal(Why);
 	if (Notifications != nullptr && !Sentence.IsEmpty())
 	{
-		Notifications->PostFeed(FText::FromString(Sentence));
+		// WARNING, not Info: a refusal is the game declining to do what the player asked, and
+		// it usually names something they must build. Save and load confirmations stay Info.
+		Notifications->PostFeed(FText::FromString(Sentence), ENotificationSeverity::Warning);
 	}
 }
 
@@ -120,6 +126,28 @@ void UToastStackWidget::TickFeed(float RealDeltaSeconds)
 	Rebuild(*UAirportMgrUISettings::ResolveStyle());
 }
 
+FLinearColor UToastStackWidget::ColourFor(const UUIStyle& Style, ENotificationSeverity Severity)
+{
+	switch (Severity)
+	{
+	case ENotificationSeverity::Warning: return Style.Warning;
+	case ENotificationSeverity::Success: return Style.Positive;
+	case ENotificationSeverity::Info:
+	default:                             return Style.TextMuted;
+	}
+}
+
+UTexture2D* UToastStackWidget::IconFor(const UUIStyle& Style, ENotificationSeverity Severity)
+{
+	switch (Severity)
+	{
+	case ENotificationSeverity::Warning: return Style.IconWarning.LoadSynchronous();
+	case ENotificationSeverity::Success: return Style.IconSuccess.LoadSynchronous();
+	case ENotificationSeverity::Info:
+	default:                             return Style.IconInfo.LoadSynchronous();
+	}
+}
+
 void UToastStackWidget::Rebuild(const UUIStyle& Style)
 {
 	if (ToastColumn == nullptr)
@@ -140,17 +168,52 @@ void UToastStackWidget::Rebuild(const UUIStyle& Style)
 			continue;   // alerts have their own surface; the feed does not carry them
 		}
 
-		UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-		Row->SetBrushColor(Style.Panel);
-		Row->SetPadding(FMargin(10.0f, 5.0f));
+		const FLinearColor Severity = ColourFor(Style, Entry.Severity);
 
-		UTextBlock* Line = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Line->SetText(Entry.Text);
-		Line->SetColorAndOpacity(FSlateColor(Style.Text));
-		FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Line->GetFont();
-		Font.Size = 11;
-		Line->SetFont(Font);
+		// A ROUNDED CARD, NOT A TINTED RECTANGLE. UBorder's default brush is a flat box, and
+		// SetBrushColor only tints it - which is how these drew as square slabs while
+		// UUIStyle::CornerRadius sat in the asset unread. FSlateRoundedBoxBrush is the only
+		// thing in Slate that actually rounds a corner, and it takes the radius and an
+		// outline in one construction.
+		//
+		// PanelDark, not Panel: a toast floats OVER the world and sits directly above a
+		// Panel-coloured bar, so drawing it in Panel made it read as part of the bar.
+		UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		Row->SetBrush(FSlateRoundedBoxBrush(Style.PanelDark, Style.CornerRadius,
+			FLinearColor(Severity.R, Severity.G, Severity.B, 0.85f), ToastOutlineWidth));
+		Row->SetPadding(FMargin(12.0f, 9.0f));
+
+		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 		Row->SetContent(Line);
+
+		// The severity says itself twice - icon and outline - because colour alone is not a
+		// message to a player who cannot tell the brick from the sage.
+		if (UTexture2D* Icon = IconFor(Style, Entry.Severity))
+		{
+			UImage* Chip = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+			Chip->SetBrushFromTexture(Icon, false);
+			Chip->SetDesiredSizeOverride(FVector2D(ToastIconSize));
+			Chip->SetColorAndOpacity(Severity);
+			UHorizontalBoxSlot* ChipSlot = Line->AddChildToHorizontalBox(Chip);
+			ChipSlot->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
+			ChipSlot->SetVerticalAlignment(VAlign_Center);
+		}
+
+		UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		Words->SetText(Entry.Text);
+		Words->SetColorAndOpacity(FSlateColor(Style.Text));
+		FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Words->GetFont();
+		Font.Size = 12;
+		Words->SetFont(Font);
+
+		// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
+		// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across
+		// the corner of the screen. Wrapped to a card width it is two short lines the eye
+		// takes in at once.
+		Words->SetAutoWrapText(true);
+		Words->SetWrapTextAt(ToastWrapWidth);
+		UHorizontalBoxSlot* WordSlot = Line->AddChildToHorizontalBox(Words);
+		WordSlot->SetVerticalAlignment(VAlign_Center);
 
 		// Fades over its last two seconds rather than vanishing, so the eye is not pulled to
 		// a sudden disappearance at the edge of vision. Never below 0.15: a toast that has
@@ -162,11 +225,34 @@ void UToastStackWidget::Rebuild(const UUIStyle& Style)
 		// NEWEST AT THE BOTTOM, which is what append gives: the eye that just looked at the
 		// bar is already at the bottom of the screen, and a new toast appearing under the
 		// last one it read is the shortest distance for it to travel.
-		ToastColumn->AddChild(Row);
+		//
+		// A GAP BETWEEN CARDS. Without it the rounded corners meet and the stack fuses back
+		// into the one slab the rounding was there to break up.
+		UVerticalBoxSlot* RowSlot = Cast<UVerticalBoxSlot>(ToastColumn->AddChild(Row));
+		if (RowSlot != nullptr)
+		{
+			RowSlot->SetPadding(FMargin(0.0f, ToastGap, 0.0f, 0.0f));
+			RowSlot->SetHorizontalAlignment(HAlign_Right);
+		}
 	}
 }
 
 int32 UToastStackWidget::ToastCountForTest() const
 {
 	return ToastColumn != nullptr ? ToastColumn->GetChildrenCount() : 0;
+}
+
+bool UToastStackWidget::FirstToastBrushForTest(FSlateBrush& OutBrush) const
+{
+	if (ToastColumn == nullptr || ToastColumn->GetChildrenCount() == 0)
+	{
+		return false;
+	}
+	const UBorder* Row = Cast<UBorder>(ToastColumn->GetChildAt(0));
+	if (Row == nullptr)
+	{
+		return false;
+	}
+	OutBrush = Row->Background;
+	return true;
 }

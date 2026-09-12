@@ -79,6 +79,15 @@ ICONS = {
     "game.load":           ("delapouite", "load"),
 }
 
+# The notification icons, one per ENotificationSeverity. Keyed by the severity name rather
+# than an action id: these do not come from the action registry and never will, so they are
+# fetched alongside but mapped to NAMED fields on UUIStyle (see IconInfo and friends).
+NOTIFICATION_ICONS = {
+    "info":    ("delapouite", "info"),
+    "success": ("delapouite", "check-mark"),
+    "warning": ("lorc",       "hazard-sign"),
+}
+
 # Actions that are drawn as a glyph rather than a texture. The bar skips the icon lookup
 # for these, and AirportMgr.UI.EveryActionResolvesAnIcon skips them too - BY SECTION, so a
 # fourth time control does not need that test edited.
@@ -140,6 +149,40 @@ def fetch(author, name):
     return data
 
 
+def import_one(tools, staging, key, author, name, asset_name):
+    """Fetch, validate and import one icon. Returns True when the asset is on disk."""
+    data = fetch(author, name)
+    if data is None:
+        return False
+
+    png = os.path.join(staging, "%s.png" % name)
+    with open(png, "wb") as handle:
+        handle.write(data)
+
+    task = unreal.AssetImportTask()
+    task.filename = png
+    task.destination_path = OUT_DIR
+    task.destination_name = asset_name
+    task.automated = True
+    task.replace_existing = True
+    task.save = True
+    tools.import_asset_tasks([task])
+
+    path = "%s/%s" % (OUT_DIR, asset_name)
+    texture = unreal.EditorAssetLibrary.load_asset(path)
+    if texture is None:
+        fail("%s imported nothing" % path)
+        return False
+
+    texture.set_editor_property("compression_settings",
+                                unreal.TextureCompressionSettings.TC_EDITOR_ICON)
+    texture.set_editor_property("lod_group", unreal.TextureGroup.TEXTUREGROUP_UI)
+    texture.set_editor_property("srgb", True)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    say("imported %s from %s/%s" % (asset_name, author, name))
+    return True
+
+
 def run():
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     staging = os.path.join(unreal.Paths.project_saved_dir(), "UIIcons")
@@ -188,6 +231,16 @@ def run():
         credited.append((action_id, author, name))
         say("imported %s from %s/%s" % (asset_name, author, name))
 
+    # The severity icons, into their own manifest section.
+    notification_assets = {}
+    for severity, (author, name) in sorted(NOTIFICATION_ICONS.items()):
+        asset_name = "T_Icon_Note_%s" % severity
+        if import_one(tools, staging, severity, author, name, asset_name):
+            notification_assets[severity] = "%s/%s" % (OUT_DIR, asset_name)
+            credited.append(("notification.%s" % severity, author, name))
+        else:
+            failures += 1
+
     os.makedirs(os.path.dirname(ATTRIBUTION), exist_ok=True)
     with io.open(ATTRIBUTION, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("# Icon attribution\n\n")
@@ -205,8 +258,12 @@ def run():
     # Deriving it twice would be the lists-that-must-agree bug in a new place.
     manifest_path = os.path.join(staging, "manifest.json")
     with io.open(manifest_path, "w", encoding="utf-8", newline="\n") as handle:
-        json.dump({action_id: "%s/%s" % (OUT_DIR, asset_name_for(action_id))
-                   for action_id, _, _ in credited}, handle, indent=2, sort_keys=True)
+        json.dump({
+            "actions": {action_id: "%s/%s" % (OUT_DIR, asset_name_for(action_id))
+                        for action_id, _, _ in credited
+                        if not action_id.startswith("notification.")},
+            "notifications": notification_assets,
+        }, handle, indent=2, sort_keys=True)
     say("wrote %s with %d entries" % (manifest_path, len(credited)))
 
     say("ALL VERIFIED" if failures == 0 else "FAILED: %d icon(s)" % failures)

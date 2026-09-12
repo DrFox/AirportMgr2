@@ -28,3 +28,6 @@ drives the downloads, so it cannot drift from what was fetched.
 | `tool.select` | mouse | delapouite |
 | `tool.stand` | position-marker | delapouite |
 | `tool.taxiway` | path-tile | delapouite |
+| `notification.info` | info | delapouite |
+| `notification.success` | check-mark | delapouite |
+| `notification.warning` | hazard-sign | lorc |
