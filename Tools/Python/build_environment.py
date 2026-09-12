@@ -42,7 +42,7 @@ LEVEL = "/Game/Maps/M_Starter"
 # rendering pipeline, so SceneCapture2D plus ExportRenderTarget writes nothing and logs
 # "render target has been released". The value has to be read in the interactive editor,
 # from the viewport's exposure readout, once there is grass under the camera.
-LOCK_EXPOSURE_EV100 = None
+LOCK_EXPOSURE_EV100 = 1.75
 
 # Spec section 4.2. Slice G turns this pair into the noon point of a curve.
 SUN_PITCH = -42.0
