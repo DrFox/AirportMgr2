@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Model/ArrivalPlanner.h"
 #include "NotificationCentre.h"
@@ -22,7 +23,7 @@ class UUIStyle;
  * what the centre currently holds. No lifetime decision is taken here.
  */
 UCLASS()
-class AIRPORTMGR_API UToastStackWidget : public UUserWidget
+class AIRPORTMGR_API UToastStackWidget : public UAirportMgrPanelWidget
 {
 	GENERATED_BODY()
 
@@ -55,19 +56,19 @@ public:
 	 */
 	void TickFeed(float RealDeltaSeconds);
 
-	virtual bool Initialize() override;
-
 	int32 ToastCountForTest() const;
 
 	/** The first card's brush, so a test can read the corner radius actually drawn. */
 	bool FirstToastBrushForTest(struct FSlateBrush& OutBrush) const;
 
 protected:
+	/** Builds the stack's chrome and subscribes to the ops runtime's events. See
+	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
+	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
 	UPROPERTY() TObjectPtr<UNotificationCentre> Notifications;
-	bool bBuilt = false;
 
 	void EnsureSlots();
 	void Rebuild(const UUIStyle& Style);

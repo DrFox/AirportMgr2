@@ -29,26 +29,8 @@ void UBuildBarEntry::HandleClicked()
 	}
 }
 
-ARoadBuildController* UBuildBarWidget::Controller() const
+void UBuildBarWidget::BuildOnce(const UUIStyle&)
 {
-	// The owning player when the controller created us; the first controller otherwise
-	// (tests create the bar from a world). Null is a supported state: buttons still build,
-	// and RefreshState simply has nothing to ask.
-	if (APlayerController* Owning = GetOwningPlayer())
-	{
-		return Cast<ARoadBuildController>(Owning);
-	}
-	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
-}
-
-bool UBuildBarWidget::Initialize()
-{
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
 	EnsureSlots();
 	BuildButtons();
 
@@ -56,7 +38,6 @@ bool UBuildBarWidget::Initialize()
 	// single UTextBlock that every notification overwrote and nothing ever cleared, so two
 	// events in one second left only the second. One widget driving the tools AND showing
 	// messages is how that came about; UToastStackWidget owns the feed now.
-	return bOk;
 }
 
 float UBuildBarWidget::BarHeightFor(const UUIStyle& Style)

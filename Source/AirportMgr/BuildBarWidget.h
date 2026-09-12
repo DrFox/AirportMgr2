@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.generated.h"
@@ -61,7 +62,7 @@ public:
  * a scriptable property, so the code-built bar is the default look.
  */
 UCLASS()
-class AIRPORTMGR_API UBuildBarWidget : public UUserWidget
+class AIRPORTMGR_API UBuildBarWidget : public UAirportMgrPanelWidget
 {
 	GENERATED_BODY()
 
@@ -109,25 +110,15 @@ public:
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
 
-	/**
-	 * Builds the bar right after the base class has bound the asset's slots.
-	 *
-	 * Initialize rather than NativeOnInitialized: UUserWidget::Initialize only calls the
-	 * latter when a PLAYER CONTEXT is valid (or a Blueprint class opts in), so a bar created
-	 * from a world with no player - which is what a headless test does - would never build
-	 * and would silently pass through empty. Overriding the one call every creation path
-	 * makes keeps the build unconditional.
-	 */
-	virtual bool Initialize() override;
-
 protected:
+	/** Builds the bar's chrome and buttons. See UAirportMgrPanelWidget::Initialize for why
+	 *  this runs from Initialize rather than NativeOnInitialized. */
+	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
 	UPROPERTY() TArray<TObjectPtr<UBuildBarEntry>> Entries;
-	bool bBuilt = false;
 
-	ARoadBuildController* Controller() const;
 	UPanelWidget* SectionPanel(EActionSection Section) const;
 	void EnsureSlots();
 	void BuildButtons();

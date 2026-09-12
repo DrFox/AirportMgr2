@@ -44,14 +44,8 @@ void UOfferRowEntry::HandleDecline()
 	}
 }
 
-bool UOfferInboxWidget::Initialize()
+void UOfferInboxWidget::BuildOnce(const UUIStyle&)
 {
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
 	Inbox = NewObject<UOfferInboxViewModel>(this);
 	EnsureSlots();
 
@@ -59,7 +53,6 @@ bool UOfferInboxWidget::Initialize()
 	// ticks a widget from its paint pass, so a collapsed widget never ticks, and the tick is
 	// the only thing that would un-collapse it.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	return bOk;
 }
 
 void UOfferInboxWidget::EnsureSlots()
@@ -70,27 +63,13 @@ void UOfferInboxWidget::EnsureSlots()
 	// inspector. A TOP-right card: a title with a count, then one row per offer. Top, not
 	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
 	// enough to have swallowed the old placement (spec section 6.2).
-	if (WidgetTree->RootWidget == nullptr)
+	//
+	// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON. A flat
+	// Panel here made the container and its rows one surface, and the offers read as lines of
+	// text in a box rather than as things awaiting an answer - see EnsureCardRoot (#90).
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InboxCard"),
+		FAnchors(1.0f, 0.0f, 1.0f, 0.0f), FVector2D(1.0, 0.0), FVector2D(-12.0, TopOffset), true)))
 	{
-		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("InboxRoot"));
-		WidgetTree->RootWidget = Root;
-
-		UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("InboxCard"));
-		// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON.
-		// A flat Panel here made the container and its rows one surface, and the offers read
-		// as lines of text in a box rather than as things awaiting an answer.
-		Card->SetBrush(FSlateRoundedBoxBrush(Style->PanelDark, Style->CornerRadius));
-		Card->SetPadding(FMargin(12.0f, 10.0f));
-
-		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(Card);
-		CardSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
-		CardSlot->SetAlignment(FVector2D(1.0, 0.0));
-		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(FVector2D(-12.0, TopOffset));
-
-		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxColumn"));
-		Card->SetContent(Column);
-
 		// HEADING AND COUNT ON ONE LINE. The count used to be FText::AsNumber on a line of
 		// its OWN directly under the word OFFERS - a bare "1" floating in the card, which is
 		// what a debug readout looks like rather than a panel heading.

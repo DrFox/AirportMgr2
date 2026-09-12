@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Tool/Selection.h"
 #include "InspectorWidget.generated.h"
@@ -9,6 +10,7 @@ class ARoadBuildController;
 class ARoadNetworkActor;
 class UButton;
 class UTextBlock;
+class UUIStyle;
 
 /**
  * The inspector: what the selected aircraft or stand is doing, and the verbs for it.
@@ -26,7 +28,7 @@ class UTextBlock;
  * list (spec §6.2).
  */
 UCLASS()
-class AIRPORTMGR_API UInspectorWidget : public UUserWidget
+class AIRPORTMGR_API UInspectorWidget : public UAirportMgrPanelWidget
 {
 	GENERATED_BODY()
 
@@ -52,20 +54,19 @@ public:
 	 */
 	void Refresh(const ARoadNetworkActor* Target, const FSelection& Selection);
 
-	virtual bool Initialize() override;
-
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
 
 protected:
+	/** Builds the panel's chrome and binds its two verbs. See
+	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
+	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
-	bool bBuilt = false;
 	bool bDepartEnabled = false;
 
-	ARoadBuildController* Controller() const;
 	void EnsureSlots();
 	void RunActionById(FName Id);
 

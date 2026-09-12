@@ -20,15 +20,8 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogToasts, Log, All);
 
-bool UToastStackWidget::Initialize()
+void UToastStackWidget::BuildOnce(const UUIStyle&)
 {
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
-
 	// Owned by the widget, not by the runtime. The centre holds UI state - what the player
 	// has been shown and for how long - and nothing in the sim reads it back; putting it on
 	// UOpsRuntime would have made a save-game question out of a reading time.
@@ -49,7 +42,6 @@ bool UToastStackWidget::Initialize()
 		// directly. Said out loud so a silent feed in PIE has a line to look for.
 		UE_LOG(LogToasts, Log, TEXT("No ops runtime: the toast stack is up but subscribed to nothing"));
 	}
-	return bOk;
 }
 
 void UToastStackWidget::EnsureSlots()

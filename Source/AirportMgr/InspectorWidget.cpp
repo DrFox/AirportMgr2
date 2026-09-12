@@ -46,23 +46,8 @@ namespace
 	}
 }
 
-ARoadBuildController* UInspectorWidget::Controller() const
+void UInspectorWidget::BuildOnce(const UUIStyle&)
 {
-	if (APlayerController* Owning = GetOwningPlayer())
-	{
-		return Cast<ARoadBuildController>(Owning);
-	}
-	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
-}
-
-bool UInspectorWidget::Initialize()
-{
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
 	EnsureSlots();
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
@@ -72,7 +57,6 @@ bool UInspectorWidget::Initialize()
 	// shown). The root stays laid out and click-transparent; only the CARD hides.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	ShowInspectorCard(WidgetTree, false);
-	return bOk;
 }
 
 void UInspectorWidget::EnsureSlots()

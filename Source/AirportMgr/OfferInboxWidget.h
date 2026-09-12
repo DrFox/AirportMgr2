@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 
 #include "OfferInboxWidget.generated.h"
@@ -12,6 +13,7 @@ class UOfferInboxWidget;
 class UOfferInboxViewModel;
 class UOfferViewModel;
 class UTextBlock;
+class UUIStyle;
 class UVerticalBox;
 class UWidget;
 
@@ -67,7 +69,7 @@ public:
  * binding runs against the new class - the stale-Blueprint trap, in a new place.
  */
 UCLASS()
-class AIRPORTMGR_API UOfferInboxWidget : public UUserWidget
+class AIRPORTMGR_API UOfferInboxWidget : public UAirportMgrPanelWidget
 {
 	GENERATED_BODY()
 
@@ -113,7 +115,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Inbox|Style") float RowGap = 6.0f;
 
 protected:
-	virtual bool Initialize() override;
+	/** Builds the inbox's chrome. See UAirportMgrPanelWidget::Initialize for why this runs
+	 *  from Initialize rather than NativeOnInitialized. */
+	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
@@ -126,9 +130,6 @@ private:
 	UButton* MakeAnswerButton(const class UUIStyle& Style, const TCHAR* Name, const FText& Label,
 		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
-
-	/** Built once, in Initialize. The bar's own rule: chrome only where the asset gave none. */
-	bool bBuilt = false;
 
 	void EnsureSlots();
 	void PaintRows();
