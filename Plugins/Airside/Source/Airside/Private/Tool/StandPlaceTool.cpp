@@ -82,21 +82,20 @@ void FStandPlaceTool::OnClick(const FToolContext& Context)
 
 	if (Context.bRemoveModifier)
 	{
+		// No RebuildMesh() on success any more - DeleteEntity notifies on commit (issue #77).
 		const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-		if (Under != INDEX_NONE && Context.Target->DeleteEntity(Under))
+		if (Under != INDEX_NONE)
 		{
-			Context.Target->RebuildMesh();
+			Context.Target->DeleteEntity(Under);
 		}
 		return;
 	}
 
 	// A press that never travelled. It still places one - facing the way the last one did -
 	// because refusing would make the tool feel broken for the common case of a row of
-	// identically-oriented stands.
-	if (Context.Target->PlaceEntity(Context.Cursor, LastHeading, Kind) != INDEX_NONE)
-	{
-		Context.Target->RebuildMesh();
-	}
+	// identically-oriented stands. No RebuildMesh() here any more - PlaceEntity notifies on
+	// commit (issue #77).
+	Context.Target->PlaceEntity(Context.Cursor, LastHeading, Kind);
 }
 
 void FStandPlaceTool::OnCancel(const FToolContext& Context)

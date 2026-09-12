@@ -133,6 +133,17 @@ bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) cons
 	return OutId.IsSet();
 }
 
+void URoadEditFacade::NotifyChanged()
+{
+	OnChanged.Broadcast();
+}
+
+void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit)
+{
+	Edit.Commit();
+	NotifyChanged();
+}
+
 int32 URoadEditFacade::PlaceNode(FVector2D Where)
 {
 	// The network is made BEFORE the scope, so the snapshot is of an empty graph rather
@@ -156,7 +167,7 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 	UE_LOG(LogRoadMesh, Log, TEXT("Node %d placed at (%.0f, %.0f), generation %d - on %s in %s"),
 		Node.Index, Where.X, Where.Y, Node.Generation,
 		*Actor().GetName(), Actor().GetWorld() ? *Actor().GetWorld()->GetName() : TEXT("no world"));
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return Node.Index;
 }
 
@@ -216,7 +227,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	}
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d"), Segment.Index, FromIndex, ToIndex);
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return true;
 }
 
@@ -272,8 +283,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// runway the player never placed.
 	Owner.Network->SetRunwayFacts(Segment, Facts);
 
-	Edit.Commit();
-	OnChanged.Broadcast();
+	CommitAndNotify(Edit);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
 		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
@@ -304,8 +314,7 @@ bool URoadEditFacade::SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Fac
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("set runway facts"));
 	Network->SetRunwayFacts(Segment, Facts);
-	Edit.Commit();
-	OnChanged.Broadcast();
+	CommitAndNotify(Edit);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway at segment %d reclassified: %s, %s approach (the whole strip)"),
 		SegmentIndex, RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach));
@@ -529,7 +538,7 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 		return INDEX_NONE;
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return Middle.Index;
 }
 
@@ -694,6 +703,15 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		}
 	}
 
+	// UNCONDITIONAL on bOwnsEdit, deliberately: a drag calls this every frame and only the
+	// FIRST frame owns the edit (see IsEditing above), but every frame that actually moves
+	// the node must still rebuild - that per-frame notification during a drag is the whole
+	// reason this is not folded into CommitAndNotify, which fires once per committed edit.
+	if (bMoved)
+	{
+		NotifyChanged();
+	}
+
 	return bMoved;
 }
 
@@ -756,7 +774,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		Owner.Network->RemoveNode(Litter);
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return true;
 }
 
@@ -799,7 +817,7 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 		}
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return true;
 }
 

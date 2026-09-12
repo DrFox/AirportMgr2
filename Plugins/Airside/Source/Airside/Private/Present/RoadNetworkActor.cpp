@@ -374,6 +374,10 @@ URoadProfile* ARoadNetworkActor::ResolveProfile()
 
 void ARoadNetworkActor::RebuildMesh()
 {
+	// Counted before anything else, so RebuildCountForTest sees every call including the
+	// early-return below - a rebuild that bailed for lack of a network still ran.
+	++RebuildCount;
+
 	// Unconditional, matching the pre-split RebuildMesh exactly: even the path below that
 	// returns before there is a Network must still invalidate the ghost cache. Presenter::
 	// Rebuild also calls this itself; doing it again there is harmless.

@@ -7,6 +7,7 @@
 class ARoadNetworkActor;
 class URoadNetwork;
 class URoadEditHistory;
+class FRoadEditScope;
 
 /**
  * Every graph edit, undo, and query the build tools drive - split out of ARoadNetworkActor
@@ -45,6 +46,15 @@ class URoadEditHistory;
  * the presenter that does the rebuilding, and this class must not reach for it - so where the
  * old code rebuilt inline, this one broadcasts instead, and the actor's own RebuildMesh()
  * (bound to OnChanged in the constructor) does the reaching.
+ *
+ * NotifyChanged is the ONLY place that calls OnChanged.Broadcast() (issue #77) - every other
+ * mutator that changes pavement or the guideline graph reaches it through CommitAndNotify,
+ * which pairs an FRoadEditScope::Commit() with the notification so neither can happen without
+ * the other. Before this, half the mutators broadcast and half relied on the TOOL calling
+ * RebuildMesh() after a successful edit - a split-brain that let one call site (a REFUSED
+ * ConnectNodes in FRoadChainingState::OnClick) rebuild for nothing while real edits elsewhere
+ * occasionally got no rebuild at all if a caller forgot. A holding position is the one
+ * deliberate exception: it changes neither pavement nor mesh, so its mutator calls neither.
  */
 UCLASS()
 class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
@@ -165,6 +175,22 @@ public:
 private:
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
+
+	/**
+	 * THE single OnChanged.Broadcast() call site - see the class comment. Undo, Redo and
+	 * ClearNetwork call this directly (they do not go through an FRoadEditScope); every
+	 * scope-committing mutator goes through CommitAndNotify instead, below.
+	 */
+	void NotifyChanged();
+
+	/**
+	 * Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits an edit
+	 * cannot forget to notify - which is exactly how ten of these went silent before issue
+	 * #77 (see the class comment). Takes the scope by reference rather than being a method
+	 * ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not know
+	 * about this facade's OnChanged, or Tool/ would depend on Present/.
+	 */
+	void CommitAndNotify(FRoadEditScope& Edit);
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.
