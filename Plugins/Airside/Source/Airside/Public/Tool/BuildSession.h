@@ -148,6 +148,25 @@ public:
 	 */
 	void CancelActiveGesture(const FToolContext& Context);
 
+	/**
+	 * Remember a road-plane position a driver's ray/plane test actually resolved.
+	 *
+	 * The one home for what used to be two separate copies - `ARoadBuildController::
+	 * LastPlaneHit` and `URoadBuildEditorTool::HoverPosition` - see issue #92. Both drivers
+	 * need SOME position on a frame whose own hit test refuses (a click above the horizon,
+	 * a ray parallel to the plane): the ghost and the snap chain run every tick and cannot
+	 * simply skip the frame. Owned here rather than by either driver so a fallback the
+	 * runtime learns and one the editor learns cannot silently diverge.
+	 *
+	 * const, like MakeContext: the callers that learn a plane hit (CursorOnRoadPlane,
+	 * RayToPlane) are themselves const reporting methods, not decisions - see
+	 * FBuildSession's own `mutable Selection` for the same reasoning applied here.
+	 */
+	void RecordPlaneHit(const FVector2D& Hit) const { LastPlaneHitValue = Hit; }
+
+	/** The last position RecordPlaneHit was given, or the origin before either driver has hit anything. */
+	const FVector2D& LastPlaneHit() const { return LastPlaneHitValue; }
+
 private:
 	/**
 	 * The selectable tools, in key order: index 0 is key 1.
@@ -171,4 +190,7 @@ private:
 	 * TUniquePtr and holds no state worth saving, only the ordering.
 	 */
 	FRoadSnapChain SnapChain;
+
+	/** See RecordPlaneHit/LastPlaneHit. mutable for the same reason Selection is. */
+	mutable FVector2D LastPlaneHitValue = FVector2D::ZeroVector;
 };

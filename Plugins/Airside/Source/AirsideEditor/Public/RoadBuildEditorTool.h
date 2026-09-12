@@ -4,6 +4,7 @@
 #include "InteractiveTool.h"
 #include "InteractiveToolBuilder.h"
 #include "BaseBehaviors/BehaviorTargetInterfaces.h"
+#include "Tool/BuildGesture.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
 #include "RoadBuildEditorTool.generated.h"
@@ -69,6 +70,11 @@ public:
 
 	/** Which session this instance is actually driving. For a test that it is the mode's. */
 	const FBuildSession* SessionForTest() const { return SharedSession; }
+
+	/** The press/drag/release recogniser this instance drives. For a test that ITF's click
+	 *  and drag callbacks actually reach FBuildGesture, rather than a copy nothing calls -
+	 *  same precedent as SessionForTest, see issue #92. */
+	const FBuildGesture& GestureForTest() const { return Gesture; }
 
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
@@ -156,15 +162,23 @@ private:
 
 	// Press, travel, release - the same click-or-drag question the PlayerController asks,
 	// asked again here because it is a fact about the mouse rather than about the tool.
-	bool bPressed = false;
-	bool bDragging = false;
-	FVector2D PressScreen = FVector2D::ZeroVector;
+	// FBuildGesture (Tool/BuildGesture.h) is the recogniser itself, shared with
+	// ARoadBuildController - see issue #92; this class keeps only the ITF-specific parts
+	// (transactions, ray/plane resolution).
+	FBuildGesture Gesture;
 
 	bool bRemoveHeld = false;
 	bool bInsertHeld = false;
 
-	/** Last cursor position on the plane, for previews between events. */
-	FVector2D HoverPosition = FVector2D::ZeroVector;
+	/**
+	 * Whether RayToPlane resolved a real hover position this session.
+	 *
+	 * The position itself lives on FBuildSession (RecordPlaneHit/LastPlaneHit), shared with
+	 * ARoadBuildController rather than kept as this class's own HoverPosition - the two used
+	 * to be separate copies of the same fallback (issue #92). This bool is NOT part of that
+	 * fallback: it gates whether Render has ever had a real hover to draw a preview at, which
+	 * FBuildSession's shared position has no equivalent of before the first mouse move.
+	 */
 	bool bHoverValid = false;
 
 	/**

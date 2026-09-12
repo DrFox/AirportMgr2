@@ -241,17 +241,24 @@ FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
 	// "no ray" sentinel: FRay() defaults its direction to (0,0,1), which points straight
 	// down at the road plane and resolves to the WORLD ORIGIN rather than failing. Every
 	// preview drew against (0,0) because of it.
+	//
+	// The fallback lives on FBuildSession (RecordPlaneHit/LastPlaneHit) now, shared with
+	// ARoadBuildController's identical fallback - see issue #92.
 	FVector2D Plane;
-	if (!RayToPlane(At.WorldRay, Plane))
+	if (RayToPlane(At.WorldRay, Plane))
 	{
-		Plane = HoverPosition;
+		Sess().RecordPlaneHit(Plane);
+	}
+	else
+	{
+		Plane = Sess().LastPlaneHit();
 	}
 	return MakeContextAt(Plane);
 }
 
 FToolContext URoadBuildEditorTool::MakeHoverContext() const
 {
-	return MakeContextAt(HoverPosition);
+	return MakeContextAt(Sess().LastPlaneHit());
 }
 
 FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
@@ -294,32 +301,37 @@ FInputRayHit URoadBuildEditorTool::CanBeginClickDragSequence(const FInputDeviceR
 
 void URoadBuildEditorTool::OnClickPress(const FInputDeviceRay& PressPos)
 {
-	bPressed = true;
-	bDragging = false;
-	PressScreen = PressPos.ScreenPosition;
+	Gesture.Press(PressPos.ScreenPosition);
 
-	RayToPlane(PressPos.WorldRay, HoverPosition);
+	FVector2D Plane;
+	if (RayToPlane(PressPos.WorldRay, Plane))
+	{
+		Sess().RecordPlaneHit(Plane);
+	}
 }
 
 void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 {
 	IBuildTool* Tool = Sess().GetActiveTool();
-	if (!bPressed || Tool == nullptr)
+	if (!Gesture.IsPressed() || Tool == nullptr)
 	{
 		return;
 	}
 
-	RayToPlane(DragPos.WorldRay, HoverPosition);
-
-	if (!bDragging)
+	FVector2D Plane;
+	if (RayToPlane(DragPos.WorldRay, Plane))
 	{
-		if (FVector2D::Distance(DragPos.ScreenPosition, PressScreen) < DragThresholdPixels)
-		{
-			return;
-		}
+		Sess().RecordPlaneHit(Plane);
+	}
 
-		bDragging = true;
+	const EGestureStep Step = Gesture.Move(DragPos.ScreenPosition, DragThresholdPixels);
+	if (Step == EGestureStep::None)
+	{
+		return;
+	}
 
+	if (Step == EGestureStep::DragBegan)
+	{
 		// One transaction for the whole drag, opened where the gesture becomes real.
 		GEditor->BeginTransaction(LOCTEXT("RoadBuildDrag", "Road Build"));
 		if (Target != nullptr && Target->Network != nullptr)
@@ -337,19 +349,19 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 {
 	IBuildTool* Tool = Sess().GetActiveTool();
-	if (!bPressed || Tool == nullptr)
+	const EGestureEnd End = Gesture.Release();
+	if (Tool == nullptr || End == EGestureEnd::Nothing)
 	{
-		bPressed = false;
 		return;
 	}
 
-	RayToPlane(ReleasePos.WorldRay, HoverPosition);
+	FVector2D Plane;
+	if (RayToPlane(ReleasePos.WorldRay, Plane))
+	{
+		Sess().RecordPlaneHit(Plane);
+	}
 
-	const bool bWasDragging = bDragging;
-	bPressed = false;
-	bDragging = false;
-
-	if (bWasDragging)
+	if (End == EGestureEnd::DragEnd)
 	{
 		Tool->OnDragEnd(MakeContext(ReleasePos));
 		GEditor->EndTransaction();
@@ -371,7 +383,7 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 
 void URoadBuildEditorTool::OnTerminateDragSequence()
 {
-	if (bDragging)
+	if (Gesture.IsDragging())
 	{
 		// Escape during a drag. Cancel the transaction rather than committing a half-aimed
 		// stand, and tell the tool so it drops whatever it was holding.
@@ -382,8 +394,7 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 		}
 	}
 
-	bPressed = false;
-	bDragging = false;
+	Gesture.Cancel();
 }
 
 FInputRayHit URoadBuildEditorTool::BeginHoverSequenceHitTest(const FInputDeviceRay& PressPos)
@@ -394,7 +405,12 @@ FInputRayHit URoadBuildEditorTool::BeginHoverSequenceHitTest(const FInputDeviceR
 
 bool URoadBuildEditorTool::OnUpdateHover(const FInputDeviceRay& DevicePos)
 {
-	bHoverValid = RayToPlane(DevicePos.WorldRay, HoverPosition);
+	FVector2D Plane;
+	bHoverValid = RayToPlane(DevicePos.WorldRay, Plane);
+	if (bHoverValid)
+	{
+		Sess().RecordPlaneHit(Plane);
+	}
 
 	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
 	{
@@ -473,8 +489,7 @@ void URoadBuildEditorTool::CancelGesture()
 	Tool->OnCancel(MakeHoverContext());
 	GEditor->EndTransaction();
 
-	bPressed = false;
-	bDragging = false;
+	Gesture.Cancel();
 }
 
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
@@ -533,8 +548,8 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	// and stands were invisible and there was no way to see what a snap would attach to.
 	DrawPersistentState(Sink);
 
-	// Gated on a real hover. Before the first mouse move HoverPosition is (0,0), and the
-	// idle marker was drawing a corner at the world origin.
+	// Gated on a real hover. Before the first mouse move the session's LastPlaneHit is
+	// (0,0), and the idle marker was drawing a corner at the world origin.
 	if (bHoverValid)
 	{
 		Tool->BuildPreview(MakeHoverContext(), Sink);

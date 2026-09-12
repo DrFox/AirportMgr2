@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
+#include "Tool/BuildGesture.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
@@ -565,31 +566,9 @@ private:
 	//
 	// The controller decides what the MOUSE did - a click or a drag, and how far a press
 	// must travel to count as one. What that MEANS is the tool's business, and a tool
-	// never sees a raw key.
+	// never sees a raw key. The recogniser itself is FBuildGesture (Tool/BuildGesture.h),
+	// shared with URoadBuildEditorTool - see issue #92; this class keeps only the host I/O
+	// of reading the mouse and calling into IBuildTool.
 
-	bool bPrimaryDown = false;
-
-	/** Screen position of the press, to measure the drag threshold against. */
-	FVector2D PressScreen = FVector2D::ZeroVector;
-
-	/** True once the press has travelled past DragThresholdPixels. */
-	bool bDragging = false;
-
-	/**
-	 * The last road-plane position CursorOnRoadPlane actually resolved, in road-plane
-	 * coordinates.
-	 *
-	 * MakeToolContext runs every PlayerTick and cannot simply drop the frame when the
-	 * cursor briefly leaves the plane (a click above the horizon, say) - the ghost and the
-	 * snap chain need SOME position that frame. Falling back to this rather than an
-	 * unwritten local is the same fix URoadBuildEditorTool::MakeContext already applies
-	 * with HoverPosition: an off-plane frame must not invent a position, so it keeps the
-	 * last good hit instead of whatever FVector2D's default constructor happened to leave
-	 * on the stack.
-	 *
-	 * mutable because CursorOnRoadPlane, which updates it, is const - it reports the
-	 * cursor, it does not decide anything, so every other caller still treats it as a
-	 * read.
-	 */
-	mutable FVector2D LastPlaneHit = FVector2D::ZeroVector;
+	FBuildGesture Gesture;
 };
