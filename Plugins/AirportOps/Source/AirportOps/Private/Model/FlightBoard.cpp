@@ -97,7 +97,7 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 		Allocator->Release(Traffic, Flight);
 	}
 
-	if (!Dispatcher(ApproachFocus, Flight.Airframe))
+	if (!Dispatcher(Flight.ApproachFocus, Flight.Airframe))
 	{
 		// Stays Accepted, with no hold. Queueing this properly is the sequencer's job and it
 		// does not exist yet; saying so is what stops it being a silent disappearance.
@@ -127,9 +127,43 @@ void UFlightBoard::Decline(UFlight& Flight)
 EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	const URoadNetwork& Network, const UFlight& Flight) const
 {
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, ApproachFocus, Flight.Airframe,
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(Network, Flight.ApproachFocus, Flight.Airframe,
 		&Traffic.GetOccupancy());
 	return Plan.Why;
+}
+
+UFlight* UFlightBoard::MakeImmediateFlight(const FAirframe& Airframe, const FVector2D& Focus,
+	FText Airline, double Now)
+{
+	UFlight* Flight = NewObject<UFlight>(this);
+	Flight->Airframe = Airframe;
+	Flight->AirlineName = Airline;
+	Flight->TypeName = FText::FromName(Airframe.TypeCode);
+
+	// NOW, not the generator's lead time: AcceptImmediate exists to put an aeroplane on the
+	// field this second - see its own header.
+	Flight->ArrivesAt = Now;
+	Flight->ExpiresAt = Now;
+	Flight->ApproachFocus = Focus;
+	return Flight;
+}
+
+EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline)
+{
+	UFlight* Flight = MakeImmediateFlight(Airframe, Focus, Airline, Clock.Now());
+	AddOffer(Flight);
+
+	if (Accept(Traffic, Network, Clock, *Flight))
+	{
+		return EArrivalRefusal::None;
+	}
+
+	// Says WHICH refusal, the same sentence the inbox would show for it - see
+	// ArrivalPlanner::DescribeRefusal. The flight is left in the inbox rather than removed:
+	// an offer nobody could accept yet is exactly what the board already does for one the
+	// generator makes, and a player watching the inbox sees the same row either way.
+	return WhyNotAcceptable(Traffic, Network, *Flight);
 }
 
 void UFlightBoard::Tick(USimClock& Clock)

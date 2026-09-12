@@ -186,6 +186,55 @@ bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardAcceptImmediateTest,
+	"AirportOps.Model.FlightBoard.AcceptImmediate",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
+{
+	// ONE stand. AcceptImmediate has to do everything the debug land key used to do by hand:
+	// make the flight, aim IT (not the board) at this call's focus, add it, accept it, and
+	// say why not if it could not be.
+	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+
+	FAirframe Airframe;
+	Airframe.Wingspan = 3400.0;
+	Airframe.TypeCode = FName(TEXT("A320"));
+	const FVector2D Focus(500.0, 250.0);
+	const FText Airline = FText::FromString(TEXT("(key 7)"));
+
+	const EArrivalRefusal Why = Board->AcceptImmediate(*Traffic, *Net, *Clock, Airframe, Focus, Airline);
+	TestEqual(TEXT("the only stand admits it"), Why, EArrivalRefusal::None);
+
+	const TArray<UFlight*> Live = Board->Live();
+	TestEqual(TEXT("one flight is now live"), Live.Num(), 1);
+	if (Live.Num() != 1) { return false; }
+
+	UFlight* Flight = Live[0];
+	TestEqual(TEXT("it is Accepted, holding the stand"), Flight->Phase, EFlightPhase::Accepted);
+	TestTrue(TEXT("the airline travelled onto the flight"), Flight->AirlineName.EqualTo(Airline));
+	TestEqual(TEXT("the type name comes off the airframe's own code"),
+		Flight->TypeName.ToString(), Airframe.TypeCode.ToString());
+	TestEqual(TEXT("the focus travelled onto the flight, not the board's own field"),
+		Flight->ApproachFocus, Focus);
+
+	// A second call, aimed elsewhere, once the one stand is gone. THE POINT OF THE TEST: its
+	// focus must not disturb the first flight's - the "last writer wins" bug this seam
+	// replaces, see UFlight::ApproachFocus.
+	const FVector2D SecondFocus(-900.0, 100.0);
+	const EArrivalRefusal SecondWhy =
+		Board->AcceptImmediate(*Traffic, *Net, *Clock, Airframe, SecondFocus, Airline);
+	TestTrue(TEXT("the second is refused: the one stand is already held"),
+		SecondWhy != EArrivalRefusal::None);
+	TestEqual(TEXT("the first flight's own focus is untouched by the second call"),
+		Flight->ApproachFocus, Focus);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightBoardAcceptedNeverExpiresTest,
 	"AirportOps.Model.FlightBoard.AnAcceptedFlightNeverLapses",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

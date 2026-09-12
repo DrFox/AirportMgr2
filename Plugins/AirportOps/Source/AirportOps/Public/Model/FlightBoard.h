@@ -53,8 +53,13 @@ public:
 	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
 
 	/**
-	 * Where an arrival is aimed. ArrivalPlanner chooses the runway by nearest threshold to
-	 * this point, so it is the same "focus" the land key already computes from the view.
+	 * The DEFAULT focus for the next generated offer - UOpsRuntime writes it before calling
+	 * UOfferGenerator::MakeOffer, which copies it onto the flight it builds.
+	 *
+	 * NOT consulted by Accept, WhyNotAcceptable or DispatchNow: those read UFlight::
+	 * ApproachFocus, which is fixed on the flight at the offer and travels with it. This
+	 * field used to be read there too, and whichever caller wrote it LAST decided every
+	 * later offer's answer - see UFlight::ApproachFocus and issue #96.
 	 */
 	UPROPERTY() FVector2D ApproachFocus = FVector2D::ZeroVector;
 
@@ -74,6 +79,22 @@ public:
 		UFlight& Flight);
 
 	void Decline(UFlight& Flight);
+
+	/**
+	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
+	 * land key's whole job, and previously done by hand at the call site (issue #96).
+	 *
+	 * ArrivesAt and ExpiresAt are Clock.Now(): this exists to put an aeroplane on the field
+	 * THIS SECOND, not to queue a normal offer. Focus travels onto the flight itself - see
+	 * UFlight::ApproachFocus - so it never has to touch the board's own field, which the
+	 * generator also writes and would otherwise fight over.
+	 *
+	 * Returns EArrivalRefusal::None on success, or the reason Accept refused it - the same
+	 * sentence ArrivalPlanner::DescribeRefusal would print for it. The flight is left in the
+	 * inbox on refusal, exactly as a generated offer nobody could accept yet is.
+	 */
+	EArrivalRefusal AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
+		USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline);
 
 	/**
 	 * Why this offer could not be accepted this instant, or EArrivalRefusal::None.
@@ -129,4 +150,9 @@ private:
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 	UFlight* FindByAgent(int32 AgentId);
 	UFlight* FindById(int32 Id);
+
+	/** The seven-assignment core of AcceptImmediate, split out so the flight it builds can be
+	 *  inspected before Accept runs over it - see AcceptImmediate's own header. */
+	UFlight* MakeImmediateFlight(const FAirframe& Airframe, const FVector2D& Focus, FText Airline,
+		double Now);
 };

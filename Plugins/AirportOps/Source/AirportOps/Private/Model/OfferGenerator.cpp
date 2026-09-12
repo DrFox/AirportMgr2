@@ -81,6 +81,10 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	Offer->Phase = EFlightPhase::Offered;
 	Offer->ArrivesAt = Now + LeadTimeSeconds;
 
+	// CARRIED WITH THE FLIGHT, not left for the board's own field to answer later - see
+	// UFlight::ApproachFocus.
+	Offer->ApproachFocus = Focus;
+
 	// CLAMPED, not trusted. An offer that outlived its own ETA would sit in the inbox while
 	// the aeroplane it describes was already on the approach, and accepting it would hold a
 	// stand for something landing in the past.

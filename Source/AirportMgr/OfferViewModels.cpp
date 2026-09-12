@@ -41,11 +41,12 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 	const EArrivalRefusal Why = Board.WhyNotAcceptable(Traffic, Network, *Live);
 	UE_MVVM_SET_PROPERTY_VALUE(bAcceptable, Why == EArrivalRefusal::None);
 
-	FArrivalPlan Plan;
-	Plan.Why = Why;
+	// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
+	// already reads it this way, and a plan with every other field default-constructed is not
+	// a plan, it is Why wearing a bigger struct.
 	UE_MVVM_SET_PROPERTY_VALUE(Refusal, Why == EArrivalRefusal::None
 		? FText::GetEmpty()
-		: FText::FromString(ArrivalPlanner::DescribeRefusal(Plan)));
+		: FText::FromString(ArrivalPlanner::DescribeRefusal(Why)));
 }
 
 void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraffic,
