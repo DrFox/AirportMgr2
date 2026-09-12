@@ -11,7 +11,9 @@ public class AirportMgr : ModuleRules
 		// Airside: the game module drives the road facade. AirportOps: the game module drives
 		// the sim clock and save/load. Both dependencies run this way only - neither plugin
 		// ever depends on the game, and AirportOps depends on Airside, never the reverse.
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Airside", "AirportOps" });
+		// DeveloperSettings: UAirportMgrUISettings, so the UI style asset is CONFIGURED and
+		// not coded - the same reason UAirsideSettings and UAirportOpsSettings take it.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "DeveloperSettings", "Airside", "AirportOps" });
 
 		// UMG: the build bar. Slate/SlateCore: FInputChord (the registry's Ctrl bindings) and
 		// the UMG types' bases.
