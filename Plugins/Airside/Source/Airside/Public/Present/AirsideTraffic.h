@@ -6,6 +6,7 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
+#include "Present/FrameDeltaSmoother.h"
 #include "AirsideTraffic.generated.h"
 
 class URoadNetwork;
@@ -198,6 +199,26 @@ public:
 	/** The newest agent's last shown position, road plane, for the redirect test. Zero when none. */
 	FVector2D LastAgentPositionForTest() const;
 
+	/**
+	 * Turns a jittering real frame delta into the even step the display will present. Moved
+	 * here from ARoadNetworkActor by issue #80 - see FFrameDeltaSmoother's own header for the
+	 * algorithm, the WHY, and the two 2026-09-13 fixes. The only caller is
+	 * ARoadNetworkActor::Tick, which owns SmoothingRate and MaxOwedSeconds as its own
+	 * level-authored UPROPERTYs and hands them in BY VALUE every call - the same pattern
+	 * Advance above uses for TrafficRules, so a figure tuned in the Details panel cannot go
+	 * stale against whatever this object happened to be constructed with.
+	 */
+	double EvenDelta(double RawDeltaSeconds, double SmoothingRate, double MaxOwedSeconds);
+
+	/**
+	 * Resets the running state DeltaSmoother has accumulated, for
+	 * ARoadNetworkActor::SetDeltaSmoothingForTest. The algorithm itself is pinned directly by
+	 * the world-free Airside.Present.FrameDeltaSmoother test; this exists only so the
+	 * composition-level Airside.Present.EvenStepsUnderAJitteringFrameRate can still start
+	 * each of its runs clean.
+	 */
+	void ResetFrameDeltaSmoothingForTest() { DeltaSmoother = FFrameDeltaSmoother(); }
+
 private:
 	/** The Mediator. CreateDefaultSubobject in the constructor, re-pointed by name in
 	 *  PostInitProperties - the duplication rule ARoadNetworkActor already follows. */
@@ -217,6 +238,11 @@ private:
 
 	/** The last SurfaceZ a caller gave, so a view spawned off a phase event can be posed. */
 	UPROPERTY(Transient) double SurfaceZ = 0.0;
+
+	/** See EvenDelta. Not a UPROPERTY: it holds two plain doubles and nothing the garbage
+	 *  collector needs to trace, and is Transient-by-construction the way every field here
+	 *  already is - a fresh UAirsideTraffic gets a freshly zeroed one for free. */
+	FFrameDeltaSmoother DeltaSmoother;
 
 	void OnModelPhaseChanged(int32 AgentId, EAgentPhase From, EAgentPhase To);
 	void OnModelArrivalRefused(EArrivalRefusal Why);

@@ -286,3 +286,8 @@ FVector2D UAirsideTraffic::LastAgentPositionForTest() const
 	const FRoadAgent* Agent = Model->FindAgent(Model->GetNewestAgentId());
 	return Agent != nullptr ? Agent->LastMotion.Position : FVector2D::ZeroVector;
 }
+
+double UAirsideTraffic::EvenDelta(double RawDeltaSeconds, double SmoothingRate, double MaxOwedSeconds)
+{
+	return DeltaSmoother.Advance(RawDeltaSeconds, SmoothingRate, MaxOwedSeconds);
+}

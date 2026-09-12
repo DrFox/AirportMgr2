@@ -29,17 +29,12 @@ ARoadNetworkActor::ARoadNetworkActor()
 	RootComponent->bVisualizeComponent = false;
 #endif
 
-	MeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RoadMesh"));
-	MeshComponent->SetupAttachment(RootComponent);
-
 	// FRoadMeshBuilder emits absolute world coordinates, so the component must not
 	// transform them again. Absolute placement pins it to world space while leaving the
 	// actor free to be moved: SetWorldTransform(Identity) on a root component would have
 	// teleported the actor itself to the origin instead, which is why the mesh component
-	// is a child of a plain scene root rather than the root itself.
-	MeshComponent->SetUsingAbsoluteLocation(true);
-	MeshComponent->SetUsingAbsoluteRotation(true);
-	MeshComponent->SetUsingAbsoluteScale(true);
+	// is a child of a plain scene root rather than the root itself. See MakeSurfaceComponent.
+	MeshComponent = MakeSurfaceComponent(TEXT("RoadMesh"));
 
 	// Tangents are left at the default ExternallyProvided, which finds no tangent space on
 	// this mesh and falls back to a frame derived from the normal alone. On a flat +Z road
@@ -68,11 +63,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// A second component for the preview, sharing the road's absolute-space setup for the
 	// same reason: the builder emits world coordinates and must not have them transformed
 	// twice. Hidden until there is something to preview.
-	GhostComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RoadGhost"));
-	GhostComponent->SetupAttachment(RootComponent);
-	GhostComponent->SetUsingAbsoluteLocation(true);
-	GhostComponent->SetUsingAbsoluteRotation(true);
-	GhostComponent->SetUsingAbsoluteScale(true);
+	GhostComponent = MakeSurfaceComponent(TEXT("RoadGhost"));
 	GhostComponent->SetVisibility(false);
 
 	// The preview is a hint, not scenery: it must never occlude, shadow or be traced
@@ -82,26 +73,14 @@ ARoadNetworkActor::ARoadNetworkActor()
 
 	// Aprons: their own component, and no collision or shadows for the same reason the
 	// roads have none - the world is flat, so picking is exact maths rather than a trace.
-	ApronComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("ApronMesh"));
-	ApronComponent->SetupAttachment(RootComponent);
-	ApronComponent->SetUsingAbsoluteLocation(true);
-	ApronComponent->SetUsingAbsoluteRotation(true);
-	ApronComponent->SetUsingAbsoluteScale(true);
+	ApronComponent = MakeSurfaceComponent(TEXT("ApronMesh"));
 	ApronComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
-	MarkingComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("HoldingPositionMarkings"));
-	MarkingComponent->SetupAttachment(RootComponent);
-	MarkingComponent->SetUsingAbsoluteLocation(true);
-	MarkingComponent->SetUsingAbsoluteRotation(true);
-	MarkingComponent->SetUsingAbsoluteScale(true);
+	MarkingComponent = MakeSurfaceComponent(TEXT("HoldingPositionMarkings"));
 	MarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	MarkingComponent->SetCastShadow(false);
 
-	RunwayMarkingComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("RunwayMarkings"));
-	RunwayMarkingComponent->SetupAttachment(RootComponent);
-	RunwayMarkingComponent->SetUsingAbsoluteLocation(true);
-	RunwayMarkingComponent->SetUsingAbsoluteRotation(true);
-	RunwayMarkingComponent->SetUsingAbsoluteScale(true);
+	RunwayMarkingComponent = MakeSurfaceComponent(TEXT("RunwayMarkings"));
 	RunwayMarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	RunwayMarkingComponent->SetCastShadow(false);
 
@@ -120,6 +99,18 @@ ARoadNetworkActor::ARoadNetworkActor()
 	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
 
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
+}
+
+UDynamicMeshComponent* ARoadNetworkActor::MakeSurfaceComponent(FName Name)
+{
+	// See the header: only the part that is IDENTICAL across all five components. Collision,
+	// shadow and visibility differ per component and stay at each call site.
+	UDynamicMeshComponent* Component = CreateDefaultSubobject<UDynamicMeshComponent>(Name);
+	Component->SetupAttachment(RootComponent);
+	Component->SetUsingAbsoluteLocation(true);
+	Component->SetUsingAbsoluteRotation(true);
+	Component->SetUsingAbsoluteScale(true);
+	return Component;
 }
 
 URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
@@ -477,34 +468,6 @@ bool ARoadNetworkActor::ShouldTickIfViewportsOnly() const
 	return World != nullptr && !World->IsGameWorld();
 }
 
-double ARoadNetworkActor::EvenDelta(double RealDeltaSeconds)
-{
-	if (RealDeltaSeconds <= 0.0)
-	{
-		return 0.0;
-	}
-
-	// Seeded from the first real frame rather than from zero, so the first second of play is
-	// not an aeroplane accelerating out of a standstill the model never asked for.
-	if (SmoothedDeltaSeconds <= 0.0)
-	{
-		SmoothedDeltaSeconds = RealDeltaSeconds;
-	}
-	SmoothedDeltaSeconds = FMath::Lerp(SmoothedDeltaSeconds, RealDeltaSeconds,
-		FMath::Clamp(DeltaSmoothingRate, 0.0, 1.0));
-
-	// WHAT IS OWED, so evening the step cannot turn into losing time. The average is paid out
-	// each frame and the difference banked; the clamp below is what stops the bank growing.
-	OwedSeconds += RealDeltaSeconds;
-
-	const double Bound = FMath::Max(MaxOwedSeconds, 0.0);
-	const double Step = FMath::Max(
-		FMath::Clamp(SmoothedDeltaSeconds, OwedSeconds - Bound, OwedSeconds + Bound), 0.0);
-
-	OwedSeconds -= Step;
-	return Step;
-}
-
 void ARoadNetworkActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -513,8 +476,19 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	// TrafficRules travels with the tick, not with construction: it is a level-authored
 	// UPROPERTY on this actor and the model that reads it is Transient, so handing it over
 	// every frame is what keeps a figure tuned in the Details panel true of the arbiter -
-	// see the property's own comment and UAirsideTraffic::Advance.
-	Traffic->Advance(static_cast<float>(EvenDelta(DeltaSeconds) * SimTimeScale), SurfaceZ, Network, TrafficRules);
+	// see the property's own comment and UAirsideTraffic::Advance. EvenDelta moved onto
+	// Traffic by issue #80 (see FFrameDeltaSmoother); DeltaSmoothingRate/MaxOwedSeconds are
+	// this actor's own level-authored UPROPERTYs and travel in by value the same way.
+	const double Evened = Traffic->EvenDelta(DeltaSeconds, DeltaSmoothingRate, MaxOwedSeconds);
+	Traffic->Advance(static_cast<float>(Evened * SimTimeScale), SurfaceZ, Network, TrafficRules);
+}
+
+void ARoadNetworkActor::SetDeltaSmoothingForTest(double Rate)
+{
+	// Out of the header: the body now needs UAirsideTraffic's complete type, which the
+	// header only forward-declares - see Tick for why (same Traffic->EvenDelta pattern).
+	DeltaSmoothingRate = FMath::Clamp(Rate, 0.0, 1.0);
+	Traffic->ResetFrameDeltaSmoothingForTest();
 }
 
 bool ARoadNetworkActor::DispatchArrival(const FVector2D& Near, const FAirframe& Airframe)
@@ -560,11 +534,6 @@ EDepartureRefusal ARoadNetworkActor::DepartAgent(int32 AgentId)
 ARoadAgentActor* ARoadNetworkActor::GetAgentView(int32 AgentId) const
 {
 	return Traffic->GetAgentView(AgentId);
-}
-
-int32 ARoadNetworkActor::AgentCountForTest() const
-{
-	return Traffic->GetAgentCount();
 }
 
 EAgentPhase ARoadNetworkActor::LastAgentPhaseForTest() const

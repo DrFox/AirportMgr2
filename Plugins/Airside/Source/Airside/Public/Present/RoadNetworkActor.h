@@ -144,7 +144,8 @@ public:
 	void ClearAgents();
 
 	/** How many agents are currently under way or parked at their destination. Forwards to
-	 *  Traffic. */
+	 *  Traffic. Also what Airside.Present.ArrivalDispatch reads - AgentCountForTest was an
+	 *  exact duplicate of this and was deleted by issue #80. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	int32 GetAgentCount() const;
 
@@ -165,6 +166,13 @@ public:
 	UAirsideTraffic* GetTraffic() const { return Traffic; }
 
 	/**
+	 * The surface presenter, for a caller that wants it directly rather than through one of
+	 * the *ForTest forwarders below. Added alongside GetTraffic() by issue #80 for the same
+	 * reason: read access to a subobject, not a forwarder per method.
+	 */
+	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
+
+	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
 	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
 	 * compression - see USimClock's class comment for why the two are different numbers.
@@ -173,14 +181,17 @@ public:
 	 */
 	void SetSimTimeScale(double Scale) { SimTimeScale = FMath::Max(0.0, Scale); }
 
-	/** Sets the delta evening and clears what it has accumulated. 1.0 hands the raw frame
-	 *  delta through, which is the only way a test can measure what the evening removes. */
-	void SetDeltaSmoothingForTest(double Rate)
-	{
-		DeltaSmoothingRate = FMath::Clamp(Rate, 0.0, 1.0);
-		SmoothedDeltaSeconds = 0.0;
-		OwedSeconds = 0.0;
-	}
+	/**
+	 * Sets the delta evening and resets what it has accumulated. 1.0 hands the raw frame
+	 * delta through, which is the only way a test can measure what the evening removes.
+	 *
+	 * RETARGETED to Traffic by issue #80: the running state (SmoothedSeconds/OwedSeconds)
+	 * moved into FFrameDeltaSmoother, owned by UAirsideTraffic, so it can be pinned by a
+	 * world-free test - see FFrameDeltaSmoother's own header. DeltaSmoothingRate itself stays
+	 * here, level-authored, and travels into Traffic BY VALUE every Tick, the same pattern
+	 * TrafficRules already uses.
+	 */
+	void SetDeltaSmoothingForTest(double Rate);
 	double GetSimTimeScale() const { return SimTimeScale; }
 
 	/** Route between two guideline nodes over the network this actor owns. Forwards to the
@@ -667,6 +678,20 @@ private:
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
 
 	/**
+	 * Constructor helper for the five CreateDefaultSubobject<UDynamicMeshComponent> blocks
+	 * that used to repeat SetupAttachment plus three SetUsingAbsolute* calls each (issue #80).
+	 * Factors only what is IDENTICAL across all five - the absolute-space setup every one of
+	 * them needs for the same reason (see MeshComponent's own comment) - and leaves collision,
+	 * shadow and visibility at the call site, because those genuinely differ per component
+	 * (the road casts a shadow and has collision defaults the other four deliberately do not)
+	 * and folding them in here would be a behaviour change dressed as a refactor.
+	 *
+	 * NAMES MUST STAY EXACTLY WHAT EACH CALLER PASSES: a saved level references its components
+	 * by name (RoadMesh, RoadGhost, ApronMesh, HoldingPositionMarkings, RunwayMarkings).
+	 */
+	UDynamicMeshComponent* MakeSurfaceComponent(FName Name);
+
+	/**
 	 * How long an arrival sits at the stand before the engine stops, seconds.
 	 *
 	 * Not zero, and not a formality: an engine that stopped the instant the wheels did reads
@@ -736,15 +761,6 @@ private:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double MaxOwedSeconds = 0.25;
-
-	/** Running average of the frame delta. See DeltaSmoothingRate. */
-	UPROPERTY(Transient) double SmoothedDeltaSeconds = 0.0;
-
-	/** Simulated time owed to the wall clock, positive when behind. See MaxOwedSeconds. */
-	UPROPERTY(Transient) double OwedSeconds = 0.0;
-
-	/** Turns a jittering real frame delta into the even step the display will present. */
-	double EvenDelta(double RealDeltaSeconds);
 
 	/** Builds the FSurfaceSettings RebuildMesh needs from this actor's own Resolve*
 	 *  functions and level-authored tunables. One place, so a rebuild cannot read the
@@ -844,9 +860,6 @@ public:
 
 	/** The material set the last rebuild skinned the mesh with. Forwards to Presenter. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const;
-
-	/** Agents alive right now, for Airside.Present.ArrivalDispatch. Forwards to Traffic. */
-	int32 AgentCountForTest() const;
 
 	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
 	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */

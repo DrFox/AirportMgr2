@@ -163,12 +163,12 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	Airframe.Climb = Climb;
 	Airframe.Approach = Approach;
 
-	const int32 Before = Actor->AgentCountForTest();
+	const int32 Before = Actor->GetAgentCount();
 	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Airframe);
 
 	TestTrue(TEXT("an arrival is accepted on a runway that has an exit to a stand"), bDispatched);
 	TestEqual(TEXT("and an aircraft exists as a result"),
-		Actor->AgentCountForTest(), Before + 1);
+		Actor->GetAgentCount(), Before + 1);
 
 	// 3. THE FOLLOWER TAXIS ON THE AIRFRAME'S GROUND PERFORMANCE, NOT THE STRUCT DEFAULT -
 	//    issue #27, and issue #28's own reason for existing: with FAirframe as ONE struct
@@ -195,7 +195,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 			Ticks, static_cast<int32>(Actor->LastAgentPhaseForTest())),
 			Actor->LastAgentPhaseForTest(), EAgentPhase::Parked);
 		TestEqual(TEXT("and it is still the only agent - parking does not spawn or drop one"),
-			Actor->AgentCountForTest(), Before + 1);
+			Actor->GetAgentCount(), Before + 1);
 
 		// THE 1234.0 FIXTURE. Read through the follower Tick actually drove, not the
 		// Airframe the test itself constructed - this is what proves the handover in
@@ -237,7 +237,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 
 			TestFalse(TEXT("a runway shorter than the landing distance is refused"),
 				Small->DispatchArrival(FVector2D::ZeroVector, Airframe));
-			TestEqual(TEXT("and nothing is left in the world"), Small->AgentCountForTest(), 0);
+			TestEqual(TEXT("and nothing is left in the world"), Small->GetAgentCount(), 0);
 		}
 	}
 
@@ -287,14 +287,14 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 					TestEqual(TEXT("a route along one undivided segment is a two-point plan"),
 						Plan.Polyline.Num(), 2);
 
-					const int32 BeforeDeparture = Departing->AgentCountForTest();
+					const int32 BeforeDeparture = Departing->GetAgentCount();
 					TestTrue(TEXT("a plain DispatchAgent onto a runway is accepted"),
 						Departing->DispatchAgent(Plan, Airframe));
 					TestEqual(TEXT("and an aircraft exists as a result"),
-						Departing->AgentCountForTest(), BeforeDeparture + 1);
+						Departing->GetAgentCount(), BeforeDeparture + 1);
 
 					int32 DepartTicks = 0;
-					while (Departing->AgentCountForTest() > 0 && DepartTicks < 6000)
+					while (Departing->GetAgentCount() > 0 && DepartTicks < 6000)
 					{
 						Departing->Tick(0.1f);
 						++DepartTicks;
@@ -303,7 +303,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 					TestEqual(FString::Printf(
 						TEXT("the departure clears and the agent is dropped within %d ticks"),
 						DepartTicks),
-						Departing->AgentCountForTest(), 0);
+						Departing->GetAgentCount(), 0);
 				}
 			}
 		}
