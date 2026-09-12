@@ -24,8 +24,13 @@ struct AIRPORTOPS_API FOpsSnapshot
 	/**
 	 * 2 since flights. A v1 snapshot is a game from before the flight board and loads with
 	 * an empty inbox rather than being refused - an old save must still open.
+	 *
+	 * 3 since UFlight::ApproachFocus (issue #96). Before it, every flight shared the board's
+	 * one ApproachFocus; a v1 or v2 blob's flights therefore have no per-flight focus at all,
+	 * and OpsSave::Restore recreates one via UFlightBoard::AimUnaimedFlightsAtBoardFocus
+	 * rather than leave every restored flight aimed at the world origin.
 	 */
-	UPROPERTY() int32 Version = 2;
+	UPROPERTY() int32 Version = 3;
 	UPROPERTY() TArray<uint8> Clock;
 	UPROPERTY() TArray<uint8> Network;
 

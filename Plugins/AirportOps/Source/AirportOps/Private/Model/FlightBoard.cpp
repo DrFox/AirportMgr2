@@ -132,8 +132,8 @@ EArrivalRefusal UFlightBoard::WhyNotAcceptable(const UGroundTraffic& Traffic,
 	return Plan.Why;
 }
 
-UFlight* UFlightBoard::MakeImmediateFlight(const FAirframe& Airframe, const FVector2D& Focus,
-	FText Airline, double Now)
+EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
+	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline)
 {
 	UFlight* Flight = NewObject<UFlight>(this);
 	Flight->Airframe = Airframe;
@@ -142,16 +142,10 @@ UFlight* UFlightBoard::MakeImmediateFlight(const FAirframe& Airframe, const FVec
 
 	// NOW, not the generator's lead time: AcceptImmediate exists to put an aeroplane on the
 	// field this second - see its own header.
-	Flight->ArrivesAt = Now;
-	Flight->ExpiresAt = Now;
+	Flight->ArrivesAt = Clock.Now();
+	Flight->ExpiresAt = Clock.Now();
 	Flight->ApproachFocus = Focus;
-	return Flight;
-}
 
-EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URoadNetwork& Network,
-	USimClock& Clock, const FAirframe& Airframe, const FVector2D& Focus, FText Airline)
-{
-	UFlight* Flight = MakeImmediateFlight(Airframe, Focus, Airline, Clock.Now());
 	AddOffer(Flight);
 
 	if (Accept(Traffic, Network, Clock, *Flight))
@@ -164,6 +158,23 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	// an offer nobody could accept yet is exactly what the board already does for one the
 	// generator makes, and a player watching the inbox sees the same row either way.
 	return WhyNotAcceptable(Traffic, Network, *Flight);
+}
+
+void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
+{
+	// A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
+	// OpsSave::Restore. Before UFlight::ApproachFocus existed (issue #96) every flight
+	// shared this one board-wide field, so a v1/v2 blob's flights have no per-flight focus
+	// at all; tagged-property load leaves the new field at FVector2D::ZeroVector, which
+	// would aim every restored flight at the world origin rather than wherever it was
+	// actually saved aimed.
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		if (Each != nullptr)
+		{
+			Each->ApproachFocus = ApproachFocus;
+		}
+	}
 }
 
 void UFlightBoard::Tick(USimClock& Clock)

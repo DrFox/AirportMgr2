@@ -133,6 +133,16 @@ public:
 
 	int32 PendingOfferCount() const { return Offers().Num(); }
 
+	/**
+	 * Copies this board's own ApproachFocus onto every flight it holds.
+	 *
+	 * A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
+	 * OpsSave::Restore, which is the one caller. Before UFlight::ApproachFocus existed
+	 * (issue #96) every flight shared this one board-wide field, so recreating it per-flight
+	 * is the only way an old load lands where it was actually aimed rather than the origin.
+	 */
+	void AimUnaimedFlightsAtBoardFocus();
+
 private:
 	UPROPERTY() TArray<TObjectPtr<UFlight>> Flights;
 	UPROPERTY() int32 NextFlightId = 1;
@@ -150,9 +160,4 @@ private:
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 	UFlight* FindByAgent(int32 AgentId);
 	UFlight* FindById(int32 Id);
-
-	/** The seven-assignment core of AcceptImmediate, split out so the flight it builds can be
-	 *  inspected before Accept runs over it - see AcceptImmediate's own header. */
-	UFlight* MakeImmediateFlight(const FAirframe& Airframe, const FVector2D& Focus, FText Airline,
-		double Now);
 };

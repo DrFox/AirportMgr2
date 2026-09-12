@@ -195,10 +195,24 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	// ONE stand. AcceptImmediate has to do everything the debug land key used to do by hand:
 	// make the flight, aim IT (not the board) at this call's focus, add it, accept it, and
 	// say why not if it could not be.
+	//
+	// THE POINT OF THE TEST: a RECORDING DISPATCHER, not just reading Flight->ApproachFocus
+	// back. Asserting the flight's own property proves AcceptImmediate SET it; it does not
+	// prove DispatchNow or WhyNotAcceptable ever READ it rather than the board's - the exact
+	// "last writer wins" bug issue #96 fixes. Only watching what actually gets dispatched
+	// catches a regression back to the board field. Revert FlightBoard.cpp's DispatchNow/
+	// WhyNotAcceptable to read the board's ApproachFocus again and this test goes red.
 	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
+
+	TArray<FVector2D> DispatchedNear;
+	Board->Dispatcher = [&DispatchedNear](const FVector2D& Near, const FAirframe&)
+	{
+		DispatchedNear.Add(Near);
+		return true;
+	};
 
 	FAirframe Airframe;
 	Airframe.Wingspan = 3400.0;
@@ -208,6 +222,8 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 
 	const EArrivalRefusal Why = Board->AcceptImmediate(*Traffic, *Net, *Clock, Airframe, Focus, Airline);
 	TestEqual(TEXT("the only stand admits it"), Why, EArrivalRefusal::None);
+	TestEqual(TEXT("the board's own field is never written by AcceptImmediate"),
+		Board->ApproachFocus, FVector2D::ZeroVector);
 
 	const TArray<UFlight*> Live = Board->Live();
 	TestEqual(TEXT("one flight is now live"), Live.Num(), 1);
@@ -218,19 +234,32 @@ bool FFlightBoardAcceptImmediateTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the airline travelled onto the flight"), Flight->AirlineName.EqualTo(Airline));
 	TestEqual(TEXT("the type name comes off the airframe's own code"),
 		Flight->TypeName.ToString(), Airframe.TypeCode.ToString());
-	TestEqual(TEXT("the focus travelled onto the flight, not the board's own field"),
-		Flight->ApproachFocus, Focus);
 
 	// A second call, aimed elsewhere, once the one stand is gone. THE POINT OF THE TEST: its
 	// focus must not disturb the first flight's - the "last writer wins" bug this seam
-	// replaces, see UFlight::ApproachFocus.
+	// replaces, see UFlight::ApproachFocus. The second flight is refused, so it never gets
+	// scheduled and never appears in DispatchedNear below.
 	const FVector2D SecondFocus(-900.0, 100.0);
 	const EArrivalRefusal SecondWhy =
 		Board->AcceptImmediate(*Traffic, *Net, *Clock, Airframe, SecondFocus, Airline);
 	TestTrue(TEXT("the second is refused: the one stand is already held"),
 		SecondWhy != EArrivalRefusal::None);
-	TestEqual(TEXT("the first flight's own focus is untouched by the second call"),
-		Flight->ApproachFocus, Focus);
+	TestEqual(TEXT("the board's own field is STILL untouched, even by the refused call"),
+		Board->ApproachFocus, FVector2D::ZeroVector);
+
+	// ArrivesAt == ExpiresAt == Clock->Now() at the accept - see AcceptImmediate's own header
+	// on why - so the tiniest advance crosses the ETA and fires the dispatcher.
+	Clock->Advance(0.1);
+	TestEqual(TEXT("the dispatcher ran exactly once - only the accepted flight was ever due"),
+		DispatchedNear.Num(), 1);
+	if (DispatchedNear.Num() == 1)
+	{
+		// Focus, SecondFocus and ZeroVector are three distinct points, so this one equality
+		// rules out all three wrong answers at once: the second call's focus, and the
+		// board's own field (which stayed ZeroVector throughout, asserted above).
+		TestEqual(TEXT("dispatched at the FIRST flight's own focus, not the second's or the board's"),
+			DispatchedNear[0], Focus);
+	}
 	return true;
 }
 

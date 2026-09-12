@@ -53,6 +53,15 @@ bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Ne
 	if (In.Flights.Num() > 0)
 	{
 		DeserializeObject(Board, In.Flights);
+
+		if (In.Version < 3)
+		{
+			// A blob from before UFlight::ApproachFocus (issue #96): every flight in it
+			// shared the board's one focus, which DID deserialise (it is older than the
+			// flights themselves) - so recreate the per-flight field from it rather than
+			// leave each restored flight's new field at its default, the world origin.
+			Board.AimUnaimedFlightsAtBoardFocus();
+		}
 	}
 
 	// A v1 snapshot has no Flights blob at all, and the branch above leaves the board alone -

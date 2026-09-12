@@ -111,4 +111,54 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightV2LoadAimsAtTheBoardsOldFocusTest,
+	"AirportOps.Model.FlightSave.AV2LoadAimsEveryFlightAtTheBoardsOldFocus",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters)
+{
+	// BEFORE UFlight::ApproachFocus (issue #96), every flight shared the board's ONE
+	// ApproachFocus. A genuine v1/v2 blob's flights therefore carry no per-flight focus at
+	// all - OpsSave::Restore must recreate it from the board's own field (which DID exist
+	// and DID serialise) rather than leave every restored flight aimed at the world origin.
+	URoadNetwork* Net = SaveTestNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = SaveTestBoard();
+	Board->Dispatcher = [](const FVector2D&, const FAirframe&) { return true; };
+	Board->ApproachFocus = FVector2D(12345.0, -678.0);
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Airframe.Wingspan = 3400.0;
+	Flight->ArrivesAt = Clock->Now() + 1000.0;
+	Board->AddOffer(Flight);
+	TestTrue(TEXT("accepted before the save"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
+
+	// ZEROED BY HAND: a real v2 save could not have written this field, since it did not
+	// exist yet. Leaving it at whatever AcceptImmediate-style code set it to would test a
+	// blob no v2 game ever actually produced.
+	Flight->ApproachFocus = FVector2D::ZeroVector;
+
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(*Clock, *Net, *Board, Snapshot);
+	Snapshot.Version = 2;
+
+	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
+	USimClock* RestoredClock = NewObject<USimClock>();
+	UFlightBoard* RestoredBoard = SaveTestBoard();
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard))) { return false; }
+
+	const TArray<UFlight*> Live = RestoredBoard->Live();
+	TestEqual(TEXT("the flight came back"), Live.Num(), 1);
+	if (Live.Num() != 1) { return false; }
+
+	TestEqual(TEXT("a v2 load aims the flight at the board's OWN restored focus"),
+		Live[0]->ApproachFocus, RestoredBoard->ApproachFocus);
+	TestEqual(TEXT("which is the focus that was actually saved, not the origin"),
+		Live[0]->ApproachFocus, FVector2D(12345.0, -678.0));
+	return true;
+}
+
 #endif
