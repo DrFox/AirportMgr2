@@ -289,6 +289,37 @@ public:
 	void ClearAgents();
 
 	/**
+	 * Hold a stand for something that is not an agent yet - an accepted flight, hours before
+	 * it is dispatched.
+	 *
+	 * THE SAME TABLE AND THE SAME CLAIM the planner already honours: ArrivalPlanner::
+	 * ChooseStand skips a stand whose PoseNode is held, and FTrafficOccupancy::IsHeld counts
+	 * a reservation (bOccupied false) as held. A separate reservation table would be a second
+	 * source of truth, and the two would drift the first time a stand was freed in one of
+	 * them - the same argument FTrafficResource's header makes for one table over three.
+	 *
+	 * HOLDERID IS NOT AN AGENT ID. Agent ids are allocated NextAgentId++ from 1, so callers
+	 * pass a NEGATIVE id (AirportOps passes the negative of the flight id) and the two id
+	 * spaces cannot collide without a registry that would have to be kept in step.
+	 *
+	 * False if someone else already holds it, in which case nothing was changed.
+	 */
+	bool HoldStand(int32 HolderId, FGuidelineNodeId PoseNode);
+
+	/**
+	 * Give back every hold made by HolderId.
+	 *
+	 * ReleaseReservations and not ReleaseAll: bOccupied is the whole test there, and a hold
+	 * is never occupied, so for a holder the two agree - but ReleaseAll would also take a
+	 * BODY if a caller ever passed a real agent id by mistake, and an aeroplane silently
+	 * losing the stand it is standing on is not a bug that announces itself.
+	 */
+	void ReleaseHold(int32 HolderId);
+
+	/** Whether any holder but ExcludingHolder holds this stand - a body or a reservation. */
+	bool IsStandHeld(FGuidelineNodeId PoseNode, int32 ExcludingHolder) const;
+
+	/**
 	 * One tick, in this order: Arbitrate (see it) writes every agent's StopWithin, then
 	 * each agent advances under that cap, accrues StalledSeconds while it is stopped and
 	 * waiting, and announces any phase change - dropping the agent once it says Gone. Then

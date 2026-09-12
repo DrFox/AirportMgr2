@@ -15,7 +15,10 @@ public class AirportMgr : ModuleRules
 
 		// UMG: the build bar. Slate/SlateCore: FInputChord (the registry's Ctrl bindings) and
 		// the UMG types' bases.
-		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
+		// ModelViewViewModel: the offer inbox binds viewmodels rather than polling the board.
+		// BETA in 5.8 - if a binding misbehaves the fallback is a plain widget reading the
+		// board directly, as UInspectorWidget does, not a redesign.
+		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore", "ModelViewViewModel" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

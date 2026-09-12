@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/OfferGenerator.h"
 #include "Model/SimClock.h"
 #include "UObject/Object.h"
 #include "OpsRuntime.generated.h"
@@ -9,6 +10,8 @@ class ARoadNetworkActor;
 class UOpsCatalog;
 class UOpsEvents;
 class UFuelService;
+class UFlightBoard;
+class UOfferGenerator;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 
@@ -42,6 +45,13 @@ public:
 	/** The fuel jobs. See UFuelService - this runtime owns it, feeds it the phase events and
 	 *  ticks it, and that is the whole of the wiring. */
 	UFuelService* GetFuelService() const { return FuelService; }
+
+	/** Every flight, and the one caller of DispatchArrival. See UFlightBoard. */
+	UFlightBoard* GetFlightBoard() const { return FlightBoard; }
+
+	/** Where offers come from. Fed the catalog's airlines by this runtime, on the clock. */
+	UOfferGenerator* GetOfferGenerator() const { return OfferGenerator; }
+
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
 	/** Binds to the actor's traffic delegates. Safe to call again with a new actor (unbinds the old). */
@@ -64,7 +74,18 @@ private:
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
 	UPROPERTY() TObjectPtr<UOpsCatalog> Catalog;
 	UPROPERTY() TObjectPtr<UFuelService> FuelService;
+	UPROPERTY() TObjectPtr<UFlightBoard> FlightBoard;
+	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
+
+	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
+	int32 OfferHandle = INDEX_NONE;
+
+	/** The catalog's airlines, flattened into airframes Model/ may read. See the .cpp. */
+	TArray<FOfferCandidate> CandidatesFromCatalog() const;
+
+	/** One offer, on the clock. Bound in Attach. */
+	void GenerateOffer();
 
 	/** What TogglePause returns to. X1 if nothing was ever set. */
 	UPROPERTY() ESimSpeed ResumeSpeed = ESimSpeed::X1;

@@ -1,4 +1,6 @@
 #include "Model/OpsSave.h"
+
+#include "Model/FlightBoard.h"
 #include "AirportOpsLog.h"
 #include "Kismet/GameplayStatics.h"
 #include "Model/RoadNetwork.h"
@@ -25,15 +27,20 @@ void OpsSave::DeserializeObject(UObject& Object, const TArray<uint8>& Bytes)
 	Object.Serialize(Ar);
 }
 
-void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network, FOpsSnapshot& Out)
+void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network,
+	const UFlightBoard& Board, FOpsSnapshot& Out)
 {
 	// Serialize is non-const on UObject; the archive is saving, so nothing is written to them.
 	SerializeObject(const_cast<USimClock&>(Clock), Out.Clock);
 	SerializeObject(const_cast<URoadNetwork&>(Network), Out.Network);
-	UE_LOG(LogAirportOps, Log, TEXT("Captured snapshot: clock %d bytes, network %d bytes"), Out.Clock.Num(), Out.Network.Num());
+	SerializeObject(const_cast<UFlightBoard&>(Board), Out.Flights);
+	UE_LOG(LogAirportOps, Log,
+		TEXT("Captured snapshot: clock %d bytes, network %d bytes, flights %d bytes"),
+		Out.Clock.Num(), Out.Network.Num(), Out.Flights.Num());
 }
 
-bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network)
+bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network,
+	UFlightBoard& Board)
 {
 	if (In.Clock.Num() > 0)
 	{
@@ -43,8 +50,16 @@ bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Ne
 	{
 		DeserializeObject(Network, In.Network);
 	}
-	UE_LOG(LogAirportOps, Log, TEXT("Restored snapshot v%d: game time %.1f, %d nodes"),
-		In.Version, Clock.Now(), Network.GetNodes().Num());
+	if (In.Flights.Num() > 0)
+	{
+		DeserializeObject(Board, In.Flights);
+	}
+
+	// A v1 snapshot has no Flights blob at all, and the branch above leaves the board alone -
+	// which is the right answer: a game saved before the board existed had no flights.
+	UE_LOG(LogAirportOps, Log,
+		TEXT("Restored snapshot v%d: game time %.1f, %d nodes, %d live flight(s)"),
+		In.Version, Clock.Now(), Network.GetNodes().Num(), Board.Live().Num());
 	return true;
 }
 

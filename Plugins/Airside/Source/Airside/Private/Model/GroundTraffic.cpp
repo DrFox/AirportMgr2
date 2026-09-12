@@ -412,6 +412,36 @@ void UGroundTraffic::ClearAgents()
 	Occupancy.Clear();
 }
 
+bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
+{
+	if (!PoseNode.IsSet())
+	{
+		return false;
+	}
+
+	FTrafficClaim Claim;
+	Claim.AgentId = HolderId;
+	Claim.Resource = FTrafficResource::OfNode(PoseNode);
+
+	// A RESERVATION, never an occupation: nothing's body is at a stand hours before it lands.
+	// ReleaseHold's use of ReleaseReservations depends on this staying false.
+	Claim.bOccupied = false;
+
+	FTrafficClaim Blocker;
+	return Occupancy.TryClaim(Claim, Blocker) == EClaimResult::Granted;
+}
+
+void UGroundTraffic::ReleaseHold(int32 HolderId)
+{
+	Occupancy.ReleaseReservations(HolderId);
+}
+
+bool UGroundTraffic::IsStandHeld(FGuidelineNodeId PoseNode, int32 ExcludingHolder) const
+{
+	return PoseNode.IsSet()
+		&& Occupancy.IsHeld(FTrafficResource::OfNode(PoseNode), ExcludingHolder);
+}
+
 void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 {
 	SimSeconds += DeltaSeconds;

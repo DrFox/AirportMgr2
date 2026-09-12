@@ -13,7 +13,11 @@
 class ARoadNetworkActor;
 class UBuildBarWidget;
 class UInspectorWidget;
+class UOfferInboxWidget;
+class UOpsRuntime;
+class UFlightBoard;
 struct FAgentFacts;
+struct FAirframe;
 struct FStandFacts;
 
 /**
@@ -130,6 +134,13 @@ public:
 
 	/** The inspector on screen, created at BeginPlay beside the bar. */
 	UPROPERTY(Transient) TObjectPtr<UInspectorWidget> Inspector;
+
+	/** The offer inbox's Blueprint class; null means the plain C++ panel, as above. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
+	TSubclassOf<UOfferInboxWidget> OfferInboxClass;
+
+	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
+	UPROPERTY(Transient) TObjectPtr<UOfferInboxWidget> OfferInbox;
 
 	/** Nearest a split may happen to the ends of the segment being split, in uu. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Snap", meta = (ClampMin = "0.0"))
@@ -301,6 +312,15 @@ public:
 	 * player is looking. The key does the same, for one-action-one-behaviour.
 	 */
 	void LandAircraftNearViewFocus();
+
+	/**
+	 * The land key's flight-board path: one flight with an immediate ETA, accepted at once.
+	 *
+	 * Split out rather than inlined so that the no-runtime fallback above it stays legible -
+	 * the editor mode has no game instance, and so no board, and the key must still work
+	 * there. Logs the refusal sentence when the airport cannot take it.
+	 */
+	void LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board, const FAirframe& Airframe);
 
 	void OnClearNetwork();
 	void OnUndo();
