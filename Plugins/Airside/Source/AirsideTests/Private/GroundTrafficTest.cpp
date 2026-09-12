@@ -2360,4 +2360,71 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECTED AIRCRAFT ALREADY HAS ITS ENGINES RUNNING.
+ *
+ * REPORTED FROM PLAY: "when departing there is no time for the prop to spin up, it is still
+ * coming up to speed when the aircraft is taxiing at full speed."
+ *
+ * FRoadAgent::StartTaxi deliberately starts COLD, so a propeller winds up as the aircraft
+ * first rolls - which is right for a plain dispatch and wrong for everything that reaches
+ * RedirectAgent. A departure has spent a turnaround on a stand with its engines started
+ * minutes before it moved; the taxi out is not an engine start. Winding up from zero there
+ * meant the prop was still accelerating while the aeroplane was already at taxi speed.
+ *
+ * ASSERTS BOTH HALVES, because the fix is a difference between two paths and an assertion
+ * on only the redirect would pass just as well if StartTaxi had been changed to start warm
+ * too - which would lose the wind-up on a genuine cold start.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficWarmRedirectTest,
+	"Airside.Model.Traffic.RedirectStartsTheEngineAtSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId W = M2TrafficNode(*Net, -20000.0, 0.0);
+	const FGuidelineNodeId J = M2TrafficNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId N = M2TrafficNode(*Net, 0.0, 20000.0);
+	M2TrafficJoin(*Net, W, J);
+	M2TrafficJoin(*Net, J, N);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = M2TrafficPlane();
+
+	// The same fallback StartEngineAtSpeed uses, so an airframe with no authored engine still
+	// has an expected figure rather than the test asserting against zero.
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	const int32 Id = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, W, J, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	// Measured before any tick: the wind-up is what is under test, so letting it run would
+	// be measuring the ramp rate instead of where it started.
+	const FRoadAgent* Cold = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent exists"), Cold != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("a plain dispatch still starts the engine cold, so a cold start still winds up (%.0f RPM)"),
+		Cold->EngineRPM), Cold->EngineRPM < AtSpeed);
+
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// Re-fetched: RedirectAgent may have moved the agent array out from under the pointer.
+	const FRoadAgent* Warm = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Warm != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("but a redirect finds the engines already running at speed (%.0f RPM, want %.0f)"),
+		Warm->EngineRPM, AtSpeed), FMath::IsNearlyEqual(Warm->EngineRPM, AtSpeed, 0.01));
+	TestTrue(TEXT("and running"), Warm->bEngineRunning);
+	return true;
+}
+
 #endif
