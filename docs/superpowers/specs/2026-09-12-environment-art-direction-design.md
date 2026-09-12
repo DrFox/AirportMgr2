@@ -194,9 +194,36 @@ rays, at a cost.
 
 ### 4.5 VolumetricCloud
 
-**Kept as-is for now**, on `m_SimpleVolumetricCloud_Inst`. It is expensive and barely
-visible below a 600 m camera, so it is a candidate for removal - but the decision is to
-see what it adds before dropping it. Revisit after the first screenshots.
+**Kept, and now earning its cost**: it casts shadows on the ground. Three findings, all
+paid for the hard way.
+
+**Cloud shadows are OFF by default.** `bCastCloudShadows` is 0 on the directional light.
+
+**The shadow map extent must hold the CLOUDS THAT CAST onto the field, not the field.**
+Sized to the 3 km plot at 6 km it produced nothing: clouds sit 5-10 km up, so with the sun
+at 42 degrees a shadow lands `altitude / tan(42)` - 6 to 11 km - away horizontally from its
+cloud. 25 km radius holds them at any sun angle the day cycle reaches, at a resolution
+scale of 4 (512 x 4 = 2048, the `r.VolumetricCloud.ShadowMap.MaxResolution` clamp) for
+about 24 m per texel. A second default confirms the trap independently:
+`ShadowMap.SnapLength` is 20 km, so a 6 km map snaps to a grid larger than itself.
+
+**The engine's cloud instance ships `Cloud_GlobalCoverage` at -0.20, which is NEGATIVE.**
+`m_SimpleVolumetricCloud_Inst` is tuned for sparse decorative cloud on a backdrop, not for
+a game where cloud's job is to move shadows across the ground. Shadows worked at that
+setting; they were simply rare enough to miss, which is exactly how they were first
+measured and wrongly written off as not working. `/Game/Environment/MI_Clouds` takes it to
+0.00 and density 0.008 -> 0.012. Measured effect on the ground: variation std 2.30 -> 6.34.
+
+**Duplicate that instance, never build a fresh one.** A new MaterialInstanceConstant
+parented to `m_SimpleVolumetricCloud` overrides only what you set and inherits parent
+defaults for everything else - it emptied the sky of cloud entirely rather than adding any.
+`EditorAssetLibrary.duplicate_loaded_asset` on the live object, because the engine's sky
+content is not in the asset registry and cannot be duplicated by path.
+
+**Do not measure cloud cover from sky pixels.** Two proxy metrics were tried and both lied:
+counting bright non-blue pixels read full overcast as LESS cloud than broken cloud, and
+counting neutral pixels ranked them backwards too. Exposure and the atmospheric gradient
+move everything. Look at the image.
 
 ### 4.6 Deletions
 

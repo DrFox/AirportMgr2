@@ -83,6 +83,23 @@ CLOUD_SHADOW_RESOLUTION_SCALE = 4.0
 # dark patch that competes with the aircraft and vehicles for attention.
 CLOUD_SHADOW_STRENGTH = 0.8
 
+# How much sky has cloud in it, and how solid that cloud is.
+#
+# THE ENGINE INSTANCE SHIPS COVERAGE AT -0.2, WHICH IS NEGATIVE - m_SimpleVolumetricCloud_Inst
+# is tuned for sparse decorative cloud on a backdrop, not for a game where the cloud's job is
+# to put moving shadows on the ground. Cloud shadows DO work at that setting; they are simply
+# rare enough to miss, which is exactly what happened when this was first measured and wrongly
+# written off as not working.
+#
+# Density 0.008 -> 0.014 for the same reason: a thin layer occludes little, so the shadow it
+# casts is faint even when it is overhead.
+CLOUD_COVERAGE = 0.0
+CLOUD_DENSITY = 0.012
+
+# Ours, in /Game, because the one the level starts with belongs to the ENGINE and must not be
+# edited - every project on this engine install shares it.
+CLOUD_MATERIAL_PATH = "/Game/Environment/MI_Clouds"
+
 # SkyAtmosphere's aerial perspective already gives distance haze; the stock fog is grey
 # and flattens everything behind it.
 FOG_DENSITY = 0.005
@@ -197,6 +214,46 @@ def add_post_process():
     return ppv
 
 
+def set_clouds(cloud):
+    """Point the cloud layer at our own material instance, with more cloud in it.
+
+    Reached through the component rather than by path: the engine's sky content is not in
+    the asset registry, so load_asset on /Engine/EngineSky/... returns None. The level's own
+    actor holds a live reference, which is the only way to get at the parent material.
+    """
+    comp = cloud.get_component_by_class(unreal.VolumetricCloudComponent)
+    current = comp.get_editor_property("material")
+    if current is None:
+        fail("volumetric cloud has no material")
+        return
+
+
+    # DUPLICATED, NOT CREATED FRESH, and that distinction cost a cloudless sky. A new
+    # MaterialInstanceConstant parented to m_SimpleVolumetricCloud overrides only what this
+    # script sets and inherits the PARENT's defaults for everything else - and the engine's
+    # instance carries a good deal more than two scalars. Building one from scratch removed
+    # every cloud from the sky (cloud-ish pixels 9.6% -> 0.0%) rather than adding any.
+    #
+    # Duplicating the live object rather than the path because the engine's sky content is
+    # not in the asset registry: EditorAssetLibrary.duplicate_asset on
+    # /Engine/EngineSky/... finds nothing, but the component hands over the loaded object.
+    if unreal.EditorAssetLibrary.does_asset_exist(CLOUD_MATERIAL_PATH):
+        mi = unreal.EditorAssetLibrary.load_asset(CLOUD_MATERIAL_PATH)
+    else:
+        mi = unreal.EditorAssetLibrary.duplicate_loaded_asset(current, CLOUD_MATERIAL_PATH)
+        if mi is None:
+            fail("could not duplicate the cloud material")
+            return
+
+    lib = unreal.MaterialEditingLibrary
+    lib.set_material_instance_scalar_parameter_value(mi, "Cloud_GlobalCoverage", CLOUD_COVERAGE)
+    lib.set_material_instance_scalar_parameter_value(mi, "Cloud_GlobalDensity", CLOUD_DENSITY)
+    unreal.EditorAssetLibrary.save_asset(mi.get_path_name(), only_if_is_dirty=False)
+
+    comp.set_editor_property("material", mi)
+    say("clouds: coverage %.2f, density %.3f via %s" % (CLOUD_COVERAGE, CLOUD_DENSITY, CLOUD_MATERIAL_PATH))
+
+
 def delete_floor():
     """The template floor is replaced by the Landscape in Slice B.
 
@@ -274,6 +331,17 @@ def verify():
         else:
             say("PASS sky light real_time_capture on")
 
+    clouds = [a for a in actors().get_all_level_actors() if isinstance(a, unreal.VolumetricCloud)]
+    if clouds:
+        cmat = clouds[0].get_component_by_class(unreal.VolumetricCloudComponent).get_editor_property("material")
+        got = unreal.MaterialEditingLibrary.get_material_instance_scalar_parameter_value(
+            cmat, "Cloud_GlobalCoverage")
+        if abs(got - CLOUD_COVERAGE) > 1e-4:
+            fail("cloud coverage is %r, expected %r" % (got, CLOUD_COVERAGE))
+            ok = False
+        else:
+            say("PASS cloud coverage = %.2f (engine default was -0.20)" % got)
+
     floors = [a for a in actors().get_all_level_actors() if a.get_actor_label() == "Floor"]
     if floors:
         fail("template floor is still in the level")
@@ -299,6 +367,9 @@ def run():
     set_sun(sun)
     set_sky_light(sky)
     set_fog(fog)
+    cloud = find_one(unreal.VolumetricCloud)
+    if cloud is not None:
+        set_clouds(cloud)
     add_post_process()
     delete_floor()
 
