@@ -27,7 +27,12 @@ Cities: Skylines. PC only, Steam, Windows 10+. Mouse and keyboard; no controller
 spline-drawn at any angle with real junctions and curves, not cells on a grid. Grid snapping
 is an optional toggle, never a constraint.
 
-**Visual style:** realism. **Audio:** undecided.
+**Visual style:** stylised but grounded - low-poly hard-edged forms and simplified
+materials, but believable proportions and soft realistic lighting. A muted ground palette
+with focused colour on vehicles, markings and signage, so colour reads as function. Not
+cartoon, and no longer realism: see
+`docs/superpowers/specs/2026-09-12-environment-art-direction-design.md` for the palette,
+the lighting, and why. **Audio:** undecided.
 
 ---
 
