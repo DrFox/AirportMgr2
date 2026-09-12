@@ -1,9 +1,11 @@
 #include "Model/OfferGenerator.h"
 
 #include "AirportOpsLog.h"
+#include "Model/AirlineDefinition.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
 #include "Model/RoadNetwork.h"
+#include "Model/SimClock.h"
 
 bool UOfferGenerator::IsPermanentRefusal(EArrivalRefusal Why)
 {
@@ -93,4 +95,17 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	// Fees are deliberately left at zero. Nothing banks them until the ledger exists, and a
 	// number nothing reads is a number that will be wrong by the time something does.
 	return Offer;
+}
+
+double UOfferGenerator::OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines)
+{
+	double OffersPerDay = 0.0;
+	for (const UAirlineDefinition* Airline : Airlines)
+	{
+		OffersPerDay += Airline != nullptr ? Airline->OffersPerDay : 0.0;
+	}
+	// ZERO IS "NEVER", not a divide-by-zero to guard against a caller forgot to. An airport
+	// with no airline offering anything is a real, reportable state - UOpsRuntime::Attach
+	// warns about it rather than scheduling a callback that would never fire usefully.
+	return OffersPerDay > 0.0 ? USimClock::SecondsPerDay / OffersPerDay : 0.0;
 }

@@ -5,7 +5,6 @@
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
 #include "Model/AirlineDefinition.h"
-#include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
@@ -76,22 +75,13 @@ void UOpsRuntime::GenerateOffer()
 		return;
 	}
 
-	// AIMED AT THE LONGEST RUNWAY, not at wherever the land key last looked. ArrivalPlanner
-	// chooses the runway by nearest threshold to the focus, so an offer generated with the
-	// board's default (0,0) focus would be planned against whichever strip happens to sit
-	// nearest the world origin - and then accepted against a different one.
-	const FAirsideCapability Airport = AirsideCapability::Summarise(*Target->Network);
-	const FRunwaySummary* Longest = nullptr;
-	for (const FRunwaySummary& Runway : Airport.Runways)
+	// FORWARDED: choosing a runway is UFlightBoard's decision now, not this class's - see
+	// UFlightBoard::DefaultApproachFocus (issue #98). Left untouched when the airport has no
+	// runway yet, same as before.
+	FVector2D Focus;
+	if (UFlightBoard::DefaultApproachFocus(*Target->Network, Focus))
 	{
-		if (Longest == nullptr || Runway.Length > Longest->Length)
-		{
-			Longest = &Runway;
-		}
-	}
-	if (Longest != nullptr)
-	{
-		FlightBoard->ApproachFocus = Longest->Threshold;
+		FlightBoard->ApproachFocus = Focus;
 	}
 
 	UFlight* Offer = OfferGenerator->MakeOffer(*Target->Network, FlightBoard->ApproachFocus,
@@ -156,17 +146,17 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 	// One repeating offer for the airport as a whole, at the average rate the airlines ask
 	// for between them. Per-airline scheduling is a refinement the inbox cannot yet show.
-	double OffersPerDay = 0.0;
-	for (const UAirlineDefinition* Airline : Catalog->All<UAirlineDefinition>())
+	//
+	// FORWARDED: the rate-to-interval arithmetic is UOfferGenerator's now, against
+	// USimClock::SecondsPerDay rather than a local figure duplicating it - see
+	// UOfferGenerator::OfferIntervalSeconds (issue #98).
+	const TArray<UAirlineDefinition*> Airlines = Catalog->All<UAirlineDefinition>();
+	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines);
+	if (Interval > 0.0)
 	{
-		OffersPerDay += Airline != nullptr ? Airline->OffersPerDay : 0.0;
-	}
-	if (OffersPerDay > 0.0)
-	{
-		const double GameSecondsPerDay = 86400.0;
-		OfferHandle = Clock->Every(GameSecondsPerDay / OffersPerDay, [this]() { GenerateOffer(); });
+		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
 		UE_LOG(LogAirportOps, Log, TEXT("Offers: %.1f per game day across %d airline(s)"),
-			OffersPerDay, Catalog->All<UAirlineDefinition>().Num());
+			USimClock::SecondsPerDay / Interval, Airlines.Num());
 	}
 	else
 	{

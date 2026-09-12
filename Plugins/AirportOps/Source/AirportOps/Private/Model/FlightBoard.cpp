@@ -1,12 +1,32 @@
 #include "Model/FlightBoard.h"
 
 #include "AirportOpsLog.h"
+#include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 #include "Model/StandAllocator.h"
+
+bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus)
+{
+	const FAirsideCapability Airport = AirsideCapability::Summarise(Network);
+	const FRunwaySummary* Longest = nullptr;
+	for (const FRunwaySummary& Runway : Airport.Runways)
+	{
+		if (Longest == nullptr || Runway.Length > Longest->Length)
+		{
+			Longest = &Runway;
+		}
+	}
+	if (Longest == nullptr)
+	{
+		return false;
+	}
+	OutFocus = Longest->Threshold;
+	return true;
+}
 
 void UFlightBoard::AddOffer(UFlight* Offer)
 {
