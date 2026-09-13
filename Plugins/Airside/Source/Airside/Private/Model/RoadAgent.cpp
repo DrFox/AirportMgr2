@@ -13,9 +13,9 @@ void FRoadAgent::ClearArbitration()
 
 void FRoadAgent::BeginCrossing(FRoadSegmentId Seed, ECrossingPhase InPhase)
 {
-	// THE INVARIANT IS "SET IFF" (see CrossingPhase), so both halves of it are checked here:
-	// InPhase != None IS THE WHOLE INVARIANT (see CrossingPhase): EndCrossing is the call for
-	// leaving a crossing, so this is never asked to arm "no crossing" with a seed attached.
+	// THE INVARIANT IS "SET IFF" (see CrossingPhase), so both halves of it are checked here.
+	// EndCrossing is the call for leaving a crossing, so this is never asked to arm "no
+	// crossing" with a seed attached.
 	checkf(InPhase != ECrossingPhase::None,
 		TEXT("BeginCrossing needs a real phase; call EndCrossing to leave a crossing"));
 	// AND Seed MUST NAME A REAL RUNWAY - the other direction of "set iff": a crossing phase
