@@ -202,6 +202,29 @@ struct IToolPreviewSink
 	 */
 	virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) = 0;
 	virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) = 0;
+
+	/**
+	 * Every consecutive pair as a Line, so a caller does not re-derive the "N-1 segments"
+	 * loop - six call sites had (#103). NON-VIRTUAL: it is built entirely from Line above,
+	 * so every sink implements it for free rather than each re-implementing the loop.
+	 */
+	void Polyline(TConstArrayView<FVector2D> Points, EPreviewStyle Style)
+	{
+		for (int32 Index = 1; Index < Points.Num(); ++Index)
+		{
+			Line(Points[Index - 1], Points[Index], Style);
+		}
+	}
+
+	/** Polyline plus the closing edge back to the first point. */
+	void Polygon(TConstArrayView<FVector2D> Points, EPreviewStyle Style)
+	{
+		Polyline(Points, Style);
+		if (Points.Num() >= 2)
+		{
+			Line(Points.Last(), Points[0], Style);
+		}
+	}
 };
 
 /**

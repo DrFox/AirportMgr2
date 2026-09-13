@@ -25,10 +25,7 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 		TArray<FVector2D> Points;
 		GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Points);
 
-		for (int32 At = 1; At < Points.Num(); ++At)
-		{
-			Sink.Line(Points[At - 1], Points[At], EPreviewStyle::Guideline);
-		}
+		Sink.Polyline(Points, EPreviewStyle::Guideline);
 	}
 
 	for (const FGuidelineNode& Node : Network.GetGuidelineNodes())
