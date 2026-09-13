@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -41,13 +42,9 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 		Van.Ground.MaxTurnRateDegPerSec
 			> UAirsideSettings::ResolveDefaultAirframe().Ground.MaxTurnRateDegPerSec);
 
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
 
 	// A NETWORK HAS TO BE MADE FIRST. A freshly spawned actor's Network is null until an

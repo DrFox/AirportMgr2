@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Build/RoadProfileBands.h"
@@ -150,13 +151,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to register components in"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to register components in"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 
 	TestEqual(TEXT("no runway, no runway paint"), Actor->GetPresenter()->RunwayMarkingTriangleCountForTest(), 0);

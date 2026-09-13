@@ -98,13 +98,9 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 {
 	// THE SEAM TEST: the panel calls the actor; the actor must reach the model, and the
 	// view must follow the agent out. A forwarder that was never wired compiles fine.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const FDepAgentGraph G = DepAgentBuild(*Actor->Network);

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Engine/Engine.h"
 #include "Engine/Level.h"
 #include "Engine/World.h"
@@ -26,13 +27,10 @@ bool FActorDuplicationTest::RunTest(const FString& Parameters)
 	//
 	// SpawnActor does not take that path, which is why every other actor test passed while
 	// PIE was broken. This one duplicates, the way PIE does.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to spawn into"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Source = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	UWorld* World = TestWorld.World;
+	ARoadNetworkActor* Source = TestWorld.Actor;
 	if (!TestNotNull(TEXT("source actor spawned"), Source)) { return false; }
 	const int32 A = Source->PlaceNode(FVector2D(0.0, 0.0));
 	const int32 B = Source->PlaceNode(FVector2D(20000.0, 0.0));
