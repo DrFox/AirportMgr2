@@ -725,6 +725,10 @@ private:
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<URoadEditFacade> Facade;
 
+	/** How many times RebuildMesh has run. Not a UPROPERTY - a session counter for
+	 *  RebuildCountForTest, not state a save would ever need. */
+	int32 RebuildCount = 0;
+
 	/** Agents and dispatch - see UAirsideTraffic's own header. Same CreateDefaultSubobject
 	 *  and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<UAirsideTraffic> Traffic;
@@ -860,6 +864,22 @@ public:
 	// of the actor growing one forwarder per presenter query. Callers (MeshFreshnessTest.cpp,
 	// RunwaySurfaceTest.cpp) now call Actor->GetPresenter()->SurfaceTriangleCountForTest() etc.
 	// directly - see URoadSurfacePresenter's own header for those three.
+
+	/**
+	 * How many times RebuildMesh has run, for Airside.Present.MeshRebuildsOnFacadeChange.
+	 *
+	 * A count survives where a triangle-count comparison cannot: MoveNode's own rebuild can
+	 * leave the triangle count exactly as it was (same segment, same profile, a shifted
+	 * vertex), so a test asserting notification for it needs a signal a shape change is not
+	 * guaranteed to give. Kept on the ACTOR, not the presenter: it counts calls to
+	 * ARoadNetworkActor::RebuildMesh itself (the OnChanged handler), not presenter-internal
+	 * rebuild work, so a future presenter-side cache hit that skips real work would not
+	 * silently break this count's meaning.
+	 */
+	int32 RebuildCountForTest() const { return RebuildCount; }
+
+	/** Agents alive right now, for Airside.Present.ArrivalDispatch. Forwards to Traffic. */
+	int32 AgentCountForTest() const;
 
 	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
 	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */

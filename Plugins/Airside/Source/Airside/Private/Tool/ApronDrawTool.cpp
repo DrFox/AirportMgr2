@@ -18,10 +18,11 @@ TUniquePtr<IApronDrawState> FApronIdleState::OnClick(const FToolContext& Context
 	// Ctrl on open ground with nothing part-drawn removes the apron under the cursor.
 	if (Context.bRemoveModifier)
 	{
+		// No RebuildMesh() on success any more - DeleteApron notifies on commit (issue #77).
 		const int32 Under = Context.Target->FindApronAt(Context.Cursor);
-		if (Under != INDEX_NONE && Context.Target->DeleteApron(Under))
+		if (Under != INDEX_NONE)
 		{
-			Context.Target->RebuildMesh();
+			Context.Target->DeleteApron(Under);
 		}
 		return nullptr;
 	}
@@ -111,7 +112,7 @@ TUniquePtr<IApronDrawState> FApronOutliningState::OnClick(const FToolContext& Co
 			return nullptr;
 		}
 
-		Context.Target->RebuildMesh();
+		// No RebuildMesh() here any more - AddApron notifies on commit (issue #77).
 		return MakeUnique<FApronIdleState>();
 	}
 

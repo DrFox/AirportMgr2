@@ -62,7 +62,8 @@ TUniquePtr<IRoadDrawState> FRoadIdleState::OnClick(const FToolContext& Context)
 		return nullptr;
 	}
 
-	Context.Target->RebuildMesh();
+	// No RebuildMesh() here any more - PlaceNode/SplitSegment, whichever ResolveToNode just
+	// called, now notify the facade's own OnChanged on commit (issue #77).
 	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind);
 }
 
@@ -121,12 +122,15 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 	if (To != From && !Context.Target->ConnectNodes(From, To, Kind))
 	{
 		// The facade already logged why. Drop the chain rather than leaving the player
-		// clicking against a connection that will not form.
-		Context.Target->RebuildMesh();
+		// clicking against a connection that will not form. NO RebuildMesh() here any more -
+		// it used to cover the node or split ResolveToNode just made a few lines up, which
+		// notifies on its OWN commit now (PlaceNode/SplitSegment, issue #77); the refused
+		// ConnectNodes itself changed nothing further that needs showing.
 		return MakeUnique<FRoadIdleState>(Kind);
 	}
 
-	Context.Target->RebuildMesh();
+	// No RebuildMesh() here either - ResolveToNode and ConnectNodes each notify the facade's
+	// own OnChanged on commit now (issue #77).
 
 	// Chain on from the node just reached, so a road is drawn click by click rather than
 	// a pair of clicks per segment.
@@ -144,10 +148,8 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Cont
 		const TArray<FRoadNode>& Nodes = Context.Target->GetNetwork()->GetNodes();
 		if (Nodes.IsValidIndex(From) && Nodes[From].bAlive && Nodes[From].Incident.Num() == 0)
 		{
-			if (Context.Target->DeleteNode(From))
-			{
-				Context.Target->RebuildMesh();
-			}
+			// No RebuildMesh() on success any more - DeleteNode notifies on commit (issue #77).
+			Context.Target->DeleteNode(From);
 		}
 	}
 
@@ -234,7 +236,7 @@ void FRoadDrawTool::Remove(const FToolContext& Context)
 	// put the Road tool back into taxiway mode after a Ctrl+click removal, and the next
 	// click would lay a 23 m aircraft lane where the player was drawing a road.
 	State = MakeUnique<FRoadIdleState>(Kind);
-	Context.Target->RebuildMesh();
+	// No RebuildMesh() here any more - DeleteNode/DeleteSegment notify on commit (issue #77).
 }
 
 void FRoadDrawTool::OnClick(const FToolContext& Context)
@@ -255,10 +257,8 @@ void FRoadDrawTool::OnClick(const FToolContext& Context)
 	// and a nuisance when all you wanted was somewhere to drag from.
 	if (Context.bInsertModifier && Context.Snap.Kind == ERoadSnapKind::Segment)
 	{
-		if (Context.Target->SplitSegment(Context.Snap.Segment.Index, Context.Snap.Position) != INDEX_NONE)
-		{
-			Context.Target->RebuildMesh();
-		}
+		// No RebuildMesh() on success any more - SplitSegment notifies on commit (issue #77).
+		Context.Target->SplitSegment(Context.Snap.Segment.Index, Context.Snap.Position);
 		return;
 	}
 
@@ -305,11 +305,9 @@ void FRoadDrawTool::OnDrag(const FToolContext& Context)
 	}
 
 	// A refused move simply does not happen, so the node stops following the cursor rather
-	// than dragging a road shorter than the solver can trim.
-	if (Context.Target->MoveNode(DragNode, Context.Cursor))
-	{
-		Context.Target->RebuildMesh();
-	}
+	// than dragging a road shorter than the solver can trim. No RebuildMesh() here any more -
+	// MoveNode notifies every successful call, drag frame included (issue #77).
+	Context.Target->MoveNode(DragNode, Context.Cursor);
 }
 
 void FRoadDrawTool::OnDragEnd(const FToolContext& Context)
@@ -321,7 +319,8 @@ void FRoadDrawTool::OnDragEnd(const FToolContext& Context)
 
 	DragNode = INDEX_NONE;
 	Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-	Context.Target->RebuildMesh();
+	// No RebuildMesh() here any more - the last OnDrag's MoveNode already notified for the
+	// final position; EndInteractiveEdit only closes the undo step, it moves nothing (#77).
 }
 
 void FRoadDrawTool::Tick(const FToolContext& Context)

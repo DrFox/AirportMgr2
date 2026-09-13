@@ -141,6 +141,67 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 			Solved->RightCutB.X == 8850.0 && Solved->RightCutB.Y == 1150.0);
 	}
 
+	// --- NodeIdAt/SegmentIdAt/GuidelineEdgeIdAt/ApronIdAt: dead, out-of-range, and live (#79 review) ---
+	//
+	// Every one of these is RoadSlot::HandleAt, already proven generically by
+	// Airside.Model.SlotMap - this pins the four call sites themselves rather than trusting
+	// each forwards to it correctly, since a copy-paste of the wrong array would compile and
+	// silently answer for a different collection.
+	{
+		URoadNetwork* IdAtNet = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* IdAtProfile = URoadProfile::MakeTransient(2300.0, 1500.0);
+
+		const FRoadNodeId IdAtA = IdAtNet->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId IdAtB = IdAtNet->AddNode(FVector2D(1000.0, 0.0));
+		const FRoadSegmentId IdAtSeg = IdAtNet->AddStraightSegment(IdAtA, IdAtB, IdAtProfile);
+		const FGuidelineNodeId IdAtGA = IdAtNet->AddGuidelineNode(FVector2D(0.0, 0.0), /*bDerived*/ false);
+		const FGuidelineNodeId IdAtGB = IdAtNet->AddGuidelineNode(FVector2D(1000.0, 0.0), /*bDerived*/ false);
+		FGuidelineEdge IdAtEdgeIn;
+		IdAtEdgeIn.A = IdAtGA;
+		IdAtEdgeIn.B = IdAtGB;
+		const FGuidelineEdgeId IdAtEdge = IdAtNet->AddGuidelineEdge(MoveTemp(IdAtEdgeIn));
+		const FApronId IdAtApron = IdAtNet->AddApron(FApronSurface());
+
+		TestTrue(TEXT("fixture built"), IdAtSeg.IsSet() && IdAtEdge.IsSet() && IdAtApron.IsSet());
+
+		// Live: the returned handle names the same slot AND the same generation as the one
+		// the Add* call itself handed back - not merely "some" live handle at that index.
+		TestTrue(TEXT("NodeIdAt live matches Add's own handle"), IdAtNet->NodeIdAt(IdAtA.Index) == IdAtA);
+		TestEqual(TEXT("NodeIdAt live generation"), IdAtNet->NodeIdAt(IdAtA.Index).Generation, IdAtA.Generation);
+		TestTrue(TEXT("SegmentIdAt live matches Add's own handle"), IdAtNet->SegmentIdAt(IdAtSeg.Index) == IdAtSeg);
+		TestEqual(TEXT("SegmentIdAt live generation"), IdAtNet->SegmentIdAt(IdAtSeg.Index).Generation, IdAtSeg.Generation);
+		TestTrue(TEXT("GuidelineEdgeIdAt live matches Add's own handle"), IdAtNet->GuidelineEdgeIdAt(IdAtEdge.Index) == IdAtEdge);
+		TestEqual(TEXT("GuidelineEdgeIdAt live generation"), IdAtNet->GuidelineEdgeIdAt(IdAtEdge.Index).Generation, IdAtEdge.Generation);
+		TestTrue(TEXT("ApronIdAt live matches Add's own handle"), IdAtNet->ApronIdAt(IdAtApron.Index) == IdAtApron);
+		TestEqual(TEXT("ApronIdAt live generation"), IdAtNet->ApronIdAt(IdAtApron.Index).Generation, IdAtApron.Generation);
+
+		// Out of range: -1 and exactly Num() (one past the last valid index).
+		TestFalse(TEXT("NodeIdAt(-1) unset"), IdAtNet->NodeIdAt(-1).IsSet());
+		TestFalse(TEXT("NodeIdAt(Num()) unset"), IdAtNet->NodeIdAt(IdAtNet->GetNodes().Num()).IsSet());
+		TestFalse(TEXT("SegmentIdAt(-1) unset"), IdAtNet->SegmentIdAt(-1).IsSet());
+		TestFalse(TEXT("SegmentIdAt(Num()) unset"), IdAtNet->SegmentIdAt(IdAtNet->GetSegments().Num()).IsSet());
+		TestFalse(TEXT("GuidelineEdgeIdAt(-1) unset"), IdAtNet->GuidelineEdgeIdAt(-1).IsSet());
+		TestFalse(TEXT("GuidelineEdgeIdAt(Num()) unset"),
+			IdAtNet->GuidelineEdgeIdAt(IdAtNet->GetGuidelineEdges().Num()).IsSet());
+		TestFalse(TEXT("ApronIdAt(-1) unset"), IdAtNet->ApronIdAt(-1).IsSet());
+		TestFalse(TEXT("ApronIdAt(Num()) unset"), IdAtNet->ApronIdAt(IdAtNet->GetAprons().Num()).IsSet());
+
+		// Dead: a valid INDEX whose slot is no longer alive.
+		const int32 DeadNodeIndex = IdAtB.Index;
+		const int32 DeadSegmentIndex = IdAtSeg.Index;
+		const int32 DeadEdgeIndex = IdAtEdge.Index;
+		const int32 DeadApronIndex = IdAtApron.Index;
+		IdAtNet->RemoveGuidelineEdge(IdAtEdge);
+		IdAtNet->RemoveApron(IdAtApron);
+		IdAtNet->RemoveSegment(IdAtSeg);
+		IdAtNet->RemoveNode(IdAtB);
+
+		TestFalse(TEXT("NodeIdAt(dead) unset"), IdAtNet->NodeIdAt(DeadNodeIndex).IsSet());
+		TestFalse(TEXT("SegmentIdAt(dead) unset"), IdAtNet->SegmentIdAt(DeadSegmentIndex).IsSet());
+		TestFalse(TEXT("GuidelineEdgeIdAt(dead) unset"), IdAtNet->GuidelineEdgeIdAt(DeadEdgeIndex).IsSet());
+		TestFalse(TEXT("ApronIdAt(dead) unset"), IdAtNet->ApronIdAt(DeadApronIndex).IsSet());
+	}
+
 	return true;
 }
 

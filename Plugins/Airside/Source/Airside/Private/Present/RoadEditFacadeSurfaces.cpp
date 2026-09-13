@@ -38,7 +38,7 @@ bool URoadEditFacade::Undo()
 	// The preview may be describing a node that no longer exists, and its cache compares
 	// only the cursor and the start node - neither of which an undo changes.
 	Owner.HideGhost();
-	OnChanged.Broadcast();
+	NotifyChanged();
 	return true;
 }
 
@@ -58,7 +58,7 @@ bool URoadEditFacade::Redo()
 
 	Owner.Network = Restored;
 	Owner.HideGhost();
-	OnChanged.Broadcast();
+	NotifyChanged();
 	return true;
 }
 
@@ -117,7 +117,7 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 		return INDEX_NONE;
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return Added.Index;
 }
 
@@ -137,7 +137,7 @@ bool URoadEditFacade::DeleteApron(int32 ApronIndex)
 		return false;
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return true;
 }
 
@@ -220,7 +220,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 		return INDEX_NONE;
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return Placed.Index;
 }
 
@@ -240,7 +240,7 @@ bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 		return false;
 	}
 
-	Edit.Commit();
+	CommitAndNotify(Edit);
 	return true;
 }
 
@@ -291,7 +291,7 @@ void URoadEditFacade::ClearNetwork()
 	// A fresh network rather than a drain: node removal bumps generations and prunes
 	// incident lists, and none of that bookkeeping is worth doing on the way to empty.
 	Owner.Network = NewObject<URoadNetwork>(&Owner);
-	OnChanged.Broadcast();
+	NotifyChanged();
 }
 
 FRoutePlan URoadEditFacade::FindRoute(

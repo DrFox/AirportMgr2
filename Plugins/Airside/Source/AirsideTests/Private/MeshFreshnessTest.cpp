@@ -120,11 +120,16 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------------------
-// URoadEditFacade::OnChanged -> ARoadNetworkActor::RebuildMesh, which replaced four direct
-// RebuildMesh() calls the facade's mutators used to make (PlaceRunway, ClearNetwork, Undo,
-// Redo - see RoadEditFacade.h's own comment on OnChanged). Nothing asserted that the wiring
-// still fires: every other test that wants a rebuilt mesh calls Actor->RebuildMesh() itself,
-// which would still pass even if the constructor's
+// URoadEditFacade::OnChanged -> ARoadNetworkActor::RebuildMesh, which originally replaced
+// four direct RebuildMesh() calls the facade's mutators used to make (PlaceRunway,
+// ClearNetwork, Undo, Redo). Issue #77 (2026-09-13) made CommitAndNotify/NotifyChanged the
+// single broadcast point for every committed edit - PlaceNode, ConnectNodes, SplitSegment,
+// DeleteNode, DeleteSegment, MoveNode, AddApron, DeleteApron, PlaceEntity and DeleteEntity
+// now notify too, and the 12 RebuildMesh() calls the TOOLS used to make after them are gone
+// (one of them, RoadDrawTool's chaining state, used to rebuild even on a REFUSED connect -
+// see RoadEditFacade.h's own comment on OnChanged). Nothing asserted that the wiring still
+// fires: every other test that wants a rebuilt mesh calls Actor->RebuildMesh() itself, which
+// would still pass even if the constructor's
 // Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh) were deleted outright.
 //
 // NewObject, no world - matching Airside.Present.NetworkActor rather than
@@ -145,8 +150,9 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	}
 
 	// One isolated node, purely to bring the network into being - see MeshIsFreshAfterLoad's
-	// own comment on PlaceNode for why this is how every test here does it.
-	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	// own comment on PlaceNode for why this is how every test here does it. Captured: the
+	// #77 section below reconnects to this exact node rather than assuming its index.
+	const int32 FirstNode = Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const int32 Before = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 
 	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
@@ -177,6 +183,53 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh back to what it was before "
 		"the runway existed, with no explicit RebuildMesh() call either"),
 		AfterUndo, Before);
+
+	// --- Issue #77: the ten mutators that used to leave notification to the TOOL ---------
+	//
+	// RebuildCountForTest, not the triangle buffer, is the signal from here on: PlaceNode on
+	// an isolated point and MoveNode both leave the triangle count exactly where it was (a
+	// lone node draws nothing; a move keeps the same segment and profile, just shifted
+	// vertices), so a test that only compared triangle counts could pass while the broadcast
+	// itself was missing. A count survives both cases.
+	// EXACTLY ONE rebuild per successful call, not merely "at least one" - a mutator that
+	// notified twice for one edit would pass a "!=" check just as happily, and issue #77 is
+	// specifically about there being ONE broadcast point per commit.
+	const int32 RebuildsBeforePlaceNode = Actor->RebuildCountForTest();
+	const int32 SecondNode = Actor->PlaceNode(FVector2D(2000.0, 2000.0));
+	TestTrue(TEXT("a second node is placed"), SecondNode != INDEX_NONE);
+	TestEqual(TEXT("PlaceNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
+		"explicit RebuildMesh() call from the tool"),
+		Actor->RebuildCountForTest(), RebuildsBeforePlaceNode + 1);
+
+	// A profile is needed for ConnectNodes to succeed at all - Actor has none authored, and
+	// ResolveProfile's content-default fallback is exactly what every other tool-level test
+	// here relies on, so this does not set one explicitly; if that ever stops resolving, the
+	// TestTrue on ConnectNodes below fails loudly rather than this test silently skipping it.
+	const int32 RebuildsBeforeConnect = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the two placed nodes connect"), Actor->ConnectNodes(FirstNode, SecondNode));
+	TestEqual(TEXT("ConnectNodes's OnChanged broadcast rebuilt the mesh exactly once, with no "
+		"explicit RebuildMesh() call from the tool"),
+		Actor->RebuildCountForTest(), RebuildsBeforeConnect + 1);
+
+	// A REFUSAL must rebuild ZERO times - the split-brain issue #77 fixed included a tool
+	// that rebuilt even when its own ConnectNodes call was refused (RoadDrawTool's chaining
+	// state). A node cannot connect to itself; nothing about the model changes.
+	const int32 RebuildsBeforeRefusedConnect = Actor->RebuildCountForTest();
+	TestFalse(TEXT("a node cannot connect to itself"), Actor->ConnectNodes(SecondNode, SecondNode));
+	TestEqual(TEXT("the refused ConnectNodes rebuilt nothing"),
+		Actor->RebuildCountForTest(), RebuildsBeforeRefusedConnect);
+
+	const int32 RebuildsBeforeMove = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the second node moves"), Actor->MoveNode(SecondNode, FVector2D(2500.0, 1800.0)));
+	TestEqual(TEXT("MoveNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
+		"explicit RebuildMesh() call from the tool - the same per-frame notification a drag "
+		"relies on"), Actor->RebuildCountForTest(), RebuildsBeforeMove + 1);
+
+	const int32 RebuildsBeforeDelete = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the second node deletes"), Actor->DeleteNode(SecondNode));
+	TestEqual(TEXT("DeleteNode's OnChanged broadcast rebuilt the mesh exactly once, with no "
+		"explicit RebuildMesh() call from the tool"),
+		Actor->RebuildCountForTest(), RebuildsBeforeDelete + 1);
 
 	return true;
 }
