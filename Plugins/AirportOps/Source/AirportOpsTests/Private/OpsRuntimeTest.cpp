@@ -107,8 +107,23 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		Runtime->GetEvents()->OnSpeedChanged.AddDynamic(L, &UOpsEventsTestListener::OnSpeed);
 
 		Actor->DispatchAgent(Outbound, UAirsideSettings::ResolveDefaultAirframe());
+
+		// BUILT FROM THE ENUM, not spelled ":4->1". This literal broke the day
+		// EAgentPhase::Manoeuvring was added between Parked and Gone and moved Gone from 4 to
+		// 5 - a failure that said nothing whatever about whether a spawn reaches the ops bus,
+		// which is the only thing this assertion is for. It is the exact maintenance cost the
+		// speed-ladder comment forty lines below argues against, and this line had not taken
+		// the lesson.
+		//
+		// NOT to be confused with OpsEventsTest's spelled-out ordinals, which are a
+		// DELIBERATE canary: that test exists to fail when the wire format changes. This one
+		// does not.
+		const FString SpawnSuffix = FString::Printf(TEXT(":%d->%d"),
+			static_cast<int32>(EAgentPhase::Gone), static_cast<int32>(EAgentPhase::Taxiing));
+
 		TestTrue(TEXT("a spawn on the Airside traffic reaches the ops bus as Gone -> Taxiing"),
-			L->Seen.ContainsByPredicate([](const FString& S) { return S.StartsWith(TEXT("phase:")) && S.EndsWith(TEXT(":4->1")); }));
+			L->Seen.ContainsByPredicate([&SpawnSuffix](const FString& S)
+				{ return S.StartsWith(TEXT("phase:")) && S.EndsWith(SpawnSuffix); }));
 
 		Runtime->StepSpeed(+1);
 		TestEqual(TEXT("stepping speed announces the new speed"), L->Seen.Last(), FString(TEXT("speed:2")));
