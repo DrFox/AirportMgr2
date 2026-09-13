@@ -115,7 +115,10 @@ struct AIRSIDE_API FAnchorLink
 	 * both sweeps just added would otherwise be a target for the NEXT link's own Resolve.
 	 *
 	 * Returns the LeadEnd node on success, an unset handle if Hit's guideline no longer
-	 * resolves (already spent by an earlier link this same pass).
+	 * resolves (already spent by an earlier link this same pass), or if any
+	 * SplitGuidelineEdge call inside this Join fails - the lane split, the hard join, or
+	 * either half of the two-cut sweep. All are the same data-race-only case: every id Join
+	 * splits was resolved moments earlier by this same link's own Resolve.
 	 */
 	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
 		TSet<FGuidelineNodeId>& AnchorNodes);

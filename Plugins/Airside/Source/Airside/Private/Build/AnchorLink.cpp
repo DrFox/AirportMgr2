@@ -446,7 +446,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const FVector2D Corner =
 		GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Hit.Param);
 
-	if (Link.Lane.Num() > 0)
+	if (Link.Kind == ELinkKind::Lane)
 	{
 		// THE LANE IS SPLIT TO MAKE THE LINK'S OWN END. Entry in the MIDDLE of a side, not
 		// at a corner: a corner-to-road connector would run diagonally across the very
@@ -472,7 +472,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		AnchorNodes.Add(Link.Node);
 	}
 
-	if (Link.Class != ETraversalClass::Aircraft)
+	if (Link.Kind != ELinkKind::Ray)
 	{
 		// The direction the join actually needs. A service link has no ray of its own - it
 		// was found by DISTANCE - but the fillet and the two sweeps below are all written

@@ -35,7 +35,7 @@ struct FPendingLink
 	ETraversalClass Class = ETraversalClass::GroundVehicle;
 	double MaxWingspan = 0.0;
 
-	/** Sweep radius for this stand's painted line - see FAnchorLink's RadiusForCode. */
+	/** Sweep radius for this stand's painted line - see RadiusForCode in AnchorLink.cpp. */
 	double Radius = 2500.0;
 
 	/**
@@ -64,9 +64,10 @@ struct FPendingLink
 	/**
 	 * Which stand's ring this side belongs to. Unset for every ordinary anchor link.
 	 *
-	 * Read TWICE, and both readings need the owner rather than a list of the ring's edges:
-	 * ConnectorCrossesLane re-finds the ring in the live graph because a link splits the
-	 * side it joins and retires its handle, and the report below is per ring.
+	 * Read TWICE by FAnchorLink::Build - once to defer an unresolved side into RingsRefused,
+	 * once to record a resolved one into RingsJoined - both keyed on the owner rather than
+	 * on a list of the ring's edges, because joining a side retires that edge's handle and
+	 * the ring must still be identifiable by something else afterwards.
 	 *
 	 * Failure is reported ONCE PER RING. A ring has four sides and a service road
 	 * along one of them; the other three failing to reach a road of their own is the

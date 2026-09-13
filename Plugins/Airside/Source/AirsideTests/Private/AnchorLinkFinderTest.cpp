@@ -194,10 +194,17 @@ bool FAnchorLinkFinderTest::RunTest(const FString& Parameters)
 			Finder.Find(*Net, EmptyLane, AnchorNodes, Nothing));
 	}
 
-	// LinkFinderFor: dispatches to the strategy matching Kind. Proved by a case where the
-	// three strategies would disagree - a target directly BEHIND Dir - rather than by type
-	// identity, which would pass even if the switch returned the wrong finder for the wrong
-	// reason.
+	// LinkFinderFor: dispatches to the strategy matching Kind. Proved by BEHAVIOUR that only
+	// the right strategy can produce, not by a result a wrong one could match by accident:
+	//
+	// - Ray fails facing away and succeeds facing toward the SAME guideline - a fingerprint
+	//   neither Proximity (succeeds either way) nor Lane (Link.Lane is empty here, so it
+	//   always fails) can reproduce. Testing only the "away" half was the bug: a switch that
+	//   wrongly returned the Lane finder for Ray would ALSO report false there, for the
+	//   wrong reason, and the test would not have noticed.
+	// - Lane's hit alone is not proof either, since a wrongly-dispatched Ray or Proximity
+	//   finder can still land on the same edge by its own rule. FLinkHit::LaneEdge is the
+	//   fingerprint instead: only FLaneLinkFinder ever writes it.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId West, East;
@@ -219,6 +226,42 @@ bool FAnchorLinkFinderTest::RunTest(const FString& Parameters)
 			LinkFinderFor(RayLink.Kind).Find(*Net, RayLink, AnchorNodes, RayHit));
 		TestTrue(TEXT("LinkFinderFor(Proximity) behaves omnidirectionally"),
 			LinkFinderFor(ProximityLink.Kind).Find(*Net, ProximityLink, AnchorNodes, ProximityHit));
+
+		FPendingLink RayTowardLink = RayLink;
+		RayTowardLink.Dir = FVector2D(0.0, -1.0); // Toward the guideline.
+		FLinkHit RayTowardHit;
+		TestTrue(TEXT("LinkFinderFor(Ray) still finds the same guideline when facing it"),
+			LinkFinderFor(RayTowardLink.Kind).Find(*Net, RayTowardLink, AnchorNodes, RayTowardHit));
+	}
+
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+		const FGuidelineNodeId LaneA = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+		const FGuidelineNodeId LaneB = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+		FGuidelineEdge LaneEdge;
+		LaneEdge.A = LaneA;
+		LaneEdge.B = LaneB;
+		LaneEdge.Control = FVector2D(500.0, 0.0);
+		LaneEdge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
+		LaneEdge.bDerived = true;
+		const FGuidelineEdgeId LaneId = Net->AddGuidelineEdge(MoveTemp(LaneEdge));
+
+		FGuidelineNodeId RoadWest, RoadEast;
+		LayStraight(*Net, 5000.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
+
+		FPendingLink LaneLink;
+		LaneLink.Kind = ELinkKind::Lane;
+		LaneLink.Lane = { LaneId };
+		LaneLink.Class = ETraversalClass::GroundVehicle;
+		LaneLink.Reach = 20000.0;
+
+		TSet<FGuidelineNodeId> AnchorNodes = { LaneA, LaneB };
+		FLinkHit LaneHit;
+		TestTrue(TEXT("LinkFinderFor(Lane) finds the road"),
+			LinkFinderFor(LaneLink.Kind).Find(*Net, LaneLink, AnchorNodes, LaneHit));
+		TestTrue(TEXT("and only the Lane strategy ever sets LaneEdge"), LaneHit.LaneEdge.IsSet());
+		TestEqual(TEXT("naming the lane side it measured from"), LaneHit.LaneEdge, LaneId);
 	}
 
 	return true;
