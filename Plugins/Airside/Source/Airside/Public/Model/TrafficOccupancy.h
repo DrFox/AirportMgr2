@@ -76,6 +76,14 @@ struct AIRSIDE_API FTrafficClaim
 	 * intervals end to end is not told it is colliding with itself.
 	 */
 	bool Conflicts(const FTrafficClaim& Other) const;
+
+	/**
+	 * A node or whole-surface claim in one expression, rather than default-constructing and
+	 * setting AgentId/Resource/bOccupied/Rank by hand - six call sites did (#103). Leaves
+	 * From/To at their edge-claim default (0.0): every one of those six is a node or surface
+	 * claim, never an edge interval.
+	 */
+	static FTrafficClaim Make(int32 AgentId, const FTrafficResource& Resource, bool bOccupied, int32 Rank = 0);
 };
 
 UENUM()
@@ -123,6 +131,17 @@ struct AIRSIDE_API FTrafficOccupancy
 	 * and there ties keep the holder - which is first-to-reserve.
 	 */
 	EClaimResult TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker);
+
+	/**
+	 * TryClaim for a caller that raises the claim purely for its SIDE EFFECT and drops both
+	 * the result and the blocker - four call sites did this by hand, each retyping the same
+	 * WHY (#103): a table cannot make an aircraft already committed to occupying this
+	 * ground stop, because whoever decided to send it there is what refuses BEFORE it
+	 * drives (ArrivalPlanner::Plan for a runway chain; the planner and the rebuild both
+	 * skipping a held stand for a goal reservation). A caller that DOES act on Held - a
+	 * return value, a log line naming the blocker - keeps calling TryClaim directly.
+	 */
+	void Assert(const FTrafficClaim& Claim);
 
 	void ReleaseAll(int32 AgentId);
 

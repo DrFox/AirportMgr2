@@ -50,6 +50,22 @@ bool FTrafficClaim::Conflicts(const FTrafficClaim& Other) const
 	return From < Other.To && Other.From < To;
 }
 
+FTrafficClaim FTrafficClaim::Make(int32 AgentId, const FTrafficResource& Resource, bool bOccupied, int32 Rank)
+{
+	FTrafficClaim Claim;
+	Claim.AgentId = AgentId;
+	Claim.Resource = Resource;
+	Claim.bOccupied = bOccupied;
+	Claim.Rank = Rank;
+	return Claim;
+}
+
+void FTrafficOccupancy::Assert(const FTrafficClaim& Claim)
+{
+	FTrafficClaim Blocker;
+	TryClaim(Claim, Blocker);
+}
+
 EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker)
 {
 	// A same-agent claim on the same resource is an UPDATE: checked against everyone else

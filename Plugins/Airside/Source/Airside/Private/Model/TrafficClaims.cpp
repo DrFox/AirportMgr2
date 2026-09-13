@@ -123,20 +123,14 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 
 	Table.ReleaseExcept(Agent.Id, Surfaces);
 
+	// See FTrafficOccupancy::Assert for the WHY every fire-and-forget claim here shares:
+	// an aircraft already rolling cannot be told to stop by a table, and DispatchArrival
+	// refused the landing at the door if the chain was held (see ArrivalPlanner::Plan). Who
+	// is allowed onto a runway NEXT is URunwaySequencer's question in M3, asked before
+	// anything is dispatched.
 	for (const FTrafficResource& Resource : Surfaces)
 	{
-		FTrafficClaim Claim;
-		Claim.AgentId = Agent.Id;
-		Claim.Resource = Resource;
-		Claim.bOccupied = true;
-		Claim.Rank = TraversalPriority(Agent.Class);
-
-		// The result is not acted on: an aircraft already rolling cannot be told to stop
-		// by a table, and DispatchArrival refused the landing at the door if the chain
-		// was held (see ArrivalPlanner::Plan). Who is allowed onto a runway NEXT is
-		// URunwaySequencer's question in M3, asked before anything is dispatched.
-		FTrafficClaim Blocker;
-		Table.TryClaim(Claim, Blocker);
+		Table.Assert(FTrafficClaim::Make(Agent.Id, Resource, /*bOccupied*/ true, TraversalPriority(Agent.Class)));
 	}
 }
 
@@ -981,15 +975,11 @@ void FClaimPass::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network)
 	{
 		return;
 	}
-	FTrafficClaim Claim;
-	Claim.AgentId = Agent.Id;
-	Claim.Resource = FTrafficResource::OfNode(Agent.GoalNode);
-	Claim.bOccupied = bParked;
-	Claim.Rank = TraversalPriority(Agent.Class);
-	FTrafficClaim Blocker;
-	// Not acted on: a stand already held by someone else is a planning failure upstream (the
-	// planner and the rebuild both skip held stands), and a table cannot un-plan an aircraft.
-	Table.TryClaim(Claim, Blocker);
+	// See FTrafficOccupancy::Assert for the WHY: a stand already held by someone else is a
+	// planning failure upstream (the planner and the rebuild both skip held stands), and a
+	// table cannot un-plan an aircraft.
+	Table.Assert(FTrafficClaim::Make(Agent.Id, FTrafficResource::OfNode(Agent.GoalNode),
+		bParked, TraversalPriority(Agent.Class)));
 }
 
 int32 FClaimPass::RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class)
