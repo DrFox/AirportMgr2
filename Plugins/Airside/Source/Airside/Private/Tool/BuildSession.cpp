@@ -28,27 +28,45 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// INDEX 0 IS THE DEFAULT STATE (spec 2026-09-07-entity-inspector §2): the session
 		// opens here and CancelActiveGesture returns here. Key 4 because that was the route
 		// tool's, whose slot this fills; the printed keys 1-3 keep their meaning.
-		{ EKeys::Four,  LOCTEXT("Select",    "Select"),    [] { return MakeUnique<FSelectTool>(); } },
+		{ EKeys::Four,  LOCTEXT("Select",    "Select"),
+			LOCTEXT("SelectTooltip", "Click an aircraft or a stand to inspect it. Escape deselects."),
+			[] { return MakeUnique<FSelectTool>(); } },
 
-		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),   [] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
-		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),     [] { return MakeUnique<FApronDrawTool>(); } },
-		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),     [] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); } },
-		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"), [] { return MakeUnique<FGuidelineDrawTool>(); } },
-		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),    [] { return MakeUnique<FRunwayTool>(); } },
+		{ EKeys::One,   LOCTEXT("Taxiway",   "Taxiway"),
+			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node."),
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
+		{ EKeys::Two,   LOCTEXT("Apron",     "Apron"),
+			LOCTEXT("ApronTooltip", "Draw a polygon of pavement; click the first corner again to close it."),
+			[] { return MakeUnique<FApronDrawTool>(); } },
+		{ EKeys::Three, LOCTEXT("Stand",     "Stand"),
+			LOCTEXT("StandTooltip", "Place an aircraft stand: press to position, drag to aim, release."),
+			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); } },
+		{ EKeys::Five,  LOCTEXT("Guideline", "Guidelines"),
+			LOCTEXT("GuidelineTooltip", "Draw a routing link the derivation never made: click a node, click another."),
+			[] { return MakeUnique<FGuidelineDrawTool>(); } },
+		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),
+			LOCTEXT("RunwayTooltip", "Click one threshold, then the other. In play the runway key pressed again cycles the width, with Shift the surface, with Ctrl the approach."),
+			[] { return MakeUnique<FRunwayTool>(); } },
 
 		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
 		// this table - see ARoadBuildController::LandAircraftNearViewFocus. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
-		{ EKeys::Eight, LOCTEXT("HoldingPosition", "Holding point"), [] { return MakeUnique<FHoldingPointTool>(); } },
+		{ EKeys::Eight, LOCTEXT("HoldingPosition", "Holding point"),
+			LOCTEXT("HoldingPositionTooltip", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway."),
+			[] { return MakeUnique<FHoldingPointTool>(); } },
 
 		// NINE: the SAME FRoadDrawTool, laying the service road cross-section instead of the
 		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
 		// for why this is not a second class.
-		{ EKeys::Nine,  LOCTEXT("Road",      "Road"),      [] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
+		{ EKeys::Nine,  LOCTEXT("Road",      "Road"),
+			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node."),
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
 
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for. One FStandPlaceTool, two entries - see that class.
-		{ EKeys::Zero,  LOCTEXT("FuelDepot", "Fuel depot"), [] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::FuelDepot); } },
+		{ EKeys::Zero,  LOCTEXT("FuelDepot", "Fuel depot"),
+			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: press to position, drag to aim, release. It needs a service road within reach to be of any use."),
+			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::FuelDepot); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }

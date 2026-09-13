@@ -23,37 +23,18 @@ public:
 	 * used to be one, spelled out again inside GetCommands()) is exactly the defect this
 	 * class exists to prevent: nothing checked that copy against this one, or against
 	 * ToolRegistry() itself.
-	 */
-	TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder() const;
-
-	TSharedPtr<FUICommandInfo> SelectEntities;
-	TSharedPtr<FUICommandInfo> DrawRoads;
-	TSharedPtr<FUICommandInfo> DrawAprons;
-	TSharedPtr<FUICommandInfo> PlaceStands;
-
-	/**
-	 * Issue #33: the editor previously had four tools against the runtime's six, with no
-	 * way to draw a guideline link or lay a runway outside PIE. One command per
-	 * ToolRegistry() entry now, in the same order, so the two cannot drift apart again.
-	 * PlaceHoldingPoint (key 8) joined them for the same reason: a hold bar authored only in
-	 * PIE is a bar that does not survive stopping play.
-	 */
-	TSharedPtr<FUICommandInfo> DrawGuidelines;
-	TSharedPtr<FUICommandInfo> PlaceRunways;
-	TSharedPtr<FUICommandInfo> PlaceHoldingPoint;
-
-	/**
-	 * Keys 9 and 0, the pair the registry grew for service traffic.
 	 *
-	 * They were missing for a slice, and the failure was not "no shortcut": an unbound key
-	 * leaves the PREVIOUS tool running, so nine drew a taxiway. A taxiway's derived guideline
-	 * is Aircraft-only, so every stand lane and depot anchor near it reported "joins nothing:
-	 * no derived vehicle guideline" while the player was looking straight at the road they
-	 * had just drawn. An editor road authored here is also the only kind that SURVIVES
-	 * stopping play - the same reason PlaceHoldingPoint was added.
+	 * BUILT FROM ToolRegistry() IN RegisterCommands() (issue #105 item 10), not nine
+	 * hand-written UI_COMMAND fields any more - see that function's own comment. What used to
+	 * be SelectEntities/DrawRoads/DrawAprons/PlaceStands/DrawGuidelines/PlaceRunways/
+	 * PlaceHoldingPoint/DrawServiceRoads/PlaceFuelDepots is ToolCommands[0..8], index for
+	 * index with ToolRegistry(). NEEDS RESAVE: nothing - editor keybindings are not a content
+	 * asset - but a user who customised one of these nine commands' keys in the editor's
+	 * keybinding settings will find it reset to the tool's ToolRegistry() key, since the
+	 * command's internal id changed from e.g. "SelectEntities" to "Select" (its ToolRegistry
+	 * Name) along with this move.
 	 */
-	TSharedPtr<FUICommandInfo> DrawServiceRoads;
-	TSharedPtr<FUICommandInfo> PlaceFuelDepots;
+	TArray<TSharedPtr<FUICommandInfo>> ToolCommandsInOrder() const { return ToolCommands; }
 
 	/**
 	 * Ends the gesture in progress - a road chain, a half-drawn apron.
@@ -61,8 +42,12 @@ public:
 	 * Exists because RIGHT-CLICK CANNOT DO THIS IN THE EDITOR. At runtime right-click
 	 * cancels, but an editor viewport has already claimed it for the context menu, so a
 	 * chain started there could never be ended and both tools felt broken. Escape is the
-	 * editor's own idiom for the same thing.
+	 * editor's own idiom for the same thing. NOT in ToolRegistry(): it is not a tool, so it
+	 * stays a hand-written UI_COMMAND like before.
 	 */
 	TSharedPtr<FUICommandInfo> CancelGesture;
 
+private:
+	/** See ToolCommandsInOrder's own comment for why this replaced nine named fields. */
+	TArray<TSharedPtr<FUICommandInfo>> ToolCommands;
 };
