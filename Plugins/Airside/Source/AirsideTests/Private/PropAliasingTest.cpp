@@ -146,4 +146,80 @@ bool FPropDisplayCapTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A WHEEL SPINS DOWN ONCE AIRBORNE, RATHER THAN STOPPING DEAD (#107 item 8).
+ *
+ * CONFIRMED, 2026-09-12 review. The wheel step used to be gated on !bAirborne outright, so a
+ * ~12,000 deg/s wheel at rotation held its exact angle from the very next frame on - a snap
+ * FAgentMotion::GroundSpeed's own header explicitly says real wheels do not do. The fix
+ * decays WheelStepDegrees's own persistent rate toward zero over WheelSpinDownSeconds
+ * instead of gating the integration outright.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FWheelSpinDownTest,
+	"Airside.Present.WheelSpinsDownRatherThanStopping",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWheelSpinDownTest::RunTest(const FString& Parameters)
+{
+	const float Radius = 21.0f;          // UAirsideAgentAnim::MainWheelRadius's own default
+	const float SpinDown = 2.0f;         // UAirsideAgentAnim::WheelSpinDownSeconds's own default
+	const float Dt = 1.0f / 60.0f;
+
+	// ON THE GROUND: v = wr, read straight off ground speed every frame.
+	float Rate = 0.0f;
+	const float GroundStep = UAirsideAgentAnim::WheelStepDegrees(3000.0f, Radius, false, Dt, SpinDown, Rate);
+	const float ExpectedRate = FMath::RadiansToDegrees(3000.0f / Radius);
+	TestTrue(*FString::Printf(TEXT("on the ground the rate is v/r (%.1f deg/s, want %.1f)"), Rate, ExpectedRate),
+		FMath::IsNearlyEqual(Rate, ExpectedRate, 0.1f));
+	TestTrue(TEXT("and it actually turns"), GroundStep > 0.0f);
+
+	// ROTATION: the wheel is turning fast, at ExpectedRate, when the aircraft leaves the
+	// ground. THE ASSERTION THE BUG WOULD FAIL: gated outright, this next call returned 0 and
+	// froze the wheel in one frame.
+	const float FirstAirborneStep = UAirsideAgentAnim::WheelStepDegrees(4000.0f, Radius, true, Dt, SpinDown, Rate);
+	TestTrue(*FString::Printf(
+		TEXT("the first airborne frame still turns the wheel, rather than stopping it dead (%.3f deg)"),
+		FirstAirborneStep), FirstAirborneStep > 0.0f);
+	TestTrue(TEXT("and it is closer to a stop than to the ground rate, one frame later"),
+		Rate < ExpectedRate);
+
+	// GROUND SPEED IS IGNORED WHILE AIRBORNE: a climbing aircraft's ground speed does not
+	// fall (FAgentMotion::GroundSpeed's own header), and feeding a rising figure in here must
+	// not make the wheel speed back up.
+	const float RateBeforeBogusSpeed = Rate;
+	UAirsideAgentAnim::WheelStepDegrees(1.0e6f, Radius, true, Dt, SpinDown, Rate);
+	TestTrue(*FString::Printf(
+		TEXT("a huge ground speed while airborne does not raise the rate (%.3f vs %.3f)"),
+		Rate, RateBeforeBogusSpeed), Rate <= RateBeforeBogusSpeed);
+
+	// SEVERAL TIME CONSTANTS LATER: RELATIVE TO WHERE IT STARTED, not an absolute figure -
+	// this airframe's wheel rate is itself in the thousands of degrees a second, so "close to
+	// a stop" means a small FRACTION of RateBeforeBogusSpeed, not a small absolute number.
+	// e^-5 is ~0.7%; five time constants (10 s at SpinDown=2 s) should clear that easily.
+	const float RateBeforeDecay = RateBeforeBogusSpeed;
+	for (int32 Step = 0; Step < 600; ++Step)  // 10 s at 60 fps, five time constants
+	{
+		UAirsideAgentAnim::WheelStepDegrees(4000.0f, Radius, true, Dt, SpinDown, Rate);
+	}
+	TestTrue(*FString::Printf(
+		TEXT("five time constants later the wheel has essentially stopped (%.3f deg/s, was %.3f)"),
+		Rate, RateBeforeDecay), Rate < RateBeforeDecay * 0.05f);
+
+	// SpinDownSeconds <= 0 IS A CONFIGURATION CHOICE TO STOP DEAD, not a divide-by-a-tiny-
+	// number: the old behaviour is still reachable for whoever wants it.
+	float DeadRate = ExpectedRate;
+	UAirsideAgentAnim::WheelStepDegrees(4000.0f, Radius, true, Dt, 0.0f, DeadRate);
+	TestEqual(TEXT("SpinDownSeconds <= 0 stops the wheel on the very next frame"), DeadRate, 0.0f);
+
+	// A ZERO RADIUS IS STILL GUARDED, exactly as it always was.
+	float GuardRate = 999.0f;
+	TestEqual(TEXT("a zero radius never turns the wheel"),
+		UAirsideAgentAnim::WheelStepDegrees(3000.0f, 0.0f, false, Dt, SpinDown, GuardRate), 0.0f);
+	TestEqual(TEXT("and clears the rate too"), GuardRate, 0.0f);
+
+	return true;
+}
+
 #endif

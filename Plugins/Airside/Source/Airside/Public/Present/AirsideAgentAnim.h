@@ -49,6 +49,28 @@ public:
 		float DisplayCapRPM);
 
 	/**
+	 * How far the wheel turns this frame, degrees, and updates InOutRateDegPerSec - the
+	 * wheel's own persistent turn rate - for next frame's call.
+	 *
+	 * ON THE GROUND (bAirborne false) the rate is read straight off GroundSpeed every frame,
+	 * v = wr: the tyre has no inertia of its own, it is driven by contact with the tarmac.
+	 *
+	 * AIRBORNE (#107 item 8), InOutRateDegPerSec DECAYS TOWARD ZERO over SpinDownSeconds
+	 * instead of being read from GroundSpeed at all - which is what FAgentMotion::GroundSpeed's
+	 * own header always said should happen ("a wheel that stopped the instant the aircraft
+	 * lifted off would snap from spinning to still in one frame, which is the one thing real
+	 * wheels visibly do not do") and what this contradicted by gating on !bAirborne outright: a
+	 * ~12,000 deg/s wheel at rotation stopped dead in a single frame. The law is the flare's
+	 * own (h' = -h/tau, FLandingRun::Advance) applied to the rate instead of a height.
+	 *
+	 * Static and free of the instance so it can be tested without an actor or a skeleton, the
+	 * same reason PropStepDegrees is. InOutRateDegPerSec is the caller's own persistent state
+	 * (WheelRateDegPerSec below) rather than a member here, because a static method has none.
+	 */
+	static float WheelStepDegrees(float GroundSpeed, float Radius, bool bAirborne, float DeltaSeconds,
+		float SpinDownSeconds, float& InOutRateDegPerSec);
+
+	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
 	 *
 	 * WRAPPED to 0..360 rather than allowed to run on: at 2000 RPM this gains 12,000 degrees
@@ -61,6 +83,15 @@ public:
 	/** Accumulated wheel rotation, degrees. Apply to all three wheel bones. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float WheelAngleDegrees = 0.0f;
+
+	/**
+	 * The wheel's own turn rate, degrees per second - carried between frames so it can decay
+	 * smoothly once airborne instead of being re-derived from GroundSpeed every frame. See
+	 * WheelStepDegrees. Not read by anything else; BlueprintReadOnly only for the same reason
+	 * PropAngleDegrees etc. are - so it is visible for debugging in the Animation Blueprint.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float WheelRateDegPerSec = 0.0f;
 
 	/** Off the wheels. Stage 2's gear retraction hangs on this. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
@@ -91,6 +122,19 @@ public:
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float MainWheelRadius = 21.0f;
+
+	/**
+	 * How long the wheels take to spin down to a stop once airborne, seconds (#107 item 8).
+	 *
+	 * NOT ZERO: the gear stays out (Stage 2's retraction is separate work - see bAirborne),
+	 * and a wheel that stopped the instant the aircraft left the ground would snap from
+	 * spinning to still in one frame, contradicting FAgentMotion::GroundSpeed's own header.
+	 * 2 seconds is long enough to read as inertia rather than another snap, short enough that
+	 * the wheels have visibly stopped well before a climbing aircraft is far from the camera.
+	 * See WheelStepDegrees for the decay law.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside", meta = (ClampMin = "0.0"))
+	float WheelSpinDownSeconds = 2.0f;
 
 	/** Above this many RPM the blades are replaced by a disc. */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
