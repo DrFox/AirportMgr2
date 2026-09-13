@@ -1,5 +1,21 @@
 #include "BuildCameraRig.h"
 
+void FBuildCameraRig::ApplyLimits(const FCameraRigLimits& Limits)
+{
+	MinDistance = Limits.MinDistance;
+	MaxDistance = Limits.MaxDistance;
+	MinPitch = Limits.MinPitch;
+	MaxPitch = Limits.MaxPitch;
+}
+
+void FBuildCameraRig::Reset(const FCameraRigLimits& Limits)
+{
+	ApplyLimits(Limits);
+	Focus = FVector2D::ZeroVector;
+	Distance = FMath::Clamp(Limits.StartDistance, MinDistance, MaxDistance);
+	Yaw = Limits.StartYaw;
+}
+
 double FBuildCameraRig::PitchDegrees() const
 {
 	// Guarded so the logarithms below are always taken of a ratio greater than one, and so

@@ -80,4 +80,82 @@ bool FBuildCameraRigInFrameTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * FCameraRigLimits::ApplyLimits/Reset - the seam issue #94 introduced to replace
+ * ApplyViewLimits/ApplyWatchLimits (two near-identical copiers) and the two near-identical
+ * resets in CreateBuildCamera and ToggleWatchAgent. One function each, exercised here
+ * without a world - UBuildCameraComponent's own use of them needs a spawned camera actor
+ * to observe past this point, which is what Airside.View.BuildCameraComponent.ToggleWatchAgent
+ * covers instead.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraRigLimitsTest,
+	"Airside.View.BuildCameraRig.ApplyLimitsAndReset",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraRigLimitsTest::RunTest(const FString& Parameters)
+{
+	FCameraRigLimits Limits;
+	Limits.MinDistance = 111.0;
+	Limits.MaxDistance = 22222.0;
+	Limits.MinPitch = 12.0;
+	Limits.MaxPitch = 65.0;
+	Limits.StartDistance = 4000.0;
+	Limits.StartYaw = 30.0;
+
+	// 1. ApplyLimits copies the four clamp fields and NOTHING else - Focus/Distance/Yaw are
+	// left exactly where the rig had them, which is what lets a details-panel edit take
+	// effect on a LIVE rig without resetting its pose (see EaseToward's own use of this
+	// shape for Target's limits).
+	{
+		FBuildCameraRig Rig;
+		Rig.Focus = FVector2D(500.0, -250.0);
+		Rig.Distance = 9999.0;
+		Rig.Yaw = 123.0;
+
+		Rig.ApplyLimits(Limits);
+
+		TestEqual(TEXT("MinDistance copied"), Rig.MinDistance, 111.0);
+		TestEqual(TEXT("MaxDistance copied"), Rig.MaxDistance, 22222.0);
+		TestEqual(TEXT("MinPitch copied"), Rig.MinPitch, 12.0);
+		TestEqual(TEXT("MaxPitch copied"), Rig.MaxPitch, 65.0);
+		TestTrue(TEXT("Focus untouched"), Rig.Focus.Equals(FVector2D(500.0, -250.0), 1e-9));
+		TestEqual(TEXT("Distance untouched"), Rig.Distance, 9999.0, 1e-9);
+		TestEqual(TEXT("Yaw untouched"), Rig.Yaw, 123.0, 1e-9);
+	}
+
+	// 2. Reset does ApplyLimits AND snaps the pose to the limits' own start values - what
+	// CreateBuildCamera's setup and ToggleWatchAgent's "reset on every entry" block each
+	// used to spell out by hand.
+	{
+		FBuildCameraRig Rig;
+		Rig.Focus = FVector2D(500.0, -250.0);
+		Rig.Distance = 9999.0;
+		Rig.Yaw = 123.0;
+
+		Rig.Reset(Limits);
+
+		TestEqual(TEXT("Reset also copies the limits"), Rig.MinDistance, 111.0);
+		TestTrue(TEXT("Focus snaps to the origin"), Rig.Focus.Equals(FVector2D::ZeroVector, 1e-9));
+		TestEqual(TEXT("Distance snaps to StartDistance"), Rig.Distance, 4000.0, 1e-9);
+		TestEqual(TEXT("Yaw snaps to StartYaw"), Rig.Yaw, 30.0, 1e-9);
+	}
+
+	// 3. StartDistance is clamped into [MinDistance, MaxDistance] - an author who widens
+	// MaxDistance without raising StartDistance, or the reverse, must not reset to a pose
+	// the same Reset call would then refuse to hold.
+	{
+		FCameraRigLimits Narrow;
+		Narrow.MinDistance = 1000.0;
+		Narrow.MaxDistance = 2000.0;
+		Narrow.StartDistance = 50.0;   // below MinDistance
+
+		FBuildCameraRig Rig;
+		Rig.Reset(Narrow);
+		TestEqual(TEXT("an out-of-range StartDistance is clamped to MinDistance"), Rig.Distance, 1000.0, 1e-9);
+	}
+
+	return true;
+}
+
 #endif

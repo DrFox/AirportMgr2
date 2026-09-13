@@ -1,6 +1,58 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "BuildCameraRig.generated.h"
+
+/**
+ * The limits and starting pose one camera MODE resets to - see FBuildCameraRig::Reset.
+ *
+ * Pulled out of ARoadBuildController's ViewLimits/WatchLimits (issue #94): the controller
+ * held these as two parallel sets of UPROPERTYs - MinViewDistance/MinPitchDegrees/... beside
+ * WatchMinDistance/WatchMinPitchDegrees/... - which is the same six numbers typed twice,
+ * copied onto a rig by two near-identical functions (ApplyViewLimits/ApplyWatchLimits), and
+ * reset by two near-identical blocks (CreateBuildCamera's setup, ToggleWatchAgent's). One
+ * struct, one UBuildCameraComponent holding two instances of it, and one Reset that both
+ * call is what stops the third copy that was always one edit away.
+ */
+USTRUCT(BlueprintType)
+struct FCameraRigLimits
+{
+	GENERATED_BODY()
+
+	/**
+	 * Closest the camera may come, in uu.
+	 *
+	 * The build view's default (600) is sized to sit beside a vehicle; the watch view's
+	 * default is set explicitly higher on UBuildCameraComponent::WatchLimits - see that
+	 * field's own comment for why the two modes do not share one number here.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0"))
+	double MinDistance = 600.0;
+
+	/** Furthest the camera may pull back, in uu. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0"))
+	double MaxDistance = 60000.0;
+
+	/** Pitch at MinDistance, in degrees below horizontal. Near eye level. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double MinPitch = 30.0;
+
+	/**
+	 * Pitch at MaxDistance. 90 would be straight down, and is deliberately not offered:
+	 * control rotation renormalises unpredictably at the poles, and a view that flat loses
+	 * every cue about relief that the angle exists to provide.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0", ClampMax = "89.0"))
+	double MaxPitch = 70.0;
+
+	/** Camera-to-focus distance the rig resets to, in uu. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0"))
+	double StartDistance = 8000.0;
+
+	/** Yaw the rig resets to, in degrees. */
+	UPROPERTY(EditAnywhere)
+	double StartYaw = 0.0;
+};
 
 /**
  * Orbit camera for the build tool: a focus point on the road plane, a distance from it,
@@ -47,6 +99,16 @@ struct FBuildCameraRig
 
 	/** Pitch at MaxDistance. 90 would be straight down. */
 	double MaxPitch = 70.0;
+
+	/** Copy Min/MaxDistance and Min/MaxPitch from Limits onto this rig, so a details-panel
+	 *  edit takes effect on the live view - the one function ApplyViewLimits and
+	 *  ApplyWatchLimits used to be separately (issue #94). */
+	void ApplyLimits(const FCameraRigLimits& Limits);
+
+	/** ApplyLimits, then snap Focus to the origin, Distance to StartDistance (clamped) and
+	 *  Yaw to StartYaw - what CreateBuildCamera's setup and ToggleWatchAgent's "reset on
+	 *  every entry" block each used to spell out separately (issue #94). */
+	void Reset(const FCameraRigLimits& Limits);
 
 	// --- Derived ---------------------------------------------------------------------
 
