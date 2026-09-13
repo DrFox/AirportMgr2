@@ -212,10 +212,15 @@ public:
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
 
 	/**
-	 * THE one graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach,
-	 * GuidelineOverlay, AnchorLink and ServiceLoopBuild each used to fetch A/B themselves and
-	 * call it directly - nine near-identical four-line bodies for "look up both ends, sample
-	 * the curve between them."
+	 * THE graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach, GuidelineOverlay,
+	 * AnchorLink, AnchorLinkFinder and ServiceLoopBuild each used to fetch A/B themselves and
+	 * call it directly - a dozen near-identical bodies for "look up both ends, sample the
+	 * curve between them."
+	 *
+	 * ONE DOCUMENTED EXCEPTION remains (PR #137 review): FAnchorLink::Join samples a curve
+	 * captured BEFORE a lane split that may already have replaced its edge with two new
+	 * pieces, so there is no live FGuidelineEdgeId left for this to look up - see that call
+	 * site's own comment.
 	 *
 	 * bFromB walks the curve from B to A instead of A to B by swapping the endpoints handed
 	 * to GuidelineGeom::Sample, not by sampling then reversing the array: a quadratic Bezier

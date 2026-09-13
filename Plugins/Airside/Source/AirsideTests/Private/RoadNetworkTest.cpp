@@ -207,10 +207,12 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE ONE graph-edge call of GuidelineGeom::Sample, introduced by issue #105 item 5 to
- * replace nine near-identical bodies in RouteSearch/NodeReach/GuidelineOverlay/AnchorLink/
- * ServiceLoopBuild that each fetched A/B themselves. Fails if SampleGuideline ever stops
- * resolving the edge, or if bFromB stops being the "walked from B" curve.
+ * THE graph-edge call of GuidelineGeom::Sample, introduced by issue #105 item 5 to replace
+ * a dozen near-identical bodies in RouteSearch/NodeReach/GuidelineOverlay/AnchorLink/
+ * AnchorLinkFinder/ServiceLoopBuild that each fetched A/B themselves (one documented
+ * exception remains - see URoadNetwork::SampleGuideline's own comment). Fails if
+ * SampleGuideline ever stops resolving the edge, or if bFromB stops being the "walked from
+ * B" curve.
  */
 // "Airside.Model.Network.SampleGuideline", not a child of the "Network" test above: that
 // leaf/parent collision is exactly what RouteSearchTest.cpp's own comment warns about - UE's

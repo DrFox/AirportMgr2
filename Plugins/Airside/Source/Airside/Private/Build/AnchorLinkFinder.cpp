@@ -77,19 +77,15 @@ bool FRayLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
 			continue;
 		}
 
-		const FGuidelineNode* EndA = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* EndB = Network.GetGuidelineNode(Edge.B);
-		if (EndA == nullptr || EndB == nullptr)
-		{
-			continue;
-		}
-
-		TArray<FVector2D> Points;
-		GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
-
 		FGuidelineEdgeId Id;
 		Id.Index = Index;
 		Id.Generation = Edge.Generation;
+
+		TArray<FVector2D> Points;
+		if (!Network.SampleGuideline(Id, Points))
+		{
+			continue;
+		}
 
 		for (int32 At = 1; At < Points.Num(); ++At)
 		{
@@ -137,15 +133,14 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 			continue;
 		}
 
-		const FGuidelineNode* EndA = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* EndB = Network.GetGuidelineNode(Edge.B);
-		if (EndA == nullptr || EndB == nullptr)
+		TArray<FVector2D> Points;
+		FGuidelineEdgeId ThisId;
+		ThisId.Index = Index;
+		ThisId.Generation = Edge.Generation;
+		if (!Network.SampleGuideline(ThisId, Points))
 		{
 			continue;
 		}
-
-		TArray<FVector2D> Points;
-		GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
 
 		// PROXIMITY, ANY DIRECTION. A vehicle may genuinely arrive from any side, and an
 		// anchor's authored heading has no representation on screen for a player to aim by -
@@ -160,8 +155,7 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 
 		Best = Distance;
 		BestParam = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
-		BestEdge.Index = Index;
-		BestEdge.Generation = Edge.Generation;
+		BestEdge = ThisId;
 	}
 
 	if (!BestEdge.IsSet())
@@ -191,35 +185,26 @@ bool FLaneLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link
 			continue;
 		}
 
-		const FGuidelineNode* EndA = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* EndB = Network.GetGuidelineNode(Edge.B);
-		if (EndA == nullptr || EndB == nullptr)
-		{
-			continue;
-		}
-
-		TArray<FVector2D> Points;
-		GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
-
 		FGuidelineEdgeId Id;
 		Id.Index = Index;
 		Id.Generation = Edge.Generation;
+
+		TArray<FVector2D> Points;
+		if (!Network.SampleGuideline(Id, Points))
+		{
+			continue;
+		}
 
 		// LANE TO ROAD: closest approach between two polylines, so a road drawn PARALLEL to
 		// the lane is measured side to side rather than corner to corner. That parallel case
 		// is the whole point - it is how a player draws a service road along a row of stands.
 		for (const FGuidelineEdgeId& LaneId : Link.Lane)
 		{
-			const FGuidelineEdge* LaneEdge = Network.GetGuidelineEdge(LaneId);
-			const FGuidelineNode* LaneA = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->A) : nullptr;
-			const FGuidelineNode* LaneB = LaneEdge != nullptr ? Network.GetGuidelineNode(LaneEdge->B) : nullptr;
-			if (LaneA == nullptr || LaneB == nullptr)
+			TArray<FVector2D> LanePoints;
+			if (!Network.SampleGuideline(LaneId, LanePoints))
 			{
 				continue;
 			}
-
-			TArray<FVector2D> LanePoints;
-			GuidelineGeom::Sample(LaneA->Position, LaneEdge->Control, LaneB->Position, LanePoints);
 
 			int32 LaneSpan = 0, RoadSpan = 0;
 			double LaneFraction = 0.0, RoadFraction = 0.0;
