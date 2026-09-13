@@ -28,7 +28,7 @@ bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& 
 	return true;
 }
 
-void UFlightBoard::AddOffer(UFlight* Offer)
+void UFlightBoard::AddOffer(USimClock& Clock, UFlight* Offer)
 {
 	if (Offer == nullptr)
 	{
@@ -46,7 +46,41 @@ void UFlightBoard::AddOffer(UFlight* Offer)
 		NextFlightId = FMath::Max(NextFlightId, Offer->Id + 1);
 	}
 	Flights.Add(Offer);
+	ScheduleExpiry(Clock, *Offer);
 	OnChanged.Broadcast();
+}
+
+void UFlightBoard::ScheduleExpiry(USimClock& Clock, UFlight& Offer)
+{
+	// WEAK BY ID, exactly as Schedule (arrivals) does - the callback outlives this call by
+	// design, and the flight it names may be gone (declined, accepted then departed, or the
+	// board itself torn down) long before its ExpiresAt comes due.
+	const int32 Id = Offer.Id;
+	const int32 Handle = Clock.At(Offer.ExpiresAt, [this, Id]()
+	{
+		UFlight* Due = FindById(Id);
+		ExpiryHandles.Remove(Id);
+		// STILL Offered, not just found: Accept/Decline cancel this handle, but a callback
+		// already popped off the clock's queue this same Advance() cannot be un-fired -
+		// the phase check is the second guard for that ordering, not a substitute for
+		// CancelExpiry.
+		if (Due != nullptr && Due->Phase == EFlightPhase::Offered)
+		{
+			Due->Phase = EFlightPhase::Expired;
+			UE_LOG(LogAirportOps, Log, TEXT("Offer %d lapsed unanswered"), Due->Id);
+			OnChanged.Broadcast();
+		}
+	});
+	ExpiryHandles.Add(Offer.Id, Handle);
+}
+
+void UFlightBoard::CancelExpiry(USimClock& Clock, UFlight& Offer)
+{
+	int32 Handle = INDEX_NONE;
+	if (ExpiryHandles.RemoveAndCopyValue(Offer.Id, Handle))
+	{
+		Clock.Cancel(Handle);
+	}
 }
 
 int32 UFlightBoard::TakeNextId()
@@ -69,6 +103,7 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	}
 
 	Flight.Phase = EFlightPhase::Accepted;
+	CancelExpiry(Clock, Flight);
 	Schedule(Traffic, Clock, Flight);
 
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d accepted: stand %d held, landing at %.0f"),
@@ -133,12 +168,13 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 	OnChanged.Broadcast();
 }
 
-void UFlightBoard::Decline(UFlight& Flight)
+void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 {
 	if (Flight.Phase != EFlightPhase::Offered)
 	{
 		return;
 	}
+	CancelExpiry(Clock, Flight);
 	Flight.Phase = EFlightPhase::Declined;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d declined"), Flight.Id);
 	OnChanged.Broadcast();
@@ -166,7 +202,7 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	Flight->ExpiresAt = Clock.Now();
 	Flight->ApproachFocus = Focus;
 
-	AddOffer(Flight);
+	AddOffer(Clock, Flight);
 
 	if (Accept(Traffic, Network, Clock, *Flight))
 	{
@@ -194,27 +230,6 @@ void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
 		{
 			Each->ApproachFocus = ApproachFocus;
 		}
-	}
-}
-
-void UFlightBoard::Tick(USimClock& Clock)
-{
-	const double Now = Clock.Now();
-	bool bChanged = false;
-
-	for (TObjectPtr<UFlight>& Each : Flights)
-	{
-		if (Each != nullptr && Each->Phase == EFlightPhase::Offered && Now >= Each->ExpiresAt)
-		{
-			Each->Phase = EFlightPhase::Expired;
-			UE_LOG(LogAirportOps, Log, TEXT("Offer %d lapsed unanswered"), Each->Id);
-			bChanged = true;
-		}
-	}
-
-	if (bChanged)
-	{
-		OnChanged.Broadcast();
 	}
 }
 
@@ -275,10 +290,33 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	USimClock& Clock)
 {
 	ArrivalHandles.Reset();
+	ExpiryHandles.Reset();
 
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
-		if (Each == nullptr || Each->Phase != EFlightPhase::Accepted)
+		if (Each == nullptr)
+		{
+			continue;
+		}
+
+		if (Each->Phase == EFlightPhase::Offered)
+		{
+			if (Each->ExpiresAt <= Clock.Now())
+			{
+				// Its offer window passed while the game was shut - the same "act at once,
+				// and say so" rule the arrival branch below follows, rather than leaving a
+				// stale "still offered" row nothing will ever expire.
+				Each->Phase = EFlightPhase::Expired;
+				UE_LOG(LogAirportOps, Log,
+					TEXT("Offer %d expired at %.0f, before this load at %.0f: lapsed on load"),
+					Each->Id, Each->ExpiresAt, Clock.Now());
+				continue;
+			}
+			ScheduleExpiry(Clock, *Each);
+			continue;
+		}
+
+		if (Each->Phase != EFlightPhase::Accepted)
 		{
 			continue;
 		}

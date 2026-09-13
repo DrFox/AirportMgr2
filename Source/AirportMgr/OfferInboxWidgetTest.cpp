@@ -67,7 +67,7 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 		Offer->ExpiresAt = Clock->Now() + 600.0;
 		Offer->AirlineName = FText::FromString(TEXT("Meridian"));
 		Offer->TypeName = FText::FromString(TEXT("A320"));
-		Board->AddOffer(Offer);
+		Board->AddOffer(*Clock, Offer);
 	}
 
 	Widget->GetInbox()->Refresh(*Board, *Traffic, *Actor->Network, *Clock);

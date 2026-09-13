@@ -47,7 +47,7 @@ bool FFlightSurvivesASaveTest::RunTest(const FString& Parameters)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = Clock->Now() + 1000.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before the save"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
 	TArray<uint8> Bytes;
@@ -101,7 +101,7 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = 10.0;
 	Flight->Phase = EFlightPhase::Accepted;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 
 	Clock->Advance(1.0);   // 72 game seconds: the ETA is already behind us
 	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Calls, 0);
@@ -133,7 +133,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = Clock->Now() + 1000.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before the save"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
 	// ZEROED BY HAND: a real v2 save could not have written this field, since it did not

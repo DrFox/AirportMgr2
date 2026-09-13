@@ -93,7 +93,7 @@ void UOpsRuntime::GenerateOffer()
 		return;
 	}
 
-	FlightBoard->AddOffer(Offer);
+	FlightBoard->AddOffer(*Clock, Offer);
 	UE_LOG(LogAirportOps, Log, TEXT("Offer %d: %s, %s, landing at %.0f"),
 		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
@@ -218,8 +218,9 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		}
 	}
 
-	// Offers lapse on the game clock whether or not a network is attached.
-	FlightBoard->Tick(*Clock);
+	// Offers used to lapse here via UFlightBoard::Tick's per-frame poll (issue #105 item 9);
+	// now Clock->Advance above already fired any expiry due this frame - see
+	// UFlightBoard::ScheduleExpiry, armed from AddOffer and re-armed by RearmSchedules.
 }
 
 void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
