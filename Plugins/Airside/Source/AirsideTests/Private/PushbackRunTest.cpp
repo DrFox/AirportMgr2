@@ -71,6 +71,10 @@ namespace
 
 	constexpr double PushbackSwingLength = 3000.0;
 
+	/** Longer than any lead-in in these fixtures, so the cap never bites here - what it does
+	 *  bite is pinned separately, below. */
+	constexpr double PushbackMaxBack = 6000.0;
+
 	/** Drives a run to completion, or until Frames runs out. Returns the frames used. */
 	int32 PushbackRunToEnd(FPushbackRun& Run, int32 Frames, FVector2D& OutAt, double& OutHeading)
 	{
@@ -102,7 +106,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		double Push = 0.0;
 		double Target = 0.0;
 		if (!TestTrue(TEXT("a perpendicular stand can be pushed"),
-			FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength,
+			FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength, PushbackMaxBack,
 				Back, Push, Target)))
 		{
 			return false;
@@ -121,7 +125,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		FPushbackRun Run;
 		if (!TestTrue(TEXT("the run starts"),
 			Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-				150.0, 30.0, PushbackSwingLength, false)))
+				150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false)))
 		{
 			return false;
 		}
@@ -153,7 +157,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
+			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -174,7 +178,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackDeadEndPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
+			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -191,7 +195,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Powerback;
 		Powerback.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			200.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ true);
+			200.0, 30.0, PushbackSwingLength, PushbackMaxBack, /*bNeedsThrust*/ true);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -214,7 +218,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 
 		FPushbackRun Towed;
 		Towed.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ false);
+			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, /*bNeedsThrust*/ false);
 		Towed.Advance(PushbackFrame, TNumericLimits<double>::Max(), false, At, Heading);
 		TestTrue(TEXT("a towed aeroplane moves on frame one whatever the propeller is doing"),
 			Towed.Travelled > 0.0);
@@ -225,7 +229,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
+			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -246,13 +250,37 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		double Push = -1.0;
 		double Target = -1.0;
 		TestFalse(TEXT("a plan with no steps cannot be pushed"),
-			FPushbackRun::PlanPushDistance(Empty, PushbackSwingLength, Back, Push, Target));
+			FPushbackRun::PlanPushDistance(Empty, PushbackSwingLength, PushbackMaxBack, Back, Push, Target));
 		TestEqual(TEXT("and the outputs are untouched"), Back, -1.0, 0.0001);
 
 		FPushbackRun Run;
 		TestFalse(TEXT("Start declines it"),
-			Run.Start(Empty, PushbackParkedHeading, 150.0, 30.0, PushbackSwingLength, false));
+			Run.Start(Empty, PushbackParkedHeading, 150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false));
 		TestEqual(TEXT("and arms nothing"), Run.PushDistance, 0.0, 0.0001);
+	}
+
+	// 8. THE FIRST STEP IS CAPPED. FPushbackRun takes Steps[0] to be the stand's lead-in, and
+	//    that is true whenever the route really starts at a stand pose node. Nothing GUARANTEES
+	//    it: a route beginning anywhere else has a first step of whatever length the graph gave
+	//    it, and uncapped the "push" dragged an aeroplane two hundred metres down a taxiway and
+	//    handed the follower a route it had already finished - measured in
+	//    Airside.Model.Traffic.DepartAgent before FTrafficRules::MaxPushBackDistance existed.
+	{
+		double Back = 0.0;
+		double Push = 0.0;
+		double Target = 0.0;
+		TestTrue(TEXT("a long first step still plans"),
+			FPushbackRun::PlanPushDistance(PushbackDeadEndPlan(), PushbackSwingLength,
+				/*MaxBack*/ 1000.0, Back, Push, Target));
+
+		TestEqual(TEXT("the straight back is capped, not the whole first step"), Back, 1000.0, 0.01);
+		TestEqual(TEXT("and the swing still follows it"), Push, 4000.0, 0.01);
+
+		// AND AN ORDINARY LEAD-IN IS UNTOUCHED. The cap must only ever bite where the
+		// assumption was wrong, or it would shorten every real pushback on the airport.
+		FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength,
+			PushbackMaxBack, Back, Push, Target);
+		TestEqual(TEXT("a 40 m lead-in is well inside the cap"), Back, 4000.0, 0.01);
 	}
 
 	return true;

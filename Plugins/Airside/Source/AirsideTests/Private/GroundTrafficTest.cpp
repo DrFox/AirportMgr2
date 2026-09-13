@@ -1891,6 +1891,18 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 		if (!TestTrue(TEXT("second arrival is taxiing in"), B != nullptr && B->Phase == EAgentPhase::Taxiing)) { return false; }
 	}
 
+	// THE PUSH IS NOT WHAT THIS TEST IS ABOUT, so it is made brief. A departure now spends
+	// about fifty seconds manoeuvring off its stand before it reaches the taxiway at all, by
+	// which time the arrival has parked and the encounter this test exists to measure never
+	// happens - TicksBothTaxiing came out zero. Shortening the manoeuvre restores the meeting
+	// without weakening a single assertion below; the push has tests of its own
+	// (Airside.Model.PushbackRun, Airside.Model.PushbackClearance).
+	Traffic->Rules.PushSwingLength = 1.0;
+	Traffic->Rules.MaxPushBackDistance = 1.0;
+	Traffic->Rules.VehicleTugPushSpeed = 10000.0;
+	Traffic->Rules.SelfManoeuvrePushSpeed = 10000.0;
+	Traffic->Rules.HandTugPushSpeed = 10000.0;
+
 	const EDepartureRefusal Why = Traffic->DepartAgent(First, *Net);
 	if (!TestTrue(FString::Printf(TEXT("departure accepted (%d)"), static_cast<int32>(Why)), Why == EDepartureRefusal::None)) { return false; }
 

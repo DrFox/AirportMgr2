@@ -71,8 +71,23 @@ bool FDepartAgentModelTest::RunTest(const FString& Parameters)
 	const EDepartureRefusal Why = Traffic->DepartAgent(Id, *Net);
 	if (!TestEqual(FString::Printf(TEXT("a parked agent departs (%d)"), static_cast<int32>(Why)), Why, EDepartureRefusal::None)) { return false; }
 	const FRoadAgent* P = Traffic->FindAgent(Id);
-	TestEqual(TEXT("it is taxiing again"), P->Phase, EAgentPhase::Taxiing);
+	// MANOEUVRING FIRST, NOT TAXIING. This parked aeroplane's way out is 180 degrees behind
+	// it, so it is pushed off its stand before it taxis at all - which is the whole of the
+	// pushback feature. The assertion is UPDATED to the real sequence rather than relaxed:
+	// going straight to Taxiing from Parked is now a defect, not an alternative.
+	TestEqual(TEXT("it manoeuvres off the stand first"), P->Phase, EAgentPhase::Manoeuvring);
 	TestTrue(TEXT("with a departure armed"), P->bDepartureArmed);
+
+	// AND IT REACHES THE TAXI. Asserted rather than assumed: a manoeuvre that never handed
+	// over would leave the aeroplane half off its stand for ever, and every assertion below
+	// would still pass.
+	for (int32 I = 0; I < 20000 && Traffic->FindAgent(Id) != nullptr
+		&& Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring; ++I)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	TestEqual(TEXT("and is taxiing once the push is over"),
+		Traffic->FindAgent(Id)->Phase, EAgentPhase::Taxiing);
 	TestTrue(TEXT("and the engine running - a redirect restarts it"), P->bEngineRunning);
 	TestEqual(TEXT("departing twice is refused: it is no longer parked"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::NotParked);
 

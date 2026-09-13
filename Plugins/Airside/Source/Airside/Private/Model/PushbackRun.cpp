@@ -2,7 +2,7 @@
 
 #include "Solve/GuidelineGeom.h"
 
-bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength,
+bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength, double MaxBack,
 	double& OutBackDistance, double& OutPushDistance, double& OutTargetHeading)
 {
 	if (!InPlan.IsValid() || InPlan.Steps.Num() == 0)
@@ -14,7 +14,11 @@ bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength
 	// the pose node - along Heading + PI, because +X faces the terminal - and builds the
 	// corner's entry sweeps as steps of their own. So Back needs no steering law at all: the
 	// body simply holds the heading it parked at while the tug pulls it out.
-	const double Back = InPlan.Steps[0].EndDistance;
+	//
+	// CAPPED - see FTrafficRules::MaxPushBackDistance. Steps[0] is the lead-in whenever the
+	// route really starts at a stand, and something else entirely when it does not; without
+	// the cap a "push" once dragged an aeroplane the whole length of a taxiway.
+	const double Back = FMath::Min(InPlan.Steps[0].EndDistance, FMath::Max(0.0, MaxBack));
 
 	// PAST THE CORNER, and this is the whole reason SwingLength exists - see
 	// FTrafficRules::PushSwingLength for what stopping at Back would leave on screen.
@@ -42,12 +46,12 @@ bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength
 }
 
 bool FPushbackRun::Start(const FRoutePlan& InPlan, double InParkedHeading, double InPushSpeed,
-	double InPushAccel, double InSwingLength, bool bInNeedsThrust)
+	double InPushAccel, double InSwingLength, double InMaxBack, bool bInNeedsThrust)
 {
 	double Back = 0.0;
 	double Push = 0.0;
 	double Target = 0.0;
-	if (!PlanPushDistance(InPlan, InSwingLength, Back, Push, Target))
+	if (!PlanPushDistance(InPlan, InSwingLength, InMaxBack, Back, Push, Target))
 	{
 		// NOTHING TOUCHED. A manoeuvre that cannot be flown must leave no trace of itself
 		// rather than one half-armed - the rule FRoadAgent::StartArrival states for a landing

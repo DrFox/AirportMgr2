@@ -189,7 +189,8 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 }
 
 bool FRoadAgent::StartPushback(const FRoutePlan& Plan, const FAirframe& InAirframe,
-	double ParkedHeading, double PushSpeed, double PushAccel, double SwingLength, double ThrustRPM)
+	double ParkedHeading, double PushSpeed, double PushAccel, double SwingLength, double MaxBack,
+	double ThrustRPM)
 {
 	// A POWERBACK IS THE ENGINE DOING THE WORK; anything on a bar is moved by the tug and its
 	// propeller is incidental. This is the ONE place in this slice where the pushback need
@@ -197,7 +198,7 @@ bool FRoadAgent::StartPushback(const FRoutePlan& Plan, const FAirframe& InAirfra
 	// rather than about a tug that does not exist yet.
 	const bool bNeedsThrust = InAirframe.PushbackNeed == EPushbackNeed::SelfManoeuvre;
 
-	if (!Pushback.Start(Plan, ParkedHeading, PushSpeed, PushAccel, SwingLength, bNeedsThrust))
+	if (!Pushback.Start(Plan, ParkedHeading, PushSpeed, PushAccel, SwingLength, MaxBack, bNeedsThrust))
 	{
 		// FPushbackRun has already declined. Nothing else is touched: a manoeuvre that cannot
 		// be flown must leave no trace of itself on the agent rather than one half-armed -

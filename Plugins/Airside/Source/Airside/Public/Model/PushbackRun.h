@@ -103,12 +103,12 @@ struct AIRSIDE_API FPushbackRun
 	 * to have a direction. The outputs are then UNTOUCHED, so a caller that used them anyway
 	 * would be reading its own uninitialised doubles: honour the return.
 	 */
-	static bool PlanPushDistance(const FRoutePlan& InPlan, double SwingLength,
+	static bool PlanPushDistance(const FRoutePlan& InPlan, double SwingLength, double MaxBack,
 		double& OutBackDistance, double& OutPushDistance, double& OutTargetHeading);
 
 	/** Arms the manoeuvre. False, and NOTHING is touched, when PlanPushDistance declines. */
 	bool Start(const FRoutePlan& InPlan, double InParkedHeading, double InPushSpeed,
-		double InPushAccel, double InSwingLength, bool bInNeedsThrust);
+		double InPushAccel, double InSwingLength, double InMaxBack, bool bInNeedsThrust);
 
 	/**
 	 * One frame. FALSE MEANS THE PUSH IS OVER and the caller should hand over - the same

@@ -69,6 +69,22 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double PushSwingLength        = 3000.0; // 30 m
 
 	/**
+	 * The furthest a tug will pull an aeroplane straight back, uu, before the swing begins.
+	 *
+	 * A CAP ON Steps[0], AND IT IS NOT BELT-AND-BRACES. FPushbackRun takes the route's first
+	 * step to be the stand's lead-in, which it is whenever the route really starts at a stand
+	 * pose node - forty metres or so. Nothing GUARANTEES that: a route that begins anywhere
+	 * else has a first step of whatever length the graph gave it, and without this cap the
+	 * "push" dragged an aeroplane two hundred metres down a taxiway and handed the follower a
+	 * route it had already finished. Measured, in Airside.Model.Traffic.DepartAgent.
+	 *
+	 * Sixty metres is comfortably longer than any real lead-in, so a stand is unaffected and
+	 * the cap only ever bites where the assumption was wrong. An aeroplane pushed the full cap
+	 * simply taxis the rest forward, which is right: by then it has swung onto the line.
+	 */
+	UPROPERTY(EditAnywhere) double MaxPushBackDistance    = 6000.0; // 60 m
+
+	/**
 	 * Within this of the parked heading, the way out is forward and no push is needed, degrees.
 	 *
 	 * A MEASUREMENT OF THE GROUND AHEAD, not a property of the stand: it answers a
@@ -859,6 +875,18 @@ private:
 	 * before any FClaimPass exists for this agent.
 	 */
 	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
+
+	/**
+	 * Is every edge and node a push off the stand will touch free of everyone else?
+	 *
+	 * PUSHBACK CLEARANCE, asked ONCE before the manoeuvre starts rather than tick by tick. A
+	 * manoeuvring agent cannot replan - a stand's lead-in is the only way off it - so it has
+	 * no move for the deadlock resolver to find, and a push that could be stopped half way
+	 * would be a phase able to block a taxiway indefinitely with nothing able to act on it.
+	 * Granting the whole thing up front makes it atomic, which is also what ground control
+	 * does: clearance is granted or withheld, never half-granted.
+	 */
+	bool IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan, double PushDistance) const;
 
 	/**
 	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where

@@ -473,7 +473,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	FRoadAgent Agent;
 	Agent.Phase = EAgentPhase::Parked;
 	if (!TestTrue(TEXT("a parked aeroplane can be pushed"),
-		Agent.StartPushback(Plan, Airframe, ParkedHeading, 150.0, 30.0, 3000.0, 0.0)))
+		Agent.StartPushback(Plan, Airframe, ParkedHeading, 150.0, 30.0, 3000.0, 6000.0, 0.0)))
 	{
 		return false;
 	}
@@ -565,7 +565,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 
 		FRoadAgent Powerback;
 		Powerback.Phase = EAgentPhase::Parked;
-		Powerback.StartPushback(Plan, Light, ParkedHeading, 200.0, 30.0, 3000.0,
+		Powerback.StartPushback(Plan, Light, ParkedHeading, 200.0, 30.0, 3000.0, 6000.0,
 			Light.Engine.MaxRPM * 0.6);
 
 		FAgentMotion PowerMotion;

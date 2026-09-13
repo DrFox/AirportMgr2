@@ -9,8 +9,10 @@
 #include "AirsideLog.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
+#include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
+#include "Solve/GuidelineGeom.h"
 #include "Solve/RunwayDesignator.h"
 
 double FTrafficRules::FootprintFor(ETraversalClass Class) const
@@ -435,7 +437,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 			Index == INDEX_NONE ? TEXT("no such agent") : *UEnum::GetValueAsString(Agents[Index].Phase));
 		return EDepartureRefusal::NotParked;
 	}
-	const FRoadAgent& Agent = Agents[Index];
+	FRoadAgent& Agent = Agents[Index];
 	if (!Agent.GoalNode.IsSet())
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("DepartAgent %d refused: parked at no node."), AgentId);
@@ -450,11 +452,125 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	{
 		return Plan.Why;
 	}
-	if (!RedirectAgent(AgentId, &Network, Plan.Route))
+
+	// CAN IT SIMPLY DRIVE OUT? A MEASUREMENT OF THE GROUND AHEAD, not a flag on the stand -
+	// which is why one question answers a taxi-through stand, a taxiway a player happened to
+	// draw past a stand, and a graph rebuilt since this aeroplane parked.
+	//
+	// AGAINST LastMotion.Heading, which is where the aeroplane is actually pointing. The
+	// stand's authored heading was the rejected alternative: it is the same number today, but
+	// it describes the STAND, and an aeroplane that ended its taxi a few degrees off would
+	// then be measured against something it is not aligned with.
+	FVector2D StartAt = FVector2D::ZeroVector;
+	double OutTangent = 0.0;
+	const bool bHaveTangent =
+		GuidelineGeom::PointAtDistance(Plan.Route.Polyline, 0.0, StartAt, OutTangent);
+
+	// 180 WHEN THE POLYLINE CANNOT SAY - honouring the return rather than reading an
+	// uninitialised double. A route with no direction is not a route that leads straight out.
+	const double OffDegrees = bHaveTangent
+		? FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(OutTangent - Agent.LastMotion.Heading)))
+		: 180.0;
+
+	if (bHaveTangent && OffDegrees <= Rules.StraightOutDegrees)
+	{
+		// THE MEASURED ANGLE IS IN THE LINE. When a player asks why an aeroplane did not push
+		// back, the angle that was measured IS the answer, and guessing it back out of the
+		// geometry costs a PIE session - which is the one thing this project's notes say to
+		// spend log lines on.
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Agent %d departs straight out of its stand (%.0f deg off the parked heading)"),
+			AgentId, OffDegrees);
+		return RedirectAgent(AgentId, &Network, Plan.Route)
+			? EDepartureRefusal::None : EDepartureRefusal::NoRoute;
+	}
+
+	// HOW MUCH GROUND THE PUSH WILL USE, from the SAME arithmetic the push itself runs - see
+	// FPushbackRun::PlanPushDistance, which is static for exactly this caller. Re-deriving it
+	// here would be two expressions that must agree, and one day would not.
+	double BackDistance = 0.0;
+	double PushDistance = 0.0;
+	double TargetHeading = 0.0;
+	if (!FPushbackRun::PlanPushDistance(Plan.Route, Rules.PushSwingLength, Rules.MaxPushBackDistance,
+		BackDistance, PushDistance, TargetHeading))
+	{
+		UE_LOG(LogAirsideTraffic, Warning,
+			TEXT("DepartAgent %d refused: its route cannot be pushed along."), AgentId);
+		return EDepartureRefusal::NoRoute;
+	}
+
+	// PUSHBACK CLEARANCE: granted whole, or withheld. A manoeuvring agent cannot replan -
+	// there is no alternative way off a stand - so if the deadlock resolver ever picked one it
+	// would have no move to make. Granting the whole push up front makes it atomic and removes
+	// it as a deadlock source, and it is what ground control actually does: clearance is
+	// granted or withheld, never half-granted.
+	if (!IsPushGroundFree(AgentId, Plan.Route, PushDistance))
+	{
+		// AT Log AND NOT Warning: a runway or a taxiway the player has left busy refuses this
+		// for as long as they leave it, and it clears itself. UFuelService::DepartTheReady
+		// already throttles its own line to a CHANGE of reason, which is what keeps this from
+		// filling the file.
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Agent %d cannot push back yet: %.0f uu of ground is not free."),
+			AgentId, PushDistance);
+		return EDepartureRefusal::PushbackBlocked;
+	}
+
+	const EAgentPhase Before = Agent.Phase;
+	if (!Agent.StartPushback(Plan.Route, Agent.Airframe, Agent.LastMotion.Heading,
+		Rules.PushSpeedFor(Agent.Airframe.PushbackNeed), Rules.PushAccel, Rules.PushSwingLength,
+		Rules.MaxPushBackDistance, Agent.Airframe.Engine.MaxRPM * Rules.PowerbackRPMFraction))
 	{
 		return EDepartureRefusal::NoRoute;
 	}
+
+	// THE SAME THREE THINGS A REDIRECT DOES, because a push is a dispatch onto a route even
+	// though no follower is walking it yet: the goal must move off the stand or the claim pass
+	// keeps reserving it, a departure must be armed if the route ends on a runway, and the new
+	// goal must be claimed at dispatch rather than a tick later.
+	Agent.SetGoalFrom(Plan.Route);
+	ArmDepartureIfRunway(Agent, &Network, Plan.Route);
+	ClaimGoalNodeAtDispatch(Agent, AgentId, Network);
+
+	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
+	// same way and nobody is doing the pushing, so this line is the only place the gap between
+	// "needs a tug" and "has one" is visible at all.
+	UE_LOG(LogAirsideTraffic, Log,
+		TEXT("Agent %d pushing back: %.0f uu, %s"), AgentId, PushDistance,
+		*UEnum::GetValueAsString(Agent.Airframe.PushbackNeed));
+
+	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);
 	return EDepartureRefusal::None;
+}
+
+bool UGroundTraffic::IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan,
+	double PushDistance) const
+{
+	// Every edge and end node the push will touch, from the stand to PushDistance. Built in
+	// route order like the claim pass's own wanted list, though nothing here needs the order:
+	// clearance is all-or-nothing, so the first refusal and the last are the same answer.
+	TArray<FTrafficResource> Wanted;
+	Wanted.Reserve(Plan.Steps.Num() * 2);
+	for (const FRouteStep& Step : Plan.Steps)
+	{
+		Wanted.Add(FTrafficResource::OfEdge(Step.Edge));
+		Wanted.Add(FTrafficResource::OfNode(Step.To));
+
+		// THE STEP THAT CONTAINS PushDistance IS INCLUDED, not excluded: the test is on the
+		// step's END, so a push that stops half way along a step has still claimed the whole
+		// of it. Rounding the other way would leave the ground under the aeroplane's nose
+		// unasked for.
+		if (Step.EndDistance >= PushDistance)
+		{
+			break;
+		}
+	}
+
+	// bCountOwnOccupied FALSE. The aeroplane is standing on its own stand node and the head of
+	// its own lead-in, and refusing a push because the aeroplane is where it already is would
+	// refuse every push there has ever been.
+	return !Occupancy.IsAnyHeld(Wanted, AgentId, /*bCountOwnOccupied*/ false);
 }
 
 bool UGroundTraffic::RetireAgent(int32 AgentId)
