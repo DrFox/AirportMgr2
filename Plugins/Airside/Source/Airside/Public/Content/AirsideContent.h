@@ -67,9 +67,9 @@ public:
 	 * Tools/Python/build_runway_materials.py. A null or missing slot falls back to
 	 * SurfaceMaterial, yellow line and all, which is what runways looked like before.
 	 *
-	 * NEEDS RESAVE: an asset that authored the old RunwayGrassMaterial/RunwayTarmacMaterial/
-	 * RunwayConcreteMaterial properties falls back to SurfaceMaterial for all three until
-	 * this array is re-authored (issue #105 item 4 - those three properties are gone).
+	 * NO ASSET EDIT NEEDED (PR #137 review reversed the earlier "needs resave" note): PostLoad
+	 * migrates the three deprecated properties below into this array itself, so an asset
+	 * authored before RunwayMaterials existed keeps its runway materials with no manual step.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
 	TArray<TSoftObjectPtr<UMaterialInterface>> RunwayMaterials;
@@ -77,6 +77,23 @@ public:
 	// NO MaterialSet HERE, deliberately. A null one on the actor is not an unset field, it is
 	// the single-material road - so offering a default silently converts every airport that
 	// chose it. Assign one on the actor to get per-band materials.
+
+	/**
+	 * DEPRECATED (issue #105 item 4, PR #137 review). An asset saved before RunwayMaterials
+	 * existed still has its bytes under these three tagged-property names - UE's tagged
+	 * serialisation matches by name, and the "_DEPRECATED" suffix is what tells it to keep
+	 * matching them here rather than dropping the bytes on the floor, while also hiding the
+	 * fields from the details panel and Blueprint so nothing new can be authored into them.
+	 * PostLoad migrates whichever of these are set into RunwayMaterials and never reads them
+	 * again afterward - see PostLoad's own comment for the slot mapping.
+	 */
+	UPROPERTY() TSoftObjectPtr<UMaterialInterface> RunwayGrassMaterial_DEPRECATED;
+	UPROPERTY() TSoftObjectPtr<UMaterialInterface> RunwayTarmacMaterial_DEPRECATED;
+	UPROPERTY() TSoftObjectPtr<UMaterialInterface> RunwayConcreteMaterial_DEPRECATED;
+
+	//~ Begin UObject Interface
+	virtual void PostLoad() override;
+	//~ End UObject Interface
 
 	/**
 	 * The runway cross-sections, one per standard width, widest last.
