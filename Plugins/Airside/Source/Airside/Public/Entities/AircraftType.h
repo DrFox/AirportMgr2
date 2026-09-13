@@ -71,6 +71,15 @@ public:
 	 */
 	UPROPERTY(EditAnywhere) double MainWheelRadius = 21.0;
 
+	/**
+	 * The steered axle in local X, uu. Zero is this class's convention - the origin IS the
+	 * nose gear, so there is nothing to offset. See FAirframe::SteerAxleX.
+	 */
+	UPROPERTY(EditAnywhere) double SteerAxleX = 0.0;
+
+	/** The main-gear axle in local X, uu. Negative on a conforming airframe. */
+	UPROPERTY(EditAnywhere) double FixedAxleX = 0.0;
+
 	/** Propeller diameter, uu. Measured at 1.814 m on the model; published is 2.03. */
 	UPROPERTY(EditAnywhere) double PropellerDiameter = 181.4;
 
@@ -142,6 +151,14 @@ public:
 		Out.Approach = Approach;
 		Out.Engine = Engine;
 		Out.Wingspan = Footprint.Wingspan;
+		Out.SteerAxleX = SteerAxleX;
+		Out.FixedAxleX = FixedAxleX;
+
+		// DERIVED, not authored: two numbers that must agree are one number. The footprint
+		// already says where the nose and tail are, so the centre is arithmetic - and an
+		// authored copy would drift the first time a mesh was re-exported, which is exactly
+		// how the four position figures in build_plane2_type.py went stale.
+		Out.BodyCentreX = (Footprint.NoseX + Footprint.TailX) * 0.5;
 		Out.Requirements = Requirements;
 		// ShortCode, falling back to Code. Assigning Code alone was the defect: it is the
 		// aerodrome letter, so TypeCode could not tell an A320 from a 737.
