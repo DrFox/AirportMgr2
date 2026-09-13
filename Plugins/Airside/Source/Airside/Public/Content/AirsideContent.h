@@ -113,6 +113,27 @@ public:
 	TArray<TSoftObjectPtr<URoadProfile>> RunwayProfiles;
 
 	/**
+	 * The standard TAXIWAY widths a player cycles through, narrowest first.
+	 *
+	 * AUTHORED ASSETS, for the reason RunwayProfiles gives above: a segment stores a
+	 * pointer to its profile, and a transient one would come back from a save as something
+	 * else entirely.
+	 *
+	 * Widths are the ICAO code letters - 10.5, 15, 18, 23 and 25 m for B through F -
+	 * because a taxiway conforms to one of them or it is not a taxiway. The tool picks from
+	 * this list rather than taking a number, which is what makes that true by construction
+	 * instead of by validation.
+	 *
+	 * SEPARATE FROM the taxiway a level defaults to. That is ARoadNetworkActor's own
+	 * Profile, tuned per instance and deliberately not read from here - see
+	 * ARoadNetworkActor::ResolveProfile, whose comment records what happened when the
+	 * content set was consulted for it. Empty is legal and means the width cycle has
+	 * nothing to offer, which the tool says out loud.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TArray<TSoftObjectPtr<URoadProfile>> TaxiwayProfiles;
+
+	/**
 	 * The SERVICE ROAD cross-section a ground vehicle drives on.
 	 *
 	 * AN AUTHORED ASSET, for exactly the reason RunwayProfiles gives: a segment stores a

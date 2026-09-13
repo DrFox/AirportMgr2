@@ -241,7 +241,7 @@ public:
 
 	/** Join two placed nodes with a straight segment. Returns false, and logs, if it refused. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) override;
 	using IRoadEditTarget::ConnectNodes;
 
 	/** Link two GUIDELINE nodes by hand. Returns the new edge's index, or INDEX_NONE. */
@@ -290,6 +290,10 @@ public:
 	 * content set has no runway profiles at all.
 	 */
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
+
+	/** The standard taxiway widths, from the content set - see IRoadEditTarget. */
+	virtual int32 GetTaxiwayProfileCount() const override;
+	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
 
 	/** Remove a HAND-AUTHORED guideline edge. Refuses a derived one. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -490,7 +494,7 @@ public:
 	 * same-named parameter would shadow it.
 	 */
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
-		ERoadKind Kind) override;
+		ERoadKind Kind, int32 WidthIndex) override;
 	using IRoadEditTarget::UpdateGhost;
 
 	/**
@@ -857,7 +861,8 @@ private:
 
 	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
 	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */
-	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings(ERoadKind Kind);
+	URoadSurfacePresenter::FSurfaceSettings MakeGhostSurfaceSettings(ERoadKind Kind,
+		int32 WidthIndex = INDEX_NONE);
 
 public:
 	/**

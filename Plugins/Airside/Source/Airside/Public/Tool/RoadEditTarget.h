@@ -62,16 +62,31 @@ public:
 
 	virtual int32 PlaceNode(FVector2D Where) = 0;
 
-	/** Runs a segment of Kind between two live nodes. See ERoadKind for why the KIND travels
-	 *  here and the profile does not. */
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) = 0;
+	/**
+	 * Runs a segment of Kind between two live nodes. See ERoadKind for why the KIND travels
+	 * here and the profile does not.
+	 *
+	 * WidthIndex names a CHOICE, not an asset, which is what keeps that rule intact: the
+	 * tool says "the third standard width" and the facade still resolves what that means
+	 * and refuses a missing one, in the one place it already did. INDEX_NONE is "whatever
+	 * this kind defaults to" - for a taxiway that is the actor's own instance tuning
+	 * (ARoadNetworkActor::ResolveProfile), which is what every road laid before the width
+	 * cycle existed used and must keep using.
+	 */
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) = 0;
+
+	/** The kind's default width - what every caller before the width cycle meant. */
+	bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind)
+	{
+		return ConnectNodes(FromIndex, ToIndex, Kind, INDEX_NONE);
+	}
 
 	/** A taxiway - what every caller before the fuel slice meant. A non-virtual overload,
 	 *  so implementers override one signature; they carry `using IRoadEditTarget::ConnectNodes;`
 	 *  so this one stays visible on the concrete type. */
 	bool ConnectNodes(int32 FromIndex, int32 ToIndex)
 	{
-		return ConnectNodes(FromIndex, ToIndex, ERoadKind::Taxiway);
+		return ConnectNodes(FromIndex, ToIndex, ERoadKind::Taxiway, INDEX_NONE);
 	}
 
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) = 0;
@@ -109,6 +124,27 @@ public:
 	 * ARoadNetworkActor::ResolveRunwayProfile. Null when GetRunwayProfileCount() is zero.
 	 */
 	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const = 0;
+
+	/**
+	 * How many standard taxiway widths the content set declares.
+	 *
+	 * THE RUNWAY PAIR ABOVE, FOR TAXIWAYS, and deliberately the same shape: the tool holds
+	 * an index and knows nothing about UAirsideContent. Zero is a real answer - a project
+	 * that has authored no taxiway profiles - and the tool says so rather than cycling
+	 * through nothing in silence.
+	 */
+	virtual int32 GetTaxiwayProfileCount() const = 0;
+
+	/**
+	 * The Nth standard taxiway profile, clamped to a live index by the implementer. Null
+	 * when GetTaxiwayProfileCount() is zero.
+	 *
+	 * SEPARATE FROM the default a taxiway gets with no index. That default is the actor's
+	 * own Profile - per-instance tuning that ARoadNetworkActor::ResolveProfile keeps the
+	 * content set out of on purpose - and this is the standard set a player cycles through.
+	 * Two questions, two resolvers, and the level's tuning is not disturbed by the tool.
+	 */
+	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const = 0;
 
 	virtual bool DisconnectGuideline(int32 EdgeIndex) = 0;
 
@@ -165,14 +201,23 @@ public:
 
 	// --- Ghost preview -------------------------------------------------------------------
 
+	/** WidthIndex as ConnectNodes: a choice, INDEX_NONE for the kind's default. It is here
+	 *  for the reason the overload below already gives - a ghost that previewed the default
+	 *  while the click laid a cycled width would be the same lie in a new place. */
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
-		ERoadKind Kind) = 0;
+		ERoadKind Kind, int32 WidthIndex) = 0;
+
+	/** The kind's default width. */
+	void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid, ERoadKind Kind)
+	{
+		UpdateGhost(FromNodeIndex, Snap, bValid, Kind, INDEX_NONE);
+	}
 
 	/** A taxiway, as ConnectNodes. The ghost must show the width the click will ACTUALLY
 	 *  lay: a 23 m preview over a 6 m road is a lie the player then acts on. */
 	void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid)
 	{
-		UpdateGhost(FromNodeIndex, Snap, bValid, ERoadKind::Taxiway);
+		UpdateGhost(FromNodeIndex, Snap, bValid, ERoadKind::Taxiway, INDEX_NONE);
 	}
 
 	virtual void HideGhost() = 0;

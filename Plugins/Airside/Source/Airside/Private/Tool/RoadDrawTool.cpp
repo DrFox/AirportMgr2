@@ -64,7 +64,7 @@ TUniquePtr<IRoadDrawState> FRoadIdleState::OnClick(const FToolContext& Context)
 
 	// No RebuildMesh() here any more - PlaceNode/SplitSegment, whichever ResolveToNode just
 	// called, now notify the facade's own OnChanged on commit (issue #77).
-	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind);
+	return MakeUnique<FRoadChainingState>(Started, bCreated, Kind, WidthIndex);
 }
 
 TUniquePtr<IRoadDrawState> FRoadIdleState::OnCancel(const FToolContext& Context)
@@ -102,7 +102,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		{
 			UE_LOG(LogAirside, Warning,
 				TEXT("Road chaining from node %d refused: the target's network is null although the node is live"), From);
-			return MakeUnique<FRoadIdleState>(Kind);
+			return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 		}
 		const ERoadPlacement Judgement =
 			RoadPlacement::Validate(*Network, FromId, Context.Snap, Context.Limits);
@@ -119,14 +119,14 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 		return nullptr;
 	}
 
-	if (To != From && !Context.Target->ConnectNodes(From, To, Kind))
+	if (To != From && !Context.Target->ConnectNodes(From, To, Kind, WidthIndex))
 	{
 		// The facade already logged why. Drop the chain rather than leaving the player
 		// clicking against a connection that will not form. NO RebuildMesh() here any more -
 		// it used to cover the node or split ResolveToNode just made a few lines up, which
 		// notifies on its OWN commit now (PlaceNode/SplitSegment, issue #77); the refused
 		// ConnectNodes itself changed nothing further that needs showing.
-		return MakeUnique<FRoadIdleState>(Kind);
+		return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 	}
 
 	// No RebuildMesh() here either - ResolveToNode and ConnectNodes each notify the facade's
@@ -134,7 +134,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 
 	// Chain on from the node just reached, so a road is drawn click by click rather than
 	// a pair of clicks per segment.
-	return MakeUnique<FRoadChainingState>(To, bNextCreated, Kind);
+	return MakeUnique<FRoadChainingState>(To, bNextCreated, Kind, WidthIndex);
 }
 
 TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Context)
@@ -153,7 +153,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnCancel(const FToolContext& Cont
 		}
 	}
 
-	return MakeUnique<FRoadIdleState>(Kind);
+	return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 }
 
 void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
@@ -234,7 +234,7 @@ void FRoadDrawTool::Remove(const FToolContext& Context)
 	// WITH THIS TOOL'S OWN KIND. Dropping to a default-constructed idle state would silently
 	// put the Road tool back into taxiway mode after a Ctrl+click removal, and the next
 	// click would lay a 23 m aircraft lane where the player was drawing a road.
-	State = MakeUnique<FRoadIdleState>(Kind);
+	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 	// No RebuildMesh() here any more - DeleteNode/DeleteSegment notify on commit (issue #77).
 }
 
@@ -264,6 +264,69 @@ void FRoadDrawTool::OnClick(const FToolContext& Context)
 	if (TUniquePtr<IRoadDrawState> Next = State->OnClick(Context))
 	{
 		State = MoveTemp(Next);
+	}
+}
+
+void FRoadDrawTool::OnReselect(const FToolContext& Context)
+{
+	// KEY-AGAIN CYCLES THE WIDTH, the gesture FRunwayTool::OnReselect already gives
+	// runways. Borrowed rather than given a key of its own for the reason that tool states:
+	// the number keys are spoken for, and "press the tool's key again" is a gesture a
+	// player already knows from it.
+	//
+	// A SERVICE ROAD HAS NOTHING TO CYCLE. It carries one authored cross-section - see
+	// UAirsideContent::ServiceRoadProfile - so this refuses rather than reaching for the
+	// taxiway list, which would lay a 23 m lane for vans.
+	if (Kind == ERoadKind::ServiceRoad)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("Road width unchanged: a service road has one authored cross-section"));
+		return;
+	}
+
+	if (Context.Target == nullptr)
+	{
+		// A DIFFERENT REFUSAL from an empty content set, said differently - the same
+		// distinction FRunwayTool::NextWidth draws, and for the same reason: this is a
+		// caller bug, not a fresh project, and one shared message would blame the content
+		// set for a null target.
+		UE_LOG(LogAirside, Warning,
+			TEXT("Taxiway width unchanged: no edit target in context, so there is nothing "
+			     "to ask for widths"));
+		return;
+	}
+
+	const int32 Count = Context.Target->GetTaxiwayProfileCount();
+	if (Count <= 0)
+	{
+		// SAID OUT LOUD. Returning in silence is indistinguishable from a key that never
+		// arrived: the player presses the tool's key again, nothing widens, and nothing
+		// anywhere says why. A content set with no taxiway profiles is a real state - it
+		// is what a project that has not run build_road_profiles.py has.
+		UE_LOG(LogAirside, Warning,
+			TEXT("Taxiway width unchanged: the content set declares no taxiway profiles, so "
+			     "there is nothing to cycle through. Author them with "
+			     "Tools/Python/build_road_profiles.py."));
+		return;
+	}
+
+	// FROM THE LEVEL'S DEFAULT INTO THE LIST, then round it. INDEX_NONE is not a slot in
+	// the cycle - it is "whatever this level was tuned for" - so the first press picks the
+	// narrowest standard width rather than the one after some remembered position.
+	WidthIndex = WidthIndex == INDEX_NONE ? 0 : (WidthIndex + 1) % Count;
+
+	// The width is otherwise visible only in the ghost, and only once a chain is started -
+	// so a player who has not clicked yet has no way to tell the key did anything.
+	const URoadProfile* Profile = Context.Target->ResolveTaxiwayProfile(WidthIndex);
+	UE_LOG(LogAirside, Log, TEXT("Taxiway width -> %d of %d, %.1f m"),
+		WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
+
+	// The part-drawn chain, if any, must hear about it: the state carries its own copy so
+	// it can build its successor, and a chain left on the old width would finish at a
+	// width the ghost has stopped showing.
+	if (State.IsValid())
+	{
+		State->WidthIndex = WidthIndex;
 	}
 }
 
@@ -351,7 +414,8 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
 		RoadPlacement::Validate(*Context.Network(), FromId, Context.Snap, Context.Limits);
-	Context.Target->UpdateGhost(Pending, Context.Snap, Judgement == ERoadPlacement::Valid, Kind);
+	Context.Target->UpdateGhost(Pending, Context.Snap,
+		Judgement == ERoadPlacement::Valid, Kind, WidthIndex);
 }
 
 void FRoadDrawTool::OnDeactivate(const FToolContext& Context)

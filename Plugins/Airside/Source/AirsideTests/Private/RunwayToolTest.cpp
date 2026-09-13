@@ -60,7 +60,7 @@ namespace
 
 		virtual const URoadNetwork* GetNetwork() const override { return nullptr; }
 		virtual int32 PlaceNode(FVector2D) override { return INDEX_NONE; }
-		virtual bool ConnectNodes(int32, int32, ERoadKind) override { return false; }
+		virtual bool ConnectNodes(int32, int32, ERoadKind, int32) override { return false; }
 		using IRoadEditTarget::ConnectNodes;
 		virtual int32 ConnectGuidelines(int32, int32) override { return INDEX_NONE; }
 		virtual bool PlaceRunway(FVector2D, FVector2D, URoadProfile*, const FRunwayFacts&) override { return false; }
@@ -85,7 +85,7 @@ namespace
 		virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }
 		virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return nullptr; }
 		using IRoadEditTarget::GetStandDefinition;
-		virtual void UpdateGhost(int32, const FRoadSnapResult&, bool, ERoadKind) override {}
+		virtual void UpdateGhost(int32, const FRoadSnapResult&, bool, ERoadKind, int32) override {}
 		using IRoadEditTarget::UpdateGhost;
 		virtual void HideGhost() override {}
 		virtual bool MakeLiveNodeId(int32, FRoadNodeId&) const override { return false; }
@@ -96,6 +96,11 @@ namespace
 		using IRoadEditTarget::DispatchAgent;
 		virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
 		virtual void RebuildMesh() override {}
+
+		/** No taxiway widths here: this fake is the RUNWAY tool's, and a taxiway list it
+		 *  never uses would be a fixture pretending to describe something it does not. */
+		virtual int32 GetTaxiwayProfileCount() const override { return 0; }
+		virtual URoadProfile* ResolveTaxiwayProfile(int32) const override { return nullptr; }
 
 		virtual int32 GetRunwayProfileCount() const override { return Profiles.Num(); }
 		virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override
