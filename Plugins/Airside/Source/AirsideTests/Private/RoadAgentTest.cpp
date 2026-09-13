@@ -72,9 +72,10 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 	constexpr int32 MaxTicks = 6000;
 	int32 Ticks = 0;
 	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
 	while (Agent.Phase == EAgentPhase::Arriving && Ticks < MaxTicks)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		++Ticks;
 	}
 
@@ -83,6 +84,11 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// THE SEAM ISSUE #105 ITEM 6 ADDS: the exact Advance call that made the handover reports
+	// it as an event, which is what UGroundTraffic::AdvanceOnce now switches on instead of
+	// diffing Phase itself.
+	TestEqual(TEXT("the handover tick reports EAgentEvent::Vacated"), Event, EAgentEvent::Vacated);
 
 	// THE MEASUREMENT. Issue #27 was the VACATED handover reading Follower.Ground instead of
 	// the airframe's; issue #83 went further and removed FRouteFollower's own Ground copy
@@ -94,7 +100,7 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 	Ticks = 0;
 	while (Agent.Phase == EAgentPhase::Taxiing && Ticks < MaxTicks)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		MaxTaxiSpeed = FMath::Max(MaxTaxiSpeed, Motion.GroundSpeed);
 		++Ticks;
 	}
@@ -149,17 +155,24 @@ bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 	int32 Ticks = 0;
 	bool bSawDeparting = false;
 	bool bCleared = false;
+	bool bSawLinedUp = false;
+	bool bSawAirborne = false;
 	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	EAgentEvent LastEvent = EAgentEvent::None;
 
 	while (Ticks < MaxTicks)
 	{
-		const bool bContinuing = Agent.Advance(Step, Motion);
+		const bool bContinuing = Agent.Advance(Step, Motion, Event);
 		++Ticks;
+		LastEvent = Event;
 
 		if (Agent.Phase == EAgentPhase::Departing)
 		{
 			bSawDeparting = true;
 		}
+		bSawLinedUp |= (Event == EAgentEvent::LinedUp);
+		bSawAirborne |= (Event == EAgentEvent::Airborne);
 
 		if (!bContinuing)
 		{
@@ -171,6 +184,12 @@ bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the taxi arriving with a departure armed enters the Departing phase"),
 		bSawDeparting);
 
+	// THE SEAM ISSUE #105 ITEM 6 ADDS: the exact ticks UGroundTraffic::AdvanceOnce now
+	// switches on instead of diffing Phase (LinedUp) or a takeoff sub-phase (Airborne) itself.
+	TestTrue(TEXT("the Taxiing -> Departing tick reports EAgentEvent::LinedUp"), bSawLinedUp);
+	TestTrue(TEXT("reaching the climb reports EAgentEvent::Airborne, though it is not a "
+		"phase change (still Departing before and after)"), bSawAirborne);
+
 	if (!TestTrue(TEXT("the departure eventually clears, within the bounded loop"), bCleared))
 	{
 		return false;
@@ -178,11 +197,12 @@ bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("Advance returning false leaves the agent in the Gone phase"),
 		Agent.Phase, EAgentPhase::Gone);
+	TestEqual(TEXT("and reports EAgentEvent::Gone on that same call"), LastEvent, EAgentEvent::Gone);
 
 	// FALSE EXACTLY FROM GONE ON - not one frame early (which would drop the view while
 	// still airborne) and not one frame late (which would leak an agent nothing is driving).
 	TestFalse(TEXT("Advance keeps declining once the agent is Gone"),
-		Agent.Advance(Step, Motion));
+		Agent.Advance(Step, Motion, Event));
 
 	return true;
 }
@@ -215,10 +235,11 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	constexpr int32 MaxTicks = 10000;
 	int32 Ticks = 0;
 	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
 
 	while (Agent.Phase == EAgentPhase::Taxiing && Ticks < MaxTicks)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		++Ticks;
 	}
 
@@ -228,6 +249,10 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// THE SEAM ISSUE #105 ITEM 6 ADDS: UGroundTraffic::AdvanceOnce's stand-claim switches on
+	// this instead of diffing Phase itself.
+	TestEqual(TEXT("the handover tick reports EAgentEvent::Parked"), Event, EAgentEvent::Parked);
+
 	TestTrue(TEXT("the engine is still running the instant it parks - the chocks are not "
 		"in yet"), Agent.bEngineRunning);
 
@@ -235,7 +260,7 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	// again once parked, so without zeroing its Speed on entry, GroundSpeed would keep
 	// reporting whatever the last taxiing tick left it at, for ever - a parked aircraft
 	// that claims to still be rolling.
-	Agent.Advance(Step, Motion);
+	Agent.Advance(Step, Motion, Event);
 	TestEqual(TEXT("GroundSpeed reads zero once parked, not the follower's stale taxi speed"),
 		Motion.GroundSpeed, 0.0);
 
@@ -244,7 +269,7 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	double Elapsed = Step;
 	while (Elapsed < Pause - Step)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		Elapsed += Step;
 	}
 
@@ -255,7 +280,7 @@ bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 	Ticks = 0;
 	while (Agent.bEngineRunning && Ticks < 600)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		++Ticks;
 	}
 
@@ -373,6 +398,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 
 	constexpr double Step = 1.0 / 60.0;
 	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
 
 	// Tick to the middle of the ROLL - past the line-up, still well short of Vr - so there is
 	// runway left to measure a changed acceleration over.
@@ -381,7 +407,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 		&& !(Agent.Phase == EAgentPhase::Departing && Agent.Departure.Phase == ETakeoffPhase::Roll
 			&& Agent.Departure.Speed > Airframe.Ground.Takeoff.SpeedCap * 0.3))
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 		++Ticks;
 	}
 
@@ -400,7 +426,7 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 	const double BeforeSpeed = Agent.Departure.Speed;
 	for (int32 Tick = 0; Tick < MeasureTicks; ++Tick)
 	{
-		Agent.Advance(Step, Motion);
+		Agent.Advance(Step, Motion, Event);
 	}
 	const double Gained = Agent.Departure.Speed - BeforeSpeed;
 

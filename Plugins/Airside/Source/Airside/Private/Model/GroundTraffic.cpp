@@ -163,7 +163,8 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	// moving it, so LastMotion is a full pose - heading included - by the time the view is
 	// spawned off the Admit broadcast below. StartTaxi's fallback covers a plan too short.
 	FAgentMotion Motion;
-	Agent.Advance(0.0, Motion);
+	EAgentEvent Event;
+	Agent.Advance(0.0, Motion, Event);
 
 	const int32 Id = Admit(MoveTemp(Agent));
 	if (Network != nullptr)
@@ -395,7 +396,8 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	// included, so a player redirecting while paused would see the aeroplane facing east with
 	// a stopped propeller until play resumed, whichever way the new route actually points.
 	FAgentMotion Motion;
-	Agent.Advance(0.0, Motion);
+	EAgentEvent Event;
+	Agent.Advance(0.0, Motion, Event);
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
 	if (Agent.Phase != Before)
@@ -556,7 +558,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		const int32 Id = Agent.Id;
 
 		FAgentMotion Motion;
-		if (!Agent.Advance(DeltaSeconds, Motion))
+		EAgentEvent Event;
+		if (!Agent.Advance(DeltaSeconds, Motion, Event))
 		{
 			// Cleared or otherwise finished - the aircraft has gone, so everything it held
 			// goes with it. An agent that stayed in the table would hold a runway nothing
@@ -570,24 +573,15 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			continue;
 		}
 
-		// THE STAND IS OCCUPIED IN THE TICK THE AIRCRAFT PARKS, by the same rule as the runway
-		// below: the claim pass ran before motion, while this agent was still Taxiing, so its
-		// stand claim is the inbound reservation until the next pass - and the panel would
-		// read "Reserved for" over an aircraft standing on the stand for one frame.
-		if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Parked && Network != nullptr)
+		// SWITCHED ON THE EVENT FRoadAgent::Advance JUST REPORTED, not diffed from Before/
+		// After phase here (issue #105 item 6) - Advance already OWNS every handover, so it
+		// is the one place that should know which one just happened, Airborne included: that
+		// one is not even an EAgentPhase change (Departing before and after), which is why it
+		// used to need its own hand-rolled condition against a takeoff sub-phase instead of a
+		// case in this switch.
+		switch (Event)
 		{
-			Pass.ClaimGoalNode(Agent, *Network);
-		}
-
-		// THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that made it.
-		//
-		// Waiting for the agent's next claim pass would leave a vacated runway held for a
-		// whole frame, and every landing offered in that frame refused for nothing -
-		// DispatchArrival refuses on ANY held claim (see ArrivalPlanner::Plan). Both
-		// chains come off the AGENT rather than a fresh lookup, because by now the graph
-		// may have been rebuilt under it; both were recorded at dispatch for that reason.
-		if (Before == EAgentPhase::Arriving && Agent.Phase == EAgentPhase::Taxiing)
-		{
+		case EAgentEvent::Vacated:
 			// VACATED HANDS THE RUNWAY TO THE CROSSING RULE, it does not give it back. An
 			// aircraft that has just left the roll is standing at the runway exit with its
 			// tail on the strip; releasing here (which is what this did before spec §3.1's
@@ -605,12 +599,17 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 				Agent.BeginCrossing(Agent.RunwayHeld[0], ECrossingPhase::OnStrip);
 			}
 			Agent.RunwayHeld.Reset();
-		}
-		else if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Departing)
-		{
+			break;
+
+		case EAgentEvent::LinedUp:
 			// The taxi that armed this departure has reached the threshold: what it held as
 			// a reservation over the runway edges it drove becomes the occupancy it keeps
-			// until Gone.
+			// until Gone. THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that
+			// made it - waiting for the agent's next claim pass would leave the strip unheld
+			// with an aeroplane lining up on it, and a landing could be cleared into that
+			// frame. DepartureRunway comes off the AGENT rather than a fresh lookup, because
+			// by now the graph may have been rebuilt under it; it was recorded at dispatch
+			// for that reason.
 			Agent.RunwayHeld = Agent.DepartureRunway;
 
 			// CLAIMED HERE AND NOT ON THE NEXT TICK'S non-Taxiing pass. A route that ends on
@@ -639,26 +638,50 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 						Id, Blocker.AgentId, Segment.Index);
 				}
 			}
-		}
+			break;
 
-		// AIRBORNE: THE RUNWAY IS FREE. A departure held the strip from the handover until
-		// Gone, and Gone is the top of the climb - 300 m up, most of a minute after the
-		// wheels left. In play (2026-09-06) every arrival dispatched in that minute was
-		// refused "the runway is in use" while the strip sat empty. The strip is what the
-		// table protects, and the strip is clear once the aircraft is established in the
-		// climb: the next arrival joins its approach minutes out (FLandingRun, 1.9 km on a
-		// 100 m glideslope) and cannot touch down under a climbing aircraft. Wake and
-		// separation between successive movements are URunwaySequencer's (M3), not this
-		// table's. Everything the departure held goes - RunwayHeld, the crossing it passed
-		// a bar to reach - and the fields are reset so HoldRunwayOnly claims nothing back.
-		if (Agent.Phase == EAgentPhase::Departing
-			&& Agent.Departure.Phase == ETakeoffPhase::Climb
-			&& (Agent.RunwayHeld.Num() > 0 || Agent.CrossingPhase != ECrossingPhase::None))
-		{
-			Occupancy.ReleaseAll(Id);
-			Agent.RunwayHeld.Reset();
-			Agent.EndCrossing();
-			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
+		case EAgentEvent::Parked:
+			// THE STAND IS OCCUPIED IN THE TICK THE AIRCRAFT PARKS, by the same rule as the
+			// runway above: the claim pass ran before motion, while this agent was still
+			// Taxiing, so its stand claim is the inbound reservation until the next pass -
+			// and the panel would read "Reserved for" over an aircraft standing on the stand
+			// for one frame.
+			if (Network != nullptr)
+			{
+				Pass.ClaimGoalNode(Agent, *Network);
+			}
+			break;
+
+		case EAgentEvent::Airborne:
+			// THE RUNWAY IS FREE. A departure held the strip from the handover until Gone,
+			// and Gone is the top of the climb - 300 m up, most of a minute after the wheels
+			// left. In play (2026-09-06) every arrival dispatched in that minute was refused
+			// "the runway is in use" while the strip sat empty. The strip is what the table
+			// protects, and the strip is clear once the aircraft is established in the climb:
+			// the next arrival joins its approach minutes out (FLandingRun, 1.9 km on a 100 m
+			// glideslope) and cannot touch down under a climbing aircraft. Wake and separation
+			// between successive movements are URunwaySequencer's (M3), not this table's.
+			//
+			// GUARDED, not unconditional: a departure from a junction turn path can reach
+			// here holding nothing (LinedUp's own comment on DerivedFrom-less routes), and
+			// releasing/logging a claim that was never made would be noise, not news.
+			if (Agent.RunwayHeld.Num() > 0 || Agent.CrossingPhase != ECrossingPhase::None)
+			{
+				// Everything the departure held goes - RunwayHeld, the crossing it passed a
+				// bar to reach - and the fields are reset so HoldRunwayOnly claims nothing back.
+				Occupancy.ReleaseAll(Id);
+				Agent.RunwayHeld.Reset();
+				Agent.EndCrossing();
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
+			}
+			break;
+
+		case EAgentEvent::None:
+		case EAgentEvent::Gone:
+		default:
+			// Gone is unreachable here: Advance returns false the same frame it fires, and
+			// that path already continued above.
+			break;
 		}
 
 		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause

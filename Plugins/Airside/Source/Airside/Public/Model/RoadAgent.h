@@ -43,6 +43,43 @@ enum class EAgentPhase : uint8
 };
 
 /**
+ * What FRoadAgent::Advance did THIS FRAME, for UGroundTraffic::AdvanceOnce to switch on
+ * instead of diffing Phase before and after the call itself (issue #105 item 6).
+ *
+ * None is the common case - most frames move an agent without handing it over to anything -
+ * and is deliberately first so it is the default a freshly zeroed FAgentEvent starts at.
+ *
+ * Airborne is NOT an EAgentPhase transition: the agent is EAgentPhase::Departing both before
+ * and after it fires, only FTakeoffRun::Phase moves (Rotate -> Climb) - which used to be the
+ * one condition UGroundTraffic::AdvanceOnce checked directly against Agent.Departure.Phase
+ * from outside, rather than something FRoadAgent::Advance told it. Folding it in here means
+ * every handover this agent can report, phase-boundary or not, comes through the one channel.
+ *
+ * Gone mirrors Advance's own `return false`, which already tells the caller "drop this
+ * agent" unambiguously - AdvanceOnce still acts on that return value, not on this event, for
+ * the removal itself. It is in the enum anyway so a test can assert the SAME thing the
+ * return value says, and so nothing reads "the event list" and wonders why the most final
+ * event of all is missing from it.
+ */
+UENUM()
+enum class EAgentEvent : uint8
+{
+	/** Nothing this frame beyond ordinary motion. */
+	None,
+	/** Arriving -> Taxiing: the landing vacated the strip, taxiing in. */
+	Vacated,
+	/** Taxiing -> Departing: reached the threshold with a departure armed, rolling. */
+	LinedUp,
+	/** Taxiing -> Parked: the taxi is over, the turnaround starts. */
+	Parked,
+	/** Still Departing, but FTakeoffRun::Phase just reached Climb: the runway is free. */
+	Airborne,
+	/** Departing -> Gone: the climb cleared. See this enum's own comment on why it is here
+	 *  despite Advance's `return false` already saying so. */
+	Gone
+};
+
+/**
  * How far through a runway crossing a taxiing agent's BODY is. Spec §3.1's fourth route.
  *
  * AN ENUM AND NOT A PAIR OF BOOLS - this codebase's "a phase is an enum, never a set of
@@ -418,10 +455,16 @@ public:
 	 * OWNS EVERY HANDOVER: Arriving -> Taxiing on vacate, Taxiing -> Departing when the taxi
 	 * has arrived with a departure armed, Taxiing -> Parked otherwise on arrival, Parked
 	 * counts down and clears bEngineRunning once, Departing -> Gone when the take-off has
-	 * cleared.
+	 * cleared, and (since issue #105 item 6) FTakeoffRun::Phase reaching Climb while still
+	 * Departing. OutEvent names whichever of these happened THIS FRAME - EAgentEvent::None on
+	 * every other frame, which is most of them - so UGroundTraffic::AdvanceOnce can switch on
+	 * what happened instead of diffing Phase (or, for the climb, a takeoff sub-phase nothing
+	 * outside this function used to have a name for) before and after the call itself.
 	 *
 	 * Returns true with a motion to show; false only once Phase == Gone, which is also the
 	 * caller's signal to destroy the view and drop the agent - see ARoadNetworkActor::Tick.
+	 * OutEvent is EAgentEvent::Gone on that same call, redundantly with the return value - see
+	 * EAgentEvent::Gone's own comment for why it is declared anyway.
 	 */
-	bool Advance(double DeltaSeconds, FAgentMotion& OutMotion);
+	bool Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent);
 };
