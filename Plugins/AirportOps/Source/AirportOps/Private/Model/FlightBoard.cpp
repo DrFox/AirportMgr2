@@ -15,7 +15,7 @@ bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& 
 	const FRunwaySummary* Longest = nullptr;
 	for (const FRunwaySummary& Runway : Airport.Runways)
 	{
-		if (Longest == nullptr || Runway.Length > Longest->Length)
+		if (Longest == nullptr || Runway.End.Length > Longest->End.Length)
 		{
 			Longest = &Runway;
 		}
@@ -24,7 +24,7 @@ bool UFlightBoard::DefaultApproachFocus(const URoadNetwork& Network, FVector2D& 
 	{
 		return false;
 	}
-	OutFocus = Longest->Threshold;
+	OutFocus = Longest->End.Threshold;
 	return true;
 }
 

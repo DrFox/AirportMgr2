@@ -13,6 +13,16 @@ namespace
 
 	/** A runway pointing due east, long enough for a Meridian with room to spare. */
 	constexpr double TakeoffRunwayLength = 100000.0;   // 1 km
+
+	/** A runway end pointing +X from the origin, of the given length - see #88. */
+	FRunwayEnd TakeoffEndOfLength(double Length)
+	{
+		FRunwayEnd End;
+		End.Threshold = FVector2D::ZeroVector;
+		End.Direction = FVector2D(1.0, 0.0);
+		End.Length = Length;
+		return End;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -46,8 +56,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	//    the roll back out of the simulation checks the arithmetic in both directions.
 	{
 		FTakeoffRun Run;
-		const bool bArmed = Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
-			TakeoffRunwayLength, Airframe, /*InHeading=*/0.0);
+		const bool bArmed = Run.Start(TakeoffEndOfLength(TakeoffRunwayLength), Airframe, /*InHeading=*/0.0);
 
 		if (!TestTrue(TEXT("a 1 km runway takes a Meridian"), bArmed))
 		{
@@ -101,8 +110,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	//    up before it, are the two ways this looks wrong to anyone who has flown.
 	{
 		FTakeoffRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Airframe, 0.0);
+		Run.Start(TakeoffEndOfLength(TakeoffRunwayLength), Airframe, 0.0);
 
 		double SpeedAtRotation = -1.0;
 		double PitchWhileRolling = 0.0;
@@ -137,8 +145,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	//    agent that never reports done is an aircraft that never despawns.
 	{
 		FTakeoffRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Airframe, 0.0);
+		Run.Start(TakeoffEndOfLength(TakeoffRunwayLength), Airframe, 0.0);
 
 		double Elapsed = 0.0;
 		double TopPitch = 0.0;
@@ -201,8 +208,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	//     it has.
 	{
 		FTakeoffRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Airframe, 0.0);
+		Run.Start(TakeoffEndOfLength(TakeoffRunwayLength), Airframe, 0.0);
 
 		double PitchAtLiftOff = -1.0;
 		double RotateSeconds = 0.0;
@@ -262,8 +268,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 
 		// Arriving at the threshold pointing back down the runway - a backtrack, which is
 		// exactly how a light aircraft reaches the threshold of a runway it will depart from.
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Airframe, /*InHeading=*/UE_DOUBLE_PI);
+		Run.Start(TakeoffEndOfLength(TakeoffRunwayLength), Airframe, /*InHeading=*/UE_DOUBLE_PI);
 
 		double WorstYawRate = 0.0;
 		double Previous = Run.Heading;
@@ -307,14 +312,12 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 
 		FTakeoffRun Short;
 		TestFalse(TEXT("a runway shorter than the roll is refused"),
-			Short.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5,
-				Airframe, 0.0));
+			Short.Start(TakeoffEndOfLength(Needed * 0.5), Airframe, 0.0));
 		TestTrue(TEXT("and the refused run reports nothing to fly"), Short.HasCleared());
 
 		FTakeoffRun Long;
 		TestTrue(TEXT("one just over it is taken"),
-			Long.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 1.05,
-				Airframe, 0.0));
+			Long.Start(TakeoffEndOfLength(Needed * 1.05), Airframe, 0.0));
 	}
 
 	return true;

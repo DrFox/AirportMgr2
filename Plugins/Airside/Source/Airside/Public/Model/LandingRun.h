@@ -32,8 +32,8 @@ enum class ELandingPhase : uint8
  * take-off - taxi to the runway, then fly. An arrival is landing then follower - fly the
  * approach, then taxi to the stand.
  *
- * World-free like both of them: a threshold, a direction, and three structs of numbers, so a
- * whole arrival can be flown in a loop with no world. See Airside.Model.LandingRun.
+ * World-free like both of them: a runway end and three structs of numbers, so a whole
+ * arrival can be flown in a loop with no world. See Airside.Model.LandingRun.
  *
  * TOUCHDOWN IS NOT DECLARED, it falls out of the flare - the exact mirror of lift-off falling
  * out of the rotation. See FApproachPerformance for the symmetry, and note that both ends of
@@ -46,14 +46,8 @@ struct AIRSIDE_API FLandingRun
 
 	UPROPERTY() ELandingPhase Phase = ELandingPhase::Vacated;
 
-	/** The landing threshold, in road-plane XY. Travelled is measured FROM here. */
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
-
-	/** Unit vector from the threshold toward the far end. The landing heading. */
-	UPROPERTY() FVector2D Direction = FVector2D(1.0, 0.0);
-
-	/** Runway available beyond the threshold, uu. */
-	UPROPERTY() double RunwayLength = 0.0;
+	/** The landing threshold and strip. Travelled is measured FROM End.Threshold - see #88. */
+	UPROPERTY() FRunwayEnd End;
 
 	// GROUND/CLIMB/APPROACH ARE NOT STORED HERE ANY MORE (issue #83). Start and Advance take
 	// the airframe by reference from FRoadAgent::Airframe instead - the single copy RoadAgent
@@ -100,8 +94,7 @@ struct AIRSIDE_API FLandingRun
 	 * would be a simulation of an overrun. The user asked for a refusal rather than a
 	 * go-around, which is a second flight phase and doubles this.
 	 */
-	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FAirframe& InAirframe, double InVacateAt = 0.0);
+	bool Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt = 0.0);
 
 	/**
 	 * Flies one frame. False once the arrival is over, leaving the outputs untouched.
@@ -157,6 +150,5 @@ struct AIRSIDE_API FLandingRun
 
 private:
 	/** Arms without the runway-length check, so RequiredLandingDistance can fly a probe. */
-	bool Begin(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FAirframe& InAirframe, double InVacateAt);
+	bool Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt);
 };

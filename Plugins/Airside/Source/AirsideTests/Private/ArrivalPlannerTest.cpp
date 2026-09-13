@@ -135,7 +135,7 @@ bool FArrivalPlannerVacateAtTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const double Expected = FVector2D::DotProduct(ExitNode->Position - Plan.Threshold, Plan.Direction);
+	const double Expected = Plan.End.OffsetOf(ExitNode->Position);
 	TestEqual(TEXT("VacateAt is the chosen exit's own projection onto the runway direction"),
 		Plan.VacateAt, Expected);
 
@@ -251,11 +251,11 @@ bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
 	Airframe.Requirements = TestAirframes::PiperRequirements();
 	const FTestAirport A = FTestAirport::Build(Airframe, { .ExitCount = 2 });
 
-	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
-	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->NearestRunwayThreshold(A.Threshold, Threshold, Direction, Length, &Seed))) { return false; }
+	FRunwayEnd End;
+	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->NearestRunwayThreshold(A.Threshold, End))) { return false; }
 	FRunwayFacts Grass;
 	Grass.Surface = ERunwaySurface::Grass;
-	TestTrue(TEXT("the strip becomes grass"), A.Net->SetRunwayFacts(Seed, Grass));
+	TestTrue(TEXT("the strip becomes grass"), A.Net->SetRunwayFacts(End.Seed, Grass));
 
 	const FArrivalPlan OnGrass = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
 	TestTrue(FString::Printf(TEXT("the Piper may land on grass: %s"), *ArrivalPlanner::DescribeRefusal(OnGrass)), OnGrass.IsValid());

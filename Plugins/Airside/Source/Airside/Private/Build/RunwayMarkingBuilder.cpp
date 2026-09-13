@@ -270,12 +270,14 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 		// every marking is painted from both ends, or neither.
 		FRunwayFrame Frame;
 		const FRoadNode* A = Network.GetNode(Segment.A);
-		if (A == nullptr
-			|| !Network.RunwayExtentAt(A->Position, Frame.Origin, Frame.Along, Frame.Length)
-			|| Frame.Length <= 0.0)
+		FRunwayEnd Extent;
+		if (A == nullptr || !Network.RunwayExtentAt(A->Position, Extent) || Extent.Length <= 0.0)
 		{
 			continue;
 		}
+		Frame.Origin = Extent.Threshold;
+		Frame.Along = Extent.Direction;
+		Frame.Length = Extent.Length;
 		Frame.Across = FVector2D(-Frame.Along.Y, Frame.Along.X);
 		const URoadProfile* Profile = Network.ProfileFor(Segment);
 		Frame.HalfWidth = Profile != nullptr ? Profile->GetTotalWidth() * 0.5 : 0.0;

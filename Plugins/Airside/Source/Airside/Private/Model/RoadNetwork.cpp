@@ -331,25 +331,21 @@ bool URoadNetwork::SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts
 	return true;
 }
 
-bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
+bool URoadNetwork::RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) const
 {
-	return RunwayExtentInternal(Near, true, OutThreshold, OutDirection, OutLength, OutSegment);
+	return RunwayExtentInternal(Near, true, OutEnd);
 }
 
-bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-	FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment) const
+bool URoadNetwork::NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const
 {
 	// NO PROXIMITY TEST, and that is the difference between the two. RunwayExtentAt answers
 	// "is this point ON a runway", which a departure asks of the place its taxi ended and
 	// which must say no for the rest of the airport. This answers "which runway would you
 	// land on", which is asked of a click that is deliberately nowhere near one.
-	return RunwayExtentInternal(Near, false, OutThreshold, OutDirection, OutLength, OutSegment);
+	return RunwayExtentInternal(Near, false, OutEnd);
 }
 
-bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-	FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
-	FRoadSegmentId* OutSegment) const
+bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway, FRunwayEnd& OutEnd) const
 {
 	// The runway segment with an END nearest the query. Ends rather than centres: a threshold
 	// is an end, and a long runway's midpoint can be closer to a query than the end that
@@ -415,11 +411,8 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		}
 	}
 
-	if (OutSegment != nullptr)
-	{
-		OutSegment->Index = Best;
-		OutSegment->Generation = Segments[Best].Generation;
-	}
+	OutEnd.Seed.Index = Best;
+	OutEnd.Seed.Generation = Segments[Best].Generation;
 
 	// THE CHAIN IS THE WALK (#86): RunwayChain already walks out through nodes that join
 	// exactly two runway segments, stopping at a threshold or a fork - the same rule this
@@ -479,17 +472,17 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	const bool bNearA = FVector2D::Distance(Near, NodeA->Position)
 		<= FVector2D::Distance(Near, NodeB->Position);
 
-	OutThreshold = bNearA ? NodeA->Position : NodeB->Position;
+	OutEnd.Threshold = bNearA ? NodeA->Position : NodeB->Position;
 	const FVector2D Far = bNearA ? NodeB->Position : NodeA->Position;
 
-	const FVector2D Along = Far - OutThreshold;
-	OutLength = Along.Size();
-	if (OutLength <= 0.0)
+	const FVector2D Along = Far - OutEnd.Threshold;
+	OutEnd.Length = Along.Size();
+	if (OutEnd.Length <= 0.0)
 	{
 		return false;
 	}
 
-	OutDirection = Along / OutLength;
+	OutEnd.Direction = Along / OutEnd.Length;
 	return true;
 }
 

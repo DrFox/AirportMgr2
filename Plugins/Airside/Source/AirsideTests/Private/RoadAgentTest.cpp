@@ -133,7 +133,11 @@ bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 
 	FRoadAgent Agent;
 	Agent.StartTaxi(Plan, Airframe);
-	Agent.ArmDeparture(Threshold, Direction, RunwayLength);
+	FRunwayEnd End;
+	End.Threshold = Threshold;
+	End.Direction = Direction;
+	End.Length = RunwayLength;
+	Agent.ArmDeparture(End);
 
 	TestEqual(TEXT("arming a departure does not itself change the phase - the taxi still "
 		"has to arrive"), Agent.Phase, EAgentPhase::Taxiing);
@@ -359,7 +363,11 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 
 	FRoadAgent Agent;
 	Agent.StartTaxi(Plan, Airframe);
-	Agent.ArmDeparture(Threshold, Direction, RunwayLength);
+	FRunwayEnd End;
+	End.Threshold = Threshold;
+	End.Direction = Direction;
+	End.Length = RunwayLength;
+	Agent.ArmDeparture(End);
 
 	constexpr double Step = 1.0 / 60.0;
 	FAgentMotion Motion;

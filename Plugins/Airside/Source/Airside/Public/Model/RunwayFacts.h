@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/RoadHandles.h"
 #include "RunwayFacts.generated.h"
 
 /**
@@ -96,3 +97,60 @@ struct AIRSIDE_API FRunwayRequirements
  */
 AIRSIDE_API const TCHAR* RunwaySurfaceName(ERunwaySurface Surface);
 AIRSIDE_API const TCHAR* RunwayApproachName(ERunwayApproach Approach);
+
+/**
+ * One end of a runway strip: the threshold an aircraft crosses it at, the direction it
+ * points from there, how much strip lies beyond, and the segment the query actually named
+ * or landed nearest.
+ *
+ * ONE STRUCT for a triple that used to travel loose through nine places (issue #88):
+ * URoadNetwork::RunwayExtentAt/NearestRunwayThreshold each filled four out-params:
+ * FArrivalPlan, FDeparturePlan, FDepartureOrder, FRunwaySummary, FTakeoffRun and
+ * FLandingRun each carried their own copy of Threshold/Direction/Length (RunwaySegment
+ * travelling as a fifth, separate field alongside); the far end was recomputed as
+ * Threshold + Direction * Length at four more call sites, and an along-strip offset as
+ * Dot(P - Threshold, Direction) at four others. Bundling the fields is what
+ * FSpeedProfile::Build(const FGroundPerformance&) already does for a performance figure;
+ * this is the same rule for a place on the strip.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FRunwayEnd
+{
+	GENERATED_BODY()
+
+	/** Where the aircraft crosses onto (or departs from) the strip. */
+	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
+
+	/** Unit vector from Threshold toward the far end. */
+	UPROPERTY() FVector2D Direction = FVector2D(1.0, 0.0);
+
+	/** Runway available beyond Threshold, uu. */
+	UPROPERTY() double Length = 0.0;
+
+	/** The runway segment the query actually named, or landed nearest. */
+	UPROPERTY() FRoadSegmentId Seed;
+
+	/** The strip's other end: Threshold walked the whole Length along Direction. */
+	FVector2D FarEnd() const { return Threshold + Direction * Length; }
+
+	/** How far along the strip, from Threshold, Position projects. Negative is short of it. */
+	double OffsetOf(const FVector2D& Position) const
+	{
+		return FVector2D::DotProduct(Position - Threshold, Direction);
+	}
+
+	/**
+	 * The SAME strip, described from its other end: Threshold becomes FarEnd(), Direction
+	 * reverses, Length is unchanged. Seed is unchanged too - Reversed() renames which end
+	 * this struct is measured from, not which segment it was asked about.
+	 */
+	FRunwayEnd Reversed() const
+	{
+		FRunwayEnd Out;
+		Out.Threshold = FarEnd();
+		Out.Direction = -Direction;
+		Out.Length = Length;
+		Out.Seed = Seed;
+		return Out;
+	}
+};

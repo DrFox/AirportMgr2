@@ -12,8 +12,7 @@ namespace DeparturePlanner
 		const FVector2D& OnRunway, const FAirframe& Airframe, ETraversalClass Class)
 	{
 		FDeparturePlan Out;
-		FRoadSegmentId Seed;
-		if (!Network.RunwayExtentAt(OnRunway, Out.Threshold, Out.Direction, Out.RunwayLength, &Seed))
+		if (!Network.RunwayExtentAt(OnRunway, Out.End))
 		{
 			Out.Why = EDepartureRefusal::NoRunway;
 			return Out;
@@ -23,7 +22,7 @@ namespace DeparturePlanner
 		// the same reason: a refusal by surface or field length is permanent and must be
 		// named before any entry is searched for, or "no route" would be reported for a
 		// strip the aircraft could taxi to but never roll from.
-		Out.Admission = RunwayAdmission::Check(Network, Seed, Airframe, false);
+		Out.Admission = RunwayAdmission::Check(Network, Out.End.Seed, Airframe, false);
 		if (!Out.Admission.IsAdmitted())
 		{
 			Out.Why = EDepartureRefusal::NotAdmitted;
@@ -44,12 +43,12 @@ namespace DeparturePlanner
 		// Threshold/Direction are OUR OWN end, not re-derived from Seed - see
 		// RunwayExitNodes's own comment: a seed has two ends and only we know which is meant.
 		const TArray<FGuidelineNodeId> Candidates =
-			Network.RunwayExitNodes(Seed, Out.Threshold, Out.Direction, 0.0);
+			Network.RunwayExitNodes(Out.End.Seed, Out.End.Threshold, Out.End.Direction, 0.0);
 
 		auto OffsetOf = [&](FGuidelineNodeId Node)
 		{
 			const FGuidelineNode* Found = Network.GetGuidelineNode(Node);
-			return Found ? FVector2D::DotProduct(Found->Position - Out.Threshold, Out.Direction) : 0.0;
+			return Found ? FVector2D::DotProduct(Found->Position - Out.End.Threshold, Out.End.Direction) : 0.0;
 		};
 
 		// 1. INTERSECTION DEPARTURE. Runway edges excluded, so the taxi can only arrive by a
@@ -58,7 +57,7 @@ namespace DeparturePlanner
 		for (const FGuidelineNodeId& Candidate : Candidates)
 		{
 			const double Offset = OffsetOf(Candidate);
-			if (Out.RunwayLength - Offset < Out.Needed)
+			if (Out.End.Length - Offset < Out.Needed)
 			{
 				// Sorted from the threshold: everything after this has less runway still.
 				break;
@@ -75,14 +74,14 @@ namespace DeparturePlanner
 				continue;
 			}
 			const FVector2D LastSpan = Route.Polyline.Last() - Route.Polyline[Route.Polyline.Num() - 2];
-			if (FVector2D::DotProduct(LastSpan, Out.Direction) <= 0.0)
+			if (FVector2D::DotProduct(LastSpan, Out.End.Direction) <= 0.0)
 			{
 				continue;
 			}
 			Out.Route = Route;
 			Out.Entry = Candidate;
 			Out.EntryOffset = Offset;
-			Out.Available = Out.RunwayLength - Offset;
+			Out.Available = Out.End.Length - Offset;
 			Out.bBacktrack = false;
 			Out.Why = EDepartureRefusal::None;
 			return Out;
@@ -104,14 +103,14 @@ namespace DeparturePlanner
 				continue;
 			}
 			const double Offset = OffsetOf(Candidate);
-			if (Out.RunwayLength - Offset < Out.Needed)
+			if (Out.End.Length - Offset < Out.Needed)
 			{
 				continue;
 			}
 			Out.Route = Route;
 			Out.Entry = Candidate;
 			Out.EntryOffset = Offset;
-			Out.Available = Out.RunwayLength - Offset;
+			Out.Available = Out.End.Length - Offset;
 			Out.bBacktrack = true;
 			Out.Why = EDepartureRefusal::None;
 			return Out;
@@ -137,7 +136,7 @@ namespace DeparturePlanner
 			// A point just inside EACH end: RunwayExtentAt's proximity gate is against the
 			// nearest segment end, so a midpoint on a long segment is "not on a runway" and
 			// the threshold it hands back is the one nearest the point asked about.
-			const FVector2D Ends[2] = { R.Threshold + R.Direction * 10.0, R.Threshold + R.Direction * (R.Length - 10.0) };
+			const FVector2D Ends[2] = { R.End.Threshold + R.End.Direction * 10.0, R.End.Threshold + R.End.Direction * (R.End.Length - 10.0) };
 			for (const FVector2D& OnRunway : Ends)
 			{
 				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);
@@ -172,7 +171,7 @@ namespace DeparturePlanner
 		case EDepartureRefusal::None:
 			return FString::Printf(TEXT("Departure: %s entry %.0f uu past the threshold, %.0f uu available of %.0f, %.0f needed, taxiing %.0f uu."),
 				Plan.bBacktrack ? TEXT("backtrack to the") : TEXT("intersection"),
-				Plan.EntryOffset, Plan.Available, Plan.RunwayLength, Plan.Needed, Plan.Route.Length);
+				Plan.EntryOffset, Plan.Available, Plan.End.Length, Plan.Needed, Plan.Route.Length);
 		}
 		return TEXT("Departure: unknown");
 	}

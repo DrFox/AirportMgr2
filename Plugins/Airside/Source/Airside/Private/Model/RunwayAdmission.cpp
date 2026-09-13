@@ -87,12 +87,12 @@ namespace RunwayAdmission
 
 		// The chain's length, not the seed's: the same walk every runway query makes,
 		// asked from the seed's own A node so it is certainly on the strip.
-		double Length = 0.0;
-		FVector2D Threshold, Direction;
+		FRunwayEnd End;
 		if (const FRoadNode* A = Network.GetNode(Segment->A))
 		{
-			Network.RunwayExtentAt(A->Position, Threshold, Direction, Length);
+			Network.RunwayExtentAt(A->Position, End);
 		}
+		const double Length = End.Length;
 
 		double MaxWingspan = 0.0;
 		if (const URoadProfile* Profile = Network.ProfileFor(*Segment))

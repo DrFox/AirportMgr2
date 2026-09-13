@@ -14,9 +14,9 @@ struct AIRSIDE_API FRunwaySummary
 {
 	GENERATED_BODY()
 
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
-	UPROPERTY() FVector2D Direction = FVector2D(1.0, 0.0);
-	UPROPERTY() double Length = 0.0;
+	/** The threshold this strip was found from, its direction and length, and its seed - see #88. */
+	UPROPERTY() FRunwayEnd End;
+
 	/** The pavement kind - the surface (grass/asphalt/concrete) is a fact about the profile. */
 	UPROPERTY() TObjectPtr<const URoadProfile> Profile = nullptr;
 };

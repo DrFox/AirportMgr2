@@ -57,19 +57,19 @@ namespace ArrivalPlanner
 
 		// 1. WHICH RUNWAY. Nearest threshold to the query point, which is the user's own choice
 		//    of rule - there is no wind model, so nothing else could decide it.
-		if (!Network.NearestRunwayThreshold(Near, Out.Threshold, Out.Direction, Out.RunwayLength, &Out.RunwaySegment))
+		if (!Network.NearestRunwayThreshold(Near, Out.End))
 		{
 			Out.Why = EArrivalRefusal::NoRunway;
 			return Out;
 		}
 
-		Out.RunwayChain = Network.RunwayChain(Out.RunwaySegment);
+		Out.RunwayChain = Network.RunwayChain(Out.End.Seed);
 
 		// 1a. MAY IT USE THIS RUNWAY AT ALL. Surface, approach, published field length and
 		//     width, in that order - before occupancy, because occupancy clears on its own
 		//     and this never does: M3's sequencer will queue on RunwayOccupied, and it must
 		//     not queue an airliner behind a Piper for a grass strip it can never land on.
-		Out.Admission = RunwayAdmission::Check(Network, Out.RunwaySegment, Airframe, true);
+		Out.Admission = RunwayAdmission::Check(Network, Out.End.Seed, Airframe, true);
 		if (!Out.Admission.IsAdmitted())
 		{
 			Out.Why = EArrivalRefusal::NotAdmitted;
@@ -125,10 +125,10 @@ namespace ArrivalPlanner
 		// is meant (fixed 2026-09-13, see RunwayExitNodes's own comment).
 		const double SlowedBy = Out.Needed / FLandingRun::LandingMargin;
 		const TArray<FGuidelineNodeId> Exits =
-			Network.RunwayExitNodes(Out.RunwaySegment, Out.Threshold, Out.Direction, SlowedBy);
+			Network.RunwayExitNodes(Out.End.Seed, Out.End.Threshold, Out.End.Direction, SlowedBy);
 		Out.ExitCount = Exits.Num();
 
-		if (Out.RunwayLength < Out.Needed)
+		if (Out.End.Length < Out.Needed)
 		{
 			Out.Why = EArrivalRefusal::RunwayTooShort;
 			return Out;
@@ -172,7 +172,7 @@ namespace ArrivalPlanner
 				continue;
 			}
 			const bool bForward =
-				FVector2D::DotProduct(BestForExit.Polyline[1] - BestForExit.Polyline[0], Out.Direction) > 0.0;
+				FVector2D::DotProduct(BestForExit.Polyline[1] - BestForExit.Polyline[0], Out.End.Direction) > 0.0;
 			if (bForward)
 			{
 				FirstForward = Candidate;
@@ -209,10 +209,10 @@ namespace ArrivalPlanner
 
 		// WHERE IT LEAVES THE RUNWAY, handed to the landing so the rollout carries on to the
 		// taxiway at taxi speed instead of stopping wherever the braking ran out.
-		Out.VacateAt = Out.RunwayLength;
+		Out.VacateAt = Out.End.Length;
 		if (const FGuidelineNode* ExitNode = Network.GetGuidelineNode(Out.Exit))
 		{
-			Out.VacateAt = FVector2D::DotProduct(ExitNode->Position - Out.Threshold, Out.Direction);
+			Out.VacateAt = FVector2D::DotProduct(ExitNode->Position - Out.End.Threshold, Out.End.Direction);
 		}
 
 		Out.Why = EArrivalRefusal::None;
@@ -266,7 +266,7 @@ namespace ArrivalPlanner
 			return FString::Printf(
 				TEXT("Arrival refused: the runway is %.0f uu and this aircraft needs %.0f to ")
 				TEXT("stop. Draw a longer runway."),
-				Plan.RunwayLength, Plan.Needed);
+				Plan.End.Length, Plan.Needed);
 
 		case EArrivalRefusal::NoExit:
 			return FString::Printf(

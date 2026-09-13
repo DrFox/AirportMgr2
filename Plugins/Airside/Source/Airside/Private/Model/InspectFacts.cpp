@@ -27,18 +27,17 @@ namespace InspectFacts
 			{
 				return TEXT("-");
 			}
-			FVector2D Threshold, Direction;
-			double Length = 0.0;
-			if (Network->RunwayExtentAt(Node->Position, Threshold, Direction, Length))
+			FRunwayEnd End;
+			if (Network->RunwayExtentAt(Node->Position, End))
 			{
 				// The direction it will ROLL when a departure is armed; the pair otherwise,
 				// because until the planner has spoken the strip has two names.
 				if (Agent.bDepartureArmed)
 				{
 					return FString::Printf(TEXT("Runway %s"),
-						*RunwayDesignator::ToText(RunwayDesignator::Designate(Agent.DepartureOrder.Direction)));
+						*RunwayDesignator::ToText(RunwayDesignator::Designate(Agent.DepartureOrder.End.Direction)));
 				}
-				return FString::Printf(TEXT("Runway %s"), *RunwayDesignator::ToPairText(Direction));
+				return FString::Printf(TEXT("Runway %s"), *RunwayDesignator::ToPairText(End.Direction));
 			}
 			return FString::Printf(TEXT("Node %d"), Agent.GoalNode.Index);
 		}
