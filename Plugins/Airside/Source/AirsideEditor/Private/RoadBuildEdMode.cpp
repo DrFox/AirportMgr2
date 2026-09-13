@@ -1,6 +1,7 @@
 #include "RoadBuildEdMode.h"
 
 #include "EdModeInteractiveToolsContext.h"
+#include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
 #include "Tool/BuildSession.h"
@@ -62,6 +63,14 @@ URoadBuildEdMode::URoadBuildEdMode()
 FString URoadBuildEdMode::MakeToolName(int32 Index)
 {
 	return FString::Printf(TEXT("Airside_%s"), *ToolRegistry()[Index].Name.ToString());
+}
+
+UWorld* URoadBuildEdMode::GetWorld() const
+{
+	// See WorldOverrideForTest's own comment: this only ever has a value when a test set it,
+	// since production reaches this class exclusively through the mode manager, which sets
+	// up EditorToolsContext long before GetWorld() is ever asked for an answer.
+	return WorldOverrideForTest != nullptr ? WorldOverrideForTest.Get() : Super::GetWorld();
 }
 
 void URoadBuildEdMode::Enter()
@@ -180,6 +189,29 @@ void URoadBuildEdMode::BindCommands()
 	}
 }
 
+FToolContext URoadBuildEdMode::MakeReselectContext() const
+{
+	// FRunwayTool::OnReselect calls NextWidth, which since issue #78 asks Context.Target for
+	// the profile count instead of reading content directly - so a reselect with a null
+	// Target here silently stopped the width cycling in the editor mode while PIE's
+	// ARoadBuildController (which always resolves a target before calling SelectTool) kept
+	// working. That split is the exact thing this mode exists to close (see GetSession's own
+	// comment) and it reopened here by omission - a plain FToolContext used to be enough
+	// because NextWidth ignored it. Resolved the same way
+	// URoadBuildEditorTool::ResolveTarget does: found or created, never left for the player
+	// to drag one in by hand first.
+	//
+	// ITS OWN FUNCTION, not inlined into StartToolAction, so
+	// Airside.Editor.ToolStateOutlivesTheToolInstance can call the exact resolution a
+	// reselect uses without needing a live UInteractiveToolManager - GetToolManager() and
+	// GetInteractiveToolsContext() both return null on a bare NewObject<URoadBuildEdMode>
+	// with no Enter(), which is why that test cannot drive StartToolAction's lambda directly
+	// (see its own header comment) and drives this instead.
+	FToolContext Context;
+	Context.Target = ARoadNetworkActor::FindOrCreate(GetWorld());
+	return Context;
+}
+
 FExecuteAction URoadBuildEdMode::StartToolAction(int32 ToolIndex)
 {
 	return FExecuteAction::CreateLambda([this, ToolIndex]()
@@ -199,10 +231,11 @@ FExecuteAction URoadBuildEdMode::StartToolAction(int32 ToolIndex)
 		if (Manager != nullptr && Manager->GetActiveToolName(EToolSide::Mouse) == ToolName)
 		{
 			// The session's own SelectTool sees Index == ActiveTool and calls OnReselect.
-			// No context: the editor's modifiers are read per-gesture from the viewport, not
-			// held as the sticky state the runtime bar keeps, so a plain reselect is what a
-			// bare key press means here.
-			Session.SelectTool(ToolIndex);
+			// Modifiers are left at their defaults (false/false): the editor's are read
+			// per-gesture from the viewport, not held as the sticky state the runtime bar
+			// keeps, so a plain reselect is what a bare key press means here. TARGET IS NOT
+			// LEFT AT ITS DEFAULT, though - see MakeReselectContext for why.
+			Session.SelectTool(ToolIndex, MakeReselectContext());
 			return;
 		}
 

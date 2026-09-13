@@ -156,11 +156,19 @@ void URoadBuildEditorTool::Setup()
 {
 	UInteractiveTool::Setup();
 
+	// RESOLVED BEFORE SelectTool, not after: a SAME-INDEX activation (this tool's own key,
+	// pressed again while already active) makes SelectTool see Index == ActiveTool and call
+	// OnReselect on the spot - FRunwayTool::OnReselect calls NextWidth, which since issue
+	// #78 asks Context.Target for the profile count. Calling SelectTool with Target still
+	// null would silently stop the width cycling, the same failure mode
+	// URoadBuildEdMode::StartToolAction's own reselect path had.
+	Target = ResolveTarget();
+
 	// Session is constructed with all six registry tools already - see FBuildSession's
 	// constructor - so selecting this instance's one is a switch, not a make.
-	Sess().SelectTool(ToolIndex);
-
-	Target = ResolveTarget();
+	FToolContext SelectContext;
+	SelectContext.Target = Target;
+	Sess().SelectTool(ToolIndex, SelectContext);
 
 	UE_LOG(LogTemp, Log, TEXT("Airside ed tool active: %s, target %s"),
 		Sess().GetActiveTool() != nullptr ? *Sess().GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),

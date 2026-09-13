@@ -27,7 +27,21 @@ URoadProfile* FRunwayTool::ProfileForWidth(const FToolContext& Context) const
 
 void FRunwayTool::NextWidth(const FToolContext& Context)
 {
-	const int32 Count = Context.Target != nullptr ? Context.Target->GetRunwayProfileCount() : 0;
+	if (Context.Target == nullptr)
+	{
+		// A DIFFERENT REFUSAL from an empty content set, said differently: this is a caller
+		// bug (a reselect wired without resolving a target first - see
+		// URoadBuildEdMode::StartToolAction and URoadBuildEditorTool::Setup for the two
+		// places this was missing, issue #78's review), not a fresh, unconfigured project.
+		// The single message this used to share with the empty-content case would have
+		// blamed the content set for what was actually a null Context.Target - exactly the
+		// misdiagnosis this branch exists to prevent.
+		UE_LOG(LogAirside, Warning,
+			TEXT("Runway width unchanged: no edit target in context, so there is nothing to ask for widths"));
+		return;
+	}
+
+	const int32 Count = Context.Target->GetRunwayProfileCount();
 	if (Count <= 0)
 	{
 		// SAID OUT LOUD. This used to return in silence, which is indistinguishable from a
