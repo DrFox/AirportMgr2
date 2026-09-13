@@ -382,8 +382,8 @@ public:
 	 * Arms an arrival: Phase becomes Arriving. False, and leaves the agent untouched, when
 	 * this runway cannot take this aircraft - see FLandingRun::Start.
 	 */
-	bool StartArrival(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-		const FAirframe& InAirframe, double VacateAt, const FRoutePlan& InTaxiInPlan);
+	bool StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
+		const FRoutePlan& InTaxiInPlan);
 
 	/** Starts a plain taxi with no prior landing: Phase becomes Taxiing. */
 	void StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe);

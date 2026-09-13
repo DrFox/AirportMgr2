@@ -53,11 +53,13 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	Agent.Id = 1;
 
 	// A long strip, so the rollout is still running when this looks at it.
-	const FVector2D Threshold(0.0, 0.0);
-	const FVector2D Direction(1.0, 0.0);
+	FRunwayEnd End;
+	End.Threshold = FVector2D(0.0, 0.0);
+	End.Direction = FVector2D(1.0, 0.0);
+	End.Length = 200000.0;
 	FRoutePlan TaxiIn;
 	if (!TestTrue(TEXT("the landing arms"),
-		Agent.StartArrival(Threshold, Direction, 200000.0, Airframe, 150000.0, TaxiIn)))
+		Agent.StartArrival(End, Airframe, 150000.0, TaxiIn)))
 	{
 		return false;
 	}

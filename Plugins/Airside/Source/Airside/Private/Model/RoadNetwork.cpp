@@ -411,9 +411,6 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 		}
 	}
 
-	OutEnd.Seed.Index = Best;
-	OutEnd.Seed.Generation = Segments[Best].Generation;
-
 	// THE CHAIN IS THE WALK (#86): RunwayChain already walks out through nodes that join
 	// exactly two runway segments, stopping at a threshold or a fork - the same rule this
 	// used to walk a second time, node by node, to find the very same two ends. The ends
@@ -472,17 +469,24 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	const bool bNearA = FVector2D::Distance(Near, NodeA->Position)
 		<= FVector2D::Distance(Near, NodeB->Position);
 
-	OutEnd.Threshold = bNearA ? NodeA->Position : NodeB->Position;
+	const FVector2D Threshold = bNearA ? NodeA->Position : NodeB->Position;
 	const FVector2D Far = bNearA ? NodeB->Position : NodeA->Position;
 
-	const FVector2D Along = Far - OutEnd.Threshold;
-	OutEnd.Length = Along.Size();
-	if (OutEnd.Length <= 0.0)
+	const FVector2D Along = Far - Threshold;
+	const double Length = Along.Size();
+	if (Length <= 0.0)
 	{
 		return false;
 	}
 
-	OutEnd.Direction = Along / OutEnd.Length;
+	// EVERY FIELD WRITTEN HERE, ON THE SUCCESS PATH ONLY - a caller that discards the bool
+	// (RunwayAdmission.cpp does, deliberately: a missing node leaves Length 0 and Judge
+	// reads that as "no claim") must never see a half-filled OutEnd from an earlier return.
+	OutEnd.Seed.Index = Best;
+	OutEnd.Seed.Generation = Segments[Best].Generation;
+	OutEnd.Threshold = Threshold;
+	OutEnd.Length = Length;
+	OutEnd.Direction = Along / Length;
 	return true;
 }
 

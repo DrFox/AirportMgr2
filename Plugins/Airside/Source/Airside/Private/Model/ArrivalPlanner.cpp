@@ -212,7 +212,7 @@ namespace ArrivalPlanner
 		Out.VacateAt = Out.End.Length;
 		if (const FGuidelineNode* ExitNode = Network.GetGuidelineNode(Out.Exit))
 		{
-			Out.VacateAt = FVector2D::DotProduct(ExitNode->Position - Out.End.Threshold, Out.End.Direction);
+			Out.VacateAt = Out.End.OffsetOf(ExitNode->Position);
 		}
 
 		Out.Why = EArrivalRefusal::None;

@@ -48,7 +48,7 @@ namespace DeparturePlanner
 		auto OffsetOf = [&](FGuidelineNodeId Node)
 		{
 			const FGuidelineNode* Found = Network.GetGuidelineNode(Node);
-			return Found ? FVector2D::DotProduct(Found->Position - Out.End.Threshold, Out.End.Direction) : 0.0;
+			return Found ? Out.End.OffsetOf(Found->Position) : 0.0;
 		};
 
 		// 1. INTERSECTION DEPARTURE. Runway edges excluded, so the taxi can only arrive by a
@@ -136,7 +136,7 @@ namespace DeparturePlanner
 			// A point just inside EACH end: RunwayExtentAt's proximity gate is against the
 			// nearest segment end, so a midpoint on a long segment is "not on a runway" and
 			// the threshold it hands back is the one nearest the point asked about.
-			const FVector2D Ends[2] = { R.End.Threshold + R.End.Direction * 10.0, R.End.Threshold + R.End.Direction * (R.End.Length - 10.0) };
+			const FVector2D Ends[2] = { R.End.Threshold + R.End.Direction * 10.0, R.End.FarEnd() - R.End.Direction * 10.0 };
 			for (const FVector2D& OnRunway : Ends)
 			{
 				const FDeparturePlan Candidate = Plan(Network, Start, OnRunway, Airframe, Class);

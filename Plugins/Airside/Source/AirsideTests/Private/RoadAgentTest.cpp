@@ -45,8 +45,10 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 	const double RunwayLength = Needed * 1.5;
 
-	const FVector2D Threshold(0.0, 0.0);
-	const FVector2D Direction(1.0, 0.0);
+	FRunwayEnd End;
+	End.Threshold = FVector2D(0.0, 0.0);
+	End.Direction = FVector2D(1.0, 0.0);
+	End.Length = RunwayLength;
 	const double VacateAt = RunwayLength * 0.5;
 
 	const FRoutePlan TaxiIn = StraightPlan(
@@ -54,7 +56,7 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 
 	FRoadAgent Agent;
 	if (!TestTrue(TEXT("a runway this long accepts the arrival"),
-		Agent.StartArrival(Threshold, Direction, RunwayLength, Airframe, VacateAt, TaxiIn)))
+		Agent.StartArrival(End, Airframe, VacateAt, TaxiIn)))
 	{
 		return false;
 	}

@@ -113,7 +113,7 @@ AIRSIDE_API const TCHAR* RunwayApproachName(ERunwayApproach Approach);
  * FSpeedProfile::Build(const FGroundPerformance&) already does for a performance figure;
  * this is the same rule for a place on the strip.
  */
-USTRUCT(BlueprintType)
+USTRUCT()
 struct AIRSIDE_API FRunwayEnd
 {
 	GENERATED_BODY()

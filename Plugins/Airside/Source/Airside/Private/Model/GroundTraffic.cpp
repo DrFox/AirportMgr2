@@ -52,7 +52,7 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	}
 
 	FRoadAgent Agent;
-	if (!Agent.StartArrival(Plan.End.Threshold, Plan.End.Direction, Plan.End.Length, Airframe, Plan.VacateAt, Plan.TaxiIn))
+	if (!Agent.StartArrival(Plan.End, Airframe, Plan.VacateAt, Plan.TaxiIn))
 	{
 		// FLandingRun has already logged why. Nothing is admitted: an arrival that cannot be
 		// flown must leave no aircraft in the world, rather than one frozen on final.

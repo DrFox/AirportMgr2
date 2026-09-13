@@ -110,15 +110,9 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	return Motion;
 }
 
-bool FRoadAgent::StartArrival(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-	const FAirframe& InAirframe, double VacateAt, const FRoutePlan& InTaxiInPlan)
+bool FRoadAgent::StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
+	const FRoutePlan& InTaxiInPlan)
 {
-	// Bundled here rather than widening this function's own signature (#88): the callers of
-	// StartArrival are outside this lane and still hand the triple loose.
-	FRunwayEnd End;
-	End.Threshold = Threshold;
-	End.Direction = Direction;
-	End.Length = RunwayLength;
 	if (!Arrival.Start(End, InAirframe, VacateAt))
 	{
 		// FLandingRun has already logged why. Nothing else is touched: an arrival that
