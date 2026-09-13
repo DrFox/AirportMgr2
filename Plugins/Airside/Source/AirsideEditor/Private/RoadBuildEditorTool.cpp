@@ -304,6 +304,34 @@ FInputRayHit URoadBuildEditorTool::CanBeginClickDragSequence(const FInputDeviceR
 	return FInputRayHit(0.0f);
 }
 
+URoadBuildEditorTool::FScopedRoadBuildTransaction::FScopedRoadBuildTransaction(
+	const FText& SessionName, ARoadNetworkActor* InTarget)
+{
+	GEditor->BeginTransaction(SessionName);
+	if (InTarget != nullptr && InTarget->Network != nullptr)
+	{
+		InTarget->Modify();
+		InTarget->Network->Modify();
+	}
+}
+
+URoadBuildEditorTool::FScopedRoadBuildTransaction::~FScopedRoadBuildTransaction()
+{
+	if (!bCancelled)
+	{
+		GEditor->EndTransaction();
+	}
+}
+
+void URoadBuildEditorTool::FScopedRoadBuildTransaction::Cancel()
+{
+	if (!bCancelled)
+	{
+		GEditor->CancelTransaction(0);
+		bCancelled = true;
+	}
+}
+
 void URoadBuildEditorTool::OnClickPress(const FInputDeviceRay& PressPos)
 {
 	Gesture.Press(PressPos.ScreenPosition);
@@ -337,14 +365,10 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 
 	if (Step == EGestureStep::DragBegan)
 	{
-		// One transaction for the whole drag, opened where the gesture becomes real.
-		GEditor->BeginTransaction(LOCTEXT("RoadBuildDrag", "Road Build"));
-		if (Target != nullptr && Target->Network != nullptr)
-		{
-			Target->Modify();
-			Target->Network->Modify();
-		}
-
+		// One transaction for the whole drag, opened where the gesture becomes real - held
+		// on DragTransaction until OnClickRelease's DragEnd branch or
+		// OnTerminateDragSequence closes it.
+		DragTransaction = MakeUnique<FScopedRoadBuildTransaction>(LOCTEXT("RoadBuildDrag", "Road Build"), Target);
 		Tool->OnDragBegin(MakeContext(DragPos));
 	}
 
@@ -369,21 +393,14 @@ void URoadBuildEditorTool::OnClickRelease(const FInputDeviceRay& ReleasePos)
 	if (End == EGestureEnd::DragEnd)
 	{
 		Tool->OnDragEnd(MakeContext(ReleasePos));
-		GEditor->EndTransaction();
+		DragTransaction.Reset();
 		return;
 	}
 
 	// A press that never travelled was a click. Its own transaction, so one click is one
 	// Ctrl+Z rather than part of whatever came before.
-	GEditor->BeginTransaction(LOCTEXT("RoadBuildClick", "Road Build"));
-	if (Target != nullptr && Target->Network != nullptr)
-	{
-		Target->Modify();
-		Target->Network->Modify();
-	}
-
+	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildClick", "Road Build"), Target);
 	Tool->OnClick(MakeContext(ReleasePos));
-	GEditor->EndTransaction();
 }
 
 void URoadBuildEditorTool::OnTerminateDragSequence()
@@ -392,7 +409,11 @@ void URoadBuildEditorTool::OnTerminateDragSequence()
 	{
 		// Escape during a drag. Cancel the transaction rather than committing a half-aimed
 		// stand, and tell the tool so it drops whatever it was holding.
-		GEditor->CancelTransaction(0);
+		if (DragTransaction.IsValid())
+		{
+			DragTransaction->Cancel();
+			DragTransaction.Reset();
+		}
 		if (IBuildTool* Tool = Sess().GetActiveTool())
 		{
 			Tool->OnCancel(MakeHoverContext());
@@ -456,12 +477,7 @@ void URoadBuildEditorTool::CancelGesture()
 
 	// A cancel can still touch the graph - abandoning a chain after one click removes the
 	// node it stranded - so it gets a transaction like any other edit.
-	GEditor->BeginTransaction(LOCTEXT("RoadBuildCancel", "Road Build Cancel"));
-	if (Target->Network != nullptr)
-	{
-		Target->Modify();
-		Target->Network->Modify();
-	}
+	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildCancel", "Road Build Cancel"), Target);
 
 	// Not Sess().CancelActiveGesture, and the reason survives the session moving to the mode:
 	// each editor tool INSTANCE is still pinned to ONE palette entry
@@ -470,7 +486,6 @@ void URoadBuildEditorTool::CancelGesture()
 	// the gesture and the palette changes tools. What changed is only WHERE the session
 	// lives, not which tool this instance speaks for.
 	Tool->OnCancel(MakeHoverContext());
-	GEditor->EndTransaction();
 
 	Gesture.Cancel();
 }
