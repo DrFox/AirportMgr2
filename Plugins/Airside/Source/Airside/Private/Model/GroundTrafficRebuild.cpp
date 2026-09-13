@@ -1,16 +1,16 @@
-// What UGroundTraffic does when the guideline graph is rebuilt under its agents - spec
-// 2026-09-06 §6. Re-pointing steps by position, splicing or truncating what no longer
-// resolves, and SpliceReplan, the all-or-nothing search-and-splice both this and ReplanAt
-// are built on. One class across four translation units; see Model/GroundTraffic.h for which
-// file holds what, and RoadEditFacadeSurfaces.cpp for the precedent.
+// UGroundTraffic::OnGraphRebuilt (kept here: tick-order orchestration, not mechanism) and
+// FPlanReResolver (issue #84) - the replan MECHANISM both this and the deadlock resolver
+// share. Spec 2026-09-06 §6, and §4 for ReplanAt/SpliceReplan. See Model/GroundTraffic.h for
+// which file holds what, and RoadEditFacadeSurfaces.cpp for the one-class-many-files precedent.
 
 #include "Model/GroundTraffic.h"
 
 #include "AirsideLog.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficClaims.h"
 
-bool UGroundTraffic::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
+bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
 	int32 KeepSteps, FRoutePlan& Plan)
 {
 	const FRoutePlan Tail = RouteSearch::Find(Network, Query);
@@ -33,6 +33,136 @@ bool UGroundTraffic::SpliceReplan(const URoadNetwork& Network, const FRouteQuery
 	return true;
 }
 
+bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, int32 SpliceStep,
+	FGuidelineEdgeId BannedEdge, FGuidelineNodeId BannedNode, const FTrafficRules& Rules,
+	FTrafficOccupancy& Occupancy)
+{
+	const FRoutePlan& Plan = Agent.Follower.Plan;
+
+	// EVERY GUARD BEFORE ANYTHING IS WRITTEN, and that is the whole shape of this function:
+	// the agent is not touched until both the search and the splice have succeeded, so a
+	// refusal at any of them leaves it driving exactly the plan it had. An implementation
+	// that replaced the follower first and repaired afterwards would leave a stuck agent
+	// worse off than before it asked.
+	if (Agent.Phase != EAgentPhase::Taxiing || !Plan.IsValid()
+		|| SpliceStep < 0 || SpliceStep > Plan.Steps.Num())
+	{
+		return false;
+	}
+
+	// NEVER BEHIND THE AGENT. Travelled is preserved across the splice (that is the point of
+	// Replace), so splicing at a step the agent has already driven past re-maps the same
+	// route distance onto a DIFFERENT polyline - the agent would appear somewhere else on
+	// the airport in one frame, which is the lateral teleport every "no jump" test exists to
+	// catch. Refused rather than clamped: a caller asking to replan behind the agent has the
+	// wrong node, and quietly moving its splice point would hide that.
+	if (SpliceStep < UGroundTraffic::CurrentStep(Plan, Agent.Follower.Travelled))
+	{
+		UE_LOG(LogAirsideTraffic, Warning,
+			TEXT("ReplanAt %d refused: splice step %d is behind the agent, which is on step %d"),
+			Agent.Id, SpliceStep, UGroundTraffic::CurrentStep(Plan, Agent.Follower.Travelled));
+		return false;
+	}
+
+	FRouteQuery Query;
+	Query.Start = UGroundTraffic::StepFromNode(Plan, SpliceStep);
+	Query.Goal = Agent.GoalNode;
+	Query.Class = Agent.Class;
+	Query.Wingspan = Agent.Airframe.Wingspan;
+	Query.BannedEdge = BannedEdge;
+	Query.BannedNode = BannedNode;
+
+	// NEVER ALONG A RUNWAY SOMEBODY ELSE HOLDS. The first replan this resolver ever made in
+	// play looped an arrival round a runway's end taxiway and back over a runway-derived
+	// edge; that edge re-reserved the strip (spec §3.1, route one) against the departure
+	// waiting at the bar, which was the very agent the loop was meant to get round. That
+	// departure HELD the strip - a bar claim is a reservation on the chain - which is what
+	// Held reads. The outright ban this replaced (All) also refused a free runway end as a
+	// turnaround, and sent an aircraft round the whole taxiway loop past one it could have
+	// used (samples/routing.png, 2026-09-07). Crossings are turn paths and nodes, not
+	// runway edges, so they stay open either way. See ERunwayAvoidance.
+	Query.AvoidRunways = ERunwayAvoidance::Held;
+
+	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
+	// the caller knows is hopeless; the congestion cost is what stops the new route from
+	// being the next queue along, which a plain shortest path would walk straight into.
+	Query.Occupancy = &Occupancy;
+	Query.QueryingAgent = Agent.Id;
+	Query.CongestionWeight = Rules.CongestionWeight;
+
+	// A COPY, because SpliceReplan writes in place and this function promises the agent keeps
+	// the plan it had until BOTH the search and the splice have succeeded - see the guard
+	// paragraph above. The copy is the price of that promise, paid once per replan.
+	FRoutePlan Spliced = Plan;
+	if (!SpliceReplan(Network, Query, SpliceStep, Spliced))
+	{
+		return false;
+	}
+
+	// THE SAME ROUTE IS NOT A REPLAN. A ban that removes nothing the search wanted returns
+	// the plan the agent already has, and accepting it would report a deadlock "resolved"
+	// every retry window while nobody moved. Refused, so the resolver goes on to the next
+	// candidate - which is how a bar-holder with only one way out hands the turn to the
+	// aircraft that has two.
+	bool bSameRoute = Spliced.Steps.Num() == Plan.Steps.Num();
+	for (int32 StepIndex = 0; bSameRoute && StepIndex < Spliced.Steps.Num(); ++StepIndex)
+	{
+		bSameRoute = Spliced.Steps[StepIndex].Edge == Plan.Steps[StepIndex].Edge;
+	}
+	if (bSameRoute)
+	{
+		return false;
+	}
+
+	// Read before Replace overwrites the plan under the reference, so the log line compares
+	// the two journeys rather than one journey against itself.
+	const double WasRemaining = Plan.Length - Agent.Follower.Travelled;
+
+	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
+	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
+	Agent.Follower.Replace(Spliced, Agent.Airframe);
+
+	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
+	// the splice, so holding them would block the line the agent has just been re-routed away
+	// from, for a journey nobody is making. What the agent is STANDING on is a different
+	// thing entirely and survives: this was ReleaseAll, and a replanned aircraft standing on
+	// a runway then showed the strip free to ArrivalPlanner for the frame before the next
+	// Arbitrate - long enough to clear a landing onto it.
+	//
+	// THAT FRAME IS REAL AND IT IS SAFE. The resolver runs at the END of Advance, so the
+	// agent holds no reservations until the next tick's claim pass, and in that window a
+	// higher-ranked agent may take the line ahead of it. It is safe because the agent is by
+	// construction STOPPED - it is a deadlocked waiter - and because the ground under it is
+	// still claimed, so nobody can be granted a node or a strip its body is on. The rejected
+	// alternative, re-claiming here, would be a second claim pass outside Arbitrate's order:
+	// this agent would claim after everyone had moved, which is exactly the interleaving
+	// Advance's header refuses.
+	//
+	// A stale OCCUPIED claim on an edge the new plan does not use is dropped by the next
+	// FClaimPass::Run's ReleaseExcept, which keeps only what was asked for this pass.
+	Occupancy.ReleaseReservations(Agent.Id);
+
+	// The wait is over BY CONSTRUCTION - the thing it was waiting for is not on its route
+	// any more - so the arbitration fields say so at once rather than a tick later. The
+	// stall clock resets with them, or the deadlock pass that asked for this replan would
+	// see the same stalled agent again on the very next tick and ask again.
+	Agent.WaitingOn = 0;
+	Agent.BlockedStep = INDEX_NONE;
+	Agent.StalledSeconds = 0.0;
+
+	// CrossingRunway AND CrossingPhase ARE DELIBERATELY LEFT ALONE. Between them they say the
+	// agent's body is physically on a strip, which is a fact about where the aeroplane IS,
+	// not about where it is going: a replan cannot move it off the runway, and clearing them
+	// here would hand the strip back with an aeroplane standing on it. FClaimPass::Run's body
+	// geometry ends the crossing, and it reads the SPLICED plan from the next tick on, which
+	// is the same line up to the splice - so the tail-clear test it makes is the one it would
+	// have made anyway.
+
+	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d replanned at step %d: %.0f uu remaining -> %.0f"),
+		Agent.Id, SpliceStep, WasRemaining, Spliced.Length - Agent.Follower.Travelled);
+	return true;
+}
+
 void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 {
 	// Every node and edge the reach table named has just been freed. The revision check
@@ -44,10 +174,10 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	int32 Truncated = 0;
 	int32 Stranded = 0;
 
-	// BY INDEX rather than by range-for: ReplanAt, reached from ReResolvePlan below, re-finds
-	// its agent by id and writes through its own reference into this same array. Nothing here
-	// adds or removes an agent so a reference would in fact survive, but the index says so
-	// without a reader having to go and check ReplanAt to find that out.
+	// BY INDEX rather than by range-for: FPlanReResolver::ReplanAt, reached from
+	// ReResolvePlan below, writes through its own reference into this same array. Nothing
+	// here adds or removes an agent so a reference would in fact survive, but the index says
+	// so without a reader having to go and check ReplanAt to find that out.
 	for (int32 Index = 0; Index < Agents.Num(); ++Index)
 	{
 		FRoadAgent& Agent = Agents[Index];
@@ -65,7 +195,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		{
 			// FROM THE STEP THE AGENT IS ON. Its own from-node is re-pointed too - four
 			// readers still ask for that one every tick - and only the steps behind THAT are
-			// left with dead handles. See ReResolvePlan.
+			// left with dead handles. See FPlanReResolver::ReResolvePlan.
 			Plan = &Agent.Follower.Plan;
 			FromStep = CurrentStep(Agent.Follower.Plan, Agent.Follower.Travelled);
 		}
@@ -103,12 +233,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		}
 
 		++Considered;
-		switch (ReResolvePlan(Agent, *Plan, FromStep, Network))
+		switch (PlanReResolver.ReResolvePlan(Agent, *Plan, FromStep, Network, Rules, Occupancy))
 		{
-		case EReResolve::Replanned: ++Replanned; break;
-		case EReResolve::Truncated: ++Truncated; break;
-		case EReResolve::Stranded:  ++Stranded;  break;
-		case EReResolve::Intact:    break;
+		case FPlanReResolver::EReResolve::Replanned: ++Replanned; break;
+		case FPlanReResolver::EReResolve::Truncated: ++Truncated; break;
+		case FPlanReResolver::EReResolve::Stranded:  ++Stranded;  break;
+		case FPlanReResolver::EReResolve::Intact:    break;
 		}
 	}
 
@@ -124,9 +254,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// release above dropped them, and the planner may be asked between now and the next
 	// Advance - the player deletes a stand and presses 7 in the same breath. And a rebuild
 	// may have ADDED a stand, so the re-offer pass asks for every waiter.
-	for (FRoadAgent& Agent : Agents)
 	{
-		ClaimGoalNode(Agent, Network);
+		FClaimPass Pass{Rules, Occupancy, NodeReach};
+		for (FRoadAgent& Agent : Agents)
+		{
+			Pass.ClaimGoalNode(Agent, Network);
+		}
 	}
 	bStandsMayHaveFreed = true;
 
@@ -143,8 +276,9 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		LastRebuild.ReResolved, Replanned, Truncated, Stranded);
 }
 
-UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
-	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network)
+FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
+	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network,
+	const FTrafficRules& Rules, FTrafficOccupancy& Occupancy)
 {
 	// WHOSE PLAN THIS IS, asked by address. The two callers hand in one of exactly two plans
 	// and the difference matters twice below: only the follower's plan gets Replace (nothing
@@ -153,13 +287,13 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	// cannot be out of step with the reference it describes.
 	const bool bDriving = (&Plan == &Agent.Follower.Plan);
 
-	auto Strand = [this, &Agent, &Plan, bDriving](const TCHAR* Why)
+	auto Strand = [&Agent, &Plan, bDriving, &Occupancy](const TCHAR* Why)
 	{
 		// THE GROUND UNDER THE AGENT IS GONE. There is no line left to put it on and no node
-		// to search from, so the plan is marked unreachable - which is what ClaimAhead and
-		// FRouteFollower::HasArrived both read to stop asking anything of it - and the agent
-		// gives back every GUIDELINE it holds, because holding lines it will never drive
-		// would block whatever the player builds in their place.
+		// to search from, so the plan is marked unreachable - which is what FClaimPass::Run
+		// and FRouteFollower::HasArrived both read to stop asking anything of it - and the
+		// agent gives back every GUIDELINE it holds, because holding lines it will never
+		// drive would block whatever the player builds in their place.
 		Plan.Result = ERouteResult::Unreachable;
 
 		// AND KEEPS ITS RUNWAY. ReleaseAll was called here and was wrong: a rebuild does not
@@ -175,7 +309,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// neither has stopped being true because a route died. Cleared here (which is what
 		// this did) they would have contradicted the claim that is now kept, and the log line
 		// that announced the release would have been a log that lies. They are cleared
-		// together with the claim by ClaimAhead's non-Taxiing branch once the agent parks.
+		// together with the claim by FClaimPass::Run's non-Taxiing branch once the agent parks.
 
 		// A STRANDING IS FINAL, and that is a deliberate v1 limitation rather than an oversight.
 		// Result is now Unreachable, so OnGraphRebuilt's own "!Plan->IsValid()" filter skips
@@ -190,9 +324,9 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// that strip until the player retires it, which is a runway out of service with no
 		// other evidence anywhere: the claim is visible only to the arbiter, and the next
 		// refused landing says "the runway is in use" without saying who by.
-		const FString Held = Agent.CrossingRunway.IsSet()
+		const FString Held = Agent.GetCrossingRunway().IsSet()
 			? FString::Printf(TEXT(" - and it is on runway segment %d, which it holds until it is retired"),
-				Agent.CrossingRunway.Index)
+				Agent.GetCrossingRunway().Index)
 			: FString();
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d stranded by the rebuild: %s%s"),
 			Agent.Id, Why, *Held);
@@ -236,10 +370,10 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	// THE NODE THE AGENT IS DRIVING AWAY FROM IS RE-POINTED, and it is not optional: four
 	// readers ask StepFromNode for it every tick - the crossing arm, the tail-node claim,
 	// RankAt, and ReplanAt's own Query.Start when the failed step is the current one. See
-	// this function's header for what each of them does with a dead handle. The last of those
-	// is why this line has to come BEFORE the replan below rather than after it: without it
-	// the search starts from a freed slot, returns NoStart, and the truncation that follows
-	// writes that same dead handle into GoalNode.
+	// UGroundTraffic::OnGraphRebuilt for what each of them does with a dead handle. The last
+	// of those is why this line has to come BEFORE the replan below rather than after it:
+	// without it the search starts from a freed slot, returns NoStart, and the truncation
+	// that follows writes that same dead handle into GoalNode.
 	if (FromStep == 0)
 	{
 		Plan.Start = Prev;
@@ -326,7 +460,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	if (!Goal.IsSet() && Agent.Class == ETraversalClass::Aircraft && !Agent.bDepartureArmed
 		&& Failed < Plan.Steps.Num())
 	{
-		const FGuidelineNodeId ReplanFrom = StepFromNode(Plan, Failed);
+		const FGuidelineNodeId ReplanFrom = UGroundTraffic::StepFromNode(Plan, Failed);
 		const FGuidelineNodeId NewStand = ArrivalPlanner::ChooseStand(
 			Network, ReplanFrom, Agent.Airframe, &Occupancy, Agent.Id);
 		if (NewStand.IsSet())
@@ -385,7 +519,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// AHEAD OF THE AGENT ONLY, by the branch above: ReplanAt's own precondition is that
 		// the splice is at or ahead of the step the agent is on, and it is now the caller
 		// that guarantees the strict half of that rather than the callee that tolerates it.
-		if (ReplanAt(Agent.Id, Network, Failed, FGuidelineEdgeId(), FGuidelineNodeId()))
+		if (ReplanAt(Agent, Network, Failed, FGuidelineEdgeId(), FGuidelineNodeId(), Rules, Occupancy))
 		{
 			return EReResolve::Replanned;
 		}
@@ -393,7 +527,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 	else
 	{
 		FRouteQuery Query;
-		Query.Start = StepFromNode(Plan, Failed);
+		Query.Start = UGroundTraffic::StepFromNode(Plan, Failed);
 		Query.Goal = Agent.GoalNode;
 		Query.Class = Agent.Class;
 		Query.Wingspan = Agent.Airframe.Wingspan;

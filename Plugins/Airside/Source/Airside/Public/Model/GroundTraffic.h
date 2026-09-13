@@ -70,6 +70,183 @@ struct FGraphRebuildSummary
 };
 
 /**
+ * The replan MECHANISM shared by the deadlock resolver and a graph rebuild - spec §4 and
+ * §6. Issue #84 pulled it off UGroundTraffic, which used to own ReplanAt, ReResolvePlan and
+ * SpliceReplan directly: "HOW, NEVER WHEN" was already the split UGroundTraffic::ReplanAt's
+ * own header drew between the resolver deciding an agent is stuck and this deciding what to
+ * do about it, so making it a struct of its own says the same thing in the type system.
+ *
+ * NO PERSISTENT STATE. Every method takes what it needs (Rules for the congestion weight
+ * and resolve radius, Occupancy for the table) and leaves nothing behind between calls, so
+ * UGroundTraffic's own instance and one a test constructs fresh behave identically.
+ */
+struct AIRSIDE_API FPlanReResolver
+{
+	/**
+	 * Re-routes Agent from SpliceStep onward, forbidding BannedEdge/BannedNode. Implements
+	 * the full contract UGroundTraffic::ReplanAt documents - guards, PRECONDITION, the two
+	 * rejected alternatives - which stays there as the PUBLIC description callers read;
+	 * that function now forwards to this one.
+	 */
+	bool ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, int32 SpliceStep,
+		FGuidelineEdgeId BannedEdge, FGuidelineNodeId BannedNode, const FTrafficRules& Rules,
+		FTrafficOccupancy& Occupancy);
+
+	/** What one re-resolution did. Counted by UGroundTraffic::OnGraphRebuilt for its one
+	 *  log line. */
+	enum class EReResolve : uint8
+	{
+		/** Every remaining step found its node and its edge again; only handles changed. */
+		Intact,
+		/** A step's edge was gone; a fresh route from there to the goal was spliced on. */
+		Replanned,
+		/** Gone with nothing to replace it: the route now ends at the last live node. */
+		Truncated,
+		/** Not even the ground under the agent resolved, or truncation left no route at all. */
+		Stranded,
+	};
+
+	/**
+	 * Re-points Plan's steps from FromStep onward at the rebuilt graph. See
+	 * UGroundTraffic::OnGraphRebuilt for the outer contract (three outcomes, the fourth
+	 * that is not a degree of them, why guideline claims go and surface claims stay).
+	 *
+	 * FromStep IS THE FIRST STEP THE AGENT HAS NOT FINISHED, and the steps behind it keep
+	 * their dead handles - with ONE exception that is not optional. The node the current step
+	 * LEAVES FROM is Steps[FromStep-1].To (or Plan.Start at step 0), it is what StepFromNode
+	 * answers, and FOUR live readers ask for it every tick:
+	 *
+	 *   - FClaimPass::Run's crossing arm, which asks whether that node carries a
+	 *     HoldingPositionFor bar. A dead handle reads as no bar, so no crossing would ever
+	 *     arm again after a rebuild;
+	 *   - FClaimPass::Run's tail-node claim, OfNode(From), held while the body is still
+	 *     within Footprint/2 of it. On a dead handle that claim protects nothing and the
+	 *     junction BEHIND the agent is open for somebody to drive into;
+	 *   - FClaimPass::RankAt, which falls back to the class order when the node cannot be
+	 *     found - so a node's PriorityOverride would silently stop applying;
+	 *   - ReplanAt's Query.Start when the failed step IS the current one, where a dead handle
+	 *     gives ERouteResult::NoStart - so that replan could never succeed, and the truncation
+	 *     that followed would write the same dead handle into GoalNode.
+	 *
+	 * So this function re-points that one node as soon as it has resolved it. Steps further
+	 * back are genuinely never read again - the follower walks the polyline - and are left
+	 * alone, because re-resolving them could only change numbers the agent has already passed.
+	 *
+	 * Applied to Follower.Plan from CurrentStep for a Taxiing agent, and to TaxiInPlan from
+	 * 0 for an Arriving one - the route it will fly when it vacates, which no follower is on
+	 * yet and which is just as dead after a rebuild as one being driven.
+	 *
+	 * WHICH OF THE TWO DECIDES WHAT A FAILURE AT FromStep MEANS. Under a moving follower it
+	 * is the ground the agent is on, so it strands in place (spec §6.2, and see the branch
+	 * itself for why a replan there teleports). A taxi-in plan is a route nobody has entered
+	 * - the aircraft is on the runway - so its first step failing is an ordinary replan, and
+	 * only a route that cannot be rebuilt at all strands it.
+	 *
+	 * MUTATES Agent.GoalNode when the goal position still resolves, because every replan
+	 * from here on searches to it: a goal handle left naming a freed slot would fail every
+	 * subsequent deadlock replan for the rest of the session, silently.
+	 */
+	EReResolve ReResolvePlan(FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep,
+		const URoadNetwork& Network, const FTrafficRules& Rules, FTrafficOccupancy& Occupancy);
+
+	/**
+	 * Runs Query and splices its answer onto Plan's first KeepSteps steps, IN PLACE.
+	 *
+	 * True and Plan is the new journey; FALSE AND PLAN IS UNTOUCHED - the search or the
+	 * splice failed, and a caller that ignored the return would otherwise be driving
+	 * something half-replanned. That all-or-nothing shape is the whole reason this is one
+	 * function and not two calls at each site.
+	 *
+	 * NO AGENT AND NO FOLLOWER. ReplanAt needs the follower handled (Travelled survives, the
+	 * reservations drop, the stall clock resets); a TaxiInPlan has no follower on it at all
+	 * and must not touch one. What the two share is exactly this - search, splice, keep or
+	 * discard - so this is where it lives, and each caller adds its own aftermath.
+	 */
+	static bool SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query, int32 KeepSteps,
+		FRoutePlan& Plan);
+};
+
+/**
+ * The wait-for graph, its cycles, and one replan per cycle per retry window - spec §5.
+ * Issue #84 pulled this off UGroundTraffic, whose nine ForTest doors existed because these
+ * six fields - CyclesSeen through DeadlockLogLines, all TEST-FACING bookkeeping, see their
+ * own comments - lived as private members of the god class. They are public fields of a
+ * plain struct now: still forwarded from UGroundTraffic under their old ForTest names (so
+ * nothing that already reads them has to change), but also reachable directly by a test
+ * that constructs an FDeadlockResolver of its own and drives it with no UGroundTraffic at all.
+ */
+struct AIRSIDE_API FDeadlockResolver
+{
+	/**
+	 * The wait-for graph, its cycles, and one replan per cycle per retry window. Spec §5.
+	 *
+	 * AT THE END OF THE TICK, after every agent has claimed and moved, so the WaitingOn edges
+	 * it reads are this frame's and not a mixture of two. Every agent stalled longer than
+	 * Rules.StallSeconds contributes ONE edge - id -> WaitingOn - which makes the graph a
+	 * functional one (out-degree at most 1), and the walk from any member therefore either
+	 * runs out of stalled waiters or closes into exactly one cycle. That is what bounds it:
+	 * each step adds an agent not already on the path, and there are finitely many agents.
+	 *
+	 * A CYCLE IS KEYED BY ITS LOWEST MEMBER ID, so it is handled once however many members
+	 * would have found it - that key, and nothing else, is why one jam is one entry in
+	 * CyclesSeen. WHAT THE RETRY STAMP DOES IS SEPARATE: re-detecting a cycle inside
+	 * Rules.RetrySeconds does nothing at all, so an unresolvable jam is REPORTED on a cadence
+	 * rather than on every tick, and the player's later fix (a new edge out of it) is picked
+	 * up on the next window.
+	 *
+	 * NO REVERSING - spec §1. The one move available is a member turning at the node it is
+	 * stopped at, so a cycle whose members are all mid-edge is logged and left, which is what
+	 * Airside.Model.Traffic.HeadOnStops measures.
+	 */
+	void Resolve(TArray<FRoadAgent>& Agents, const URoadNetwork& Network, const FTrafficRules& Rules,
+		FTrafficOccupancy& Occupancy, FNodeReachCache& Reach, FPlanReResolver& PlanReResolver,
+		double SimSeconds);
+
+	/**
+	 * Every cycle key (the lowest member id) this session has LOGGED. Its only reader is
+	 * UGroundTraffic::GetCyclesDetectedForTest.
+	 *
+	 * NOT reflected: it is test-facing bookkeeping about log lines, not state the simulation
+	 * reads - nothing in the tick branches on it, and an agent list that never reaches disk
+	 * cannot leave a meaningful key behind for a later session. Reflecting it would say it
+	 * mattered to the model, which it does not.
+	 */
+	TSet<int32> CyclesSeen;
+
+	/** Last agent whose deadlock replan succeeded; 0 until one does. Test-facing, as above. */
+	int32 LastResolvedAgent = 0;
+
+	/**
+	 * When each cycle key last settled by a YIELD (SimSeconds). Read by Resolve, unlike the
+	 * sets above: a cycle that re-forms within Rules.RetrySeconds of yielding is one a yield
+	 * did not fix - the other member wanted something a third party holds - and goes to the
+	 * replan path instead of yielding for ever. Test-facing for the same reason as CyclesSeen:
+	 * agents never reach disk, so a key could not mean anything to a later session.
+	 */
+	TMap<int32, double> YieldedAt;
+
+	/** Reservation cycles settled by a yield; and who yielded last. Test-facing. */
+	int32 Yields = 0;
+	int32 LastYieldedAgent = 0;
+
+	/** Deadlock lines emitted, resolved and unresolvable alike. Test-facing, as above. */
+	int32 DeadlockLogLines = 0;
+
+private:
+	/**
+	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.
+	 *
+	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep), and
+	 * is AT the node that step leaves from - within Gap + Footprint/2 short of it and not
+	 * past it. The alternative to a banned edge is another edge OUT of that node, so an agent
+	 * that has already entered the edge cannot take it without reversing, and one still a
+	 * whole edge short of the node would be replanned from a node it is nowhere near.
+	 */
+	bool CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network,
+		const FTrafficRules& Rules, FNodeReachCache& Reach) const;
+};
+
+/**
  * Every agent under way, the reservation table, and the tick that arbitrates between
  * them. Spec 2026-09-06 §2.2, §3.
  *
@@ -94,15 +271,24 @@ struct FGraphRebuildSummary
  * on something UAirsideTraffic can own by CreateDefaultSubobject, and so a test can
  * NewObject one. Transient throughout: agents never reach disk (see Agents).
  *
- * ONE CLASS, FOUR TRANSLATION UNITS - the shape URoadEditFacade already uses
- * (RoadEditFacade.cpp beside RoadEditFacadeSurfaces.cpp). Split by CONCERN rather than by
- * size, so a reader chasing a traffic report opens the file named after the rule:
+ * SPLIT BY RESPONSIBILITY, NOT JUST BY FILE (issue #84). Four translation units, the shape
+ * URoadEditFacade already uses (RoadEditFacade.cpp beside RoadEditFacadeSurfaces.cpp) - but
+ * three of the four now define a STRUCT UGroundTraffic merely owns one of, rather than
+ * methods and fields living directly on this class:
  *
- *   - GroundTraffic.cpp          dispatch, admit, redirect/retire, Advance, Arbitrate, and
- *                                the plan/step helpers the other three read;
- *   - GroundTrafficClaims.cpp    ClaimAhead and the claim geometry it is built from (§3);
- *   - GroundTrafficDeadlock.cpp  ResolveDeadlocks, CanReplanAtBlockedStep, ReplanAt (§4, §5);
- *   - GroundTrafficRebuild.cpp   OnGraphRebuilt, ReResolvePlan, SpliceReplan (§6).
+ *   - GroundTraffic.cpp    dispatch, admit, redirect/retire, registry, Advance, Arbitrate,
+ *                          events, and the plan/step helpers the other three read;
+ *   - TrafficClaims.cpp    FClaimPass - one agent's claim pass (§3). Model/TrafficClaims.h;
+ *   - GroundTrafficDeadlock.cpp  FDeadlockResolver - the wait-for graph (§4, §5);
+ *   - GroundTrafficRebuild.cpp   OnGraphRebuilt (kept here: it is tick-order orchestration,
+ *                                not mechanism) plus FPlanReResolver - ReplanAt,
+ *                                ReResolvePlan, SpliceReplan (§4, §6), which both
+ *                                OnGraphRebuilt and FDeadlockResolver call into.
+ *
+ * UGroundTraffic keeps the registry, dispatch, tick order and events; it owns one FClaimPass
+ * (constructed fresh per Arbitrate call - it carries no state of its own), one
+ * FDeadlockResolver and one FPlanReResolver. A test can construct any of the three directly
+ * and drive it with no UGroundTraffic at all.
  */
 UCLASS()
 class AIRSIDE_API UGroundTraffic : public UObject
@@ -323,8 +509,8 @@ public:
 	 * One tick, in this order: Arbitrate (see it) writes every agent's StopWithin, then
 	 * each agent advances under that cap, accrues StalledSeconds while it is stopped and
 	 * waiting, and announces any phase change - dropping the agent once it says Gone. Then
-	 * ResolveDeadlocks (see it) reads those stall clocks, and may replan one agent per
-	 * wait-for cycle.
+	 * DeadlockResolver.Resolve (see FDeadlockResolver) reads those stall clocks, and may
+	 * replan one agent per wait-for cycle.
 	 *
 	 * ARBITRATION FIRST AND MOTION SECOND, never interleaved: a claim must be visible to
 	 * every agent before any of them moves on it, or the last agent in the list drives
@@ -391,14 +577,15 @@ public:
 	 *
 	 * IT STANDS IN FOR THE PAVEMENT GOING AWAY UNDER A MOVING AGENT - a rebuild that leaves
 	 * a step with no live edge and no route to replace it, or a redirect that lands a bad
-	 * plan on a live follower. Both end in ClaimAhead's dead-plan branch, which must release
-	 * every claim the agent holds; without a hook there is no world-free way to reach that
-	 * branch, and a seam no test reaches is one a later edit can quietly unwire (see
+	 * plan on a live follower. Both end in FClaimPass::Run's dead-plan branch (issue #84
+	 * moved it off UGroundTraffic's own ClaimAhead), which must release every claim the
+	 * agent holds; without a hook there is no world-free way to reach that branch, and a
+	 * seam no test reaches is one a later edit can quietly unwire (see
 	 * Airside.Model.Traffic.DeadPlanReleases).
 	 *
 	 * ForTest in its name for the same reason OccupancyForTest is: nothing in production
 	 * invalidates a plan by hand - OnGraphRebuilt truncates or strands through
-	 * ReResolvePlan, which is a decision, not an assignment.
+	 * FPlanReResolver::ReResolvePlan, which is a decision, not an assignment.
 	 */
 	bool StrandForTest(int32 AgentId);
 
@@ -436,7 +623,7 @@ public:
 	 * GetDeadlockLogLinesForTest answers it - conflating the two was a comment defect on this
 	 * very pair, so the two accessors now say which is which.
 	 */
-	int32 GetCyclesDetectedForTest() const { return CyclesSeen.Num(); }
+	int32 GetCyclesDetectedForTest() const { return DeadlockResolver.CyclesSeen.Num(); }
 
 	/**
 	 * How many deadlock lines - resolved or unresolvable - this session has emitted.
@@ -445,81 +632,29 @@ public:
 	 * every single tick; LastResolveAttempt is why it is reported once per Rules.RetrySeconds
 	 * instead, and this is the count that measures it.
 	 */
-	int32 GetDeadlockLogLinesForTest() const { return DeadlockLogLines; }
+	int32 GetDeadlockLogLinesForTest() const { return DeadlockResolver.DeadlockLogLines; }
 
 	/** Id of the last agent whose deadlock replan SUCCEEDED, or 0 if none ever has. */
-	int32 GetLastResolvedAgentForTest() const { return LastResolvedAgent; }
+	int32 GetLastResolvedAgentForTest() const { return DeadlockResolver.LastResolvedAgent; }
 
 	/** How many reservation cycles were settled by a yield rather than a replan. See §5. */
-	int32 GetYieldsForTest() const { return Yields; }
+	int32 GetYieldsForTest() const { return DeadlockResolver.Yields; }
 
 	/** Id of the last agent that yielded its reservations, or 0 if none has. */
-	int32 GetLastYieldedAgentForTest() const { return LastYieldedAgent; }
+	int32 GetLastYieldedAgentForTest() const { return DeadlockResolver.LastYieldedAgent; }
+
+	// NO GetDeadlockResolverForTest() (issue #84 review): a test that wants to drive an
+	// FDeadlockResolver directly constructs its own - Airside.Model.Traffic.
+	// DeadlockResolverStandalone does exactly that - rather than reading this instance's,
+	// which would have had zero callers. The five accessors above stay for every existing
+	// caller of UGroundTraffic's own resolver.
 
 	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
 	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
 
-	/**
-	 * The two maps between ROUTE distance - what the follower walks and what a stop point is
-	 * expressed in - and EDGE distance, which is what a claim's interval means. Pure
-	 * arithmetic on doubles: no member of this class, no network, no agent.
-	 *
-	 * PUBLIC AND NESTED, rather than private statics behind a ForTest forwarder. Both mirror
-	 * a reversed step, both are one line of arithmetic that is wrong in a way no fixture
-	 * reads back directly (a From > To interval conflicts with nothing at all, silently), so
-	 * they are worth pinning on their own and a test has to reach them. A ForTest wrapper on
-	 * UGroundTraffic would instead be a second door into the claim pass - the thing
-	 * OccupancyForTest's comment warns against - and two free functions in Model/ would stop
-	 * saying which pass they belong to. Nesting costs neither.
-	 *
-	 * Airside.Model.Traffic.ClaimGeometry is the test.
-	 */
-	struct FClaimGeometry
-	{
-		/** A claim's extent along one edge, in EDGE distance from that edge's A end. */
-		struct FEdgeInterval
-		{
-			double From = 0.0;
-			double To = 0.0;
-		};
-
-		/**
-		 * The route interval [Lo, Hi] on a step that begins at StepBegin and whose edge is
-		 * Length long, mapped into edge distance.
-		 *
-		 * Route distance to EDGE distance, measured from the edge's A end. A reversed
-		 * step is walked from B, so its interval mirrors through the edge length - and
-		 * the mirror swaps the ends, which is why From takes what Hi produced. Getting
-		 * this backwards would give From > To, and a half-open interval that way round
-		 * conflicts with nothing at all.
-		 */
-		static FEdgeInterval EdgeInterval(double Lo, double Hi, double StepBegin, double Length, bool bReversed)
-		{
-			FEdgeInterval Interval;
-			Interval.From = Lo - StepBegin;
-			Interval.To = Hi - StepBegin;
-			if (bReversed)
-			{
-				Interval.From = Length - (Hi - StepBegin);
-				Interval.To = Length - (Lo - StepBegin);
-			}
-			return Interval;
-		}
-
-		/**
-		 * Where a blocker's edge interval first bars the way, back in ROUTE distance, on a
-		 * step that begins at StepBegin and whose edge is Length long.
-		 *
-		 * The blocker's NEAREST boundary ahead, back in route distance. On a reversed
-		 * step the agent is walking the edge from B, so the near end of the blocker's
-		 * interval is its To, mirrored.
-		 */
-		static double BoundaryAhead(double StepBegin, double Length, bool bReversed,
-			double BlockerFrom, double BlockerTo)
-		{
-			return bReversed ? StepBegin + (Length - BlockerTo) : StepBegin + BlockerFrom;
-		}
-	};
+	// FClaimGeometry MOVED TO FClaimPass (Model/TrafficClaims.h) IN ISSUE #84, with the claim
+	// pass it belongs to. Airside.Model.Traffic.ClaimGeometry now includes that header instead
+	// of this one.
 
 private:
 	/**
@@ -548,34 +683,18 @@ private:
 	UPROPERTY(Transient) double SimSeconds = 0.0;
 
 	/**
-	 * Every cycle key (the lowest member id) this session has LOGGED. Its only reader is
-	 * GetCyclesDetectedForTest.
-	 *
-	 * NOT a UPROPERTY, and transient by being a plain member: it is test-facing bookkeeping
-	 * about log lines, not state the simulation reads - nothing in the tick branches on it,
-	 * and an agent list that never reaches disk cannot leave a meaningful key behind for a
-	 * later session. Reflecting it would say it mattered to the model, which it does not.
+	 * The wait-for graph and its cycle bookkeeping (issue #84) - CyclesSeen, YieldedAt,
+	 * Yields, LastYieldedAgent, DeadlockLogLines and LastResolvedAgent used to be members
+	 * here; see FDeadlockResolver's own comment for why they are its public fields now
+	 * instead. Constructed once and kept, unlike FClaimPass: its bookkeeping must persist
+	 * from tick to tick.
 	 */
-	TSet<int32> CyclesSeen;
+	FDeadlockResolver DeadlockResolver;
 
-	/** Last agent whose deadlock replan succeeded; 0 until one does. Test-facing, as above. */
-	int32 LastResolvedAgent = 0;
-
-	/**
-	 * When each cycle key last settled by a YIELD (SimSeconds). Read by the tick, unlike the
-	 * sets above: a cycle that re-forms within Rules.RetrySeconds of yielding is one a yield
-	 * did not fix - the other member wanted something a third party holds - and goes to the
-	 * replan path instead of yielding for ever. Plain member for the same reason as CyclesSeen:
-	 * agents never reach disk, so a key could not mean anything to a later session.
-	 */
-	TMap<int32, double> YieldedAt;
-
-	/** Reservation cycles settled by a yield; and who yielded last. Test-facing. */
-	int32 Yields = 0;
-	int32 LastYieldedAgent = 0;
-
-	/** Deadlock lines emitted, resolved and unresolvable alike. Test-facing, as above. */
-	int32 DeadlockLogLines = 0;
+	/** The replan mechanism FDeadlockResolver::Resolve and OnGraphRebuilt both call into.
+	 *  See FPlanReResolver - stateless, so this exists mainly for a consistent calling
+	 *  convention (PlanReResolver.ReplanAt(...)) rather than because it must persist. */
+	FPlanReResolver PlanReResolver;
 
 	/** What the last OnGraphRebuilt did. Test-facing, as above. */
 	FGraphRebuildSummary LastRebuild;
@@ -626,138 +745,21 @@ private:
 	/** One bounded step. Advance splits a long frame into these - see MaxSubstepSeconds. */
 	void AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network);
 
-	/**
-	 * What one agent holds and reserves this tick, and how far it may go. Spec §3.1-§3.3.
-	 *
-	 * A Taxiing agent takes T = Travelled, F = footprint, G = gap, and a window
-	 * W = Speed^2 / (2 Decel) + G - braking distance plus the gap, so a fast agent reserves
-	 * far ahead and a stopped one still holds F/2 + G and keeps its place in a queue. It
-	 * then walks its remaining steps from Head = T + W back to Tail = T - F/2 (HALF the
-	 * footprint behind, because Travelled is the agent's CENTRE: a van 300 uu past a node
-	 * with a 500 uu footprint has cleared it) and asks for, in route order:
-	 *
-	 *   - the node the current step LEFT, while the centre is still within F/2 of it;
-	 *   - on each step the window touches, the edge interval [max(Tail, start),
-	 *     min(Head, end)] mapped into edge distance - mirrored through the edge length on a
-	 *     reversed step - occupied on the step it is standing on, reserved beyond;
-	 *   - that step's END node, once the window passes it; and, by the BOX-JUNCTION ENTRY
-	 *     RULE, at the moment the window reaches the START of the FIRST step shorter than
-	 *     F + G that the agent has not yet entered. A box is an edge the agent cannot stand
-	 *     on without still blocking the node behind it, which is every junction turn path,
-	 *     so it must be granted the far end before it commits to the near one. The FIRST
-	 *     such step only: a window routinely spans several boxes, and demanding the far end
-	 *     of each is the rejected alternative below.
-	 *
-	 * First refusal in ROUTE ORDER decides everything: WaitingOn is the blocker, BlockedStep
-	 * the step, and StopWithin the distance to G short of the refused thing - G short of the
-	 * BOX's START when the box was refused at entry, so the agent stops outside the junction
-	 * where it can still turn, rather than inside it where nobody can. All granted:
-	 * StopWithin unbounded, WaitingOn 0, BlockedStep -1. Past the first refusal the agent
-	 * goes on claiming the ground it OCCUPIES and reserves nothing further: dropping its own
-	 * occupancies there let the agent that had merely reserved the node it stands on drive
-	 * into it.
-	 *
-	 * TWO ALTERNATIVES REJECTED, both traced by hand on the three-vehicle triangle:
-	 *
-	 *  - Release everything and re-claim. ReleaseExcept keeps what is still wanted, so
-	 *    first-to-reserve survives across ticks; an agent that dropped its holds and asked
-	 *    again would be a stranger to its own queue every frame, and any higher-ranked
-	 *    agent could step into the gap it had just opened in front of itself.
-	 *  - Extending the box requirement through every CONSECUTIVE short step. It deadlocks
-	 *    harder: an agent then refuses to move until a node two junctions ahead is free,
-	 *    and the agent holding that node is waiting on it. Spec §3.1 records the trace;
-	 *    Airside.Model.Traffic.BoxEntryFirstOnly measures it, at 400 uu of line the chained
-	 *    rule kept a van out of while the box in front of it was empty.
-	 *
-	 * A RUNWAY SURFACE IS CLAIMED BY THE TWO TAXIING ROUTES OF SPEC §3.1, both raised in
-	 * route order beside the thing that implied them, so the first-refusal rule still decides:
-	 *
-	 *   - a step whose EDGE derives from a runway segment claims that segment's whole CHAIN,
-	 *     occupied on the step being stood on and reserved beyond, ranked as that edge is. A
-	 *     refusal stops the agent a gap short of the step's START - outside the strip;
-	 *   - a step whose END NODE carries HoldingPositionFor claims the chain that names, always
-	 *     RESERVED (nobody is occupied THROUGH a bar) and only once the window has reached
-	 *     the node. A refusal stops the agent with its NOSE on the bar, which is the one
-	 *     refusal that does not subtract the gap.
-	 *
-	 * A non-Taxiing agent claims only SURFACES, occupied, and releases the rest: an arrival
-	 * on the roll owns the strip and nothing on the taxiway. Which surfaces is RunwayHeld -
-	 * the handovers that fill it live in Advance - PLUS the chain of any crossing still in
-	 * progress, because spec §3.4's "their surface" has to mean the one the body is on: an
-	 * aircraft whose plan dies mid-crossing is Parked by the end of that tick with RunwayHeld
-	 * empty, and holding nothing would show the strip free with an aeroplane on it. The third
-	 * route is that one.
-	 */
-	void ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network);
+	// ClaimAhead's full header (the numbered sequence, the box-junction entry rule, the two
+	// rejected alternatives, the runway surface routes) MOVED WITH IT to FClaimPass::Run
+	// (issue #84) - Model/TrafficClaims.h. Along with it: FClaimWindow, FClaimBody,
+	// FWantedClaim, HoldRunwayOnly, ReleaseForDeadPlan, WindowFor, SampleBody, UpdateCrossing,
+	// BuildPending, ApplyClaims, StopWithinFor, RankAt, ReachExcessAt. Arbitrate constructs
+	// one FClaimPass per call and calls its Run where this used to call ClaimAhead.
 
 	/**
-	 * The numbers ONE claim pass works in: the agent's centre, its body and gap, and the
-	 * stretch of route the window covers. Read by four of the five steps below.
+	 * Claims Agent's GoalNode as a stand reservation right now, for the between-ticks
+	 * window DispatchArrival reads the table in. Used by both dispatches and the redirect.
 	 *
-	 * ONE STRUCT rather than six parameters threaded through four helpers - the codebase's
-	 * "one struct per thing", and for its stated reason: a figure copied by hand into a
-	 * sibling call is a figure somebody will one day forget to copy, and the copy that
-	 * nobody set is how an arrival taxied on default figures.
-	 *
-	 * The names are the one-letter ones the rules are written in, because the rules are
-	 * arithmetic and T + F/2 reads as the nose while Travelled + Footprint/2 does not.
+	 * NOTE: the per-tick version of this claim is FClaimPass::ClaimGoalNode now (issue #84).
+	 * This one remains on UGroundTraffic because it fires at DISPATCH, between ticks,
+	 * before any FClaimPass exists for this agent.
 	 */
-	struct FClaimWindow
-	{
-		/** Follower.Travelled: the agent's CENTRE, never its nose. */
-		double T = 0.0;
-		/** Footprint and gap for this agent's class. See FTrafficRules. */
-		double F = 0.0;
-		double G = 0.0;
-		/** T + F/2 + braking distance + G, and T - F/2. WindowFor says why the halves. */
-		double Head = 0.0;
-		double Tail = 0.0;
-		/** Index into Plan.Steps that T falls on. */
-		int32 Current = INDEX_NONE;
-	};
-
-	/**
-	 * Where the agent's nose, centre and tail are this tick, sampled ONCE per pass out of
-	 * the one array the follower walks. See SampleBody, and UpdateCrossing, which is the
-	 * only reader: all three rules of a crossing ask about the same three points, and
-	 * sampling per rule is the second evaluator this codebase's guideline invariant forbids.
-	 */
-	struct FClaimBody
-	{
-		/** All three or none - PointAtDistance fails on the polyline, not on the distance. */
-		bool bValid = false;
-		FVector2D Nose = FVector2D::ZeroVector;
-		FVector2D Centre = FVector2D::ZeroVector;
-		FVector2D Tail = FVector2D::ZeroVector;
-	};
-
-	/** One thing an agent wants this tick. Defined in GroundTrafficClaims.cpp, where the
-	 *  only three functions that build or read one live. */
-	struct FWantedClaim;
-
-	/** A non-Taxiing agent's whole claim pass: hold RunwayHeld AND the chain its body is
-	 *  crossing, release everything else. Spec §3.4's "their surface and nothing else",
-	 *  where the surface includes the one it is standing on. ClaimAhead's first branch. */
-	void HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network);
-
-	/**
-	 * The one claim that is not about the ground under or ahead of the agent: its DESTINATION.
-	 * An Arriving or Taxiing aircraft RESERVES the stand pose node it is heading for, and a
-	 * Parked agent OCCUPIES the node it parked at - stand or not; the M2 rule "a parked agent
-	 * holds only its surface" left a parked aircraft on a taxiway junction holding nothing
-	 * (spec 2026-09-07-stand-occupancy §3, amended).
-	 *
-	 * DERIVED FROM GoalNode EVERY TICK, after the phase's own claim pass has run its
-	 * ReleaseExcept. Threading the stand through BuildPending/ApplyClaims was rejected: those
-	 * are route-ordered claims whose first refusal sets StopWithin, and a stand must never
-	 * stop an aircraft short - it is a reservation for a place, not a queue for a line. The
-	 * drop-and-reclaim inside one agent's pass is invisible: Arbitrate is synchronous and no
-	 * other agent has the same goal (the planner and the rebuild see to that).
-	 */
-	void ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network);
-
-	/** Claims Agent's GoalNode as a stand reservation right now, for the between-ticks
-	 *  window DispatchArrival reads the table in. Used by both dispatches and the redirect. */
 	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
 
 	/**
@@ -775,153 +777,15 @@ private:
 	 */
 	bool bStandsMayHaveFreed = false;
 
-	/** A Taxiing agent whose plan went bad under it: give back every GUIDELINE, keep any
-	 *  runway surface and the crossing that describes it (a plan says nothing about where a
-	 *  body is), clear the arbitration fields. ClaimAhead's second branch. */
-	void ReleaseForDeadPlan(FRoadAgent& Agent);
+	// ResolveDeadlocks, CanReplanAtBlockedStep, EReResolve, ReResolvePlan and SpliceReplan ALL
+	// MOVED to FDeadlockResolver / FPlanReResolver (issue #84) - both declared above, near
+	// FTrafficRules. ReplanAt and OnGraphRebuilt (both still public, above) now forward into
+	// them; see PlanReResolver and DeadlockResolver, the members that hold the instances.
 
-	/** T, F, G, Head, Tail and the current step for one pass. See FClaimWindow. */
-	FClaimWindow WindowFor(const FRoadAgent& Agent) const;
-
-	/** Nose, centre and tail out of Plan.Polyline, once. See FClaimBody. */
-	static FClaimBody SampleBody(const FRoutePlan& Plan, const FClaimWindow& Window);
-
-	/** Step 0's phase machine: arm at a bar that leads onto the strip, note the centre
-	 *  reaching it, release when the whole body is off it. Spec §3.1's fourth route. */
-	void UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
-		const FClaimWindow& Window, const FClaimBody& Body) const;
-
-	/** Steps 0-2: everything the agent wants this tick, IN ROUTE ORDER, which is what the
-	 *  first-refusal rule reads. Nothing is asked of the table here. */
-	void BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
-		const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const;
-
-	/** Step 3: ask the table for each in turn, keep what was granted or occupied, and let
-	 *  the FIRST refusal write StopWithin, WaitingOn and BlockedStep. */
-	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const TArray<FWantedClaim>& Pending);
-
-	/** How far a refused claim lets the agent go, in route distance from T. A pure function
-	 *  of the refusal's kind, the step it was raised on, and the window. */
-	static double StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
-		const FClaimWindow& Window);
-
-	/**
-	 * Who goes first at Node. The node's PriorityOverride if it has one, else the class
-	 * order. Spec §3.3, §5.4.
-	 */
-	int32 RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const;
-
-	/**
-	 * How much FURTHER than half a footprint Node's claim reaches along Edge for this class,
-	 * in uu; 0 at an ordinary junction. The claim pass adds it wherever it used to compare a
-	 * distance to the node against F/2, and the stop point for a refused node moves back by
-	 * it, so a body told to wait for a node waits where the lines have actually parted.
-	 */
-	double ReachExcessAt(const URoadNetwork& Network, FGuidelineNodeId Node, FGuidelineEdgeId Edge,
-		ETraversalClass Class) const;
-
-	/**
-	 * The wait-for graph, its cycles, and one replan per cycle per retry window. Spec §5.
-	 *
-	 * AT THE END OF THE TICK, after every agent has claimed and moved, so the WaitingOn edges
-	 * it reads are this frame's and not a mixture of two. Every agent stalled longer than
-	 * Rules.StallSeconds contributes ONE edge - id -> WaitingOn - which makes the graph a
-	 * functional one (out-degree at most 1), and the walk from any member therefore either
-	 * runs out of stalled waiters or closes into exactly one cycle. That is what bounds it:
-	 * each step adds an agent not already on the path, and there are finitely many agents.
-	 *
-	 * A CYCLE IS KEYED BY ITS LOWEST MEMBER ID, so it is handled once however many members
-	 * would have found it - that key, and nothing else, is why one jam is one entry in
-	 * CyclesSeen. WHAT THE RETRY STAMP DOES IS SEPARATE: re-detecting a cycle inside
-	 * Rules.RetrySeconds does nothing at all, so an unresolvable jam is REPORTED on a cadence
-	 * rather than on every tick, and the player's later fix (a new edge out of it) is picked
-	 * up on the next window.
-	 *
-	 * NO REVERSING - spec §1. The one move available is a member turning at the node it is
-	 * stopped at, so a cycle whose members are all mid-edge is logged and left, which is what
-	 * Airside.Model.Traffic.HeadOnStops measures.
-	 */
-	void ResolveDeadlocks(const URoadNetwork& Network);
-
-	/**
-	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.
-	 *
-	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep), and
-	 * is AT the node that step leaves from - within Gap + Footprint/2 short of it and not
-	 * past it. The alternative to a banned edge is another edge OUT of that node, so an agent
-	 * that has already entered the edge cannot take it without reversing, and one still a
-	 * whole edge short of the node would be replanned from a node it is nowhere near.
-	 */
-	bool CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network) const;
-
-	/** What re-resolution did to one plan. Counted by OnGraphRebuilt for its one log line. */
-	enum class EReResolve : uint8
-	{
-		/** Every remaining step found its node and its edge again; only handles changed. */
-		Intact,
-		/** A step's edge was gone; a fresh route from there to the goal was spliced on. */
-		Replanned,
-		/** Gone with nothing to replace it: the route now ends at the last live node. */
-		Truncated,
-		/** Not even the ground under the agent resolved, or truncation left no route at all. */
-		Stranded,
-	};
-
-	/**
-	 * Re-points Plan's steps from FromStep onward at the rebuilt graph. See OnGraphRebuilt.
-	 *
-	 * FromStep IS THE FIRST STEP THE AGENT HAS NOT FINISHED, and the steps behind it keep
-	 * their dead handles - with ONE exception that is not optional. The node the current step
-	 * LEAVES FROM is Steps[FromStep-1].To (or Plan.Start at step 0), it is what StepFromNode
-	 * answers, and FOUR live readers ask for it every tick:
-	 *
-	 *   - ClaimAhead's crossing arm, which asks whether that node carries a HoldingPositionFor bar.
-	 *     A dead handle reads as no bar, so no crossing would ever arm again after a rebuild;
-	 *   - ClaimAhead's tail-node claim, OfNode(From), held while the body is still within
-	 *     Footprint/2 of it. On a dead handle that claim protects nothing and the junction
-	 *     BEHIND the agent is open for somebody to drive into;
-	 *   - RankAt, which falls back to the class order when the node cannot be found - so a
-	 *     node's PriorityOverride would silently stop applying;
-	 *   - ReplanAt's Query.Start when the failed step IS the current one, where a dead handle
-	 *     gives ERouteResult::NoStart - so that replan could never succeed, and the truncation
-	 *     that followed would write the same dead handle into GoalNode.
-	 *
-	 * So this function re-points that one node as soon as it has resolved it. Steps further
-	 * back are genuinely never read again - the follower walks the polyline - and are left
-	 * alone, because re-resolving them could only change numbers the agent has already passed.
-	 *
-	 * Applied to Follower.Plan from CurrentStep for a Taxiing agent, and to TaxiInPlan from
-	 * 0 for an Arriving one - the route it will fly when it vacates, which no follower is on
-	 * yet and which is just as dead after a rebuild as one being driven.
-	 *
-	 * WHICH OF THE TWO DECIDES WHAT A FAILURE AT FromStep MEANS. Under a moving follower it
-	 * is the ground the agent is on, so it strands in place (spec §6.2, and see the branch
-	 * itself for why a replan there teleports). A taxi-in plan is a route nobody has entered
-	 * - the aircraft is on the runway - so its first step failing is an ordinary replan, and
-	 * only a route that cannot be rebuilt at all strands it.
-	 *
-	 * MUTATES Agent.GoalNode when the goal position still resolves, because every replan
-	 * from here on searches to it: a goal handle left naming a freed slot would fail every
-	 * subsequent deadlock replan for the rest of the session, silently.
-	 */
-	EReResolve ReResolvePlan(FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network);
-
-	/**
-	 * Runs Query and splices its answer onto Plan's first KeepSteps steps, IN PLACE.
-	 *
-	 * True and Plan is the new journey; FALSE AND PLAN IS UNTOUCHED - the search or the
-	 * splice failed, and a caller that ignored the return would otherwise be driving
-	 * something half-replanned. That all-or-nothing shape is the whole reason this is one
-	 * function and not two calls at each site.
-	 *
-	 * NO AGENT AND NO FOLLOWER. ReplanAt needs the follower handled (Travelled survives, the
-	 * reservations drop, the stall clock resets); a TaxiInPlan has no follower on it at all
-	 * and must not touch one. What the two share is exactly this - search, splice, keep or
-	 * discard - so this is where it lives, and each caller adds its own aftermath.
-	 */
-	static bool SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query, int32 KeepSteps, FRoutePlan& Plan);
-
-	/** Route distance at which Step begins - the previous step's end, or 0. */
+public:
+	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
+	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
+	 *  below, which is why the three share it rather than each keeping a copy. */
 	static double StepStart(const FRoutePlan& Plan, int32 Step);
 
 	/** The node Step leaves from: the previous step's To, or the plan's Start. */
