@@ -235,4 +235,77 @@ bool FBuildPurseDemolishCreditsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseDragChargesTheDeltaTest,
+	"Airside.Present.BuildPurseDragChargesTheDelta",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseDragChargesTheDeltaTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	PriceTheTaxiway(*World.Actor);
+
+	FRecordingPurse Purse;
+	World.Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = World.Actor->PlaceNode(FVector2D(1000.0, 0.0));   // 10 m
+	World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE);
+	const int32 ChargesAfterBuild = Purse.Charges.Num();
+
+	// THE HOLE THIS CLOSES: build ten metres, drag the end two hundred, and the extra pavement
+	// is free - MoveNode creates no segment, so nothing else in the facade charges for it.
+	URoadEditFacade* Facade = World.Actor->GetEditFacade();
+	Facade->BeginInteractiveEdit(TEXT("drag node"));
+	World.Actor->MoveNode(B, FVector2D(20000.0, 0.0));               // 200 m
+	Facade->EndInteractiveEdit(true);
+
+	if (!TestEqual(TEXT("the drag charged once for what it added"),
+		Purse.Charges.Num(), ChargesAfterBuild + 1)) { return false; }
+	TestEqual(TEXT("and charged for the 190 m of NEW pavement, not for the whole 200"),
+		Purse.Charges.Last(), 190.0 * 300.0, 1e-6);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseDragRevertsWhenBrokeTest,
+	"Airside.Present.BuildPurseDragRevertsWhenBroke",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseDragRevertsWhenBrokeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	PriceTheTaxiway(*World.Actor);
+
+	FRecordingPurse Purse;
+	World.Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = World.Actor->PlaceNode(FVector2D(1000.0, 0.0));
+	World.Actor->ConnectNodes(A, B, ERoadKind::Taxiway, INDEX_NONE);
+
+	// Nothing left for the drag to spend.
+	Purse.Funds = 0.0;
+	const int32 ChargesBefore = Purse.Charges.Num();
+
+	URoadEditFacade* Facade = World.Actor->GetEditFacade();
+	Facade->BeginInteractiveEdit(TEXT("drag node"));
+	World.Actor->MoveNode(B, FVector2D(20000.0, 0.0));
+	Facade->EndInteractiveEdit(true);
+
+	TestEqual(TEXT("a drag nobody can pay for charges nothing"), Purse.Charges.Num(), ChargesBefore);
+
+	// REVERTED, NOT MERELY REFUSED, and this is the assertion that matters. The node moved on
+	// every frame of the drag, so dropping the undo snapshot would have left the longer taxiway
+	// standing and unpaid for - which is exactly the free pavement the charge exists to stop.
+	const URoadNetwork* Network = World.Actor->GetNetwork();
+	if (!TestTrue(TEXT("the node still exists"), Network->GetNodes().IsValidIndex(B)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and it is back where the drag started, not left out at 200 m"),
+		Network->GetNodes()[B].Position.X, 1000.0, 1e-6);
+	return true;
+}
+
 #endif

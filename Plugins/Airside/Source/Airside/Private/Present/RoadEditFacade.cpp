@@ -185,6 +185,34 @@ FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
 	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment));
 }
 
+FBuildQuote URoadEditFacade::QuoteForAllPavement() const
+{
+	FBuildQuote Total;
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return Total;
+	}
+
+	for (int32 Index = 0; Index < Network->GetSegments().Num(); ++Index)
+	{
+		if (!Network->GetSegments()[Index].bAlive)
+		{
+			continue;
+		}
+		const FBuildQuote Each = QuoteForSegment(Index);
+		Total.BaseAmount += Each.BaseAmount;
+		if (!Total.Source.IsValid())
+		{
+			// The first profile met stands in for the lot, for discounts only - the AMOUNT is
+			// the true sum whichever one it is.
+			Total.Source = Each.Source;
+		}
+	}
+	Total.What = NSLOCTEXT("BuildCost", "MovedPavement", "Moved pavement");
+	return Total;
+}
+
 FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
 {
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
@@ -682,6 +710,11 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	{
 		Use->BeginEdit(*Network, Label);
 	}
+
+	// WHAT THE PAVEMENT WAS WORTH BEFORE THE DRAG. Without this the cost model has a hole big
+	// enough to drive through: build ten metres of taxiway, drag its end two kilometres, and
+	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
+	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount;
 }
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
@@ -692,14 +725,52 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		return;
 	}
 
-	if (bKeep)
-	{
-		History->CommitEdit();
-	}
-	else
+	if (!bKeep)
 	{
 		History->AbandonEdit();
+		return;
 	}
+
+	// THE DIFFERENCE THE DRAG MADE, priced at today's rates. A drag that lengthened the
+	// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
+	// value rather than refunded in full - otherwise dragging a taxiway long and short again
+	// would be a loop that returns more than it costs.
+	FBuildQuote Delta = QuoteForAllPavement();
+	const double After = Delta.BaseAmount;
+	Delta.BaseAmount = After - PavementValueAtDragStart;
+	PavementValueAtDragStart = 0.0;
+
+	if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+	{
+		// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
+		// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
+		// the one edit that has to be undone rather than merely refused - see
+		// URoadEditHistory::RevertEdit.
+		if (URoadNetwork* Reverted = History->RevertEdit())
+		{
+			Actor().Network = Reverted;
+			HideGhost();
+			NotifyChanged();
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
+		return;
+	}
+
+	if (Purse != nullptr)
+	{
+		if (Delta.BaseAmount > 0.0)
+		{
+			History->SetPendingCharge(Purse->Charge(Delta), Delta);
+		}
+		else if (Delta.BaseAmount < 0.0)
+		{
+			Delta.BaseAmount = -Delta.BaseAmount;
+			Purse->Credit(Delta);
+		}
+	}
+
+	History->CommitEdit();
 }
 
 bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)

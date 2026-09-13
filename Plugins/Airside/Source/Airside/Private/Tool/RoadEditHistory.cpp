@@ -92,6 +92,25 @@ void URoadEditHistory::AbandonEdit()
 	PendingQuote = FBuildQuote();
 }
 
+URoadNetwork* URoadEditHistory::RevertEdit()
+{
+	if (PendingSnapshot == nullptr)
+	{
+		return nullptr;
+	}
+
+	// Handed over outright, exactly as Undo does: this history stops referencing it, so nothing
+	// later mutates a graph the stacks still believe in. The stacks themselves are untouched -
+	// a reverted edit is not an undo step, because as far as the player is concerned it never
+	// happened.
+	URoadNetwork* Reverted = PendingSnapshot;
+	PendingSnapshot = nullptr;
+	PendingLabel.Reset();
+	PendingCharge = INDEX_NONE;
+	PendingQuote = FBuildQuote();
+	return Reverted;
+}
+
 URoadNetwork* URoadEditHistory::Undo(const URoadNetwork& Current)
 {
 	if (UndoStack.Num() == 0)

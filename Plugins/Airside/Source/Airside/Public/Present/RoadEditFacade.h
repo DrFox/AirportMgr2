@@ -254,6 +254,16 @@ private:
 	/** What the pavement a segment occupies is worth today, for a charge or a credit. */
 	FBuildQuote QuoteForSegment(int32 SegmentIndex) const;
 
+	/**
+	 * What every live segment on the network is worth today, summed.
+	 *
+	 * FOR THE DRAG, which is the one edit that changes how much pavement exists WITHOUT
+	 * creating or destroying a segment - see EndInteractiveEdit. Walking the whole graph twice
+	 * per drag (once at the start, once at the end) is cheap, and it is the only measure that
+	 * cannot miss a length change: a drag can move a node that six segments meet at.
+	 */
+	FBuildQuote QuoteForAllPavement() const;
+
 	/** What an apron outline is worth today, at the settings' rate. */
 	FBuildQuote QuoteForApron(TConstArrayView<FVector2D> Outline) const;
 
@@ -277,6 +287,9 @@ private:
 		const FBuildQuote& Quote = FBuildQuote());
 
 	IBuildPurse* Purse = nullptr;
+
+	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */
+	double PavementValueAtDragStart = 0.0;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.

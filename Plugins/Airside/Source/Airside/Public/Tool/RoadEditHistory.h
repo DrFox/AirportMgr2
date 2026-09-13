@@ -102,6 +102,17 @@ public:
 	void AbandonEdit();
 
 	/**
+	 * The edit must be UNDONE: hand back the state it started from, and clear the pending edit.
+	 *
+	 * NOT AbandonEdit, WHICH REVERTS NOTHING. Abandon drops the snapshot and leaves the model
+	 * exactly as the edit left it - right for a mutator that refuses before touching anything,
+	 * and wrong for an interactive drag, which has already moved the node on every frame it
+	 * was held. The caller adopts the returned network the way Undo's caller does; null when
+	 * no edit was in progress.
+	 */
+	URoadNetwork* RevertEdit();
+
+	/**
 	 * Record what the edit in progress paid, so undoing past it can put the money back.
 	 *
 	 * ON THE PENDING SNAPSHOT and therefore only between BeginEdit and CommitEdit. A no-op when
