@@ -18,33 +18,74 @@
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
-void URoadSurfacePresenter::Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
-	UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent,
-	UDynamicMeshComponent* InRunwayMarkingComponent)
+void URoadSurfacePresenter::Initialize(
+	const TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)>& Components)
 {
-	MarkingComponent = InMarkingComponent;
-	RunwayMarkingComponent = InRunwayMarkingComponent;
-	MeshComponent = InMeshComponent;
-	GhostComponent = InGhostComponent;
-	ApronComponent = InApronComponent;
+	LayerComponents = TArray<TObjectPtr<UDynamicMeshComponent>>(Components.GetData(), Components.Num());
+}
+
+UDynamicMeshComponent* URoadSurfacePresenter::GetLayerComponent(ESurfaceLayer Layer) const
+{
+	const int32 Index = static_cast<int32>(Layer);
+	return LayerComponents.IsValidIndex(Index) ? LayerComponents[Index].Get() : nullptr;
+}
+
+int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
+	UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers)
+{
+	UDynamicMeshComponent* Component = GetLayerComponent(Layer);
+	if (Component == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	const int32 Count = BuildFn(OutBuffers);
+
+	FDynamicMeshSink Sink(Component, Material, bUseConstantColour);
+	Sink.Accept(OutBuffers);
+	Component->SetVisibility(Count > 0);
+	return Count;
+}
+
+void URoadSurfacePresenter::DebugDrawTriangles(const FRoadMeshBuffers& Buffers, FColor Colour, float Thickness, double Seconds) const
+{
+	if (GetWorld() == nullptr)
+	{
+		return;
+	}
+	const float Lifetime = static_cast<float>(Seconds);
+	for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
+	{
+		const FVector A = Buffers.Positions[Buffers.Indices[Slot]];
+		const FVector B = Buffers.Positions[Buffers.Indices[Slot + 1]];
+		const FVector C = Buffers.Positions[Buffers.Indices[Slot + 2]];
+
+		// Thickness in WORLD units. Single digits are sub-pixel across a scene this large -
+		// indistinguishable from nothing being drawn at all.
+		DrawDebugLine(GetWorld(), A, B, Colour, false, Lifetime, 0, Thickness);
+		DrawDebugLine(GetWorld(), B, C, Colour, false, Lifetime, 0, Thickness);
+		DrawDebugLine(GetWorld(), C, A, Colour, false, Lifetime, 0, Thickness);
+	}
 }
 
 int32 URoadSurfacePresenter::SurfaceTriangleCountForTest() const
 {
-	if (MeshComponent == nullptr || MeshComponent->GetDynamicMesh() == nullptr)
+	UDynamicMeshComponent* Component = GetLayerComponent(ESurfaceLayer::Road);
+	if (Component == nullptr || Component->GetDynamicMesh() == nullptr)
 	{
 		return 0;
 	}
-	return MeshComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
 }
 
 int32 URoadSurfacePresenter::RunwayMarkingTriangleCountForTest() const
 {
-	if (RunwayMarkingComponent == nullptr || RunwayMarkingComponent->GetDynamicMesh() == nullptr)
+	UDynamicMeshComponent* Component = GetLayerComponent(ESurfaceLayer::RunwayPaint);
+	if (Component == nullptr || Component->GetDynamicMesh() == nullptr)
 	{
 		return 0;
 	}
-	return RunwayMarkingComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
 }
 
 const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfaceSettings& Settings)
@@ -105,24 +146,36 @@ UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(U
 
 void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
-	if (RunwayMarkingComponent == nullptr)
+	// Checked BEFORE RunwayMarkingMaterialInstance below, not left to RebuildLayer's own
+	// check: that call lazily creates and caches a UMaterialInstanceDynamic, a real
+	// allocation this function must not make on an actor with no runway-paint component to
+	// use it on (see LayerComponents' own comment for when that is a supported state).
+	if (GetLayerComponent(ESurfaceLayer::RunwayPaint) == nullptr)
 	{
 		return;
 	}
+
 	// The same half unit above the road as the holding positions: both are paint on the
 	// pavement, and neither overlaps the other by construction (one lies on taxiways at
-	// their runway ends, the other on the runway itself).
-	const double MarkingZ = Settings.SurfaceZ + 0.5;
-	FRoadMeshBuffers Buffers;
+	// their runway ends, the other on the runway itself). See GetMarkingZ.
+	const double MarkingZ = GetMarkingZ(Settings.SurfaceZ);
 	FRunwayMarkingCensus Census;
-	const int32 Painted = FRunwayMarkingBuilder::Build(Network, MarkingZ, Buffers, &Census);
 	// The road material through a dynamic instance with MarkingColor white - see
 	// RunwayMarkingMaterialInstance. A null base material leaves the sink's own fallback.
 	UMaterialInterface* Material = RunwayMarkingMaterialInstance(Settings.SurfaceMaterial);
-	FDynamicMeshSink Sink(RunwayMarkingComponent, Material != nullptr ? Material : Settings.SurfaceMaterial,
-		Settings.bUseConstantVertexColour);
-	Sink.Accept(Buffers);
-	RunwayMarkingComponent->SetVisibility(Painted > 0);
+
+	FRoadMeshBuffers Buffers;
+	const int32 Painted = RebuildLayer(ESurfaceLayer::RunwayPaint,
+		[&Network, MarkingZ, &Census](FRoadMeshBuffers& OutBuffers)
+		{
+			return FRunwayMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &Census);
+		},
+		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers);
+	if (Painted == INDEX_NONE)
+	{
+		return;
+	}
+
 	// The census, reported: which markings were painted says more about a runway's facts
 	// than a triangle count, and it is what the probe reads.
 	UE_LOG(LogRoadMesh, Log,
@@ -143,34 +196,41 @@ double URoadSurfacePresenter::GetApronSurfaceZ(double SurfaceZ, double ApronZOff
 
 void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
-	if (ApronComponent == nullptr)
-	{
-		return;
-	}
-
 	// Its own builder instance, so an apron corner that happens to land exactly on a road
 	// vertex cannot weld to it. The two surfaces meet; they are not one surface.
 	const double ApronZ = GetApronSurfaceZ(Settings.SurfaceZ, Settings.ApronZOffset);
-	FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit);
 
-	int32 Built = 0;
-	for (const FApronSurface& Apron : Network.GetAprons())
-	{
-		if (Apron.bAlive)
+	FRoadMeshBuffers Buffers;
+	const int32 Built = RebuildLayer(ESurfaceLayer::Apron,
+		[&Network, ApronZ, &Settings](FRoadMeshBuffers& OutBuffers)
 		{
-			Builder.AddApron(Apron);
-			++Built;
-		}
-	}
-
-	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
-
-	FDynamicMeshSink Sink(ApronComponent,
+			FRoadMeshBuilder Builder(ApronZ, Settings.TexelsPerUnit);
+			int32 Count = 0;
+			for (const FApronSurface& Apron : Network.GetAprons())
+			{
+				if (Apron.bAlive)
+				{
+					Builder.AddApron(Apron);
+					++Count;
+				}
+			}
+			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
+			// to this lambda, and GetBuffers() returns a const& into IT, which stops existing
+			// the moment this lambda returns - MoveTemp cannot turn that into a move either,
+			// since a move constructor cannot bind to a const source. FRoadMeshBuilder's own
+			// API has no "build into an external FRoadMeshBuffers" - only the two static
+			// Build(Network, Z, OutBuffers) builders RebuildLayer was shaped around do - so a
+			// copy at this one boundary is the price of routing aprons through RebuildLayer
+			// too. One apron rebuild's worth of vertices, not a hot path.
+			OutBuffers = Builder.GetBuffers();
+			return Count;
+		},
 		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial,
-		Settings.bUseConstantApronColour);
-	Sink.Accept(Buffers);
-
-	ApronComponent->SetVisibility(Built > 0);
+		Settings.bUseConstantApronColour, Buffers);
+	if (Built == INDEX_NONE)
+	{
+		return;
+	}
 
 	// Reported rather than inferred. An apron that is built and never seen, and one that
 	// is never built, look identical from outside - and every explanation reasoned from
@@ -192,44 +252,34 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			Settings.SurfaceZ, Settings.ApronZOffset, ApronZ);
 	}
 
-	if (Settings.bDebugDrawAprons && GetWorld() != nullptr)
+	if (Settings.bDebugDrawAprons)
 	{
-		// A completely separate route to the screen, from the same buffers the component
-		// was handed.
-		const float Lifetime = static_cast<float>(Settings.DebugDrawSeconds);
-		for (int32 Slot = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3)
-		{
-			const FVector A = Buffers.Positions[Buffers.Indices[Slot]];
-			const FVector B = Buffers.Positions[Buffers.Indices[Slot + 1]];
-			const FVector C = Buffers.Positions[Buffers.Indices[Slot + 2]];
-
-			// Thickness in WORLD units. Single digits are sub-pixel across a scene this
-			// large - indistinguishable from nothing being drawn at all.
-			DrawDebugLine(GetWorld(), A, B, FColor::Cyan, false, Lifetime, 0, 12.0f);
-			DrawDebugLine(GetWorld(), B, C, FColor::Cyan, false, Lifetime, 0, 12.0f);
-			DrawDebugLine(GetWorld(), C, A, FColor::Cyan, false, Lifetime, 0, 12.0f);
-		}
+		DebugDrawTriangles(Buffers, FColor::Cyan, 12.0f, Settings.DebugDrawSeconds);
 	}
 }
 
 void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
-	if (MarkingComponent == nullptr)
-	{
-		return;
-	}
 	// Half a unit ABOVE the road, so the paint wins the depth test against the pavement it
 	// lies on - the road is the highest surface here (the apron sits below it, see
-	// GetApronSurfaceZ), so above the road is above everything.
-	const double MarkingZ = Settings.SurfaceZ + 0.5;
+	// GetApronSurfaceZ), so above the road is above everything. See GetMarkingZ.
+	const double MarkingZ = GetMarkingZ(Settings.SurfaceZ);
+
 	FRoadMeshBuffers Buffers;
-	const int32 Painted = FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, Buffers);
 	// THE ROAD'S OWN MATERIAL, on purpose: every vertex carries UV1 = 0, which M_RoadSurface
 	// reads as "on the centreline" and paints MarkingColor across the whole quad. See
 	// FHoldingPositionMarkingBuilder for why that is the paint wanted and not a defect.
-	FDynamicMeshSink Sink(MarkingComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour);
-	Sink.Accept(Buffers);
-	MarkingComponent->SetVisibility(Painted > 0);
+	const int32 Painted = RebuildLayer(ESurfaceLayer::HoldingPaint,
+		[&Network, MarkingZ](FRoadMeshBuffers& OutBuffers)
+		{
+			return FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
+		},
+		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers);
+	if (Painted == INDEX_NONE)
+	{
+		return;
+	}
+
 	// Reported, not inferred - the same reason the aprons say what they built.
 	UE_LOG(LogRoadMesh, Log, TEXT("Holding positions: %d painted, %d triangle(s) at Z=%.1f"),
 		Painted, Buffers.Indices.Num() / 3, MarkingZ);
@@ -245,6 +295,7 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	// See InvalidateGhostCache's own comment for why this must happen on every rebuild.
 	InvalidateGhostCache();
 
+	UDynamicMeshComponent* MeshComponent = GetLayerComponent(ESurfaceLayer::Road);
 	if (MeshComponent == nullptr)
 	{
 		return;
@@ -304,21 +355,11 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 		// where the clicks did and the surface does not, the fault is in the component or
 		// the view, not the geometry - and if the lines are wrong too, every conclusion
 		// drawn from vertex counts and bounds so far needs revisiting.
-		const FRoadMeshBuffers& Drawn = Builder.GetBuffers();
-		const float Lifetime = static_cast<float>(Settings.DebugDrawSeconds);
-		for (int32 Slot = 0; Slot + 2 < Drawn.Indices.Num(); Slot += 3)
-		{
-			const FVector A = Drawn.Positions[Drawn.Indices[Slot]];
-			const FVector B = Drawn.Positions[Drawn.Indices[Slot + 1]];
-			const FVector C = Drawn.Positions[Drawn.Indices[Slot + 2]];
-
-			DrawDebugLine(GetWorld(), A, B, FColor::Green, false, Lifetime, 0, 8.0f);
-			DrawDebugLine(GetWorld(), B, C, FColor::Green, false, Lifetime, 0, 8.0f);
-			DrawDebugLine(GetWorld(), C, A, FColor::Green, false, Lifetime, 0, 8.0f);
-		}
+		DebugDrawTriangles(Builder.GetBuffers(), FColor::Green, 8.0f, Settings.DebugDrawSeconds);
 
 		// The bounding box the renderer culls against, so an off-screen or collapsed box
 		// is visible rather than merely reported.
+		const float Lifetime = static_cast<float>(Settings.DebugDrawSeconds);
 		DrawDebugBox(GetWorld(), MeshComponent->Bounds.Origin,
 			MeshComponent->Bounds.BoxExtent + FVector(0.0, 0.0, 50.0),
 			FColor::Magenta, false, Lifetime, 0, 8.0f);
@@ -357,7 +398,7 @@ void URoadSurfacePresenter::AddGhostJunction(
 
 void URoadSurfacePresenter::HideGhost()
 {
-	if (GhostComponent != nullptr)
+	if (UDynamicMeshComponent* GhostComponent = GetLayerComponent(ESurfaceLayer::Ghost))
 	{
 		GhostComponent->SetVisibility(false);
 	}
@@ -443,7 +484,7 @@ bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 F
 	// is never a cache hit, so a caller that sees false here and falls through to
 	// UpdateGhost gets the same HideGhost() it would have gotten before this query existed.
 	const FRoadNodeId From = Network != nullptr ? Network->NodeIdAt(FromNodeIndex) : FRoadNodeId();
-	if (GhostComponent == nullptr || !From.IsSet())
+	if (GetLayerComponent(ESurfaceLayer::Ghost) == nullptr || !From.IsSet())
 	{
 		return false;
 	}
@@ -481,6 +522,7 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 	// IsGhostCacheHit and SetGhostValidity, which exist so the caller can skip resolving
 	// Settings at all on a still drag. This function always does the full rebuild; a
 	// caller that already knows it has a cache hit must not reach here.
+	UDynamicMeshComponent* GhostComponent = GetLayerComponent(ESurfaceLayer::Ghost);
 	const FRoadNodeId From = Network != nullptr ? Network->NodeIdAt(FromNodeIndex) : FRoadNodeId();
 	if (GhostComponent == nullptr || !From.IsSet())
 	{

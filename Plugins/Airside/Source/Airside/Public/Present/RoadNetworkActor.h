@@ -895,6 +895,21 @@ public:
 	UObject* FacadeOuterForTest() const;
 	UObject* PresenterOuterForTest() const;
 
+	/**
+	 * The presenter's own LayerComponents[Layer], for Airside.Present.NetworkActor.
+	 *
+	 * Compared there against THIS actor's named fields (MeshComponent, GhostComponent, ...) -
+	 * the identity check the constructor's ESurfaceLayer indexing has no other test for.
+	 * Every rebuild-triggered test reads a layer's component back out through the presenter's
+	 * own table, so a Road<->Ghost or HoldingPaint<->RunwayPaint swap in the constructor's
+	 * indexing would still rebuild something, correctly, at the swapped slot, and pass -
+	 * only comparing against the actor's independently-named fields catches that.
+	 */
+	UDynamicMeshComponent* LayerComponentForTest(ESurfaceLayer Layer) const
+	{
+		return GetPresenter() != nullptr ? GetPresenter()->GetLayerComponentForTest(Layer) : nullptr;
+	}
+
 public:
 	/** Absolute world-space Z of the road surface, in uu. Not relative to the actor:
 	 *  the mesh builder emits world-space XY at this Z, and MeshComponent is set to use

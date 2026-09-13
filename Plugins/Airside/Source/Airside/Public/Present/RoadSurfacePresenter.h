@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/StaticArray.h"
+#include "Templates/Function.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
@@ -17,9 +19,35 @@ class FRoadMeshBuilder;
 struct FRoadSolveResult;
 
 /**
- * Everything the road network LOOKS like: the three dynamic-mesh surfaces (road, apron,
- * ghost) built from a URoadNetwork, and nothing about how that network came to be what it
- * is - split out of ARoadNetworkActor by issue #32.
+ * Which dynamic-mesh component a built surface belongs to. Replaces this presenter's five
+ * separately named UPROPERTY component fields with one indexed table (LayerComponents), and
+ * the three near-identical Rebuild* bodies that read them with one RebuildLayer - issue #81.
+ * The actor's own five CreateDefaultSubobject blocks are unchanged; only how it hands those
+ * components to Initialize changed, from five positional arguments to one array by this
+ * index.
+ *
+ * ROAD AND GHOST ARE NOT REBUILT BY RebuildLayer below: the road pipeline runs a whole
+ * FRoadMeshBuilder plus the effective material set (see EffectiveMaterialSet), and the ghost
+ * is solved against a DUPLICATED, hypothetical network rather than the live one (see
+ * BuildGhostBuffers) - neither is "fill one FRoadMeshBuffers from the live Network and sink
+ * it", which is all Apron/HoldingPaint/RunwayPaint ever were. Both stay enumerated here
+ * anyway because Initialize hands over all five components in one indexed call.
+ */
+enum class ESurfaceLayer : uint8
+{
+	Road,
+	Ghost,
+	Apron,
+	HoldingPaint,
+	RunwayPaint,
+	Count
+};
+
+/**
+ * Everything the road network LOOKS like: the five dynamic-mesh surfaces (road, ghost,
+ * apron, holding-position paint, runway paint - see ESurfaceLayer) built from a
+ * URoadNetwork, and nothing about how that network came to be what it is - split out of
+ * ARoadNetworkActor by issue #32, back when there were three.
  *
  * Pattern: Presenter (a Humble Object) - the graph solve, the mesh builder and the sink are
  * all straightforward to unit-test without a world (and already are), so the only thing
@@ -101,12 +129,17 @@ public:
 	};
 
 	/**
-	 * Non-owning: all three components are CreateDefaultSubobjects of the actor that also
-	 * creates this presenter, and none of their lifetimes are this class's to manage.
+	 * Non-owning: every component is a CreateDefaultSubobject of the actor that also creates
+	 * this presenter, and none of their lifetimes are this class's to manage.
+	 *
+	 * ONE ARGUMENT INDEXED BY ESurfaceLayer, not five positional ones (two defaulted): the
+	 * old signature grew a parameter every time a layer was added, with nothing to stop a
+	 * caller passing RunwayMarking where HoldingPosition belonged. TStaticArray at this
+	 * boundary because the handoff is fixed-size and known at compile time; stored internally
+	 * as a TArray (LayerComponents) because UPROPERTY reflection - which is what lets the
+	 * garbage collector trace these non-owning pointers - has no TStaticArray support.
 	 */
-	void Initialize(UDynamicMeshComponent* InMeshComponent, UDynamicMeshComponent* InGhostComponent,
-		UDynamicMeshComponent* InApronComponent, UDynamicMeshComponent* InMarkingComponent = nullptr,
-		UDynamicMeshComponent* InRunwayMarkingComponent = nullptr);
+	void Initialize(const TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)>& Components);
 
 	/** Solve every node, build the road and apron surfaces, and push them to their components. */
 	void Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings);
@@ -205,7 +238,52 @@ public:
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
 
+	/**
+	 * LayerComponents[Layer], for Airside.Present.NetworkActor.
+	 *
+	 * GetLayerComponent itself is private, and every OTHER test reads a layer's component
+	 * back out through the very table Rebuild* wrote it into - which cannot catch a wiring
+	 * bug in Initialize's argument order (Road<->Ghost, HoldingPaint<->RunwayPaint): the
+	 * rebuild would still find and paint SOME component at that slot, correctly, and the
+	 * test would still pass. This is the one seam that has to compare against something
+	 * outside the table - the actor's own named UPROPERTY fields, in
+	 * ARoadNetworkActor::LayerComponentForTest.
+	 */
+	UDynamicMeshComponent* GetLayerComponentForTest(ESurfaceLayer Layer) const { return GetLayerComponent(Layer); }
+
 private:
+	/** LayerComponents[Layer], or null if Layer has none - see Initialize and
+	 *  LayerComponents' own comment for why that is a supported state. */
+	UDynamicMeshComponent* GetLayerComponent(ESurfaceLayer Layer) const;
+
+	/**
+	 * The shape RebuildAprons/RebuildMarkings/RebuildRunwayMarkings all repeated before issue
+	 * #81: null-check Layer's component, fill an FRoadMeshBuffers with BuildFn, sink it with
+	 * Material at bUseConstantColour, and show the component only if anything was built.
+	 * Returns what BuildFn reported, or INDEX_NONE if Layer has no component - in which case
+	 * BuildFn is never even called, so a caller checking for INDEX_NONE can return early
+	 * exactly as it did when its own null check opened the function.
+	 *
+	 * DOES NOT LOG. Each caller's own summary line differs too much to fold in here (an
+	 * apron's material name, a runway's whole marking-type census) - see each Rebuild*'s own
+	 * UE_LOG for what that layer reports, and OutBuffers exists so it can.
+	 */
+	int32 RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
+		UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers);
+
+	/** Half a unit above the road, so paint wins the depth test against the pavement it lies
+	 *  on - shared by RebuildMarkings and RebuildRunwayMarkings, which used to compute this
+	 *  identically and separately (issue #81). */
+	static double GetMarkingZ(double SurfaceZ) { return SurfaceZ + 0.5; }
+
+	/**
+	 * Every triangle in Buffers, as debug lines - the same ground truth RebuildAprons and
+	 * Rebuild both give their surface: these are the buffers the component was actually
+	 * handed, reaching the screen by a completely separate route. Was copied at both call
+	 * sites (Cyan/12 for aprons, Green/8 for the road) before issue #81.
+	 */
+	void DebugDrawTriangles(const FRoadMeshBuffers& Buffers, FColor Colour, float Thickness, double Seconds) const;
+
 	/** Separate from the roads, which share nothing with it - see AddApron's own comment. */
 	void RebuildAprons(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
@@ -246,15 +324,22 @@ private:
 	/** The ghost's material instance, made on first use. Null if GhostMaterialBase is unset. */
 	UMaterialInstanceDynamic* GhostMaterialInstance(UMaterialInterface* GhostMaterialBase);
 
-	/** Non-owning: the three components this presenter draws into. See Initialize. */
-	UPROPERTY() TObjectPtr<UDynamicMeshComponent> MeshComponent;
-	UPROPERTY() TObjectPtr<UDynamicMeshComponent> GhostComponent;
-	UPROPERTY() TObjectPtr<UDynamicMeshComponent> ApronComponent;
-	/** May be null on an actor made before markings existed; RebuildMarkings then does nothing. */
-	UPROPERTY() TObjectPtr<UDynamicMeshComponent> MarkingComponent;
-
-	/** The runway paint's own component - see RebuildRunwayMarkings. May be null likewise. */
-	UPROPERTY() TObjectPtr<UDynamicMeshComponent> RunwayMarkingComponent;
+	/**
+	 * Non-owning: one dynamic mesh per ESurfaceLayer - see Initialize. Sized to
+	 * ESurfaceLayer::Count once Initialize has run; empty (every GetLayerComponent null)
+	 * before that, same as a default-constructed presenter always was.
+	 *
+	 * HoldingPaint/RunwayPaint may still be null even after Initialize, on an actor made
+	 * before markings existed - RebuildMarkings/RebuildRunwayMarkings then does nothing,
+	 * exactly as MarkingComponent/RunwayMarkingComponent being null used to mean.
+	 *
+	 * A TArray, not the TStaticArray Initialize takes: UPROPERTY reflection - which is what
+	 * lets the garbage collector trace these pointers - has no TStaticArray support. Five
+	 * separate named UPROPERTYs would GC-trace correctly too; the point of this table is that
+	 * RebuildLayer can index it by ESurfaceLayer instead of one of five call sites addressing
+	 * one of five identically-shaped fields by name.
+	 */
+	UPROPERTY() TArray<TObjectPtr<UDynamicMeshComponent>> LayerComponents;
 
 	/** See EffectiveMaterialSet. Transient: composed from resolved settings on every rebuild. */
 	UPROPERTY(Transient) TObjectPtr<URoadMaterialSet> EffectiveSet;
