@@ -146,7 +146,8 @@ struct AIRSIDE_API FClaimPass
 	 */
 	struct FClaimWindow
 	{
-		/** Follower.Travelled: the agent's CENTRE, never its nose. */
+		/** The agent's CENTRE, never its nose - see FClaimPass::CentreOf, which derives it
+		 *  from Follower.Travelled and the airframe's own offsets. */
 		double T = 0.0;
 		/** Footprint and gap for this agent's class. See FTrafficRules. */
 		double F = 0.0;
@@ -260,6 +261,24 @@ struct AIRSIDE_API FClaimPass
 	 *  of the refusal's kind, the step it was raised on, and the window. */
 	static double StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
 		const FClaimWindow& Window);
+
+	/**
+	 * Where this agent's BODY CENTRE is along its route, uu.
+	 *
+	 * NOT Follower.Travelled, which measures the STEERED AXLE, and not the origin it is
+	 * derived from either - on a conforming airframe that origin is the nose gear. The
+	 * window below is written as T +/- F/2 about the centre, so taking Travelled for it put
+	 * the whole window half a length forward and left the agent's own tail unclaimed. That
+	 * was approximately true while mesh origins sat mid-fuselage and stopped being true
+	 * when plane2 was re-exported about its nose gear on 2026-09-13.
+	 *
+	 * Both offsets are per-type data, so an airframe with neither measured returns Travelled
+	 * and claims exactly the line it claims today - which is every service vehicle.
+	 *
+	 * Static and taking the agent so a test can ask it one question with no claim pass, no
+	 * graph and no world.
+	 */
+	static double CentreOf(const FRoadAgent& Agent);
 
 	/**
 	 * Who goes first at Node. The node's PriorityOverride if it has one, else the class
