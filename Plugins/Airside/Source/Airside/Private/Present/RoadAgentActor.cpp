@@ -1,5 +1,6 @@
 #include "Present/RoadAgentActor.h"
 
+#include "AirsideLog.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
@@ -32,6 +33,8 @@ ARoadAgentActor::ARoadAgentActor()
 	Placeholder = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Placeholder"));
 	Placeholder->SetupAttachment(Airframe);
 
+	// The engine's own primitive, not an authored asset: a placeholder that shows only
+	// until SetAirframe dresses the actor has no business owning content of its own.
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (Cube.Succeeded())
 	{
@@ -128,7 +131,7 @@ void ARoadAgentActor::SetAirframe(USkeletalMesh* InAirframe, UClass* AnimClass)
 		Slots += FString::Printf(TEXT("[%d]=%s "), Slot,
 			Applied != nullptr ? *Applied->GetName() : TEXT("null"));
 	}
-	UE_LOG(LogTemp, Log, TEXT("Airframe '%s': %d material slots  %s"),
+	UE_LOG(LogAirside, Log, TEXT("Airframe '%s': %d material slots  %s"),
 		*InAirframe->GetName(), SlotCount, *Slots);
 
 	// The box has done its job.

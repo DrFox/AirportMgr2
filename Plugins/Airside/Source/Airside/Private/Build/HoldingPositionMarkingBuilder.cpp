@@ -8,7 +8,7 @@
 namespace
 {
 	/** A taxiway with no profile to ask still gets a bar this wide. The standard taxiway. */
-	constexpr double MarkingFallbackWidth = 2300.0;
+	constexpr double MarkingFallbackWidth = URoadProfile::StandardTaxiwayWidth;
 
 	/**
 	 * One bar across the taxiway: solid, or dashed from one edge. Toward is the unit
