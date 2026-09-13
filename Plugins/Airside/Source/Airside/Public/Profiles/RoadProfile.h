@@ -138,6 +138,16 @@ public:
 	double GetHalfWidthRight() const;
 
 	/**
+	 * The wider of the two sides - what a corner-fit reach, a ghost material's edge
+	 * distance, or a placement limit's half-width cares about, never which side is which.
+	 * `FMath::Max(GetHalfWidthLeft(), GetHalfWidthRight())` was typed at five call sites
+	 * (RoadPlacement.cpp x3, RoadNetworkActor.cpp, RoadSurfacePresenter.cpp) - one of them
+	 * drifting from the others was how a corner check and its ghost's colour could disagree
+	 * about the same road's half-width.
+	 */
+	double GetMaxHalfWidth() const { return FMath::Max(GetHalfWidthLeft(), GetHalfWidthRight()); }
+
+	/**
 	 * Symmetric profile for tests and the debug gallery.
 	 *
 	 * ShoulderWidth > 0 produces shoulder | lane | shoulder, which is what the ground

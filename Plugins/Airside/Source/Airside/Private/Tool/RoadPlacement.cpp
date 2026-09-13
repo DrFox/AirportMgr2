@@ -7,6 +7,46 @@
 #include "Profiles/RoadProfile.h"
 #include "Solve/RoadGeom.h"
 
+namespace
+{
+	/** One arm meeting a corner: exactly what CornerFits needs, nothing about the network. */
+	struct FArm
+	{
+		FVector2D Dir = FVector2D::ZeroVector;   // unit, pointing away from the corner
+		double Half = 0.0;                        // road half-width
+		double Length = 0.0;                      // this arm's own length, for its far-cut budget
+		double FarCut = 0.0;                      // this arm's cut at its OTHER end, already spoken for
+	};
+
+	/**
+	 * Whether New's corner against Existing fits with no fillet at all, and Existing still has
+	 * room for its own far-end cut once New's reach is added. OutReachOnNew is raised (never
+	 * lowered) to this corner's floor on New, so a caller checking New against several existing
+	 * arms in a loop folds all of them into one running floor with repeated calls.
+	 *
+	 * This is the arithmetic that was typed three times (RoadPlacement.cpp review, 2026-09):
+	 * Validate's per-arm loop at the start/end node, its segment-split variant, and
+	 * NodeCornersFit's far-node loop. All three share exactly this shape - a tentative or
+	 * moved arm (New) against an arm already in the graph (Existing) that must not be cut past
+	 * its own length. NodeCornersFit's OTHER loop, the pairs of arms meeting at the node that
+	 * moved, is NOT this shape: neither side has a far end to protect at that step (that is
+	 * ReachAtFar, computed separately) and BOTH sides' reach is needed, not one - so it keeps
+	 * its own inline arithmetic rather than calling this twice with the roles swapped.
+	 */
+	bool CornerFits(const FArm& New, const FArm& Existing, double& OutReachOnNew)
+	{
+		const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(New.Dir, Existing.Dir), -1.0, 1.0));
+		double AlongNew = 0.0;
+		double AlongExisting = 0.0;
+		if (!RoadGeom::CornerReachAtZeroRadius(New.Half, Existing.Half, Theta, AlongNew, AlongExisting))
+		{
+			return false;
+		}
+		OutReachOnNew = FMath::Max(OutReachOnNew, AlongNew);
+		return AlongExisting + Existing.FarCut <= Existing.Length;
+	}
+}
+
 ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId From,
 	const FRoadSnapResult& To, const FRoadPlacementLimits& Limits)
 {
@@ -123,7 +163,7 @@ ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId 
 		const auto ArmHalfWidth = [&Network](const FRoadSegment& Segment)
 		{
 			const URoadProfile* Profile = Network.ProfileFor(Segment);
-			return Profile != nullptr ? FMath::Max(Profile->GetHalfWidthLeft(), Profile->GetHalfWidthRight()) : 0.0;
+			return Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0;
 		};
 		const auto ArmLength = [&Network](const FRoadSegment& Segment)
 		{
@@ -136,6 +176,7 @@ ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId 
 		const auto NewReachAt = [&](const FVector2D& NewDir, const FRoadNode& At, FRoadNodeId AtId, double& OutReach)
 		{
 			OutReach = 0.0;   // a dead end has no floor: its cap shrinks to fit
+			const FArm New{ NewDir, Limits.NewRoadHalfWidth, 0.0, 0.0 };
 			for (const FRoadSegmentId& Incident : At.Incident)
 			{
 				const FRoadSegment* Arm = Network.GetSegment(Incident);
@@ -148,16 +189,9 @@ ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId 
 				{
 					continue;
 				}
-				const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(NewDir, ArmDir), -1.0, 1.0));
-				double AlongNew = 0.0;
-				double AlongArm = 0.0;
-				if (!RoadGeom::CornerReachAtZeroRadius(Limits.NewRoadHalfWidth, ArmHalfWidth(*Arm), Theta, AlongNew, AlongArm))
-				{
-					return false;
-				}
-				OutReach = FMath::Max(OutReach, AlongNew);
-				const double ArmFar = FRoadNetworkSolver::ZeroRadiusCut(Network, Incident, Network.GetOtherEnd(Incident, AtId));
-				if (AlongArm + ArmFar > ArmLength(*Arm))
+				const FArm Existing{ ArmDir, ArmHalfWidth(*Arm), ArmLength(*Arm),
+					FRoadNetworkSolver::ZeroRadiusCut(Network, Incident, Network.GetOtherEnd(Incident, AtId)) };
+				if (!CornerFits(New, Existing, OutReach))
 				{
 					return false;
 				}
@@ -192,19 +226,14 @@ ERoadPlacement RoadPlacement::Validate(const URoadNetwork& Network, FRoadNodeId 
 				const double Half = ArmHalfWidth(*Split);
 				const FRoadNodeId Ends[2] = { Split->A, Split->B };
 				const FRoadNode* EndNodes[2] = { EndA, EndB };
+				const FArm New{ Incoming, Limits.NewRoadHalfWidth, 0.0, 0.0 };
 				for (int32 Side = 0; Side < 2; ++Side)
 				{
 					const double HalfLength = FVector2D::Distance(EndNodes[Side]->Position, To.Position);
 					const FVector2D Towards = (EndNodes[Side]->Position - To.Position).GetSafeNormal();
-					const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(Incoming, Towards), -1.0, 1.0));
-					double AlongNew = 0.0;
-					double AlongHalf = 0.0;
-					if (!RoadGeom::CornerReachAtZeroRadius(Limits.NewRoadHalfWidth, Half, Theta, AlongNew, AlongHalf))
-					{
-						return ERoadPlacement::TooShortForCorner;
-					}
-					ReachAtEnd = FMath::Max(ReachAtEnd, AlongNew);
-					if (AlongHalf + FRoadNetworkSolver::ZeroRadiusCut(Network, To.Segment, Ends[Side]) > HalfLength)
+					const FArm Existing{ Towards, Half, HalfLength,
+						FRoadNetworkSolver::ZeroRadiusCut(Network, To.Segment, Ends[Side]) };
+					if (!CornerFits(New, Existing, ReachAtEnd))
 					{
 						return ERoadPlacement::TooShortForCorner;
 					}
@@ -245,7 +274,10 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 		return true;
 	}
 
-	struct FArm
+	// Named apart from the file-local FArm (CornerFits' plain corner-participant struct):
+	// this one also carries the network handles and running-max fields NodeCornersFit itself
+	// needs across its two passes, which CornerFits has no business knowing about.
+	struct FIncidentArm
 	{
 		FRoadSegmentId Segment;
 		FRoadNodeId Far;
@@ -255,7 +287,7 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 		double ReachHere = 0.0;                   // the floor at the moved node, max over pairs
 		double ReachAtFar = 0.0;                  // the floor at the far node, max over its other arms
 	};
-	TArray<FArm> Arms;
+	TArray<FIncidentArm> Arms;
 	for (const FRoadSegmentId& Incident : Live->Incident)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Incident);
@@ -265,14 +297,14 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 		{
 			continue;
 		}
-		FArm Arm;
+		FIncidentArm Arm;
 		Arm.Segment = Incident;
 		Arm.Far = FarId;
 		// Judged where the node WOULD land, not where it is.
 		Arm.Length = FVector2D::Distance(Far->Position, Position);
 		Arm.Dir = Arm.Length > 0.0 ? (Far->Position - Position) / Arm.Length : FVector2D::ZeroVector;
 		const URoadProfile* Profile = Network.ProfileFor(*Segment);
-		Arm.Half = Profile != nullptr ? FMath::Max(Profile->GetHalfWidthLeft(), Profile->GetHalfWidthRight()) : 0.0;
+		Arm.Half = Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0;
 		Arm.ReachHere = 0.0;    // a dead end has no floor; corners raise these below
 		Arm.ReachAtFar = 0.0;
 		Arms.Add(Arm);
@@ -301,15 +333,17 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 	}
 
 	// Corners at each far node that the moved arm takes part in: the arm's new direction
-	// against every other arm there. The other arm must still hold ITS two ends too.
-	for (FArm& Arm : Arms)
+	// against every other arm there. The other arm must still hold ITS two ends too. This is
+	// exactly CornerFits' shape - Arm is the moved (New) side, Other is the unmoved (Existing)
+	// one that must not be cut past its own length.
+	for (FIncidentArm& Arm : Arms)
 	{
 		const FRoadNode* Far = Network.GetNode(Arm.Far);
 		if (Far == nullptr)
 		{
 			continue;
 		}
-		const FVector2D MovedDirAtFar = -Arm.Dir;
+		const FArm Moved{ -Arm.Dir, Arm.Half, 0.0, 0.0 };
 		for (const FRoadSegmentId& FarIncident : Far->Incident)
 		{
 			if (FarIncident == Arm.Segment)
@@ -324,18 +358,10 @@ bool RoadPlacement::NodeCornersFit(const URoadNetwork& Network, FRoadNodeId Node
 			}
 			const FVector2D OtherDir = (OtherEnd->Position - Far->Position).GetSafeNormal();
 			const URoadProfile* OtherProfile = Network.ProfileFor(*Other);
-			const double OtherHalf = OtherProfile ? FMath::Max(OtherProfile->GetHalfWidthLeft(), OtherProfile->GetHalfWidthRight()) : 0.0;
-			const double Theta = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(MovedDirAtFar, OtherDir), -1.0, 1.0));
-			double AlongMoved = 0.0;
-			double AlongOther = 0.0;
-			if (!RoadGeom::CornerReachAtZeroRadius(Arm.Half, OtherHalf, Theta, AlongMoved, AlongOther))
-			{
-				return false;
-			}
-			Arm.ReachAtFar = FMath::Max(Arm.ReachAtFar, AlongMoved);
-			const double OtherLength = FVector2D::Distance(OtherEnd->Position, Far->Position);
-			const double OtherFar = FRoadNetworkSolver::ZeroRadiusCut(Network, FarIncident, Network.GetOtherEnd(FarIncident, Arm.Far));
-			if (AlongOther + OtherFar > OtherLength)
+			const FArm Existing{ OtherDir, OtherProfile ? OtherProfile->GetMaxHalfWidth() : 0.0,
+				FVector2D::Distance(OtherEnd->Position, Far->Position),
+				FRoadNetworkSolver::ZeroRadiusCut(Network, FarIncident, Network.GetOtherEnd(FarIncident, Arm.Far)) };
+			if (!CornerFits(Moved, Existing, Arm.ReachAtFar))
 			{
 				return false;
 			}

@@ -412,8 +412,7 @@ FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 	// is a cache refresh, the same shape as RuntimeProfile, not a write to authored state.
 	if (const URoadProfile* ProfileForLimits = ResolveProfile())
 	{
-		PlacementLimits.NewRoadHalfWidth =
-			FMath::Max(ProfileForLimits->GetHalfWidthLeft(), ProfileForLimits->GetHalfWidthRight());
+		PlacementLimits.NewRoadHalfWidth = ProfileForLimits->GetMaxHalfWidth();
 	}
 
 	FBuildSessionTunables Tunables;

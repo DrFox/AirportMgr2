@@ -265,6 +265,38 @@ bool FCornerPlacementTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("30 degrees with 3000 uu arms is a corner the solver can fit"), Judge(3000.0), ERoadPlacement::Valid);
 	TestEqual(TEXT("30 degrees with 700 uu arms cannot hold its corner (746) and is refused"), Judge(700.0), ERoadPlacement::TooShortForCorner);
 
+	// THE SEGMENT-SPLIT VARIANT of the same corner-fit floor - a new road cutting an EXISTING
+	// one in half, rather than landing on a live node. This is the one corner-fit branch none
+	// of Placement/Heal/JunctionClearance ever reaches (they all run with NewRoadHalfWidth 0),
+	// so it needs its own case here.
+	auto JudgeSplitAt = [&](double SplitAt, double BaseLength)
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>();
+		const FRoadNodeId EndA = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId EndB = Net->AddNode(FVector2D(BaseLength, 0.0));
+		const FRoadSegmentId Base = Net->AddStraightSegment(EndA, EndB, Profile);
+		// Perpendicular to the base road, so the split's own TooSharpAtEnd check (90 degrees
+		// off either half) never fires and the corner-fit floor is what is measured.
+		const FRoadNodeId From = Net->AddNode(FVector2D(SplitAt, 1000.0));
+
+		FRoadSnapResult To;
+		To.Kind = ERoadSnapKind::Segment;
+		To.Segment = Base;
+		To.Position = FVector2D(SplitAt, 0.0);
+		return RoadPlacement::Validate(*Net, From, To, Limits);
+	};
+
+	// Equal 200 uu half-widths at 90 degrees need a 200 uu floor on each side (RoadGeom's
+	// w / tan(theta/2) at theta = 90 is exactly w). Split 100 uu from the west end of a 3000
+	// uu road: that half cannot hold the floor and is refused before the long half is even
+	// measured.
+	TestEqual(TEXT("a segment split too close to one end cannot hold that half's corner and is refused"),
+		JudgeSplitAt(100.0, 3000.0), ERoadPlacement::TooShortForCorner);
+
+	// Split at the midpoint instead: both 1500 uu halves clear the same 200 uu floor.
+	TestEqual(TEXT("split at the midpoint, both halves hold their corner and it is valid"),
+		JudgeSplitAt(1500.0, 3000.0), ERoadPlacement::Valid);
+
 	Limits.NewRoadHalfWidth = 0.0;
 	TestEqual(TEXT("a zero half-width disables the check, so callers without a profile are unchanged"),
 		Judge(700.0), ERoadPlacement::Valid);
