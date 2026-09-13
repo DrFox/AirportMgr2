@@ -82,7 +82,7 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 	Net.AddStraightSegment(A, B, Taxiway);
 	Actor->RebuildMesh();
 
-	const int32 Saved = Actor->SurfaceTriangleCountForTest();
+	const int32 Saved = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 	if (!TestTrue(TEXT("a connected pair of nodes builds a surface"), Saved > 0))
 	{
 		return false;
@@ -99,13 +99,13 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 	}
 
 	TestEqual(TEXT("the mesh is now stale - it still shows the old model"),
-		Actor->SurfaceTriangleCountForTest(), Saved);
+		Actor->GetPresenter()->SurfaceTriangleCountForTest(), Saved);
 
 	// 3. THE MEASUREMENT. Re-registering runs the same path a level load does, and it must
 	//    leave the surface agreeing with the model.
 	Actor->ReregisterAllComponents();
 
-	const int32 AfterLoad = Actor->SurfaceTriangleCountForTest();
+	const int32 AfterLoad = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 	TestNotEqual(TEXT("loading rebuilds the surface from the model, not the saved cache"),
 		AfterLoad, Saved);
 
@@ -114,7 +114,7 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 	//    a rebuild after a load is a no-op, so there is no moment at which old roads move.
 	Actor->RebuildMesh();
 	TestEqual(TEXT("and a later rebuild then changes nothing at all"),
-		Actor->SurfaceTriangleCountForTest(), AfterLoad);
+		Actor->GetPresenter()->SurfaceTriangleCountForTest(), AfterLoad);
 
 	return true;
 }
@@ -147,7 +147,7 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	// One isolated node, purely to bring the network into being - see MeshIsFreshAfterLoad's
 	// own comment on PlaceNode for why this is how every test here does it.
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
-	const int32 Before = Actor->SurfaceTriangleCountForTest();
+	const int32 Before = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 
 	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
 	Runway->bContinuousThroughJunctions = true;
@@ -162,7 +162,7 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a runway is placed"),
 		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), Runway));
 
-	const int32 AfterPlace = Actor->SurfaceTriangleCountForTest();
+	const int32 AfterPlace = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 	TestTrue(TEXT("PlaceRunway's OnChanged broadcast rebuilt the mesh with no explicit "
 		"RebuildMesh() call - the triangle count actually changed"), AfterPlace != Before);
 	TestTrue(TEXT("and the rebuild produced real triangles, not an empty buffer"),
@@ -173,7 +173,7 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	// model itself had taken it back.
 	TestTrue(TEXT("the placement undoes"), Actor->Undo());
 
-	const int32 AfterUndo = Actor->SurfaceTriangleCountForTest();
+	const int32 AfterUndo = Actor->GetPresenter()->SurfaceTriangleCountForTest();
 	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh back to what it was before "
 		"the runway existed, with no explicit RebuildMesh() call either"),
 		AfterUndo, Before);
