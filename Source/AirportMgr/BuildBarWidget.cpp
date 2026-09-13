@@ -315,12 +315,7 @@ void UBuildBarWidget::RunAction(int32 ActionIndex)
 		UE_LOG(LogBuildBar, Warning, TEXT("Bar click %d ignored: no controller or no such action"), ActionIndex);
 		return;
 	}
-	if (!Actions[ActionIndex].IsEnabled(*C))
-	{
-		return;
-	}
-	UE_LOG(LogBuildBar, Log, TEXT("Bar: %s"), *Actions[ActionIndex].Id.ToString());
-	Actions[ActionIndex].Execute(*C);
+	Actions[ActionIndex].TryRun(*C, TEXT("Bar"));
 }
 
 void UBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

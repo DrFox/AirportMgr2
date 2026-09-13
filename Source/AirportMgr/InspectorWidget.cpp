@@ -273,12 +273,7 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 		UE_LOG(LogInspector, Warning, TEXT("Inspector click %d ignored: no such action"), ActionIndex);
 		return;
 	}
-	if (!Actions[ActionIndex].IsEnabled(*C))
-	{
-		return;
-	}
-	UE_LOG(LogInspector, Log, TEXT("Inspector: %s"), *Actions[ActionIndex].Id.ToString());
-	Actions[ActionIndex].Execute(*C);
+	Actions[ActionIndex].TryRun(*C, TEXT("Inspector"));
 }
 
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }

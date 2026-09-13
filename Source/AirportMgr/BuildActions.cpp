@@ -117,4 +117,39 @@ TConstArrayView<FBuildAction> BuildActions()
 	return Actions;
 }
 
+bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
+{
+	if (!IsEnabled(C))
+	{
+		return false;
+	}
+	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), Via, *Id.ToString());
+	Execute(C);
+	return true;
+}
+
+const FBuildAction* FindAction(FName Id)
+{
+	for (const FBuildAction& Action : BuildActions())
+	{
+		if (Action.Id == Id)
+		{
+			return &Action;
+		}
+	}
+	return nullptr;
+}
+
+const FBuildAction* FindAction(FKey Key, bool bRequiresCtrl)
+{
+	for (const FBuildAction& Action : BuildActions())
+	{
+		if (Action.Key == Key && Action.bRequiresCtrl == bRequiresCtrl)
+		{
+			return &Action;
+		}
+	}
+	return nullptr;
+}
+
 #undef LOCTEXT_NAMESPACE

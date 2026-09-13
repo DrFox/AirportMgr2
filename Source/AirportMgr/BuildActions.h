@@ -38,7 +38,20 @@ struct FBuildAction
 	TFunction<bool(const ARoadBuildController&)> IsActive;
 	/** Greyed when false: undo with nothing to undo, land with no runway. */
 	TFunction<bool(const ARoadBuildController&)> IsEnabled;
+
+	/**
+	 * The ONE door: checks IsEnabled, logs "<Via>: <Id>" on LogRoadBuild, then Execute - so
+	 * the bar, the inspector and every key press leave the same one line when they actually
+	 * fire, and none of them can fire a disabled action by forgetting the check. Returns
+	 * whether it ran.
+	 */
+	bool TryRun(ARoadBuildController& C, const TCHAR* Via) const;
 };
+
+/** Linear scan: BuildActions() is a few dozen entries, not a hot loop. */
+const FBuildAction* FindAction(FName Id);
+/** Ctrl state disambiguates two actions sharing a key; none do today, but the table allows it. */
+const FBuildAction* FindAction(FKey Key, bool bRequiresCtrl);
 
 /**
  * THE list. Key bindings (ARoadBuildController::SetupInputComponent), the startup banner and
