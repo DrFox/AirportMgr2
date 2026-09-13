@@ -214,10 +214,12 @@ private:
 	bool Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step);
 
 	/**
-	 * DeleteApron and DeleteEntity were the same shape apart from which slot-map Remove they
-	 * called (#103): guard the network and the doomed handle, open an edit scope, Remove,
-	 * CommitAndNotify. bDoomed is evaluated by the caller, which is the one that knows how to
-	 * turn its own index into its own handle type.
+	 * DeleteApron, DeleteEntity and DisconnectGuideline were the same shape apart from which
+	 * slot-map Remove they called (#103, folded in on review once #134 gave
+	 * DisconnectGuideline its own CommitAndNotify): guard the network and the doomed handle,
+	 * open an edit scope, Remove, CommitAndNotify. bDoomed is evaluated by the caller, which
+	 * is the one that knows how to turn its own index into its own handle type - and, for
+	 * DisconnectGuideline, checks its own extra derived-edge refusal first.
 	 */
 	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove);
 
