@@ -1356,15 +1356,20 @@ bool FPushbackHoldsLeadInTest::RunTest(const FString& Parameters)
 	//   3. the second agent's WaitingOn names the pushing agent by id.
 
 	// NOTE TO THE IMPLEMENTER: build this against the live URoadNetwork API by copying the
-	// fixture construction from JunctionClaimTest.cpp, which already stands two agents on one
-	// edge and asserts a refusal. Do not invent a network shape; reuse that one.
+	// fixture construction from GroundTrafficTest.cpp's Airside.Model.Traffic.BoxEntry
+	// (:299-364), which already stands agents on one graph and asserts a refusal. Plant a
+	// blocker with Traffic->OccupancyForTest().TryClaim(Claim, OutBlocker) and a phantom
+	// AgentId, the way GroundTrafficTest.cpp:410-416 does; read it back with
+	// Traffic->GetOccupancy().IsHeld(FTrafficResource::OfEdge(Id), 0). A real stand pose node
+	// comes from FTestAirport::Build(Airframe, {.StandCount = 1}) then FTestAirport::Pose().
+	// Do not invent a network shape; reuse those.
 	return true;
 }
 
 #endif
 ```
 
-**This is the one test whose body the plan does not write out in full**, because the network fixture must be copied from a live test rather than transcribed from memory — a plan that invents a `URoadNetwork` construction sequence is exactly how this project ships plans with real defects. Open `JunctionClaimTest.cpp`, copy its fixture, and replace one agent's phase with `Manoeuvring` armed by `FPushbackRun::Start` on the plan that fixture already builds. The three assertions above are the deliverable.
+**This is the one test whose body the plan does not write out in full**, because the network fixture must be copied from a live test rather than transcribed from memory — a plan that invents a `URoadNetwork` construction sequence is exactly how this project ships plans with real defects. **Corrected during execution: `JunctionClaimTest.cpp` is a road-geometry test with no `UGroundTraffic` and no agents at all.** The traffic/claims fixtures live in `GroundTrafficTest.cpp` (`Airside.Model.Traffic.BoxEntry`, :299-364) and `TrafficOccupancyTest.cpp`. Copy from there, and get a real stand pose node from `FTestAirport::Build(Airframe, {.StandCount = 1})` plus `FTestAirport::Pose(Stand)`. The three assertions above are the deliverable.
 
 - [ ] **Step 7: Build twice, then run**
 
@@ -1969,5 +1974,7 @@ Fill the PR template: the build line, the test line (`N test(s) run, N failed, N
 **Two spec tests have no separate task and are folded in deliberately:** `Pushback.WalksTheLeadIn` and `Pushback.BodyIsReversed` are both assertions inside `Airside.Model.PushbackRun` (Task 3 Step 2), because they share its fixture and a reviewer could not reject one without the other.
 
 **Known soft spots, stated rather than hidden.** Four test bodies are specified as comments plus an assertion list rather than written out: Task 5 Step 6, Task 6 Step 2 (two tests), Task 8 Step 2, Task 9 Step 1. Each needs a `URoadNetwork` or a world fixture, and this project has shipped plans whose invented fixture code did not compile against the live headers. Each names the existing test file to copy the fixture from. That is a deliberate trade: a named source beats a plausible invention.
+
+**Execution note, 2026-09-13.** The first named source was wrong: this plan originally sent Task 5 to `JunctionClaimTest.cpp`, which turns out to contain no `UGroundTraffic`, no agents and no claims - it is a `FRoadNetworkSolver` geometry test. Corrected to `GroundTrafficTest.cpp`. The lesson is the one the plan already states, applied to itself: a file named from memory is a plausible invention too.
 
 **One name to check against the live header before writing it:** `FTrafficResource::ForEdge` / `ForNode` in Task 6 Step 4. The struct is in `Model/TrafficOccupancy.h`; use whatever it actually spells.

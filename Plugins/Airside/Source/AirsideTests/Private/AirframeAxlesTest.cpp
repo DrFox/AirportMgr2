@@ -63,6 +63,21 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the body centre is derived from the footprint"),
 		Built.BodyCentreX, (385.1 + -531.5) * 0.5, 0.01);
 
+	// THE PUSHBACK NEED MAKES THE SAME TRIP, and it is asserted here for the reason this
+	// whole section exists: it is authored on the type, read in Model/, and the ONE crossing
+	// between them is Airframe(). A field left out of that function is a value the simulation
+	// never sees, however carefully a designer set it.
+	Type->PushbackNeed = EPushbackNeed::SelfManoeuvre;
+	TestEqual(TEXT("the pushback need reaches the airframe"),
+		Type->Airframe().PushbackNeed, EPushbackNeed::SelfManoeuvre);
+
+	// AND THE UNAUTHORED DEFAULT IS THE CONSERVATIVE ONE. A hand-built airframe - a test, the
+	// Piper fallback - must not claim it can reverse itself: saying "needs a tug" of something
+	// that does not is a missing fee, while saying "reverses itself" of an A320 is an airport
+	// that never needs the depot at all. Only one of those two errors is recoverable.
+	TestEqual(TEXT("an unauthored airframe needs a tug"),
+		Unmeasured.PushbackNeed, EPushbackNeed::VehicleTug);
+
 	// 5. THE PIPER IS MEASURED and keeps its main-gear origin: SteerAxleX is its wheelbase,
 	//    FixedAxleX is zero. Measured off SK_PiperMeridian's reference pose - wheel_f at
 	//    x = 237.8, wheel_rl and wheel_rr at x = 0 - rather than from the "about 2.6 m" the
@@ -127,6 +142,60 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("plane2's steered axle is its origin, per the class convention"),
 		Type->SteerAxleX, 0.0, 1.0);
 	TestTrue(TEXT("and its mains are measured, aft of that origin"), Type->FixedAxleX < -100.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPushbackNeedsAuthoredTest,
+	"Airside.Content.PushbackNeedsAuthored",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
+{
+	// WHAT THE SHIPPED AIRCRAFT ACTUALLY SAY, asserted against the assets rather than trusted
+	// to an authoring script's own report. Both headless save APIs report success while
+	// writing nothing, so a MARKER line in a python log is evidence that the script RAN, not
+	// that the value landed. This is the only check that survives the script.
+	//
+	// IT IS ALSO THE PROGRESSION, pinned. The light types reverse themselves, so an early
+	// airport needs no Pushback depot at all; the airliners need a tug, so accepting one is
+	// what forces the building. That is the whole gameplay point of EPushbackNeed, and it is
+	// a content decision - which means nothing but a content test can defend it.
+	struct FExpected
+	{
+		const TCHAR* Path;
+		EPushbackNeed Need;
+		const TCHAR* Why;
+	};
+
+	const FExpected Expected[] = {
+		{ TEXT("/Game/Entities/DA_Aircraft_Piper"),  EPushbackNeed::SelfManoeuvre,
+		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Twin Otter beta-ranges off a stand") },
+		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
+		  TEXT("an A320 is what forces the Pushback depot") },
+		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,
+		  TEXT("and so is a 737") },
+	};
+
+	for (const FExpected& Each : Expected)
+	{
+		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
+			UAircraftType::StaticClass(), nullptr, Each.Path));
+		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Each.Path), Type))
+		{
+			continue;
+		}
+
+		TestEqual(Each.Why, Type->PushbackNeed, Each.Need);
+
+		// AND IT SURVIVES THE FLATTENING for this particular asset, not just for the
+		// hand-built type in AirframeAxles above: the game reads FAirframe, never the DA.
+		TestEqual(*FString::Printf(TEXT("%s carries it into the airframe"), Each.Path),
+			Type->Airframe().PushbackNeed, Each.Need);
+	}
 
 	return true;
 }
