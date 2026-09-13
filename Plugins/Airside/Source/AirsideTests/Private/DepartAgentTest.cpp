@@ -17,9 +17,20 @@
 
 namespace
 {
-	/** The departure-release fixture: a runway split at (0,0) and an authored guideline from
-	 *  A (0,-20000) to B (0,0) ON the strip. Built onto whichever network is handed in. */
-	struct FDepAgentGraph { FGuidelineNodeId A, B; };
+	/**
+	 * The departure-release fixture: a runway split at (0,0), a stand at A (0,-20000), and a
+	 * JUNCTION at J (0,-10000) where the lead-in meets a taxiway running east-west.
+	 *
+	 * THE JUNCTION IS NOT DECORATION. A pushback reverses onto the arm of the junction the
+	 * departure does NOT take, so a stand joined to its runway by a single edge has nowhere to
+	 * be pushed and UGroundTraffic::DepartAgent refuses it - see PushbackPlanner::Plan, and the
+	 * ruling that a stand nothing can leave is a layout problem rather than something to
+	 * improvise around. This fixture used to be that single edge, and duly started refusing.
+	 *
+	 * A REAL AIRPORT NEVER HAS THE OTHER SHAPE: a stand's lead-in meets a taxiway, not a
+	 * runway. The fixture is more realistic for the change, not less.
+	 */
+	struct FDepAgentGraph { FGuidelineNodeId A, B, J, E; };
 
 	FDepAgentGraph DepAgentBuild(URoadNetwork& Net)
 	{
@@ -31,15 +42,29 @@ namespace
 		Net.AddStraightSegment(RM, RB, Runway);
 
 		FDepAgentGraph G;
-		G.A = Net.AddGuidelineNode(FVector2D(0.0, -20000.0), false);
-		G.B = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
-		FGuidelineEdge Edge;
-		Edge.A = G.A; Edge.B = G.B;
-		Edge.Control = FVector2D(0.0, -10000.0);
-		Edge.AllowedTraffic = FTrafficMask::All();
-		Edge.Direction = EGuidelineDir::Bidirectional;
-		Edge.bDerived = false;
-		Net.AddGuidelineEdge(MoveTemp(Edge));
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, -20000.0), false);   // the stand
+		G.J = Net.AddGuidelineNode(FVector2D(0.0, -10000.0), false);   // lead-in meets taxiway
+		G.B = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);        // on the strip
+		G.E = Net.AddGuidelineNode(FVector2D(20000.0, -10000.0), false); // the far arm
+
+		auto Join = [&Net](FGuidelineNodeId From, FGuidelineNodeId To)
+		{
+			const FVector2D Mid =
+				(Net.GetGuidelineNode(From)->Position + Net.GetGuidelineNode(To)->Position) * 0.5;
+
+			FGuidelineEdge Edge;
+			Edge.A = From;
+			Edge.B = To;
+			Edge.Control = Mid;
+			Edge.AllowedTraffic = FTrafficMask::All();
+			Edge.Direction = EGuidelineDir::Bidirectional;
+			Edge.bDerived = false;
+			Net.AddGuidelineEdge(MoveTemp(Edge));
+		};
+
+		Join(G.A, G.J);
+		Join(G.J, G.B);
+		Join(G.J, G.E);
 		return G;
 	}
 }

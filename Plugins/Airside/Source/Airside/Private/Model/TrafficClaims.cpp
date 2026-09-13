@@ -249,7 +249,7 @@ FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 	// are added for the same reasons the ordinary Head adds them.
 	if (Agent.Phase == EAgentPhase::Manoeuvring)
 	{
-		Head = FMath::Max(Head, Agent.Pushback.PushDistance + F * 0.5 + G);
+		Head = FMath::Max(Head, Agent.Pushback.Plan.Length + F * 0.5 + G);
 	}
 	const int32 Current = UGroundTraffic::CurrentStep(Plan, T);
 

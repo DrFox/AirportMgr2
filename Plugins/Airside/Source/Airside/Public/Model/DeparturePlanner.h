@@ -33,6 +33,14 @@ enum class EDepartureRefusal : uint8
 	 * arbitrated as it goes.
 	 */
 	PushbackBlocked,
+	/**
+	 * The stand has no arm to reverse onto, so the aeroplane cannot be pushed off it at all.
+	 *
+	 * PERMANENT, unlike PushbackBlocked: no amount of waiting adds a second way out of a
+	 * dead-end taxiway. Refusing is deliberate - see PushbackPlanner::Plan for why falling
+	 * back on reversing down the departure's own arm was rejected.
+	 */
+	NoPushbackRoute,
 };
 
 /**

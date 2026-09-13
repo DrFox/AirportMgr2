@@ -68,7 +68,37 @@ A fourth sibling beside `FLandingRun`, `FRouteFollower` and `FTakeoffRun`, with
 already describes and justifies. `Parked → Manoeuvring → Taxiing`. `UGroundTraffic::DepartAgent`
 enters it instead of calling `RedirectAgent` straight from `Parked`.
 
-### It walks the departure plan; it does not invent geometry
+### CORRECTED 2026-09-13: it walks a route of its OWN
+
+**This section originally said the push walks a prefix of the DEPARTURE route, and that was
+the defect.** It was reported from PIE with photographs (`samples/reversePath1-8.png` against
+`samples/reversePathWanted1-5.png`): the aeroplane reversed its lead-in correctly and then
+kept reversing the way it meant to taxi, finishing *past* the junction on the wrong side of
+its own turn.
+
+A real pushback reverses onto the arm of the junction the departure does **not** take, so
+that driving forward afterwards carries the aeroplane *through* the junction and away.
+`PushbackPlanner::Plan` builds that route, and plans the taxi out **from where the push ends**
+— the aeroplane finishes somewhere the departure route never visits, so the route planned from
+the stand no longer begins where it is standing. `FRoadAgent::TaxiOutPlan` carries it, exactly
+as `TaxiInPlan` carries an arrival's.
+
+**The heading law collapses to one line as a result**: facing is the tangent turned through
+180°, the whole way. At the stand the lead-in runs away from the terminal, so tangent + π *is*
+the parked heading; at the far end the route runs away from where the aeroplane is going, so
+tangent + π *is* the taxi-out heading. The `Back`/`Swing` phases, `TargetHeading`,
+`PushSwingLength` and the corner-finding below were all needed only because the run was
+walking the wrong line. They are gone.
+
+**When a stand has no second arm the departure is REFUSED** (`EDepartureRefusal::NoPushbackRoute`)
+rather than falling back on the old behaviour — a stand nothing can leave is a layout problem
+the player can see and fix, and a fallback would make the defect appear on some layouts and
+not others.
+
+The rest of this section is kept as written, because what it says about `Travelled` and the
+reversed body is still exactly true — only *which line* was wrong.
+
+### Superseded: it walks the departure plan; it does not invent geometry
 
 `DeparturePlanner::PlanAny` already returns an `FRoutePlan` whose `Steps[0]` *is* the stand
 lead-in — `FAnchorLink::Gather` casts that lead-in along `Heading + PI` from the pose node

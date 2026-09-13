@@ -457,7 +457,11 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	// DELIBERATELY NOT AT THE WORLD ORIGIN. The origin is what this project's recurring
 	// "posed at (0,0)" failure looks like, so a fixture that parks the aeroplane there could
 	// never tell the failure from the fixture. Offset, and the check below means something.
-	Plan.Polyline = { {10000.0, 5000.0}, {14000.0, 5000.0}, {14000.0, 13000.0} };
+	//
+	// THE PUSH ROUTE, not the departure's: the stand at (10000, 5000) facing north, its
+	// lead-in running SOUTH, and then the EAST arm of the junction - the one the taxi out does
+	// not use. See PushbackPlanner.
+	Plan.Polyline = { {10000.0, 5000.0}, {10000.0, 1000.0}, {18000.0, 1000.0} };
 	Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
 	FRouteStep LeadIn;
 	LeadIn.EndDistance = 4000.0;
@@ -465,7 +469,19 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	Taxiway.EndDistance = Plan.Length;
 	Plan.Steps = { LeadIn, Taxiway };
 
-	const double ParkedHeading = UE_DOUBLE_PI;
+	// AND THE TAXI OUT FROM WHERE THE PUSH ENDS - west along the same taxiway, which is the
+	// direction the push leaves the aeroplane facing. Planned at dispatch in production; here
+	// it is the second half of the fixture.
+	FRoutePlan TaxiOut;
+	TaxiOut.Result = ERouteResult::Found;
+	TaxiOut.Polyline = { {18000.0, 1000.0}, {2000.0, 1000.0} };
+	TaxiOut.Length = GuidelineGeom::PolylineLength(TaxiOut.Polyline);
+	FRouteStep Away;
+	Away.EndDistance = TaxiOut.Length;
+	TaxiOut.Steps = { Away };
+
+	// Facing NORTH on the stand, into the terminal, because the lead-in runs south.
+	const double ParkedHeading = UE_DOUBLE_HALF_PI;
 
 	FAirframe Airframe = TestAirframes::Piper();
 	Airframe.PushbackNeed = EPushbackNeed::VehicleTug;
@@ -473,7 +489,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	FRoadAgent Agent;
 	Agent.Phase = EAgentPhase::Parked;
 	if (!TestTrue(TEXT("a parked aeroplane can be pushed"),
-		Agent.StartPushback(Plan, Airframe, ParkedHeading, 150.0, 30.0, 3000.0, 0.0)))
+		Agent.StartPushback(Plan, TaxiOut, Airframe, 150.0, 30.0, 0.0)))
 	{
 		return false;
 	}
@@ -489,7 +505,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	// AND IT IS POSED AT THE STAND, facing the way it parked, before any Advance at all -
 	// never at the world origin, and never facing out along the line it is standing on.
 	TestEqual(TEXT("posed at the stand from the start"),
-		Agent.GroundPosition().X, 10000.0, 0.01);
+		Agent.GroundPosition().Y, 5000.0, 0.01);
 	TestEqual(TEXT("facing the way it parked, not the way the line points"),
 		FMath::Abs(FMath::RadiansToDegrees(
 			FMath::UnwindRadians(Agent.LastMotion.Heading - ParkedHeading))), 0.0, 0.01);
@@ -545,17 +561,22 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("no frame put the aeroplane at the world origin"), bEverAtOrigin);
 
 	// THE DEFECT THIS FEATURE REMOVES, measured at the level of the agent: the follower
-	// inherits no heading error, so there is nothing left for it to slew on the spot.
-	TestEqual(TEXT("the follower inherits no heading error"),
+	// inherits no heading error, so there is nothing left for it to slew on the spot. The push
+	// finished facing the line's tangent turned about, and the taxi out leaves that same point
+	// the other way, so the two agree by construction rather than by arithmetic.
+	TestEqual(TEXT("the follower inherits the heading the push finished on"),
 		FMath::Abs(FMath::RadiansToDegrees(
-			FMath::UnwindRadians(Agent.Follower.Heading - Agent.Pushback.TargetHeading))),
+			FMath::UnwindRadians(Agent.Follower.Heading - Agent.Pushback.Heading))),
 		0.0, 0.01);
 
-	// AND IT TURNED 90 DEGREES GETTING THERE, not 180: the push ran past the corner and onto
-	// the taxiway rather than stopping on the lead-in.
+	// AND IT TURNED 90 DEGREES GETTING THERE, ending facing WEST - the way it will taxi -
+	// rather than back out along its own lead-in.
 	TestEqual(TEXT("it swung 90 degrees off its parked heading"),
 		FMath::Abs(FMath::RadiansToDegrees(
 			FMath::UnwindRadians(Agent.Follower.Heading - ParkedHeading))), 90.0, 0.5);
+	TestEqual(TEXT("which leaves it facing the way the taxi out goes"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.Follower.Heading - UE_DOUBLE_PI))), 0.0, 0.5);
 
 	// A POWERBACK WAITS FOR THRUST, through the agent rather than through FPushbackRun: the
 	// gate reads the AGENT's EngineRPM, so a threshold that never rose would hold it for ever.
@@ -565,7 +586,7 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 
 		FRoadAgent Powerback;
 		Powerback.Phase = EAgentPhase::Parked;
-		Powerback.StartPushback(Plan, Light, ParkedHeading, 200.0, 30.0, 3000.0,
+		Powerback.StartPushback(Plan, TaxiOut, Light, 200.0, 30.0,
 			Light.Engine.MaxRPM * 0.6);
 
 		FAgentMotion PowerMotion;

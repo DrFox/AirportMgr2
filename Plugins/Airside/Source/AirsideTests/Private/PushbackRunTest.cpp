@@ -21,23 +21,25 @@ namespace
 	}
 
 	/**
-	 * A stand square to its taxiway: 40 m of lead-in running +X out of the nose-stop, then a
-	 * corner onto a taxiway running +Y. The aeroplane parked facing -X, into the terminal,
-	 * which is what makes the lead-in run away from it.
+	 * THE LAYOUT FROM THE REPORT, laid out the way the photographs show it.
 	 *
-	 * THE ORDINARY LAYOUT, and the one the whole feature is sized for: the correct answer
-	 * here is a 90 degree swing, not the 180 an earlier design would have produced.
+	 * The stand is at the origin with the aeroplane facing NORTH into the terminal. Its
+	 * lead-in runs SOUTH to a taxiway along y = -4000. The departure taxis WEST, so the push
+	 * must reverse onto the EAST arm - finishing east of the junction and facing west, which
+	 * is exactly reversePathWanted5.png.
+	 *
+	 * THIS IS A PUSH ROUTE, not a departure route: PushbackPlanner::Plan produces it, and the
+	 * distinction is the whole correction. An earlier version walked a prefix of the DEPARTURE
+	 * route, which runs the other way, so the aeroplane finished WEST of the junction having
+	 * reversed along the very arm it was supposed to taxi out along - reversePath8.png.
 	 */
-	FRoutePlan PushbackPerpendicularPlan()
+	FRoutePlan PushbackEastArmPlan()
 	{
 		FRoutePlan Plan;
 		Plan.Result = ERouteResult::Found;
-		Plan.Polyline = { {0.0, 0.0}, {4000.0, 0.0}, {4000.0, 8000.0} };
+		Plan.Polyline = { {0.0, 0.0}, {0.0, -4000.0}, {8000.0, -4000.0} };
 		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
 
-		// ONE STEP PER LEG, and Steps[0] is the straight lead-in - which is what
-		// PlanPushDistance reads. EndDistance is CUMULATIVE route distance, the meaning
-		// FRouteStep::EndDistance carries everywhere else.
 		FRouteStep LeadIn;
 		LeadIn.EndDistance = 4000.0;
 		FRouteStep Taxiway;
@@ -46,53 +48,11 @@ namespace
 		return Plan;
 	}
 
-	/**
-	 * A dead-end apron: the taxi out runs back the way the lead-in points, so the tug has to
-	 * turn the aeroplane right round. The 180 degree case, which must still work rather than
-	 * oscillate about the angle seam.
-	 */
-	FRoutePlan PushbackDeadEndPlan()
-	{
-		FRoutePlan Plan;
-		Plan.Result = ERouteResult::Found;
-		Plan.Polyline = { {0.0, 0.0}, {12000.0, 0.0} };
-		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+	/** Facing north, into the terminal: the lead-in runs away from it, southward. */
+	constexpr double PushbackParkedHeading = UE_DOUBLE_HALF_PI;
 
-		FRouteStep LeadIn;
-		LeadIn.EndDistance = 4000.0;
-		FRouteStep Onward;
-		Onward.EndDistance = Plan.Length;
-		Plan.Steps = { LeadIn, Onward };
-		return Plan;
-	}
-
-	/**
-	 * THE REAL STAND, and the one the reported defect happened on: a lead-in LONGER than any
-	 * cap on the straight-back - 120 m here - then the corner onto a taxiway running +Y.
-	 *
-	 * FAnchorLink casts a lead-in up to DefaultMaxLeadIn (200 m), so this is an ordinary
-	 * stand, not a pathological one. It is kept separate from the 40 m fixture above because
-	 * the two differ in exactly the property that broke: whether the push reaches the corner.
-	 */
-	FRoutePlan PushbackLongLeadInPlan()
-	{
-		FRoutePlan Plan;
-		Plan.Result = ERouteResult::Found;
-		Plan.Polyline = { {0.0, 0.0}, {12000.0, 0.0}, {12000.0, 20000.0} };
-		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
-
-		FRouteStep LeadIn;
-		LeadIn.EndDistance = 12000.0;
-		FRouteStep Taxiway;
-		Taxiway.EndDistance = Plan.Length;
-		Plan.Steps = { LeadIn, Taxiway };
-		return Plan;
-	}
-
-	/** Parked facing the terminal: the lead-in leaves along +X, so the body faces -X. */
-	constexpr double PushbackParkedHeading = UE_DOUBLE_PI;
-
-	constexpr double PushbackSwingLength = 3000.0;
+	/** Where the aeroplane must finish facing: west, the way it will taxi out. */
+	constexpr double PushbackTaxiOutHeading = UE_DOUBLE_PI;
 
 	/** Drives a run to completion, or until Frames runs out. Returns the frames used. */
 	int32 PushbackRunToEnd(FPushbackRun& Run, int32 Frames, FVector2D& OutAt, double& OutHeading)
@@ -115,55 +75,50 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPushbackRunTest::RunTest(const FString& Parameters)
 {
-	// 1. THE PUSH RUNS PAST THE CORNER. An earlier draft of the spec stopped it at the end of
-	//    the lead-in; the plan's tangent THERE is still the LEAD-IN's, so the aeroplane would
-	//    have been handed over facing straight out of its stand and FRouteFollower would have
-	//    slewed 90 degrees on the spot - the pirouette this whole feature exists to remove,
-	//    merely smaller. This is that defect, measured.
-	{
-		double Back = 0.0;
-		double Push = 0.0;
-		double Target = 0.0;
-		if (!TestTrue(TEXT("a perpendicular stand can be pushed"),
-			FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength,
-				Back, Push, Target)))
-		{
-			return false;
-		}
-		TestEqual(TEXT("Back ends at the end of the lead-in"), Back, 4000.0, 0.01);
-		TestEqual(TEXT("and the push runs a swing length past it"), Push, 7000.0, 0.01);
-
-		// +Y, the TAXIWAY - not +X, the lead-in. The whole of item 1 is this line.
-		TestEqual(TEXT("the target heading is the taxiway, not the lead-in"),
-			PushbackDeltaDegrees(Target, UE_DOUBLE_HALF_PI), 0.0, 0.01);
-	}
-
-	// 2. A PERPENDICULAR STAND SWINGS 90 DEGREES, and ends with nothing left for the follower
-	//    to slew. Parked facing -X, ending facing +Y.
+	// 1. IT STARTS FACING THE WAY IT PARKED, before any frame is advanced - the body is the
+	//    line's tangent turned about, and at the stand that IS the parked heading. An
+	//    aeroplane facing out along its own lead-in for one frame is the flicker this seeding
+	//    exists to prevent.
 	{
 		FPushbackRun Run;
 		if (!TestTrue(TEXT("the run starts"),
-			Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-				150.0, 30.0, PushbackSwingLength, false)))
+			Run.Start(PushbackEastArmPlan(), 150.0, 30.0, false)))
 		{
 			return false;
 		}
-		TestEqual(TEXT("it starts facing the way it parked"),
+		TestEqual(TEXT("it starts facing the way it parked, into the terminal"),
 			PushbackDeltaDegrees(Run.Heading, PushbackParkedHeading), 0.0, 0.001);
+	}
+
+	// 2. THE REPORTED DEFECT, measured: where it finishes, and facing where.
+	//
+	//    reversePath8.png put the aeroplane WEST of the junction - already past the turn it
+	//    was about to make - because the push walked the departure route, which goes west.
+	//    reversePathWanted5.png puts it EAST of the junction facing west, so that driving
+	//    forward carries it through the junction and away. That is a fact about WHICH LINE the
+	//    push walks, and these assertions are the difference between the two photographs.
+	{
+		FPushbackRun Run;
+		Run.Start(PushbackEastArmPlan(), 150.0, 30.0, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
-		const int32 Frames = PushbackRunToEnd(Run, 20000, At, Heading);
-		TestTrue(TEXT("the push ends rather than running for ever"), Frames < 20000);
+		const int32 Frames = PushbackRunToEnd(Run, 40000, At, Heading);
+		TestTrue(TEXT("the push ends rather than running for ever"), Frames < 40000);
 
-		TestEqual(TEXT("the swing is 90 degrees, not 180"),
+		TestTrue(FString::Printf(TEXT("it finishes EAST of the junction (x = %.0f)"), At.X),
+			At.X > 1000.0);
+		TestEqual(TEXT("on the taxiway"), At.Y, -4000.0, 1.0);
+
+		TestEqual(TEXT("facing the way it will taxi out - west, not along its lead-in"),
+			PushbackDeltaDegrees(Run.Heading, PushbackTaxiOutHeading), 0.0, 0.5);
+
+		// A 90 DEGREE TURN from where it parked, not the 180 an aeroplane makes when it
+		// reverses along its own departure arm.
+		TestEqual(TEXT("which is 90 degrees off the parked heading"),
 			PushbackDeltaDegrees(PushbackParkedHeading, Run.Heading), 90.0, 0.5);
 
-		// THE WHOLE POINT OF THE FEATURE: the follower inherits no heading error at all.
-		TestEqual(TEXT("it ends on the plan's tangent, so nothing is left to slew"),
-			PushbackDeltaDegrees(Run.Heading, Run.TargetHeading), 0.0, 0.01);
-		TestEqual(TEXT("and it ends where it was cleared to"),
-			Run.Travelled, Run.PushDistance, 1.0);
+		TestEqual(TEXT("and it has run the whole route"), Run.Travelled, Run.Plan.Length, 1.0);
 
 		// IT STOPS DEAD before the handover. The aeroplane is about to reverse its direction
 		// of travel; handing the follower a speed would have it pull away forwards at the
@@ -171,12 +126,12 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the push ends at rest"), Run.Speed, 0.0, 0.01);
 	}
 
-	// 3. THE BODY IS REVERSED THROUGH THE STRAIGHT. Travelled grows along +X while the body
-	//    faces -X: the mains lead and the nose gear trails, which is what a towbar push is.
+	// 3. THE BODY IS REVERSED THROUGH THE STRAIGHT, and the nose gear stays on the line. The
+	//    aeroplane travels SOUTH down the lead-in while facing NORTH: the mains lead and the
+	//    nose gear trails, which is what a towbar push is.
 	{
 		FPushbackRun Run;
-		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
+		Run.Start(PushbackEastArmPlan(), 150.0, 30.0, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -186,35 +141,19 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		}
 
 		TestTrue(TEXT("it has moved out along the lead-in"), Run.Travelled > 500.0);
-		TestEqual(TEXT("the nose gear is on the line"), At.Y, 0.0, 0.01);
+		TestTrue(TEXT("southward, away from the terminal"), At.Y < -100.0);
+		TestEqual(TEXT("the nose gear is on the line"), At.X, 0.0, 0.01);
 		TestEqual(TEXT("and the body still faces the terminal"),
 			PushbackDeltaDegrees(Heading, PushbackParkedHeading), 0.0, 0.01);
-		TestEqual(TEXT("Back is still the phase"), Run.Phase, EPushPhase::Back);
 	}
 
-	// 4. A DEAD-END APRON TURNS IT RIGHT ROUND - 180 degrees, and that is correct rather than
-	//    a bug: the taxi out runs back the way the lead-in points, so the tug has to.
-	{
-		FPushbackRun Run;
-		Run.Start(PushbackDeadEndPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
-
-		FVector2D At = FVector2D::ZeroVector;
-		double Heading = 0.0;
-		PushbackRunToEnd(Run, 20000, At, Heading);
-
-		TestEqual(TEXT("a dead end swings the full half turn"),
-			PushbackDeltaDegrees(PushbackParkedHeading, Run.Heading), 180.0, 0.5);
-	}
-
-	// 5. A POWERBACK WAITS FOR THRUST; A TUG DOES NOT. The engine is doing the work in one
-	//    case and not in the other. This is the ONE place in slice 1 where the pushback need
+	// 4. A POWERBACK WAITS FOR THRUST; A TUG DOES NOT. The engine is doing the work in one
+	//    case and not the other. This is the ONE place in this slice where the pushback need
 	//    changes anything, and it is justified because it is a fact about the aeroplane's
 	//    physics rather than about a tug that does not exist yet.
 	{
 		FPushbackRun Powerback;
-		Powerback.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			200.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ true);
+		Powerback.Start(PushbackEastArmPlan(), 200.0, 30.0, /*bNeedsThrust*/ true);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -228,7 +167,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 
 		// AND IT IS POSED WHILE IT WAITS, rather than left at an unset FVector2D - the
 		// "world origin" failure this project keeps rediscovering.
-		TestEqual(TEXT("but it is posed at the stand while it waits"), At.X, 0.0, 0.01);
+		TestEqual(TEXT("but it is posed on its stand while it waits"), At.Y, 0.0, 0.01);
 		TestEqual(TEXT("facing the way it parked"),
 			PushbackDeltaDegrees(Heading, PushbackParkedHeading), 0.0, 0.01);
 
@@ -236,19 +175,17 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and it moves the frame it has thrust"), Powerback.Travelled > 0.0);
 
 		FPushbackRun Towed;
-		Towed.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ false);
+		Towed.Start(PushbackEastArmPlan(), 150.0, 30.0, /*bNeedsThrust*/ false);
 		Towed.Advance(PushbackFrame, TNumericLimits<double>::Max(), false, At, Heading);
 		TestTrue(TEXT("a towed aeroplane moves on frame one whatever the propeller is doing"),
 			Towed.Travelled > 0.0);
 	}
 
-	// 6. ARBITRATION IS THE ONE INPUT, exactly as it is for the follower: a push held short
+	// 5. ARBITRATION IS THE ONE INPUT, exactly as it is for the follower: a push held short
 	//    stops where it is told and does not creep past it.
 	{
 		FPushbackRun Run;
-		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, false);
+		Run.Start(PushbackEastArmPlan(), 150.0, 30.0, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -261,86 +198,13 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("and has not arrived, so it is still the driving phase"), Run.HasArrived());
 	}
 
-	// 7. AN UNPUSHABLE PLAN IS REFUSED AND LEAVES NOTHING HALF-ARMED - the rule
+	// 6. AN UNUSABLE ROUTE IS REFUSED AND LEAVES NOTHING HALF-ARMED - the rule
 	//    FRoadAgent::StartArrival already follows for a landing that cannot be flown.
 	{
-		FRoutePlan Empty;
-		double Back = -1.0;
-		double Push = -1.0;
-		double Target = -1.0;
-		TestFalse(TEXT("a plan with no steps cannot be pushed"),
-			FPushbackRun::PlanPushDistance(Empty, PushbackSwingLength, Back, Push, Target));
-		TestEqual(TEXT("and the outputs are untouched"), Back, -1.0, 0.0001);
-
 		FPushbackRun Run;
-		TestFalse(TEXT("Start declines it"),
-			Run.Start(Empty, PushbackParkedHeading, 150.0, 30.0, PushbackSwingLength, false));
-		TestEqual(TEXT("and arms nothing"), Run.PushDistance, 0.0, 0.0001);
-	}
-
-	// 8. A ROUTE THAT NEVER BENDS HAS NO CORNER TO SWING ONTO, and the manoeuvre is then a
-	//    turn on the spot rather than a long reverse. There is nothing to back ALONG that
-	//    leads anywhere, so backing down two hundred metres of it would be a tug dragging an
-	//    aeroplane the length of a taxiway for no reason - which is what the discarded
-	//    straight-back cap was really guarding against, and this is the honest version of it.
-	{
-		double Back = -1.0;
-		double Push = -1.0;
-		double Target = -1.0;
-		TestTrue(TEXT("a dead-straight route still plans"),
-			FPushbackRun::PlanPushDistance(PushbackDeadEndPlan(), PushbackSwingLength, Back, Push, Target));
-
-		TestEqual(TEXT("no corner means no straight leg"), Back, 0.0, 0.01);
-		TestEqual(TEXT("and the swing is the whole manoeuvre"), Push, PushbackSwingLength, 0.01);
-	}
-
-	// 9. A LEAD-IN LONGER THAN THE CAP STILL REACHES THE CORNER. Reported from PIE on
-	//    2026-09-13: a Twin Otter reversed the straight leg correctly and then "crabbed around
-	//    using the wrong arm", ending ACROSS its taxiway instead of along it.
-	//
-	//    The log said "pushing back: 9000 uu" - exactly the sixty-metre straight-back cap then
-	//    in force plus PushSwingLength - so the straight leg had hit that cap and the whole
-	//    manoeuvre finished while still on the straight lead-in. TargetHeading is the plan's tangent at PushDistance, and that
-	//    tangent was therefore the LEAD-IN's own direction: 180 degrees from the parked
-	//    heading. The aeroplane duly turned through 180 degrees over thirty metres and ended
-	//    pointing straight out of its stand, athwart the taxiway.
-	//
-	//    HOW FAR BACK AN AEROPLANE MUST COME IS SET BY WHERE THE STAND IS, not by a tug's
-	//    patience. A cap that cuts before the corner cannot be right at any value.
-	{
-		double Back = 0.0;
-		double Push = 0.0;
-		double Target = 0.0;
-		if (!TestTrue(TEXT("a long lead-in can be pushed"),
-			FPushbackRun::PlanPushDistance(PushbackLongLeadInPlan(), PushbackSwingLength, Back, Push, Target)))
-		{
-			return false;
-		}
-
-		TestEqual(TEXT("the straight back reaches the corner, cap or no cap"), Back, 12000.0, 0.01);
-		TestEqual(TEXT("and the swing carries it past"), Push, 15000.0, 0.01);
-
-		// +Y, THE TAXIWAY. This is the assertion the defect fails: at 9000 uu the tangent is
-		// still +X, the lead-in, and the aeroplane aligns with that instead.
-		TestEqual(TEXT("the target heading is the taxiway, not the lead-in it reversed down"),
-			PushbackDeltaDegrees(Target, UE_DOUBLE_HALF_PI), 0.0, 0.01);
-
-		FPushbackRun Run;
-		Run.Start(PushbackLongLeadInPlan(), PushbackParkedHeading,
-			200.0, 30.0, PushbackSwingLength, false);
-
-		FVector2D At = FVector2D::ZeroVector;
-		double Heading = 0.0;
-		PushbackRunToEnd(Run, 40000, At, Heading);
-
-		// 90 DEGREES AND NOT 180 - the whole of what was reported. A 180 here is an aeroplane
-		// that turned to face back out of its own stand.
-		TestEqual(TEXT("it swings 90 degrees onto the taxiway, not 180 back out of the stand"),
-			PushbackDeltaDegrees(PushbackParkedHeading, Run.Heading), 90.0, 0.5);
-
-		// AND IT IS PHYSICALLY ON THE TAXIWAY when it gets there, not still on the lead-in.
-		TestTrue(FString::Printf(TEXT("and it ends round the corner (y = %.0f)"), At.Y),
-			At.Y > 1000.0);
+		TestFalse(TEXT("an invalid plan is declined"),
+			Run.Start(FRoutePlan(), 150.0, 30.0, false));
+		TestEqual(TEXT("and arms nothing"), Run.Plan.Length, 0.0, 0.0001);
 	}
 
 	return true;

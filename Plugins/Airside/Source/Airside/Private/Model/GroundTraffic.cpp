@@ -9,6 +9,7 @@
 #include "AirsideLog.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
+#include "Model/PushbackPlanner.h"
 #include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
@@ -486,18 +487,33 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 			? EDepartureRefusal::None : EDepartureRefusal::NoRoute;
 	}
 
-	// HOW MUCH GROUND THE PUSH WILL USE, from the SAME arithmetic the push itself runs - see
-	// FPushbackRun::PlanPushDistance, which is static for exactly this caller. Re-deriving it
-	// here would be two expressions that must agree, and one day would not.
-	double BackDistance = 0.0;
-	double PushDistance = 0.0;
-	double TargetHeading = 0.0;
-	if (!FPushbackRun::PlanPushDistance(Plan.Route, Rules.PushSwingLength,
-		BackDistance, PushDistance, TargetHeading))
+	// THE PUSH GETS A ROUTE OF ITS OWN - see PushbackPlanner, and see FPushbackRun's header
+	// for what walking a prefix of the DEPARTURE route did instead. It reverses onto the arm
+	// of the junction the departure does not take, so that driving forward afterwards carries
+	// the aeroplane through the junction and away; and because it finishes somewhere the
+	// departure route never visits, the taxi out is planned from there in the same breath.
+	//
+	// CLEAR BY A FOOTPRINT AND A GAP, which is what this model already means by "clear of"
+	// everywhere else - FClaimPass's window is built from the same pair. Not a new figure: how
+	// far past a junction an aeroplane must finish is the same question as how much room it
+	// takes up, and inventing a second answer is how the two drift.
+	const FPushbackPlan Push = PushbackPlanner::Plan(Network, Agent.GoalNode, Plan,
+		Agent.Airframe, Agent.Class,
+		Rules.FootprintFor(Agent.Class) + Rules.GapFor(Agent.Class));
+
+	UE_LOG(LogAirsideTraffic, Log, TEXT("DepartAgent %d: %s"), AgentId,
+		*PushbackPlanner::Describe(Push));
+
+	if (!Push.IsValid())
 	{
+		// PERMANENT, and said as a Warning because it is a LAYOUT the player can fix: a stand
+		// on a dead-end taxiway has no second arm to reverse onto, so nothing will ever leave
+		// it. Falling back on reversing down the departure's own arm was rejected - that is
+		// precisely the behaviour reported as wrong, and doing it only on some layouts would
+		// make it a defect that appears and disappears.
 		UE_LOG(LogAirsideTraffic, Warning,
-			TEXT("DepartAgent %d refused: its route cannot be pushed along."), AgentId);
-		return EDepartureRefusal::NoRoute;
+			TEXT("DepartAgent %d refused: stand has no arm to push back onto."), AgentId);
+		return EDepartureRefusal::NoPushbackRoute;
 	}
 
 	// PUSHBACK CLEARANCE: granted whole, or withheld. A manoeuvring agent cannot replan -
@@ -505,40 +521,38 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// would have no move to make. Granting the whole push up front makes it atomic and removes
 	// it as a deadlock source, and it is what ground control actually does: clearance is
 	// granted or withheld, never half-granted.
-	if (!IsPushGroundFree(AgentId, Plan.Route, PushDistance))
+	if (!IsPushGroundFree(AgentId, Push.PushRoute, Push.PushRoute.Length))
 	{
-		// AT Log AND NOT Warning: a runway or a taxiway the player has left busy refuses this
-		// for as long as they leave it, and it clears itself. UFuelService::DepartTheReady
-		// already throttles its own line to a CHANGE of reason, which is what keeps this from
-		// filling the file.
+		// AT Log AND NOT Warning: a taxiway the player has left busy refuses this for as long
+		// as they leave it, and it clears itself. UFuelService::DepartTheReady already
+		// throttles its own line to a CHANGE of reason, which keeps this from filling the file.
 		UE_LOG(LogAirsideTraffic, Log,
 			TEXT("Agent %d cannot push back yet: %.0f uu of ground is not free."),
-			AgentId, PushDistance);
+			AgentId, Push.PushRoute.Length);
 		return EDepartureRefusal::PushbackBlocked;
 	}
 
 	const EAgentPhase Before = Agent.Phase;
-	if (!Agent.StartPushback(Plan.Route, Agent.Airframe, Agent.LastMotion.Heading,
-		Rules.PushSpeedFor(Agent.Airframe.PushbackNeed), Rules.PushAccel, Rules.PushSwingLength,
+	if (!Agent.StartPushback(Push.PushRoute, Push.TaxiOutRoute, Agent.Airframe,
+		Rules.PushSpeedFor(Agent.Airframe.PushbackNeed), Rules.PushAccel,
 		Agent.Airframe.Engine.MaxRPM * Rules.PowerbackRPMFraction))
 	{
 		return EDepartureRefusal::NoRoute;
 	}
 
-	// THE SAME THREE THINGS A REDIRECT DOES, because a push is a dispatch onto a route even
-	// though no follower is walking it yet: the goal must move off the stand or the claim pass
-	// keeps reserving it, a departure must be armed if the route ends on a runway, and the new
-	// goal must be claimed at dispatch rather than a tick later.
-	Agent.SetGoalFrom(Plan.Route);
-	ArmDepartureIfRunway(Agent, &Network, Plan.Route);
+	// THE GOAL IS THE TAXI OUT'S, not the push's. The claim pass reserves the node an agent is
+	// heading FOR, and a push that claimed its own end would have the aeroplane reserving a
+	// patch of taxiway as though it were a stand. What it is going to is the runway.
+	Agent.SetGoalFrom(Push.TaxiOutRoute);
+	ArmDepartureIfRunway(Agent, &Network, Push.TaxiOutRoute);
 	ClaimGoalNodeAtDispatch(Agent, AgentId, Network);
 
 	// THE NEED IS NAMED even though nothing branches on it yet. Slice 1 pushes all three the
 	// same way and nobody is doing the pushing, so this line is the only place the gap between
 	// "needs a tug" and "has one" is visible at all.
 	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Agent %d pushing back: %.0f uu straight to the corner then %.0f swinging, %s"),
-		AgentId, BackDistance, PushDistance - BackDistance,
+		TEXT("Agent %d pushing back %.0f uu, then %.0f uu to taxi out, %s"),
+		AgentId, Push.PushRoute.Length, Push.TaxiOutRoute.Length,
 		*UEnum::GetValueAsString(Agent.Airframe.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);

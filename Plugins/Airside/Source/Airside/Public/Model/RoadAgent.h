@@ -224,6 +224,18 @@ struct AIRSIDE_API FRoadAgent
 	 *  cannot be armed for a stand it has no way of reaching. */
 	UPROPERTY() FRoutePlan TaxiInPlan;
 
+	/**
+	 * The route to taxi once a PUSH has finished. The exact mirror of TaxiInPlan above, and
+	 * planned at dispatch for the same reason: an aeroplane must never be pushed somewhere it
+	 * cannot then taxi out of.
+	 *
+	 * A SECOND ROUTE IS UNAVOIDABLE HERE. A push reverses onto the arm of the junction the
+	 * departure does NOT take, so when it ends the aeroplane is standing somewhere the
+	 * departure route never visits - the route planned from the stand no longer begins where
+	 * the aeroplane is. See PushbackPlanner::Plan.
+	 */
+	UPROPERTY() FRoutePlan TaxiOutPlan;
+
 	/** What to fly once the current taxi ends, if anything. See FDepartureOrder. */
 	UPROPERTY() FDepartureOrder DepartureOrder;
 
@@ -517,8 +529,8 @@ public:
 	 * ThrustRPM is the RPM at or above which a POWERBACK may begin; it is ignored for
 	 * anything on a tug bar, which the tug moves whatever the propeller is doing.
 	 */
-	bool StartPushback(const FRoutePlan& Plan, const FAirframe& InAirframe, double ParkedHeading,
-		double PushSpeed, double PushAccel, double SwingLength, double ThrustRPM);
+	bool StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
+		const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM);
 
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);

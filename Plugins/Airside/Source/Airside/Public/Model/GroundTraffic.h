@@ -53,22 +53,6 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double PushAccel              = 30.0;   // 0.3 m/s^2
 
 	/**
-	 * Room past the lead-in's corner the tug needs to straighten the aeroplane, uu.
-	 *
-	 * IT IS WHAT MAKES THE PUSH RUN PAST THE CORNER, and that is the whole of why it exists.
-	 * A push that stopped at the end of the lead-in would leave the aeroplane on the LEAD-IN's
-	 * tangent - facing straight out of its stand, 90 degrees off the taxiway on an ordinary
-	 * perpendicular layout - and FRouteFollower would then slew that 90 degrees away on the
-	 * spot. That is the pirouette this whole feature exists to remove, merely smaller.
-	 *
-	 * A LENGTH AND NOT A CONVERGENCE RULE ("swing until the heading error closes"): this one
-	 * is known BEFORE the push starts, which is what lets UGroundTraffic::DepartAgent reserve
-	 * exactly the ground the push will use. A rule whose length is not known until it is over
-	 * cannot be cleared in advance, and a push cannot be arbitrated as it goes - see there.
-	 */
-	UPROPERTY(EditAnywhere) double PushSwingLength        = 3000.0; // 30 m
-
-	/**
 	 * Within this of the parked heading, the way out is forward and no push is needed, degrees.
 	 *
 	 * A MEASUREMENT OF THE GROUND AHEAD, not a property of the stand: it answers a

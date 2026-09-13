@@ -188,8 +188,8 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 	}
 }
 
-bool FRoadAgent::StartPushback(const FRoutePlan& Plan, const FAirframe& InAirframe,
-	double ParkedHeading, double PushSpeed, double PushAccel, double SwingLength, double ThrustRPM)
+bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
+	const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM)
 {
 	// A POWERBACK IS THE ENGINE DOING THE WORK; anything on a bar is moved by the tug and its
 	// propeller is incidental. This is the ONE place in this slice where the pushback need
@@ -197,7 +197,7 @@ bool FRoadAgent::StartPushback(const FRoutePlan& Plan, const FAirframe& InAirfra
 	// rather than about a tug that does not exist yet.
 	const bool bNeedsThrust = InAirframe.PushbackNeed == EPushbackNeed::SelfManoeuvre;
 
-	if (!Pushback.Start(Plan, ParkedHeading, PushSpeed, PushAccel, SwingLength, bNeedsThrust))
+	if (!Pushback.Start(PushPlan, PushSpeed, PushAccel, bNeedsThrust))
 	{
 		// FPushbackRun has already declined. Nothing else is touched: a manoeuvre that cannot
 		// be flown must leave no trace of itself on the agent rather than one half-armed -
@@ -209,25 +209,30 @@ bool FRoadAgent::StartPushback(const FRoutePlan& Plan, const FAirframe& InAirfra
 	Airframe = InAirframe;
 	PushbackThrustRPM = ThrustRPM;
 
+	// THE ROUTE OUT, CARRIED FROM DISPATCH exactly as TaxiInPlan is for an arrival. The push
+	// ends somewhere the departure route never visits, so this is the only thing that knows
+	// how the aeroplane leaves from there - see FRoadAgent::TaxiOutPlan.
+	TaxiOutPlan = InTaxiOutPlan;
+
 	// PUSH AND START, and the cold start lives HERE rather than in StartTaxi - see this
-	// function's declaration. AdvanceEngine spools from this zero over SpoolUpSeconds
-	// whatever phase is driving, so the propeller is still coming up as the taxi takes over,
-	// which is what "the spool outlasts the tug" means.
+	// function's declaration. AdvanceEngine spools from this zero over SpoolUpSeconds whatever
+	// phase is driving, so the propeller is still coming up as the taxi takes over, which is
+	// what "the spool outlasts the tug" means.
 	bEngineRunning = true;
 	EngineRPM = 0.0;
 
-	// The fallback pose, for the reason StartTaxi has one: a caller that reads LastMotion
-	// before the first real Advance must see where the manoeuvre actually begins, never the
-	// FVector2D default - the "world origin" bug this field exists to prevent. The HEADING is
-	// seeded too, unlike StartTaxi's, because a push starts facing the opposite way from the
-	// line it stands on: taking the polyline's direction here would face it out of its stand
-	// for one frame, which is the very thing this phase exists to stop happening.
+	// SEEDED FROM THE PUSH'S OWN STARTING POSE, the rule StartArrival follows: a caller that
+	// reads LastMotion before the first real Advance must see where the manoeuvre actually
+	// begins, never the FVector2D default - the "world origin" bug this field exists to
+	// prevent. The HEADING comes from FPushbackRun, which has already turned the line's
+	// tangent about; taking the polyline's own direction here would face the aeroplane out of
+	// its stand for one frame, which is the very thing this phase exists to stop.
 	LastMotion = FAgentMotion();
-	if (Plan.Polyline.Num() > 0)
+	if (PushPlan.Polyline.Num() > 0)
 	{
-		LastMotion.Position = Plan.Polyline[0];
+		LastMotion.Position = PushPlan.Polyline[0];
 	}
-	LastMotion.Heading = ParkedHeading;
+	LastMotion.Heading = Pushback.Heading;
 	return true;
 }
 
@@ -335,10 +340,17 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 				return true;
 			}
 
-			// OFF THE STAND: hand over to the taxi, on the SAME plan at the distance the push
-			// reached. The heading carries across and is by construction the plan's tangent
-			// there, so the follower starts with ZERO error - which is the whole of what this
-			// feature fixes, and what makes the aeroplane pull away instead of pirouetting.
+			// OFF THE STAND: hand over to the taxi, on the route planned FROM HERE at dispatch.
+			// Not a splice into the push's own plan, which is the correction this phase was
+			// rewritten for: a push reverses onto the arm the departure does NOT take, so when
+			// it ends the aeroplane is standing somewhere that route never visits. See
+			// FRoadAgent::TaxiOutPlan.
+			//
+			// FROM ITS BEGINNING, therefore - Travelled zero, not the push's distance - and
+			// the heading carries across unchanged. The push finished facing the line's
+			// tangent turned about, and the taxi out leaves the same point the other way, so
+			// the two agree exactly and the follower starts with ZERO heading error. That is
+			// what makes the aeroplane pull away instead of pirouetting.
 			//
 			// SPEED ZERO, deliberately, and unlike the Vacated handover above which carries
 			// the rollout's speed into the taxi. This aeroplane has just been moving BACKWARDS
@@ -350,7 +362,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			// would undo the spool the push has been running - see StartPushback.
 			Phase = EAgentPhase::Taxiing;
 			OutEvent = EAgentEvent::PushedBack;
-			Follower.Start(Pushback.Plan, Airframe, 0.0, Pushback.Heading, Pushback.Travelled);
+			Follower.Start(TaxiOutPlan, Airframe, 0.0, Pushback.Heading);
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Push complete; taxiing out."));
 
 			// AND TAXI THIS SAME FRAME, falling out of this branch rather than returning, for
