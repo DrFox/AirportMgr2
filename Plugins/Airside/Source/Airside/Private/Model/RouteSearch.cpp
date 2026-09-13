@@ -109,12 +109,7 @@ namespace
 			bool bHeld = false;
 			if (Query.Occupancy != nullptr)
 			{
-				TArray<FRoadSegmentId> Chain = Network.RunwayChain(Seed);
-				if (Chain.Num() == 0)
-				{
-					Chain.Add(Seed);
-				}
-				for (const FRoadSegmentId Segment : Chain)
+				for (const FRoadSegmentId Segment : Network.RunwayChainOrSeed(Seed))
 				{
 					const FTrafficResource Surface = FTrafficResource::OfSurface(Segment);
 					const FTrafficClaim* Own = Query.Occupancy->FindClaim(Query.QueryingAgent, Surface);

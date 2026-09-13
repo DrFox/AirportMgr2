@@ -44,10 +44,48 @@ bool FRunwayChainTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and not the taxiway"), Chain.Contains(Tx));
 	TestEqual(TEXT("seeded from a taxiway the chain is empty"), Net->RunwayChain(Tx).Num(), 0);
 
+	// RunwayChainOrSeed (#86): the idiom every claim/hold-bar consumer used to spell out by
+	// hand - a live runway gets the same chain RunwayChain gives, and a seed RunwayChain
+	// refuses (not a runway any more) still protects itself rather than nothing.
+	const TArray<FRoadSegmentId> ChainOrSeed = Net->RunwayChainOrSeed(R2);
+	TestEqual(TEXT("on a live runway, RunwayChainOrSeed has the same segments as RunwayChain"),
+		ChainOrSeed.Num(), Chain.Num());
+	TestTrue(TEXT("both halves"), ChainOrSeed.Contains(R1) && ChainOrSeed.Contains(R2));
+	const TArray<FRoadSegmentId> TaxiwayFallback = Net->RunwayChainOrSeed(Tx);
+	TestEqual(TEXT("on a taxiway, RunwayChainOrSeed falls back to just the seed"), TaxiwayFallback.Num(), 1);
+	TestTrue(TEXT("and that seed is the one asked for"), TaxiwayFallback.Contains(Tx));
+
 	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
 	TestTrue(TEXT("extent query answers near the far end"), Net->RunwayExtentAt(FVector2D(99000.0, 100.0), Threshold, Direction, Length, &Seed));
 	TestEqual(TEXT("and names the segment whose end was nearest"), Seed, R2);
 	TestEqual(TEXT("length is the whole strip, not the seed"), Length, 100000.0, 1.0);
+
+	// A FORK: three runway arms meeting at one node. A runway does not fork, so the fork
+	// node is itself a threshold - the chain must stop there rather than choosing one of
+	// its far arms, and RunwayExtentAt must measure only as far as the fork.
+	{
+		URoadNetwork* ForkNet = NewObject<URoadNetwork>(GetTransientPackage());
+		const FVector2D FarAt(0.0, 0.0);
+		const FVector2D ForkAt(50000.0, 0.0);
+		const FRoadNodeId Far = ForkNet->AddNode(FarAt);
+		const FRoadNodeId Fork = ForkNet->AddNode(ForkAt);
+		const FRoadNodeId BranchB = ForkNet->AddNode(FVector2D(100000.0, 0.0));
+		const FRoadNodeId BranchC = ForkNet->AddNode(FVector2D(50000.0, 50000.0));
+		const FRoadSegmentId Arm = ForkNet->AddStraightSegment(Far, Fork, Runway);
+		ForkNet->AddStraightSegment(Fork, BranchB, Runway);
+		ForkNet->AddStraightSegment(Fork, BranchC, Runway);
+
+		const TArray<FRoadSegmentId> ForkChain = ForkNet->RunwayChain(Arm);
+		TestEqual(TEXT("a fork (3 runway arms) stops the chain at the seed alone"), ForkChain.Num(), 1);
+
+		FVector2D ForkThreshold, ForkDirection; double ForkLength = 0.0;
+		if (TestTrue(TEXT("extent from the far end finds the one-segment arm"),
+			ForkNet->RunwayExtentAt(FarAt, ForkThreshold, ForkDirection, ForkLength)))
+		{
+			TestEqual(TEXT("the threshold is the far end"), ForkThreshold, FarAt);
+			TestEqual(TEXT("and length stops at the fork, not past it"), ForkLength, 50000.0, 1.0);
+		}
+	}
 	return true;
 }
 

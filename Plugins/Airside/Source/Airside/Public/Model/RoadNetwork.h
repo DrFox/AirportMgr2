@@ -93,15 +93,24 @@ public:
 	bool IsRunwaySegment(FRoadSegmentId Segment) const;
 
 	/**
-	 * Every segment continuous with Seed through nodes joining exactly two runway segments -
-	 * the same walk RunwayExtentAt makes to find the thresholds, returning the segments it
-	 * walked rather than the ends. Empty when Seed is not a live runway. Includes Seed.
+	 * Every segment continuous with Seed through nodes joining exactly two runway segments,
+	 * returning the segments walked rather than the ends - RunwayExtentAt reads its
+	 * thresholds off this chain. Empty when Seed is not a live runway. Includes Seed.
 	 *
 	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
 	 * chain, a holding-position names one, and the arbiter expands it here - so an exit added to a
 	 * runway after the hold bar was placed still protects the whole strip.
 	 */
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
+
+	/**
+	 * RunwayChain(Seed), or a one-segment chain of just Seed when that comes back empty.
+	 *
+	 * Seed dropped to a taxiway under a claim still made or a bar still placed should
+	 * protect the one segment named rather than nothing at all - one implementation
+	 * instead of every caller spelling out the same fallback. See #86.
+	 */
+	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
 
 	/**
 	 * The surface and approach class of the runway Seed belongs to.
