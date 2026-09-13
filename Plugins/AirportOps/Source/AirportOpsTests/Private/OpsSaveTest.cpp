@@ -178,6 +178,37 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	OpsSave::RestoreBlob(NoFuelBlob, *Fuel);
 	TestEqual(TEXT("OnBeforeRestore cleared it even with no blob for this object"),
 		Fuel->TrucksGoingHomeForTest(), 0);
+
+	// PR #137 REVIEW: THE LEAK CAME BACK a different way once Demands/GoingHome actually got
+	// a real Fuel blob to be written into. Non-Transient, Capture serialised the truck
+	// straight into it, and RestoreBlob's OnBeforeRestore (which clears both) ran BEFORE the
+	// deserialise that then overwrote them right back FROM the blob - so a full Capture/
+	// Restore round trip is the one path that actually proves the fix, not RestoreBlob alone
+	// against a snapshot built by hand. Both fields are UPROPERTY(Transient) now for exactly
+	// this reason.
+	Fuel->SetGoingHomeForTest(2, FEntityInstanceId());
+	if (!TestEqual(TEXT("set up again with one truck going home, for the round trip"),
+		Fuel->TrucksGoingHomeForTest(), 1))
+	{
+		return false;
+	}
+	USimClock* Clock = NewObject<USimClock>();
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	FOpsSnapshot RoundTrip;
+	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, RoundTrip);
+
+	USimClock* RestoredClock = NewObject<USimClock>();
+	URoadNetwork* RestoredNet = NewObject<URoadNetwork>();
+	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
+	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	if (!TestTrue(TEXT("round-trip restore succeeds"),
+		OpsSave::Restore(RoundTrip, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("a full Capture/Restore round trip does not resurrect the stale truck"),
+		RestoredFuel->TrucksGoingHomeForTest(), 0);
 	return true;
 }
 

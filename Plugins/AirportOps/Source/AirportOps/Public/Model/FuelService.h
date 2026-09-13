@@ -267,7 +267,16 @@ private:
 	void DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock);
 
-	UPROPERTY() TArray<FFuelDemand> Demands;
+	/**
+	 * TRANSIENT (PR #137 review, issue #105 item 8): both this and GoingHome below NAME
+	 * AGENTS (TruckId, AircraftId), and agents are never saved - see OpsRuntimeTest's own
+	 * "agents do not survive a load" assertion. Non-Transient, these were serialized straight
+	 * into the new Fuel blob, and RestoreBlob's OnBeforeRestore() (which clears both) ran
+	 * BEFORE the deserialize that then overwrote them right back from the blob - the leak
+	 * this issue traces would have come back through any v4 save with a truck homeward-bound,
+	 * exactly the bug OnBeforeRestore exists to fix.
+	 */
+	UPROPERTY(Transient) TArray<FFuelDemand> Demands;
 
 	/**
 	 * Trucks on their way back, and the depot each is going to.
@@ -279,9 +288,9 @@ private:
 	 * and the demand's TruckId is cleared at the same moment.
 	 *
 	 * A truck in here still COUNTS as out (see TrucksOutFor): it is not available until it
-	 * has actually arrived.
+	 * has actually arrived. TRANSIENT for the same reason as Demands above.
 	 */
-	UPROPERTY() TMap<int32, FEntityInstanceId> GoingHome;
+	UPROPERTY(Transient) TMap<int32, FEntityInstanceId> GoingHome;
 
 	/**
 	 * The guideline revision the last refusal was decided against.
