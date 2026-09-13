@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
+#include "RoadBuildLog.h"
 #include "Tool/BuildGesture.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
@@ -12,16 +13,14 @@
 #include "RoadBuildController.generated.h"
 
 class ARoadNetworkActor;
-class UBuildBarWidget;
 class UAircraftType;
-class UInspectorWidget;
-class UOfferInboxWidget;
-class UToastStackWidget;
 class UOpsRuntime;
 class UFlightBoard;
 struct FAgentFacts;
 struct FAirframe;
 struct FStandFacts;
+class UBuildCameraComponent;
+class UBuildHudLayer;
 
 /**
  * What a plain click means right now. ONE ENUM: Remove and Insert can never both be lit,
@@ -50,6 +49,15 @@ enum class EClickModifier : uint8
  *
  * It lives in the game module rather than the Airside plugin because a PlayerController
  * is game-framework glue. The plugin must not depend on the game.
+ *
+ * SPLIT by issue #94: this class carried seven concerns as roughly 40 UPROPERTYs and a .cpp
+ * to match - the view rig, the watch rig, four widget classes, a testing override and
+ * placement. The camera (both rigs, CreateBuildCamera, UpdateView, ZoomBy, ToggleWatchAgent's
+ * mechanics) is now UBuildCameraComponent, a subobject; the four HUD widgets are
+ * UBuildHudLayer, a subobject. What remains here is INPUT (binding keys, reading them, the
+ * click/drag/release gesture), SESSION AND TARGET (which tool is active, which actor is
+ * being built into), and forwarding - every public method BuildActions() or Blueprint could
+ * already call keeps its name, whether the work happens here or in a subobject now.
  */
 
 UCLASS(Config = Game)
@@ -104,31 +112,6 @@ public:
 	bool bShowGuidelines = true;
 
 	/**
-	 * The bar's Blueprint class. Config so DefaultGame.ini names WBP_BuildBar without a
-	 * Blueprint subclass of this controller existing to hold the default. Null means the
-	 * plain C++ bar, which works and says so in the log.
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
-	TSubclassOf<UBuildBarWidget> BuildBarClass;
-
-	/** The bar on screen, created at BeginPlay. */
-	UPROPERTY(Transient) TObjectPtr<UBuildBarWidget> BuildBar;
-
-	/** The inspector's Blueprint class; null means the plain C++ panel. Config, like the bar's. */
-	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
-	TSubclassOf<UInspectorWidget> InspectorClass;
-
-	/** The inspector on screen, created at BeginPlay beside the bar. */
-	UPROPERTY(Transient) TObjectPtr<UInspectorWidget> Inspector;
-
-	/** The offer inbox's Blueprint class; null means the plain C++ panel, as above. */
-	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
-	TSubclassOf<UOfferInboxWidget> OfferInboxClass;
-
-	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
-	UPROPERTY(Transient) TObjectPtr<UOfferInboxWidget> OfferInbox;
-
-	/**
 	 * What key 7 lands. Null - the shipping state - lands the content set's default.
 	 *
 	 * A TESTING OVERRIDE, and deliberately shaped so it cannot quietly become the game's
@@ -144,15 +127,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|Testing")
 	TSoftObjectPtr<UAircraftType> LandAircraftType;
 
-	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
-	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
-	TSubclassOf<UToastStackWidget> ToastStackClass;
-
-	/** The feed on screen. Owns the notification centre; see UToastStackWidget. */
-	UPROPERTY(Transient) TObjectPtr<UToastStackWidget> ToastStack;
-
 	/**
-	 * Furthest a click may place a node, as a MULTIPLE of the current view distance.
+	 * Furthest a click may place a node, as a MULTIPLE of the active camera's own distance.
 	 *
 	 * The ray/plane distance is (SurfaceZ - Origin.Z) / Direction.Z, which runs away
 	 * towards infinity as a click approaches the horizon - and the horizon is on screen
@@ -175,44 +151,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|View")
 	bool bStartAbovePlane = true;
 
-	/** Camera-to-focus distance the session opens at, in uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0"))
-	double StartViewDistance = 8000.0;
-
-	/** Closest the camera may come, in uu. Sized to sit beside a vehicle. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0"))
-	double MinViewDistance = 600.0;
-
-	/** Furthest the camera may pull back, in uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0"))
-	double MaxViewDistance = 60000.0;
-
-	/** Pitch at MinViewDistance, in degrees below horizontal. Near eye level. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0", ClampMax = "89.0"))
-	double MinPitchDegrees = 30.0;
-
-	/**
-	 * Pitch at MaxViewDistance. 90 would be straight down, and is deliberately not
-	 * offered: control rotation renormalises unpredictably at the poles, and a view that
-	 * flat loses every cue about relief that the angle exists to provide.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0", ClampMax = "89.0"))
-	double MaxPitchDegrees = 70.0;
-
-	/** Fraction the view distance changes per mouse-wheel notch. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.01", ClampMax = "0.9"))
-	double ZoomStep = 0.15;
-
-	/**
-	 * Pan speed, in view distances per second.
-	 *
-	 * Not uu per second: the view spans a hundredfold range, and a fixed speed crawls when
-	 * zoomed out and overshoots when zoomed in. As a fraction of the view, a pan crosses
-	 * the same amount of screen at every zoom.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
-	double PanRate = 0.9;
-
 	/**
 	 * How far the mouse must move while held, in pixels, before a press on a node becomes a
 	 * drag rather than a click.
@@ -222,18 +160,6 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Move", meta = (ClampMin = "0.0"))
 	double DragThresholdPixels = 4.0;
-
-	/** Rotation speed on Q and E, in degrees per second. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
-	double RotateRate = 90.0;
-
-	/** Seconds the view takes to settle after an input. Zero snaps. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
-	double CameraLag = 0.12;
-
-	/** Horizontal field of view, in degrees. */
-	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "20.0", ClampMax = "150.0"))
-	double FieldOfView = 75.0;
 
 	/**
 	 * Show the ghost of the segment the next click would build.
@@ -272,7 +198,8 @@ public:
 	void ToggleClickModifier(EClickModifier Mode);
 	EClickModifier GetClickModifier() const { return ClickModifier; }
 
-	bool IsWatchingAgent() const { return bWatchingAgent; }
+	/** Forwards to the camera component - see UBuildCameraComponent::IsWatchingAgent. */
+	bool IsWatchingAgent() const;
 	bool IsGuidelineOverlayOn() const { return bShowGuidelines; }
 	bool CanUndo() const;
 	bool CanRedo() const;
@@ -286,6 +213,11 @@ public:
 	void TogglePause();
 	void QuickSave();
 	void QuickLoad();
+
+	/** Mouse wheel. Forwards to the camera component. Public, like the other bar/key
+	 *  actions above - SetupInputComponent binds these the same way it binds those. */
+	void ZoomIn();
+	void ZoomOut();
 
 	/**
 	 * Lands at the runway nearest the VIEW FOCUS. The bar's Land button is clicked with the
@@ -307,8 +239,14 @@ public:
 	void OnUndo();
 	void OnRedo();
 
-	/** C: orbit the SELECTED aircraft, or the newest when none is selected; or go back to
-	 *  the build view. */
+	/**
+	 * C: orbit the SELECTED aircraft, or the newest when none is selected; or go back to the
+	 * build view.
+	 *
+	 * The PREFERENCE (selected, else newest) is Session/Selection policy and stays here; the
+	 * mechanics of riding the aircraft are UBuildCameraComponent::ToggleWatchAgent's - see
+	 * that class's own comment for why the split falls there.
+	 */
 	void ToggleWatchAgent();
 
 	// --- Selection (the inspector's verbs) --------------------------------------------
@@ -341,6 +279,12 @@ public:
 
 	/** G: show or hide the guideline overlay. */
 	void OnToggleGuidelines();
+
+	/** The widget layer this instance owns, or null before construction has run. For a test
+	 *  that CreateDefaultSubobject was not dropped - same precedent as SessionForTest,
+	 *  GestureForTest and ResolveProfileForTest. The camera component needs no equivalent:
+	 *  it is an actual UActorComponent, so FindComponentByClass already answers that. */
+	UBuildHudLayer* GetHudForTest() const { return Hud; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -387,86 +331,8 @@ private:
 	 */
 	void SelectToolByKey(FKey Key);
 
-	// --- Watch camera -----------------------------------------------------------------
-	//
-	// A second camera MODE rather than a second camera: the build rig is a top-down thing
-	// for laying pavement, and watching a take-off from it shows a dot getting smaller. This
-	// orbits the aircraft instead, and hands back the moment there is nothing to watch.
-	//
-	// It is the SAME rig type as the build view, kept in the aircraft's frame (see
-	// FBuildCameraRig::InFrame), so the wheel, WASD and Q/E do in watch mode exactly what
-	// they do while building: zoom, slide the look-at point, orbit. Two rigs rather than
-	// one re-aimed, so leaving watch mode lands on the build view where it was left.
-
-	/** True while the camera is riding with an agent. */
-	bool bWatchingAgent = false;
-
-	/** The agent the watch camera rides: the selected one at toggle time, else the newest. */
-	int32 WatchAgentId = 0;
-
 	/** The agent whose projected position is nearest the cursor within AgentPickPixels, or 0. */
 	int32 HoverAgentUnderCursor() const;
-
-	/** Where the watch rig is asked to be, and where it is; relative to the aircraft. */
-	FBuildCameraRig WatchTarget;
-	FBuildCameraRig WatchCurrent;
-
-	/** Copy the watch tunables below onto a rig. The watch twin of ApplyViewLimits. */
-	void ApplyWatchLimits(FBuildCameraRig& Rig) const;
-
-	/**
-	 * Camera-to-aircraft distance on pressing C, uu. 1550 is 15.5 m.
-	 *
-	 * Wide enough to frame a 13 m wingspan and close enough to read the attitude, which is
-	 * the whole point of watching a rotation.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
-	double WatchStartDistance = 1550.0;
-
-	/**
-	 * Direction the camera looks on pressing C, degrees from the aircraft's heading.
-	 *
-	 * -75 looks across the aircraft from off its right wing and a little behind, which is
-	 * the pose the fixed watch camera had: side-on enough to read pitch, angled enough
-	 * to see the nose.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch")
-	double WatchStartYaw = -75.0;
-
-	/** Height of the look-at point above the aircraft's origin, uu. Its origin is the
-	 *  main-gear axle; 150 is about the fuselage centreline. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch")
-	double WatchFocusHeight = 150.0;
-
-	/** Closest the wheel may bring the camera to the aircraft, uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
-	double WatchMinDistance = 800.0;
-
-	/** Furthest the wheel may pull back while still following, uu. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0"))
-	double WatchMaxDistance = 20000.0;
-
-	/**
-	 * Pitch at WatchMinDistance, degrees below horizontal.
-	 *
-	 * Lower than the build rig's: the build rig's floor keeps the road plane readable,
-	 * while this one wants to be near eye level beside an aircraft.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0", ClampMax = "89.0"))
-	double WatchMinPitchDegrees = 10.0;
-
-	/** Pitch at WatchMaxDistance, degrees below horizontal. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "1.0", ClampMax = "89.0"))
-	double WatchMaxPitchDegrees = 60.0;
-
-	/**
-	 * Furthest WASD may slide the look-at point from the aircraft, uu.
-	 *
-	 * Without a leash, W held for a few seconds carries the focus off into the grass and
-	 * the aircraft leaves the frame, with nothing on screen to say which way it went.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Watch", meta = (ClampMin = "0.0"))
-	double WatchMaxFocusOffset = 2000.0;
 
 	/**
 	 * Lands an aircraft on the runway nearest the cursor and taxis it to a stand. Key 7.
@@ -480,26 +346,34 @@ private:
 	/** World-space position of a node, at the road plane's height. */
 	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
 
-	void CreateBuildCamera();
-
-	/** Read WASD/QE into the target rig, ease the view towards it, and apply it. */
+	/** Read WASD/QE/wheel into axes and hand them to the camera component; owns the raw key
+	 *  reads because that is host input, not camera geometry. */
 	void UpdateView(float DeltaTime);
 
-	/** Mouse wheel. Moves the camera in or out; the pitch follows from the distance. */
-	void ZoomIn();
-	void ZoomOut();
-	void ZoomBy(double Notches);
+	/**
+	 * The camera: both rigs, the spawned ACameraActor, CreateBuildCamera/UpdateView/ZoomBy
+	 * and the mechanics of ToggleWatchAgent - see UBuildCameraComponent's own comment.
+	 * CreateDefaultSubobject rather than NewObject: this is an ActorComponent, and
+	 * CreateDefaultSubobject is what REGISTERS it with the owning actor - the requirement
+	 * for it to participate in save/duplicate at all, the same reasoning
+	 * ARoadNetworkActor's own subobjects follow. It does NOT tick
+	 * (PrimaryComponentTick.bCanEverTick is false in the constructor): UpdateView is called
+	 * explicitly from PlayerTick instead, in the same frame as input is read - see that
+	 * constructor's own comment for why a component tick would run at the wrong point.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside")
+	TObjectPtr<UBuildCameraComponent> BuildCameraComp;
 
-	/** Copy the tunables above onto a rig, so details-panel edits take effect live. */
-	void ApplyViewLimits(FBuildCameraRig& Rig) const;
-
-	/** Orbiting camera spawned on possession; the view target while building. */
-	UPROPERTY(Transient) TObjectPtr<class ACameraActor> BuildCamera;
-
-	/** Where the input says the view should be, and where it actually is. Separate so a
-	 *  wheel notch eases in rather than cutting - see FBuildCameraRig::EaseToward. */
-	FBuildCameraRig TargetView;
-	FBuildCameraRig CurrentView;
+	/**
+	 * The four HUD widgets and their configured classes - see UBuildHudLayer's own comment.
+	 * A UObject, not a component: it owns no transform and ticks nothing, so it costs
+	 * nothing more than a UPROPERTY pointer to hold it. CreateDefaultSubobject rather than
+	 * NewObject - the same call as BuildCameraComp's above works for any UObject subobject,
+	 * component or not; see ARoadNetworkActor::Facade (URoadEditFacade) for the same plain-
+	 * UObject use of it already established in this codebase.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside")
+	TObjectPtr<UBuildHudLayer> Hud;
 
 	/** Resolved once on BeginPlay; the first ARoadNetworkActor in the level. */
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;

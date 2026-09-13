@@ -1,13 +1,8 @@
 #include "RoadBuildController.h"
 
-#include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
-#include "BuildBarWidget.h"
-#include "OfferInboxWidget.h"
-#include "ToastStackWidget.h"
-#include "InspectorWidget.h"
-#include "Camera/CameraActor.h"
-#include "Camera/CameraComponent.h"
+#include "BuildCameraComponent.h"
+#include "BuildHudLayer.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
@@ -30,13 +25,23 @@
 #include "Solve/RoadGeom.h"
 #include "Tool/ScreenPick.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogRoadBuild, Log, All);
+// LogRoadBuild is declared AND defined in RoadBuildLog.h/.cpp now - see that header's own
+// comment for why a component logging under this category should not have to include this
+// file just to reach it.
 
 ARoadBuildController::ARoadBuildController()
 {
 	bShowMouseCursor = true;
 	bEnableClickEvents = true;
 	bEnableMouseOverEvents = true;
+
+	// See UBuildCameraComponent's and UBuildHudLayer's own comments for what each owns now -
+	// issue #94. CreateDefaultSubobject for both: UBuildHudLayer is a plain UObject, not a
+	// component, but the same call works for any UObject subobject that should share the
+	// CDO template hierarchy - see ARoadNetworkActor::Facade (URoadEditFacade) for the same
+	// pattern already established in this codebase.
+	BuildCameraComp = CreateDefaultSubobject<UBuildCameraComponent>(TEXT("BuildCameraComp"));
+	Hud = CreateDefaultSubobject<UBuildHudLayer>(TEXT("Hud"));
 }
 
 void ARoadBuildController::BeginPlay()
@@ -63,7 +68,7 @@ void ARoadBuildController::BeginPlay()
 
 	if (bStartAbovePlane)
 	{
-		CreateBuildCamera();
+		BuildCameraComp->CreateBuildCamera(*this, *Target);
 	}
 
 	// Game AND UI: the bar's buttons must take a click before the road tool sees it, and the
@@ -72,54 +77,8 @@ void ARoadBuildController::BeginPlay()
 	Mode.SetHideCursorDuringCapture(false);
 	SetInputMode(Mode);
 
-	// The bar. The configured Blueprint if there is one, else the C++ class itself - which
-	// builds every section in code, so a missing asset degrades rather than breaks.
-	const TSubclassOf<UBuildBarWidget> BarClass =
-		BuildBarClass != nullptr ? BuildBarClass : TSubclassOf<UBuildBarWidget>(UBuildBarWidget::StaticClass());
-	BuildBar = CreateWidget<UBuildBarWidget>(this, BarClass);
-	if (BuildBar != nullptr)
-	{
-		BuildBar->AddToViewport();
-		UE_LOG(LogRoadBuild, Log, TEXT("Build bar: %s"),
-			BuildBarClass != nullptr ? *BuildBarClass->GetName() : TEXT("code-only (no BuildBarClass configured)"));
-	}
-
-	// The inspector, same recipe as the bar. Z-order 1 so its card sits over the bar's
-	// canvas where the two overlap at the bottom-left.
-	const TSubclassOf<UInspectorWidget> PanelClass =
-		InspectorClass != nullptr ? InspectorClass : TSubclassOf<UInspectorWidget>(UInspectorWidget::StaticClass());
-	Inspector = CreateWidget<UInspectorWidget>(this, PanelClass);
-	if (Inspector != nullptr)
-	{
-		Inspector->AddToViewport(1);
-		UE_LOG(LogRoadBuild, Log, TEXT("Inspector: %s"),
-			InspectorClass != nullptr ? *InspectorClass->GetName() : TEXT("code-only (no InspectorClass configured)"));
-	}
-
-	// The inbox, same recipe again. Z-order 1 with the inspector: the two never overlap -
-	// the inspector anchors bottom-left, the inbox bottom-right.
-	const TSubclassOf<UOfferInboxWidget> InboxClass =
-		OfferInboxClass != nullptr ? OfferInboxClass : TSubclassOf<UOfferInboxWidget>(UOfferInboxWidget::StaticClass());
-	OfferInbox = CreateWidget<UOfferInboxWidget>(this, InboxClass);
-	if (OfferInbox != nullptr)
-	{
-		OfferInbox->AddToViewport(1);
-		UE_LOG(LogRoadBuild, Log, TEXT("Offer inbox: %s"),
-			OfferInboxClass != nullptr ? *OfferInboxClass->GetName() : TEXT("code-only (no OfferInboxClass configured)"));
-	}
-
-	// The feed. Z-order 2, above the bar and the inbox: a toast is the newest thing the game
-	// has to say, and anything drawn over it is a toast the player never saw - which is the
-	// defect this whole surface exists to fix, in a new form.
-	const TSubclassOf<UToastStackWidget> ToastClass =
-		ToastStackClass != nullptr ? ToastStackClass : TSubclassOf<UToastStackWidget>(UToastStackWidget::StaticClass());
-	ToastStack = CreateWidget<UToastStackWidget>(this, ToastClass);
-	if (ToastStack != nullptr)
-	{
-		ToastStack->AddToViewport(2);
-		UE_LOG(LogRoadBuild, Log, TEXT("Toast stack: %s"),
-			ToastStackClass != nullptr ? *ToastStackClass->GetName() : TEXT("code-only (no ToastStackClass configured)"));
-	}
+	// The four HUD widgets - see UBuildHudLayer::CreateAll for the recipe and the Z-orders.
+	Hud->CreateAll(*this);
 
 	// The key list is GENERATED from the same registry SetupInputComponent binds from and
 	// the bar builds from, so this banner cannot advertise a key that goes nowhere - which
@@ -143,100 +102,20 @@ void ARoadBuildController::BeginPlay()
 		*Target->GetName(), *Keys);
 }
 
-void ARoadBuildController::ApplyViewLimits(FBuildCameraRig& Rig) const
-{
-	Rig.MinDistance = MinViewDistance;
-	Rig.MaxDistance = MaxViewDistance;
-	Rig.MinPitch = MinPitchDegrees;
-	Rig.MaxPitch = MaxPitchDegrees;
-}
-
-void ARoadBuildController::CreateBuildCamera()
-{
-	if (Target == nullptr || GetWorld() == nullptr)
-	{
-		return;
-	}
-
-	ApplyViewLimits(TargetView);
-	TargetView.Focus = FVector2D::ZeroVector;
-	TargetView.Distance = FMath::Clamp(StartViewDistance, MinViewDistance, MaxViewDistance);
-	TargetView.Yaw = 0.0;
-
-	// The view starts settled rather than easing in from wherever a default-constructed
-	// rig happens to sit, which would swoop the camera across the map on possession.
-	CurrentView = TargetView;
-
-	FActorSpawnParameters Params;
-	Params.ObjectFlags |= RF_Transient;
-	BuildCamera = GetWorld()->SpawnActor<ACameraActor>(
-		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation(), Params);
-	if (BuildCamera == nullptr)
-	{
-		return;
-	}
-
-	UCameraComponent* Camera = BuildCamera->GetCameraComponent();
-	Camera->SetProjectionMode(ECameraProjectionMode::Perspective);
-	Camera->SetFieldOfView(static_cast<float>(FieldOfView));
-
-	// Viewing through a camera actor takes the view away from the pawn, so the pawn's
-	// mouse-look stops fighting the cursor for the same input.
-	SetViewTarget(BuildCamera);
-
-	UE_LOG(LogRoadBuild, Log,
-		TEXT("Build camera: %.0f uu out at %.1f degrees. Pitch follows the zoom, %.0f to %.0f degrees."),
-		CurrentView.Distance, CurrentView.PitchDegrees(), MinPitchDegrees, MaxPitchDegrees);
-}
-
 void ARoadBuildController::UpdateView(float DeltaTime)
 {
-	if (BuildCamera == nullptr || Target == nullptr)
-	{
-		return;
-	}
-
 	// Read as held keys rather than bound as actions: pan and rotate are continuous, and a
-	// key binding fires once on press. The same reason WASD was never bound.
+	// key binding fires once on press. The same reason WASD was never bound. Reading them
+	// stays here - it is host input, which UBuildCameraComponent has no business owning.
 	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
 	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
 	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
+	BuildCameraComp->UpdateView(DeltaTime, Right, Forward, Turn, Target);
+}
 
-	// WATCHING AN AIRCRAFT drives the watch rig with the same keys, and hands the camera
-	// straight back when there is nothing to watch - a mode that stranded the view on a
-	// despawned aircraft would leave the player looking at empty sky with no way to tell why.
-	if (bWatchingAgent)
-	{
-		if (ARoadAgentActor* Agent = Target->GetAgentView(WatchAgentId))
-		{
-			ApplyWatchLimits(WatchTarget);
-			WatchTarget.Pan(Right, Forward, PanRate, DeltaTime);
-			WatchTarget.Focus = WatchTarget.Focus.GetClampedToMaxSize(WatchMaxFocusOffset);
-			WatchTarget.Rotate(Turn * RotateRate * DeltaTime);
-
-			// Eased in the AIRCRAFT'S frame, then projected: the aircraft's own motion
-			// reaches the camera rigidly and only the player's inputs are smoothed. Easing
-			// a world-space rig towards a moving aircraft would trail it instead.
-			WatchCurrent.EaseToward(WatchTarget, CameraLag, DeltaTime);
-
-			const FVector At = Agent->GetActorLocation();
-			const FBuildCameraRig World = WatchCurrent.InFrame(FVector2D(At), Agent->GetActorRotation().Yaw);
-			BuildCamera->SetActorLocationAndRotation(
-				World.CameraLocation(At.Z + WatchFocusHeight), World.CameraRotation());
-			return;
-		}
-
-		bWatchingAgent = false;
-		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to watch: back to the build view."));
-	}
-
-	ApplyViewLimits(TargetView);
-	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
-	TargetView.Rotate(Turn * RotateRate * DeltaTime);
-	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
-
-	BuildCamera->SetActorLocationAndRotation(
-		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
+bool ARoadBuildController::IsWatchingAgent() const
+{
+	return BuildCameraComp != nullptr && BuildCameraComp->IsWatchingAgent();
 }
 
 void ARoadBuildController::ToggleWatchAgent()
@@ -248,8 +127,10 @@ void ARoadBuildController::ToggleWatchAgent()
 
 	// The SELECTED aircraft when there is one, else the newest - "follow" means the one you
 	// are looking at, and the newest is what you are looking at when nothing is selected.
+	// This preference is Session/Selection policy and stays here; UBuildCameraComponent
+	// knows only the id it was given.
 	const int32 Wanted = HasSelectedAircraft() ? GetSelection().Id : Target->GetTraffic()->GetNewestAgentId();
-	if (!bWatchingAgent && Target->GetAgentView(Wanted) == nullptr)
+	if (!BuildCameraComp->ToggleWatchAgent(*Target, Wanted))
 	{
 		// Refused out loud. Silently staying on the build camera is indistinguishable from
 		// the key not being bound, which is a class of confusion this project has paid for.
@@ -258,29 +139,10 @@ void ARoadBuildController::ToggleWatchAgent()
 		return;
 	}
 
-	bWatchingAgent = !bWatchingAgent;
-	if (bWatchingAgent)
-	{
-		WatchAgentId = Wanted;
-		// Reset on every entry rather than resuming: C is "show me the aircraft", and a
-		// view left zoomed into a wheel last time would answer with a wheel.
-		ApplyWatchLimits(WatchTarget);
-		WatchTarget.Focus = FVector2D::ZeroVector;
-		WatchTarget.Distance = FMath::Clamp(WatchStartDistance, WatchMinDistance, WatchMaxDistance);
-		WatchTarget.Yaw = WatchStartYaw;
-		WatchCurrent = WatchTarget;
-	}
-
 	UE_LOG(LogRoadBuild, Log, TEXT("Camera: %s"),
-		bWatchingAgent ? *FString::Printf(TEXT("following aircraft %d"), WatchAgentId) : TEXT("build view"));
-}
-
-void ARoadBuildController::ApplyWatchLimits(FBuildCameraRig& Rig) const
-{
-	Rig.MinDistance = WatchMinDistance;
-	Rig.MaxDistance = WatchMaxDistance;
-	Rig.MinPitch = WatchMinPitchDegrees;
-	Rig.MaxPitch = WatchMaxPitchDegrees;
+		BuildCameraComp->IsWatchingAgent()
+			? *FString::Printf(TEXT("following aircraft %d"), BuildCameraComp->GetWatchAgentId())
+			: TEXT("build view"));
 }
 
 void ARoadBuildController::SetupInputComponent()
@@ -347,7 +209,7 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	// is clicked with the cursor on the bar, where "nearest the cursor" is meaningless, and
 	// the focus is where the player is looking either way.
 	UE_LOG(LogRoadBuild, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
-		TargetView.Focus.X, TargetView.Focus.Y);
+		BuildCameraComp->ViewFocus().X, BuildCameraComp->ViewFocus().Y);
 
 	// The SAME resolver every dispatch falls back to, for the same reason: an aircraft that
 	// approached as one airframe and taxied as another would be two different aircraft
@@ -395,7 +257,7 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 	//
 	// DispatchArrival has already logged which runway, which exit and which stand it chose,
 	// or why it declined.
-	Target->DispatchArrival(TargetView.Focus, Airframe);
+	Target->DispatchArrival(BuildCameraComp->ViewFocus(), Airframe);
 }
 
 void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board,
@@ -411,8 +273,14 @@ void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoar
 	// ONE CALL: make, aim, add and accept the debug flight are all UFlightBoard's job now -
 	// see AcceptImmediate's own header (issue #96). Focus travels with the flight it builds,
 	// so it lands where aimed without re-aiming the board for every later offer.
+	//
+	// Minimal touch, issue #94: TargetView.Focus -> BuildCameraComp->ViewFocus() - the field
+	// it read moved to UBuildCameraComponent. ViewFocus(), not ActiveRig().Focus: while
+	// watching an agent, ActiveRig() is the WATCH rig, whose Focus is a leash offset in the
+	// AIRCRAFT's frame, not a road-plane position - key 7 must still aim at the build view's
+	// own focus regardless of which camera is on screen.
 	const EArrivalRefusal Why = Board.AcceptImmediate(*Traffic, *Target->Network, *Clock, Airframe,
-		TargetView.Focus, NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)"));
+		BuildCameraComp->ViewFocus(), NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)"));
 	if (Why != EArrivalRefusal::None)
 	{
 		// The key used to do nothing at all when the airport was full. Now it says which of
@@ -455,9 +323,13 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	// perspective now and they are live and necessary again - if an orthographic mode ever
 	// returns, it must exempt itself from both of them.
 	//
-	// Measured against the current view distance rather than a fixed number, because the
-	// view spans a hundredfold range and no single cap suits both ends of it.
-	const double Furthest = MaxPlaceDistanceFactor * CurrentView.Distance;
+	// Measured against the ACTIVE rig's distance rather than a fixed number, because the
+	// view spans a hundredfold range and no single cap suits both ends of it. BuildCameraComp->
+	// ActiveRig(), not the build view unconditionally: before issue #94 this read the build
+	// view's distance even while watching an agent, when the watch rig - parked at a very
+	// different distance - was the one actually driving the camera. THE FORGOTTEN TERNARY
+	// that issue's evidence names; ActiveRig() is the one place that ternary is asked now.
+	const double Furthest = MaxPlaceDistanceFactor * BuildCameraComp->ActiveRig().Distance;
 
 	RoadGeom::ERayToPlaneRefusal Why = RoadGeom::ERayToPlaneRefusal::None;
 	double Distance = 0.0;
@@ -506,24 +378,12 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 
 void ARoadBuildController::ZoomIn()
 {
-	ZoomBy(-1.0);
+	BuildCameraComp->ZoomBy(-1.0);
 }
 
 void ARoadBuildController::ZoomOut()
 {
-	ZoomBy(1.0);
-}
-
-void ARoadBuildController::ZoomBy(double Notches)
-{
-	// The wheel drives whichever rig owns the camera. Zooming the hidden build view while
-	// watching would be a surprise stored up for the moment the watch ends.
-	FBuildCameraRig& View = bWatchingAgent ? WatchTarget : TargetView;
-	bWatchingAgent ? ApplyWatchLimits(View) : ApplyViewLimits(View);
-	View.Zoom(ZoomStep, Notches);
-
-	UE_LOG(LogRoadBuild, Log, TEXT("%s %.0f uu out, %.1f degrees"),
-		bWatchingAgent ? TEXT("Watch") : TEXT("View"), View.Distance, View.PitchDegrees());
+	BuildCameraComp->ZoomBy(1.0);
 }
 
 bool ARoadBuildController::ResolveSnap(FRoadSnapResult& Out, bool bLogRefusals) const
