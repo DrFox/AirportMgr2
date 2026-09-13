@@ -81,8 +81,28 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// Pitch is FRotator's FIRST argument and yaw its second, which is the opposite order to
 	// the way they are spoken of. Getting them the wrong way round yaws the aircraft by its
 	// climb attitude and pitches it by its heading - a Piper lying on its side, pointing north.
-	SetActorLocationAndRotation(
-		At, FRotator(Motion.PitchDegrees, FMath::RadiansToDegrees(Motion.Heading), 0.0));
+	const FRotator Rotation(Motion.PitchDegrees, FMath::RadiansToDegrees(Motion.Heading), 0.0);
+
+	// PITCHED ABOUT THE MAIN GEAR, not about the origin.
+	//
+	// SetActorLocationAndRotation rotates about the ACTOR ORIGIN, which was harmless while
+	// every airframe's origin sat mid-fuselage. plane2's origin is its NOSE GEAR - the
+	// local space UAircraftType documents - so a nose-up attitude about it swings everything
+	// aft downwards: 8 degrees of flare put the mains 63 uu under the tarmac, reported from
+	// play as the rear wheels pushing into the ground on landing.
+	//
+	// The correction holds the pivot still while the body turns about it: the pivot's
+	// unrotated offset minus its rotated one. Zero pivot is exactly zero correction, so an
+	// unmeasured airframe - every vehicle, both airliners - and the Piper, whose origin
+	// already IS its main-gear axle, are untouched by this.
+	//
+	// IN THE VIEW rather than in the model, because it is a fact about drawing a rigid body
+	// at an attitude, not about where the aircraft is: FAgentMotion::Position still means
+	// the origin, and the model still decides it alone.
+	const FVector Pivot(Motion.PitchPivotX, 0.0, 0.0);
+	const FVector Correction = Pivot - Rotation.RotateVector(Pivot);
+
+	SetActorLocationAndRotation(At + Correction, Rotation);
 
 	// KEPT, NOT CONSUMED, until the mesh is skeletal. The animation reads these - wheel rate
 	// is GroundSpeed over the wheel radius, the propeller turns while the engine does - and

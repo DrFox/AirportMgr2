@@ -130,6 +130,22 @@ struct AIRSIDE_API FAgentMotion
 	UPROPERTY() double PitchDegrees = 0.0;
 
 	/**
+	 * The point the airframe pitches ABOUT, local X, uu. The main-gear axle.
+	 *
+	 * WITHOUT IT THE PIVOT IS THE ORIGIN, and that only looked right while origins sat
+	 * mid-fuselage. plane2's origin is its nose gear (UAircraftType's local space), so a
+	 * nose-up attitude about the origin levers everything aft of it into the ground - at 8
+	 * degrees of flare the mains ended up 63 uu under the tarmac, which is exactly how it
+	 * was reported from play.
+	 *
+	 * An aeroplane on the ground pitches about its MAIN GEAR, and in the air about a centre
+	 * of gravity that sits close to it, so the mains serve both. Zero - an unmeasured
+	 * airframe, or one whose origin already IS the mains, like the Piper - pitches about
+	 * the origin exactly as it always did.
+	 */
+	UPROPERTY() double PitchPivotX = 0.0;
+
+	/**
 	 * Speed over the ground, uu per second.
 	 *
 	 * DRIVES THE WHEELS ON THE GROUND ONLY (#107 item 8). It stays meaningful once airborne -

@@ -107,6 +107,60 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and at the position it was given"), At.X, 1200.0);
 		TestEqual(TEXT("on both axes"), At.Y, -400.0);
 
+		// PITCHING KEEPS THE MAINS ON THE GROUND, which is the whole of the flare looking
+		// right. Reported from play: "the rear wheels now push into the ground on the plane
+		// landing, as if the pivot point for the flare has changed" - and it had. Pitch
+		// rotates about the ACTOR ORIGIN, and plane2's origin moved to the nose gear when it
+		// was re-exported into UAircraftType's local space (2026-09-13). A nose-up attitude
+		// about a pivot at the very front levers everything behind it downwards: at 8
+		// degrees the mains go 63 uu under the tarmac.
+		//
+		// An aeroplane pitches about its MAIN GEAR on the ground, so that is the pivot.
+		//
+		// ITS OWN ACTOR, not the one above: SetMotion is the only way to pose an agent, so a
+		// test that borrowed it would leave it pitched and pointing somewhere else for every
+		// assertion that follows - which is precisely what it did on the first run here.
+		ARoadAgentActor* Flaring = NewObject<ARoadAgentActor>(GetTransientPackage());
+		if (TestNotNull(TEXT("a flaring agent constructs"), Flaring))
+		{
+			Flaring->SetAirframe(AgentActorTestAirframe());
+
+			FAgentMotion Pitched;
+			Pitched.PitchDegrees = 8.0;
+			Pitched.PitchPivotX = -454.3;          // plane2's mains, measured
+			Flaring->SetMotion(Pitched, SurfaceZ);
+
+			// Where the main gear ended up in WORLD space, which is the thing that must not
+			// sink. Asked of the actor's own transform rather than recomputed here, so the
+			// test measures what the renderer will draw.
+			const FVector Mains = Flaring->GetActorTransform().TransformPosition(
+				FVector(Pitched.PitchPivotX, 0.0, 0.0));
+
+			TestTrue(FString::Printf(
+				TEXT("a pitched aircraft keeps its mains on the surface (Z %.1f against %.1f)"),
+				Mains.Z, SurfaceZ), FMath::Abs(Mains.Z - SurfaceZ) < 1.0);
+
+			// AND THE NOSE GEAR RISES, or the assertion above would pass on an aeroplane that
+			// simply refused to pitch at all. 454 uu of wheelbase at 8 degrees is 63 uu.
+			TestTrue(FString::Printf(TEXT("while the nose gear lifts off it (%.1f)"),
+				Flaring->GetActorLocation().Z),
+				Flaring->GetActorLocation().Z > SurfaceZ + 50.0);
+		}
+
+		// AN UNMEASURED AIRFRAME PITCHES ABOUT ITS ORIGIN exactly as it did before any of
+		// this - a zero pivot is the identity, and every vehicle and both airliners take it.
+		ARoadAgentActor* Unmeasured = NewObject<ARoadAgentActor>(GetTransientPackage());
+		if (TestNotNull(TEXT("an unmeasured agent constructs"), Unmeasured))
+		{
+			Unmeasured->SetAirframe(AgentActorTestAirframe());
+
+			FAgentMotion Pitched;
+			Pitched.PitchDegrees = 8.0;
+			Unmeasured->SetMotion(Pitched, SurfaceZ);
+			TestEqual(TEXT("with no pivot measured, the origin still sits on the surface"),
+				Unmeasured->GetActorLocation().Z, SurfaceZ);
+		}
+
 			// And an UNDRESSED one is lifted, because the cube's pivot is at its centre while the
 		// airframe's is on the ground. Getting this backwards flies the aircraft a metre above
 		// the taxiway, which reads as a physics bug rather than as the arithmetic it is.
