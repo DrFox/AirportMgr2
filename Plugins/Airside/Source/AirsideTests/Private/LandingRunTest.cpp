@@ -9,6 +9,16 @@ namespace
 {
 	// Prefixed against the UNITY build - these test files share one translation unit.
 
+	/** A runway end pointing +X from the origin, of the given length - see #88. */
+	FRunwayEnd LandingEndOfLength(double Length)
+	{
+		FRunwayEnd End;
+		End.Threshold = FVector2D::ZeroVector;
+		End.Direction = FVector2D(1.0, 0.0);
+		End.Length = Length;
+		return End;
+	}
+
 	/** Flies an arrival to completion, reporting what happened at each transition. */
 	struct FLandingTrace
 	{
@@ -110,7 +120,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	{
 		FLandingRun Run;
 		if (!TestTrue(TEXT("a long runway accepts the arrival"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe)))
+			Run.Start(LandingEndOfLength(LongRunway), Airframe)))
 		{
 			return false;
 		}
@@ -147,7 +157,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    it keeps measuring the flare if Vref or the glideslope are ever retuned.
 	{
 		FLandingRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		Run.Start(LandingEndOfLength(LongRunway), Airframe);
 		const FLandingTrace Trace = FlyLanding(Run, Airframe);
 
 		if (!TestTrue(TEXT("the aircraft reaches the ground"), Trace.bReachedGround))
@@ -223,7 +233,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		// Measured against the trace above rather than against a constant, so it keeps
 		// checking the two agree if any of the approach numbers are retuned.
 		FLandingRun Flown;
-		Flown.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		Flown.Start(LandingEndOfLength(LongRunway), Airframe);
 		const FLandingTrace FlownTrace = FlyLanding(Flown, Airframe);
 		TestEqual(FString::Printf(
 			TEXT("the required distance is what it flies: %.0f uu needed, %.0f used"),
@@ -232,13 +242,12 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 
 		FLandingRun Run;
 		TestFalse(TEXT("a runway shorter than that is refused"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5, Airframe));
+			Run.Start(LandingEndOfLength(Needed * 0.5), Airframe));
 
 		// Comfortably past the safety margin - a landing is flown to a touchdown zone, not
 		// to the numbers, so the refusal deliberately wants more than the bare measurement.
 		TestTrue(TEXT("and one with room to spare is not"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
-				Needed * FLandingRun::LandingMargin * 1.1, Airframe));
+			Run.Start(LandingEndOfLength(Needed * FLandingRun::LandingMargin * 1.1), Airframe));
 	}
 
 	// 8. AN AIRFRAME WITH NO LANDING FIGURES DECLINES rather than flying a nonsense - and
@@ -252,7 +261,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 
 		FLandingRun Run;
 		TestFalse(TEXT("but it cannot land"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, NoLandingAirframe));
+			Run.Start(LandingEndOfLength(LongRunway), NoLandingAirframe));
 	}
 
 	// 9. ADVANCE IS THE ONLY THING THAT MOVES IT, and it declines once done - the same
@@ -260,7 +269,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    ignores the return value must leave its aircraft where it was, not at the origin.
 	{
 		FLandingRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		Run.Start(LandingEndOfLength(LongRunway), Airframe);
 		FlyLanding(Run, Airframe);
 
 		FVector2D At(12345.0, 6789.0);

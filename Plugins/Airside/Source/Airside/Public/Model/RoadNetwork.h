@@ -186,12 +186,11 @@ public:
 	 * A runway is recognised by its PROFILE - see URoadProfile::bContinuousThroughJunctions -
 	 * so nothing here needs a runway type or a flag on the segment.
 	 *
-	 * Direction points from the near threshold toward the far one: the way you depart having
-	 * backtracked to that end. OutSegment, when given, receives the seed segment - the runway
-	 * segment whose end was nearest Near. False when Near is not on a runway at all.
+	 * OutEnd.Direction points from the near threshold toward the far one: the way you depart
+	 * having backtracked to that end. OutEnd.Seed is the runway segment whose end was
+	 * nearest Near. False when Near is not on a runway at all, and OutEnd is untouched.
 	 */
-	bool RunwayExtentAt(const FVector2D& Near, FVector2D& OutThreshold, FVector2D& OutDirection,
-		double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
+	bool RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) const;
 
 	/**
 	 * The runway threshold nearest a point, however far away it is.
@@ -204,11 +203,10 @@ public:
 	 *
 	 * The threshold returned is the end NEAREST the query and the direction runs away from
 	 * it, so an aircraft lands toward the far end - the same convention as a departure, and
-	 * the reason both can share the walk. OutSegment, when given, receives the seed segment -
-	 * the runway segment whose end was nearest Near.
+	 * the reason both can share the walk. OutEnd.Seed is the runway segment whose end was
+	 * nearest Near.
 	 */
-	bool NearestRunwayThreshold(const FVector2D& Near, FVector2D& OutThreshold,
-		FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
+	bool NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const;
 
 	/**
 	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
@@ -539,9 +537,7 @@ private:
 	UPROPERTY() TArray<int32>        SegmentFreeList;
 
 	/** RunwayExtentAt and NearestRunwayThreshold, which differ only in the proximity test. */
-	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway,
-		FVector2D& OutThreshold, FVector2D& OutDirection, double& OutLength,
-		FRoadSegmentId* OutSegment) const;
+	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway, FRunwayEnd& OutEnd) const;
 
 	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;

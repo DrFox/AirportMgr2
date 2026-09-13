@@ -96,7 +96,7 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 
-	TestTrue(TEXT("departing from the E threshold, westbound"), Plan.Direction.X < -0.99 && FVector2D::Distance(Plan.Threshold, A.EAt) < 1.0);
+	TestTrue(TEXT("departing from the E threshold, westbound"), Plan.End.Direction.X < -0.99 && FVector2D::Distance(Plan.End.Threshold, A.EAt) < 1.0);
 	TestFalse(TEXT("an intersection departure, not a backtrack"), Plan.bBacktrack);
 	// The split node on the W side of X, ExitLength (6000) from it: 46000 from the E threshold.
 	TestTrue(FString::Printf(TEXT("joins at the entry arc's node, 46000 uu past the threshold (%.0f)"), Plan.EntryOffset),
@@ -105,7 +105,7 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("the taxi never runs along the runway"), DepartureRouteUsesRunway(*A.Net, Plan.Route));
 	const int32 N = Plan.Route.Polyline.Num();
 	TestTrue(TEXT("and arrives heading down the runway"),
-		N >= 2 && FVector2D::DotProduct(Plan.Route.Polyline[N - 1] - Plan.Route.Polyline[N - 2], Plan.Direction) > 0.0);
+		N >= 2 && FVector2D::DotProduct(Plan.Route.Polyline[N - 1] - Plan.Route.Polyline[N - 2], Plan.End.Direction) > 0.0);
 	TestTrue(TEXT("ending on the centreline"), FMath::Abs(Plan.Route.Polyline.Last().Y) < 1.0);
 	return true;
 }
@@ -153,7 +153,7 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*Net, StandNode, WAt + FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
-	TestTrue(TEXT("departing from the W threshold, eastbound"), Plan.Direction.X > 0.99);
+	TestTrue(TEXT("departing from the W threshold, eastbound"), Plan.End.Direction.X > 0.99);
 	TestTrue(TEXT("a backtrack"), Plan.bBacktrack);
 	// The strip's end node sits the runway's half width (900) inside the threshold: a dead
 	// end is cut back by that much, and the threshold is the road node beyond the cut.
@@ -240,11 +240,11 @@ bool FDeparturePlannerNotAdmittedTest::RunTest(const FString& Parameters)
 {
 	FDepartureAirport A = BuildDepartureAirport(GetTransientPackage());
 	if (!TestTrue(TEXT("the stand is linked"), A.StandNode.IsSet())) { return false; }
-	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
-	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->RunwayExtentAt(A.XAt, Threshold, Direction, Length, &Seed))) { return false; }
+	FRunwayEnd End;
+	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->RunwayExtentAt(A.XAt, End))) { return false; }
 	FRunwayFacts Grass;
 	Grass.Surface = ERunwaySurface::Grass;
-	A.Net->SetRunwayFacts(Seed, Grass);
+	A.Net->SetRunwayFacts(End.Seed, Grass);
 
 	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 	const FDeparturePlan OnGrass = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);

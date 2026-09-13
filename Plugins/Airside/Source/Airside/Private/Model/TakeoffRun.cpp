@@ -41,8 +41,7 @@ double FTakeoffRun::RequiredRoll(const FGroundPerformance& InGround,
 	return ToRotate + WhileRotating;
 }
 
-bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FAirframe& InAirframe, double InHeading,
+bool FTakeoffRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InHeading,
 	double InEntryOffset, double InSpeed)
 {
 	Phase = ETakeoffPhase::Clear;
@@ -57,15 +56,15 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 		return false;
 	}
 
-	if (InDirection.IsNearlyZero())
+	if (InEnd.Direction.IsNearlyZero())
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("Departure refused: the runway has no direction."));
 		return false;
 	}
 
 	const double Needed = RequiredRoll(InGround, InClimb);
-	const double EntryOffset = FMath::Clamp(InEntryOffset, 0.0, InRunwayLength);
-	if (InRunwayLength - EntryOffset < Needed)
+	const double EntryOffset = FMath::Clamp(InEntryOffset, 0.0, InEnd.Length);
+	if (InEnd.Length - EntryOffset < Needed)
 	{
 		// The whole reason this returns a bool. A strip shorter than the roll to Vr is one
 		// this aircraft cannot leave, and rolling anyway simulates an overrun.
@@ -73,19 +72,18 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 		// departure has given the piece behind it up.
 		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Departure refused: %.0f uu of runway ahead of the entry (%.0f past the threshold), %.0f needed to reach %.0f uu/s."),
-			InRunwayLength - EntryOffset, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
+			InEnd.Length - EntryOffset, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
 		return false;
 	}
 
-	Threshold = InThreshold;
-	Direction = InDirection.GetSafeNormal();
-	RunwayLength = InRunwayLength;
+	End = InEnd;
+	End.Direction = InEnd.Direction.GetSafeNormal();
 	// Ground/Climb are NOT copied here any more (issue #83) - Advance takes the airframe
 	// fresh from its caller every frame instead.
 
 	// FROM THE ENTRY, which is the threshold only for a backtrack: the position this
-	// reports is Threshold + Direction * Travelled, so starting Travelled here is what
-	// keeps the aircraft where the taxi left it instead of jumping to the threshold.
+	// reports is End.Threshold + End.Direction * Travelled, so starting Travelled here is
+	// what keeps the aircraft where the taxi left it instead of jumping to the threshold.
 	Travelled = EntryOffset;
 	Altitude = 0.0;
 	Pitch = 0.0;
@@ -99,7 +97,7 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Departure armed: %.0f uu runway, joining %.0f past the threshold, %.0f needed, rotate at %.0f uu/s."),
-		RunwayLength, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
+		End.Length, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
 	return true;
 }
 
@@ -113,7 +111,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 	const FGroundPerformance& Ground = InAirframe.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
-	const double RunwayHeading = FMath::Atan2(Direction.Y, Direction.X);
+	const double RunwayHeading = FMath::Atan2(End.Direction.Y, End.Direction.X);
 
 	switch (Phase)
 	{
@@ -206,7 +204,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		break;
 	}
 
-	OutPosition = Threshold + Direction * Travelled;
+	OutPosition = End.Threshold + End.Direction * Travelled;
 	OutHeading = Heading;
 	OutAltitude = Altitude;
 	OutPitch = Pitch;

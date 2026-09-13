@@ -82,13 +82,13 @@ bool FPlanAnyShortestTest::RunTest(const FString& Parameters)
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 
 	// Both strips admit the Piper; the W-E one is the shorter taxi from this stand.
-	TestTrue(TEXT("chose the W-E strip (threshold on Y=0)"), FMath::Abs(Plan.Threshold.Y) < 1.0);
+	TestTrue(TEXT("chose the W-E strip (threshold on Y=0)"), FMath::Abs(Plan.End.Threshold.Y) < 1.0);
 
 	// The alternative, priced: any plan to the N-S strip is longer.
-	FVector2D Th, Dir; double Len = 0.0;
-	FRoadSegmentId Seed;
-	A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), Th, Dir, Len, &Seed);
-	const FDeparturePlan Other = DeparturePlanner::Plan(*A.Net, A.StandNode, Th + Dir * 10.0, Airframe, ETraversalClass::Aircraft);
+	FRunwayEnd OtherEnd;
+	A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd);
+	const FDeparturePlan Other = DeparturePlanner::Plan(*A.Net, A.StandNode,
+		OtherEnd.Threshold + OtherEnd.Direction * 10.0, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogPlanAnyTest, Log, TEXT("N-S alternative: %s"), *DeparturePlanner::Describe(Other));
 	if (Other.IsValid())
 	{
@@ -120,7 +120,7 @@ bool FPlanAnyAdmissionTest::RunTest(const FString& Parameters)
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*A.Net, A.StandNode, Airframe, ETraversalClass::Aircraft);
 	UE_LOG(LogPlanAnyTest, Log, TEXT("PlanAny (near strip refused): %s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
-	TestTrue(TEXT("chose the N-S strip (threshold on X=100000)"), FMath::Abs(Plan.Threshold.X - 100000.0) < 1.0);
+	TestTrue(TEXT("chose the N-S strip (threshold on X=100000)"), FMath::Abs(Plan.End.Threshold.X - 100000.0) < 1.0);
 
 	// Both refused: the refusal names admission, not "no runway".
 	A.Net->SetRunwayFacts(A.ShortSeed, Grass);

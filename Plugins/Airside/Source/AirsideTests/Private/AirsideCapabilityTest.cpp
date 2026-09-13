@@ -35,7 +35,7 @@ bool FAirsideCapabilityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("two collinear runway segments are ONE runway"), Cap.Runways.Num(), 1);
 	if (Cap.Runways.Num() == 1)
 	{
-		TestEqual(TEXT("whose length is the whole strip"), Cap.Runways[0].Length, 60000.0, 1.0);
+		TestEqual(TEXT("whose length is the whole strip"), Cap.Runways[0].End.Length, 60000.0, 1.0);
 		TestEqual(TEXT("and whose profile is the runway's"),
 			Cap.Runways[0].Profile.Get(), static_cast<const URoadProfile*>(Runway));
 	}

@@ -233,23 +233,25 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			if (!Net->IsRunwaySegment(Id)) { continue; }
 			const TArray<FRoadSegmentId> Chain = Net->RunwayChain(Id);
 			for (const FRoadSegmentId& Member : Chain) { Seen.Add(Member.Index); }
-			FVector2D ChainThreshold, ChainDirection; double ChainLength = 0.0;
-			if (const FRoadNode* A = Net->GetNode(Segment.A)) { Net->RunwayExtentAt(A->Position, ChainThreshold, ChainDirection, ChainLength); }
+			FRunwayEnd ChainEnd;
+			if (const FRoadNode* A = Net->GetNode(Segment.A)) { Net->RunwayExtentAt(A->Position, ChainEnd); }
 			const URoadProfile* Profile = Net->ProfileFor(Segment);
 			const FRunwayFacts Facts = Net->RunwayFactsFor(Id);
 			const FRunwayAdmission Landing = RunwayAdmission::Check(*Net, Id, Airframe, true);
 			const FRunwayAdmission Takeoff = RunwayAdmission::Check(*Net, Id, Airframe, false);
 			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE runway %s from segment %d: %d segment(s), %.0f uu long, %.0f uu wide, %s, %s approach; default airframe landing: %s; take-off: %s"),
-				*RunwayDesignator::ToPairText(ChainDirection), Index, Chain.Num(), ChainLength, Profile ? Profile->GetTotalWidth() : 0.0,
+				*RunwayDesignator::ToPairText(ChainEnd.Direction), Index, Chain.Num(), ChainEnd.Length, Profile ? Profile->GetTotalWidth() : 0.0,
 				RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach),
 				*(Landing.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Landing)),
 				*(Takeoff.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Takeoff)));
 		}
 	}
 
-	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId RunwaySeed;
-	const bool bRunway = Net->NearestRunwayThreshold(FVector2D::ZeroVector, Threshold, Direction, Length, &RunwaySeed);
-	const FArrivalPlan Plan = bRunway ? ArrivalPlanner::Plan(*Net, Threshold - Direction * 1000.0, Airframe) : FArrivalPlan();
+	FRunwayEnd NearestEnd;
+	const bool bRunway = Net->NearestRunwayThreshold(FVector2D::ZeroVector, NearestEnd);
+	const FArrivalPlan Plan = bRunway
+		? ArrivalPlanner::Plan(*Net, NearestEnd.Threshold - NearestEnd.Direction * 1000.0, Airframe)
+		: FArrivalPlan();
 	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE arrival from the nearest threshold: runway %d, plan says %s, %d usable exit(s)"),
 		bRunway, *ArrivalPlanner::DescribeRefusal(Plan), Plan.ExitCount);
 
@@ -269,7 +271,8 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		if (bRunway && Pose != nullptr)
 		{
 			// From EVERY node on the strip, not just the plan's chosen exit.
-			const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(RunwaySeed, Threshold, Direction, 0.0);
+			const TArray<FGuidelineNodeId> Exits =
+				Net->RunwayExitNodes(NearestEnd.Seed, NearestEnd.Threshold, NearestEnd.Direction, 0.0);
 			int32 Reachable = 0;
 			for (const FGuidelineNodeId& Exit : Exits)
 			{
@@ -314,7 +317,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			*Type->GetName(), TypeAirframe.Wingspan, TypeAirframe.Requirements.LandingFieldLength,
 			TypePlan.IsValid() ? TEXT("YES") : TEXT("NO - "),
 			TypePlan.IsValid() ? TEXT("") : *ArrivalPlanner::DescribeRefusal(TypePlan),
-			TypePlan.Needed, TypePlan.RunwayLength);
+			TypePlan.Needed, TypePlan.End.Length);
 	}
 	return true;
 }

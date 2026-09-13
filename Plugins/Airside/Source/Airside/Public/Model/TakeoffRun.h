@@ -34,8 +34,8 @@ enum class ETakeoffPhase : uint8
  *
  * The agent switches: the follower brings it to the threshold, this takes it from there.
  *
- * World-free like the follower. It is a threshold, a direction, and two structs of numbers,
- * so a whole departure can be flown in a loop with no world - see Airside.Model.TakeoffRun.
+ * World-free like the follower. It is a runway end and two structs of numbers, so a whole
+ * departure can be flown in a loop with no world - see Airside.Model.TakeoffRun.
  *
  * IT USES THE SAME MinTaxiSpeed RULE while lining up, because the reason has not changed: a
  * wheeled aircraft cannot yaw without rolling, and an aircraft turning onto a runway is still
@@ -48,14 +48,8 @@ struct AIRSIDE_API FTakeoffRun
 
 	UPROPERTY() ETakeoffPhase Phase = ETakeoffPhase::Clear;
 
-	/** The threshold the roll starts from, in road-plane XY. */
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
-
-	/** Unit vector from the threshold toward the far end. The departure heading. */
-	UPROPERTY() FVector2D Direction = FVector2D(1.0, 0.0);
-
-	/** Runway available, uu. */
-	UPROPERTY() double RunwayLength = 0.0;
+	/** The strip the roll starts from, and the threshold it starts at - see #88. */
+	UPROPERTY() FRunwayEnd End;
 
 	// GROUND/CLIMB ARE NOT STORED HERE ANY MORE (issue #83) - see FLandingRun's own note.
 	// Start and Advance take the airframe by reference from FRoadAgent::Airframe instead.
@@ -86,9 +80,8 @@ struct AIRSIDE_API FTakeoffRun
 	 * departure rolls from there and is judged on the runway REMAINING); InSpeed is the
 	 * speed it arrives at, floored at MinTaxiSpeed. Both default to the backtrack case.
 	 */
-	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FAirframe& InAirframe, double InHeading, double InEntryOffset = 0.0,
-		double InSpeed = 0.0);
+	bool Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InHeading,
+		double InEntryOffset = 0.0, double InSpeed = 0.0);
 
 	/**
 	 * Flies one frame. False once the departure is over, leaving the outputs untouched.

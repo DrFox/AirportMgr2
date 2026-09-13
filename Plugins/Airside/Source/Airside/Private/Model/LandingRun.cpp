@@ -27,8 +27,11 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	// A long but FINITE runway. TNumericLimits<double>::Max() works arithmetically and puts
 	// 1.8e308 into the armed log line, which is 300 characters of noise in the one place
 	// somebody reads to find out why an arrival was refused.
-	constexpr double UnboundedRunway = 1.0e9;
-	if (!Probe.Begin(FVector2D::ZeroVector, FVector2D(1.0, 0.0), UnboundedRunway, ProbeAirframe, 0.0))
+	FRunwayEnd ProbeEnd;
+	ProbeEnd.Threshold = FVector2D::ZeroVector;
+	ProbeEnd.Direction = FVector2D(1.0, 0.0);
+	ProbeEnd.Length = 1.0e9;
+	if (!Probe.Begin(ProbeEnd, ProbeAirframe, 0.0))
 	{
 		return 0.0;
 	}
@@ -61,28 +64,26 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	return FMath::Max(Probe.Travelled, 0.0);
 }
 
-bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FAirframe& InAirframe, double InVacateAt)
+bool FLandingRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
 
 	const double Needed = RequiredLandingDistance(
 		InAirframe.Ground, InAirframe.Climb, InAirframe.Approach) * LandingMargin;
-	if (InRunwayLength < Needed)
+	if (InEnd.Length < Needed)
 	{
 		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s "
 				 "(%.0f flown plus a %.0f%% margin)."),
-			InRunwayLength, Needed, InAirframe.Ground.Landing.SpeedCap,
+			InEnd.Length, Needed, InAirframe.Ground.Landing.SpeedCap,
 			Needed / LandingMargin, (LandingMargin - 1.0) * 100.0);
 		return false;
 	}
 
-	return Begin(InThreshold, InDirection, InRunwayLength, InAirframe, InVacateAt);
+	return Begin(InEnd, InAirframe, InVacateAt);
 }
 
-bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FAirframe& InAirframe, double InVacateAt)
+bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
 
@@ -97,7 +98,7 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 		return false;
 	}
 
-	if (InDirection.IsNearlyZero())
+	if (InEnd.Direction.IsNearlyZero())
 	{
 		UE_LOG(LogAirsideTraffic, Warning, TEXT("Arrival refused: the runway has no direction."));
 		return false;
@@ -105,9 +106,8 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	VacateAt = InVacateAt;
 
-	Threshold = InThreshold;
-	Direction = InDirection.GetSafeNormal();
-	RunwayLength = InRunwayLength;
+	End = InEnd;
+	End.Direction = InEnd.Direction.GetSafeNormal();
 	// Ground/Climb/Approach are NOT copied here any more (issue #83) - Advance takes the
 	// airframe fresh from its caller every frame instead.
 
@@ -117,7 +117,7 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Travelled = -InApproach.FinalDistance();
 	Altitude = InApproach.FinalAltitude;
 	Speed = InGround.Landing.SpeedCap;
-	Heading = FMath::Atan2(Direction.Y, Direction.X);
+	Heading = FMath::Atan2(End.Direction.Y, End.Direction.X);
 
 	// The approach attitude is the angle the wing needs at Vref, LESS the descent angle: the
 	// aircraft is flying nose-high relative to its flight path while the flight path itself
@@ -129,7 +129,7 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Arrival armed: %.0f uu runway, vacating at %.0f, Vref %.0f uu/s, joining %.0f uu out."),
-		RunwayLength, VacateAt, Speed, InApproach.FinalDistance());
+		End.Length, VacateAt, Speed, InApproach.FinalDistance());
 	return true;
 }
 
@@ -253,7 +253,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 			Phase = ELandingPhase::Vacated;
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Vacated %.0f uu past the threshold of %.0f available."),
-				Travelled, RunwayLength);
+				Travelled, End.Length);
 		}
 		break;
 	}
@@ -262,7 +262,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		break;
 	}
 
-	OutPosition = Threshold + Direction * Travelled;
+	OutPosition = End.Threshold + End.Direction * Travelled;
 	OutHeading = Heading;
 	OutAltitude = Altitude;
 	OutPitch = Pitch;

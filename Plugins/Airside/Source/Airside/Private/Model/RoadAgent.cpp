@@ -110,10 +110,10 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	return Motion;
 }
 
-bool FRoadAgent::StartArrival(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-	const FAirframe& InAirframe, double VacateAt, const FRoutePlan& InTaxiInPlan)
+bool FRoadAgent::StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
+	const FRoutePlan& InTaxiInPlan)
 {
-	if (!Arrival.Start(Threshold, Direction, RunwayLength, InAirframe, VacateAt))
+	if (!Arrival.Start(End, InAirframe, VacateAt))
 	{
 		// FLandingRun has already logged why. Nothing else is touched: an arrival that
 		// cannot be flown must leave no trace of itself on the agent, rather than one
@@ -168,13 +168,10 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 	}
 }
 
-void FRoadAgent::ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-	double EntryOffset)
+void FRoadAgent::ArmDeparture(const FRunwayEnd& End, double EntryOffset)
 {
 	bDepartureArmed = true;
-	DepartureOrder.Threshold = Threshold;
-	DepartureOrder.Direction = Direction;
-	DepartureOrder.RunwayLength = RunwayLength;
+	DepartureOrder.End = End;
 	DepartureOrder.EntryOffset = EntryOffset;
 }
 
@@ -269,8 +266,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// Restarting at the threshold from creep was the teleport-and-spin of
 				// samples/runway1.png (2026-09-07).
 				bDepartureArmed = false;
-				if (Departure.Start(DepartureOrder.Threshold, DepartureOrder.Direction,
-					DepartureOrder.RunwayLength, Airframe, LastMotion.Heading,
+				if (Departure.Start(DepartureOrder.End, Airframe, LastMotion.Heading,
 					DepartureOrder.EntryOffset, Follower.Speed))
 				{
 					Phase = EAgentPhase::Departing;

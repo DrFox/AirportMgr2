@@ -47,18 +47,16 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 	FRoadSegmentId Seed;
 	URoadNetwork* Net = RunwayExtentFixture(Threshold, FarAway, Seed);
 
-	FVector2D OutThreshold;
-	FVector2D OutDirection;
-	double OutLength = 0.0;
+	FRunwayEnd OutEnd;
 
 	// 1. AT A THRESHOLD, it is a runway, and the departure runs the length of it.
 	{
-		const bool bFound = Net->RunwayExtentAt(Threshold, OutThreshold, OutDirection, OutLength);
+		const bool bFound = Net->RunwayExtentAt(Threshold, OutEnd);
 		if (TestTrue(TEXT("a query at the threshold finds the runway"), bFound))
 		{
-			TestEqual(TEXT("and reports that threshold, not the far one"), OutThreshold, Threshold);
-			TestTrue(TEXT("pointing down the runway"), OutDirection.X > 0.99);
-			TestEqual(TEXT("for its whole length"), OutLength, 100000.0);
+			TestEqual(TEXT("and reports that threshold, not the far one"), OutEnd.Threshold, Threshold);
+			TestTrue(TEXT("pointing down the runway"), OutEnd.Direction.X > 0.99);
+			TestEqual(TEXT("for its whole length"), OutEnd.Length, 100000.0);
 		}
 	}
 
@@ -70,7 +68,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 	//    aircraft - having taxied correctly to a stand on the far side of the airport -
 	//    jumped to the runway and rolled. It read as the routing tool being broken.
 	{
-		const bool bFound = Net->RunwayExtentAt(FarAway, OutThreshold, OutDirection, OutLength);
+		const bool bFound = Net->RunwayExtentAt(FarAway, OutEnd);
 		TestFalse(FString::Printf(
 			TEXT("a taxiway %.0f uu from the runway is not a departure point"),
 			FVector2D::Distance(FarAway, Threshold)),
@@ -85,12 +83,10 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		const double Width = 4500.0;
 
 		TestTrue(TEXT("just inside a runway's width of the threshold still counts"),
-			Net->RunwayExtentAt(Threshold + FVector2D(0.0, Width * 0.9),
-				OutThreshold, OutDirection, OutLength));
+			Net->RunwayExtentAt(Threshold + FVector2D(0.0, Width * 0.9), OutEnd));
 
 		TestFalse(TEXT("and well outside it does not"),
-			Net->RunwayExtentAt(Threshold + FVector2D(0.0, Width * 3.0),
-				OutThreshold, OutDirection, OutLength));
+			Net->RunwayExtentAt(Threshold + FVector2D(0.0, Width * 3.0), OutEnd));
 	}
 
 	// 4. NEAREST-THRESHOLD IS THE SAME SEARCH WITHOUT THE PROXIMITY TEST, and that is the
@@ -102,14 +98,14 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 	//    same refusal would make an arrival impossible to order.
 	{
 		TestFalse(TEXT("the far taxiway is not ON a runway"),
-			Net->RunwayExtentAt(FarAway, OutThreshold, OutDirection, OutLength));
+			Net->RunwayExtentAt(FarAway, OutEnd));
 
 		if (TestTrue(TEXT("but it still has a nearest runway to land on"),
-			Net->NearestRunwayThreshold(FarAway, OutThreshold, OutDirection, OutLength)))
+			Net->NearestRunwayThreshold(FarAway, OutEnd)))
 		{
-			TestEqual(TEXT("and it is the threshold nearer the query"), OutThreshold, Threshold);
-			TestTrue(TEXT("landing away from that threshold"), OutDirection.X > 0.99);
-			TestEqual(TEXT("down the full length"), OutLength, 100000.0);
+			TestEqual(TEXT("and it is the threshold nearer the query"), OutEnd.Threshold, Threshold);
+			TestTrue(TEXT("landing away from that threshold"), OutEnd.Direction.X > 0.99);
+			TestEqual(TEXT("down the full length"), OutEnd.Length, 100000.0);
 		}
 	}
 
@@ -191,7 +187,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		Bare->AddStraightSegment(A, B, Taxiway);
 
 		TestFalse(TEXT("a network with no runway offers no departure"),
-			Bare->RunwayExtentAt(FVector2D::ZeroVector, OutThreshold, OutDirection, OutLength));
+			Bare->RunwayExtentAt(FVector2D::ZeroVector, OutEnd));
 	}
 
 	// 8. THE MULTI-RUNWAY CASE (#87). RunwayExitNodes takes a Seed now, not a caller-

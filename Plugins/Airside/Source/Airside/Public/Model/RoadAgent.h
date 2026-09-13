@@ -83,14 +83,8 @@ struct AIRSIDE_API FDepartureOrder
 {
 	GENERATED_BODY()
 
-	/** Where the roll starts, road-plane XY. */
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
-
-	/** Unit vector from the threshold toward the far end. */
-	UPROPERTY() FVector2D Direction = FVector2D::ZeroVector;
-
-	/** Runway available beyond the threshold, uu. */
-	UPROPERTY() double RunwayLength = 0.0;
+	/** Where the roll starts, and the strip it starts on - see #88. */
+	UPROPERTY() FRunwayEnd End;
 
 	/**
 	 * How far past the threshold the taxi joins the strip, uu. The roll starts THERE - an
@@ -388,15 +382,14 @@ public:
 	 * Arms an arrival: Phase becomes Arriving. False, and leaves the agent untouched, when
 	 * this runway cannot take this aircraft - see FLandingRun::Start.
 	 */
-	bool StartArrival(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-		const FAirframe& InAirframe, double VacateAt, const FRoutePlan& InTaxiInPlan);
+	bool StartArrival(const FRunwayEnd& End, const FAirframe& InAirframe, double VacateAt,
+		const FRoutePlan& InTaxiInPlan);
 
 	/** Starts a plain taxi with no prior landing: Phase becomes Taxiing. */
 	void StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe);
 
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
-	void ArmDeparture(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
-		double EntryOffset = 0.0);
+	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);
 
 	/**
 	 * Sets GoalNode from a plan's own last step, or clears it when the plan has none.

@@ -67,18 +67,12 @@ struct AIRSIDE_API FArrivalPlan
 {
 	GENERATED_BODY()
 
-	/** The runway threshold nearest the query point. */
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
+	/** The runway threshold nearest the query point, its heading and the strip's own seed
+	 *  segment - see #88. */
+	UPROPERTY() FRunwayEnd End;
 
-	/** Unit vector from Threshold toward the far end - the landing heading. */
-	UPROPERTY() FVector2D Direction = FVector2D(1.0, 0.0);
-
-	/** Runway available beyond Threshold, uu. */
-	UPROPERTY() double RunwayLength = 0.0;
-
-	/** The runway segment nearest the query, and every segment continuous with it. What the
-	 *  landing holds in the occupancy table from StartArrival until Vacated. */
-	UPROPERTY() FRoadSegmentId RunwaySegment;
+	/** Every segment continuous with End.Seed. What the landing holds in the occupancy
+	 *  table from StartArrival until Vacated. */
 	UPROPERTY() TArray<FRoadSegmentId> RunwayChain;
 
 	/** The admission decision for this runway and airframe; Why == NotAdmitted when refused. */

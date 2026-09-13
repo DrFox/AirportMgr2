@@ -8,7 +8,7 @@ double FAirsideCapability::LongestRunway() const
 	double Longest = 0.0;
 	for (const FRunwaySummary& R : Runways)
 	{
-		Longest = FMath::Max(Longest, R.Length);
+		Longest = FMath::Max(Longest, R.End.Length);
 	}
 	return Longest;
 }
@@ -20,9 +20,9 @@ namespace
 		// 1 uu: thresholds come from the same node positions, so anything looser would be
 		// tolerating a disagreement that cannot happen.
 		const double Tol = 1.0;
-		const FVector2D AFar = A.Threshold + A.Direction * A.Length;
-		return (FVector2D::Distance(A.Threshold, Threshold) < Tol && FVector2D::Distance(AFar, FarEnd) < Tol)
-			|| (FVector2D::Distance(A.Threshold, FarEnd) < Tol && FVector2D::Distance(AFar, Threshold) < Tol);
+		const FVector2D AFar = A.End.FarEnd();
+		return (FVector2D::Distance(A.End.Threshold, Threshold) < Tol && FVector2D::Distance(AFar, FarEnd) < Tol)
+			|| (FVector2D::Distance(A.End.Threshold, FarEnd) < Tol && FVector2D::Distance(AFar, Threshold) < Tol);
 	}
 }
 
@@ -43,19 +43,16 @@ FAirsideCapability AirsideCapability::Summarise(const URoadNetwork& Network)
 		// Queried AT AN END, not the midpoint: RunwayExtentAt's proximity gate measures the
 		// distance to the nearest segment END against the runway's width, so a long segment's
 		// midpoint is "not on a runway" by that rule. Its end is on it by definition.
-		FVector2D Threshold, Direction;
-		double Length = 0.0;
-		if (!Network.RunwayExtentAt(A->Position, Threshold, Direction, Length)) { continue; }
-		const FVector2D FarEnd = Threshold + Direction * Length;
+		FRunwayEnd End;
+		if (!Network.RunwayExtentAt(A->Position, End)) { continue; }
+		const FVector2D FarEnd = End.FarEnd();
 
 		const bool bKnown = Out.Runways.ContainsByPredicate(
-			[&](const FRunwaySummary& R) { return SameStrip(R, Threshold, FarEnd); });
+			[&](const FRunwaySummary& R) { return SameStrip(R, End.Threshold, FarEnd); });
 		if (bKnown) { continue; }
 
 		FRunwaySummary R;
-		R.Threshold = Threshold;
-		R.Direction = Direction;
-		R.Length = Length;
+		R.End = End;
 		R.Profile = Profile;
 		Out.Runways.Add(R);
 	}

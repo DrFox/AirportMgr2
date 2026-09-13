@@ -56,9 +56,8 @@ struct AIRSIDE_API FDeparturePlan
 	 */
 	UPROPERTY() bool bBacktrack = false;
 
-	UPROPERTY() FVector2D Threshold = FVector2D::ZeroVector;
-	UPROPERTY() FVector2D Direction = FVector2D::ZeroVector;
-	UPROPERTY() double RunwayLength = 0.0;
+	/** The strip departed from, and the threshold the roll starts at - see #88. */
+	UPROPERTY() FRunwayEnd End;
 	/** Runway beyond the entry, uu: what the roll actually has. */
 	UPROPERTY() double Available = 0.0;
 	/** Roll to Vr this airframe needs, uu. */
