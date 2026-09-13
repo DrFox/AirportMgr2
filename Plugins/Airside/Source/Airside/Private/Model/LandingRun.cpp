@@ -198,12 +198,10 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 			FMath::Asin(FMath::Clamp(Speed > 0.0 ? Commanded / Speed : 0.0, -1.0, 1.0)));
 		const double Wanted = FMath::Min(Required + WantedGamma, Approach.MaxFlarePitchDegrees);
 
-		// Slewed, never assigned - the nose has a rate. Clamped by the REMAINING error so the
-		// last step lands exactly on the wanted attitude, the same construction the line-up
-		// turn uses in FTakeoffRun and for the same reason.
-		const double Error = Wanted - Pitch;
-		const double MaxStep = Approach.FlareRateDegPerSec * DeltaSeconds;
-		Pitch += FMath::Clamp(Error, -MaxStep, MaxStep);
+		// Slewed, never assigned - the nose has a rate. FInterpConstantTo clamps by the
+		// REMAINING error so the last step lands exactly on the wanted attitude, the same
+		// construction the line-up turn uses in FTakeoffRun and for the same reason.
+		Pitch = FMath::FInterpConstantTo(Pitch, Wanted, DeltaSeconds, Approach.FlareRateDegPerSec);
 
 		// FLIGHT PATH IS ATTITUDE LESS THE ANGLE THE WING IS USING - the same expression the
 		// climb uses, with the same two terms. Taken from the ACTUAL attitude, not the wanted

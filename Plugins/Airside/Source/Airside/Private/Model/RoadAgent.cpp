@@ -62,12 +62,10 @@ void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 	const double Seconds = bEngineRunning ? Airframe.Engine.SpoolUpSeconds : Airframe.Engine.SpoolDownSeconds;
 	const double Rate = Airframe.Engine.MaxRPM / Seconds;
 
-	// Clamped by the REMAINING error, so the last step lands exactly on the target and the
-	// propeller neither overshoots nor creeps. The same construction the line-up turn and
-	// the flare use.
-	const double Error = Target - EngineRPM;
-	const double MaxStep = Rate * DeltaSeconds;
-	EngineRPM += FMath::Clamp(Error, -MaxStep, MaxStep);
+	// FInterpConstantTo clamps by the REMAINING error, so the last step lands exactly on
+	// the target and the propeller neither overshoots nor creeps. The same construction
+	// the line-up turn and the flare use.
+	EngineRPM = FMath::FInterpConstantTo(EngineRPM, Target, DeltaSeconds, Rate);
 }
 
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
