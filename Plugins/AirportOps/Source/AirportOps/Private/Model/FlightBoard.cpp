@@ -289,6 +289,13 @@ void UFlightBoard::OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& N
 void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	USimClock& Clock)
 {
+	// CANCELLED, not just forgotten (PR #137 review): a handle left in Clock's own queue
+	// after this map drops it is an orphaned entry that outlives every reference to it here -
+	// harmless against a genuinely fresh post-load Clock (its queue starts empty), but this
+	// function has no way to know that is the only time it is ever called, and an entry that
+	// fires later still runs its captured lambda against whatever Id it named.
+	for (const TPair<int32, int32>& Handle : ArrivalHandles) { Clock.Cancel(Handle.Value); }
+	for (const TPair<int32, int32>& Handle : ExpiryHandles) { Clock.Cancel(Handle.Value); }
 	ArrivalHandles.Reset();
 	ExpiryHandles.Reset();
 

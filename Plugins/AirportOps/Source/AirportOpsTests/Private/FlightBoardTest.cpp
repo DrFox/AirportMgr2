@@ -188,6 +188,35 @@ bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * PR #137 REVIEW: Decline -> CancelExpiry had no test. A declined offer that is left to sit
+ * past its own ExpiresAt must stay Declined, not be silently flipped to Expired by a schedule
+ * nobody cancelled.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardDeclineCancelsExpiryTest,
+	"AirportOps.Model.FlightBoard.DeclineCancelsExpiry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardDeclineCancelsExpiryTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+
+	UFlight* Offer = BoardFlightNeeding(3400.0);
+	Offer->ExpiresAt = Clock->Now() + 50.0;
+	Board->AddOffer(*Clock, Offer);
+
+	Board->Decline(*Clock, *Offer);
+	TestEqual(TEXT("declining sets the phase at once"), Offer->Phase, EFlightPhase::Declined);
+
+	// Well past the ExpiresAt that would have lapsed it, had Decline left the schedule armed.
+	Clock->Advance(1.0);
+	TestEqual(TEXT("a declined offer stays Declined - Decline cancelled the expiry"),
+		Offer->Phase, EFlightPhase::Declined);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFlightBoardAcceptImmediateTest,
 	"AirportOps.Model.FlightBoard.AcceptImmediate",
