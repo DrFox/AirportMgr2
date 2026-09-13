@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Build/AnchorLinkFinder.h"
 
 class URoadNetwork;
 
@@ -61,13 +62,64 @@ struct AIRSIDE_API FAnchorLink
 	static constexpr double DefaultServiceLinkRadius = 5000.0;
 
 	/**
+	 * Within this of an endpoint, join the endpoint rather than splitting off a stub - and,
+	 * inside a finder's search, within this of a hit is refused rather than reported, since
+	 * a hit that close would only ever be welded back to nothing anyway. ONE constant for
+	 * both: Gather/Join and the three ILinkFinder strategies used to each keep their own
+	 * copy, which is exactly the kind of pair CLAUDE.md's "lists that must agree are one
+	 * list" is about - a search tolerance and a weld tolerance that quietly drifted apart
+	 * would report a hit its own join would then refuse to make.
+	 */
+	static constexpr double LeadInWeldTolerance = 10.0;
+
+	/**
 	 * Lays every service lane, then casts or measures every unjoined lead-in. Returns how
 	 * many joined.
 	 *
 	 * An anchor that already has an incident edge is skipped, so a hand-drawn connection
 	 * wins over the automatic one rather than being doubled up by it - and so does an anchor
 	 * FServiceLoopBuild has just spurred to its stand's lane.
+	 *
+	 * Three steps, in order, per Pending link: Gather collects every anchor/pose/lane-side
+	 * awaiting a link before anything mutates; Resolve dispatches to the ILinkFinder for the
+	 * link's Kind and reports the best candidate, if any; Join splits the candidate (and, for
+	 * a Lane link, the lane side too) and lays the lead-in and its entry sweeps. Splitting
+	 * these out is what makes each finder unit-testable in isolation - nothing below Resolve
+	 * needs a mutated graph, a placed entity, or even a second guideline to react to.
 	 */
 	static int32 Build(URoadNetwork& Network, double MaxLeadIn = DefaultMaxLeadIn,
 		double ServiceLinkRadius = DefaultServiceLinkRadius);
+
+	/**
+	 * Every anchor, pose and service-lane side that has nothing joined yet, plus every node
+	 * a link must not itself target (anchor/pose nodes, and every node of every service lane
+	 * and spur - see AnchorNodes' use in Resolve for why the second half matters).
+	 *
+	 * Gathered up front, deliberately: joining one anchor adds and removes edges, and an
+	 * iteration over the graph must not be holding pointers into it while that happens.
+	 */
+	static void Gather(URoadNetwork& Network, double MaxLeadIn, double ServiceLinkRadius,
+		TArray<FPendingLink>& OutPending, TSet<FGuidelineNodeId>& OutAnchorNodes);
+
+	/** Strategy dispatch: LinkFinderFor(Link.Kind)'s best candidate, or an unset hit. */
+	static FLinkHit Resolve(const URoadNetwork& Network, const FPendingLink& Link,
+		const TSet<FGuidelineNodeId>& AnchorNodes);
+
+	/**
+	 * Splits Hit's guideline (and, for a Lane link, the lane side too - see FPendingLink::Kind)
+	 * and lays the lead-in and its entry sweeps.
+	 *
+	 * Mutates Link: a Lane link has no Node or At until the lane is split, and a link found
+	 * by distance rather than by ray has no Dir until the join says which way the road lies.
+	 * Mutates AnchorNodes too - every node the join creates is added, because the lead and
+	 * both sweeps just added would otherwise be a target for the NEXT link's own Resolve.
+	 *
+	 * Returns the LeadEnd node on success, an unset handle if Hit's guideline no longer
+	 * resolves (already spent by an earlier link this same pass), or if any
+	 * SplitGuidelineEdge call inside this Join fails - the lane split, the hard join, or
+	 * either half of the two-cut sweep. All are the same data-race-only case: every id Join
+	 * splits was resolved moments earlier by this same link's own Resolve.
+	 */
+	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
+		TSet<FGuidelineNodeId>& AnchorNodes);
 };
