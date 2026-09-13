@@ -218,6 +218,15 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() FAgentMotion LastMotion;
 
+	/**
+	 * The ROAD-PLANE position: for an airborne aircraft this is its ground track, and
+	 * anything drawn under it (a selection ring, say) sits at the same point. Right for
+	 * every aircraft on the ground, which is where anything selectable long enough to matter
+	 * is. Exists so a caller outside Model/ (FSelectTool) names what it wants rather than
+	 * reaching LastMotion.Position itself (#104).
+	 */
+	FVector2D GroundPosition() const { return LastMotion.Position; }
+
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
 	 *  Model/ and the slot struct went with the view pointer it existed to carry. */

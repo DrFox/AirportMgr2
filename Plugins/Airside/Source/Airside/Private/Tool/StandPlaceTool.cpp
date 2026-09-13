@@ -6,7 +6,6 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
-#include "Model/TrafficOccupancy.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -146,9 +145,9 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 				// infrastructure - but not without being told who is about to lose a stand.
 				if (const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic())
 				{
-					int32 Holder = 0;
-					if (Entities[Under].PoseNode.IsSet()
-						&& Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(Entities[Under].PoseNode), 0, &Holder))
+					const int32 Holder = Entities[Under].PoseNode.IsSet()
+						? Traffic->HolderOfNode(Entities[Under].PoseNode) : 0;
+					if (Holder != 0)
 					{
 						Sink.Label(Entities[Under].Position + FVector2D(0.0, 600.0),
 							FString::Printf(TEXT("in use by aircraft %d"), Holder), EPreviewStyle::Refused);

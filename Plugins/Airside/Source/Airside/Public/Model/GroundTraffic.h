@@ -581,6 +581,26 @@ public:
 	const FRoadAgent* FindAgent(int32 AgentId) const;
 	const FTrafficOccupancy& GetOccupancy() const { return Occupancy; }
 
+	/**
+	 * The agent currently holding Node, or 0 if nobody is (0 is never a real agent id - see
+	 * FRoadAgent::Id). Wraps FTrafficResource::OfNode and IsHeld's ExcludingAgent=0 idiom
+	 * ("exclude no real agent") so a caller outside Model/ can ask "who is here" without
+	 * knowing either exists - Tool/StandPlaceTool used to build the resource and read the
+	 * sentinel itself (#104).
+	 */
+	int32 HolderOfNode(FGuidelineNodeId Node) const;
+
+	/**
+	 * AgentId's planned polyline, road-plane, or an empty array if there is no such agent or
+	 * it is not Taxiing. NOT trimmed to what is actually left to drive - Travelled advances a
+	 * point along this same array (see FRouteFollower::Advance) but nothing shortens the
+	 * array itself, so this is the whole plan every frame. Good enough for the one picture
+	 * that reads it (FSelectTool's route preview); a true "from here to the end" trim is
+	 * future work if something needs it. Exists so Tool/ names the agent it wants rather than
+	 * reaching Agent->Follower.Plan.Polyline itself (#104).
+	 */
+	const TArray<FVector2D>& RemainingRoute(int32 AgentId) const;
+
 	/** True after a stand claim was released or a rebuild ran, until Advance's re-offer pass
 	 *  consumes it. For Airside.Model.Traffic.StandClaim. */
 	bool StandsMayHaveFreedForTest() const { return bStandsMayHaveFreed; }
