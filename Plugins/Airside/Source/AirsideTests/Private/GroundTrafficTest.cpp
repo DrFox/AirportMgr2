@@ -2288,6 +2288,81 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 /**
+ * A REDIRECT DOES NOT WARM-START AN ENGINE THAT HAS ALREADY SHUT DOWN.
+ *
+ * CONFIRMED, 2026-09-12 review (#107 item 2). RedirectAgent called StartEngineAtSpeed
+ * unconditionally after StartTaxi, snapping EngineRPM 0 -> MaxRPM in the very same call for
+ * DepartAgent on a parked aircraft that had already run out its post-arrival shutdown pause.
+ * StartEngineAtSpeed's own header says what it is FOR - "as it is for an aeroplane that has
+ * spent a turnaround ... before it taxied out", which presumes the engine was ALREADY
+ * running - so calling it regardless made a stopped propeller jump straight to full power
+ * with no spool-up at all, which is the opposite of FTrafficWarmRedirectTest above, whose
+ * redirected agent's engine had never stopped.
+ *
+ * FRoadAgent::StartTaxi already primes a cold start (bEngineRunning=true, EngineRPM=0.0) -
+ * the same one a plain DispatchAgent gets - so the fix is to leave that alone unless the
+ * engine was already running a moment before the redirect.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficColdRedirectTest,
+	"Airside.Model.Traffic.RedirectDoesNotWarmStartAShutDownEngine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 100.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 100.0, 20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, C);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	// A HAIR-TRIGGER SHUTDOWN PAUSE, so the aircraft is sitting with its engine already off
+	// well within a handful of ticks - #107 item 2's DepartAgent-on-a-shut-down-aircraft case.
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, /*ShutdownPauseSeconds=*/0.1);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	const bool bShutDown = RunUntil(*Traffic, *Net, 10.0, [&]()
+	{
+		const FRoadAgent* Ag = Traffic->FindAgent(Id);
+		return Ag != nullptr && Ag->Phase == EAgentPhase::Parked && !Ag->bEngineRunning;
+	});
+	if (!TestTrue(TEXT("parked and shut down before the redirect"), bShutDown))
+	{
+		return false;
+	}
+
+	// NOT NECESSARILY ZERO: bEngineRunning flips the moment the pause elapses, but EngineRPM
+	// trails it down over SpoolDownSeconds the same way it trails a start up - see
+	// AdvanceEngine. What matters for this test is only that it is not sitting at AtSpeed.
+	const FRoadAgent* ShutDown = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent exists"), ShutDown != nullptr)) { return false; }
+	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), ShutDown->EngineRPM));
+
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// THE ASSERTION THE BUG WOULD FAIL: before the fix this jumped straight to AtSpeed in the
+	// very same call, with no spool-up at all.
+	const FRoadAgent* Redirected = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("a shut-down engine spools up rather than snapping to speed (%.0f RPM, cap %.0f)"),
+		Redirected->EngineRPM, AtSpeed), Redirected->EngineRPM < AtSpeed);
+	TestTrue(TEXT("but it is running again, spooling up"), Redirected->bEngineRunning);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
  * THE POSED AIRCRAFT NEVER REVERSES OR SNAPS, across a whole arrival.
  *
  * Written while chasing judder reported from play (2026-09-12). It turned out to be

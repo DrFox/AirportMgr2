@@ -327,15 +327,31 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		bStandsMayHaveFreed = true;
 	}
 
+	// CAPTURED BEFORE StartTaxi, which always primes a cold start of its own
+	// (bEngineRunning=true, EngineRPM=0.0) - so this is whether the engine was running a
+	// moment ago, not the post-StartTaxi state that call is about to write.
+	const bool bWasRunning = Agent.bEngineRunning;
+
 	Agent.StartTaxi(Plan, Own);
 
-	// AND THE ENGINE IS ALREADY TURNING. StartTaxi starts from cold, which is right for a
-	// plain dispatch and wrong for everything that reaches here: an aeroplane redirected has
-	// either been taxiing already, or has spent a turnaround on a stand where its engines
-	// were started long before it rolled. Left cold, the propeller was still winding up while
-	// the aircraft taxied out at full speed - reported from play as the prop never having
-	// time to spin up on departure.
-	Agent.StartEngineAtSpeed();
+	if (bWasRunning)
+	{
+		// AND THE ENGINE IS ALREADY TURNING. StartTaxi starts from cold, which is right for a
+		// plain dispatch and wrong for an aeroplane that was already taxiing, or has spent a
+		// turnaround on a stand where its engines were started long before it rolled and
+		// never stopped. Left cold, the propeller was still winding up while the aircraft
+		// taxied out at full speed - reported from play as the prop never having time to spin
+		// up on departure.
+		Agent.StartEngineAtSpeed();
+	}
+	// ELSE: THE ENGINE HAD ALREADY STOPPED (#107 item 2) - DepartAgent on a parked aircraft
+	// that ran out its post-arrival shutdown pause, or ReofferStands on one that shut down
+	// while it waited for a stand. StartEngineAtSpeed's own header says what it is FOR - "as
+	// it is for an aeroplane that has spent a turnaround ... before it taxied out" - which
+	// presumes the engine was already running; calling it unconditionally snapped a stopped
+	// propeller straight to full power in one frame, with no spool-up at all. StartTaxi's own
+	// cold start above is exactly the fallback DispatchAgent uses, so this aircraft now spools
+	// up through AdvanceEngine like any other cold start.
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
