@@ -71,6 +71,14 @@ namespace
 		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(FVector2D::DotProduct(A, B), -1.0, 1.0)));
 	}
 
+	/** StartError/EndError/Worst from ExitArcMeasure - see that function's own comment. */
+	struct FArcFit
+	{
+		double StartError = 0.0;
+		double EndError = 0.0;
+		double Worst = 0.0;
+	};
+
 	/**
 	 * Samples a turn walking From -> To and reports: the first chord's error against
 	 * FromDir, the last chord's error against ToDir, and the largest turn between two
@@ -83,14 +91,6 @@ namespace
 	 * which is the polyline the aircraft drives: a straight stub into the node shows there
 	 * as one chord turning by the whole exit angle.
 	 */
-	/** StartError/EndError/Worst from ExitArcMeasure - see that function's own comment. */
-	struct FArcFit
-	{
-		double StartError = 0.0;
-		double EndError = 0.0;
-		double Worst = 0.0;
-	};
-
 	FArcFit ExitArcMeasure(const FGuidelineEdge& Turn, FGuidelineNodeId From, const URoadNetwork& Net,
 		const FVector2D& FromDir, const FVector2D& ToDir)
 	{
