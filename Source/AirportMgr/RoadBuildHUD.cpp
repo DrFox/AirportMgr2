@@ -13,27 +13,22 @@
 
 ARoadBuildHUD::ARoadBuildHUD()
 {
-	// Seeded from the one canonical table instead of typed here - see PreviewPalette.h and
-	// the header's comment on each of these UPROPERTYs. Assigning in the constructor rather
-	// than as member-initialisers still leaves every one of them a designer-overridable
-	// default on the CDO; only where the literal value LIVES has moved.
-	StubColour = PreviewPalette::Default(EPreviewStyle::NodeStub);
-	EndColour = PreviewPalette::Default(EPreviewStyle::NodeThrough);
-	JunctionColour = PreviewPalette::Default(EPreviewStyle::NodeJunction);
-	StandColour = PreviewPalette::Default(EPreviewStyle::StandPose);
-	ServiceAnchorColour = PreviewPalette::Default(EPreviewStyle::ServiceAnchor);
-
-	PendingColour = PreviewPalette::Default(EPreviewStyle::Pending);
-	SnapColour = PreviewPalette::Default(EPreviewStyle::Snap);
-	DoomedColour = PreviewPalette::Default(EPreviewStyle::Doomed);
-	HealColour = PreviewPalette::Default(EPreviewStyle::Heal);
-	RefusedColour = PreviewPalette::Default(EPreviewStyle::Refused);
-	GuidelineColour = PreviewPalette::Default(EPreviewStyle::Guideline);
-	RouteColour = PreviewPalette::Default(EPreviewStyle::Route);
-	HoverColour = PreviewPalette::Default(EPreviewStyle::Hover);
-	SelectedColour = PreviewPalette::Default(EPreviewStyle::Selected);
-	RunwayHoldingPositionColour = PreviewPalette::Default(EPreviewStyle::RunwayHoldingPosition);
-	IntermediateHoldingPositionColour = PreviewPalette::Default(EPreviewStyle::IntermediateHoldingPosition);
+	// Seeded from the one canonical table instead of typed here - see PreviewPalette.h.
+	// Assigning in the constructor rather than as a member-initialiser still leaves this a
+	// designer-overridable default on the CDO; only where the literal values LIVE has moved.
+	// Explicit list, not a reflection-based enumeration of EPreviewStyle, matching this
+	// project's other registries (e.g. BuildActionsTest reads EActionSection the same way) -
+	// FRoadBuildHUDLooksTest is what catches a style left out of this list.
+	for (const EPreviewStyle Style : {
+		EPreviewStyle::Pending, EPreviewStyle::Snap, EPreviewStyle::Doomed, EPreviewStyle::Heal,
+		EPreviewStyle::Refused, EPreviewStyle::Guideline, EPreviewStyle::Route,
+		EPreviewStyle::RunwayHoldingPosition, EPreviewStyle::IntermediateHoldingPosition,
+		EPreviewStyle::Hover, EPreviewStyle::Selected, EPreviewStyle::NodeStub,
+		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
+		EPreviewStyle::ServiceAnchor })
+	{
+		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
+	}
 }
 
 void ARoadBuildHUD::DrawHUD()
@@ -117,36 +112,22 @@ ARoadBuildController* ARoadBuildHUD::GetBuildController() const
 	return Cast<ARoadBuildController>(GetOwningPlayerController());
 }
 
-FLinearColor ARoadBuildHUD::StyleColour(EPreviewStyle Style) const
+const FPreviewLook& ARoadBuildHUD::LookFor(EPreviewStyle Style) const
 {
-	// No `default:` - see PreviewPalette.h. This project does not build with switch
-	// exhaustiveness as an error (UBT's SwitchWarningLevel is off), so a style added to
-	// EPreviewStyle without a case here still compiles; what actually catches it is the
-	// checkNoEntry() below, at the first frame that draws the missing style. That is worse
-	// than a compile error, but still better than the old `default:`, which fell through to
-	// Pending's colour and never reported anything at all.
-	switch (Style)
+	// No entry missing from a live style is a bug in the constructor's seeding list, not a
+	// runtime possibility a caller should branch on - see PreviewPalette.h's FPreviewLook
+	// comment and FRoadBuildHUDLooksTest, which is what actually catches a style left out.
+	// checkNoEntry() is the same backstop StyleColour's switch used to give a style with no
+	// case; worse than a compile error, but still better than silently drawing Pending's
+	// look for a style nobody wrote a look for.
+	if (const FPreviewLook* Look = Looks.Find(Style))
 	{
-	case EPreviewStyle::Pending:  return PendingColour;
-	case EPreviewStyle::Snap:    return SnapColour;
-	case EPreviewStyle::Doomed:  return DoomedColour;
-	case EPreviewStyle::Heal:    return HealColour;
-	case EPreviewStyle::Refused: return RefusedColour;
-	case EPreviewStyle::Guideline: return GuidelineColour;
-	case EPreviewStyle::Route:   return RouteColour;
-	case EPreviewStyle::Hover:   return HoverColour;
-	case EPreviewStyle::Selected: return SelectedColour;
-	case EPreviewStyle::RunwayHoldingPosition: return RunwayHoldingPositionColour;
-	case EPreviewStyle::IntermediateHoldingPosition: return IntermediateHoldingPositionColour;
-	case EPreviewStyle::NodeStub:      return StubColour;
-	case EPreviewStyle::NodeThrough:   return EndColour;
-	case EPreviewStyle::NodeJunction:  return JunctionColour;
-	case EPreviewStyle::StandPose:     return StandColour;
-	case EPreviewStyle::ServiceAnchor: return ServiceAnchorColour;
+		return *Look;
 	}
 
 	checkNoEntry();
-	return PendingColour;
+	static const FPreviewLook Fallback;
+	return Fallback;
 }
 
 void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
@@ -157,43 +138,16 @@ void ARoadBuildHUD::Marker(const FVector2D& At, EPreviewStyle Style)
 		return;
 	}
 
-	// A heavier ring than a node normally wears, so a marked one reads as marked rather
-	// than merely recoloured. Guideline nodes are the exception: there are hundreds of
-	// them and they are context, so they get a dot rather than a ring that would swamp
-	// every mark a tool actually wants read.
-	const bool bContext = (Style == EPreviewStyle::Guideline);
-	float Radius = bContext ? NodeRingRadius * 0.35f : NodeRingRadius;
-	float Thickness = bContext ? PreviewThickness * 0.5f : PreviewThickness;
+	const FPreviewLook& Look = LookFor(Style);
+	const float Radius = NodeRingRadius * Look.RadiusScale;
+	const float Thickness = PreviewThickness * Look.ThicknessScale;
 
-	// GraphOverlay's own styles keep the sizing DrawNodes/DrawStands drew them with before
-	// the two calls were unified: PreviewThickness is tuned for a tool's own sparse preview
-	// lines, and NodeRingRadius would swamp the small anchor rings a stand carries eight of.
-	if (Style == EPreviewStyle::NodeStub || Style == EPreviewStyle::NodeThrough
-		|| Style == EPreviewStyle::NodeJunction)
+	DrawRing(Screen, Radius, Look.Colour, Thickness);
+	if (Look.bDoubleRing)
 	{
-		Thickness = NodeRingThickness;
-	}
-	else if (Style == EPreviewStyle::ServiceAnchor)
-	{
-		Radius = ServiceAnchorRadius;
-		Thickness = NodeRingThickness;
-	}
-	else if (Style == EPreviewStyle::StandPose)
-	{
-		// DELIBERATELY not NodeRingRadius. GraphOverlay::DescribeStands emits this marker
-		// AFTER StandPreview::Describe's own Pending stop mark, at the SAME Entity.Position -
-		// a ring at the same radius would just overdraw that mark (or be overdrawn by it,
-		// depending on draw order) rather than sit visibly alongside it. A distinctly larger
-		// halo is what makes "this is committed" a fact a viewer can actually see around the
-		// preview, rather than one colour silently replacing another.
-		Radius = NodeRingRadius * 2.2f;
-		Thickness = NodeRingThickness;
-	}
-
-	DrawRing(Screen, Radius, StyleColour(Style), Thickness);
-	if (Style == EPreviewStyle::Doomed || Style == EPreviewStyle::Pending || Style == EPreviewStyle::Selected)
-	{
-		DrawRing(Screen, NodeRingRadius * 1.6f, StyleColour(Style), PreviewThickness);
+		// A heavier second ring, so a marked one reads as marked rather than merely
+		// recoloured - see FPreviewLook's own comment for which styles set this.
+		DrawRing(Screen, NodeRingRadius * 1.6f, Look.Colour, PreviewThickness);
 	}
 }
 
@@ -207,16 +161,15 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 	}
 
 	// The route is what was asked for and the graph is what it ran over, so the route is
-	// drawn heavier than everything and the graph lighter than everything.
-	const float Weight =
-		Style == EPreviewStyle::Guideline ? PreviewThickness * 0.5f :
-		Style == EPreviewStyle::Route     ? PreviewThickness * 2.0f :
-											PreviewThickness;
+	// drawn heavier than everything and the graph lighter than everything - see
+	// PreviewPalette::DefaultLook's Guideline/Route cases for the ThicknessScale numbers.
+	const FPreviewLook& Look = LookFor(Style);
+	const float Weight = PreviewThickness * Look.ThicknessScale;
 
 	DrawLine(
 		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
 		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
-		StyleColour(Style), Weight);
+		Look.Colour, Weight);
 }
 
 void ARoadBuildHUD::CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style)
@@ -243,7 +196,7 @@ void ARoadBuildHUD::CrossMark(const FVector2D& At, const FVector2D& Along, EPrev
 		return;
 	}
 
-	const FLinearColor Colour = StyleColour(Style);
+	const FLinearColor Colour = LookFor(Style).Colour;
 	DrawLine(
 		static_cast<float>(Screen.X - Across.X * CrossMarkRadius),
 		static_cast<float>(Screen.Y - Across.Y * CrossMarkRadius),
@@ -260,7 +213,7 @@ void ARoadBuildHUD::Label(const FVector2D& At, const FString& Text, EPreviewStyl
 		return;
 	}
 
-	DrawText(Text, StyleColour(Style),
+	DrawText(Text, LookFor(Style).Colour,
 		static_cast<float>(Screen.X) + NodeRingRadius * 1.8f,
 		static_cast<float>(Screen.Y) + NodeRingRadius,
 		GEngine->GetSmallFont());
@@ -292,9 +245,10 @@ void ARoadBuildHUD::DrawNodeIndices(const ARoadNetworkActor& Target)
 		}
 
 		const int32 Degree = Node.Incident.Num();
-		const FLinearColor Colour = (Degree == 0) ? StubColour
-			: (Degree >= 3) ? JunctionColour
-			: EndColour;
+		const EPreviewStyle Style = (Degree == 0) ? EPreviewStyle::NodeStub
+			: (Degree >= 3) ? EPreviewStyle::NodeJunction
+			: EPreviewStyle::NodeThrough;
+		const FLinearColor Colour = LookFor(Style).Colour;
 
 		DrawText(FString::FromInt(Index), Colour,
 			static_cast<float>(Screen.X) + NodeRingRadius + 3.0f,
@@ -334,9 +288,13 @@ void ARoadBuildHUD::DrawAnchorIds(const ARoadNetworkActor& Target)
 				continue;
 			}
 
-			DrawText(Anchor.Id.ToString(), ServiceAnchorColour,
-				static_cast<float>(Screen.X) + ServiceAnchorRadius + 3.0f,
-				static_cast<float>(Screen.Y) - ServiceAnchorRadius,
+			// Offset by the anchor ring's actual radius so the id sits beside the ring
+			// GraphOverlay just drew for it, not a separately-tuned distance from it.
+			const FPreviewLook& AnchorLook = LookFor(EPreviewStyle::ServiceAnchor);
+			const float AnchorRadius = NodeRingRadius * AnchorLook.RadiusScale;
+			DrawText(Anchor.Id.ToString(), AnchorLook.Colour,
+				static_cast<float>(Screen.X) + AnchorRadius + 3.0f,
+				static_cast<float>(Screen.Y) - AnchorRadius,
 				GEngine->GetSmallFont());
 		}
 	}

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/HUD.h"
+#include "Tool/PreviewPalette.h"
 #include "Tool/RoadBuildTool.h"
 #include "RoadBuildHUD.generated.h"
 
@@ -40,10 +41,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "1.0"))
 	float NodeRingRadius = 9.0f;
 
-	/** Line thickness of a ring, in pixels. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "0.5"))
-	float NodeRingThickness = 2.0f;
-
 	/** Sides of the polygon a ring is drawn as. Below about 10 it reads as a polygon. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes", meta = (ClampMin = "3", ClampMax = "64"))
 	int32 NodeRingSides = 16;
@@ -52,40 +49,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
 	bool bDrawNodeIndices = false;
 
-	/**
-	 * A node with no incident segments. It draws no pavement whatsoever, so without a
-	 * marker of its own it is invisible.
-	 *
-	 * Default seeded from PreviewPalette::Default(NodeStub) in the constructor, not typed
-	 * here, so this and GraphOverlay's colour agree without anyone re-typing the number -
-	 * this UPROPERTY still lets a designer override it per level afterwards.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor StubColour;
-
-	/** One or two incident segments: a dead end, or a straight-through node. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor EndColour;
-
-	/** Three or more incident segments - a real junction, with a solved boundary. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Nodes")
-	FLinearColor JunctionColour;
-
 	/** Draw a marker at every placed stand's anchors, and the way it faces. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	bool bDrawStands = true;
-
-	/** The aircraft stop position - the thing a stand IS. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
-	FLinearColor StandColour;
-
-	/** Where the service vehicles park. Consequences of where the aircraft sits. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
-	FLinearColor ServiceAnchorColour;
-
-	/** Radius of a service anchor's ring, in pixels. Smaller than a road node's. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Stands", meta = (ClampMin = "1.0"))
-	float ServiceAnchorRadius = 5.0f;
 
 	/** Label each anchor with its id. Off by default; a stand carries eight of them. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
@@ -93,54 +59,20 @@ public:
 
 	// --- Preview palette --------------------------------------------------------------
 	//
-	// One colour per EPreviewStyle. A tool names a MEANING and this maps it to a look, so
-	// the plugin holds no colours, the palette can be retuned without touching a tool, and
-	// every tool reads the same way for the same meaning.
+	// One FPreviewLook per EPreviewStyle: a tool names a MEANING and this maps it to a look
+	// (colour, ring radius/thickness scale, whether it draws a second emphasis ring), so the
+	// plugin holds no colours, the palette can be retuned without touching a tool or this
+	// class's drawing code, and every tool reads the same way for the same meaning.
 	//
-	// None of these are typed here any more - see the constructor. PreviewPalette::Default
-	// is the one place the number lives; this class just seeds its own UPROPERTYs from it so
-	// a designer can still override any one per level afterwards.
-
+	// Used to be 15 separate FLinearColor UPROPERTYs (one of them, IntermediateHolding-
+	// PositionColour, even drifted into the wrong Category by hand) plus a StyleColour
+	// switch plus a chain of if/else in Marker/Line picking ring radius, ring thickness and
+	// line weight per style - three places a reader had to check against each other for
+	// every style (#104). Seeded in the constructor from PreviewPalette::DefaultLook, the
+	// same source the editor viewport's colours already came from - this UPROPERTY still
+	// lets a designer override any one style's whole look per level afterwards.
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor PendingColour;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor SnapColour;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor DoomedColour;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HealColour;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RefusedColour;
-
-	/** Context, not intent - so it must read as BEHIND everything else the tools draw. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor GuidelineColour;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RouteColour;
-
-	/** The pickable under the cursor - what a click would select. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor HoverColour;
-
-	/** The current selection. Warm, so it reads against the cyan route and grey nodes. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor SelectedColour;
-
-	/**
-	 * Hold bars. Amber, because that is what one is painted on a real taxiway - and it
-	 * reads as a warning against the blue-grey guideline dots it sits among rather than
-	 * as one more piece of context.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside|Preview")
-	FLinearColor RunwayHoldingPositionColour;
-	/** The same amber at half strength: the player's line, lighter than the runway's. */
-	UPROPERTY(EditAnywhere, Category = "Road Build")
-	FLinearColor IntermediateHoldingPositionColour;
+	TMap<EPreviewStyle, FPreviewLook> Looks;
 
 	/** Thickness of preview lines, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
@@ -184,7 +116,17 @@ private:
 	 */
 	void DrawAnchorIds(const ARoadNetworkActor& Target);
 
-	FLinearColor StyleColour(EPreviewStyle Style) const;
+	/**
+	 * A style's look, falling back to a checkNoEntry() backstop - same role StyleColour's
+	 * switch used to play - if Looks is missing an entry the seeding loop should have added.
+	 */
+	const FPreviewLook& LookFor(EPreviewStyle Style) const;
+
+public:
+	/** LookFor, exposed for FRoadBuildHUDLooksTest - see #104. */
+	const FPreviewLook& LookForTest(EPreviewStyle Style) const { return LookFor(Style); }
+
+private:
 
 	/** Ring of NodeRingSides segments, centred on a screen position. */
 	void DrawRing(const FVector2D& Centre, float Radius, const FLinearColor& Colour, float Thickness);
