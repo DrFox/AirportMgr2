@@ -123,17 +123,54 @@ def measure():
     # lies across the airframe rather than along it.
     wheel_radius = (wheel_hi[2] - wheel_lo[2]) * 0.5
     prop_diameter = max(prop_hi[1] - prop_lo[1], prop_hi[2] - prop_lo[2])
+    return footprint, wheel_radius, prop_diameter
 
-    # THE AXLES, off the wheels themselves. The origin is the nose gear - import_plane2.py
-    # asserts it against UAircraftType's local space - so the steered axle measures zero and
-    # the mains are the figure that matters. Measured rather than written as -454.3, because
-    # a typed axle would go stale on the next re-export exactly as the footprint did.
-    nose_lo, nose_hi = find("nosewheel")
-    axles = {
-        "steer_axle_x": (nose_lo[0] + nose_hi[0]) * 0.5,
-        "fixed_axle_x": (wheel_lo[0] + wheel_hi[0]) * 0.5,
+
+def axles_from_rig(wheel_radius):
+    """(steer axle, fixed axle) X in uu, off SK_Plane2's own reference pose.
+
+    THE BONE, NOT THE TYRE'S BOUNDING BOX. Both answer the same question and they agree to
+    0.02 uu on this model, but they are not the same KIND of answer: build_export.py places
+    each wheel's origin ON ITS ROTATION AXIS so the thing can spin, which makes the bone a
+    statement about where the axle is. A bounding-box centre is a by-product of tyre shape,
+    and would quietly move if a fairing or a brake were ever modelled into the same object.
+
+    It is also the point the animation turns the wheel about, so the drawn wheel and the
+    pitch pivot cannot drift apart - and the import already asserts a bone per joint the
+    skin declares, so a rig that loses these fails loudly rather than defaulting.
+
+    WHAT IS NOT TAKEN IS THE BONE'S HEIGHT. It sits at the HUB, one wheel radius up, and
+    the pitch pivot wants the CONTACT PATCH below it - see FAgentMotion::PitchPivotX, which
+    is a scalar X for exactly that reason. Asserted here rather than assumed: hub height and
+    measured tyre radius are the same number arrived at two ways, and a disagreement means
+    the wheel has moved off the ground plane that ARoadAgentActor::SetMotion relies on.
+    """
+    mesh = unreal.EditorAssetLibrary.load_asset(MESH)
+    if mesh is None:
+        raise KeyError("no %s - run import_plane2.py first" % MESH)
+
+    pose = mesh.get_editor_property("skeleton").get_reference_pose()
+    at = {}
+    for name in unreal.AnimPose.get_bone_names(pose):
+        bone = unreal.AnimPose.get_bone_pose(pose, name, unreal.AnimPoseSpaces.WORLD)
+        at[str(name)] = bone.translation
+
+    for wanted in ("nosewheel", "wheel_L", "wheel_R"):
+        if wanted not in at:
+            raise KeyError("SK_Plane2 has no %s bone - the rig was renamed. Bones: %s"
+                           % (wanted, ", ".join(sorted(at))))
+
+    mains_x = (at["wheel_L"].x + at["wheel_R"].x) * 0.5
+    hub_z = (at["wheel_L"].z + at["wheel_R"].z) * 0.5
+    if abs(hub_z - wheel_radius) > 2.0:
+        fail("the main-gear hub sits at z=%.1f but the tyre measures %.1f in radius. Either "
+             "the wheels are off the ground plane or the bone is not on the axle, and the "
+             "pitch pivot assumes both." % (hub_z, wheel_radius))
+
+    return {
+        "steer_axle_x": at["nosewheel"].x,
+        "fixed_axle_x": mains_x,
     }
-    return footprint, wheel_radius, prop_diameter, axles
 
 
 _MEASURED = None
@@ -142,8 +179,8 @@ _MEASURED = None
 def measured():
     """measure(), once.
 
-    Four places need these figures - the type, its axles, the ABP's wheel radius and the
-    read-back verification - and all of them must agree or the verification is checking a different
+    Three places need these figures - the type, the ABP's wheel radius and the read-back
+    verification - and all three must agree or the verification is checking a different
     aeroplane than the one that was written. Cached rather than re-read because a file that
     changed mid-run would be a worse problem than a stale one.
     """
@@ -272,11 +309,13 @@ def author_type():
         fail("%s has no generated class; compile it before running this" % ABP)
     else:
         asset.set_editor_property("anim_class", abp.generated_class())
-    footprint_figures, wheel_radius, prop_diameter, axles = measured()
-    say("measured off the export: wheel radius %.1f, prop %.1f, nose %.1f, tail %.1f, "
-        "steer axle %.1f, fixed axle %.1f uu"
+    footprint_figures, wheel_radius, prop_diameter = measured()
+    axles = axles_from_rig(wheel_radius)
+    say("measured off the export: wheel radius %.1f, prop %.1f, nose %.1f, tail %.1f uu"
         % (wheel_radius, prop_diameter, footprint_figures["nose_x"],
-           footprint_figures["tail_x"], axles["steer_axle_x"], axles["fixed_axle_x"]))
+           footprint_figures["tail_x"]))
+    say("measured off the rig: steer axle %.1f, fixed axle %.1f uu"
+        % (axles["steer_axle_x"], axles["fixed_axle_x"]))
     asset.set_editor_property("steer_axle_x", axles["steer_axle_x"])
     asset.set_editor_property("fixed_axle_x", axles["fixed_axle_x"])
     asset.set_editor_property("main_wheel_radius", wheel_radius)
