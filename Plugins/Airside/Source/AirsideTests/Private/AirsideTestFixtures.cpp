@@ -7,8 +7,11 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Entities/AircraftType.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/LandingRun.h"
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 
 FAirsideTestWorld::FAirsideTestWorld()
 {
@@ -97,4 +100,86 @@ void TestGraph::Rebuild(URoadNetwork& Net)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
 	FRoadGuidelineBuilder::Build(Net, Solved);
 	FAnchorLink::Build(Net);
+}
+
+FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOptions& Options, URoadNetwork* ExistingNet)
+{
+	FTestAirport Out;
+	Out.Net = ExistingNet != nullptr ? ExistingNet : NewObject<URoadNetwork>(GetTransientPackage());
+	Out.Threshold = FVector2D::ZeroVector;
+
+	// SIZED FROM THE AIRCRAFT, not chosen - see ArrivalDispatchTest's own comment: a strip
+	// shorter than the landing distance is correctly refused, so a fixture that picked a
+	// length out of the air would test the refusal or the acceptance depending on numbers
+	// nobody was watching.
+	const double Needed = FLandingRun::RequiredLandingDistance(
+		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
+	const FVector2D Exit1At(Needed * 1.2, 0.0);
+	const FVector2D FarAt(Needed * 3.0, 0.0);
+
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+
+	const FRoadNodeId ThresholdNode = Out.Net->AddNode(Out.Threshold);
+
+	// THE EXIT STANDS SIT BESIDE: the only one, on a single-exit airport, or the second of two
+	// - the shape ArrivalPlannerTest's "earliest exit wins" needs, where BOTH exits reach the
+	// one stand and the earlier one must still win despite its longer taxi.
+	FVector2D StandExitAt = Exit1At;
+	if (Options.ExitCount >= 2)
+	{
+		const FVector2D Exit2At(Needed * 2.0, 0.0);
+		const FRoadNodeId Exit1Node = Out.Net->AddNode(Exit1At);
+		const FRoadNodeId Exit2Node = Out.Net->AddNode(Exit2At);
+		const FRoadNodeId FarNode = Out.Net->AddNode(FarAt);
+		Out.ThresholdSegment = TestGraph::Lay(*Out.Net, ThresholdNode, Exit1Node, Runway);
+		TestGraph::Lay(*Out.Net, Exit1Node, Exit2Node, Runway);
+		TestGraph::Lay(*Out.Net, Exit2Node, FarNode, Runway);
+
+		// Exit 1's taxiway runs to a dead end - no stand on it directly; exit 2's is the one
+		// the stand(s) sit beside. The crossbar joins them so a route exists from EITHER exit,
+		// with the one from exit 2 unambiguously the shorter taxi.
+		const FRoadNodeId Taxi1End = Out.Net->AddNode(Exit1At + FVector2D(0.0, -Options.TaxiwayLength));
+		TestGraph::Lay(*Out.Net, Exit1Node, Taxi1End, Taxiway);
+		const FRoadNodeId Taxi2End = Out.Net->AddNode(Exit2At + FVector2D(0.0, -Options.TaxiwayLength));
+		TestGraph::Lay(*Out.Net, Exit2Node, Taxi2End, Taxiway);
+		TestGraph::Lay(*Out.Net, Taxi1End, Taxi2End, Taxiway);
+
+		StandExitAt = Exit2At;
+	}
+	else
+	{
+		const FRoadNodeId ExitNode = Out.Net->AddNode(Exit1At);
+		const FRoadNodeId FarNode = Out.Net->AddNode(FarAt);
+		Out.ThresholdSegment = TestGraph::Lay(*Out.Net, ThresholdNode, ExitNode, Runway);
+		TestGraph::Lay(*Out.Net, ExitNode, FarNode, Runway);
+
+		const FRoadNodeId TaxiEnd = Out.Net->AddNode(Exit1At + FVector2D(0.0, -Options.TaxiwayLength));
+		TestGraph::Lay(*Out.Net, ExitNode, TaxiEnd, Taxiway);
+	}
+	Out.ExitAt = StandExitAt;
+
+	if (Options.bDerived)
+	{
+		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+	}
+
+	// STANDS FACE EAST (heading 0) so their lead-in casts WEST and meets the taxiway - see
+	// FAnchorLink's own comment on why a stand must face the guideline it joins. Spaced 6000
+	// uu apart, the StandOcc* fixtures' own spacing, so two stands never overlap.
+	for (int32 Index = 0; Index < Options.StandCount; ++Index)
+	{
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		const FVector2D StandAt = StandExitAt + FVector2D(9000.0, -10000.0 - 6000.0 * Index);
+		Out.Stands.Add(Out.Net->PlaceEntity(Stand, Stand->Anchors, StandAt, 0.0));
+	}
+
+	if (Options.bDerived && Options.StandCount > 0)
+	{
+		FAnchorLink::Build(*Out.Net);
+	}
+
+	return Out;
 }

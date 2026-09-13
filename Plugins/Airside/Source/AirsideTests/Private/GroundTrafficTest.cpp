@@ -29,48 +29,6 @@ namespace
 		return RouteSearch::Find(Net, Q);
 	}
 
-	/**
-	 * The smallest airport an arrival can be dispatched into: a runway split at ONE exit (the
-	 * split is what puts a guideline node on the centreline for RunwayExitNodes to find), a
-	 * taxiway south from it, and a stand beside that taxiway facing east so its lead-in casts
-	 * west and meets the taxiway. Modelled on ArrivalPlannerTest's two-exit fixture, cut down
-	 * to the one exit this test needs, and M2-prefixed against the unity build.
-	 *
-	 * DERIVED THROUGHOUT, deliberately: every guideline in it comes from FRoadGuidelineBuilder,
-	 * so re-running the builder frees the whole graph and hands back fresh handles - which is
-	 * the event OnGraphRebuilt exists for, done by the real thing rather than by hand.
-	 */
-	URoadNetwork* M2TrafficArrivalAirport(const FAirframe& Airframe, FVector2D& OutThreshold)
-	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		OutThreshold = FVector2D(0.0, 0.0);
-
-		const double Needed = FLandingRun::RequiredLandingDistance(
-			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
-		const FVector2D ExitAt(Needed * 1.2, 0.0);
-		const FVector2D FarAt(Needed * 3.0, 0.0);
-
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
-
-		const FRoadNodeId ThresholdNode = Net->AddNode(OutThreshold);
-		const FRoadNodeId ExitNode = Net->AddNode(ExitAt);
-		const FRoadNodeId FarNode = Net->AddNode(FarAt);
-		Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
-		Net->AddStraightSegment(ExitNode, FarNode, Runway);
-
-		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -20000.0));
-		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
-
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
-
-		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0);
-		FAnchorLink::Build(*Net);
-		return Net;
-	}
 }
 
 // ---------------------------------------------------------------------------------------
@@ -638,9 +596,10 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 	// window the Taxiing->Departing handover already raises its claim synchronously to avoid
 	// (see UGroundTraffic::Advance). A player pressing 7 twice is exactly that call pattern.
 	{
-		FVector2D Threshold;
 		const FAirframe Piper = TestAirframes::Piper();
-		URoadNetwork* Airport = M2TrafficArrivalAirport(Piper, Threshold);
+		const FTestAirport Fixture = FTestAirport::Build(Piper);
+		URoadNetwork* Airport = Fixture.Net;
+		const FVector2D Threshold = Fixture.Threshold;
 		UGroundTraffic* Two = NewObject<UGroundTraffic>(GetTransientPackage());
 		TArray<EArrivalRefusal> Refused;
 		Two->OnArrivalRefused.AddLambda([&Refused](EArrivalRefusal Why) { Refused.Add(Why); });
@@ -1586,9 +1545,10 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	// geometry the next rebuild frees. Rebuilt by the REAL FRoadGuidelineBuilder here, not by
 	// hand, so what is measured is the actual event rather than this test's model of it.
 	{
-		FVector2D Threshold;
 		const FAirframe Piper = TestAirframes::Piper();
-		URoadNetwork* Net = M2TrafficArrivalAirport(Piper, Threshold);
+		const FTestAirport Fixture = FTestAirport::Build(Piper);
+		URoadNetwork* Net = Fixture.Net;
+		const FVector2D Threshold = Fixture.Threshold;
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Plane = Traffic->DispatchArrival(*Net, Threshold - FVector2D(1000.0, 0.0), Piper, 1.0);
 		if (TestTrue(TEXT("the arrival is admitted"), Plane > 0))
@@ -1920,33 +1880,13 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 	// arrival is taxiing in on the same taxiway, and the two drive through each other. On
 	// the DERIVED graph - builder taxiway, anchor-link lead-ins, arrival planner, departure
 	// planner - not the hand-joined edge HeadOnStops uses, because that one stops.
-	FVector2D Threshold(0.0, 0.0);
 	const FAirframe Piper = TestAirframes::Piper();
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	{
-		const double Needed = FLandingRun::RequiredLandingDistance(
-			Piper.Ground, Piper.Climb, Piper.Approach) * FLandingRun::LandingMargin;
-		const FVector2D ExitAt(Needed * 1.2, 0.0);
-		const FVector2D FarAt(Needed * 3.0, 0.0);
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
-		const FRoadNodeId ThresholdNode = Net->AddNode(Threshold);
-		const FRoadNodeId ExitNode = Net->AddNode(ExitAt);
-		const FRoadNodeId FarNode = Net->AddNode(FarAt);
-		Net->AddStraightSegment(ThresholdNode, ExitNode, Runway);
-		Net->AddStraightSegment(ExitNode, FarNode, Runway);
-		const FRoadNodeId TaxiEnd = Net->AddNode(ExitAt + FVector2D(0.0, -24000.0));
-		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
-		// Two stands off the one taxiway, so the second arrival has somewhere to go while
-		// the first is parked.
-		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -12000.0), 0.0);
-		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -18000.0), 0.0);
-		FAnchorLink::Build(*Net);
-	}
+	// TWO STANDS off the one taxiway, so the second arrival has somewhere to go while the
+	// first is parked - the standard shape, not the -24000 taxiway/-12000,-18000 stands this
+	// fixture had drifted to before #101: nothing here asserts on those exact figures.
+	const FTestAirport Fixture = FTestAirport::Build(Piper, { .StandCount = 2 });
+	URoadNetwork* Net = Fixture.Net;
+	const FVector2D Threshold = Fixture.Threshold;
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const FVector2D Approach = Threshold - FVector2D(1000.0, 0.0);
@@ -2401,8 +2341,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FTrafficPoseContinuityTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
-	FVector2D Threshold;
-	URoadNetwork* Net = M2TrafficArrivalAirport(Airframe, Threshold);
+	const FTestAirport Fixture = FTestAirport::Build(Airframe);
+	URoadNetwork* Net = Fixture.Net;
+	const FVector2D Threshold = Fixture.Threshold;
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Id = Traffic->DispatchArrival(*Net, Threshold, Airframe, 0.0);

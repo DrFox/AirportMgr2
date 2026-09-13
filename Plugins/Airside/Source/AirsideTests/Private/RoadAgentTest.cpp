@@ -349,8 +349,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = UAircraftType::PiperMeridianGround();
-	Airframe.Climb = UAircraftType::PiperMeridianClimb();
+	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Climb = TestAirframes::Piper().Climb;
 
 	constexpr double RunwayLength = 100000.0;
 	const FVector2D Threshold(0.0, 0.0);

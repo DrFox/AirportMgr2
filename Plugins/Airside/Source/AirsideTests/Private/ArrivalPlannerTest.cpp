@@ -1,9 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
-#include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/LandingRun.h"
@@ -14,85 +12,15 @@
 
 namespace
 {
-	// Prefixed against the UNITY build - these test files share one translation unit.
-
-	/**
-	 * A runway with TWO exits, a taxiway off each, both eventually reaching ONE stand - but
-	 * only the second exit's taxiway reaches it directly. The first exit's taxiway is joined
-	 * to the second's by a crossbar, so a route exists from EITHER exit, and the one from the
-	 * later exit is unambiguously shorter. That is the fixture the "earliest exit wins" rule
-	 * needs: a network where picking by shortest taxi alone would give the wrong answer.
-	 *
-	 * Positions are handed back because the tests need Threshold, Direction and both exits'
-	 * x-coordinates to state what they expect - re-deriving them from the network would risk
-	 * testing the fixture against itself.
-	 */
-	struct FTwoExitAirport
+	/** Exit1At (the earlier, longer-taxi exit) is not exposed on FTestAirport - ExitAt is the
+	 *  one stands sit beside, exit 2 here - so recomputed the same way FTestAirport::Build
+	 *  computes it internally. Used only by EarliestExitWinsTest, to check WHICH junction the
+	 *  chosen exit sits at. */
+	FVector2D TwoExitFirstExitAt(const FAirframe& Airframe)
 	{
-		URoadNetwork* Network = nullptr;
-		FVector2D Threshold;
-		FVector2D Direction;
-		double RunwayLength = 0.0;
-		double Needed = 0.0;
-		FVector2D Exit1At;
-		FVector2D Exit2At;
-	};
-
-	FTwoExitAirport BuildTwoExitAirport(UObject* Outer, const FAirframe& Airframe)
-	{
-		FTwoExitAirport Out;
-		Out.Network = NewObject<URoadNetwork>(Outer);
-		Out.Threshold = FVector2D(0.0, 0.0);
-		Out.Direction = FVector2D(1.0, 0.0);
-
-		Out.Needed = FLandingRun::RequiredLandingDistance(
+		const double Needed = FLandingRun::RequiredLandingDistance(
 			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
-		Out.RunwayLength = Out.Needed * 3.0;
-		Out.Exit1At = FVector2D(Out.Needed * 1.2, 0.0);
-		Out.Exit2At = FVector2D(Out.Needed * 2.0, 0.0);
-		const FVector2D FarAt(Out.RunwayLength, 0.0);
-
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
-
-		// The runway, SPLIT at both exits - see ArrivalDispatchTest for why a T-junction is
-		// what puts a guideline node on the centreline for RunwayExitNodes to find.
-		const FRoadNodeId ThresholdNode = Out.Network->AddNode(Out.Threshold);
-		const FRoadNodeId Exit1Node = Out.Network->AddNode(Out.Exit1At);
-		const FRoadNodeId Exit2Node = Out.Network->AddNode(Out.Exit2At);
-		const FRoadNodeId FarNode = Out.Network->AddNode(FarAt);
-		Out.Network->AddStraightSegment(ThresholdNode, Exit1Node, Runway);
-		Out.Network->AddStraightSegment(Exit1Node, Exit2Node, Runway);
-		Out.Network->AddStraightSegment(Exit2Node, FarNode, Runway);
-
-		// Exit 1's taxiway runs south to a dead end - no stand on it directly.
-		const FRoadNodeId Taxi1End = Out.Network->AddNode(Out.Exit1At + FVector2D(0.0, -20000.0));
-		Out.Network->AddStraightSegment(Exit1Node, Taxi1End, Taxiway);
-
-		// Exit 2's taxiway runs south the same distance, and THIS is the one the stand sits
-		// beside.
-		const FRoadNodeId Taxi2End = Out.Network->AddNode(Out.Exit2At + FVector2D(0.0, -20000.0));
-		Out.Network->AddStraightSegment(Exit2Node, Taxi2End, Taxiway);
-
-		// The crossbar. Without it exit 1 could not reach the stand at all and this would
-		// only prove "the planner takes the only route available" rather than "the planner
-		// takes the EARLIEST exit despite a longer taxi".
-		Out.Network->AddStraightSegment(Taxi1End, Taxi2End, Taxiway);
-
-		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Network);
-		FRoadGuidelineBuilder::Build(*Out.Network, Solved);
-
-		// THE STAND SITS BESIDE EXIT 2'S TAXIWAY AND FACES IT - see ArrivalDispatchTest's own
-		// comment on FAnchorLink: the lead-in casts from the stand along heading + 180, so a
-		// stand facing east (heading 0) casts its ray west and meets a taxiway to its west.
-		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-		const FVector2D StandAt = Out.Exit2At + FVector2D(9000.0, -10000.0);
-		Out.Network->PlaceEntity(Stand, Stand->Anchors, StandAt, 0.0);
-
-		FAnchorLink::Build(*Out.Network);
-
-		return Out;
+		return FVector2D(Needed * 1.2, 0.0);
 	}
 }
 
@@ -152,7 +80,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 // ---------------------------------------------------------------------------------------
 // (c) The earliest exit that reaches a stand wins even when a later exit gives a shorter
 // taxi - an aircraft takes the first turn-off it can rather than rolling on in search of a
-// marginally shorter one. See FTwoExitAirport for why BOTH exits can reach the one stand.
+// marginally shorter one. See FTestAirport::Build's ExitCount=2 shape for why BOTH exits can reach the one stand.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FArrivalPlannerEarliestExitWinsTest,
 	"Airside.Model.ArrivalPlanner.EarliestExitWins",
@@ -161,9 +89,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
-	const FTwoExitAirport Airport = BuildTwoExitAirport(GetTransientPackage(), Airframe);
+	const FTestAirport Airport = FTestAirport::Build(Airframe, { .ExitCount = 2 });
 
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Network, Airport.Threshold, Airframe);
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Net, Airport.Threshold, Airframe);
 
 	if (!TestTrue(TEXT("both exits reach the stand, so the arrival is accepted"), Plan.IsValid()))
 	{
@@ -181,14 +109,14 @@ bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the chosen entry is the FIRST candidate down the runway"),
 		Plan.ExitOrdinal, 1);
 
-	const FGuidelineNode* ExitNode = Airport.Network->GetGuidelineNode(Plan.Exit);
+	const FGuidelineNode* ExitNode = Airport.Net->GetGuidelineNode(Plan.Exit);
 	if (TestNotNull(TEXT("the chosen exit resolves to a guideline node"), ExitNode))
 	{
 		// At exit 1's ARC START since 2026-09-06: the builder splits the runway ExitLength
 		// (the profile default, 6000) before the junction and that is where the taxi-in
 		// leaves the centreline, so the earliest usable node is just short of the junction,
 		// on the centreline, and never at exit 2's.
-		const double Along = ExitNode->Position.X - Airport.Exit1At.X;
+		const double Along = ExitNode->Position.X - TwoExitFirstExitAt(Airframe).X;
 		TestTrue(FString::Printf(TEXT("and it sits at exit 1's JUNCTION (its arc start, %.0f uu short of it), ")
 			TEXT("not exit 2's - the earlier one, despite its longer taxi to the stand"), -Along),
 			Along <= 0.0 && Along >= -6000.0 - 1.0 && FMath::Abs(ExitNode->Position.Y) < 1.0);
@@ -208,15 +136,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FArrivalPlannerVacateAtTest::RunTest(const FString& Parameters)
 {
 	const FAirframe Airframe = TestAirframes::Piper();
-	const FTwoExitAirport Airport = BuildTwoExitAirport(GetTransientPackage(), Airframe);
+	const FTestAirport Airport = FTestAirport::Build(Airframe, { .ExitCount = 2 });
 
-	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Network, Airport.Threshold, Airframe);
+	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Airport.Net, Airport.Threshold, Airframe);
 	if (!TestTrue(TEXT("the arrival is accepted"), Plan.IsValid()))
 	{
 		return false;
 	}
 
-	const FGuidelineNode* ExitNode = Airport.Network->GetGuidelineNode(Plan.Exit);
+	const FGuidelineNode* ExitNode = Airport.Net->GetGuidelineNode(Plan.Exit);
 	if (!TestNotNull(TEXT("the chosen exit resolves to a guideline node"), ExitNode))
 	{
 		return false;
@@ -338,19 +266,19 @@ bool FArrivalPlannerNotAdmittedTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe = TestAirframes::Piper();
 	Airframe.Requirements = TestAirframes::PiperRequirements();
-	FTwoExitAirport A = BuildTwoExitAirport(GetTransientPackage(), Airframe);
+	const FTestAirport A = FTestAirport::Build(Airframe, { .ExitCount = 2 });
 
 	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId Seed;
-	if (!TestTrue(TEXT("the fixture has a runway"), A.Network->NearestRunwayThreshold(A.Threshold, Threshold, Direction, Length, &Seed))) { return false; }
+	if (!TestTrue(TEXT("the fixture has a runway"), A.Net->NearestRunwayThreshold(A.Threshold, Threshold, Direction, Length, &Seed))) { return false; }
 	FRunwayFacts Grass;
 	Grass.Surface = ERunwaySurface::Grass;
-	TestTrue(TEXT("the strip becomes grass"), A.Network->SetRunwayFacts(Seed, Grass));
+	TestTrue(TEXT("the strip becomes grass"), A.Net->SetRunwayFacts(Seed, Grass));
 
-	const FArrivalPlan OnGrass = ArrivalPlanner::Plan(*A.Network, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	const FArrivalPlan OnGrass = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
 	TestTrue(FString::Printf(TEXT("the Piper may land on grass: %s"), *ArrivalPlanner::DescribeRefusal(OnGrass)), OnGrass.IsValid());
 
 	Airframe.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
-	const FArrivalPlan Refused = ArrivalPlanner::Plan(*A.Network, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
+	const FArrivalPlan Refused = ArrivalPlanner::Plan(*A.Net, A.Threshold - FVector2D(1000.0, 0.0), Airframe);
 	TestEqual(TEXT("an aircraft needing tarmac is refused the grass strip as NotAdmitted"), Refused.Why, EArrivalRefusal::NotAdmitted);
 	TestEqual(TEXT("with the admission's own reason on the plan"), Refused.Admission.Why, ERunwayRefusal::Surface);
 	TestEqual(TEXT("and the chain it was refused for"), Refused.RunwayChain.Num(), 3);

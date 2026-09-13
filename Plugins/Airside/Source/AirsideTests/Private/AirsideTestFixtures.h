@@ -89,6 +89,45 @@ namespace TestProfiles
 {
 }
 
+/** Options for FTestAirport::Build, defaulted to the single-exit, single-stand shape every
+ *  site but the two named on FTestAirport itself used before #101. */
+struct FTestAirportOptions
+{
+	int32 StandCount = 1;
+	/** 1: one exit, taxiway and stand(s) beside it. 2: two exits (ArrivalPlannerTest's
+	 *  "earliest exit wins" shape) joined by a crossbar; the stand(s) sit beside the SECOND
+	 *  exit's taxiway, which both exits can reach. */
+	int32 ExitCount = 1;
+	double TaxiwayLength = 20000.0;
+	/** Derive the guideline graph (and, once a stand exists, its anchor link) before
+	 *  returning. False for a fixture built onto a network something else - an actor's
+	 *  RebuildMesh - will derive itself; see ArrivalDispatchTest's world variant. */
+	bool bDerived = true;
+};
+
+/**
+ * The arrival-airport fixture repeated, with small unnamed drifts, at every one of the sites
+ * #101 names: a runway split at its exit(s) so a guideline node lands on the centreline for
+ * RunwayExitNodes to find, a taxiway south from the (last) exit, and StandCount stand(s)
+ * beside it facing east so their lead-ins cast west and meet the taxiway - see FAnchorLink's
+ * own comment on why a stand must FACE the guideline it joins.
+ */
+struct FTestAirport
+{
+	URoadNetwork* Net = nullptr;
+	FVector2D Threshold = FVector2D::ZeroVector;
+	/** The exit stands sit beside - the only one there is, or the second of two. */
+	FVector2D ExitAt = FVector2D::ZeroVector;
+	/** The runway's own threshold segment - a valid Seed for RunwayExitNodes/RunwayChain,
+	 *  since either walks the whole chain from any member. */
+	FRoadSegmentId ThresholdSegment;
+	TArray<FEntityInstanceId> Stands;
+
+	/** Builds onto ExistingNet if given, else a fresh transient URoadNetwork. */
+	static FTestAirport Build(const FAirframe& Airframe, const FTestAirportOptions& Options = FTestAirportOptions(),
+		URoadNetwork* ExistingNet = nullptr);
+};
+
 /** Guideline-graph and road-graph builders shared by every fixture in the module. */
 namespace TestGraph
 {
