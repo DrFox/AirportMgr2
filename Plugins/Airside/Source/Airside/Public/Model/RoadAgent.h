@@ -296,6 +296,41 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	FVector2D GroundPosition() const { return LastMotion.Position; }
 
+	/**
+	 * The plan this agent is walking, how far along it, and how fast - from whichever struct
+	 * is actually driving.
+	 *
+	 * THREE ACCESSORS AND NOT THREE DIRECT READS OF Follower, because since the push there are
+	 * TWO structs that can be walking an agent along a route. Reading Agent.Follower.Travelled
+	 * on a manoeuvring agent returns whatever the taxi IN left there - a stale distance on a
+	 * live plan, which claims ground the aeroplane is nowhere near. Airside.Model.ClaimCentre
+	 * measured that at 99 000 uu against a real 1 500.
+	 *
+	 * NOT A CASE FOR EVERY PHASE. An arrival and a departure are not on a route at all, and
+	 * their callers branch away before they reach these (see FClaimPass::Run's first arm). The
+	 * follower is the answer for everything else, which leaves every vehicle's path unchanged.
+	 */
+	const FRoutePlan& PlanInProgress() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Plan : Follower.Plan;
+	}
+	double DistanceAlongPlan() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Travelled : Follower.Travelled;
+	}
+	double SpeedAlongPlan() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Speed : Follower.Speed;
+	}
+
+	/** True while a route-walking phase is driving: a taxi, or a push off a stand. The one
+	 *  question FClaimPass::Run, the rebuild and the deadlock resolver all used to spell as
+	 *  "Phase == Taxiing", which silently excluded the push. */
+	bool IsOnRoute() const
+	{
+		return Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring;
+	}
+
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
 	 *  Model/ and the slot struct went with the view pointer it existed to carry. */

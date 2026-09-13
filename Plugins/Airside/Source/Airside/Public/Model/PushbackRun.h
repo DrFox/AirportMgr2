@@ -122,6 +122,21 @@ struct AIRSIDE_API FPushbackRun
 	bool Advance(double DeltaSeconds, double StopWithin, bool bHasThrust,
 		FVector2D& OutPosition, double& OutHeading);
 
-	/** True once the manoeuvre has run its length. */
-	bool HasArrived() const { return Travelled >= PushDistance - UE_KINDA_SMALL_NUMBER; }
+	/**
+	 * True once the manoeuvre has run its length - OR once its plan can no longer carry it
+	 * that far.
+	 *
+	 * CLAMPED TO Plan.Length, and that second half is not belt-and-braces. A graph rebuild can
+	 * TRUNCATE a plan under an agent (see FPlanReResolver: the route keeps the longest prefix
+	 * that is still pavement), and a plan truncated shorter than PushDistance would leave
+	 * Travelled unable to reach it - a push that never ends, on an aeroplane wedged half off
+	 * its stand, with nothing in the model able to notice. Ending at the new end instead hands
+	 * over to the follower with a small heading error, which the follower is perfectly able to
+	 * slew out; a truncation under a pushing aeroplane is a degraded case either way, and this
+	 * is the recoverable one.
+	 */
+	bool HasArrived() const
+	{
+		return Travelled >= FMath::Min(PushDistance, Plan.Length) - UE_KINDA_SMALL_NUMBER;
+	}
 };

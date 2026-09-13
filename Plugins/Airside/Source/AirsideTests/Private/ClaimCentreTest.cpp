@@ -49,6 +49,49 @@ bool FClaimCentreTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("an unmeasured agent's centre is still Travelled"),
 		FClaimPass::CentreOf(Unmeasured), 10000.0, 0.0001);
 
+	// A PUSHED BODY LEADS ITS NOSE GEAR, and the offset must reverse with it.
+	//
+	// BodyCentreX - SteerAxleX is NEGATIVE on a conforming airframe - the plan centre sits
+	// AFT of the nose gear - so the form above puts the centre BEHIND the steered axle in
+	// plan distance. That is right for a taxi, where the nose gear leads. During a push the
+	// aeroplane is pulled out along a lead-in that runs away from the terminal it faces, so
+	// the MAINS lead and the body is AHEAD of the nose gear in plan distance.
+	//
+	// Getting it wrong misplaces the claimed body by TWICE the offset - 12.6 m on plane2,
+	// whose re-export about its nose gear is the reason CentreOf exists at all - and shows as
+	// an aeroplane still holding the stand it has left while pushing into ground it has not
+	// claimed. Neither is visible in any log, which is why it is a test.
+	FRoadAgent Pushing;
+	Pushing.Airframe.Ground = TestAirframes::Piper().Ground;
+	Pushing.Airframe.SteerAxleX = 0.0;
+	Pushing.Airframe.FixedAxleX = -454.3;
+	Pushing.Airframe.BodyCentreX = -629.3;   // plane2 as measured, as above
+	Pushing.Phase = EAgentPhase::Manoeuvring;
+	Pushing.Pushback.Travelled = 10000.0;
+
+	TestEqual(TEXT("a pushed body's centre LEADS its nose gear"),
+		FClaimPass::CentreOf(Pushing), 10000.0 + 629.3, 0.01);
+
+	// AND THE SAME AGENT READ AS A TAXI IS UNCHANGED. The assertions at the top already pin
+	// the taxi answer, but reading ONE agent both ways is what makes this a contrast rather
+	// than two unrelated facts - and it is what fails if CentreOf stops asking the phase.
+	Pushing.Phase = EAgentPhase::Taxiing;
+	Pushing.Follower.Travelled = 10000.0;
+	TestEqual(TEXT("a taxiing body's centre still trails it"),
+		FClaimPass::CentreOf(Pushing), 10000.0 - 629.3, 0.01);
+
+	// AND THE DISTANCE COMES FROM WHICHEVER STRUCT IS DRIVING. A manoeuvring agent whose
+	// Follower still holds the taxi that brought it in must read the PUSH's distance: taking
+	// the stale one would claim ground the aeroplane is nowhere near, and the two are
+	// deliberately different numbers here so that mistake cannot pass.
+	FRoadAgent Stale;
+	Stale.Airframe.Ground = TestAirframes::Piper().Ground;
+	Stale.Phase = EAgentPhase::Manoeuvring;
+	Stale.Follower.Travelled = 99000.0;   // where the taxi IN ended
+	Stale.Pushback.Travelled = 1500.0;    // where the push has got to
+	TestEqual(TEXT("a push reads its own distance, not the taxi that brought it in"),
+		FClaimPass::CentreOf(Stale), 1500.0, 0.01);
+
 	return true;
 }
 

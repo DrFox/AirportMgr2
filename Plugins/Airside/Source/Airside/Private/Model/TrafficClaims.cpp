@@ -172,12 +172,27 @@ double FClaimPass::CentreOf(const FRoadAgent& Agent)
 	// on a bend the two differ by well under a centimetre at these offsets, and the exact
 	// form would need the heading here - turning a distance into a pose, and this function
 	// into a second evaluator of where the agent is. See the guideline invariant.
-	return Agent.Follower.Travelled - Agent.Airframe.SteerAxleX + Agent.Airframe.BodyCentreX;
+	//
+	// THE SIGN IS THE PHASE'S, and this is the half that was missing. Ahead is NEGATIVE on a
+	// conforming airframe - the plan centre sits aft of the nose gear - so it places the
+	// centre BEHIND the steered axle, which is right while the nose gear leads. A push
+	// reverses which end leads: the aeroplane is pulled out along a lead-in running away from
+	// the terminal it faces, so the MAINS lead and the body is ahead of the nose gear in plan
+	// distance. Keeping the taxi's sign misplaces the claimed body by twice the offset, 12.6 m
+	// on plane2 - an aeroplane still holding a stand it has left, pushing into ground it has
+	// not claimed, and nothing in any log to say so. Airside.Model.ClaimCentre pins both ways.
+	//
+	// AND THE DISTANCE COMES FROM WHICHEVER STRUCT IS DRIVING - see FRoadAgent::
+	// DistanceAlongPlan. Agent.Follower.Travelled on a manoeuvring agent is where the taxi IN
+	// ended, which measured 99 000 uu against a real 1 500 the first time it was asked.
+	const double Ahead = Agent.Airframe.BodyCentreX - Agent.Airframe.SteerAxleX;
+	const double Sign = Agent.Phase == EAgentPhase::Manoeuvring ? -1.0 : 1.0;
+	return Agent.DistanceAlongPlan() + Sign * Ahead;
 }
 
 FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 {
-	const FRoutePlan& Plan = Agent.Follower.Plan;
+	const FRoutePlan& Plan = Agent.PlanInProgress();
 
 	// THE CENTRE, which is no longer Follower.Travelled - see CentreOf. It was, back when
 	// every mesh origin sat mid-fuselage; plane2's re-export about its nose gear made the
@@ -190,7 +205,14 @@ FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 	// THIS airframe needs, or an agent reserves less line than it can stop in. Read off
 	// Agent.Airframe now (issue #83) - the follower no longer keeps its own copy of it.
 	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Airframe.Ground.Taxi.Decel);
-	const double Window = Agent.Follower.Speed * Agent.Follower.Speed / (2.0 * Decel) + G;
+	//
+	// AND THE SPEED IS THE DRIVING PHASE'S. A push runs at a metre or two a second and brakes
+	// on its own PushAccel, so this reserves rather more line than it strictly needs - which
+	// is conservative in the safe direction and deliberately left that way: the window is
+	// about the room an agent RESERVES, and a push that under-reserved could be cleared into.
+	// Do not "fix" this to FPushbackRun::PushAccel without deciding that question first.
+	const double Speed = Agent.SpeedAlongPlan();
+	const double Window = Speed * Speed / (2.0 * Decel) + G;
 
 	// HALF the footprint each way, because Travelled is the CENTRE, and the window is
 	// measured from the NOSE - which is what FTrafficRules::AircraftGap already says the gap
@@ -254,7 +276,7 @@ FClaimPass::FClaimBody FClaimPass::SampleBody(const FRoutePlan& Plan, const FCla
 void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	const FClaimWindow& Window, const FClaimBody& Body) const
 {
-	const FRoutePlan& Plan = Agent.Follower.Plan;
+	const FRoutePlan& Plan = Agent.PlanInProgress();
 	const double T = Window.T;
 	const double F = Window.F;
 	const int32 Current = Window.Current;
@@ -395,7 +417,7 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
 	const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const
 {
-	const FRoutePlan& Plan = Agent.Follower.Plan;
+	const FRoutePlan& Plan = Agent.PlanInProgress();
 	const double T = Window.T;
 	const double F = Window.F;
 	const double G = Window.G;
@@ -781,7 +803,7 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		// never asked (PIE, 2026-09-06). Only when there IS a next step; a bar at the end of
 		// a route is the route's end.
 		if (Want.Surface == FWantedClaim::ESurface::HoldingPosition
-			&& Agent.Follower.Plan.Steps.IsValidIndex(Want.Step + 1))
+			&& Agent.PlanInProgress().Steps.IsValidIndex(Want.Step + 1))
 		{
 			Agent.BlockedStep = Want.Step + 1;
 		}
@@ -922,14 +944,20 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	// lining up own the strip; whatever either held on the taxiway before the handover is
 	// released here, which is what makes "Vacated releases the chain" fall out of the tick
 	// rather than needing a call of its own.
-	if (Agent.Phase != EAgentPhase::Taxiing)
+	//
+	// A PUSH IS ON A ROUTE and must NOT take this arm. A manoeuvring aeroplane is standing on
+	// its stand's own lead-in; releasing every guideline claim would show that ground free
+	// with an aeroplane on it, and something could be cleared down the line it is being
+	// pushed along. That is the same hole spec 3.4's crossing rule exists to close, in a
+	// phase where the aeroplane is barely moving and entirely unable to get out of the way.
+	if (!Agent.IsOnRoute())
 	{
 		HoldRunwayOnly(Agent, Network);
 		ClaimGoalNode(Agent, Network);
 		return;
 	}
 
-	const FRoutePlan& Plan = Agent.Follower.Plan;
+	const FRoutePlan& Plan = Agent.PlanInProgress();
 	if (!Plan.IsValid() || Plan.Steps.Num() == 0)
 	{
 		ReleaseForDeadPlan(Agent);
@@ -973,7 +1001,8 @@ void FClaimPass::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network)
 	// stand nor an occupation of the goal node describes anything true. Airside.Model.Traffic.
 	// DeadPlanReleases pins "the table holds NOTHING for it". An arrival's route is its
 	// taxi-in, which the follower has not started yet.
-	const FRoutePlan& Route = Agent.Phase == EAgentPhase::Arriving ? Agent.TaxiInPlan : Agent.Follower.Plan;
+	const FRoutePlan& Route = Agent.Phase == EAgentPhase::Arriving
+		? Agent.TaxiInPlan : Agent.PlanInProgress();
 	if (!Route.IsValid())
 	{
 		return;
