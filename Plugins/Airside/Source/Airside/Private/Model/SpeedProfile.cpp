@@ -1,5 +1,6 @@
 #include "Model/SpeedProfile.h"
 
+#include "AirsideLog.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -72,6 +73,13 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		? Airframe.Wheelbase() / Lock
 		: 0.0;
 
+	// WHY THIS ROUTE IS AS SLOW AS IT IS, gathered as the caps are built and logged once at
+	// the end - see the UE_LOG below for why it is worth carrying.
+	double TightestRadius = TNumericLimits<double>::Max();
+	double TightestAt = 0.0;
+	double TightestCap = Ground.Taxi.SpeedCap;
+	const TCHAR* TightestRule = TEXT("straight");
+
 	SpanCaps.SetNumUninitialized(Count - 1);
 	for (int32 Span = 0; Span + 1 < Count; ++Span)
 	{
@@ -82,20 +90,32 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		if (Length > 0.0 && Turn > CornerEpsilon)
 		{
 			const double Radius = Length / Turn;
+			const TCHAR* Rule = TEXT("?");
 			if (!Airframe.HasAxles())
 			{
 				Cap = FMath::Min(Cap, MaxTurnRate * Radius);
+				Rule = TEXT("pivot yaw rate");
 			}
 			else if (Radius < TightestFollowable)
 			{
 				// The lock cannot hold this line at any speed. Crawl and wear the crab -
 				// the same answer the vertex caps below give an instant corner.
 				Cap = Ground.MinTaxiSpeed;
+				Rule = TEXT("TIGHTER THAN THE STEERING LOCK");
 			}
 			else
 			{
 				Cap = FMath::Min(Cap, FMath::Sqrt(
 					FMath::Max(0.0, Ground.MaxLateralAccelUu) * Radius));
+				Rule = TEXT("lateral accel");
+			}
+
+			if (Radius < TightestRadius)
+			{
+				TightestRadius = Radius;
+				TightestAt = Distances[Span];
+				TightestCap = FMath::Max(Cap, Ground.MinTaxiSpeed);
+				TightestRule = Rule;
 			}
 		}
 
@@ -104,6 +124,10 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		// FGroundPerformance::MinTaxiSpeed.
 		SpanCaps[Span] = FMath::Max(Cap, Ground.MinTaxiSpeed);
 	}
+
+	int32 SharpVertices = 0;
+	double SharpestAt = 0.0;
+	double SharpestDegrees = 0.0;
 
 	// VERTEX CAPS. A vertex whose heading changes instantly cannot be taken at any speed at
 	// all, so the answer there is the slowest the aircraft can still steer at, and the crab
@@ -118,6 +142,16 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		if (Instant > CornerEpsilon)
 		{
 			Limit = Ground.MinTaxiSpeed;
+
+			// The FIRST one only, and where it is. A route with a sharp vertex crawls
+			// through it whatever its curvature says, so this is the other answer the log
+			// below has to be able to give.
+			if (SharpVertices == 0)
+			{
+				SharpestAt = Distances[At];
+				SharpestDegrees = FMath::RadiansToDegrees(Instant);
+			}
+			++SharpVertices;
 		}
 
 		if (At > 0)          { Limit = FMath::Min(Limit, SpanCaps[At - 1]); }
@@ -142,6 +176,35 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 
 		VertexLimits[At] = FMath::Min(VertexLimits[At], Reachable);
 	}
+
+	// WHY THIS ROUTE IS AS SLOW AS IT IS, once per plan.
+	//
+	// Build runs on Start and Replace, so this is one line per route rather than one per
+	// tick - cheap enough to leave in, and the only way to answer the question it answers.
+	//
+	// THREE RULES ALL REPORT MinTaxiSpeed and the inspector panel cannot tell them apart,
+	// because it shows the speed and not the reason: a vertex too sharp to sample, a radius
+	// tighter than the steering lock can hold, and a curvature whose lateral-accel cap
+	// happens to land on the floor. "It crawls round that corner" was about to be diagnosed
+	// by reasoning about which of the three it was, which is exactly the guesswork this
+	// project's notes say to instrument instead.
+	//
+	// The lock threshold is printed even when nothing hit it, because knowing a corner was
+	// 6 m against a 5.2 m limit is what says whether to widen the taxiway or retune the
+	// aircraft - and that is the decision this log exists to inform.
+	UE_LOG(LogAirsideTraffic, Log,
+		TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
+		     "(%s). %d sharp vertex/vertices%s. Floor %.0f, taxi cap %.0f, lock allows "
+		     "R>=%.0f (wheelbase %.0f, lock %.0f deg)."),
+		Distances.Last(), Count,
+		TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius,
+		TightestAt, TightestCap, TightestRule,
+		SharpVertices,
+		SharpVertices > 0
+			? *FString::Printf(TEXT(", first %.0f deg at %.0f"), SharpestDegrees, SharpestAt)
+			: TEXT(""),
+		Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap, TightestFollowable,
+		Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 }
 
 double FSpeedProfile::LimitAt(double Distance) const
