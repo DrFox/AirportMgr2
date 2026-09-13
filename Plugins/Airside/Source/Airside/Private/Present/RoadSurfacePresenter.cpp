@@ -214,6 +214,14 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 					++Count;
 				}
 			}
+			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
+			// to this lambda, and GetBuffers() returns a const& into IT, which stops existing
+			// the moment this lambda returns - MoveTemp cannot turn that into a move either,
+			// since a move constructor cannot bind to a const source. FRoadMeshBuilder's own
+			// API has no "build into an external FRoadMeshBuffers" - only the two static
+			// Build(Network, Z, OutBuffers) builders RebuildLayer was shaped around do - so a
+			// copy at this one boundary is the price of routing aprons through RebuildLayer
+			// too. One apron rebuild's worth of vertices, not a hot path.
 			OutBuffers = Builder.GetBuffers();
 			return Count;
 		},
