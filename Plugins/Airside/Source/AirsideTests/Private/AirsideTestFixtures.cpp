@@ -117,6 +117,10 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	const FVector2D Exit1At(Needed * 1.2, 0.0);
 	const FVector2D FarAt(Needed * 3.0, 0.0);
 
+	// No FTestAirportOptions knob for this: nothing has ever needed a taxiway other length
+	// than the StandOcc* fixtures' own 20000, so there is nothing yet to name a parameter for.
+	constexpr double TaxiwayLength = 20000.0;
+
 	URoadProfile* Runway = TestProfiles::Runway();
 	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
@@ -125,10 +129,12 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	// THE EXIT STANDS SIT BESIDE: the only one, on a single-exit airport, or the second of two
 	// - the shape ArrivalPlannerTest's "earliest exit wins" needs, where BOTH exits reach the
 	// one stand and the earlier one must still win despite its longer taxi.
+	Out.Exits.Add(Exit1At);
 	FVector2D StandExitAt = Exit1At;
 	if (Options.ExitCount >= 2)
 	{
 		const FVector2D Exit2At(Needed * 2.0, 0.0);
+		Out.Exits.Add(Exit2At);
 		const FRoadNodeId Exit1Node = Out.Net->AddNode(Exit1At);
 		const FRoadNodeId Exit2Node = Out.Net->AddNode(Exit2At);
 		const FRoadNodeId FarNode = Out.Net->AddNode(FarAt);
@@ -139,9 +145,9 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 		// Exit 1's taxiway runs to a dead end - no stand on it directly; exit 2's is the one
 		// the stand(s) sit beside. The crossbar joins them so a route exists from EITHER exit,
 		// with the one from exit 2 unambiguously the shorter taxi.
-		const FRoadNodeId Taxi1End = Out.Net->AddNode(Exit1At + FVector2D(0.0, -Options.TaxiwayLength));
+		const FRoadNodeId Taxi1End = Out.Net->AddNode(Exit1At + FVector2D(0.0, -TaxiwayLength));
 		TestGraph::Lay(*Out.Net, Exit1Node, Taxi1End, Taxiway);
-		const FRoadNodeId Taxi2End = Out.Net->AddNode(Exit2At + FVector2D(0.0, -Options.TaxiwayLength));
+		const FRoadNodeId Taxi2End = Out.Net->AddNode(Exit2At + FVector2D(0.0, -TaxiwayLength));
 		TestGraph::Lay(*Out.Net, Exit2Node, Taxi2End, Taxiway);
 		TestGraph::Lay(*Out.Net, Taxi1End, Taxi2End, Taxiway);
 
@@ -154,7 +160,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 		Out.ThresholdSegment = TestGraph::Lay(*Out.Net, ThresholdNode, ExitNode, Runway);
 		TestGraph::Lay(*Out.Net, ExitNode, FarNode, Runway);
 
-		const FRoadNodeId TaxiEnd = Out.Net->AddNode(Exit1At + FVector2D(0.0, -Options.TaxiwayLength));
+		const FRoadNodeId TaxiEnd = Out.Net->AddNode(Exit1At + FVector2D(0.0, -TaxiwayLength));
 		TestGraph::Lay(*Out.Net, ExitNode, TaxiEnd, Taxiway);
 	}
 	Out.ExitAt = StandExitAt;
@@ -181,6 +187,12 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	}
 
 	return Out;
+}
+
+FGuidelineNodeId FTestAirport::Pose(FEntityInstanceId Stand) const
+{
+	const FEntityInstance* E = Net->GetEntity(Stand);
+	return E != nullptr ? E->PoseNode : FGuidelineNodeId();
 }
 
 URoadProfile* TestProfiles::Runway()

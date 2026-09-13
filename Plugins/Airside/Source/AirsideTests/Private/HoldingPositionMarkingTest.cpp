@@ -29,10 +29,10 @@ bool FHoldingPositionMarkingTest::RunTest(const FString& Parameters)
 	//   T ======= E ======= F        runway (east-west)
 	//             |
 	//             X                  taxiway E-X due south; its E end is the runway position
-	constexpr double TaxiwayWidth = 2300.0;
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	URoadProfile* Runway = TestProfiles::Runway();
 	URoadProfile* Taxiway = TestProfiles::Taxiway();
+	const double TaxiwayWidth = Taxiway->GetTotalWidth();
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
 	const FRoadNodeId F = Net->AddNode(FVector2D(100000.0, 0.0));

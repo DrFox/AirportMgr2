@@ -9,27 +9,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	FGuidelineNodeId StandOccPose(const FTestAirport& A, FEntityInstanceId Stand)
-	{
-		const FEntityInstance* E = A.Net->GetEntity(Stand);
-		return E != nullptr ? E->PoseNode : FGuidelineNodeId();
-	}
-
-	/** Ticks until Pred() or Seconds; returns true when Pred became true. */
-	template <typename P>
-	bool StandOccRunUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds, P Pred, double Dt = 0.05)
-	{
-		for (double Clock = 0.0; Clock < Seconds; Clock += Dt)
-		{
-			Traffic.Advance(Dt, &Net);
-			if (Pred()) { return true; }
-		}
-		return Pred();
-	}
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandClaimTest,
 	"Airside.Model.Traffic.StandClaim",
@@ -40,8 +19,8 @@ bool FStandClaimTest::RunTest(const FString& Parameters)
 	// THE CLAIM IS A READING OF THE GOAL. Held from dispatch (between ticks), re-asserted
 	// every tick, released when the goal changes or the agent goes. Nothing on the stand.
 	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
-	const FGuidelineNodeId PoseA = StandOccPose(A, A.Stands[0]);
-	const FGuidelineNodeId PoseB = StandOccPose(A, A.Stands[1]);
+	const FGuidelineNodeId PoseA = A.Pose(A.Stands[0]);
+	const FGuidelineNodeId PoseB = A.Pose(A.Stands[1]);
 	if (!TestTrue(TEXT("both stands linked"), PoseA.IsSet() && PoseB.IsSet())) { return false; }
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
@@ -57,7 +36,7 @@ bool FStandClaimTest::RunTest(const FString& Parameters)
 
 	// Still held every tick of the approach, roll and taxi; occupied once parked.
 	bool bHeldThroughout = true;
-	const bool bParked = StandOccRunUntil(*Traffic, *A.Net, 600.0, [&]()
+	const bool bParked = RunUntil(*Traffic, *A.Net, 600.0, [&]()
 	{
 		bHeldThroughout = bHeldThroughout && Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(Goal), 0);
 		const FRoadAgent* P = Traffic->FindAgent(Id);

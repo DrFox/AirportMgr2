@@ -3,9 +3,12 @@
 // The tests module is a UNITY build: two anonymous-namespace helpers of one name in two
 // .cpp files compile alone and collide together. Before this header the fix was a per-file
 // name prefix (M2*, StandOcc2*, ...) - 12 different prefixes for the same handful of
-// fixtures, ~1,500 lines of pasted setup. One header shared by every .cpp in the module (and
-// forwarded to AirportOpsTests) needs no prefix at all: it is included once per translation
-// unit like any other header, not pasted into an anonymous namespace per file. See #99.
+// fixtures, ~1,500 lines of pasted setup. One header shared by every .cpp in AirsideTests
+// needs no prefix at all: it is included once per translation unit like any other header,
+// not pasted into an anonymous namespace per file. See #99. NOT YET exposed to
+// AirportOpsTests - that needs a Public/ move, AIRSIDETESTS_API on the non-template members,
+// and an AirportOpsTests.Build.cs dependency; tracked as a #99 follow-up rather than done
+// here, given this PR's size.
 
 #include "CoreMinimal.h"
 #include "Model/GroundTraffic.h"
@@ -55,6 +58,25 @@ int32 TickUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds
 		if (!Callback(Ticks)) { break; }
 	}
 	return Ticks;
+}
+
+/**
+ * Ticks Traffic in fixed steps of Dt until Pred() is true or Seconds elapse; returns
+ * whether Pred was true when it stopped (checked once more even past the deadline, so a
+ * predicate that only turns true on the final tick is not missed by one Dt). Generalises
+ * the StandOcc/StandOcc2/StandOcc3 RunUntil triplet (StandClaimTest, StandChoiceTest,
+ * StandRetargetTest) - a bare predicate rather than TickUntil's per-tick callback, so kept
+ * as its own helper instead of forcing one shape onto the other.
+ */
+template <typename P>
+bool RunUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds, P Pred, double Dt = 0.05)
+{
+	for (double Clock = 0.0; Clock < Seconds; Clock += Dt)
+	{
+		Traffic.Advance(Dt, &Net);
+		if (Pred()) { return true; }
+	}
+	return Pred();
 }
 
 /**
@@ -127,7 +149,6 @@ struct FTestAirportOptions
 	 *  "earliest exit wins" shape) joined by a crossbar; the stand(s) sit beside the SECOND
 	 *  exit's taxiway, which both exits can reach. */
 	int32 ExitCount = 1;
-	double TaxiwayLength = 20000.0;
 	/** Derive the guideline graph (and, once a stand exists, its anchor link) before
 	 *  returning. False for a fixture built onto a network something else - an actor's
 	 *  RebuildMesh - will derive itself; see ArrivalDispatchTest's world variant. */
@@ -145,8 +166,13 @@ struct FTestAirport
 {
 	URoadNetwork* Net = nullptr;
 	FVector2D Threshold = FVector2D::ZeroVector;
-	/** The exit stands sit beside - the only one there is, or the second of two. */
+	/** The exit stands sit beside - the only one there is, or the second of two. Exits.Last(). */
 	FVector2D ExitAt = FVector2D::ZeroVector;
+	/** Every exit, threshold-first: one entry for ExitCount=1, two (the earlier, longer-taxi
+	 *  exit then the one stands sit beside) for ExitCount=2. ArrivalPlannerTest's
+	 *  EarliestExitWinsTest reads Exits[0] to check WHICH junction the chosen exit sits at,
+	 *  rather than recomputing Needed * 1.2 itself - the drift #101 exists to end. */
+	TArray<FVector2D> Exits;
 	/** The runway's own threshold segment - a valid Seed for RunwayExitNodes/RunwayChain,
 	 *  since either walks the whole chain from any member. */
 	FRoadSegmentId ThresholdSegment;
@@ -155,6 +181,10 @@ struct FTestAirport
 	/** Builds onto ExistingNet if given, else a fresh transient URoadNetwork. */
 	static FTestAirport Build(const FAirframe& Airframe, const FTestAirportOptions& Options = FTestAirportOptions(),
 		URoadNetwork* ExistingNet = nullptr);
+
+	/** One of Stands' own pose node, or unset. Generalises the StandOcc/StandOcc2/StandOcc3
+	 *  Pose triplet (StandClaimTest, StandChoiceTest, StandRetargetTest). */
+	FGuidelineNodeId Pose(FEntityInstanceId Stand) const;
 };
 
 /** Guideline-graph and road-graph builders shared by every fixture in the module. */
@@ -172,7 +202,10 @@ namespace TestGraph
 		bool bDerived = true;
 	};
 
-	/** An authored guideline edge from A to B. */
+	/** A guideline edge from A to B. Options.bDerived defaults true, matching FGuidelineEdge's
+	 *  own default - so a plain Join() is NOT authored and will not survive a guideline
+	 *  sweep. Pass bDerived=false for one that does (see TrafficForwardersTest's own comment
+	 *  on why AgentRedirectTest's fixture needs that). */
 	FGuidelineEdgeId Join(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, const FJoinOptions& Options = FJoinOptions());
 
 	/** A straight road segment between two EXISTING road nodes, carrying Profile. */

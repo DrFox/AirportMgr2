@@ -10,20 +10,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	/** Exit1At (the earlier, longer-taxi exit) is not exposed on FTestAirport - ExitAt is the
-	 *  one stands sit beside, exit 2 here - so recomputed the same way FTestAirport::Build
-	 *  computes it internally. Used only by EarliestExitWinsTest, to check WHICH junction the
-	 *  chosen exit sits at. */
-	FVector2D TwoExitFirstExitAt(const FAirframe& Airframe)
-	{
-		const double Needed = FLandingRun::RequiredLandingDistance(
-			Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
-		return FVector2D(Needed * 1.2, 0.0);
-	}
-}
-
 // ---------------------------------------------------------------------------------------
 // (a) NoRunway: an empty network has nothing to land on at all.
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -115,7 +101,7 @@ bool FArrivalPlannerEarliestExitWinsTest::RunTest(const FString& Parameters)
 		// (the profile default, 6000) before the junction and that is where the taxi-in
 		// leaves the centreline, so the earliest usable node is just short of the junction,
 		// on the centreline, and never at exit 2's.
-		const double Along = ExitNode->Position.X - TwoExitFirstExitAt(Airframe).X;
+		const double Along = ExitNode->Position.X - Airport.Exits[0].X;
 		TestTrue(FString::Printf(TEXT("and it sits at exit 1's JUNCTION (its arc start, %.0f uu short of it), ")
 			TEXT("not exit 2's - the earlier one, despite its longer taxi to the stand"), -Along),
 			Along <= 0.0 && Along >= -6000.0 - 1.0 && FMath::Abs(ExitNode->Position.Y) < 1.0);

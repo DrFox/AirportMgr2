@@ -10,26 +10,6 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-namespace
-{
-	FGuidelineNodeId StandOcc2Pose(const FTestAirport& A, FEntityInstanceId Stand)
-	{
-		const FEntityInstance* E = A.Net->GetEntity(Stand);
-		return E != nullptr ? E->PoseNode : FGuidelineNodeId();
-	}
-
-	template <typename P>
-	bool StandOcc2RunUntil(UGroundTraffic& Traffic, const URoadNetwork& Net, double Seconds, P Pred, double Dt = 0.05)
-	{
-		for (double Clock = 0.0; Clock < Seconds; Clock += Dt)
-		{
-			Traffic.Advance(Dt, &Net);
-			if (Pred()) { return true; }
-		}
-		return Pred();
-	}
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandChoiceTest,
 	"Airside.Model.ArrivalPlanner.SkipsHeldStand",
@@ -38,8 +18,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandChoiceTest::RunTest(const FString& Parameters)
 {
 	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
-	const FGuidelineNodeId PoseA = StandOcc2Pose(A, A.Stands[0]);
-	const FGuidelineNodeId PoseB = StandOcc2Pose(A, A.Stands[1]);
+	const FGuidelineNodeId PoseA = A.Pose(A.Stands[0]);
+	const FGuidelineNodeId PoseB = A.Pose(A.Stands[1]);
 	if (!TestTrue(TEXT("both stands linked"), PoseA.IsSet() && PoseB.IsSet())) { return false; }
 	const FAirframe Piper = TestAirframes::Piper();
 
@@ -101,7 +81,7 @@ bool FStandChoiceTwoArrivalsTest::RunTest(const FString& Parameters)
 		}
 		return true;
 	};
-	if (!TestTrue(TEXT("first vacates and clears the runway"), StandOcc2RunUntil(*Traffic, *A.Net, 300.0,
+	if (!TestTrue(TEXT("first vacates and clears the runway"), RunUntil(*Traffic, *A.Net, 300.0,
 		[&]() { const FRoadAgent* P = Traffic->FindAgent(First); return P && P->Phase == EAgentPhase::Taxiing && RunwayFree(); }))) { return false; }
 
 	TArray<EArrivalRefusal> Refusals;
@@ -111,7 +91,7 @@ bool FStandChoiceTwoArrivalsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("two aircraft, two stands"),
 		Traffic->FindAgent(First)->GoalNode != Traffic->FindAgent(Second)->GoalNode);
 
-	if (!TestTrue(TEXT("second vacates and clears the runway"), StandOcc2RunUntil(*Traffic, *A.Net, 300.0,
+	if (!TestTrue(TEXT("second vacates and clears the runway"), RunUntil(*Traffic, *A.Net, 300.0,
 		[&]() { const FRoadAgent* P = Traffic->FindAgent(Second); return P && P->Phase == EAgentPhase::Taxiing && RunwayFree(); }))) { return false; }
 	const int32 Third = Traffic->DispatchArrival(*A.Net, A.Threshold, Piper, 1.0);
 	TestEqual(TEXT("a third is refused"), Third, 0);
