@@ -102,13 +102,23 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	return Offer;
 }
 
-double UOfferGenerator::OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines)
+double UOfferGenerator::OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines,
+	double DemandFactor)
 {
 	double OffersPerDay = 0.0;
 	for (const UAirlineDefinition* Airline : Airlines)
 	{
 		OffersPerDay += Airline != nullptr ? Airline->OffersPerDay : 0.0;
 	}
+
+	// THE FEE'S ONLY COST, AND IT IS PAID HERE. A higher landing fee scales this down, so the
+	// player earns more per aeroplane and sees fewer of them. See UPricing::Elasticity for why
+	// that trade is deliberately even until the airport is capacity-bound: the lever is meant
+	// to pose "am I full?", not to have a best setting.
+	//
+	// Clamped at zero rather than trusted: a negative factor would turn the whole sum negative
+	// and fall through the "never" branch below looking like an airport nobody flies to.
+	OffersPerDay *= FMath::Max(DemandFactor, 0.0);
 	// ZERO IS "NEVER", not a divide-by-zero to guard against a caller forgot to. An airport
 	// with no airline offering anything is a real, reportable state - UOpsRuntime::Attach
 	// warns about it rather than scheduling a callback that would never fire usefully.

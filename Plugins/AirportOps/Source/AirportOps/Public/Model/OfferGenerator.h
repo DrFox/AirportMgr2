@@ -115,5 +115,6 @@ public:
 	 * this one. Static and world-free for the same reason CouldEverAdmit is: it reads its
 	 * argument and nothing else, so a test can ask it without owning a generator.
 	 */
-	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines);
+	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines,
+		double DemandFactor = 1.0);
 };

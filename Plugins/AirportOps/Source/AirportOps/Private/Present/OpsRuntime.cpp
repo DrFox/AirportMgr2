@@ -180,7 +180,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// USimClock::SecondsPerDay rather than a local figure duplicating it - see
 	// UOfferGenerator::OfferIntervalSeconds (issue #98).
 	const TArray<UAirlineDefinition*> Airlines = Catalog->All<UAirlineDefinition>();
-	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines);
+	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines, Pricing->DemandFactor());
 	if (Interval > 0.0)
 	{
 		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
