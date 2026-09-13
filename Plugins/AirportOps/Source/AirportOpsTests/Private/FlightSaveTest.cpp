@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -140,15 +141,18 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	// blob no v2 game ever actually produced.
 	Flight->ApproachFocus = FVector2D::ZeroVector;
 
+	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Net, *Board, Snapshot);
+	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, Snapshot);
 	Snapshot.Version = 2;
 
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
+	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard))) { return false; }
+		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel))) { return false; }
 
 	const TArray<UFlight*> Live = RestoredBoard->Live();
 	TestEqual(TEXT("the flight came back"), Live.Num(), 1);

@@ -306,7 +306,7 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, Snapshot);
+	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, *FuelService, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
@@ -332,7 +332,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
-	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard))
+	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard, *FuelService))
 	{
 		return false;
 	}

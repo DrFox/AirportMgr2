@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/OpsSave.h"
 #include "UObject/Object.h"
 #include "SimClock.generated.h"
 
@@ -44,13 +45,18 @@ enum class ESimSpeed : uint8
  * queue would duplicate that knowledge and desync the two on the first edit.
  */
 UCLASS()
-class AIRPORTOPS_API USimClock : public UObject
+class AIRPORTOPS_API USimClock : public UObject, public IOpsPersistent
 {
 	GENERATED_BODY()
 
 public:
 	/** Game seconds in one game day. A definition, not a tunable. */
 	static constexpr double SecondsPerDay = 86400.0;
+
+	// --- IOpsPersistent ---------------------------------------------------------------
+	/** "Clock": the name OpsSave.h's shim already expects for a pre-v4 save's bytes. */
+	virtual FName SaveBlobName() const override { return TEXT("Clock"); }
+	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
 	 * Real seconds one game day takes at x1. A tunable, set from the scenario by

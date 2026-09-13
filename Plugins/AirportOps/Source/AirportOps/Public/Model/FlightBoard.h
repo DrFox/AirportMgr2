@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
 
@@ -29,11 +30,16 @@ enum class EAgentPhase : uint8;
  * Present/.
  */
 UCLASS()
-class AIRPORTOPS_API UFlightBoard : public UObject
+class AIRPORTOPS_API UFlightBoard : public UObject, public IOpsPersistent
 {
 	GENERATED_BODY()
 
 public:
+	// --- IOpsPersistent ---------------------------------------------------------------
+	/** "Flights": the name OpsSave.h's shim already expects for a pre-v4 save's bytes. */
+	virtual FName SaveBlobName() const override { return TEXT("Flights"); }
+	virtual UObject& AsPersistentObject() override { return *this; }
+
 	/**
 	 * What actually puts an aeroplane in the world. UOpsRuntime::Attach points this at
 	 * ARoadNetworkActor::DispatchArrival; tests substitute a recorder.

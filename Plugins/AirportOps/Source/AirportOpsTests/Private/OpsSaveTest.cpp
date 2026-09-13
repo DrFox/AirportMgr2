@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/AirsideCapability.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
@@ -43,16 +44,21 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	// An empty board: this test is about the clock and the network, and a board with no
 	// flights is what a game that never opened the inbox actually saves.
 	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFuelService* Fuel = NewObject<UFuelService>();
 
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Source, *Board, Snapshot);
-	TestTrue(TEXT("the snapshot holds bytes for both objects"), Snapshot.Clock.Num() > 0 && Snapshot.Network.Num() > 0);
+	OpsSave::Capture(*Clock, *Source, *Board, *Fuel, Snapshot);
+	TestTrue(TEXT("the snapshot holds a blob for the clock and the network"),
+		Snapshot.Blobs.FindRef(TEXT("Clock")).Bytes.Num() > 0 && Snapshot.Blobs.FindRef(TEXT("Network")).Bytes.Num() > 0);
+	TestTrue(TEXT("and one for fuel, new since issue #105 item 8"),
+		Snapshot.Blobs.Contains(TEXT("Fuel")));
 
 	URoadNetwork* Restored = NewObject<URoadNetwork>();
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
+	UFuelService* RestoredFuel = NewObject<UFuelService>();
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *Restored, *RestoredBoard))) { return false; }
+		OpsSave::Restore(Snapshot, *RestoredClock, *Restored, *RestoredBoard, *RestoredFuel))) { return false; }
 
 	TestEqual(TEXT("game time survives"), RestoredClock->Now(), SavedNow, 1e-9);
 	TestEqual(TEXT("speed survives"), RestoredClock->GetSpeed(), ESimSpeed::X4);
@@ -85,20 +91,93 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FOpsSaveSlotTest::RunTest(const FString& Parameters)
 {
 	FOpsSnapshot Out;
-	Out.Clock = { 1, 2, 3 };
-	Out.Network = { 9, 8 };
+	Out.Blobs.Add(TEXT("Clock"), FOpsBlob{ TArray<uint8>{ 1, 2, 3 } });
+	Out.Blobs.Add(TEXT("Network"), FOpsBlob{ TArray<uint8>{ 9, 8 } });
 	const FString Slot = TEXT("AirportOpsTest_Slot");
 	if (!TestTrue(TEXT("a snapshot writes to a slot"), OpsSave::WriteSlot(Slot, Out))) { return false; }
 
 	FOpsSnapshot In;
 	if (!TestTrue(TEXT("and reads back"), OpsSave::ReadSlot(Slot, In))) { return false; }
-	TestEqual(TEXT("byte-identical clock"), In.Clock, Out.Clock);
-	TestEqual(TEXT("byte-identical network"), In.Network, Out.Network);
+	TestEqual(TEXT("byte-identical clock blob"), In.Blobs.FindRef(TEXT("Clock")).Bytes, Out.Blobs.FindRef(TEXT("Clock")).Bytes);
+	TestEqual(TEXT("byte-identical network blob"), In.Blobs.FindRef(TEXT("Network")).Bytes, Out.Blobs.FindRef(TEXT("Network")).Bytes);
 	TestEqual(TEXT("version tag carried"), In.Version, Out.Version);
 
 	FOpsSnapshot Missing;
 	TestFalse(TEXT("a slot that does not exist reads false, not garbage"),
 		OpsSave::ReadSlot(TEXT("AirportOpsTest_NoSuchSlot"), Missing));
+	return true;
+}
+
+/**
+ * THE v3-AND-EARLIER SHIM. A save from before FOpsSnapshot::Blobs existed has its bytes
+ * under the OLD tagged-property names (Clock/Network/Flights) and no Blobs at all - this
+ * fails if OpsSave::Restore ever stops migrating them before the generic per-object pass.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveLegacyShimTest,
+	"AirportOps.Model.Save.LegacyShim",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveLegacyShimTest::RunTest(const FString& Parameters)
+{
+	USimClock* Source = NewObject<USimClock>();
+	Source->RealSecondsPerGameDay = 900.0;
+	Source->Advance(5.0);
+	const double SavedNow = Source->Now();
+
+	FOpsSnapshot Legacy;
+	Legacy.Version = 3;
+	OpsSave::SerializeObject(*Source, Legacy.Clock);
+	// Network and Flights deliberately left empty - a v1/v2/v3 game with an empty board and,
+	// for this test, an unimportant network - so the shim's "absent stays absent" path is
+	// exercised too.
+	TestTrue(TEXT("the legacy blob is populated the old way"), Legacy.Clock.Num() > 0);
+	TestTrue(TEXT("not the new way"), Legacy.Blobs.Num() == 0);
+
+	USimClock* RestoredClock = NewObject<USimClock>();
+	URoadNetwork* RestoredNetwork = NewObject<URoadNetwork>();
+	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
+	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	if (!TestTrue(TEXT("restore succeeds against a legacy snapshot"),
+		OpsSave::Restore(Legacy, *RestoredClock, *RestoredNetwork, *RestoredBoard, *RestoredFuel)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the clock's legacy bytes still landed"), RestoredClock->Now(), SavedNow, 1e-9);
+	return true;
+}
+
+/**
+ * THE BUG THIS EXISTS FOR (traced, issue #105 item 8). GoingHome named a truck that a load's
+ * ClearAgents had just removed, and nothing ever reset the map - so TrucksOutFor(Depot) over-
+ * counted for the rest of the session. OnBeforeRestore fires even with NO Fuel blob at all
+ * (an old save), which is the case that actually shipped broken.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSaveFuelResetOnRestoreTest,
+	"AirportOps.Model.Save.FuelResetsOnRestore",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
+{
+	UFuelService* Fuel = NewObject<UFuelService>();
+	// A truck "on its way home" from a PRE-load session - exactly the state a load's
+	// ClearAgents makes stale, and exactly what leaked before this fix: nothing ever
+	// touched GoingHome across a load, so this entry outlived the truck it named forever.
+	Fuel->SetGoingHomeForTest(1, FEntityInstanceId());
+	if (!TestEqual(TEXT("set up with one truck going home"), Fuel->TrucksGoingHomeForTest(), 1))
+	{
+		return false;
+	}
+
+	// A v4 snapshot with NO Fuel blob at all is exactly the shape every save made before this
+	// issue has - RestoreBlob must still call OnBeforeRestore for it, which is the case that
+	// actually shipped broken (fuel was never saved OR reset).
+	FOpsSnapshot NoFuelBlob;
+	NoFuelBlob.Version = 4;
+	OpsSave::RestoreBlob(NoFuelBlob, *Fuel);
+	TestEqual(TEXT("OnBeforeRestore cleared it even with no blob for this object"),
+		Fuel->TrucksGoingHomeForTest(), 0);
 	return true;
 }
 

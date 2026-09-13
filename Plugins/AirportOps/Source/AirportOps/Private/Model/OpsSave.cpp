@@ -1,6 +1,7 @@
 #include "Model/OpsSave.h"
 
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "AirportOpsLog.h"
 #include "Kismet/GameplayStatics.h"
 #include "Model/RoadNetwork.h"
@@ -8,6 +9,13 @@
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Serialization/ObjectAndNameAsStringProxyArchive.h"
+
+namespace
+{
+	// URoadNetwork cannot implement IOpsPersistent (Airside may not depend on AirportOps) so
+	// its blob is keyed by a literal name instead - see IOpsPersistent's class comment.
+	const FName NetworkBlobName(TEXT("Network"));
+}
 
 void OpsSave::SerializeObject(UObject& Object, TArray<uint8>& OutBytes)
 {
@@ -27,41 +35,77 @@ void OpsSave::DeserializeObject(UObject& Object, const TArray<uint8>& Bytes)
 	Object.Serialize(Ar);
 }
 
-void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network,
-	const UFlightBoard& Board, FOpsSnapshot& Out)
+void OpsSave::CaptureBlob(IOpsPersistent& Persistent, FOpsSnapshot& Out)
 {
+	SerializeObject(Persistent.AsPersistentObject(), Out.Blobs.FindOrAdd(Persistent.SaveBlobName()).Bytes);
+}
+
+void OpsSave::RestoreBlob(const FOpsSnapshot& In, IOpsPersistent& Persistent)
+{
+	// UNCONDITIONAL: even a snapshot with no blob at all for Persistent (an old save, or one
+	// from before this object existed) must not leave stale runtime state behind - see the
+	// interface method's own comment for the leak this fixes.
+	Persistent.OnBeforeRestore();
+	if (const FOpsBlob* Blob = In.Blobs.Find(Persistent.SaveBlobName()))
+	{
+		if (Blob->Bytes.Num() > 0)
+		{
+			DeserializeObject(Persistent.AsPersistentObject(), Blob->Bytes);
+		}
+	}
+}
+
+void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network,
+	const UFlightBoard& Board, const UFuelService& Fuel, FOpsSnapshot& Out)
+{
+	Out.Blobs.Reset();
+	Out.Clock.Reset();
+	Out.Network.Reset();
+	Out.Flights.Reset();
+
 	// Serialize is non-const on UObject; the archive is saving, so nothing is written to them.
-	SerializeObject(const_cast<USimClock&>(Clock), Out.Clock);
-	SerializeObject(const_cast<URoadNetwork&>(Network), Out.Network);
-	SerializeObject(const_cast<UFlightBoard&>(Board), Out.Flights);
-	UE_LOG(LogAirportOps, Log,
-		TEXT("Captured snapshot: clock %d bytes, network %d bytes, flights %d bytes"),
-		Out.Clock.Num(), Out.Network.Num(), Out.Flights.Num());
+	SerializeObject(const_cast<URoadNetwork&>(Network), Out.Blobs.FindOrAdd(NetworkBlobName).Bytes);
+	CaptureBlob(const_cast<USimClock&>(Clock), Out);
+	CaptureBlob(const_cast<UFlightBoard&>(Board), Out);
+	CaptureBlob(const_cast<UFuelService&>(Fuel), Out);
+
+	UE_LOG(LogAirportOps, Log, TEXT("Captured snapshot: %d blob(s)"), Out.Blobs.Num());
 }
 
 bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network,
-	UFlightBoard& Board)
+	UFlightBoard& Board, UFuelService& Fuel)
 {
-	if (In.Clock.Num() > 0)
+	FOpsSnapshot Shimmed = In;
+	if (Shimmed.Version < 4)
 	{
-		DeserializeObject(Clock, In.Clock);
+		// v3-AND-EARLIER SHIM: bytes under the old named fields, not yet in Blobs - see
+		// FOpsSnapshot::Version's own comment. A field the old save never wrote (e.g. no
+		// Flights blob at all, v1) stays absent from Blobs too, same as today.
+		if (Shimmed.Clock.Num() > 0)   { Shimmed.Blobs.FindOrAdd(TEXT("Clock")).Bytes = Shimmed.Clock; }
+		if (Shimmed.Network.Num() > 0) { Shimmed.Blobs.FindOrAdd(NetworkBlobName).Bytes = Shimmed.Network; }
+		if (Shimmed.Flights.Num() > 0) { Shimmed.Blobs.FindOrAdd(TEXT("Flights")).Bytes = Shimmed.Flights; }
 	}
-	if (In.Network.Num() > 0)
-	{
-		DeserializeObject(Network, In.Network);
-	}
-	if (In.Flights.Num() > 0)
-	{
-		DeserializeObject(Board, In.Flights);
 
-		if (In.Version < 3)
+	if (const FOpsBlob* NetworkBlob = Shimmed.Blobs.Find(NetworkBlobName))
+	{
+		if (NetworkBlob->Bytes.Num() > 0)
 		{
-			// A blob from before UFlight::ApproachFocus (issue #96): every flight in it
-			// shared the board's one focus, which DID deserialise (it is older than the
-			// flights themselves) - so recreate the per-flight field from it rather than
-			// leave each restored flight's new field at its default, the world origin.
-			Board.AimUnaimedFlightsAtBoardFocus();
+			DeserializeObject(Network, NetworkBlob->Bytes);
 		}
+	}
+
+	RestoreBlob(Shimmed, Clock);
+	RestoreBlob(Shimmed, Fuel);
+
+	const bool bHadFlights = Shimmed.Blobs.Contains(TEXT("Flights"));
+	RestoreBlob(Shimmed, Board);
+	if (bHadFlights && Shimmed.Version < 3)
+	{
+		// A blob from before UFlight::ApproachFocus (issue #96): every flight in it
+		// shared the board's one focus, which DID deserialise (it is older than the
+		// flights themselves) - so recreate the per-flight field from it rather than
+		// leave each restored flight's new field at its default, the world origin.
+		Board.AimUnaimedFlightsAtBoardFocus();
 	}
 
 	// A v1 snapshot has no Flights blob at all, and the branch above leaves the board alone -
