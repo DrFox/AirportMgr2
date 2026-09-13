@@ -90,7 +90,7 @@ void ARoadBuildHUD::DrawHUD()
 	//
 	// Not a tool's job: it is true whatever the gesture, and while it lived inside
 	// the old route tool the graph you were building for was invisible while you built it.
-	if (Controller->bShowGuidelines && Target->Network != nullptr)
+	if (Controller->IsGuidelineOverlayOn() && Target->Network != nullptr)
 	{
 		GuidelineOverlay::Draw(*Target->Network, *this);
 	}

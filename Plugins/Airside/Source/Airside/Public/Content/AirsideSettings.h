@@ -53,7 +53,7 @@ public:
 	 * UAircraftType::PiperMeridian*() may still be called from production code.
 	 *
 	 * Issue #30: those four functions used to be called directly at seven sites (RouteTool's
-	 * three *For helpers, RoadBuildController::OnLandAircraft's four), each one a place the
+	 * three *For helpers, RoadBuildController::LandAircraftNearViewFocus's four), each one a place the
 	 * fallback could drift from the others. Content->DefaultAircraft is preferred when the
 	 * content set names one - Airframe() is what makes UAircraftType::Airframe stop being
 	 * dead code - and the Piper is the fallback for a project with no content set configured

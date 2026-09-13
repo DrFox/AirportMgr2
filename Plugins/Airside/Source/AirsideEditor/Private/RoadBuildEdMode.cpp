@@ -146,7 +146,7 @@ void URoadBuildEdMode::Enter()
 	GetInteractiveToolsContext()->StartTool(MakeToolName(0));
 
 	// TODO(#33): key 7 (land an aircraft) has no editor equivalent. It is not a SelectTool
-	// at runtime either - see ARoadBuildController::OnLandAircraft - so wiring it up here
+	// at runtime either - see ARoadBuildController::LandAircraftNearViewFocus - so wiring it up here
 	// needs its own command and its own cursor-to-plane resolution, not a seventh registry
 	// entry; out of scope for making the two drivers share ONE tool table.
 }
