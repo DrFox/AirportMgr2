@@ -52,7 +52,23 @@ public:
 	 */
 	TFunction<bool(const FVector2D& Near, const FAirframe& Airframe)> Dispatcher;
 
-	/** Raised whenever anything a viewmodel displays has changed. */
+	/**
+	 * Raised whenever anything a viewmodel displays has changed.
+	 *
+	 * NOT ON UOpsEvents (issue #105 item 11's "or document why not"): that bus announces
+	 * discrete OUTCOMES - an agent's phase changed, an arrival was refused, the speed changed
+	 * - each with a publisher that fires it rarely enough to log and a payload Blueprint can
+	 * bind to. This is a coarse "go re-read everything" signal a C++ viewmodel polls off of
+	 * (UOfferInboxViewModel::Refresh re-derives its whole row list from the board every time),
+	 * fired from nearly every method in this class - AddOffer, Accept, Decline, DispatchNow,
+	 * OnAgentPhase, OnGraphRebuilt - often several times per player action. Logging each fire
+	 * the way every Notify* does would flood the log with lines that say nothing happened
+	 * except "ask the board again"; putting it on the bus would let Blueprint bind to a
+	 * signal that carries no information about what changed, unlike every other one there.
+	 * FSimpleMulticastDelegate (no UPROPERTY, no BlueprintAssignable) matches what it actually
+	 * is: C++ wiring between this model and its own viewmodels, not an outcome for anyone
+	 * else to hear about.
+	 */
 	FSimpleMulticastDelegate OnChanged;
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;

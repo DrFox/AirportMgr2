@@ -16,6 +16,7 @@ void UOpsEvents::NotifyArrivalRefused(EArrivalRefusal Why)
 
 void UOpsEvents::NotifySpeedChanged(ESimSpeed Speed)
 {
+	UE_LOG(LogAirportOps, Log, TEXT("Speed: %s"), *UEnum::GetValueAsString(Speed));
 	OnSpeedChanged.Broadcast(Speed);
 }
 
