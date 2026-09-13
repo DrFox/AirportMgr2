@@ -59,7 +59,7 @@ bool FBuildActionsRegistryTest::RunTest(const FString& Parameters)
 
 	// Every section has at least one action - an empty section on the bar is a layout with
 	// nothing in it, which reads as a bug.
-	for (uint8 S = 0; S <= static_cast<uint8>(EActionSection::Game); ++S)
+	for (uint8 S = 0; S < static_cast<uint8>(EActionSection::Count); ++S)
 	{
 		const EActionSection Section = static_cast<EActionSection>(S);
 		TestTrue(*FString::Printf(TEXT("section %s has actions"), ActionSectionName(Section)),

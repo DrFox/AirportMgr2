@@ -5,7 +5,9 @@
 
 class ARoadBuildController;
 
-/** Where an action sits on the bar. Bar order is enum order. */
+/** Where an action sits on the bar. Bar order is enum order. Count is a sentinel, never a
+ *  section: it lets a table or a loop size itself off the enum instead of retyping "Game"
+ *  as the last one, the way BuildBarWidgetTest and BuildActionsTest both used to. */
 enum class EActionSection : uint8
 {
 	Time,
@@ -13,7 +15,8 @@ enum class EActionSection : uint8
 	Edit,
 	Aircraft,
 	Selection,
-	Game
+	Game,
+	Count
 };
 
 const TCHAR* ActionSectionName(EActionSection Section);

@@ -4,18 +4,23 @@
 
 #define LOCTEXT_NAMESPACE "AirportMgr"
 
+namespace
+{
+	// ONE TABLE, not a switch: a static_assert ties its length to EActionSection::Count, so a
+	// section added to the enum with no name here fails the build instead of printing "?" at
+	// runtime the way the old switch's default-less fallthrough would have.
+	constexpr const TCHAR* SectionNames[] =
+	{
+		TEXT("Time"), TEXT("Tools"), TEXT("Edit"), TEXT("Aircraft"), TEXT("Selection"), TEXT("Game"),
+	};
+	static_assert(UE_ARRAY_COUNT(SectionNames) == static_cast<int32>(EActionSection::Count),
+		"Every EActionSection needs a name here");
+}
+
 const TCHAR* ActionSectionName(EActionSection Section)
 {
-	switch (Section)
-	{
-	case EActionSection::Time:     return TEXT("Time");
-	case EActionSection::Tools:    return TEXT("Tools");
-	case EActionSection::Edit:     return TEXT("Edit");
-	case EActionSection::Aircraft: return TEXT("Aircraft");
-	case EActionSection::Selection: return TEXT("Selection");
-	case EActionSection::Game:     return TEXT("Game");
-	}
-	return TEXT("?");
+	const int32 Index = static_cast<int32>(Section);
+	return (Index >= 0 && Index < UE_ARRAY_COUNT(SectionNames)) ? SectionNames[Index] : TEXT("?");
 }
 
 namespace

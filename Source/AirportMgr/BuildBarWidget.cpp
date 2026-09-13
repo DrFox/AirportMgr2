@@ -21,6 +21,35 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogBuildBar, Log, All);
 
+namespace
+{
+	/**
+	 * THE ONE TABLE the section switch and the Ensure() call list both used to be. Each
+	 * entry's Slot is a pointer TO the named UPROPERTY, not a copy of it - the six BindWidgetOptional
+	 * members in BuildBarWidget.h stay named (Blueprint binds a panel by that name, so they
+	 * cannot become an array), but everything that used to switch on EActionSection to find
+	 * one of them now walks this instead. A static_assert against EActionSection::Count means
+	 * a seventh section with no row here fails the build, not silently drops its buttons.
+	 */
+	struct FSectionSpec
+	{
+		EActionSection Section;
+		TObjectPtr<UPanelWidget> UBuildBarWidget::* Slot;
+	};
+
+	const FSectionSpec SectionSpecs[] =
+	{
+		{ EActionSection::Time,      &UBuildBarWidget::TimeSection },
+		{ EActionSection::Tools,     &UBuildBarWidget::ToolsSection },
+		{ EActionSection::Edit,      &UBuildBarWidget::EditSection },
+		{ EActionSection::Aircraft,  &UBuildBarWidget::AircraftSection },
+		{ EActionSection::Selection, &UBuildBarWidget::SelectionSection },
+		{ EActionSection::Game,      &UBuildBarWidget::GameSection },
+	};
+	static_assert(UE_ARRAY_COUNT(SectionSpecs) == static_cast<int32>(EActionSection::Count),
+		"Every EActionSection needs a slot here - see BuildBarWidget.h's UPROPERTY list");
+}
+
 void UBuildBarEntry::HandleClicked()
 {
 	if (UBuildBarWidget* Bar = Owner.Get())
@@ -179,12 +208,13 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 
 		Section = Box;
 	};
-	Ensure(TimeSection, TEXT("TimeSection"), EActionSection::Time);
-	Ensure(ToolsSection, TEXT("ToolsSection"), EActionSection::Tools);
-	Ensure(EditSection, TEXT("EditSection"), EActionSection::Edit);
-	Ensure(AircraftSection, TEXT("AircraftSection"), EActionSection::Aircraft);
-	Ensure(SelectionSection, TEXT("SelectionSection"), EActionSection::Selection);
-	Ensure(GameSection, TEXT("GameSection"), EActionSection::Game);
+	// Slot NAME is ActionSectionName + "Section" - exactly the literals this used to retype
+	// ("TimeSection", "GameSection", ...) - so BuildActions.h stays the one source for the name
+	// half too.
+	for (const FSectionSpec& Spec : SectionSpecs)
+	{
+		Ensure(this->*Spec.Slot, *FString::Printf(TEXT("%sSection"), ActionSectionName(Spec.Section)), Spec.Section);
+	}
 
 	if (ClockText == nullptr)
 	{
@@ -215,14 +245,12 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 
 UPanelWidget* UBuildBarWidget::SectionPanel(EActionSection Section) const
 {
-	switch (Section)
+	for (const FSectionSpec& Spec : SectionSpecs)
 	{
-	case EActionSection::Time:     return TimeSection;
-	case EActionSection::Tools:    return ToolsSection;
-	case EActionSection::Edit:     return EditSection;
-	case EActionSection::Aircraft: return AircraftSection;
-	case EActionSection::Selection: return SelectionSection;
-	case EActionSection::Game:     return GameSection;
+		if (Spec.Section == Section)
+		{
+			return this->*Spec.Slot;
+		}
 	}
 	return nullptr;
 }
