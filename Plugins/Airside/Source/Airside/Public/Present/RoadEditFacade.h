@@ -60,10 +60,11 @@ class FRoadEditScope;
  * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
  * position changes neither pavement nor mesh.
  *
- * ConnectGuidelines and DisconnectGuideline open an FRoadEditScope and never call Commit()
- * on it, so today NEITHER pushes an undo step NOR notifies - the scope's destructor calls
- * AbandonEdit() and nothing else runs. Pre-existing (not introduced by issue #77) and not
- * fixed here - tracked as issue #125.
+ * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
+ * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and
+ * fall off the end without calling Commit() on it, so a successful link or unlink pushed no
+ * undo step and notified nobody - the scope's destructor took the AbandonEdit() branch on a
+ * change that had actually happened. Pre-existing, not introduced by issue #77.
  *
  * Before issue #77, half the mutators broadcast and half relied on the TOOL calling
  * RebuildMesh() after a successful edit - a split-brain that let one call site (a REFUSED

@@ -182,9 +182,11 @@ public:
 	 * as the propeller changing speed with the camera, which it was - zooming in cost more to
 	 * draw and landed the frame rate on a different point along that same ramp.
 	 *
-	 * CHOSEN FOR 60 FPS, THE LOWEST RATE THIS COUNTS AS ORDINARY PLAY rather than a hitch (a
-	 * game running below it is already dropping frames for reasons this animation cannot
-	 * fix): 400 RPM at three blades is 40 degrees a frame at 60 fps, which is exactly
+	 * CHOSEN FOR 60 FPS - THIS FIGURE'S OWN FLOOR for full effect, not a project-wide
+	 * constant (Airside.Model.Traffic.SubstepCeilingCoversTheSpeedLadder picks a different,
+	 * lower one - 30 fps - for the substep ceiling; each figure's floor is authored against
+	 * what THAT figure needs, not shared): 400 RPM at three blades is 40 degrees a frame at
+	 * 60 fps, which is exactly
 	 * PropMaxStepPerRepeat's own 0.333 x 120 degree repeat - the guard does not additionally
 	 * bind at 60 fps or above, so the shown speed is this exact figure at every ordinary frame
 	 * rate, not merely bounded by it. Below 60 fps the guard binds again and the apparent

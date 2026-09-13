@@ -2250,9 +2250,12 @@ bool FTrafficSubstepLadderTest::RunTest(const FString& Parameters)
 	const UGroundTraffic* Fresh = NewObject<UGroundTraffic>(GetTransientPackage());
 
 	// X32 IS THE LADDER'S TOP (USimClock::SpeedLadder, AirportOps/SimClock.h) and 30 fps is
-	// the slowest frame rate this project treats as ordinary play rather than a hitch (see
-	// FPropAliasingTest's own rate list) - so this is the busiest EVERY-FRAME delta the
-	// ladder can ask for, not a hitch outlier the ceiling is allowed to clamp.
+	// THIS SUBSTEP CEILING'S OWN floor for ordinary play rather than a hitch (FPropAliasingTest's
+	// rate list calls 24 "a hitching" rate and starts bracketing real play at 30) - so this is
+	// the busiest EVERY-FRAME delta the ladder can ask for, not a hitch outlier the ceiling is
+	// allowed to clamp. A DIFFERENT, HIGHER FLOOR (60 fps) is what UAirsideAgentAnim::
+	// PropDisplayCapRPM is picked against - the two are chosen separately, one per feature,
+	// not read from one shared "ordinary play" constant.
 	const double WorstOrdinaryFrame = 32.0 * (1.0 / 30.0);
 	const int32 StepsNeeded = FMath::CeilToInt(WorstOrdinaryFrame / Fresh->Rules.MaxSubstepSeconds);
 
@@ -2389,10 +2392,12 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 
 	// NOT NECESSARILY ZERO: bEngineRunning flips the moment the pause elapses, but EngineRPM
 	// trails it down over SpoolDownSeconds the same way it trails a start up - see
-	// AdvanceEngine. What matters for this test is only that it is not sitting at AtSpeed.
+	// AdvanceEngine. CAPTURED, not just logged: this is the mid-decay RPM the fix must not
+	// throw away - see the assertion below and PR #134 review item 3.
 	const FRoadAgent* ShutDown = Traffic->FindAgent(Id);
 	if (!TestTrue(TEXT("the agent exists"), ShutDown != nullptr)) { return false; }
-	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), ShutDown->EngineRPM));
+	const double PreRedirectRPM = ShutDown->EngineRPM;
+	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), PreRedirectRPM));
 
 	if (!TestTrue(TEXT("the redirect is accepted"),
 		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft))))
@@ -2400,13 +2405,23 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// THE ASSERTION THE BUG WOULD FAIL: before the fix this jumped straight to AtSpeed in the
-	// very same call, with no spool-up at all.
+	// THE ASSERTIONS THE BUG WOULD FAIL. Before the original fix this jumped straight to
+	// AtSpeed in the very same call, with no spool-up at all. Before the review fix
+	// (PR #134), StartTaxi's own EngineRPM=0.0 reset was left standing on the not-already-
+	// running branch, so a redirect landing MID-DECAY (bEngineRunning already false, RPM
+	// still positive - exactly this test's fixture) snapped the propeller DOWN to zero first
+	// and spooled it back UP from there: the same one-frame snap this fix exists to remove,
+	// just in the other direction. RedirectAgent's own zero-second Advance (#107 item 3)
+	// calls AdvanceEngine(0.0), which makes no change, so immediately after the redirect the
+	// RPM must be AT LEAST what it already was.
 	const FRoadAgent* Redirected = Traffic->FindAgent(Id);
 	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
 	TestTrue(*FString::Printf(
 		TEXT("a shut-down engine spools up rather than snapping to speed (%.0f RPM, cap %.0f)"),
 		Redirected->EngineRPM, AtSpeed), Redirected->EngineRPM < AtSpeed);
+	TestTrue(*FString::Printf(
+		TEXT("and it never drops below where it already was (%.0f RPM, was %.0f)"),
+		Redirected->EngineRPM, PreRedirectRPM), Redirected->EngineRPM >= PreRedirectRPM);
 	TestTrue(TEXT("but it is running again, spooling up"), Redirected->bEngineRunning);
 	return true;
 }

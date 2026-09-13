@@ -328,9 +328,11 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	}
 
 	// CAPTURED BEFORE StartTaxi, which always primes a cold start of its own
-	// (bEngineRunning=true, EngineRPM=0.0) - so this is whether the engine was running a
-	// moment ago, not the post-StartTaxi state that call is about to write.
+	// (bEngineRunning=true, EngineRPM=0.0) - so these are whether the engine was running and
+	// what RPM it actually had a moment ago, not the post-StartTaxi state that call is about
+	// to overwrite both with.
 	const bool bWasRunning = Agent.bEngineRunning;
+	const double PriorRPM = Agent.EngineRPM;
 
 	Agent.StartTaxi(Plan, Own);
 
@@ -344,14 +346,26 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		// up on departure.
 		Agent.StartEngineAtSpeed();
 	}
-	// ELSE: THE ENGINE HAD ALREADY STOPPED (#107 item 2) - DepartAgent on a parked aircraft
-	// that ran out its post-arrival shutdown pause, or ReofferStands on one that shut down
-	// while it waited for a stand. StartEngineAtSpeed's own header says what it is FOR - "as
-	// it is for an aeroplane that has spent a turnaround ... before it taxied out" - which
-	// presumes the engine was already running; calling it unconditionally snapped a stopped
-	// propeller straight to full power in one frame, with no spool-up at all. StartTaxi's own
-	// cold start above is exactly the fallback DispatchAgent uses, so this aircraft now spools
-	// up through AdvanceEngine like any other cold start.
+	else
+	{
+		// THE ENGINE WAS NOT RUNNING (#107 item 2) - DepartAgent on a parked aircraft that ran
+		// out its post-arrival shutdown pause, or ReofferStands on one that is stranded and
+		// parked with its own shutdown countdown running. StartEngineAtSpeed's own header says
+		// what it is FOR - "as it is for an aeroplane that has spent a turnaround ... before it
+		// taxied out" - which presumes the engine was already running; calling it
+		// unconditionally snapped a stopped propeller straight to full power in one frame,
+		// with no spool-up at all.
+		//
+		// PriorRPM RESTORED, NOT LEFT AT ZERO: bEngineRunning false does not mean the
+		// propeller has actually stopped turning - AdvanceEngine spools it DOWN over
+		// SpoolDownSeconds, so a redirect that lands mid-decay (the ReofferStands case above)
+		// still has real RPM on it. StartTaxi's own cold start just wrote EngineRPM=0.0 over
+		// that, which would have snapped a spooling-down propeller to a dead stop and then
+		// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
+		// only downward first. Restoring it here means AdvanceEngine picks up the ramp exactly
+		// where it actually was, whichever direction it was headed.
+		Agent.EngineRPM = PriorRPM;
+	}
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only

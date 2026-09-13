@@ -73,8 +73,9 @@ struct AIRSIDE_API FTrafficRules
 	 *
 	 * A CEILING RATHER THAN A PROMISE. A frame that hitches badly - a level loading, a
 	 * breakpoint - would otherwise ask for hundreds of steps and hitch the next frame too,
-	 * which is the spiral that turns one stutter into a freeze. Past this the remaining time
-	 * is taken in one longer step: slightly wrong once beats compounding.
+	 * which is the spiral that turns one stutter into a freeze. Past this the delta is
+	 * divided evenly (see Advance), so every step is longer than MaxSubstepSeconds: slightly
+	 * wrong every step beats compounding.
 	 *
 	 * SIZED FROM THE SPEED LADDER (#107 item 4), not merely for a hitch: USimClock's ladder
 	 * (AirportOps/SimClock.h) reaches X32, and UAirsideTraffic::Advance's caller hands it the
