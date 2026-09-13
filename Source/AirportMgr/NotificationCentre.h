@@ -5,31 +5,8 @@
 #include "NotificationCentre.generated.h"
 
 /**
- * What a notification needs of the player. AN ENUM, NOT A SET OF BOOLS, for the reason
- * EAgentPhase and ECrossingPhase are: "transient AND persists while true" is not a state.
- *
- * OFFERS ARE NOT HERE. They need a decision and carry a deadline, UFlightBoard already owns
- * them, and a second store would be a second source of truth about what the player has been
- * offered - the failure this codebase has shipped three times. The inbox widget reads the
- * board directly through its existing viewmodel.
- */
-UENUM()
-enum class ENotificationKind : uint8
-{
-	/** Happened, worth knowing, no action. Expires. */
-	Feed,
-	/** A condition that is true now. Persists until cleared. */
-	Alert
-};
-
-/**
- * How much the thing that happened matters. SEPARATE FROM KIND, because the two answer
- * different questions: Kind is what the notification NEEDS of the player (nothing, or a
- * standing condition), Severity is how the news READS. A feed entry can be routine or
- * alarming without changing what the player must do about it.
- *
- * Drives colour and icon and nothing else - a severity that changed behaviour would be a
- * Kind wearing a disguise.
+ * How much the thing that happened matters. Drives colour and icon and nothing else - a
+ * severity that changed behaviour would be doing a different job than this one.
  */
 UENUM()
 enum class ENotificationSeverity : uint8
@@ -47,22 +24,28 @@ struct FNotificationEntry
 {
 	GENERATED_BODY()
 
-	UPROPERTY() ENotificationKind Kind = ENotificationKind::Feed;
 	UPROPERTY() ENotificationSeverity Severity = ENotificationSeverity::Info;
 	UPROPERTY() FText Text;
-	/** Alerts only: the condition's identity, so re-raising does not stack. */
-	UPROPERTY() FName SourceId;
 	UPROPERTY() double RaisedAtRealSeconds = 0.0;
 };
 
 /**
- * Everything the player is told, and the rules for how long each kind stays.
+ * Everything the player is told, and the rule for how long an entry stays.
  *
  * World-free: built with NewObject and advanced by hand in tests, like USimClock and
  * UFlightBoard. The widget that draws it is a forwarder.
  *
  * Replaces a single UTextBlock that every notification OVERWROTE and nothing ever cleared,
  * so two events in one second left only the second, permanently.
+ *
+ * USED TO ALSO CARRY "Alert" - a standing condition kind meant to persist until cleared,
+ * keyed by source so a re-detected condition did not stack. Issue #105 review found it had
+ * shipped with no producer (nothing ever called RaiseAlert in play) and no surface (the
+ * toast stack explicitly skipped drawing it, "alerts have their own surface" pointing at
+ * nothing) - nine months of dead code covered only by its own tests. Cut rather than wired:
+ * a real producer (FuelService "no depot" and friends) needs its own bus event and its own
+ * persistent-banner surface, which is a feature, not a cleanup. Re-add Kind/RaiseAlert/
+ * ClearAlert from this issue's history if that feature is actually built.
  */
 UCLASS()
 class AIRPORTMGR_API UNotificationCentre : public UObject
@@ -71,7 +54,7 @@ class AIRPORTMGR_API UNotificationCentre : public UObject
 
 public:
 	/**
-	 * How long a feed entry stays, in REAL seconds.
+	 * How long an entry stays, in REAL seconds.
 	 *
 	 * REAL, not game, and NOT SCALED BY SPEED EITHER. SimClock.h's class comment draws the
 	 * first distinction and this adds the second, because both would shorten a toast: the
@@ -88,9 +71,6 @@ public:
 	UPROPERTY() int32 MaxEntries = 50;
 
 	void PostFeed(const FText& Text, ENotificationSeverity Severity = ENotificationSeverity::Info);
-	void RaiseAlert(FName SourceId, const FText& Text,
-		ENotificationSeverity Severity = ENotificationSeverity::Warning);
-	void ClearAlert(FName SourceId);
 
 	/** RAW frame seconds in - never multiplied by Multiplier() and never by TimeScale(). */
 	void Advance(double RealDeltaSeconds);
