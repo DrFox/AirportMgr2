@@ -23,6 +23,12 @@ enum class ERunwaySurface : uint8
 	Count UMETA(Hidden),
 };
 
+/** How many runway material slots there are - Grass/Tarmac/Concrete, Reinforced aliased in
+ *  by RunwayMaterialSlot below. The one figure UAirsideContent::RunwayMaterials (a TArray,
+ *  sized at runtime) and FSurfaceSettings::RunwayMaterials (a fixed C array, sized at compile
+ *  time) both size against - see the static_assert at the latter's declaration. */
+inline constexpr int32 RunwayMaterialSlotCount = 3;
+
 /**
  * Which of the THREE runway material slots (Grass/Tarmac/Concrete) a surface draws with.
  * Reinforced has no slot of its own - it is concrete with a stronger rating, and the

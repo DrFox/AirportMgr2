@@ -6,6 +6,7 @@
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
+#include "Model/RunwayFacts.h"
 #include "Tool/RoadSnap.h"
 #include "RoadSurfacePresenter.generated.h"
 
@@ -121,8 +122,12 @@ public:
 		 * may legitimately be null (the single-material road) and these must still reach the
 		 * mesh - see EffectiveMaterialSet. A plain C array, not TStaticArray: this struct is
 		 * not UPROPERTY-reflected, so either works, and a fixed array needs no include.
+		 *
+		 * Sized off RunwayMaterialSlotCount, not a literal 3 - see the static_assert right
+		 * below (PR #137 review): a change to that constant with nothing checking this array
+		 * against it is exactly the second-truths bug this project keeps a rule against.
 		 */
-		UMaterialInterface* RunwayMaterials[3] = {};
+		UMaterialInterface* RunwayMaterials[RunwayMaterialSlotCount] = {};
 
 		/** Already resolved - see ARoadNetworkActor::ResolveProfile. */
 		URoadProfile* Profile = nullptr;

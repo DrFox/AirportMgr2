@@ -131,6 +131,8 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; RunwayMaterialSlot is
 	// where that alias happens, and Settings.RunwayMaterials is already indexed by it.
 	const ERunwaySurface RunwaySurfacesBySlot[] = { ERunwaySurface::Grass, ERunwaySurface::Tarmac, ERunwaySurface::Concrete };
+	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == RunwayMaterialSlotCount,
+		"One entry per runway material slot - see RunwayMaterialSlotCount's own comment");
 	for (int32 Slot = 0; Slot < UE_ARRAY_COUNT(RunwaySurfacesBySlot); ++Slot)
 	{
 		FRoadMaterialSlot MatSlot;
