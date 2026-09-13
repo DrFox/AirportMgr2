@@ -1,21 +1,14 @@
 #include "Tool/GuidelineOverlay.h"
 
 #include "Model/RoadNetwork.h"
-#include "Solve/GuidelineGeom.h"
 #include "Tool/RoadBuildTool.h"
 
 void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 {
-	for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
+	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
+	for (int32 Index = 0; Index < Edges.Num(); ++Index)
 	{
-		if (!Edge.bAlive)
-		{
-			continue;
-		}
-
-		const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
-		if (A == nullptr || B == nullptr)
+		if (!Edges[Index].bAlive)
 		{
 			continue;
 		}
@@ -23,7 +16,10 @@ void GuidelineOverlay::Draw(const URoadNetwork& Network, IToolPreviewSink& Sink)
 		// The same sampling the search costed and a follower will walk, so what is drawn is
 		// what is driven. Do not add a second evaluator here - see the header.
 		TArray<FVector2D> Points;
-		GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Points);
+		if (!Network.SampleGuideline(Network.GuidelineEdgeIdAt(Index), Points))
+		{
+			continue;
+		}
 
 		Sink.Polyline(Points, EPreviewStyle::Guideline);
 	}

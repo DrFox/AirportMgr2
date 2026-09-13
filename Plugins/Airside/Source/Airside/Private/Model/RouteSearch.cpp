@@ -8,27 +8,12 @@
 
 namespace
 {
-	/** The guideline's points in its own A-to-B order. False if either end is dead. */
-	bool EdgePoints(const URoadNetwork& Network, const FGuidelineEdge& Edge, TArray<FVector2D>& Out)
-	{
-		const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
-		if (A == nullptr || B == nullptr)
-		{
-			return false;
-		}
-
-		GuidelineGeom::Sample(A->Position, Edge.Control, B->Position, Out);
-		return true;
-	}
-
 	/** Sampled length plus the query's congestion charge. Negative when the edge cannot be
 	 *  measured, which is how the search skips it. */
-	double EdgeCost(const URoadNetwork& Network, const FGuidelineEdge& Edge,
-		FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
+	double EdgeCost(const URoadNetwork& Network, FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
 	{
 		TArray<FVector2D> Points;
-		if (!EdgePoints(Network, Edge, Points))
+		if (!Network.SampleGuideline(EdgeId, Points))
 		{
 			return -1.0;
 		}
@@ -187,7 +172,7 @@ namespace
 					continue;
 				}
 
-				const double Cost = EdgeCost(Network, *Edge, EdgeId, Query);
+				const double Cost = EdgeCost(Network, EdgeId, Query);
 				if (Cost < 0.0)
 				{
 					continue;
@@ -262,21 +247,10 @@ namespace
 		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
 		{
 			FRouteStep& Step = Plan.Steps[Index];
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
-			if (Edge == nullptr)
-			{
-				continue;
-			}
-
 			TArray<FVector2D> Points;
-			if (!EdgePoints(Network, *Edge, Points))
+			if (!Network.SampleGuideline(Step.Edge, Points, Step.bReversed))
 			{
 				continue;
-			}
-
-			if (Step.bReversed)
-			{
-				Algo::Reverse(Points);
 			}
 
 			for (int32 At = 1; At < Points.Num(); ++At)

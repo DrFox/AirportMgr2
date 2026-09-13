@@ -40,8 +40,10 @@ namespace
 
 		double Best = Reach;
 		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-		for (const FGuidelineEdge& Edge : Edges)
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
 		{
+			const FGuidelineEdge& Edge = Edges[Index];
+
 			// The same eligibility the search below applies, and for the same reasons: a lane
 			// side that measured against a target the search would refuse would be selected on
 			// a distance it can never actually have.
@@ -52,15 +54,11 @@ namespace
 				continue;
 			}
 
-			const FGuidelineNode* EndA = Network.GetGuidelineNode(Edge.A);
-			const FGuidelineNode* EndB = Network.GetGuidelineNode(Edge.B);
-			if (EndA == nullptr || EndB == nullptr)
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Network.GuidelineEdgeIdAt(Index), Points))
 			{
 				continue;
 			}
-
-			TArray<FVector2D> Points;
-			GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
 
 			int32 SideSpan = 0, RoadSpan = 0;
 			double SideFraction = 0.0, RoadFraction = 0.0;

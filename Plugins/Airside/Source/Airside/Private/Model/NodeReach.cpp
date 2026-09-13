@@ -7,20 +7,13 @@
 namespace
 {
 	/**
-	 * The edge as a polyline walked AWAY from Node. A Bezier reversed is the same curve, so
-	 * swapping the ends is all the reversal takes.
+	 * The edge as a polyline walked AWAY from Node, through URoadNetwork::SampleGuideline's
+	 * bFromB - see its own comment for why swapping the ends is all a Bezier reversal takes.
 	 */
-	bool SampleOutward(const URoadNetwork& Network, FGuidelineNodeId Node, const FGuidelineEdge& Edge,
-		TArray<FVector2D>& OutPoints)
+	bool SampleOutward(const URoadNetwork& Network, FGuidelineNodeId Node, FGuidelineEdgeId EdgeId,
+		const FGuidelineEdge& Edge, TArray<FVector2D>& OutPoints)
 	{
-		const FGuidelineNode* Near = Network.GetGuidelineNode(Node);
-		const FGuidelineNode* Far = Network.GetGuidelineNode(Edge.A == Node ? Edge.B : Edge.A);
-		if (Near == nullptr || Far == nullptr)
-		{
-			return false;
-		}
-		GuidelineGeom::Sample(Near->Position, Edge.Control, Far->Position, OutPoints);
-		return OutPoints.Num() >= 2;
+		return Network.SampleGuideline(EdgeId, OutPoints, Edge.B == Node) && OutPoints.Num() >= 2;
 	}
 }
 
@@ -37,7 +30,7 @@ double NodeReach::Compute(const URoadNetwork& Network, FGuidelineNodeId Node,
 		return Floor;
 	}
 	TArray<FVector2D> OwnLine;
-	if (!SampleOutward(Network, Node, *Own, OwnLine))
+	if (!SampleOutward(Network, Node, Edge, *Own, OwnLine))
 	{
 		return Floor;
 	}
@@ -60,7 +53,7 @@ double NodeReach::Compute(const URoadNetwork& Network, FGuidelineNodeId Node,
 	{
 		const FGuidelineEdge* Other = OtherId == Edge ? nullptr : Network.GetGuidelineEdge(OtherId);
 		TArray<FVector2D> OtherLine;
-		if (Other == nullptr || !SampleOutward(Network, Node, *Other, OtherLine))
+		if (Other == nullptr || !SampleOutward(Network, Node, OtherId, *Other, OtherLine))
 		{
 			continue;
 		}

@@ -926,6 +926,30 @@ FGuidelineNode* URoadNetwork::GetGuidelineNodeMutable(FGuidelineNodeId Node)
 	return RoadSlot::Get<FGuidelineNodeId>(GuidelineNodes, Node);
 }
 
+bool URoadNetwork::SampleGuideline(FGuidelineEdgeId Edge, TArray<FVector2D>& Out, bool bFromB) const
+{
+	const FGuidelineEdge* Found = GetGuidelineEdge(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	const FGuidelineNode* A = GetGuidelineNode(Found->A);
+	const FGuidelineNode* B = GetGuidelineNode(Found->B);
+	if (A == nullptr || B == nullptr)
+	{
+		return false;
+	}
+	if (bFromB)
+	{
+		GuidelineGeom::Sample(B->Position, Found->Control, A->Position, Out);
+	}
+	else
+	{
+		GuidelineGeom::Sample(A->Position, Found->Control, B->Position, Out);
+	}
+	return true;
+}
+
 bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bSet)
 {
 	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);

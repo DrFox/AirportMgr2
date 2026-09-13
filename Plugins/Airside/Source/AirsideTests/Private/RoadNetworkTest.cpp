@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 
@@ -201,6 +202,75 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("GuidelineEdgeIdAt(dead) unset"), IdAtNet->GuidelineEdgeIdAt(DeadEdgeIndex).IsSet());
 		TestFalse(TEXT("ApronIdAt(dead) unset"), IdAtNet->ApronIdAt(DeadApronIndex).IsSet());
 	}
+
+	return true;
+}
+
+/**
+ * THE ONE graph-edge call of GuidelineGeom::Sample, introduced by issue #105 item 5 to
+ * replace nine near-identical bodies in RouteSearch/NodeReach/GuidelineOverlay/AnchorLink/
+ * ServiceLoopBuild that each fetched A/B themselves. Fails if SampleGuideline ever stops
+ * resolving the edge, or if bFromB stops being the "walked from B" curve.
+ */
+// "Airside.Model.Network.SampleGuideline", not a child of the "Network" test above: that
+// leaf/parent collision is exactly what RouteSearchTest.cpp's own comment warns about - UE's
+// automation report tree cannot have "Network" be both a leaf and a parent, and the leaf
+// silently stops running the moment a child is registered under it.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNetworkSampleGuidelineTest,
+	"Airside.Model.Guideline.SampleGuideline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNetworkSampleGuidelineTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+
+	FGuidelineEdge Edge;
+	Edge.A = A;
+	Edge.B = B;
+	Edge.Control = FVector2D(500.0, 400.0);
+	Edge.AllowedTraffic = FTrafficMask::All();
+	Edge.Direction = EGuidelineDir::Bidirectional;
+	const FGuidelineEdgeId EdgeId = Net->AddGuidelineEdge(MoveTemp(Edge));
+	TestTrue(TEXT("edge added"), EdgeId.IsSet());
+
+	TArray<FVector2D> Forward;
+	TestTrue(TEXT("samples A-to-B"), Net->SampleGuideline(EdgeId, Forward));
+	TestTrue(TEXT("more than the two endpoints"), Forward.Num() > 2);
+	TestTrue(TEXT("starts at A"), Forward[0].Equals(FVector2D(0.0, 0.0), 1e-6));
+	TestTrue(TEXT("ends at B"), Forward.Last().Equals(FVector2D(1000.0, 0.0), 1e-6));
+
+	// bFromB swaps the ends handed to GuidelineGeom::Sample rather than sampling then
+	// reversing - see SampleGuideline's own comment for the algebra. Both give the SAME
+	// polyline, point for point, walked from the other end.
+	TArray<FVector2D> Backward;
+	TestTrue(TEXT("samples B-to-A"), Net->SampleGuideline(EdgeId, Backward, /*bFromB=*/true));
+	TestEqual(TEXT("same number of points either direction"), Backward.Num(), Forward.Num());
+	TestTrue(TEXT("starts at B"), Backward[0].Equals(FVector2D(1000.0, 0.0), 1e-6));
+	TestTrue(TEXT("ends at A"), Backward.Last().Equals(FVector2D(0.0, 0.0), 1e-6));
+	for (int32 Index = 0; Index < Forward.Num(); ++Index)
+	{
+		TestTrue(*FString::Printf(TEXT("point %d matches reversed"), Index),
+			Forward[Index].Equals(Backward[Backward.Num() - 1 - Index], 1e-6));
+	}
+
+	// APPENDS, not clears - a route is built by sampling each edge into one running array
+	// (RouteSearch's own comment), so a caller handing it a non-empty array must keep what
+	// was already there.
+	TArray<FVector2D> Appended;
+	Appended.Add(FVector2D(-1.0, -1.0));
+	TestTrue(TEXT("appends onto a non-empty array"), Net->SampleGuideline(EdgeId, Appended));
+	TestTrue(TEXT("the pre-existing point survives"), Appended[0].Equals(FVector2D(-1.0, -1.0), 1e-6));
+
+	TArray<FVector2D> Missing;
+	TestFalse(TEXT("an unset edge id refuses"), Net->SampleGuideline(FGuidelineEdgeId(), Missing));
+
+	Net->RemoveGuidelineEdge(EdgeId);
+	TArray<FVector2D> Removed;
+	TestFalse(TEXT("a removed edge id refuses"), Net->SampleGuideline(EdgeId, Removed));
 
 	return true;
 }

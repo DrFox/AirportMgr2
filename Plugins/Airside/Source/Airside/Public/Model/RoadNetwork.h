@@ -317,6 +317,21 @@ public:
 	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
 
 	/**
+	 * THE one graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach,
+	 * GuidelineOverlay, AnchorLink and ServiceLoopBuild each used to fetch A/B themselves and
+	 * call it directly - nine near-identical four-line bodies for "look up both ends, sample
+	 * the curve between them."
+	 *
+	 * bFromB walks the curve from B to A instead of A to B by swapping the endpoints handed
+	 * to GuidelineGeom::Sample, not by sampling then reversing the array: a quadratic Bezier
+	 * evaluated backwards is the same curve (Sample(B,C,A) at t equals Sample(A,C,B) at 1-t),
+	 * so swapping the ends is all the reversal a caller walking TOWARD A needs.
+	 *
+	 * False, Out left whatever it was, if Edge does not resolve or either end is dead.
+	 */
+	bool SampleGuideline(FGuidelineEdgeId Edge, TArray<FVector2D>& Out, bool bFromB = false) const;
+
+	/**
 	 * Mutable access to a guideline node.
 	 *
 	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldingPositionFor and
