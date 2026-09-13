@@ -476,14 +476,9 @@ bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
 		return false;
 	}
 
-	FTrafficClaim Claim;
-	Claim.AgentId = HolderId;
-	Claim.Resource = FTrafficResource::OfNode(PoseNode);
-
 	// A RESERVATION, never an occupation: nothing's body is at a stand hours before it lands.
 	// ReleaseHold's use of ReleaseReservations depends on this staying false.
-	Claim.bOccupied = false;
-
+	const FTrafficClaim Claim = FTrafficClaim::Make(HolderId, FTrafficResource::OfNode(PoseNode), /*bOccupied*/ false);
 	FTrafficClaim Blocker;
 	return Occupancy.TryClaim(Claim, Blocker) == EClaimResult::Granted;
 }
@@ -627,11 +622,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// to stop, and who goes next is URunwaySequencer's question in M3.
 			for (const FRoadSegmentId Segment : Agent.RunwayHeld)
 			{
-				FTrafficClaim Claim;
-				Claim.AgentId = Id;
-				Claim.Resource = FTrafficResource::OfSurface(Segment);
-				Claim.bOccupied = true;
-				Claim.Rank = TraversalPriority(Agent.Class);
+				const FTrafficClaim Claim = FTrafficClaim::Make(Id, FTrafficResource::OfSurface(Segment),
+					/*bOccupied*/ true, TraversalPriority(Agent.Class));
 				FTrafficClaim Blocker;
 
 				// THE RESULT IS NOT ACTED ON, BUT IT IS NOT SWALLOWED EITHER. Nothing can

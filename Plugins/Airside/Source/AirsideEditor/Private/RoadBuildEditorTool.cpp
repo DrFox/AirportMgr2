@@ -203,6 +203,17 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 		Tool->OnDeactivate(MakeHoverContext());
 	}
 
+	// A mid-drag transaction outlives OnClickDrag/OnClickRelease by design (see
+	// DragTransaction's own comment) - so a palette switch or mode exit DURING a drag,
+	// which shuts this tool down without ever reaching OnClickRelease's DragEnd branch or
+	// OnTerminateDragSequence, is exactly the kind of early-return the RAII was meant to
+	// close against. Cancelled, not committed: the drag never finished.
+	if (DragTransaction.IsValid())
+	{
+		DragTransaction->Cancel();
+		DragTransaction.Reset();
+	}
+
 	UInteractiveTool::Shutdown(ShutdownType);
 }
 

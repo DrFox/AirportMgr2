@@ -225,7 +225,16 @@ bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 {
 	const URoadNetwork* Network = Actor().Network;
 	const FEntityInstanceId Doomed = Network != nullptr ? Network->EntityIdAt(EntityIndex) : FEntityInstanceId();
-	return DeleteSlot(Doomed.IsSet(), TEXT("delete stand"),
+
+	// KEYED ON KIND, the same way PlaceEntity's own label is (#103 review): the label lost
+	// this distinction when the field-by-field version collapsed into DeleteSlot, and the
+	// issue named it - a fuel depot removed under "delete stand" is the wrong word in the
+	// undo history and the log. Doomed.IsSet() means the index is still live to read.
+	const FEntityInstance* Entity = Doomed.IsSet() ? Network->GetEntity(Doomed) : nullptr;
+	const TCHAR* Label = (Entity != nullptr && Entity->PoseRole == EServiceRole::Fuel)
+		? TEXT("delete fuel depot") : TEXT("delete stand");
+
+	return DeleteSlot(Doomed.IsSet(), Label,
 		[Doomed](URoadNetwork& Net) { return Net.RemoveEntity(Doomed); });
 }
 

@@ -19,8 +19,11 @@ namespace MarkingQuads
 	 * unguarded, which is also why UV2 below is now (0,1): RoadMeshSink.h's own contract on
 	 * UV2 ("Y is reserved and always 1") was being violated by every marking quad.
 	 *
-	 * Four consecutive vertices and two triangles per call, always, so a test can walk the
-	 * buffers four vertices at a time and measure each marking on its own.
+	 * Four consecutive vertices per call, ALWAYS, so a test can walk the buffers four
+	 * vertices at a time and measure each marking on its own - but NOT two triangles per
+	 * call any more (review of #103): AppendTriangleUp drops a degenerate or sliver one,
+	 * which a marking too small or too thin to rasterise can now hit exactly like any other
+	 * geometry the builders emit.
 	 */
 	inline void AddQuad(FRoadMeshBuffers& Out, double Z,
 		const FVector2D& P0, const FVector2D& P1, const FVector2D& P2, const FVector2D& P3)
