@@ -12,6 +12,8 @@ class UOpsEvents;
 class UFuelService;
 class UFlightBoard;
 class UOfferGenerator;
+class ULedger;
+class UPricing;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 
@@ -26,9 +28,10 @@ enum class EArrivalRefusal : uint8;
  * a lifetime in play. Same split as ARoadNetworkActor (composition root) over
  * UAirsideTraffic (testable subobject), for the same reason.
  *
- * It GROWS BY FORWARDING. UFuelService is the first such subobject: this class gained a
- * pointer, three lines in Attach/Tick/OnAgentPhase, and no logic at all. Flight board, job
- * board and ledger arrive the same way in later milestones - logic lands in them, not here.
+ * It GROWS BY FORWARDING. UFuelService was the first such subobject: this class gained a
+ * pointer, three lines in Attach/Tick/OnAgentPhase, and no logic at all. The flight board, the
+ * ledger and the pricing arrived the same way and cost the same: a pointer each and a line in
+ * Attach. The job board is next, and gets no more. Logic lands in them, never here.
  */
 UCLASS()
 class AIRPORTOPS_API UOpsRuntime : public UObject
@@ -51,6 +54,13 @@ public:
 
 	/** Where offers come from. Fed the catalog's airlines by this runtime, on the clock. */
 	UOfferGenerator* GetOfferGenerator() const { return OfferGenerator; }
+
+	/** The money. See ULedger - this runtime owns it, opens it from the scenario, and hands it
+	 *  to the edit facade as the build purse. */
+	ULedger* GetLedger() const { return Ledger; }
+
+	/** What things cost and what they earn. See UPricing. */
+	UPricing* GetPricing() const { return Pricing; }
 
 	ARoadNetworkActor* GetTarget() const { return Target; }
 
@@ -105,6 +115,8 @@ private:
 	UPROPERTY() TObjectPtr<UFuelService> FuelService;
 	UPROPERTY() TObjectPtr<UFlightBoard> FlightBoard;
 	UPROPERTY() TObjectPtr<UOfferGenerator> OfferGenerator;
+	UPROPERTY() TObjectPtr<ULedger> Ledger;
+	UPROPERTY() TObjectPtr<UPricing> Pricing;
 	UPROPERTY(Transient) TObjectPtr<ARoadNetworkActor> Target;
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */

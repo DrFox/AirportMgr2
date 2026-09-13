@@ -9,9 +9,11 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
+#include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
 #include "Model/StandAllocator.h"
 #include "Model/OpsEvents.h"
+#include "Model/Pricing.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
@@ -31,6 +33,11 @@ UOpsRuntime::UOpsRuntime()
 	FlightBoard->Allocator = CreateDefaultSubobject<UStandAllocator>(TEXT("StandAllocator"));
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
+
+	// The money, and the same forwarding shape: this class gains two pointers and a line in
+	// Attach, and every decision about what things cost lives in UPricing, not here.
+	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
+	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
 }
 
 TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
@@ -111,8 +118,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
 
-	// Content is resolved ONCE, here, and applied to the clock. Balance goes to the ledger
-	// when it exists (M3); until then the scenario's day length is the only field consumed.
+	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
 	{
 		Catalog->LoadFromAssetManager();
@@ -131,10 +137,17 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// The designer figures set from the same asset in the same breath, so none of them
 		// is the one somebody forgot to copy.
 		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
+
+		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
+		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD
+		// overwrites it moments later from the saved entries, which is why Open is safe here:
+		// it is the new-game path, and OpsSave::Restore is the other one.
+		Ledger->Open(Scenario->StartingBalance);
+
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell"),
+			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
 			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
-			Scenario->FuelDwellSeconds);
+			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
 	// TruckAirframe resolved HERE, once, not by FuelService at every dispatch (#104): this is
@@ -311,6 +324,8 @@ TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
 	Out.Add(Clock);
 	Out.Add(FuelService);
 	Out.Add(FlightBoard);
+	Out.Add(Ledger);
+	Out.Add(Pricing);
 	return Out;
 }
 
