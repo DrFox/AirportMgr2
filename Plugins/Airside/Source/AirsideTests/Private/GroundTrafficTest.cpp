@@ -29,6 +29,12 @@ namespace
 		return RouteSearch::Find(Net, Q);
 	}
 
+	/** The two named nodes a rebuilt A-B-C(-D) test graph keeps handles to. */
+	struct FRebuiltGraph
+	{
+		FGuidelineNodeId A;
+		FGuidelineNodeId C;
+	};
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1419,7 +1425,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	//   1. same geometry -> the agent's step handles are re-pointed and it never notices;
 	//   2. the edge ahead is gone but a bypass exists -> replanned over the bypass;
 	//   3. the edge ahead is gone and nothing replaces it -> stops at the last live node.
-	auto Build = [](URoadNetwork& Net, bool bKeepBC, bool bBypass, FGuidelineNodeId* OutA, FGuidelineNodeId* OutC)
+	auto Build = [](URoadNetwork& Net, bool bKeepBC, bool bBypass)
 	{
 		// Sweep everything (a rebuild removes derived edges, then idle derived nodes).
 		TArray<FGuidelineEdgeId> Edges;
@@ -1432,7 +1438,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		TestGraph::Join(Net, A, B);
 		if (bKeepBC) { TestGraph::Join(Net, B, C); }
 		if (bBypass) { const FGuidelineNodeId D = Net.AddGuidelineNode(FVector2D(30000.0, 8000.0)); TestGraph::Join(Net, B, D); TestGraph::Join(Net, D, C); }
-		if (OutA) { *OutA = A; } if (OutC) { *OutC = C; }
+		return FRebuiltGraph{ A, C };
 	};
 
 	auto Dispatch = [&](URoadNetwork& Net, UGroundTraffic& Traffic, FGuidelineNodeId A, FGuidelineNodeId C)
@@ -1445,7 +1451,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	// Case 1: same geometry.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		const auto [A, C] = Build(*Net, true, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Van = Dispatch(*Net, *Traffic, A, C);
 		const FVector2D Before = Traffic->FindAgent(Van)->LastMotion.Position;
@@ -1461,7 +1467,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		const int32 EndVertexWas = Was.Steps[1].EndVertex;
 		const double EndDistanceWas = Was.Steps[1].EndDistance;
 
-		Build(*Net, true, false, nullptr, nullptr);
+		Build(*Net, true, false);
 		TestNull(TEXT("the old handle is dead after the rebuild"), Net->GetGuidelineEdge(OldEdge));
 		Traffic->OnGraphRebuilt(*Net);
 
@@ -1494,10 +1500,10 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	// Case 2: B->C deleted, bypass added.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		const auto [A, C] = Build(*Net, true, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Van = Dispatch(*Net, *Traffic, A, C);
-		Build(*Net, false, true, nullptr, nullptr);
+		Build(*Net, false, true);
 		Traffic->OnGraphRebuilt(*Net);
 		double MaxY = 0.0;
 		TickUntil(*Traffic, *Net, 150.0, [&](int32) { MaxY = FMath::Max(MaxY, Traffic->FindAgent(Van)->LastMotion.Position.Y); return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
@@ -1507,10 +1513,10 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	// Case 3: B->C deleted, nothing replaces it.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		const auto [A, C] = Build(*Net, true, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Van = Dispatch(*Net, *Traffic, A, C);
-		Build(*Net, false, false, nullptr, nullptr);
+		Build(*Net, false, false);
 		Traffic->OnGraphRebuilt(*Net);
 		TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Van)->Phase != EAgentPhase::Parked; });
 		TestEqual(TEXT("stops at the last live node"), Traffic->FindAgent(Van)->Phase, EAgentPhase::Parked);
@@ -1579,7 +1585,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 	// So the agent stops where it is and the player retires it, which is what Stranded means.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		FGuidelineNodeId A, C; Build(*Net, true, false, &A, &C);
+		const auto [A, C] = Build(*Net, true, false);
 		UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Van = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle),
 			TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
@@ -1595,7 +1601,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 		if (!TestTrue(FString::Printf(TEXT("the van is ON step 1, past B (%.0f uu)"), Travelled),
 			Travelled > 20000.0 && Travelled < 37000.0)) { return false; }
 
-		Build(*Net, false, true, nullptr, nullptr);      // B->C gone, B->D->C in its place
+		Build(*Net, false, true);      // B->C gone, B->D->C in its place
 		Traffic->OnGraphRebuilt(*Net);
 
 		const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();

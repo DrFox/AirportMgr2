@@ -83,28 +83,36 @@ namespace
 	 * which is the polyline the aircraft drives: a straight stub into the node shows there
 	 * as one chord turning by the whole exit angle.
 	 */
-	void ExitArcMeasure(const FGuidelineEdge& Turn, FGuidelineNodeId From, const URoadNetwork& Net,
-		const FVector2D& FromDir, const FVector2D& ToDir,
-		double& OutStartError, double& OutEndError, double& OutWorstVertex)
+	/** StartError/EndError/Worst from ExitArcMeasure - see that function's own comment. */
+	struct FArcFit
+	{
+		double StartError = 0.0;
+		double EndError = 0.0;
+		double Worst = 0.0;
+	};
+
+	FArcFit ExitArcMeasure(const FGuidelineEdge& Turn, FGuidelineNodeId From, const URoadNetwork& Net,
+		const FVector2D& FromDir, const FVector2D& ToDir)
 	{
 		const FVector2D PA = Net.GetGuidelineNode(Turn.A)->Position;
 		const FVector2D PB = Net.GetGuidelineNode(Turn.B)->Position;
 		const FVector2D Start = (Turn.A == From) ? PA : PB;
 		const FVector2D End = (Turn.A == From) ? PB : PA;
 
+		FArcFit Fit;
 		TArray<FVector2D> Fine;
 		GuidelineGeom::Sample(Start, Turn.Control, End, Fine, 64);
-		OutStartError = ExitArcDegreesBetween(Fine[1] - Fine[0], FromDir);
-		OutEndError = ExitArcDegreesBetween(Fine.Last() - Fine[Fine.Num() - 2], ToDir);
+		Fit.StartError = ExitArcDegreesBetween(Fine[1] - Fine[0], FromDir);
+		Fit.EndError = ExitArcDegreesBetween(Fine.Last() - Fine[Fine.Num() - 2], ToDir);
 
 		TArray<FVector2D> Points;
 		GuidelineGeom::Sample(Start, Turn.Control, End, Points, 16);
-		OutWorstVertex = 0.0;
 		for (int32 Vertex = 1; Vertex + 1 < Points.Num(); ++Vertex)
 		{
-			OutWorstVertex = FMath::Max(OutWorstVertex,
+			Fit.Worst = FMath::Max(Fit.Worst,
 				ExitArcDegreesBetween(Points[Vertex] - Points[Vertex - 1], Points[Vertex + 1] - Points[Vertex]));
 		}
+		return Fit;
 	}
 
 	/** The solver's cut distance for Segment's arm at road node NodeIndex, or 0. */
@@ -206,13 +214,12 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		const FGuidelineEdge* Exit = ExitArcTurnBetween(*Net, SUp, TEnd);
 		if (TestNotNull(TEXT("an exit turn joins the upstream strip node to the taxiway end"), Exit))
 		{
-			double StartError = 0.0, EndError = 0.0, Worst = 0.0;
-			ExitArcMeasure(*Exit, SUp, *Net, East, TowardT, StartError, EndError, Worst);
+			const FArcFit Fit = ExitArcMeasure(*Exit, SUp, *Net, East, TowardT);
 			UE_LOG(LogExitArcTest, Log, TEXT("45 deg exit: leaves the runway %.2f deg off, meets the taxiway %.2f deg off, worst vertex %.2f deg"),
-				StartError, EndError, Worst);
-			TestTrue(FString::Printf(TEXT("exit leaves the centreline tangent (%.2f deg off)"), StartError), StartError < TangentTolerance);
-			TestTrue(FString::Printf(TEXT("exit meets the taxiway tangent (%.2f deg off)"), EndError), EndError < TangentTolerance);
-			TestTrue(FString::Printf(TEXT("no corner on the exit (worst vertex %.2f deg)"), Worst), Worst < VertexTolerance);
+				Fit.StartError, Fit.EndError, Fit.Worst);
+			TestTrue(FString::Printf(TEXT("exit leaves the centreline tangent (%.2f deg off)"), Fit.StartError), Fit.StartError < TangentTolerance);
+			TestTrue(FString::Printf(TEXT("exit meets the taxiway tangent (%.2f deg off)"), Fit.EndError), Fit.EndError < TangentTolerance);
+			TestTrue(FString::Printf(TEXT("no corner on the exit (worst vertex %.2f deg)"), Fit.Worst), Fit.Worst < VertexTolerance);
 		}
 	}
 
@@ -223,15 +230,14 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		const FGuidelineEdge* Entry = ExitArcTurnBetween(*Net, SDown, TEnd);
 		if (TestNotNull(TEXT("an entry turn joins the taxiway end to the downstream strip node"), Entry))
 		{
-			double StartError = 0.0, EndError = 0.0, Worst = 0.0;
-			ExitArcMeasure(*Entry, TEnd, *Net, -TowardT, East, StartError, EndError, Worst);
-			TestTrue(FString::Printf(TEXT("entry leaves the taxiway tangent (%.2f deg off)"), StartError), StartError < TangentTolerance);
-			TestTrue(FString::Printf(TEXT("entry joins the centreline tangent (%.2f deg off)"), EndError), EndError < TangentTolerance);
+			const FArcFit Fit = ExitArcMeasure(*Entry, TEnd, *Net, -TowardT, East);
+			TestTrue(FString::Printf(TEXT("entry leaves the taxiway tangent (%.2f deg off)"), Fit.StartError), Fit.StartError < TangentTolerance);
+			TestTrue(FString::Printf(TEXT("entry joins the centreline tangent (%.2f deg off)"), Fit.EndError), Fit.EndError < TangentTolerance);
 			// A 135 DEGREE HAIRPIN: this taxiway is angled for LEAVING an eastbound runway, so
 			// joining it eastbound means turning back on oneself. Tangent at both ends all the
 			// same, and spread over the arc rather than taken at one vertex - a stub would show
 			// the whole 135 at one chord. The speed profile will crawl it, as it should.
-			TestTrue(FString::Printf(TEXT("no single corner on the hairpin entry (worst vertex %.2f deg of 135)"), Worst), Worst < 25.0);
+			TestTrue(FString::Printf(TEXT("no single corner on the hairpin entry (worst vertex %.2f deg of 135)"), Fit.Worst), Fit.Worst < 25.0);
 		}
 	}
 
@@ -273,12 +279,11 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		const FGuidelineEdge* Turn = (QEnd.IsSet() && Miss < 1.0) ? ExitArcTurnBetween(*Net, SW, QEnd) : nullptr;
 		if (TestNotNull(TEXT("a turn joins the W-end strip node to the 90 degree taxiway"), Turn))
 		{
-			double StartError = 0.0, EndError = 0.0, Worst = 0.0;
-			ExitArcMeasure(*Turn, SW, *Net, -East, FVector2D(0.0, -1.0), StartError, EndError, Worst);
-			UE_LOG(LogExitArcTest, Log, TEXT("90 deg exit: %.2f / %.2f deg off, worst vertex %.2f deg"), StartError, EndError, Worst);
-			TestTrue(FString::Printf(TEXT("90 degree exit tangent both ends (%.2f, %.2f deg off)"), StartError, EndError),
-				StartError < TangentTolerance && EndError < TangentTolerance);
-			TestTrue(FString::Printf(TEXT("and cornerless (worst vertex %.2f deg)"), Worst), Worst < 2.0 * VertexTolerance);
+			const FArcFit Fit = ExitArcMeasure(*Turn, SW, *Net, -East, FVector2D(0.0, -1.0));
+			UE_LOG(LogExitArcTest, Log, TEXT("90 deg exit: %.2f / %.2f deg off, worst vertex %.2f deg"), Fit.StartError, Fit.EndError, Fit.Worst);
+			TestTrue(FString::Printf(TEXT("90 degree exit tangent both ends (%.2f, %.2f deg off)"), Fit.StartError, Fit.EndError),
+				Fit.StartError < TangentTolerance && Fit.EndError < TangentTolerance);
+			TestTrue(FString::Printf(TEXT("and cornerless (worst vertex %.2f deg)"), Fit.Worst), Fit.Worst < 2.0 * VertexTolerance);
 		}
 	}
 
@@ -311,13 +316,12 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 			const FGuidelineEdge* Turn = ExitArcTurnBetween(*Net, SE, ZEnd);
 			if (TestNotNull(TEXT("the short taxiway still gets its arc"), Turn))
 			{
-				double StartError = 0.0, EndError = 0.0, Worst = 0.0;
-				ExitArcMeasure(*Turn, SE, *Net, East, FVector2D(1.0, -1.0).GetSafeNormal(), StartError, EndError, Worst);
+				const FArcFit Fit = ExitArcMeasure(*Turn, SE, *Net, East, FVector2D(1.0, -1.0).GetSafeNormal());
 				// Twice the tolerance on the short side: the tangent lengths are uneven (6000
 				// on the runway, ~2200 on the stub) so the curvature bunches at the short end
 				// and even a 64-sample chord sits further off the tangent there.
-				TestTrue(FString::Printf(TEXT("clamped arc still tangent both ends (%.2f, %.2f deg off)"), StartError, EndError),
-					StartError < TangentTolerance && EndError < 2.0 * TangentTolerance);
+				TestTrue(FString::Printf(TEXT("clamped arc still tangent both ends (%.2f, %.2f deg off)"), Fit.StartError, Fit.EndError),
+					Fit.StartError < TangentTolerance && Fit.EndError < 2.0 * TangentTolerance);
 			}
 		}
 	}

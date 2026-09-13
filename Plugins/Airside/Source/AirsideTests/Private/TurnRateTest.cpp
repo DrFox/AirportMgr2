@@ -483,17 +483,23 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		// on a closed form, and the useful question is not how close one run gets but whether
 		// the gap SHRINKS as the step does: that is what tells discretisation apart from a
 		// model that is simply wrong, and it is a distinction this project has paid to learn.
-		auto Journey = [&Piper, &Airframe, Length](double Step, double& OutTopSpeed, double& OutFinalSpeed,
-			bool& bOutHeadingHeld, bool& bOutStartedFromRest)
+		struct FJourney
+		{
+			double Elapsed = 0.0;
+			double TopSpeed = 0.0;
+			double FinalSpeed = 0.0;
+			bool bHeadingHeld = false;
+			bool bStartedFromRest = false;
+		};
+		auto Journey = [&Piper, &Airframe, Length](double Step)
 		{
 			FRouteFollower Follower;
 			Follower.Start(TurnRatePlan({ FVector2D(0.0, 0.0), FVector2D(Length, 0.0) }), Airframe);
 
-			bOutStartedFromRest = Follower.Speed <= KINDA_SMALL_NUMBER;
-			bOutHeadingHeld = true;
-			OutTopSpeed = 0.0;
+			FJourney Result;
+			Result.bStartedFromRest = Follower.Speed <= KINDA_SMALL_NUMBER;
+			Result.bHeadingHeld = true;
 
-			double Elapsed = 0.0;
 			const int32 Budget = FMath::CeilToInt32(120.0 / Step);
 
 			for (int32 Frame = 0; Frame < Budget && !Follower.HasArrived(); ++Frame)
@@ -504,44 +510,35 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 				{
 					break;
 				}
-				Elapsed += Step;
-				OutTopSpeed = FMath::Max(OutTopSpeed, Follower.Speed);
-				bOutHeadingHeld &= TurnRateDeltaDegrees(Heading, 0.0) < 1e-9;
+				Result.Elapsed += Step;
+				Result.TopSpeed = FMath::Max(Result.TopSpeed, Follower.Speed);
+				Result.bHeadingHeld &= TurnRateDeltaDegrees(Heading, 0.0) < 1e-9;
 			}
 
-			OutFinalSpeed = Follower.Speed;
-			return Elapsed;
+			Result.FinalSpeed = Follower.Speed;
+			return Result;
 		};
 
-		double TopSpeed = 0.0;
-		double FinalSpeed = 0.0;
-		bool bHeadingHeld = false;
-		bool bFromRest = false;
-		const double Coarse = Journey(TurnRateFrame, TopSpeed, FinalSpeed, bHeadingHeld, bFromRest);
+		const FJourney Coarse = Journey(TurnRateFrame);
+		const FJourney Fine = Journey(TurnRateFrame / 8.0);
 
-		double FineTop = 0.0;
-		double FineFinal = 0.0;
-		bool bFineHeading = false;
-		bool bFineRest = false;
-		const double Fine = Journey(TurnRateFrame / 8.0, FineTop, FineFinal, bFineHeading, bFineRest);
+		TestTrue(TEXT("an aircraft starts from rest, not at taxi speed"), Coarse.bStartedFromRest);
+		TestTrue(TEXT("a straight route never yaws at all"), Coarse.bHeadingHeld);
 
-		TestTrue(TEXT("an aircraft starts from rest, not at taxi speed"), bFromRest);
-		TestTrue(TEXT("a straight route never yaws at all"), bHeadingHeld);
-
-		TestTrue(FString::Printf(TEXT("it reaches taxi speed (%.0f uu/s)"), TopSpeed),
-			TopSpeed >= Piper.Taxi.SpeedCap * 0.99);
+		TestTrue(FString::Printf(TEXT("it reaches taxi speed (%.0f uu/s)"), Coarse.TopSpeed),
+			Coarse.TopSpeed >= Piper.Taxi.SpeedCap * 0.99);
 
 		TestTrue(FString::Printf(
-			TEXT("and stops on arrival rather than at %.0f uu/s"), FinalSpeed),
-			FinalSpeed <= Piper.MinTaxiSpeed);
+			TEXT("and stops on arrival rather than at %.0f uu/s"), Coarse.FinalSpeed),
+			Coarse.FinalSpeed <= Piper.MinTaxiSpeed);
 
-		const double CoarseGap = FMath::Abs(Coarse - Expected);
-		const double FineGap = FMath::Abs(Fine - Expected);
+		const double CoarseGap = FMath::Abs(Coarse.Elapsed - Expected);
+		const double FineGap = FMath::Abs(Fine.Elapsed - Expected);
 
 		TestTrue(FString::Printf(
 			TEXT("an eighth of the timestep lands closer to the %.2f s the phases add up to "
 				 "(%.2f s -> %.2f s, gap %.3f -> %.3f)"),
-			Expected, Coarse, Fine, CoarseGap, FineGap),
+			Expected, Coarse.Elapsed, Fine.Elapsed, CoarseGap, FineGap),
 			FineGap < CoarseGap * 0.5);
 
 		// Close enough to pin it to THIS answer rather than one nearby, but not asked to be
