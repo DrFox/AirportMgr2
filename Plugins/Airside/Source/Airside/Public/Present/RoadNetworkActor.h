@@ -196,6 +196,15 @@ public:
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
 
 	/**
+	 * Every graph mutator, query and undo step - see URoadEditFacade.
+	 *
+	 * READ ACCESS TO THE SUBOBJECT, not a forwarder per method, for exactly the reason
+	 * GetPresenter above gives. The ops runtime reaches through it at attach to hand the facade
+	 * its build purse, and the purse tests reach through it to substitute a recorder.
+	 */
+	URoadEditFacade* GetEditFacade() const { return Facade; }
+
+	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
 	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
 	 * compression - see USimClock's class comment for why the two are different numbers.

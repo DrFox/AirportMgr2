@@ -18,6 +18,36 @@ void URoadEditHistory::BeginEdit(const URoadNetwork& Network, const FString& Lab
 	PendingLabel = Label;
 }
 
+void URoadEditHistory::SetPendingCharge(int32 ChargeId, const FBuildQuote& Quote)
+{
+	// Only meaningful between BeginEdit and CommitEdit; silently ignored otherwise, which is
+	// the editor-world case where undo belongs to the transaction system and nothing was paid.
+	if (PendingSnapshot != nullptr)
+	{
+		PendingCharge = ChargeId;
+		PendingQuote = Quote;
+	}
+}
+
+const FBuildQuote& URoadEditHistory::PeekRedoQuote() const
+{
+	static const FBuildQuote Free;
+	return RedoStack.Num() > 0 ? RedoStack.Last().Quote : Free;
+}
+
+void URoadEditHistory::SetUndoTopCharge(int32 ChargeId)
+{
+	if (UndoStack.Num() > 0)
+	{
+		UndoStack.Last().ChargeId = ChargeId;
+	}
+}
+
+int32 URoadEditHistory::PeekUndoChargeId() const
+{
+	return UndoStack.Num() > 0 ? UndoStack.Last().ChargeId : INDEX_NONE;
+}
+
 void URoadEditHistory::CommitEdit()
 {
 	if (PendingSnapshot == nullptr)
@@ -32,10 +62,13 @@ void URoadEditHistory::CommitEdit()
 	FRoadEditSnapshot Entry;
 	Entry.Network = PendingSnapshot;
 	Entry.Label = PendingLabel;
+	Entry.ChargeId = PendingCharge;
+	Entry.Quote = PendingQuote;
 	UndoStack.Add(Entry);
 
 	PendingSnapshot = nullptr;
 	PendingLabel.Reset();
+	PendingCharge = INDEX_NONE;
 
 	// Dropped from the bottom: the oldest states are the ones nobody is coming back to.
 	const int32 Cap = FMath::Max(MaxDepth, 1);
@@ -51,6 +84,12 @@ void URoadEditHistory::AbandonEdit()
 	// whole point: a refused edit must not become an undo step that does nothing.
 	PendingSnapshot = nullptr;
 	PendingLabel.Reset();
+
+	// The charge goes with it. A refused edit was never charged - CanAfford runs before the
+	// mutation, not after - so a pending id surviving here could only attach itself to the
+	// NEXT edit and let an undo reverse a charge that edit never made.
+	PendingCharge = INDEX_NONE;
+	PendingQuote = FBuildQuote();
 }
 
 URoadNetwork* URoadEditHistory::Undo(const URoadNetwork& Current)
@@ -67,6 +106,10 @@ URoadNetwork* URoadEditHistory::Undo(const URoadNetwork& Current)
 	FRoadEditSnapshot Forward;
 	Forward.Network = DuplicateObject<URoadNetwork>(&Current, this);
 	Forward.Label = Entry.Label;
+	// The money travels with the step. Redoing this edit charges for it again - see
+	// FRoadEditSnapshot::Quote for why leaving it behind would be a money printer.
+	Forward.ChargeId = Entry.ChargeId;
+	Forward.Quote = Entry.Quote;
 	RedoStack.Add(Forward);
 
 	// Handed over outright. This history no longer references it, so nothing later
@@ -86,6 +129,9 @@ URoadNetwork* URoadEditHistory::Redo(const URoadNetwork& Current)
 	FRoadEditSnapshot Backward;
 	Backward.Network = DuplicateObject<URoadNetwork>(&Current, this);
 	Backward.Label = Entry.Label;
+	// ChargeId is left alone here and written by URoadEditFacade::Redo once it has actually
+	// charged: the id on Entry names a ledger entry that has already been reversed.
+	Backward.Quote = Entry.Quote;
 	UndoStack.Add(Backward);
 
 	return Entry.Network;

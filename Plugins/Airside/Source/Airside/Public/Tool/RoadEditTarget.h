@@ -12,6 +12,7 @@
 #include "Tool/RoadSnap.h"
 
 class URoadNetwork;
+class IBuildPurse;
 class URoadProfile;
 class UGroundTraffic;
 class UEntityDefinition;
@@ -48,6 +49,16 @@ public:
 	 * mutation instead goes through a named method below that the facade can make undoable.
 	 */
 	virtual const URoadNetwork* GetNetwork() const = 0;
+
+	/**
+	 * Where the money for a build comes from, or null when building is free.
+	 *
+	 * ON THE TARGET so a TOOL can reach it through FToolContext::Target, the way it reaches
+	 * everything else - the ghost needs to price what it is about to build and grey itself out
+	 * when the player cannot pay. Default null rather than pure virtual: every existing
+	 * implementer builds for nothing and should keep compiling.
+	 */
+	virtual IBuildPurse* GetPurse() const { return nullptr; }
 
 	/**
 	 * The agents, read-only, for a tool that asks about them (Select). Model/, so Tool/ may

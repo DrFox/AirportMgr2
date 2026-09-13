@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Build/BuildQuote.h"
 #include "UObject/Object.h"
 #include "RoadEditHistory.generated.h"
 
@@ -16,6 +17,30 @@ struct FRoadEditSnapshot
 
 	/** Shown to the player: "Undo split segment". */
 	UPROPERTY() FString Label;
+
+	/**
+	 * The ledger entry the edit this snapshot precedes paid for, or INDEX_NONE.
+	 *
+	 * ON THE SNAPSHOT, because the snapshot IS the edit as far as undo is concerned: stepping
+	 * past it reverses that edit, so the charge to reverse has to travel with it. Reversing by
+	 * ID rather than re-pricing the geometry is what puts back exactly what was taken - see
+	 * IBuildPurse::Reverse.
+	 *
+	 * NOT a UPROPERTY and not saved, like the history itself: an undo stack is a session's, and
+	 * a charge id restored against a ledger that had moved on would reverse somebody else's
+	 * entry.
+	 */
+	int32 ChargeId = INDEX_NONE;
+
+	/**
+	 * What that edit was worth, so a REDO can charge for it again.
+	 *
+	 * WITHOUT THIS, UNDO IS A MONEY PRINTER. Undo refunds what the build took; if redo then
+	 * re-applied the edit for nothing, the player would end up holding both the taxiway and
+	 * its refund, and could repeat it. Re-charging on redo is what closes that, and the quote
+	 * has to travel with the snapshot because Travel has no idea what edit it is replaying.
+	 */
+	FBuildQuote Quote;
 };
 
 /**
@@ -76,6 +101,35 @@ public:
 	/** The edit refused: discard the pending snapshot, leaving the stacks untouched. */
 	void AbandonEdit();
 
+	/**
+	 * Record what the edit in progress paid, so undoing past it can put the money back.
+	 *
+	 * ON THE PENDING SNAPSHOT and therefore only between BeginEdit and CommitEdit. A no-op when
+	 * nothing is being edited, which is the editor-world case: there HistoryForEdit is null,
+	 * the transaction system owns undo, and nothing was charged anyway.
+	 */
+	void SetPendingCharge(int32 ChargeId, const FBuildQuote& Quote);
+
+	/**
+	 * The charge id of the edit Undo would step past, or INDEX_NONE.
+	 *
+	 * READ BEFORE TRAVELLING, never after: Undo moves that snapshot onto the redo stack, so by
+	 * the time it returns the entry this names is no longer on top.
+	 */
+	int32 PeekUndoChargeId() const;
+
+	/** What redoing the next step would cost again, or a free quote if there is nothing to redo. */
+	const FBuildQuote& PeekRedoQuote() const;
+
+	/**
+	 * Record the charge a REDO just made, onto the step it re-applied.
+	 *
+	 * The redone edit is on top of the undo stack by the time this is called, and it carries a
+	 * NEW ledger id - the old one names an entry that has already been reversed, and reversing
+	 * it a second time is refused by the ledger on purpose.
+	 */
+	void SetUndoTopCharge(int32 ChargeId);
+
 	bool IsEditing() const { return PendingSnapshot != nullptr; }
 
 	// --- Travel -----------------------------------------------------------------------
@@ -114,6 +168,10 @@ private:
 	UPROPERTY() TObjectPtr<URoadNetwork> PendingSnapshot = nullptr;
 
 	UPROPERTY() FString PendingLabel;
+
+	/** What the edit in progress paid, and for what. Both move onto the snapshot at CommitEdit. */
+	int32 PendingCharge = INDEX_NONE;
+	FBuildQuote PendingQuote;
 
 	// One array of pairs, never two parallel arrays keyed by index. An index-parallel
 	// invariant with nothing enforcing it is what put an out-of-bounds read into the

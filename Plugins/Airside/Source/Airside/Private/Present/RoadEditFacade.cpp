@@ -6,6 +6,10 @@
 
 #include "Present/RoadEditFacade.h"
 
+#include "Build/BuildCost.h"
+#include "Content/AirsideSettings.h"
+#include "Tool/BuildPurse.h"
+
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
@@ -158,6 +162,65 @@ void URoadEditFacade::NotifyChanged()
 	OnChanged.Broadcast();
 }
 
+bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
+{
+	// NO PURSE MEANS FREE, and that is the design-time answer: URoadBuildEdMode has no runtime
+	// and no money, and a default that refused would make the editor mode unable to build.
+	return Purse == nullptr || Quote.IsFree() || Purse->CanAfford(Quote);
+}
+
+FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr || !Network->GetSegments().IsValidIndex(SegmentIndex))
+	{
+		return FBuildQuote();
+	}
+	const FRoadSegment& Segment = Network->GetSegments()[SegmentIndex];
+	const URoadProfile* Profile = Network->ProfileFor(Segment);
+	if (Profile == nullptr)
+	{
+		return FBuildQuote();
+	}
+	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment));
+}
+
+FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
+{
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	return BuildCost::ForApron(Outline,
+		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0);
+}
+
+void URoadEditFacade::CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote)
+{
+	if (Purse != nullptr && !Quote.IsFree())
+	{
+		const int32 ChargeId = Purse->Charge(Quote);
+		if (URoadEditHistory* History = HistoryForEdit())
+		{
+			// ONTO THE PENDING SNAPSHOT, before the scope's destructor pushes it: the snapshot
+			// IS the edit as far as undo is concerned, so the charge to reverse has to travel
+			// with it. In an editor world HistoryForEdit is null and the id is simply dropped,
+			// which is correct there - the transaction system owns undo and nothing was paid.
+			History->SetPendingCharge(ChargeId, Quote);
+		}
+	}
+	CommitAndNotify(Edit);
+}
+
+void URoadEditFacade::CommitDisposal(FRoadEditScope& Edit, const FBuildQuote& Quote)
+{
+	if (Purse != nullptr && !Quote.IsFree())
+	{
+		// CREDIT, not Reverse: tearing something out is a NEW transaction valuing the geometry
+		// at today's price, not the undoing of the one that built it. See IBuildPurse::Credit -
+		// that asymmetry is what keeps a BuiltFor field out of FRoadSegment.
+		Purse->Credit(Quote);
+	}
+	CommitAndNotify(Edit);
+}
+
 void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit)
 {
 	Edit.Commit();
@@ -253,6 +316,20 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 		return false;
 	}
 
+	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not
+	// committed discards its undo snapshot but does NOT roll the network back, so a refusal
+	// after AddStraightSegment would leave the taxiway built and unpaid for - see
+	// CommitPurchase's own comment.
+	const FBuildQuote Quote = BuildCost::ForSegment(*Chosen,
+		FVector2D::Distance(Owner.Network->GetNodes()[From.Index].Position,
+			Owner.Network->GetNodes()[To.Index].Position));
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("ConnectNodes refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return false;
+	}
+
 	// Created after the guards above, all of which refuse without mutating anything, so a
 	// rejected connection never costs a snapshot.
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network,
@@ -269,7 +346,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	}
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d"), Segment.Index, FromIndex, ToIndex);
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 	return true;
 }
 
@@ -303,6 +380,16 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 	// After the guards, all of which refuse without mutating, so a rejected runway never
 	// costs a snapshot - the same rule ConnectNodes follows.
+	// Priced from the two ENDS the caller asked for, before anything is mutated - see
+	// ConnectNodes above for why the refusal cannot wait until commit.
+	const FBuildQuote Quote = BuildCost::ForSegment(*RunwayProfile, FVector2D::Distance(From, To));
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return false;
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("place runway"));
 
 	const FRoadNodeId A = Owner.Network->AddNode(From);
@@ -325,7 +412,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// runway the player never placed.
 	Owner.Network->SetRunwayFacts(Segment, Facts);
 
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
 		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
@@ -719,6 +806,24 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
+	// EVERY SEGMENT THIS TAKES WITH IT, summed before the removal. Deleting a node destroys
+	// the roads meeting it - SegmentsIncidentTo is what the deletion plan already shows the
+	// player - so crediting only the node would pay back nothing for the pavement that
+	// actually disappears.
+	FBuildQuote Quote;
+	for (const int32 Incident : SegmentsIncidentTo(NodeIndex))
+	{
+		const FBuildQuote Each = QuoteForSegment(Incident);
+		Quote.BaseAmount += Each.BaseAmount;
+		if (!Quote.Source.IsValid())
+		{
+			// The first profile met stands for the lot. A junction of two widths is priced on
+			// one of them for discount purposes only - the AMOUNT is the true sum either way.
+			Quote.Source = Each.Source;
+			Quote.What = Each.What;
+		}
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
@@ -745,7 +850,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		Owner.Network->RemoveNode(Litter);
 	}
 
-	CommitAndNotify(Edit);
+	CommitDisposal(Edit, Quote);
 	return true;
 }
 
@@ -765,6 +870,10 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 	const FRoadSegment* Doomed = Owner.Network->GetSegment(Segment);
 	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
 	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
+
+	// QUOTED BEFORE THE REMOVAL, because afterwards the segment is not there to measure. Its
+	// value TODAY rather than what was paid for it - see IBuildPurse::Credit.
+	const FBuildQuote Quote = QuoteForSegment(SegmentIndex);
 
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete segment"));
 
@@ -788,7 +897,7 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 		}
 	}
 
-	CommitAndNotify(Edit);
+	CommitDisposal(Edit, Quote);
 	return true;
 }
 
