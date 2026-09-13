@@ -327,15 +327,45 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		bStandsMayHaveFreed = true;
 	}
 
+	// CAPTURED BEFORE StartTaxi, which always primes a cold start of its own
+	// (bEngineRunning=true, EngineRPM=0.0) - so these are whether the engine was running and
+	// what RPM it actually had a moment ago, not the post-StartTaxi state that call is about
+	// to overwrite both with.
+	const bool bWasRunning = Agent.bEngineRunning;
+	const double PriorRPM = Agent.EngineRPM;
+
 	Agent.StartTaxi(Plan, Own);
 
-	// AND THE ENGINE IS ALREADY TURNING. StartTaxi starts from cold, which is right for a
-	// plain dispatch and wrong for everything that reaches here: an aeroplane redirected has
-	// either been taxiing already, or has spent a turnaround on a stand where its engines
-	// were started long before it rolled. Left cold, the propeller was still winding up while
-	// the aircraft taxied out at full speed - reported from play as the prop never having
-	// time to spin up on departure.
-	Agent.StartEngineAtSpeed();
+	if (bWasRunning)
+	{
+		// AND THE ENGINE IS ALREADY TURNING. StartTaxi starts from cold, which is right for a
+		// plain dispatch and wrong for an aeroplane that was already taxiing, or has spent a
+		// turnaround on a stand where its engines were started long before it rolled and
+		// never stopped. Left cold, the propeller was still winding up while the aircraft
+		// taxied out at full speed - reported from play as the prop never having time to spin
+		// up on departure.
+		Agent.StartEngineAtSpeed();
+	}
+	else
+	{
+		// THE ENGINE WAS NOT RUNNING (#107 item 2) - DepartAgent on a parked aircraft that ran
+		// out its post-arrival shutdown pause, or ReofferStands on one that is stranded and
+		// parked with its own shutdown countdown running. StartEngineAtSpeed's own header says
+		// what it is FOR - "as it is for an aeroplane that has spent a turnaround ... before it
+		// taxied out" - which presumes the engine was already running; calling it
+		// unconditionally snapped a stopped propeller straight to full power in one frame,
+		// with no spool-up at all.
+		//
+		// PriorRPM RESTORED, NOT LEFT AT ZERO: bEngineRunning false does not mean the
+		// propeller has actually stopped turning - AdvanceEngine spools it DOWN over
+		// SpoolDownSeconds, so a redirect that lands mid-decay (the ReofferStands case above)
+		// still has real RPM on it. StartTaxi's own cold start just wrote EngineRPM=0.0 over
+		// that, which would have snapped a spooling-down propeller to a dead stop and then
+		// spooled it back UP from zero - the same one-frame snap this fix exists to remove,
+		// only downward first. Restoring it here means AdvanceEngine picks up the ramp exactly
+		// where it actually was, whichever direction it was headed.
+		Agent.EngineRPM = PriorRPM;
+	}
 
 	// Class is NOT re-derived: a van redirected is still a van. StartTaxi rewrites the
 	// follower and the airframe and nothing else, so the identity fields survive it; only
@@ -346,6 +376,18 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 	{
 		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
 	}
+
+	// POSED NOW, NOT LEFT FOR THE NEXT TICK (#107 item 3) - the same reason DispatchAgent runs
+	// a zero-second Advance before Admit. UGroundTraffic::Advance early-returns on a paused
+	// frame (DeltaSeconds <= 0), so nothing would otherwise call FRoadAgent::Advance for the
+	// rest of one - and StartTaxi's own LastMotion reset above is a bare FAgentMotion() with
+	// only Position filled in: heading 0 regardless of which way this route actually goes,
+	// EngineRPM 0 regardless of what StartEngineAtSpeed just wrote into Agent.EngineRPM.
+	// UAirsideTraffic::Advance poses the view off exactly this field every tick, paused ones
+	// included, so a player redirecting while paused would see the aeroplane facing east with
+	// a stopped propeller until play resumed, whichever way the new route actually points.
+	FAgentMotion Motion;
+	Agent.Advance(0.0, Motion);
 
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
 	if (Agent.Phase != Before)
@@ -465,14 +507,15 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 		return;
 	}
 
-	const double Longest = FMath::Max(MaxSubstepSeconds, KINDA_SMALL_NUMBER);
+	const double Longest = FMath::Max(Rules.MaxSubstepSeconds, KINDA_SMALL_NUMBER);
 	const int32 Steps = FMath::Clamp(
-		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(MaxSubsteps, 1));
+		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(Rules.MaxSubsteps, 1));
+	LastStepsForTest = Steps;
 
 	// Divided rather than repeatedly subtracted: the steps then sum to exactly DeltaSeconds,
 	// so SimSeconds and every integration inside stay in step with the caller's clock. Past
 	// the ceiling this simply makes each step longer than Longest, which is the documented
-	// trade - see MaxSubsteps.
+	// trade - see FTrafficRules::MaxSubsteps.
 	const double Step = DeltaSeconds / Steps;
 	for (int32 Index = 0; Index < Steps; ++Index)
 	{

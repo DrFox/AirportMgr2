@@ -239,7 +239,7 @@ ARoadAgentActor* UAirsideTraffic::GetNewestAgent() const
 	return Views.FindRef(Model->GetNewestAgentId());
 }
 
-void UAirsideTraffic::Advance(float DeltaSeconds, double InSurfaceZ, const URoadNetwork* Network,
+void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoadNetwork* Network,
 	const FTrafficRules& Rules)
 {
 	SurfaceZ = InSurfaceZ;

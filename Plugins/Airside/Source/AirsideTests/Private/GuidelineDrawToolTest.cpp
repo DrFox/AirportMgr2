@@ -192,9 +192,21 @@ bool FGuidelineDrawToolTest::RunTest(const FString& Parameters)
 	}
 
 	// 4. THE POINT OF THE FEATURE, end to end: a route now crosses the gap.
+	//
+	// RE-RESOLVED, NOT THE ORIGINAL Left/Right (#125 fix, 2026-09-13): ConnectGuidelines now
+	// commits and broadcasts OnChanged like every other mutator on this actor, so the click
+	// above triggered a real rebuild - and derived guideline nodes are freed and reallocated
+	// on every one (see NearestGuidelineIndex's own comment in MeshFreshnessTest.cpp), which
+	// is exactly what section 5 below already re-resolves for after ITS OWN explicit
+	// RebuildMesh() call. Before the fix ConnectGuidelines never committed, so OnChanged
+	// never fired and no rebuild happened here - which is why the ORIGINAL handles used to
+	// still resolve at this point. That silence was the bug (#125): no undo step, and
+	// nothing redrew the link until something else happened to rebuild it.
 	{
+		const FGuidelineNodeId LeftNow  = NodeNearest(*Actor->Network, LeftAt);
+		const FGuidelineNodeId RightNow = NodeNearest(*Actor->Network, RightAt);
 		const FRoutePlan After =
-			Actor->FindRoute(Left, Right, ETraversalClass::Aircraft, 0.0);
+			Actor->FindRoute(LeftNow, RightNow, ETraversalClass::Aircraft, 0.0);
 		TestTrue(TEXT("a route now crosses the hand-drawn link"), After.IsValid());
 	}
 

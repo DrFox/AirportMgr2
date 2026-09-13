@@ -1332,7 +1332,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	//
 	// THAT BOOKKEEPING IS ONLY VALID WHILE ONE CALL IS ONE PASS, which is why the tick below
 	// is the substep and not the 0.05 the other fixtures use. Advance now splits a long delta
-	// into bounded substeps (see UGroundTraffic::MaxSubstepSeconds), and a call holding two
+	// into bounded substeps (see FTrafficRules::MaxSubstepSeconds), and a call holding two
 	// passes arbitrates twice - at the start pose and half a tick later - while this variable
 	// still names only the first. Every threshold here would then be read against a pose the
 	// agent had already left, which is measuring the substep count rather than the crossing
@@ -1373,7 +1373,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 			}
 		}
 		return Q->Follower.Travelled < 25000.0;
-	}, Traffic->MaxSubstepSeconds);
+	}, Traffic->Rules.MaxSubstepSeconds);
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	UE_LOG(LogM2TrafficTest, Log,
@@ -1400,7 +1400,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// releases 33 uu past 22750 - a tick, exactly - so the wider bounds were tolerance for the
 	// sampling rate and not for the rule. Tightening them is the point of ticking finer: at 60
 	// the arming could drift more than a whole tick late and this test would still pass.
-	const double OneTick = Traffic->MaxSubstepSeconds * 1000.0 + 1.0;
+	const double OneTick = Traffic->Rules.MaxSubstepSeconds * 1000.0 + 1.0;
 	TestTrue(FString::Printf(TEXT("armed no later than the nose entered the strip (%.0f, bound 17250 + one tick)"), ArmedAt),
 		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + OneTick);
 	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within one tick after (%.0f, want 22750)"), ReleasedAt),
@@ -2174,7 +2174,7 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 	for (int32 Which = 0; Which < 3; ++Which)
 	{
 		Runs[Which] = NewObject<UGroundTraffic>(GetTransientPackage());
-		Runs[Which]->MaxSubstepSeconds = Longest[Which];
+		Runs[Which]->Rules.MaxSubstepSeconds = Longest[Which];
 		Ids[Which] = Runs[Which]->DispatchAgent(Net,
 			M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft),
 			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
@@ -2216,6 +2216,59 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(
 		TEXT("and taking the frame in one step does not (%.4f uu apart)"), UnsplitGap),
 		UnsplitGap > 1.0);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * THE DEFAULT MaxSubsteps CEILING COVERS THE SPEED LADDER, NOT JUST A HITCH (#107 item 4).
+ *
+ * CONFIRMED, 2026-09-12 review. MaxSubsteps x MaxSubstepSeconds bounds one Advance call at
+ * MaxSubsteps * MaxSubstepSeconds - the OLD default of 8 x 1/30 s gave 267 ms - but
+ * USimClock's ladder (AirportOps, SimClock.h) reaches X32, and UAirsideTraffic::Advance's
+ * own caller (ARoadNetworkActor::Tick) hands it the real frame time TIMES that multiplier.
+ * A 30 fps frame at X32 is 1.067 s of sim time EVERY FRAME, not just on a hitch, which needs
+ * 32 steps of MaxSubstepSeconds to stay at the documented target - the old ceiling of 8
+ * clamped that to 8 steps of 133 ms each, four times MaxSubstepSeconds' own 33 ms, which is
+ * the same rubber-banding the substep split exists to remove in the first place, just moved
+ * to a higher speed setting instead of fixed.
+ *
+ * PINS THE ARITHMETIC DIRECTLY, not a position that a pre-costed speed profile can mask (see
+ * FRouteFollower::Advance's Profile.LimitAt - it plans a corner's braking many steps ahead,
+ * which makes a coarser step's actual DISPLACEMENT a weak and noisy signal here). What
+ * matters is simpler and exact: the number of steps a full ladder-top frame needs at
+ * MaxSubstepSeconds must not exceed MaxSubsteps, on a freshly constructed model - i.e. on
+ * whatever a level that never touches either figure actually runs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficSubstepLadderTest,
+	"Airside.Model.Traffic.SubstepCeilingCoversTheSpeedLadder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficSubstepLadderTest::RunTest(const FString& Parameters)
+{
+	const UGroundTraffic* Fresh = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// X32 IS THE LADDER'S TOP (USimClock::SpeedLadder, AirportOps/SimClock.h) and 30 fps is
+	// THIS SUBSTEP CEILING'S OWN floor for ordinary play rather than a hitch (FPropAliasingTest's
+	// rate list calls 24 "a hitching" rate and starts bracketing real play at 30) - so this is
+	// the busiest EVERY-FRAME delta the ladder can ask for, not a hitch outlier the ceiling is
+	// allowed to clamp. A DIFFERENT, HIGHER FLOOR (60 fps) is what UAirsideAgentAnim::
+	// PropDisplayCapRPM is picked against - the two are chosen separately, one per feature,
+	// not read from one shared "ordinary play" constant.
+	const double WorstOrdinaryFrame = 32.0 * (1.0 / 30.0);
+	const int32 StepsNeeded = FMath::CeilToInt(WorstOrdinaryFrame / Fresh->Rules.MaxSubstepSeconds);
+
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("SubstepCeilingCoversTheSpeedLadder: %.3f s needs %d steps of %.4f s; MaxSubsteps is %d"),
+		WorstOrdinaryFrame, StepsNeeded, Fresh->Rules.MaxSubstepSeconds, Fresh->Rules.MaxSubsteps);
+
+	// THE ASSERTION THE BUG WOULD FAIL: the old default of 8 is less than the 32 steps X32 at
+	// 30 fps needs, so every frame at that speed - not merely a hitch - was silently taken in
+	// steps four times longer than MaxSubstepSeconds documents.
+	TestTrue(*FString::Printf(
+		TEXT("MaxSubsteps (%d) covers a full ladder-top frame (%d steps needed)"),
+		Fresh->Rules.MaxSubsteps, StepsNeeded), Fresh->Rules.MaxSubsteps >= StepsNeeded);
 	return true;
 }
 
@@ -2283,6 +2336,166 @@ bool FTrafficWarmRedirectTest::RunTest(const FString& Parameters)
 		TEXT("but a redirect finds the engines already running at speed (%.0f RPM, want %.0f)"),
 		Warm->EngineRPM, AtSpeed), FMath::IsNearlyEqual(Warm->EngineRPM, AtSpeed, 0.01));
 	TestTrue(TEXT("and running"), Warm->bEngineRunning);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECT DOES NOT WARM-START AN ENGINE THAT HAS ALREADY SHUT DOWN.
+ *
+ * CONFIRMED, 2026-09-12 review (#107 item 2). RedirectAgent called StartEngineAtSpeed
+ * unconditionally after StartTaxi, snapping EngineRPM 0 -> MaxRPM in the very same call for
+ * DepartAgent on a parked aircraft that had already run out its post-arrival shutdown pause.
+ * StartEngineAtSpeed's own header says what it is FOR - "as it is for an aeroplane that has
+ * spent a turnaround ... before it taxied out", which presumes the engine was ALREADY
+ * running - so calling it regardless made a stopped propeller jump straight to full power
+ * with no spool-up at all, which is the opposite of FTrafficWarmRedirectTest above, whose
+ * redirected agent's engine had never stopped.
+ *
+ * FRoadAgent::StartTaxi already primes a cold start (bEngineRunning=true, EngineRPM=0.0) -
+ * the same one a plain DispatchAgent gets - so the fix is to leave that alone unless the
+ * engine was already running a moment before the redirect.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficColdRedirectTest,
+	"Airside.Model.Traffic.RedirectDoesNotWarmStartAShutDownEngine",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 100.0, 0.0);
+	const FGuidelineNodeId C = TestGraph::Node(*Net, 100.0, 20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, C);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	// A HAIR-TRIGGER SHUTDOWN PAUSE, so the aircraft is sitting with its engine already off
+	// well within a handful of ticks - #107 item 2's DepartAgent-on-a-shut-down-aircraft case.
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, /*ShutdownPauseSeconds=*/0.1);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	const bool bShutDown = RunUntil(*Traffic, *Net, 10.0, [&]()
+	{
+		const FRoadAgent* Ag = Traffic->FindAgent(Id);
+		return Ag != nullptr && Ag->Phase == EAgentPhase::Parked && !Ag->bEngineRunning;
+	});
+	if (!TestTrue(TEXT("parked and shut down before the redirect"), bShutDown))
+	{
+		return false;
+	}
+
+	// NOT NECESSARILY ZERO: bEngineRunning flips the moment the pause elapses, but EngineRPM
+	// trails it down over SpoolDownSeconds the same way it trails a start up - see
+	// AdvanceEngine. CAPTURED, not just logged: this is the mid-decay RPM the fix must not
+	// throw away - see the assertion below and PR #134 review item 3.
+	const FRoadAgent* ShutDown = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent exists"), ShutDown != nullptr)) { return false; }
+	const double PreRedirectRPM = ShutDown->EngineRPM;
+	AddInfo(*FString::Printf(TEXT("shut down at %.0f RPM, still decaying"), PreRedirectRPM));
+
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, C, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// THE ASSERTIONS THE BUG WOULD FAIL. Before the original fix this jumped straight to
+	// AtSpeed in the very same call, with no spool-up at all. Before the review fix
+	// (PR #134), StartTaxi's own EngineRPM=0.0 reset was left standing on the not-already-
+	// running branch, so a redirect landing MID-DECAY (bEngineRunning already false, RPM
+	// still positive - exactly this test's fixture) snapped the propeller DOWN to zero first
+	// and spooled it back UP from there: the same one-frame snap this fix exists to remove,
+	// just in the other direction. RedirectAgent's own zero-second Advance (#107 item 3)
+	// calls AdvanceEngine(0.0), which makes no change, so immediately after the redirect the
+	// RPM must be AT LEAST what it already was.
+	const FRoadAgent* Redirected = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
+	TestTrue(*FString::Printf(
+		TEXT("a shut-down engine spools up rather than snapping to speed (%.0f RPM, cap %.0f)"),
+		Redirected->EngineRPM, AtSpeed), Redirected->EngineRPM < AtSpeed);
+	TestTrue(*FString::Printf(
+		TEXT("and it never drops below where it already was (%.0f RPM, was %.0f)"),
+		Redirected->EngineRPM, PreRedirectRPM), Redirected->EngineRPM >= PreRedirectRPM);
+	TestTrue(TEXT("but it is running again, spooling up"), Redirected->bEngineRunning);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REDIRECT RE-POSES IMMEDIATELY, EVEN ON A PAUSED FRAME.
+ *
+ * CONFIRMED, 2026-09-12 review (#107 item 3). UGroundTraffic::Advance early-returns on
+ * DeltaSeconds <= 0 (the paused-frame guard, by design - see its own comment), which means
+ * nothing calls FRoadAgent::Advance for the rest of a paused tick. DispatchAgent covers this
+ * for a fresh agent with its own zero-second Agent.Advance(0.0, Motion) right after StartTaxi
+ * - see its comment - but RedirectAgent did not, so LastMotion was left exactly as StartTaxi's
+ * OWN fallback reset it: FAgentMotion() with only Position set. Heading 0 regardless of the
+ * new route's actual direction, EngineRPM 0 regardless of whatever StartEngineAtSpeed had
+ * just written into Agent.EngineRPM. UAirsideTraffic::Advance poses the view off exactly this
+ * field every tick (AirsideTraffic.cpp:255-268), including a paused one, so a player pressing
+ * Depart while paused would see the aeroplane point due east with a stopped propeller until
+ * the game resumed - regardless of which way the departure runway actually lies.
+ *
+ * Fixed the same way DispatchAgent already does it: RedirectAgent now re-poses with its own
+ * zero-second Agent.Advance(0.0, Motion) once everything is armed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRedirectPosesImmediatelyTest,
+	"Airside.Model.Traffic.RedirectPosesImmediatelyEvenPaused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRedirectPosesImmediatelyTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 20000.0, 20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, D);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	// A -> B, due EAST (heading 0) - so a redirect's heading is measured against a real
+	// change, not against the same number StartTaxi's fallback would have left anyway.
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	// NOT TICKED: the engine is still warm from the dispatch itself (bEngineRunning true), so
+	// this redirect takes the "already running" branch (#107 item 2) and StartEngineAtSpeed
+	// writes Agent.EngineRPM = AtSpeed - the mismatch this test pins is between THAT field and
+	// LastMotion.EngineRPM, which is what the view actually reads.
+	//
+	// B -> D, due NORTH (heading +90 deg) - unmistakably different from both 0 and from
+	// whatever FAgentMotion()'s default would read.
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, D, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// NO Traffic->Advance CALL HERE AT ALL - this is exactly the state a paused frame would
+	// show, because UGroundTraffic::Advance(0.0, ...) would not touch the agent either.
+	const FRoadAgent* Redirected = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
+
+	TestTrue(*FString::Printf(
+		TEXT("LastMotion already points north (%.1f deg), not the old heading or the FAgentMotion default"),
+		FMath::RadiansToDegrees(Redirected->LastMotion.Heading)),
+		FMath::IsNearlyEqual(Redirected->LastMotion.Heading, PI * 0.5, 0.01));
+
+	TestTrue(*FString::Printf(
+		TEXT("LastMotion already shows the warm-started engine (%.0f RPM, want %.0f)"),
+		Redirected->LastMotion.EngineRPM, AtSpeed),
+		FMath::IsNearlyEqual(Redirected->LastMotion.EngineRPM, AtSpeed, 0.01));
 	return true;
 }
 

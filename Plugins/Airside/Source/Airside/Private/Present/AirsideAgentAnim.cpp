@@ -27,21 +27,13 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	GroundSpeed = static_cast<float>(Motion.GroundSpeed);
 	bAirborne = Motion.bAirborne;
 
-	// WHEELS: v = wr, so the rate is speed over radius. Guarded because a radius of zero is
-	// a configuration mistake, and dividing by it would put NaN into a bone transform - which
-	// does not show up as a fast wheel, it shows up as an aircraft that vanishes.
-	//
-	// AND ONLY WHILE THE WHEELS ARE ON THE GROUND. Ground speed does not fall to zero at
-	// rotation - a climbing aeroplane is still travelling, and faster than it ever did on the
-	// runway - so integrating it regardless spun the wheels harder than ever as the aircraft
-	// climbed away. Real gear spins down over a few seconds in the airflow; stopping is not
-	// that, but it is far closer than accelerating.
-	if (MainWheelRadius > KINDA_SMALL_NUMBER && !bAirborne)
-	{
-		const float RadiansPerSecond = GroundSpeed / MainWheelRadius;
-		WheelAngleDegrees = FMath::Fmod(
-			WheelAngleDegrees + FMath::RadiansToDegrees(RadiansPerSecond) * DeltaSeconds, 360.0f);
-	}
+	// WHEELS: v = wr on the ground; DECAYED, NOT DROPPED, in the air (#107 item 8) - see
+	// WheelStepDegrees and FAgentMotion::GroundSpeed's own header.
+	WheelAngleDegrees = FMath::Fmod(
+		WheelAngleDegrees
+			+ WheelStepDegrees(GroundSpeed, MainWheelRadius, bAirborne, DeltaSeconds,
+				WheelSpinDownSeconds, WheelRateDegPerSec),
+		360.0f);
 
 	// PROPELLER: RPM to degrees a second is x6 - 360 degrees over 60 seconds.
 	//
@@ -51,24 +43,78 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	// inertia, and the model now says where it has got to - see FEnginePerformance.
 	const float RPM = static_cast<float>(Motion.EngineRPM);
 
-	// CLAMPED TO WHAT THE FRAME RATE CAN SHOW. A blade repeats every 360/N degrees, and a step
-	// past half of that is indistinguishable from a smaller step the other way - which is why
-	// this propeller appeared to stop at 110 fps and run backwards at 120. The step, not the
-	// RPM, is what is capped: a cap expressed in RPM would still alias at a low enough frame
-	// rate, because the angle per frame is what the sampling sees. See PropMaxStepPerRepeat.
+	// BOTH CAPPED NOW (#107 item 7): RPM first, THEN the per-frame step. A blade repeats every
+	// 360/N degrees, and a step past half of that is indistinguishable from a smaller step
+	// the other way - which is why this propeller appeared to stop at 110 fps and run
+	// backwards at 120. Capping only the step (the original fix for that) made the apparent
+	// speed rise with the frame rate instead: a fixed degrees-per-frame ceiling times a
+	// higher frame rate is a higher degrees-per-second rate, which read from play as the
+	// propeller changing speed with the camera. Capping the RATE (PropDisplayCapRPM) fixes
+	// that; the step clamp (PropMaxStepPerRepeat) stays as the guard against aliasing at a
+	// frame rate low enough to hitch, which a rate cap alone cannot prevent.
 	PropAngleDegrees = FMath::Fmod(
-		PropAngleDegrees + PropStepDegrees(RPM, DeltaSeconds, PropBladeCount, PropMaxStepPerRepeat),
+		PropAngleDegrees
+			+ PropStepDegrees(RPM, DeltaSeconds, PropBladeCount, PropMaxStepPerRepeat, PropDisplayCapRPM),
 		360.0f);
 
 	// See the header: a modelled blade at 2000 RPM strobes against a 60 Hz frame rate.
 	bPropIsDisc = RPM > PropDiscRPM;
 }
 
-float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 BladeCount,
-	float MaxStepPerRepeat)
+float UAirsideAgentAnim::WheelStepDegrees(float GroundSpeed, float Radius, bool bAirborne,
+	float DeltaSeconds, float SpinDownSeconds, float& InOutRateDegPerSec)
 {
+	if (Radius <= KINDA_SMALL_NUMBER)
+	{
+		// A radius of zero is a configuration mistake, and dividing by it would put NaN into
+		// a bone transform - which does not show up as a fast wheel, it shows up as an
+		// aircraft that vanishes.
+		InOutRateDegPerSec = 0.0f;
+		return 0.0f;
+	}
+
+	if (!bAirborne)
+	{
+		// ON THE GROUND: read straight off ground speed every frame, v = wr - the tyre has no
+		// inertia of its own here, it is being driven by contact with the tarmac.
+		InOutRateDegPerSec = FMath::RadiansToDegrees(GroundSpeed / Radius);
+	}
+	else if (SpinDownSeconds > KINDA_SMALL_NUMBER)
+	{
+		// AIRBORNE: DECAYED, NOT DROPPED. This used to be gated on !bAirborne outright, which
+		// contradicts FAgentMotion::GroundSpeed's own header - "a wheel that stopped the
+		// instant the aircraft lifted off would snap from spinning to still in one frame,
+		// which is the one thing real wheels visibly do not do" - and that is exactly what it
+		// did: a ~12,000 deg/s wheel at rotation stopped dead in a single frame.
+		//
+		// THE FLARE'S OWN LAW (h' = -h/tau, FLandingRun::Advance), applied to the rate
+		// instead of a height: proportional to what is left, so it eases toward zero rather
+		// than running at a fixed rate until it arrives and then holding. Bounded in time by
+		// SpinDownSeconds the same way the flare is bounded by FlareTimeConstantSeconds.
+		InOutRateDegPerSec = FMath::Max(
+			InOutRateDegPerSec - (InOutRateDegPerSec / SpinDownSeconds) * DeltaSeconds, 0.0f);
+	}
+	else
+	{
+		// SpinDownSeconds <= 0 is authored as "stop dead" - a choice, not a division by a
+		// number close to zero.
+		InOutRateDegPerSec = 0.0f;
+	}
+
+	return InOutRateDegPerSec * DeltaSeconds;
+}
+
+float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 BladeCount,
+	float MaxStepPerRepeat, float DisplayCapRPM)
+{
+	// THE RATE IS CAPPED, NOT THE STEP - fps-independent by construction, because this feeds
+	// straight into a degrees-per-second figure rather than being sized against one frame's
+	// worth of it. NEVER RAISES the rate: a genuinely slow propeller (idling, spooling) is
+	// still shown turning at its real speed, only ever brought DOWN toward it.
+	const float Displayed = FMath::Min(RPM, FMath::Max(DisplayCapRPM, 0.0f));
+
 	// RPM to degrees a second is x6 - 360 degrees over 60 seconds.
-	const float Wanted = RPM * 6.0f * DeltaSeconds;
+	const float Wanted = Displayed * 6.0f * DeltaSeconds;
 
 	// A blade repeats every 360/N degrees, so that - not a full turn - is the angle the frame
 	// rate has to resolve. Past half of it a step is indistinguishable from a smaller one the

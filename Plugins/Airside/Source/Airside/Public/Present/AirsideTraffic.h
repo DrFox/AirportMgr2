@@ -176,8 +176,15 @@ public:
 	 * Copying eight doubles per tick is cheaper than that class of bug is to find. A setter
 	 * called before Advance was the alternative: it is the same copy with one more way for a
 	 * caller to forget it.
+	 *
+	 * DeltaSeconds IS A double (#107 item 5), never narrowed to float: UGroundTraffic::Advance
+	 * divides it by MaxSubstepSeconds and takes CeilToInt to size the substep split, and
+	 * float(1.0/30.0) is very slightly LARGER than the double it should equal - narrowing
+	 * here rounded that division UP at every exact multiple, taking a spurious extra substep
+	 * on the plainest settings in the game (30 Hz x1, 60 Hz x4). ARoadNetworkActor::Tick
+	 * carries the same double all the way from EvenDelta * SimTimeScale for the same reason.
 	 */
-	void Advance(float DeltaSeconds, double SurfaceZ, const URoadNetwork* Network, const FTrafficRules& Rules);
+	void Advance(double DeltaSeconds, double SurfaceZ, const URoadNetwork* Network, const FTrafficRules& Rules);
 
 	/**
 	 * The newest agent's Phase, for Airside.Present.ArrivalDispatch - which drives a real

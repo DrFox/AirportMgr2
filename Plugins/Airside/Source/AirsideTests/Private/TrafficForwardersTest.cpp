@@ -90,6 +90,20 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a figure set on the ACTOR reaches the model's rules within one tick"),
 		Model->Rules.VehicleGap, 777.0, 1e-9);
 
+	// MaxSubstepSeconds/MaxSubsteps THE SAME WAY (#107 item 6): both used to be
+	// UPROPERTY(EditAnywhere) on UGroundTraffic itself, which is Transient and never exposed
+	// EditAnywhere one layer up - so a designer could type into a field the Details panel
+	// would never show, and it would do nothing. Living on FTrafficRules instead means this
+	// same seam - already proven above for VehicleGap - covers them for free; asserted
+	// explicitly anyway because "for free" is exactly the kind of claim CLAUDE.md's "check
+	// where a list is CONSUMED" says to measure rather than assume.
+	Actor->TrafficRules.MaxSubstepSeconds = 0.01;
+	Actor->TrafficRules.MaxSubsteps = 3;
+	Actor->Tick(0.05f);
+	TestEqual(TEXT("MaxSubstepSeconds set on the ACTOR reaches the model's rules within one tick"),
+		Model->Rules.MaxSubstepSeconds, 0.01, 1e-9);
+	TestEqual(TEXT("MaxSubsteps too"), Model->Rules.MaxSubsteps, 3);
+
 	// THE REBUILD SEAM, at the level of the composition: ARoadNetworkActor::RebuildMesh must
 	// call UGroundTraffic::OnGraphRebuilt. Airside.Model.Traffic.GraphRebuild pins what that
 	// function DOES, but it calls it by hand, so deleting the actor's three lines left every
@@ -194,6 +208,52 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the duplicate's relay is bound to the duplicate's model"), DupRelayed, 1);
 		TestNotNull(TEXT("and its view was spawned"), DupTraffic->GetNewestAgent());
 	}
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * DeltaSeconds CROSSES THE Present/Model SEAM AS A double, NOT A float (#107 item 5).
+ *
+ * CONFIRMED, 2026-09-12 review. UAirsideTraffic::Advance used to take DeltaSeconds as a
+ * float, and ARoadNetworkActor::Tick fed it static_cast<float>(Evened * SimTimeScale) - both
+ * unnecessary narrowings of a value UGroundTraffic::Advance (and the substep split inside
+ * it) has always used as a double. float(1.0/30.0) is very slightly LARGER than the double
+ * it should equal, so UGroundTraffic::Advance's `CeilToInt(DeltaSeconds / MaxSubstepSeconds)`
+ * rounds UP at every exact multiple: a plain 30 Hz frame at x1 took 2 substeps instead of 1,
+ * and 60 Hz at x4 took 3 instead of 2 - work multiplied for no visible reason, at the most
+ * ordinary settings in the game.
+ *
+ * PINNED THROUGH UGroundTraffic::GetLastStepsForTest(), added for exactly this: the split is
+ * not otherwise observable, and the follower's own physics do not show a one-step difference
+ * reliably (FTrafficSubstepTest's own near-exact SplitGap when the step count DOES match).
+ * Calls UAirsideTraffic::Advance directly - the actual seam under test - with a double
+ * literal, which narrows to float at the call site under the old signature and stays double
+ * under the fixed one; that narrowing IS the defect, so this is the only way to reproduce it
+ * rather than re-deriving the arithmetic by hand.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficAdvanceDeltaStaysDoubleTest,
+	"Airside.Present.TrafficAdvanceDeltaStaysDouble",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficAdvanceDeltaStaysDoubleTest::RunTest(const FString& Parameters)
+{
+	UAirsideTraffic* Traffic = NewObject<UAirsideTraffic>(GetTransientPackage());
+	if (!TestNotNull(TEXT("traffic constructed"), Traffic)) { return false; }
+	UGroundTraffic* Model = Traffic->GetModel();
+	if (!TestNotNull(TEXT("and it owns a model"), Model)) { return false; }
+
+	// 30 Hz, x1 - the plainest setting in the game, not a hitch or a high speed multiplier.
+	// A true double 1/30 s needs exactly one substep at the default MaxSubstepSeconds.
+	Traffic->Advance(1.0 / 30.0, 0.0, nullptr, FTrafficRules());
+	TestEqual(TEXT("30 Hz x1 takes exactly one substep, not a spurious second one"),
+		Model->GetLastStepsForTest(), 1);
+
+	// 60 Hz, x4 - the issue's second reported example.
+	Traffic->Advance(4.0 / 60.0, 0.0, nullptr, FTrafficRules());
+	TestEqual(TEXT("60 Hz x4 takes exactly two substeps, not three"),
+		Model->GetLastStepsForTest(), 2);
 	return true;
 }
 

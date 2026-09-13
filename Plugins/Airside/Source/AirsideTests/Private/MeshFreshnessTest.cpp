@@ -231,6 +231,79 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 		"explicit RebuildMesh() call from the tool"),
 		Actor->RebuildCountForTest(), RebuildsBeforeDelete + 1);
 
+	// --- Issue #125: ConnectGuidelines/DisconnectGuideline must commit too --------------
+	//
+	// Two disjoint roads, far from everything else on this network, so their facing derived
+	// ends are guaranteed not to be linked to each other already - the same fixture shape
+	// GuidelineDrawToolTest's LinkFixture uses.
+	const int32 LinkA0 = Actor->PlaceNode(FVector2D(50000.0, 50000.0));
+	const int32 LinkA1 = Actor->PlaceNode(FVector2D(56000.0, 50000.0));
+	Actor->ConnectNodes(LinkA0, LinkA1);
+	const int32 LinkB0 = Actor->PlaceNode(FVector2D(70000.0, 50000.0));
+	const int32 LinkB1 = Actor->PlaceNode(FVector2D(76000.0, 50000.0));
+	Actor->ConnectNodes(LinkB0, LinkB1);
+
+	auto NearestGuidelineIndex = [Actor](const FVector2D& Where) -> int32
+	{
+		const TArray<FGuidelineNode>& Nodes = Actor->Network->GetGuidelineNodes();
+		int32 Best = INDEX_NONE;
+		double BestDistance = TNumericLimits<double>::Max();
+		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		{
+			if (!Nodes[Index].bAlive) { continue; }
+			const double Distance = FVector2D::Distance(Nodes[Index].Position, Where);
+			if (Distance < BestDistance) { BestDistance = Distance; Best = Index; }
+		}
+		return Best;
+	};
+	const int32 LinkLeft = NearestGuidelineIndex(FVector2D(56000.0, 50000.0));
+	const int32 LinkRight = NearestGuidelineIndex(FVector2D(70000.0, 50000.0));
+	if (!TestTrue(TEXT("found a guideline node either side of the gap"),
+		LinkLeft != INDEX_NONE && LinkRight != INDEX_NONE && LinkLeft != LinkRight))
+	{
+		return false;
+	}
+
+	// CONFIRMED, 2026-09-12 review of PR #122: ConnectGuidelines opened an FRoadEditScope and
+	// fell off the end without committing it, so ~FRoadEditScope called AbandonEdit - no undo
+	// step pushed for a hand-drawn link, and OnChanged never fired, so nothing here would have
+	// caught it: no explicit RebuildMesh() call anywhere in this test, exactly like every
+	// other mutator above.
+	const int32 RebuildsBeforeLink = Actor->RebuildCountForTest();
+	const int32 LinkEdge = Actor->ConnectGuidelines(LinkLeft, LinkRight);
+	TestTrue(TEXT("the guideline link is made"), LinkEdge != INDEX_NONE);
+	TestEqual(TEXT("ConnectGuidelines's OnChanged broadcast rebuilt the mesh exactly once (#125)"),
+		Actor->RebuildCountForTest(), RebuildsBeforeLink + 1);
+
+	TestTrue(TEXT("and the hand-drawn link undoes"), Actor->Undo());
+	TestEqual(TEXT("Undo's OnChanged broadcast rebuilt the mesh again - there was an undo step "
+		"to take, which is exactly what #125 says was missing"),
+		Actor->RebuildCountForTest(), RebuildsBeforeLink + 2);
+
+	// Relinked so DisconnectGuideline has something to remove. RE-RESOLVED, not reused: the
+	// undo above rebuilt the mesh, and derived guideline nodes are freed and reallocated on
+	// every rebuild (URoadNetwork's own "by position, never by handle" rule for this graph -
+	// see UGroundTraffic::OnGraphRebuilt) - the OLD indices are not guaranteed to still name
+	// the same two nodes.
+	const int32 RelinkLeft = NearestGuidelineIndex(FVector2D(56000.0, 50000.0));
+	const int32 RelinkRight = NearestGuidelineIndex(FVector2D(70000.0, 50000.0));
+	const int32 RelinkEdge = Actor->ConnectGuidelines(RelinkLeft, RelinkRight);
+	if (!TestTrue(TEXT("relinked for the disconnect half"), RelinkEdge != INDEX_NONE))
+	{
+		return false;
+	}
+
+	// THE SAME DEFECT, THE SAME FIX: DisconnectGuideline returned RemoveGuidelineEdge's
+	// result directly with the scope still open, so a SUCCESSFUL removal was abandoned too.
+	const int32 RebuildsBeforeUnlink = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the guideline link is removed"), Actor->DisconnectGuideline(RelinkEdge));
+	TestEqual(TEXT("DisconnectGuideline's OnChanged broadcast rebuilt the mesh exactly once (#125)"),
+		Actor->RebuildCountForTest(), RebuildsBeforeUnlink + 1);
+
+	TestTrue(TEXT("and the disconnect undoes"), Actor->Undo());
+	TestEqual(TEXT("whose Undo rebuilt the mesh once more"),
+		Actor->RebuildCountForTest(), RebuildsBeforeUnlink + 2);
+
 	return true;
 }
 

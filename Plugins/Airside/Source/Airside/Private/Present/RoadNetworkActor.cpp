@@ -545,8 +545,14 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	// see the property's own comment and UAirsideTraffic::Advance. EvenDelta moved onto
 	// Traffic by issue #80 (see FFrameDeltaSmoother); DeltaSmoothingRate/MaxOwedSeconds are
 	// this actor's own level-authored UPROPERTYs and travel in by value the same way.
+	//
+	// KEPT AS A double THE WHOLE WAY (#107 item 5) - no static_cast<float> here any more.
+	// UGroundTraffic::Advance divides this by MaxSubstepSeconds and takes CeilToInt to size
+	// its substep split, and float(1.0/30.0) is very slightly larger than the double it
+	// should equal - narrowing here rounded that division up at every exact multiple, taking
+	// a spurious extra substep on the plainest settings in the game (30 Hz x1, 60 Hz x4).
 	const double Evened = Traffic->EvenDelta(DeltaSeconds, DeltaSmoothingRate, MaxOwedSeconds);
-	Traffic->Advance(static_cast<float>(Evened * SimTimeScale), SurfaceZ, Network, TrafficRules);
+	Traffic->Advance(Evened * SimTimeScale, SurfaceZ, Network, TrafficRules);
 }
 
 void ARoadNetworkActor::SetDeltaSmoothingForTest(double Rate)

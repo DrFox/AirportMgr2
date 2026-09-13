@@ -132,9 +132,13 @@ struct AIRSIDE_API FAgentMotion
 	/**
 	 * Speed over the ground, uu per second.
 	 *
-	 * Drives the wheels, so it stays meaningful in the air: a wheel that stopped the instant
-	 * the aircraft lifted off would snap from spinning to still in one frame, which is the
-	 * one thing real wheels visibly do not do.
+	 * DRIVES THE WHEELS ON THE GROUND ONLY (#107 item 8). It stays meaningful once airborne -
+	 * a departure keeps climbing, not stopping - but UAirsideAgentAnim no longer reads it
+	 * there: a wheel that stopped the instant the aircraft lifted off used to snap from
+	 * spinning to still in one frame, which is the one thing real wheels visibly do not do,
+	 * so the view now decays its OWN last-known rate toward zero over WheelSpinDownSeconds
+	 * instead (see UAirsideAgentAnim::WheelStepDegrees) rather than integrating this figure
+	 * further once bAirborne is true.
 	 */
 	UPROPERTY() double GroundSpeed = 0.0;
 
