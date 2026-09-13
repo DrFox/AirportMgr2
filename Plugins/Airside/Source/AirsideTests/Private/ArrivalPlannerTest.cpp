@@ -56,8 +56,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 
 	// Sized from the aircraft, not chosen: a strip under Needed is correctly refused, and a
 	// fixture that picked a length out of the air would test the refusal or the acceptance
@@ -182,8 +181,7 @@ bool FArrivalPlannerNoExitTest::RunTest(const FString& Parameters)
 		Airframe.Ground, Airframe.Climb, Airframe.Approach) * FLandingRun::LandingMargin;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 
 	// Long enough to stop on (RunwayLength > Needed), so the refusal cannot be RunwayTooShort.
 	const FRoadNodeId A = Network->AddNode(FVector2D(0.0, 0.0));
@@ -217,9 +215,8 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 	const double RunwayLength = Needed * 1.5;
 
 	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FVector2D ThresholdAt(0.0, 0.0);
 	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);

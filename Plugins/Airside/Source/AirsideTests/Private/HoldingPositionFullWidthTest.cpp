@@ -41,10 +41,9 @@ bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 	{
 		const double Angle = Case.Angle;
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::NarrowRunway();
 		Runway->ExitLength = 6000.0;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(TaxiwayWidth, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 		// Runway W -> E, a long taxiway leaving X at Angle below east.
 		const FRoadNodeId W = Net->AddNode(FVector2D(-80000.0, 0.0));

@@ -173,8 +173,7 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 	// Which one the search takes is exactly what ERunwayAvoidance decides, and the phantom
 	// holder on the runway chain is what Held reads.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
 	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
 	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);

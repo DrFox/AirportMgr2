@@ -210,8 +210,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 			Small->PlaceNode(FVector2D(-100000.0, -100000.0));
 			URoadNetwork& Tiny = *Small->Network;
 
-			URoadProfile* Strip = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Strip->bContinuousThroughJunctions = true;
+			URoadProfile* Strip = TestProfiles::Runway();
 
 			const FRoadNodeId A = Tiny.AddNode(FVector2D(0.0, 0.0));
 			const FRoadNodeId B = Tiny.AddNode(FVector2D(Needed * 0.4, 0.0));
@@ -245,8 +244,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 			Departing->PlaceNode(FVector2D(-100000.0, -100000.0));
 			URoadNetwork& Net2 = *Departing->Network;
 
-			URoadProfile* Runway2 = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Runway2->bContinuousThroughJunctions = true;
+			URoadProfile* Runway2 = TestProfiles::Runway();
 
 			const FVector2D NearAt2(0.0, 0.0);
 			const FVector2D FarAt2(RunwayLength * 2.0, 0.0);

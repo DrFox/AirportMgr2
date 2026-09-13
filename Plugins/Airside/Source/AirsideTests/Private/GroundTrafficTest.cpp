@@ -470,18 +470,11 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	// The edge-derived-from-a-runway route to the same surface is exercised by the
 	// arrival dispatch test once landings hold the chain.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
-	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
-	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
-
-	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId H = TestGraph::Node(*Net, 0.0, -3000.0);
-	const FGuidelineNodeId X = TestGraph::Node(*Net, 0.0, 0.0);
-	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
-	TestGraph::Join(*Net, S, H); TestGraph::Join(*Net, H, X); TestGraph::Join(*Net, X, N);
-	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
+	const FCrossingFixture Crossing = FCrossingFixture::Build(*Net);
+	const FRoadSegmentId RunwaySeg = Crossing.Strip;
+	const FGuidelineNodeId S = Crossing.S;
+	const FGuidelineNodeId H = Crossing.H;
+	const FGuidelineNodeId N = Crossing.N;
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	// Someone holds the runway: a claim by a phantom agent 99, as a landing would make.
@@ -570,8 +563,7 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 	// The dispatch path, not just the planner: a runway held in the traffic's OWN table
 	// refuses through UGroundTraffic and fires the delegate with the new reason.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RA = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId RB = Net->AddNode(FVector2D(120000.0, 0.0));
 	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
@@ -654,16 +646,6 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// cannot cover the gap: here they are hand-built with no DerivedFrom, and in a DERIVED
 	// graph a junction's turn paths carry none either, by design.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
-	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
-	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
-
-	const FGuidelineNodeId S = TestGraph::Node(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId H = TestGraph::Node(*Net, 0.0, -3000.0);
-	const FGuidelineNodeId X = TestGraph::Node(*Net, 0.0, 0.0);
-
 	// A SECOND BAR ON THE FAR SIDE, protecting the SAME runway, because that is how a
 	// crossing is actually painted - one bar each side - and it is the case that broke the
 	// hold. The far bar's claim is a RESERVATION on a chain the crossing block is already
@@ -671,12 +653,10 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	// update written over the old one wholesale: without the skip in ClaimAhead the
 	// reservation replaced the occupancy, and a landing could then preempt an aeroplane
 	// standing on the centreline.
-	const FGuidelineNodeId Far = TestGraph::Node(*Net, 0.0, 3000.0);
-	const FGuidelineNodeId N = TestGraph::Node(*Net, 0.0, 20000.0);
-	TestGraph::Join(*Net, S, H); TestGraph::Join(*Net, H, X);
-	TestGraph::Join(*Net, X, Far); TestGraph::Join(*Net, Far, N);
-	Net->SetRunwayHoldingPositionForTest(H, RunwaySeg);
-	Net->SetRunwayHoldingPositionForTest(Far, RunwaySeg);
+	const FCrossingFixture Crossing = FCrossingFixture::Build(*Net, /*bFarBar=*/true);
+	const FRoadSegmentId RunwaySeg = Crossing.Strip;
+	const FGuidelineNodeId S = Crossing.S;
+	const FGuidelineNodeId N = Crossing.N;
 
 	// Route distances: the near bar at 17000, the centreline crossing X at 20000, the far
 	// bar at 23000, the far node N at 40000. The strip's half width is 2250, so a tail clear
@@ -844,8 +824,7 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	// into two segments; the guideline edge B->C names only the FAR one, and the phantom
 	// holds the NEAR one. An implementation that claimed only DerivedFrom would sail past.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
 	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
@@ -1306,8 +1285,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// the bars for it to reason about. This fixture is that graph, and the assertions are the
 	// BODY against the surface: nose in, tail out.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
 	const FRoadSegmentId RunwaySeg = Net->AddStraightSegment(RA, RB, Runway);
@@ -1779,18 +1757,10 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	// else, so what the planner refuses on is this agent's own claim.
 	{
 		URoadNetwork* Cross = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
-		const FRoadNodeId RA = Cross->AddNode(FVector2D(-50000.0, 0.0));
-		const FRoadNodeId RB = Cross->AddNode(FVector2D(50000.0, 0.0));
-		const FRoadSegmentId RunwaySeg = Cross->AddStraightSegment(RA, RB, Runway);
-
-		const FGuidelineNodeId S = TestGraph::Node(*Cross, 0.0, -20000.0);
-		const FGuidelineNodeId H = TestGraph::Node(*Cross, 0.0, -3000.0);
-		const FGuidelineNodeId X = TestGraph::Node(*Cross, 0.0, 0.0);
-		const FGuidelineNodeId N = TestGraph::Node(*Cross, 0.0, 20000.0);
-		TestGraph::Join(*Cross, S, H); TestGraph::Join(*Cross, H, X); TestGraph::Join(*Cross, X, N);
-		Cross->SetRunwayHoldingPositionForTest(H, RunwaySeg);
+		const FCrossingFixture Crossing = FCrossingFixture::Build(*Cross);
+		const FRoadSegmentId RunwaySeg = Crossing.Strip;
+		const FGuidelineNodeId S = Crossing.S;
+		const FGuidelineNodeId N = Crossing.N;
 
 		UGroundTraffic* Air = NewObject<UGroundTraffic>(GetTransientPackage());
 		const int32 Plane = Air->DispatchAgent(Cross, M2TrafficRoute(*Cross, S, N, ETraversalClass::Aircraft),
@@ -2078,8 +2048,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 	//         |     |
 	//        R1 === R2             the strip, derived from a runway segment
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1500.0));
 	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(4000.0, -1500.0));
 	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);

@@ -30,8 +30,7 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 	// ending ON the runway at the split - which is what arms a departure (see
 	// UGroundTraffic::ArmDepartureIfRunway).
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
 	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));

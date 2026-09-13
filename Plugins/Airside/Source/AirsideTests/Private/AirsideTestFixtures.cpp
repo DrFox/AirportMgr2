@@ -117,9 +117,8 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	const FVector2D Exit1At(Needed * 1.2, 0.0);
 	const FVector2D FarAt(Needed * 3.0, 0.0);
 
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FRoadNodeId ThresholdNode = Out.Net->AddNode(Out.Threshold);
 
@@ -179,6 +178,60 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	if (Options.bDerived && Options.StandCount > 0)
 	{
 		FAnchorLink::Build(*Out.Net);
+	}
+
+	return Out;
+}
+
+URoadProfile* TestProfiles::Runway()
+{
+	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Profile->bContinuousThroughJunctions = true;
+	return Profile;
+}
+
+URoadProfile* TestProfiles::NarrowRunway()
+{
+	URoadProfile* Profile = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
+	Profile->bContinuousThroughJunctions = true;
+	return Profile;
+}
+
+URoadProfile* TestProfiles::Taxiway()
+{
+	return URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+}
+
+FCrossingFixture FCrossingFixture::Build(URoadNetwork& Net, bool bFarBar)
+{
+	FCrossingFixture Out;
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RA = Net.AddNode(FVector2D(-50000.0, 0.0));
+	const FRoadNodeId RB = Net.AddNode(FVector2D(50000.0, 0.0));
+	Out.Strip = Net.AddStraightSegment(RA, RB, Runway);
+
+	Out.S = TestGraph::Node(Net, 0.0, -20000.0);
+	Out.H = TestGraph::Node(Net, 0.0, -3000.0);
+	Out.X = TestGraph::Node(Net, 0.0, 0.0);
+	Out.N = TestGraph::Node(Net, 0.0, 20000.0);
+
+	TestGraph::Join(Net, Out.S, Out.H);
+	TestGraph::Join(Net, Out.H, Out.X);
+	Net.SetRunwayHoldingPositionForTest(Out.H, Out.Strip);
+
+	if (bFarBar)
+	{
+		// A SECOND BAR ON THE FAR SIDE, protecting the SAME runway - one bar each side, the
+		// way a crossing is actually painted, and the shape CrossingHoldsRunway needs to
+		// measure that the far bar does not re-arm the crossing once passed.
+		const FGuidelineNodeId Far = TestGraph::Node(Net, 0.0, 3000.0);
+		TestGraph::Join(Net, Out.X, Far);
+		TestGraph::Join(Net, Far, Out.N);
+		Net.SetRunwayHoldingPositionForTest(Far, Out.Strip);
+	}
+	else
+	{
+		TestGraph::Join(Net, Out.X, Out.N);
 	}
 
 	return Out;

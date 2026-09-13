@@ -87,7 +87,36 @@ namespace TestAirframes
 /** Runway and taxiway profiles authored by hand, MakeTransient so no asset is touched. */
 namespace TestProfiles
 {
+	/** 4500 wide / 1500 / 450, continuous through junctions - the runway every fixture in
+	 *  the module lands a Piper on. */
+	URoadProfile* Runway();
+
+	/** 1800 wide / 1500 / 180, continuous through junctions - the width TrafficHeadOnReplan
+	 *  and HoldingPositionFullWidth need to own, where a wider strip's own geometry would
+	 *  hide the thing under test. */
+	URoadProfile* NarrowRunway();
+
+	/** 2300 wide / 1500 / 230 - the taxiway every fixture in the module uses. NOT continuous
+	 *  through junctions: a taxiway is not a runway chain. */
+	URoadProfile* Taxiway();
 }
+
+/**
+ * A taxiway crossing a runway: S -> H (near bar) -> X (on the strip's centreline) -> N, hand-
+ * built with no DerivedFrom - the holding position at H is the only thing protecting the
+ * runway, which is the point of every test that builds one. bFarBar adds a second bar past X
+ * protecting the SAME strip, the way a real crossing is painted (one bar each side) -
+ * Airside.Model.Traffic.CrossingHoldsRunway needs it to measure that the far bar does not
+ * re-arm the crossing once passed. The far node itself is not returned: nothing downstream
+ * of Build needs its handle, only that it exists.
+ */
+struct FCrossingFixture
+{
+	FRoadSegmentId Strip;
+	FGuidelineNodeId S, H, X, N;
+
+	static FCrossingFixture Build(URoadNetwork& Net, bool bFarBar = false);
+};
 
 /** Options for FTestAirport::Build, defaulted to the single-exit, single-stand shape every
  *  site but the two named on FTestAirport itself used before #101. */

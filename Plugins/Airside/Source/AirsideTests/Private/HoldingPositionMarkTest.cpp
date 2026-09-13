@@ -33,9 +33,8 @@ bool FHoldingPositionSurvivesRebuildTest::RunTest(const FString& Parameters)
 	//             |
 	//             X ----- Y          taxiway E-X, taxiway X-Y: X is a taxiway junction
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Runway = TestProfiles::Runway();
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 	const FRoadNodeId T = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId E = Net->AddNode(FVector2D(60000.0, 0.0));
 	const FRoadNodeId F = Net->AddNode(FVector2D(100000.0, 0.0));
