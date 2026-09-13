@@ -25,6 +25,25 @@ double FTrafficRules::GapFor(ETraversalClass Class) const
 	return Class == ETraversalClass::Aircraft ? AircraftGap : VehicleGap;
 }
 
+double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const
+{
+	// A SWITCH AND NOT A TERNARY CHAIN, deliberately, and unlike the two functions above -
+	// which have two cases and a documented "everything else" rule. This is the one place
+	// that must agree with EPushbackNeed, so a value added to that enum has to produce a
+	// compiler warning here rather than fall quietly into an else and push an A320 at a hand
+	// tug's pace. The codebase's "lists that must agree are ONE list", applied to arithmetic.
+	switch (Need)
+	{
+	case EPushbackNeed::SelfManoeuvre: return SelfManoeuvrePushSpeed;
+	case EPushbackNeed::HandTug:       return HandTugPushSpeed;
+	case EPushbackNeed::VehicleTug:    return VehicleTugPushSpeed;
+	}
+
+	// Unreachable while the switch is total. The CONSERVATIVE answer anyway, matching
+	// FAirframe::PushbackNeed's own default: slowest is never unsafe.
+	return HandTugPushSpeed;
+}
+
 int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector2D& Near,
 	const FAirframe& Airframe, double ShutdownPauseSeconds)
 {
