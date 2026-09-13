@@ -496,6 +496,7 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 	const double Longest = FMath::Max(Rules.MaxSubstepSeconds, KINDA_SMALL_NUMBER);
 	const int32 Steps = FMath::Clamp(
 		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(Rules.MaxSubsteps, 1));
+	LastStepsForTest = Steps;
 
 	// Divided rather than repeatedly subtracted: the steps then sum to exactly DeltaSeconds,
 	// so SimSeconds and every integration inside stay in step with the caller's clock. Past

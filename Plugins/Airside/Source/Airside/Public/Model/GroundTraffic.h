@@ -635,6 +635,20 @@ public:
 	double GetSimSeconds() const { return SimSeconds; }
 
 	/**
+	 * How many substeps the most recent Advance call split its DeltaSeconds into.
+	 *
+	 * THE ONLY WAY TO SEE THE SPLIT FROM OUTSIDE (#107 item 5): Advance's step count is not
+	 * otherwise observable, and the defect this exists to pin - DeltaSeconds crossing the
+	 * Present/Model seam as a float (UAirsideTraffic::Advance used to take one) - shows up
+	 * ONLY in this count: float(1.0/30.0) is very slightly LARGER than the double it should
+	 * equal, so dividing by MaxSubstepSeconds and taking CeilToInt rounds up at every exact
+	 * multiple of a substep - one spurious extra step at 30 Hz x1, one at 60 Hz x4. The
+	 * follower's own physics do not show this reliably (FTrafficSubstepTest's near-exact
+	 * SplitGap), so the count is what a test can actually assert.
+	 */
+	int32 GetLastStepsForTest() const { return LastStepsForTest; }
+
+	/**
 	 * How many DISTINCT wait-for cycles this session has logged, keyed by lowest member id.
 	 *
 	 * The one thing a test can ask that the logs would otherwise be the only record of.
@@ -703,6 +717,10 @@ private:
 
 	/** Sim seconds elapsed through Advance. The deadlock resolver's retry clock. */
 	UPROPERTY(Transient) double SimSeconds = 0.0;
+
+	/** How many substeps the last Advance call took. See GetLastStepsForTest. Not a
+	 *  UPROPERTY: bookkeeping about the last call, not state a save would ever need. */
+	int32 LastStepsForTest = 0;
 
 	/**
 	 * The wait-for graph and its cycle bookkeeping (issue #84) - CyclesSeen, YieldedAt,
