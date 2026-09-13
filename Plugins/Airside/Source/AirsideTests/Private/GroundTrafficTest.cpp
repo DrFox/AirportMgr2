@@ -2363,6 +2363,79 @@ bool FTrafficColdRedirectTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 /**
+ * A REDIRECT RE-POSES IMMEDIATELY, EVEN ON A PAUSED FRAME.
+ *
+ * CONFIRMED, 2026-09-12 review (#107 item 3). UGroundTraffic::Advance early-returns on
+ * DeltaSeconds <= 0 (the paused-frame guard, by design - see its own comment), which means
+ * nothing calls FRoadAgent::Advance for the rest of a paused tick. DispatchAgent covers this
+ * for a fresh agent with its own zero-second Agent.Advance(0.0, Motion) right after StartTaxi
+ * - see its comment - but RedirectAgent did not, so LastMotion was left exactly as StartTaxi's
+ * OWN fallback reset it: FAgentMotion() with only Position set. Heading 0 regardless of the
+ * new route's actual direction, EngineRPM 0 regardless of whatever StartEngineAtSpeed had
+ * just written into Agent.EngineRPM. UAirsideTraffic::Advance poses the view off exactly this
+ * field every tick (AirsideTraffic.cpp:255-268), including a paused one, so a player pressing
+ * Depart while paused would see the aeroplane point due east with a stopped propeller until
+ * the game resumed - regardless of which way the departure runway actually lies.
+ *
+ * Fixed the same way DispatchAgent already does it: RedirectAgent now re-poses with its own
+ * zero-second Agent.Advance(0.0, Motion) once everything is armed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRedirectPosesImmediatelyTest,
+	"Airside.Model.Traffic.RedirectPosesImmediatelyEvenPaused",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRedirectPosesImmediatelyTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, 0.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 20000.0, 0.0);
+	const FGuidelineNodeId D = TestGraph::Node(*Net, 20000.0, 20000.0);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, D);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const double AtSpeed = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+
+	// A -> B, due EAST (heading 0) - so a redirect's heading is measured against a real
+	// change, not against the same number StartTaxi's fallback would have left anyway.
+	const int32 Id = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, B, ETraversalClass::Aircraft),
+		Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+
+	// NOT TICKED: the engine is still warm from the dispatch itself (bEngineRunning true), so
+	// this redirect takes the "already running" branch (#107 item 2) and StartEngineAtSpeed
+	// writes Agent.EngineRPM = AtSpeed - the mismatch this test pins is between THAT field and
+	// LastMotion.EngineRPM, which is what the view actually reads.
+	//
+	// B -> D, due NORTH (heading +90 deg) - unmistakably different from both 0 and from
+	// whatever FAgentMotion()'s default would read.
+	if (!TestTrue(TEXT("the redirect is accepted"),
+		Traffic->RedirectAgent(Id, Net, M2TrafficRoute(*Net, B, D, ETraversalClass::Aircraft))))
+	{
+		return false;
+	}
+
+	// NO Traffic->Advance CALL HERE AT ALL - this is exactly the state a paused frame would
+	// show, because UGroundTraffic::Advance(0.0, ...) would not touch the agent either.
+	const FRoadAgent* Redirected = Traffic->FindAgent(Id);
+	if (!TestTrue(TEXT("the agent survived the redirect"), Redirected != nullptr)) { return false; }
+
+	TestTrue(*FString::Printf(
+		TEXT("LastMotion already points north (%.1f deg), not the old heading or the FAgentMotion default"),
+		FMath::RadiansToDegrees(Redirected->LastMotion.Heading)),
+		FMath::IsNearlyEqual(Redirected->LastMotion.Heading, PI * 0.5, 0.01));
+
+	TestTrue(*FString::Printf(
+		TEXT("LastMotion already shows the warm-started engine (%.0f RPM, want %.0f)"),
+		Redirected->LastMotion.EngineRPM, AtSpeed),
+		FMath::IsNearlyEqual(Redirected->LastMotion.EngineRPM, AtSpeed, 0.01));
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
  * THE POSED AIRCRAFT NEVER REVERSES OR SNAPS, across a whole arrival.
  *
  * Written while chasing judder reported from play (2026-09-12). It turned out to be

@@ -363,6 +363,18 @@ bool UGroundTraffic::RedirectAgent(int32 AgentId, const URoadNetwork* Network, c
 		ClaimGoalNodeAtDispatch(Agent, AgentId, *Network);
 	}
 
+	// POSED NOW, NOT LEFT FOR THE NEXT TICK (#107 item 3) - the same reason DispatchAgent runs
+	// a zero-second Advance before Admit. UGroundTraffic::Advance early-returns on a paused
+	// frame (DeltaSeconds <= 0), so nothing would otherwise call FRoadAgent::Advance for the
+	// rest of one - and StartTaxi's own LastMotion reset above is a bare FAgentMotion() with
+	// only Position filled in: heading 0 regardless of which way this route actually goes,
+	// EngineRPM 0 regardless of what StartEngineAtSpeed just wrote into Agent.EngineRPM.
+	// UAirsideTraffic::Advance poses the view off exactly this field every tick, paused ones
+	// included, so a player redirecting while paused would see the aeroplane facing east with
+	// a stopped propeller until play resumed, whichever way the new route actually points.
+	FAgentMotion Motion;
+	Agent.Advance(0.0, Motion);
+
 	UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d redirected: %.0f uu"), AgentId, Plan.Length);
 	if (Agent.Phase != Before)
 	{
