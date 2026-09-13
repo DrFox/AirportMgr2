@@ -1,15 +1,17 @@
-// UGroundTraffic::ClaimAhead and the helpers it alone uses - spec 2026-09-06 §3.1-§3.3.
-// One class across four translation units, the shape URoadEditFacade already uses
-// (RoadEditFacade.cpp beside RoadEditFacadeSurfaces.cpp): the claim pass is the biggest
-// single concern in this class and the one every traffic bug is read in, so it gets a file
-// of its own rather than 740 lines in the middle of dispatch and tick. See
-// Model/GroundTraffic.h for the class itself and for which file holds what.
+// FClaimPass and the helpers it alone uses - spec 2026-09-06 §3.1-§3.3.
+//
+// PULLED OFF UGroundTraffic BY ISSUE #84: this was UGroundTraffic::ClaimAhead and its
+// private helpers, in GroundTrafficClaims.cpp, one class across four translation units (the
+// shape URoadEditFacade already uses). It is a struct of its own now - Rules, Table (the
+// occupancy table, was UGroundTraffic::Occupancy) and Reach (was UGroundTraffic::NodeReach)
+// are references to the SAME objects UGroundTraffic still owns, handed in by
+// UGroundTraffic::Arbitrate. See Model/TrafficClaims.h for the struct itself.
+//
+// Run itself is the numbered sequence its comments have always carried: the two early
+// branches, the window, step 0's crossing, steps 1-2's wanted list, step 3's ask. Each
+// numbered step is one function below, and Run is last.
 
-// ClaimAhead itself is the numbered sequence its comments have always carried: the two
-// early branches, the window, step 0's crossing, steps 1-2's wanted list, step 3's ask.
-// Each numbered step is one function below, and ClaimAhead is last.
-
-#include "Model/GroundTraffic.h"
+#include "Model/TrafficClaims.h"
 
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
@@ -24,7 +26,7 @@
  * which way round) is exactly these fields. Re-deriving it from the blocker would mean a
  * second reading of the same step - the thing this codebase calls a second evaluator.
  */
-struct UGroundTraffic::FWantedClaim
+struct FClaimPass::FWantedClaim
 {
 	/**
 	* Which of spec §3.1's routes to the runway surface raised this claim, when it was
@@ -64,7 +66,7 @@ struct UGroundTraffic::FWantedClaim
 
 	/**
 	 * For an end-node claim: how far short of the node the lines have parted, beyond the
-	 * half footprint - UGroundTraffic::ReachExcessAt. Carried here so StopWithinFor can stay
+	 * half footprint - FClaimPass::ReachExcessAt. Carried here so StopWithinFor can stay
 	 * a pure function of the claim, without the network.
 	 */
 	double ReachExcess = 0.0;
@@ -74,7 +76,7 @@ struct UGroundTraffic::FWantedClaim
 	FGuidelineNodeId HoldNode;
 };
 
-void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
+void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 {
 	// CLEARED, or the arbitration fields say whatever they said on the last tick this
 	// agent taxied. A parked aircraft still naming the vehicle it once queued behind
@@ -119,7 +121,7 @@ void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Netwo
 		}
 	}
 
-	Occupancy.ReleaseExcept(Agent.Id, Surfaces);
+	Table.ReleaseExcept(Agent.Id, Surfaces);
 
 	for (const FTrafficResource& Resource : Surfaces)
 	{
@@ -134,11 +136,11 @@ void UGroundTraffic::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Netwo
 		// was held (see ArrivalPlanner::Plan). Who is allowed onto a runway NEXT is
 		// URunwaySequencer's question in M3, asked before anything is dispatched.
 		FTrafficClaim Blocker;
-		Occupancy.TryClaim(Claim, Blocker);
+		Table.TryClaim(Claim, Blocker);
 	}
 }
 
-void UGroundTraffic::ReleaseForDeadPlan(FRoadAgent& Agent)
+void FClaimPass::ReleaseForDeadPlan(FRoadAgent& Agent)
 {
 	// NO LINE LEFT TO WALK, SO NO LINE HELD. Released rather than left alone: an agent
 	// whose plan was replaced by an invalid one would otherwise keep its last edge and
@@ -152,7 +154,7 @@ void UGroundTraffic::ReleaseForDeadPlan(FRoadAgent& Agent)
 	// BETWEEN ticks - so giving the strip back cleared a landing onto it. The same
 	// correction as ReplanAt's (reservations only) and the rebuild's Strand, for the same
 	// reason: only the things a ROUTE names are a route's to give back.
-	Occupancy.ReleaseGuidelineClaimsOf(Agent.Id);
+	Table.ReleaseGuidelineClaimsOf(Agent.Id);
 
 	// THE CROSSING FIELDS SURVIVE WITH THE CLAIM THEY DESCRIBE. Clearing them here (which
 	// is what this did, in the breath that also dropped the claim) would leave the phase
@@ -170,7 +172,7 @@ void UGroundTraffic::ReleaseForDeadPlan(FRoadAgent& Agent)
 	Agent.LastOverlaps.Reset();
 }
 
-UGroundTraffic::FClaimWindow UGroundTraffic::WindowFor(const FRoadAgent& Agent) const
+FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 {
 	const FRoutePlan& Plan = Agent.Follower.Plan;
 
@@ -201,7 +203,7 @@ UGroundTraffic::FClaimWindow UGroundTraffic::WindowFor(const FRoadAgent& Agent) 
 	// as a resolver that never fires.
 	const double Head = T + F * 0.5 + Window;
 	const double Tail = T - F * 0.5;
-	const int32 Current = CurrentStep(Plan, T);
+	const int32 Current = UGroundTraffic::CurrentStep(Plan, T);
 
 	// COPIED OUT ONE AT A TIME rather than assigned as the arithmetic runs: every line
 	// above is the line it was inside ClaimAhead, so the figures can be diffed against
@@ -216,7 +218,7 @@ UGroundTraffic::FClaimWindow UGroundTraffic::WindowFor(const FRoadAgent& Agent) 
 	return Out;
 }
 
-UGroundTraffic::FClaimBody UGroundTraffic::SampleBody(const FRoutePlan& Plan, const FClaimWindow& Window)
+FClaimPass::FClaimBody FClaimPass::SampleBody(const FRoutePlan& Plan, const FClaimWindow& Window)
 {
 	const double T = Window.T;
 	const double F = Window.F;
@@ -243,7 +245,7 @@ UGroundTraffic::FClaimBody UGroundTraffic::SampleBody(const FRoutePlan& Plan, co
 	return Body;
 }
 
-void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
+void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	const FClaimWindow& Window, const FClaimBody& Body) const
 {
 	const FRoutePlan& Plan = Agent.Follower.Plan;
@@ -259,7 +261,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	const FVector2D& CentrePoint = Body.Centre;
 	const FVector2D& TailPoint = Body.Tail;
 
-	const FGuidelineNodeId FromId = StepFromNode(Plan, Current);
+	const FGuidelineNodeId FromId = UGroundTraffic::StepFromNode(Plan, Current);
 	const FGuidelineNode* FromNode = Network.GetGuidelineNode(FromId);
 
 	// RUNWAY holding positions only: HoldingPositionFor is set iff the node is one. An
@@ -367,7 +369,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 			// must not hold a runway for ever.
 			double ChainHalfWidth = 0.0;
 			const bool bNodeOnStrip = Network.IsGuidelineNodeOnRunway(FromId, Agent.CrossingRunway, &ChainHalfWidth);
-			const double TailPast = (T - F * 0.5) - StepStart(Plan, Current);
+			const double TailPast = (T - F * 0.5) - UGroundTraffic::StepStart(Plan, Current);
 			bClear = !bFromIsBar && TailPast >= 0.0 && (!bNodeOnStrip || TailPast > ChainHalfWidth);
 		}
 
@@ -384,7 +386,7 @@ void UGroundTraffic::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Netwo
 	}
 }
 
-void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
+void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
 	const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const
 {
 	const FRoutePlan& Plan = Agent.Follower.Plan;
@@ -423,7 +425,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	};
 
 	// 0. THE CLAIM SIDE OF THE CROSSING UpdateCrossing has just armed, advanced or
-	// released. See ClaimAhead for why the runway under a crossing agent is held at all.
+	// released. See Run for why the runway under a crossing agent is held at all.
 	// AT THE FRONT of Pending, so a refusal here binds before anything further along the
 	// route: the agent is standing on this surface, and nothing it might be told about a
 	// node ahead can matter more than that. COMMITTED COUNTS AS STANDING ON IT: the body
@@ -442,14 +444,14 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 			Crossing.Claim.bOccupied = true;
 			Crossing.Claim.Rank = TraversalPriority(Agent.Class);
 			Crossing.Step = Current;
-			Crossing.StepStart = StepStart(Plan, Current);
+			Crossing.StepStart = UGroundTraffic::StepStart(Plan, Current);
 			Crossing.StepEnd = Plan.Steps[Current].EndDistance;
 			Pending.Add(Crossing);
 		}
 	}
 
 	// THE ENTRY RULE FIRES FOR ONE BOX PER PASS - the first the window reaches that the agent
-	// has not entered. See the loop below and ClaimAhead's header for the trace that rejected
+	// has not entered. See the loop below and Run's header for the trace that rejected
 	// chaining it through every consecutive box.
 	bool bBoxEntryTaken = false;
 
@@ -460,8 +462,9 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	// PLUS THE NODE'S REACH along this edge: where the edge leaves the node alongside
 	// another - a stand's sweep arc hugging its taxiway - half a footprint releases the
 	// node with the body still beside the other line. See NodeReach.h.
-	const FGuidelineNodeId From = StepFromNode(Plan, Current);
-	if (T - StepStart(Plan, Current) < F * 0.5 + ReachExcessAt(Network, From, Plan.Steps[Current].Edge, Agent.Class))
+	const FGuidelineNodeId From = UGroundTraffic::StepFromNode(Plan, Current);
+	if (T - UGroundTraffic::StepStart(Plan, Current)
+		< F * 0.5 + ReachExcessAt(Rules, Reach, Network, From, Plan.Steps[Current].Edge, Agent.Class))
 	{
 		FWantedClaim Want;
 		Want.Claim.AgentId = Agent.Id;
@@ -469,7 +472,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 		Want.Claim.bOccupied = true;
 		Want.Claim.Rank = RankAt(Network, From, Agent.Class);
 		Want.Step = Current;
-		Want.StepStart = StepStart(Plan, Current);
+		Want.StepStart = UGroundTraffic::StepStart(Plan, Current);
 		Want.StepEnd = Plan.Steps[Current].EndDistance;
 		Pending.Add(Want);
 	}
@@ -478,7 +481,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	for (int32 Index = Current; Index < Plan.Steps.Num(); ++Index)
 	{
 		const FRouteStep& Step = Plan.Steps[Index];
-		const double Start = StepStart(Plan, Index);
+		const double Start = UGroundTraffic::StepStart(Plan, Index);
 		if (Start >= Head)
 		{
 			break;
@@ -489,7 +492,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 		// Where this edge has actually parted from the others at its end node, measured
 		// back from the node - the node's claim begins there, not at the node. 0 at an
 		// ordinary junction. See NodeReach.h.
-		const double ExcessTo = ReachExcessAt(Network, Step.To, Step.Edge, Agent.Class);
+		const double ExcessTo = ReachExcessAt(Rules, Reach, Network, Step.To, Step.Edge, Agent.Class);
 
 		// A BOX: an edge too short to stand on without still blocking the node behind it,
 		// which is what every junction turn path is. Spec §3.1.
@@ -533,7 +536,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 			// junction has to reach the approach, not just the junction itself. The step
 			// being stood on is ranked at the node it left, which is the one it is in.
 			Want.Claim.Rank = Index == Current
-				? RankAt(Network, StepFromNode(Plan, Current), Agent.Class)
+				? RankAt(Network, UGroundTraffic::StepFromNode(Plan, Current), Agent.Class)
 				: RankAt(Network, Step.To, Agent.Class);
 
 			Want.Step = Index;
@@ -674,7 +677,7 @@ void UGroundTraffic::BuildPending(const FRoadAgent& Agent, const URoadNetwork& N
 	}
 }
 
-void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
+void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	const TArray<FWantedClaim>& Pending)
 {
 	// WHAT WAS ACTUALLY CLAIMED, not what was wanted: the loop below stops reserving at the
@@ -686,7 +689,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	// Released AFTER the claims rather than before them, which is safe and was checked: the
 	// table skips an agent's own claims when it looks for conflicts, and no other agent
 	// claims between this ReleaseExcept and the ones above - Arbitrate runs one agent at a
-	// time. Releasing everything and re-claiming is still rejected (ClaimAhead's header):
+	// time. Releasing everything and re-claiming is still rejected (Run's header):
 	// this drops only what was not asked for.
 	TArray<FTrafficResource> Wanted;
 	Wanted.Reserve(Pending.Num());
@@ -710,7 +713,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		}
 
 		FTrafficClaim Blocker;
-		const bool bGranted = Occupancy.TryClaim(Want.Claim, Blocker) == EClaimResult::Granted;
+		const bool bGranted = Table.TryClaim(Want.Claim, Blocker) == EClaimResult::Granted;
 		if (bGranted || Want.Claim.bOccupied)
 		{
 			Wanted.Add(Want.Claim.Resource);
@@ -814,7 +817,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	}
 
 	Agent.LastOverlaps = MoveTemp(OverlapsThisPass);
-	Occupancy.ReleaseExcept(Agent.Id, Wanted);
+	Table.ReleaseExcept(Agent.Id, Wanted);
 
 	if (!bHeld)
 	{
@@ -828,7 +831,7 @@ void UGroundTraffic::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	}
 }
 
-double UGroundTraffic::StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
+double FClaimPass::StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& Blocker,
 	const FClaimWindow& Window)
 {
 	const double T = Window.T;
@@ -907,7 +910,7 @@ double UGroundTraffic::StopWithinFor(const FWantedClaim& Want, const FTrafficCla
 	return 0.0;
 }
 
-void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
+void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 {
 	// NOT TAXIING: hold the runway and nothing else. An arrival on the roll and a departure
 	// lining up own the strip; whatever either held on the taxiway before the handover is
@@ -953,7 +956,7 @@ void UGroundTraffic::ClaimAhead(FRoadAgent& Agent, const URoadNetwork& Network)
 	ClaimGoalNode(Agent, Network);
 }
 
-void UGroundTraffic::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network)
+void FClaimPass::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Network)
 {
 	if (!Agent.GoalNode.IsSet() || Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
 	{
@@ -986,5 +989,28 @@ void UGroundTraffic::ClaimGoalNode(FRoadAgent& Agent, const URoadNetwork& Networ
 	FTrafficClaim Blocker;
 	// Not acted on: a stand already held by someone else is a planning failure upstream (the
 	// planner and the rebuild both skip held stands), and a table cannot un-plan an aircraft.
-	Occupancy.TryClaim(Claim, Blocker);
+	Table.TryClaim(Claim, Blocker);
+}
+
+int32 FClaimPass::RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class)
+{
+	const FGuidelineNode* Found = Network.GetGuidelineNode(Node);
+	if (Found != nullptr && Found->PriorityOverride.Num() > 0)
+	{
+		// Scaled by ten so an authored order can never tie with a default one - a tie keeps
+		// the holder, and an authored "vehicles first" that tied would mean nothing. A class
+		// the author left out of the list ranks below everything named in it.
+		const int32 Index = Found->PriorityOverride.Find(Class);
+		return Index == INDEX_NONE ? 0 : 10 * (Found->PriorityOverride.Num() - Index);
+	}
+	return TraversalPriority(Class);
+}
+
+double FClaimPass::ReachExcessAt(const FTrafficRules& Rules, FNodeReachCache& Reach, const URoadNetwork& Network,
+	FGuidelineNodeId Node, FGuidelineEdgeId Edge, ETraversalClass Class)
+{
+	// Per class because the footprint is: a van's reach along the same arc is shorter than
+	// an aeroplane's, and the cache keys on the footprint it was asked for.
+	const double F = Rules.FootprintFor(Class);
+	return FMath::Max(0.0, Reach.Get(Network, Node, Edge, F) - F * 0.5);
 }

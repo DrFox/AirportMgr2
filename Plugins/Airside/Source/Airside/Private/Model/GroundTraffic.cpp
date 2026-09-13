@@ -1,7 +1,8 @@
-// Dispatch, admission, redirect/retire, the tick, and the plan/step helpers everything else
-// reads. The rest of UGroundTraffic lives in GroundTrafficClaims.cpp (the claim pass),
-// GroundTrafficDeadlock.cpp (the wait-for graph and ReplanAt) and GroundTrafficRebuild.cpp
-// (surviving a guideline rebuild). See Model/GroundTraffic.h for the map.
+// Dispatch, admission, redirect/retire, the registry, the tick, events, and the plan/step
+// helpers everything else reads. FClaimPass (TrafficClaims.cpp), FDeadlockResolver
+// (GroundTrafficDeadlock.cpp) and FPlanReResolver (GroundTrafficRebuild.cpp) hold the rest -
+// see Model/GroundTraffic.h for the map (issue #84 split these off by responsibility, not
+// just by file).
 
 #include "Model/GroundTraffic.h"
 
@@ -9,6 +10,7 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
+#include "Model/TrafficClaims.h"
 #include "Solve/RunwayDesignator.h"
 
 double FTrafficRules::FootprintFor(ETraversalClass Class) const
@@ -495,6 +497,11 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		Arbitrate(*Network);
 	}
 
+	// ONE INSTANCE FOR THE HANDOVER CLAIM BELOW (issue #84): the only FClaimPass call in this
+	// loop is ClaimGoalNode at the Taxiing -> Parked handover, so this is cheaper than
+	// constructing one per agent and exactly as correct - see Arbitrate's own instance for why.
+	FClaimPass Pass{Rules, Occupancy, NodeReach};
+
 	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
 	// the phase, accrue the stall clock, drop an agent once it says Gone. The deadlock pass
@@ -526,7 +533,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		// read "Reserved for" over an aircraft standing on the stand for one frame.
 		if (Before == EAgentPhase::Taxiing && Agent.Phase == EAgentPhase::Parked && Network != nullptr)
 		{
-			ClaimGoalNode(Agent, *Network);
+			Pass.ClaimGoalNode(Agent, *Network);
 		}
 
 		// THE RUNWAY CHANGES HANDS AT THE HANDOVER ITSELF, in the tick that made it.
@@ -616,7 +623,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 
 		// STOPPED AND WAITING, not merely stopped: an aircraft sitting out its shutdown pause
 		// is not stalled, and neither is one crawling through a turn. All three conditions
-		// together are what ResolveDeadlocks means by a waiter, and the clock
+		// together are what FDeadlockResolver::Resolve means by a waiter, and the clock
 		// resets the moment any of them stops holding, so a junction wait that clears on its
 		// own leaves nothing behind.
 		Agent.StalledSeconds = (Agent.Phase == EAgentPhase::Taxiing && Agent.WaitingOn != 0
@@ -637,7 +644,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// and hand the follower a plan the arbiter had not yet been asked about.
 	if (Network != nullptr)
 	{
-		ResolveDeadlocks(*Network);
+		DeadlockResolver.Resolve(Agents, *Network, Rules, Occupancy, NodeReach, PlanReResolver, SimSeconds);
 	}
 
 	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been
@@ -713,31 +720,18 @@ FGuidelineNodeId UGroundTraffic::StepFromNode(const FRoutePlan& Plan, int32 Step
 	return Step <= 0 ? Plan.Start : Plan.Steps[Step - 1].To;
 }
 
-int32 UGroundTraffic::RankAt(const URoadNetwork& Network, FGuidelineNodeId Node, ETraversalClass Class) const
-{
-	const FGuidelineNode* Found = Network.GetGuidelineNode(Node);
-	if (Found != nullptr && Found->PriorityOverride.Num() > 0)
-	{
-		// Scaled by ten so an authored order can never tie with a default one - a tie keeps
-		// the holder, and an authored "vehicles first" that tied would mean nothing. A class
-		// the author left out of the list ranks below everything named in it.
-		const int32 Index = Found->PriorityOverride.Find(Class);
-		return Index == INDEX_NONE ? 0 : 10 * (Found->PriorityOverride.Num() - Index);
-	}
-	return TraversalPriority(Class);
-}
-
-double UGroundTraffic::ReachExcessAt(const URoadNetwork& Network, FGuidelineNodeId Node, FGuidelineEdgeId Edge,
-	ETraversalClass Class) const
-{
-	// Per class because the footprint is: a van's reach along the same arc is shorter than
-	// an aeroplane's, and the cache keys on the footprint it was asked for.
-	const double F = Rules.FootprintFor(Class);
-	return FMath::Max(0.0, NodeReach.Get(Network, Node, Edge, F) - F * 0.5);
-}
+// RankAt and ReachExcessAt MOVED TO FClaimPass (issue #84) - Model/TrafficClaims.h. Both are
+// static there, taking Rules/Reach explicitly, so FDeadlockResolver::CanReplanAtBlockedStep
+// can call FClaimPass::ReachExcessAt without standing up a whole claim pass just for it.
 
 void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 {
+	// ONE PASS, SHARED ACROSS EVERY AGENT THIS CALL CLAIMS FOR (issue #84): FClaimPass carries
+	// no state between agents - Rules, Occupancy and NodeReach are references to this class's
+	// own members - so one instance for the whole Arbitrate call is exactly as correct as a
+	// fresh one per agent, and cheaper.
+	FClaimPass Pass{Rules, Occupancy, NodeReach};
+
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
 	// pass writes to the agents, so a copy would be arbitrating over stale ones.
 	TArray<int32> Order;
@@ -753,14 +747,14 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 
 		// Ties to the lower id, which is first-to-be-dispatched. The per-node
 		// PriorityOverride does NOT reorder this pass: it changes who wins a contested
-		// resource (see RankAt), not who is asked first, and a per-node rule cannot decide a
-		// global order without asking every node about every agent.
+		// resource (see FClaimPass::RankAt), not who is asked first, and a per-node rule
+		// cannot decide a global order without asking every node about every agent.
 		return LeftRank != RightRank ? LeftRank > RightRank : Agents[Left].Id < Agents[Right].Id;
 	});
 
 	for (const int32 Index : Order)
 	{
-		ClaimAhead(Agents[Index], Network);
+		Pass.Run(Agents[Index], Network);
 	}
 
 	// ONE RE-PASS over whoever lost a reservation to a higher rank during that pass. Without
@@ -771,7 +765,7 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 		const int32 Index = FindIndex(AgentId);
 		if (Index != INDEX_NONE)
 		{
-			ClaimAhead(Agents[Index], Network);
+			Pass.Run(Agents[Index], Network);
 		}
 	}
 }

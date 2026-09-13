@@ -1,6 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
-#include "Model/GroundTraffic.h"
+#include "Model/TrafficClaims.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -21,7 +21,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FClaimGeometryTest::RunTest(const FString& Parameters)
 {
-	using FGeom = UGroundTraffic::FClaimGeometry;
+	using FGeom = FClaimPass::FClaimGeometry;
 
 	// One step: route 1000..1400, over an edge 400 long. The window covers 1100..1300.
 	const double StepBegin = 1000.0;

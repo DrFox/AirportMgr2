@@ -11,8 +11,9 @@
 #include "Model/TrafficOccupancy.h"
 #include "RoadAgent.generated.h"
 
-// Forward declared only for the friend below - see FRoadAgent::CrossingRunway.
+// Forward declared only for the friends below - see FRoadAgent::CrossingRunway.
 class UGroundTraffic;
+struct FClaimPass;
 
 /**
  * Where an agent has got to. Replaces five independent bools - bArriving, bDeparting,
@@ -338,19 +339,21 @@ private:
 	 * WHICH CHAIN, NOT WHETHER. CrossingPhase says whether the hold applies; this says which
 	 * runway it is over. Reading IsSet() as "holding" is the bug the phase exists to end.
 	 *
-	 * PRIVATE, WITH UGroundTraffic AS A FRIEND (issue #82): the friendship is for the many
+	 * PRIVATE, WITH UGroundTraffic AND FClaimPass AS FRIENDS (issue #82; FClaimPass added in
+	 * #84 when the claim pass moved off UGroundTraffic). The friendship is for the many
 	 * existing READS in the claim pass (Agent.CrossingPhase == ...), which stay direct field
 	 * access rather than a getter call at every one. WRITES go through BeginCrossing/
-	 * EndCrossing everywhere, including inside UGroundTraffic - the friendship makes that a
+	 * EndCrossing everywhere, including inside these friends - the friendship makes that a
 	 * convention this type documents, not a rule the compiler can enforce on its own friend.
 	 */
 	UPROPERTY() FRoadSegmentId CrossingRunway;
 
 	/** How far through a crossing this agent's BODY is. See ECrossingPhase. Private for the
-	 *  same reason as CrossingRunway, and by the same friend. */
+	 *  same reason as CrossingRunway, and by the same friends. */
 	UPROPERTY() ECrossingPhase CrossingPhase = ECrossingPhase::None;
 
 	friend class UGroundTraffic;
+	friend struct FClaimPass;
 
 public:
 	/**
