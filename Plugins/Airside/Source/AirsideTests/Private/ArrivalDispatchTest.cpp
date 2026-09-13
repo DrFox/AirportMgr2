@@ -1,8 +1,6 @@
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
+#include "AirsideTestFixtures.h"
 #include "Engine/World.h"
-#include "Entities/AircraftType.h"
-#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/LandingRun.h"
 #include "Model/RoadAgent.h"
@@ -29,21 +27,12 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//
 	// So this builds the airport the user actually drew - a runway, a taxiway joining it, and
 	// stands on the taxiway - and asserts that ordering an arrival on it produces an aircraft.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to spawn into"), World))
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World))
 	{
 		return false;
 	}
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-
-	ON_SCOPE_EXIT
-	{
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	};
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor))
 	{
 		return false;
@@ -56,7 +45,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	Actor->GetTraffic()->OnAgentPhaseChanged.AddLambda(
 		[&Transitions](int32, EAgentPhase From, EAgentPhase To) { Transitions.Emplace(From, To); });
 
-	FGroundPerformance Ground = UAircraftType::PiperMeridianGround();
+	FGroundPerformance Ground = TestAirframes::Piper().Ground;
 
 	// DISTINCTIVE, not authored: 1000 is the Piper's own Taxi.SpeedCap AND what a
 	// default-constructed FGroundPerformance carries, so leaving the figure alone could not
@@ -65,12 +54,17 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// #27 describes. 1234 belongs to neither, so only the real handover proves it.
 	Ground.Taxi.SpeedCap = 1234.0;
 
-	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
-	const FApproachPerformance Approach = UAircraftType::PiperMeridianApproach();
+	const FClimbPerformance Climb = TestAirframes::Piper().Climb;
+	const FApproachPerformance Approach = TestAirframes::Piper().Approach;
 
 	// THE RUNWAY IS SIZED FROM THE AIRCRAFT, not chosen. A strip shorter than the landing
 	// distance is correctly refused, so a fixture that picked a length out of the air would
 	// be testing the refusal or the acceptance depending on numbers nobody was watching.
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Approach = Approach;
+
 	const double Needed =
 		FLandingRun::RequiredLandingDistance(Ground, Climb, Approach) * FLandingRun::LandingMargin;
 	const double RunwayLength = Needed * 1.5;
@@ -80,27 +74,16 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
-	URoadNetwork& Net = *Actor->Network;
 
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
-
-	// The runway, SPLIT at the exit - which is how a T-junction reaches the graph, and what
-	// puts a guideline node on the runway centreline for the exit search to find.
-	const FVector2D ThresholdAt(0.0, 0.0);
-	const FVector2D ExitAt(RunwayLength * 0.8, 0.0);
-	const FVector2D FarEnd(RunwayLength, 0.0);
-
-	const FRoadNodeId Threshold = Net.AddNode(ThresholdAt);
-	const FRoadNodeId Exit = Net.AddNode(ExitAt);
-	const FRoadNodeId Far = Net.AddNode(FarEnd);
-	const FRoadSegmentId RunwaySeed = Net.AddStraightSegment(Threshold, Exit, Runway);
-	Net.AddStraightSegment(Exit, Far, Runway);
-
-	// The taxiway off it, running south.
-	const FRoadNodeId TaxiEnd = Net.AddNode(ExitAt + FVector2D(0.0, -20000.0));
-	Net.AddStraightSegment(Exit, TaxiEnd, Taxiway);
+	// ONTO THE ACTOR'S OWN NETWORK, no stand (Actor->PlaceStand below needs the content set's
+	// authored definition, which FTestAirport's own MakeStandTransient does not exercise) and
+	// NOT derived here: Actor->RebuildMesh does that, the real path a road edit takes, and is
+	// what this test means to exercise.
+	const FTestAirport Fixture = FTestAirport::Build(Airframe, { .StandCount = 0, .bDerived = false }, Actor->Network.Get());
+	URoadNetwork& Net = *Fixture.Net;
+	const FVector2D ThresholdAt = Fixture.Threshold;
+	const FVector2D ExitAt = Fixture.ExitAt;
+	const FRoadSegmentId RunwaySeed = Fixture.ThresholdSegment;
 
 	// THE STAND SITS BESIDE THE TAXIWAY AND FACES IT. Not on it: FAnchorLink casts the
 	// lead-in FROM the stand along heading + 180 and links to the guideline it strikes, so a
@@ -158,11 +141,6 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    DispatchArrival now takes one FAirframe rather than four structs - see issue #29 -
 	//    but this test still exercises it through the actor, because it is what needs the
 	//    world: the plan itself is asserted world-free in Airside.Model.ArrivalPlanner.
-	FAirframe Airframe;
-	Airframe.Ground = Ground;
-	Airframe.Climb = Climb;
-	Airframe.Approach = Approach;
-
 	const int32 Before = Actor->GetAgentCount();
 	const bool bDispatched = Actor->DispatchArrival(ThresholdAt, Airframe);
 
@@ -226,14 +204,13 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// 4. A RUNWAY TOO SHORT TO STOP ON IS STILL REFUSED, and refused without spawning - an
 	//    arrival that cannot be completed must leave nothing frozen on final.
 	{
-		ARoadNetworkActor* Small = World->SpawnActor<ARoadNetworkActor>();
+		ARoadNetworkActor* Small = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		if (TestNotNull(TEXT("a second actor"), Small))
 		{
 			Small->PlaceNode(FVector2D(-100000.0, -100000.0));
 			URoadNetwork& Tiny = *Small->Network;
 
-			URoadProfile* Strip = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Strip->bContinuousThroughJunctions = true;
+			URoadProfile* Strip = TestProfiles::Runway();
 
 			const FRoadNodeId A = Tiny.AddNode(FVector2D(0.0, 0.0));
 			const FRoadNodeId B = Tiny.AddNode(FVector2D(Needed * 0.4, 0.0));
@@ -261,14 +238,13 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    reliable. A single segment has exactly one derived guideline edge, and it is the
 	//    plan in its entirety: no junction, no ambiguity about which end is which.
 	{
-		ARoadNetworkActor* Departing = World->SpawnActor<ARoadNetworkActor>();
+		ARoadNetworkActor* Departing = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		if (TestNotNull(TEXT("a third actor"), Departing))
 		{
 			Departing->PlaceNode(FVector2D(-100000.0, -100000.0));
 			URoadNetwork& Net2 = *Departing->Network;
 
-			URoadProfile* Runway2 = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-			Runway2->bContinuousThroughJunctions = true;
+			URoadProfile* Runway2 = TestProfiles::Runway();
 
 			const FVector2D NearAt2(0.0, 0.0);
 			const FVector2D FarAt2(RunwayLength * 2.0, 0.0);

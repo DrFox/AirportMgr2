@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -9,23 +10,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	/** The guideline node derived for one end of Segment, or unset. M2FullWidth prefix: unity build. */
-	FGuidelineNodeId M2FullWidthNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-}
 
 /**
  * THE HOLDING POSITION SITS WHERE THE TAXIWAY IS ITS OWN WIDTH. The flare fillet (PR #58)
@@ -43,7 +27,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 {
-	constexpr double TaxiwayWidth = 2300.0;
 	// Long exits at three angles, where the flare's own fillet lands its cut at the arc
 	// start; a short square stub; and the case from the player's level (probe, 2026-09-07:
 	// ends 1452-2498 uu from the node, cuts 1552-3381): a SHALLOW exit on a SHORT arm. The
@@ -57,10 +40,10 @@ bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 	{
 		const double Angle = Case.Angle;
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::NarrowRunway();
 		Runway->ExitLength = 6000.0;
-		URoadProfile* Taxiway = URoadProfile::MakeTransient(TaxiwayWidth, 1500.0, 230.0);
+		URoadProfile* Taxiway = TestProfiles::Taxiway();
+		const double TaxiwayWidth = Taxiway->GetTotalWidth();
 
 		// Runway W -> E, a long taxiway leaving X at Angle below east.
 		const FRoadNodeId W = Net->AddNode(FVector2D(-80000.0, 0.0));
@@ -77,7 +60,7 @@ bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 		FRoadGuidelineBuilder::Build(*Net, Solved);
 
 		const FRoadSegment* Segment = Net->GetSegment(XT);
-		const FGuidelineNodeId End = M2FullWidthNodeFor(*Net, XT, /*bEndA=*/true);
+		const FGuidelineNodeId End = TestGraph::NodeFor(*Net, XT, /*bEndA=*/true);
 		if (!TestTrue(TEXT("the taxiway's runway end exists"), Segment != nullptr && End.IsSet())) { continue; }
 		const FGuidelineNode* Node = Net->GetGuidelineNode(End);
 		TestEqual(TEXT("and is the derived runway-holding position"), Node->HoldingPosition, EHoldingPositionKind::Runway);

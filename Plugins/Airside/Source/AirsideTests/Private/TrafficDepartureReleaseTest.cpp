@@ -1,5 +1,5 @@
 #include "CoreMinimal.h"
-#include "Entities/AircraftType.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/GroundTraffic.h"
@@ -12,25 +12,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 DEFINE_LOG_CATEGORY_STATIC(LogM2DepTest, Log, All);
-
-namespace
-{
-	// Prefixed against the unity build.
-	FGuidelineNodeId M2DepNode(URoadNetwork& Net, double X, double Y)
-	{
-		return Net.AddGuidelineNode(FVector2D(X, Y), /*bDerived=*/false);
-	}
-
-	FAirframe M2DepPiper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-}
 
 /**
  * THE SECOND PIE REPORT OF 2026-09-06: "an aircraft taking off never releases the runway".
@@ -49,16 +30,15 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 	// ending ON the runway at the split - which is what arms a departure (see
 	// UGroundTraffic::ArmDepartureIfRunway).
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RA = Net->AddNode(FVector2D(-50000.0, 0.0));
 	const FRoadNodeId RM = Net->AddNode(FVector2D(0.0, 0.0));
 	const FRoadNodeId RB = Net->AddNode(FVector2D(50000.0, 0.0));
 	const FRoadSegmentId Near = Net->AddStraightSegment(RA, RM, Runway);
 	const FRoadSegmentId Far = Net->AddStraightSegment(RM, RB, Runway);
 
-	const FGuidelineNodeId A = M2DepNode(*Net, 0.0, -20000.0);
-	const FGuidelineNodeId B = M2DepNode(*Net, 0.0, 0.0);
+	const FGuidelineNodeId A = TestGraph::Node(*Net, 0.0, -20000.0);
+	const FGuidelineNodeId B = TestGraph::Node(*Net, 0.0, 0.0);
 	{
 		FGuidelineEdge Edge;
 		Edge.A = A; Edge.B = B;
@@ -69,11 +49,11 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
-	const int32 Plane = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), M2DepPiper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Plane = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 	if (!TestTrue(TEXT("the route ends on the runway, so the departure is armed"), Traffic->FindAgent(Plane)->bDepartureArmed)) { return false; }
 
-	const FAirframe Airframe = M2DepPiper();
+	const FAirframe Airframe = TestAirframes::Piper();
 	auto StripHeld = [&]()
 	{
 		return Traffic->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Near), 0)

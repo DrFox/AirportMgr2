@@ -35,7 +35,7 @@ bool FFieldLengthsCoverTheRollTest::RunTest(const FString& Parameters)
 	Check(TEXT("the default airframe"), UAirsideSettings::ResolveDefaultAirframe());
 
 	// Every type the content set names, when one is configured. Tests run without one, so
-	// this branch is exercised only in a project that has authored DA_PiperMeridian (#30).
+	// this branch is exercised only in a project that has authored a DA_PiperMeridian asset (#30).
 	if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 	{
 		if (const UAircraftType* Type = Content->DefaultAircraft.LoadSynchronous())

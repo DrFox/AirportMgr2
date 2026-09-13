@@ -1,7 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
-#include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
@@ -23,8 +23,7 @@ namespace
 
 	FDepAgentGraph DepAgentBuild(URoadNetwork& Net)
 	{
-		URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Runway->bContinuousThroughJunctions = true;
+		URoadProfile* Runway = TestProfiles::Runway();
 		const FRoadNodeId RA = Net.AddNode(FVector2D(-50000.0, 0.0));
 		const FRoadNodeId RM = Net.AddNode(FVector2D(0.0, 0.0));
 		const FRoadNodeId RB = Net.AddNode(FVector2D(50000.0, 0.0));
@@ -43,16 +42,6 @@ namespace
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 		return G;
 	}
-
-	FAirframe DepAgentPiper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -68,7 +57,7 @@ bool FDepartAgentModelTest::RunTest(const FString& Parameters)
 
 	// Taxi B -> A: parks at A, off the runway, engine shut down after the pause.
 	FRouteQuery Q; Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
-	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), DepAgentPiper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
 	TestEqual(TEXT("a taxiing agent may not depart"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::NotParked);
@@ -121,7 +110,7 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 	const FDepAgentGraph G = DepAgentBuild(*Actor->Network);
 
 	FRouteQuery Q; Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
-	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), DepAgentPiper()))) { return false; }
+	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), TestAirframes::Piper()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 	TestNotNull(TEXT("the actor can name the agent's view by id"), Actor->GetAgentView(Id));
 	TestNull(TEXT("and returns null for an unknown id"), Actor->GetAgentView(Id + 9));

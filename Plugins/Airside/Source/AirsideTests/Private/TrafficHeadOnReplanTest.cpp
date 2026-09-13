@@ -1,7 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
-#include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
@@ -15,33 +15,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogM2HeadOnTest, Log, All);
 
 namespace
 {
-	// Prefixed against the unity build: GroundTrafficTest.cpp and HoldingPositionMarkTest.cpp
-	// own the unprefixed names.
-
-	/** The guideline node derived for one end of Segment, or unset. */
-	FGuidelineNodeId M2HeadOnNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
-	{
-		const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (Nodes[Index].bAlive && Nodes[Index].Origin.Segment == Segment && Nodes[Index].Origin.bEndA == bEndA)
-			{
-				return Net.GuidelineNodeIdAt(Index);
-			}
-		}
-		return FGuidelineNodeId();
-	}
-
-	FAirframe M2HeadOnPiper()
-	{
-		FAirframe A;
-		A.Ground = UAircraftType::PiperMeridianGround();
-		A.Climb = UAircraftType::PiperMeridianClimb();
-		A.Approach = UAircraftType::PiperMeridianApproach();
-		A.Engine = UAircraftType::PiperMeridianEngine();
-		return A;
-	}
-
 	FRoutePlan M2HeadOnRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
 	{
 		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
@@ -96,8 +69,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	// box the vacating aircraft stops at the exit node, which is what makes it a replan
 	// candidate. On a 4500 runway the bar is 3750 out, the turn path is not a box, and the
 	// aircraft stops mid-edge where nobody can turn - a different, later story.
-	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::NarrowRunway();
 	// THE GEOMETRY THE DEADLOCK HAPPENED ON. With exit arcs (ExitLength > 0, the default
 	// since 2026-09-06) the bar at H sits 60 m down the taxiway, an aircraft refused there
 	// has its tail clear of the strip, the geometric release lets the runway go and no
@@ -107,7 +79,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	// authored with a short exit, a hand-placed bar - so this replay keeps the straight
 	// stubs it was recorded on by turning the arcs off for this runway.
 	Runway->ExitLength = 0.0;
-	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	URoadProfile* Taxiway = TestProfiles::Taxiway();
 
 	const FRoadNodeId W = Net->AddNode(FVector2D(-40000.0, 0.0));
 	const FRoadNodeId X = Net->AddNode(FVector2D(0.0, 0.0));
@@ -140,10 +112,10 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	}
 
 	// The bars the player placed: both arms at W, and both approaches to the crossing at X.
-	const FGuidelineNodeId H = M2HeadOnNodeFor(*Net, T1, /*bEndA=*/true);
-	const FGuidelineNodeId H2 = M2HeadOnNodeFor(*Net, Top1, /*bEndA=*/true);
-	const FGuidelineNodeId Hn = M2HeadOnNodeFor(*Net, N2X, /*bEndA=*/false);
-	const FGuidelineNodeId Hs = M2HeadOnNodeFor(*Net, XB, /*bEndA=*/true);
+	const FGuidelineNodeId H = TestGraph::NodeFor(*Net, T1, /*bEndA=*/true);
+	const FGuidelineNodeId H2 = TestGraph::NodeFor(*Net, Top1, /*bEndA=*/true);
+	const FGuidelineNodeId Hn = TestGraph::NodeFor(*Net, N2X, /*bEndA=*/false);
+	const FGuidelineNodeId Hs = TestGraph::NodeFor(*Net, XB, /*bEndA=*/true);
 	if (!TestTrue(TEXT("the four bar nodes exist"), H.IsSet() && H2.IsSet() && Hn.IsSet() && Hs.IsSet())) { return false; }
 	// DERIVED, not placed (2026-09-07): every taxiway end at the runway is a runway-holding
 	// position the moment the builder runs, ExitLength or no ExitLength.
@@ -157,10 +129,10 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("holding position north of the crossing, derived"), IsRunwayPosition(Hn));
 	TestTrue(TEXT("holding position south of the crossing, derived"), IsRunwayPosition(Hs));
 
-	const FGuidelineNodeId RunwayW = M2HeadOnNodeFor(*Net, RW1, true);     // the threshold's own node
-	const FGuidelineNodeId RunwayX = M2HeadOnNodeFor(*Net, RW1, false);    // RW1's node at the crossing
-	const FGuidelineNodeId Bottom = M2HeadOnNodeFor(*Net, T1, false);      // T1's S1 end
-	const FGuidelineNodeId Goal = M2HeadOnNodeFor(*Net, S1G, false);       // S1->G's G end, the stand side
+	const FGuidelineNodeId RunwayW = TestGraph::NodeFor(*Net, RW1, true);     // the threshold's own node
+	const FGuidelineNodeId RunwayX = TestGraph::NodeFor(*Net, RW1, false);    // RW1's node at the crossing
+	const FGuidelineNodeId Bottom = TestGraph::NodeFor(*Net, T1, false);      // T1's S1 end
+	const FGuidelineNodeId Goal = TestGraph::NodeFor(*Net, S1G, false);       // S1->G's G end, the stand side
 	if (!TestTrue(TEXT("the route endpoints exist"), RunwayW.IsSet() && RunwayX.IsSet() && Bottom.IsSet() && Goal.IsSet())) { return false; }
 
 	// THE ARRIVAL'S FIXED ROUTE: along the runway to W, then the west taxiway - built the way
@@ -192,8 +164,8 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("spliced"), ArrivalPlan.IsValid())) { return false; }
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	const int32 Arrival = Traffic->DispatchAgent(Net, ArrivalPlan, M2HeadOnPiper(), ETraversalClass::Aircraft, 1.0);
-	const int32 Dep1 = Traffic->DispatchAgent(Net, M2HeadOnRoute(*Net, Bottom, RunwayW), M2HeadOnPiper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Arrival = Traffic->DispatchAgent(Net, ArrivalPlan, TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
+	const int32 Dep1 = Traffic->DispatchAgent(Net, M2HeadOnRoute(*Net, Bottom, RunwayW), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("both dispatched"), Arrival > 0 && Dep1 > 0)) { return false; }
 
 	// THE ARRIVAL HOLDS THE STRIP BY ITS BODY, as one that has just vacated does (spec §3.1,

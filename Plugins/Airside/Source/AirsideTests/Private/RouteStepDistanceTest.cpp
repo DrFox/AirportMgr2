@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -8,23 +9,6 @@
 #include "Solve/GuidelineGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-namespace
-{
-	// Prefixed against the unity build: RouteSearchTest already owns Join().
-	FGuidelineEdgeId M2StepJoin(URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B,
-		const FVector2D* Control = nullptr)
-	{
-		const FGuidelineNode* NodeA = Net.GetGuidelineNode(A);
-		const FGuidelineNode* NodeB = Net.GetGuidelineNode(B);
-		FGuidelineEdge Edge;
-		Edge.A = A;
-		Edge.B = B;
-		Edge.Control = Control ? *Control : (NodeA->Position + NodeB->Position) * 0.5;
-		Edge.AllowedTraffic = FTrafficMask::All();
-		return Net.AddGuidelineEdge(MoveTemp(Edge));
-	}
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRouteStepEndDistanceTest,
@@ -41,11 +25,11 @@ bool FRouteStepEndDistanceTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
 	const FGuidelineNodeId C = Net->AddGuidelineNode(FVector2D(2000.0, 1000.0));
 	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(2000.0, 3000.0));
-	M2StepJoin(*Net, A, B);
+	TestGraph::Join(*Net, A, B);
 	const FVector2D Bend(2000.0, 0.0);
-	M2StepJoin(*Net, B, C, &Bend);
+	TestGraph::Join(*Net, B, C, { EGuidelineDir::Bidirectional, &Bend });
 	// Reversed on purpose: D->C is the stored direction, the route walks C->D.
-	M2StepJoin(*Net, D, C);
+	TestGraph::Join(*Net, D, C);
 
 	FRouteQuery Query;
 	Query.Start = A;
@@ -86,10 +70,10 @@ bool FRouteSpliceTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
 	const FGuidelineNodeId C = Net->AddGuidelineNode(FVector2D(2000.0, 0.0));
 	const FGuidelineNodeId X = Net->AddGuidelineNode(FVector2D(1000.0, 1500.0));
-	M2StepJoin(*Net, A, B);
-	M2StepJoin(*Net, B, C);
-	M2StepJoin(*Net, B, X);
-	M2StepJoin(*Net, X, C);
+	TestGraph::Join(*Net, A, B);
+	TestGraph::Join(*Net, B, C);
+	TestGraph::Join(*Net, B, X);
+	TestGraph::Join(*Net, X, C);
 
 	FRouteQuery Q; Q.Start = A; Q.Goal = C; Q.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Head = RouteSearch::Find(*Net, Q);
@@ -143,9 +127,9 @@ bool FRouteOccupancyCostTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId East = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
 	const FGuidelineNodeId North = Net->AddGuidelineNode(FVector2D(0.0, 2000.0));
 	const FGuidelineNodeId South = Net->AddGuidelineNode(FVector2D(0.0, -100.0));
-	M2StepJoin(*Net, West, North); M2StepJoin(*Net, North, East);
-	const FGuidelineEdgeId WestSouth = M2StepJoin(*Net, West, South);
-	M2StepJoin(*Net, South, East);
+	TestGraph::Join(*Net, West, North); TestGraph::Join(*Net, North, East);
+	const FGuidelineEdgeId WestSouth = TestGraph::Join(*Net, West, South);
+	TestGraph::Join(*Net, South, East);
 
 	FTrafficOccupancy Table;
 	FTrafficClaim Queue; Queue.AgentId = 7; Queue.Resource = FTrafficResource::OfEdge(WestSouth); Queue.From = 0.0; Queue.To = 2500.0;
@@ -189,8 +173,7 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 	// Which one the search takes is exactly what ERunwayAvoidance decides, and the phantom
 	// holder on the runway chain is what Held reads.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-	Runway->bContinuousThroughJunctions = true;
+	URoadProfile* Runway = TestProfiles::Runway();
 	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
 	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
 	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
@@ -201,8 +184,8 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(10000.0, 30000.0));
 	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
 	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
-	M2StepJoin(*Net, A, D); M2StepJoin(*Net, D, B);
-	M2StepJoin(*Net, A, R1); M2StepJoin(*Net, R2, B);
+	TestGraph::Join(*Net, A, D); TestGraph::Join(*Net, D, B);
+	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
 	{
 		FGuidelineEdge Along;
 		Along.A = R1; Along.B = R2;

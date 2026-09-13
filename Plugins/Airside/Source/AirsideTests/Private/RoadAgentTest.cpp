@@ -1,5 +1,5 @@
 #include "CoreMinimal.h"
-#include "Entities/AircraftType.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadAgent.h"
 
@@ -32,11 +32,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 {
-	FAirframe Airframe;
-	Airframe.Ground = UAircraftType::PiperMeridianGround();
-	Airframe.Climb = UAircraftType::PiperMeridianClimb();
-	Airframe.Approach = UAircraftType::PiperMeridianApproach();
-	Airframe.Engine = UAircraftType::PiperMeridianEngine();
+	FAirframe Airframe = TestAirframes::Piper();
 
 	// DISTINCTIVE, not authored: 1000 is both the Piper's own Taxi.SpeedCap and what a
 	// default-constructed FGroundPerformance carries, so leaving the figure alone could not
@@ -118,8 +114,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentDepartureHandoverTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = UAircraftType::PiperMeridianGround();
-	Airframe.Climb = UAircraftType::PiperMeridianClimb();
+	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Climb = TestAirframes::Piper().Climb;
 
 	if (!TestTrue(TEXT("the Meridian has take-off and climb performance to arm a departure"),
 		Airframe.Ground.Takeoff.IsSet() && Airframe.Climb.IsSet()))
@@ -196,7 +192,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentParkedHandoverTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = UAircraftType::PiperMeridianGround();
+	Airframe.Ground = TestAirframes::Piper().Ground;
 
 	const FRoutePlan Plan = StraightPlan(FVector2D(0.0, 0.0), FVector2D(50000.0, 0.0));
 
@@ -353,8 +349,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 {
 	FAirframe Airframe;
-	Airframe.Ground = UAircraftType::PiperMeridianGround();
-	Airframe.Climb = UAircraftType::PiperMeridianClimb();
+	Airframe.Ground = TestAirframes::Piper().Ground;
+	Airframe.Climb = TestAirframes::Piper().Climb;
 
 	constexpr double RunwayLength = 100000.0;
 	const FVector2D Threshold(0.0, 0.0);
