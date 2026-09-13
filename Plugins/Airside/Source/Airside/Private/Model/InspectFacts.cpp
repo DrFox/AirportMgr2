@@ -4,6 +4,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficOccupancy.h"
+#include "Solve/IcaoCode.h"
 #include "Solve/RunwayDesignator.h"
 
 namespace InspectFacts
@@ -81,13 +82,9 @@ namespace InspectFacts
 
 	FString IcaoCodeForWingspan(double WingspanUu)
 	{
-		const double M = WingspanUu / 100.0;
-		if (M < 15.0) { return TEXT("A"); }
-		if (M < 24.0) { return TEXT("B"); }
-		if (M < 36.0) { return TEXT("C"); }
-		if (M < 52.0) { return TEXT("D"); }
-		if (M < 65.0) { return TEXT("E"); }
-		return TEXT("F");
+		// The table itself is Solve/IcaoCode.h now - shared with RunwayAdmission (width ->
+		// wingspan) and AnchorLink (letter -> stand radius). See #85.
+		return IcaoCode::LetterForWingspan(WingspanUu);
 	}
 
 	bool DescribeAgent(const UGroundTraffic& Traffic, const URoadNetwork* Network, int32 AgentId, FAgentFacts& Out)

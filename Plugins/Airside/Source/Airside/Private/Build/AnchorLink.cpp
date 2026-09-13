@@ -9,6 +9,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/IcaoCode.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -113,18 +114,9 @@ namespace
 	 */
 	double RadiusForCode(FName Code)
 	{
-		const FString Letter = Code.ToString().ToUpper();
-
-		if (Letter == TEXT("A")) { return 1500.0; }
-		if (Letter == TEXT("B")) { return 2000.0; }
-		if (Letter == TEXT("C")) { return 2500.0; }
-		if (Letter == TEXT("D")) { return 4000.0; }
-		if (Letter == TEXT("E")) { return 5000.0; }
-		if (Letter == TEXT("F")) { return 6000.0; }
-
-		// No code, or one nobody recognises. Code C is the commonest stand in the world, and
-		// erring to Code F instead would put a 60 m curve on a light-aircraft apron.
-		return 2500.0;
+		// The table itself is Solve/IcaoCode.h now - shared with RunwayAdmission (width ->
+		// wingspan) and InspectFacts (wingspan -> letter). See #85.
+		return IcaoCode::RadiusForLetter(Code.ToString());
 	}
 
 	/**
