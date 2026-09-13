@@ -7,6 +7,26 @@
 #include "UIStyle.generated.h"
 
 class UTexture2D;
+class UTextBlock;
+
+/**
+ * Where a text block sits in the type hierarchy - ROLE, not a retyped size.
+ *
+ * ApplyText is the one function that turns a role into a fallback font, a size, a
+ * letter-spacing and a colour. Eleven call sites across four widgets used to do this by hand,
+ * with thirteen literal sizes between them (9/10/11/12/13) - see issue #89. Title and Clock
+ * stay two roles even though they share a default size: the clock is a specific readout that
+ * may later want tabular figures or its own size without dragging every other title with it.
+ */
+UENUM(BlueprintType)
+enum class EUITextRole : uint8
+{
+	Heading,   // ALL-CAPS section captions, widely letter-spaced - a section name, "OFFERS".
+	Label,     // A short caption - a button label, a badge count, a countdown.
+	Body,      // A descriptive sentence that may wrap - facts, a refusal, a toast message.
+	Title,     // A prominent single-line identifier - an airline name, a panel title.
+	Clock,     // The bar's clock readout. See the enum comment for why it is not Title.
+};
 
 /**
  * Every colour, font, size and icon the game UI draws with.
@@ -71,6 +91,21 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo TitleFont;
 	UPROPERTY(EditAnywhere, Category = "Type") FSlateFontInfo LabelFont;
 
+	// Per-role sizes, uu. ONE UPROPERTY PER EUITextRole, so a size lives in exactly one place
+	// instead of at every call site that used to retype it - the whole point of issue #89.
+	//
+	// LabelSize IS 11, NOT 9, ON PURPOSE: the six Label call sites this collapses came in at
+	// 9 (bar button captions, the inbox badge) AND 11 (the inbox's ETA countdown, its Accept/
+	// Decline verbs). One role can only pick one size, and Accept/Decline are the two buttons
+	// an offer actually lives or dies on - shrinking the affirmative verb the player must read
+	// and click is the wrong two sites to save, against a badge count and tool captions that
+	// only gain legibility from the same +2. See the PR body's size table for every site.
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float HeadingSize = 9.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float LabelSize = 11.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float BodySize = 11.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float TitleSize = 13.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float ClockSize = 13.0f;
+
 	/** Square edge of a tool button, uu. Today's bar is about 30 and is hard to hit. */
 	UPROPERTY(EditAnywhere, Category = "Metrics", meta = (ClampMin = "32.0")) float ButtonSize = 56.0f;
 
@@ -108,6 +143,19 @@ public:
 
 	/** The icon for an action, or null when none is mapped. Loads on first use. */
 	UTexture2D* IconFor(FName ActionId) const;
+
+	/**
+	 * Fallback font, size, letter-spacing and colour for one role, applied once.
+	 *
+	 * Replaces the pattern `FSlateFontInfo F = Style->LabelFont.HasValidFont() ? Style->
+	 * LabelFont : X->GetFont(); F.Size = 9; ...` that was copy-pasted at eleven call sites
+	 * across UBuildBarWidget, UOfferInboxWidget and UToastStackWidget (issue #89). Colour is a
+	 * PARAMETER, not part of the role, because the same role draws in different slots
+	 * depending on state (a label is Text when enabled, TextMuted when not) - baking one
+	 * colour into the role would just move that second source of truth rather than remove it.
+	 * Layout (wrap width, alignment, visibility) stays at the call site; this only owns type.
+	 */
+	void ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const;
 };
 
 /**

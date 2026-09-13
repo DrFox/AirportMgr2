@@ -29,34 +29,17 @@ void UBuildBarEntry::HandleClicked()
 	}
 }
 
-ARoadBuildController* UBuildBarWidget::Controller() const
+void UBuildBarWidget::BuildOnce(const UUIStyle& Style)
 {
-	// The owning player when the controller created us; the first controller otherwise
-	// (tests create the bar from a world). Null is a supported state: buttons still build,
-	// and RefreshState simply has nothing to ask.
-	if (APlayerController* Owning = GetOwningPlayer())
-	{
-		return Cast<ARoadBuildController>(Owning);
-	}
-	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
-}
-
-bool UBuildBarWidget::Initialize()
-{
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
-	EnsureSlots();
-	BuildButtons();
+	// Threaded through rather than re-resolved: BuildOnce already has the resolved style in
+	// hand, so EnsureSlots/BuildButtons take it instead of calling ResolveStyle() again.
+	EnsureSlots(&Style);
+	BuildButtons(&Style);
 
 	// THE BAR IS NOT A NOTIFICATION SURFACE ANY MORE. It used to bind OnNotification to a
 	// single UTextBlock that every notification overwrote and nothing ever cleared, so two
 	// events in one second left only the second. One widget driving the tools AND showing
 	// messages is how that came about; UToastStackWidget owns the feed now.
-	return bOk;
 }
 
 float UBuildBarWidget::BarHeightFor(const UUIStyle& Style)
@@ -71,10 +54,8 @@ float UBuildBarWidget::BarHeightFor(const UUIStyle& Style)
 	return StatusStrip + SectionFrame + Heading + ButtonStack;
 }
 
-void UBuildBarWidget::EnsureSlots()
+void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null, by contract
-
 	// A root only if the asset gave none: BindWidgetOptional has already filled every slot
 	// the asset supplies, and a code-built root would replace the designer's bar.
 	//
@@ -177,11 +158,9 @@ void UBuildBarWidget::EnsureSlots()
 		// retyped string here would be a second list to keep in agreement.
 		UTextBlock* Heading = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Heading->SetText(FText::FromString(FString(ActionSectionName(Which)).ToUpper()));
-		Heading->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo HeadingFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : Heading->GetFont();
-		HeadingFont.Size = 9;
-		HeadingFont.LetterSpacing = 120;   // a heading reads as a heading, not as a short label
-		Heading->SetFont(HeadingFont);
+		// Fallback/size/letter-spacing/colour: see UUIStyle::ApplyText (issue #89). The wide
+		// spacing that makes a heading read as a heading, not a short label, lives there now.
+		Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
 		Group->AddChildToVerticalBox(Heading)->SetHorizontalAlignment(HAlign_Left);
 		Group->AddChildToVerticalBox(Box);
 
@@ -210,10 +189,7 @@ void UBuildBarWidget::EnsureSlots()
 	if (ClockText == nullptr)
 	{
 		ClockText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("ClockText"));
-		ClockText->SetColorAndOpacity(FSlateColor(Style->Text));
-		FSlateFontInfo ClockFont = Style->TitleFont.HasValidFont() ? Style->TitleFont : ClockText->GetFont();
-		ClockFont.Size = 13;
-		ClockText->SetFont(ClockFont);
+		Style->ApplyText(*ClockText, EUITextRole::Clock, Style->Text);
 		if (UHorizontalBox* Box = Cast<UHorizontalBox>(TimeSection))
 		{
 			UHorizontalBoxSlot* ClockSlot = Box->AddChildToHorizontalBox(ClockText);
@@ -251,9 +227,8 @@ UPanelWidget* UBuildBarWidget::SectionPanel(EActionSection Section) const
 	return nullptr;
 }
 
-void UBuildBarWidget::BuildButtons()
+void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
 	int32 WithIcon = 0;
 	for (int32 Index = 0; Index < Actions.Num(); ++Index)
@@ -293,10 +268,7 @@ void UBuildBarWidget::BuildButtons()
 		// which is most of what made the bar read as a debug menu. It moves to the tooltip,
 		// where it still teaches the shortcut without shouting it on every button forever.
 		Entry->Label->SetText(Action.Label);
-		Entry->Label->SetColorAndOpacity(FSlateColor(Style->Text));
-		FSlateFontInfo LabelFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : Entry->Label->GetFont();
-		LabelFont.Size = 9;
-		Entry->Label->SetFont(LabelFont);
+		Style->ApplyText(*Entry->Label, EUITextRole::Label, Style->Text);
 		Stack->AddChildToVerticalBox(Entry->Label)->SetHorizontalAlignment(HAlign_Center);
 
 		Entry->Button->SetContent(Stack);

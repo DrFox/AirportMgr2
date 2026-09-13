@@ -1,8 +1,40 @@
 #include "UIStyle.h"
 
+#include "Components/TextBlock.h"
 #include "Engine/Texture2D.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUIStyle, Log, All);
+
+void UUIStyle::ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor Colour) const
+{
+	// Title and Clock read off TitleFont; everything smaller off LabelFont - the same split
+	// the eleven call sites made by hand. Falls back to the widget's own font when the asset
+	// carries none, same as every site this replaces did.
+	const bool bUsesTitleFont = (Role == EUITextRole::Title || Role == EUITextRole::Clock);
+	const FSlateFontInfo& BaseFont = bUsesTitleFont ? TitleFont : LabelFont;
+	FSlateFontInfo Font = BaseFont.HasValidFont() ? BaseFont : TextBlock.GetFont();
+
+	// Only Heading forces spacing. Every other role LEAVES THE BASE FONT'S OWN SPACING ALONE:
+	// forcing it to 0 would silently override whatever the asset's TitleFont/LabelFont
+	// carries, the exact "one function overwrites a value nothing told it to touch" shape
+	// this refactor is supposed to be removing, not reintroducing.
+	switch (Role)
+	{
+	case EUITextRole::Heading:
+		Font.Size = HeadingSize;
+		// A HEADING READS AS A HEADING, NOT AS A SHORT LABEL. Carried over from
+		// UBuildBarWidget's original comment on this exact literal.
+		Font.LetterSpacing = 120;
+		break;
+	case EUITextRole::Label: Font.Size = LabelSize; break;
+	case EUITextRole::Body:  Font.Size = BodySize;  break;
+	case EUITextRole::Title: Font.Size = TitleSize; break;
+	case EUITextRole::Clock: Font.Size = ClockSize; break;
+	}
+
+	TextBlock.SetFont(Font);
+	TextBlock.SetColorAndOpacity(FSlateColor(Colour));
+}
 
 UTexture2D* UUIStyle::IconFor(FName ActionId) const
 {

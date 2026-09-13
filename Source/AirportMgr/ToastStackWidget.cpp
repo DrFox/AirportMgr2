@@ -20,21 +20,14 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogToasts, Log, All);
 
-bool UToastStackWidget::Initialize()
+void UToastStackWidget::BuildOnce(const UUIStyle& Style)
 {
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
-
 	// Owned by the widget, not by the runtime. The centre holds UI state - what the player
 	// has been shown and for how long - and nothing in the sim reads it back; putting it on
 	// UOpsRuntime would have made a save-game question out of a reading time.
 	Notifications = NewObject<UNotificationCentre>(this);
 
-	EnsureSlots();
+	EnsureSlots(&Style);
 
 	// THE ONLY SUBSCRIBER THAT TURNS EVENTS INTO USER-VISIBLE ENTRIES, so there is one place
 	// that decides what is worth telling the player (spec section 6.1).
@@ -49,15 +42,13 @@ bool UToastStackWidget::Initialize()
 		// directly. Said out loud so a silent feed in PIE has a line to look for.
 		UE_LOG(LogToasts, Log, TEXT("No ops runtime: the toast stack is up but subscribed to nothing"));
 	}
-	return bOk;
 }
 
-void UToastStackWidget::EnsureSlots()
+void UToastStackWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
-
-	// SelfHitTestInvisible: a toast must never eat a click meant for the world underneath.
-	// It is information, not a control - that is the whole difference from an offer.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce. A toast is
+	// information, not a control, so this also means it never eats a click meant for the
+	// world underneath it - the whole difference from an offer.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 
 	if (WidgetTree->RootWidget == nullptr)
@@ -201,10 +192,7 @@ void UToastStackWidget::Rebuild(const UUIStyle& Style)
 
 		UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 		Words->SetText(Entry.Text);
-		Words->SetColorAndOpacity(FSlateColor(Style.Text));
-		FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Words->GetFont();
-		Font.Size = 12;
-		Words->SetFont(Font);
+		Style.ApplyText(*Words, EUITextRole::Body, Style.Text);
 
 		// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
 		// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across

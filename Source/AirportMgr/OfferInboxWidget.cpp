@@ -44,53 +44,29 @@ void UOfferRowEntry::HandleDecline()
 	}
 }
 
-bool UOfferInboxWidget::Initialize()
+void UOfferInboxWidget::BuildOnce(const UUIStyle& Style)
 {
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
 	Inbox = NewObject<UOfferInboxViewModel>(this);
-	EnsureSlots();
+	EnsureSlots(&Style);
 
-	// THE ROOT IS NEVER COLLAPSED, for the reason UInspectorWidget's own comment gives: Slate
-	// ticks a widget from its paint pass, so a collapsed widget never ticks, and the tick is
-	// the only thing that would un-collapse it.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
+	// otherwise-empty panel must stay this way rather than Collapsed.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	return bOk;
 }
 
-void UOfferInboxWidget::EnsureSlots()
+void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
-
 	// Code-built chrome only where the asset gave none - the same rule as the bar and the
 	// inspector. A TOP-right card: a title with a count, then one row per offer. Top, not
 	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall
 	// enough to have swallowed the old placement (spec section 6.2).
-	if (WidgetTree->RootWidget == nullptr)
+	//
+	// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON. A flat
+	// Panel here made the container and its rows one surface, and the offers read as lines of
+	// text in a box rather than as things awaiting an answer - see EnsureCardRoot (#90).
+	if (UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InboxCard"),
+		FAnchors(1.0f, 0.0f, 1.0f, 0.0f), FVector2D(1.0, 0.0), FVector2D(-12.0, TopOffset), true)))
 	{
-		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("InboxRoot"));
-		WidgetTree->RootWidget = Root;
-
-		UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("InboxCard"));
-		// PanelDark, so the Panel-coloured offer cards inside it have something to sit ON.
-		// A flat Panel here made the container and its rows one surface, and the offers read
-		// as lines of text in a box rather than as things awaiting an answer.
-		Card->SetBrush(FSlateRoundedBoxBrush(Style->PanelDark, Style->CornerRadius));
-		Card->SetPadding(FMargin(12.0f, 10.0f));
-
-		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(Card);
-		CardSlot->SetAnchors(FAnchors(1.0f, 0.0f, 1.0f, 0.0f));
-		CardSlot->SetAlignment(FVector2D(1.0, 0.0));
-		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(FVector2D(-12.0, TopOffset));
-
-		UVerticalBox* Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InboxColumn"));
-		Card->SetContent(Column);
-
 		// HEADING AND COUNT ON ONE LINE. The count used to be FText::AsNumber on a line of
 		// its OWN directly under the word OFFERS - a bare "1" floating in the card, which is
 		// what a debug readout looks like rather than a panel heading.
@@ -99,11 +75,8 @@ void UOfferInboxWidget::EnsureSlots()
 
 		TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxTitle"));
 		TitleText->SetText(NSLOCTEXT("AirportMgr", "InboxTitle", "OFFERS"));
-		TitleText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo TitleFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : TitleText->GetFont();
-		TitleFont.Size = 9;
-		TitleFont.LetterSpacing = 120;   // the same heading treatment the bar's sections take
-		TitleText->SetFont(TitleFont);
+		// The same heading treatment the bar's sections take - see UUIStyle::ApplyText (#89).
+		Style->ApplyText(*TitleText, EUITextRole::Heading, Style->TextMuted);
 		HeadingRow->AddChildToHorizontalBox(TitleText)->SetVerticalAlignment(VAlign_Center);
 
 		UHorizontalBoxSlot* HeadGap = HeadingRow->AddChildToHorizontalBox(
@@ -111,10 +84,7 @@ void UOfferInboxWidget::EnsureSlots()
 		HeadGap->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 		BadgeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("InboxBadge"));
-		BadgeText->SetColorAndOpacity(FSlateColor(Style->TextMuted));
-		FSlateFontInfo BadgeFont = Style->LabelFont.HasValidFont() ? Style->LabelFont : BadgeText->GetFont();
-		BadgeFont.Size = 9;
-		BadgeText->SetFont(BadgeFont);
+		Style->ApplyText(*BadgeText, EUITextRole::Label, Style->TextMuted);
 		UHorizontalBoxSlot* BadgeSlot = HeadingRow->AddChildToHorizontalBox(BadgeText);
 		BadgeSlot->SetPadding(FMargin(16.0f, 0.0f, 0.0f, 0.0f));
 		BadgeSlot->SetVerticalAlignment(VAlign_Center);
@@ -281,10 +251,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	// than buried mid-sentence.
 	UHorizontalBox* Head = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
 	Entry.AirlineText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.AirlineText->SetColorAndOpacity(FSlateColor(Style.Text));
-	FSlateFontInfo AirlineFont = Style.TitleFont.HasValidFont() ? Style.TitleFont : Entry.AirlineText->GetFont();
-	AirlineFont.Size = 13;
-	Entry.AirlineText->SetFont(AirlineFont);
+	Style.ApplyText(*Entry.AirlineText, EUITextRole::Title, Style.Text);
 	Head->AddChildToHorizontalBox(Entry.AirlineText)->SetVerticalAlignment(VAlign_Center);
 
 	UHorizontalBoxSlot* GapSlot = Head->AddChildToHorizontalBox(
@@ -292,10 +259,7 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 	GapSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 
 	Entry.EtaText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.EtaText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
-	FSlateFontInfo EtaFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.EtaText->GetFont();
-	EtaFont.Size = 11;
-	Entry.EtaText->SetFont(EtaFont);
+	Style.ApplyText(*Entry.EtaText, EUITextRole::Label, Style.TextMuted);
 	UHorizontalBoxSlot* EtaSlot = Head->AddChildToHorizontalBox(Entry.EtaText);
 	EtaSlot->SetPadding(FMargin(12.0f, 0.0f, 0.0f, 0.0f));
 	EtaSlot->SetVerticalAlignment(VAlign_Center);
@@ -303,19 +267,13 @@ UWidget* UOfferInboxWidget::BuildRow(const UUIStyle& Style, UOfferRowEntry& Entr
 
 	// LINE TWO: the airframe, quieter. It matters while deciding, not while scanning.
 	Entry.TypeText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.TypeText->SetColorAndOpacity(FSlateColor(Style.TextMuted));
-	FSlateFontInfo TypeFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.TypeText->GetFont();
-	TypeFont.Size = 10;
-	Entry.TypeText->SetFont(TypeFont);
+	Style.ApplyText(*Entry.TypeText, EUITextRole::Body, Style.TextMuted);
 	Lines->AddChildToVerticalBox(Entry.TypeText);
 
 	// LINE THREE: why it cannot be taken, in Warning and wrapped. Hidden while acceptable -
 	// see the Collapsed comment in the repaint above.
 	Entry.RefusalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-	Entry.RefusalText->SetColorAndOpacity(FSlateColor(Style.Warning));
-	FSlateFontInfo RefusalFont = Style.LabelFont.HasValidFont() ? Style.LabelFont : Entry.RefusalText->GetFont();
-	RefusalFont.Size = 10;
-	Entry.RefusalText->SetFont(RefusalFont);
+	Style.ApplyText(*Entry.RefusalText, EUITextRole::Body, Style.Warning);
 	Entry.RefusalText->SetAutoWrapText(true);
 	Entry.RefusalText->SetWrapTextAt(RowWrapWidth);
 	Entry.RefusalText->SetVisibility(ESlateVisibility::Collapsed);
@@ -365,10 +323,7 @@ UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR*
 
 	UTextBlock* Text = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
 	Text->SetText(Label);
-	Text->SetColorAndOpacity(FSlateColor(Ink));
-	FSlateFontInfo Font = Style.LabelFont.HasValidFont() ? Style.LabelFont : Text->GetFont();
-	Font.Size = 11;
-	Text->SetFont(Font);
+	Style.ApplyText(*Text, EUITextRole::Label, Ink);
 	Button->AddChild(Text);
 	return Button;
 }

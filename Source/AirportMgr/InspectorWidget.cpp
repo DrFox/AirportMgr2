@@ -18,6 +18,7 @@
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "UIStyle.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
 
@@ -46,71 +47,59 @@ namespace
 	}
 }
 
-ARoadBuildController* UInspectorWidget::Controller() const
+void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 {
-	if (APlayerController* Owning = GetOwningPlayer())
-	{
-		return Cast<ARoadBuildController>(Owning);
-	}
-	return GetWorld() ? Cast<ARoadBuildController>(GetWorld()->GetFirstPlayerController()) : nullptr;
-}
+	// Cached for Refresh, which runs every tick: without this it called ResolveStyle() (a
+	// TSoftObjectPtr::LoadSynchronous) itself just to recolour one button.
+	CachedStyle = &Style;
 
-bool UInspectorWidget::Initialize()
-{
-	const bool bOk = Super::Initialize();
-	if (!bOk || bBuilt || HasAnyFlags(RF_ClassDefaultObject) || WidgetTree == nullptr)
-	{
-		return bOk;
-	}
-	bBuilt = true;
-	EnsureSlots();
+	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
-	// THE ROOT IS NEVER COLLAPSED. Slate ticks a widget from its paint pass, and a Collapsed
-	// widget is not arranged, so it is not painted, so NativeTick never runs - and the tick
-	// is the only thing that would un-collapse it (PIE 2026-09-07: panel created, never
-	// shown). The root stays laid out and click-transparent; only the CARD hides.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
+	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	ShowInspectorCard(WidgetTree, false);
-	return bOk;
 }
 
-void UInspectorWidget::EnsureSlots()
+void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 {
-	// Code-built chrome only where the asset gave none - the same rule as the bar. A
-	// bottom-left card: title, facts, status, then the two verbs in a row.
-	UVerticalBox* Column = nullptr;
-	if (WidgetTree->RootWidget == nullptr)
+	// FOUND ONCE, POSITIONALLY. BuildActions.cpp's own comment says these two rows exist so
+	// the panel, the bar and the C key are one list (spec §6.2); walking the Selection section
+	// in the order it is built - depart, then follow - is what lets this panel ask for "its"
+	// two verbs without retyping their ids (issue #91).
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	int32 SelectionSeen = 0;
+	for (int32 Index = 0; Index < Actions.Num(); ++Index)
 	{
-		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("InspectorRoot"));
-		WidgetTree->RootWidget = Root;
-		UBorder* Card = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("InspectorCard"));
-		Card->SetBrushColor(PanelTint);
-		Card->SetPadding(FMargin(12.0f, 10.0f));
-		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(Card);
-		CardSlot->SetAnchors(FAnchors(0.0f, 1.0f, 0.0f, 1.0f));
-		CardSlot->SetAlignment(FVector2D(0.0, 1.0));
-		CardSlot->SetAutoSize(true);
-		CardSlot->SetPosition(FVector2D(12.0, -BottomOffset));
-		Column = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("InspectorColumn"));
-		Card->SetContent(Column);
+		if (Actions[Index].Section != EActionSection::Selection) { continue; }
+		if (SelectionSeen == 0) { DepartActionIndex = Index; }
+		else if (SelectionSeen == 1) { FollowActionIndex = Index; }
+		++SelectionSeen;
+	}
+
+	// Code-built chrome only where the asset gave none - the same skeleton the offer inbox
+	// uses (EnsureCardRoot, issue #90). A bottom-left card: title, facts, status, then the two
+	// verbs in a row.
+	UVerticalBox* Column = Cast<UVerticalBox>(EnsureCardRoot(TEXT("InspectorCard"),
+		FAnchors(0.0f, 1.0f, 0.0f, 1.0f), FVector2D(0.0, 1.0), FVector2D(12.0, -BottomOffset), true));
+	if (Column != nullptr)
+	{
 		UE_LOG(LogInspector, Log, TEXT("No inspector asset: building the code-only panel"));
 	}
 
-	auto Text = [&](TObjectPtr<UTextBlock>& Field, const TCHAR* Name)
+	auto Text = [&](TObjectPtr<UTextBlock>& Field, const TCHAR* Name, EUITextRole Role, FLinearColor Colour)
 	{
 		if (Field != nullptr) { return; }
 		Field = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), Name);
-		FSlateFontInfo Font = Field->GetFont();
-		Font.Size = FontSize;
-		Field->SetFont(Font);
+		Style->ApplyText(*Field, Role, Colour);
 		Field->SetAutoWrapText(true);
 		Field->SetMinDesiredWidth(static_cast<float>(PanelWidth));
 		if (Column != nullptr) { Column->AddChildToVerticalBox(Field)->SetPadding(FMargin(0.0f, 2.0f)); }
 	};
-	Text(TitleText, TEXT("TitleText"));
-	Text(FactsText, TEXT("FactsText"));
-	Text(StatusText, TEXT("StatusText"));
+	Text(TitleText, TEXT("TitleText"), EUITextRole::Title, Style->Text);
+	Text(FactsText, TEXT("FactsText"), EUITextRole::Body, Style->TextMuted);
+	Text(StatusText, TEXT("StatusText"), EUITextRole::Body, Style->TextMuted);
 
 	UHorizontalBox* Row = nullptr;
 	if (Column != nullptr && (DepartButton == nullptr || FollowButton == nullptr))
@@ -118,21 +107,36 @@ void UInspectorWidget::EnsureSlots()
 		Row = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("InspectorVerbs"));
 		Column->AddChildToVerticalBox(Row)->SetPadding(FMargin(0.0f, 8.0f, 0.0f, 0.0f));
 	}
-	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, const TCHAR* Caption)
+
+	// LABEL FROM Action.Label, KEY IN THE TOOLTIP - the bar's own convention
+	// (UBuildBarWidget::BuildButtons), so a verb reads the same wherever it appears.
+	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, int32 ActionIndex, TObjectPtr<UTextBlock>* OutLabel)
 	{
-		if (Field != nullptr) { return; }
+		if (Field != nullptr || !Actions.IsValidIndex(ActionIndex)) { return; }
+		const FBuildAction& Action = Actions[ActionIndex];
 		Field = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), Name);
 		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Label->SetText(FText::FromString(Caption));
-		FSlateFontInfo Font = Label->GetFont();
-		Font.Size = FontSize;
-		Label->SetFont(Font);
+		Label->SetText(Action.Label);
+		Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
 		Field->SetContent(Label);
-		Field->SetBackgroundColor(ButtonTint);
+		Field->SetBackgroundColor(Style->Button);
+		if (OutLabel != nullptr) { *OutLabel = Label; }
+		if (Action.Key.IsValid())
+		{
+			Field->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s  (%s%s)"),
+				*Action.Label.ToString(), Action.bRequiresCtrl ? TEXT("Ctrl+") : TEXT(""),
+				*Action.Key.GetDisplayName().ToString())));
+		}
+		else
+		{
+			Field->SetToolTipText(Action.Label);
+		}
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	};
-	Button(DepartButton, TEXT("DepartButton"), TEXT("Depart"));
-	Button(FollowButton, TEXT("FollowButton"), TEXT("Follow (C)"));
+	// DepartLabel is HELD, not re-found: Refresh recolours it every tick when Depart's
+	// enabled state changes, and UBuildBarEntry holds its own Label for the same reason.
+	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex, &DepartLabel);
+	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
 }
 
 void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -229,9 +233,22 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	if (StatusText != nullptr) { StatusText->SetText(FText::FromString(Status)); }
 	if (DepartButton != nullptr)
 	{
+		// Cached in BuildOnce, not re-resolved here: Refresh runs every tick.
+		const UUIStyle* Style = CachedStyle != nullptr ? CachedStyle.Get() : UAirportMgrUISettings::ResolveStyle();
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		DepartButton->SetIsEnabled(bDepartEnabled);
-		DepartButton->SetBackgroundColor(bDepartEnabled ? ButtonTint : DisabledTint);
+
+		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Button
+		// always: disabled dims a button by darkening it under Button, never by brightening
+		// it, and TextMuted is a LABEL slot (it is lighter than Button on purpose, for text
+		// over a dark ground) - painting a disabled background with it made Depart look
+		// MORE prominent while taxiing than while parked, backwards from the intent. Only the
+		// CAPTION follows enabled state, exactly as the bar's icon/label content does.
+		DepartButton->SetBackgroundColor(Style->Button);
+		if (DepartLabel != nullptr)
+		{
+			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Text : Style->TextMuted));
+		}
 	}
 	if (FollowButton != nullptr)
 	{
@@ -240,32 +257,37 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	ShowInspectorCard(WidgetTree, true);
 }
 
-void UInspectorWidget::RunActionById(FName Id)
+void UInspectorWidget::RunAction(int32 ActionIndex)
 {
 	ARoadBuildController* C = Controller();
 	if (C == nullptr)
 	{
-		UE_LOG(LogInspector, Warning, TEXT("Inspector %s ignored: no controller"), *Id.ToString());
+		UE_LOG(LogInspector, Warning, TEXT("Inspector click %d ignored: no controller"), ActionIndex);
 		return;
 	}
-	for (const FBuildAction& A : BuildActions())
+	const TConstArrayView<FBuildAction> Actions = BuildActions();
+	if (!Actions.IsValidIndex(ActionIndex))
 	{
-		if (A.Id == Id)
-		{
-			if (A.IsEnabled(*C))
-			{
-				UE_LOG(LogInspector, Log, TEXT("Inspector: %s"), *Id.ToString());
-				A.Execute(*C);
-			}
-			return;
-		}
+		// Should not happen - EnsureSlots finds both indices from the registry itself - but a
+		// missing row degrades to a no-op rather than a crash, same as the old by-id lookup.
+		UE_LOG(LogInspector, Warning, TEXT("Inspector click %d ignored: no such action"), ActionIndex);
+		return;
 	}
-	UE_LOG(LogInspector, Warning, TEXT("Inspector: no action named %s"), *Id.ToString());
+	if (!Actions[ActionIndex].IsEnabled(*C))
+	{
+		return;
+	}
+	UE_LOG(LogInspector, Log, TEXT("Inspector: %s"), *Actions[ActionIndex].Id.ToString());
+	Actions[ActionIndex].Execute(*C);
 }
 
-void UInspectorWidget::HandleDepart() { RunActionById(TEXT("selection.depart")); }
-void UInspectorWidget::HandleFollow() { RunActionById(TEXT("selection.follow")); }
+void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
+void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 
 bool UInspectorWidget::IsShownForTest() const { return IsInspectorCardShown(WidgetTree); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
+FLinearColor UInspectorWidget::DepartLabelColourForTest() const
+{
+	return DepartLabel != nullptr ? DepartLabel->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
+}

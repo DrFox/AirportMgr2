@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Tool/Selection.h"
 #include "InspectorWidget.generated.h"
@@ -9,6 +10,7 @@ class ARoadBuildController;
 class ARoadNetworkActor;
 class UButton;
 class UTextBlock;
+class UUIStyle;
 
 /**
  * The inspector: what the selected aircraft or stand is doing, and the verbs for it.
@@ -24,9 +26,13 @@ class UTextBlock;
  *
  * Its buttons run rows of BuildActions() by id, so the panel, the bar and the C key are one
  * list (spec §6.2).
+ *
+ * PanelTint/ButtonTint/DisabledTint/FontSize are GONE (issue #91) - EVERY COLOUR AND FONT
+ * COMES FROM UUIStyle now, the rule UBuildBarWidget's own header already states. Only metrics
+ * this panel alone needs (its width, how far it floats) stay as knobs.
  */
 UCLASS()
-class AIRPORTMGR_API UInspectorWidget : public UUserWidget
+class AIRPORTMGR_API UInspectorWidget : public UAirportMgrPanelWidget
 {
 	GENERATED_BODY()
 
@@ -37,10 +43,6 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
 
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor PanelTint = FLinearColor(0.06f, 0.07f, 0.09f, 0.92f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor ButtonTint = FLinearColor(0.18f, 0.20f, 0.24f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") FLinearColor DisabledTint = FLinearColor(0.10f, 0.10f, 0.12f);
-	UPROPERTY(EditAnywhere, Category = "Inspector|Style") int32 FontSize = 12;
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 	/** Distance above the bottom edge, so it clears the build bar. */
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BottomOffset = 72.0;
@@ -52,22 +54,47 @@ public:
 	 */
 	void Refresh(const ARoadNetworkActor* Target, const FSelection& Selection);
 
-	virtual bool Initialize() override;
-
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
+	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
+	 *  See Refresh: the button's own background stays Style->Button always. */
+	FLinearColor DepartLabelColourForTest() const;
 
 protected:
+	/** Builds the panel's chrome and binds its two verbs. See
+	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
+	virtual void BuildOnce(const UUIStyle& Style) override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 private:
-	bool bBuilt = false;
 	bool bDepartEnabled = false;
 
-	ARoadBuildController* Controller() const;
-	void EnsureSlots();
-	void RunActionById(FName Id);
+	/**
+	 * INDICES INTO BuildActions(), never ids to look up - the same reason UBuildBarEntry
+	 * holds one. Found once, in EnsureSlots, by walking the Selection section positionally:
+	 * BuildActions.cpp adds selection.depart then selection.follow so the panel, the bar and
+	 * the C key stay one list (its own comment, spec §6.2) - the pair this panel needs is
+	 * exactly those two rows, in that order.
+	 */
+	int32 DepartActionIndex = INDEX_NONE;
+	int32 FollowActionIndex = INDEX_NONE;
+
+	/** DepartButton's own caption, held so Refresh can recolour it without re-finding it
+	 *  through GetContent() every tick - the same reason UBuildBarEntry holds its Label. */
+	UPROPERTY() TObjectPtr<UTextBlock> DepartLabel;
+
+	/**
+	 * Set once from BuildOnce's own parameter. Refresh runs every tick and used to call
+	 * UAirportMgrUISettings::ResolveStyle() (a TSoftObjectPtr::LoadSynchronous) itself just to
+	 * recolour one button; caching the pointer this construction pass already resolved avoids
+	 * paying that every frame. Falls back to a fresh resolve if Refresh is ever reached before
+	 * BuildOnce (defensive only - CreateWidget always runs Initialize first).
+	 */
+	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
+
+	void EnsureSlots(const UUIStyle* Style);
+	void RunAction(int32 ActionIndex);
 
 	UFUNCTION() void HandleDepart();
 	UFUNCTION() void HandleFollow();
