@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
 #include "Tool/RoadSnap.h"
+#include "RoadPlacement.generated.h"
 
 class URoadNetwork;
 
@@ -55,18 +56,34 @@ enum class ERoadPlacement : uint8
 	TooShortForCorner,
 };
 
-struct FRoadPlacementLimits
+/**
+ * PER-AIRPORT, not per-driver, like FRoadSnapSettings - see that struct's own comment and
+ * issue #93. `ARoadNetworkActor::PlacementLimits` is the one UPROPERTY(EditAnywhere) copy of
+ * MinSegmentLength/MinTurnDegrees both drivers build their `FBuildSessionTunables` from, via
+ * `ARoadNetworkActor::MakeTunables`. Before this, the editor tool never set either one at
+ * all - a corner PIE would refuse as TooSharp the editor mode would happily draw.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FRoadPlacementLimits
 {
+	GENERATED_BODY()
+
 	/** Shortest segment that may be built, in uu. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double MinSegmentLength = 250.0;
 
 	/** Tightest corner allowed against an existing arm at the start node, in degrees. */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0", ClampMax = "180.0"))
 	double MinTurnDegrees = 25.0;
 
 	/**
 	 * Half-width of the road being drawn, uu, for the corner-fit check. 0 disables that
 	 * check, which is what a caller with no profile in hand gets and what every test that
 	 * predates the check relies on.
+	 *
+	 * NOT a UPROPERTY: this is resolved fresh from whichever road profile is about to be
+	 * drawn (see ARoadNetworkActor::MakeTunables), never authored - a value saved into a
+	 * level here would silently outlive the profile it was measured from.
 	 */
 	double NewRoadHalfWidth = 0.0;
 };
