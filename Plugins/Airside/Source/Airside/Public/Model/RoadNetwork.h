@@ -202,18 +202,24 @@ public:
 		FVector2D& OutDirection, double& OutLength, FRoadSegmentId* OutSegment = nullptr) const;
 
 	/**
-	 * Guideline nodes lying on a runway, ordered by distance from its threshold.
+	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
+	 * its threshold.
 	 *
 	 * THE EXITS, without needing an exit to be a thing. A runway is continuous through
 	 * junctions, so a taxiway joining it already puts a guideline node on the centreline;
 	 * asking which nodes lie along the strip therefore finds every way off it, including
 	 * ones the player drew after the runway existed.
 	 *
+	 * TAKES A SEED, not a caller-measured width (2026-09-13, #87): a node qualifies by
+	 * IsPointOnRunway(Node.Position, Seed) - the one evaluator of "on the strip", tested per
+	 * SEGMENT of the chain against that segment's OWN width. The two callers used to compute
+	 * their own HalfWidth as the max over every continuous segment on the whole airport, so a
+	 * 60 m runway anywhere widened the exit test on an 18 m strip.
+	 *
 	 * MinDistance is what makes the answer useful to an arrival: an exit before the aircraft
 	 * can possibly have slowed down is not an exit it can take.
 	 */
-	TArray<FGuidelineNodeId> RunwayExitNodes(const FVector2D& Threshold,
-		const FVector2D& Direction, double Length, double HalfWidth, double MinDistance) const;
+	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, double MinDistance) const;
 
 	// --- Guideline graph -------------------------------------------------------------
 	// A SECOND graph, deliberately in the same object. The build tool must make "draw a

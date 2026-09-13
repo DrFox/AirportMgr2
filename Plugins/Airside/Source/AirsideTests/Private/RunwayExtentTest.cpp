@@ -10,7 +10,8 @@ namespace
 	// Prefixed against the UNITY build - these test files share one translation unit.
 
 	/** A 45 m runway lying east-west, plus a taxiway far away from it. */
-	URoadNetwork* RunwayExtentFixture(FVector2D& OutThresholdWest, FVector2D& OutFarTaxiway)
+	URoadNetwork* RunwayExtentFixture(FVector2D& OutThresholdWest, FVector2D& OutFarTaxiway,
+		FRoadSegmentId& OutSeed)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
@@ -22,7 +23,7 @@ namespace
 		OutThresholdWest = FVector2D(0.0, 0.0);
 		const FRoadNodeId West = Net->AddNode(OutThresholdWest);
 		const FRoadNodeId East = Net->AddNode(FVector2D(100000.0, 0.0));
-		Net->AddStraightSegment(West, East, Runway);
+		OutSeed = Net->AddStraightSegment(West, East, Runway);
 
 		// A taxiway a long way off - a stand on the other side of the airport.
 		OutFarTaxiway = FVector2D(-60000.0, 40000.0);
@@ -43,7 +44,8 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 {
 	FVector2D Threshold;
 	FVector2D FarAway;
-	URoadNetwork* Net = RunwayExtentFixture(Threshold, FarAway);
+	FRoadSegmentId Seed;
+	URoadNetwork* Net = RunwayExtentFixture(Threshold, FarAway, Seed);
 
 	FVector2D OutThreshold;
 	FVector2D OutDirection;
@@ -135,8 +137,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		// Beyond the far threshold, which is not on the runway at all.
 		Net->AddGuidelineNode(FVector2D(130000.0, 0.0), false);
 
-		const TArray<FGuidelineNodeId> Exits =
-			Net->RunwayExitNodes(Threshold, FVector2D(1.0, 0.0), 100000.0, HalfWidth, 0.0);
+		const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(Seed, 0.0);
 
 		TestEqual(TEXT("three nodes lie on the runway, and only three"), Exits.Num(), 3);
 		if (Exits.Num() == 3)
@@ -152,8 +153,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		// 6. THE MEASUREMENT AN ARRIVAL DEPENDS ON. An exit before the aircraft could have
 		//    slowed to taxi speed is not an exit it can take, and offering one would turn a
 		//    landing aircraft off the runway at approach speed.
-		const TArray<FGuidelineNodeId> Usable =
-			Net->RunwayExitNodes(Threshold, FVector2D(1.0, 0.0), 100000.0, HalfWidth, 30000.0);
+		const TArray<FGuidelineNodeId> Usable = Net->RunwayExitNodes(Seed, 30000.0);
 
 		TestEqual(TEXT("an exit inside the landing distance is not offered"), Usable.Num(), 2);
 		if (Usable.Num() == 2)
@@ -173,6 +173,39 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 
 		TestFalse(TEXT("a network with no runway offers no departure"),
 			Bare->RunwayExtentAt(FVector2D::ZeroVector, OutThreshold, OutDirection, OutLength));
+	}
+
+	// 8. THE MULTI-RUNWAY CASE (#87). RunwayExitNodes takes a Seed now, not a caller-
+	//    measured HalfWidth - the bug that width used to produce: a far WIDER runway
+	//    elsewhere on the airport widened the exit test on a narrower one, because both
+	//    planners computed HalfWidth as the max total width over EVERY continuous
+	//    segment on the whole model, not just the runway being asked about.
+	{
+		URoadNetwork* MultiNet = NewObject<URoadNetwork>(GetTransientPackage());
+
+		// The runway under test: 18 m wide, own half width 900.
+		URoadProfile* Narrow = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
+		Narrow->bContinuousThroughJunctions = true;
+		const FRoadNodeId NarrowW = MultiNet->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId NarrowE = MultiNet->AddNode(FVector2D(50000.0, 0.0));
+		const FRoadSegmentId NarrowSeed = MultiNet->AddStraightSegment(NarrowW, NarrowE, Narrow);
+
+		// A second, much WIDER runway elsewhere: 60 m wide, half width 3000. Its width
+		// must have no bearing on the narrow runway's own exit test.
+		URoadProfile* Wide = URoadProfile::MakeTransient(6000.0, 1500.0, 600.0);
+		Wide->bContinuousThroughJunctions = true;
+		const FRoadNodeId WideW = MultiNet->AddNode(FVector2D(0.0, 500000.0));
+		const FRoadNodeId WideE = MultiNet->AddNode(FVector2D(50000.0, 500000.0));
+		MultiNet->AddStraightSegment(WideW, WideE, Wide);
+
+		// Beside the NARROW runway's own centreline, 1500 uu off it: outside the narrow
+		// strip's own half width (900) but inside the wide runway's (3000) - exactly the
+		// figure the old caller-computed HalfWidth would have used for THIS seed.
+		MultiNet->AddGuidelineNode(FVector2D(25000.0, 1500.0), false);
+
+		const TArray<FGuidelineNodeId> MultiExits = MultiNet->RunwayExitNodes(NarrowSeed, 0.0);
+		TestEqual(TEXT("a node outside the narrow strip's OWN width is not an exit, even "
+			"though a wider runway elsewhere would have admitted it"), MultiExits.Num(), 0);
 	}
 
 	return true;

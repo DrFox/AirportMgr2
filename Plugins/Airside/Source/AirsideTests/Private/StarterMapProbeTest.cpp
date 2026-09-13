@@ -247,8 +247,8 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	FVector2D Threshold, Direction; double Length = 0.0;
-	const bool bRunway = Net->NearestRunwayThreshold(FVector2D::ZeroVector, Threshold, Direction, Length);
+	FVector2D Threshold, Direction; double Length = 0.0; FRoadSegmentId RunwaySeed;
+	const bool bRunway = Net->NearestRunwayThreshold(FVector2D::ZeroVector, Threshold, Direction, Length, &RunwaySeed);
 	const FArrivalPlan Plan = bRunway ? ArrivalPlanner::Plan(*Net, Threshold - Direction * 1000.0, Airframe) : FArrivalPlan();
 	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE arrival from the nearest threshold: runway %d, plan says %s, %d usable exit(s)"),
 		bRunway, *ArrivalPlanner::DescribeRefusal(Plan), Plan.ExitCount);
@@ -269,7 +269,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		if (bRunway && Pose != nullptr)
 		{
 			// From EVERY node on the strip, not just the plan's chosen exit.
-			const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(Threshold, Direction, Length, 2250.0, 0.0);
+			const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(RunwaySeed, 0.0);
 			int32 Reachable = 0;
 			for (const FGuidelineNodeId& Exit : Exits)
 			{

@@ -487,16 +487,21 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	return true;
 }
 
-TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshold,
-	const FVector2D& Direction, double Length, double HalfWidth, double MinDistance) const
+TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, double MinDistance) const
 {
 	TArray<FGuidelineNodeId> Out;
-	if (Direction.IsNearlyZero() || Length <= 0.0)
+
+	// The seed's own A node is certainly on its own strip, so this is the same figure
+	// RunwayAdmission::Check asks RunwayExtentAt for - and now, unlike before #87, actually
+	// is: only used here for the Threshold/Direction to ORDER by, never to test width.
+	const FRoadSegment* SeedSegment = GetSegment(Seed);
+	const FRoadNode* SeedNodeA = SeedSegment != nullptr ? GetNode(SeedSegment->A) : nullptr;
+	FVector2D Threshold, Direction;
+	double Length = 0.0;
+	if (SeedNodeA == nullptr || !RunwayExtentAt(SeedNodeA->Position, Threshold, Direction, Length))
 	{
 		return Out;
 	}
-
-	const FVector2D Along = Direction.GetSafeNormal();
 
 	// Sorted by distance down the runway, because the CALLER's rule is "the first exit I can
 	// take". Collected with the distance and sorted at the end rather than inserted in order:
@@ -511,26 +516,21 @@ TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshol
 			continue;
 		}
 
-		const FVector2D Offset = Node.Position - Threshold;
-		const double Distance = FVector2D::DotProduct(Offset, Along);
-
-		// Beyond the point the aircraft could have slowed to taxi speed, and still on the
-		// strip. An exit before that is one it cannot take, which is the whole reason
-		// MinDistance is a parameter rather than zero.
-		// The far end is INCLUDED, with the runway's own half width of slack past it. The
-		// commonest airport anyone draws has its taxiway joined to the END of the runway, and
-		// the guideline node there sits wherever the junction cut put it - which can be a
-		// little beyond the road node the length was measured to. Excluding it leaves that
-		// airport with no exits at all.
-		if (Distance < MinDistance || Distance > Length + HalfWidth)
+		// ONE EVALUATOR OF "IS THIS ON THE STRIP" (#87), the same test the crossing hold and
+		// occupancy already share - tested per SEGMENT of the chain against that segment's
+		// OWN width, not a HalfWidth the caller measured across the whole airport. This is
+		// what makes the far end's own slack, and a multi-width chain, correct without this
+		// function knowing either detail.
+		if (!IsPointOnRunway(Node.Position, Seed))
 		{
 			continue;
 		}
 
-		// LATERAL, so a node on a parallel taxiway is not mistaken for one on the runway.
-		// The runway's own half width is the bound, so it scales with the strip.
-		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
-		if (Lateral > HalfWidth)
+		const double Distance = FVector2D::DotProduct(Node.Position - Threshold, Direction);
+
+		// Beyond the point the aircraft could have slowed to taxi speed. An exit before that
+		// is one it cannot take, which is the whole reason MinDistance is a parameter.
+		if (Distance < MinDistance)
 		{
 			continue;
 		}

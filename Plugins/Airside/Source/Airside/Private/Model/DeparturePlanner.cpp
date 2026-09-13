@@ -5,7 +5,6 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TakeoffRun.h"
-#include "Profiles/RoadProfile.h"
 
 namespace DeparturePlanner
 {
@@ -38,23 +37,11 @@ namespace DeparturePlanner
 		}
 		Out.Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
 
-		// The strip's half width bounds which nodes count as on it - the widest continuous
-		// profile, exactly as ArrivalPlanner reads it.
-		double HalfWidth = 0.0;
-		for (const FRoadSegment& Segment : Network.GetSegments())
-		{
-			if (!Segment.bAlive) { continue; }
-			const URoadProfile* Profile = Network.ProfileFor(Segment);
-			if (Profile != nullptr && Profile->bContinuousThroughJunctions)
-			{
-				HalfWidth = FMath::Max(HalfWidth, Profile->GetTotalWidth() * 0.5);
-			}
-		}
 		// Every strip node from the threshold, nearest first. MinDistance 0: a node AT the
 		// threshold is the backtrack's goal, and the first one past it with enough runway
-		// left is the intersection departure's.
-		const TArray<FGuidelineNodeId> Candidates =
-			Network.RunwayExitNodes(Out.Threshold, Out.Direction, Out.RunwayLength, HalfWidth, 0.0);
+		// left is the intersection departure's. Tested against Seed's OWN chain width per
+		// segment (#87), not a HalfWidth measured across every runway on the airport.
+		const TArray<FGuidelineNodeId> Candidates = Network.RunwayExitNodes(Seed, 0.0);
 
 		auto OffsetOf = [&](FGuidelineNodeId Node)
 		{
