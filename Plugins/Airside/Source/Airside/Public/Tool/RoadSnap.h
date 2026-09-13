@@ -60,7 +60,13 @@ struct AIRSIDE_API FRoadSnapSettings
 {
 	GENERATED_BODY()
 
-	/** How close, in uu, the cursor must be to a node to reuse it. */
+	/**
+	 * How close, in uu, the cursor must be to a node to reuse it.
+	 *
+	 * Roughly the road's own width: much wider and the cursor snaps to junctions you were
+	 * trying to draw past. Formerly ARoadBuildController::PickRadius - see this struct's own
+	 * comment for why it moved here.
+	 */
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0"))
 	double NodeRadius = 150.0;
 

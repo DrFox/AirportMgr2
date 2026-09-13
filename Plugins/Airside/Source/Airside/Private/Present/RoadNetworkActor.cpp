@@ -404,8 +404,27 @@ FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 	// URoadBuildEditorTool::MakeContextAt used to compute for itself. 0: the caller (the
 	// runtime driver) has its own ToolPickRadius and overwrites this right after - see
 	// ARoadBuildController::MakeToolContext.
-	Tunables.ToolPickRadius = ViewWorldWidth > 0.0 ? FMath::Max(150.0, ViewWorldWidth * 0.02)
-		: FBuildSessionTunables().ToolPickRadius;
+	if (ViewWorldWidth > 0.0)
+	{
+		const double Floor = FMath::Max(150.0, ViewWorldWidth * 0.02);
+		Tunables.ToolPickRadius = Floor;
+
+		// A FLOOR ON THE AUTHORED VALUE, not an overwrite of it: the road-snap radii are
+		// per-airport now (FRoadNetworkActor::Snap, issue #93), and folding them down to a
+		// fixed 150/150 here would be a THIRD place they came from, on top of the level
+		// author's own choice and the class default. Without the floor, "has to be a screen
+		// distance, not a world one" - the reason MakeContextAt computed this at all - goes
+		// straight back to being sub-pixel at 20000 uu of view width: max() keeps whichever
+		// of the two is more generous, so a wide-open airport with untouched defaults still
+		// snaps by screen size, and an airport whose author widened NodeRadius past the
+		// floor keeps that choice.
+		Tunables.Snap.NodeRadius = FMath::Max(Tunables.Snap.NodeRadius, Floor);
+		Tunables.Snap.SegmentRadius = FMath::Max(Tunables.Snap.SegmentRadius, Floor);
+	}
+	else
+	{
+		Tunables.ToolPickRadius = FBuildSessionTunables().ToolPickRadius;
+	}
 
 	return Tunables;
 }

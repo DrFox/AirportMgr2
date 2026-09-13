@@ -434,11 +434,14 @@ public:
 
 	// --- Ghost preview --------------------------------------------------------------
 
-	/** Show the segment a click would build, as real solved pavement. Forwards to Presenter
-	 *  with a FSurfaceSettings built the same way RebuildMesh's is. */
-	// Parameter named SnapResult, not Snap: this class now also has a Snap member
-	// (ARoadNetworkActor::Snap, the per-airport FRoadSnapSettings - issue #93), and a
-	// same-named parameter would shadow it.
+	/**
+	 * Show the segment a click would build, as real solved pavement. Forwards to Presenter
+	 * with a FSurfaceSettings built the same way RebuildMesh's is.
+	 *
+	 * Parameter named SnapResult, not Snap: this class now also has a Snap member
+	 * (ARoadNetworkActor::Snap, the per-airport FRoadSnapSettings - issue #93), and a
+	 * same-named parameter would shadow it.
+	 */
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
 		ERoadKind Kind) override;
 	using IRoadEditTarget::UpdateGhost;

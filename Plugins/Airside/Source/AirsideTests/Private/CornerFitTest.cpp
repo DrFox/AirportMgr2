@@ -310,15 +310,33 @@ bool FCornerPlacementTest::RunTest(const FString& Parameters)
 		const FBuildSessionTunables Tunables = Actor->MakeTunables(0.0);
 		TestEqual(TEXT("MakeTunables resolves NewRoadHalfWidth from the actor's own profile"),
 			Tunables.Limits.NewRoadHalfWidth, 200.0);
-		TestEqual(TEXT("MakeTunables carries the actor's own Snap through unchanged"),
+		TestEqual(TEXT("ViewWorldWidth 0 carries the actor's own Snap through unchanged"),
 			Tunables.Snap.NodeRadius, 321.0);
 		TestEqual(TEXT("ViewWorldWidth 0 leaves ToolPickRadius at the class default, for the "
 			"caller (the runtime driver) that overwrites it with its own view fact"),
 			Tunables.ToolPickRadius, FBuildSessionTunables().ToolPickRadius);
 
+		// A POSITIVE ViewWorldWidth is a FLOOR on the authored Snap radii, not an overwrite -
+		// the bug this reviews against: MakeTunables once scaled ONLY ToolPickRadius and
+		// copied Snap.NodeRadius/SegmentRadius verbatim, so a 150 uu authored default (or
+		// this fixture's 321) went sub-pixel at a wide-open zoom, the exact case
+		// MakeContextAt's removed comment ("has to be a screen distance, not a world one")
+		// existed to prevent.
+		const double Floor20000 = FMath::Max(150.0, 20000.0 * 0.02);   // 400
 		const FBuildSessionTunables ViewScaled = Actor->MakeTunables(20000.0);
-		TestEqual(TEXT("a positive ViewWorldWidth sizes ToolPickRadius off it instead"),
-			ViewScaled.ToolPickRadius, 20000.0 * 0.02);
+		TestEqual(TEXT("a positive ViewWorldWidth sizes ToolPickRadius off it"),
+			ViewScaled.ToolPickRadius, Floor20000);
+		TestEqual(TEXT("and raises Snap.NodeRadius to the same floor when the authored value is below it"),
+			ViewScaled.Snap.NodeRadius, Floor20000);
+		TestEqual(TEXT("and raises SegmentRadius the same way"),
+			ViewScaled.Snap.SegmentRadius, Floor20000);
+
+		// An authored radius ABOVE the floor is left alone - the floor must not shrink a
+		// deliberately widened per-airport value back down.
+		Actor->Snap.NodeRadius = 5000.0;
+		TestEqual(TEXT("the floor does not shrink an authored radius already above it"),
+			Actor->MakeTunables(20000.0).Snap.NodeRadius, 5000.0);
+		Actor->Snap.NodeRadius = 321.0;   // restore, for the Judge calls below
 
 		TestEqual(TEXT("MakeTunables' Limits refuse the same 700 uu corner Judge() does"),
 			JudgeWith(700.0, Tunables.Limits), ERoadPlacement::TooShortForCorner);

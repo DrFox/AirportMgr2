@@ -67,10 +67,20 @@ public:
 	 * A VIEW FACT, not an airport one - see ARoadNetworkActor::Snap for the road-snap radii
 	 * this used to sit beside (moved there by issue #93, now that both drivers judge a click
 	 * by the same per-airport rules). This one stays here: it is the runtime driver's own
-	 * answer to "what is the cursor pointing at", 400 uu because a guideline node is a
-	 * dimensionless point on a road 200 uu wide viewed from 8000 uu out - the editor tool
-	 * asks the same question from ARoadNetworkActor::MakeTunables' view-scaled default
-	 * instead, since it has no fixed view distance of its own to size a constant from.
+	 * answer to "what is the cursor pointing at" - the editor tool asks the same question
+	 * from ARoadNetworkActor::MakeTunables' view-scaled default instead, since it has no
+	 * fixed view distance of its own to size a constant from.
+	 *
+	 * SEPARATE from the road-snap radius, and larger. The two answer different questions and
+	 * only ever looked like one number by coincidence: the snap radius decides where a road
+	 * NODE goes, and wants to be tight or roads land where you did not click. This decides
+	 * what the cursor is POINTING AT, and 150 uu is a punishing target - a guideline node is
+	 * a dimensionless point on a road 200 uu wide, viewed from 8000 uu out, so the route tool
+	 * read as doing nothing at all when it was simply being missed.
+	 *
+	 * Road snapping no longer depends on this number anyway: a junction claims the cursor out
+	 * to its own pavement (FRoadSnapSettings::JunctionSnapFactor), so widening the fixed
+	 * radius here would only have made BARE nodes grabbier for no gain.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double ToolPickRadius = 400.0;
