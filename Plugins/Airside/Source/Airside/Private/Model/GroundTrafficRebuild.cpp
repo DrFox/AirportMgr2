@@ -44,6 +44,13 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, i
 	// refusal at any of them leaves it driving exactly the plan it had. An implementation
 	// that replaced the follower first and repaired afterwards would leave a stuck agent
 	// worse off than before it asked.
+	//
+	// TAXIING AND NOT IsOnRoute(): a push is deliberately NOT replannable. There is no
+	// alternative way off a stand - the lead-in is the only line - so a manoeuvring agent has
+	// no move to make and the deadlock resolver must never pick one. That is exactly why
+	// UGroundTraffic::DepartAgent grants the whole push up front instead of letting
+	// arbitration stop it half way: clearance makes the manoeuvre atomic, which is what lets
+	// this guard stay as narrow as it is.
 	if (Agent.Phase != EAgentPhase::Taxiing || !Plan.IsValid()
 		|| SpliceStep < 0 || SpliceStep > Plan.Steps.Num())
 	{
@@ -194,6 +201,20 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 			Plan = &Agent.Follower.Plan;
 			FromStep = CurrentStep(Agent.Follower.Plan, Agent.Follower.Travelled);
 		}
+		else if (Agent.Phase == EAgentPhase::Manoeuvring && Agent.Pushback.Plan.Steps.Num() > 0)
+		{
+			// A PUSH IS ON A ROUTE TOO, and it is the departure route the follower will
+			// inherit in a few seconds. A player who redraws a taxiway while an aeroplane is
+			// being pushed off its stand leaves it exactly the dead handles a taxiing agent
+			// would have, and the taxi out would then start on them.
+			//
+			// NOT REPLANNED, only re-pointed - see ReplanAt above for why a push has no
+			// alternative to replan TO. If the rebuild truncates the plan shorter than the
+			// push needed, FPushbackRun::HasArrived clamps to the new length and the
+			// manoeuvre ends early rather than never.
+			Plan = &Agent.Pushback.Plan;
+			FromStep = CurrentStep(Agent.Pushback.Plan, Agent.Pushback.Travelled);
+		}
 		else if (Agent.Phase == EAgentPhase::Arriving && Agent.TaxiInPlan.Steps.Num() > 0)
 		{
 			// FROM 0, because not a metre of this one has been driven: it is the route the
@@ -280,6 +301,11 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// is following a TaxiInPlan yet), and only the follower's plan can be replanned through
 	// ReplanAt. A bool parameter would say the same thing and could be passed wrongly; this
 	// cannot be out of step with the reference it describes.
+	// A PUSHBACK PLAN IS NOT "DRIVING" BY THIS TEST, and that is the right answer rather than
+	// an oversight: what bDriving gates is FRouteFollower::Replace, whose whole job is
+	// rebuilding the SPEED PROFILE. FPushbackRun has no profile - it is a trapezoid to
+	// PushDistance - so there is nothing to rebuild, and HasArrived's clamp to Plan.Length
+	// covers the one thing a truncation can do to it.
 	const bool bDriving = (&Plan == &Agent.Follower.Plan);
 
 	auto Strand = [&Agent, &Plan, bDriving, &Occupancy](const TCHAR* Why)

@@ -2,6 +2,8 @@
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadAgent.h"
+#include "Model/PushbackRun.h"
+#include "Solve/GuidelineGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -435,6 +437,173 @@ bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
 		TEXT("Advance reads it live (gained %.2f uu/s over %.1f s, was accelerating at %.0f uu/s2)"),
 		Gained, MeasureTicks * Step, Agent.Airframe.Ground.Takeoff.Accel),
 		Gained < 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAgentPushbackHandoverTest,
+	"Airside.Model.AgentPushbackHandover",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
+{
+	// A stand square to its taxiway: 40 m of lead-in out along +X, then the taxiway along +Y.
+	// The aeroplane parked facing -X, into the terminal, which is what makes the lead-in run
+	// away from it. Built by hand for the reason the other tests in this file give: the
+	// agent's handovers do not need a real graph.
+	FRoutePlan Plan;
+	Plan.Result = ERouteResult::Found;
+	// DELIBERATELY NOT AT THE WORLD ORIGIN. The origin is what this project's recurring
+	// "posed at (0,0)" failure looks like, so a fixture that parks the aeroplane there could
+	// never tell the failure from the fixture. Offset, and the check below means something.
+	//
+	// THE PUSH ROUTE, not the departure's: the stand at (10000, 5000) facing north, its
+	// lead-in running SOUTH, and then the EAST arm of the junction - the one the taxi out does
+	// not use. See PushbackPlanner.
+	Plan.Polyline = { {10000.0, 5000.0}, {10000.0, 1000.0}, {18000.0, 1000.0} };
+	Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+	FRouteStep LeadIn;
+	LeadIn.EndDistance = 4000.0;
+	FRouteStep Taxiway;
+	Taxiway.EndDistance = Plan.Length;
+	Plan.Steps = { LeadIn, Taxiway };
+
+	// AND THE TAXI OUT FROM WHERE THE PUSH ENDS - west along the same taxiway, which is the
+	// direction the push leaves the aeroplane facing. Planned at dispatch in production; here
+	// it is the second half of the fixture.
+	FRoutePlan TaxiOut;
+	TaxiOut.Result = ERouteResult::Found;
+	TaxiOut.Polyline = { {18000.0, 1000.0}, {2000.0, 1000.0} };
+	TaxiOut.Length = GuidelineGeom::PolylineLength(TaxiOut.Polyline);
+	FRouteStep Away;
+	Away.EndDistance = TaxiOut.Length;
+	TaxiOut.Steps = { Away };
+
+	// Facing NORTH on the stand, into the terminal, because the lead-in runs south.
+	const double ParkedHeading = UE_DOUBLE_HALF_PI;
+
+	FAirframe Airframe = TestAirframes::Piper();
+	Airframe.PushbackNeed = EPushbackNeed::VehicleTug;
+
+	FRoadAgent Agent;
+	Agent.Phase = EAgentPhase::Parked;
+	if (!TestTrue(TEXT("a parked aeroplane can be pushed"),
+		Agent.StartPushback(Plan, TaxiOut, Airframe, 150.0, 30.0, 0.0)))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("it is manoeuvring"), Agent.Phase, EAgentPhase::Manoeuvring);
+
+	// PUSH AND START: the engine comes alive as the manoeuvre begins, FROM COLD, and spools
+	// while the tug pushes. Starting it at full RPM would be an aeroplane that was shut down
+	// one frame and at governed speed the next.
+	TestTrue(TEXT("the engine is running"), Agent.bEngineRunning);
+	TestEqual(TEXT("from cold"), Agent.EngineRPM, 0.0, 0.0001);
+
+	// AND IT IS POSED AT THE STAND, facing the way it parked, before any Advance at all -
+	// never at the world origin, and never facing out along the line it is standing on.
+	TestEqual(TEXT("posed at the stand from the start"),
+		Agent.GroundPosition().Y, 5000.0, 0.01);
+	TestEqual(TEXT("facing the way it parked, not the way the line points"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.LastMotion.Heading - ParkedHeading))), 0.0, 0.01);
+
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	bool bPushedBack = false;
+	double RPMAtHandover = -1.0;
+	double SpeedDuringPush = 0.0;
+	bool bEverAtOrigin = false;
+
+	for (int32 Frame = 0; Frame < 20000; ++Frame)
+	{
+		Agent.Advance(1.0 / 60.0, Motion, Event);
+
+		// THE WHEELS TURN UNDER A PUSH. Recorded rather than asserted per frame so the
+		// failure names a number: a zero here is DescribeMotion missing the Manoeuvring arm,
+		// which is the "stopped wheels" defect its own comment warns about.
+		SpeedDuringPush = FMath::Max(SpeedDuringPush, Motion.GroundSpeed);
+
+		bEverAtOrigin = bEverAtOrigin || Motion.Position.SizeSquared() < 1.0;
+
+		if (Event == EAgentEvent::PushedBack)
+		{
+			bPushedBack = true;
+			RPMAtHandover = Agent.EngineRPM;
+			break;
+		}
+	}
+
+	if (!TestTrue(TEXT("the push hands over"), bPushedBack))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("and it is taxiing after it"), Agent.Phase, EAgentPhase::Taxiing);
+	TestTrue(TEXT("the wheels turned during the push"), SpeedDuringPush > 0.0);
+
+	// THE SPOOL SURVIVES THE HANDOVER. Going through StartTaxi would write EngineRPM back to
+	// zero, which is the whole reason the handover calls Follower.Start directly.
+	TestTrue(FString::Printf(TEXT("the propeller kept the RPM it spooled to (%.0f)"), RPMAtHandover),
+		RPMAtHandover > 0.0);
+
+	// NOT ASSERTED: that it is STILL spooling at the handover. Whether the spool outlasts the
+	// tug is a race between two authored figures - a Piper's SpoolUpSeconds is 4 s and this
+	// push takes about fifty - so it is true for a jet and false for a light turboprop, and
+	// pinning it here would be pinning the Piper's engine data rather than this handover. The
+	// property that matters either way is the one above: the taxi inherits the spool rather
+	// than restarting it, which is the whole reason this hands over through Follower.Start.
+
+	// NO FRAME AT THE WORLD ORIGIN - this project's recurring failure, and the reason
+	// LastMotion exists at all.
+	TestFalse(TEXT("no frame put the aeroplane at the world origin"), bEverAtOrigin);
+
+	// THE DEFECT THIS FEATURE REMOVES, measured at the level of the agent: the follower
+	// inherits no heading error, so there is nothing left for it to slew on the spot. The push
+	// finished facing the line's tangent turned about, and the taxi out leaves that same point
+	// the other way, so the two agree by construction rather than by arithmetic.
+	TestEqual(TEXT("the follower inherits the heading the push finished on"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.Follower.Heading - Agent.Pushback.Heading))),
+		0.0, 0.01);
+
+	// AND IT TURNED 90 DEGREES GETTING THERE, ending facing WEST - the way it will taxi -
+	// rather than back out along its own lead-in.
+	TestEqual(TEXT("it swung 90 degrees off its parked heading"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.Follower.Heading - ParkedHeading))), 90.0, 0.5);
+	TestEqual(TEXT("which leaves it facing the way the taxi out goes"),
+		FMath::Abs(FMath::RadiansToDegrees(
+			FMath::UnwindRadians(Agent.Follower.Heading - UE_DOUBLE_PI))), 0.0, 0.5);
+
+	// A POWERBACK WAITS FOR THRUST, through the agent rather than through FPushbackRun: the
+	// gate reads the AGENT's EngineRPM, so a threshold that never rose would hold it for ever.
+	{
+		FAirframe Light = TestAirframes::Piper();
+		Light.PushbackNeed = EPushbackNeed::SelfManoeuvre;
+
+		FRoadAgent Powerback;
+		Powerback.Phase = EAgentPhase::Parked;
+		Powerback.StartPushback(Plan, TaxiOut, Light, 200.0, 30.0,
+			Light.Engine.MaxRPM * 0.6);
+
+		FAgentMotion PowerMotion;
+		EAgentEvent PowerEvent = EAgentEvent::None;
+		Powerback.Advance(1.0 / 60.0, PowerMotion, PowerEvent);
+		TestEqual(TEXT("a powerback has not moved on frame one - the propeller is still cold"),
+			Powerback.Pushback.Travelled, 0.0, 0.0001);
+
+		// It does move once the engine has spooled past the fraction, which is what makes
+		// this a delay rather than a deadlock.
+		for (int32 Frame = 0; Frame < 2000 && Powerback.Pushback.Travelled <= 0.0; ++Frame)
+		{
+			Powerback.Advance(1.0 / 60.0, PowerMotion, PowerEvent);
+		}
+		TestTrue(TEXT("and moves once it has thrust"), Powerback.Pushback.Travelled > 0.0);
+		TestTrue(TEXT("by which time the propeller is turning"), Powerback.EngineRPM > 0.0);
+	}
 
 	return true;
 }

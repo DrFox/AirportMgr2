@@ -17,6 +17,12 @@ EFlightPhase FlightPhaseFromAgent(EAgentPhase To, EFlightPhase Current)
 	case EAgentPhase::Parked:
 		return EFlightPhase::Turnaround;
 
+	case EAgentPhase::Manoeuvring:
+		// WITHOUT THIS CASE the default below leaves the flight reading "Turnaround" while the
+		// aeroplane is visibly moving off its stand - the board and the apron disagreeing, with
+		// nothing to say which was right.
+		return EFlightPhase::Manoeuvring;
+
 	case EAgentPhase::Departing:
 		return EFlightPhase::Departing;
 

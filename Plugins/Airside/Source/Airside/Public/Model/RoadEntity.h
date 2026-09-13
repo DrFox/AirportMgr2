@@ -544,6 +544,35 @@ struct AIRSIDE_API FApproachPerformance
 };
 
 /**
+ * How this aeroplane gets off its stand.
+ *
+ * A GAMEPLAY LEVER, not a detail. It is the one thing that makes a Pushback depot a decision
+ * rather than a tax: an airport flying Twin Otters needs no tug at all, and the first A320
+ * offer is what forces the building.
+ *
+ * AUTHORED AND NOT DERIVED FROM THE CODE LETTER. "Code A and B reverse, C and above need a
+ * tug" needs no field at all and is wrong for real types - a Dash 8 is Code C and reverses
+ * perfectly well. It would also bury a gameplay lever in a letter that exists to dimension
+ * pavement, which is the mistake FAirframe::TypeCode's own comment records.
+ *
+ * THREE VALUES AND NOT A BOOL even though slice 1 only ever asks "is it SelfManoeuvre". The
+ * hand-tug tier is the Pushback depot's first upgrade rung - a cheap depot that can move a
+ * Dash 8 but not an A320 - and widening a shipped bool is worse than carrying the value now.
+ */
+UENUM(BlueprintType)
+enum class EPushbackNeed : uint8
+{
+	/** Reverses under its own power. A Twin Otter beta-ranges out of a stand. */
+	SelfManoeuvre,
+
+	/** Light enough for a towbar on a manual tug. */
+	HandTug,
+
+	/** Needs a tug vehicle. */
+	VehicleTug
+};
+
+/**
  * Every fact about one aeroplane that a dispatch needs, bundled - not four parameters.
  *
  * FRoadAgent used to be handed Ground, Climb, Approach and Engine as four separate
@@ -679,6 +708,20 @@ struct AIRSIDE_API FAirframe
 	 * then leaves without it.
 	 */
 	UPROPERTY(EditAnywhere) double TurnaroundSeconds = 1800.0;
+
+	/**
+	 * How this aeroplane leaves its stand - see EPushbackNeed.
+	 *
+	 * HERE WITH THE FIGURES, for the reason Wingspan, Requirements and Mesh are here: the
+	 * thing that pushes an aeroplane holds an FAirframe and no UAircraftType, and Model/ may
+	 * not see Entities/ at all.
+	 *
+	 * DEFAULTS TO VehicleTug, the CONSERVATIVE answer: an airframe assembled by hand - a test,
+	 * the Piper fallback - must not silently claim it can reverse itself. Saying "needs a tug"
+	 * of something that does not is a missing fee; saying "reverses itself" of an A320 is an
+	 * airport that never needs the depot at all.
+	 */
+	UPROPERTY(EditAnywhere) EPushbackNeed PushbackNeed = EPushbackNeed::VehicleTug;
 };
 
 /** A connection point between an entity and the guideline graph, in the entity's local space. */

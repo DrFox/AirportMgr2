@@ -24,6 +24,23 @@ enum class EDepartureRefusal : uint8
 	NotAdmitted,
 	/** DepartAgent only: the agent is not Parked, so there is nothing standing still to send. */
 	NotParked,
+	/**
+	 * DepartAgent only: the ground the push off the stand needs is not free.
+	 *
+	 * UNLIKE EVERY OTHER REFUSAL HERE, this one is about OTHER TRAFFIC and clears itself - a
+	 * caller that gives up on it gives up on an aeroplane that would have left a few seconds
+	 * later. See UGroundTraffic::DepartAgent for why a push is granted whole rather than
+	 * arbitrated as it goes.
+	 */
+	PushbackBlocked,
+	/**
+	 * The stand has no arm to reverse onto, so the aeroplane cannot be pushed off it at all.
+	 *
+	 * PERMANENT, unlike PushbackBlocked: no amount of waiting adds a second way out of a
+	 * dead-end taxiway. Refusing is deliberate - see PushbackPlanner::Plan for why falling
+	 * back on reversing down the departure's own arm was rejected.
+	 */
+	NoPushbackRoute,
 };
 
 /**

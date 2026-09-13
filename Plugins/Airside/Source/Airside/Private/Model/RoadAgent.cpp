@@ -88,9 +88,14 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// speed over radius - so a phase missing from this line is a phase with stopped wheels.
 	switch (Phase)
 	{
-	case EAgentPhase::Arriving:  Motion.GroundSpeed = Arrival.Speed;   break;
-	case EAgentPhase::Departing: Motion.GroundSpeed = Departure.Speed; break;
-	default:                     Motion.GroundSpeed = Follower.Speed;  break;
+	case EAgentPhase::Arriving:    Motion.GroundSpeed = Arrival.Speed;   break;
+	case EAgentPhase::Departing:   Motion.GroundSpeed = Departure.Speed; break;
+	// A PUSH IS MOTION TOO, and the wheels turn under it - backwards, but the view has no
+	// signed wheel rate and a tyre rolling the other way at 1.5 m/s reads the same. Omitting
+	// this line is the "stopped wheels" defect above, in the one phase where the aeroplane is
+	// closest to the camera.
+	case EAgentPhase::Manoeuvring: Motion.GroundSpeed = Pushback.Speed;  break;
+	default:                       Motion.GroundSpeed = Follower.Speed;  break;
 	}
 
 	// WHERE IT PITCHES ABOUT, which is a fact about the airframe rather than about this
@@ -183,6 +188,54 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 	}
 }
 
+bool FRoadAgent::StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
+	const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM)
+{
+	// A POWERBACK IS THE ENGINE DOING THE WORK; anything on a bar is moved by the tug and its
+	// propeller is incidental. This is the ONE place in this slice where the pushback need
+	// changes what happens, and it is justified because it is a fact about the AEROPLANE
+	// rather than about a tug that does not exist yet.
+	const bool bNeedsThrust = InAirframe.PushbackNeed == EPushbackNeed::SelfManoeuvre;
+
+	if (!Pushback.Start(PushPlan, PushSpeed, PushAccel, bNeedsThrust))
+	{
+		// FPushbackRun has already declined. Nothing else is touched: a manoeuvre that cannot
+		// be flown must leave no trace of itself on the agent rather than one half-armed -
+		// the rule StartArrival states above, for the same reason.
+		return false;
+	}
+
+	Phase = EAgentPhase::Manoeuvring;
+	Airframe = InAirframe;
+	PushbackThrustRPM = ThrustRPM;
+
+	// THE ROUTE OUT, CARRIED FROM DISPATCH exactly as TaxiInPlan is for an arrival. The push
+	// ends somewhere the departure route never visits, so this is the only thing that knows
+	// how the aeroplane leaves from there - see FRoadAgent::TaxiOutPlan.
+	TaxiOutPlan = InTaxiOutPlan;
+
+	// PUSH AND START, and the cold start lives HERE rather than in StartTaxi - see this
+	// function's declaration. AdvanceEngine spools from this zero over SpoolUpSeconds whatever
+	// phase is driving, so the propeller is still coming up as the taxi takes over, which is
+	// what "the spool outlasts the tug" means.
+	bEngineRunning = true;
+	EngineRPM = 0.0;
+
+	// SEEDED FROM THE PUSH'S OWN STARTING POSE, the rule StartArrival follows: a caller that
+	// reads LastMotion before the first real Advance must see where the manoeuvre actually
+	// begins, never the FVector2D default - the "world origin" bug this field exists to
+	// prevent. The HEADING comes from FPushbackRun, which has already turned the line's
+	// tangent about; taking the polyline's own direction here would face the aeroplane out of
+	// its stand for one frame, which is the very thing this phase exists to stop.
+	LastMotion = FAgentMotion();
+	if (PushPlan.Polyline.Num() > 0)
+	{
+		LastMotion.Position = PushPlan.Polyline[0];
+	}
+	LastMotion.Heading = Pushback.Heading;
+	return true;
+}
+
 void FRoadAgent::ArmDeparture(const FRunwayEnd& End, double EntryOffset)
 {
 	bDepartureArmed = true;
@@ -255,8 +308,69 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		[[fallthrough]];
 	}
 
+	// TWO LABELS ON ONE BODY, and NOT a third [[fallthrough]] arm above this one.
+	//
+	// THIS COST EIGHT TESTS. Arriving ends in [[fallthrough]] and relies on the NEXT case
+	// label being the taxi. A Manoeuvring case written between the two silently redirected
+	// every arrival's vacate handover into the push arm - the aeroplane landed, and then ran
+	// FPushbackRun::Advance on an unarmed struct. Nothing about the insertion looked wrong;
+	// the coupling is purely positional, which is exactly the kind this codebase's "check
+	// where a list is CONSUMED" rule exists to catch.
+	//
+	// So the push shares the taxi's case instead of preceding it. Arriving still falls
+	// through, arriving with Phase already set to Taxiing, so the branch below is false for
+	// it and the adjacency it depends on can no longer be broken by inserting a case.
+	case EAgentPhase::Manoeuvring:
 	case EAgentPhase::Taxiing:
 	{
+		if (Phase == EAgentPhase::Manoeuvring)
+		{
+			// THE THRUST GATE IS ASKED HERE rather than inside FPushbackRun, because the RPM
+			// is the AGENT's: that struct is world-free and holds no engine, exactly as it
+			// holds no airframe. A powerback waits at rest until the propeller has something
+			// to push with; a towed aeroplane moves on frame one.
+			const bool bHasThrust = EngineRPM >= PushbackThrustRPM;
+
+			FVector2D PushAt = At;
+			double PushHeading = Heading;
+			if (Pushback.Advance(DeltaSeconds, StopWithin, bHasThrust, PushAt, PushHeading))
+			{
+				LastMotion = DescribeMotion(PushAt, PushHeading);
+				OutMotion = LastMotion;
+				return true;
+			}
+
+			// OFF THE STAND: hand over to the taxi, on the route planned FROM HERE at dispatch.
+			// Not a splice into the push's own plan, which is the correction this phase was
+			// rewritten for: a push reverses onto the arm the departure does NOT take, so when
+			// it ends the aeroplane is standing somewhere that route never visits. See
+			// FRoadAgent::TaxiOutPlan.
+			//
+			// FROM ITS BEGINNING, therefore - Travelled zero, not the push's distance - and
+			// the heading carries across unchanged. The push finished facing the line's
+			// tangent turned about, and the taxi out leaves the same point the other way, so
+			// the two agree exactly and the follower starts with ZERO heading error. That is
+			// what makes the aeroplane pull away instead of pirouetting.
+			//
+			// SPEED ZERO, deliberately, and unlike the Vacated handover above which carries
+			// the rollout's speed into the taxi. This aeroplane has just been moving BACKWARDS
+			// and is about to move forwards: carrying the push's speed across would have it
+			// pull away at the speed it was pushed at, in the other direction, on the
+			// handover frame.
+			//
+			// Follower.Start AND NOT StartTaxi, which writes EngineRPM = 0.0 from cold and
+			// would undo the spool the push has been running - see StartPushback.
+			Phase = EAgentPhase::Taxiing;
+			OutEvent = EAgentEvent::PushedBack;
+			Follower.Start(TaxiOutPlan, Airframe, 0.0, Pushback.Heading);
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Push complete; taxiing out."));
+
+			// AND TAXI THIS SAME FRAME, falling out of this branch rather than returning, for
+			// the reason the Vacated fallthrough gives: the push declined this frame without
+			// moving, so the frame's dt is the follower's. A frame with no motion at all is
+			// exactly the step the handover-continuity test catches.
+		}
+
 		FVector2D FollowAt = At;
 		double FollowHeading = Heading;
 		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one

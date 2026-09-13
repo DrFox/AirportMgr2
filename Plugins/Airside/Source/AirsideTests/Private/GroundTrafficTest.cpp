@@ -1891,6 +1891,23 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 		if (!TestTrue(TEXT("second arrival is taxiing in"), B != nullptr && B->Phase == EAgentPhase::Taxiing)) { return false; }
 	}
 
+	// THIS DEPARTURE DRIVES STRAIGHT OUT. StraightOutDegrees is the angle within which an
+	// aeroplane's way out is already ahead of it and no manoeuvre is needed; 360 makes that
+	// true of every stand, so this fixture takes exactly the path it took before pushback
+	// existed.
+	//
+	// NEUTRALISED RATHER THAN RETUNED, and the difference matters. Making the push merely
+	// FAST does not restore this test: the aeroplane still physically reverses seventy-six
+	// metres down its lead-in, which moves where it meets the arrival however quickly it gets
+	// there. Trying to keep the encounter by shortening the manoeuvre chased that for three
+	// rounds and never worked.
+	//
+	// WHAT THIS TEST IS FOR is two aeroplanes meeting on one taxiway and keeping separation.
+	// The manoeuvre has its own tests - Airside.Model.PushbackRun, PushbackClearance,
+	// PushbackStraightOut, AgentPushbackComposition - and a departure that meets an arrival
+	// WITH a push in front of it is still uncovered. That gap is named in the branch's notes
+	// rather than papered over here.
+	Traffic->Rules.StraightOutDegrees = 360.0;
 	const EDepartureRefusal Why = Traffic->DepartAgent(First, *Net);
 	if (!TestTrue(FString::Printf(TEXT("departure accepted (%d)"), static_cast<int32>(Why)), Why == EDepartureRefusal::None)) { return false; }
 
@@ -1903,7 +1920,12 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 		const FRoadAgent* A = Traffic->FindAgent(First);
 		const FRoadAgent* B = Traffic->FindAgent(Second);
 		if (A == nullptr || B == nullptr) { return false; }
-		if (A->Phase != EAgentPhase::Taxiing || B->Phase != EAgentPhase::Taxiing) { return B->Phase == EAgentPhase::Taxiing || A->Phase == EAgentPhase::Taxiing; }
+		// KEEP TICKING WHILE EITHER IS STILL UNDER WAY, and a PUSH is under way. This read
+		// "Phase == Taxiing" on both sides, which was the whole truth before a departure
+		// manoeuvred off its stand first: the loop saw the departing aeroplane leave Taxiing,
+		// concluded it was finished, and stopped before the two ever met - zero ticks both
+		// taxiing, however fast the push was made. IsOnRoute is the question that was meant.
+		if (A->Phase != EAgentPhase::Taxiing || B->Phase != EAgentPhase::Taxiing) { return B->IsOnRoute() || A->IsOnRoute(); }
 		++TicksBothTaxiing;
 		TicksFirstWaited += A->WaitingOn != 0 ? 1 : 0;
 		TicksSecondWaited += B->WaitingOn != 0 ? 1 : 0;

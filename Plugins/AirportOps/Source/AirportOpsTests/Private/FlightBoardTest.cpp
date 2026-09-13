@@ -147,8 +147,17 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Taxiing, EAgentPhase::Parked);
 	TestEqual(TEXT("parked is the turnaround"), Flight->Phase, EFlightPhase::Turnaround);
 
-	// THE POINT OF THE TEST: the same agent phase, the other answer.
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Parked, EAgentPhase::Taxiing);
+	// THE REAL SEQUENCE NOW GOES THROUGH THE MANOEUVRE. An aeroplane is pushed off its stand
+	// before it taxis out, so the board has to show that rather than jumping from Turnaround
+	// to TaxiOut - and this step is also what makes the NEXT assertion mean something.
+	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
+	TestEqual(TEXT("coming off the stand is the manoeuvre"),
+		Flight->Phase, EFlightPhase::Manoeuvring);
+
+	// THE POINT OF THE TEST: the same agent phase, the other answer. Taxiing is the agent's
+	// phase both into the stand and out of it, and only the flight's own progress tells them
+	// apart - which is why EFlightPhase's declaration order is load-bearing.
+	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing);
 	TestEqual(TEXT("taxiing after the turnaround is TaxiOut"), Flight->Phase, EFlightPhase::TaxiOut);
 
 	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Taxiing, EAgentPhase::Departing);

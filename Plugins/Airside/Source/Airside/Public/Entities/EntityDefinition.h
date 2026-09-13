@@ -122,6 +122,22 @@ public:
 	UPROPERTY(EditAnywhere) EServiceRole PoseRole = EServiceRole::Aircraft;
 
 	/**
+	 * This stand has pavement on BOTH sides: an aeroplane enters nose-first and leaves
+	 * nose-first, so it needs no push off it at all.
+	 *
+	 * IT CHANGES THE GRAPH, NOT THE TRAFFIC MODEL. All it does is make FAnchorLink::Gather
+	 * cast a SECOND lead-in ray, forward along +Heading, so the pose node has a way OUT as
+	 * well as a way in. Whether a given aeroplane then needs a push is measured off the route
+	 * it is actually given - see UGroundTraffic::DepartAgent - which is why nothing in Model/
+	 * reads this flag, and why one question also answers a taxiway a player happened to draw
+	 * past an ordinary stand.
+	 *
+	 * ONE LEAD-IN IS STILL THE RULE for every stand that does not set this. A second line into
+	 * one nose-stop is normally a defect, and the anchor loop in Gather refuses it by name.
+	 */
+	UPROPERTY(EditAnywhere) bool bTaxiThrough = false;
+
+	/**
 	 * Plan-view HALF-extents of the installation itself, uu, in its own local space.
 	 *
 	 * FOR THE PLACEMENT PREVIEW, and nothing else this slice. Zero draws nothing but the

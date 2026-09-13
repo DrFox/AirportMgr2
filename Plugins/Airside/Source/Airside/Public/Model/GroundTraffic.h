@@ -32,6 +32,52 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;
 	UPROPERTY(EditAnywhere) double VehicleGap = 300.0;
 
+	/**
+	 * How fast a push off a stand runs, uu/s. 1 uu is 1 cm - see UAircraftType::MainWheelRadius.
+	 *
+	 * ON THE RULES AND NOT THE AIRFRAME, unlike the braking figure the claim window reads:
+	 * push speed is a property of what is doing the PUSHING, so a hand tug is slower than a
+	 * tug vehicle whatever it has on the bar. That is also why they are named for the tug
+	 * rather than for the aeroplane. Slice 2 moves the two tug figures onto the depot's own
+	 * vehicle types and leaves SelfManoeuvre here, where it belongs.
+	 *
+	 * FIGURES, NOT MEASUREMENTS. Nothing about a real tug is modelled yet; these exist so the
+	 * manoeuvre reads at the right pace on screen, and they are EditAnywhere so it can be
+	 * tuned against what the player actually sees rather than against a specification.
+	 */
+	UPROPERTY(EditAnywhere) double SelfManoeuvrePushSpeed = 200.0;  // 2.0 m/s, on the engine
+	UPROPERTY(EditAnywhere) double HandTugPushSpeed       = 80.0;   // 0.8 m/s, walking pace
+	UPROPERTY(EditAnywhere) double VehicleTugPushSpeed    = 150.0;  // 1.5 m/s
+
+	/** Into and out of a push, uu/s^2. Gentle: a towbar does not snatch. */
+	UPROPERTY(EditAnywhere) double PushAccel              = 30.0;   // 0.3 m/s^2
+
+	/**
+	 * Within this of the parked heading, the way out is forward and no push is needed, degrees.
+	 *
+	 * A MEASUREMENT OF THE GROUND AHEAD, not a property of the stand: it answers a
+	 * taxi-through stand, a taxiway a player happened to draw past a stand, and a graph
+	 * rebuilt since the aeroplane parked, all with one question. Nothing in Model/ reads
+	 * UEntityDefinition::bTaxiThrough for this, and that is deliberate.
+	 */
+	UPROPERTY(EditAnywhere) double StraightOutDegrees     = 45.0;
+
+	/**
+	 * Fraction of MaxRPM a SelfManoeuvre airframe needs before it will move, 0..1.
+	 *
+	 * A POWERBACK IS THE ENGINE DOING THE WORK, so it cannot begin until there is thrust. An
+	 * aeroplane on a tug bar moves from the first frame whatever its propeller is doing,
+	 * because the tug supplies the force - which is the ONE place in this slice where the
+	 * pushback need changes what happens, and it is justified because it is a fact about the
+	 * aeroplane rather than about a tug that does not exist yet.
+	 *
+	 * HERE AND NOT ON FEnginePerformance, which is per-type authored content: this is a rule
+	 * about when a manoeuvre may begin, not a fact about any engine, and putting it there
+	 * would mean re-authoring every aircraft asset to carry a number none of them vary.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double PowerbackRPMFraction = 0.6;
+
 	/** Weight on held length in the routing cost. See FRouteQuery::CongestionWeight. */
 	UPROPERTY(EditAnywhere) double CongestionWeight = 2.0;
 
@@ -91,6 +137,10 @@ struct AIRSIDE_API FTrafficRules
 
 	double FootprintFor(ETraversalClass Class) const;
 	double GapFor(ETraversalClass Class) const;
+
+	/** Which of the three push speeds above applies. The ONE consumer that has to agree with
+	 *  EPushbackNeed - see its body for why that matters. */
+	double PushSpeedFor(EPushbackNeed Need) const;
 };
 
 /**
@@ -793,6 +843,18 @@ private:
 	 * before any FClaimPass exists for this agent.
 	 */
 	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
+
+	/**
+	 * Is every edge and node a push off the stand will touch free of everyone else?
+	 *
+	 * PUSHBACK CLEARANCE, asked ONCE before the manoeuvre starts rather than tick by tick. A
+	 * manoeuvring agent cannot replan - a stand's lead-in is the only way off it - so it has
+	 * no move for the deadlock resolver to find, and a push that could be stopped half way
+	 * would be a phase able to block a taxiway indefinitely with nothing able to act on it.
+	 * Granting the whole thing up front makes it atomic, which is also what ground control
+	 * does: clearance is granted or withheld, never half-granted.
+	 */
+	bool IsPushGroundFree(int32 AgentId, const FRoutePlan& Plan, double PushDistance) const;
 
 	/**
 	 * Offers every waiting aircraft (bAwaitingStand) the best free stand reachable from where

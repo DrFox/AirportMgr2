@@ -130,7 +130,7 @@ one game day. Ad-hoc offers keep arriving and use whatever stands the grid leave
 ## 7. Flights on the ground
 
 Every flight moves through one sequence: offered, accepted, inbound, landing, taxi-in,
-turnaround, pushback, taxi-out, departing, departed. It can fail out as declined, diverted
+turnaround, manoeuvring, taxi-out, departing, departed. It can fail out as declined, diverted
 or cancelled.
 
 **Runway.** One occupant at a time. Landings need a clear runway and a usable exit that
@@ -148,6 +148,13 @@ is a player mistake the game will eventually warn about.
 
 **Stands.** Sized by ICAO wingspan class. An aircraft takes the smallest free stand that
 fits it. Once scheduling is unlocked, contracted flights take the stand the grid assigns.
+
+**Manoeuvring off the stand.** An aeroplane backs down its stand's lead-in and swings onto
+the taxiway before it taxis out. **Manoeuvring is the stage; pushback is the service that
+performs it.** Small types reverse under their own power and need no tug at all; larger ones
+need a hand tug or a tug vehicle, and that is what makes a Pushback depot a choice rather
+than a tax on every airport. A stand with pavement on both sides is driven straight out of
+and needs neither.
 
 **Turnaround.** Service demands become jobs with ordering rules: unload before load,
 pushback last, no fuelling during boarding. A job is offered to every depot that can do it;

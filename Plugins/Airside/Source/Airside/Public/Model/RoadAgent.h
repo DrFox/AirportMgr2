@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/LandingRun.h"
+#include "Model/PushbackRun.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
@@ -38,6 +39,17 @@ enum class EAgentPhase : uint8
 	/** At the stand, taxi over, running down the post-arrival shutdown pause. */
 	Parked,
 
+	/**
+	 * Coming off the stand: backed down the lead-in and swung onto the taxiway. The push
+	 * drives it - see FPushbackRun.
+	 *
+	 * NOT CALLED Pushback, and that distinction is the point of the feature rather than
+	 * pedantry: a Twin Otter reverses under its own power and is not being pushed by
+	 * anything. The PHASE is the manoeuvre; the SERVICE that performs it for an aeroplane
+	 * which cannot manage alone is pushback, and that is the job board's business.
+	 */
+	Manoeuvring,
+
 	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
 	Gone
 };
@@ -72,6 +84,8 @@ enum class EAgentEvent : uint8
 	LinedUp,
 	/** Taxiing -> Parked: the taxi is over, the turnaround starts. */
 	Parked,
+	/** Manoeuvring -> Taxiing: off the stand and aligned, the taxi out starts. */
+	PushedBack,
 	/** Still Departing, but FTakeoffRun::Phase just reached Climb: the runway is free. */
 	Airborne,
 	/** Departing -> Gone: the climb cleared. See this enum's own comment on why it is here
@@ -188,9 +202,39 @@ struct AIRSIDE_API FRoadAgent
 	 */
 	UPROPERTY() FTakeoffRun Departure;
 
+	/**
+	 * Drives Phase == Manoeuvring.
+	 *
+	 * A FOURTH MOTION PHASE rather than a mode inside the follower, for the reason the other
+	 * three are separate: it is a COMPLETE, independently-tested simulation of one thing
+	 * (Airside.Model.PushbackRun), and it walks its route with the body reversed, which no
+	 * amount of signing FRouteFollower::Speed would express. FRoadAgent owns which of the
+	 * four is driving, so none of them has to know the others exist.
+	 */
+	UPROPERTY() FPushbackRun Pushback;
+
+	/**
+	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback
+	 * because this struct is world-free and cannot read the rules for itself - the same
+	 * reason ShutdownPause is a copy rather than a lookup. Zero for anything on a tug bar.
+	 */
+	UPROPERTY() double PushbackThrustRPM = 0.0;
+
 	/** The route to fly once an arrival has vacated. Planned at dispatch, so a landing
 	 *  cannot be armed for a stand it has no way of reaching. */
 	UPROPERTY() FRoutePlan TaxiInPlan;
+
+	/**
+	 * The route to taxi once a PUSH has finished. The exact mirror of TaxiInPlan above, and
+	 * planned at dispatch for the same reason: an aeroplane must never be pushed somewhere it
+	 * cannot then taxi out of.
+	 *
+	 * A SECOND ROUTE IS UNAVOIDABLE HERE. A push reverses onto the arm of the junction the
+	 * departure does NOT take, so when it ends the aeroplane is standing somewhere the
+	 * departure route never visits - the route planned from the stand no longer begins where
+	 * the aeroplane is. See PushbackPlanner::Plan.
+	 */
+	UPROPERTY() FRoutePlan TaxiOutPlan;
 
 	/** What to fly once the current taxi ends, if anything. See FDepartureOrder. */
 	UPROPERTY() FDepartureOrder DepartureOrder;
@@ -263,6 +307,41 @@ struct AIRSIDE_API FRoadAgent
 	 * reaching LastMotion.Position itself (#104).
 	 */
 	FVector2D GroundPosition() const { return LastMotion.Position; }
+
+	/**
+	 * The plan this agent is walking, how far along it, and how fast - from whichever struct
+	 * is actually driving.
+	 *
+	 * THREE ACCESSORS AND NOT THREE DIRECT READS OF Follower, because since the push there are
+	 * TWO structs that can be walking an agent along a route. Reading Agent.Follower.Travelled
+	 * on a manoeuvring agent returns whatever the taxi IN left there - a stale distance on a
+	 * live plan, which claims ground the aeroplane is nowhere near. Airside.Model.ClaimCentre
+	 * measured that at 99 000 uu against a real 1 500.
+	 *
+	 * NOT A CASE FOR EVERY PHASE. An arrival and a departure are not on a route at all, and
+	 * their callers branch away before they reach these (see FClaimPass::Run's first arm). The
+	 * follower is the answer for everything else, which leaves every vehicle's path unchanged.
+	 */
+	const FRoutePlan& PlanInProgress() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Plan : Follower.Plan;
+	}
+	double DistanceAlongPlan() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Travelled : Follower.Travelled;
+	}
+	double SpeedAlongPlan() const
+	{
+		return Phase == EAgentPhase::Manoeuvring ? Pushback.Speed : Follower.Speed;
+	}
+
+	/** True while a route-walking phase is driving: a taxi, or a push off a stand. The one
+	 *  question FClaimPass::Run, the rebuild and the deadlock resolver all used to spell as
+	 *  "Phase == Taxiing", which silently excluded the push. */
+	bool IsOnRoute() const
+	{
+		return Phase == EAgentPhase::Taxiing || Phase == EAgentPhase::Manoeuvring;
+	}
 
 	/** Stable identity for the agent's lifetime, assigned by UGroundTraffic::Admit. 0 means
 	 *  unassigned and is never handed out. Was FAgentSlot::Id before the Mediator moved to
@@ -436,6 +515,22 @@ public:
 
 	/** Starts a plain taxi with no prior landing: Phase becomes Taxiing. */
 	void StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe);
+
+	/**
+	 * Sends a parked aeroplane off its stand: Phase becomes Manoeuvring. False, and leaves
+	 * the agent untouched, when the plan cannot be pushed along - see FPushbackRun::Start.
+	 *
+	 * THE ENGINE IS STARTED HERE AND NOT IN StartTaxi. Real practice is "push and start": the
+	 * crew spools up WHILE the tug pushes, and the spool routinely outlasts the manoeuvre.
+	 * AdvanceEngine already runs first and unconditionally every frame whatever phase is
+	 * driving, so moving the cold start to here is the whole of it - and the handover into
+	 * the follower must then NOT go through StartTaxi, which writes EngineRPM back to zero.
+	 *
+	 * ThrustRPM is the RPM at or above which a POWERBACK may begin; it is ignored for
+	 * anything on a tug bar, which the tug moves whatever the propeller is doing.
+	 */
+	bool StartPushback(const FRoutePlan& PushPlan, const FRoutePlan& InTaxiOutPlan,
+		const FAirframe& InAirframe, double PushSpeed, double PushAccel, double ThrustRPM);
 
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);

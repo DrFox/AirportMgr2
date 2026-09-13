@@ -135,6 +135,10 @@ public:
 	 */
 	UPROPERTY(EditAnywhere) double TurnaroundSeconds = 1800.0;
 
+	/** How this type gets off a stand - see EPushbackNeed. Carried into FAirframe by
+	 *  Airframe() below, because Model/ may not see this header. */
+	UPROPERTY(EditAnywhere) EPushbackNeed PushbackNeed = EPushbackNeed::VehicleTug;
+
 	/**
 	 * The four performance structs plus Wingspan and Requirements, bundled - see FAirframe
 	 * for why.
@@ -168,6 +172,7 @@ public:
 		Out.Mesh = Mesh;
 		Out.AnimClass = AnimClass;
 		Out.TurnaroundSeconds = TurnaroundSeconds;
+		Out.PushbackNeed = PushbackNeed;
 		return Out;
 	}
 

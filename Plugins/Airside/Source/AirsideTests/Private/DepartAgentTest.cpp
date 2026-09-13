@@ -17,9 +17,20 @@
 
 namespace
 {
-	/** The departure-release fixture: a runway split at (0,0) and an authored guideline from
-	 *  A (0,-20000) to B (0,0) ON the strip. Built onto whichever network is handed in. */
-	struct FDepAgentGraph { FGuidelineNodeId A, B; };
+	/**
+	 * The departure-release fixture: a runway split at (0,0), a stand at A (0,-20000), and a
+	 * JUNCTION at J (0,-10000) where the lead-in meets a taxiway running east-west.
+	 *
+	 * THE JUNCTION IS NOT DECORATION. A pushback reverses onto the arm of the junction the
+	 * departure does NOT take, so a stand joined to its runway by a single edge has nowhere to
+	 * be pushed and UGroundTraffic::DepartAgent refuses it - see PushbackPlanner::Plan, and the
+	 * ruling that a stand nothing can leave is a layout problem rather than something to
+	 * improvise around. This fixture used to be that single edge, and duly started refusing.
+	 *
+	 * A REAL AIRPORT NEVER HAS THE OTHER SHAPE: a stand's lead-in meets a taxiway, not a
+	 * runway. The fixture is more realistic for the change, not less.
+	 */
+	struct FDepAgentGraph { FGuidelineNodeId A, B, J, E; };
 
 	FDepAgentGraph DepAgentBuild(URoadNetwork& Net)
 	{
@@ -31,15 +42,29 @@ namespace
 		Net.AddStraightSegment(RM, RB, Runway);
 
 		FDepAgentGraph G;
-		G.A = Net.AddGuidelineNode(FVector2D(0.0, -20000.0), false);
-		G.B = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
-		FGuidelineEdge Edge;
-		Edge.A = G.A; Edge.B = G.B;
-		Edge.Control = FVector2D(0.0, -10000.0);
-		Edge.AllowedTraffic = FTrafficMask::All();
-		Edge.Direction = EGuidelineDir::Bidirectional;
-		Edge.bDerived = false;
-		Net.AddGuidelineEdge(MoveTemp(Edge));
+		G.A = Net.AddGuidelineNode(FVector2D(0.0, -20000.0), false);   // the stand
+		G.J = Net.AddGuidelineNode(FVector2D(0.0, -10000.0), false);   // lead-in meets taxiway
+		G.B = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);        // on the strip
+		G.E = Net.AddGuidelineNode(FVector2D(20000.0, -10000.0), false); // the far arm
+
+		auto Join = [&Net](FGuidelineNodeId From, FGuidelineNodeId To)
+		{
+			const FVector2D Mid =
+				(Net.GetGuidelineNode(From)->Position + Net.GetGuidelineNode(To)->Position) * 0.5;
+
+			FGuidelineEdge Edge;
+			Edge.A = From;
+			Edge.B = To;
+			Edge.Control = Mid;
+			Edge.AllowedTraffic = FTrafficMask::All();
+			Edge.Direction = EGuidelineDir::Bidirectional;
+			Edge.bDerived = false;
+			Net.AddGuidelineEdge(MoveTemp(Edge));
+		};
+
+		Join(G.A, G.J);
+		Join(G.J, G.B);
+		Join(G.J, G.E);
 		return G;
 	}
 }
@@ -71,8 +96,23 @@ bool FDepartAgentModelTest::RunTest(const FString& Parameters)
 	const EDepartureRefusal Why = Traffic->DepartAgent(Id, *Net);
 	if (!TestEqual(FString::Printf(TEXT("a parked agent departs (%d)"), static_cast<int32>(Why)), Why, EDepartureRefusal::None)) { return false; }
 	const FRoadAgent* P = Traffic->FindAgent(Id);
-	TestEqual(TEXT("it is taxiing again"), P->Phase, EAgentPhase::Taxiing);
+	// MANOEUVRING FIRST, NOT TAXIING. This parked aeroplane's way out is 180 degrees behind
+	// it, so it is pushed off its stand before it taxis at all - which is the whole of the
+	// pushback feature. The assertion is UPDATED to the real sequence rather than relaxed:
+	// going straight to Taxiing from Parked is now a defect, not an alternative.
+	TestEqual(TEXT("it manoeuvres off the stand first"), P->Phase, EAgentPhase::Manoeuvring);
 	TestTrue(TEXT("with a departure armed"), P->bDepartureArmed);
+
+	// AND IT REACHES THE TAXI. Asserted rather than assumed: a manoeuvre that never handed
+	// over would leave the aeroplane half off its stand for ever, and every assertion below
+	// would still pass.
+	for (int32 I = 0; I < 20000 && Traffic->FindAgent(Id) != nullptr
+		&& Traffic->FindAgent(Id)->Phase == EAgentPhase::Manoeuvring; ++I)
+	{
+		Traffic->Advance(1.0 / 30.0, Net);
+	}
+	TestEqual(TEXT("and is taxiing once the push is over"),
+		Traffic->FindAgent(Id)->Phase, EAgentPhase::Taxiing);
 	TestTrue(TEXT("and the engine running - a redirect restarts it"), P->bEngineRunning);
 	TestEqual(TEXT("departing twice is refused: it is no longer parked"), Traffic->DepartAgent(Id, *Net), EDepartureRefusal::NotParked);
 
