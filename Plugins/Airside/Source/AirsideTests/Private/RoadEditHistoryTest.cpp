@@ -37,6 +37,36 @@ bool FRoadEditHistoryTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an abandoned edit pushes nothing"), History->UndoDepth(), 0);
 	}
 
+	// A SUCCESSFUL MUTATION LEFT UNCOMMITTED IS STILL ABANDONED (#125). FRoadEditScope's own
+	// header says it "cannot forget to end an edit" - meaning every path out of scope ends
+	// the edit one way or the other, not that it defaults to keeping it. This is exactly the
+	// shape of the #125 bug: URoadEditFacade::ConnectGuidelines and DisconnectGuideline
+	// mutated the live graph successfully and then fell off the end of the function with the
+	// scope's Commit() never called, so the destructor took the AbandonEdit branch on a
+	// change that had actually happened - no undo step, no OnChanged. Pinned here at the
+	// scope's own level, world-free, rather than only through the two callers that had the
+	// bug (Airside.Present.MeshRebuildsOnFacadeChange covers those directly).
+	{
+		// A SCRATCH network and a fresh History of its own, so this block leaves no trace on
+		// Live/History for the sections below - they go on to assert exact undo/redo depths
+		// and node counts that this uncommitted mutation would otherwise throw off.
+		URoadNetwork* Scratch = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadEditHistory* ScratchHistory = NewObject<URoadEditHistory>(GetTransientPackage());
+		const int32 NodesBeforeScope = Scratch->GetNodes().Num();
+		{
+			FRoadEditScope Edit(ScratchHistory, Scratch, TEXT("uncommitted"));
+			Scratch->AddNode(FVector2D(1234.0, 5678.0));
+			// Edit.Commit() DELIBERATELY NOT CALLED - the scope destructs at the closing
+			// brace with the mutation already applied to Scratch, same as a caller that
+			// forgot the line.
+		}
+		TestEqual(TEXT("an uncommitted scope pushes no undo step, even over a real mutation"),
+			ScratchHistory->UndoDepth(), 0);
+		TestEqual(TEXT("and the live graph is NOT rolled back - AbandonEdit discards the "
+			"snapshot, it is not a rollback (see FRoadEditScope's own header)"),
+			Scratch->GetNodes().Num(), NodesBeforeScope + 1);
+	}
+
 	// A committed edit, and the round trip through it.
 	{
 		History->BeginEdit(*Live, TEXT("place node"));

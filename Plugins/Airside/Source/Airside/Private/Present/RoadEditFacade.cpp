@@ -391,7 +391,24 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 	Edge.EndRefB = Nodes[ToNodeIndex].Origin;
 
 	const FGuidelineEdgeId Added = Network->AddGuidelineEdge(MoveTemp(Edge));
-	return Added.IsSet() ? Added.Index : INDEX_NONE;
+	if (!Added.IsSet())
+	{
+		// Nothing mutated - AddGuidelineEdge refuses without touching the graph, so leaving
+		// the scope uncommitted here costs nothing to abandon. ~FRoadEditScope calls
+		// AbandonEdit.
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("ConnectGuidelines refused: node %d -> node %d, AddGuidelineEdge declined"),
+			FromNodeIndex, ToNodeIndex);
+		return INDEX_NONE;
+	}
+
+	// COMMITTED (#125): this used to fall off the end of the function with the scope still
+	// open, so ~FRoadEditScope called AbandonEdit instead - no undo step pushed for a
+	// hand-drawn link, and OnChanged never fired, so nothing rebuilt the overlay or the mesh
+	// to show it. Every other mutator on this seam commits before returning; this one simply
+	// never had the line.
+	CommitAndNotify(Edit);
+	return Added.Index;
 }
 
 bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
@@ -420,7 +437,19 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 	}
 
 	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("unlink guidelines"));
-	return Network->RemoveGuidelineEdge(Id);
+	if (!Network->RemoveGuidelineEdge(Id))
+	{
+		// Refused without mutating (RemoveGuidelineEdge's own guards), so nothing here needs
+		// undoing - leaving the scope uncommitted abandons the pending snapshot for free.
+		return false;
+	}
+
+	// COMMITTED (#125): this used to return RemoveGuidelineEdge's result directly with the
+	// scope still open, so ~FRoadEditScope called AbandonEdit on a SUCCESSFUL removal - no
+	// undo step for it, and OnChanged never fired, so a disconnected guideline stayed on
+	// screen until something else happened to rebuild it.
+	CommitAndNotify(Edit);
+	return true;
 }
 
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
