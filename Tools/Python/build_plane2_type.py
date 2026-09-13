@@ -5,9 +5,10 @@
 Every result line is prefixed MARKER: so it can be grepped out of the log.
 
 GEOMETRY IS MEASURED, PERFORMANCE IS PUBLISHED, and the split is the point. Every dimension
-below came off SK_Plane2's own meshes - wheel radius from the wheel's vertical extent, span
-and reaches from the airframe's bounds - because those describe the model that is actually
-drawn, and a figure typed from a spec sheet would be a second opinion about the same object.
+is measured AT RUN TIME off the export's own parts - see measure() - because those describe
+the model that is actually drawn, and a figure typed from a spec sheet would be a second
+opinion about the same object. They were literals here until 2026-09-13, when the export
+moved its origin to the nose gear and made all four position figures wrong at once.
 The speeds and distances come from the DHC-6 Twin Otter the model is based on, because
 nothing in the mesh knows how fast it rotates.
 
@@ -17,6 +18,9 @@ Meridian's 21 uu. A Twin Otter wheel measures 68.6 uu, so an unset ABP spins the
 over three times the right rate against ground speed - which reads as an aircraft skating
 rather than rolling. Both are set here, from the one measurement.
 """
+import json
+import struct
+
 import unreal
 
 TYPE_PATH = "/Game/Entities"
@@ -25,19 +29,118 @@ ABP = "/Game/Aircraft/Plane2/ABP_Plane2"
 SHORT_CODE = "DHC6"
 MESH = "/Game/Aircraft/Plane2/SK_Plane2"
 
-# --- Measured off SK_Plane2, uu (a uu is a centimetre) --------------------------------
-# Wheel: vertical extent 137.2 uu, so radius 68.6. Prop: widest sweep 318.1 uu.
-MAIN_WHEEL_RADIUS = 68.6
-PROPELLER_DIAMETER = 318.1
+# --- Measured off the export, uu (a uu is a centimetre) -------------------------------
+#
+# MEASURED, NOT TYPED, and this block is the reason the rule exists. Every figure below was
+# a literal here - nose_x 811.6, tail_x -782.0, wing_x 204.8, tailplane_x -622.0 - in a file
+# whose own header says "GEOMETRY IS MEASURED, PERFORMANCE IS PUBLISHED". On 2026-09-13 the
+# export moved its origin onto the nose gear (UAircraftType's documented local space), which
+# shifted every one of them by 644 uu at a stroke. Typed figures do not move with the model;
+# they just quietly describe an aeroplane that no longer exists, and the drawn envelope ends
+# up a wheelbase away from the drawn aircraft.
+#
+# The prop was already drifting for the same reason: 318.1 written here against 317.3 in the
+# file after a re-export nobody re-measured.
+#
+# From the .glb rather than from SK_Plane2 because these are PER-PART figures - the wing's
+# mid-chord, the stabiliser's span - and a UStaticMesh/USkeletalMesh gives only the bounds of
+# everything at once. import_plane2.py asserts the import matches the source, so measuring the
+# source is measuring what landed.
+SOURCE = r"C:\repos\AirportMgr2Models\plane2\export\plane2.glb"
 
-FOOTPRINT = {
-    "nose_x": 811.6,          # the airframe's +X reach
-    "tail_x": -782.0,
-    "wingspan": 1975.0,       # 19.75 m; the Twin Otter's published span is 19.81
-    "wing_x": 204.8,          # wing mid-chord, a high wing set slightly forward
-    "tailplane_span": 794.0,
-    "tailplane_x": -622.0,
-}
+
+def part_bounds():
+    """Every named mesh node's extent in UE uu: {name: (min, max)} over X, Y, Z.
+
+    glTF is Y-up with the span on z for this export; UE takes x->X, z->Y, y->Z. A glTF metre
+    is 100 uu. Written out rather than hidden in a matrix because getting it wrong produces a
+    plausible-looking aeroplane with its wings where its fuselage should be.
+    """
+    with open(SOURCE, "rb") as handle:
+        handle.read(12)
+        length = struct.unpack("<I4s", handle.read(8))[0]
+        doc = json.loads(handle.read(length).decode("utf-8"))
+
+    accessors = doc.get("accessors", [])
+    meshes = doc.get("meshes", [])
+    out = {}
+    for node in doc.get("nodes", []):
+        index = node.get("mesh")
+        if index is None or index >= len(meshes):
+            continue
+        low = None
+        high = None
+        for primitive in meshes[index].get("primitives", []):
+            at = primitive.get("attributes", {}).get("POSITION")
+            if at is None or at >= len(accessors):
+                continue
+            lo = accessors[at]["min"]
+            hi = accessors[at]["max"]
+            low = lo if low is None else [min(low[k], lo[k]) for k in range(3)]
+            high = hi if high is None else [max(high[k], hi[k]) for k in range(3)]
+        if low is None:
+            continue
+        # x->X, z->Y, y->Z, metres to uu.
+        out[node.get("name", "?")] = (
+            [low[0] * 100.0, low[2] * 100.0, low[1] * 100.0],
+            [high[0] * 100.0, high[2] * 100.0, high[1] * 100.0])
+    return out
+
+
+def measure():
+    """The footprint and the two scalars, off the export's own parts.
+
+    Raises rather than guessing: a renamed part is a change to look at, not a figure to
+    silently default. The stem match tolerates Blender's '.001' suffixes, which the exporter
+    adds and removes as objects are duplicated.
+    """
+    parts = part_bounds()
+
+    def find(stem):
+        for name, extent in parts.items():
+            if name.split(".")[0] == stem:
+                return extent
+        raise KeyError("no part named %s in %s - the rig was renamed" % (stem, SOURCE))
+
+    every = list(parts.values())
+    nose_x = max(high[0] for _, high in every)
+    tail_x = min(low[0] for low, _ in every)
+
+    wing_lo, wing_hi = find("wing")
+    stab_lo, stab_hi = find("stabiliser")
+    wheel_lo, wheel_hi = find("wheel_L")
+    prop_lo, prop_hi = find("prop_L")
+
+    footprint = {
+        "nose_x": nose_x,
+        "tail_x": tail_x,
+        "wingspan": wing_hi[1] - wing_lo[1],   # the Twin Otter's published span is 19.81 m
+        "wing_x": (wing_lo[0] + wing_hi[0]) * 0.5,
+        "tailplane_span": stab_hi[1] - stab_lo[1],
+        "tailplane_x": (stab_lo[0] + stab_hi[0]) * 0.5,
+    }
+    # The wheel's VERTICAL extent is its diameter; the prop's widest sweep is its disc, which
+    # lies across the airframe rather than along it.
+    wheel_radius = (wheel_hi[2] - wheel_lo[2]) * 0.5
+    prop_diameter = max(prop_hi[1] - prop_lo[1], prop_hi[2] - prop_lo[2])
+    return footprint, wheel_radius, prop_diameter
+
+
+_MEASURED = None
+
+
+def measured():
+    """measure(), once.
+
+    Three places need these figures - the type, the ABP's wheel radius and the read-back
+    verification - and all three must agree or the verification is checking a different
+    aeroplane than the one that was written. Cached rather than re-read because a file that
+    changed mid-run would be a worse problem than a stale one.
+    """
+    global _MEASURED
+    if _MEASURED is None:
+        _MEASURED = measure()
+    return _MEASURED
 
 # --- Published, from the DHC-6 Twin Otter ---------------------------------------------
 #
@@ -146,12 +249,15 @@ def author_type():
         fail("%s has no generated class; compile it before running this" % ABP)
     else:
         asset.set_editor_property("anim_class", abp.generated_class())
-    asset.set_editor_property("main_wheel_radius", MAIN_WHEEL_RADIUS)
-    asset.set_editor_property("propeller_diameter", PROPELLER_DIAMETER)
+    footprint_figures, wheel_radius, prop_diameter = measured()
+    say("measured off the export: wheel radius %.1f, prop %.1f, nose %.1f, tail %.1f uu"
+        % (wheel_radius, prop_diameter, footprint_figures["nose_x"], footprint_figures["tail_x"]))
+    asset.set_editor_property("main_wheel_radius", wheel_radius)
+    asset.set_editor_property("propeller_diameter", prop_diameter)
     asset.set_editor_property("turnaround_seconds", TURNAROUND_SECONDS)
 
     footprint = asset.get_editor_property("footprint")
-    for field, value in FOOTPRINT.items():
+    for field, value in footprint_figures.items():
         footprint.set_editor_property(field, value)
     asset.set_editor_property("footprint", footprint)
 
@@ -196,15 +302,16 @@ def set_anim_wheel_radius():
         return
 
     defaults = unreal.get_default_object(generated)
+    radius = measured()[1]
     before = defaults.get_editor_property("main_wheel_radius")
-    defaults.set_editor_property("main_wheel_radius", MAIN_WHEEL_RADIUS)
+    defaults.set_editor_property("main_wheel_radius", radius)
     unreal.EditorAssetLibrary.save_asset(ABP, only_if_is_dirty=False)
 
     after = unreal.get_default_object(
         unreal.EditorAssetLibrary.load_asset(ABP).generated_class()
     ).get_editor_property("main_wheel_radius")
-    if abs(after - MAIN_WHEEL_RADIUS) > 0.01:
-        fail("ABP wheel radius read back as %.1f, expected %.1f" % (after, MAIN_WHEEL_RADIUS))
+    if abs(after - radius) > 0.01:
+        fail("ABP wheel radius read back as %.1f, expected %.1f" % (after, radius))
     else:
         say("PASS ABP_Plane2 wheel radius %.1f -> %.1f uu" % (before, after))
 
@@ -218,7 +325,7 @@ def verify(path):
         return
 
     checks = [
-        ("main_wheel_radius", asset.get_editor_property("main_wheel_radius"), MAIN_WHEEL_RADIUS),
+        ("main_wheel_radius", asset.get_editor_property("main_wheel_radius"), measured()[1]),
         ("turnaround_seconds", asset.get_editor_property("turnaround_seconds"), TURNAROUND_SECONDS),
     ]
     for name, got, want in checks:
@@ -229,7 +336,7 @@ def verify(path):
 
     footprint = asset.get_editor_property("footprint")
     span = footprint.get_editor_property("wingspan")
-    if abs(span - FOOTPRINT["wingspan"]) > 0.1:
+    if abs(span - measured()[0]["wingspan"]) > 0.1:
         fail("wingspan read back as %.1f" % span)
     else:
         say("PASS footprint wingspan %.1f uu" % span)
