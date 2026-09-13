@@ -63,7 +63,9 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("phase"), Facts.Phase, EAgentPhase::Taxiing);
 	TestEqual(TEXT("destination names the stand by index"),
 		Facts.Destination, FString::Printf(TEXT("Stand %d"), StandId.Index));
-	TestEqual(TEXT("status while moving freely"), Facts.Status, FString(TEXT("Taxiing")));
+	// Status while plain-taxiing is not asserted here: StatusOf's Taxiing case is a bare
+	// mirror of the Phase already checked above (#104) - the real content of Status, its
+	// PRECEDENCE over Phase, is what the scripted block below actually tests.
 	TestFalse(TEXT("cannot depart while taxiing"), Facts.bCanDepart);
 	TestTrue(TEXT("engine running while taxiing"), Facts.bEngineRunning);
 

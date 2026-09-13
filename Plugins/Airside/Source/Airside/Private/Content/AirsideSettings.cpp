@@ -1,6 +1,8 @@
 #include "Content/AirsideSettings.h"
 
 #include "Content/AirsideContent.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/StaticMesh.h"
 #include "Entities/AircraftType.h"
 
 // File-local, matching every other category in this module.
@@ -124,4 +126,31 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	Van.TypeCode = TEXT("FUEL");
 
 	return Van;
+}
+
+FResolvedAgentView UAirsideSettings::ResolveAgentView(const FAirframe& Airframe)
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedAgentView View;
+	View.Mesh = Airframe.Mesh.LoadSynchronous();
+	View.AnimClass = Airframe.AnimClass.LoadSynchronous();
+	if (View.Mesh == nullptr && Content != nullptr)
+	{
+		View.Mesh = Content->AgentMesh.LoadSynchronous();
+		View.AnimClass = Content->AgentAnimClass.LoadSynchronous();
+	}
+	else if (View.Mesh != nullptr && View.AnimClass == nullptr && Content != nullptr)
+	{
+		// A type with a mesh but no anim Blueprint: the default one drives bones by name, so
+		// it is the right fallback rather than no animation at all.
+		View.AnimClass = Content->AgentAnimClass.LoadSynchronous();
+	}
+	return View;
+}
+
+UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
+{
+	const UAirsideContent* Content = GetContent();
+	return Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr;
 }

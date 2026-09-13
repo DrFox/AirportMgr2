@@ -13,7 +13,6 @@
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RouteSearch.h"
-#include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
@@ -318,15 +317,16 @@ FRoutePlan URoadEditFacade::FindRoute(
 	//
 	// QueryingAgent stays 0: nothing has been dispatched yet, so there is no agent whose own
 	// claims should be discounted from the cost.
-	if (Class != ETraversalClass::Aircraft)
+	// TrafficModelProvider, not Actor().GetTraffic()->GetModel() directly: this class must
+	// not reach past Network/History for anything else (#104, and see the class comment) -
+	// ARoadNetworkActor wires the provider once, right after it creates Traffic, the same
+	// way it wires OnChanged right after creating Facade.
+	if (Class != ETraversalClass::Aircraft && TrafficModelProvider)
 	{
-		if (const UAirsideTraffic* Traffic = Actor().GetTraffic())
+		if (const UGroundTraffic* Model = TrafficModelProvider())
 		{
-			if (const UGroundTraffic* Model = Traffic->GetModel())
-			{
-				Query.Occupancy = &Model->GetOccupancy();
-				Query.CongestionWeight = Model->Rules.CongestionWeight;
-			}
+			Query.Occupancy = &Model->GetOccupancy();
+			Query.CongestionWeight = Model->Rules.CongestionWeight;
 		}
 	}
 

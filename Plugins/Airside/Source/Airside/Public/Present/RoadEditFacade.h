@@ -7,6 +7,7 @@
 class ARoadNetworkActor;
 class URoadNetwork;
 class URoadEditHistory;
+class UGroundTraffic;
 class FRoadEditScope;
 
 /**
@@ -156,6 +157,16 @@ public:
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	void ClearNetwork();
 
+	/**
+	 * Wired by ARoadNetworkActor, right after it creates Traffic - the same "reconnect what a
+	 * pointer can't" idiom the constructor already uses for OnChanged (see the class comment).
+	 * FindRoute calls this instead of reaching Actor().GetTraffic()->GetModel() itself: this
+	 * class must not reach past Network/History for anything else (#104), so the ONE place
+	 * that knows how to find the traffic model is the actor, same as the ONE place that knows
+	 * how to rebuild the mesh is.
+	 */
+	void SetTrafficModelProvider(TFunction<const UGroundTraffic*()> Provider) { TrafficModelProvider = MoveTemp(Provider); }
+
 	// --- Undo ----------------------------------------------------------------------------
 
 	bool Undo();
@@ -173,21 +184,6 @@ public:
 	 * runtime, where there is no transaction system, it returns the history.
 	 */
 	URoadEditHistory* HistoryForEdit();
-
-	/**
-	 * The split surgery itself, against any network.
-	 *
-	 * Shared by the real edit (SplitSegment, above) and URoadSurfacePresenter's ghost preview
-	 * deliberately: two implementations of the same surgery is precisely how a preview comes
-	 * to show something the click will not do, and that failure is invisible - the ghost looks
-	 * plausible either way. Static rather than moved to Model/URoadNetwork: it is genuinely
-	 * graph surgery and a free function on URoadNetwork was the brief's preferred home for it,
-	 * but this refactor's blast radius is the Present/ split named in issue #32, and Model/ is
-	 * explicitly out of scope for it - adding a new public Model/ entry point is a second,
-	 * unrelated design decision this task should not fold in silently. A static here costs the
-	 * presenter one extra include and nothing else.
-	 */
-	static FRoadNodeId SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Doomed, const FVector2D& At);
 
 private:
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
@@ -226,4 +222,9 @@ private:
 
 	URoadNetwork& EnsureNetwork();
 	URoadEditHistory& EnsureHistory();
+
+	/** See SetTrafficModelProvider. Returns null before Traffic has dispatched anything, or
+	 *  in an editor world with no running simulation - FindRoute already treats a null model
+	 *  as "no occupancy to weight against", same as it did reaching Actor() directly. */
+	TFunction<const UGroundTraffic*()> TrafficModelProvider;
 };

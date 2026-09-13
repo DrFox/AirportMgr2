@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -50,15 +51,10 @@ namespace
 		}
 	};
 
-	/** Two roads that do NOT touch - the case a hand-drawn link exists for. */
-	ARoadNetworkActor* LinkFixture()
+	/** Two roads that do NOT touch - the case a hand-drawn link exists for. Builds onto an
+	 *  already-spawned actor (see FAirsideTestWorld in RunTest, #104). */
+	void BuildLinkFixture(ARoadNetworkActor* Actor)
 	{
-		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
-		if (Actor == nullptr)
-		{
-			return nullptr;
-		}
-
 		const int32 A0 = Actor->PlaceNode(FVector2D(0.0, 0.0));
 		const int32 A1 = Actor->PlaceNode(FVector2D(6000.0, 0.0));
 		Actor->ConnectNodes(A0, A1);
@@ -68,7 +64,6 @@ namespace
 		Actor->ConnectNodes(B0, B1);
 
 		Actor->RebuildMesh();
-		return Actor;
 	}
 
 	/** The alive guideline node nearest a point. */
@@ -95,16 +90,11 @@ namespace
 		return Best;
 	}
 
+	/** Free-snap, 400uu radius - wider than TestTool::ContextAt's default so a link-node
+	 *  search this test drives actually reaches across the gap it is testing. */
 	FToolContext LinkContextAt(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
-		FToolContext Context;
-		Context.Target = Actor;
-		Context.SnapRadius = 400.0;
-
-		FRoadSnapResult Snap;
-		Snap.Position = Where;
-		Context.SetCursor(Where, Snap);
-		return Context;
+		return TestTool::ContextAt(*Actor, Where, ERoadSnapKind::Free, 400.0);
 	}
 
 	int32 CountHandEdges(const URoadNetwork& Network)
@@ -125,9 +115,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGuidelineDrawToolTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = LinkFixture();
-	if (!TestNotNull(TEXT("fixture built"), Actor)
-		|| !TestNotNull(TEXT("fixture has a network"), Actor->Network.Get()))
+	// A REAL WORLD, not a bare NewObject: this test rebuilds the mesh and routes through the
+	// facade, and a half-built actor is not evidence about either (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor))
+	{
+		return false;
+	}
+	BuildLinkFixture(Actor);
+	if (!TestNotNull(TEXT("fixture has a network"), Actor->Network.Get()))
 	{
 		return false;
 	}

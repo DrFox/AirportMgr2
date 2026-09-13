@@ -223,6 +223,10 @@ public:
 	 * Lands at the runway nearest the VIEW FOCUS. The bar's Land button is clicked with the
 	 * cursor on the bar, where "nearest the cursor" is meaningless; the focus is where the
 	 * player is looking. The key does the same, for one-action-one-behaviour.
+	 *
+	 * NOT a tool, and not in ToolRegistry(): an arrival is one decision taken at the view
+	 * focus rather than a gesture with states, so giving it an IBuildTool would be inventing
+	 * a mode for it to sit in.
 	 */
 	void LandAircraftNearViewFocus();
 
@@ -307,6 +311,13 @@ private:
 	 * The registry's key handler: finds the action whose key and Ctrl requirement match the
 	 * chord that fired. One handler for every key, so a binding cannot exist without an
 	 * action behind it.
+	 *
+	 * ONE handler bound once per registry entry, rather than one dedicated method per tool
+	 * (issue #33 removed six of those - a "select the Nth tool" method for each key) or a
+	 * lambda per BindKey call: the registry already carries the FKey, so a handler that
+	 * receives it back needs no capture and no second place to say which index goes with
+	 * which key. Any key not in the registry (there is none, by construction) is silently
+	 * ignored.
 	 */
 	void OnActionKey(FKey Key);
 
@@ -318,33 +329,8 @@ private:
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;
 
-	/**
-	 * The key that was pressed, looked up against ToolRegistry() to find which tool it
-	 * selects.
-	 *
-	 * ONE handler bound once per registry entry, rather than one dedicated method per tool
-	 * (issue #33 removed six of those - a "select the Nth tool" method for each key) or a
-	 * lambda per BindKey call: the registry already carries the FKey, so a handler that
-	 * receives it back needs no capture and no second place to say which index goes with
-	 * which key. Any key not in the registry (there is none, by construction) is silently
-	 * ignored.
-	 */
-	void SelectToolByKey(FKey Key);
-
 	/** The agent whose projected position is nearest the cursor within AgentPickPixels, or 0. */
 	int32 HoverAgentUnderCursor() const;
-
-	/**
-	 * Lands an aircraft on the runway nearest the cursor and taxis it to a stand. Key 7.
-	 *
-	 * NOT a tool, and not in ToolRegistry(): an arrival is one decision taken at the cursor
-	 * rather than a gesture with states, so giving it an IBuildTool would be inventing a
-	 * mode for it to sit in.
-	 */
-	void OnLandAircraft();
-
-	/** World-space position of a node, at the road plane's height. */
-	bool NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const;
 
 	/** Read WASD/QE/wheel into axes and hand them to the camera component; owns the raw key
 	 *  reads because that is host input, not camera geometry. */

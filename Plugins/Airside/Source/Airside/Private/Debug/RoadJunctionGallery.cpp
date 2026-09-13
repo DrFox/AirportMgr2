@@ -121,15 +121,19 @@ void ARoadJunctionGallery::RebuildGalleryMesh()
 
 	Builder.Build(*Network, Solved, 1);
 
-	if (SurfaceMaterial == nullptr)
+	// A LOCAL, not written back to SurfaceMaterial: that UPROPERTY is EditAnywhere, and
+	// filling it from content the first time this runs would make the Details panel show an
+	// asset nobody assigned - indistinguishable from an author having picked it (#104).
+	UMaterialInterface* Material = SurfaceMaterial;
+	if (Material == nullptr)
 	{
 		if (const UAirsideContent* Content = UAirsideSettings::GetContent())
 		{
-			SurfaceMaterial = Content->SurfaceMaterial.LoadSynchronous();
+			Material = Content->SurfaceMaterial.LoadSynchronous();
 		}
 	}
 
-	FDynamicMeshSink Sink(MeshComponent, SurfaceMaterial, true);
+	FDynamicMeshSink Sink(MeshComponent, Material, true);
 	Builder.Emit(Sink);
 
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery mesh: %d nodes (%d failed), %d vertices, %d triangles"),

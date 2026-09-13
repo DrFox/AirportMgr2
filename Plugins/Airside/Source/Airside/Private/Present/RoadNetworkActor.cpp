@@ -112,6 +112,16 @@ ARoadNetworkActor::ARoadNetworkActor()
 	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
 
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
+
+	// Same idiom as OnChanged above: the facade must not reach past Network/History for
+	// anything else (#104), so FindRoute's vehicle-occupancy lookup asks this provider
+	// instead of Actor().GetTraffic()->GetModel() directly - wired here because this is the
+	// one place that knows how to find the traffic model, same as it is for the mesh rebuild.
+	Facade->SetTrafficModelProvider([this]() -> const UGroundTraffic*
+	{
+		const UAirsideTraffic* T = GetTraffic();
+		return T != nullptr ? T->GetModel() : nullptr;
+	});
 }
 
 UDynamicMeshComponent* ARoadNetworkActor::MakeSurfaceComponent(FName Name)
@@ -242,16 +252,31 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 #endif
 }
 
-ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
+ARoadNetworkActor* ARoadNetworkActor::Find(const UWorld* World)
 {
 	if (World == nullptr)
 	{
 		return nullptr;
 	}
 
-	for (TActorIterator<ARoadNetworkActor> It(World); It; ++It)
+	for (TActorIterator<ARoadNetworkActor> It(const_cast<UWorld*>(World)); It; ++It)
 	{
 		return *It;
+	}
+
+	return nullptr;
+}
+
+ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
+{
+	if (ARoadNetworkActor* Existing = Find(World))
+	{
+		return Existing;
+	}
+
+	if (World == nullptr)
+	{
+		return nullptr;
 	}
 
 	// Not transient, and not RF_Transient: this is the one that will be saved with the

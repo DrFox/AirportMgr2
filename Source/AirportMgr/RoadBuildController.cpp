@@ -48,11 +48,7 @@ void ARoadBuildController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	for (TActorIterator<ARoadNetworkActor> It(GetWorld()); It; ++It)
-	{
-		Target = *It;
-		break;
-	}
+	Target = ARoadNetworkActor::Find(GetWorld());
 
 	if (Target == nullptr)
 	{
@@ -189,13 +185,6 @@ void ARoadBuildController::SetupInputComponent()
 
 	InputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this, &ARoadBuildController::ZoomIn);
 	InputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this, &ARoadBuildController::ZoomOut);
-}
-
-void ARoadBuildController::OnLandAircraft()
-{
-	// Kept by name for anything that still calls it. The registry lands near the view
-	// focus, and so does this now: one action, one behaviour.
-	LandAircraftNearViewFocus();
 }
 
 void ARoadBuildController::LandAircraftNearViewFocus()
@@ -520,12 +509,6 @@ void ARoadBuildController::DepartSelected()
 		Why == EDepartureRefusal::None ? TEXT("accepted") : *UEnum::GetValueAsString(Why));
 }
 
-void ARoadBuildController::SelectToolByKey(FKey Key)
-{
-	// Kept for callers by name; the registry route is OnActionKey -> SelectTool.
-	OnActionKey(Key);
-}
-
 void ARoadBuildController::OnActionKey(FKey Key)
 {
 	// The chord is already matched by the binding; Ctrl state is re-read only to pick between
@@ -725,23 +708,6 @@ void ARoadBuildController::OnPrimaryReleased()
 	{
 		Tool->OnClick(Context);
 	}
-}
-
-bool ARoadBuildController::NodeWorldLocation(int32 NodeIndex, FVector& OutLocation) const
-{
-	if (Target == nullptr || Target->Network == nullptr)
-	{
-		return false;
-	}
-
-	const TArray<FRoadNode>& Nodes = Target->Network->GetNodes();
-	if (!Nodes.IsValidIndex(NodeIndex) || !Nodes[NodeIndex].bAlive)
-	{
-		return false;
-	}
-
-	OutLocation = FVector(Nodes[NodeIndex].Position.X, Nodes[NodeIndex].Position.Y, Target->SurfaceZ);
-	return true;
 }
 
 void ARoadBuildController::PlayerTick(float DeltaTime)

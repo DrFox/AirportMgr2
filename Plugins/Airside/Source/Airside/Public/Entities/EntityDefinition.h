@@ -86,6 +86,17 @@ public:
 	UPROPERTY(EditAnywhere) TArray<FVector2D> ServiceLoop;
 
 	/**
+	 * The axis-aligned box ServiceLoop occupies, in the entity's own local space - empty if
+	 * ServiceLoop is. Exists so a test that needs "where is the lane" (ServiceLinkTest,
+	 * FuelServiceTest) asks this instead of typing the four corners BuildCodeCStand computed
+	 * a second time (#104): the loop is a rectangle by construction, so its bounds are the
+	 * whole of what those tests actually needed, and a test that hand-typed the corners
+	 * could drift from BuildCodeCStand's own clearance/footprint arithmetic without either
+	 * side noticing.
+	 */
+	FBox2D ServiceLaneBounds() const;
+
+	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
 	 * that drives up.
 	 *

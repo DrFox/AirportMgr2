@@ -2,6 +2,7 @@
 
 #include "RoadBuildEdMode.h"
 
+#include "AirsideEditorLog.h"
 #include "BaseBehaviors/ClickDragBehavior.h"
 #include "BaseBehaviors/MouseHoverBehavior.h"
 #include "EngineUtils.h"
@@ -145,7 +146,7 @@ UInteractiveTool* URoadBuildEditorToolBuilder::BuildTool(const FToolBuilderState
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning,
+		UE_LOG(LogAirsideEditor, Warning,
 			TEXT("Airside editor tool built without a mode: tool state will not persist "
 				 "across activations, so a runway's width resets each time it is picked."));
 	}
@@ -170,7 +171,7 @@ void URoadBuildEditorTool::Setup()
 	SelectContext.Target = Target;
 	Sess().SelectTool(ToolIndex, SelectContext);
 
-	UE_LOG(LogTemp, Log, TEXT("Airside ed tool active: %s, target %s"),
+	UE_LOG(LogAirsideEditor, Log, TEXT("Airside ed tool active: %s, target %s"),
 		Sess().GetActiveTool() != nullptr ? *Sess().GetActiveTool()->GetDisplayName().ToString() : TEXT("NONE"),
 		Target != nullptr ? *Target->GetName() : TEXT("NONE"));
 

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -45,7 +46,13 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 	//    With SnapRadius smaller than CutDistance that is never a hit, which is why every
 	//    junction-adjacent node went dead at once rather than intermittently.
 	{
-		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		// A REAL WORLD, not a bare NewObject - FAirsideTestWorld throughout the module rather
+		// than deciding per file whether THIS test happens to need one (#104): this one
+		// doesn't touch a component either, but a future edit that did would silently inherit
+		// a half-built actor if the choice were made here instead of once.
+		FAirsideTestWorld TestWorld;
+		if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+		ARoadNetworkActor* Actor = TestWorld.Actor;
 		if (!TestNotNull(TEXT("actor constructed"), Actor))
 		{
 			return false;
@@ -64,7 +71,8 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 		}
 
 		// Solve and derive the guidelines, which is what RebuildMesh does before any of
-		// this is hoverable. Done directly so the test needs no world or component.
+		// this is hoverable. Done directly, without RebuildMesh itself: this test needs no
+		// mesh, only the guideline graph it derives.
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
 		FRoadGuidelineBuilder::Build(*Actor->Network, Solved);
 

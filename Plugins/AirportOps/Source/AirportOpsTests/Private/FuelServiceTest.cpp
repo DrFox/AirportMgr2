@@ -152,6 +152,11 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 	Service = NewObject<UFuelService>(GetTransientPackage());
 	Clock = NewObject<USimClock>(GetTransientPackage());
 
+	// UOpsRuntime::Attach's job in production (#104) - a bare NewObject has no Present/ to
+	// set this, and an unset TruckAirframe means a truck dispatched with zero speed and
+	// acceleration, not the one every other caller of DispatchAgent gets.
+	Service->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
+
 	FGuidelineNodeId TaxiSouth, TaxiNorth;
 	LayLine(*Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);

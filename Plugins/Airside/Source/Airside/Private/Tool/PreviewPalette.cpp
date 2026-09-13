@@ -17,21 +17,29 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	case EPreviewStyle::Refused:                     return FLinearColor(1.0f, 0.25f, 0.2f);
 	case EPreviewStyle::Guideline:                   return FLinearColor(0.35f, 0.45f, 0.6f);
 	case EPreviewStyle::Route:                       return FLinearColor(0.2f, 0.85f, 1.0f);
+
+	// Amber, because that is what one is painted on a real taxiway - and it reads as a
+	// warning against the blue-grey guideline dots it sits among rather than as one more
+	// piece of context.
 	case EPreviewStyle::RunwayHoldingPosition:        return FLinearColor(1.0f, 0.8f, 0.1f);
+	// The same amber at half strength: the player's line, lighter than the runway's.
 	case EPreviewStyle::IntermediateHoldingPosition:  return FLinearColor(1.0f, 0.8f, 0.1f, 0.5f);
 
 	// The editor's old switch had no cases for these two at all and fell through to
 	// Pending's green for both - the exact bug this table exists to make impossible.
 	case EPreviewStyle::Hover:                       return FLinearColor(1.0f, 1.0f, 1.0f);
+	// Warm, so it reads against the cyan route and grey nodes.
 	case EPreviewStyle::Selected:                    return FLinearColor(1.0f, 0.75f, 0.2f);
 
 	// GraphOverlay's context styles - the same colours ARoadBuildHUD::DrawNodes/DrawStands
-	// wired to StubColour/EndColour/JunctionColour/StandColour/ServiceAnchorColour, now the
-	// default those designer-overridable UPROPERTYs are seeded from.
+	// used to wire to their own StubColour/EndColour/JunctionColour/StandColour/
+	// ServiceAnchorColour UPROPERTYs, now the default ARoadBuildHUD::Looks is seeded from.
 	case EPreviewStyle::NodeStub:                    return FLinearColor(1.0f, 0.55f, 0.1f);
 	case EPreviewStyle::NodeThrough:                 return FLinearColor(0.85f, 0.85f, 0.85f);
 	case EPreviewStyle::NodeJunction:                return FLinearColor(0.15f, 0.85f, 1.0f);
 	case EPreviewStyle::StandPose:                   return FLinearColor(0.25f, 0.7f, 1.0f);
+	// Where the service vehicles park - a consequence of where the aircraft sits, not a
+	// thing that IS one (contrast StandPose).
 	case EPreviewStyle::ServiceAnchor:                return FLinearColor(0.9f, 0.6f, 0.2f);
 	}
 
@@ -40,4 +48,68 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// `default:` return, which is what let this go quiet before.
 	checkNoEntry();
 	return FLinearColor::Black;
+}
+
+FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
+{
+	FPreviewLook Look;
+	Look.Colour = Default(Style);
+
+	// Ratios frozen at the CURRENT defaults of the two shared sliders these styles used to
+	// read directly - ARoadBuildHUD::NodeRingThickness (2.0) over PreviewThickness (3.0) for
+	// the graph styles and ServiceAnchor, ServiceAnchorRadius (5.0) over NodeRingRadius (9.0)
+	// for ServiceAnchor's radius - moved here verbatim so nothing on screen shifts, same
+	// contract as Default() above. See FPreviewLook's own comment for why a ratio, not the
+	// old shared float, is what a style reads from now on.
+	constexpr float GraphThicknessScale = 2.0f / 3.0f;
+
+	// No `default:` - see Default() above for why, and what actually catches a style added
+	// to EPreviewStyle without a case here.
+	switch (Style)
+	{
+	case EPreviewStyle::Pending:  Look.bDoubleRing = true; break;
+	case EPreviewStyle::Snap:     break;
+	case EPreviewStyle::Doomed:   Look.bDoubleRing = true; break;
+	case EPreviewStyle::Heal:     break;
+	case EPreviewStyle::Refused:  break;
+
+	// Context, not intent: a dot rather than a ring, so hundreds of guideline nodes read as
+	// background instead of swamping every gesture drawn over them. Also the Line() weight a
+	// route runs under - ARoadBuildHUD::Line's own comment on why the route reads heavier.
+	case EPreviewStyle::Guideline:
+		Look.RadiusScale = 0.35f;
+		Look.ThicknessScale = 0.5f;
+		break;
+
+	case EPreviewStyle::Route:
+		Look.ThicknessScale = 2.0f;
+		break;
+
+	case EPreviewStyle::RunwayHoldingPosition:       break;
+	case EPreviewStyle::IntermediateHoldingPosition: break;
+	case EPreviewStyle::Hover:                       break;
+	case EPreviewStyle::Selected:                    Look.bDoubleRing = true; break;
+
+	case EPreviewStyle::NodeStub:
+	case EPreviewStyle::NodeThrough:
+	case EPreviewStyle::NodeJunction:
+		Look.ThicknessScale = GraphThicknessScale;
+		break;
+
+	case EPreviewStyle::ServiceAnchor:
+		Look.RadiusScale = 5.0f / 9.0f;
+		Look.ThicknessScale = GraphThicknessScale;
+		break;
+
+	// DELIBERATELY not NodeRingRadius (1.0) - see ARoadBuildHUD::Marker's old comment on
+	// this exact number, moved here: GraphOverlay::DescribeStands draws this AFTER
+	// StandPreview::Describe's own Pending mark at the same position, and a ring at the same
+	// radius would just overdraw it instead of sitting visibly alongside it.
+	case EPreviewStyle::StandPose:
+		Look.RadiusScale = 2.2f;
+		Look.ThicknessScale = GraphThicknessScale;
+		break;
+	}
+
+	return Look;
 }

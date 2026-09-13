@@ -5,6 +5,7 @@
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
+#include "RoadBuildTool.generated.h"
 
 /**
  * Everything a tool needs to decide what an input means.
@@ -101,6 +102,7 @@ struct FToolContext
  * what a thing MEANS and the overlay decides what that looks like. It is also what lets
  * the sink be implemented by something other than a HUD - a test counting markers, say.
  */
+UENUM()
 enum class EPreviewStyle : uint8
 {
 	/** Ordinary in-progress geometry. */

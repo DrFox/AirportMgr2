@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadMeshBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
@@ -14,15 +15,10 @@
 
 namespace
 {
+	/** Free-snap, 150uu radius - see TestTool::ContextAt (#104). */
 	FToolContext ApronAt(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
-		FToolContext Context;
-		Context.Target = Actor;
-		Context.Cursor = Where;
-		Context.SnapRadius = 150.0;
-		Context.Snap.Kind = ERoadSnapKind::Free;
-		Context.Snap.Position = Where;
-		return Context;
+		return TestTool::ContextAt(*Actor, Where);
 	}
 
 	int32 LiveAprons(const ARoadNetworkActor* Actor)
@@ -43,7 +39,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FApronDrawToolTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	// A REAL WORLD, not a bare NewObject: this test rebuilds the mesh and reads it back off
+	// ApronComponent, and a component never registered by SpawnActor is a half-built actor
+	// masquerading as a fully working one (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor))
 	{
 		return false;

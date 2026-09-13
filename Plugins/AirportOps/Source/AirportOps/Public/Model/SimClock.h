@@ -99,8 +99,6 @@ public:
 	/** True if the handle named a pending entry. */
 	bool Cancel(int32 Handle);
 
-	int32 PendingCountForTest() const { return Entries.Num(); }
-
 private:
 	struct FEntry
 	{

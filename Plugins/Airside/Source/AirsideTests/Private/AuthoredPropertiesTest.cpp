@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
@@ -32,7 +33,11 @@ bool FAuthoredPropertiesTest::RunTest(const FString& Parameters)
 	// The defaults still exist - see ARoadNetworkActor::ResolveMaterialSet and friends - they
 	// are just RESOLVED rather than STORED. This test is the difference between that being
 	// true today and it staying true.
-	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	// A REAL WORLD, not a bare NewObject: this test calls RebuildMesh repeatedly, and a
+	// half-built actor is not evidence about what it does or does not write (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor))
 	{
 		return false;

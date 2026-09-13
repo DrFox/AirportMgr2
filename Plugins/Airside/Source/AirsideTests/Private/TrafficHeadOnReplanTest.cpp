@@ -175,7 +175,8 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	// fixture produced no deadlock at all: the departure was through before the arrival
 	// reached the bar. In play the arrival was refused the bar node with its tail still on
 	// the asphalt, and that is the state under test.
-	TestTrue(TEXT("the arrival is staged as just-vacated"), Traffic->BeginCrossingForTest(Arrival, RW1));
+	TestTrue(TEXT("the arrival is staged as just-vacated"),
+		FGroundTrafficTestAccess(*Traffic).BeginCrossing(Arrival, RW1));
 	TestTrue(TEXT("the departure's route ends on the runway, so it is armed"), Traffic->FindAgent(Dep1)->bDepartureArmed);
 
 	// Run: the departure reaches the bar first and holds (the arrival is on the strip);

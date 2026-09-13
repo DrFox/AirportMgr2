@@ -136,6 +136,16 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraft
 	}
 }
 
+FBox2D UEntityDefinition::ServiceLaneBounds() const
+{
+	FBox2D Bounds(ForceInit);
+	for (const FVector2D& Point : ServiceLoop)
+	{
+		Bounds += Point;
+	}
+	return Bounds;
+}
+
 UEntityDefinition* UEntityDefinition::MakeFuelDepotTransient()
 {
 	UEntityDefinition* Definition = NewObject<UEntityDefinition>(GetTransientPackage());

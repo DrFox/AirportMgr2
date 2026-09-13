@@ -1,7 +1,6 @@
 #include "Model/FuelService.h"
 
 #include "AirportOpsLog.h"
-#include "Content/AirsideSettings.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
@@ -496,10 +495,11 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *Path);
 			}
 
-			// ShutdownPause 0 - see TruckShutdownPause. The AIRFRAME is the vehicle default,
-			// resolved in the one place a truck's figures live.
+			// ShutdownPause 0 - see TruckShutdownPause. TruckAirframe is set once at attach
+			// (UOpsRuntime::Attach), not resolved here - this is Model/, and Content/ was the
+			// only edge from Model/ to Content/ in either plugin (#104).
 			const int32 TruckId = Traffic.DispatchAgent(&Network, Plan,
-				UAirsideSettings::ResolveDefaultVehicle(), ETraversalClass::GroundVehicle,
+				TruckAirframe, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
 			{

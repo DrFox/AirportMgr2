@@ -1721,10 +1721,10 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the node it left, while its tail is still in it"),
 		Traffic->GetOccupancy().IsHeld(FTrafficResource::OfNode(A), /*ExcludingAgent=*/0));
 
-	// THE PAVEMENT GOES AWAY UNDER IT. StrandForTest sets Result only - the follower keeps
+	// THE PAVEMENT GOES AWAY UNDER IT. Strand sets Result only - the follower keeps
 	// its polyline and its distance, so the agent is exactly where it was and the ONLY thing
 	// that has changed is that its plan no longer describes the airport.
-	if (!TestTrue(TEXT("stranded"), Traffic->StrandForTest(Van))) { return false; }
+	if (!TestTrue(TEXT("stranded"), FGroundTrafficTestAccess(*Traffic).Strand(Van))) { return false; }
 	Traffic->Advance(0.05, Net);
 
 	const FRoadAgent* V = Traffic->FindAgent(Van);
@@ -1786,7 +1786,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				TestTrue(TEXT("so it holds the runway before its plan dies"),
 					Air->GetOccupancy().IsHeld(Strip, /*ExcludingAgent=*/0));
 
-				TestTrue(TEXT("stranded mid-crossing"), Air->StrandForTest(Plane));
+				TestTrue(TEXT("stranded mid-crossing"), FGroundTrafficTestAccess(*Air).Strand(Plane));
 				Air->Advance(0.05, Cross);
 
 				UE_LOG(LogM2TrafficTest, Log,
@@ -2097,7 +2097,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		const FRoadAgent* Before = Traffic->FindAgent(Plane);
 		TestTrue(TEXT("the cleared route is the taxiway, three steps, no strip"), Before->Follower.Plan.Steps.Num() == 3 && !UsesStrip(Before->Follower.Plan));
 
-		const bool bReplanned = Traffic->ReplanAtForTest(Plane, *Net, /*SpliceStep=*/1, AB);
+		const bool bReplanned = FGroundTrafficTestAccess(*Traffic).ReplanAt(Plane, *Net, /*SpliceStep=*/1, AB);
 		const FRoadAgent* After = Traffic->FindAgent(Plane);
 		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: free strip - replanned %d, %d step(s), uses strip %d, %.0f uu"),
 			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan), After->Follower.Plan.Length);
@@ -2116,7 +2116,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		Traffic->OccupancyForTest().TryClaim(Bar, Blocker);
 		const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
 		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
-		const bool bReplanned = Traffic->ReplanAtForTest(Plane, *Net, /*SpliceStep=*/1, AB);
+		const bool bReplanned = FGroundTrafficTestAccess(*Traffic).ReplanAt(Plane, *Net, /*SpliceStep=*/1, AB);
 		const FRoadAgent* After = Traffic->FindAgent(Plane);
 		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: held strip - replanned %d, %d step(s), uses strip %d"),
 			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan));

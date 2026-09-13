@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -53,15 +54,10 @@ namespace
 		}
 	};
 
-	/** A corner with its guidelines derived, as RebuildMesh would leave it. */
-	ARoadNetworkActor* OverlayFixture()
+	/** A corner with its guidelines derived, as RebuildMesh would leave it. Builds onto an
+	 *  already-spawned actor (see FAirsideTestWorld in RunTest, #104). */
+	void BuildOverlayFixture(ARoadNetworkActor* Actor)
 	{
-		ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
-		if (Actor == nullptr)
-		{
-			return nullptr;
-		}
-
 		const int32 Centre = Actor->PlaceNode(FVector2D(0.0, 0.0));
 		const int32 East   = Actor->PlaceNode(FVector2D(6000.0, 0.0));
 		const int32 North  = Actor->PlaceNode(FVector2D(0.0, 6000.0));
@@ -70,12 +66,11 @@ namespace
 
 		if (Actor->Network == nullptr)
 		{
-			return Actor;
+			return;
 		}
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
 		FRoadGuidelineBuilder::Build(*Actor->Network, Solved);
-		return Actor;
 	}
 }
 
@@ -86,9 +81,17 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGuidelineOverlayTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = OverlayFixture();
-	if (!TestNotNull(TEXT("fixture actor built"), Actor)
-		|| !TestNotNull(TEXT("fixture has a network"), Actor->Network.Get()))
+	// A REAL WORLD, not a bare NewObject: this test drives FRoadDrawTool::BuildPreview through
+	// the actor, and a half-built actor is not evidence about what it draws (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("fixture actor built"), Actor))
+	{
+		return false;
+	}
+	BuildOverlayFixture(Actor);
+	if (!TestNotNull(TEXT("fixture has a network"), Actor->Network.Get()))
 	{
 		return false;
 	}
@@ -211,16 +214,16 @@ bool FGuidelineOverlayTest::RunTest(const FString& Parameters)
 	//    looks like. The taxiway tool is the one that would most plausibly want to: it
 	//    builds the thing the graph is derived from.
 	{
-		ARoadNetworkActor* Fresh = OverlayFixture();
+		// A second, independent actor in the SAME world - FAirsideTestWorld's one Actor is
+		// already mid-fixture above, and this test wants a fresh network to build the second
+		// fixture onto rather than sharing the first's.
+		ARoadNetworkActor* Fresh = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		if (TestNotNull(TEXT("second fixture built"), Fresh))
 		{
-			FToolContext Context;
-			Context.Target = Fresh;
-			Context.SnapRadius = 150.0;
+			BuildOverlayFixture(Fresh);
 
-			FRoadSnapResult NoSnap;
-			NoSnap.Position = FVector2D(50000.0, 50000.0);   // far from anything
-			Context.SetCursor(NoSnap.Position, NoSnap);
+			// Far from anything, so Free is what the snap chain would actually report.
+			const FToolContext Context = TestTool::ContextAt(*Fresh, FVector2D(50000.0, 50000.0));
 
 			FRoadDrawTool Tool;
 			FOverlaySink Sink;

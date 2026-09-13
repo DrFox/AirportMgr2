@@ -29,6 +29,20 @@ FAirsideTestWorld::~FAirsideTestWorld()
 	World->DestroyWorld(false);
 }
 
+FToolContext TestTool::ContextAt(IRoadEditTarget& Target, const FVector2D& Where,
+	ERoadSnapKind Kind, double SnapRadius)
+{
+	FToolContext Context;
+	Context.Target = &Target;
+	Context.SnapRadius = SnapRadius;
+
+	FRoadSnapResult Snap;
+	Snap.Kind = Kind;
+	Snap.Position = Where;
+	Context.SetCursor(Where, Snap);
+	return Context;
+}
+
 FAirframe TestAirframes::Piper()
 {
 	FAirframe A;

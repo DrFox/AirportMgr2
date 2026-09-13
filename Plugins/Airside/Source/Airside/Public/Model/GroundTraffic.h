@@ -339,6 +339,10 @@ class AIRSIDE_API UGroundTraffic : public UObject
 {
 	GENERATED_BODY()
 
+	/** Strand, BeginCrossing and ReplanAt (#104) - see FGroundTrafficTestAccess, declared
+	 *  after this class, for why they are not public members of it. */
+	friend struct FGroundTrafficTestAccess;
+
 public:
 	/** See UAirsideTraffic::OnAgentPhaseChanged, which relays this one layer up. */
 	DECLARE_MULTICAST_DELEGATE_ThreeParams(FOnAgentPhaseChanged, int32 /*AgentId*/, EAgentPhase /*From*/, EAgentPhase /*To*/);
@@ -581,6 +585,26 @@ public:
 	const FRoadAgent* FindAgent(int32 AgentId) const;
 	const FTrafficOccupancy& GetOccupancy() const { return Occupancy; }
 
+	/**
+	 * The agent currently holding Node, or 0 if nobody is (0 is never a real agent id - see
+	 * FRoadAgent::Id). Wraps FTrafficResource::OfNode and IsHeld's ExcludingAgent=0 idiom
+	 * ("exclude no real agent") so a caller outside Model/ can ask "who is here" without
+	 * knowing either exists - Tool/StandPlaceTool used to build the resource and read the
+	 * sentinel itself (#104).
+	 */
+	int32 HolderOfNode(FGuidelineNodeId Node) const;
+
+	/**
+	 * AgentId's planned polyline, road-plane, or an empty array if there is no such agent or
+	 * it is not Taxiing. NOT trimmed to what is actually left to drive - Travelled advances a
+	 * point along this same array (see FRouteFollower::Advance) but nothing shortens the
+	 * array itself, so this is the whole plan every frame. Good enough for the one picture
+	 * that reads it (FSelectTool's route preview); a true "from here to the end" trim is
+	 * future work if something needs it. Exists so Tool/ names the agent it wants rather than
+	 * reaching Agent->Follower.Plan.Polyline itself (#104).
+	 */
+	const TArray<FVector2D>& RemainingRoute(int32 AgentId) const;
+
 	/** True after a stand claim was released or a rebuild ran, until Advance's re-offer pass
 	 *  consumes it. For Airside.Model.Traffic.StandClaim. */
 	bool StandsMayHaveFreedForTest() const { return bStandsMayHaveFreed; }
@@ -594,45 +618,12 @@ public:
 	 */
 	FTrafficOccupancy& OccupancyForTest() { return Occupancy; }
 
-	/**
-	 * Makes AgentId's plan unusable where it stands, keeping the agent and its position.
-	 * True if the id was known.
-	 *
-	 * IT STANDS IN FOR THE PAVEMENT GOING AWAY UNDER A MOVING AGENT - a rebuild that leaves
-	 * a step with no live edge and no route to replace it, or a redirect that lands a bad
-	 * plan on a live follower. Both end in FClaimPass::Run's dead-plan branch (issue #84
-	 * moved it off UGroundTraffic's own ClaimAhead), which must release every claim the
-	 * agent holds; without a hook there is no world-free way to reach that branch, and a
-	 * seam no test reaches is one a later edit can quietly unwire (see
-	 * Airside.Model.Traffic.DeadPlanReleases).
-	 *
-	 * ForTest in its name for the same reason OccupancyForTest is: nothing in production
-	 * invalidates a plan by hand - OnGraphRebuilt truncates or strands through
-	 * FPlanReResolver::ReResolvePlan, which is a decision, not an assignment.
-	 */
-	bool StrandForTest(int32 AgentId);
+	// Strand, BeginCrossing and ReplanAt (staging plan-death, a mid-crossing landing, and a
+	// pinned-search replan no test could otherwise reach without staging the whole scenario
+	// that would trigger it in production) moved behind FGroundTrafficTestAccess, declared
+	// after this class (#104) - three public mutators nothing in production ever calls, each
+	// documented ForTest in its own comment, are now one friend struct that says so once.
 
-	/**
-	 * Puts a Taxiing agent ON a runway the way the Vacated handover does - CrossingRunway
-	 * set, phase OnStrip - so a world-free test can stage an aircraft that has just landed
-	 * without a stand definition, which DispatchArrival needs and a bare automation run
-	 * has not got. Stands in for FRoadAgent::Advance's Arriving -> Taxiing frame and
-	 * nothing else; the geometric release then runs as in play. False for an unknown or
-	 * non-Taxiing agent.
-	 */
-	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
-
-	/**
-	 * ReplanAt with no banned node, from outside the resolver. What the deadlock resolver
-	 * and OnGraphRebuilt call; exposed so a test can pin what a replan's SEARCH is allowed
-	 * to use - a free runway end, a held one - without staging the two-aircraft cycle that
-	 * would otherwise be the only way to make the resolver replan on demand. ForTest for the
-	 * same reason as the others above: in production a replan is a decision, never a call.
-	 */
-	bool ReplanAtForTest(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge)
-	{
-		return ReplanAt(AgentId, Network, SpliceStep, BannedEdge, FGuidelineNodeId());
-	}
 	double GetSimSeconds() const { return SimSeconds; }
 
 	/**
@@ -823,6 +814,34 @@ private:
 	// FTrafficRules. ReplanAt and OnGraphRebuilt (both still public, above) now forward into
 	// them; see PlanReResolver and DeadlockResolver, the members that hold the instances.
 
+	/**
+	 * Makes AgentId's plan unusable where it stands, keeping the agent and its position.
+	 * True if the id was known.
+	 *
+	 * IT STANDS IN FOR THE PAVEMENT GOING AWAY UNDER A MOVING AGENT - a rebuild that leaves
+	 * a step with no live edge and no route to replace it, or a redirect that lands a bad
+	 * plan on a live follower. Both end in FClaimPass::Run's dead-plan branch (issue #84
+	 * moved it off UGroundTraffic's own ClaimAhead), which must release every claim the
+	 * agent holds; without a hook there is no world-free way to reach that branch, and a
+	 * seam no test reaches is one a later edit can quietly unwire (see
+	 * Airside.Model.Traffic.DeadPlanReleases).
+	 *
+	 * Not public, and reached only through FGroundTrafficTestAccess (#104): nothing in
+	 * production invalidates a plan by hand - OnGraphRebuilt truncates or strands through
+	 * FPlanReResolver::ReResolvePlan, which is a decision, not an assignment.
+	 */
+	bool StrandForTest(int32 AgentId);
+
+	/**
+	 * Puts a Taxiing agent ON a runway the way the Vacated handover does - CrossingRunway
+	 * set, phase OnStrip - so a world-free test can stage an aircraft that has just landed
+	 * without a stand definition, which DispatchArrival needs and a bare automation run
+	 * has not got. Stands in for FRoadAgent::Advance's Arriving -> Taxiing frame and
+	 * nothing else; the geometric release then runs as in play. False for an unknown or
+	 * non-Taxiing agent. Not public - see FGroundTrafficTestAccess (#104).
+	 */
+	bool BeginCrossingForTest(int32 AgentId, FRoadSegmentId RunwaySeed);
+
 public:
 	/** Route distance at which Step begins - the previous step's end, or 0. Public: FClaimPass,
 	 *  FDeadlockResolver and FPlanReResolver all read plan geometry through this and the two
@@ -835,4 +854,47 @@ public:
 	/** Which step Travelled is on. The map from a distance to an edge, read off
 	 *  FRouteStep::EndDistance so it cannot disagree with the polyline the follower walks. */
 	static int32 CurrentStep(const FRoutePlan& Plan, double Travelled);
+};
+
+/**
+ * Every mutation of a UGroundTraffic a test can make that production code never does by a
+ * direct call - a plan invalidated by hand, an aircraft staged mid-crossing, a replan pinned
+ * to a search a test chose rather than one the resolver decided on (#104).
+ *
+ * ONE friend struct rather than three public "ForTest" methods on UGroundTraffic itself: each
+ * of the three used to carry its own paragraph explaining why a normal caller must never use
+ * it, which is exactly the shape of fact a type system should enforce rather than a comment -
+ * a test constructs this wrapper around the instance it wants to drive, and nothing else can.
+ * Stateless and cheap to construct per call; it holds nothing but the reference.
+ */
+struct FGroundTrafficTestAccess
+{
+	explicit FGroundTrafficTestAccess(UGroundTraffic& InTraffic) : Traffic(InTraffic) {}
+
+	/** See UGroundTraffic::StrandForTest's own comment. */
+	bool Strand(int32 AgentId) { return Traffic.StrandForTest(AgentId); }
+
+	/** See UGroundTraffic::BeginCrossingForTest's own comment. */
+	bool BeginCrossing(int32 AgentId, FRoadSegmentId RunwaySeed)
+	{
+		return Traffic.BeginCrossingForTest(AgentId, RunwaySeed);
+	}
+
+	/**
+	 * ReplanAt with no banned node, from outside the resolver. What the deadlock resolver
+	 * and OnGraphRebuilt call; exposed so a test can pin what a replan's SEARCH is allowed
+	 * to use - a free runway end, a held one - without staging the two-aircraft cycle that
+	 * would otherwise be the only way to make the resolver replan on demand. Forwards to the
+	 * already-public UGroundTraffic::ReplanAt(AgentId, ...) - that overload has no production
+	 * caller of its own either (production replans through FPlanReResolver directly, by
+	 * reference, not by agent id), but this task's scope is the three named ForTest members;
+	 * narrowing ReplanAt itself is a separate change.
+	 */
+	bool ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep, FGuidelineEdgeId BannedEdge)
+	{
+		return Traffic.ReplanAt(AgentId, Network, SpliceStep, BannedEdge, FGuidelineNodeId());
+	}
+
+private:
+	UGroundTraffic& Traffic;
 };

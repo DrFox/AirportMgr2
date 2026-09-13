@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadMeshBuilder.h"
 #include "DynamicMesh/DynamicMesh3.h"
@@ -18,7 +19,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	// A REAL WORLD, not a bare NewObject: this test calls RebuildMesh and reads components
+	// back, and a half-built actor is not evidence about either (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor))
 	{
 		return false;
@@ -92,7 +97,8 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 	// mesh comes out - and a graph that solves to an empty buffer looks, on screen,
 	// exactly like a click that did nothing.
 	{
-		ARoadNetworkActor* Drawn = NewObject<ARoadNetworkActor>(GetTransientPackage());
+		// A second, independent actor in the SAME world - see FAirsideTestWorld above.
+		ARoadNetworkActor* Drawn = TestWorld.World->SpawnActor<ARoadNetworkActor>();
 		const int32 P = Drawn->PlaceNode(FVector2D(0.0, 0.0));
 		const int32 Q = Drawn->PlaceNode(FVector2D(1000.0, 0.0));
 		TestTrue(TEXT("two clicks connect"), Drawn->ConnectNodes(P, Q));

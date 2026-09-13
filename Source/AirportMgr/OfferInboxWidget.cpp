@@ -2,7 +2,6 @@
 
 #include "AirportMgr.h"
 #include "Blueprint/WidgetTree.h"
-#include "EngineUtils.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/CanvasPanel.h"
@@ -22,6 +21,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadNetworkActor.h"
+#include "RoadBuildController.h"
 #include "UIStyle.h"
 
 // Its own category, and its own NAME: the module is a unity build, and two
@@ -102,15 +102,15 @@ void UOfferInboxWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTim
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 
-	// The actor is found through the world rather than held, because URoadEditFacade::
-	// ClearNetwork replaces the network object and a cached pointer would go stale.
-	if (const UWorld* World = GetWorld())
+	// The target comes from the controller, not a fresh TActorIterator scan: this widget
+	// only ever hangs off BuildHudLayer, which only ever exists on ARoadBuildController, so
+	// the controller's own Target (found once in BeginPlay) is the same actor a scan would
+	// find here - see #104. Re-read every tick rather than cached, because
+	// URoadEditFacade::ClearNetwork replaces the network object and a cached pointer would
+	// go stale.
+	if (const ARoadBuildController* C = Controller())
 	{
-		for (TActorIterator<ARoadNetworkActor> It(const_cast<UWorld*>(World)); It; ++It)
-		{
-			Refresh(*It);
-			return;
-		}
+		Refresh(C->GetTarget());
 	}
 }
 

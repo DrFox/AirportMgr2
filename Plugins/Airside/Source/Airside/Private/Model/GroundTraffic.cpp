@@ -266,6 +266,24 @@ const FRoadAgent* UGroundTraffic::FindAgent(int32 AgentId) const
 	return Index == INDEX_NONE ? nullptr : &Agents[Index];
 }
 
+int32 UGroundTraffic::HolderOfNode(FGuidelineNodeId Node) const
+{
+	int32 Holder = 0;
+	Occupancy.IsHeld(FTrafficResource::OfNode(Node), 0, &Holder);
+	return Holder;
+}
+
+const TArray<FVector2D>& UGroundTraffic::RemainingRoute(int32 AgentId) const
+{
+	const FRoadAgent* Agent = FindAgent(AgentId);
+	if (Agent == nullptr || Agent->Phase != EAgentPhase::Taxiing)
+	{
+		static const TArray<FVector2D> Empty;
+		return Empty;
+	}
+	return Agent->Follower.Plan.Polyline;
+}
+
 bool UGroundTraffic::StrandForTest(int32 AgentId)
 {
 	const int32 Index = FindIndex(AgentId);

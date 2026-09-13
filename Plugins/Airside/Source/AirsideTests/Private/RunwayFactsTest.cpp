@@ -2,7 +2,6 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RunwayFacts.h"
-#include "Present/RoadEditFacade.h"
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -53,7 +52,7 @@ bool FRunwayFactsTest::RunTest(const FString& Parameters)
 
 	// The split surgery replaces a segment with two: both halves must inherit the facts, or
 	// adding an exit to a precision runway would silently demote the half past the exit.
-	const FRoadNodeId Middle = URoadEditFacade::SplitSegmentIn(*Net, RW2, FVector2D(80000.0, 0.0));
+	const FRoadNodeId Middle = Net->SplitSegment(RW2, FVector2D(80000.0, 0.0));
 	if (!TestTrue(TEXT("the split produced a node"), Middle.IsSet())) { return false; }
 	int32 RunwaySegments = 0;
 	for (int32 Index = 0; Index < Net->GetSegments().Num(); ++Index)

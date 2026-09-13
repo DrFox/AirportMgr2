@@ -29,6 +29,22 @@ public:
 	bool RemoveSegment(FRoadSegmentId Segment);
 
 	/**
+	 * Replace Doomed with two straight segments meeting at a new node placed At. Unset if
+	 * Doomed is not live or At is too close to either of its ends to leave a real road.
+	 *
+	 * Shared by URoadEditFacade::SplitSegment (the real edit) and URoadSurfacePresenter's
+	 * ghost preview deliberately: two implementations of the same surgery is precisely how a
+	 * preview comes to show something the click will not do, and that failure is invisible -
+	 * the ghost looks plausible either way. Lives here rather than only in the facade (#104):
+	 * a Model/ test (RunwayFactsTest) and the presenter's ghost preview both used to reach
+	 * into Present/URoadEditFacade for a static helper that is genuinely graph surgery and
+	 * touches nothing Present/ owns - Model/ was this operation's home from the start, and
+	 * issue #32's split just never got around to it (see the facade's now-removed comment on
+	 * the old SplitSegmentIn for why it was deferred).
+	 */
+	FRoadNodeId SplitSegment(FRoadSegmentId Doomed, const FVector2D& At);
+
+	/**
 	 * Move a live node, keeping the incidence order the solver depends on.
 	 *
 	 * Moving a node changes the outgoing bearing of every segment that touches it - at BOTH

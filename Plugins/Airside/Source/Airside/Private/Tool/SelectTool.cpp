@@ -28,10 +28,7 @@ bool FSelectTool::PositionOf(const FToolContext& Context, ESelectionKind Kind, i
 		{
 			return false;
 		}
-		// The ROAD-PLANE position: for an airborne aircraft this is its ground track, and
-		// the ring the HUD draws sits under it. Right for every aircraft on the ground,
-		// which is where anything selectable long enough to matter is.
-		Out = Agent->LastMotion.Position;
+		Out = Agent->GroundPosition();
 		return true;
 	}
 	case ESelectionKind::Stand:
@@ -138,10 +135,9 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		if (Context.Selection->Kind == ESelectionKind::Aircraft)
 		{
 			const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic();
-			const FRoadAgent* Agent = Traffic != nullptr ? Traffic->FindAgent(Context.Selection->Id) : nullptr;
-			if (Agent != nullptr && Agent->Phase == EAgentPhase::Taxiing)
+			if (Traffic != nullptr)
 			{
-				const TArray<FVector2D>& Poly = Agent->Follower.Plan.Polyline;
+				const TArray<FVector2D>& Poly = Traffic->RemainingRoute(Context.Selection->Id);
 				for (int32 I = 1; I < Poly.Num(); ++I)
 				{
 					Sink.Line(Poly[I - 1], Poly[I], EPreviewStyle::Route);

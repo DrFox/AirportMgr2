@@ -6,9 +6,10 @@
 #include "OpsCatalog.generated.h"
 
 /**
- * Every loaded definition, by class and by name. The one place content defaults are
- * resolved from (CLAUDE.md "Content/": a literal asset path at a second site is a second
- * source of truth).
+ * Every loaded DEFINITION, by class and by name - the one place a UOpsDefinition is loaded
+ * from disk (CLAUDE.md "Content/": a literal asset path at a second site is a second source
+ * of truth). NOT which one is the default of its kind - that is UAirportOpsSettings' job
+ * (#104: the two used to each load a UScenario their own way, independently).
  *
  * World-free: tests Add() NewObject'd definitions. In play, UOpsRuntime calls
  * LoadFromAssetManager once, which needs DefaultGame.ini's PrimaryAssetTypesToScan.

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
@@ -54,13 +55,13 @@ namespace
 		return Context;
 	}
 
-	/** Open ground, as the snap chain's Free fallback would report it. */
+	/** Open ground, as the snap chain's Free fallback would report it. TestTool::ContextAt
+	 *  (#104) plus this tool's own placement limits (see BaseContext above). */
 	FToolContext AtGround(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
-		FToolContext Context = BaseContext(Actor);
-		Context.Snap.Kind = ERoadSnapKind::Free;
-		Context.Snap.Position = Where;
-		Context.Cursor = Where;
+		FToolContext Context = TestTool::ContextAt(*Actor, Where);
+		Context.Limits.MinSegmentLength = 250.0;
+		Context.Limits.MinTurnDegrees = 25.0;
 		return Context;
 	}
 
@@ -118,7 +119,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRoadDrawToolTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	// A REAL WORLD, not a bare NewObject: this tool drives the facade through the actor and a
+	// half-built actor is not evidence about what it does (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor))
 	{
 		return false;

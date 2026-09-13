@@ -37,7 +37,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::Six,   LOCTEXT("Runway",    "Runway"),    [] { return MakeUnique<FRunwayTool>(); } },
 
 		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
-		// this table - see ARoadBuildController::OnLandAircraft. Numbering around it keeps
+		// this table - see ARoadBuildController::LandAircraftNearViewFocus. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
 		{ EKeys::Eight, LOCTEXT("HoldingPosition", "Holding point"), [] { return MakeUnique<FHoldingPointTool>(); } },
 
