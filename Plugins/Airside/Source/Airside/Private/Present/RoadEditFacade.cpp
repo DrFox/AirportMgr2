@@ -569,7 +569,11 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 	ARoadNetworkActor& Owner = Actor();
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("split segment"));
 
-	const FRoadNodeId Middle = SplitSegmentIn(*Owner.Network, Doomed, At);
+	// The surgery itself moved to URoadNetwork::SplitSegment (#104): it is genuinely graph
+	// surgery, touches nothing this facade owns, and a Model/ test and the presenter's ghost
+	// preview both used to reach into this class's own static SplitSegmentIn for it - see
+	// that method's comment, now on URoadNetwork::SplitSegment, for why it was here at all.
+	const FRoadNodeId Middle = Owner.Network->SplitSegment(Doomed, At);
 	if (!Middle.IsSet())
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -579,80 +583,6 @@ int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)
 
 	CommitAndNotify(Edit);
 	return Middle.Index;
-}
-
-FRoadNodeId URoadEditFacade::SplitSegmentIn(URoadNetwork& Net, FRoadSegmentId Doomed, const FVector2D& At)
-{
-	const FRoadSegment* Segment = Net.GetSegment(Doomed);
-	const FRoadNode* EndA = Segment != nullptr ? Net.GetNode(Segment->A) : nullptr;
-	const FRoadNode* EndB = Segment != nullptr ? Net.GetNode(Segment->B) : nullptr;
-	if (EndA == nullptr || EndB == nullptr)
-	{
-		return FRoadNodeId();
-	}
-
-	// Copied out before anything mutates. Every pointer above dangles the moment the
-	// segment is removed or the arrays reallocate, and the two replacements need all of
-	// this after that point.
-	const FRoadNodeId KeepA = Segment->A;
-	const FRoadNodeId KeepB = Segment->B;
-	URoadProfile* KeepProfile = Segment->Profile;
-	const FRunwayFacts KeepFacts = Segment->Runway;
-	const FVector2D PositionA = EndA->Position;
-	const FVector2D PositionB = EndB->Position;
-
-	// A degeneracy floor, NOT a placement policy: how far from an end a split should be
-	// allowed is the snap chain's MinSplitFromEndpoint, which is tuned and can be turned
-	// down. This is the point below which the result is not a road at all, and no setting
-	// may cross it - a zero-length segment has no direction, so the solver cannot derive
-	// a bearing for it and the junction at either end loses an arm.
-	constexpr double MinSplitOffset = 1.0;
-	if (FVector2D::DistSquared(At, PositionA) < MinSplitOffset * MinSplitOffset
-		|| FVector2D::DistSquared(At, PositionB) < MinSplitOffset * MinSplitOffset)
-	{
-		return FRoadNodeId();
-	}
-
-	const FRoadNodeId Middle = Net.AddNode(At);
-	if (!Middle.IsSet())
-	{
-		return FRoadNodeId();
-	}
-
-	// Removed, not reshaped. A segment's endpoints are its identity and both of them
-	// change here, so the handle must die rather than quietly come to mean half a road.
-	if (!Net.RemoveSegment(Doomed))
-	{
-		Net.RemoveNode(Middle);
-		return FRoadNodeId();
-	}
-
-	const FRoadSegmentId First = Net.AddStraightSegment(KeepA, Middle, KeepProfile);
-	const FRoadSegmentId Second = Net.AddStraightSegment(Middle, KeepB, KeepProfile);
-
-	// The runway facts are the STRIP's and both halves are still the strip. Copied here
-	// rather than re-derived through SetRunwayFacts on the chain, because at this moment
-	// the chain is the two new segments and nothing else remembers what the doomed one
-	// said; without this, every exit added to a precision runway demoted the far half to
-	// the default and repainted it visual.
-	for (const FRoadSegmentId& Half : { First, Second })
-	{
-		if (FRoadSegment* Fresh = Net.GetSegmentMutable(Half))
-		{
-			Fresh->Runway = KeepFacts;
-		}
-	}
-
-	// Both endpoints were checked live and the middle node was just created, so the only
-	// way here is a model invariant having changed underneath. Loud rather than silent:
-	// the graph is now missing a road the player can still see the ends of.
-	if (!First.IsSet() || !Second.IsSet())
-	{
-		UE_LOG(LogRoadMesh, Error, TEXT("SplitSegmentIn left a segment half-replaced: first=%d second=%d"),
-			First.IsSet() ? 1 : 0, Second.IsSet() ? 1 : 0);
-	}
-
-	return Middle;
 }
 
 void URoadEditFacade::BeginInteractiveEdit(const FString& Label)

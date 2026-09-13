@@ -1,4 +1,5 @@
 #include "Model/RoadNetwork.h"
+#include "AirsideLog.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -82,6 +83,80 @@ bool URoadNetwork::RemoveSegment(FRoadSegmentId Segment)
 	}
 
 	return RoadSlot::Remove<FRoadSegmentId>(Segments, SegmentFreeList, Segment);
+}
+
+FRoadNodeId URoadNetwork::SplitSegment(FRoadSegmentId Doomed, const FVector2D& At)
+{
+	const FRoadSegment* Segment = GetSegment(Doomed);
+	const FRoadNode* EndA = Segment != nullptr ? GetNode(Segment->A) : nullptr;
+	const FRoadNode* EndB = Segment != nullptr ? GetNode(Segment->B) : nullptr;
+	if (EndA == nullptr || EndB == nullptr)
+	{
+		return FRoadNodeId();
+	}
+
+	// Copied out before anything mutates. Every pointer above dangles the moment the
+	// segment is removed or the arrays reallocate, and the two replacements need all of
+	// this after that point.
+	const FRoadNodeId KeepA = Segment->A;
+	const FRoadNodeId KeepB = Segment->B;
+	URoadProfile* KeepProfile = Segment->Profile;
+	const FRunwayFacts KeepFacts = Segment->Runway;
+	const FVector2D PositionA = EndA->Position;
+	const FVector2D PositionB = EndB->Position;
+
+	// A degeneracy floor, NOT a placement policy: how far from an end a split should be
+	// allowed is the snap chain's MinSplitFromEndpoint, which is tuned and can be turned
+	// down. This is the point below which the result is not a road at all, and no setting
+	// may cross it - a zero-length segment has no direction, so the solver cannot derive
+	// a bearing for it and the junction at either end loses an arm.
+	constexpr double MinSplitOffset = 1.0;
+	if (FVector2D::DistSquared(At, PositionA) < MinSplitOffset * MinSplitOffset
+		|| FVector2D::DistSquared(At, PositionB) < MinSplitOffset * MinSplitOffset)
+	{
+		return FRoadNodeId();
+	}
+
+	const FRoadNodeId Middle = AddNode(At);
+	if (!Middle.IsSet())
+	{
+		return FRoadNodeId();
+	}
+
+	// Removed, not reshaped. A segment's endpoints are its identity and both of them
+	// change here, so the handle must die rather than quietly come to mean half a road.
+	if (!RemoveSegment(Doomed))
+	{
+		RemoveNode(Middle);
+		return FRoadNodeId();
+	}
+
+	const FRoadSegmentId First = AddStraightSegment(KeepA, Middle, KeepProfile);
+	const FRoadSegmentId Second = AddStraightSegment(Middle, KeepB, KeepProfile);
+
+	// The runway facts are the STRIP's and both halves are still the strip. Copied here
+	// rather than re-derived through SetRunwayFacts on the chain, because at this moment
+	// the chain is the two new segments and nothing else remembers what the doomed one
+	// said; without this, every exit added to a precision runway demoted the far half to
+	// the default and repainted it visual.
+	for (const FRoadSegmentId& Half : { First, Second })
+	{
+		if (FRoadSegment* Fresh = GetSegmentMutable(Half))
+		{
+			Fresh->Runway = KeepFacts;
+		}
+	}
+
+	// Both endpoints were checked live and the middle node was just created, so the only
+	// way here is a model invariant having changed underneath. Loud rather than silent:
+	// the graph is now missing a road the player can still see the ends of.
+	if (!First.IsSet() || !Second.IsSet())
+	{
+		UE_LOG(LogRoadMesh, Error, TEXT("SplitSegment left a segment half-replaced: first=%d second=%d"),
+			First.IsSet() ? 1 : 0, Second.IsSet() ? 1 : 0);
+	}
+
+	return Middle;
 }
 
 bool URoadNetwork::SetNodePosition(FRoadNodeId Node, const FVector2D& To)

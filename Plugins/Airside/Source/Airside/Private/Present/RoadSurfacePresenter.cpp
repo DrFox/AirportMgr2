@@ -14,7 +14,6 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Present/DynamicMeshSink.h"
-#include "Present/RoadEditFacade.h"
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
@@ -433,10 +432,10 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 		break;
 
 	case ERoadSnapKind::Segment:
-		// The same surgery the click will perform, run on the copy. Sharing the
-		// implementation with URoadEditFacade::SplitSegment is the only thing that stops
-		// the preview and the edit diverging.
-		To = URoadEditFacade::SplitSegmentIn(*GhostNetwork, Snap.Segment, Snap.Position);
+		// The same surgery the click will perform, run on the copy. Sharing
+		// URoadNetwork::SplitSegment with URoadEditFacade::SplitSegment is the only thing
+		// that stops the preview and the edit diverging.
+		To = GhostNetwork->SplitSegment(Snap.Segment, Snap.Position);
 		break;
 
 	case ERoadSnapKind::Free:
