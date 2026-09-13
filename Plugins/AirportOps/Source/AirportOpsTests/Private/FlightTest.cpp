@@ -64,6 +64,25 @@ bool FFlightDefaultsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a new flight is an offer"), Flight->Phase, EFlightPhase::Offered);
 	TestEqual(TEXT("with no agent, so nothing maps a phase onto it"), Flight->AgentId, INDEX_NONE);
 	TestFalse(TEXT("and no stand held"), Flight->Stand.IsSet());
+	// THE DECLARATION ORDER IS LOAD-BEARING and this is what pins it. FlightPhaseFromAgent
+	// decides taxi-in from taxi-out by asking whether the flight has reached Turnaround, so
+	// Manoeuvring must sit AFTER Turnaround - inserting it before would read every taxi OUT as
+	// a taxi in, with no compiler complaint at all.
+	TestTrue(TEXT("Turnaround comes before Manoeuvring"),
+		EFlightPhase::Turnaround < EFlightPhase::Manoeuvring);
+	TestTrue(TEXT("and Manoeuvring before TaxiOut"),
+		EFlightPhase::Manoeuvring < EFlightPhase::TaxiOut);
+
+	TestEqual(TEXT("a manoeuvring agent is a manoeuvring flight"),
+		FlightPhaseFromAgent(EAgentPhase::Manoeuvring, EFlightPhase::Turnaround),
+		EFlightPhase::Manoeuvring);
+
+	// AND THE TAXI AFTER IT IS STILL A TAXI OUT - which is what the ordering above buys, and
+	// what would break silently if Manoeuvring were declared in the wrong place.
+	TestEqual(TEXT("taxiing after a push is the taxi out"),
+		FlightPhaseFromAgent(EAgentPhase::Taxiing, EFlightPhase::Manoeuvring),
+		EFlightPhase::TaxiOut);
+
 	return true;
 }
 

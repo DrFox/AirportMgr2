@@ -19,8 +19,12 @@ enum class EAgentPhase : uint8;
  * is taxiing by asking whether the flight has reached Turnaround yet, so Turnaround must stay
  * between TaxiIn and TaxiOut. Reordering these breaks that with no compiler complaint.
  *
- * Pushback, Diverted and Cancelled are deliberately ABSENT: the job board owns the first and
- * the sequencer the other two, and neither exists yet. A phase nothing can enter is a lie.
+ * Manoeuvring is the aeroplane coming off the stand - the PHASE, and it exists because an
+ * aeroplane can now be watched doing it. The SERVICE that performs it for one that cannot
+ * manage alone is PUSHBACK, which is the job board's and does not exist yet; a Twin Otter
+ * reverses under its own power and is not being pushed by anything, so the two are not the
+ * same word. Diverted and Cancelled are still deliberately ABSENT: the sequencer owns them
+ * and it does not exist either. A phase nothing can enter is a lie.
  */
 UENUM()
 enum class EFlightPhase : uint8
@@ -34,6 +38,13 @@ enum class EFlightPhase : uint8
 	Landing,
 	TaxiIn,
 	Turnaround,
+	/**
+	 * Coming off the stand - see EAgentPhase::Manoeuvring.
+	 *
+	 * ITS POSITION IN THIS LIST IS LOAD-BEARING, like every other entry's: it must sit AFTER
+	 * Turnaround or FlightPhaseFromAgent would read the taxi that follows it as a taxi IN.
+	 */
+	Manoeuvring,
 	TaxiOut,
 	Departing,
 	Departed,
