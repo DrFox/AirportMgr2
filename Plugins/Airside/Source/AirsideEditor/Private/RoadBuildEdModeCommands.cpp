@@ -38,7 +38,10 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 		FUICommandInfo::MakeCommandInfo(
 			AsShared(),
 			Command,
-			FName(*Tool.Name.ToString()),
+			// Tool.Id, not Tool.Name (PR #137 review): the command id is what
+			// FUICommandInfo persists to the editor's per-user keybindings ini, and Name is
+			// LOCTEXT - a localised id would orphan every saved keybinding on a locale change.
+			Tool.Id,
 			Tool.Name,
 			Tool.Tooltip,
 			FSlateIcon(),

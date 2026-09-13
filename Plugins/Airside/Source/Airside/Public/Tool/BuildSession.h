@@ -29,6 +29,16 @@ class IRoadEditTarget;
 struct FToolRegistration
 {
 	FKey Key;
+
+	/**
+	 * STABLE, unlocalised (PR #137 review, issue #105 item 10): FRoadBuildEdModeCommands used
+	 * to build each command's FName straight from Name below, which is LOCTEXT and therefore
+	 * whatever the current culture renders it as - baking a translation into the command id
+	 * FUICommandInfo persists to the editor's per-user keybindings ini. A locale change would
+	 * have orphaned every saved keybinding silently. This is the one field nothing localises.
+	 */
+	FName Id;
+
 	FText Name;
 	FText Tooltip;
 	TFunction<TUniquePtr<IBuildTool>()> Make;
