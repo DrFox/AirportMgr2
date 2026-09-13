@@ -55,8 +55,8 @@ void OpsSave::RestoreBlob(const FOpsSnapshot& In, IOpsPersistent& Persistent)
 	}
 }
 
-void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network,
-	const UFlightBoard& Board, const UFuelService& Fuel, FOpsSnapshot& Out)
+void OpsSave::Capture(TArrayView<IOpsPersistent* const> Persistents,
+	const URoadNetwork& Network, FOpsSnapshot& Out)
 {
 	Out.Blobs.Reset();
 	Out.Clock.Reset();
@@ -65,15 +65,23 @@ void OpsSave::Capture(const USimClock& Clock, const URoadNetwork& Network,
 
 	// Serialize is non-const on UObject; the archive is saving, so nothing is written to them.
 	SerializeObject(const_cast<URoadNetwork&>(Network), Out.Blobs.FindOrAdd(NetworkBlobName).Bytes);
-	CaptureBlob(const_cast<USimClock&>(Clock), Out);
-	CaptureBlob(const_cast<UFlightBoard&>(Board), Out);
-	CaptureBlob(const_cast<UFuelService&>(Fuel), Out);
+
+	for (IOpsPersistent* Persistent : Persistents)
+	{
+		// NULL IS SKIPPED RATHER THAN CHECKED AWAY at every call site: UOpsRuntime builds this
+		// list from its own subobjects, and one that failed to construct should cost that
+		// system's blob, not the whole save.
+		if (Persistent != nullptr)
+		{
+			CaptureBlob(*Persistent, Out);
+		}
+	}
 
 	UE_LOG(LogAirportOps, Log, TEXT("Captured snapshot: %d blob(s)"), Out.Blobs.Num());
 }
 
-bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network,
-	UFlightBoard& Board, UFuelService& Fuel)
+bool OpsSave::Restore(const FOpsSnapshot& In, TArrayView<IOpsPersistent* const> Persistents,
+	URoadNetwork& Network)
 {
 	FOpsSnapshot Shimmed = In;
 	if (Shimmed.Version < 4)
@@ -94,25 +102,24 @@ bool OpsSave::Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Ne
 		}
 	}
 
-	RestoreBlob(Shimmed, Clock);
-	RestoreBlob(Shimmed, Fuel);
-
-	const bool bHadFlights = Shimmed.Blobs.Contains(TEXT("Flights"));
-	RestoreBlob(Shimmed, Board);
-	if (bHadFlights && Shimmed.Version < 3)
+	// ONE UNIFORM PASS. Anything a particular system must do about an OLD snapshot is that
+	// system's own OnAfterRestore - see IOpsPersistent, and UFlightBoard's override for the
+	// pre-v3 ApproachFocus migration that used to be special-cased here, wrapped around the
+	// board's blob specifically and forcing Restore to name the board as a parameter.
+	for (IOpsPersistent* Persistent : Persistents)
 	{
-		// A blob from before UFlight::ApproachFocus (issue #96): every flight in it
-		// shared the board's one focus, which DID deserialise (it is older than the
-		// flights themselves) - so recreate the per-flight field from it rather than
-		// leave each restored flight's new field at its default, the world origin.
-		Board.AimUnaimedFlightsAtBoardFocus();
+		if (Persistent != nullptr)
+		{
+			RestoreBlob(Shimmed, *Persistent);
+			Persistent->OnAfterRestore(Shimmed.Version);
+		}
 	}
 
-	// A v1 snapshot has no Flights blob at all, and the branch above leaves the board alone -
+	// A v1 snapshot has no Flights blob at all, and the loop above leaves the board alone -
 	// which is the right answer: a game saved before the board existed had no flights.
 	UE_LOG(LogAirportOps, Log,
-		TEXT("Restored snapshot v%d: game time %.1f, %d nodes, %d live flight(s)"),
-		In.Version, Clock.Now(), Network.GetNodes().Num(), Board.Live().Num());
+		TEXT("Restored snapshot v%d: %d nodes, %d persistent object(s)"),
+		In.Version, Network.GetNodes().Num(), Persistents.Num());
 	return true;
 }
 

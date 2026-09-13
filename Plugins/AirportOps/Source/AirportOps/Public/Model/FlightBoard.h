@@ -41,6 +41,16 @@ public:
 	virtual UObject& AsPersistentObject() override { return *this; }
 
 	/**
+	 * Recreate every flight's own ApproachFocus from this board's one field, for a snapshot
+	 * older than FOpsSnapshot::Version 3.
+	 *
+	 * MOVED HERE FROM OpsSave::Restore so that Restore could become a plain loop over every
+	 * persistent object rather than naming this class as a parameter and calling it in one
+	 * particular position - see IOpsPersistent::OnAfterRestore.
+	 */
+	virtual void OnAfterRestore(int32 SnapshotVersion) override;
+
+	/**
 	 * What actually puts an aeroplane in the world. UOpsRuntime::Attach points this at
 	 * ARoadNetworkActor::DispatchArrival; tests substitute a recorder.
 	 *

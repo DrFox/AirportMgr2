@@ -216,10 +216,22 @@ EArrivalRefusal UFlightBoard::AcceptImmediate(UGroundTraffic& Traffic, const URo
 	return WhyNotAcceptable(Traffic, Network, *Flight);
 }
 
+void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
+{
+	// Flights.Num() replaces the bHadFlights flag OpsSave::Restore used to keep around this
+	// call: a board with no flights has nothing to migrate either way, so asking its own state
+	// answers the same question without Restore having to remember which blobs it saw - which
+	// is what let Restore become a plain loop over every persistent object.
+	if (SnapshotVersion < 3 && Flights.Num() > 0)
+	{
+		AimUnaimedFlightsAtBoardFocus();
+	}
+}
+
 void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
 {
 	// A LOAD-ONLY MIGRATION for a snapshot older than FOpsSnapshot::Version 3 - see
-	// OpsSave::Restore. Before UFlight::ApproachFocus existed (issue #96) every flight
+	// OnAfterRestore, the one caller. Before UFlight::ApproachFocus existed (issue #96) every flight
 	// shared this one board-wide field, so a v1/v2 blob's flights have no per-flight focus
 	// at all; tagged-property load leaves the new field at FVector2D::ZeroVector, which
 	// would aim every restored flight at the world origin rather than wherever it was

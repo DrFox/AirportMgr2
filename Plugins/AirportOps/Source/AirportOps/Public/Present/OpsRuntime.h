@@ -89,6 +89,16 @@ public:
 	double OfferIntervalSecondsForTest() const { return LastOfferIntervalSeconds; }
 
 private:
+	/**
+	 * Every model object that owns saved state, in a fixed order.
+	 *
+	 * ONE LIST. A system added to this runtime and forgotten here is a system that silently
+	 * stops being saved - so there is one place to forget rather than the two call sites
+	 * (SaveToSlot and LoadFromSlot) that each used to name their own subset positionally. The
+	 * order matters only in being the same on both sides of a round trip.
+	 */
+	TArray<IOpsPersistent*> Persistents() const;
+
 	UPROPERTY() TObjectPtr<USimClock> Clock;
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
 	UPROPERTY() TObjectPtr<UOpsCatalog> Catalog;

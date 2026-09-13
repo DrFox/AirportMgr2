@@ -302,6 +302,18 @@ void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)
 	Events->NotifyArrivalRefused(Why);
 }
 
+TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
+{
+	// ORDER IS THE SAME ON BOTH SIDES and that is all it has to be: every blob is keyed by its
+	// own SaveBlobName, and OnBeforeRestore runs for all of them before any is deserialised, so
+	// nothing here depends on a neighbour having been restored first.
+	TArray<IOpsPersistent*> Out;
+	Out.Add(Clock);
+	Out.Add(FuelService);
+	Out.Add(FlightBoard);
+	return Out;
+}
+
 bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 {
 	if (Target == nullptr || Target->Network == nullptr)
@@ -310,7 +322,8 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, *FuelService, Snapshot);
+	const TArray<IOpsPersistent*> Saved = Persistents();
+	OpsSave::Capture(Saved, *Target->Network, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
@@ -336,7 +349,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
-	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard, *FuelService))
+	const TArray<IOpsPersistent*> Loaded = Persistents();
+	if (!OpsSave::Restore(Snapshot, Loaded, *Target->Network))
 	{
 		return false;
 	}
