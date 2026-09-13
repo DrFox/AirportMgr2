@@ -130,7 +130,12 @@ struct AIRSIDE_API FAgentMotion
 	UPROPERTY() double PitchDegrees = 0.0;
 
 	/**
-	 * The point the airframe pitches ABOUT, local X, uu. The main-gear axle.
+	 * The point the airframe pitches ABOUT, local X, uu. The main gear.
+	 *
+	 * X ALONE, deliberately: the pivot is the CONTACT PATCH, on the ground directly below
+	 * the axle, and the axle's own height is discarded. A main-gear bone sits at the hub -
+	 * one wheel radius up, 68.6 uu on plane2 - and pitching about that would drag the tyre
+	 * through the tarmac. The view supplies the zero; see ARoadAgentActor::SetMotion.
 	 *
 	 * WITHOUT IT THE PIVOT IS THE ORIGIN, and that only looked right while origins sat
 	 * mid-fuselage. plane2's origin is its nose gear (UAircraftType's local space), so a

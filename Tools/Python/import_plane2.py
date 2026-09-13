@@ -382,12 +382,23 @@ def report_bounds(mesh):
         say("PASS the origin is the nose gear (%.1f uu), as UAircraftType's local space wants"
             % nose)
 
-    # Wheels on the ground is what lets a taxiing agent sit at Z = SurfaceZ with no lift.
+    # WHEELS ON THE GROUND, and this is a FAIL rather than the NOTE it used to be.
+    #
+    # Two things rest on z = 0 being the ground plane, and both break silently if it is not.
+    # ARoadAgentActor::SetMotion applies no lift to an airframe, so the aircraft floats or
+    # sinks by whatever this is; and the pitch pivot is taken at z = 0 on the assumption
+    # that it is the main gear's CONTACT PATCH, so a model exported a metre up pitches about
+    # a point a metre underground - which reads as the gear sinking through the runway
+    # during the flare, exactly the defect reported on 2026-09-13 from a different cause.
+    #
+    # Noting it was not enough: a NOTE in a log nobody greps is an assumption, not a check.
     if abs(bounds.min.z) > 10.0:
-        say("NOTE mesh bottom is at Z=%.1f rather than 0 - an agent would float or sink"
-            % bounds.min.z)
+        fail("mesh bottom is at Z=%.1f rather than 0. The agent would float or sink, and the "
+             "pitch pivot - taken at z=0 as the main gear's contact patch - would be that far "
+             "underground. Re-export with the wheels on the ground plane." % bounds.min.z)
     else:
-        say("PASS wheels are on the ground at Z=%.1f" % bounds.min.z)
+        say("PASS wheels are on the ground at Z=%.1f, so z=0 is the contact plane"
+            % bounds.min.z)
 
 
 def report_skeleton(skeletal_mesh):

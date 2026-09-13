@@ -99,6 +99,15 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// IN THE VIEW rather than in the model, because it is a fact about drawing a rigid body
 	// at an attitude, not about where the aircraft is: FAgentMotion::Position still means
 	// the origin, and the model still decides it alone.
+	// THE CONTACT PATCH, NOT THE HUB, which is why the pivot is a scalar X and this Z is a
+	// hard zero rather than anything read off the airframe. The main-gear BONE sits at the
+	// axle - on plane2 at z = 68.6, which is exactly the wheel's radius - and pitching about
+	// the hub would drag the tyre through the tarmac by that radius. An aeroplane rotates
+	// about where the rubber touches, one radius below.
+	//
+	// Zero IS the ground here because the export puts the wheels at z = 0 and the import
+	// fails if they are not - see import_plane2.py's ground check, and the comment above
+	// about the origin needing no lift. That assertion is what this line rests on.
 	const FVector Pivot(Motion.PitchPivotX, 0.0, 0.0);
 	const FVector Correction = Pivot - Rotation.RotateVector(Pivot);
 
