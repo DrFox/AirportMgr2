@@ -103,9 +103,15 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// FAgentMotion::EngineRPM. The view spins the prop at this, so a shutdown winds down.
 	Motion.EngineRPM = EngineRPM;
 
-	// Off the wheels only once the rotation is finished. The phase already knows, so nothing
-	// here has to infer it from the altitude being above zero.
-	Motion.bAirborne = Phase == EAgentPhase::Departing && Departure.Phase == ETakeoffPhase::Climb;
+	// Off the wheels only once the rotation is finished, ON THEM from the moment an arrival's
+	// wheels have not yet touched down. Departure and arrival are opposite questions of the
+	// same fact, asked separately: a departure is airborne once it reaches the climb; an
+	// arrival is airborne until FLandingRun::IsOnGround (Rollout or Vacated). The arrival half
+	// was missing entirely, so an approach or a flare reported bAirborne=false and
+	// UAirsideAgentAnim - gated on !bAirborne - spun the wheels under an aircraft still in the
+	// air, while InspectFacts.cpp's "On final" status already assumed the opposite.
+	Motion.bAirborne = (Phase == EAgentPhase::Departing && Departure.Phase == ETakeoffPhase::Climb)
+		|| (Phase == EAgentPhase::Arriving && !Arrival.IsOnGround());
 
 	return Motion;
 }

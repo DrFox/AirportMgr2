@@ -65,30 +65,46 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("it is Arriving"), Agent.Phase, EAgentPhase::Arriving);
 
-	// Fly it far enough to be rolling rather than still on final.
+	// ONE STEP INTO THE APPROACH, still miles from the threshold: DescribeMotion used to set
+	// bAirborne only for a departure in the climb, so an arrival on final (or in the flare)
+	// reported bAirborne=false - approach speed with the wheels shown down and turning, which
+	// contradicts InspectFacts.cpp's "On final" status. Sampled here, before any rollout, so
+	// this cannot be satisfied by the Rollout/Vacated branch of FLandingRun::IsOnGround.
+	FAgentMotion ApproachMotion;
+	Agent.Advance(1.0 / 30.0, ApproachMotion);
+	TestEqual(TEXT("still on the approach, not yet on the ground"),
+		Agent.Arrival.Phase, ELandingPhase::Approach);
+	TestTrue(TEXT("an aircraft on final is airborne"), ApproachMotion.bAirborne);
+
+	// Fly it far enough to be ROLLING - Arrival.Phase == Rollout - rather than still on final.
+	// 400 steps (13.3 s) was the OLD budget, and it is not enough: FinalAltitude/Glideslope
+	// alone is ~5.8 s of approach before the flare even starts, and the old final assertion
+	// below passed regardless, because bAirborne was hard-wired false for every Arriving
+	// agent - the exact bug this test exists to catch. 6000 steps (200 s) comfortably covers
+	// the approach and flare for any airframe these figures describe; touchdown is the thing
+	// under test, not how long it takes to reach it.
 	FAgentMotion Motion;
-	for (int32 Step = 0; Step < 400 && Agent.Phase == EAgentPhase::Arriving; ++Step)
+	for (int32 Step = 0; Step < 6000 && Agent.Arrival.Phase != ELandingPhase::Rollout
+		&& Agent.Phase == EAgentPhase::Arriving; ++Step)
 	{
 		Agent.Advance(1.0 / 30.0, Motion);
 	}
 
-	if (Agent.Phase == EAgentPhase::Arriving)
+	if (!TestEqual(TEXT("touched down within the step budget"),
+		Agent.Arrival.Phase, ELandingPhase::Rollout))
 	{
-		// THE ASSERTION THE BUG WOULD FAIL. Before the fix this was Follower.Speed, which is
-		// zero for the whole of a landing, and the wheels stood still under a rolling
-		// aeroplane.
-		TestTrue(*FString::Printf(
-			TEXT("a rolling arrival reports a ground speed (%.0f uu/s), so its wheels turn"),
-			Motion.GroundSpeed), Motion.GroundSpeed > 0.0);
+		return false;
+	}
 
-		// And it is the ARRIVAL's speed, not some other phase's that happens to be non-zero.
-		TestTrue(TEXT("and it is the landing run's own speed"),
-			FMath::IsNearlyEqual(Motion.GroundSpeed, Agent.Arrival.Speed, 0.01));
-	}
-	else
-	{
-		AddInfo(TEXT("the arrival completed within the step budget; speed not sampled"));
-	}
+	// THE ASSERTION THE BUG WOULD FAIL. Before the fix this was Follower.Speed, which is
+	// zero for the whole of a landing, and the wheels stood still under a rolling aeroplane.
+	TestTrue(*FString::Printf(
+		TEXT("a rolling arrival reports a ground speed (%.0f uu/s), so its wheels turn"),
+		Motion.GroundSpeed), Motion.GroundSpeed > 0.0);
+
+	// And it is the ARRIVAL's speed, not some other phase's that happens to be non-zero.
+	TestTrue(TEXT("and it is the landing run's own speed"),
+		FMath::IsNearlyEqual(Motion.GroundSpeed, Agent.Arrival.Speed, 0.01));
 
 	// bAirborne is what the view gates the wheels on, and it must be false while any part of
 	// the aeroplane is still rolling - otherwise the fix for the take-off half would stop the
