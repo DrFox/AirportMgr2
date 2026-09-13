@@ -1136,6 +1136,12 @@ bool URoadNetwork::IsServiceNodeConnected(FGuidelineNodeId Node) const
 	return false;
 }
 
+bool URoadNetwork::IsDepotJoined(const FEntityInstance& Entity) const
+{
+	const FGuidelineNode* Pose = GetGuidelineNode(Entity.PoseNode);
+	return Pose != nullptr && Pose->Incident.Num() > 0;
+}
+
 FApronId URoadNetwork::AddApron(FApronSurface&& Apron)
 {
 	return RoadSlot::Add<FApronId>(Aprons, ApronFreeList, MoveTemp(Apron));

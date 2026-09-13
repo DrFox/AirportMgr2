@@ -419,6 +419,15 @@ public:
 	 */
 	bool IsServiceNodeConnected(FGuidelineNodeId Node) const;
 
+	/**
+	 * True when Entity's pose has ANY line on it at all - placed, but with no road within
+	 * its lead-in reach otherwise. SHALLOW, deliberately, unlike IsServiceNodeConnected's
+	 * walk: a depot only needs a route search to start from somewhere, so "has an edge"
+	 * is the whole question, asked the same way ChooseDepot's classifying loop and its
+	 * refusal log's depot count used to ask it separately (#103).
+	 */
+	bool IsDepotJoined(const FEntityInstance& Entity) const;
+
 	// --- Apron surfaces --------------------------------------------------------------
 	// Polygon pavement. Deliberately NOT in the segment list: the junction solver walks
 	// segments, and an apron has nothing for it to solve.

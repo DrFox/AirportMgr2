@@ -276,17 +276,35 @@ private:
 	static FGuidelineNodeId FuelAnchorOf(const URoadNetwork& Network, FEntityInstanceId Stand);
 
 	/**
+	 * ChooseDepot's whole answer, so a caller that refuses does not have to re-walk
+	 * Network.GetEntities() a second time just to LOG the counts the search already saw
+	 * (#103) - Tick's Unserviceable branch used to do exactly that, plus a second
+	 * FuelAnchorOf(Demand.Stand) call for the same node ChooseDepot was already given.
+	 */
+	struct FDepotChoice
+	{
+		FEntityInstanceId Depot;
+		FRoutePlan Plan;
+		EFuelRefusal Why = EFuelRefusal::NoDepot;
+
+		/** How many entities are fuel depots at all, and how many of those are joined to a
+		 *  road - the two counts the refusal log names so the player knows which end of the
+		 *  airport to look at. */
+		int32 Depots = 0;
+		int32 DepotsOnRoad = 0;
+	};
+
+	/**
 	 * Nearest depot with a truck free and a route to StandFuel, BY ROUTE LENGTH.
 	 *
 	 * Not by straight-line distance: a depot 200 m away across a runway is further than one
-	 * 400 m away along the road, and the truck drives the road. Fills OutPlan with the
+	 * 400 m away along the road, and the truck drives the road. The result's Plan is the
 	 * winning route so the caller dispatches the very route the choice was made on.
 	 *
 	 * Reports Why in the order the spec fixes - NoDepot, NoRoad, StandUnjoined, NoRoute - so
 	 * the reason names the thing nearest the player's hand.
 	 */
-	FEntityInstanceId ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel,
-		FRoutePlan& OutPlan, EFuelRefusal& OutWhy) const;
+	FDepotChoice ChooseDepot(const URoadNetwork& Network, FGuidelineNodeId StandFuel) const;
 
 	/**
 	 * How many trucks this depot has out right now, counted off Demands and GoingHome.
