@@ -1,6 +1,7 @@
 #include "Model/Ledger.h"
 
 #include "AirportOpsLog.h"
+#include "Model/Pricing.h"
 #include "Model/SimClock.h"
 
 void ULedger::Open(double InStartingBalance)
@@ -112,4 +113,91 @@ double ULedger::FoldBalanceForTest() const
 void ULedger::Recache()
 {
 	CachedBalance = FoldBalanceForTest();
+}
+
+// --- IBuildPurse --------------------------------------------------------------------------
+//
+// Airside asks these five; none of them is reached from AirportOps itself. See IBuildPurse.
+
+double ULedger::NowOrZero() const
+{
+	// A LEDGER THAT CANNOT DATE ITS OWN ENTRIES IS WORSE THAN ONE THAT REFUSES, but refusing
+	// would mean a test that only checks arithmetic could not use the purse at all. Zero is
+	// honest and visible: every entry piled at time zero is obvious the moment anyone looks.
+	return Clock != nullptr ? Clock->Now() : 0.0;
+}
+
+double ULedger::PriceOf(const FBuildQuote& Quote) const
+{
+	return Pricing != nullptr
+		? Pricing->PriceOfBuild(Quote.BaseAmount, Quote.Source.Get())
+		: Quote.BaseAmount;
+}
+
+bool ULedger::CanAfford(const FBuildQuote& Quote) const
+{
+	const double Price = PriceOf(Quote);
+
+	// A FREE EDIT IS ALWAYS ALLOWED, even under water, and the check has to come first: with a
+	// balance of -1000, "0 <= -1000" is false, so a plain comparison would refuse to split a
+	// segment or name a runway for a player who cannot pay their upkeep. Locking PLACEMENT is
+	// not locking the editor, and a refusal with nothing to buy would be unexplainable on
+	// screen.
+	if (Price <= 0.0)
+	{
+		return true;
+	}
+
+	// THE GDD'S "A NEGATIVE BALANCE LOCKS PLACEMENT" FALLS OUT OF THIS, rather than being a
+	// second rule somewhere that could disagree with it: nothing that costs anything can be
+	// afforded while the balance is under water. And because a build is never authorised past
+	// the balance, building can never PUT the player under - only upkeep can.
+	return Price <= Balance();
+}
+
+int32 ULedger::Charge(const FBuildQuote& Quote)
+{
+	const double Price = PriceOf(Quote);
+	if (Price <= 0.0)
+	{
+		return INDEX_NONE;
+	}
+
+	const int32 Id = Post(NowOrZero(), ELedgerCategory::Placement, -Price, Quote.What);
+	UE_LOG(LogAirportOps, Log, TEXT("Built %s for %.0f; balance %.0f"),
+		*Quote.What.ToString(), Price, Balance());
+	return Id;
+}
+
+void ULedger::Reverse(int32 ChargeId)
+{
+	Reverse(NowOrZero(), ChargeId);
+}
+
+void ULedger::Credit(const FBuildQuote& Quote)
+{
+	// SCRAP VALUE AT TODAY'S PRICE, not what was paid - see IBuildPurse::Credit for why the
+	// ledger is never asked to remember what each segment cost.
+	const double Scrap = Pricing != nullptr
+		? Pricing->ScrapValue(Quote.BaseAmount, Quote.Source.Get())
+		: 0.0;
+	if (Scrap <= 0.0)
+	{
+		return;
+	}
+
+	Post(NowOrZero(), ELedgerCategory::Refund, Scrap, Quote.What);
+	UE_LOG(LogAirportOps, Log, TEXT("Demolished %s for %.0f; balance %.0f"),
+		*Quote.What.ToString(), Scrap, Balance());
+}
+
+FText ULedger::Describe(const FBuildQuote& Quote) const
+{
+	const double Price = PriceOf(Quote);
+	if (Pricing == nullptr)
+	{
+		return FText::AsNumber(Price);
+	}
+	return FText::Format(NSLOCTEXT("Ledger", "QuoteAndPrice", "{0}  {1}"),
+		Quote.What, Pricing->Format(Price));
 }

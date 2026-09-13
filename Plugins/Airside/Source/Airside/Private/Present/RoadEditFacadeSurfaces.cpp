@@ -8,7 +8,7 @@
 #include "Present/RoadEditFacade.h"
 
 #include "Build/BuildCost.h"
-#include "Tool/BuildPurse.h"
+#include "Model/BuildPurse.h"
 
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"

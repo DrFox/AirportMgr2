@@ -8,7 +8,7 @@
 
 #include "Build/BuildCost.h"
 #include "Content/AirsideSettings.h"
-#include "Tool/BuildPurse.h"
+#include "Model/BuildPurse.h"
 
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"

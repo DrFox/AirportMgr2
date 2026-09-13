@@ -122,6 +122,13 @@ private:
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
 	int32 OfferHandle = INDEX_NONE;
 
+	/** The repeating daily upkeep callback. Same sentinel and same cancellation as OfferHandle:
+	 *  a handle left armed across a Detach fires against a runtime with no network. */
+	int32 UpkeepHandle = INDEX_NONE;
+
+	/** One day's upkeep for everything standing, as a single entry. Bound in Attach. */
+	void PostDailyUpkeep();
+
 	/** The interval OfferHandle was armed with. See OfferIntervalSecondsForTest. */
 	double LastOfferIntervalSeconds = 0.0;
 

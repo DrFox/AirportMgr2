@@ -1,5 +1,6 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
+#include "Build/BuildCost.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Model/OpsCatalog.h"
@@ -17,6 +18,7 @@
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditHistory.h"
 
@@ -164,6 +166,20 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	FlightBoard->Pricing = Pricing;
 	FuelService->Ledger = Ledger;
 	FuelService->Pricing = Pricing;
+	Ledger->Pricing = Pricing;
+	Ledger->Clock = Clock;
+
+	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
+	// nowhere else, so design-time building - which has no runtime and therefore no purse -
+	// stays free. See IBuildPurse.
+	if (URoadEditFacade* Facade = Target->GetEditFacade())
+	{
+		Facade->SetPurse(Ledger);
+	}
+
+	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
+	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
+	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
@@ -205,6 +221,11 @@ void UOpsRuntime::Detach()
 	{
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
 		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
+	}
+	if (UpkeepHandle != INDEX_NONE)
+	{
+		Clock->Cancel(UpkeepHandle);
+		UpkeepHandle = INDEX_NONE;
 	}
 	if (OfferHandle != INDEX_NONE)
 	{
@@ -323,6 +344,35 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)
 {
 	Events->NotifyArrivalRefused(Why);
+}
+
+void UOpsRuntime::PostDailyUpkeep()
+{
+	if (Target == nullptr || Target->Network == nullptr || Ledger == nullptr)
+	{
+		return;
+	}
+
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	const double Base = BuildCost::DailyUpkeep(*Target->Network,
+		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
+	if (Base <= 0.0)
+	{
+		// An airport with nothing standing on it costs nothing to own, and an entry saying so
+		// every day would be noise in the one place the player goes to find out where the
+		// money went.
+		return;
+	}
+
+	Ledger->Post(Clock->Now(), ELedgerCategory::Upkeep, -Base,
+		NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
+
+	// FOLDED HERE, on the same daily beat, because this is the only thing that happens once a
+	// game day and the roll-up has no reason to be its own schedule.
+	Ledger->RollUp(Clock->Now());
+
+	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
+		Clock->Day(), Base, Ledger->Balance());
 }
 
 TArray<IOpsPersistent*> UOpsRuntime::Persistents() const

@@ -5,7 +5,7 @@
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
-#include "Tool/BuildPurse.h"
+#include "Model/BuildPurse.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 

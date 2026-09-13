@@ -2,9 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "Model/OpsSave.h"
+#include "Model/BuildPurse.h"
 #include "UObject/Object.h"
 
 #include "Ledger.generated.h"
+
+class UPricing;
+class USimClock;
 
 /**
  * What a ledger entry was for.
@@ -67,7 +71,7 @@ struct AIRPORTOPS_API FLedgerEntry
  * World-free, like every other AirportOps Model/ class: NewObject, Post, and no world.
  */
 UCLASS()
-class AIRPORTOPS_API ULedger : public UObject, public IOpsPersistent
+class AIRPORTOPS_API ULedger : public UObject, public IOpsPersistent, public IBuildPurse
 {
 	GENERATED_BODY()
 
@@ -92,6 +96,29 @@ public:
 	 * whole balance rests on. Balance is this plus the fold.
 	 */
 	UPROPERTY() double StartingBalance = 0.0;
+
+	// --- IBuildPurse ------------------------------------------------------------------
+	//
+	// IMPLEMENTED DIRECTLY, with no adapter class, exactly as USimClock implements
+	// IOpsPersistent. The ledger IS the purse: it knows the balance, it knows the prices
+	// through UPricing, and it is the thing that has to record the movement anyway.
+
+	virtual bool CanAfford(const FBuildQuote& Quote) const override;
+	virtual int32 Charge(const FBuildQuote& Quote) override;
+	virtual void Reverse(int32 ChargeId) override;
+	virtual void Credit(const FBuildQuote& Quote) override;
+	virtual FText Describe(const FBuildQuote& Quote) const override;
+
+	/**
+	 * What things cost, and what dates an entry. Both set by the ops runtime at attach.
+	 *
+	 * THE CLOCK IS NOT OPTIONAL FOR A PURSE. IBuildPurse hands no time down - Airside has no
+	 * notion of game time - so a ledger that could not date its own entries would write every
+	 * build at time zero, and the roll-up and the determinism test would both quietly stop
+	 * meaning anything. Null is tolerated (a test that only checks arithmetic) and dates to 0.
+	 */
+	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+	UPROPERTY() TObjectPtr<USimClock> Clock = nullptr;
 
 	/** Start a NEW GAME at this balance. Not for a load - Restore brings back the entries. */
 	void Open(double InStartingBalance);
@@ -130,4 +157,10 @@ private:
 	UPROPERTY() double CachedBalance = 0.0;
 
 	void Recache();
+
+	/** Clock.Now(), or zero when there is no clock. See the Clock member. */
+	double NowOrZero() const;
+
+	/** The quote's base amount run through UPricing, or the base amount when there is none. */
+	double PriceOf(const FBuildQuote& Quote) const;
 };

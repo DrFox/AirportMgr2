@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Build/BuildQuote.h"
+#include "Model/BuildPurse.h"
 #include "UObject/Object.h"
 #include "RoadEditHistory.generated.h"
 
