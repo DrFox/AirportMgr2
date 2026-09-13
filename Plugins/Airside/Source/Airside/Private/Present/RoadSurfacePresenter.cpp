@@ -17,6 +17,18 @@
 #include "Profiles/RoadMaterialSet.h"
 #include "Profiles/RoadProfile.h"
 
+/**
+ * The material parameter names this presenter drives, named once rather than retyped as a
+ * TEXT() literal at every SetVectorParameterValue/SetScalarParameterValue call site (#103) -
+ * a typo in one copy would silently stop driving the parameter rather than fail to compile.
+ */
+namespace RoadMaterialParams
+{
+	constexpr const TCHAR* MarkingColor = TEXT("MarkingColor");
+	constexpr const TCHAR* ValidityBlend = TEXT("ValidityBlend");
+	constexpr const TCHAR* EdgeHalfWidth = TEXT("EdgeHalfWidth");
+}
+
 void URoadSurfacePresenter::Initialize(
 	const TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)>& Components)
 {
@@ -138,7 +150,7 @@ UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(U
 		// WHITE, the one thing that differs from the holding-position paint. The road
 		// material's MarkingColor parameter is the taxiway yellow by default; a runway's
 		// markings are white (ICAO Annex 14, 5.2.1.4) and this is the whole of the change.
-		RunwayMarkingMID->SetVectorParameterValue(TEXT("MarkingColor"), FLinearColor::White);
+		RunwayMarkingMID->SetVectorParameterValue(RoadMaterialParams::MarkingColor, FLinearColor::White);
 	}
 	return RunwayMarkingMID;
 }
@@ -509,7 +521,7 @@ void URoadSurfacePresenter::SetGhostValidity(bool bValid, UMaterialInterface* Gh
 	// than a second mesh.
 	if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance(GhostMaterialBase))
 	{
-		Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
+		Instance->SetScalarParameterValue(RoadMaterialParams::ValidityBlend, bValid ? 0.0f : 1.0f);
 	}
 	bLastGhostValid = bValid;
 }
@@ -538,14 +550,14 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 
 	if (UMaterialInstanceDynamic* Instance = GhostMaterialInstance(Settings.GhostMaterial))
 	{
-		Instance->SetScalarParameterValue(TEXT("ValidityBlend"), bValid ? 0.0f : 1.0f);
+		Instance->SetScalarParameterValue(RoadMaterialParams::ValidityBlend, bValid ? 0.0f : 1.0f);
 
 		// The material cannot know where this road's edge is; UV1.X is in uu and the
 		// profile owns the half-width. Left at its default a narrow road would glow from
 		// edge to edge and a wide one not at all.
 		if (const URoadProfile* Used = Settings.Profile)
 		{
-			Instance->SetScalarParameterValue(TEXT("EdgeHalfWidth"),
+			Instance->SetScalarParameterValue(RoadMaterialParams::EdgeHalfWidth,
 				static_cast<float>(Used->GetMaxHalfWidth()));
 		}
 	}

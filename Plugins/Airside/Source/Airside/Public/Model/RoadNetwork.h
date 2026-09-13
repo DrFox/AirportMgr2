@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"
+#include "Model/TrafficOccupancy.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -127,6 +128,14 @@ public:
 	 * instead of every caller spelling out the same fallback. See #86.
 	 */
 	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
+
+	/**
+	 * RunwayChainOrSeed(Seed), each segment wrapped as the FTrafficResource the occupancy
+	 * table reads - the chain-to-resources conversion ArrivalPlanner and RouteSearch's
+	 * IsRunwayHeld each spelled out over their own loop before asking FTrafficOccupancy::
+	 * IsAnyHeld the chain-held question (#103).
+	 */
+	TArray<FTrafficResource> RunwaySurfaces(FRoadSegmentId Seed) const;
 
 	/**
 	 * The surface and approach class of the runway Seed belongs to.
@@ -409,6 +418,15 @@ public:
 	 * pose and a hand-drawn node both give the obvious answer without a walk.
 	 */
 	bool IsServiceNodeConnected(FGuidelineNodeId Node) const;
+
+	/**
+	 * True when Entity's pose has ANY line on it at all - placed, but with no road within
+	 * its lead-in reach otherwise. SHALLOW, deliberately, unlike IsServiceNodeConnected's
+	 * walk: a depot only needs a route search to start from somewhere, so "has an edge"
+	 * is the whole question, asked the same way ChooseDepot's classifying loop and its
+	 * refusal log's depot count used to ask it separately (#103).
+	 */
+	bool IsDepotJoined(const FEntityInstance& Entity) const;
 
 	// --- Apron surfaces --------------------------------------------------------------
 	// Polygon pavement. Deliberately NOT in the segment list: the junction solver walks

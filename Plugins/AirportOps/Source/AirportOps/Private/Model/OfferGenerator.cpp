@@ -63,12 +63,10 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 		// SAYS WHY, and names the aeroplane. An inbox that is simply empty is
 		// indistinguishable from a generator that is not running - which is exactly how the
 		// 2026-09-11 width refusal presented, and it cost a PIE session to tell apart.
-		FArrivalPlan Explain;
-		Explain.Why = FirstRefusal;
 		UE_LOG(LogAirportOps, Log,
 			TEXT("Offers: nothing in any fleet can use this airport. %s (the first refused "
 				"has a %.0f uu wingspan and wants %.0f uu of runway)"),
-			*ArrivalPlanner::DescribeRefusal(Explain), FirstRefused.Wingspan,
+			*ArrivalPlanner::DescribeRefusal(FirstRefusal), FirstRefused.Wingspan,
 			FirstRefused.Requirements.LandingFieldLength);
 		return nullptr;
 	}

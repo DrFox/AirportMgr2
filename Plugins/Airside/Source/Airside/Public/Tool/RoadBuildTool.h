@@ -58,6 +58,14 @@ struct FToolContext
 	 */
 	double SnapRadius = 150.0;
 
+	/**
+	 * Target's network, null-safe. A Ctrl-remove preview always needs Target non-null AND
+	 * its network non-null before it can look anything up - that pair used to be
+	 * `Context.Target != nullptr && Context.Target->GetNetwork() != nullptr` at every one
+	 * of those call sites (#103); this is the null check, once.
+	 */
+	const URoadNetwork* Network() const { return Target != nullptr ? Target->GetNetwork() : nullptr; }
+
 	/** Ctrl: the gesture means remove rather than build. */
 	bool bRemoveModifier = false;
 
@@ -194,6 +202,29 @@ struct IToolPreviewSink
 	 */
 	virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) = 0;
 	virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) = 0;
+
+	/**
+	 * Every consecutive pair as a Line, so a caller does not re-derive the "N-1 segments"
+	 * loop - six call sites had (#103). NON-VIRTUAL: it is built entirely from Line above,
+	 * so every sink implements it for free rather than each re-implementing the loop.
+	 */
+	void Polyline(TConstArrayView<FVector2D> Points, EPreviewStyle Style)
+	{
+		for (int32 Index = 1; Index < Points.Num(); ++Index)
+		{
+			Line(Points[Index - 1], Points[Index], Style);
+		}
+	}
+
+	/** Polyline plus the closing edge back to the first point. */
+	void Polygon(TConstArrayView<FVector2D> Points, EPreviewStyle Style)
+	{
+		Polyline(Points, Style);
+		if (Points.Num() >= 2)
+		{
+			Line(Points.Last(), Points[0], Style);
+		}
+	}
 };
 
 /**

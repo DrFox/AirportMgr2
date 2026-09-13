@@ -87,6 +87,13 @@ class AIRSIDE_API URoadProfile : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	/**
+	 * A real taxiway's width, uu - 23 m. The one figure ARoadNetworkActor::FallbackWidth's
+	 * own default and the holding-position marking's width-with-no-profile-to-ask fallback
+	 * both typed independently as a bare 2300.0 (#103); this is that number, named once.
+	 */
+	static constexpr double StandardTaxiwayWidth = 2300.0;
+
 	UPROPERTY(EditAnywhere) TArray<FProfileBand> Bands;
 	UPROPERTY(EditAnywhere) TArray<FProfileGuideline> Guidelines;
 

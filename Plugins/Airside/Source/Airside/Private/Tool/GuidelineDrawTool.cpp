@@ -2,6 +2,7 @@
 
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadSlotMap.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -9,25 +10,10 @@ namespace
 	/** Nearest ALIVE guideline node within Radius, whatever it is incident to. */
 	FGuidelineNodeId NearestAnyNode(const URoadNetwork& Network, const FVector2D& At, double Radius)
 	{
-		FGuidelineNodeId Best;
-		double BestDistance = Radius;
-
 		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (!Nodes[Index].bAlive)
-			{
-				continue;
-			}
-
-			const double Distance = FVector2D::Distance(Nodes[Index].Position, At);
-			if (Distance <= BestDistance)
-			{
-				BestDistance = Distance;
-				Best = Network.GuidelineNodeIdAt(Index);
-			}
-		}
-		return Best;
+		const int32 Index = RoadSlot::NearestAlive<FGuidelineNode>(Nodes, At, Radius,
+			[](const FGuidelineNode& Node) { return Node.Position; });
+		return Network.GuidelineNodeIdAt(Index);
 	}
 
 	/**
@@ -124,16 +110,16 @@ const TCHAR* FGuidelineDrawTool::Describe(EGuidelineLink Result)
 
 FGuidelineNodeId FGuidelineDrawTool::PickNode(const FToolContext& Context) const
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Network() == nullptr)
 	{
 		return FGuidelineNodeId();
 	}
-	return NearestAnyNode(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
+	return NearestAnyNode(*Context.Network(), Context.Cursor, Context.SnapRadius);
 }
 
 void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Target == nullptr || Context.Network() == nullptr)
 	{
 		return;
 	}
@@ -143,7 +129,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 	if (Context.bRemoveModifier)
 	{
 		const FGuidelineEdgeId Doomed =
-			NearestHandEdge(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
+			NearestHandEdge(*Context.Network(), Context.Cursor, Context.SnapRadius);
 		if (Doomed.IsSet())
 		{
 			Context.Target->DisconnectGuideline(Doomed.Index);
@@ -167,7 +153,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 
 	// Refusals leave the START in place rather than dropping it. Clearing it would make a
 	// mis-aimed second click cost the first one too.
-	if (Validate(*Context.Target->GetNetwork(), StartNode, Picked) != EGuidelineLink::Valid)
+	if (Validate(*Context.Network(), StartNode, Picked) != EGuidelineLink::Valid)
 	{
 		return;
 	}
@@ -188,12 +174,12 @@ void FGuidelineDrawTool::OnDeactivate(const FToolContext& Context)
 
 void FGuidelineDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Network() == nullptr)
 	{
 		return;
 	}
 
-	const URoadNetwork& Network = *Context.Target->GetNetwork();
+	const URoadNetwork& Network = *Context.Network();
 
 	// Removal reads differently from drawing, so it previews differently: the link that
 	// would go, marked as doomed, and nothing about starting a new one.

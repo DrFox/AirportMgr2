@@ -102,13 +102,8 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// statements ago and refused on it.
 	for (const FRoadSegmentId Segment : Plan.RunwayChain)
 	{
-		FTrafficClaim Claim;
-		Claim.AgentId = Id;
-		Claim.Resource = FTrafficResource::OfSurface(Segment);
-		Claim.bOccupied = true;
-		Claim.Rank = TraversalPriority(ETraversalClass::Aircraft);
-		FTrafficClaim Blocker;
-		Occupancy.TryClaim(Claim, Blocker);
+		Occupancy.Assert(FTrafficClaim::Make(Id, FTrafficResource::OfSurface(Segment),
+			/*bOccupied*/ true, TraversalPriority(ETraversalClass::Aircraft)));
 	}
 
 	// AND THE STAND, for the same between-ticks reason. Agents.Last() is the agent Admit
@@ -128,13 +123,8 @@ void UGroundTraffic::ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, 
 	{
 		return;
 	}
-	FTrafficClaim Claim;
-	Claim.AgentId = Id;
-	Claim.Resource = FTrafficResource::OfNode(Agent.GoalNode);
-	Claim.bOccupied = false;
-	Claim.Rank = TraversalPriority(ETraversalClass::Aircraft);
-	FTrafficClaim Blocker;
-	Occupancy.TryClaim(Claim, Blocker);
+	Occupancy.Assert(FTrafficClaim::Make(Id, FTrafficResource::OfNode(Agent.GoalNode),
+		/*bOccupied*/ false, TraversalPriority(ETraversalClass::Aircraft)));
 }
 
 int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePlan& Plan,
@@ -486,14 +476,9 @@ bool UGroundTraffic::HoldStand(int32 HolderId, FGuidelineNodeId PoseNode)
 		return false;
 	}
 
-	FTrafficClaim Claim;
-	Claim.AgentId = HolderId;
-	Claim.Resource = FTrafficResource::OfNode(PoseNode);
-
 	// A RESERVATION, never an occupation: nothing's body is at a stand hours before it lands.
 	// ReleaseHold's use of ReleaseReservations depends on this staying false.
-	Claim.bOccupied = false;
-
+	const FTrafficClaim Claim = FTrafficClaim::Make(HolderId, FTrafficResource::OfNode(PoseNode), /*bOccupied*/ false);
 	FTrafficClaim Blocker;
 	return Occupancy.TryClaim(Claim, Blocker) == EClaimResult::Granted;
 }
@@ -637,11 +622,8 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// to stop, and who goes next is URunwaySequencer's question in M3.
 			for (const FRoadSegmentId Segment : Agent.RunwayHeld)
 			{
-				FTrafficClaim Claim;
-				Claim.AgentId = Id;
-				Claim.Resource = FTrafficResource::OfSurface(Segment);
-				Claim.bOccupied = true;
-				Claim.Rank = TraversalPriority(Agent.Class);
+				const FTrafficClaim Claim = FTrafficClaim::Make(Id, FTrafficResource::OfSurface(Segment),
+					/*bOccupied*/ true, TraversalPriority(Agent.Class));
 				FTrafficClaim Blocker;
 
 				// THE RESULT IS NOT ACTED ON, BUT IT IS NOT SWALLOWED EITHER. Nothing can

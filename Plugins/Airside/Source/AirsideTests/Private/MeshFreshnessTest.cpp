@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
@@ -39,21 +40,12 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 	// override directly would only prove the body works, not that anything invokes it. That
 	// is the mistake this codebase has now shipped three times: testing a list where it is
 	// declared rather than where it is consumed.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to register components in"), World))
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to register components in"), TestWorld.World))
 	{
 		return false;
 	}
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-
-	ON_SCOPE_EXIT
-	{
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	};
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor))
 	{
 		return false;

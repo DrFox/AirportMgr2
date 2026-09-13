@@ -1,6 +1,7 @@
 #include "Model/TakeoffRun.h"
 
 #include "AirsideLog.h"
+#include "Solve/RoadGeom.h"
 
 namespace
 {
@@ -111,7 +112,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 	const FGroundPerformance& Ground = InAirframe.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
-	const double RunwayHeading = FMath::Atan2(End.Direction.Y, End.Direction.X);
+	const double RunwayHeading = RoadGeom::Bearing(End.Direction);
 
 	switch (Phase)
 	{
@@ -120,12 +121,12 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 		// Slewed at the airframe's rate, exactly as taxiing does. An aircraft that snapped
 		// onto the runway heading would undo the whole of the turn-rate work one frame
 		// before the most-watched moment in the game.
-		const double Error = FMath::UnwindRadians(RunwayHeading - Heading);
-		const double MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
-
+		//
 		// Clamped by the REMAINING error, so the final step is exactly the error and the
-		// heading arrives on the runway direction without ever being assigned it.
-		Heading = FMath::UnwindRadians(Heading + FMath::Clamp(Error, -MaxStep, MaxStep));
+		// heading arrives on the runway direction without ever being assigned it - see
+		// RoadGeom::SlewAngle for the shared idiom.
+		const double MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
+		Heading = RoadGeom::SlewAngle(Heading, RunwayHeading, MaxStep);
 
 		// Creeping while it turns, and held at the threshold: the line-up happens on the
 		// spot as far as the runway is concerned, so Travelled stays at zero.

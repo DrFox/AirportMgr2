@@ -64,11 +64,8 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, i
 		return false;
 	}
 
-	FRouteQuery Query;
-	Query.Start = UGroundTraffic::StepFromNode(Plan, SpliceStep);
-	Query.Goal = Agent.GoalNode;
-	Query.Class = Agent.Class;
-	Query.Wingspan = Agent.Airframe.Wingspan;
+	FRouteQuery Query = FRouteQuery::For(
+		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent.Airframe, Agent.Class);
 	Query.BannedEdge = BannedEdge;
 	Query.BannedNode = BannedNode;
 
@@ -86,9 +83,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, i
 	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
 	// the caller knows is hopeless; the congestion cost is what stops the new route from
 	// being the next queue along, which a plain shortest path would walk straight into.
-	Query.Occupancy = &Occupancy;
-	Query.QueryingAgent = Agent.Id;
-	Query.CongestionWeight = Rules.CongestionWeight;
+	Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
 
 	// A COPY, because SpliceReplan writes in place and this function promises the agent keeps
 	// the plan it had until BOTH the search and the splice have succeeded - see the guard
@@ -526,18 +521,13 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 	else
 	{
-		FRouteQuery Query;
-		Query.Start = UGroundTraffic::StepFromNode(Plan, Failed);
-		Query.Goal = Agent.GoalNode;
-		Query.Class = Agent.Class;
-		Query.Wingspan = Agent.Airframe.Wingspan;
+		FRouteQuery Query = FRouteQuery::For(
+			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent.Airframe, Agent.Class);
 
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival
 		// should be steered round them rather than into the back of one.
-		Query.Occupancy = &Occupancy;
-		Query.QueryingAgent = Agent.Id;
-		Query.CongestionWeight = Rules.CongestionWeight;
+		Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
 
 		if (SpliceReplan(Network, Query, Failed, Plan))
 		{

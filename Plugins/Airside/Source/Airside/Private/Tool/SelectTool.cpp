@@ -137,11 +137,7 @@ void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 			const UGroundTraffic* Traffic = Context.Target->GetGroundTraffic();
 			if (Traffic != nullptr)
 			{
-				const TArray<FVector2D>& Poly = Traffic->RemainingRoute(Context.Selection->Id);
-				for (int32 I = 1; I < Poly.Num(); ++I)
-				{
-					Sink.Line(Poly[I - 1], Poly[I], EPreviewStyle::Route);
-				}
+				Sink.Polyline(Traffic->RemainingRoute(Context.Selection->Id), EPreviewStyle::Route);
 			}
 		}
 	}

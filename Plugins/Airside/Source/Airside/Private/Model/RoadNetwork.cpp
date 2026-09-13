@@ -3,6 +3,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/RoadGeom.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -380,6 +381,16 @@ TArray<FRoadSegmentId> URoadNetwork::RunwayChainOrSeed(FRoadSegmentId Seed) cons
 	return Chain;
 }
 
+TArray<FTrafficResource> URoadNetwork::RunwaySurfaces(FRoadSegmentId Seed) const
+{
+	TArray<FTrafficResource> Surfaces;
+	for (const FRoadSegmentId& Segment : RunwayChainOrSeed(Seed))
+	{
+		Surfaces.Add(FTrafficResource::OfSurface(Segment));
+	}
+	return Surfaces;
+}
+
 FRunwayFacts URoadNetwork::RunwayFactsFor(FRoadSegmentId Seed) const
 {
 	// The seed's own, not a walk: SetRunwayFacts and the split keep every member of a
@@ -693,7 +704,7 @@ void URoadNetwork::SortIncident(FRoadNodeId NodeId)
 	{
 		const FVector2D DirL = GetOutgoingTangent(L, NodeId);
 		const FVector2D DirR = GetOutgoingTangent(R, NodeId);
-		return FMath::Atan2(DirL.Y, DirL.X) < FMath::Atan2(DirR.Y, DirR.X);
+		return RoadGeom::Bearing(DirL) < RoadGeom::Bearing(DirR);
 	});
 }
 
@@ -1123,6 +1134,12 @@ bool URoadNetwork::IsServiceNodeConnected(FGuidelineNodeId Node) const
 		}
 	}
 	return false;
+}
+
+bool URoadNetwork::IsDepotJoined(const FEntityInstance& Entity) const
+{
+	const FGuidelineNode* Pose = GetGuidelineNode(Entity.PoseNode);
+	return Pose != nullptr && Pose->Incident.Num() > 0;
 }
 
 FApronId URoadNetwork::AddApron(FApronSurface&& Apron)

@@ -206,6 +206,24 @@ private:
 	void CommitAndNotify(FRoadEditScope& Edit);
 
 	/**
+	 * Undo and Redo were the same six lines apart from which of URoadEditHistory's two
+	 * methods they called (#103): guard Network/History, run Step, adopt what it returns,
+	 * hide the ghost, NotifyChanged directly - NOT through CommitAndNotify, same as before -
+	 * see this class's comment on why those two mutators bypass it.
+	 */
+	bool Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step);
+
+	/**
+	 * DeleteApron, DeleteEntity and DisconnectGuideline were the same shape apart from which
+	 * slot-map Remove they called (#103, folded in on review once #134 gave
+	 * DisconnectGuideline its own CommitAndNotify): guard the network and the doomed handle,
+	 * open an edit scope, Remove, CommitAndNotify. bDoomed is evaluated by the caller, which
+	 * is the one that knows how to turn its own index into its own handle type - and, for
+	 * DisconnectGuideline, checks its own extra derived-edge refusal first.
+	 */
+	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove);
+
+	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.
 	 *
 	 * A REFERENCE, not a pointer every caller has to null-check: this facade REQUIRES an

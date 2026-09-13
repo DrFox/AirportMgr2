@@ -111,6 +111,32 @@ public:
 	virtual void OnUpdateModifierState(int ModifierID, bool bIsOn) override;
 
 private:
+	/**
+	 * RAII around GEditor->BeginTransaction/EndTransaction, calling Modify() on the actor
+	 * and its network together - the shape OnClickDrag, OnClickRelease and CancelGesture
+	 * each wrote out by hand (#103), one of them (OnClickDrag) with an early return between
+	 * the two that could otherwise leave a transaction open. EndTransaction fires from the
+	 * destructor rather than from a matching call every path through the caller has to
+	 * remember to reach.
+	 *
+	 * Bodies live in the .cpp, where ARoadNetworkActor is a complete type - only the
+	 * pointer is named here, which is all a declaration needs.
+	 */
+	struct FScopedRoadBuildTransaction
+	{
+		FScopedRoadBuildTransaction(const FText& SessionName, ARoadNetworkActor* InTarget);
+		~FScopedRoadBuildTransaction();
+
+		/** Undo-stack no-op instead of committing - the mid-drag Escape case. */
+		void Cancel();
+
+		FScopedRoadBuildTransaction(const FScopedRoadBuildTransaction&) = delete;
+		FScopedRoadBuildTransaction& operator=(const FScopedRoadBuildTransaction&) = delete;
+
+	private:
+		bool bCancelled = false;
+	};
+
 	/** Where a ray meets the road plane. False when it is parallel or points away. */
 	bool RayToPlane(const FRay& Ray, FVector2D& OutPosition) const;
 
@@ -166,6 +192,14 @@ private:
 	// ARoadBuildController - see issue #92; this class keeps only the ITF-specific parts
 	// (transactions, ray/plane resolution).
 	FBuildGesture Gesture;
+
+	/**
+	 * Owns the one transaction a drag opens in OnClickDrag's DragBegan branch, closed
+	 * (destroyed, committing) in OnClickRelease's DragEnd branch or cancelled in
+	 * OnTerminateDragSequence - the only one of the three transactions whose lifetime
+	 * spans more than one call, so it needs somewhere to live between them.
+	 */
+	TUniquePtr<FScopedRoadBuildTransaction> DragTransaction;
 
 	bool bRemoveHeld = false;
 	bool bInsertHeld = false;

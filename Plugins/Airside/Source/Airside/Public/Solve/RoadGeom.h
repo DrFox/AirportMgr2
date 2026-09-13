@@ -27,6 +27,15 @@ namespace RoadGeom
 	/** CCW angle from From to To, in [0, 2*UE_DOUBLE_PI). */
 	AIRSIDE_API double CcwAngleBetween(const FVector2D& From, const FVector2D& To);
 
+	/**
+	 * Current slewed toward Target by at most MaxStep radians, the short way round the
+	 * +/-PI seam, clamped by the REMAINING error so the last step lands exactly on Target
+	 * rather than overshooting it. The turn-rate idiom FTakeoffRun's line-up and
+	 * FRouteFollower's heading both hand-rolled (#103); FMath::FInterpConstantTo is the
+	 * same idea for a scalar that does not wrap.
+	 */
+	AIRSIDE_API double SlewAngle(double Current, double Target, double MaxStep);
+
 	/** Intersection of the two infinite lines. False if near-parallel. */
 	AIRSIDE_API bool LineIntersect(const FRay2D& A, const FRay2D& B, FVector2D& OutPoint);
 

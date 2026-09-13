@@ -42,7 +42,7 @@ void FRoadAgent::StartEngineAtSpeed()
 
 	// The same fallback AdvanceEngine uses when nothing is authored, so an airframe with no
 	// engine figures still shows a turning propeller rather than a stopped one.
-	EngineRPM = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : 2000.0;
+	EngineRPM = Airframe.Engine.IsSet() ? Airframe.Engine.MaxRPM : FEnginePerformance{}.MaxRPM;
 }
 
 void FRoadAgent::AdvanceEngine(double DeltaSeconds)
@@ -51,7 +51,7 @@ void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 	{
 		// Nothing authored: fall back to the switch this replaced, so an airframe with no
 		// engine figures still shows a turning propeller rather than a stopped one.
-		EngineRPM = bEngineRunning ? 2000.0 : 0.0;
+		EngineRPM = bEngineRunning ? FEnginePerformance{}.MaxRPM : 0.0;
 		return;
 	}
 
@@ -62,12 +62,10 @@ void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 	const double Seconds = bEngineRunning ? Airframe.Engine.SpoolUpSeconds : Airframe.Engine.SpoolDownSeconds;
 	const double Rate = Airframe.Engine.MaxRPM / Seconds;
 
-	// Clamped by the REMAINING error, so the last step lands exactly on the target and the
-	// propeller neither overshoots nor creeps. The same construction the line-up turn and
-	// the flare use.
-	const double Error = Target - EngineRPM;
-	const double MaxStep = Rate * DeltaSeconds;
-	EngineRPM += FMath::Clamp(Error, -MaxStep, MaxStep);
+	// FInterpConstantTo clamps by the REMAINING error, so the last step lands exactly on
+	// the target and the propeller neither overshoots nor creeps. The same construction
+	// the line-up turn and the flare use.
+	EngineRPM = FMath::FInterpConstantTo(EngineRPM, Target, DeltaSeconds, Rate);
 }
 
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,

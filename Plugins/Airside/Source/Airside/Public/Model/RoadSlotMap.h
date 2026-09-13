@@ -88,4 +88,33 @@ namespace RoadSlot
 		FreeList.Push(Handle.Index);
 		return true;
 	}
+
+	/**
+	 * Index of the nearest ALIVE item to At within Radius, or INDEX_NONE. PositionOf projects
+	 * an item to the FVector2D its distance is measured from - the three call sites this
+	 * replaces (URoadEditFacade::FindNodeNear/FindEntityAt, FGuidelineDrawTool's node pick)
+	 * differed only in that projection and the item type (#103). Compared squared, so a
+	 * caller passing a large radius costs no square roots.
+	 */
+	template<typename TItem, typename TPositionOf>
+	int32 NearestAlive(TConstArrayView<TItem> Items, const FVector2D& At, double Radius, TPositionOf&& PositionOf)
+	{
+		double BestSquared = Radius * Radius;
+		int32 Best = INDEX_NONE;
+		for (int32 Index = 0; Index < Items.Num(); ++Index)
+		{
+			if (!Items[Index].bAlive)
+			{
+				continue;
+			}
+
+			const double DistanceSquared = FVector2D::DistSquared(PositionOf(Items[Index]), At);
+			if (DistanceSquared <= BestSquared)
+			{
+				BestSquared = DistanceSquared;
+				Best = Index;
+			}
+		}
+		return Best;
+	}
 }

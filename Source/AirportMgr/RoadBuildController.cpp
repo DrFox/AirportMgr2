@@ -253,7 +253,7 @@ void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoar
 	const FAirframe& Airframe)
 {
 	USimClock* Clock = Runtime.GetClock();
-	UGroundTraffic* Traffic = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	UGroundTraffic* Traffic = Target->GetGroundTraffic();
 	if (Clock == nullptr || Traffic == nullptr || Target->Network == nullptr)
 	{
 		return;
@@ -444,7 +444,8 @@ FToolContext ARoadBuildController::MakeToolContext() const
 
 int32 ARoadBuildController::HoverAgentUnderCursor() const
 {
-	if (Target == nullptr || Target->GetTraffic() == nullptr || Target->GetTraffic()->GetModel() == nullptr)
+	UGroundTraffic* AgentModel = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+	if (AgentModel == nullptr)
 	{
 		return 0;
 	}
@@ -457,7 +458,7 @@ int32 ARoadBuildController::HoverAgentUnderCursor() const
 	// altitude, and an aircraft on final is picked where it is drawn.
 	TArray<FVector2D> Screen;
 	TArray<int32> Ids;
-	for (const FRoadAgent& Agent : Target->GetTraffic()->GetModel()->GetAgents())
+	for (const FRoadAgent& Agent : AgentModel->GetAgents())
 	{
 		const ARoadAgentActor* View = Target->GetAgentView(Agent.Id);
 		FVector2D At;

@@ -414,21 +414,17 @@ int32 URoadEditFacade::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)
 bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 {
 	URoadNetwork* Network = Actor().Network;
-	if (Network == nullptr)
-	{
-		return false;
-	}
-
-	const TArray<FGuidelineEdge>& Edges = Network->GetGuidelineEdges();
-	const FGuidelineEdgeId Id = Network->GuidelineEdgeIdAt(EdgeIndex);
+	const FGuidelineEdgeId Id = Network != nullptr ? Network->GuidelineEdgeIdAt(EdgeIndex) : FGuidelineEdgeId();
 	if (!Id.IsSet())
 	{
 		return false;
 	}
 
 	// A derived edge belongs to the pavement, and the next rebuild would put it straight
-	// back. Obeying here would be indistinguishable from ignoring the click.
-	if (Edges[EdgeIndex].bDerived)
+	// back. Obeying here would be indistinguishable from ignoring the click. Checked BEFORE
+	// DeleteSlot, which has no notion of this refusal - it only ever sees a doomed handle
+	// that is or is not there.
+	if (Network->GetGuidelineEdges()[EdgeIndex].bDerived)
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("DisconnectGuideline refused: edge %d is derived from a road, not hand-drawn"),
@@ -436,20 +432,14 @@ bool URoadEditFacade::DisconnectGuideline(int32 EdgeIndex)
 		return false;
 	}
 
-	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("unlink guidelines"));
-	if (!Network->RemoveGuidelineEdge(Id))
-	{
-		// Refused without mutating (RemoveGuidelineEdge's own guards), so nothing here needs
-		// undoing - leaving the scope uncommitted abandons the pending snapshot for free.
-		return false;
-	}
-
 	// COMMITTED (#125): this used to return RemoveGuidelineEdge's result directly with the
 	// scope still open, so ~FRoadEditScope called AbandonEdit on a SUCCESSFUL removal - no
 	// undo step for it, and OnChanged never fired, so a disconnected guideline stayed on
-	// screen until something else happened to rebuild it.
-	CommitAndNotify(Edit);
-	return true;
+	// screen until something else happened to rebuild it. Now DeleteSlot's own
+	// CommitAndNotify does that (#103 review: this had grown the same guard-scope-remove-
+	// commit shape as DeleteApron/DeleteEntity and belonged with them).
+	return DeleteSlot(true, TEXT("unlink guidelines"),
+		[Id](URoadNetwork& Net) { return Net.RemoveGuidelineEdge(Id); });
 }
 
 bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
@@ -532,28 +522,8 @@ int32 URoadEditFacade::FindNodeNear(FVector2D Where, double Radius) const
 		return INDEX_NONE;
 	}
 
-	// Compared squared, so a caller passing a large radius costs no square roots.
-	const double RadiusSquared = Radius * Radius;
-	double BestSquared = RadiusSquared;
-	int32 Best = INDEX_NONE;
-
-	const TArray<FRoadNode>& Nodes = Network->GetNodes();
-	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-	{
-		if (!Nodes[Index].bAlive)
-		{
-			continue;
-		}
-
-		const double DistanceSquared = FVector2D::DistSquared(Nodes[Index].Position, Where);
-		if (DistanceSquared <= BestSquared)
-		{
-			BestSquared = DistanceSquared;
-			Best = Index;
-		}
-	}
-
-	return Best;
+	return RoadSlot::NearestAlive<FRoadNode>(Network->GetNodes(), Where, Radius,
+		[](const FRoadNode& Node) { return Node.Position; });
 }
 
 int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)

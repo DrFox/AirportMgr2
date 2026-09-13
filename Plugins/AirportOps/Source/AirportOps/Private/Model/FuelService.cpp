@@ -92,18 +92,16 @@ int32 UFuelService::TrucksOutFor(FEntityInstanceId Depot) const
 	return Out;
 }
 
-FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
-	FGuidelineNodeId StandFuel, FRoutePlan& OutPlan, EFuelRefusal& OutWhy) const
+UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network,
+	FGuidelineNodeId StandFuel) const
 {
 	// THE ORDER OF THESE TESTS IS THE SPEC'S, and it is the order of the player's hand: no
 	// depot at all is a building to place, a depot off the road is a road to draw, and only
 	// then is it worth talking about the stand or the graph.
-	OutWhy = EFuelRefusal::NoDepot;
+	FDepotChoice Result;
+	Result.Why = EFuelRefusal::NoDepot;
 
-	FEntityInstanceId Best;
 	double BestLength = TNumericLimits<double>::Max();
-	bool bAnyDepot = false;
-	bool bAnyJoinedDepot = false;
 
 	/**
 	 * A joined depot with a fleet, all of it already out.
@@ -140,17 +138,16 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 		{
 			continue;
 		}
-		bAnyDepot = true;
+		++Result.Depots;
 
-		const FGuidelineNode* Pose = Network.GetGuidelineNode(Instance.PoseNode);
-		if (Pose == nullptr || Pose->Incident.Num() == 0)
+		if (!Network.IsDepotJoined(Instance))
 		{
 			// Placed, but with no road within its lead-in reach. FAnchorLink has already
 			// warned about it in the census; this is the same fact reaching the player's
 			// aircraft card.
 			continue;
 		}
-		bAnyJoinedDepot = true;
+		++Result.DepotsOnRoad;
 
 		const FEntityInstanceId DepotId = Network.EntityIdAt(Index);
 
@@ -210,25 +207,25 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 		}
 
 		BestLength = Plan.Length;
-		OutPlan = Plan;
-		Best = DepotId;
+		Result.Plan = Plan;
+		Result.Depot = DepotId;
 	}
 
-	if (Best.IsSet())
+	if (Result.Depot.IsSet())
 	{
-		OutWhy = EFuelRefusal::None;
+		Result.Why = EFuelRefusal::None;
 	}
-	else if (!bAnyDepot)
+	else if (Result.Depots == 0)
 	{
-		OutWhy = EFuelRefusal::NoDepot;
+		Result.Why = EFuelRefusal::NoDepot;
 	}
-	else if (!bAnyJoinedDepot)
+	else if (Result.DepotsOnRoad == 0)
 	{
-		OutWhy = EFuelRefusal::NoRoad;
+		Result.Why = EFuelRefusal::NoRoad;
 	}
 	else if (!bStandJoined)
 	{
-		OutWhy = EFuelRefusal::StandUnjoined;
+		Result.Why = EFuelRefusal::StandUnjoined;
 	}
 	else if (bAnyBusyDepot)
 	{
@@ -239,13 +236,13 @@ FEntityInstanceId UFuelService::ChooseDepot(const URoadNetwork& Network,
 		// fix and should be told about even while a truck happens to be out; being busy is
 		// not. And DEFERRING a genuine NoRoute costs nothing: the moment the truck is home
 		// the depot is idle, this branch stops firing, and the real reason is reported.
-		OutWhy = EFuelRefusal::None;
+		Result.Why = EFuelRefusal::None;
 	}
 	else
 	{
-		OutWhy = EFuelRefusal::NoRoute;
+		Result.Why = EFuelRefusal::NoRoute;
 	}
-	return Best;
+	return Result;
 }
 
 void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -424,14 +421,12 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 
 		case EFuelDemandState::Needed:
 		{
-			FRoutePlan Plan;
-			EFuelRefusal Why = EFuelRefusal::None;
-			const FEntityInstanceId Depot = ChooseDepot(Network,
-				FuelAnchorOf(Network, Demand.Stand), Plan, Why);
+			const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
+			const FDepotChoice Choice = ChooseDepot(Network, Hydrant);
 
-			if (!Depot.IsSet())
+			if (!Choice.Depot.IsSet())
 			{
-				if (Why == EFuelRefusal::None)
+				if (Choice.Why == EFuelRefusal::None)
 				{
 					// Every depot is simply busy. Still Needed - it will be offered again
 					// next tick - and not logged, because it happens every tick until one
@@ -440,26 +435,19 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 				}
 
 				Demand.State = EFuelDemandState::Unserviceable;
-				Demand.Why = Why;
+				Demand.Why = Choice.Why;
 				LastRefusedRevision = Revision;
 
 				// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player
 				// to look at the wrong end of the airport once already (PIE 2026-09-07); these
-				// three numbers say which end without a second repro.
-				int32 Depots = 0, DepotsOnRoad = 0;
-				for (const FEntityInstance& Each : Network.GetEntities())
-				{
-					if (!Each.bAlive || Each.PoseRole != EServiceRole::Fuel) { continue; }
-					++Depots;
-					const FGuidelineNode* Pose = Network.GetGuidelineNode(Each.PoseNode);
-					DepotsOnRoad += (Pose != nullptr && Pose->Incident.Num() > 0) ? 1 : 0;
-				}
-				const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
-
+				// three numbers say which end without a second repro - read off Choice, which
+				// already counted them while classifying depots, rather than walking
+				// Network.GetEntities() a second time just to log them.
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: aircraft %d at stand %d cannot be served: %s. %d depot(s), %d on a "
 						 "road; the stand's hydrant %s. Check the 'Anchor links:' line."),
-					Demand.AircraftId, Demand.Stand.Index, RefusalText(Why), Depots, DepotsOnRoad,
+					Demand.AircraftId, Demand.Stand.Index, RefusalText(Choice.Why),
+					Choice.Depots, Choice.DepotsOnRoad,
 					!Hydrant.IsSet() ? TEXT("has no node at all")
 						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
 						: TEXT("is NOT on a road"));
@@ -480,25 +468,25 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 				// matters: the journey out of the lane is what this exists to show.
 				constexpr int32 MostPoints = 40;
 				FString Path;
-				for (int32 At = 0; At < FMath::Min(Plan.Polyline.Num(), MostPoints); ++At)
+				for (int32 At = 0; At < FMath::Min(Choice.Plan.Polyline.Num(), MostPoints); ++At)
 				{
 					Path += FString::Printf(TEXT("(%.0f,%.0f) "),
-						Plan.Polyline[At].X, Plan.Polyline[At].Y);
+						Choice.Plan.Polyline[At].X, Choice.Plan.Polyline[At].Y);
 				}
-				if (Plan.Polyline.Num() > MostPoints)
+				if (Choice.Plan.Polyline.Num() > MostPoints)
 				{
-					Path += FString::Printf(TEXT("... +%d more"), Plan.Polyline.Num() - MostPoints);
+					Path += FString::Printf(TEXT("... +%d more"), Choice.Plan.Polyline.Num() - MostPoints);
 				}
 				UE_LOG(LogAirportOps, Log,
 					TEXT("Fuel route: aircraft %d, depot %d to stand %d, %.0f uu over %d point(s): %s"),
-					Demand.AircraftId, Depot.Index, Demand.Stand.Index,
-					GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(), *Path);
+					Demand.AircraftId, Choice.Depot.Index, Demand.Stand.Index,
+					GuidelineGeom::PolylineLength(Choice.Plan.Polyline), Choice.Plan.Polyline.Num(), *Path);
 			}
 
 			// ShutdownPause 0 - see TruckShutdownPause. TruckAirframe is set once at attach
 			// (UOpsRuntime::Attach), not resolved here - this is Model/, and Content/ was the
 			// only edge from Model/ to Content/ in either plugin (#104).
-			const int32 TruckId = Traffic.DispatchAgent(&Network, Plan,
+			const int32 TruckId = Traffic.DispatchAgent(&Network, Choice.Plan,
 				TruckAirframe, ETraversalClass::GroundVehicle,
 				TruckShutdownPause);
 			if (TruckId == 0)
@@ -508,16 +496,16 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 				// not what would fix it, and the next tick is a free retry.
 				UE_LOG(LogAirportOps, Warning,
 					TEXT("Fuel: aircraft %d - depot %d had a route but the dispatch was refused"),
-					Demand.AircraftId, Depot.Index);
+					Demand.AircraftId, Choice.Depot.Index);
 				break;
 			}
 
 			Demand.State = EFuelDemandState::TruckEnRoute;
 			Demand.TruckId = TruckId;
-			Demand.Depot = Depot;
+			Demand.Depot = Choice.Depot;
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: depot %d sends truck %d to stand %d for aircraft %d (%.0f uu)"),
-				Depot.Index, TruckId, Demand.Stand.Index, Demand.AircraftId, Plan.Length);
+				Choice.Depot.Index, TruckId, Demand.Stand.Index, Demand.AircraftId, Choice.Plan.Length);
 			break;
 		}
 

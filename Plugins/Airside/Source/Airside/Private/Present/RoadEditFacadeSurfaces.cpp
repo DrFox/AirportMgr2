@@ -12,12 +12,13 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
+#include "Model/RoadSlotMap.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
 
-bool URoadEditFacade::Undo()
+bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
 {
 	ARoadNetworkActor& Owner = Actor();
 	if (Owner.Network == nullptr || Owner.History == nullptr)
@@ -25,7 +26,7 @@ bool URoadEditFacade::Undo()
 		return false;
 	}
 
-	URoadNetwork* Restored = Owner.History->Undo(*Owner.Network);
+	URoadNetwork* Restored = Step(*Owner.History, *Owner.Network);
 	if (Restored == nullptr)
 	{
 		return false;
@@ -35,30 +36,20 @@ bool URoadEditFacade::Undo()
 	Owner.Network = Restored;
 
 	// The preview may be describing a node that no longer exists, and its cache compares
-	// only the cursor and the start node - neither of which an undo changes.
+	// only the cursor and the start node - neither of which an undo/redo changes.
 	Owner.HideGhost();
 	NotifyChanged();
 	return true;
 }
 
+bool URoadEditFacade::Undo()
+{
+	return Travel([](URoadEditHistory& History, URoadNetwork& Network) { return History.Undo(Network); });
+}
+
 bool URoadEditFacade::Redo()
 {
-	ARoadNetworkActor& Owner = Actor();
-	if (Owner.Network == nullptr || Owner.History == nullptr)
-	{
-		return false;
-	}
-
-	URoadNetwork* Restored = Owner.History->Redo(*Owner.Network);
-	if (Restored == nullptr)
-	{
-		return false;
-	}
-
-	Owner.Network = Restored;
-	Owner.HideGhost();
-	NotifyChanged();
-	return true;
+	return Travel([](URoadEditHistory& History, URoadNetwork& Network) { return History.Redo(Network); });
 }
 
 bool URoadEditFacade::CanUndo() const
@@ -120,24 +111,31 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 	return Added.Index;
 }
 
-bool URoadEditFacade::DeleteApron(int32 ApronIndex)
+bool URoadEditFacade::DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove)
 {
 	URoadNetwork* Network = Actor().Network;
-	const FApronId Doomed = Network != nullptr ? Network->ApronIdAt(ApronIndex) : FApronId();
-	if (!Doomed.IsSet())
+	if (Network == nullptr || !bDoomed)
 	{
 		return false;
 	}
 
-	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete apron"));
+	FRoadEditScope Edit(HistoryForEdit(), Network, Label);
 
-	if (!Network->RemoveApron(Doomed))
+	if (!Remove(*Network))
 	{
 		return false;
 	}
 
 	CommitAndNotify(Edit);
 	return true;
+}
+
+bool URoadEditFacade::DeleteApron(int32 ApronIndex)
+{
+	const URoadNetwork* Network = Actor().Network;
+	const FApronId Doomed = Network != nullptr ? Network->ApronIdAt(ApronIndex) : FApronId();
+	return DeleteSlot(Doomed.IsSet(), TEXT("delete apron"),
+		[Doomed](URoadNetwork& Net) { return Net.RemoveApron(Doomed); });
 }
 
 int32 URoadEditFacade::FindApronAt(FVector2D Where) const
@@ -225,22 +223,19 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 
 bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 {
-	URoadNetwork* Network = Actor().Network;
+	const URoadNetwork* Network = Actor().Network;
 	const FEntityInstanceId Doomed = Network != nullptr ? Network->EntityIdAt(EntityIndex) : FEntityInstanceId();
-	if (!Doomed.IsSet())
-	{
-		return false;
-	}
 
-	FRoadEditScope Edit(HistoryForEdit(), Network, TEXT("delete stand"));
+	// KEYED ON KIND, the same way PlaceEntity's own label is (#103 review): the label lost
+	// this distinction when the field-by-field version collapsed into DeleteSlot, and the
+	// issue named it - a fuel depot removed under "delete stand" is the wrong word in the
+	// undo history and the log. Doomed.IsSet() means the index is still live to read.
+	const FEntityInstance* Entity = Doomed.IsSet() ? Network->GetEntity(Doomed) : nullptr;
+	const TCHAR* Label = (Entity != nullptr && Entity->PoseRole == EServiceRole::Fuel)
+		? TEXT("delete fuel depot") : TEXT("delete stand");
 
-	if (!Network->RemoveEntity(Doomed))
-	{
-		return false;
-	}
-
-	CommitAndNotify(Edit);
-	return true;
+	return DeleteSlot(Doomed.IsSet(), Label,
+		[Doomed](URoadNetwork& Net) { return Net.RemoveEntity(Doomed); });
 }
 
 int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
@@ -253,25 +248,8 @@ int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const
 
 	// Picked by the entity's own position - its stop mark - rather than by any anchor. An
 	// anchor is where a vehicle parks; the stand is the thing being pointed at.
-	double BestSquared = Radius * Radius;
-	int32 Best = INDEX_NONE;
-
-	const TArray<FEntityInstance>& Entities = Network->GetEntities();
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
-	{
-		if (!Entities[Index].bAlive)
-		{
-			continue;
-		}
-
-		const double DistanceSquared = FVector2D::DistSquared(Entities[Index].Position, Where);
-		if (DistanceSquared <= BestSquared)
-		{
-			BestSquared = DistanceSquared;
-			Best = Index;
-		}
-	}
-	return Best;
+	return RoadSlot::NearestAlive<FEntityInstance>(Network->GetEntities(), Where, Radius,
+		[](const FEntityInstance& Entity) { return Entity.Position; });
 }
 
 void URoadEditFacade::ClearNetwork()

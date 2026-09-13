@@ -127,6 +127,7 @@ struct AIRSIDE_API FRoutePlan
 };
 
 struct FTrafficOccupancy;
+struct FAirframe;
 
 /** What is being routed, and what it is allowed to use. */
 USTRUCT()
@@ -188,6 +189,25 @@ struct AIRSIDE_API FRouteQuery
 
 	/** Weight on held length. Ignored when Occupancy is null. */
 	UPROPERTY() double CongestionWeight = 2.0;
+
+	/**
+	 * Start/Goal/Class/Wingspan in one expression, rather than default-constructing and
+	 * setting each by hand - five call sites did (#103). Everything else (bans, avoidance,
+	 * congestion) is per-caller enough that setting it after is clearer than a builder
+	 * taking eight parameters most callers do not use.
+	 */
+	static FRouteQuery For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
+		const FAirframe& Airframe, ETraversalClass Class);
+
+	/** Chainable: the congestion cost term, set together because CongestionWeight is
+	 *  meaningless without Occupancy and QueryingAgent is meaningless without both. */
+	FRouteQuery& WithCongestion(const FTrafficOccupancy& InOccupancy, int32 InQueryingAgent, double InCongestionWeight)
+	{
+		Occupancy = &InOccupancy;
+		QueryingAgent = InQueryingAgent;
+		CongestionWeight = InCongestionWeight;
+		return *this;
+	}
 };
 
 /**

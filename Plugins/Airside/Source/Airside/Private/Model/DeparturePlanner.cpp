@@ -51,6 +51,29 @@ namespace DeparturePlanner
 			return Found ? Out.End.OffsetOf(Found->Position) : 0.0;
 		};
 
+		// The two loops below differ in more than these two lines (see #103 review reply on
+		// the item this replaces): loop 1 breaks early on insufficient runway and checks
+		// arrival direction; loop 2 checks route validity first and continues rather than
+		// breaks. Only the QUERY and the ACCEPTED-ENTRY shapes were actually identical
+		// between them, so only those are factored out - neither loop's break/continue is
+		// touched.
+		auto TryRoute = [&](FGuidelineNodeId Candidate, ERunwayAvoidance Avoidance)
+		{
+			FRouteQuery Query = FRouteQuery::For(Start, Candidate, Airframe, Class);
+			Query.AvoidRunways = Avoidance;
+			return RouteSearch::Find(Network, Query);
+		};
+
+		auto Accept = [&](const FRoutePlan& Route, FGuidelineNodeId Candidate, double Offset, bool bBacktrack)
+		{
+			Out.Route = Route;
+			Out.Entry = Candidate;
+			Out.EntryOffset = Offset;
+			Out.Available = Out.End.Length - Offset;
+			Out.bBacktrack = bBacktrack;
+			Out.Why = EDepartureRefusal::None;
+		};
+
 		// 1. INTERSECTION DEPARTURE. Runway edges excluded, so the taxi can only arrive by a
 		//    turn path - and must arrive heading down the runway, or it is the hairpin the
 		//    other way and no entry at all.
@@ -62,13 +85,7 @@ namespace DeparturePlanner
 				// Sorted from the threshold: everything after this has less runway still.
 				break;
 			}
-			FRouteQuery Query;
-			Query.Start = Start;
-			Query.Goal = Candidate;
-			Query.Class = Class;
-			Query.Wingspan = Airframe.Wingspan;
-			Query.AvoidRunways = ERunwayAvoidance::All;
-			const FRoutePlan Route = RouteSearch::Find(Network, Query);
+			const FRoutePlan Route = TryRoute(Candidate, ERunwayAvoidance::All);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{
 				continue;
@@ -78,12 +95,7 @@ namespace DeparturePlanner
 			{
 				continue;
 			}
-			Out.Route = Route;
-			Out.Entry = Candidate;
-			Out.EntryOffset = Offset;
-			Out.Available = Out.End.Length - Offset;
-			Out.bBacktrack = false;
-			Out.Why = EDepartureRefusal::None;
+			Accept(Route, Candidate, Offset, /*bBacktrack*/ false);
 			return Out;
 		}
 
@@ -91,13 +103,7 @@ namespace DeparturePlanner
 		//    runway from its end, and a turn on the spot to face down it.
 		for (const FGuidelineNodeId& Candidate : Candidates)
 		{
-			FRouteQuery Query;
-			Query.Start = Start;
-			Query.Goal = Candidate;
-			Query.Class = Class;
-			Query.Wingspan = Airframe.Wingspan;
-			Query.AvoidRunways = ERunwayAvoidance::None;
-			const FRoutePlan Route = RouteSearch::Find(Network, Query);
+			const FRoutePlan Route = TryRoute(Candidate, ERunwayAvoidance::None);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{
 				continue;
@@ -107,12 +113,7 @@ namespace DeparturePlanner
 			{
 				continue;
 			}
-			Out.Route = Route;
-			Out.Entry = Candidate;
-			Out.EntryOffset = Offset;
-			Out.Available = Out.End.Length - Offset;
-			Out.bBacktrack = true;
-			Out.Why = EDepartureRefusal::None;
+			Accept(Route, Candidate, Offset, /*bBacktrack*/ true);
 			return Out;
 		}
 

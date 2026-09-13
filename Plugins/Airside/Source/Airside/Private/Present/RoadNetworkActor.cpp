@@ -623,6 +623,11 @@ const UGroundTraffic* ARoadNetworkActor::GetGroundTraffic() const
 	return Traffic != nullptr ? Traffic->GetModel() : nullptr;
 }
 
+UGroundTraffic* ARoadNetworkActor::GetGroundTraffic()
+{
+	return Traffic != nullptr ? Traffic->GetModel() : nullptr;
+}
+
 EDepartureRefusal ARoadNetworkActor::DepartAgent(int32 AgentId)
 {
 	return Traffic->DepartAgent(AgentId, Network);

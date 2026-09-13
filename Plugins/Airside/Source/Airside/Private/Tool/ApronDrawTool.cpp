@@ -46,17 +46,12 @@ void FApronIdleState::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	if (Context.bRemoveModifier)
 	{
 		const int32 Under = Context.Target->FindApronAt(Context.Cursor);
-		if (Under != INDEX_NONE && Context.Target->GetNetwork() != nullptr)
+		if (Under != INDEX_NONE && Context.Network() != nullptr)
 		{
-			const TArray<FApronSurface>& Aprons = Context.Target->GetNetwork()->GetAprons();
+			const TArray<FApronSurface>& Aprons = Context.Network()->GetAprons();
 			if (Aprons.IsValidIndex(Under))
 			{
-				const TArray<FVector2D>& Outline = Aprons[Under].Outline;
-				for (int32 Index = 0; Index < Outline.Num(); ++Index)
-				{
-					Sink.Line(Outline[Index], Outline[(Index + 1) % Outline.Num()],
-						EPreviewStyle::Doomed);
-				}
+				Sink.Polygon(Aprons[Under].Outline, EPreviewStyle::Doomed);
 			}
 		}
 		return;
@@ -141,10 +136,7 @@ TUniquePtr<IApronDrawState> FApronOutliningState::OnCancel(const FToolContext& C
 
 void FApronOutliningState::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	for (int32 Index = 0; Index + 1 < Corners.Num(); ++Index)
-	{
-		Sink.Line(Corners[Index], Corners[Index + 1], EPreviewStyle::Pending);
-	}
+	Sink.Polyline(Corners, EPreviewStyle::Pending);
 
 	for (const FVector2D& Corner : Corners)
 	{

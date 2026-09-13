@@ -1,6 +1,7 @@
 #include "Model/RouteFollower.h"
 
 #include "Solve/GuidelineGeom.h"
+#include "Solve/RoadGeom.h"
 
 void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed,
 	TOptional<double> InitialHeading, double InitialTravelled)
@@ -87,10 +88,11 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	const double Error = FMath::UnwindRadians(LineHeading - Heading);
 
 	// Unwound first, so a turn across the +/-PI seam is taken the short way round rather
-	// than very nearly all the way about.
+	// than very nearly all the way about. Step kept apart from the slew itself (RoadGeom::
+	// SlewAngle) because Crab below needs the exact clamped step, not just the new heading.
 	const double MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
 	const double Step = FMath::Clamp(Error, -MaxStep, MaxStep);
-	Heading = FMath::UnwindRadians(Heading + Step);
+	Heading = RoadGeom::SlewAngle(Heading, LineHeading, MaxStep);
 
 	// WHAT COULD NOT BE TAKEN OUT THIS FRAME, which is the crab the player is now looking
 	// at. Measured after the slew rather than before it: an airframe that CAN make the turn

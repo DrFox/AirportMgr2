@@ -59,10 +59,7 @@ void StandPreview::Describe(const UEntityDefinition* Definition, const FVector2D
 			ToWorld(FVector2D(+Extent.X, -Extent.Y)),
 			ToWorld(FVector2D(-Extent.X, -Extent.Y)),
 			ToWorld(FVector2D(-Extent.X, +Extent.Y)) };
-		for (int32 Corner = 0; Corner < 4; ++Corner)
-		{
-			Sink.Line(Corners[Corner], Corners[(Corner + 1) % 4], EPreviewStyle::Snap);
-		}
+		Sink.Polygon(Corners, EPreviewStyle::Snap);
 	}
 
 	// The stand's own fixtures: plant dug into the concrete, which stay put whatever parks

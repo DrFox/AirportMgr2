@@ -76,6 +76,14 @@ struct AIRSIDE_API FTrafficClaim
 	 * intervals end to end is not told it is colliding with itself.
 	 */
 	bool Conflicts(const FTrafficClaim& Other) const;
+
+	/**
+	 * A node or whole-surface claim in one expression, rather than default-constructing and
+	 * setting AgentId/Resource/bOccupied/Rank by hand - six call sites did (#103). Leaves
+	 * From/To at their edge-claim default (0.0): every one of those six is a node or surface
+	 * claim, never an edge interval.
+	 */
+	static FTrafficClaim Make(int32 AgentId, const FTrafficResource& Resource, bool bOccupied, int32 Rank = 0);
 };
 
 UENUM()
@@ -124,6 +132,17 @@ struct AIRSIDE_API FTrafficOccupancy
 	 */
 	EClaimResult TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker);
 
+	/**
+	 * TryClaim for a caller that raises the claim purely for its SIDE EFFECT and drops both
+	 * the result and the blocker - four call sites did this by hand, each retyping the same
+	 * WHY (#103): a table cannot make an aircraft already committed to occupying this
+	 * ground stop, because whoever decided to send it there is what refuses BEFORE it
+	 * drives (ArrivalPlanner::Plan for a runway chain; the planner and the rebuild both
+	 * skipping a held stand for a goal reservation). A caller that DOES act on Held - a
+	 * return value, a log line naming the blocker - keeps calling TryClaim directly.
+	 */
+	void Assert(const FTrafficClaim& Claim);
+
 	void ReleaseAll(int32 AgentId);
 
 	/**
@@ -162,6 +181,21 @@ struct AIRSIDE_API FTrafficOccupancy
 
 	/** True when someone other than ExcludingAgent holds Resource (any interval). */
 	bool IsHeld(const FTrafficResource& Resource, int32 ExcludingAgent, int32* OutHolder = nullptr) const;
+
+	/**
+	 * True when ANY of Resources IsHeld by someone but Excluding - the runway-chain-held
+	 * question ArrivalPlanner and RouteSearch's IsRunwayHeld each hand-rolled as their own
+	 * loop (#103): URoadNetwork::RunwaySurfaces(Seed) gives the resource list.
+	 *
+	 * bCountOwnOccupied adds Excluding's OWN occupied claim to what counts as held - the two
+	 * callers disagree on this and both are right for their own question. A landing not yet
+	 * dispatched (ArrivalPlanner, Excluding = 0, bCountOwnOccupied = false) has no agent of
+	 * its own to be occupying anything. A route already dispatched and asking whether a
+	 * runway is safe to use (RouteSearch, bCountOwnOccupied = true) must count its own body:
+	 * spec §3.3 says an occupied claim was never a reservation another route could quietly
+	 * use, including the one the claim's own owner is currently flying.
+	 */
+	bool IsAnyHeld(TConstArrayView<FTrafficResource> Resources, int32 Excluding, bool bCountOwnOccupied) const;
 
 	const TArray<FTrafficClaim>& GetClaims() const { return Claims; }
 
@@ -215,6 +249,13 @@ struct AIRSIDE_API FTrafficOccupancy
 	void Clear();
 
 private:
+	/**
+	 * Claims.RemoveAllSwap(Predicate), named once behind the six Release* wrappers that
+	 * each called it directly (#103) - each keeps its own WHY comment on what it releases
+	 * and why; this is only the mechanism they all share.
+	 */
+	void ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate);
+
 	UPROPERTY() TArray<FTrafficClaim> Claims;
 
 	/** Not a UPROPERTY: consumed within the tick that produced it. */

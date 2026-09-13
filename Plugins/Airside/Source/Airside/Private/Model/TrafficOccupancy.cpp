@@ -50,6 +50,22 @@ bool FTrafficClaim::Conflicts(const FTrafficClaim& Other) const
 	return From < Other.To && Other.From < To;
 }
 
+FTrafficClaim FTrafficClaim::Make(int32 AgentId, const FTrafficResource& Resource, bool bOccupied, int32 Rank)
+{
+	FTrafficClaim Claim;
+	Claim.AgentId = AgentId;
+	Claim.Resource = Resource;
+	Claim.bOccupied = bOccupied;
+	Claim.Rank = Rank;
+	return Claim;
+}
+
+void FTrafficOccupancy::Assert(const FTrafficClaim& Claim)
+{
+	FTrafficClaim Blocker;
+	TryClaim(Claim, Blocker);
+}
+
 EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker)
 {
 	// A same-agent claim on the same resource is an UPDATE: checked against everyone else
@@ -143,14 +159,19 @@ const FTrafficClaim* FTrafficOccupancy::FindClaim(int32 AgentId, const FTrafficR
 	return nullptr;
 }
 
+void FTrafficOccupancy::ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate)
+{
+	Claims.RemoveAllSwap([&Predicate](const FTrafficClaim& C) { return Predicate(C); });
+}
+
 void FTrafficOccupancy::ReleaseAll(int32 AgentId)
 {
-	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
+	ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
 }
 
 void FTrafficOccupancy::Release(int32 AgentId, const FTrafficResource& Resource)
 {
-	Claims.RemoveAllSwap([AgentId, &Resource](const FTrafficClaim& C)
+	ReleaseWhere([AgentId, &Resource](const FTrafficClaim& C)
 	{
 		return C.AgentId == AgentId && C.Resource == Resource;
 	});
@@ -161,12 +182,12 @@ void FTrafficOccupancy::ReleaseReservations(int32 AgentId)
 	// bOccupied IS THE WHOLE TEST, and it is the same one TryClaim arbitrates on: a claim
 	// that contains the agent's own position is where its body is, and nothing a caller does
 	// to its PLAN can move a body. See the header for the landing this cost.
-	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId && !C.bOccupied; });
+	ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId && !C.bOccupied; });
 }
 
 void FTrafficOccupancy::ReleaseExcept(int32 AgentId, const TArray<FTrafficResource>& Keep)
 {
-	Claims.RemoveAllSwap([AgentId, &Keep](const FTrafficClaim& C)
+	ReleaseWhere([AgentId, &Keep](const FTrafficClaim& C)
 	{
 		return C.AgentId == AgentId && !Keep.Contains(C.Resource);
 	});
@@ -198,6 +219,26 @@ bool FTrafficOccupancy::IsHeld(const FTrafficResource& Resource, int32 Excluding
 	return false;
 }
 
+bool FTrafficOccupancy::IsAnyHeld(TConstArrayView<FTrafficResource> Resources, int32 Excluding, bool bCountOwnOccupied) const
+{
+	for (const FTrafficResource& Resource : Resources)
+	{
+		if (IsHeld(Resource, Excluding))
+		{
+			return true;
+		}
+		if (bCountOwnOccupied)
+		{
+			const FTrafficClaim* Own = FindClaim(Excluding, Resource);
+			if (Own != nullptr && Own->bOccupied)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 TSet<int32> FTrafficOccupancy::TakePreempted()
 {
 	TSet<int32> Out = MoveTemp(Preempted);
@@ -211,7 +252,7 @@ void FTrafficOccupancy::ReleaseGuidelineClaims()
 	// a rebuild frees guideline slots for everybody at once, so this is not one agent giving
 	// something back - it is a set of resources ceasing to exist. See the header for why
 	// Surface is not one of them.
-	Claims.RemoveAllSwap([](const FTrafficClaim& C)
+	ReleaseWhere([](const FTrafficClaim& C)
 	{
 		return C.Resource.Kind == ETrafficResourceKind::Edge
 			|| C.Resource.Kind == ETrafficResourceKind::Node;
@@ -231,7 +272,7 @@ void FTrafficOccupancy::ReleaseGuidelineClaimsOf(int32 AgentId)
 	// preemption list here, unlike ReleaseGuidelineClaims: this is one agent giving ground
 	// back on a graph everybody else is still claiming over, and an agent that lost a
 	// reservation to a rival this tick still has to hear about it.
-	Claims.RemoveAllSwap([AgentId](const FTrafficClaim& C)
+	ReleaseWhere([AgentId](const FTrafficClaim& C)
 	{
 		return C.AgentId == AgentId
 			&& (C.Resource.Kind == ETrafficResourceKind::Edge

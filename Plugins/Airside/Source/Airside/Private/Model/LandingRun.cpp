@@ -1,6 +1,7 @@
 #include "Model/LandingRun.h"
 
 #include "AirsideLog.h"
+#include "Solve/RoadGeom.h"
 
 double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	const FClimbPerformance& InClimb, const FApproachPerformance& InApproach)
@@ -117,7 +118,7 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	Travelled = -InApproach.FinalDistance();
 	Altitude = InApproach.FinalAltitude;
 	Speed = InGround.Landing.SpeedCap;
-	Heading = FMath::Atan2(End.Direction.Y, End.Direction.X);
+	Heading = RoadGeom::Bearing(End.Direction);
 
 	// The approach attitude is the angle the wing needs at Vref, LESS the descent angle: the
 	// aircraft is flying nose-high relative to its flight path while the flight path itself
@@ -198,12 +199,10 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 			FMath::Asin(FMath::Clamp(Speed > 0.0 ? Commanded / Speed : 0.0, -1.0, 1.0)));
 		const double Wanted = FMath::Min(Required + WantedGamma, Approach.MaxFlarePitchDegrees);
 
-		// Slewed, never assigned - the nose has a rate. Clamped by the REMAINING error so the
-		// last step lands exactly on the wanted attitude, the same construction the line-up
-		// turn uses in FTakeoffRun and for the same reason.
-		const double Error = Wanted - Pitch;
-		const double MaxStep = Approach.FlareRateDegPerSec * DeltaSeconds;
-		Pitch += FMath::Clamp(Error, -MaxStep, MaxStep);
+		// Slewed, never assigned - the nose has a rate. FInterpConstantTo clamps by the
+		// REMAINING error so the last step lands exactly on the wanted attitude, the same
+		// construction the line-up turn uses in FTakeoffRun and for the same reason.
+		Pitch = FMath::FInterpConstantTo(Pitch, Wanted, DeltaSeconds, Approach.FlareRateDegPerSec);
 
 		// FLIGHT PATH IS ATTITUDE LESS THE ANGLE THE WING IS USING - the same expression the
 		// climb uses, with the same two terms. Taken from the ACTUAL attitude, not the wanted

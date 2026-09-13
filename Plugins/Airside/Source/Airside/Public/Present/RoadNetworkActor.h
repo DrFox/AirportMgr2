@@ -7,6 +7,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
 #include "Present/RoadSurfacePresenter.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
@@ -175,6 +176,14 @@ public:
 	 * (CLAUDE.md), and a forwarder per event would re-grow it one line per event for ever.
 	 */
 	UAirsideTraffic* GetTraffic() const { return Traffic; }
+
+	/**
+	 * Non-const overload of the IRoadEditTarget accessor above, for a caller that needs to
+	 * MUTATE traffic (UFlightBoard::AcceptImmediate, the offer inbox's Refresh) rather than
+	 * read it. Replaces the `GetTraffic() != nullptr ? GetTraffic()->GetModel() : nullptr`
+	 * ternary those call sites used to hand-roll (#103).
+	 */
+	UGroundTraffic* GetGroundTraffic();
 
 	/**
 	 * The surface presenter, for a caller that wants it directly rather than through a
@@ -564,7 +573,7 @@ public:
 	 * solver clamping their fillets away, which is what an airport is anyway.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1.0"))
-	double FallbackWidth = 2300.0;
+	double FallbackWidth = URoadProfile::StandardTaxiwayWidth;
 
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
 	double FallbackFilletRadius = 1500.0;

@@ -38,6 +38,12 @@ FVector2D RoadGeom::Rotate(const FVector2D& V, double Radians)
 	return FVector2D(V.X * C - V.Y * S, V.X * S + V.Y * C);
 }
 
+double RoadGeom::SlewAngle(double Current, double Target, double MaxStep)
+{
+	const double Error = FMath::UnwindRadians(Target - Current);
+	return FMath::UnwindRadians(Current + FMath::Clamp(Error, -MaxStep, MaxStep));
+}
+
 double RoadGeom::Bearing(const FVector2D& Dir)
 {
 	return FMath::Atan2(Dir.Y, Dir.X);

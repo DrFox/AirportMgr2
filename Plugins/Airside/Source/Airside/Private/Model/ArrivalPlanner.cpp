@@ -20,11 +20,7 @@ namespace ArrivalPlanner
 			{
 				continue;
 			}
-			FRouteQuery Query;
-			Query.Start = From;
-			Query.Goal = Stand.PoseNode;
-			Query.Class = ETraversalClass::Aircraft;
-			Query.Wingspan = Airframe.Wingspan;
+			FRouteQuery Query = FRouteQuery::For(From, Stand.PoseNode, Airframe, ETraversalClass::Aircraft);
 			Query.AvoidRunways = ERunwayAvoidance::All;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
@@ -79,16 +75,12 @@ namespace ArrivalPlanner
 		// Asked before the length and exit steps, because those cannot change while the
 		// runway is busy and this can: a refusal that clears on its own is reported as
 		// itself, not as whichever later step happened to fail too.
-		if (Occupancy != nullptr)
+		// No agent of our own to be occupying anything: nothing has been dispatched yet, so
+		// bCountOwnOccupied is false - see FTrafficOccupancy::IsAnyHeld.
+		if (Occupancy != nullptr && Occupancy->IsAnyHeld(Network.RunwaySurfaces(Out.End.Seed), 0, false))
 		{
-			for (const FRoadSegmentId& Segment : Out.RunwayChain)
-			{
-				if (Occupancy->IsHeld(FTrafficResource::OfSurface(Segment), 0))
-				{
-					Out.Why = EArrivalRefusal::RunwayOccupied;
-					return Out;
-				}
-			}
+			Out.Why = EArrivalRefusal::RunwayOccupied;
+			return Out;
 		}
 
 		// The distance the model actually flies, plus its margin - see FLandingRun. The closed

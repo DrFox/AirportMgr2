@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -116,13 +117,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FSelectToolPickTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	FSelToolFixture F = SelToolBuild(World);
+	FSelToolFixture F = SelToolBuild(TestWorld.World);
 	if (!TestNotNull(TEXT("fixture actor"), F.Actor)) { return false; }
 	if (!TestTrue(TEXT("a stand was placed"), F.StandIndex != INDEX_NONE)) { return false; }
 	if (!TestTrue(TEXT("an agent was dispatched"), F.AgentId > 0)) { return false; }

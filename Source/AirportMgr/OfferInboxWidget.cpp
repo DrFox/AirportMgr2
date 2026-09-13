@@ -122,7 +122,7 @@ void UOfferInboxWidget::Refresh(ARoadNetworkActor* Target)
 	}
 
 	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
-	UGroundTraffic* Traffic = Target->GetTraffic() != nullptr ? Target->GetTraffic()->GetModel() : nullptr;
+	UGroundTraffic* Traffic = Target->GetGroundTraffic();
 	if (Runtime == nullptr || Traffic == nullptr || Runtime->GetFlightBoard() == nullptr
 		|| Runtime->GetClock() == nullptr)
 	{
