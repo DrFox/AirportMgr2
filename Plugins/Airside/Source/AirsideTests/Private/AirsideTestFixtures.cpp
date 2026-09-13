@@ -262,3 +262,78 @@ FCrossingFixture FCrossingFixture::Build(URoadNetwork& Net, bool bFarBar)
 
 	return Out;
 }
+
+FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDistance)
+{
+	FExitArcAirport Out;
+	Out.XAt = FVector2D(-40000.0 + XDistance, 0.0);
+	Out.Net = NewObject<URoadNetwork>(Outer);
+	URoadProfile* Runway = URoadProfile::MakeTransient(1800.0, 1500.0, 180.0);
+	Runway->bContinuousThroughJunctions = true;
+	Runway->ExitLength = Out.ExitLength;
+	URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1500.0, 230.0);
+	const FRoadNodeId W = Out.Net->AddNode(Out.Threshold);
+	const FRoadNodeId X = Out.Net->AddNode(Out.XAt);
+	const FRoadNodeId E = Out.Net->AddNode(FVector2D(FMath::Max(60000.0, Out.XAt.X + 40000.0), 0.0));
+	const FRoadNodeId T = Out.Net->AddNode(Out.XAt + FVector2D(20000.0, -20000.0));
+	Out.RW1 = Out.Net->AddStraightSegment(W, X, Runway);
+	Out.RW2 = Out.Net->AddStraightSegment(X, E, Runway);
+	Out.XT = Out.Net->AddStraightSegment(X, T, Taxiway);
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
+	FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+	if (bWithStand)
+	{
+		// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree
+		// taxiway at (34000, -14000), 11000 uu away - inside FAnchorLink's reach.
+		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+		Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
+		FAnchorLink::Build(*Out.Net);
+	}
+	return Out;
+}
+
+FGuidelineNodeId ExitArcNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA)
+{
+	const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		const FGuidelineNode& Node = Nodes[Index];
+		if (Node.bAlive && Node.Origin.Segment == Segment && Node.Origin.bEndA == bEndA
+			&& Node.Origin.GuidelineIndex == 0)
+		{
+			return Net.GuidelineNodeIdAt(Index);
+		}
+	}
+	return FGuidelineNodeId();
+}
+
+FGuidelineNodeId ExitArcNodeNear(const URoadNetwork& Net, const FVector2D& At, double& OutMiss)
+{
+	const TArray<FGuidelineNode>& Nodes = Net.GetGuidelineNodes();
+	FGuidelineNodeId Best;
+	OutMiss = TNumericLimits<double>::Max();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		if (!Nodes[Index].bAlive) { continue; }
+		const double Miss = FVector2D::Distance(Nodes[Index].Position, At);
+		if (Miss < OutMiss)
+		{
+			OutMiss = Miss;
+			Best = Net.GuidelineNodeIdAt(Index);
+		}
+	}
+	return Best;
+}
+
+const FGuidelineEdge* ExitArcTurnBetween(const URoadNetwork& Net, FGuidelineNodeId P, FGuidelineNodeId Q)
+{
+	for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
+	{
+		if (!Edge.bAlive || !Edge.bDerived || Edge.DerivedFrom.IsSet()) { continue; }
+		if ((Edge.A == P && Edge.B == Q) || (Edge.A == Q && Edge.B == P))
+		{
+			return &Edge;
+		}
+	}
+	return nullptr;
+}

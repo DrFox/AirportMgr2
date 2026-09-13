@@ -4,14 +4,9 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-/**
- * Named under "Airside." although the rig lives in the game module: Run-AirsideTests.ps1
- * filters on that prefix by default, and a test the pre-commit run does not pick up is a
- * test that will be found failing by the next person to touch the camera.
- */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBuildCameraRigInFrameTest,
-	"Airside.View.BuildCameraRig.InFrame",
+	"AirportMgr.View.BuildCameraRig.InFrame",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FBuildCameraRigInFrameTest::RunTest(const FString& Parameters)

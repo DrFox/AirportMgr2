@@ -11,7 +11,7 @@
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunDriverNoClockIsNoonTest,
-	"Airside.Sky.SunDriver.NoClockMeansNoon",
+	"AirportMgr.Sky.SunDriver.NoClockMeansNoon",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunDriverNoClockIsNoonTest::RunTest(const FString& Parameters)
@@ -25,7 +25,7 @@ bool FSunDriverNoClockIsNoonTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunDriverReadsClockTest,
-	"Airside.Sky.SunDriver.ReadsTheGameClock",
+	"AirportMgr.Sky.SunDriver.ReadsTheGameClock",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunDriverReadsClockTest::RunTest(const FString& Parameters)

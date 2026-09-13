@@ -17,7 +17,7 @@ namespace
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandHoldReservesTest,
-	"Airside.Traffic.StandHoldReserves",
+	"Airside.Model.Traffic.StandHoldReserves",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FStandHoldReservesTest::RunTest(const FString& Parameters)
@@ -41,7 +41,7 @@ bool FStandHoldReservesTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FStandHoldIsNotABodyTest,
-	"Airside.Traffic.StandHoldIsNotABody",
+	"Airside.Model.Traffic.StandHoldIsNotABody",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FStandHoldIsNotABodyTest::RunTest(const FString& Parameters)

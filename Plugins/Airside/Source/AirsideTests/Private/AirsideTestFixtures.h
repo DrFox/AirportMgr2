@@ -234,3 +234,32 @@ namespace TestGraph
 	/** Solve, derive guidelines and re-link every entity: what the facade's RebuildMesh does. */
 	void Rebuild(URoadNetwork& Net);
 }
+
+/**
+ * A runway long enough for the Piper to stop before the exit, one 45 degree taxiway, and a
+ * stand beside it. Shared by RunwayExitArcTest.cpp's Build tests and ArrivalExitArcTest.cpp's
+ * Model tests (issue #105 item 13 split the one file into those two, and hoisted this and
+ * ExitArcNodeFor/ExitArcNodeNear/ExitArcTurnBetween here so both still argue about the same
+ * junction) - X sits 60000 uu from the W threshold because the exit arc begins ExitLength
+ * before it, and that start must be past the landing distance (about 37000) or the planner
+ * would rightly skip it for a later node.
+ */
+struct FExitArcAirport
+{
+	URoadNetwork* Net = nullptr;
+	FRoadSegmentId RW1, RW2, XT;
+	FVector2D XAt = FVector2D(20000.0, 0.0);
+	double ExitLength = 6000.0;
+	FVector2D Threshold = FVector2D(-40000.0, 0.0);
+};
+
+FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDistance = 60000.0);
+
+/** The guideline node a segment's derived guideline ENDS on, found by identity. */
+FGuidelineNodeId ExitArcNodeFor(const URoadNetwork& Net, FRoadSegmentId Segment, bool bEndA);
+
+/** The alive guideline node nearest a position, and how far off it is. */
+FGuidelineNodeId ExitArcNodeNear(const URoadNetwork& Net, const FVector2D& At, double& OutMiss);
+
+/** An alive derived TURN PATH (no DerivedFrom) joining two nodes, either way round. */
+const FGuidelineEdge* ExitArcTurnBetween(const URoadNetwork& Net, FGuidelineNodeId P, FGuidelineNodeId Q);
