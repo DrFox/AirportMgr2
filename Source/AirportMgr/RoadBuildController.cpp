@@ -48,11 +48,7 @@ void ARoadBuildController::BeginPlay()
 {
 	Super::BeginPlay();
 
-	for (TActorIterator<ARoadNetworkActor> It(GetWorld()); It; ++It)
-	{
-		Target = *It;
-		break;
-	}
+	Target = ARoadNetworkActor::Find(GetWorld());
 
 	if (Target == nullptr)
 	{

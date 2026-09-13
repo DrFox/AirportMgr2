@@ -242,16 +242,31 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 #endif
 }
 
-ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
+ARoadNetworkActor* ARoadNetworkActor::Find(const UWorld* World)
 {
 	if (World == nullptr)
 	{
 		return nullptr;
 	}
 
-	for (TActorIterator<ARoadNetworkActor> It(World); It; ++It)
+	for (TActorIterator<ARoadNetworkActor> It(const_cast<UWorld*>(World)); It; ++It)
 	{
 		return *It;
+	}
+
+	return nullptr;
+}
+
+ARoadNetworkActor* ARoadNetworkActor::FindOrCreate(UWorld* World)
+{
+	if (ARoadNetworkActor* Existing = Find(World))
+	{
+		return Existing;
+	}
+
+	if (World == nullptr)
+	{
+		return nullptr;
 	}
 
 	// Not transient, and not RF_Transient: this is the one that will be saved with the

@@ -66,6 +66,16 @@ public:
 	static ARoadNetworkActor* FindOrCreate(UWorld* World);
 
 	/**
+	 * The first road network in a world, or nullptr - the read-only half of FindOrCreate.
+	 *
+	 * For callers that must not spawn one (a controller's BeginPlay warns and no-ops
+	 * instead) or that re-poll every tick (a widget's inbox) - see #104: three call sites
+	 * used to run their own TActorIterator scan, one of them every frame with a
+	 * const_cast, instead of sharing this one.
+	 */
+	static ARoadNetworkActor* Find(const UWorld* World);
+
+	/**
 	 * Rebuilds the surface from the model, and hides the engine's visualization billboard.
 	 *
 	 * REBUILDING HERE IS NOT AN OPTIMISATION, IT IS THE INVALIDATION OF A CACHE WE CANNOT
