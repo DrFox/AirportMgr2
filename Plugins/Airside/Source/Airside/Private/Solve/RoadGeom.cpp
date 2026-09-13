@@ -44,6 +44,21 @@ double RoadGeom::SlewAngle(double Current, double Target, double MaxStep)
 	return FMath::UnwindRadians(Current + FMath::Clamp(Error, -MaxStep, MaxStep));
 }
 
+FVector2D RoadGeom::TrailPoint(const FVector2D& At, double HeadingRadians,
+	double OffsetAlongBody)
+{
+	// GUARDED rather than computed, so the conforming case is the identity and not a pair
+	// of trig calls whose rounding could nudge an agent that has no offset at all. Every
+	// vehicle on the airport takes this branch.
+	if (FMath::IsNearlyZero(OffsetAlongBody))
+	{
+		return At;
+	}
+
+	return At + FVector2D(FMath::Cos(HeadingRadians), FMath::Sin(HeadingRadians))
+		* OffsetAlongBody;
+}
+
 double RoadGeom::Bearing(const FVector2D& Dir)
 {
 	return FMath::Atan2(Dir.Y, Dir.X);
