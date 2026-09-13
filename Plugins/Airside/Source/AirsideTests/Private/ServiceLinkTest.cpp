@@ -174,8 +174,10 @@ bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
 	// one, ALONGSIDE the stands, was parallel to every ray and served none of them. A vehicle
 	// may genuinely arrive from any side, so a service link measures distance, not direction.
 	//
-	// The lane round a Code C stand at the origin, heading 0, is x in [-3550, +1700] and y in
-	// [-2090, +2090]. Each road below sits GapNear or GapFar beyond one of those four sides.
+	// Each road below sits GapNear or GapFar beyond one of the lane's four sides -
+	// UEntityDefinition::ServiceLaneBounds(), not the four corners typed a second time (#104):
+	// for a Code C stand at the origin, heading 0, that box is x in [-3550, +1700], y in
+	// [-2090, +2090], derived from BuildCodeCStand's clearance round the aircraft and anchors.
 	//
 	// 4500 rather than exactly the 5000 uu radius: a boundary case measures the comparison
 	// operator rather than the rule, and would flip on a rounding error.
@@ -189,17 +191,18 @@ bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
 		FVector2D To;
 	};
 
-	auto RoadsAt = [](double Gap) -> TArray<FSide>
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FBox2D LaneBounds = Stand->ServiceLaneBounds();
+
+	auto RoadsAt = [&LaneBounds](double Gap) -> TArray<FSide>
 	{
 		return {
-			{ TEXT("south"), FVector2D(-20000.0, -2090.0 - Gap), FVector2D(20000.0, -2090.0 - Gap) },
-			{ TEXT("north"), FVector2D(-20000.0,  2090.0 + Gap), FVector2D(20000.0,  2090.0 + Gap) },
-			{ TEXT("west"),  FVector2D(-3550.0 - Gap, -20000.0), FVector2D(-3550.0 - Gap, 20000.0) },
-			{ TEXT("east"),  FVector2D( 1700.0 + Gap, -20000.0), FVector2D( 1700.0 + Gap, 20000.0) },
+			{ TEXT("south"), FVector2D(-20000.0, LaneBounds.Min.Y - Gap), FVector2D(20000.0, LaneBounds.Min.Y - Gap) },
+			{ TEXT("north"), FVector2D(-20000.0, LaneBounds.Max.Y + Gap), FVector2D(20000.0, LaneBounds.Max.Y + Gap) },
+			{ TEXT("west"),  FVector2D(LaneBounds.Min.X - Gap, -20000.0), FVector2D(LaneBounds.Min.X - Gap, 20000.0) },
+			{ TEXT("east"),  FVector2D(LaneBounds.Max.X + Gap, -20000.0), FVector2D(LaneBounds.Max.X + Gap, 20000.0) },
 		};
 	};
-
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
 	for (const FSide& Side : RoadsAt(GapNear))
 	{
@@ -409,16 +412,20 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	// A ROAD ALONGSIDE, 4 m clear of the lane's south side. The whole case: a service road
 	// running past a row of stands, which is how a player builds one.
 	//
-	// The Code C ring is local X -3550..+1700, Y -2090..+2090 - see
-	// UEntityDefinition::BuildCodeCStand, where it is derived from the design aircraft's
-	// footprint and the anchors rather than typed. The stand sits at the origin facing +X so
-	// local and world coincide, stated rather than assumed.
+	// UEntityDefinition::ServiceLaneBounds(), not the ring's four corners typed a second time
+	// (#104): for a Code C stand it is local X -3550..+1700, Y -2090..+2090, derived in
+	// BuildCodeCStand from the design aircraft's footprint and the anchors. The stand sits at
+	// the origin facing +X so local and world coincide, stated rather than assumed.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FBox2D LaneBounds = Stand->ServiceLaneBounds();
+	constexpr double RoadClearance = 400.0;
+
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	FGuidelineNodeId East;
-	const FGuidelineNodeId West = Lay(*Net, FVector2D(-30000.0, -2490.0), FVector2D(30000.0, -2490.0),
+	const double RoadY = LaneBounds.Min.Y - RoadClearance;
+	const FGuidelineNodeId West = Lay(*Net, FVector2D(-30000.0, RoadY), FVector2D(30000.0, RoadY),
 		ETraversalClass::GroundVehicle, East);
 
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 	FAnchorLink::Build(*Net);
 
@@ -439,18 +446,18 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 		Entries.Num(), 3);
 
 	// THE NEAR SIDE, IN THE MIDDLE OF ITS OVERLAP WITH THE ROAD - not at the first corner
-	// that tied. Halfway between -3550 and +1700 is -925. This is the assertion that fails
-	// without GuidelineGeom::NearestBetweenPolylines breaking its tie at the middle.
+	// that tied. This is the assertion that fails without GuidelineGeom::
+	// NearestBetweenPolylines breaking its tie at the middle.
 	TestTrue(TEXT("the near side is entered at its middle"),
-		Has(Entries, FVector2D(-925.0, -2090.0)));
+		Has(Entries, FVector2D(LaneBounds.GetCenter().X, LaneBounds.Min.Y)));
 
 	// THE END SIDES, at the corner each brings nearest the road. A corner here is right where
 	// it was wrong on the near side: it genuinely IS the nearest point, and the connector
 	// leaving it runs away from the lane rather than across it.
 	TestTrue(TEXT("the tail end side joins at its near corner"),
-		Has(Entries, FVector2D(-3550.0, -2090.0)));
+		Has(Entries, FVector2D(LaneBounds.Min.X, LaneBounds.Min.Y)));
 	TestTrue(TEXT("the nose end side joins at its near corner"),
-		Has(Entries, FVector2D(1700.0, -2090.0)));
+		Has(Entries, FVector2D(LaneBounds.Max.X, LaneBounds.Min.Y)));
 
 	// AND THE FAR SIDE DOES NOT, though it is 4580 uu from the road and the service radius is
 	// 5000. Its connector would run the whole depth of the stand, through the parked
