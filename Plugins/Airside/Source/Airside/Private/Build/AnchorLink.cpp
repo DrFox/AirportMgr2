@@ -227,28 +227,53 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		if (const FGuidelineNode* Pose = Network.GetGuidelineNode(Instance.PoseNode);
 			Pose != nullptr && Pose->Incident.Num() == 0)
 		{
-			const double Out = Instance.Heading + UE_DOUBLE_PI;
+			// ONE RAY, PARAMETERISED BY DIRECTION, because a taxi-through stand casts two and
+			// everything about them but the heading is identical. Written as a lambda rather
+			// than duplicated: two copies of this block would be two places to keep the
+			// wingspan limit, the reach and the strategy in step.
+			const auto AddPoseLink = [&](double Out)
+			{
+				FPendingLink Link;
+				Link.Node = Instance.PoseNode;
+				Link.At = Pose->Position;
+				Link.Dir = FVector2D(FMath::Cos(Out), FMath::Sin(Out));
+				Link.Class = TraversalForRole(Instance.PoseRole);
 
-			FPendingLink Link;
-			Link.Node = Instance.PoseNode;
-			Link.At = Pose->Position;
-			Link.Dir = FVector2D(FMath::Cos(Out), FMath::Sin(Out));
-			Link.Class = TraversalForRole(Instance.PoseRole);
+				// THE STRATEGY, decided once here rather than re-derived at search time - see
+				// ELinkKind. Aircraft casts a ray along Dir; everything else measures proximity.
+				Link.Kind = Link.Class == ETraversalClass::Aircraft ? ELinkKind::Ray : ELinkKind::Proximity;
 
-			// THE STRATEGY, decided once here rather than re-derived at search time - see
-			// ELinkKind. Aircraft casts a ray along Dir; everything else measures proximity.
-			Link.Kind = Link.Class == ETraversalClass::Aircraft ? ELinkKind::Ray : ELinkKind::Proximity;
+				// A span limit on a line no wing uses could never bind - 0 is UNLIMITED (see
+				// FProfileGuideline::MaxWingspan), and the CLASS has already refused aircraft.
+				Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
+				Link.Radius = StandRadius;
 
-			// A span limit on a line no wing uses could never bind - 0 is UNLIMITED (see
-			// FProfileGuideline::MaxWingspan), and the CLASS has already refused aircraft.
-			Link.MaxWingspan = Link.Class == ETraversalClass::Aircraft ? StandWingspan : 0.0;
-			Link.Radius = StandRadius;
+				// WHICH RULE, and therefore how far. An aircraft casts its painted line 200 m; a
+				// service pose - a depot's truck bay - measures 50 m in any direction, because a
+				// van is not following paint and the player has no way to see an authored heading.
+				Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
+				OutPending.Add(Link);
+			};
 
-			// WHICH RULE, and therefore how far. An aircraft casts its painted line 200 m; a
-			// service pose - a depot's truck bay - measures 50 m in any direction, because a
-			// van is not following paint and the player has no way to see an authored heading.
-			Link.Reach = Link.Class == ETraversalClass::Aircraft ? MaxLeadIn : ServiceLinkRadius;
-			OutPending.Add(Link);
+			AddPoseLink(Instance.Heading + UE_DOUBLE_PI);
+
+			// A SECOND RAY, FORWARD, for a stand with pavement on both sides. The first runs
+			// BACK out of the entity because +X faces the terminal; this one is the declared
+			// exception - there is no terminal that side, so +X finds pavement too, and an
+			// aeroplane that parks here drives straight out instead of being pushed.
+			//
+			// THE FLAG IS AUTHORED AND NOT MEASURED HERE. Casting speculatively and keeping
+			// whatever it hit would join a stand to a taxiway on the far side of a terminal
+			// building, which the graph has no way to know is not pavement.
+			//
+			// WHETHER A GIVEN AEROPLANE THEN NEEDS A PUSH IS NOT DECIDED HERE EITHER: that is
+			// measured off the route it is actually given - see UGroundTraffic::DepartAgent -
+			// which is why nothing in Model/ reads this flag. All this does is give the pose
+			// node a way OUT as well as a way in.
+			if (Instance.Definition != nullptr && Instance.Definition->bTaxiThrough)
+			{
+				AddPoseLink(Instance.Heading);
+			}
 		}
 
 		for (const FResolvedAnchor& Resolved : Instance.ResolvedAnchors)
