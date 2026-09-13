@@ -7,6 +7,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
 #include "Present/RoadSurfacePresenter.h"
+#include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
@@ -294,15 +295,54 @@ public:
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;
 
 	/**
-	 * Limits the deletion plan judges its rejoins against. Set from the build tool.
+	 * Shortest segment and tightest corner a click may build, and the limits the deletion
+	 * plan judges its rejoins against.
 	 *
-	 * Stays a plain field on the actor, not moved to the facade: RoadBuildController writes
-	 * it directly every frame (Target->PlacementLimits = ...) on the concrete actor type, so
-	 * moving it would mean either breaking that write or adding a forwarding setter for a
-	 * struct assignment - more machinery than a runtime-only tuning knob is worth. The facade
-	 * reads it back through its owning actor; see URoadEditFacade::MoveNode.
+	 * PER-AIRPORT now, not per-driver - issue #93. Both `ARoadBuildController` and
+	 * `URoadBuildEditorTool` used to hold their own copy (the controller as UPROPERTYs
+	 * `MinSegmentLength`/`MinTurnDegrees`; the editor tool never set either, so it accepted
+	 * corners PIE would refuse). `MakeTunables` is the one place both read this now.
+	 * NewRoadHalfWidth is the exception: not authored, refreshed IN PLACE by every
+	 * `MakeTunables` call from whichever profile is live - see that field's own comment -
+	 * so `URoadEditFacade::PlanNodeDeletion`, which reads this member directly rather than
+	 * through a Tunables bundle, still judges a rejoin against the current road width.
+	 *
+	 * Still a plain UPROPERTY rather than moved to the facade: RoadBuildController used to
+	 * write the whole struct here directly every frame (Target->PlacementLimits = ...);
+	 * MakeTunables replaces that write, but the field stays on the actor for the same
+	 * reason it always did - the facade reads it back through its owning actor, see
+	 * URoadEditFacade::MoveNode.
 	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Placement")
 	FRoadPlacementLimits PlacementLimits;
+
+	/**
+	 * Radii and toggles the snap chain judges a click against - see FRoadSnapSettings.
+	 *
+	 * PER-AIRPORT, not per-driver - issue #93; see FRoadSnapSettings' own comment for the
+	 * divergence this replaced. ToolPickRadius is deliberately NOT here: it answers "what is
+	 * the cursor pointing at", a screen-scale question each driver judges from its own view,
+	 * not an airport fact - see ARoadBuildController::ToolPickRadius.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Placement")
+	FRoadSnapSettings Snap;
+
+	/**
+	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see
+	 * FBuildSessionTunables. THE ONE PLACE both drivers assemble this now: before issue #93,
+	 * ARoadBuildController filled Tunables.Snap/Limits from its own seven UPROPERTYs every
+	 * tick, and URoadBuildEditorTool built a DIFFERENT set from a view-derived radius, leaving
+	 * Limits at struct defaults entirely - the same click was judged by different rules
+	 * depending on which driver was open.
+	 *
+	 * ViewWorldWidth > 0 asks for an adaptive ToolPickRadius sized off it (what the editor
+	 * tool needs, having no view-distance UPROPERTY of its own to read); 0 leaves
+	 * ToolPickRadius at its class default for a caller - the runtime driver - that overwrites
+	 * it right after with its own ToolPickRadius view fact. Not const: resolving the
+	 * corner-fit half-width goes through ResolveProfile, which is deliberately non-const -
+	 * see that method's own comment.
+	 */
+	FBuildSessionTunables MakeTunables(double ViewWorldWidth);
 
 	/** Both endpoints of a live segment, on the road plane. False if it is not live. */
 	bool GetSegmentEnds(int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB) const;
@@ -394,9 +434,15 @@ public:
 
 	// --- Ghost preview --------------------------------------------------------------
 
-	/** Show the segment a click would build, as real solved pavement. Forwards to Presenter
-	 *  with a FSurfaceSettings built the same way RebuildMesh's is. */
-	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
+	/**
+	 * Show the segment a click would build, as real solved pavement. Forwards to Presenter
+	 * with a FSurfaceSettings built the same way RebuildMesh's is.
+	 *
+	 * Parameter named SnapResult, not Snap: this class now also has a Snap member
+	 * (ARoadNetworkActor::Snap, the per-airport FRoadSnapSettings - issue #93), and a
+	 * same-named parameter would shadow it.
+	 */
+	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
 		ERoadKind Kind) override;
 	using IRoadEditTarget::UpdateGhost;
 
@@ -407,7 +453,7 @@ public:
 	 * rests on can be asserted in a test with no World: building a preview must leave the
 	 * REAL network bitwise unchanged. Forwards to Presenter.
 	 */
-	bool BuildGhostBuffers(int32 FromNodeIndex, const FRoadSnapResult& Snap, FRoadMeshBuffers& OutBuffers);
+	bool BuildGhostBuffers(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, FRoadMeshBuffers& OutBuffers);
 
 	/** Hide the preview and forget what it was showing. Forwards to Presenter. */
 	virtual void HideGhost() override;
