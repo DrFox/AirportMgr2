@@ -2,7 +2,67 @@
 
 #include "Solve/GuidelineGeom.h"
 
-bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength, double MaxBack,
+namespace
+{
+	/**
+	 * How far a polyline runs straight before it first turns, or 0 if it never does.
+	 *
+	 * THE STRAIGHT PART OF A PUSH IS A GEOMETRIC FACT. A stand's lead-in is laid as a straight
+	 * ray and its corner as sweeps, so this finds the corner wherever it is - and finds
+	 * honestly that there is none when a route simply runs straight out of a plain node.
+	 *
+	 * MEASURED AGAINST THE FIRST SEGMENT'S DIRECTION, not against the previous segment's: a
+	 * sweep is sampled into many small steps, each a degree or two from the last, so a
+	 * segment-to-segment test would never see a corner at all however far round it went.
+	 *
+	 * TWENTY DEGREES is GuidelineGeom's own threshold for a real corner rather than a sampling
+	 * artefact - FRouteFollower::CrabAtMinSpeedDegrees cites it by name for the same reason.
+	 * Using one number for both keeps "the line bends here" a single opinion.
+	 *
+	 * Returns the distance to the START of the first turning segment: that is the last point
+	 * at which the aeroplane is still square to the line it reversed down.
+	 */
+	constexpr double PushbackCornerDegrees = 20.0;
+
+	double StraightRunLength(const TArray<FVector2D>& Points)
+	{
+		if (Points.Num() < 3)
+		{
+			// Two points are one straight segment with nothing after it to turn.
+			return 0.0;
+		}
+
+		FVector2D First = Points[1] - Points[0];
+		if (!First.Normalize())
+		{
+			return 0.0;
+		}
+
+		double Travelled = 0.0;
+		for (int32 Index = 1; Index < Points.Num() - 1; ++Index)
+		{
+			Travelled += FVector2D::Distance(Points[Index - 1], Points[Index]);
+
+			FVector2D Next = Points[Index + 1] - Points[Index];
+			if (!Next.Normalize())
+			{
+				continue;
+			}
+
+			const double Turn = FMath::RadiansToDegrees(
+				FMath::Acos(FMath::Clamp(FVector2D::DotProduct(First, Next), -1.0, 1.0)));
+			if (Turn > PushbackCornerDegrees)
+			{
+				return Travelled;
+			}
+		}
+
+		// Straight the whole way.
+		return 0.0;
+	}
+}
+
+bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength,
 	double& OutBackDistance, double& OutPushDistance, double& OutTargetHeading)
 {
 	if (!InPlan.IsValid() || InPlan.Steps.Num() == 0)
@@ -10,15 +70,27 @@ bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength
 		return false;
 	}
 
-	// STEPS[0] IS THE STRAIGHT LEAD-IN. FAnchorLink::Gather casts it as a straight ray out of
-	// the pose node - along Heading + PI, because +X faces the terminal - and builds the
-	// corner's entry sweeps as steps of their own. So Back needs no steering law at all: the
-	// body simply holds the heading it parked at while the tug pulls it out.
+	// WHERE THE ROUTE STOPS BEING STRAIGHT. That is what "the lead-in" means physically, and
+	// it is a fact about the GEOMETRY rather than about the step list - which is the whole
+	// correction here. Steps[0] is the lead-in when the route starts at a stand pose node and
+	// is something else entirely when it does not, and an earlier version took it on trust and
+	// then capped it at sixty metres to bound the cases where the trust was misplaced. Both
+	// halves of that were wrong: the cap cut before real corners, and the step index answered
+	// the wrong question. Reported from PIE on 2026-09-13 as an aeroplane that reversed its
+	// straight leg correctly and then turned to face back out of its own stand.
+	const double Corner = StraightRunLength(InPlan.Polyline);
+
+	// NO CORNER AT ALL means the route runs dead straight out of wherever the aeroplane is
+	// standing. There is nothing to reverse ALONG that leads anywhere and nothing to swing
+	// ONTO, so the manoeuvre is a turn on the spot: no straight leg, and the swing is the
+	// whole of it. A tug turning an aeroplane round on a straight taxiway does exactly that.
 	//
-	// CAPPED - see FTrafficRules::MaxPushBackDistance. Steps[0] is the lead-in whenever the
-	// route really starts at a stand, and something else entirely when it does not; without
-	// the cap a "push" once dragged an aeroplane the whole length of a taxiway.
-	const double Back = FMath::Min(InPlan.Steps[0].EndDistance, FMath::Max(0.0, MaxBack));
+	// This is also what keeps a route whose first step is a two-hundred-metre taxiway from
+	// being reversed down its whole length, which is what a discarded straight-back cap was
+	// really for - and why there is no such cap any more. A corner is where the aeroplane MUST
+	// reach, so no bound may cut before it; a straight route has no corner, so no bound is
+	// needed. The knob that tried to be both was the defect.
+	const double Back = Corner;
 
 	// PAST THE CORNER, and this is the whole reason SwingLength exists - see
 	// FTrafficRules::PushSwingLength for what stopping at Back would leave on screen.
@@ -46,12 +118,12 @@ bool FPushbackRun::PlanPushDistance(const FRoutePlan& InPlan, double SwingLength
 }
 
 bool FPushbackRun::Start(const FRoutePlan& InPlan, double InParkedHeading, double InPushSpeed,
-	double InPushAccel, double InSwingLength, double InMaxBack, bool bInNeedsThrust)
+	double InPushAccel, double InSwingLength, bool bInNeedsThrust)
 {
 	double Back = 0.0;
 	double Push = 0.0;
 	double Target = 0.0;
-	if (!PlanPushDistance(InPlan, InSwingLength, InMaxBack, Back, Push, Target))
+	if (!PlanPushDistance(InPlan, InSwingLength, Back, Push, Target))
 	{
 		// NOTHING TOUCHED. A manoeuvre that cannot be flown must leave no trace of itself
 		// rather than one half-armed - the rule FRoadAgent::StartArrival states for a landing

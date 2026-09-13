@@ -66,14 +66,33 @@ namespace
 		return Plan;
 	}
 
+	/**
+	 * THE REAL STAND, and the one the reported defect happened on: a lead-in LONGER than any
+	 * cap on the straight-back - 120 m here - then the corner onto a taxiway running +Y.
+	 *
+	 * FAnchorLink casts a lead-in up to DefaultMaxLeadIn (200 m), so this is an ordinary
+	 * stand, not a pathological one. It is kept separate from the 40 m fixture above because
+	 * the two differ in exactly the property that broke: whether the push reaches the corner.
+	 */
+	FRoutePlan PushbackLongLeadInPlan()
+	{
+		FRoutePlan Plan;
+		Plan.Result = ERouteResult::Found;
+		Plan.Polyline = { {0.0, 0.0}, {12000.0, 0.0}, {12000.0, 20000.0} };
+		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+
+		FRouteStep LeadIn;
+		LeadIn.EndDistance = 12000.0;
+		FRouteStep Taxiway;
+		Taxiway.EndDistance = Plan.Length;
+		Plan.Steps = { LeadIn, Taxiway };
+		return Plan;
+	}
+
 	/** Parked facing the terminal: the lead-in leaves along +X, so the body faces -X. */
 	constexpr double PushbackParkedHeading = UE_DOUBLE_PI;
 
 	constexpr double PushbackSwingLength = 3000.0;
-
-	/** Longer than any lead-in in these fixtures, so the cap never bites here - what it does
-	 *  bite is pinned separately, below. */
-	constexpr double PushbackMaxBack = 6000.0;
 
 	/** Drives a run to completion, or until Frames runs out. Returns the frames used. */
 	int32 PushbackRunToEnd(FPushbackRun& Run, int32 Frames, FVector2D& OutAt, double& OutHeading)
@@ -106,7 +125,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		double Push = 0.0;
 		double Target = 0.0;
 		if (!TestTrue(TEXT("a perpendicular stand can be pushed"),
-			FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength, PushbackMaxBack,
+			FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength,
 				Back, Push, Target)))
 		{
 			return false;
@@ -125,7 +144,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		FPushbackRun Run;
 		if (!TestTrue(TEXT("the run starts"),
 			Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-				150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false)))
+				150.0, 30.0, PushbackSwingLength, false)))
 		{
 			return false;
 		}
@@ -157,7 +176,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
+			150.0, 30.0, PushbackSwingLength, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -178,7 +197,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackDeadEndPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
+			150.0, 30.0, PushbackSwingLength, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -195,7 +214,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Powerback;
 		Powerback.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			200.0, 30.0, PushbackSwingLength, PushbackMaxBack, /*bNeedsThrust*/ true);
+			200.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ true);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -218,7 +237,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 
 		FPushbackRun Towed;
 		Towed.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, /*bNeedsThrust*/ false);
+			150.0, 30.0, PushbackSwingLength, /*bNeedsThrust*/ false);
 		Towed.Advance(PushbackFrame, TNumericLimits<double>::Max(), false, At, Heading);
 		TestTrue(TEXT("a towed aeroplane moves on frame one whatever the propeller is doing"),
 			Towed.Travelled > 0.0);
@@ -229,7 +248,7 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 	{
 		FPushbackRun Run;
 		Run.Start(PushbackPerpendicularPlan(), PushbackParkedHeading,
-			150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false);
+			150.0, 30.0, PushbackSwingLength, false);
 
 		FVector2D At = FVector2D::ZeroVector;
 		double Heading = 0.0;
@@ -250,37 +269,78 @@ bool FPushbackRunTest::RunTest(const FString& Parameters)
 		double Push = -1.0;
 		double Target = -1.0;
 		TestFalse(TEXT("a plan with no steps cannot be pushed"),
-			FPushbackRun::PlanPushDistance(Empty, PushbackSwingLength, PushbackMaxBack, Back, Push, Target));
+			FPushbackRun::PlanPushDistance(Empty, PushbackSwingLength, Back, Push, Target));
 		TestEqual(TEXT("and the outputs are untouched"), Back, -1.0, 0.0001);
 
 		FPushbackRun Run;
 		TestFalse(TEXT("Start declines it"),
-			Run.Start(Empty, PushbackParkedHeading, 150.0, 30.0, PushbackSwingLength, PushbackMaxBack, false));
+			Run.Start(Empty, PushbackParkedHeading, 150.0, 30.0, PushbackSwingLength, false));
 		TestEqual(TEXT("and arms nothing"), Run.PushDistance, 0.0, 0.0001);
 	}
 
-	// 8. THE FIRST STEP IS CAPPED. FPushbackRun takes Steps[0] to be the stand's lead-in, and
-	//    that is true whenever the route really starts at a stand pose node. Nothing GUARANTEES
-	//    it: a route beginning anywhere else has a first step of whatever length the graph gave
-	//    it, and uncapped the "push" dragged an aeroplane two hundred metres down a taxiway and
-	//    handed the follower a route it had already finished - measured in
-	//    Airside.Model.Traffic.DepartAgent before FTrafficRules::MaxPushBackDistance existed.
+	// 8. A ROUTE THAT NEVER BENDS HAS NO CORNER TO SWING ONTO, and the manoeuvre is then a
+	//    turn on the spot rather than a long reverse. There is nothing to back ALONG that
+	//    leads anywhere, so backing down two hundred metres of it would be a tug dragging an
+	//    aeroplane the length of a taxiway for no reason - which is what the discarded
+	//    straight-back cap was really guarding against, and this is the honest version of it.
+	{
+		double Back = -1.0;
+		double Push = -1.0;
+		double Target = -1.0;
+		TestTrue(TEXT("a dead-straight route still plans"),
+			FPushbackRun::PlanPushDistance(PushbackDeadEndPlan(), PushbackSwingLength, Back, Push, Target));
+
+		TestEqual(TEXT("no corner means no straight leg"), Back, 0.0, 0.01);
+		TestEqual(TEXT("and the swing is the whole manoeuvre"), Push, PushbackSwingLength, 0.01);
+	}
+
+	// 9. A LEAD-IN LONGER THAN THE CAP STILL REACHES THE CORNER. Reported from PIE on
+	//    2026-09-13: a Twin Otter reversed the straight leg correctly and then "crabbed around
+	//    using the wrong arm", ending ACROSS its taxiway instead of along it.
+	//
+	//    The log said "pushing back: 9000 uu" - exactly the sixty-metre straight-back cap then
+	//    in force plus PushSwingLength - so the straight leg had hit that cap and the whole
+	//    manoeuvre finished while still on the straight lead-in. TargetHeading is the plan's tangent at PushDistance, and that
+	//    tangent was therefore the LEAD-IN's own direction: 180 degrees from the parked
+	//    heading. The aeroplane duly turned through 180 degrees over thirty metres and ended
+	//    pointing straight out of its stand, athwart the taxiway.
+	//
+	//    HOW FAR BACK AN AEROPLANE MUST COME IS SET BY WHERE THE STAND IS, not by a tug's
+	//    patience. A cap that cuts before the corner cannot be right at any value.
 	{
 		double Back = 0.0;
 		double Push = 0.0;
 		double Target = 0.0;
-		TestTrue(TEXT("a long first step still plans"),
-			FPushbackRun::PlanPushDistance(PushbackDeadEndPlan(), PushbackSwingLength,
-				/*MaxBack*/ 1000.0, Back, Push, Target));
+		if (!TestTrue(TEXT("a long lead-in can be pushed"),
+			FPushbackRun::PlanPushDistance(PushbackLongLeadInPlan(), PushbackSwingLength, Back, Push, Target)))
+		{
+			return false;
+		}
 
-		TestEqual(TEXT("the straight back is capped, not the whole first step"), Back, 1000.0, 0.01);
-		TestEqual(TEXT("and the swing still follows it"), Push, 4000.0, 0.01);
+		TestEqual(TEXT("the straight back reaches the corner, cap or no cap"), Back, 12000.0, 0.01);
+		TestEqual(TEXT("and the swing carries it past"), Push, 15000.0, 0.01);
 
-		// AND AN ORDINARY LEAD-IN IS UNTOUCHED. The cap must only ever bite where the
-		// assumption was wrong, or it would shorten every real pushback on the airport.
-		FPushbackRun::PlanPushDistance(PushbackPerpendicularPlan(), PushbackSwingLength,
-			PushbackMaxBack, Back, Push, Target);
-		TestEqual(TEXT("a 40 m lead-in is well inside the cap"), Back, 4000.0, 0.01);
+		// +Y, THE TAXIWAY. This is the assertion the defect fails: at 9000 uu the tangent is
+		// still +X, the lead-in, and the aeroplane aligns with that instead.
+		TestEqual(TEXT("the target heading is the taxiway, not the lead-in it reversed down"),
+			PushbackDeltaDegrees(Target, UE_DOUBLE_HALF_PI), 0.0, 0.01);
+
+		FPushbackRun Run;
+		Run.Start(PushbackLongLeadInPlan(), PushbackParkedHeading,
+			200.0, 30.0, PushbackSwingLength, false);
+
+		FVector2D At = FVector2D::ZeroVector;
+		double Heading = 0.0;
+		PushbackRunToEnd(Run, 40000, At, Heading);
+
+		// 90 DEGREES AND NOT 180 - the whole of what was reported. A 180 here is an aeroplane
+		// that turned to face back out of its own stand.
+		TestEqual(TEXT("it swings 90 degrees onto the taxiway, not 180 back out of the stand"),
+			PushbackDeltaDegrees(PushbackParkedHeading, Run.Heading), 90.0, 0.5);
+
+		// AND IT IS PHYSICALLY ON THE TAXIWAY when it gets there, not still on the lead-in.
+		TestTrue(FString::Printf(TEXT("and it ends round the corner (y = %.0f)"), At.Y),
+			At.Y > 1000.0);
 	}
 
 	return true;

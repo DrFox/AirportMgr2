@@ -492,7 +492,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	double BackDistance = 0.0;
 	double PushDistance = 0.0;
 	double TargetHeading = 0.0;
-	if (!FPushbackRun::PlanPushDistance(Plan.Route, Rules.PushSwingLength, Rules.MaxPushBackDistance,
+	if (!FPushbackRun::PlanPushDistance(Plan.Route, Rules.PushSwingLength,
 		BackDistance, PushDistance, TargetHeading))
 	{
 		UE_LOG(LogAirsideTraffic, Warning,
@@ -520,7 +520,7 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	const EAgentPhase Before = Agent.Phase;
 	if (!Agent.StartPushback(Plan.Route, Agent.Airframe, Agent.LastMotion.Heading,
 		Rules.PushSpeedFor(Agent.Airframe.PushbackNeed), Rules.PushAccel, Rules.PushSwingLength,
-		Rules.MaxPushBackDistance, Agent.Airframe.Engine.MaxRPM * Rules.PowerbackRPMFraction))
+		Agent.Airframe.Engine.MaxRPM * Rules.PowerbackRPMFraction))
 	{
 		return EDepartureRefusal::NoRoute;
 	}
@@ -537,7 +537,8 @@ EDepartureRefusal UGroundTraffic::DepartAgent(int32 AgentId, const URoadNetwork&
 	// same way and nobody is doing the pushing, so this line is the only place the gap between
 	// "needs a tug" and "has one" is visible at all.
 	UE_LOG(LogAirsideTraffic, Log,
-		TEXT("Agent %d pushing back: %.0f uu, %s"), AgentId, PushDistance,
+		TEXT("Agent %d pushing back: %.0f uu straight to the corner then %.0f swinging, %s"),
+		AgentId, BackDistance, PushDistance - BackDistance,
 		*UEnum::GetValueAsString(Agent.Airframe.PushbackNeed));
 
 	OnAgentPhaseChanged.Broadcast(AgentId, Before, Agent.Phase);

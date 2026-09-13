@@ -229,8 +229,28 @@ FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 	// StalledSeconds every other tick, which would have left Task 8's deadlock detection
 	// unable to see a single stalled agent - the bug would have surfaced two tasks later,
 	// as a resolver that never fires.
-	const double Head = T + F * 0.5 + Window;
+	double Head = T + F * 0.5 + Window;
 	const double Tail = T - F * 0.5;
+
+	// A PUSH HOLDS THE WHOLE MANOEUVRE, not just the room it needs to stop in. That is what
+	// "granted whole" has to mean, and checking the ground once at DepartAgent was not enough
+	// on its own: an aeroplane already taxiing in reserved its way into the lead-in a tick
+	// later, and the two then held each other - "Agent 1 stops 8431 uu short of node 6 held by
+	// agent 2" against "Agent 2 stops 2995 uu short of edge 4 held by agent 1", in
+	// Airside.Model.Traffic.DepartureMeetsArrivalOnTaxiway.
+	//
+	// A HEAD-ON THE RESOLVER CANNOT BREAK, which is the whole reason this matters. Every other
+	// deadlock in this model is broken by somebody replanning; a manoeuvring agent has no
+	// second way off its stand, so it has no move to offer and the jam is permanent. Holding
+	// the manoeuvre from the moment it is cleared is what stops the jam forming: the other
+	// aeroplane is refused while the push is still short, waits, and goes when it is over.
+	//
+	// MEASURED FROM THE CENTRE like everything else here, so the half footprint and the gap
+	// are added for the same reasons the ordinary Head adds them.
+	if (Agent.Phase == EAgentPhase::Manoeuvring)
+	{
+		Head = FMath::Max(Head, Agent.Pushback.PushDistance + F * 0.5 + G);
+	}
 	const int32 Current = UGroundTraffic::CurrentStep(Plan, T);
 
 	// COPIED OUT ONE AT A TIME rather than assigned as the arithmetic runs: every line

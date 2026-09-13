@@ -70,7 +70,8 @@ struct AIRSIDE_API FPushbackRun
 	 *  the whole of this struct. */
 	UPROPERTY() double Heading = 0.0;
 
-	/** Where Back ends and Swing begins: the end of the straight lead-in. */
+	/** Where Back ends and Swing begins: where the route stops running straight. ZERO when it
+	 *  never does - there is then nothing to reverse along, and the swing is the whole of it. */
 	UPROPERTY() double BackDistance = 0.0;
 
 	/** Where the whole manoeuvre ends, and exactly what DepartAgent reserved for it. */
@@ -103,12 +104,12 @@ struct AIRSIDE_API FPushbackRun
 	 * to have a direction. The outputs are then UNTOUCHED, so a caller that used them anyway
 	 * would be reading its own uninitialised doubles: honour the return.
 	 */
-	static bool PlanPushDistance(const FRoutePlan& InPlan, double SwingLength, double MaxBack,
+	static bool PlanPushDistance(const FRoutePlan& InPlan, double SwingLength,
 		double& OutBackDistance, double& OutPushDistance, double& OutTargetHeading);
 
 	/** Arms the manoeuvre. False, and NOTHING is touched, when PlanPushDistance declines. */
 	bool Start(const FRoutePlan& InPlan, double InParkedHeading, double InPushSpeed,
-		double InPushAccel, double InSwingLength, double InMaxBack, bool bInNeedsThrust);
+		double InPushAccel, double InSwingLength, bool bInNeedsThrust);
 
 	/**
 	 * One frame. FALSE MEANS THE PUSH IS OVER and the caller should hand over - the same

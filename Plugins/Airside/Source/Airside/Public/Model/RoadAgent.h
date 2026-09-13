@@ -518,7 +518,7 @@ public:
 	 * anything on a tug bar, which the tug moves whatever the propeller is doing.
 	 */
 	bool StartPushback(const FRoutePlan& Plan, const FAirframe& InAirframe, double ParkedHeading,
-		double PushSpeed, double PushAccel, double SwingLength, double MaxBack, double ThrustRPM);
+		double PushSpeed, double PushAccel, double SwingLength, double ThrustRPM);
 
 	/** Arms a departure for the taxi currently under way. See FDepartureOrder. */
 	void ArmDeparture(const FRunwayEnd& End, double EntryOffset = 0.0);
