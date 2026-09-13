@@ -208,7 +208,9 @@ public:
 	 *
 	 * Its LOCAL ORIGIN IS THE MAIN-GEAR AXLE, not the nose gear this class otherwise
 	 * specifies, and that is a deviation with a reason rather than an oversight - see the
-	 * comment at the footprint.
+	 * comment at the footprint. It is DECLARED rather than merely described: SteerAxleX
+	 * carries the measured 2.378 m wheelbase, so the follower and the stands both compose
+	 * against it without anything hard-coding the offset.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildPiperMeridian(UAircraftType* Type);

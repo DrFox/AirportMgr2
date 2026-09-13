@@ -123,7 +123,17 @@ def measure():
     # lies across the airframe rather than along it.
     wheel_radius = (wheel_hi[2] - wheel_lo[2]) * 0.5
     prop_diameter = max(prop_hi[1] - prop_lo[1], prop_hi[2] - prop_lo[2])
-    return footprint, wheel_radius, prop_diameter
+
+    # THE AXLES, off the wheels themselves. The origin is the nose gear - import_plane2.py
+    # asserts it against UAircraftType's local space - so the steered axle measures zero and
+    # the mains are the figure that matters. Measured rather than written as -454.3, because
+    # a typed axle would go stale on the next re-export exactly as the footprint did.
+    nose_lo, nose_hi = find("nosewheel")
+    axles = {
+        "steer_axle_x": (nose_lo[0] + nose_hi[0]) * 0.5,
+        "fixed_axle_x": (wheel_lo[0] + wheel_hi[0]) * 0.5,
+    }
+    return footprint, wheel_radius, prop_diameter, axles
 
 
 _MEASURED = None
@@ -132,8 +142,8 @@ _MEASURED = None
 def measured():
     """measure(), once.
 
-    Three places need these figures - the type, the ABP's wheel radius and the read-back
-    verification - and all three must agree or the verification is checking a different
+    Four places need these figures - the type, its axles, the ABP's wheel radius and the
+    read-back verification - and all of them must agree or the verification is checking a different
     aeroplane than the one that was written. Cached rather than re-read because a file that
     changed mid-run would be a worse problem than a stale one.
     """
@@ -154,6 +164,19 @@ GROUND = {
     "taxi":    dict(accel=100.0, decel=200.0, speed_cap=1000.0),   # 19 kn, as the Meridian
     "takeoff": dict(accel=450.0, decel=400.0, speed_cap=3100.0),   # Vr about 60 kn
     "landing": dict(accel=100.0, decel=400.0, speed_cap=3600.0),   # threshold about 70 kn
+}
+
+# STEERING, published rather than measured - nothing in the mesh knows how far the tiller
+# turns or how hard a pilot will corner. Both are read only by the rolling-steer law, which
+# this type uses because it carries axle figures; MaxTurnRateDegPerSec is left at its default
+# for the take-off line-up and never consulted for a taxi turn.
+#
+# 60 degrees of lock on the measured 4.54 m wheelbase makes the tightest followable radius
+# 5.2 m, well inside any taxiway bend. 0.2 g is between the Meridian's 0.25 and an airliner's
+# 0.15: a Twin Otter on a quiet apron corners harder than a jet and less hard than a single.
+STEERING = {
+    "max_steer_degrees": 60.0,
+    "max_lateral_accel_uu": 196.0,
 }
 
 CLIMB = {
@@ -249,9 +272,13 @@ def author_type():
         fail("%s has no generated class; compile it before running this" % ABP)
     else:
         asset.set_editor_property("anim_class", abp.generated_class())
-    footprint_figures, wheel_radius, prop_diameter = measured()
-    say("measured off the export: wheel radius %.1f, prop %.1f, nose %.1f, tail %.1f uu"
-        % (wheel_radius, prop_diameter, footprint_figures["nose_x"], footprint_figures["tail_x"]))
+    footprint_figures, wheel_radius, prop_diameter, axles = measured()
+    say("measured off the export: wheel radius %.1f, prop %.1f, nose %.1f, tail %.1f, "
+        "steer axle %.1f, fixed axle %.1f uu"
+        % (wheel_radius, prop_diameter, footprint_figures["nose_x"],
+           footprint_figures["tail_x"], axles["steer_axle_x"], axles["fixed_axle_x"]))
+    asset.set_editor_property("steer_axle_x", axles["steer_axle_x"])
+    asset.set_editor_property("fixed_axle_x", axles["fixed_axle_x"])
     asset.set_editor_property("main_wheel_radius", wheel_radius)
     asset.set_editor_property("propeller_diameter", prop_diameter)
     asset.set_editor_property("turnaround_seconds", TURNAROUND_SECONDS)
@@ -264,6 +291,8 @@ def author_type():
     ground = asset.get_editor_property("ground")
     for name, values in GROUND.items():
         set_regime(ground, name, values)
+    for field, value in STEERING.items():
+        ground.set_editor_property(field, value)
     asset.set_editor_property("ground", ground)
 
     for group, values in (("climb", CLIMB), ("approach", APPROACH), ("engine", ENGINE)):
