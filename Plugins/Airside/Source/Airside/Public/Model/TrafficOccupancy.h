@@ -182,6 +182,21 @@ struct AIRSIDE_API FTrafficOccupancy
 	/** True when someone other than ExcludingAgent holds Resource (any interval). */
 	bool IsHeld(const FTrafficResource& Resource, int32 ExcludingAgent, int32* OutHolder = nullptr) const;
 
+	/**
+	 * True when ANY of Resources IsHeld by someone but Excluding - the runway-chain-held
+	 * question ArrivalPlanner and RouteSearch's IsRunwayHeld each hand-rolled as their own
+	 * loop (#103): URoadNetwork::RunwaySurfaces(Seed) gives the resource list.
+	 *
+	 * bCountOwnOccupied adds Excluding's OWN occupied claim to what counts as held - the two
+	 * callers disagree on this and both are right for their own question. A landing not yet
+	 * dispatched (ArrivalPlanner, Excluding = 0, bCountOwnOccupied = false) has no agent of
+	 * its own to be occupying anything. A route already dispatched and asking whether a
+	 * runway is safe to use (RouteSearch, bCountOwnOccupied = true) must count its own body:
+	 * spec §3.3 says an occupied claim was never a reservation another route could quietly
+	 * use, including the one the claim's own owner is currently flying.
+	 */
+	bool IsAnyHeld(TConstArrayView<FTrafficResource> Resources, int32 Excluding, bool bCountOwnOccupied) const;
+
 	const TArray<FTrafficClaim>& GetClaims() const { return Claims; }
 
 	/**

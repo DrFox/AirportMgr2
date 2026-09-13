@@ -380,6 +380,16 @@ TArray<FRoadSegmentId> URoadNetwork::RunwayChainOrSeed(FRoadSegmentId Seed) cons
 	return Chain;
 }
 
+TArray<FTrafficResource> URoadNetwork::RunwaySurfaces(FRoadSegmentId Seed) const
+{
+	TArray<FTrafficResource> Surfaces;
+	for (const FRoadSegmentId& Segment : RunwayChainOrSeed(Seed))
+	{
+		Surfaces.Add(FTrafficResource::OfSurface(Segment));
+	}
+	return Surfaces;
+}
+
 FRunwayFacts URoadNetwork::RunwayFactsFor(FRoadSegmentId Seed) const
 {
 	// The seed's own, not a walk: SetRunwayFacts and the split keep every member of a

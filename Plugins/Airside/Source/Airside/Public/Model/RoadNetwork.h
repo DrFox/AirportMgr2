@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"
+#include "Model/TrafficOccupancy.h"
 #include "RoadNetwork.generated.h"
 
 class URoadProfile;
@@ -127,6 +128,14 @@ public:
 	 * instead of every caller spelling out the same fallback. See #86.
 	 */
 	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
+
+	/**
+	 * RunwayChainOrSeed(Seed), each segment wrapped as the FTrafficResource the occupancy
+	 * table reads - the chain-to-resources conversion ArrivalPlanner and RouteSearch's
+	 * IsRunwayHeld each spelled out over their own loop before asking FTrafficOccupancy::
+	 * IsAnyHeld the chain-held question (#103).
+	 */
+	TArray<FTrafficResource> RunwaySurfaces(FRoadSegmentId Seed) const;
 
 	/**
 	 * The surface and approach class of the runway Seed belongs to.

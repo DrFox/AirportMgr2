@@ -214,6 +214,26 @@ bool FTrafficOccupancy::IsHeld(const FTrafficResource& Resource, int32 Excluding
 	return false;
 }
 
+bool FTrafficOccupancy::IsAnyHeld(TConstArrayView<FTrafficResource> Resources, int32 Excluding, bool bCountOwnOccupied) const
+{
+	for (const FTrafficResource& Resource : Resources)
+	{
+		if (IsHeld(Resource, Excluding))
+		{
+			return true;
+		}
+		if (bCountOwnOccupied)
+		{
+			const FTrafficClaim* Own = FindClaim(Excluding, Resource);
+			if (Own != nullptr && Own->bOccupied)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 TSet<int32> FTrafficOccupancy::TakePreempted()
 {
 	TSet<int32> Out = MoveTemp(Preempted);

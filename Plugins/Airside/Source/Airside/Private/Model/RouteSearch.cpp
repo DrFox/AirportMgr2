@@ -106,18 +106,10 @@ namespace
 			{
 				return *Known;
 			}
-			bool bHeld = false;
-			if (Query.Occupancy != nullptr)
-			{
-				for (const FRoadSegmentId Segment : Network.RunwayChainOrSeed(Seed))
-				{
-					const FTrafficResource Surface = FTrafficResource::OfSurface(Segment);
-					const FTrafficClaim* Own = Query.Occupancy->FindClaim(Query.QueryingAgent, Surface);
-					bHeld = bHeld
-						|| Query.Occupancy->IsHeld(Surface, Query.QueryingAgent)
-						|| (Own != nullptr && Own->bOccupied);
-				}
-			}
+			// bCountOwnOccupied true: ERunwayAvoidance::Held's own comment (FRouteQuery)
+			// says why the querier's OWN occupied claim counts too.
+			const bool bHeld = Query.Occupancy != nullptr
+				&& Query.Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), Query.QueryingAgent, /*bCountOwnOccupied*/ true);
 			RunwayInUse.Add(Seed.Index, bHeld);
 			return bHeld;
 		};
