@@ -13,8 +13,11 @@
 class URoadProfile;
 
 /**
- * Repository owning the road graph. All mutation goes through this type;
- * from Slice 3 onward only IRoadCommand implementations may call the mutators.
+ * Repository owning the road graph. All mutation goes through this type; URoadEditFacade is
+ * the one caller the build tools use, and it snapshots the graph into URoadEditHistory (a
+ * Memento, not the Command layer design spec 7.3 once specified - see URoadEditHistory's own
+ * comment) before each edit, which is what undo replays against. This type itself enforces
+ * nothing about who calls it; the facade is the boundary by convention.
  */
 UCLASS(BlueprintType)
 class AIRSIDE_API URoadNetwork : public UObject
@@ -109,43 +112,37 @@ public:
 	 */
 	bool IsRunwaySegment(FRoadSegmentId Segment) const;
 
-	/**
-	 * Every segment continuous with Seed through nodes joining exactly two runway segments,
-	 * returning the segments walked rather than the ends - RunwayExtentAt reads its
-	 * thresholds off this chain. Empty when Seed is not a live runway. Includes Seed.
-	 *
-	 * This is what a runway IS to the occupancy table: a landing holds every segment of the
-	 * chain, a holding-position names one, and the arbiter expands it here - so an exit added to a
-	 * runway after the hold bar was placed still protects the whole strip.
-	 */
+	// --- Runway reads: forwarders. See Model/RunwayQuery.h for what each answers and why -
+	// the repository grew a second responsibility deriving these from its own graph, so the
+	// logic moved beside IsRunwaySegment/ProfileFor's callers rather than living inside the
+	// class it reads (issue #105 item 7). Old name and signature, so nothing calling these
+	// changes.
 	TArray<FRoadSegmentId> RunwayChain(FRoadSegmentId Seed) const;
-
-	/**
-	 * RunwayChain(Seed), or a one-segment chain of just Seed when that comes back empty.
-	 *
-	 * Seed dropped to a taxiway under a claim still made or a bar still placed should
-	 * protect the one segment named rather than nothing at all - one implementation
-	 * instead of every caller spelling out the same fallback. See #86.
-	 */
 	TArray<FRoadSegmentId> RunwayChainOrSeed(FRoadSegmentId Seed) const;
 
 	/**
 	 * RunwayChainOrSeed(Seed), each segment wrapped as the FTrafficResource the occupancy
 	 * table reads - the chain-to-resources conversion ArrivalPlanner and RouteSearch's
 	 * IsRunwayHeld each spelled out over their own loop before asking FTrafficOccupancy::
-	 * IsAnyHeld the chain-held question (#103).
+	 * IsAnyHeld the chain-held question (#103). NOT moved to RunwayQuery with the reads
+	 * below (#105 item 7): it landed after that move started, and FTrafficResource is a
+	 * Model/ concept the same repository already depends on either way, so there is no
+	 * layering reason to move it and every reason to leave a #103/#105 merge with one less
+	 * conflict to resolve by hand.
 	 */
 	TArray<FTrafficResource> RunwaySurfaces(FRoadSegmentId Seed) const;
 
-	/**
-	 * The surface and approach class of the runway Seed belongs to.
-	 *
-	 * Reads Seed's OWN segment: SetRunwayFacts writes every member of the chain and the
-	 * split copies them, so any member answers for the strip and no walk is needed here.
-	 * A dead or non-runway seed reads the struct default - the same answer an unclassified
-	 * runway gives, so a caller that must tell the two apart asks IsRunwaySegment first.
-	 */
 	FRunwayFacts RunwayFactsFor(FRoadSegmentId Seed) const;
+	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+	bool IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,
+		double* OutChainHalfWidth = nullptr) const;
+	bool RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) const;
+	bool NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const;
+	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
+		const FVector2D& Direction, double MinDistance) const;
 
 	/**
 	 * Write Facts onto EVERY segment of RunwayChain(Seed). False, and nothing written,
@@ -154,112 +151,10 @@ public:
 	 * The chain rather than the one segment, because the facts are the strip's: a runway
 	 * split by two exits is three segments and one runway, and a tool that classified the
 	 * segment it clicked would leave the halves past each exit disagreeing with it.
+	 *
+	 * A MUTATOR, so it stays here rather than moving to RunwayQuery with its reads.
 	 */
 	bool SetRunwayFacts(FRoadSegmentId Seed, const FRunwayFacts& Facts);
-
-	/**
-	 * Does this guideline node stand ON the strip of the runway chain seeded at Seed?
-	 *
-	 * The question spec §3.1's fourth route asks: an agent crossing a runway holds it until
-	 * its TAIL is clear of the strip, and "clear" cannot be "past the next node" because a
-	 * node in the middle of a crossing sits on the runway itself. Geometry answers it; a bar
-	 * on the far side would not, because a player may place one bar or none.
-	 *
-	 * True when, for ANY segment of the chain, the node is within that segment's own profile
-	 * half width of its centreline AND its projection falls inside the segment's A..B extent
-	 * with that half width of slack at each end - a junction cut puts the node a little
-	 * beyond the road node, and this is the slack that admits it anyway.
-	 *
-	 * OutChainHalfWidth, when given, reports the LARGEST half width in the chain whether or
-	 * not the node is on it. That is how far past the last on-strip node a tail must travel
-	 * to be clear of the widest part of the strip, which is the caller's next question when
-	 * the answer here is true.
-	 */
-	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
-		double* OutChainHalfWidth = nullptr) const;
-
-	/**
-	 * The same question about a bare POSITION, which is where the rule actually lives.
-	 *
-	 * IsGuidelineNodeOnRunway is this function applied to a node's position, and exists
-	 * because most callers have a node. The one that does not is the crossing hold arming
-	 * itself (spec §3.1, refined during Task 7): "is the agent's own centre already on the
-	 * strip" is asked of an agent standing between two nodes, and there is no node to hand.
-	 * One implementation so the two answers cannot drift - the second-evaluator rule.
-	 */
-	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
-		double* OutChainHalfWidth = nullptr) const;
-
-	/**
-	 * The same question against a chain ALREADY WALKED, for a caller asking it of many
-	 * points on one chain (RunwayExitNodes, one per guideline node) - RunwayChain(Seed)
-	 * walks the graph, and paying for that walk again per point would be asking the same
-	 * question about the network a hundred times to answer it about a hundred positions.
-	 */
-	bool IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,
-		double* OutChainHalfWidth = nullptr) const;
-
-	/**
-	 * If Near sits on a runway, reports the departure from the threshold nearest it.
-	 *
-	 * WALKS THE WHOLE RUNWAY, not the one segment it lands on. Adding an exit splits a runway,
-	 * so by the time it is useful it is several segments - and a roll computed from one piece
-	 * would refuse a departure the strip can easily take. The walk follows nodes joining
-	 * exactly two continuous segments, which is what an uninterrupted runway looks like from
-	 * the graph's point of view.
-	 *
-	 * A runway is recognised by its PROFILE - see URoadProfile::bContinuousThroughJunctions -
-	 * so nothing here needs a runway type or a flag on the segment.
-	 *
-	 * OutEnd.Direction points from the near threshold toward the far one: the way you depart
-	 * having backtracked to that end. OutEnd.Seed is the runway segment whose end was
-	 * nearest Near. False when Near is not on a runway at all, and OutEnd is untouched.
-	 */
-	bool RunwayExtentAt(const FVector2D& Near, FRunwayEnd& OutEnd) const;
-
-	/**
-	 * The runway threshold nearest a point, however far away it is.
-	 *
-	 * THE SAME SEARCH AS RunwayExtentAt WITHOUT THE PROXIMITY TEST, which is exactly the
-	 * difference between the two questions. A departure asks "did my taxi end on a runway",
-	 * and must hear no everywhere else - that test exists because without it every route
-	 * armed a departure at the only runway on the field. An arrival asks "which runway am I
-	 * landing on", of a click that is deliberately nowhere near one.
-	 *
-	 * The threshold returned is the end NEAREST the query and the direction runs away from
-	 * it, so an aircraft lands toward the far end - the same convention as a departure, and
-	 * the reason both can share the walk. OutEnd.Seed is the runway segment whose end was
-	 * nearest Near.
-	 */
-	bool NearestRunwayThreshold(const FVector2D& Near, FRunwayEnd& OutEnd) const;
-
-	/**
-	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
-	 * Threshold along Direction.
-	 *
-	 * THE EXITS, without needing an exit to be a thing. A runway is continuous through
-	 * junctions, so a taxiway joining it already puts a guideline node on the centreline;
-	 * asking which nodes lie along the strip therefore finds every way off it, including
-	 * ones the player drew after the runway existed.
-	 *
-	 * A node qualifies by IsPointOnRunway(Node.Position, Seed) - the one evaluator of "on
-	 * the strip", tested per SEGMENT of the chain against that segment's OWN width (#87).
-	 * The two callers used to compute their own HalfWidth as the max over every continuous
-	 * segment on the whole airport, so a 60 m runway anywhere widened the exit test on an
-	 * 18 m strip.
-	 *
-	 * THRESHOLD AND DIRECTION ARE THE CALLER'S OWN, not re-derived from Seed here (fixed
-	 * 2026-09-13): a seed has two ends and this function has no way to know which one the
-	 * aircraft is actually at. Deriving them from Seed's own A node - a draw-direction
-	 * artefact - silently reversed the ordering and the MinDistance filter on any strip not
-	 * drawn threshold-first, which nothing forces a player to do. Seed still decides
-	 * membership and width (IsPointOnRunway); Threshold/Direction decide direction.
-	 *
-	 * MinDistance is what makes the answer useful to an arrival: an exit before the aircraft
-	 * can possibly have slowed down is not an exit it can take.
-	 */
-	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
-		const FVector2D& Direction, double MinDistance) const;
 
 	// --- Guideline graph -------------------------------------------------------------
 	// A SECOND graph, deliberately in the same object. The build tool must make "draw a
@@ -584,9 +479,6 @@ private:
 	UPROPERTY() TArray<int32>        NodeFreeList;
 	UPROPERTY() TArray<FRoadSegment> Segments;
 	UPROPERTY() TArray<int32>        SegmentFreeList;
-
-	/** RunwayExtentAt and NearestRunwayThreshold, which differ only in the proximity test. */
-	bool RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRunway, FRunwayEnd& OutEnd) const;
 
 	UPROPERTY() TArray<FGuidelineNode> GuidelineNodes;
 	UPROPERTY() TArray<int32>          GuidelineNodeFreeList;
