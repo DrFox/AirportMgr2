@@ -643,13 +643,11 @@ public:
 	/** Id of the last agent that yielded its reservations, or 0 if none has. */
 	int32 GetLastYieldedAgentForTest() const { return DeadlockResolver.LastYieldedAgent; }
 
-	/**
-	 * The deadlock resolver itself, for a test that wants to drive one directly (issue #84) -
-	 * construct an FDeadlockResolver of its own, or read this one's public fields without
-	 * going through a ForTest accessor apiece. The five accessors above stay, unchanged, for
-	 * every existing caller.
-	 */
-	const FDeadlockResolver& GetDeadlockResolverForTest() const { return DeadlockResolver; }
+	// NO GetDeadlockResolverForTest() (issue #84 review): a test that wants to drive an
+	// FDeadlockResolver directly constructs its own - Airside.Model.Traffic.
+	// DeadlockResolverStandalone does exactly that - rather than reading this instance's,
+	// which would have had zero callers. The five accessors above stay for every existing
+	// caller of UGroundTraffic's own resolver.
 
 	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
 	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
@@ -693,8 +691,8 @@ private:
 	 */
 	FDeadlockResolver DeadlockResolver;
 
-	/** The replan mechanism ResolveDeadlocks and OnGraphRebuilt both call into. See
-	 *  FPlanReResolver - stateless, so this exists mainly for a consistent calling
+	/** The replan mechanism FDeadlockResolver::Resolve and OnGraphRebuilt both call into.
+	 *  See FPlanReResolver - stateless, so this exists mainly for a consistent calling
 	 *  convention (PlanReResolver.ReplanAt(...)) rather than because it must persist. */
 	FPlanReResolver PlanReResolver;
 
@@ -755,15 +753,12 @@ private:
 	// one FClaimPass per call and calls its Run where this used to call ClaimAhead.
 
 	/**
-	 * The one claim that is not about the ground under or ahead of the agent: its DESTINATION.
-	 * An Arriving or Taxiing aircraft RESERVES the stand pose node it is heading for, and a
-	 * Parked agent OCCUPIES the node it parked at - stand or not; the M2 rule "a parked agent
-	 * holds only its surface" left a parked aircraft on a taxiway junction holding nothing
-	 * (spec 2026-09-07-stand-occupancy §3, amended).
+	 * Claims Agent's GoalNode as a stand reservation right now, for the between-ticks
+	 * window DispatchArrival reads the table in. Used by both dispatches and the redirect.
 	 *
 	 * NOTE: the per-tick version of this claim is FClaimPass::ClaimGoalNode now (issue #84).
-	 * This one remains on UGroundTraffic because it fires at DISPATCH, between ticks, before
-	 * any FClaimPass exists for this agent - see the comment below.
+	 * This one remains on UGroundTraffic because it fires at DISPATCH, between ticks,
+	 * before any FClaimPass exists for this agent.
 	 */
 	void ClaimGoalNodeAtDispatch(const FRoadAgent& Agent, int32 Id, const URoadNetwork& Network);
 
