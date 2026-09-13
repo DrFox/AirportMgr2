@@ -15,6 +15,8 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Tool/RoadBuildTool.h"
+#include "Tool/RoadSnap.h"
 
 class ARoadNetworkActor;
 class UWorld;
@@ -40,6 +42,21 @@ struct FAirsideTestWorld
 	FAirsideTestWorld(const FAirsideTestWorld&) = delete;
 	FAirsideTestWorld& operator=(const FAirsideTestWorld&) = delete;
 };
+
+/** FToolContext builders shared by every tool test - see ContextAt's own comment (#104). */
+namespace TestTool
+{
+	/**
+	 * A context whose snap is exactly what a click at Where would report, at 150uu radius
+	 * (the value every tool test used) unless SnapRadius says otherwise (GuidelineDrawToolTest
+	 * needs 400uu to reach across the gap it tests). Cursor and Snap.Position both land on
+	 * Where, matching every one of the eight per-file builders this replaces - they never
+	 * differed. A Node or Segment Kind still needs its own handle filled in by the caller
+	 * (Snap.Node / Snap.Segment): this only sets what every kind has in common.
+	 */
+	FToolContext ContextAt(IRoadEditTarget& Target, const FVector2D& Where,
+		ERoadSnapKind Kind = ERoadSnapKind::Free, double SnapRadius = 150.0);
+}
 
 /**
  * Ticks Traffic in fixed steps of Dt until Seconds elapse or Callback returns false for a

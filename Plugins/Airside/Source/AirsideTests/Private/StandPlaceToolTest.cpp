@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -19,15 +20,10 @@
 
 namespace
 {
+	/** Free-snap, 150uu radius - see TestTool::ContextAt (#104). */
 	FToolContext StandAt(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
-		FToolContext Context;
-		Context.Target = Actor;
-		Context.Cursor = Where;
-		Context.SnapRadius = 150.0;
-		Context.Snap.Kind = ERoadSnapKind::Free;
-		Context.Snap.Position = Where;
-		return Context;
+		return TestTool::ContextAt(*Actor, Where);
 	}
 
 	int32 LiveEntities(const ARoadNetworkActor* Actor)
@@ -61,7 +57,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 {
-	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	// A REAL WORLD, not a bare NewObject: this test dispatches an agent through the actor's
+	// traffic, and a half-built actor is not evidence about whether that works (#104).
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor constructed"), Actor))
 	{
 		return false;
