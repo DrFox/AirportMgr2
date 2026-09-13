@@ -55,9 +55,10 @@ struct AIRSIDE_API FLandingRun
 	/** Runway available beyond the threshold, uu. */
 	UPROPERTY() double RunwayLength = 0.0;
 
-	UPROPERTY() FGroundPerformance Ground;
-	UPROPERTY() FClimbPerformance Climb;
-	UPROPERTY() FApproachPerformance Approach;
+	// GROUND/CLIMB/APPROACH ARE NOT STORED HERE ANY MORE (issue #83). Start and Advance take
+	// the airframe by reference from FRoadAgent::Airframe instead - the single copy RoadAgent
+	// owns - so this struct cannot fly the wrong figures because a caller forgot to keep two
+	// copies of the same aeroplane in step. See FRoadAgent::Airframe.
 
 	/**
 	 * Distance along the runway centreline from the THRESHOLD, uu.
@@ -100,8 +101,7 @@ struct AIRSIDE_API FLandingRun
 	 * go-around, which is a second flight phase and doubles this.
 	 */
 	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-		const FApproachPerformance& InApproach, double InVacateAt = 0.0);
+		const FAirframe& InAirframe, double InVacateAt = 0.0);
 
 	/**
 	 * Flies one frame. False once the arrival is over, leaving the outputs untouched.
@@ -109,9 +109,13 @@ struct AIRSIDE_API FLandingRun
 	 * Same contract as FRouteFollower::Advance and FTakeoffRun::Advance, and for the same
 	 * reason: a caller that ignores the return value leaves its aircraft where it was rather
 	 * than at the origin.
+	 *
+	 * InAirframe MUST be the same airframe Start was armed with (issue #83) - nothing here
+	 * checks that, the same way nothing checked the copies stayed equal before this. The one
+	 * caller, FRoadAgent::Advance, passes its own Airframe field both times.
 	 */
-	bool Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading,
-		double& OutAltitude, double& OutPitch);
+	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition,
+		double& OutHeading, double& OutAltitude, double& OutPitch);
 
 	bool HasVacated() const { return Phase == ELandingPhase::Vacated; }
 
@@ -154,6 +158,5 @@ struct AIRSIDE_API FLandingRun
 private:
 	/** Arms without the runway-length check, so RequiredLandingDistance can fly a probe. */
 	bool Begin(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-		const FApproachPerformance& InApproach, double InVacateAt);
+		const FAirframe& InAirframe, double InVacateAt);
 };

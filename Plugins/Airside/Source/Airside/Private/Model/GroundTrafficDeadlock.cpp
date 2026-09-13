@@ -102,7 +102,7 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 
 	// Replace, NOT Start: the line up to the splice is unchanged and the agent is part way
 	// along it, so Travelled, Speed and Heading all survive. See FRouteFollower::Replace.
-	Agent.Follower.Replace(Spliced);
+	Agent.Follower.Replace(Spliced, Agent.Airframe);
 
 	// THE RESERVATIONS, AND ONLY THOSE. They were made for a route that no longer exists past
 	// the splice, so holding them would block the line the agent has just been re-routed away

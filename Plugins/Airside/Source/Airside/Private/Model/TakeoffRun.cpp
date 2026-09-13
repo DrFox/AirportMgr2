@@ -42,10 +42,13 @@ double FTakeoffRun::RequiredRoll(const FGroundPerformance& InGround,
 }
 
 bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-	double InHeading, double InEntryOffset, double InSpeed)
+	double InRunwayLength, const FAirframe& InAirframe, double InHeading,
+	double InEntryOffset, double InSpeed)
 {
 	Phase = ETakeoffPhase::Clear;
+
+	const FGroundPerformance& InGround = InAirframe.Ground;
+	const FClimbPerformance& InClimb = InAirframe.Climb;
 
 	if (!InGround.IsSet() || !InGround.Takeoff.IsSet() || !InClimb.IsSet())
 	{
@@ -77,8 +80,8 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Threshold = InThreshold;
 	Direction = InDirection.GetSafeNormal();
 	RunwayLength = InRunwayLength;
-	Ground = InGround;
-	Climb = InClimb;
+	// Ground/Climb are NOT copied here any more (issue #83) - Advance takes the airframe
+	// fresh from its caller every frame instead.
 
 	// FROM THE ENTRY, which is the threshold only for a backtrack: the position this
 	// reports is Threshold + Direction * Travelled, so starting Travelled here is what
@@ -91,23 +94,25 @@ bool FTakeoffRun::Start(const FVector2D& InThreshold, const FVector2D& InDirecti
 	// Rolling, not stopped: it arrived under power and has to keep rolling to steer - the
 	// same rule the taxi model states in FGroundPerformance::MinTaxiSpeed. At the speed
 	// it arrived with, when the caller knows it, so the handover has no step.
-	Speed = FMath::Max(InSpeed, Ground.MinTaxiSpeed);
+	Speed = FMath::Max(InSpeed, InGround.MinTaxiSpeed);
 	Phase = ETakeoffPhase::LineUp;
 
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Departure armed: %.0f uu runway, joining %.0f past the threshold, %.0f needed, rotate at %.0f uu/s."),
-		RunwayLength, EntryOffset, Needed, Ground.Takeoff.SpeedCap);
+		RunwayLength, EntryOffset, Needed, InGround.Takeoff.SpeedCap);
 	return true;
 }
 
-bool FTakeoffRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading,
-	double& OutAltitude, double& OutPitch)
+bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition,
+	double& OutHeading, double& OutAltitude, double& OutPitch)
 {
 	if (Phase == ETakeoffPhase::Clear)
 	{
 		return false;
 	}
 
+	const FGroundPerformance& Ground = InAirframe.Ground;
+	const FClimbPerformance& Climb = InAirframe.Climb;
 	const double RunwayHeading = FMath::Atan2(Direction.Y, Direction.X);
 
 	switch (Phase)

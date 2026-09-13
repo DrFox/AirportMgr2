@@ -456,7 +456,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// the truncation was applied in place - which Replace handles: TArray's assignment
 		// guards self-assignment, and what this call is here for is the speed profile, rebuilt
 		// so the agent brakes to the new end instead of running off it.
-		Agent.Follower.Replace(Plan);
+		Agent.Follower.Replace(Plan, Agent.Airframe);
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,

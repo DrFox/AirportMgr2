@@ -209,7 +209,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 	}
 
 	TestTrue(TEXT("the van yielded: its speed fell below half its taxi cap while blocked"),
-		VanMinSpeedWhileWaiting < 0.5 * VanNow->Follower.Ground.Taxi.SpeedCap);
+		VanMinSpeedWhileWaiting < 0.5 * VanNow->Airframe.Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
 	TestTrue(FString::Printf(TEXT("never closer than the van's own footprint (%.0f uu)"), MinSeparation), MinSeparation >= Traffic->Rules.VehicleFootprint - 1.0);

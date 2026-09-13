@@ -2,7 +2,7 @@
 
 #include "Solve/GuidelineGeom.h"
 
-void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround, double InitialSpeed,
+void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed,
 	TOptional<double> InitialHeading, double InitialTravelled)
 {
 	Plan = InPlan;
@@ -12,11 +12,12 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& I
 	// as 1.9 uu of motion on a frame that should have carried 16.7, an 890 uu/s step
 	// (2026-09-06). The overshoot is handed in and the taxi begins that far along the arc.
 	Travelled = FMath::Max(InitialTravelled, 0.0);
-	Ground = InGround;
+	// Ground is NOT copied here any more (issue #83) - Advance and Replace take the airframe
+	// fresh from their caller every time instead.
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
-	Profile.Build(Plan.Polyline, Ground);
+	Profile.Build(Plan.Polyline, InAirframe.Ground);
 
 	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
 	// on the first frame is the same defect as the corner this class was just taught about
@@ -51,12 +52,15 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FGroundPerformance& I
 	}
 }
 
-bool FRouteFollower::Advance(double DeltaSeconds, double StopWithin, FVector2D& OutPosition, double& OutHeading)
+bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, double StopWithin,
+	FVector2D& OutPosition, double& OutHeading)
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
 		return false;
 	}
+
+	const FGroundPerformance& Ground = InAirframe.Ground;
 
 	// The stop point in route distance, fixed BEFORE the move: StopWithin was measured from
 	// where the agent was when the arbiter looked, and re-measuring it after moving would
@@ -130,11 +134,11 @@ bool FRouteFollower::Advance(double DeltaSeconds, double StopWithin, FVector2D& 
 	return true;
 }
 
-void FRouteFollower::Replace(const FRoutePlan& NewPlan)
+void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirframe)
 {
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
-	Profile.Build(Plan.Polyline, Ground);
+	Profile.Build(Plan.Polyline, InAirframe.Ground);
 }
 
 bool FRouteFollower::HasArrived() const

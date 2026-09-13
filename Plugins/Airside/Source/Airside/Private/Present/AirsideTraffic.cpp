@@ -278,7 +278,8 @@ EAgentPhase UAirsideTraffic::LastAgentPhaseForTest() const
 double UAirsideTraffic::LastAgentTaxiSpeedCapForTest() const
 {
 	const FRoadAgent* Agent = Model->FindAgent(Model->GetNewestAgentId());
-	return Agent != nullptr ? Agent->Follower.Ground.Taxi.SpeedCap : 0.0;
+	// Agent.Airframe.Ground, not Follower.Ground (issue #83 removed the follower's own copy).
+	return Agent != nullptr ? Agent->Airframe.Ground.Taxi.SpeedCap : 0.0;
 }
 
 FVector2D UAirsideTraffic::LastAgentPositionForTest() const

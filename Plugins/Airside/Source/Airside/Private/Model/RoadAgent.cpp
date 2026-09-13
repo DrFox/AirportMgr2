@@ -113,8 +113,7 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 bool FRoadAgent::StartArrival(const FVector2D& Threshold, const FVector2D& Direction, double RunwayLength,
 	const FAirframe& InAirframe, double VacateAt, const FRoutePlan& InTaxiInPlan)
 {
-	if (!Arrival.Start(Threshold, Direction, RunwayLength,
-		InAirframe.Ground, InAirframe.Climb, InAirframe.Approach, VacateAt))
+	if (!Arrival.Start(Threshold, Direction, RunwayLength, InAirframe, VacateAt))
 	{
 		// FLandingRun has already logged why. Nothing else is touched: an arrival that
 		// cannot be flown must leave no trace of itself on the agent, rather than one
@@ -141,7 +140,7 @@ bool FRoadAgent::StartArrival(const FVector2D& Threshold, const FVector2D& Direc
 	double Heading = 0.0;
 	double Altitude = 0.0;
 	double Pitch = 0.0;
-	Arrival.Advance(0.0, At, Heading, Altitude, Pitch);
+	Arrival.Advance(0.0, InAirframe, At, Heading, Altitude, Pitch);
 	LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 
 	return true;
@@ -151,7 +150,7 @@ void FRoadAgent::StartTaxi(const FRoutePlan& Plan, const FAirframe& InAirframe)
 {
 	Phase = EAgentPhase::Taxiing;
 	Airframe = InAirframe;
-	Follower.Start(Plan, InAirframe.Ground);
+	Follower.Start(Plan, InAirframe);
 
 	bEngineRunning = true;
 
@@ -194,7 +193,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 	{
 	case EAgentPhase::Arriving:
 	{
-		if (Arrival.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
+		if (Arrival.Advance(DeltaSeconds, Airframe, At, Heading, Altitude, Pitch))
 		{
 			LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 			OutMotion = LastMotion;
@@ -214,9 +213,11 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// intended outcome - a parked aeroplane off the runway, with a Warning in the log
 		// naming it - and not a runway blocked by an aircraft with nowhere to go.
 		//
-		// Started from Airframe.Ground, NOT Follower.Ground: the follower has never been
-		// started before this point, so its Ground is still the struct default (Accel 100,
-		// SpeedCap 1000, turn rate 10) rather than the airframe's figures - see issue #27.
+		// STARTED FROM Airframe, THE AGENT'S OWN FIELD: the follower used to store its own
+		// Ground copy, which had never been started before this point and so was still the
+		// struct default (Accel 100, SpeedCap 1000, turn rate 10) rather than the airframe's
+		// figures - see issue #27. Issue #83 removed that copy entirely, so passing anything
+		// but this agent's own Airframe here is now a compile-time question, not a runtime one.
 		//
 		// AT THE ROLLOUT'S SPEED, not from rest: the landing run brakes to the taxi cap
 		// before VacateAt and the exit arc begins there, so the taxi carries on at the
@@ -225,7 +226,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		Phase = EAgentPhase::Taxiing;
 		// Speed, heading AND distance carry over: the rollout crossed VacateAt last frame
 		// and stopped this far past it, which is this far along the arc.
-		Follower.Start(TaxiInPlan, Airframe.Ground, Arrival.Speed, LastMotion.Heading,
+		Follower.Start(TaxiInPlan, Airframe, Arrival.Speed, LastMotion.Heading,
 			Arrival.Travelled - Arrival.VacateAt);
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Vacated; taxiing in."));
 
@@ -244,7 +245,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// StopWithin, not the unbounded overload: arbitration is the ONE input into the one
 		// follower, and it defaults to unbounded, so an agent nobody has arbitrated for
 		// drives exactly as it did before M2.
-		if (Follower.Advance(DeltaSeconds, StopWithin, FollowAt, FollowHeading))
+		if (Follower.Advance(DeltaSeconds, Airframe, StopWithin, FollowAt, FollowHeading))
 		{
 			LastMotion = DescribeMotion(FollowAt, FollowHeading);
 			OutMotion = LastMotion;
@@ -269,7 +270,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// samples/runway1.png (2026-09-07).
 				bDepartureArmed = false;
 				if (Departure.Start(DepartureOrder.Threshold, DepartureOrder.Direction,
-					DepartureOrder.RunwayLength, Airframe.Ground, Airframe.Climb, LastMotion.Heading,
+					DepartureOrder.RunwayLength, Airframe, LastMotion.Heading,
 					DepartureOrder.EntryOffset, Follower.Speed))
 				{
 					Phase = EAgentPhase::Departing;
@@ -337,7 +338,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 
 	case EAgentPhase::Departing:
 	{
-		if (Departure.Advance(DeltaSeconds, At, Heading, Altitude, Pitch))
+		if (Departure.Advance(DeltaSeconds, Airframe, At, Heading, Altitude, Pitch))
 		{
 			LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 			OutMotion = LastMotion;

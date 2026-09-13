@@ -64,8 +64,8 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	UPROPERTY() double Speed = 0.0;
 
-	/** What the airframe can do. See FGroundPerformance. */
-	UPROPERTY() FGroundPerformance Ground;
+	// GROUND IS NOT STORED HERE ANY MORE (issue #83) - see FLandingRun's own note. Start,
+	// Advance and Replace take the airframe by reference from FRoadAgent::Airframe instead.
 
 	/**
 	 * The crab angle at which speed has fallen all the way to FGroundPerformance::MinTaxiSpeed.
@@ -92,7 +92,7 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	UPROPERTY() FSpeedProfile Profile;
 
-	void Start(const FRoutePlan& InPlan, const FGroundPerformance& InGround, double InitialSpeed = 0.0,
+	void Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed = 0.0,
 		TOptional<double> InitialHeading = TOptional<double>(), double InitialTravelled = 0.0);
 
 	/**
@@ -107,14 +107,18 @@ struct AIRSIDE_API FRouteFollower
 	 * False when there is no valid route to walk, leaving the outputs untouched - so a
 	 * caller that ignores the return value leaves its agent where it was rather than
 	 * teleporting it to the origin, which is this project's most-repeated bug.
+	 *
+	 * InAirframe MUST be the same one Start (or the last Replace) was given - see
+	 * FLandingRun::Advance's note; this is the same contract by the same construction.
 	 */
-	bool Advance(double DeltaSeconds, double StopWithin, FVector2D& OutPosition, double& OutHeading);
+	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, double StopWithin,
+		FVector2D& OutPosition, double& OutHeading);
 
 	/** Advance with nothing ahead. Kept so every caller and test from before the traffic
 	 *  model reads exactly as it did. */
-	bool Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading)
+	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition, double& OutHeading)
 	{
-		return Advance(DeltaSeconds, TNumericLimits<double>::Max(), OutPosition, OutHeading);
+		return Advance(DeltaSeconds, InAirframe, TNumericLimits<double>::Max(), OutPosition, OutHeading);
 	}
 
 	/**
@@ -123,8 +127,11 @@ struct AIRSIDE_API FRouteFollower
 	 * Start() is for a dispatch: it resets to rest at the polyline's first point. A replan
 	 * spliced at a node the agent has not reached yet must not do that - the agent is part
 	 * way along a line that is unchanged up to the splice, so only the profile is rebuilt.
+	 *
+	 * TAKES THE AIRFRAME TOO, now that Ground is not stored here (issue #83): the profile
+	 * rebuild below needs it exactly as Start's did.
 	 */
-	void Replace(const FRoutePlan& NewPlan);
+	void Replace(const FRoutePlan& NewPlan, const FAirframe& InAirframe);
 
 	/** True once the whole polyline has been walked. Always true for an invalid plan. */
 	bool HasArrived() const;

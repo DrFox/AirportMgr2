@@ -41,9 +41,9 @@ bool FFollowerLongFrameTest::RunTest(const FString& Parameters)
 		Plan.Polyline = { FVector2D(0.0, 0.0), FVector2D(200000.0, 0.0) };
 		Plan.Length = 200000.0;
 
-		FGroundPerformance Ground;
+		FAirframe Airframe;
 		FRouteFollower Follower;
-		Follower.Start(Plan, Ground);
+		Follower.Start(Plan, Airframe);
 
 		FVector2D At;
 		double Heading = 0.0;
@@ -61,7 +61,7 @@ bool FFollowerLongFrameTest::RunTest(const FString& Parameters)
 		// is genuinely moving at the speed a long frame would have given it.
 		for (int32 Tick = 0; Tick < TicksFor(60.0); ++Tick)
 		{
-			Follower.Advance(Delta, TNumericLimits<double>::Max(), At, Heading);
+			Follower.Advance(Delta, Airframe, TNumericLimits<double>::Max(), At, Heading);
 		}
 		if (!TestTrue(*FString::Printf(TEXT("delta %.3f s: at cruise before the bar is set"), Delta),
 			Follower.Speed > 990.0))
@@ -75,7 +75,7 @@ bool FFollowerLongFrameTest::RunTest(const FString& Parameters)
 		for (int32 Tick = 0; Tick < TicksFor(60.0); ++Tick)
 		{
 			const double StopWithin = FMath::Max(0.0, StopAt - Follower.Travelled);
-			Follower.Advance(Delta, StopWithin, At, Heading);
+			Follower.Advance(Delta, Airframe, StopWithin, At, Heading);
 
 			TestTrue(*FString::Printf(
 				TEXT("delta %.3f s: never passes the stop point (at %.3f, bar at %.3f)"),

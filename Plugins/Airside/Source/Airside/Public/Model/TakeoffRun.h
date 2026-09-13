@@ -57,8 +57,8 @@ struct AIRSIDE_API FTakeoffRun
 	/** Runway available, uu. */
 	UPROPERTY() double RunwayLength = 0.0;
 
-	UPROPERTY() FGroundPerformance Ground;
-	UPROPERTY() FClimbPerformance Climb;
+	// GROUND/CLIMB ARE NOT STORED HERE ANY MORE (issue #83) - see FLandingRun's own note.
+	// Start and Advance take the airframe by reference from FRoadAgent::Airframe instead.
 
 	/** How far down the runway, uu. Keeps increasing after rotation - the aircraft flies on. */
 	UPROPERTY() double Travelled = 0.0;
@@ -87,17 +87,19 @@ struct AIRSIDE_API FTakeoffRun
 	 * speed it arrives at, floored at MinTaxiSpeed. Both default to the backtrack case.
 	 */
 	bool Start(const FVector2D& InThreshold, const FVector2D& InDirection, double InRunwayLength,
-		const FGroundPerformance& InGround, const FClimbPerformance& InClimb, double InHeading,
-		double InEntryOffset = 0.0, double InSpeed = 0.0);
+		const FAirframe& InAirframe, double InHeading, double InEntryOffset = 0.0,
+		double InSpeed = 0.0);
 
 	/**
 	 * Flies one frame. False once the departure is over, leaving the outputs untouched.
 	 *
 	 * Same contract as FRouteFollower::Advance, and for the same reason: a caller that
 	 * ignores the return value leaves its aircraft where it was rather than at the origin.
+	 *
+	 * InAirframe MUST be the airframe Start was armed with - see FLandingRun::Advance's note.
 	 */
-	bool Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading,
-		double& OutAltitude, double& OutPitch);
+	bool Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition,
+		double& OutHeading, double& OutAltitude, double& OutPitch);
 
 	bool HasCleared() const { return Phase == ETakeoffPhase::Clear; }
 
