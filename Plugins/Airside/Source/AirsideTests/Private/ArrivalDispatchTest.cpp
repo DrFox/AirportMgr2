@@ -95,7 +95,7 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	const FRoadNodeId Threshold = Net.AddNode(ThresholdAt);
 	const FRoadNodeId Exit = Net.AddNode(ExitAt);
 	const FRoadNodeId Far = Net.AddNode(FarEnd);
-	Net.AddStraightSegment(Threshold, Exit, Runway);
+	const FRoadSegmentId RunwaySeed = Net.AddStraightSegment(Threshold, Exit, Runway);
 	Net.AddStraightSegment(Exit, Far, Runway);
 
 	// The taxiway off it, running south.
@@ -136,14 +136,14 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    not do, and why "pressing 7 does nothing" took two sittings to diagnose.
 	{
 		const TArray<FGuidelineNodeId> OnStrip =
-			Net.RunwayExitNodes(ThresholdAt, FVector2D(1.0, 0.0), RunwayLength, 2250.0, 0.0);
+			Net.RunwayExitNodes(RunwaySeed, ThresholdAt, FVector2D(1.0, 0.0), 0.0);
 		TestTrue(FString::Printf(
 			TEXT("the taxiway junction puts guideline node(s) on the runway (%d found)"),
 			OnStrip.Num()),
 			OnStrip.Num() > 0);
 
 		const TArray<FGuidelineNodeId> Usable =
-			Net.RunwayExitNodes(ThresholdAt, FVector2D(1.0, 0.0), RunwayLength, 2250.0, Needed);
+			Net.RunwayExitNodes(RunwaySeed, ThresholdAt, FVector2D(1.0, 0.0), Needed);
 		TestTrue(FString::Printf(
 			TEXT("and at least one of them is far enough down to be usable (%d of %d, past %.0f uu)"),
 			Usable.Num(), OnStrip.Num(), Needed),

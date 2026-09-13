@@ -179,13 +179,19 @@ bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId
 bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
 	double* OutChainHalfWidth) const
 {
+	return IsPointOnRunway(Position, RunwayChain(Seed), OutChainHalfWidth);
+}
+
+bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,
+	double* OutChainHalfWidth) const
+{
 	if (OutChainHalfWidth != nullptr)
 	{
 		*OutChainHalfWidth = 0.0;
 	}
 
 	bool bOnStrip = false;
-	for (const FRoadSegmentId& Id : RunwayChain(Seed))
+	for (const FRoadSegmentId& Id : Chain)
 	{
 		const FRoadSegment* Segment = GetSegment(Id);
 		if (Segment == nullptr)
@@ -201,7 +207,7 @@ bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId See
 		}
 
 		// THE SEGMENT'S OWN HALF WIDTH, not a constant: a chain may mix profiles, and the
-		// bound has to scale with the strip - the same rule RunwayExitNodes uses.
+		// bound has to scale with the strip it is currently walking.
 		const double HalfWidth = Profile->GetTotalWidth() * 0.5;
 		if (OutChainHalfWidth != nullptr)
 		{
@@ -487,16 +493,20 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	return true;
 }
 
-TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshold,
-	const FVector2D& Direction, double Length, double HalfWidth, double MinDistance) const
+TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
+	const FVector2D& Direction, double MinDistance) const
 {
 	TArray<FGuidelineNodeId> Out;
-	if (Direction.IsNearlyZero() || Length <= 0.0)
+	if (Direction.IsNearlyZero())
 	{
 		return Out;
 	}
 
-	const FVector2D Along = Direction.GetSafeNormal();
+	// Walked ONCE here rather than once per guideline node inside IsPointOnRunway: the
+	// walk is the same answer for every point asked of this seed, so paying for it per
+	// point would be re-deriving one fact about the network as many times as there are
+	// candidate exits.
+	const TArray<FRoadSegmentId> Chain = RunwayChain(Seed);
 
 	// Sorted by distance down the runway, because the CALLER's rule is "the first exit I can
 	// take". Collected with the distance and sorted at the end rather than inserted in order:
@@ -511,26 +521,21 @@ TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(const FVector2D& Threshol
 			continue;
 		}
 
-		const FVector2D Offset = Node.Position - Threshold;
-		const double Distance = FVector2D::DotProduct(Offset, Along);
-
-		// Beyond the point the aircraft could have slowed to taxi speed, and still on the
-		// strip. An exit before that is one it cannot take, which is the whole reason
-		// MinDistance is a parameter rather than zero.
-		// The far end is INCLUDED, with the runway's own half width of slack past it. The
-		// commonest airport anyone draws has its taxiway joined to the END of the runway, and
-		// the guideline node there sits wherever the junction cut put it - which can be a
-		// little beyond the road node the length was measured to. Excluding it leaves that
-		// airport with no exits at all.
-		if (Distance < MinDistance || Distance > Length + HalfWidth)
+		// ONE EVALUATOR OF "IS THIS ON THE STRIP" (#87), the same test the crossing hold and
+		// occupancy already share - tested per SEGMENT of the chain against that segment's
+		// OWN width, not a HalfWidth the caller measured across the whole airport. This is
+		// what makes the far end's own slack, and a multi-width chain, correct without this
+		// function knowing either detail.
+		if (!IsPointOnRunway(Node.Position, Chain))
 		{
 			continue;
 		}
 
-		// LATERAL, so a node on a parallel taxiway is not mistaken for one on the runway.
-		// The runway's own half width is the bound, so it scales with the strip.
-		const double Lateral = FMath::Abs(FVector2D::CrossProduct(Along, Offset));
-		if (Lateral > HalfWidth)
+		const double Distance = FVector2D::DotProduct(Node.Position - Threshold, Direction);
+
+		// Beyond the point the aircraft could have slowed to taxi speed. An exit before that
+		// is one it cannot take, which is the whole reason MinDistance is a parameter.
+		if (Distance < MinDistance)
 		{
 			continue;
 		}

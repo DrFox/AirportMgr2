@@ -3,7 +3,6 @@
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficOccupancy.h"
-#include "Profiles/RoadProfile.h"
 
 namespace ArrivalPlanner
 {
@@ -98,22 +97,6 @@ namespace ArrivalPlanner
 		Out.Needed = FLandingRun::RequiredLandingDistance(Airframe.Ground, Airframe.Climb, Airframe.Approach)
 			* FLandingRun::LandingMargin;
 
-		// The runway's own width bounds what counts as ON it, the same figure RunwayExtentAt
-		// uses for its reach - so "on the runway" means one thing across the whole model.
-		double HalfWidth = 0.0;
-		for (const FRoadSegment& Segment : Network.GetSegments())
-		{
-			if (!Segment.bAlive)
-			{
-				continue;
-			}
-			const URoadProfile* SegmentProfile = Network.ProfileFor(Segment);
-			if (SegmentProfile != nullptr && SegmentProfile->bContinuousThroughJunctions)
-			{
-				HalfWidth = FMath::Max(HalfWidth, SegmentProfile->GetTotalWidth() * 0.5);
-			}
-		}
-
 		// 2. THE EARLIEST EXIT IT COULD TAKE, asked before anything is armed - the same
 		//    discipline as a departure refusing a strip it cannot leave.
 		//
@@ -135,9 +118,14 @@ namespace ArrivalPlanner
 		//    an unbounded strip against 37039 needed), and an arc whose start lay between
 		//    the two was skipped for the junction node behind it, which has no turn-off at
 		//    all. The player watched the aircraft roll straight past the exit it had built.
+		// RunwayExitNodes tests each chain segment against its OWN width (#87) - no HalfWidth
+		// measured here, and no risk of a wider runway elsewhere loosening this strip's test.
+		// Threshold/Direction are OUR OWN (the end this arrival is actually at), not
+		// re-derived from the seed: a seed has two ends and only the caller knows which one
+		// is meant (fixed 2026-09-13, see RunwayExitNodes's own comment).
 		const double SlowedBy = Out.Needed / FLandingRun::LandingMargin;
 		const TArray<FGuidelineNodeId> Exits =
-			Network.RunwayExitNodes(Out.Threshold, Out.Direction, Out.RunwayLength, HalfWidth, SlowedBy);
+			Network.RunwayExitNodes(Out.RunwaySegment, Out.Threshold, Out.Direction, SlowedBy);
 		Out.ExitCount = Exits.Num();
 
 		if (Out.RunwayLength < Out.Needed)
