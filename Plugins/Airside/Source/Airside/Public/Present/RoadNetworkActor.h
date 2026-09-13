@@ -177,6 +177,14 @@ public:
 	UAirsideTraffic* GetTraffic() const { return Traffic; }
 
 	/**
+	 * Non-const overload of the IRoadEditTarget accessor above, for a caller that needs to
+	 * MUTATE traffic (UFlightBoard::AcceptImmediate, the offer inbox's Refresh) rather than
+	 * read it. Replaces the `GetTraffic() != nullptr ? GetTraffic()->GetModel() : nullptr`
+	 * ternary those call sites used to hand-roll (#103).
+	 */
+	UGroundTraffic* GetGroundTraffic();
+
+	/**
 	 * The surface presenter, for a caller that wants it directly rather than through a
 	 * forwarder on this actor. Added alongside GetTraffic() by issue #80 for the same reason:
 	 * read access to a subobject, not a forwarder per method - and used exactly that way by
