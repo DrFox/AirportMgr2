@@ -124,16 +124,16 @@ const TCHAR* FGuidelineDrawTool::Describe(EGuidelineLink Result)
 
 FGuidelineNodeId FGuidelineDrawTool::PickNode(const FToolContext& Context) const
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Network() == nullptr)
 	{
 		return FGuidelineNodeId();
 	}
-	return NearestAnyNode(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
+	return NearestAnyNode(*Context.Network(), Context.Cursor, Context.SnapRadius);
 }
 
 void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Target == nullptr || Context.Network() == nullptr)
 	{
 		return;
 	}
@@ -143,7 +143,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 	if (Context.bRemoveModifier)
 	{
 		const FGuidelineEdgeId Doomed =
-			NearestHandEdge(*Context.Target->GetNetwork(), Context.Cursor, Context.SnapRadius);
+			NearestHandEdge(*Context.Network(), Context.Cursor, Context.SnapRadius);
 		if (Doomed.IsSet())
 		{
 			Context.Target->DisconnectGuideline(Doomed.Index);
@@ -167,7 +167,7 @@ void FGuidelineDrawTool::OnClick(const FToolContext& Context)
 
 	// Refusals leave the START in place rather than dropping it. Clearing it would make a
 	// mis-aimed second click cost the first one too.
-	if (Validate(*Context.Target->GetNetwork(), StartNode, Picked) != EGuidelineLink::Valid)
+	if (Validate(*Context.Network(), StartNode, Picked) != EGuidelineLink::Valid)
 	{
 		return;
 	}
@@ -188,12 +188,12 @@ void FGuidelineDrawTool::OnDeactivate(const FToolContext& Context)
 
 void FGuidelineDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Target == nullptr || Context.Target->GetNetwork() == nullptr)
+	if (Context.Network() == nullptr)
 	{
 		return;
 	}
 
-	const URoadNetwork& Network = *Context.Target->GetNetwork();
+	const URoadNetwork& Network = *Context.Network();
 
 	// Removal reads differently from drawing, so it previews differently: the link that
 	// would go, marked as doomed, and nothing about starting a new one.

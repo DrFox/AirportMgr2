@@ -46,9 +46,9 @@ void FApronIdleState::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	if (Context.bRemoveModifier)
 	{
 		const int32 Under = Context.Target->FindApronAt(Context.Cursor);
-		if (Under != INDEX_NONE && Context.Target->GetNetwork() != nullptr)
+		if (Under != INDEX_NONE && Context.Network() != nullptr)
 		{
-			const TArray<FApronSurface>& Aprons = Context.Target->GetNetwork()->GetAprons();
+			const TArray<FApronSurface>& Aprons = Context.Network()->GetAprons();
 			if (Aprons.IsValidIndex(Under))
 			{
 				const TArray<FVector2D>& Outline = Aprons[Under].Outline;

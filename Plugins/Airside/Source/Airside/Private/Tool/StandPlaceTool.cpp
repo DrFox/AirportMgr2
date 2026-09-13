@@ -130,9 +130,9 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	if (Context.bRemoveModifier)
 	{
 		const int32 Under = Context.Target->FindEntityAt(Context.Cursor, Context.SnapRadius);
-		if (Under != INDEX_NONE && Context.Target->GetNetwork() != nullptr)
+		if (Under != INDEX_NONE && Context.Network() != nullptr)
 		{
-			const TArray<FEntityInstance>& Entities = Context.Target->GetNetwork()->GetEntities();
+			const TArray<FEntityInstance>& Entities = Context.Network()->GetEntities();
 			if (Entities.IsValidIndex(Under))
 			{
 				Sink.Marker(Entities[Under].Position, EPreviewStyle::Doomed);

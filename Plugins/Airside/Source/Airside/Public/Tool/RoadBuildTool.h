@@ -58,6 +58,14 @@ struct FToolContext
 	 */
 	double SnapRadius = 150.0;
 
+	/**
+	 * Target's network, null-safe. A Ctrl-remove preview always needs Target non-null AND
+	 * its network non-null before it can look anything up - that pair used to be
+	 * `Context.Target != nullptr && Context.Target->GetNetwork() != nullptr` at every one
+	 * of those call sites (#103); this is the null check, once.
+	 */
+	const URoadNetwork* Network() const { return Target != nullptr ? Target->GetNetwork() : nullptr; }
+
 	/** Ctrl: the gesture means remove rather than build. */
 	bool bRemoveModifier = false;
 
