@@ -1,5 +1,6 @@
 #include "RoadBuildEdMode.h"
 
+#include "AirsideEditorLog.h"
 #include "EdModeInteractiveToolsContext.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
@@ -9,14 +10,13 @@
 
 #define LOCTEXT_NAMESPACE "RoadBuildEdMode"
 
-// Every tool switch is logged, and so is every tool that gets built.
+// Every tool switch is logged under LogAirsideEditor, and so is every tool that gets built.
 //
 // Not decoration: this mode has now produced three separate rounds of "the tool looks
 // broken" where the model was correct, and each was diagnosed from screenshots and guesses
 // before anything measured the boundary. A tool that does not activate and a tool that
 // activates and draws nothing are indistinguishable on screen, and these two lines tell
 // them apart outright.
-DEFINE_LOG_CATEGORY_STATIC(LogRoadBuildMode, Log, All);
 
 namespace
 {
@@ -97,7 +97,7 @@ void URoadBuildEdMode::Enter()
 	// PREVIOUS tool running and a player drew a taxiway believing it was a service road.
 	if (ToolCommands.Num() != Registry.Num())
 	{
-		UE_LOG(LogRoadBuildMode, Error,
+		UE_LOG(LogAirsideEditor, Error,
 			TEXT("%d editor commands but %d registry entries - see FRoadBuildEdModeCommands::"
 				 "ToolCommandsInOrder and ToolRegistry(). A tool past the shorter count gets "
 				 "no command."),
@@ -114,7 +114,7 @@ void URoadBuildEdMode::Enter()
 		if (const TSharedPtr<FUICommandInfo>& Command = ToolCommands[Index];
 			Command.IsValid() && !Command->GetLabel().EqualTo(Registry[Index].Name))
 		{
-			UE_LOG(LogRoadBuildMode, Error,
+			UE_LOG(LogAirsideEditor, Error,
 				TEXT("Tool %d: command label \"%s\" does not match registry name \"%s\" - ")
 				TEXT("FRoadBuildEdModeCommands::ToolCommandsInOrder and ToolRegistry() have ")
 				TEXT("drifted out of order."),
@@ -136,7 +136,7 @@ void URoadBuildEdMode::Enter()
 			*Registry[Index].Name.ToString());
 	}
 
-	UE_LOG(LogRoadBuildMode, Log,
+	UE_LOG(LogAirsideEditor, Log,
 		TEXT("Road Build mode entered. Tools: %s. If a number key does nothing, the palette "
 			 "buttons do the same job."),
 		*Banner);
@@ -217,7 +217,7 @@ FExecuteAction URoadBuildEdMode::StartToolAction(int32 ToolIndex)
 	return FExecuteAction::CreateLambda([this, ToolIndex]()
 	{
 		const FString ToolName = MakeToolName(ToolIndex);
-		UE_LOG(LogRoadBuildMode, Log, TEXT("Tool switch requested: %s"), *ToolName);
+		UE_LOG(LogAirsideEditor, Log, TEXT("Tool switch requested: %s"), *ToolName);
 
 		// Still refused, and for the reason it always was: restarting the tool already
 		// running would silently abandon a chain half-drawn.

@@ -1,6 +1,9 @@
 #include "AirsideEditorModule.h"
 
+#include "AirsideEditorLog.h"
 #include "RoadBuildEdModeCommands.h"
+
+DEFINE_LOG_CATEGORY(LogAirsideEditor);
 
 #define LOCTEXT_NAMESPACE "AirsideEditor"
 

@@ -13,10 +13,12 @@
          includes only CoreMinimal.h and Solve/. (Issue #31: Model<->Entities and
          Tool<->Present cycles shipped and stayed; issue #104: AirportOps' FuelService.cpp
          resolved a content default itself instead of taking it from Present/.)
-      2. One log category per name across the Airside module. It is a unity build, so two
+      2. One log category per name across each unity-build module: Airside, AirportOps,
+         AirsideEditor, AirsideTests and AirportOpsTests. It is a unity build, so two
          DEFINE_LOG_CATEGORY_STATIC of one name in different .cpp files collide at compile
          time - but only once the two land in the same Module.*.cpp blob, which is why it
-         passed locally and failed later. (Issue #35 / PR #39.)
+         passed locally and failed later. (Issue #35 / PR #39; issue #104 widened this past
+         Airside/AirportOps to the editor and test modules, none of which were checked.)
       3. No stacked doc comments in headers: a */ followed by /** with no declaration between
          means one of them lost its subject. (Issue #34.)
       4. The Piper fallback is called from exactly one production site. Any other call of a
@@ -39,10 +41,20 @@ param(
 $ErrorActionPreference = 'Stop'
 $failures = New-Object System.Collections.Generic.List[string]
 
-$plugin  = Join-Path $Root 'Plugins\Airside\Source\Airside'
-$ops     = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
+$plugin      = Join-Path $Root 'Plugins\Airside\Source\Airside'
+$ops         = Join-Path $Root 'Plugins\AirportOps\Source\AirportOps'
+$editor      = Join-Path $Root 'Plugins\Airside\Source\AirsideEditor'
+$airsideTests = Join-Path $Root 'Plugins\Airside\Source\AirsideTests'
+$opsTests    = Join-Path $Root 'Plugins\AirportOps\Source\AirportOpsTests'
 $modules = @($plugin, $ops)
 $trees   = @((Join-Path $Root 'Plugins\Airside\Source'), (Join-Path $Root 'Plugins\AirportOps\Source'), (Join-Path $Root 'Source\AirportMgr'))
+
+# Rule 2's own module list, wider than $modules above: AirsideEditor, and the two test
+# modules, are not subject to the Model/Tool/Build include-direction rule (a composition
+# test freely includes Present/), but a DEFINE_LOG_CATEGORY_STATIC in any of them collides
+# under the SAME unity-build failure mode as one in Airside or AirportOps - #104: 8 of them
+# in the two test modules were unique only because nobody had yet picked the same word twice.
+$logCategoryModules = @($plugin, $ops, $editor, $airsideTests, $opsTests)
 
 function Get-Sources([string] $Dir, [string[]] $Ext) {
     if (-not (Test-Path $Dir)) { return @() }
@@ -97,7 +109,7 @@ foreach ($half in 'Public', 'Private') {
 }
 
 # --- 2. Log category names unique within each module ------------------------------------
-foreach ($module in $modules) {
+foreach ($module in $logCategoryModules) {
     $categories = @{}
     foreach ($file in Get-Sources $module @('.cpp', '.h')) {
         $hits = Select-String -Path $file.FullName -Pattern 'DEFINE_LOG_CATEGORY(_STATIC)?\(\s*(\w+)'
