@@ -179,8 +179,12 @@ void FRoadAgent::ArmDeparture(const FRunwayEnd& End, double EntryOffset)
 	DepartureOrder.EntryOffset = EntryOffset;
 }
 
-bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
+bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent)
 {
+	// NONE ON THE COMMON FRAME, overwritten below only at an actual handover - see
+	// EAgentEvent's own comment.
+	OutEvent = EAgentEvent::None;
+
 	// FIRST, AND WHATEVER PHASE IS DRIVING. An engine spooled only inside one phase's branch
 	// would freeze whenever the aircraft was doing something else - which is most of the time.
 	AdvanceEngine(DeltaSeconds);
@@ -225,6 +229,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// speed the wheels already have. Starting from zero here was the "stops dead at the
 		// exit, turns on the spot, pulls away" the player reported on 2026-09-06.
 		Phase = EAgentPhase::Taxiing;
+		OutEvent = EAgentEvent::Vacated;
 		// Speed, heading AND distance carry over: the rollout crossed VacateAt last frame
 		// and stopped this far past it, which is this far along the arc.
 		Follower.Start(TaxiInPlan, Airframe, Arrival.Speed, LastMotion.Heading,
@@ -274,6 +279,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 					DepartureOrder.EntryOffset, Follower.Speed))
 				{
 					Phase = EAgentPhase::Departing;
+					OutEvent = EAgentEvent::LinedUp;
 					UE_LOG(LogAirsideTraffic, Log, TEXT("Taxi complete; rolling for departure."));
 				}
 				// Declined (see FTakeoffRun::Start): bDepartureArmed is already cleared
@@ -293,6 +299,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 				// stall - an arriving aircraft sits at the stand with the engine running
 				// while the chocks go in.
 				Phase = EAgentPhase::Parked;
+				OutEvent = EAgentEvent::Parked;
 				ShutdownCountdown = ShutdownPause;
 
 				// ZEROED HERE: the Parked branch below never calls Follower.Advance again, so
@@ -338,10 +345,19 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 
 	case EAgentPhase::Departing:
 	{
+		// BEFORE, so the climb transition can be told apart from "already climbing" - NOT an
+		// EAgentPhase change (Departing both before and after), which is why AdvanceOnce used
+		// to check this sub-phase directly from outside rather than being told. See
+		// EAgentEvent::Airborne's own comment.
+		const ETakeoffPhase TakeoffPhaseBefore = Departure.Phase;
 		if (Departure.Advance(DeltaSeconds, Airframe, At, Heading, Altitude, Pitch))
 		{
 			LastMotion = DescribeMotion(At, Heading, Altitude, Pitch);
 			OutMotion = LastMotion;
+			if (TakeoffPhaseBefore != ETakeoffPhase::Climb && Departure.Phase == ETakeoffPhase::Climb)
+			{
+				OutEvent = EAgentEvent::Airborne;
+			}
 			return true;
 		}
 
@@ -349,6 +365,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion)
 		// destroys the view and drops the agent the moment this returns false.
 		UE_LOG(LogAirsideTraffic, Log, TEXT("Departure complete, agent despawned"));
 		Phase = EAgentPhase::Gone;
+		OutEvent = EAgentEvent::Gone;
 		return false;
 	}
 

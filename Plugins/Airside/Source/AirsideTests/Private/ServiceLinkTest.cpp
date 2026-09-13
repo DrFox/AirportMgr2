@@ -497,7 +497,7 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTruckReachesHydrantWithoutCrossingTheAircraftTest,
-	"Airside.Traffic.TruckReachesHydrantWithoutCrossingTheAircraft",
+	"Airside.Model.Traffic.TruckReachesHydrantWithoutCrossingTheAircraft",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& Parameters)

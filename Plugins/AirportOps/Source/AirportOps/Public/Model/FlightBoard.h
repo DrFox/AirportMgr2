@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/ArrivalPlanner.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadEntity.h"
 #include "UObject/Object.h"
 
@@ -29,11 +30,16 @@ enum class EAgentPhase : uint8;
  * Present/.
  */
 UCLASS()
-class AIRPORTOPS_API UFlightBoard : public UObject
+class AIRPORTOPS_API UFlightBoard : public UObject, public IOpsPersistent
 {
 	GENERATED_BODY()
 
 public:
+	// --- IOpsPersistent ---------------------------------------------------------------
+	/** "Flights": the name OpsSave.h's shim already expects for a pre-v4 save's bytes. */
+	virtual FName SaveBlobName() const override { return TEXT("Flights"); }
+	virtual UObject& AsPersistentObject() override { return *this; }
+
 	/**
 	 * What actually puts an aeroplane in the world. UOpsRuntime::Attach points this at
 	 * ARoadNetworkActor::DispatchArrival; tests substitute a recorder.
@@ -46,7 +52,23 @@ public:
 	 */
 	TFunction<bool(const FVector2D& Near, const FAirframe& Airframe)> Dispatcher;
 
-	/** Raised whenever anything a viewmodel displays has changed. */
+	/**
+	 * Raised whenever anything a viewmodel displays has changed.
+	 *
+	 * NOT ON UOpsEvents (issue #105 item 11's "or document why not"): that bus announces
+	 * discrete OUTCOMES - an agent's phase changed, an arrival was refused, the speed changed
+	 * - each with a publisher that fires it rarely enough to log and a payload Blueprint can
+	 * bind to. This is a coarse "go re-read everything" signal a C++ viewmodel polls off of
+	 * (UOfferInboxViewModel::Refresh re-derives its whole row list from the board every time),
+	 * fired from nearly every method in this class - AddOffer, Accept, Decline, DispatchNow,
+	 * OnAgentPhase, OnGraphRebuilt - often several times per player action. Logging each fire
+	 * the way every Notify* does would flood the log with lines that say nothing happened
+	 * except "ask the board again"; putting it on the bus would let Blueprint bind to a
+	 * signal that carries no information about what changed, unlike every other one there.
+	 * FSimpleMulticastDelegate (no UPROPERTY, no BlueprintAssignable) matches what it actually
+	 * is: C++ wiring between this model and its own viewmodels, not an outcome for anyone
+	 * else to hear about.
+	 */
 	FSimpleMulticastDelegate OnChanged;
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
@@ -82,8 +104,11 @@ public:
 	 */
 	static bool DefaultApproachFocus(const URoadNetwork& Network, FVector2D& OutFocus);
 
-	/** Takes ownership of an offer and gives it the next id if it has none. */
-	void AddOffer(UFlight* Offer);
+	/**
+	 * Takes ownership of an offer, gives it the next id if it has none, and puts its expiry
+	 * on the clock - see ScheduleExpiry's own comment for why this replaced Tick's poll.
+	 */
+	void AddOffer(USimClock& Clock, UFlight* Offer);
 
 	/** The id the next offer should carry. The board owns numbering; see UOfferGenerator. */
 	int32 TakeNextId();
@@ -97,7 +122,8 @@ public:
 	bool Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock,
 		UFlight& Flight);
 
-	void Decline(UFlight& Flight);
+	/** Cancels the offer's scheduled expiry - it will never lapse now, having been answered. */
+	void Decline(USimClock& Clock, UFlight& Flight);
 
 	/**
 	 * Make a flight from an airframe, aim it at Focus, and accept it on the spot - the debug
@@ -126,9 +152,6 @@ public:
 	EArrivalRefusal WhyNotAcceptable(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const UFlight& Flight) const;
 
-	/** Expiry, and nothing else on the fast path: the ETA is the clock's job, not a poll. */
-	void Tick(USimClock& Clock);
-
 	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network, int32 AgentId,
 		EAgentPhase From, EAgentPhase To);
 
@@ -136,11 +159,12 @@ public:
 	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network);
 
 	/**
-	 * Re-arm the clock for every Accepted flight.
+	 * Re-arm the clock for every Accepted flight's arrival AND every Offered flight's expiry.
 	 *
 	 * CALLED AFTER A LOAD, and it is not optional: USimClock deliberately does not save its
-	 * callback queue, so a restored flight has an ETA and nothing armed. Without this it
-	 * never arrives, and nothing anywhere says so.
+	 * callback queue, so a restored flight has an ETA (or an ExpiresAt) and nothing armed.
+	 * Without this an accepted flight never arrives, and an offered one never lapses even
+	 * long after its window - and nothing anywhere says so.
 	 */
 	void RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock);
 
@@ -175,8 +199,22 @@ private:
 	 */
 	TMap<int32, int32> ArrivalHandles;
 
+	/** Same shape as ArrivalHandles, same reason: not saved, rebuilt by RearmSchedules. */
+	TMap<int32, int32> ExpiryHandles;
+
 	void DispatchNow(UGroundTraffic& Traffic, UFlight& Flight);
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
+
+	/**
+	 * Puts Offer's ExpiresAt on the clock, replacing what used to be Tick's per-frame poll
+	 * over every offer (issue #105 item 9) - arrivals were already Clock.At callbacks
+	 * (Schedule, above); expiry was the one thing still checked by hand every tick.
+	 */
+	void ScheduleExpiry(USimClock& Clock, UFlight& Offer);
+
+	/** Called on Accept/Decline: the offer has been answered, so it can no longer lapse. */
+	void CancelExpiry(USimClock& Clock, UFlight& Offer);
+
 	UFlight* FindByAgent(int32 AgentId);
 	UFlight* FindById(int32 Id);
 };

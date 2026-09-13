@@ -66,12 +66,12 @@ void FRunwayTool::NextWidth(const FToolContext& Context)
 
 void FRunwayTool::NextSurface()
 {
-	Surface = static_cast<ERunwaySurface>((static_cast<uint8>(Surface) + 1) % 4);
+	Surface = static_cast<ERunwaySurface>((static_cast<uint8>(Surface) + 1) % static_cast<uint8>(ERunwaySurface::Count));
 }
 
 void FRunwayTool::NextApproach()
 {
-	Approach = static_cast<ERunwayApproach>((static_cast<uint8>(Approach) + 1) % 3);
+	Approach = static_cast<ERunwayApproach>((static_cast<uint8>(Approach) + 1) % static_cast<uint8>(ERunwayApproach::Count));
 }
 
 FRunwayFacts FRunwayTool::Facts() const

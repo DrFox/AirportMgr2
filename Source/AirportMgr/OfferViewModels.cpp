@@ -129,22 +129,20 @@ bool UOfferInboxViewModel::Accept(UOfferViewModel* Row)
 void UOfferInboxViewModel::Decline(UOfferViewModel* Row)
 {
 	UFlightBoard* LiveBoard = Board.Get();
-	if (Row == nullptr || LiveBoard == nullptr)
+	USimClock* LiveClock = Clock.Get();
+	if (Row == nullptr || LiveBoard == nullptr || LiveClock == nullptr)
 	{
 		return;
 	}
 	if (UFlight* Flight = Row->Flight.Get())
 	{
-		LiveBoard->Decline(*Flight);
+		LiveBoard->Decline(*LiveClock, *Flight);
 	}
 	if (UGroundTraffic* LiveTraffic = Traffic.Get())
 	{
 		if (URoadNetwork* LiveNetwork = Network.Get())
 		{
-			if (USimClock* LiveClock = Clock.Get())
-			{
-				Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock);
-			}
+			Refresh(*LiveBoard, *LiveTraffic, *LiveNetwork, *LiveClock);
 		}
 	}
 }

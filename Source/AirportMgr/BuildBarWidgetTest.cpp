@@ -27,7 +27,7 @@ bool FBuildBarWidgetTest::RunTest(const FString& Parameters)
 	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 
-	for (uint8 S = 0; S <= static_cast<uint8>(EActionSection::Game); ++S)
+	for (uint8 S = 0; S < static_cast<uint8>(EActionSection::Count); ++S)
 	{
 		const EActionSection Section = static_cast<EActionSection>(S);
 		int32 Expected = 0;

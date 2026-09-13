@@ -13,8 +13,22 @@ const TCHAR* RunwaySurfaceName(ERunwaySurface Surface)
 	case ERunwaySurface::Tarmac:     return TEXT("tarmac");
 	case ERunwaySurface::Concrete:   return TEXT("concrete");
 	case ERunwaySurface::Reinforced: return TEXT("reinforced");
+	default:                         break;
 	}
 	return TEXT("unknown");
+}
+
+int32 RunwayMaterialSlot(ERunwaySurface Surface)
+{
+	switch (Surface)
+	{
+	case ERunwaySurface::Grass:  return 0;
+	case ERunwaySurface::Tarmac: return 1;
+	// Reinforced shares concrete's slot - see the declaration's own comment for why.
+	case ERunwaySurface::Concrete:
+	case ERunwaySurface::Reinforced:
+	default:                     return 2;
+	}
 }
 
 const TCHAR* RunwayApproachName(ERunwayApproach Approach)
@@ -24,6 +38,7 @@ const TCHAR* RunwayApproachName(ERunwayApproach Approach)
 	case ERunwayApproach::Visual:       return TEXT("visual");
 	case ERunwayApproach::NonPrecision: return TEXT("non-precision");
 	case ERunwayApproach::Precision:    return TEXT("precision");
+	default:                            break;
 	}
 	return TEXT("unknown");
 }

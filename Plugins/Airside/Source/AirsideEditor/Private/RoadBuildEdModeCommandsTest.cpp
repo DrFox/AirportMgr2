@@ -7,8 +7,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * The one seam that can still drift: ToolCommandsInOrder() is a hand-written UI_COMMAND list
- * beside ToolRegistry(), and nothing but opening the mode used to compare them.
+ * ToolCommandsInOrder() is now BUILT FROM ToolRegistry() (issue #105 item 10), replacing a
+ * hand-written UI_COMMAND list that used to sit beside it and could drift silently. This test
+ * predates that move and stays as the regression guard: it still fails if RegisterCommands
+ * ever goes back to a hand-typed list, or a future entry skips FUICommandInfo::MakeCommandInfo.
  *
  * IN AirsideEditor, not AirsideTests, deliberately. AirsideTests depends on Airside alone -
  * Model/Present/Tool are tested with no editor module loaded - and making it depend on an
@@ -16,8 +18,9 @@
  * A test that lives with the code it guards costs nothing and needs no new dependency.
  *
  * This test would have failed for the whole slice in which the registry carried Road and Fuel
- * depot and this list did not: key 9 was unbound, so it left the previous tool running and a
- * player drew a TAXIWAY - an Aircraft-only guideline that no service lane can join.
+ * depot and the old hand-written list did not: key 9 was unbound, so it left the previous
+ * tool running and a player drew a TAXIWAY - an Aircraft-only guideline no service lane can
+ * join.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildEdModeCommandsTest,

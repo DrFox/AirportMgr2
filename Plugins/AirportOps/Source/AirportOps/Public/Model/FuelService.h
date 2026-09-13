@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/DeparturePlanner.h"
+#include "Model/OpsSave.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
 #include "UObject/Object.h"
@@ -168,11 +169,31 @@ struct AIRPORTOPS_API FFuelDemand
  * vehicle agent and its view - which is why none of that is in this class.
  */
 UCLASS()
-class AIRPORTOPS_API UFuelService : public UObject
+class AIRPORTOPS_API UFuelService : public UObject, public IOpsPersistent
 {
 	GENERATED_BODY()
 
 public:
+	// --- IOpsPersistent ---------------------------------------------------------------
+	/** "Fuel": a NEW blob - no save before this issue ever captured this class at all, which
+	 *  is the other half of the bug OnBeforeRestore fixes (Demands/GoingHome were never even
+	 *  reset, let alone saved). */
+	virtual FName SaveBlobName() const override { return TEXT("Fuel"); }
+	virtual UObject& AsPersistentObject() override { return *this; }
+
+	/**
+	 * Demands AND GoingHome are cleared, not restored from a blob: both name agents
+	 * (TruckId/AircraftId), and UOpsRuntime::LoadFromSlot always clears every agent before
+	 * calling OpsSave::Restore - so any id either held is stale the instant a load happens,
+	 * whether or not this snapshot even has a Fuel blob. Before this fix GoingHome in
+	 * particular was never touched at all: a truck sent home, then a load, left its entry in
+	 * GoingHome forever (nothing removes an entry except the truck arriving, which it now
+	 * never will, being gone) - TrucksOutFor(Depot) counted it as out for the rest of the
+	 * session, one truck short, for every depot a truck happened to be homeward bound from
+	 * at save time. The demands agents rebuild the moment OnAgentPhase sees them again.
+	 */
+	virtual void OnBeforeRestore() override { Demands.Reset(); GoingHome.Reset(); }
+
 	/**
 	 * How long a truck stays at the hydrant, in the sim seconds a truck MOVES in.
 	 *
@@ -226,6 +247,11 @@ public:
 	 *  to tell "retired at home" from "never dispatched". */
 	int32 TrucksGoingHomeForTest() const { return GoingHome.Num(); }
 
+	/** Puts a truck in GoingHome without running the traffic model - so OpsSave's tests can
+	 *  reach the leak OnBeforeRestore fixes without a full arrival-to-turnaround fixture,
+	 *  which FuelServiceTest.cpp already builds for the behavioural side of this class. */
+	void SetGoingHomeForTest(int32 TruckId, FEntityInstanceId Depot) { GoingHome.Add(TruckId, Depot); }
+
 private:
 	/**
 	 * Send every aircraft whose turnaround has run out and whose services are finished.
@@ -241,7 +267,16 @@ private:
 	void DepartTheReady(UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock);
 
-	UPROPERTY() TArray<FFuelDemand> Demands;
+	/**
+	 * TRANSIENT (PR #137 review, issue #105 item 8): both this and GoingHome below NAME
+	 * AGENTS (TruckId, AircraftId), and agents are never saved - see OpsRuntimeTest's own
+	 * "agents do not survive a load" assertion. Non-Transient, these were serialized straight
+	 * into the new Fuel blob, and RestoreBlob's OnBeforeRestore() (which clears both) ran
+	 * BEFORE the deserialize that then overwrote them right back from the blob - the leak
+	 * this issue traces would have come back through any v4 save with a truck homeward-bound,
+	 * exactly the bug OnBeforeRestore exists to fix.
+	 */
+	UPROPERTY(Transient) TArray<FFuelDemand> Demands;
 
 	/**
 	 * Trucks on their way back, and the depot each is going to.
@@ -253,9 +288,9 @@ private:
 	 * and the demand's TruckId is cleared at the same moment.
 	 *
 	 * A truck in here still COUNTS as out (see TrucksOutFor): it is not available until it
-	 * has actually arrived.
+	 * has actually arrived. TRANSIENT for the same reason as Demands above.
 	 */
-	UPROPERTY() TMap<int32, FEntityInstanceId> GoingHome;
+	UPROPERTY(Transient) TMap<int32, FEntityInstanceId> GoingHome;
 
 	/**
 	 * The guideline revision the last refusal was decided against.

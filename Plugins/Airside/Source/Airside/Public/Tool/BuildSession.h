@@ -11,16 +11,36 @@ class URoadNetwork;
 class IRoadEditTarget;
 
 /**
- * One selectable tool: the key that picks it, its display name, and how to make one.
+ * One selectable tool: the key that picks it, its display name, its tooltip, and how to
+ * make one.
  *
  * A registration rather than a bare TFunction, because a tool needs a KEY and a NAME
  * before it needs to exist - the startup banner and the editor's command list both want
  * those without constructing six IBuildTools to ask.
+ *
+ * TOOLTIP JOINED THE OTHER TWO (issue #105 item 10): FRoadBuildEdModeCommands used to hand-
+ * author one UI_COMMAND per tool beside this table, with the LABEL checked against this
+ * one's Name by string at URoadBuildEdMode::Enter - a runtime check that the two lists still
+ * agreed, rather than there being one list. FRoadBuildEdModeCommands now builds its
+ * ToolCommands FROM this table directly (FUICommandInfo::MakeCommandInfo, not the UI_COMMAND
+ * macro, which requires a compile-time named field per command), so Tooltip has to live
+ * here too - the one thing the old hand-written commands carried that this table did not.
  */
 struct FToolRegistration
 {
 	FKey Key;
+
+	/**
+	 * STABLE, unlocalised (PR #137 review, issue #105 item 10): FRoadBuildEdModeCommands used
+	 * to build each command's FName straight from Name below, which is LOCTEXT and therefore
+	 * whatever the current culture renders it as - baking a translation into the command id
+	 * FUICommandInfo persists to the editor's per-user keybindings ini. A locale change would
+	 * have orphaned every saved keybinding silently. This is the one field nothing localises.
+	 */
+	FName Id;
+
 	FText Name;
+	FText Tooltip;
 	TFunction<TUniquePtr<IBuildTool>()> Make;
 };
 

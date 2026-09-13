@@ -127,17 +127,18 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 	// project without the runway materials authored still draws its runways as roads. An
 	// authored set that already declares one of these names keeps its own binding: the
 	// name resolves to the earlier index, and the appended copy is never reached.
-	const struct { ERunwaySurface Surface; UMaterialInterface* Material; } Runway[] = {
-		{ ERunwaySurface::Grass, Settings.RunwayGrassMaterial },
-		{ ERunwaySurface::Tarmac, Settings.RunwayTarmacMaterial },
-		{ ERunwaySurface::Concrete, Settings.RunwayConcreteMaterial },
-	};
-	for (const auto& Entry : Runway)
+	//
+	// Grass/Tarmac/Concrete ONLY - Reinforced has no slot of its own; RunwayMaterialSlot is
+	// where that alias happens, and Settings.RunwayMaterials is already indexed by it.
+	const ERunwaySurface RunwaySurfacesBySlot[] = { ERunwaySurface::Grass, ERunwaySurface::Tarmac, ERunwaySurface::Concrete };
+	static_assert(UE_ARRAY_COUNT(RunwaySurfacesBySlot) == RunwayMaterialSlotCount,
+		"One entry per runway material slot - see RunwayMaterialSlotCount's own comment");
+	for (int32 Slot = 0; Slot < UE_ARRAY_COUNT(RunwaySurfacesBySlot); ++Slot)
 	{
-		FRoadMaterialSlot Slot;
-		Slot.Name = URoadMaterialSet::RunwaySlotName(Entry.Surface);
-		Slot.Material = Entry.Material != nullptr ? Entry.Material : Settings.SurfaceMaterial;
-		EffectiveSet->Slots.Add(Slot);
+		FRoadMaterialSlot MatSlot;
+		MatSlot.Name = URoadMaterialSet::RunwaySlotName(RunwaySurfacesBySlot[Slot]);
+		MatSlot.Material = Settings.RunwayMaterials[Slot] != nullptr ? Settings.RunwayMaterials[Slot] : Settings.SurfaceMaterial;
+		EffectiveSet->Slots.Add(MatSlot);
 	}
 	return EffectiveSet;
 }

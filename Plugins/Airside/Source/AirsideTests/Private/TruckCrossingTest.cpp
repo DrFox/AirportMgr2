@@ -13,7 +13,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTruckCrossesTaxiwayTest,
-	"Airside.Traffic.TruckCrossesTaxiway",
+	"Airside.Model.Traffic.TruckCrossesTaxiway",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)

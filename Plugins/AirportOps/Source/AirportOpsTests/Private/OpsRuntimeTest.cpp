@@ -3,6 +3,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Model/FlightBoard.h"
 #include "Model/OpsEvents.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -13,6 +14,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -41,6 +43,24 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("a road segment exists"), Actor->ConnectNodes(RoadA, RoadB))) { return false; }
 	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
 
+	// A RUNWAY, clear of the road above, so UFlightBoard::DefaultApproachFocus has a threshold
+	// to find - issue #105's follow-up comment on this test asks for exactly that, plus the
+	// offer schedule check below.
+	URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	RunwayProfile->bContinuousThroughJunctions = true;
+	Actor->MinimumRunwayLength = 100.0;   // short, deliberately - see MeshFreshnessTest's own comment
+	if (!TestTrue(TEXT("a runway is placed"),
+		Actor->PlaceRunway(FVector2D(0.0, -50000.0), FVector2D(6000.0, -50000.0), RunwayProfile)))
+	{
+		return false;
+	}
+	FVector2D ExpectedFocus;
+	if (!TestTrue(TEXT("the runway gives DefaultApproachFocus a threshold to find"),
+		UFlightBoard::DefaultApproachFocus(*Actor->Network, ExpectedFocus)))
+	{
+		return false;
+	}
+
 	// And one authored guideline for the agent, as in AgentRedirectTest.
 	{
 		URoadNetwork& Net = *Actor->Network;
@@ -61,6 +81,26 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 
 		UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 		Runtime->Attach(Actor);
+
+		// ATTACH'S OFFER CADENCE (issue #105, follow-up from #121 review). Content-independent:
+		// it only asks whether SOME airline in the real catalog offers anything, not whether
+		// this test's runway admits any particular one.
+		if (TestTrue(TEXT("Attach armed the repeating offer schedule"), Runtime->HasOfferScheduledForTest()))
+		{
+			// ONE TICK, RIGHT THROUGH THE SCHEDULE'S OWN INTERVAL - not a guessed real-seconds
+			// delta that might land short of it (or, converted back from a huge one, spend the
+			// test iterating hundreds of avoidable fires). TimeScale() is exactly the
+			// game-seconds-per-real-second USimClock::Advance divides by internally.
+			const double RealSeconds = Runtime->OfferIntervalSecondsForTest() / Runtime->GetClock()->TimeScale() * 1.01;
+			Runtime->Tick(RealSeconds);
+
+			// THE FOCUS UPDATES REGARDLESS OF WHETHER THIS RUNWAY ADMITS ANY REAL FLEET
+			// AIRCRAFT (UOpsRuntime::GenerateOffer sets it before the admissibility check) -
+			// so this assertion, unlike an offer actually appearing, does not depend on this
+			// test's short runway matching a real AircraftType's LandingFieldLength.
+			TestEqual(TEXT("a runway-bearing network's board focus equals DefaultApproachFocus"),
+				Runtime->GetFlightBoard()->ApproachFocus, ExpectedFocus);
+		}
 
 		UOpsEventsTestListener* L = NewObject<UOpsEventsTestListener>();
 		Runtime->GetEvents()->OnAgentPhaseChanged.AddDynamic(L, &UOpsEventsTestListener::OnPhase);
@@ -113,7 +153,9 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and no surface"), Actor->GetPresenter()->SurfaceTriangleCountForTest(), 0);
 
 		if (!TestTrue(TEXT("load reads"), Runtime->LoadFromSlot(Slot))) { return false; }
-		TestEqual(TEXT("the nodes are back"), Actor->Network->GetNodes().Num(), 2);
+		// 4, not 2: the road's own two PLUS the runway's two, added for issue #105's follow-up
+		// comment above - see its own comment.
+		TestEqual(TEXT("the nodes are back"), Actor->Network->GetNodes().Num(), 4);
 		TestEqual(TEXT("and the surface mesh was rebuilt from them"), Actor->GetPresenter()->SurfaceTriangleCountForTest(), TrisBefore);
 		TestEqual(TEXT("agents do not survive a load - they were never saved"), Actor->GetTraffic()->GetAgentCount(), 0);
 		TestFalse(TEXT("a load is a new undo baseline"), Actor->CanUndo());

@@ -4,14 +4,9 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-/**
- * Named under "Airside." although the path lives in the game module, for the same reason
- * BuildCameraRigTest gives: Run-AirsideTests.ps1 filters on that prefix, and a test the
- * pre-commit run does not pick up is one found failing by the next person to touch it.
- */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunPathNoonTest,
-	"Airside.Sky.SunPath.NoonIsThePeak",
+	"AirportMgr.Sky.SunPath.NoonIsThePeak",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunPathNoonTest::RunTest(const FString& Parameters)
@@ -30,7 +25,7 @@ bool FSunPathNoonTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunPathFloorTest,
-	"Airside.Sky.SunPath.NeverBelowTheFloor",
+	"AirportMgr.Sky.SunPath.NeverBelowTheFloor",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunPathFloorTest::RunTest(const FString& Parameters)
@@ -56,7 +51,7 @@ bool FSunPathFloorTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunPathMidnightContinuityTest,
-	"Airside.Sky.SunPath.AzimuthIsContinuousAcrossMidnight",
+	"AirportMgr.Sky.SunPath.AzimuthIsContinuousAcrossMidnight",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunPathMidnightContinuityTest::RunTest(const FString& Parameters)
@@ -76,7 +71,7 @@ bool FSunPathMidnightContinuityTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunPathDawnRisesTest,
-	"Airside.Sky.SunPath.ElevationRisesFromDawnToNoon",
+	"AirportMgr.Sky.SunPath.ElevationRisesFromDawnToNoon",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunPathDawnRisesTest::RunTest(const FString& Parameters)
@@ -99,7 +94,7 @@ bool FSunPathDawnRisesTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSunPathDuskWarmsTest,
-	"Airside.Sky.SunPath.DuskIsWarmerAndDimmer",
+	"AirportMgr.Sky.SunPath.DuskIsWarmerAndDimmer",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
 bool FSunPathDuskWarmsTest::RunTest(const FString& Parameters)

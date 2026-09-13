@@ -61,7 +61,7 @@ bool FOfferInboxCountBroadcastsTest::RunTest(const FString& Parameters)
 		INotifyFieldValueChanged::FFieldValueChangedDelegate::CreateLambda(
 			[&Broadcasts](UObject*, UE::FieldNotification::FFieldId) { ++Broadcasts; }));
 
-	Board->AddOffer(InboxOffer(Clock->Now() + 600.0));
+	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 
 	TestEqual(TEXT("the count followed the board"), Inbox->GetPendingCount(), 1);
@@ -72,7 +72,7 @@ bool FOfferInboxCountBroadcastsTest::RunTest(const FString& Parameters)
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	TestEqual(TEXT("an unchanged count does not broadcast again"), Broadcasts, 1);
 
-	Board->AddOffer(InboxOffer(Clock->Now() + 900.0));
+	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 900.0));
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	TestEqual(TEXT("a second offer moves the count"), Inbox->GetPendingCount(), 2);
 	TestEqual(TEXT("and broadcasts once more"), Broadcasts, 2);
@@ -94,8 +94,8 @@ bool FOfferInboxAcceptGoesThroughTheBoardTest::RunTest(const FString& Parameters
 
 	UFlight* First = InboxOffer(Clock->Now() + 600.0);
 	UFlight* Second = InboxOffer(Clock->Now() + 600.0);
-	Board->AddOffer(First);
-	Board->AddOffer(Second);
+	Board->AddOffer(*Clock, First);
+	Board->AddOffer(*Clock, Second);
 
 	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);

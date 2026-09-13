@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
+#include "Model/FuelService.h"
 #include "Model/GroundTraffic.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
@@ -46,7 +47,7 @@ bool FFlightSurvivesASaveTest::RunTest(const FString& Parameters)
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = Clock->Now() + 1000.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before the save"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
 	TArray<uint8> Bytes;
@@ -100,7 +101,7 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = 10.0;
 	Flight->Phase = EFlightPhase::Accepted;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 
 	Clock->Advance(1.0);   // 72 game seconds: the ETA is already behind us
 	TestEqual(TEXT("nothing has been dispatched, because nothing was armed"), Calls, 0);
@@ -108,6 +109,89 @@ bool FFlightDueWhileClosedTest::RunTest(const FString& Parameters)
 	Board->RearmSchedules(*Traffic, *Net, *Clock);
 	TestEqual(TEXT("a flight already due is dispatched at once, not dropped"), Calls, 1);
 	TestEqual(TEXT("and it is landing, not still waiting"), Flight->Phase, EFlightPhase::Landing);
+	return true;
+}
+
+/**
+ * PR #137 REVIEW: RearmSchedules' Offered branch (re-arming an offer's expiry on load) had
+ * no test. The window is still open at load time, so the offer must survive the round trip
+ * still Offered, and must still lapse once its rearmed schedule catches up to it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightOfferedExpirySurvivesLoadTest,
+	"AirportOps.Model.FlightSave.AnOfferedFlightsExpiryIsRearmedOnLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightOfferedExpirySurvivesLoadTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = SaveTestNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = SaveTestBoard();
+	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Airframe.Wingspan = 3400.0;
+	Flight->ExpiresAt = Clock->Now() + 1000.0;
+	Board->AddOffer(*Clock, Flight);
+	TestEqual(TEXT("offered before the save"), Flight->Phase, EFlightPhase::Offered);
+
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, Snapshot);
+
+	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
+	USimClock* RestoredClock = NewObject<USimClock>();
+	UFlightBoard* RestoredBoard = SaveTestBoard();
+	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel))) { return false; }
+
+	const TArray<UFlight*> Offers = RestoredBoard->Offers();
+	if (!TestEqual(TEXT("the offer came back"), Offers.Num(), 1)) { return false; }
+	UFlight* Restored = Offers[0];
+
+	RestoredBoard->RearmSchedules(*Traffic, *RestoredNet, *RestoredClock);
+	TestEqual(TEXT("still offered right after rearming - its window has not passed"),
+		Restored->Phase, EFlightPhase::Offered);
+
+	RestoredClock->Advance(20.0);   // 72 game s per real s: past an ExpiresAt 1000 game s out
+	TestEqual(TEXT("and it lapses once its rearmed schedule catches up"),
+		Restored->Phase, EFlightPhase::Expired);
+	return true;
+}
+
+/**
+ * PR #137 REVIEW: the other half of the Offered branch - an offer whose window already
+ * passed while the game was shut must lapse AT ONCE on rearm, the same "act now, and say so"
+ * rule FFlightDueWhileClosedTest already covers for an Accepted flight's arrival.
+ *
+ * AddOffer arms a real (if never-fired) expiry schedule the instant it is called, same as
+ * FFlightDueWhileClosedTest's Accept would arm a real dispatch - so neither test calls
+ * Clock->Advance() before the load-path call under test, which is what keeps that schedule
+ * from firing on its own and proving the wrong path.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightOfferedExpiredWhileClosedTest,
+	"AirportOps.Model.FlightSave.AnOfferedFlightPastItsWindowExpiresOnLoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightOfferedExpiredWhileClosedTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = SaveTestNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = SaveTestBoard();
+
+	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
+	Flight->Airframe.Wingspan = 3400.0;
+	Flight->ExpiresAt = -5.0;   // already behind a fresh clock's Now() == 0.0
+	Board->AddOffer(*Clock, Flight);
+	TestEqual(TEXT("still offered - nothing has driven the clock yet"),
+		Flight->Phase, EFlightPhase::Offered);
+
+	Board->RearmSchedules(*Traffic, *Net, *Clock);
+	TestEqual(TEXT("an offer already past its window is expired at once, not left standing"),
+		Flight->Phase, EFlightPhase::Expired);
 	return true;
 }
 
@@ -132,7 +216,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	UFlight* Flight = NewObject<UFlight>(GetTransientPackage());
 	Flight->Airframe.Wingspan = 3400.0;
 	Flight->ArrivesAt = Clock->Now() + 1000.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before the save"), Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
 	// ZEROED BY HAND: a real v2 save could not have written this field, since it did not
@@ -140,15 +224,18 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	// blob no v2 game ever actually produced.
 	Flight->ApproachFocus = FVector2D::ZeroVector;
 
+	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Net, *Board, Snapshot);
+	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, Snapshot);
 	Snapshot.Version = 2;
 
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
+	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard))) { return false; }
+		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel))) { return false; }
 
 	const TArray<UFlight*> Live = RestoredBoard->Live();
 	TestEqual(TEXT("the flight came back"), Live.Num(), 1);

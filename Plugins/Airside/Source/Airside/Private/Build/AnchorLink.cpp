@@ -26,22 +26,20 @@ namespace
 	 * the whole graph.
 	 */
 	double NearestRoadApproach(const URoadNetwork& Network, const TSet<FGuidelineNodeId>& AnchorNodes,
-		const FGuidelineEdge& Side, ETraversalClass Class, double Reach)
+		FGuidelineEdgeId SideId, ETraversalClass Class, double Reach)
 	{
-		const FGuidelineNode* SideA = Network.GetGuidelineNode(Side.A);
-		const FGuidelineNode* SideB = Network.GetGuidelineNode(Side.B);
-		if (SideA == nullptr || SideB == nullptr)
+		TArray<FVector2D> SidePoints;
+		if (!Network.SampleGuideline(SideId, SidePoints))
 		{
 			return TNumericLimits<double>::Max();
 		}
 
-		TArray<FVector2D> SidePoints;
-		GuidelineGeom::Sample(SideA->Position, Side.Control, SideB->Position, SidePoints);
-
 		double Best = Reach;
 		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-		for (const FGuidelineEdge& Edge : Edges)
+		for (int32 Index = 0; Index < Edges.Num(); ++Index)
 		{
+			const FGuidelineEdge& Edge = Edges[Index];
+
 			// The same eligibility the search below applies, and for the same reasons: a lane
 			// side that measured against a target the search would refuse would be selected on
 			// a distance it can never actually have.
@@ -52,15 +50,11 @@ namespace
 				continue;
 			}
 
-			const FGuidelineNode* EndA = Network.GetGuidelineNode(Edge.A);
-			const FGuidelineNode* EndB = Network.GetGuidelineNode(Edge.B);
-			if (EndA == nullptr || EndB == nullptr)
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Network.GuidelineEdgeIdAt(Index), Points))
 			{
 				continue;
 			}
-
-			TArray<FVector2D> Points;
-			GuidelineGeom::Sample(EndA->Position, Edge.Control, EndB->Position, Points);
 
 			int32 SideSpan = 0, RoadSpan = 0;
 			double SideFraction = 0.0, RoadFraction = 0.0;
@@ -322,7 +316,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 				}
 
 				const double Distance = NearestRoadApproach(
-					Network, OutAnchorNodes, *Side, ETraversalClass::GroundVehicle, ServiceLinkRadius);
+					Network, OutAnchorNodes, SideId, ETraversalClass::GroundVehicle, ServiceLinkRadius);
 				Approach.Add(SideId, Distance);
 				NearestSide = FMath::Min(NearestSide, Distance);
 			}
@@ -479,6 +473,14 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const FVector2D TaxiDir =
 		GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Hit.Param);
 
+	// THE ONE DELIBERATE EXCEPTION to URoadNetwork::SampleGuideline being the one graph-edge
+	// call of GuidelineGeom::Sample (PR #137 review, issue #105 item 5): there is no live
+	// FGuidelineEdgeId left to sample by the time this runs. A Lane join above may already
+	// have called SplitGuidelineEdge, which replaces Hit.Edge with two new head/tail pieces -
+	// Original/PositionA/PositionB are a snapshot of the edge as it stood BEFORE that split
+	// (captured at line ~421, before anything could reallocate the slot array from under
+	// Found), and this curve is exactly that pre-split geometry, which SampleGuideline has no
+	// id left to look up.
 	TArray<FVector2D> Curve;
 	GuidelineGeom::Sample(PositionA, Original.Control, PositionB, Curve);
 

@@ -7,6 +7,7 @@
 
 // RunwaySurfaceName/RunwayApproachName moved to RunwayFacts.cpp (#103) - declared in
 // RunwayFacts.h beside the enums they name, which is where their definition belongs too.
+// RunwayMaterialSlot (issue #105 item 4) lives there too, for the same reason.
 
 namespace RunwayAdmission
 {

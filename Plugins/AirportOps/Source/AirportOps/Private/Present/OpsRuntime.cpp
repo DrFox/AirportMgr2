@@ -93,7 +93,7 @@ void UOpsRuntime::GenerateOffer()
 		return;
 	}
 
-	FlightBoard->AddOffer(Offer);
+	FlightBoard->AddOffer(*Clock, Offer);
 	UE_LOG(LogAirportOps, Log, TEXT("Offer %d: %s, %s, landing at %.0f"),
 		Offer->Id, *Offer->AirlineName.ToString(), *Offer->TypeName.ToString(), Offer->ArrivesAt);
 }
@@ -161,11 +161,13 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	if (Interval > 0.0)
 	{
 		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
+		LastOfferIntervalSeconds = Interval;
 		UE_LOG(LogAirportOps, Log, TEXT("Offers: %.1f per game day across %d airline(s)"),
 			USimClock::SecondsPerDay / Interval, Airlines.Num());
 	}
 	else
 	{
+		LastOfferIntervalSeconds = 0.0;
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Offers: no airline offers anything, so the inbox will stay empty"));
 	}
@@ -185,6 +187,7 @@ void UOpsRuntime::Detach()
 	{
 		Clock->Cancel(OfferHandle);
 		OfferHandle = INDEX_NONE;
+		LastOfferIntervalSeconds = 0.0;
 	}
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
@@ -218,8 +221,9 @@ void UOpsRuntime::Tick(double RealDeltaSeconds)
 		}
 	}
 
-	// Offers lapse on the game clock whether or not a network is attached.
-	FlightBoard->Tick(*Clock);
+	// Offers used to lapse here via UFlightBoard::Tick's per-frame poll (issue #105 item 9);
+	// now Clock->Advance above already fired any expiry due this frame - see
+	// UFlightBoard::ScheduleExpiry, armed from AddOffer and re-armed by RearmSchedules.
 }
 
 void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
@@ -306,7 +310,7 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, Snapshot);
+	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, *FuelService, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
@@ -332,7 +336,7 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
-	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard))
+	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard, *FuelService))
 	{
 		return false;
 	}

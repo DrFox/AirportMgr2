@@ -71,7 +71,8 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	// contradicts InspectFacts.cpp's "On final" status. Sampled here, before any rollout, so
 	// this cannot be satisfied by the Rollout/Vacated branch of FLandingRun::IsOnGround.
 	FAgentMotion ApproachMotion;
-	Agent.Advance(1.0 / 30.0, ApproachMotion);
+	EAgentEvent Event = EAgentEvent::None;
+	Agent.Advance(1.0 / 30.0, ApproachMotion, Event);
 	TestEqual(TEXT("still on the approach, not yet on the ground"),
 		Agent.Arrival.Phase, ELandingPhase::Approach);
 	TestTrue(TEXT("an aircraft on final is airborne"), ApproachMotion.bAirborne);
@@ -87,7 +88,7 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	for (int32 Step = 0; Step < 6000 && Agent.Arrival.Phase != ELandingPhase::Rollout
 		&& Agent.Phase == EAgentPhase::Arriving; ++Step)
 	{
-		Agent.Advance(1.0 / 30.0, Motion);
+		Agent.Advance(1.0 / 30.0, Motion, Event);
 	}
 
 	if (!TestEqual(TEXT("touched down within the step budget"),

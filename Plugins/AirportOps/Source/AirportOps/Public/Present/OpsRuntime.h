@@ -79,6 +79,15 @@ public:
 	/** Restores clock and network, clears agents and undo history, rebuilds the actor's mesh. */
 	bool LoadFromSlot(const FString& SlotName);
 
+	/** True once Attach has armed the repeating offer schedule. False if no airline in the
+	 *  catalog offers anything, or before Attach - see Attach's own comment. */
+	bool HasOfferScheduledForTest() const { return OfferHandle != INDEX_NONE; }
+
+	/** The GAME-seconds interval the offer schedule actually fires at, or 0.0 if it was never
+	 *  armed - see HasOfferScheduledForTest. Lets a test tick exactly one cadence rather than
+	 *  guessing a real-seconds delta long enough to cover an interval it cannot otherwise see. */
+	double OfferIntervalSecondsForTest() const { return LastOfferIntervalSeconds; }
+
 private:
 	UPROPERTY() TObjectPtr<USimClock> Clock;
 	UPROPERTY() TObjectPtr<UOpsEvents> Events;
@@ -90,6 +99,9 @@ private:
 
 	/** The repeating offer callback, so Detach can cancel it. INDEX_NONE when unattached. */
 	int32 OfferHandle = INDEX_NONE;
+
+	/** The interval OfferHandle was armed with. See OfferIntervalSecondsForTest. */
+	double LastOfferIntervalSeconds = 0.0;
 
 	/** The catalog's airlines, flattened into airframes Model/ may read. See the .cpp. */
 	TArray<FOfferCandidate> CandidatesFromCatalog() const;

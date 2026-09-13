@@ -81,46 +81,15 @@ void URoadBuildEdMode::Enter()
 	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
 	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
 
-	// Logged rather than a hard check(): a crash over a wiring mistake is worse than a tool
-	// with no command. The runtime controller has no equivalent check any more - its tool
-	// list, its key bindings and its banner are ALL read from ToolRegistry() itself, so
-	// they cannot disagree by construction. This CAN still disagree:
-	// FRoadBuildEdModeCommands::ToolCommandsInOrder() is a hand-written UI_COMMAND list, a
-	// separate thing from ToolRegistry(), so this is the one place left that has to check
-	// the two agree rather than being able to assume it.
-	//
-	// KEPT even though Airside.Editor.ToolCommandsMatchRegistry now asserts the same thing
-	// headlessly (RoadBuildEdModeCommandsTest.cpp, in THIS module - AirsideTests depends on
-	// Airside alone and must not be made to depend on an editor module). The test is the
-	// guard; this line is the diagnosis, and the two are worth having separately - the gap
-	// they cover between them cost a slice in which key 9 was unbound, so nine left the
-	// PREVIOUS tool running and a player drew a taxiway believing it was a service road.
-	if (ToolCommands.Num() != Registry.Num())
-	{
-		UE_LOG(LogAirsideEditor, Error,
-			TEXT("%d editor commands but %d registry entries - see FRoadBuildEdModeCommands::"
-				 "ToolCommandsInOrder and ToolRegistry(). A tool past the shorter count gets "
-				 "no command."),
-			ToolCommands.Num(), Registry.Num());
-	}
-
+	// NO DRIFT CHECK HERE ANY MORE (issue #105 item 10): ToolCommandsInOrder() is now BUILT
+	// FROM ToolRegistry() one entry at a time (FRoadBuildEdModeCommands::RegisterCommands),
+	// so the two cannot disagree in count or in order - there is only the one list, read
+	// twice. The runtime controller has read that way from the start; this mode's own
+	// UI_COMMAND list used to be the one exception, and Airside.Editor.ToolCommandsMatchRegistry
+	// (RoadBuildEdModeCommandsTest.cpp) is kept as the regression guard against that coming back.
 	FString Banner;
 	for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), Registry.Num()); ++Index)
 	{
-		// COUNT alone does not catch a reordering - six of each, wrongly paired, still
-		// passes the check above. Identity does: a command's label is a human-authored
-		// UI_COMMAND string, so it names which tool the palette THINKS index Index is,
-		// independent of the FKey/Make lambda the registry entry actually carries.
-		if (const TSharedPtr<FUICommandInfo>& Command = ToolCommands[Index];
-			Command.IsValid() && !Command->GetLabel().EqualTo(Registry[Index].Name))
-		{
-			UE_LOG(LogAirsideEditor, Error,
-				TEXT("Tool %d: command label \"%s\" does not match registry name \"%s\" - ")
-				TEXT("FRoadBuildEdModeCommands::ToolCommandsInOrder and ToolRegistry() have ")
-				TEXT("drifted out of order."),
-				Index, *Command->GetLabel().ToString(), *Registry[Index].Name.ToString());
-		}
-
 		URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(this);
 		Builder->ToolIndex = Index;
 		RegisterTool(ToolCommands[Index], MakeToolName(Index), Builder);

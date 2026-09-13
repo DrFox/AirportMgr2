@@ -154,11 +154,6 @@ void UToastStackWidget::Rebuild(const UUIStyle& Style)
 	const double Now = Notifications->Now();
 	for (const FNotificationEntry& Entry : Notifications->Entries())
 	{
-		if (Entry.Kind != ENotificationKind::Feed)
-		{
-			continue;   // alerts have their own surface; the feed does not carry them
-		}
-
 		const FLinearColor Severity = ColourFor(Style, Entry.Severity);
 
 		// A ROUNDED CARD, NOT A TINTED RECTANGLE. UBorder's default brush is a flat box, and

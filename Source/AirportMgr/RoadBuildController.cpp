@@ -515,13 +515,12 @@ void ARoadBuildController::OnActionKey(FKey Key)
 	// The chord is already matched by the binding; Ctrl state is re-read only to pick between
 	// two actions on the same key that differ by it (none today, but the table allows it).
 	const bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
-	for (const FBuildAction& Action : BuildActions())
+	// TryRun, not Execute: a key used to fire a disabled action (undo with nothing to undo,
+	// land with no runway) because this scan never consulted IsEnabled - the bar and the
+	// inspector always did. Behaviour change: disabled actions now stop firing from keys too.
+	if (const FBuildAction* Action = FindAction(Key, bCtrl))
 	{
-		if (Action.Key == Key && Action.bRequiresCtrl == bCtrl)
-		{
-			Action.Execute(*this);
-			return;
-		}
+		Action->TryRun(*this, TEXT("Key"));
 	}
 }
 
@@ -531,7 +530,7 @@ void ARoadBuildController::OnCtrlActionKey()
 	{
 		if (Action.bRequiresCtrl && Action.Key.IsValid() && WasInputKeyJustPressed(Action.Key))
 		{
-			Action.Execute(*this);
+			Action.TryRun(*this, TEXT("Key"));
 			return;
 		}
 	}

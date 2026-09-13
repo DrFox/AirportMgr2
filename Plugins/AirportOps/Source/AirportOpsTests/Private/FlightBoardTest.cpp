@@ -64,8 +64,8 @@ bool FFlightBoardAcceptReservesTest::RunTest(const FString& Parameters)
 	UFlight* Second = BoardFlightNeeding(3400.0);
 	First->ArrivesAt = Clock->Now() + 100.0;
 	Second->ArrivesAt = Clock->Now() + 100.0;
-	Board->AddOffer(First);
-	Board->AddOffer(Second);
+	Board->AddOffer(*Clock, First);
+	Board->AddOffer(*Clock, Second);
 
 	TestTrue(TEXT("the first offer is accepted"), Board->Accept(*Traffic, *Net, *Clock, *First));
 	TestEqual(TEXT("and becomes Accepted"), First->Phase, EFlightPhase::Accepted);
@@ -93,7 +93,7 @@ bool FFlightBoardDispatchesAtTheEtaTest::RunTest(const FString& Parameters)
 
 	UFlight* Flight = BoardFlightNeeding(3400.0);
 	Flight->ArrivesAt = Clock->Now() + 100.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 
 	int32 Calls = 0;
 	bool bHeldAtDispatch = true;
@@ -133,12 +133,13 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = BoardNetworkWithStands({3600.0});
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
 	UFlightBoard* Board = MakeBoard();
 
 	UFlight* Flight = BoardFlightNeeding(3400.0);
 	Flight->AgentId = 5;
 	Flight->Phase = EFlightPhase::Landing;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 
 	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Arriving, EAgentPhase::Taxiing);
 	TestEqual(TEXT("taxiing before the stand is TaxiIn"), Flight->Phase, EFlightPhase::TaxiIn);
@@ -175,14 +176,44 @@ bool FFlightBoardExpiresOffersTest::RunTest(const FString& Parameters)
 
 	UFlight* Offer = BoardFlightNeeding(3400.0);
 	Offer->ExpiresAt = Clock->Now() + 50.0;
-	Board->AddOffer(Offer);
+	Board->AddOffer(*Clock, Offer);
 	TestEqual(TEXT("it is in the inbox to begin with"), Board->PendingOfferCount(), 1);
 
-	Clock->Advance(1.0);   // 72 game seconds: past the expiry
-	Board->Tick(*Clock);
+	// 72 game seconds: past the expiry. No Tick to call any more (issue #105 item 9) - the
+	// expiry is a Clock.At callback armed by AddOffer, and Advance fires it itself.
+	Clock->Advance(1.0);
 
 	TestEqual(TEXT("an ignored offer lapses"), Offer->Phase, EFlightPhase::Expired);
 	TestEqual(TEXT("and leaves the inbox"), Board->PendingOfferCount(), 0);
+	return true;
+}
+
+/**
+ * PR #137 REVIEW: Decline -> CancelExpiry had no test. A declined offer that is left to sit
+ * past its own ExpiresAt must stay Declined, not be silently flipped to Expired by a schedule
+ * nobody cancelled.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardDeclineCancelsExpiryTest,
+	"AirportOps.Model.FlightBoard.DeclineCancelsExpiry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardDeclineCancelsExpiryTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+
+	UFlight* Offer = BoardFlightNeeding(3400.0);
+	Offer->ExpiresAt = Clock->Now() + 50.0;
+	Board->AddOffer(*Clock, Offer);
+
+	Board->Decline(*Clock, *Offer);
+	TestEqual(TEXT("declining sets the phase at once"), Offer->Phase, EFlightPhase::Declined);
+
+	// Well past the ExpiresAt that would have lapsed it, had Decline left the schedule armed.
+	Clock->Advance(1.0);
+	TestEqual(TEXT("a declined offer stays Declined - Decline cancelled the expiry"),
+		Offer->Phase, EFlightPhase::Declined);
 	return true;
 }
 
@@ -319,12 +350,13 @@ bool FFlightBoardAcceptedNeverExpiresTest::RunTest(const FString& Parameters)
 	UFlight* Flight = BoardFlightNeeding(3400.0);
 	Flight->ExpiresAt = Clock->Now() + 50.0;
 	Flight->ArrivesAt = Clock->Now() + 100000.0;
-	Board->AddOffer(Flight);
+	Board->AddOffer(*Clock, Flight);
 	TestTrue(TEXT("accepted before it would have lapsed"),
 		Board->Accept(*Traffic, *Net, *Clock, *Flight));
 
+	// No Tick to call any more (issue #105 item 9) - Accept cancelled the expiry outright,
+	// so there is nothing left on the clock for Advance to fire even without the phase guard.
 	Clock->Advance(1.0);
-	Board->Tick(*Clock);
 	TestEqual(TEXT("an accepted flight is not expired by its old offer deadline"),
 		Flight->Phase, EFlightPhase::Accepted);
 	return true;

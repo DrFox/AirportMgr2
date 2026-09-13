@@ -19,7 +19,25 @@ enum class ERunwaySurface : uint8
 	Tarmac,
 	Concrete,
 	Reinforced,
+	/** Sentinel, never a real surface - sizes tables and % cycling instead of retyping 4. */
+	Count UMETA(Hidden),
 };
+
+/** How many runway material slots there are - Grass/Tarmac/Concrete, Reinforced aliased in
+ *  by RunwayMaterialSlot below. The one figure UAirsideContent::RunwayMaterials (a TArray,
+ *  sized at runtime) and FSurfaceSettings::RunwayMaterials (a fixed C array, sized at compile
+ *  time) both size against - see the static_assert at the latter's declaration. */
+inline constexpr int32 RunwayMaterialSlotCount = 3;
+
+/**
+ * Which of the THREE runway material slots (Grass/Tarmac/Concrete) a surface draws with.
+ * Reinforced has no slot of its own - it is concrete with a stronger rating, and the
+ * difference shows in the details panel and in what may land there, not on the ground (spec
+ * 2026-09-07 §8) - so this is the ONE place that alias happens. Everything downstream
+ * (UAirsideContent::RunwayMaterials, FSurfaceSettings::RunwayMaterials) indexes by this,
+ * never by ERunwaySurface directly.
+ */
+AIRSIDE_API int32 RunwayMaterialSlot(ERunwaySurface Surface);
 
 /**
  * What the approach aids support. ORDERED: an aircraft names the least it needs.
@@ -34,6 +52,8 @@ enum class ERunwayApproach : uint8
 	Visual,
 	NonPrecision,
 	Precision,
+	/** Sentinel, never a real approach - sizes % cycling instead of retyping 3. */
+	Count UMETA(Hidden),
 };
 
 /**

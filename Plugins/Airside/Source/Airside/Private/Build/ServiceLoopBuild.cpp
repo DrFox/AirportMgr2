@@ -178,16 +178,11 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 
 			for (const FGuidelineEdgeId& EdgeId : Lane)
 			{
-				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-				const FGuidelineNode* EndA = Edge != nullptr ? Network.GetGuidelineNode(Edge->A) : nullptr;
-				const FGuidelineNode* EndB = Edge != nullptr ? Network.GetGuidelineNode(Edge->B) : nullptr;
-				if (EndA == nullptr || EndB == nullptr)
+				TArray<FVector2D> Points;
+				if (!Network.SampleGuideline(EdgeId, Points))
 				{
 					continue;
 				}
-
-				TArray<FVector2D> Points;
-				GuidelineGeom::Sample(EndA->Position, Edge->Control, EndB->Position, Points);
 
 				int32 Span = 0;
 				double Fraction = 0.0;
