@@ -125,6 +125,21 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		{
 			Flaring->SetAirframe(AgentActorTestAirframe());
 
+			// LEVEL FIRST, AND NOT POINTING DOWN +X. A pivot correction differenced against
+			// the unrotated offset rather than the yawed one is zero at heading zero and
+			// wrong everywhere else - it displaced agents sideways by up to twice the
+			// wheelbase, reported from play as tracking way off the centre line, and the
+			// first version of this test could not see it because it faced +X.
+			FAgentMotion Level;
+			Level.Position = FVector2D(700.0, -250.0);
+			Level.Heading = FMath::DegreesToRadians(40.0);
+			Level.PitchPivotX = -454.3;
+			Flaring->SetMotion(Level, SurfaceZ);
+
+			TestEqual(TEXT("a level aircraft stands exactly where it was put, whatever its "
+				"heading"), Flaring->GetActorLocation().X, 700.0, 0.01);
+			TestEqual(TEXT("on both axes"), Flaring->GetActorLocation().Y, -250.0, 0.01);
+
 			FAgentMotion Pitched;
 			Pitched.PitchDegrees = 8.0;
 			Pitched.PitchPivotX = -454.3;          // plane2's mains, measured
@@ -145,6 +160,32 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 			TestTrue(FString::Printf(TEXT("while the nose gear lifts off it (%.1f)"),
 				Flaring->GetActorLocation().Z),
 				Flaring->GetActorLocation().Z > SurfaceZ + 50.0);
+
+			// PITCHED AT A HEADING keeps the mains on the ground too, which is the case the
+			// yaw bug above broke. Measured on a diagonal so a correction applied in the
+			// wrong frame cannot hide behind a zero component.
+			FAgentMotion Turning;
+			Turning.Position = FVector2D(-1200.0, 900.0);
+			Turning.Heading = FMath::DegreesToRadians(115.0);
+			Turning.PitchDegrees = 8.0;
+			Turning.PitchPivotX = -454.3;
+			Flaring->SetMotion(Turning, SurfaceZ);
+
+			const FVector TurnedMains = Flaring->GetActorTransform().TransformPosition(
+				FVector(Turning.PitchPivotX, 0.0, 0.0));
+			TestTrue(FString::Printf(
+				TEXT("a pitched aircraft on a heading keeps its mains down (Z %.1f)"),
+				TurnedMains.Z), FMath::Abs(TurnedMains.Z - SurfaceZ) < 1.0);
+
+			// AND THE MAINS STAY ON THE ROUTE POINT'S OWN LINE. The pivot is what the model
+			// positioned; pitching may raise the nose but must not slide the aircraft
+			// sideways off the centreline it was placed on.
+			const FVector2D MainsPlan(TurnedMains.X, TurnedMains.Y);
+			const FVector2D Expected = Turning.Position + FVector2D(
+				FMath::Cos(Turning.Heading), FMath::Sin(Turning.Heading)) * Turning.PitchPivotX;
+			TestTrue(FString::Printf(TEXT("and do not slide off the line (%.1f uu away)"),
+				FVector2D::Distance(MainsPlan, Expected)),
+				FVector2D::Distance(MainsPlan, Expected) < 1.0);
 		}
 
 		// AN UNMEASURED AIRFRAME PITCHES ABOUT ITS ORIGIN exactly as it did before any of

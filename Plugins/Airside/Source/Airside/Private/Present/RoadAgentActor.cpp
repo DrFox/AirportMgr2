@@ -91,14 +91,14 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// aft downwards: 8 degrees of flare put the mains 63 uu under the tarmac, reported from
 	// play as the rear wheels pushing into the ground on landing.
 	//
-	// The correction holds the pivot still while the body turns about it: the pivot's
-	// unrotated offset minus its rotated one. Zero pivot is exactly zero correction, so an
-	// unmeasured airframe - every vehicle, both airliners - and the Piper, whose origin
-	// already IS its main-gear axle, are untouched by this.
+	// The correction holds the pivot still while the body pitches about it. Zero pivot is
+	// exactly zero correction, so an unmeasured airframe - every vehicle, both airliners -
+	// and the Piper, whose origin already IS its main-gear axle, are untouched by this.
 	//
 	// IN THE VIEW rather than in the model, because it is a fact about drawing a rigid body
 	// at an attitude, not about where the aircraft is: FAgentMotion::Position still means
 	// the origin, and the model still decides it alone.
+	//
 	// THE CONTACT PATCH, NOT THE HUB, which is why the pivot is a scalar X and this Z is a
 	// hard zero rather than anything read off the airframe. The main-gear BONE sits at the
 	// axle - on plane2 at z = 68.6, which is exactly the wheel's radius - and pitching about
@@ -108,8 +108,20 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// Zero IS the ground here because the export puts the wheels at z = 0 and the import
 	// fails if they are not - see import_plane2.py's ground check, and the comment above
 	// about the origin needing no lift. That assertion is what this line rests on.
+	//
+	// AGAINST THE YAWED PIVOT, NOT THE UNROTATED ONE, and this is the correction's whole
+	// subtlety. The pivot is a point on the BODY, so it turns with the heading whether the
+	// aircraft is pitched or not; only the PITCH is supposed to move it. Differencing
+	// against the raw offset instead made the correction non-zero at zero pitch - it
+	// displaced every agent sideways by up to twice the wheelbase depending on which way it
+	// was pointing, reported from play as tracking way off the centre line.
+	//
+	// So: where the pivot would be with this heading and no pitch, minus where the full
+	// rotation puts it. Identical rotations cancel exactly, so level flight and every
+	// taxiing aircraft get a correction of precisely zero.
 	const FVector Pivot(Motion.PitchPivotX, 0.0, 0.0);
-	const FVector Correction = Pivot - Rotation.RotateVector(Pivot);
+	const FRotator YawOnly(0.0, Rotation.Yaw, 0.0);
+	const FVector Correction = YawOnly.RotateVector(Pivot) - Rotation.RotateVector(Pivot);
 
 	SetActorLocationAndRotation(At + Correction, Rotation);
 
