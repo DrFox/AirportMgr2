@@ -1,8 +1,6 @@
 #include "Tool/RunwayTool.h"
 
 #include "AirsideLog.h"
-#include "Content/AirsideContent.h"
-#include "Content/AirsideSettings.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/RunwayDesignator.h"
 
@@ -13,25 +11,23 @@ FText FRunwayTool::GetDisplayName() const
 	return LOCTEXT("RunwayTool", "Runway");
 }
 
-URoadProfile* FRunwayTool::ProfileForWidth() const
+URoadProfile* FRunwayTool::ProfileForWidth(const FToolContext& Context) const
 {
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	if (Content == nullptr || Content->RunwayProfiles.Num() == 0)
+	if (Context.Target == nullptr || Context.Target->GetRunwayProfileCount() <= 0)
 	{
 		return nullptr;
 	}
 
-	// Clamped rather than checked: the list is content, so it can be shorter than an index
-	// left over from a longer one. Wrapping would silently lay a different width from the one
-	// the HUD is showing.
-	const int32 Index = FMath::Clamp(WidthIndex, 0, Content->RunwayProfiles.Num() - 1);
-	return Content->RunwayProfiles[Index].LoadSynchronous();
+	// Clamping is ResolveRunwayProfile's job now (see IRoadEditTarget) - still done there for
+	// the same reason it was done here: the list is content, so it can be shorter than an
+	// index left over from a longer one, and wrapping would silently resolve a different
+	// width from the one the HUD is showing.
+	return Context.Target->ResolveRunwayProfile(WidthIndex);
 }
 
 void FRunwayTool::NextWidth(const FToolContext& Context)
 {
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	const int32 Count = Content != nullptr ? Content->RunwayProfiles.Num() : 0;
+	const int32 Count = Context.Target != nullptr ? Context.Target->GetRunwayProfileCount() : 0;
 	if (Count <= 0)
 	{
 		// SAID OUT LOUD. This used to return in silence, which is indistinguishable from a
@@ -49,7 +45,7 @@ void FRunwayTool::NextWidth(const FToolContext& Context)
 	// The width is otherwise visible ONLY in the drag preview, so a player who has not
 	// started a drag has no way to tell whether the key did anything. One line per press,
 	// naming the width in metres, is what makes "the key does nothing" answerable.
-	const URoadProfile* Profile = ProfileForWidth();
+	const URoadProfile* Profile = ProfileForWidth(Context);
 	UE_LOG(LogAirside, Log, TEXT("Runway width -> %d of %d, %.0f m"),
 		WidthIndex + 1, Count, Profile != nullptr ? Profile->GetTotalWidth() / 100.0 : 0.0);
 }
@@ -119,7 +115,7 @@ void FRunwayTool::OnClick(const FToolContext& Context)
 	const FVector2D Far = Context.Cursor;
 	bHasThreshold = false;
 
-	Context.Target->PlaceRunway(Threshold, Far, ProfileForWidth(), Facts());
+	Context.Target->PlaceRunway(Threshold, Far, ProfileForWidth(Context), Facts());
 }
 
 void FRunwayTool::OnCancel(const FToolContext& Context)
@@ -134,7 +130,7 @@ void FRunwayTool::OnDeactivate(const FToolContext& Context)
 
 void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	const URoadProfile* Profile = ProfileForWidth();
+	const URoadProfile* Profile = ProfileForWidth(Context);
 
 	if (!bHasThreshold)
 	{

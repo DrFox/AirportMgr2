@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "InteractiveToolManager.h"
 #include "Misc/AutomationTest.h"
+#include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdMode.h"
 #include "RoadBuildEditorTool.h"
 #include "Tool/BuildSession.h"
@@ -84,10 +85,24 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and it drives the same session, so state survives the rebuild"),
 		Again->SessionForTest(), Tool->SessionForTest());
 
+	// A TARGET FOR THE RESELECT. Issue #78: NextWidth now asks Context.Target for its runway
+	// profiles rather than reading UAirsideSettings::GetContent() itself, so the reselect
+	// below - which used to cycle regardless of context - needs one to have anything to
+	// cycle through. A real actor rather than a stub: RunwayToolTest.cpp already assumes
+	// this project's content set names at least two runway profiles, and this test cares
+	// only that WidthIndex moves, not which widths those are.
+	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an actor to source runway profiles from"), Actor))
+	{
+		return false;
+	}
+	FToolContext WidthContext;
+	WidthContext.Target = Actor;
+
 	// THE RESELECT, on the shared session. Selecting the runway tool twice is what a second
 	// press of its key does, and the second press must cycle the width rather than do nothing.
 	FBuildSession& Session = Mode->GetSession();
-	Session.SelectTool(RunwayIndex);
+	Session.SelectTool(RunwayIndex, WidthContext);
 	FRunwayTool* Runway = static_cast<FRunwayTool*>(Session.GetActiveTool());
 	if (!TestNotNull(TEXT("the runway tool is active on the shared session"), Runway))
 	{
@@ -95,7 +110,7 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("it starts on the first width"), Runway->WidthIndex, 0);
 
-	Session.SelectTool(RunwayIndex);
+	Session.SelectTool(RunwayIndex, WidthContext);
 	TestEqual(TEXT("picking it again cycles the width - the press that did nothing before"),
 		Runway->WidthIndex, 1);
 

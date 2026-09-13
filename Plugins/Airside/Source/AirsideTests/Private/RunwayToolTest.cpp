@@ -38,6 +38,149 @@ namespace
 		}
 		return INDEX_NONE;
 	}
+
+	/**
+	 * A target with N TRANSIENT runway profiles and nothing else real (issue #78).
+	 *
+	 * Before #78, FRunwayTool called UAirsideSettings::GetContent() directly, so testing its
+	 * width cycle needed a project content set with at least two runway profiles authored -
+	 * see M2RwyFirstRunwaySegment's own test below, which still spawns a real actor for the
+	 * placement/undo/reclassify assertions that genuinely need one. This fixture proves the
+	 * OTHER half moved: GetRunwayProfileCount/ResolveRunwayProfile, WidthIndex cycling and the
+	 * BuildPreview label all now go through IRoadEditTarget, with no reachable path back to
+	 * UAirsideContent - grep this file for it and find nothing but the two #includes above,
+	 * kept only for the actor-based test that still legitimately needs real content.
+	 *
+	 * Every OTHER IRoadEditTarget virtual is an inert default: FRunwayTool's OnClick,
+	 * BuildPreview (with no threshold placed) and NextWidth call nothing else on Target, and a
+	 * body that did would be a sign this tool grew a new content dependency unnoticed.
+	 */
+	struct FFakeRunwayTarget : IRoadEditTarget
+	{
+		TArray<URoadProfile*> Profiles;
+
+		virtual const URoadNetwork* GetNetwork() const override { return nullptr; }
+		virtual int32 PlaceNode(FVector2D) override { return INDEX_NONE; }
+		virtual bool ConnectNodes(int32, int32, ERoadKind) override { return false; }
+		using IRoadEditTarget::ConnectNodes;
+		virtual int32 ConnectGuidelines(int32, int32) override { return INDEX_NONE; }
+		virtual bool PlaceRunway(FVector2D, FVector2D, URoadProfile*, const FRunwayFacts&) override { return false; }
+		using IRoadEditTarget::PlaceRunway;
+		virtual bool SetRunwayFacts(int32, const FRunwayFacts&) override { return false; }
+		virtual double GetMinimumRunwayLength() const override { return 0.0; }
+		virtual bool DisconnectGuideline(int32) override { return false; }
+		virtual bool SetIntermediateHoldingPosition(int32, bool) override { return false; }
+		virtual int32 SplitSegment(int32, FVector2D) override { return INDEX_NONE; }
+		virtual bool DeleteNode(int32) override { return false; }
+		virtual bool DeleteSegment(int32) override { return false; }
+		virtual bool MoveNode(int32, FVector2D) override { return false; }
+		virtual void BeginInteractiveEdit(const FString&) override {}
+		virtual void EndInteractiveEdit(bool) override {}
+		virtual FRoadDeletionPlan PlanNodeDeletion(int32) const override { return FRoadDeletionPlan(); }
+		virtual int32 AddApron(const TArray<FVector2D>&) override { return INDEX_NONE; }
+		virtual bool DeleteApron(int32) override { return false; }
+		virtual int32 FindApronAt(FVector2D) const override { return INDEX_NONE; }
+		virtual int32 PlaceEntity(FVector2D, double, EPlaceableEntity) override { return INDEX_NONE; }
+		using IRoadEditTarget::PlaceStand;
+		virtual bool DeleteEntity(int32) override { return false; }
+		virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }
+		virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return nullptr; }
+		using IRoadEditTarget::GetStandDefinition;
+		virtual void UpdateGhost(int32, const FRoadSnapResult&, bool, ERoadKind) override {}
+		using IRoadEditTarget::UpdateGhost;
+		virtual void HideGhost() override {}
+		virtual bool MakeLiveNodeId(int32, FRoadNodeId&) const override { return false; }
+		virtual FRoutePlan FindRoute(FGuidelineNodeId, FGuidelineNodeId, ETraversalClass, double) const override
+		{
+			return FRoutePlan();
+		}
+		using IRoadEditTarget::DispatchAgent;
+		virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
+		virtual void RebuildMesh() override {}
+
+		virtual int32 GetRunwayProfileCount() const override { return Profiles.Num(); }
+		virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override
+		{
+			if (Profiles.Num() == 0)
+			{
+				return nullptr;
+			}
+			// Clamped, mirroring ARoadNetworkActor::ResolveRunwayProfile's own contract - a
+			// fake that did not clamp would let a test pass against behaviour real targets
+			// refuse.
+			return Profiles[FMath::Clamp(Index, 0, Profiles.Num() - 1)];
+		}
+	};
+}
+
+/**
+ * THE TOOL NO LONGER KNOWS UAirsideContent (issue #78): GetRunwayProfileCount and
+ * ResolveRunwayProfile are the only two calls ProfileForWidth/NextWidth/BuildPreview make for
+ * a width, and a fake target with transient profiles proves it - no project content set
+ * required, unlike Airside.Tool.Runway below.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayProfileTargetTest,
+	"Airside.Tool.RunwayProfileTarget",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayProfileTargetTest::RunTest(const FString& Parameters)
+{
+	FFakeRunwayTarget Target;
+	Target.Profiles = {
+		URoadProfile::MakeTransient(2300.0, 1500.0),
+		URoadProfile::MakeTransient(3000.0, 1500.0),
+		URoadProfile::MakeTransient(4500.0, 1500.0),
+	};
+
+	FToolContext Context;
+	Context.Target = &Target;
+
+	FRunwayTool Tool;
+	TestEqual(TEXT("starts on the first width"), Tool.WidthIndex, 0);
+
+	FM2RwyToolSink IdleSink;
+	Tool.BuildPreview(Context, IdleSink);
+	TestTrue(TEXT("the idle preview names the first profile's width"),
+		IdleSink.Labels.Num() > 0 && IdleSink.Labels.Last().Contains(TEXT("23 m")));
+
+	Tool.NextWidth(Context);
+	TestEqual(TEXT("NextWidth cycles to the fake target's second profile"), Tool.WidthIndex, 1);
+
+	FM2RwyToolSink SecondSink;
+	Tool.BuildPreview(Context, SecondSink);
+	TestTrue(TEXT("the preview now names the SECOND profile's width, from the fake target"),
+		SecondSink.Labels.Num() > 0 && SecondSink.Labels.Last().Contains(TEXT("30 m")));
+
+	Tool.NextWidth(Context);
+	Tool.NextWidth(Context);
+	TestEqual(TEXT("a third NextWidth wraps back to the first profile"), Tool.WidthIndex, 0);
+
+	// CLAMPED, not refused: a WidthIndex left over from a longer list (e.g. after content is
+	// edited down) must still resolve to SOMETHING rather than crash or draw nothing.
+	Tool.WidthIndex = 99;
+	FM2RwyToolSink ClampedSink;
+	Tool.BuildPreview(Context, ClampedSink);
+	TestTrue(TEXT("an out-of-range WidthIndex clamps to the last profile rather than refusing"),
+		ClampedSink.Labels.Num() > 0 && ClampedSink.Labels.Last().Contains(TEXT("45 m")));
+	Tool.WidthIndex = 0;
+
+	// AN EMPTY TARGET (no profiles at all - what a fresh, unconfigured project looks like)
+	// refuses cleanly rather than crashing, and NextWidth leaves WidthIndex untouched.
+	FFakeRunwayTarget Empty;
+	FToolContext EmptyContext;
+	EmptyContext.Target = &Empty;
+
+	FRunwayTool EmptyTool;
+	EmptyTool.NextWidth(EmptyContext);
+	TestEqual(TEXT("NextWidth on an empty target changes nothing"), EmptyTool.WidthIndex, 0);
+
+	FM2RwyToolSink EmptySink;
+	EmptyTool.BuildPreview(EmptyContext, EmptySink);
+	TestTrue(TEXT("the idle preview on an empty target says so rather than naming a width"),
+		EmptySink.Labels.Num() > 0 && EmptySink.Labels.Last().Contains(TEXT("no runway profile")));
+
+	return true;
 }
 
 /**

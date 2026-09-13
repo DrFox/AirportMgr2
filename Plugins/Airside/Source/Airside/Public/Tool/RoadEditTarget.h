@@ -93,6 +93,23 @@ public:
 	/** MinimumRunwayLength, read-only: RunwayTool judges a drag against it but never sets it. */
 	virtual double GetMinimumRunwayLength() const = 0;
 
+	/**
+	 * How many standard runway widths the content set declares.
+	 *
+	 * ADDED SO RunwayTool NO LONGER KNOWS UAirsideContent (issue #78): it used to call
+	 * UAirsideSettings::GetContent() and load RunwayProfiles[Index] itself, the only file in
+	 * Tool/ that did - every other tool goes through this seam for content, per CLAUDE.md's
+	 * "Content resolves in Resolve* only". The tool keeps WidthIndex; this and
+	 * ResolveRunwayProfile below are all it needs from the target.
+	 */
+	virtual int32 GetRunwayProfileCount() const = 0;
+
+	/**
+	 * The Nth standard runway profile, clamped to a live index by the implementer - see
+	 * ARoadNetworkActor::ResolveRunwayProfile. Null when GetRunwayProfileCount() is zero.
+	 */
+	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const = 0;
+
 	virtual bool DisconnectGuideline(int32 EdgeIndex) = 0;
 
 	/**

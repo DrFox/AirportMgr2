@@ -92,6 +92,8 @@ public:
 	using IRoadEditTarget::PlaceRunway;
 	virtual bool SetRunwayFacts(int32 SegmentIndex, const FRunwayFacts& Facts) override;
 	virtual double GetMinimumRunwayLength() const override;
+	virtual int32 GetRunwayProfileCount() const override;
+	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;
 	virtual bool SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet) override;
 	virtual int32 SplitSegment(int32 SegmentIndex, FVector2D At) override;
