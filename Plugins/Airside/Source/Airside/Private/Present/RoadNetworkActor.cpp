@@ -157,9 +157,9 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.ApronMaterial = ResolveApronMaterial();
 	Settings.GhostMaterial = ResolveGhostMaterial();
 	Settings.MaterialSet = ResolveMaterialSet();
-	Settings.RunwayGrassMaterial = ResolveRunwayMaterial(ERunwaySurface::Grass);
-	Settings.RunwayTarmacMaterial = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
-	Settings.RunwayConcreteMaterial = ResolveRunwayMaterial(ERunwaySurface::Concrete);
+	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
+	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Tarmac)] = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
+	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Concrete)] = ResolveRunwayMaterial(ERunwaySurface::Concrete);
 	Settings.Profile = ResolveProfile();
 	return Settings;
 }
@@ -330,16 +330,10 @@ UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(ERunwaySurface Surf
 	{
 		return nullptr;
 	}
-	switch (Surface)
-	{
-	case ERunwaySurface::Grass:  return Content->RunwayGrassMaterial.LoadSynchronous();
-	case ERunwaySurface::Tarmac: return Content->RunwayTarmacMaterial.LoadSynchronous();
-	// Reinforced shares concrete's material - URoadMaterialSet::RunwaySlotName says why.
-	case ERunwaySurface::Concrete:
-	case ERunwaySurface::Reinforced:
-	default:
-		return Content->RunwayConcreteMaterial.LoadSynchronous();
-	}
+	// RunwayMaterialSlot is the ONE place Reinforced aliases to Concrete's slot - see its
+	// own declaration's comment. An unauthored (short) array reads as every slot null.
+	const int32 Slot = RunwayMaterialSlot(Surface);
+	return Content->RunwayMaterials.IsValidIndex(Slot) ? Content->RunwayMaterials[Slot].LoadSynchronous() : nullptr;
 }
 
 int32 ARoadNetworkActor::GetRunwayProfileCount() const

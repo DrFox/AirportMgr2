@@ -116,13 +116,13 @@ public:
 
 		/**
 		 * Already resolved - see ARoadNetworkActor::ResolveRunwayMaterial. What a runway's
-		 * bands are skinned with, by surface; null falls back to SurfaceMaterial. Three
-		 * pointers rather than a set, because MaterialSet may legitimately be null (the
-		 * single-material road) and these must still reach the mesh - see EffectiveMaterialSet.
+		 * bands are skinned with, indexed by RunwayMaterialSlot(Surface); null falls back to
+		 * SurfaceMaterial. Raw pointers in an array rather than a set, because MaterialSet
+		 * may legitimately be null (the single-material road) and these must still reach the
+		 * mesh - see EffectiveMaterialSet. A plain C array, not TStaticArray: this struct is
+		 * not UPROPERTY-reflected, so either works, and a fixed array needs no include.
 		 */
-		UMaterialInterface* RunwayGrassMaterial = nullptr;
-		UMaterialInterface* RunwayTarmacMaterial = nullptr;
-		UMaterialInterface* RunwayConcreteMaterial = nullptr;
+		UMaterialInterface* RunwayMaterials[3] = {};
 
 		/** Already resolved - see ARoadNetworkActor::ResolveProfile. */
 		URoadProfile* Profile = nullptr;

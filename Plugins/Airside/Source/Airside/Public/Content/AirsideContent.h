@@ -53,23 +53,26 @@ public:
 	TSoftObjectPtr<UMaterialInterface> GhostMaterial;
 
 	/**
-	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts.
+	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts. Indexed by
+	 * RunwayMaterialSlot(Surface), which is the ONE place Reinforced aliases to Concrete's
+	 * slot - replacing the switch that used to live in ResolveRunwayMaterial AND the
+	 * array-of-struct RoadSurfacePresenter.cpp built from three named properties here.
 	 *
-	 * Three, not four: reinforced is concrete with a stronger rating, and the difference
-	 * shows in the details panel and in what may land there, not on the ground (spec
-	 * 2026-09-07 §8). Each is an instance of the road surface with its centreline width
-	 * at zero, because the only line on a runway is the white one FRunwayMarkingBuilder
-	 * paints - authored by Tools/Python/build_runway_materials.py. Null falls back to
+	 * THREE SLOTS: reinforced is concrete with a stronger rating, and the difference shows
+	 * in the details panel and in what may land there, not on the ground (spec 2026-09-07
+	 * §8). A TArray, not a TStaticArray: UPROPERTY reflection has no TStaticArray support -
+	 * see URoadSurfacePresenter::LayerComponents' own comment for the same constraint. Each
+	 * slot is an instance of the road surface with its centreline width at zero, because the
+	 * only line on a runway is the white one FRunwayMarkingBuilder paints - authored by
+	 * Tools/Python/build_runway_materials.py. A null or missing slot falls back to
 	 * SurfaceMaterial, yellow line and all, which is what runways looked like before.
+	 *
+	 * NEEDS RESAVE: an asset that authored the old RunwayGrassMaterial/RunwayTarmacMaterial/
+	 * RunwayConcreteMaterial properties falls back to SurfaceMaterial for all three until
+	 * this array is re-authored (issue #105 item 4 - those three properties are gone).
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
-	TSoftObjectPtr<UMaterialInterface> RunwayGrassMaterial;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
-	TSoftObjectPtr<UMaterialInterface> RunwayTarmacMaterial;
-
-	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
-	TSoftObjectPtr<UMaterialInterface> RunwayConcreteMaterial;
+	TArray<TSoftObjectPtr<UMaterialInterface>> RunwayMaterials;
 
 	// NO MaterialSet HERE, deliberately. A null one on the actor is not an unset field, it is
 	// the single-material road - so offering a default silently converts every airport that
