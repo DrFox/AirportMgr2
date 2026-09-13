@@ -547,7 +547,7 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 		if (const URoadProfile* Used = Settings.Profile)
 		{
 			Instance->SetScalarParameterValue(TEXT("EdgeHalfWidth"),
-				static_cast<float>(FMath::Max(Used->GetHalfWidthLeft(), Used->GetHalfWidthRight())));
+				static_cast<float>(Used->GetMaxHalfWidth()));
 		}
 	}
 
