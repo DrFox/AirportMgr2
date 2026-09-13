@@ -137,7 +137,7 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		// Beyond the far threshold, which is not on the runway at all.
 		Net->AddGuidelineNode(FVector2D(130000.0, 0.0), false);
 
-		const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(Seed, 0.0);
+		const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(Seed, Threshold, FVector2D(1.0, 0.0), 0.0);
 
 		TestEqual(TEXT("three nodes lie on the runway, and only three"), Exits.Num(), 3);
 		if (Exits.Num() == 3)
@@ -150,10 +150,29 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("then the far one"), Exits[2], Late);
 		}
 
+		// 5b. THE CALLER'S OWN END, NOT THE SEED'S DRAW DIRECTION (fixed 2026-09-13). Asked
+		//     from the EAST threshold, landing WEST (-1, 0) - the seed itself is unchanged
+		//     (it was built West to East), so a version that re-derived Threshold/Direction
+		//     from the seed's own A node would answer as if still asked from the west and
+		//     get the order and the MinDistance filter backwards.
+		{
+			const FVector2D EastThreshold(100000.0, 0.0);
+			const TArray<FGuidelineNodeId> FromEast =
+				Net->RunwayExitNodes(Seed, EastThreshold, FVector2D(-1.0, 0.0), 0.0);
+			TestEqual(TEXT("same three nodes, asked from the other end"), FromEast.Num(), 3);
+			if (FromEast.Num() == 3)
+			{
+				TestEqual(TEXT("nearest the EAST threshold first"), FromEast[0], Late);
+				TestEqual(TEXT("then the middle one"), FromEast[1], Middle);
+				TestEqual(TEXT("then the far (west) one"), FromEast[2], Early);
+			}
+		}
+
 		// 6. THE MEASUREMENT AN ARRIVAL DEPENDS ON. An exit before the aircraft could have
 		//    slowed to taxi speed is not an exit it can take, and offering one would turn a
 		//    landing aircraft off the runway at approach speed.
-		const TArray<FGuidelineNodeId> Usable = Net->RunwayExitNodes(Seed, 30000.0);
+		const TArray<FGuidelineNodeId> Usable =
+			Net->RunwayExitNodes(Seed, Threshold, FVector2D(1.0, 0.0), 30000.0);
 
 		TestEqual(TEXT("an exit inside the landing distance is not offered"), Usable.Num(), 2);
 		if (Usable.Num() == 2)
@@ -203,7 +222,8 @@ bool FRunwayExtentTest::RunTest(const FString& Parameters)
 		// figure the old caller-computed HalfWidth would have used for THIS seed.
 		MultiNet->AddGuidelineNode(FVector2D(25000.0, 1500.0), false);
 
-		const TArray<FGuidelineNodeId> MultiExits = MultiNet->RunwayExitNodes(NarrowSeed, 0.0);
+		const TArray<FGuidelineNodeId> MultiExits =
+			MultiNet->RunwayExitNodes(NarrowSeed, FVector2D(0.0, 0.0), FVector2D(1.0, 0.0), 0.0);
 		TestEqual(TEXT("a node outside the narrow strip's OWN width is not an exit, even "
 			"though a wider runway elsewhere would have admitted it"), MultiExits.Num(), 0);
 	}

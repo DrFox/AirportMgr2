@@ -269,7 +269,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		if (bRunway && Pose != nullptr)
 		{
 			// From EVERY node on the strip, not just the plan's chosen exit.
-			const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(RunwaySeed, 0.0);
+			const TArray<FGuidelineNodeId> Exits = Net->RunwayExitNodes(RunwaySeed, Threshold, Direction, 0.0);
 			int32 Reachable = 0;
 			for (const FGuidelineNodeId& Exit : Exits)
 			{

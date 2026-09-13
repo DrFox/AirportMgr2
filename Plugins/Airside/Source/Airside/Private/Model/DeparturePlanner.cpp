@@ -41,7 +41,10 @@ namespace DeparturePlanner
 		// threshold is the backtrack's goal, and the first one past it with enough runway
 		// left is the intersection departure's. Tested against Seed's OWN chain width per
 		// segment (#87), not a HalfWidth measured across every runway on the airport.
-		const TArray<FGuidelineNodeId> Candidates = Network.RunwayExitNodes(Seed, 0.0);
+		// Threshold/Direction are OUR OWN end, not re-derived from Seed - see
+		// RunwayExitNodes's own comment: a seed has two ends and only we know which is meant.
+		const TArray<FGuidelineNodeId> Candidates =
+			Network.RunwayExitNodes(Seed, Out.Threshold, Out.Direction, 0.0);
 
 		auto OffsetOf = [&](FGuidelineNodeId Node)
 		{

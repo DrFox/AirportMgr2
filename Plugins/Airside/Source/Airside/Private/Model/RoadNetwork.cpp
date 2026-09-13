@@ -179,13 +179,19 @@ bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId
 bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
 	double* OutChainHalfWidth) const
 {
+	return IsPointOnRunway(Position, RunwayChain(Seed), OutChainHalfWidth);
+}
+
+bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,
+	double* OutChainHalfWidth) const
+{
 	if (OutChainHalfWidth != nullptr)
 	{
 		*OutChainHalfWidth = 0.0;
 	}
 
 	bool bOnStrip = false;
-	for (const FRoadSegmentId& Id : RunwayChain(Seed))
+	for (const FRoadSegmentId& Id : Chain)
 	{
 		const FRoadSegment* Segment = GetSegment(Id);
 		if (Segment == nullptr)
@@ -201,7 +207,7 @@ bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId See
 		}
 
 		// THE SEGMENT'S OWN HALF WIDTH, not a constant: a chain may mix profiles, and the
-		// bound has to scale with the strip - the same rule RunwayExitNodes uses.
+		// bound has to scale with the strip it is currently walking.
 		const double HalfWidth = Profile->GetTotalWidth() * 0.5;
 		if (OutChainHalfWidth != nullptr)
 		{
@@ -487,21 +493,20 @@ bool URoadNetwork::RunwayExtentInternal(const FVector2D& Near, bool bRequireOnRu
 	return true;
 }
 
-TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, double MinDistance) const
+TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
+	const FVector2D& Direction, double MinDistance) const
 {
 	TArray<FGuidelineNodeId> Out;
-
-	// The seed's own A node is certainly on its own strip, so this is the same figure
-	// RunwayAdmission::Check asks RunwayExtentAt for - and now, unlike before #87, actually
-	// is: only used here for the Threshold/Direction to ORDER by, never to test width.
-	const FRoadSegment* SeedSegment = GetSegment(Seed);
-	const FRoadNode* SeedNodeA = SeedSegment != nullptr ? GetNode(SeedSegment->A) : nullptr;
-	FVector2D Threshold, Direction;
-	double Length = 0.0;
-	if (SeedNodeA == nullptr || !RunwayExtentAt(SeedNodeA->Position, Threshold, Direction, Length))
+	if (Direction.IsNearlyZero())
 	{
 		return Out;
 	}
+
+	// Walked ONCE here rather than once per guideline node inside IsPointOnRunway: the
+	// walk is the same answer for every point asked of this seed, so paying for it per
+	// point would be re-deriving one fact about the network as many times as there are
+	// candidate exits.
+	const TArray<FRoadSegmentId> Chain = RunwayChain(Seed);
 
 	// Sorted by distance down the runway, because the CALLER's rule is "the first exit I can
 	// take". Collected with the distance and sorted at the end rather than inserted in order:
@@ -521,7 +526,7 @@ TArray<FGuidelineNodeId> URoadNetwork::RunwayExitNodes(FRoadSegmentId Seed, doub
 		// OWN width, not a HalfWidth the caller measured across the whole airport. This is
 		// what makes the far end's own slack, and a multi-width chain, correct without this
 		// function knowing either detail.
-		if (!IsPointOnRunway(Node.Position, Seed))
+		if (!IsPointOnRunway(Node.Position, Chain))
 		{
 			continue;
 		}

@@ -135,13 +135,15 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	//    apart from a failure here - which is exactly what the first refusal message could
 	//    not do, and why "pressing 7 does nothing" took two sittings to diagnose.
 	{
-		const TArray<FGuidelineNodeId> OnStrip = Net.RunwayExitNodes(RunwaySeed, 0.0);
+		const TArray<FGuidelineNodeId> OnStrip =
+			Net.RunwayExitNodes(RunwaySeed, ThresholdAt, FVector2D(1.0, 0.0), 0.0);
 		TestTrue(FString::Printf(
 			TEXT("the taxiway junction puts guideline node(s) on the runway (%d found)"),
 			OnStrip.Num()),
 			OnStrip.Num() > 0);
 
-		const TArray<FGuidelineNodeId> Usable = Net.RunwayExitNodes(RunwaySeed, Needed);
+		const TArray<FGuidelineNodeId> Usable =
+			Net.RunwayExitNodes(RunwaySeed, ThresholdAt, FVector2D(1.0, 0.0), Needed);
 		TestTrue(FString::Printf(
 			TEXT("and at least one of them is far enough down to be usable (%d of %d, past %.0f uu)"),
 			Usable.Num(), OnStrip.Num(), Needed),

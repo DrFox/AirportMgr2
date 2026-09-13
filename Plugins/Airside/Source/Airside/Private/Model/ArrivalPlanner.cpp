@@ -120,8 +120,12 @@ namespace ArrivalPlanner
 		//    all. The player watched the aircraft roll straight past the exit it had built.
 		// RunwayExitNodes tests each chain segment against its OWN width (#87) - no HalfWidth
 		// measured here, and no risk of a wider runway elsewhere loosening this strip's test.
+		// Threshold/Direction are OUR OWN (the end this arrival is actually at), not
+		// re-derived from the seed: a seed has two ends and only the caller knows which one
+		// is meant (fixed 2026-09-13, see RunwayExitNodes's own comment).
 		const double SlowedBy = Out.Needed / FLandingRun::LandingMargin;
-		const TArray<FGuidelineNodeId> Exits = Network.RunwayExitNodes(Out.RunwaySegment, SlowedBy);
+		const TArray<FGuidelineNodeId> Exits =
+			Network.RunwayExitNodes(Out.RunwaySegment, Out.Threshold, Out.Direction, SlowedBy);
 		Out.ExitCount = Exits.Num();
 
 		if (Out.RunwayLength < Out.Needed)

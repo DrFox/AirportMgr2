@@ -142,8 +142,8 @@ public:
 	 *
 	 * True when, for ANY segment of the chain, the node is within that segment's own profile
 	 * half width of its centreline AND its projection falls inside the segment's A..B extent
-	 * with that half width of slack at each end - the same slack RunwayExitNodes gives, and
-	 * for the same reason: a junction cut puts the node a little beyond the road node.
+	 * with that half width of slack at each end - a junction cut puts the node a little
+	 * beyond the road node, and this is the slack that admits it anyway.
 	 *
 	 * OutChainHalfWidth, when given, reports the LARGEST half width in the chain whether or
 	 * not the node is on it. That is how far past the last on-strip node a tail must travel
@@ -163,6 +163,15 @@ public:
 	 * One implementation so the two answers cannot drift - the second-evaluator rule.
 	 */
 	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
+		double* OutChainHalfWidth = nullptr) const;
+
+	/**
+	 * The same question against a chain ALREADY WALKED, for a caller asking it of many
+	 * points on one chain (RunwayExitNodes, one per guideline node) - RunwayChain(Seed)
+	 * walks the graph, and paying for that walk again per point would be asking the same
+	 * question about the network a hundred times to answer it about a hundred positions.
+	 */
+	bool IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,
 		double* OutChainHalfWidth = nullptr) const;
 
 	/**
@@ -203,23 +212,31 @@ public:
 
 	/**
 	 * Guideline nodes lying on the runway chain Seed belongs to, ordered by distance from
-	 * its threshold.
+	 * Threshold along Direction.
 	 *
 	 * THE EXITS, without needing an exit to be a thing. A runway is continuous through
 	 * junctions, so a taxiway joining it already puts a guideline node on the centreline;
 	 * asking which nodes lie along the strip therefore finds every way off it, including
 	 * ones the player drew after the runway existed.
 	 *
-	 * TAKES A SEED, not a caller-measured width (2026-09-13, #87): a node qualifies by
-	 * IsPointOnRunway(Node.Position, Seed) - the one evaluator of "on the strip", tested per
-	 * SEGMENT of the chain against that segment's OWN width. The two callers used to compute
-	 * their own HalfWidth as the max over every continuous segment on the whole airport, so a
-	 * 60 m runway anywhere widened the exit test on an 18 m strip.
+	 * A node qualifies by IsPointOnRunway(Node.Position, Seed) - the one evaluator of "on
+	 * the strip", tested per SEGMENT of the chain against that segment's OWN width (#87).
+	 * The two callers used to compute their own HalfWidth as the max over every continuous
+	 * segment on the whole airport, so a 60 m runway anywhere widened the exit test on an
+	 * 18 m strip.
+	 *
+	 * THRESHOLD AND DIRECTION ARE THE CALLER'S OWN, not re-derived from Seed here (fixed
+	 * 2026-09-13): a seed has two ends and this function has no way to know which one the
+	 * aircraft is actually at. Deriving them from Seed's own A node - a draw-direction
+	 * artefact - silently reversed the ordering and the MinDistance filter on any strip not
+	 * drawn threshold-first, which nothing forces a player to do. Seed still decides
+	 * membership and width (IsPointOnRunway); Threshold/Direction decide direction.
 	 *
 	 * MinDistance is what makes the answer useful to an arrival: an exit before the aircraft
 	 * can possibly have slowed down is not an exit it can take.
 	 */
-	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, double MinDistance) const;
+	TArray<FGuidelineNodeId> RunwayExitNodes(FRoadSegmentId Seed, const FVector2D& Threshold,
+		const FVector2D& Direction, double MinDistance) const;
 
 	// --- Guideline graph -------------------------------------------------------------
 	// A SECOND graph, deliberately in the same object. The build tool must make "draw a
