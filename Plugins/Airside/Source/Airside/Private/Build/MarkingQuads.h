@@ -13,10 +13,11 @@ namespace MarkingQuads
 {
 	/**
 	 * One quad, corners in either rotational order, wound counter-clockwise as seen from +Z
-	 * by measurement - the maths convention every builder here works in - and emitted with
-	 * the SAME flip FRoadMeshBuilder::AddTriangle applies: Unreal is left-handed, so a
-	 * counter-clockwise triangle faces DOWN and is culled from above. The flip lives in one
-	 * place per builder, never at a call site.
+	 * by measurement - the maths convention every builder here works in. Emitted through
+	 * FRoadMeshBuffers::AppendTriangleUp, the SAME flip-plus-degenerate-guard
+	 * FRoadMeshBuilder::AddTriangle uses (#103) - AddQuad used to apply the flip itself,
+	 * unguarded, which is also why UV2 below is now (0,1): RoadMeshSink.h's own contract on
+	 * UV2 ("Y is reserved and always 1") was being violated by every marking quad.
 	 *
 	 * Four consecutive vertices and two triangles per call, always, so a test can walk the
 	 * buffers four vertices at a time and measure each marking on its own.
@@ -51,13 +52,11 @@ namespace MarkingQuads
 			// Lateral 0 everywhere: the whole quad is centreline as far as the material can
 			// tell, which is what paints it MarkingColor - see FHoldingPositionMarkingBuilder.
 			Out.UV1.Add(FVector2f(0.f, 0.f));
-			Out.UV2.Add(FVector2f(0.f, 0.f));
+			Out.UV2.Add(FVector2f(0.f, 1.f));
 		}
-		// (0,1,2) and (0,2,3) counter-clockwise, flipped to (0,2,1) and (0,3,2).
-		Out.Indices.Append({ Base + 0, Base + 2, Base + 1 });
-		Out.MaterialIDs.Add(0);
-		Out.Indices.Append({ Base + 0, Base + 3, Base + 2 });
-		Out.MaterialIDs.Add(0);
+		// (0,1,2) and (0,2,3) counter-clockwise; AppendTriangleUp applies its own flip.
+		Out.AppendTriangleUp(Base + 0, Base + 1, Base + 2, 0);
+		Out.AppendTriangleUp(Base + 0, Base + 2, Base + 3, 0);
 	}
 
 	/**

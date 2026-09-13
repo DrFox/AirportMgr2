@@ -48,6 +48,75 @@ struct FRoadMeshBuffers
 	 * carry a material. Material is a per-face property; the weld is a per-vertex one.
 	 */
 	TArray<int32> MaterialIDs;
+
+	/**
+	 * Below this, in uu², a triangle cannot cover a pixel at any sane texel density.
+	 *
+	 * A square 0.001 uu on a side. Absolute rather than texel-derived: spec section 12 (K3)
+	 * assigns the drop to the mesh builder precisely because the solver has no texel scale
+	 * to judge "too small" against, and neither does this - what it has is the knowledge
+	 * that nothing this small is ever rasterised, whatever the scale.
+	 */
+	static constexpr double MinSliverArea = 1e-6;
+
+	/**
+	 * One triangle from three ALREADY-APPENDED vertex indices A, B, C - guards degenerate
+	 * and sliver triangles, then emits with Unreal's winding. Shared by every builder that
+	 * emits a triangle (FRoadMeshBuilder::AddTriangle, MarkingQuads::AddQuad), so the flip
+	 * and the guards live in one place rather than being re-derived per builder (#103).
+	 *
+	 * Emitted B and C SWAPPED, because Unreal's front face is the opposite winding to the
+	 * mathematical convention every caller here uses.
+	 *
+	 * Callers build counter-clockwise as seen from +Z, which is correct maths and is what
+	 * the solver's polygons are. Unreal is left-handed: VectorUtil::Normal computes
+	 * cross(C-A, B-A) - the negation of the standard cross product, with a comment in the
+	 * engine saying exactly why - so a counter-clockwise triangle faces DOWN and is
+	 * backface-culled from above.
+	 *
+	 * This went unnoticed from slice 2a until the first genuinely lit material, because
+	 * the placeholder colour override substitutes Unreal's vertex-colour debug material,
+	 * which is two-sided. Every winding check - the tests, the hand-derivations, the
+	 * review - measured the maths convention and agreed with each other while disagreeing
+	 * with the rasteriser.
+	 */
+	void AppendTriangleUp(int32 A, int32 B, int32 C, int32 MaterialID)
+	{
+		// A degenerate triangle contributes nothing and upsets downstream normal
+		// computation, so drop it rather than emit it.
+		if (A == B || B == C || A == C)
+		{
+			return;
+		}
+
+		// Zero-area slivers. A pass-through node a hair off collinear emits a fan whose corner
+		// has collapsed: the triangles are correctly wound and have distinct indices, so every
+		// check above passes them, but they carry ~2.6e-07 uu² of area into FDynamicMesh3 and
+		// its normal computation. Spec section 12 (K3) assigns this to the mesh builder rather
+		// than the solver. Note an exactly collinear node never reaches here - the solver finds
+		// no apex that sees its rim and declines to emit a fan at all.
+		{
+			const FVector3d& PA = Positions[A];
+			const FVector3d& PB = Positions[B];
+			const FVector3d& PC = Positions[C];
+			const double Area = FMath::Abs(
+				0.5 * ((PB.X - PA.X) * (PC.Y - PA.Y) - (PB.Y - PA.Y) * (PC.X - PA.X)));
+			if (Area < MinSliverArea)
+			{
+				return;
+			}
+		}
+
+		Indices.Add(A);
+		Indices.Add(C);
+		Indices.Add(B);
+
+		// Added HERE, after every early return above, so the array stays exactly one entry per
+		// emitted triangle. Pushing it at the top would leave an id for each degenerate and
+		// sliver triangle this function drops, and MaterialIDs would silently run one ahead of
+		// Indices for the rest of the mesh.
+		MaterialIDs.Add(MaterialID);
+	}
 };
 
 /**
