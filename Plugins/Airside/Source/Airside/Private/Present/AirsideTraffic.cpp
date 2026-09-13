@@ -1,9 +1,6 @@
 #include "Present/AirsideTraffic.h"
 
-#include "Engine/SkeletalMesh.h"
-
 #include "AirsideLog.h"
-#include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/GroundTraffic.h"
@@ -105,37 +102,23 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 	// BY THE AGENT'S CLASS, because an aircraft and a truck are different assets of different
 	// KINDS - one skeletal, one static. Decided HERE rather than inside the view, so the view
 	// still knows nothing about traffic classes and stays the dumb thing its header promises.
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	if (Agent->Class == ETraversalClass::Aircraft)
 	{
-		// THE AGENT'S OWN AIRFRAME FIRST, the content default only as a fallback.
-		//
-		// This used to read Content->AgentMesh unconditionally - ONE mesh for every aircraft
-		// in the game - so a Twin Otter was offered, dispatched and landed as a Meridian:
-		// the name, the figures and the refusal reasons were all the right type's, and only
-		// the aeroplane on the runway was not. It went unnoticed for as long as there was
-		// exactly one aircraft model to wear.
-		USkeletalMesh* Mesh = Agent->Airframe.Mesh.LoadSynchronous();
-		UClass* AnimClass = Agent->Airframe.AnimClass.LoadSynchronous();
-		if (Mesh == nullptr && Content != nullptr)
-		{
-			Mesh = Content->AgentMesh.LoadSynchronous();
-			AnimClass = Content->AgentAnimClass.LoadSynchronous();
-		}
-		else if (Mesh != nullptr && AnimClass == nullptr && Content != nullptr)
-		{
-			// A type with a mesh but no anim Blueprint: the default one drives bones by
-			// name, so it is the right fallback rather than no animation at all.
-			AnimClass = Content->AgentAnimClass.LoadSynchronous();
-		}
-
-		if (Mesh != nullptr)
+		// THE AGENT'S OWN AIRFRAME FIRST, the content default only as a fallback - see
+		// UAirsideSettings::ResolveAgentView, the one place this three-way fallback is typed
+		// (#104). This used to read Content->AgentMesh unconditionally - ONE mesh for every
+		// aircraft in the game - so a Twin Otter was offered, dispatched and landed as a
+		// Meridian: the name, the figures and the refusal reasons were all the right type's,
+		// and only the aeroplane on the runway was not. It went unnoticed for as long as
+		// there was exactly one aircraft model to wear.
+		const FResolvedAgentView Resolved = UAirsideSettings::ResolveAgentView(Agent->Airframe);
+		if (Resolved.Mesh != nullptr)
 		{
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d wears %s (%s)"),
-				AgentId, *Mesh->GetName(),
+				AgentId, *Resolved.Mesh->GetName(),
 				Agent->Airframe.Mesh.IsNull() ? TEXT("content default") : TEXT("its own type"));
 		}
-		View->SetAirframe(Mesh, AnimClass);
+		View->SetAirframe(Resolved.Mesh, Resolved.AnimClass);
 	}
 	else
 	{
@@ -144,7 +127,7 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		// length that actually stopped. Half the length across and half again tall, which is
 		// a van's proportions.
 		const double Length = Model->Rules.FootprintFor(Agent->Class);
-		View->SetVehicleBody(Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr,
+		View->SetVehicleBody(UAirsideSettings::ResolveVehicleMesh(),
 			FVector(Length, Length * 0.5, Length * 0.5));
 	}
 

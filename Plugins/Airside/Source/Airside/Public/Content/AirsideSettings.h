@@ -6,6 +6,18 @@
 #include "AirsideSettings.generated.h"
 
 class UAirsideContent;
+class USkeletalMesh;
+class UStaticMesh;
+
+/** What UAirsideSettings::ResolveAgentView resolved - see its own comment. */
+USTRUCT()
+struct FResolvedAgentView
+{
+	GENERATED_BODY()
+
+	UPROPERTY() TObjectPtr<USkeletalMesh> Mesh = nullptr;
+	UPROPERTY() TObjectPtr<UClass> AnimClass = nullptr;
+};
 
 /**
  * Where the plugin is told which content set to use. The ONE remaining path, and it is data.
@@ -82,4 +94,22 @@ public:
 	 * neither side of that comparison means anything for a van.
 	 */
 	static FAirframe ResolveDefaultVehicle();
+
+	/**
+	 * What an aircraft's view should wear: THE AGENT'S OWN AIRFRAME FIRST, falling back to
+	 * the content set's - and if the type has a mesh but no anim Blueprint of its own, the
+	 * content default anim Blueprint drives it rather than leaving it unanimated.
+	 *
+	 * Moved out of UAirsideTraffic::SpawnView (#104): three branches of authored/content/
+	 * mixed fallback belong beside every other Resolve*, not inline in Present/, which is
+	 * how this project keeps "what does content default to" answered in exactly one place.
+	 * This used to read Content->AgentMesh unconditionally - ONE mesh for every aircraft in
+	 * the game - so a Twin Otter was offered, dispatched and landed as a Meridian: the name,
+	 * the figures and the refusal reasons were all the right type's, and only the aeroplane
+	 * on the runway was not.
+	 */
+	static FResolvedAgentView ResolveAgentView(const FAirframe& Airframe);
+
+	/** A service vehicle's body mesh - the content default, or null with none configured. */
+	static UStaticMesh* ResolveVehicleMesh();
 };
