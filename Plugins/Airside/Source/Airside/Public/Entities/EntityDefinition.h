@@ -60,6 +60,16 @@ public:
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> Anchors;
 
 	/**
+	 * What placing one costs, and what a day of owning it costs.
+	 *
+	 * See URoadProfile::CostPerMetre for why the figure lives on the asset rather than in a
+	 * table beside it, and why a number only AirportOps reads sits in this plugin.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double PlacementCost = 0.0;
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double UpkeepPerDay = 0.0;
+
+
+	/**
 	 * A closed, INVISIBLE vehicle lane enclosing the parked aircraft and every anchor, in
 	 * the entity's own local space. Empty means none.
 	 *

@@ -94,6 +94,26 @@ public:
 	 */
 	static constexpr double StandardTaxiwayWidth = 2300.0;
 
+	/**
+	 * What a metre of this profile costs to lay, and what a day of owning it costs.
+	 *
+	 * ON THE PROFILE rather than in a cost table beside it, so a new taxiway width cannot be
+	 * added without a price. A central table keyed by asset was the alternative and was
+	 * rejected: forget a row there and the profile builds free, with nothing anywhere to say
+	 * so - the "lists that must agree" failure this codebase has shipped three times.
+	 *
+	 * A FIGURE ONLY AirportOps EVER READS, and that is deliberate. Airside owns the geometry,
+	 * so Airside is the only layer that can say how much of it there is; putting the rate
+	 * anywhere else would mean something outside this plugin had to know what a profile is
+	 * made of. See FBuildQuote, and BuildCost, which is the only reader in this plugin.
+	 *
+	 * Zero by default, so a profile nobody has priced builds free rather than at some invented
+	 * figure - visible in the ghost as a build that costs nothing, which is the right way for
+	 * an un-authored asset to fail.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double CostPerMetre = 0.0;
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double UpkeepPerMetrePerDay = 0.0;
+
 	UPROPERTY(EditAnywhere) TArray<FProfileBand> Bands;
 	UPROPERTY(EditAnywhere) TArray<FProfileGuideline> Guidelines;
 
