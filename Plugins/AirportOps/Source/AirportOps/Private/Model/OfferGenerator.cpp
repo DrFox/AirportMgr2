@@ -4,6 +4,7 @@
 #include "Model/AirlineDefinition.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/Pricing.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
 
@@ -90,8 +91,14 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 	// stand for something landing in the past.
 	Offer->ExpiresAt = Now + FMath::Min(OfferLifeSeconds, LeadTimeSeconds);
 
-	// Fees are deliberately left at zero. Nothing banks them until the ledger exists, and a
-	// number nothing reads is a number that will be wrong by the time something does.
+	// PRICED AT THE OFFER, not at touchdown, so the inbox row shows what accepting it is worth
+	// and the player's fee lever moves NEW offers only. A fee computed on landing would let
+	// them accept cheaply and put the price up afterwards, and the number they decided on
+	// would have been a lie. ParkingFee stays zero: nobody knows how long it will stay.
+	if (Pricing != nullptr)
+	{
+		Offer->LandingFee = Pricing->LandingFee(Offer->Airframe);
+	}
 	return Offer;
 }
 

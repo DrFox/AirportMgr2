@@ -154,6 +154,16 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// Present/, where every other content default gets resolved, and Model/ has no business
 	// reaching Content/ for it.
 	FuelService->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
+
+	// THE MONEY, wired in one breath like the scenario figures above, so none of these is the
+	// one somebody forgot to connect. Each of the three posts to the ledger for its own part of
+	// a flight: the generator prices the offer, the board banks landing and parking, the fuel
+	// service banks a completed fuelling.
+	OfferGenerator->Pricing = Pricing;
+	FlightBoard->Ledger = Ledger;
+	FlightBoard->Pricing = Pricing;
+	FuelService->Ledger = Ledger;
+	FuelService->Pricing = Pricing;
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
@@ -303,7 +313,7 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 		{
 			FuelService->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
-			FlightBoard->OnAgentPhase(*Model, *Target->Network, AgentId, From, To);
+			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
 		}
 	}
 

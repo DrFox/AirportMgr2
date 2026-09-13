@@ -7,6 +7,8 @@
 
 #include "OfferGenerator.generated.h"
 
+class UPricing;
+
 class UAirlineDefinition;
 class UFlight;
 class URoadNetwork;
@@ -52,6 +54,15 @@ class AIRPORTOPS_API UOfferGenerator : public UObject
 	GENERATED_BODY()
 
 public:
+
+	/**
+	 * What a landing is worth, or null for a test that does not care.
+	 *
+	 * THE OFFER IS PRICED, NOT THE LANDING. See MakeOffer - the fee is fixed here so the inbox
+	 * row can show what accepting it is worth, and so the player's lever moves NEW offers only.
+	 */
+	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
 	/** How far ahead of the offer an accepted flight lands, GAME seconds. */
 	UPROPERTY(EditAnywhere, Category = "Offers", meta = (ClampMin = "0.0"))
 	double LeadTimeSeconds = 900.0;

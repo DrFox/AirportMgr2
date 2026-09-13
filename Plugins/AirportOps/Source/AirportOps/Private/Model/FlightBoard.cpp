@@ -3,6 +3,8 @@
 #include "AirportOpsLog.h"
 #include "Model/AirsideCapability.h"
 #include "Model/Flight.h"
+#include "Model/Ledger.h"
+#include "Model/Pricing.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadNetwork.h"
@@ -245,8 +247,44 @@ void UFlightBoard::AimUnaimedFlightsAtBoardFocus()
 	}
 }
 
+void UFlightBoard::PostLandingFee(double Now, UFlight& Flight)
+{
+	// bLandingFeePaid AND NOT "is the phase Landing": OnAgentPhase fires for every agent phase
+	// change, and more than one of them can map to EFlightPhase::Landing. A flag on the flight
+	// is the only thing that survives a reload as well - see UFlight::bLandingFeePaid.
+	if (Ledger == nullptr || Flight.LandingFee <= 0.0 || Flight.bLandingFeePaid)
+	{
+		return;
+	}
+
+	Flight.bLandingFeePaid = true;
+	Ledger->Post(Now, ELedgerCategory::LandingFee, Flight.LandingFee,
+		FText::Format(NSLOCTEXT("Ledger", "LandingBy", "Landing: {0}"), Flight.AirlineName));
+}
+
+void UFlightBoard::PostParkingFee(double Now, UFlight& Flight)
+{
+	// ParkedAt of zero means it never parked - see UFlight::ParkedAt for the two ways a flight
+	// reaches TaxiOut without having done so, and for what billing from the epoch would cost.
+	if (Ledger == nullptr || Pricing == nullptr || Flight.ParkedAt <= 0.0)
+	{
+		return;
+	}
+
+	const double Hours = FMath::Max(0.0, (Now - Flight.ParkedAt) / 3600.0);
+	const double Fee = Pricing->ParkingFeePerHour(Flight.Airframe) * Hours;
+	if (Fee <= 0.0)
+	{
+		return;
+	}
+
+	Flight.ParkingFee = Fee;
+	Ledger->Post(Now, ELedgerCategory::ParkingFee, Fee,
+		FText::Format(NSLOCTEXT("Ledger", "ParkingBy", "Parking: {0}"), Flight.AirlineName));
+}
+
 void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
-	int32 AgentId, EAgentPhase From, EAgentPhase To)
+	const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To)
 {
 	UFlight* Flight = FindByAgent(AgentId);
 	if (Flight == nullptr)
@@ -275,6 +313,30 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 	if (To == EAgentPhase::Gone)
 	{
 		Flight->AgentId = INDEX_NONE;
+	}
+
+	// THE MONEY, at two phases and those two specifically.
+	//
+	// Landing is where an aeroplane becomes the airport's business. TaxiOut is the one phase
+	// EVERY departure reaches - Manoeuvring is NOT, because an aeroplane parked within
+	// StraightOutDegrees of its exit heading simply drives out and never enters it (commit
+	// 021cc2e). Charging parking at a phase some flights never enter would be a fee that went
+	// silently uncollected on exactly the layouts the player built best.
+	const double Now = Clock.Now();
+	if (Flight->Phase == EFlightPhase::Landing)
+	{
+		PostLandingFee(Now, *Flight);
+	}
+	else if (Flight->Phase == EFlightPhase::Turnaround && Flight->ParkedAt <= 0.0)
+	{
+		// The start of the parking clock, taken once - Turnaround is reached again by anything
+		// that re-enters it, and the second visit must not restart the meter in the player's
+		// favour.
+		Flight->ParkedAt = Now;
+	}
+	else if (Flight->Phase == EFlightPhase::TaxiOut)
+	{
+		PostParkingFee(Now, *Flight);
 	}
 
 	OnChanged.Broadcast();
