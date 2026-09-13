@@ -50,6 +50,21 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 			Active->GetDisplayName().EqualTo(Registry[Index].Name));
 	}
 
+	// 4. RecordPlaneHit/LastPlaneHit - the one shared home for the fallback that used to be
+	// ARoadBuildController::LastPlaneHit and URoadBuildEditorTool::HoverPosition separately
+	// (issue #92). Pinned directly rather than only through MakeContext's fallback branch,
+	// so a future change to that branch cannot stop exercising the pair without a test
+	// noticing.
+	{
+		FBuildSession PlaneHitSession;
+		TestTrue(TEXT("a fresh session's last plane hit is the origin"),
+			PlaneHitSession.LastPlaneHit().Equals(FVector2D::ZeroVector, 1e-6));
+
+		PlaneHitSession.RecordPlaneHit(FVector2D(1234.0, -500.0));
+		TestTrue(TEXT("RecordPlaneHit's value reads back exactly"),
+			PlaneHitSession.LastPlaneHit().Equals(FVector2D(1234.0, -500.0), 1e-6));
+	}
+
 	return true;
 }
 
