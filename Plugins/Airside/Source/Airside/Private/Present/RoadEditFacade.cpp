@@ -85,6 +85,16 @@ double URoadEditFacade::GetMinimumRunwayLength() const
 	return Actor().MinimumRunwayLength;
 }
 
+int32 URoadEditFacade::GetRunwayProfileCount() const
+{
+	return Actor().GetRunwayProfileCount();
+}
+
+URoadProfile* URoadEditFacade::ResolveRunwayProfile(int32 Index) const
+{
+	return Actor().ResolveRunwayProfile(Index);
+}
+
 const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity Kind) const
 {
 	// RESOLVED, not the raw field: PlaceEntity places from ResolveEntityDefinition()'s

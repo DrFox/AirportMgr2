@@ -317,6 +317,23 @@ UMaterialInterface* ARoadNetworkActor::ResolveRunwayMaterial(ERunwaySurface Surf
 	}
 }
 
+int32 ARoadNetworkActor::GetRunwayProfileCount() const
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->RunwayProfiles.Num() : 0;
+}
+
+URoadProfile* ARoadNetworkActor::ResolveRunwayProfile(int32 Index) const
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content == nullptr || Content->RunwayProfiles.Num() == 0)
+	{
+		return nullptr;
+	}
+	const int32 Clamped = FMath::Clamp(Index, 0, Content->RunwayProfiles.Num() - 1);
+	return Content->RunwayProfiles[Clamped].LoadSynchronous();
+}
+
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 {
 	if (StandDefinition != nullptr) { return StandDefinition; }

@@ -258,6 +258,20 @@ public:
 	/** IRoadEditTarget accessor for MinimumRunwayLength - see the property's own comment. */
 	virtual double GetMinimumRunwayLength() const override { return MinimumRunwayLength; }
 
+	/**
+	 * Content only, like ResolveRunwayMaterial below - there is no per-actor override, because
+	 * the set of legal widths is a project-wide fact, not a level one.
+	 */
+	virtual int32 GetRunwayProfileCount() const override;
+
+	/**
+	 * Clamped rather than checked, like the tool's own old ProfileForWidth used to be: the
+	 * list is content, so it can be shorter than an index left over from a longer one, and
+	 * wrapping would silently resolve a different width from the one shown. Null when the
+	 * content set has no runway profiles at all.
+	 */
+	virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override;
+
 	/** Remove a HAND-AUTHORED guideline edge. Refuses a derived one. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;

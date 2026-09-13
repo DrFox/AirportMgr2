@@ -15,9 +15,11 @@ class URoadProfile;
  * straightness by refusing a curve would have been the same rule stated as a rejection
  * instead of as a shape.
  *
- * WIDTH IS CHOSEN, NOT TYPED. The tool holds an index into the content set's RunwayProfiles,
- * which are the ICAO standard widths. A runway conforms to one of them by construction rather
- * than by a validator that can be argued with.
+ * WIDTH IS CHOSEN, NOT TYPED. The tool holds an index into the target's runway profiles -
+ * IRoadEditTarget::GetRunwayProfileCount/ResolveRunwayProfile, the ICAO standard widths (see
+ * that interface's own comment for why this tool does not read UAirsideContent itself, issue
+ * #78). A runway conforms to one of them by construction rather than by a validator that can
+ * be argued with.
  *
  * It reports the DESIGNATOR while you drag, because the number is the first thing that tells
  * you whether the strip is pointing where you meant - see RunwayDesignator, and note the
@@ -50,7 +52,8 @@ public:
 	virtual void OnReselect(const FToolContext& Context) override;
 
 	/**
-	 * Which standard width, as an index into the content set's RunwayProfiles.
+	 * Which standard width, as an index into the target's runway profiles
+	 * (IRoadEditTarget::GetRunwayProfileCount/ResolveRunwayProfile).
 	 *
 	 * An index rather than a width in uu: the list IS the set of legal widths, so there is no
 	 * value this can hold that names an illegal runway. Clamped on use, because the list is
@@ -73,8 +76,15 @@ public:
 	FRunwayFacts Facts() const;
 
 private:
-	/** The chosen profile, or null when no content set is configured. */
-	URoadProfile* ProfileForWidth() const;
+	/**
+	 * The chosen profile, or null when Target has none.
+	 *
+	 * THROUGH THE TARGET, not UAirsideSettings::GetContent() (issue #78) - this was the only
+	 * file in Tool/ that knew UAirsideContent existed, calling it directly instead of going
+	 * through IRoadEditTarget like every other tool's content lookup (ARoadNetworkActor's
+	 * Resolve* family). A null Target answers null, same as an empty content set.
+	 */
+	URoadProfile* ProfileForWidth(const FToolContext& Context) const;
 
 	bool bHasThreshold = false;
 

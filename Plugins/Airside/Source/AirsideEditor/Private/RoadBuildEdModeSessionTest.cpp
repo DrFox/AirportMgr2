@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "InteractiveToolManager.h"
 #include "Misc/AutomationTest.h"
+#include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdMode.h"
 #include "RoadBuildEditorTool.h"
 #include "Tool/BuildSession.h"
@@ -22,6 +25,13 @@
  * SHARED (the tool points at the mode's), and a reselect on the shared session actually
  * cycles the width. Either alone would pass while the feature stayed broken.
  *
+ * A THIRD THING joined them at issue #78's review: the reselect's FToolContext needs a real
+ * Target now that FRunwayTool::NextWidth reads runway profiles through IRoadEditTarget
+ * instead of content directly, and URoadBuildEdMode::StartToolAction had stopped resolving
+ * one. This drives the reselect through Mode->MakeReselectContext() - the exact resolution
+ * StartToolAction uses - rather than building an unrelated ARoadNetworkActor of its own,
+ * which is what let an earlier version of this test pass while the mode stayed broken.
+ *
  * IN AirsideEditor rather than AirsideTests, for the reason ToolCommandsMatchRegistry gives:
  * AirsideTests depends on Airside alone, and making it reach an editor class would invert the
  * direction the plugin is built on.
@@ -38,6 +48,25 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// A REAL WORLD, purely so MakeReselectContext's ARoadNetworkActor::FindOrCreate(GetWorld())
+	// has something to search and spawn into - see WorldOverrideForTest's own comment for why
+	// GetWorld() needs help here at all. Not the same as registering the mode with a live
+	// editor (Enter() is never called); this substitutes for the ONE thing this test's
+	// reselect assertions need from a real editor session.
+	UWorld* World = UWorld::CreateWorld(EWorldType::Editor, false);
+	if (!TestNotNull(TEXT("a world for the mode to resolve a target in"), World))
+	{
+		return false;
+	}
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Editor);
+	WorldContext.SetCurrentWorld(World);
+	ON_SCOPE_EXIT
+	{
+		GEngine->DestroyWorldContext(World);
+		World->DestroyWorld(false);
+	};
+	Mode->WorldOverrideForTest = World;
 
 	// The runway tool, found by its registry key rather than a literal index - the table is
 	// not contiguous and an index written here would be a second claim about its order.
@@ -84,10 +113,23 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and it drives the same session, so state survives the rebuild"),
 		Again->SessionForTest(), Tool->SessionForTest());
 
+	// THE RESELECT'S CONTEXT, THROUGH THE MODE - not a target this test builds itself.
+	// StartToolAction's own lambda cannot be driven directly here: it is gated on
+	// GetToolManager()/GetInteractiveToolsContext(), both null on a bare
+	// NewObject<URoadBuildEdMode> with no Enter() and no real editor viewport (confirmed
+	// against UEdMode.cpp - EditorToolsContext/ModeToolsContext are set only by
+	// CreateInteractiveToolsContexts(), called from mode registration this test does not
+	// do). Mode->MakeReselectContext() is what StartToolAction calls once that gate passes,
+	// so calling it here exercises the SAME resolution a real reselect uses - unlike an
+	// earlier version of this test, which built an unrelated ARoadNetworkActor of its own
+	// and could not have caught the mode forgetting to resolve one (issue #78's review).
+	FBuildSession& Session = Mode->GetSession();
+	const FToolContext ReselectContext = Mode->MakeReselectContext();
+	TestNotNull(TEXT("the mode resolves a real target for a reselect"), ReselectContext.Target);
+
 	// THE RESELECT, on the shared session. Selecting the runway tool twice is what a second
 	// press of its key does, and the second press must cycle the width rather than do nothing.
-	FBuildSession& Session = Mode->GetSession();
-	Session.SelectTool(RunwayIndex);
+	Session.SelectTool(RunwayIndex, ReselectContext);
 	FRunwayTool* Runway = static_cast<FRunwayTool*>(Session.GetActiveTool());
 	if (!TestNotNull(TEXT("the runway tool is active on the shared session"), Runway))
 	{
@@ -95,7 +137,7 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("it starts on the first width"), Runway->WidthIndex, 0);
 
-	Session.SelectTool(RunwayIndex);
+	Session.SelectTool(RunwayIndex, ReselectContext);
 	TestEqual(TEXT("picking it again cycles the width - the press that did nothing before"),
 		Runway->WidthIndex, 1);
 

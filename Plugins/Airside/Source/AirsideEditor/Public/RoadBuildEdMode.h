@@ -56,6 +56,33 @@ public:
 	 */
 	FBuildSession& GetSession() { return Session; }
 
+	/**
+	 * The context StartToolAction's reselect passes to FBuildSession::SelectTool - see its
+	 * own .cpp comment for why a null Target there silently broke runway width cycling in
+	 * this mode (issue #78's review), and for why this is public: a headless test cannot
+	 * drive StartToolAction's lambda at all (it is gated on a live
+	 * UInteractiveToolManager/UEditorInteractiveToolsContext, neither of which exists without
+	 * Enter() and a real editor viewport), so
+	 * Airside.Editor.ToolStateOutlivesTheToolInstance calls this directly instead of building
+	 * an unrelated target of its own - which is what let a prior version of that test pass
+	 * while the mode itself stayed broken.
+	 */
+	FToolContext MakeReselectContext() const;
+
+	/**
+	 * Substitutes for GetWorld()'s usual answer (EditorToolsContext->GetWorld()), which is
+	 * unconditionally null without Enter() and a real FEditorModeTools/viewport - see
+	 * GetWorld's own comment. Null in production; nothing here ever sets it, and
+	 * MakeReselectContext's ARoadNetworkActor::FindOrCreate(GetWorld()) is exactly why
+	 * Airside.Editor.ToolStateOutlivesTheToolInstance needs a real world to resolve a real
+	 * target against, without the weight of registering this mode with a live editor.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<UWorld> WorldOverrideForTest = nullptr;
+
+	/** See WorldOverrideForTest. */
+	virtual UWorld* GetWorld() const override;
+
 	virtual void Enter() override;
 	virtual void CreateToolkit() override;
 	virtual TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetModeCommands() const override;
