@@ -304,6 +304,17 @@ namespace
 	}
 }
 
+FRouteQuery FRouteQuery::For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
+	const FAirframe& Airframe, ETraversalClass Class)
+{
+	FRouteQuery Query;
+	Query.Start = Start;
+	Query.Goal = Goal;
+	Query.Class = Class;
+	Query.Wingspan = Airframe.Wingspan;
+	return Query;
+}
+
 namespace RouteSearch
 {
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)

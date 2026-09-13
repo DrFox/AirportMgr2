@@ -62,11 +62,7 @@ namespace DeparturePlanner
 				// Sorted from the threshold: everything after this has less runway still.
 				break;
 			}
-			FRouteQuery Query;
-			Query.Start = Start;
-			Query.Goal = Candidate;
-			Query.Class = Class;
-			Query.Wingspan = Airframe.Wingspan;
+			FRouteQuery Query = FRouteQuery::For(Start, Candidate, Airframe, Class);
 			Query.AvoidRunways = ERunwayAvoidance::All;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
@@ -91,11 +87,7 @@ namespace DeparturePlanner
 		//    runway from its end, and a turn on the spot to face down it.
 		for (const FGuidelineNodeId& Candidate : Candidates)
 		{
-			FRouteQuery Query;
-			Query.Start = Start;
-			Query.Goal = Candidate;
-			Query.Class = Class;
-			Query.Wingspan = Airframe.Wingspan;
+			FRouteQuery Query = FRouteQuery::For(Start, Candidate, Airframe, Class);
 			Query.AvoidRunways = ERunwayAvoidance::None;
 			const FRoutePlan Route = RouteSearch::Find(Network, Query);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
