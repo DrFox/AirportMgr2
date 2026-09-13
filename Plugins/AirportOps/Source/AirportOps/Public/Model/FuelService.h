@@ -184,6 +184,16 @@ public:
 	double DwellSeconds = 40.0;
 
 	/**
+	 * The truck's performance figures, dispatched with every fuel demand.
+	 *
+	 * Set from UAirsideSettings::ResolveDefaultVehicle() at attach, next to DwellSeconds
+	 * above - not resolved here at dispatch time. This is Model/, and reaching Content/ was
+	 * the only Model->Content edge in either plugin (#104): Present/ (UOpsRuntime) is where
+	 * every other content default gets resolved once and handed down.
+	 */
+	UPROPERTY() FAirframe TruckAirframe;
+
+	/**
 	 * Every phase change in the traffic model - the events this class is driven by.
 	 *
 	 * An aircraft reaching Parked at a stand makes a demand; a truck reaching Parked at the

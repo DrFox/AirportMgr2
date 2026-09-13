@@ -8,10 +8,11 @@
     on every Run-AirsideTests.ps1 invocation, which is the pre-commit path.
 
     Rules:
-      1. Include direction. Model/ and Solve/ never include Build|Tool|Present|Entities;
-         Tool/ never includes Present/; Build/ never includes Present|Tool; Solve/ includes
-         only CoreMinimal.h and Solve/. (Issue #31: Model<->Entities and Tool<->Present
-         cycles shipped and stayed.)
+      1. Include direction. Model/ and Solve/ never include Build|Tool|Present|Entities|
+         Content; Tool/ never includes Present/; Build/ never includes Present|Tool; Solve/
+         includes only CoreMinimal.h and Solve/. (Issue #31: Model<->Entities and
+         Tool<->Present cycles shipped and stayed; issue #104: AirportOps' FuelService.cpp
+         resolved a content default itself instead of taking it from Present/.)
       2. One log category per name across the Airside module. It is a unity build, so two
          DEFINE_LOG_CATEGORY_STATIC of one name in different .cpp files collide at compile
          time - but only once the two land in the same Module.*.cpp blob, which is why it
@@ -52,7 +53,7 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
 # Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
 # handled separately as an allow-list.
 $forbidden = @{
-    'Model' = 'Build/|Tool/|Present/|Entities/'
+    'Model' = 'Build/|Tool/|Present/|Entities/|Content/'
     'Tool'  = 'Present/'
     'Build' = 'Present/|Tool/'
 }

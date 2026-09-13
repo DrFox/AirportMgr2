@@ -1,6 +1,7 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
 #include "Content/AirportOpsSettings.h"
+#include "Content/AirsideSettings.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
@@ -135,6 +136,11 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
 			Scenario->FuelDwellSeconds);
 	}
+
+	// TruckAirframe resolved HERE, once, not by FuelService at every dispatch (#104): this is
+	// Present/, where every other content default gets resolved, and Model/ has no business
+	// reaching Content/ for it.
+	FuelService->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
