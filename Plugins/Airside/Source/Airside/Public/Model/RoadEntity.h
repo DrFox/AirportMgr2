@@ -156,6 +156,19 @@ struct AIRSIDE_API FAgentMotion
 
 	/** Off the wheels. Stage 2's gear retraction hangs on this. */
 	UPROPERTY() bool bAirborne = false;
+
+	/**
+	 * The steered wheel's deflection, degrees, signed the way Heading turns.
+	 *
+	 * THE CONTROL INPUT, not a description of the motion: this is the angle the follower
+	 * steered with, and the yaw the aircraft took came out of it. An earlier design had the
+	 * view derive this from the yaw rate for the animation's sake, which would have been a
+	 * second model of the same thing - and the two would have drifted the first time either
+	 * was retuned.
+	 *
+	 * Zero on a pivot-steered vehicle, which has no steered wheel to draw.
+	 */
+	UPROPERTY() double SteerAngleDegrees = 0.0;
 };
 
 /**

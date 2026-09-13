@@ -85,6 +85,22 @@ public:
 	float WheelAngleDegrees = 0.0f;
 
 	/**
+	 * Nose-gear deflection, degrees. Apply to the STEER bone, NOT the rolling one.
+	 *
+	 * TWO BONES, because one cannot do both: the roll axis has to turn with the steering,
+	 * and a single Transform (Modify) Bone applies its rotations in a fixed order, so a
+	 * shared bone wobbles instead of steering. plane2's rig is nosewheel_steer (yaw about
+	 * the strut) with nosewheel (roll) as its child.
+	 *
+	 * NOT INTEGRATED, unlike the propeller and the wheels above: this is an absolute
+	 * deflection the model already decided - FRouteFollower::SteerDegrees, the angle it
+	 * actually steered with - rather than a rate to accumulate. Adding it frame by frame
+	 * would wind the nose gear round like a propeller.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float SteerAngleDegrees = 0.0f;
+
+	/**
 	 * The wheel's own turn rate, degrees per second - carried between frames so it can decay
 	 * smoothly once airborne instead of being re-derived from GroundSpeed every frame. See
 	 * WheelStepDegrees. Not read by anything else; BlueprintReadOnly only for the same reason

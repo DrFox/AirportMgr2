@@ -27,6 +27,11 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	GroundSpeed = static_cast<float>(Motion.GroundSpeed);
 	bAirborne = Motion.bAirborne;
 
+	// COPIED, NOT DERIVED. The model steered with this exact angle - see
+	// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
+	// the aeroplane rather than a second opinion about it.
+	SteerAngleDegrees = static_cast<float>(Motion.SteerAngleDegrees);
+
 	// WHEELS: v = wr on the ground; DECAYED, NOT DROPPED, in the air (#107 item 8) - see
 	// WheelStepDegrees and FAgentMotion::GroundSpeed's own header.
 	WheelAngleDegrees = FMath::Fmod(

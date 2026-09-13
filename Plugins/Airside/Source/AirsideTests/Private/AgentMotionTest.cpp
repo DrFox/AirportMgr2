@@ -94,6 +94,19 @@ bool FAgentMotionTest::RunTest(const FString& Parameters)
 			Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).bAirborne);
 	}
 
+	// 6. THE STEER ANGLE CROSSES THE SEAM, sign and all.
+	//
+	//    It travels follower -> motion -> anim instance -> bone, and a forwarder with no
+	//    test is how Tick, view spawn and view destroy ended up with no coverage at all.
+	//    Asserted at the composition rather than on the struct that holds it.
+	{
+		FRoadAgent Agent;
+		Agent.Follower.SteerDegrees = -17.5;
+
+		TestEqual(TEXT("the motion carries the follower's steer angle, sign included"),
+			Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).SteerAngleDegrees, -17.5, 0.01);
+	}
+
 	return true;
 }
 
