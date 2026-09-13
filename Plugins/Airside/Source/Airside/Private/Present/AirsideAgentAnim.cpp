@@ -51,13 +51,18 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	// inertia, and the model now says where it has got to - see FEnginePerformance.
 	const float RPM = static_cast<float>(Motion.EngineRPM);
 
-	// CLAMPED TO WHAT THE FRAME RATE CAN SHOW. A blade repeats every 360/N degrees, and a step
-	// past half of that is indistinguishable from a smaller step the other way - which is why
-	// this propeller appeared to stop at 110 fps and run backwards at 120. The step, not the
-	// RPM, is what is capped: a cap expressed in RPM would still alias at a low enough frame
-	// rate, because the angle per frame is what the sampling sees. See PropMaxStepPerRepeat.
+	// BOTH CAPPED NOW (#107 item 7): RPM first, THEN the per-frame step. A blade repeats every
+	// 360/N degrees, and a step past half of that is indistinguishable from a smaller step
+	// the other way - which is why this propeller appeared to stop at 110 fps and run
+	// backwards at 120. Capping only the step (the original fix for that) made the apparent
+	// speed rise with the frame rate instead: a fixed degrees-per-frame ceiling times a
+	// higher frame rate is a higher degrees-per-second rate, which read from play as the
+	// propeller changing speed with the camera. Capping the RATE (PropDisplayCapRPM) fixes
+	// that; the step clamp (PropMaxStepPerRepeat) stays as the guard against aliasing at a
+	// frame rate low enough to hitch, which a rate cap alone cannot prevent.
 	PropAngleDegrees = FMath::Fmod(
-		PropAngleDegrees + PropStepDegrees(RPM, DeltaSeconds, PropBladeCount, PropMaxStepPerRepeat),
+		PropAngleDegrees
+			+ PropStepDegrees(RPM, DeltaSeconds, PropBladeCount, PropMaxStepPerRepeat, PropDisplayCapRPM),
 		360.0f);
 
 	// See the header: a modelled blade at 2000 RPM strobes against a 60 Hz frame rate.
@@ -65,10 +70,16 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 }
 
 float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 BladeCount,
-	float MaxStepPerRepeat)
+	float MaxStepPerRepeat, float DisplayCapRPM)
 {
+	// THE RATE IS CAPPED, NOT THE STEP - fps-independent by construction, because this feeds
+	// straight into a degrees-per-second figure rather than being sized against one frame's
+	// worth of it. NEVER RAISES the rate: a genuinely slow propeller (idling, spooling) is
+	// still shown turning at its real speed, only ever brought DOWN toward it.
+	const float Displayed = FMath::Min(RPM, FMath::Max(DisplayCapRPM, 0.0f));
+
 	// RPM to degrees a second is x6 - 360 degrees over 60 seconds.
-	const float Wanted = RPM * 6.0f * DeltaSeconds;
+	const float Wanted = Displayed * 6.0f * DeltaSeconds;
 
 	// A blade repeats every 360/N degrees, so that - not a full turn - is the angle the frame
 	// rate has to resolve. Past half of it a step is indistinguishable from a smaller one the

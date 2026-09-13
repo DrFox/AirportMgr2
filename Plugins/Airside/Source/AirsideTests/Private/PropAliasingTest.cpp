@@ -38,13 +38,18 @@ bool FPropAliasingTest::RunTest(const FString& Parameters)
 	const float Fraction = 0.333f;
 	const float Repeat = 360.0f / Blades;
 
+	// NO DISPLAY CAP HERE: this test is entirely about the STEP guard against aliasing, a
+	// property #107 item 7 left untouched - see FPropDisplayCapTest below for the RPM cap
+	// this file gained alongside it. A cap this large never binds at the RPM used here.
+	const float NoCap = 1.0e6f;
+
 	// 110 and 120 are the rates measured to freeze and reverse this propeller in play; the
 	// rest bracket what the game will actually run at, down to a hitching 24.
 	const float Rates[] = { 24.0f, 30.0f, 60.0f, 75.0f, 90.0f, 100.0f, 110.0f, 120.0f, 144.0f, 240.0f };
 
 	for (const float Fps : Rates)
 	{
-		const float Step = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / Fps, Blades, Fraction);
+		const float Step = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / Fps, Blades, Fraction, NoCap);
 
 		// THE ASSERTION THE BUG WOULD FAIL. Unclamped, 2200 RPM at 60 fps steps 220 degrees -
 		// well past the 60 that a 120 degree repeat can carry - and reads as backwards.
@@ -59,21 +64,85 @@ bool FPropAliasingTest::RunTest(const FString& Parameters)
 	// A SLOW PROPELLER IS NOT TOUCHED. Shutting down or winding up, the blades are inside what
 	// the frame rate can show and must turn at their real rate - a clamp that always bound
 	// would make every propeller in the game turn at the same speed.
-	const float Idle = UAirsideAgentAnim::PropStepDegrees(300.0f, 1.0f / 60.0f, Blades, Fraction);
+	const float Idle = UAirsideAgentAnim::PropStepDegrees(300.0f, 1.0f / 60.0f, Blades, Fraction, NoCap);
 	TestTrue(*FString::Printf(TEXT("a slow propeller turns at its real rate (%.3f deg, wanted %.3f)"),
 		Idle, 300.0f * 6.0f / 60.0f),
 		FMath::IsNearlyEqual(Idle, 300.0f * 6.0f / 60.0f, 0.001f));
 
 	// A STOPPED ONE STAYS STOPPED, rather than creeping forward on the clamp.
 	TestEqual(TEXT("a stopped propeller does not turn"),
-		UAirsideAgentAnim::PropStepDegrees(0.0f, 1.0f / 60.0f, Blades, Fraction), 0.0f);
+		UAirsideAgentAnim::PropStepDegrees(0.0f, 1.0f / 60.0f, Blades, Fraction, NoCap), 0.0f);
 
 	// A two-blade propeller repeats every 180 degrees and may therefore turn further per
 	// frame than a three-blade one. Pins that the limit comes from the BLADES, not a constant.
-	const float Two = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / 60.0f, 2, Fraction);
-	const float Three = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / 60.0f, 3, Fraction);
+	const float Two = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / 60.0f, 2, Fraction, NoCap);
+	const float Three = UAirsideAgentAnim::PropStepDegrees(2200.0f, 1.0f / 60.0f, 3, Fraction, NoCap);
 	TestTrue(*FString::Printf(TEXT("fewer blades may turn further (%.1f vs %.1f deg)"), Two, Three),
 		Two > Three);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * THE PROPELLER'S APPARENT SPEED DOES NOT CHANGE WITH THE FRAME RATE (#107 item 7).
+ *
+ * CONFIRMED, 2026-09-12 review, the same review that measured FPropAliasingTest's aliasing
+ * figures above. PropStepDegrees used to clamp only the per-frame STEP - a fixed
+ * degrees-per-FRAME ceiling - so degrees-per-SECOND, the apparent speed, rose with the frame
+ * rate whenever that ceiling bound: 200/400/800 apparent RPM at 30/60/120 fps for this
+ * airframe's 2200 RPM cruise and three-blade prop. Reported from play as the propeller
+ * changing speed with the camera, which it was - zooming in cost more to draw and landed the
+ * frame rate on a different point along that ramp.
+ *
+ * THE FIX CAPS THE RATE INSTEAD (PropDisplayCapRPM), so the shown speed is the same number
+ * at every frame rate the cap is chosen to cover - here, 60 fps and up, matching the
+ * DEFAULT figure's own justification (400 RPM at 60 fps exactly fills PropMaxStepPerRepeat's
+ * budget for a three-blade prop, so the step guard does not additionally bind above that
+ * rate). Below it the guard binds again and the apparent speed sags - the accepted
+ * hitch fallback this project has always had, not a regression.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPropDisplayCapTest,
+	"Airside.Present.PropellerApparentSpeedIsFrameRateIndependent",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPropDisplayCapTest::RunTest(const FString& Parameters)
+{
+	const int32 Blades = 3;
+	const float Fraction = 0.333f;
+	const float Cap = 400.0f;       // UAirsideAgentAnim::PropDisplayCapRPM's own default
+	const float TrueRPM = 2200.0f;  // this airframe's cruise RPM (2026-09-12 measurement)
+
+	auto ApparentRPM = [Blades, Fraction, Cap, TrueRPM](float Fps)
+	{
+		const float Step = UAirsideAgentAnim::PropStepDegrees(TrueRPM, 1.0f / Fps, Blades, Fraction, Cap);
+		return Step * Fps / 6.0f;
+	};
+
+	const float At60 = ApparentRPM(60.0f);
+	const float At90 = ApparentRPM(90.0f);
+	const float At120 = ApparentRPM(120.0f);
+	const float At240 = ApparentRPM(240.0f);
+
+	// THE ASSERTION THE BUG WOULD FAIL: before the fix these four were 400/600/800/1600 -
+	// each proportional to its own frame rate - rather than one shared number.
+	TestTrue(*FString::Printf(TEXT("60 fps shows the capped rate (%.0f RPM, want %.0f)"), At60, Cap),
+		FMath::IsNearlyEqual(At60, Cap, 0.5f));
+	TestTrue(*FString::Printf(TEXT("90 fps shows the SAME apparent speed as 60 fps (%.0f vs %.0f)"), At90, At60),
+		FMath::IsNearlyEqual(At90, At60, 0.5f));
+	TestTrue(*FString::Printf(TEXT("120 fps too (%.0f vs %.0f)"), At120, At60),
+		FMath::IsNearlyEqual(At120, At60, 0.5f));
+	TestTrue(*FString::Printf(TEXT("and 240 fps (%.0f vs %.0f)"), At240, At60),
+		FMath::IsNearlyEqual(At240, At60, 0.5f));
+
+	// BELOW THE CHOSEN MINIMUM, THE GUARD FALLS BACK - a hitching frame rate shows a slower
+	// prop, never a faster or a backwards one. This is the accepted degradation, not a bug:
+	// PropMaxStepPerRepeat still binds here exactly as it always has.
+	const float At30 = ApparentRPM(30.0f);
+	TestTrue(*FString::Printf(
+		TEXT("30 fps sags below the cap - the accepted hitch fallback, not frame independence (%.0f RPM)"),
+		At30), At30 < Cap - 1.0f);
+
 	return true;
 }
 
