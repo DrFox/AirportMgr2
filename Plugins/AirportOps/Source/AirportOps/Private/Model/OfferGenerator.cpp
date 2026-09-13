@@ -72,7 +72,8 @@ UFlight* UOfferGenerator::MakeOffer(const URoadNetwork& Network, const FVector2D
 		return nullptr;
 	}
 
-	const FOfferCandidate& Chosen = *Admissible[FMath::RandHelper(Admissible.Num())];
+	// FROM THIS GENERATOR'S OWN STREAM, never the global RNG - see UOfferGenerator::Stream.
+	const FOfferCandidate& Chosen = *Admissible[Stream.RandHelper(Admissible.Num())];
 
 	UFlight* Offer = NewObject<UFlight>(this);
 	Offer->Id = NextId;

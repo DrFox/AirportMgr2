@@ -63,6 +63,20 @@ public:
 	 */
 	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
 
+	/**
+	 * Which aeroplane this generator picks, next.
+	 *
+	 * A SEEDED STREAM AND NOT FMath::RandHelper, which is what this used. The global RNG is
+	 * shared with everything else in the process and is advanced by anything that draws from
+	 * it, so the same save reloaded twice offered different aeroplanes - and the determinism
+	 * the systems map asks for ("same seed, same inputs, same ledger") could not be written as
+	 * a test at all, which is why M1 deferred it.
+	 *
+	 * SAVED, so a reload continues the same sequence rather than restarting it: a player who
+	 * reloads to dodge an offer they did not like should get the same one back.
+	 */
+	UPROPERTY() FRandomStream Stream;
+
 	/** How far ahead of the offer an accepted flight lands, GAME seconds. */
 	UPROPERTY(EditAnywhere, Category = "Offers", meta = (ClampMin = "0.0"))
 	double LeadTimeSeconds = 900.0;
