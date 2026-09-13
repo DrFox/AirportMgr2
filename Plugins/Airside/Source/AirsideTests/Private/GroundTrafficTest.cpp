@@ -2221,6 +2221,56 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 /**
+ * THE DEFAULT MaxSubsteps CEILING COVERS THE SPEED LADDER, NOT JUST A HITCH (#107 item 4).
+ *
+ * CONFIRMED, 2026-09-12 review. MaxSubsteps x MaxSubstepSeconds bounds one Advance call at
+ * MaxSubsteps * MaxSubstepSeconds - the OLD default of 8 x 1/30 s gave 267 ms - but
+ * USimClock's ladder (AirportOps, SimClock.h) reaches X32, and UAirsideTraffic::Advance's
+ * own caller (ARoadNetworkActor::Tick) hands it the real frame time TIMES that multiplier.
+ * A 30 fps frame at X32 is 1.067 s of sim time EVERY FRAME, not just on a hitch, which needs
+ * 32 steps of MaxSubstepSeconds to stay at the documented target - the old ceiling of 8
+ * clamped that to 8 steps of 133 ms each, four times MaxSubstepSeconds' own 33 ms, which is
+ * the same rubber-banding the substep split exists to remove in the first place, just moved
+ * to a higher speed setting instead of fixed.
+ *
+ * PINS THE ARITHMETIC DIRECTLY, not a position that a pre-costed speed profile can mask (see
+ * FRouteFollower::Advance's Profile.LimitAt - it plans a corner's braking many steps ahead,
+ * which makes a coarser step's actual DISPLACEMENT a weak and noisy signal here). What
+ * matters is simpler and exact: the number of steps a full ladder-top frame needs at
+ * MaxSubstepSeconds must not exceed MaxSubsteps, on a freshly constructed model - i.e. on
+ * whatever a level that never touches either figure actually runs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficSubstepLadderTest,
+	"Airside.Model.Traffic.SubstepCeilingCoversTheSpeedLadder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficSubstepLadderTest::RunTest(const FString& Parameters)
+{
+	const UGroundTraffic* Fresh = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// X32 IS THE LADDER'S TOP (USimClock::SpeedLadder, AirportOps/SimClock.h) and 30 fps is
+	// the slowest frame rate this project treats as ordinary play rather than a hitch (see
+	// FPropAliasingTest's own rate list) - so this is the busiest EVERY-FRAME delta the
+	// ladder can ask for, not a hitch outlier the ceiling is allowed to clamp.
+	const double WorstOrdinaryFrame = 32.0 * (1.0 / 30.0);
+	const int32 StepsNeeded = FMath::CeilToInt(WorstOrdinaryFrame / Fresh->Rules.MaxSubstepSeconds);
+
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("SubstepCeilingCoversTheSpeedLadder: %.3f s needs %d steps of %.4f s; MaxSubsteps is %d"),
+		WorstOrdinaryFrame, StepsNeeded, Fresh->Rules.MaxSubstepSeconds, Fresh->Rules.MaxSubsteps);
+
+	// THE ASSERTION THE BUG WOULD FAIL: the old default of 8 is less than the 32 steps X32 at
+	// 30 fps needs, so every frame at that speed - not merely a hitch - was silently taken in
+	// steps four times longer than MaxSubstepSeconds documents.
+	TestTrue(*FString::Printf(
+		TEXT("MaxSubsteps (%d) covers a full ladder-top frame (%d steps needed)"),
+		Fresh->Rules.MaxSubsteps, StepsNeeded), Fresh->Rules.MaxSubsteps >= StepsNeeded);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
  * A REDIRECTED AIRCRAFT ALREADY HAS ITS ENGINES RUNNING.
  *
  * REPORTED FROM PLAY: "when departing there is no time for the prop to spin up, it is still

@@ -27,7 +27,7 @@ enum class ESimSpeed : uint8
  * Two independent scalings meet here and it matters which is which:
  *  - DAY COMPRESSION (RealSecondsPerGameDay): how many real seconds a 24h game day takes.
  *    This scales the CLOCK only - upkeep ticks, contract deliveries, off-block times.
- *  - SPEED (ESimSpeed): the player's x1..x8. This scales the clock AND the movement layer.
+ *  - SPEED (ESimSpeed): the player's x1..x32. This scales the clock AND the movement layer.
  *
  * Airside agents run on Multiplier() alone, never on TimeScale(): a truck that drove 72x
  * faster because the day is 20 real minutes long would be unwatchable. Turnaround

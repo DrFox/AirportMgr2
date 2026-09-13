@@ -75,8 +75,18 @@ struct AIRSIDE_API FTrafficRules
 	 * breakpoint - would otherwise ask for hundreds of steps and hitch the next frame too,
 	 * which is the spiral that turns one stutter into a freeze. Past this the remaining time
 	 * is taken in one longer step: slightly wrong once beats compounding.
+	 *
+	 * SIZED FROM THE SPEED LADDER (#107 item 4), not merely for a hitch: USimClock's ladder
+	 * (AirportOps/SimClock.h) reaches X32, and UAirsideTraffic::Advance's caller hands it the
+	 * real frame time TIMES that multiplier every frame, hitch or not. X32 at 30 fps - the
+	 * slowest rate this project treats as ordinary play - is 1.067 s of sim time needing 32
+	 * steps to hold MaxSubstepSeconds; the OLD default of 8 clamped that to 8 steps of 133 ms
+	 * each, four times the documented target, on EVERY frame at that speed - the same
+	 * rubber-banding this substep split exists to remove, just moved to a higher speed
+	 * setting instead of fixed. 32 keeps a genuine hitch exactly as bounded as before; it
+	 * only stops ordinary top-speed play from being treated as one.
 	 */
-	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 MaxSubsteps = 8;
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 MaxSubsteps = 32;
 
 	double FootprintFor(ETraversalClass Class) const;
 	double GapFor(ETraversalClass Class) const;
