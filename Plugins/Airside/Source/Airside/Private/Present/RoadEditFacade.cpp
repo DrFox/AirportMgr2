@@ -532,28 +532,8 @@ int32 URoadEditFacade::FindNodeNear(FVector2D Where, double Radius) const
 		return INDEX_NONE;
 	}
 
-	// Compared squared, so a caller passing a large radius costs no square roots.
-	const double RadiusSquared = Radius * Radius;
-	double BestSquared = RadiusSquared;
-	int32 Best = INDEX_NONE;
-
-	const TArray<FRoadNode>& Nodes = Network->GetNodes();
-	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-	{
-		if (!Nodes[Index].bAlive)
-		{
-			continue;
-		}
-
-		const double DistanceSquared = FVector2D::DistSquared(Nodes[Index].Position, Where);
-		if (DistanceSquared <= BestSquared)
-		{
-			BestSquared = DistanceSquared;
-			Best = Index;
-		}
-	}
-
-	return Best;
+	return RoadSlot::NearestAlive<FRoadNode>(Network->GetNodes(), Where, Radius,
+		[](const FRoadNode& Node) { return Node.Position; });
 }
 
 int32 URoadEditFacade::SplitSegment(int32 SegmentIndex, FVector2D At)

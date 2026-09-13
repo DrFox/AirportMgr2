@@ -2,6 +2,7 @@
 
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadSlotMap.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -9,25 +10,10 @@ namespace
 	/** Nearest ALIVE guideline node within Radius, whatever it is incident to. */
 	FGuidelineNodeId NearestAnyNode(const URoadNetwork& Network, const FVector2D& At, double Radius)
 	{
-		FGuidelineNodeId Best;
-		double BestDistance = Radius;
-
 		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-		{
-			if (!Nodes[Index].bAlive)
-			{
-				continue;
-			}
-
-			const double Distance = FVector2D::Distance(Nodes[Index].Position, At);
-			if (Distance <= BestDistance)
-			{
-				BestDistance = Distance;
-				Best = Network.GuidelineNodeIdAt(Index);
-			}
-		}
-		return Best;
+		const int32 Index = RoadSlot::NearestAlive<FGuidelineNode>(Nodes, At, Radius,
+			[](const FGuidelineNode& Node) { return Node.Position; });
+		return Network.GuidelineNodeIdAt(Index);
 	}
 
 	/**
