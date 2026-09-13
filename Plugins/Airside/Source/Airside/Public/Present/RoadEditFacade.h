@@ -47,14 +47,28 @@ class FRoadEditScope;
  * old code rebuilt inline, this one broadcasts instead, and the actor's own RebuildMesh()
  * (bound to OnChanged in the constructor) does the reaching.
  *
- * NotifyChanged is the ONLY place that calls OnChanged.Broadcast() (issue #77) - every other
- * mutator that changes pavement or the guideline graph reaches it through CommitAndNotify,
- * which pairs an FRoadEditScope::Commit() with the notification so neither can happen without
- * the other. Before this, half the mutators broadcast and half relied on the TOOL calling
+ * NotifyChanged is the ONLY place that calls OnChanged.Broadcast() (issue #77). Every
+ * scope-committing mutator EXCEPT MoveNode reaches it through CommitAndNotify, which pairs
+ * an FRoadEditScope::Commit() with the notification so neither can happen without the
+ * other. Undo, Redo and ClearNetwork call NotifyChanged directly instead, because none of
+ * them fits that shape: Undo/Redo replace Network wholesale rather than mutating through a
+ * scope, and ClearNetwork's own scope only records the pre-clear snapshot - the notify has
+ * to wait until AFTER Owner.Network is replaced with the fresh one. MoveNode also calls
+ * NotifyChanged directly, and on every successful call rather than once: a drag joins one
+ * scope-free edit across many frames (BeginInteractiveEdit/EndInteractiveEdit), and needs a
+ * rebuild each frame it actually moves, not only when the drag ends.
+ * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
+ * position changes neither pavement nor mesh.
+ *
+ * ConnectGuidelines and DisconnectGuideline open an FRoadEditScope and never call Commit()
+ * on it, so today NEITHER pushes an undo step NOR notifies - the scope's destructor calls
+ * AbandonEdit() and nothing else runs. Pre-existing (not introduced by issue #77) and not
+ * fixed here - tracked as issue #125.
+ *
+ * Before issue #77, half the mutators broadcast and half relied on the TOOL calling
  * RebuildMesh() after a successful edit - a split-brain that let one call site (a REFUSED
  * ConnectNodes in FRoadChainingState::OnClick) rebuild for nothing while real edits elsewhere
- * occasionally got no rebuild at all if a caller forgot. A holding position is the one
- * deliberate exception: it changes neither pavement nor mesh, so its mutator calls neither.
+ * occasionally got no rebuild at all if a caller forgot.
  */
 UCLASS()
 class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
@@ -177,9 +191,9 @@ private:
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 
 	/**
-	 * THE single OnChanged.Broadcast() call site - see the class comment. Undo, Redo and
-	 * ClearNetwork call this directly (they do not go through an FRoadEditScope); every
-	 * scope-committing mutator goes through CommitAndNotify instead, below.
+	 * THE single OnChanged.Broadcast() call site - see the class comment for exactly which
+	 * mutators call this directly (Undo, Redo, ClearNetwork, MoveNode) versus through
+	 * CommitAndNotify below, and which two currently call neither (issue #125).
 	 */
 	void NotifyChanged();
 

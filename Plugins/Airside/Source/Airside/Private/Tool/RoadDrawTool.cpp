@@ -123,8 +123,9 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 	{
 		// The facade already logged why. Drop the chain rather than leaving the player
 		// clicking against a connection that will not form. NO RebuildMesh() here any more -
-		// a REFUSED ConnectNodes changed nothing, so there was never anything to rebuild for
-		// (issue #77 named this exact call a bug: it rebuilt on refusal).
+		// it used to cover the node or split ResolveToNode just made a few lines up, which
+		// notifies on its OWN commit now (PlaceNode/SplitSegment, issue #77); the refused
+		// ConnectNodes itself changed nothing further that needs showing.
 		return MakeUnique<FRoadIdleState>(Kind);
 	}
 
