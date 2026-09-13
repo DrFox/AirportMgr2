@@ -26,6 +26,30 @@ figure is the cause, and moving the reference point would not have changed it.
 
 The two are worth fixing together anyway, because the same geometry answers both.
 
+## The reference point was already decided; plane2 breaks it
+
+`UAircraftType` states the convention (`AircraftType.h:21`):
+
+> *LOCAL SPACE has its origin at the NOSE GEAR, +X forward, +Y starboard. The nose gear is
+> what stops on the mark painted on the stand, so an aircraft parked on a stand shares that
+> stand's pose exactly - which is why composing the two needs no offset of its own.*
+
+So `ARoadAgentActor::SetPose` pinning the origin to the line is already right, and plane2's
+export is what is wrong. It is being re-exported about the nose gear, which fixes the reported
+symptom with no code at all - the rest of this spec is about the turn, not the tracked point.
+
+ONE TYPE DEVIATES ON PURPOSE. `SM_PiperMeridian` is imported about the main-gear axle
+(`AircraftType.cpp:178-193`) so that the drawn envelope and the drawn aeroplane come from one
+measurement, and that comment closes by naming today:
+
+> *A stand's origin is the nose gear stop mark, so composing the two needs the wheelbase, which
+> the other types do not. Nothing does that yet; the day something does, that offset belongs
+> here as a field and not as a constant at the call site.*
+
+Hence `SteerAxleX` below is a field with a default of zero meaning "conforms to the convention",
+not machinery for tolerating arbitrary origins. Plane2 (after its re-export), the A320 and the
+737 are all zero. The Piper carries its wheelbase and nothing else has to know.
+
 ## What this project already decided, and is only approximating
 
 `FGroundPerformance::MinTaxiSpeed` (`RoadEntity.h:328`) already states the physics this design
@@ -44,9 +68,11 @@ So this is not a new model bolted on. It is the existing comments' own model, ma
 
 1. **Full bicycle model** rather than moving the reference point alone. Only the geometric law
    makes turns faster for a stated reason instead of a raised number.
-2. **`FAgentMotion::Position` keeps meaning the airframe origin.** The follower tracks the line
-   with the steer-axle point internally and derives the origin from it. Stands, claim geometry,
-   holding positions, runway lineup and the pose keep the meaning they were authored against.
+2. **`FAgentMotion::Position` keeps meaning the airframe origin**, which for a conforming type
+   IS the nose gear. The follower tracks the line with the steered axle and derives the origin
+   from it, so stands, claim geometry, holding positions, runway lineup and the pose keep the
+   meaning they were authored against - and for every type but the Piper the derivation is the
+   identity.
 3. **Swept path and claims are OUT OF SCOPE.** The mains cutting inside a corner becomes
    visible; nothing re-reserves pavement for it yet. One subsystem per spec.
 4. **Two steering laws, selected by data, not by subclass.** Strategy-by-parameters, the same
@@ -87,8 +113,8 @@ type at a time.
 
 | Field | Meaning | Unset |
 |---|---|---|
-| `SteerAxleX` | Steered axle, uu along local +X. Aircraft: nose gear. Vehicle: front axle. | 0 |
-| `FixedAxleX` | Fixed axle, uu along local +X. Aircraft: main gear. Vehicle: rear axle. | 0 |
+| `SteerAxleX` | Steered axle, uu along local +X. Zero means the origin IS that axle, which is the class convention. Non-zero is a documented deviation - today only the Piper. | 0 |
+| `FixedAxleX` | Fixed axle, uu along local +X. Aircraft: main gear. Vehicle: rear axle. Negative on a conforming type, since the mains are aft of the nose gear. | 0 |
 
 Names carry no aeroplane in them because trucks use the same struct. Wheelbase is
 `L = SteerAxleX - FixedAxleX`, derived rather than authored, so it cannot disagree with the two
@@ -100,6 +126,12 @@ positions it comes from. `HasAxles()` is `L > KINDA_SMALL_NUMBER` and is the law
 |---|---|---|
 | `MaxSteerDegrees` | Steering lock. | 60.0 |
 | `MaxLateralAccelUu` | What a turn may pull, uu/s^2. 147 is 0.15 g. | 147.0 |
+
+`MaxLateralAccelUu` is authored PER TYPE from the start, not left to the default, for the reason
+`AirsideSettings.cpp:92` already gives about the van's figures: *"this is where a truck's
+performance is DECIDED, and a reader must be able to see the figures without opening another
+header to find out they happen to coincide."* A Twin Otter on a quiet apron and a 737 on a
+crowded one do not corner alike, and the default exists for types nobody has thought about yet.
 
 `MaxTurnRateDegPerSec` stays, with ONE meaning narrowed rather than two: *how fast the nose may
 be swung when geometry is not what limits it*. That is the pivot law, and the take-off lineup
@@ -155,15 +187,11 @@ returns the line point unchanged, which is today's behaviour bit for bit.
 
 ### Authored stop points do not move
 
-`Travelled` now measures a different point, so an agent told to stop at distance D would stop
-with its NOSE GEAR at D rather than its origin - 6.4 m short of where plane2 parks today. Every
-authored holding position, stand park point and lineup distance would silently mean something
-new.
-
-So the follower converts at the boundary: `StopAt_steer = StopAt_origin + SteerAxleX`. Authored
-figures keep meaning the origin, exactly as they were measured. A later pass may deliberately
-re-base holding positions to the nose gear, because stopping the nose gear at the hold line is
-the real rule - but that is a change to make on purpose, not one to inherit from a refactor.
+`Travelled` measures the steered axle, so on a type whose origin is NOT that axle an agent told
+to stop at distance D would stop with its nose gear at D rather than its origin. The follower
+converts at the boundary - `StopAt_steer = StopAt_origin + SteerAxleX` - which is a no-op for
+every conforming type and is exactly the composition the Piper's comment predicted would be
+needed one day.
 
 ### What limits a turn now
 
@@ -219,16 +247,41 @@ Written first, all world-free in `Model/` and `Solve/` except the last.
 | `Airside.Model.CornerTighterThanLockCrawls` | `R < L/sin(d_max)` falls to `MinTaxiSpeed` rather than being taken wide. |
 | `Airside.Model.AuthoredStopPointsDoNotMove` | An agent stopped at an authored distance parks its ORIGIN where it does today, to the millimetre. |
 | `Airside.Present.AgentMotion` (extended) | The anim instance copies `SteerAngleDegrees` - a forwarder seam, so it gets its own assert. |
+| `Airside.Content.FootprintMatchesTheMesh` | A type's `NoseX`/`TailX` match the bounds of the mesh it names. Nothing asserts this today, which is why a half-run content pipeline - new mesh, old DA - would ship an envelope 6.4 m from its aeroplane and look like a physics bug. |
 
 ## Content
 
-`build_plane2_type.py` measures both axles off `SK_Plane2` the way it already measures wheel
-radius and prop sweep - the `nosewheel` and `wheel_L` node centres are +644.2 and +189.9 uu -
-and authors `MaxSteerDegrees`. Geometry measured, performance published, as that script's own
-header requires.
+**plane2 is re-exported about the nose gear**, which is what actually fixes the reported
+symptom. Two scripts break on that re-export and are fixed BEFORE it lands, because both fail
+in ways that look like a bad model rather than a stale script:
 
-The Piper, the airliner and the van are NOT measured in this work and stay on the pivot law
-until someone measures them. That is the point of the zero default.
+- `import_plane2.py` decides facing from the bounds - `nose reach > tail reach`, +811.6 against
+  782.0 today. With the origin at the nose gear that becomes +167.6 against 1426 and it reports
+  *"the airframe is backwards and would taxi tail-first"* on a correct export. The check moves
+  to the RIG, where it belongs: the nose wheel joint is forward of the mains. True wherever the
+  origin sits, and it reads the export's own authority on itself the way `joint_names()` already
+  does.
+- `build_plane2_type.py` hard-codes `FOOTPRINT` - `nose_x 811.6, tail_x -782.0, wing_x 204.8,
+  tailplane_x -622.0` - all in the old frame, in a file whose own header says *"GEOMETRY IS
+  MEASURED, PERFORMANCE IS PUBLISHED"*. They become wrong by 6.4 m on re-export. They are
+  measured off `SK_Plane2` instead, which is what the header always claimed.
+
+It then measures `FixedAxleX` (the mains, ~-454 uu once the origin is the nose gear) and authors
+`MaxSteerDegrees` and `MaxLateralAccelUu`.
+
+**The Piper is measured too**, and keeps its main-gear origin: `SteerAxleX` = its wheelbase,
+`FixedAxleX` = 0. Its figures come from `SM_PiperMeridian` the way `import_piper.py` already
+measures the rest, so the deviation costs one field and no second measurement.
+
+**The A320 and 737 stay**, unmeasured, on the pivot law. They carry no mesh, but they are not
+idle: `EntityDefinition.cpp:15` builds the A320 in production, `LeadInSweepTest` sizes stand
+lead-in geometry against it and `StandPlaceToolTest` against the 737 - the only large footprints
+in the project, and the pair the class docstring's stand/aircraft split rests on. The zero
+default is what lets them sit this out rather than be deleted or invented. Their published
+wheelbases are available (the A320's own comment says *"a nose gear 12 m ahead of the mains"*)
+if a later pass wants them on the geometric law.
+
+The van stays on the pivot law permanently - see "Why two laws rather than one".
 
 ## Risks
 
@@ -237,11 +290,16 @@ until someone measures them. That is the point of the zero default.
   here so the next reader knows it was seen, not missed.
 - `FSpeedProfile`'s span-cap tests pin `w*R` and will be rewritten against `sqrt(a*R)`.
 - New UPROPERTYs, so a full rebuild with the editor closed.
+- The two content scripts above break on a CORRECT re-export. Fixed first, or the model gets
+  blamed for a stale script - which is the failure mode `import_plane2.py` was written to
+  prevent and would then commit itself.
+- `DA_Aircraft_Plane2` is re-authored by the script after the re-export, so its measured
+  figures all move together. A partially re-run pipeline - new mesh, old DA - is an aircraft
+  whose envelope is 6.4 m from its body, and nothing asserts that today. The re-run is one
+  step, not two.
 
-## Open questions
+## Settled, previously open
 
-1. `MaxLateralAccelUu` default: 0.15 g is a comfortable airliner taxi turn. A Twin Otter on a
-   quiet apron would take more. Per-type from the start, or one default until it looks wrong?
-2. Should the airliner and the Piper be measured in this work after all, so the flat rate has
-   no aircraft left on it? It costs two mesh measurements each and removes a whole code path
-   from aircraft.
+1. `MaxLateralAccelUu` is per-type from the start. See the figures table.
+2. The Piper is measured in this work; the A320 and 737 are kept and stay on the pivot law.
+   See Content.
