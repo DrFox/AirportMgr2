@@ -161,11 +161,13 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	if (Interval > 0.0)
 	{
 		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
+		LastOfferIntervalSeconds = Interval;
 		UE_LOG(LogAirportOps, Log, TEXT("Offers: %.1f per game day across %d airline(s)"),
 			USimClock::SecondsPerDay / Interval, Airlines.Num());
 	}
 	else
 	{
+		LastOfferIntervalSeconds = 0.0;
 		UE_LOG(LogAirportOps, Warning,
 			TEXT("Offers: no airline offers anything, so the inbox will stay empty"));
 	}
@@ -185,6 +187,7 @@ void UOpsRuntime::Detach()
 	{
 		Clock->Cancel(OfferHandle);
 		OfferHandle = INDEX_NONE;
+		LastOfferIntervalSeconds = 0.0;
 	}
 	// Cleared rather than left pointing at the old actor: a dispatcher that still answers
 	// after a detach would put an aeroplane on a field this runtime no longer drives.
