@@ -15,8 +15,10 @@ namespace
 	constexpr double CornerEpsilon = 1.0e-6;
 }
 
-void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FGroundPerformance& Ground)
+void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe)
 {
+	const FGroundPerformance& Ground = Airframe.Ground;
+
 	Distances.Reset();
 	VertexLimits.Reset();
 	SpanCaps.Reset();
@@ -50,10 +52,26 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FGroundPerforma
 		Distances[At] = Distances[At - 1] + FVector2D::Distance(Points[At - 1], Points[At]);
 	}
 
-	// SPAN CAPS, from curvature. Heading changes by so many radians over so many uu, and the
-	// aircraft can only supply MaxTurnRate radians a second, so v is capped at the rate
-	// divided by that. This is just v = wR written without ever naming a radius, which is
-	// what lets it work on a polyline that is not an arc.
+	// SPAN CAPS, from curvature. Heading changes by so many radians over so many uu, so the
+	// radius is Length/Turn - v = wR written without ever naming a radius, which is what
+	// lets it work on a polyline that is not an arc.
+	//
+	// WHAT LIMITS THE SPEED THERE depends on which law steers this airframe.
+	//
+	// PIVOT: the yaw rate is all there is, so the cap is MaxTurnRate * R, exactly as before.
+	//
+	// ROLLING-STEER: the yaw rate does NOT limit it, and that is the whole reason turns were
+	// slow. Required yaw is v/R and available yaw is v*sin(lock)/L, so speed cancels and a
+	// corner is either followable at every speed or at none: R >= L/sin(lock). For plane2
+	// that threshold is 5.2 m, tighter than any taxiway bend. What remains is the physical
+	// limit the yaw-rate cap was always standing in for - lateral acceleration, sqrt(a*R),
+	// which is tyre side load and the cabin.
+	const double Lock = FMath::Sin(FMath::DegreesToRadians(
+		FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
+	const double TightestFollowable = (Airframe.HasAxles() && Lock > KINDA_SMALL_NUMBER)
+		? Airframe.Wheelbase() / Lock
+		: 0.0;
+
 	SpanCaps.SetNumUninitialized(Count - 1);
 	for (int32 Span = 0; Span + 1 < Count; ++Span)
 	{
@@ -63,7 +81,22 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FGroundPerforma
 		double Cap = Ground.Taxi.SpeedCap;
 		if (Length > 0.0 && Turn > CornerEpsilon)
 		{
-			Cap = FMath::Min(Cap, MaxTurnRate * Length / Turn);
+			const double Radius = Length / Turn;
+			if (!Airframe.HasAxles())
+			{
+				Cap = FMath::Min(Cap, MaxTurnRate * Radius);
+			}
+			else if (Radius < TightestFollowable)
+			{
+				// The lock cannot hold this line at any speed. Crawl and wear the crab -
+				// the same answer the vertex caps below give an instant corner.
+				Cap = Ground.MinTaxiSpeed;
+			}
+			else
+			{
+				Cap = FMath::Min(Cap, FMath::Sqrt(
+					FMath::Max(0.0, Ground.MaxLateralAccelUu) * Radius));
+			}
 		}
 
 		// Never below the creep speed. A span this tight is one the aircraft has to crab

@@ -40,8 +40,14 @@ struct AIRSIDE_API FSpeedProfile
 	 *
 	 * Clears first. Safe on a polyline too short to drive, which leaves it empty and makes
 	 * LimitAt return the taxi speed - a follower with no plan is refused before it gets here.
+	 *
+	 * TAKES THE AIRFRAME, not just its ground performance (it was FGroundPerformance): the
+	 * corner cap now depends on the WHEELBASE as well as on the figures, because whether a
+	 * corner can be steered at all is geometric. Passing the bundle is this codebase's "one
+	 * struct per thing" - the alternative was a second parameter that some caller would one
+	 * day forget to keep in step.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FGroundPerformance& Ground);
+	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe);
 
 	/**
 	 * The fastest the aircraft may be Distance along the route.

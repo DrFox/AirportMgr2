@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RouteFollower.h"
 #include "Model/RouteSearch.h"
+#include "Model/SpeedProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 
@@ -32,11 +33,15 @@ namespace
 	 * that corner rather than of the curve - the aircraft would be crawling through the
 	 * whole arc for a reason the test never intended. The arc runs from (0,0) heading +X
 	 * round to (R,R) heading +Y, about a centre at (0,R).
+	 *
+	 * THE APPROACH LEG IS 80 m because the aircraft starts from rest: at the Meridian's
+	 * 100 uu/s^2 it needs v^2/2a = 5000 uu to reach the 1000 uu/s taxi cap, so a shorter
+	 * one measures an aeroplane that is still accelerating and calls it a corner limit.
 	 */
 	TArray<FVector2D> NoseGearArc(double R)
 	{
 		TArray<FVector2D> Points;
-		Points.Add(FVector2D(-2000.0, 0.0));
+		Points.Add(FVector2D(-8000.0, 0.0));
 		for (int32 Step = 0; Step <= 24; ++Step)
 		{
 			const double Angle = -HALF_PI + (HALF_PI * Step) / 24.0;
@@ -204,6 +209,96 @@ bool FSteerNeverExceedsLockTest::RunTest(const FString& Parameters)
 		WorstSteer <= 45.0 + 0.01);
 	TestTrue(TEXT("and the corner did demand full lock, so the clamp was exercised"),
 		WorstSteer > 44.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCornerSpeedIsLateralAccelTest,
+	"Airside.Model.CornerSpeedIsLateralAccel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCornerSpeedIsLateralAccelTest::RunTest(const FString& Parameters)
+{
+	// WHY THE TURN IS SLOW is the question this answers. It used to be a flat 10 deg/s,
+	// which is not a fact about any aeroplane; it is now sqrt(a*R) - tyre side load and the
+	// cabin, which is what actually stops a taxiing aircraft cornering faster.
+	const double R = 3000.0;
+	FAirframe Airframe = NoseGearTwinOtter();
+	Airframe.Ground.MaxLateralAccelUu = 147.0;   // 0.15 g
+
+	FRouteFollower Follower;
+	Follower.Start(NoseGearPlan(NoseGearArc(R)), Airframe, 0.0);
+
+	double FastestOnTheStraight = 0.0;
+	double FastestInTheArc = 0.0;
+	for (int32 Frame = 0; Frame < 6000; ++Frame)
+	{
+		FVector2D At = FVector2D::ZeroVector;
+		double Heading = 0.0;
+		if (!Follower.Advance(NoseGearFrame, Airframe, At, Heading))
+		{
+			break;
+		}
+		if (At.X < -500.0)
+		{
+			FastestOnTheStraight = FMath::Max(FastestOnTheStraight, Follower.Speed);
+		}
+		else if (At.X > 500.0 && At.Y < R - 500.0)
+		{
+			FastestInTheArc = FMath::Max(FastestInTheArc, Follower.Speed);
+		}
+	}
+
+	// It got going first, or "slower in the turn" would be true of an aeroplane that never
+	// moved.
+	TestTrue(FString::Printf(TEXT("it reached taxi speed on the straight (%.0f uu/s)"),
+		FastestOnTheStraight), FastestOnTheStraight > Airframe.Ground.Taxi.SpeedCap * 0.9);
+
+	// sqrt(147 * 3000) = 664 uu/s. The old law gave 10 deg/s x 3000 = 524, so this is the
+	// turn getting FASTER for a stated reason rather than a raised number.
+	const double Expected = FMath::Sqrt(Airframe.Ground.MaxLateralAccelUu * R);
+	TestTrue(FString::Printf(TEXT("the arc is taken at about sqrt(a*R) = %.0f, measured %.0f"),
+		Expected, FastestInTheArc), FMath::Abs(FastestInTheArc - Expected) < 60.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCornerTighterThanLockCrawlsTest,
+	"Airside.Model.CornerTighterThanLockCrawls",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
+{
+	// A corner tighter than R = L/sin(lock) cannot be followed AT ANY SPEED - the geometry
+	// refuses it, not the pace. The honest answer there is the crawl the model already
+	// specifies: "a turn that cannot be made at speed is made at a crawl, which is what a
+	// pilot riding the brakes against idle thrust actually does."
+	FAirframe Airframe = NoseGearTwinOtter();
+	Airframe.Ground.MaxSteerDegrees = 10.0;   // rudder-pedal range: L/sin(10) = 26 m
+
+	const double R = 1000.0;                      // a 10 m radius, far inside that
+	const TArray<FVector2D> Tight = NoseGearArc(R);
+
+	// MIDWAY ALONG THE ARC ITSELF, computed rather than taken as half the polyline: the
+	// approach leg is much the longest part, so "half the route" is a point on the straight
+	// and would have asked the profile about the wrong span entirely.
+	const double MidArc = 8000.0 + (HALF_PI * R) * 0.5;
+
+	FSpeedProfile Profile;
+	Profile.Build(Tight, Airframe);
+	const double Limit = Profile.LimitAt(MidArc);
+	TestTrue(FString::Printf(TEXT("an impossible corner crawls (%.0f uu/s)"), Limit),
+		Limit <= Airframe.Ground.MinTaxiSpeed + 1.0);
+
+	// AND A FOLLOWABLE ONE DOES NOT, or the assertion above would pass on a profile that
+	// crawled everywhere. The same arc at a tiller's 60 degrees is well within the lock.
+	FAirframe Tiller = NoseGearTwinOtter();
+	FSpeedProfile Roomy;
+	Roomy.Build(Tight, Tiller);
+	TestTrue(TEXT("the same corner at full tiller is not reduced to a crawl"),
+		Roomy.LimitAt(MidArc) > Tiller.Ground.MinTaxiSpeed + 1.0);
 
 	return true;
 }

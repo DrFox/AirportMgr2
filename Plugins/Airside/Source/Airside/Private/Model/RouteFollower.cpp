@@ -18,7 +18,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
-	Profile.Build(Plan.Polyline, InAirframe.Ground);
+	Profile.Build(Plan.Polyline, InAirframe);
 
 	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
 	// on the first frame is the same defect as the corner this class was just taught about
@@ -118,10 +118,11 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// PIVOT keeps the flat rate, permanently rather than pending measurement. A van is
 	// authored at 90 deg/s with the note "a van CAN pivot"; at its 0.5 m/s creep that needs
 	// 83 degrees of lock, so it is not steering at all and a geometric law would cripple it.
+	const double Lock = FMath::DegreesToRadians(FMath::Max(0.0, Ground.MaxSteerDegrees));
+
 	double MaxStep = 0.0;
 	if (InAirframe.HasAxles())
 	{
-		const double Lock = FMath::DegreesToRadians(FMath::Max(0.0, Ground.MaxSteerDegrees));
 		const double Steer = FMath::Clamp(Error, -Lock, Lock);
 		SteerDegrees = FMath::RadiansToDegrees(Steer);
 		MaxStep = FMath::Abs(Speed * FMath::Sin(Steer) / InAirframe.Wheelbase()) * DeltaSeconds;
@@ -142,11 +143,24 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 		? FMath::RadiansToDegrees(Step) / DeltaSeconds
 		: 0.0;
 
-	// WHAT COULD NOT BE TAKEN OUT THIS FRAME, which is the crab the player is now looking
-	// at. Measured after the slew rather than before it: an airframe that CAN make the turn
-	// has no reason to slow for it, and taking the pre-slew error instead would have shaved
-	// a few percent off the speed of every agent on every gentle bend for nothing.
-	const double Crab = FMath::RadiansToDegrees(FMath::Abs(Error - Step));
+	// WHAT COULD NOT BE TAKEN OUT, which is the crab the player is now looking at - and the
+	// two laws disagree about what that means, which is the subtlety that cost a test run.
+	//
+	// PIVOT: what is left after this frame's slew. Measured after the slew rather than
+	// before it - an airframe that CAN make the turn has no reason to slow for it, and
+	// taking the pre-slew error would have shaved a few percent off every agent on every
+	// gentle bend for nothing.
+	//
+	// ROLLING-STEER: what is left after FULL LOCK, not after one frame's yaw. A steady
+	// heading error IS steering under this law - a body following a radius R settles at
+	// asin(L/R), 8.7 degrees on an ordinary taxiway bend - so measuring the crab the pivot
+	// way reads correct steering as a failure to keep up and crawls through every corner at
+	// a seventh of the speed. What genuinely cannot be tracked is only the error the lock
+	// itself cannot absorb, and on a corner too tight for the lock that is exactly what
+	// grows - so the crab term still does its job where it should.
+	const double Crab = InAirframe.HasAxles()
+		? FMath::RadiansToDegrees(FMath::Max(0.0, FMath::Abs(Error) - Lock))
+		: FMath::RadiansToDegrees(FMath::Abs(Error - Step));
 
 	// TWO THINGS DECIDE THE TARGET SPEED, and they have different jobs.
 	//
@@ -194,7 +208,7 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 {
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
-	Profile.Build(Plan.Polyline, InAirframe.Ground);
+	Profile.Build(Plan.Polyline, InAirframe);
 }
 
 bool FRouteFollower::HasArrived() const
