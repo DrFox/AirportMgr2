@@ -249,6 +249,13 @@ struct AIRSIDE_API FTrafficOccupancy
 	void Clear();
 
 private:
+	/**
+	 * Claims.RemoveAllSwap(Predicate), named once behind the six Release* wrappers that
+	 * each called it directly (#103) - each keeps its own WHY comment on what it releases
+	 * and why; this is only the mechanism they all share.
+	 */
+	void ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate);
+
 	UPROPERTY() TArray<FTrafficClaim> Claims;
 
 	/** Not a UPROPERTY: consumed within the tick that produced it. */

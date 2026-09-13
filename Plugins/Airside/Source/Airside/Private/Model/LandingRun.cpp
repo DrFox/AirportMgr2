@@ -1,6 +1,7 @@
 #include "Model/LandingRun.h"
 
 #include "AirsideLog.h"
+#include "Solve/RoadGeom.h"
 
 double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	const FClimbPerformance& InClimb, const FApproachPerformance& InApproach)
@@ -117,7 +118,7 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	Travelled = -InApproach.FinalDistance();
 	Altitude = InApproach.FinalAltitude;
 	Speed = InGround.Landing.SpeedCap;
-	Heading = FMath::Atan2(End.Direction.Y, End.Direction.X);
+	Heading = RoadGeom::Bearing(End.Direction);
 
 	// The approach attitude is the angle the wing needs at Vref, LESS the descent angle: the
 	// aircraft is flying nose-high relative to its flight path while the flight path itself

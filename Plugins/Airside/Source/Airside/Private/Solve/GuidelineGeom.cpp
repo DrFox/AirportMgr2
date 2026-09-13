@@ -302,7 +302,7 @@ namespace GuidelineGeom
 			// A REAL corner keeps its own segments' directions: averaging across it would
 			// point the agent into the corner rather than along either road.
 			const double Turn = FMath::Abs(FMath::UnwindRadians(
-				FMath::Atan2(After.Y, After.X) - FMath::Atan2(Before.Y, Before.X)));
+				RoadGeom::Bearing(After) - RoadGeom::Bearing(Before)));
 			if (Turn > MaxSampledTurn)
 			{
 				return bLeaving ? After : Before;
@@ -333,8 +333,8 @@ namespace GuidelineGeom
 			return;
 		}
 
-		OutArriving = FMath::Atan2(Arriving.Y, Arriving.X);
-		OutLeaving = FMath::Atan2(Leaving.Y, Leaving.X);
+		OutArriving = RoadGeom::Bearing(Arriving);
+		OutLeaving = RoadGeom::Bearing(Leaving);
 	}
 
 	bool PointAtDistance(
@@ -377,8 +377,8 @@ namespace GuidelineGeom
 				const FVector2D DirStart = VertexDirection(Points, At - 1, /*bLeaving=*/true);
 				const FVector2D DirEnd = VertexDirection(Points, At, /*bLeaving=*/false);
 
-				const double HeadingStart = FMath::Atan2(DirStart.Y, DirStart.X);
-				const double HeadingEnd = FMath::Atan2(DirEnd.Y, DirEnd.X);
+				const double HeadingStart = RoadGeom::Bearing(DirStart);
+				const double HeadingEnd = RoadGeom::Bearing(DirEnd);
 
 				// Unwound before scaling, so a turn across the +/-PI seam is the short way
 				// round rather than very nearly a full revolution.
@@ -403,7 +403,7 @@ namespace GuidelineGeom
 				// The END vertex's direction, for the same reason as above - so an agent
 				// that arrives does not snap as it stops.
 				const FVector2D Facing = VertexDirection(Points, Points.Num() - 1, /*bLeaving=*/false);
-				OutHeading = FMath::Atan2(Facing.Y, Facing.X);
+				OutHeading = RoadGeom::Bearing(Facing);
 				return true;
 			}
 		}

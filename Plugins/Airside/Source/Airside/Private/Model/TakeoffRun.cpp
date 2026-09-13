@@ -112,7 +112,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 	const FGroundPerformance& Ground = InAirframe.Ground;
 	const FClimbPerformance& Climb = InAirframe.Climb;
-	const double RunwayHeading = FMath::Atan2(End.Direction.Y, End.Direction.X);
+	const double RunwayHeading = RoadGeom::Bearing(End.Direction);
 
 	switch (Phase)
 	{

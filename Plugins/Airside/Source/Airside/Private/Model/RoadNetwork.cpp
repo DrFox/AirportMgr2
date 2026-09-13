@@ -3,6 +3,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/RoadGeom.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
@@ -703,7 +704,7 @@ void URoadNetwork::SortIncident(FRoadNodeId NodeId)
 	{
 		const FVector2D DirL = GetOutgoingTangent(L, NodeId);
 		const FVector2D DirR = GetOutgoingTangent(R, NodeId);
-		return FMath::Atan2(DirL.Y, DirL.X) < FMath::Atan2(DirR.Y, DirR.X);
+		return RoadGeom::Bearing(DirL) < RoadGeom::Bearing(DirR);
 	});
 }
 

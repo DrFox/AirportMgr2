@@ -5,28 +5,8 @@
 #include "Profiles/RoadProfile.h"
 #include "Solve/IcaoCode.h"
 
-const TCHAR* RunwaySurfaceName(ERunwaySurface Surface)
-{
-	switch (Surface)
-	{
-	case ERunwaySurface::Grass:      return TEXT("grass");
-	case ERunwaySurface::Tarmac:     return TEXT("tarmac");
-	case ERunwaySurface::Concrete:   return TEXT("concrete");
-	case ERunwaySurface::Reinforced: return TEXT("reinforced");
-	}
-	return TEXT("unknown");
-}
-
-const TCHAR* RunwayApproachName(ERunwayApproach Approach)
-{
-	switch (Approach)
-	{
-	case ERunwayApproach::Visual:       return TEXT("visual");
-	case ERunwayApproach::NonPrecision: return TEXT("non-precision");
-	case ERunwayApproach::Precision:    return TEXT("precision");
-	}
-	return TEXT("unknown");
-}
+// RunwaySurfaceName/RunwayApproachName moved to RunwayFacts.cpp (#103) - declared in
+// RunwayFacts.h beside the enums they name, which is where their definition belongs too.
 
 namespace RunwayAdmission
 {
