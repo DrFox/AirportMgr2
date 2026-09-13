@@ -70,7 +70,7 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<UNotificationCentre> Notifications;
 
-	void EnsureSlots();
+	void EnsureSlots(const UUIStyle* Style);
 	void Rebuild(const UUIStyle& Style);
 
 	/** Severity to palette slot, and to icon. Static: they read the style, not the widget. */

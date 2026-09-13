@@ -24,6 +24,13 @@ class UUIStyle;
  * the four: a click-driven panel asks the same question about who is playing, and a floating
  * corner card builds the same canvas-root-plus-bordered-card skeleton before it ever reaches
  * its own content.
+ *
+ * NOT ALL FOUR USE EnsureCardRoot. UBuildBarWidget's chrome is a full-width bar stretched by
+ * OFFSETS across two differently-coloured rows, and UToastStackWidget's root holds a bare
+ * VerticalBox with no card at all (each toast is its own rounded card) - neither shape is the
+ * single anchored-and-auto-sized card EnsureCardRoot builds. Both still sit on this base for
+ * Initialize/BuildOnce/Controller; only UInspectorWidget and UOfferInboxWidget call
+ * EnsureCardRoot.
  */
 UCLASS(Abstract)
 class AIRPORTMGR_API UAirportMgrPanelWidget : public UUserWidget
@@ -49,6 +56,17 @@ protected:
 	 * usable, with a style that is NEVER NULL - do here what each subclass's own EnsureSlots
 	 * plus any one-time wiring (button bindings, initial visibility) used to do from
 	 * Initialize() directly.
+	 *
+	 * A SUBCLASS WHOSE CONTENT CAN GO ENTIRELY EMPTY (the inspector with nothing selected, the
+	 * offer inbox with no offers, the toast stack with nothing to show) must mark ITSELF
+	 * `SetVisibility(ESlateVisibility::SelfHitTestInvisible)` here, never Collapsed: Slate only
+	 * ticks a widget from its paint pass, so a Collapsed widget is never arranged, is never
+	 * painted, and so never ticks - and the tick is the only thing that could later un-collapse
+	 * it (PIE 2026-09-07: a panel built this way, never shown). SelfHitTestInvisible keeps the
+	 * panel laid out and running while staying click-transparent, so an otherwise-empty panel
+	 * does not sit over the world as an invisible pane that eats the player's clicks. Individual
+	 * pieces of content (the inspector's card, an offer row) still hide themselves normally;
+	 * this is about the PANEL's own root, once, not about them.
 	 */
 	virtual void BuildOnce(const UUIStyle& Style) PURE_VIRTUAL(UAirportMgrPanelWidget::BuildOnce, );
 

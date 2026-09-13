@@ -131,6 +131,6 @@ private:
 		const FLinearColor& Fill, const FLinearColor& Ink, int32 Index);
 	UPROPERTY() TArray<TObjectPtr<UOfferRowEntry>> Entries;
 
-	void EnsureSlots();
+	void EnsureSlots(const UUIStyle* Style);
 	void PaintRows();
 };

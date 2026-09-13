@@ -29,10 +29,12 @@ void UBuildBarEntry::HandleClicked()
 	}
 }
 
-void UBuildBarWidget::BuildOnce(const UUIStyle&)
+void UBuildBarWidget::BuildOnce(const UUIStyle& Style)
 {
-	EnsureSlots();
-	BuildButtons();
+	// Threaded through rather than re-resolved: BuildOnce already has the resolved style in
+	// hand, so EnsureSlots/BuildButtons take it instead of calling ResolveStyle() again.
+	EnsureSlots(&Style);
+	BuildButtons(&Style);
 
 	// THE BAR IS NOT A NOTIFICATION SURFACE ANY MORE. It used to bind OnNotification to a
 	// single UTextBlock that every notification overwrote and nothing ever cleared, so two
@@ -52,10 +54,8 @@ float UBuildBarWidget::BarHeightFor(const UUIStyle& Style)
 	return StatusStrip + SectionFrame + Heading + ButtonStack;
 }
 
-void UBuildBarWidget::EnsureSlots()
+void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null, by contract
-
 	// A root only if the asset gave none: BindWidgetOptional has already filled every slot
 	// the asset supplies, and a code-built root would replace the designer's bar.
 	//
@@ -227,9 +227,8 @@ UPanelWidget* UBuildBarWidget::SectionPanel(EActionSection Section) const
 	return nullptr;
 }
 
-void UBuildBarWidget::BuildButtons()
+void UBuildBarWidget::BuildButtons(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
 	int32 WithIcon = 0;
 	for (int32 Index = 0; Index < Actions.Num(); ++Index)

@@ -47,23 +47,23 @@ namespace
 	}
 }
 
-void UInspectorWidget::BuildOnce(const UUIStyle&)
+void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 {
-	EnsureSlots();
+	// Cached for Refresh, which runs every tick: without this it called ResolveStyle() (a
+	// TSoftObjectPtr::LoadSynchronous) itself just to recolour one button.
+	CachedStyle = &Style;
+
+	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
 	if (FollowButton != nullptr) { FollowButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleFollow); }
-	// THE ROOT IS NEVER COLLAPSED. Slate ticks a widget from its paint pass, and a Collapsed
-	// widget is not arranged, so it is not painted, so NativeTick never runs - and the tick
-	// is the only thing that would un-collapse it (PIE 2026-09-07: panel created, never
-	// shown). The root stays laid out and click-transparent; only the CARD hides.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
+	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	ShowInspectorCard(WidgetTree, false);
 }
 
-void UInspectorWidget::EnsureSlots()
+void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
-
 	// FOUND ONCE, POSITIONALLY. BuildActions.cpp's own comment says these two rows exist so
 	// the panel, the bar and the C key are one list (spec §6.2); walking the Selection section
 	// in the order it is built - depart, then follow - is what lets this panel ask for "its"
@@ -110,7 +110,7 @@ void UInspectorWidget::EnsureSlots()
 
 	// LABEL FROM Action.Label, KEY IN THE TOOLTIP - the bar's own convention
 	// (UBuildBarWidget::BuildButtons), so a verb reads the same wherever it appears.
-	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, int32 ActionIndex)
+	auto Button = [&](TObjectPtr<UButton>& Field, const TCHAR* Name, int32 ActionIndex, TObjectPtr<UTextBlock>* OutLabel)
 	{
 		if (Field != nullptr || !Actions.IsValidIndex(ActionIndex)) { return; }
 		const FBuildAction& Action = Actions[ActionIndex];
@@ -120,6 +120,7 @@ void UInspectorWidget::EnsureSlots()
 		Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
 		Field->SetContent(Label);
 		Field->SetBackgroundColor(Style->Button);
+		if (OutLabel != nullptr) { *OutLabel = Label; }
 		if (Action.Key.IsValid())
 		{
 			Field->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s  (%s%s)"),
@@ -132,8 +133,10 @@ void UInspectorWidget::EnsureSlots()
 		}
 		if (Row != nullptr) { Row->AddChildToHorizontalBox(Field)->SetPadding(FMargin(0.0f, 0.0f, 8.0f, 0.0f)); }
 	};
-	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex);
-	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex);
+	// DepartLabel is HELD, not re-found: Refresh recolours it every tick when Depart's
+	// enabled state changes, and UBuildBarEntry holds its own Label for the same reason.
+	Button(DepartButton, TEXT("DepartButton"), DepartActionIndex, &DepartLabel);
+	Button(FollowButton, TEXT("FollowButton"), FollowActionIndex, nullptr);
 }
 
 void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
@@ -230,12 +233,22 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	if (StatusText != nullptr) { StatusText->SetText(FText::FromString(Status)); }
 	if (DepartButton != nullptr)
 	{
-		const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
+		// Cached in BuildOnce, not re-resolved here: Refresh runs every tick.
+		const UUIStyle* Style = CachedStyle != nullptr ? CachedStyle.Get() : UAirportMgrUISettings::ResolveStyle();
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		DepartButton->SetIsEnabled(bDepartEnabled);
-		// TextMuted, the same slot UUIStyle already names for "disabled labels" - not a
-		// bespoke DisabledTint knob (issue #91).
-		DepartButton->SetBackgroundColor(bDepartEnabled ? Style->Button : Style->TextMuted);
+
+		// THE BAR'S OWN RULE (UBuildBarWidget::RefreshState): the BUTTON stays Style->Button
+		// always: disabled dims a button by darkening it under Button, never by brightening
+		// it, and TextMuted is a LABEL slot (it is lighter than Button on purpose, for text
+		// over a dark ground) - painting a disabled background with it made Depart look
+		// MORE prominent while taxiing than while parked, backwards from the intent. Only the
+		// CAPTION follows enabled state, exactly as the bar's icon/label content does.
+		DepartButton->SetBackgroundColor(Style->Button);
+		if (DepartLabel != nullptr)
+		{
+			DepartLabel->SetColorAndOpacity(FSlateColor(bDepartEnabled ? Style->Text : Style->TextMuted));
+		}
 	}
 	if (FollowButton != nullptr)
 	{
@@ -274,3 +287,7 @@ void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 bool UInspectorWidget::IsShownForTest() const { return IsInspectorCardShown(WidgetTree); }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
+FLinearColor UInspectorWidget::DepartLabelColourForTest() const
+{
+	return DepartLabel != nullptr ? DepartLabel->GetColorAndOpacity().GetSpecifiedColor() : FLinearColor::Black;
+}

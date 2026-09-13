@@ -120,8 +120,8 @@ private:
 	UPROPERTY() TArray<TObjectPtr<UBuildBarEntry>> Entries;
 
 	UPanelWidget* SectionPanel(EActionSection Section) const;
-	void EnsureSlots();
-	void BuildButtons();
+	void EnsureSlots(const UUIStyle* Style);
+	void BuildButtons(const UUIStyle* Style);
 	void RefreshState();
 	void RefreshClock();
 

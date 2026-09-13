@@ -26,6 +26,10 @@ class UUIStyle;
  *
  * Its buttons run rows of BuildActions() by id, so the panel, the bar and the C key are one
  * list (spec §6.2).
+ *
+ * PanelTint/ButtonTint/DisabledTint/FontSize are GONE (issue #91) - EVERY COLOUR AND FONT
+ * COMES FROM UUIStyle now, the rule UBuildBarWidget's own header already states. Only metrics
+ * this panel alone needs (its width, how far it floats) stay as knobs.
  */
 UCLASS()
 class AIRPORTMGR_API UInspectorWidget : public UAirportMgrPanelWidget
@@ -39,9 +43,6 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> DepartButton;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UButton> FollowButton;
 
-	// PanelTint/ButtonTint/DisabledTint/FontSize are GONE (issue #91) - EVERY COLOUR AND FONT
-	// COMES FROM UUIStyle now, the rule UBuildBarWidget's own header already states. Only
-	// metrics this panel alone needs (its width, how far it floats) stay as knobs.
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double PanelWidth = 300.0;
 	/** Distance above the bottom edge, so it clears the build bar. */
 	UPROPERTY(EditAnywhere, Category = "Inspector|Style") double BottomOffset = 72.0;
@@ -56,6 +57,9 @@ public:
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
 	FString TitleForTest() const;
+	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
+	 *  See Refresh: the button's own background stays Style->Button always. */
+	FLinearColor DepartLabelColourForTest() const;
 
 protected:
 	/** Builds the panel's chrome and binds its two verbs. See
@@ -76,7 +80,20 @@ private:
 	int32 DepartActionIndex = INDEX_NONE;
 	int32 FollowActionIndex = INDEX_NONE;
 
-	void EnsureSlots();
+	/** DepartButton's own caption, held so Refresh can recolour it without re-finding it
+	 *  through GetContent() every tick - the same reason UBuildBarEntry holds its Label. */
+	UPROPERTY() TObjectPtr<UTextBlock> DepartLabel;
+
+	/**
+	 * Set once from BuildOnce's own parameter. Refresh runs every tick and used to call
+	 * UAirportMgrUISettings::ResolveStyle() (a TSoftObjectPtr::LoadSynchronous) itself just to
+	 * recolour one button; caching the pointer this construction pass already resolved avoids
+	 * paying that every frame. Falls back to a fresh resolve if Refresh is ever reached before
+	 * BuildOnce (defensive only - CreateWidget always runs Initialize first).
+	 */
+	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
+
+	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);
 
 	UFUNCTION() void HandleDepart();

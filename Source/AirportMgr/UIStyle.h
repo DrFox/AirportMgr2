@@ -93,8 +93,15 @@ public:
 
 	// Per-role sizes, uu. ONE UPROPERTY PER EUITextRole, so a size lives in exactly one place
 	// instead of at every call site that used to retype it - the whole point of issue #89.
+	//
+	// LabelSize IS 11, NOT 9, ON PURPOSE: the six Label call sites this collapses came in at
+	// 9 (bar button captions, the inbox badge) AND 11 (the inbox's ETA countdown, its Accept/
+	// Decline verbs). One role can only pick one size, and Accept/Decline are the two buttons
+	// an offer actually lives or dies on - shrinking the affirmative verb the player must read
+	// and click is the wrong two sites to save, against a badge count and tool captions that
+	// only gain legibility from the same +2. See the PR body's size table for every site.
 	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float HeadingSize = 9.0f;
-	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float LabelSize = 9.0f;
+	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float LabelSize = 11.0f;
 	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float BodySize = 11.0f;
 	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float TitleSize = 13.0f;
 	UPROPERTY(EditAnywhere, Category = "Type", meta = (ClampMin = "6.0")) float ClockSize = 13.0f;

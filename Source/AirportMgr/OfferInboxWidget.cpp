@@ -44,21 +44,18 @@ void UOfferRowEntry::HandleDecline()
 	}
 }
 
-void UOfferInboxWidget::BuildOnce(const UUIStyle&)
+void UOfferInboxWidget::BuildOnce(const UUIStyle& Style)
 {
 	Inbox = NewObject<UOfferInboxViewModel>(this);
-	EnsureSlots();
+	EnsureSlots(&Style);
 
-	// THE ROOT IS NEVER COLLAPSED, for the reason UInspectorWidget's own comment gives: Slate
-	// ticks a widget from its paint pass, so a collapsed widget never ticks, and the tick is
-	// the only thing that would un-collapse it.
+	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
+	// otherwise-empty panel must stay this way rather than Collapsed.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 }
 
-void UOfferInboxWidget::EnsureSlots()
+void UOfferInboxWidget::EnsureSlots(const UUIStyle* Style)
 {
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();   // never null
-
 	// Code-built chrome only where the asset gave none - the same rule as the bar and the
 	// inspector. A TOP-right card: a title with a count, then one row per offer. Top, not
 	// bottom, because the feed owns the bottom-right corner now and the two-row bar is tall

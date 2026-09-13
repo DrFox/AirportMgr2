@@ -88,23 +88,40 @@ bool FUIStyleApplyTextTest::RunTest(const FString& Parameters)
 	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
 	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
 
-	UTextBlock* Text = NewObject<UTextBlock>(GetTransientPackage());
-	if (!TestNotNull(TEXT("a text block to paint"), Text)) { return false; }
+	// A FRESH TEXT BLOCK PER ROLE, matching every real call site (each constructs its own
+	// UTextBlock and applies exactly one role to it, once). Reusing one across roles would
+	// make a later ApplyText's "fall back to the widget's own font" path read back whatever
+	// the PREVIOUS call left on it - a test artifact no production call site can hit.
+	auto Fresh = [&]() -> UTextBlock*
+	{
+		return NewObject<UTextBlock>(GetTransientPackage());
+	};
 
-	Style->ApplyText(*Text, EUITextRole::Heading, Style->TextMuted);
-	TestEqual(TEXT("Heading takes the style's HeadingSize"), Text->GetFont().Size, Style->HeadingSize);
+	UTextBlock* Heading = Fresh();
+	if (!TestNotNull(TEXT("a text block to paint"), Heading)) { return false; }
+	Style->ApplyText(*Heading, EUITextRole::Heading, Style->TextMuted);
+	TestEqual(TEXT("Heading takes the style's HeadingSize"), Heading->GetFont().Size, Style->HeadingSize);
 	TestEqual(TEXT("Heading is widely spaced, so it reads as a heading and not a short label"),
-		Text->GetFont().LetterSpacing, 120);
+		Heading->GetFont().LetterSpacing, 120);
 	TestEqual(TEXT("colour is the passed-in one, not baked into the role"),
-		Text->GetColorAndOpacity().GetSpecifiedColor(), Style->TextMuted);
+		Heading->GetColorAndOpacity().GetSpecifiedColor(), Style->TextMuted);
 
-	Style->ApplyText(*Text, EUITextRole::Label, Style->Text);
+	UTextBlock* Label = Fresh();
+	if (!TestNotNull(TEXT("a text block to paint"), Label)) { return false; }
+	Style->ApplyText(*Label, EUITextRole::Label, Style->Text);
 	TestEqual(TEXT("Label takes the style's LabelSize, distinct from Heading"),
-		Text->GetFont().Size, Style->LabelSize);
-	TestEqual(TEXT("Label carries no extra letter-spacing"), Text->GetFont().LetterSpacing, 0);
+		Label->GetFont().Size, Style->LabelSize);
+	// The BASE FONT'S OWN SPACING, not a literal 0: only Heading forces one, and every other
+	// role must leave whatever LabelFont/TitleFont already carries alone - a UI Style asset is
+	// free to set its own tracking (e.g. a condensed label face wanting +10), and ApplyText
+	// must not silently override it the way the old per-site `F.LetterSpacing = 0` would have.
+	TestEqual(TEXT("Label leaves the base font's own letter-spacing untouched"),
+		Label->GetFont().LetterSpacing, Style->LabelFont.LetterSpacing);
 
-	Style->ApplyText(*Text, EUITextRole::Clock, Style->Text);
-	TestEqual(TEXT("Clock takes its own size, kept apart from Title"), Text->GetFont().Size, Style->ClockSize);
+	UTextBlock* Clock = Fresh();
+	if (!TestNotNull(TEXT("a text block to paint"), Clock)) { return false; }
+	Style->ApplyText(*Clock, EUITextRole::Clock, Style->Text);
+	TestEqual(TEXT("Clock takes its own size, kept apart from Title"), Clock->GetFont().Size, Style->ClockSize);
 	return true;
 }
 

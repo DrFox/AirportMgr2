@@ -14,6 +14,10 @@ void UUIStyle::ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor C
 	const FSlateFontInfo& BaseFont = bUsesTitleFont ? TitleFont : LabelFont;
 	FSlateFontInfo Font = BaseFont.HasValidFont() ? BaseFont : TextBlock.GetFont();
 
+	// Only Heading forces spacing. Every other role LEAVES THE BASE FONT'S OWN SPACING ALONE:
+	// forcing it to 0 would silently override whatever the asset's TitleFont/LabelFont
+	// carries, the exact "one function overwrites a value nothing told it to touch" shape
+	// this refactor is supposed to be removing, not reintroducing.
 	switch (Role)
 	{
 	case EUITextRole::Heading:
@@ -22,10 +26,10 @@ void UUIStyle::ApplyText(UTextBlock& TextBlock, EUITextRole Role, FLinearColor C
 		// UBuildBarWidget's original comment on this exact literal.
 		Font.LetterSpacing = 120;
 		break;
-	case EUITextRole::Label: Font.Size = LabelSize; Font.LetterSpacing = 0; break;
-	case EUITextRole::Body:  Font.Size = BodySize;  Font.LetterSpacing = 0; break;
-	case EUITextRole::Title: Font.Size = TitleSize; Font.LetterSpacing = 0; break;
-	case EUITextRole::Clock: Font.Size = ClockSize; Font.LetterSpacing = 0; break;
+	case EUITextRole::Label: Font.Size = LabelSize; break;
+	case EUITextRole::Body:  Font.Size = BodySize;  break;
+	case EUITextRole::Title: Font.Size = TitleSize; break;
+	case EUITextRole::Clock: Font.Size = ClockSize; break;
 	}
 
 	TextBlock.SetFont(Font);

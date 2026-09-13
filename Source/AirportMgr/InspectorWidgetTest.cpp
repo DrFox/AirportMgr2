@@ -13,6 +13,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/Selection.h"
+#include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -60,15 +61,24 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 	Panel->Refresh(Actor, None);
 	TestFalse(TEXT("hidden with nothing selected"), Panel->IsShownForTest());
 
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+
 	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = Id;
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("shown with an aircraft selected"), Panel->IsShownForTest());
 	TestTrue(TEXT("the title names the aircraft"), Panel->TitleForTest().Contains(FString::FromInt(Id)));
 	TestFalse(TEXT("Depart is greyed while taxiing"), Panel->IsDepartEnabledForTest());
+	// THE BLOCKING BUG, PINNED: a disabled Depart used to paint LIGHTER (TextMuted, a label
+	// slot lighter than Button) than an enabled one - backwards. The button's own background
+	// never changes (UBuildBarWidget::RefreshState's rule); only the caption dims to TextMuted.
+	TestEqual(TEXT("Depart's caption is muted while taxiing, not the button background"),
+		Panel->DepartLabelColourForTest(), Style->TextMuted);
 
 	for (int32 I = 0; I < 20000 && Actor->GetTraffic()->LastAgentPhaseForTest() != EAgentPhase::Parked; ++I) { Actor->Tick(1.0f / 30.0f); }
 	Panel->Refresh(Actor, Sel);
 	TestTrue(TEXT("Depart lights once parked"), Panel->IsDepartEnabledForTest());
+	TestEqual(TEXT("Depart's caption returns to full Text once parked"),
+		Panel->DepartLabelColourForTest(), Style->Text);
 	return true;
 }
 
@@ -115,9 +125,13 @@ bool FInspectorVerbsFromRegistryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("follow's caption comes from the registry, not a literal"),
 		FollowLabel->GetText().ToString(), FollowAction->Label.ToString());
 
-	// KEY IN THE TOOLTIP, not the caption: Follow has one (C), Depart does not.
-	TestTrue(TEXT("follow's key reaches the tooltip"),
-		Panel->FollowButton->GetToolTipText().ToString().Contains(FollowAction->Key.GetDisplayName().ToString()));
+	// KEY IN THE TOOLTIP, not the caption: Follow has one (C), Depart does not. Checking for
+	// the PARENTHESISED form, not a bare "C", because the raw letter would also match inside
+	// unrelated words in the tooltip - "(C)" is the actual shape SetToolTipText produces.
+	const FString ExpectedKey = FString::Printf(TEXT("(%s%s)"),
+		FollowAction->bRequiresCtrl ? TEXT("Ctrl+") : TEXT(""), *FollowAction->Key.GetDisplayName().ToString());
+	TestTrue(TEXT("follow's key reaches the tooltip as '(C)'"),
+		Panel->FollowButton->GetToolTipText().ToString().Contains(ExpectedKey));
 	TestFalse(TEXT("depart's caption no longer carries a parenthesised key"),
 		DepartLabel->GetText().ToString().Contains(TEXT("(")));
 	return true;
