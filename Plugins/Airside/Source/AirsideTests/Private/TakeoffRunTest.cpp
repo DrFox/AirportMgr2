@@ -25,6 +25,12 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	const FGroundPerformance Piper = UAircraftType::PiperMeridianGround();
 	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
 
+	// Issue #83: FTakeoffRun no longer stores Ground/Climb - Start and Advance take the
+	// bundle by reference instead, same as FRoadAgent hands its own Airframe in.
+	FAirframe Airframe;
+	Airframe.Ground = Piper;
+	Airframe.Climb = Climb;
+
 	if (!TestTrue(TEXT("the Meridian has take-off and climb performance"),
 		Piper.Takeoff.IsSet() && Climb.IsSet()))
 	{
@@ -40,7 +46,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	{
 		FTakeoffRun Run;
 		const bool bArmed = Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
-			TakeoffRunwayLength, Piper, Climb, /*InHeading=*/0.0);
+			TakeoffRunwayLength, Airframe, /*InHeading=*/0.0);
 
 		if (!TestTrue(TEXT("a 1 km runway takes a Meridian"), bArmed))
 		{
@@ -59,7 +65,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
-			if (!Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch))
+			if (!Run.Advance(TakeoffFrame, Airframe, At, Heading, Altitude, Pitch))
 			{
 				break;
 			}
@@ -95,7 +101,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	{
 		FTakeoffRun Run;
 		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Piper, Climb, 0.0);
+			Airframe, 0.0);
 
 		double SpeedAtRotation = -1.0;
 		double PitchWhileRolling = 0.0;
@@ -104,7 +110,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
-			if (!Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch))
+			if (!Run.Advance(TakeoffFrame, Airframe, At, Heading, Altitude, Pitch))
 			{
 				break;
 			}
@@ -131,7 +137,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	{
 		FTakeoffRun Run;
 		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Piper, Climb, 0.0);
+			Airframe, 0.0);
 
 		double Elapsed = 0.0;
 		double TopPitch = 0.0;
@@ -143,7 +149,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
-			if (!Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch))
+			if (!Run.Advance(TakeoffFrame, Airframe, At, Heading, Altitude, Pitch))
 			{
 				break;
 			}
@@ -195,7 +201,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 	{
 		FTakeoffRun Run;
 		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Piper, Climb, 0.0);
+			Airframe, 0.0);
 
 		double PitchAtLiftOff = -1.0;
 		double RotateSeconds = 0.0;
@@ -207,7 +213,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
-			if (!Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch))
+			if (!Run.Advance(TakeoffFrame, Airframe, At, Heading, Altitude, Pitch))
 			{
 				break;
 			}
@@ -256,7 +262,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		// Arriving at the threshold pointing back down the runway - a backtrack, which is
 		// exactly how a light aircraft reaches the threshold of a runway it will depart from.
 		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), TakeoffRunwayLength,
-			Piper, Climb, /*InHeading=*/UE_DOUBLE_PI);
+			Airframe, /*InHeading=*/UE_DOUBLE_PI);
 
 		double WorstYawRate = 0.0;
 		double Previous = Run.Heading;
@@ -266,7 +272,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		{
 			FVector2D At;
 			double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
-			Run.Advance(TakeoffFrame, At, Heading, Altitude, Pitch);
+			Run.Advance(TakeoffFrame, Airframe, At, Heading, Altitude, Pitch);
 			LineUpSeconds += TakeoffFrame;
 
 			WorstYawRate = FMath::Max(WorstYawRate, FMath::Abs(FMath::RadiansToDegrees(
@@ -301,13 +307,13 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		FTakeoffRun Short;
 		TestFalse(TEXT("a runway shorter than the roll is refused"),
 			Short.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5,
-				Piper, Climb, 0.0));
+				Airframe, 0.0));
 		TestTrue(TEXT("and the refused run reports nothing to fly"), Short.HasCleared());
 
 		FTakeoffRun Long;
 		TestTrue(TEXT("one just over it is taken"),
 			Long.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 1.05,
-				Piper, Climb, 0.0));
+				Airframe, 0.0));
 	}
 
 	return true;

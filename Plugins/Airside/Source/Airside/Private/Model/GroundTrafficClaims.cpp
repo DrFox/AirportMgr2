@@ -178,9 +178,10 @@ UGroundTraffic::FClaimWindow UGroundTraffic::WindowFor(const FRoadAgent& Agent) 
 	const double F = Rules.FootprintFor(Agent.Class);
 	const double G = Rules.GapFor(Agent.Class);
 
-	// The follower's own braking figure, not the rules': the window has to be the distance
-	// THIS airframe needs, or an agent reserves less line than it can stop in.
-	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Follower.Ground.Taxi.Decel);
+	// The airframe's own braking figure, not the rules': the window has to be the distance
+	// THIS airframe needs, or an agent reserves less line than it can stop in. Read off
+	// Agent.Airframe now (issue #83) - the follower no longer keeps its own copy of it.
+	const double Decel = FMath::Max(KINDA_SMALL_NUMBER, Agent.Airframe.Ground.Taxi.Decel);
 	const double Window = Agent.Follower.Speed * Agent.Follower.Speed / (2.0 * Decel) + G;
 
 	// HALF the footprint each way, because Travelled is the CENTRE, and the window is

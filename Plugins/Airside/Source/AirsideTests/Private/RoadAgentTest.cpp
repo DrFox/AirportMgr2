@@ -86,13 +86,24 @@ bool FRoadAgentArrivalHandoverTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// THE MEASUREMENT. Issue #27 was the VACATED handover reading Follower.Ground instead
-	// of the airframe's - which FAirframe now makes structurally impossible, because
-	// FRoadAgent::Advance starts the follower from Airframe.Ground and nothing else ever
-	// writes to it.
-	TestEqual(TEXT("the follower taxis on the SAME ground performance the arrival was flown "
-		"with, not the struct default it would otherwise start with"),
-		Agent.Follower.Ground.Taxi.SpeedCap, 1234.0);
+	// THE MEASUREMENT. Issue #27 was the VACATED handover reading Follower.Ground instead of
+	// the airframe's; issue #83 went further and removed FRouteFollower's own Ground copy
+	// entirely, so there is no longer a stale field to read AT ALL - every Advance takes
+	// Agent.Airframe fresh. What is left to prove is that the figure actually driving the
+	// taxi is 1234, not the Piper's own 1000 or a default-constructed FGroundPerformance's -
+	// so this keeps ticking and watches the SPEED the follower actually reaches.
+	double MaxTaxiSpeed = 0.0;
+	Ticks = 0;
+	while (Agent.Phase == EAgentPhase::Taxiing && Ticks < MaxTicks)
+	{
+		Agent.Advance(Step, Motion);
+		MaxTaxiSpeed = FMath::Max(MaxTaxiSpeed, Motion.GroundSpeed);
+		++Ticks;
+	}
+
+	TestTrue(TEXT("the follower taxis at the SAME ground performance the arrival was flown "
+		"with (1234), not the struct default (1000) it would otherwise be capped at"),
+		MaxTaxiSpeed > 1100.0);
 
 	return true;
 }
@@ -317,6 +328,81 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	FRoutePlan Empty;
 	Agent.SetGoalFrom(Empty);
 	TestFalse(TEXT("SetGoalFrom clears the goal when the plan has no steps"), Agent.GoalNode.IsSet());
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #83: FLandingRun, FTakeoffRun and FRouteFollower no longer keep their own copy of
+// the airframe - Start and Advance take FRoadAgent::Airframe BY REFERENCE. The seam this
+// test is FOR: a copy taken once at Start (the bug being fixed) would pass every other
+// test in this file, because none of them change Airframe after dispatch. This one does,
+// mid-roll, with no re-Start - which only a genuine by-reference read can reflect.
+//
+// NOT THE FOLLOWER, deliberately: FRouteFollower plans a speed PROFILE once at Start (see
+// its header - "PLANS: FSpeedProfile works out what the whole route permits before the
+// first frame") and that cache is untouched by a later change to Airframe by design, so
+// measuring the taxi cap there would prove nothing either way. FTakeoffRun has no such
+// cache - Roll reads Ground.Takeoff.Accel fresh every frame - which is exactly the case
+// the "by reference, not copied" fix is for.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAgentAirframeByReferenceTest,
+	"Airside.Model.RoadAgent.AirframeByReference",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAgentAirframeByReferenceTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe;
+	Airframe.Ground = UAircraftType::PiperMeridianGround();
+	Airframe.Climb = UAircraftType::PiperMeridianClimb();
+
+	constexpr double RunwayLength = 100000.0;
+	const FVector2D Threshold(0.0, 0.0);
+	const FVector2D Direction(1.0, 0.0);
+	const FRoutePlan Plan = StraightPlan(FVector2D(-20000.0, 0.0), Threshold);
+
+	FRoadAgent Agent;
+	Agent.StartTaxi(Plan, Airframe);
+	Agent.ArmDeparture(Threshold, Direction, RunwayLength);
+
+	constexpr double Step = 1.0 / 60.0;
+	FAgentMotion Motion;
+
+	// Tick to the middle of the ROLL - past the line-up, still well short of Vr - so there is
+	// runway left to measure a changed acceleration over.
+	int32 Ticks = 0;
+	while (Ticks < 25000
+		&& !(Agent.Phase == EAgentPhase::Departing && Agent.Departure.Phase == ETakeoffPhase::Roll
+			&& Agent.Departure.Speed > Airframe.Ground.Takeoff.SpeedCap * 0.3))
+	{
+		Agent.Advance(Step, Motion);
+		++Ticks;
+	}
+
+	if (!TestTrue(TEXT("reaches the middle of the roll within the bounded loop"),
+		Agent.Phase == EAgentPhase::Departing && Agent.Departure.Phase == ETakeoffPhase::Roll))
+	{
+		return false;
+	}
+
+	// CUT, NOT RE-ARMED: no Departure.Start, no new agent - the same FTakeoffRun that has
+	// been rolling since ArmDeparture. A copy taken at Start would keep accelerating at the
+	// Piper's own figure regardless of this.
+	Agent.Airframe.Ground.Takeoff.Accel = 0.01;
+
+	constexpr int32 MeasureTicks = 30; // half a second
+	const double BeforeSpeed = Agent.Departure.Speed;
+	for (int32 Tick = 0; Tick < MeasureTicks; ++Tick)
+	{
+		Agent.Advance(Step, Motion);
+	}
+	const double Gained = Agent.Departure.Speed - BeforeSpeed;
+
+	TestTrue(FString::Printf(
+		TEXT("a near-zero accel written to Airframe takes effect with no re-arm, proving ")
+		TEXT("Advance reads it live (gained %.2f uu/s over %.1f s, was accelerating at %.0f uu/s2)"),
+		Gained, MeasureTicks * Step, Agent.Airframe.Ground.Takeoff.Accel),
+		Gained < 1.0);
 
 	return true;
 }

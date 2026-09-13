@@ -409,6 +409,11 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		{
 			// The destination has not moved - the splice ends where the old plan did - but the
 			// last step's To is now a LIVE handle, and that is what a later replan searches to.
+			//
+			// NOT SetGoalFrom (issue #82): that clears GoalNode to unset when Steps is empty,
+			// which is right for a fresh dispatch but wrong here - FRoutePlan::IsValid() does
+			// NOT guarantee Steps.Num() > 0, and a valid-but-empty splice must leave the goal
+			// exactly where it was rather than blank it out from under a later replan.
 			Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode;
 
 			UE_LOG(LogAirsideTraffic, Log,
@@ -451,7 +456,7 @@ UGroundTraffic::EReResolve UGroundTraffic::ReResolvePlan(
 		// the truncation was applied in place - which Replace handles: TArray's assignment
 		// guards self-assignment, and what this call is here for is the speed profile, rebuilt
 		// so the agent brakes to the new end instead of running off it.
-		Agent.Follower.Replace(Plan);
+		Agent.Follower.Replace(Plan, Agent.Airframe);
 	}
 
 	UE_LOG(LogAirsideTraffic, Log,

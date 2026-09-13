@@ -278,7 +278,13 @@ EAgentPhase UAirsideTraffic::LastAgentPhaseForTest() const
 double UAirsideTraffic::LastAgentTaxiSpeedCapForTest() const
 {
 	const FRoadAgent* Agent = Model->FindAgent(Model->GetNewestAgentId());
-	return Agent != nullptr ? Agent->Follower.Ground.Taxi.SpeedCap : 0.0;
+	// NOT Agent->Airframe.Ground.Taxi.SpeedCap. Issue #83 removed the follower's own copy of
+	// Ground, but reading the agent's own airframe back here would be a tautology - it is
+	// exactly what the test handed in, whether or not the Vacated handover ever passed it to
+	// Follower.Start. Profile.Fallback is the one follower-side figure left after #83:
+	// FSpeedProfile::Build sets it to Ground.Taxi.SpeedCap at Start/Replace time (see
+	// SpeedProfile.cpp), so this reads back what the follower was ACTUALLY started with.
+	return Agent != nullptr ? Agent->Follower.Profile.GetFallback() : 0.0;
 }
 
 FVector2D UAirsideTraffic::LastAgentPositionForTest() const

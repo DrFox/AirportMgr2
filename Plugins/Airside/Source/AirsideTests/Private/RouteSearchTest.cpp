@@ -215,16 +215,16 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		// search costed, and an agent slowing for corners or winding up from rest would turn
 		// a clean "arrives in N steps" into a question about turn rates and throttle. Those
 		// are measured in Airside.Model.TurnRate.
-		FGroundPerformance Ground;
-		Ground.MaxTurnRateDegPerSec = 1.0e6;
-		Ground.Taxi.Accel = 1.0e9;
-		Ground.Taxi.Decel = 1.0e9;
-		Follower.Start(Plan, Ground);
+		FAirframe Airframe;
+		Airframe.Ground.MaxTurnRateDegPerSec = 1.0e6;
+		Airframe.Ground.Taxi.Accel = 1.0e9;
+		Airframe.Ground.Taxi.Decel = 1.0e9;
+		Follower.Start(Plan, Airframe);
 
 		FVector2D At;
 		double Heading = 0.0;
 
-		TestTrue(TEXT("the first advance reports a pose"), Follower.Advance(0.0, At, Heading));
+		TestTrue(TEXT("the first advance reports a pose"), Follower.Advance(0.0, Airframe, At, Heading));
 		TestEqual(TEXT("and it is the start"), At, Plan.Polyline[0]);
 		TestFalse(TEXT("it has not arrived"), Follower.HasArrived());
 
@@ -232,7 +232,7 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		// exercises the same accumulation a real tick does.
 		for (int32 Step = 0; Step < 1000 && !Follower.HasArrived(); ++Step)
 		{
-			Follower.Advance(0.05, At, Heading);
+			Follower.Advance(0.05, Airframe, At, Heading);
 		}
 
 		TestTrue(TEXT("it arrives"), Follower.HasArrived());
@@ -240,7 +240,7 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 			FVector2D::Distance(At, Plan.Polyline.Last()) < 1.0);
 
 		// Past the end it must STAY at the end, not run on and not snap to the origin.
-		Follower.Advance(100.0, At, Heading);
+		Follower.Advance(100.0, Airframe, At, Heading);
 		TestTrue(TEXT("and stays there"), FVector2D::Distance(At, Plan.Polyline.Last()) < 1.0);
 	}
 
@@ -248,10 +248,11 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 	// false is what leaves the caller's pose untouched instead of writing (0,0) into it.
 	{
 		FRouteFollower Follower;
+		FAirframe Airframe;
 		FVector2D At(1234.0, 5678.0);
 		double Heading = 42.0;
 
-		TestFalse(TEXT("an empty plan does not advance"), Follower.Advance(1.0, At, Heading));
+		TestFalse(TEXT("an empty plan does not advance"), Follower.Advance(1.0, Airframe, At, Heading));
 		TestEqual(TEXT("and leaves the pose alone"), At, FVector2D(1234.0, 5678.0));
 		TestTrue(TEXT("an agent that cannot move counts as arrived"), Follower.HasArrived());
 	}

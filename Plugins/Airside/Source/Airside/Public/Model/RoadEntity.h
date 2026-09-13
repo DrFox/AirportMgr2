@@ -484,6 +484,11 @@ struct AIRSIDE_API FApproachPerformance
  * that is taxiing, landing or departing is always reading facts about the SAME aeroplane,
  * because there is only one place they could have come from.
  *
+ * AND, SINCE ISSUE #83, THE ONLY COPY: FLandingRun, FTakeoffRun and FRouteFollower stopped
+ * keeping their own Ground/Climb/Approach fields (Agent.Follower.Ground and Agent.Arrival.Ground
+ * are both gone) and take this bundle by reference from FRoadAgent::Airframe instead, so the
+ * class of bug #27 fixed by convention is now unrepresentable by construction.
+ *
  * Wingspan travels with the other four despite living on FEntityFootprint on the type,
  * because a route search needs it in the same breath it needs Ground - see
  * UAircraftType::Airframe.

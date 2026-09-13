@@ -173,11 +173,12 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 	// 3. THE FOLLOWER TAXIS ON THE AIRFRAME'S GROUND PERFORMANCE, NOT THE STRUCT DEFAULT -
 	//    issue #27, and issue #28's own reason for existing: with FAirframe as ONE struct
 	//    handed to FRoadAgent::StartArrival and read again from it at the VACATED handover
-	//    (Airframe.Ground, never Follower.Ground), the two literally cannot disagree any
-	//    more. That property is asserted world-free, on the STRUCT, in
-	//    Airside.Model.RoadAgent - what THIS test can add on top is that the handover
-	//    actually happens when Tick is what drives it, through the same Tick -> Traffic->
-	//    Advance path PlayerTick uses every frame, not a direct call to FRoadAgent::Advance.
+	//    (Airframe.Ground - FRouteFollower no longer keeps a Ground copy of its own to
+	//    disagree with at all; removed in #83), the two literally cannot disagree any more.
+	//    That property is asserted world-free, on the STRUCT, in Airside.Model.RoadAgent -
+	//    what THIS test can add on top is that the handover actually happens when Tick is
+	//    what drives it, through the same Tick -> Traffic-> Advance path PlayerTick uses
+	//    every frame, not a direct call to FRoadAgent::Advance.
 	//
 	//    RUN TO COMPLETION, bounded rather than open-ended: an infinite loop over a defect
 	//    that never resolves would hang the whole test run instead of failing one test.
@@ -197,10 +198,14 @@ bool FArrivalDispatchTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and it is still the only agent - parking does not spawn or drop one"),
 			Actor->GetAgentCount(), Before + 1);
 
-		// THE 1234.0 FIXTURE. Read through the follower Tick actually drove, not the
-		// Airframe the test itself constructed - this is what proves the handover in
-		// FRoadAgent::Advance (Airframe.Ground copied into Follower.Ground at the VACATED
-		// moment) reached the struct the taxi is actually driven by.
+		// THE 1234.0 FIXTURE. Read through Follower.Profile.Fallback - the one follower-side
+		// figure FSpeedProfile::Build still records (Fallback = Ground.Taxi.SpeedCap, set at
+		// Start/Replace) now that #83 removed FRouteFollower's own Ground copy - rather than
+		// through Agent->Airframe.Ground.Taxi.SpeedCap, which would be a TAUTOLOGY: that is
+		// exactly the FAirframe this test constructed, and would read back 1234.0 whether or
+		// not the Vacated handover in FRoadAgent::Advance ever actually passed it to
+		// Follower.Start. Reading it off the follower is what proves the handover reached the
+		// struct the taxi is actually driven by, through Tick rather than a direct call.
 		TestEqual(TEXT("the parked follower taxied on the airframe's own SpeedCap, not the ")
 			TEXT("FGroundPerformance struct default"),
 			Actor->LastAgentTaxiSpeedCapForTest(), 1234.0);

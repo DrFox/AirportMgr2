@@ -25,7 +25,8 @@ namespace
 		bool bVacated = false;
 	};
 
-	FLandingTrace FlyLanding(FLandingRun& Run, double Step = 1.0 / 60.0, double Limit = 600.0)
+	FLandingTrace FlyLanding(FLandingRun& Run, const FAirframe& Airframe, double Step = 1.0 / 60.0,
+		double Limit = 600.0)
 	{
 		FLandingTrace Trace;
 
@@ -36,7 +37,7 @@ namespace
 		double PreviousAltitude = Run.Altitude;
 		ELandingPhase Previous = Run.Phase;
 
-		while (Run.Advance(Step, At, Heading, Altitude, Pitch) && Trace.Seconds < Limit)
+		while (Run.Advance(Step, Airframe, At, Heading, Altitude, Pitch) && Trace.Seconds < Limit)
 		{
 			Trace.Seconds += Step;
 
@@ -91,6 +92,13 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	const FClimbPerformance Climb = UAircraftType::PiperMeridianClimb();
 	const FApproachPerformance Approach = UAircraftType::PiperMeridianApproach();
 
+	// Issue #83: FLandingRun no longer stores Ground/Climb/Approach - Start and Advance take
+	// the bundle by reference instead, same as FRoadAgent hands its own Airframe in.
+	FAirframe Airframe;
+	Airframe.Ground = Ground;
+	Airframe.Climb = Climb;
+	Airframe.Approach = Approach;
+
 	// A generous runway, so nothing below is measuring a refusal by accident.
 	constexpr double LongRunway = 150000.0;
 
@@ -101,8 +109,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	{
 		FLandingRun Run;
 		if (!TestTrue(TEXT("a long runway accepts the arrival"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway,
-				Ground, Climb, Approach)))
+			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe)))
 		{
 			return false;
 		}
@@ -139,8 +146,8 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    it keeps measuring the flare if Vref or the glideslope are ever retuned.
 	{
 		FLandingRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Ground, Climb, Approach);
-		const FLandingTrace Trace = FlyLanding(Run);
+		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		const FLandingTrace Trace = FlyLanding(Run, Airframe);
 
 		if (!TestTrue(TEXT("the aircraft reaches the ground"), Trace.bReachedGround))
 		{
@@ -215,8 +222,8 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		// Measured against the trace above rather than against a constant, so it keeps
 		// checking the two agree if any of the approach numbers are retuned.
 		FLandingRun Flown;
-		Flown.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Ground, Climb, Approach);
-		const FLandingTrace FlownTrace = FlyLanding(Flown);
+		Flown.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		const FLandingTrace FlownTrace = FlyLanding(Flown, Airframe);
 		TestEqual(FString::Printf(
 			TEXT("the required distance is what it flies: %.0f uu needed, %.0f used"),
 			Needed, FlownTrace.VacatedAt),
@@ -224,29 +231,27 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 
 		FLandingRun Run;
 		TestFalse(TEXT("a runway shorter than that is refused"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5,
-				Ground, Climb, Approach));
+			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), Needed * 0.5, Airframe));
 
 		// Comfortably past the safety margin - a landing is flown to a touchdown zone, not
 		// to the numbers, so the refusal deliberately wants more than the bare measurement.
 		TestTrue(TEXT("and one with room to spare is not"),
 			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
-				Needed * FLandingRun::LandingMargin * 1.1, Ground, Climb, Approach));
+				Needed * FLandingRun::LandingMargin * 1.1, Airframe));
 	}
 
 	// 8. AN AIRFRAME WITH NO LANDING FIGURES DECLINES rather than flying a nonsense - and
 	//    can still taxi, which is why FGroundPerformance::IsSet does not require Landing.
 	{
-		FGroundPerformance NoLanding = Ground;
-		NoLanding.Landing = FGroundRegime();
-		NoLanding.Landing.SpeedCap = 0.0;
+		FAirframe NoLandingAirframe = Airframe;
+		NoLandingAirframe.Ground.Landing = FGroundRegime();
+		NoLandingAirframe.Ground.Landing.SpeedCap = 0.0;
 
-		TestTrue(TEXT("it can still move about the airport"), NoLanding.IsSet());
+		TestTrue(TEXT("it can still move about the airport"), NoLandingAirframe.Ground.IsSet());
 
 		FLandingRun Run;
 		TestFalse(TEXT("but it cannot land"),
-			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway,
-				NoLanding, Climb, Approach));
+			Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, NoLandingAirframe));
 	}
 
 	// 9. ADVANCE IS THE ONLY THING THAT MOVES IT, and it declines once done - the same
@@ -254,8 +259,8 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 	//    ignores the return value must leave its aircraft where it was, not at the origin.
 	{
 		FLandingRun Run;
-		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Ground, Climb, Approach);
-		FlyLanding(Run);
+		Run.Start(FVector2D::ZeroVector, FVector2D(1.0, 0.0), LongRunway, Airframe);
+		FlyLanding(Run, Airframe);
 
 		FVector2D At(12345.0, 6789.0);
 		double Heading = 4.0;
@@ -263,7 +268,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		double Pitch = 42.0;
 
 		TestFalse(TEXT("a finished arrival declines to advance"),
-			Run.Advance(1.0 / 60.0, At, Heading, Altitude, Pitch));
+			Run.Advance(1.0 / 60.0, Airframe, At, Heading, Altitude, Pitch));
 		TestEqual(TEXT("and leaves the caller's position untouched"), At, FVector2D(12345.0, 6789.0));
 		TestEqual(TEXT("and its altitude"), Altitude, 999.0);
 	}

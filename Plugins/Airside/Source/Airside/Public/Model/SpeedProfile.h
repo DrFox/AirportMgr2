@@ -54,6 +54,17 @@ struct AIRSIDE_API FSpeedProfile
 
 	bool IsEmpty() const { return Distances.Num() < 2; }
 
+	/**
+	 * The taxi cap Build was last given, straight off FGroundPerformance - see Fallback.
+	 *
+	 * PUBLIC FOR A REASON NARROWER THAN IT LOOKS: with FRouteFollower no longer keeping its
+	 * own Ground copy (issue #83), this is the one follower-side record of which airframe's
+	 * figures a taxi actually started on - UAirsideTraffic::LastAgentTaxiSpeedCapForTest
+	 * reads it rather than the agent's own Airframe, which would be a tautology (the test
+	 * already knows what it dispatched; the question is whether the handover used it).
+	 */
+	double GetFallback() const { return Fallback; }
+
 private:
 	/** Cumulative distance to each vertex. Distances[0] is 0. */
 	UPROPERTY() TArray<double> Distances;

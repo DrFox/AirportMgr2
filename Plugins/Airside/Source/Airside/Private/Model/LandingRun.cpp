@@ -13,13 +13,22 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 	// Begin rather than Start, because Start's whole job is to apply the answer this is
 	// computing. A probe refused by the check it exists to feed would return zero and make
 	// every runway acceptable.
+	//
+	// A LOCAL FAirframe, ASSEMBLED FROM THE THREE PARTS: this static method's signature is
+	// unchanged by issue #83 (every caller - ArrivalPlanner, tests - already has these three
+	// structs separately, often before an FAirframe exists at all), so the bundling happens
+	// here rather than pushing an FAirframe requirement onto every caller of a distance query.
+	FAirframe ProbeAirframe;
+	ProbeAirframe.Ground = InGround;
+	ProbeAirframe.Climb = InClimb;
+	ProbeAirframe.Approach = InApproach;
+
 	FLandingRun Probe;
 	// A long but FINITE runway. TNumericLimits<double>::Max() works arithmetically and puts
 	// 1.8e308 into the armed log line, which is 300 characters of noise in the one place
 	// somebody reads to find out why an arrival was refused.
 	constexpr double UnboundedRunway = 1.0e9;
-	if (!Probe.Begin(FVector2D::ZeroVector, FVector2D(1.0, 0.0),
-		UnboundedRunway, InGround, InClimb, InApproach, 0.0))
+	if (!Probe.Begin(FVector2D::ZeroVector, FVector2D(1.0, 0.0), UnboundedRunway, ProbeAirframe, 0.0))
 	{
 		return 0.0;
 	}
@@ -37,7 +46,7 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 
 	for (int32 Guard = 0; Guard < MaxSteps; ++Guard)
 	{
-		if (!Probe.Advance(Step, At, Heading, Altitude, Pitch))
+		if (!Probe.Advance(Step, ProbeAirframe, At, Heading, Altitude, Pitch))
 		{
 			break;
 		}
@@ -53,31 +62,33 @@ double FLandingRun::RequiredLandingDistance(const FGroundPerformance& InGround,
 }
 
 bool FLandingRun::Start(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-	const FApproachPerformance& InApproach, double InVacateAt)
+	double InRunwayLength, const FAirframe& InAirframe, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
 
-	const double Needed = RequiredLandingDistance(InGround, InClimb, InApproach) * LandingMargin;
+	const double Needed = RequiredLandingDistance(
+		InAirframe.Ground, InAirframe.Climb, InAirframe.Approach) * LandingMargin;
 	if (InRunwayLength < Needed)
 	{
 		UE_LOG(LogAirsideTraffic, Warning,
 			TEXT("Arrival refused: %.0f uu of runway, %.0f needed to stop from %.0f uu/s "
 				 "(%.0f flown plus a %.0f%% margin)."),
-			InRunwayLength, Needed, InGround.Landing.SpeedCap,
+			InRunwayLength, Needed, InAirframe.Ground.Landing.SpeedCap,
 			Needed / LandingMargin, (LandingMargin - 1.0) * 100.0);
 		return false;
 	}
 
-	return Begin(InThreshold, InDirection, InRunwayLength, InGround, InClimb, InApproach,
-		InVacateAt);
+	return Begin(InThreshold, InDirection, InRunwayLength, InAirframe, InVacateAt);
 }
 
 bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirection,
-	double InRunwayLength, const FGroundPerformance& InGround, const FClimbPerformance& InClimb,
-	const FApproachPerformance& InApproach, double InVacateAt)
+	double InRunwayLength, const FAirframe& InAirframe, double InVacateAt)
 {
 	Phase = ELandingPhase::Vacated;
+
+	const FGroundPerformance& InGround = InAirframe.Ground;
+	const FClimbPerformance& InClimb = InAirframe.Climb;
+	const FApproachPerformance& InApproach = InAirframe.Approach;
 
 	if (!InGround.IsSet() || !InGround.Landing.IsSet() || !InClimb.IsSet() || !InApproach.IsSet())
 	{
@@ -97,40 +108,42 @@ bool FLandingRun::Begin(const FVector2D& InThreshold, const FVector2D& InDirecti
 	Threshold = InThreshold;
 	Direction = InDirection.GetSafeNormal();
 	RunwayLength = InRunwayLength;
-	Ground = InGround;
-	Climb = InClimb;
-	Approach = InApproach;
+	// Ground/Climb/Approach are NOT copied here any more (issue #83) - Advance takes the
+	// airframe fresh from its caller every frame instead.
 
 	// SHORT OF THE THRESHOLD, hence negative, and at the height the glideslope puts it at
 	// that distance. Derived from FinalAltitude rather than authored beside it - see
 	// FApproachPerformance::FinalDistance.
-	Travelled = -Approach.FinalDistance();
-	Altitude = Approach.FinalAltitude;
-	Speed = Ground.Landing.SpeedCap;
+	Travelled = -InApproach.FinalDistance();
+	Altitude = InApproach.FinalAltitude;
+	Speed = InGround.Landing.SpeedCap;
 	Heading = FMath::Atan2(Direction.Y, Direction.X);
 
 	// The approach attitude is the angle the wing needs at Vref, LESS the descent angle: the
 	// aircraft is flying nose-high relative to its flight path while the flight path itself
 	// points down. Derived, so the nose sits where the speed says rather than where a number
 	// typed into a details panel says.
-	Pitch = Climb.RequiredAngleAt(Speed, Ground.Takeoff.SpeedCap) - Approach.GlideslopeDegrees;
+	Pitch = InClimb.RequiredAngleAt(Speed, InGround.Takeoff.SpeedCap) - InApproach.GlideslopeDegrees;
 
 	Phase = ELandingPhase::Approach;
 
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Arrival armed: %.0f uu runway, vacating at %.0f, Vref %.0f uu/s, joining %.0f uu out."),
-		RunwayLength, VacateAt, Speed, Approach.FinalDistance());
+		RunwayLength, VacateAt, Speed, InApproach.FinalDistance());
 	return true;
 }
 
-bool FLandingRun::Advance(double DeltaSeconds, FVector2D& OutPosition, double& OutHeading,
-	double& OutAltitude, double& OutPitch)
+bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition,
+	double& OutHeading, double& OutAltitude, double& OutPitch)
 {
 	if (Phase == ELandingPhase::Vacated)
 	{
 		return false;
 	}
 
+	const FGroundPerformance& Ground = InAirframe.Ground;
+	const FClimbPerformance& Climb = InAirframe.Climb;
+	const FApproachPerformance& Approach = InAirframe.Approach;
 	const double Vr = Ground.Takeoff.SpeedCap;
 
 	switch (Phase)
