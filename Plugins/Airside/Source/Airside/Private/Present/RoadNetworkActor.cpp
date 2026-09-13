@@ -1,6 +1,7 @@
 #include "Present/RoadNetworkActor.h"
 
 #include "AirsideLog.h"
+#include "Containers/StaticArray.h"
 #include "Components/BillboardComponent.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/SceneComponent.h"
@@ -88,7 +89,19 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
 	// than UPROPERTY(Instanced).
 	Presenter = CreateDefaultSubobject<URoadSurfacePresenter>(TEXT("Presenter"));
-	Presenter->Initialize(MeshComponent, GhostComponent, ApronComponent, MarkingComponent, RunwayMarkingComponent);
+
+	// Indexed by ESurfaceLayer, not positional - see URoadSurfacePresenter::Initialize's own
+	// comment (issue #81). A local TStaticArray: this actor's own components stay five
+	// separately named UPROPERTYs (unchanged, since a saved level's Details panel and
+	// ApronDrawToolTest.cpp already know them by those names), and this is just how they are
+	// handed across the Present-internal boundary in one indexed call instead of five.
+	TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)> SurfaceComponents;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Road)] = MeshComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Ghost)] = GhostComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Apron)] = ApronComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::HoldingPaint)] = MarkingComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::RunwayPaint)] = RunwayMarkingComponent;
+	Presenter->Initialize(SurfaceComponents);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 

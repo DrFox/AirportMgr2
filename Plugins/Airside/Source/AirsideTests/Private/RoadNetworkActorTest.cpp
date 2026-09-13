@@ -24,6 +24,24 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// ESurfaceLayer -> component identity (issue #81's table-driven presenter). Every OTHER
+	// test in this suite reads a layer's component back out through the same
+	// GetLayerComponent(Layer) the rebuild wrote it into, which cannot see a wiring bug in
+	// the constructor's TStaticArray indexing: a Road<->Ghost or HoldingPaint<->RunwayPaint
+	// swap would still rebuild something, correctly, at the swapped slot, and every one of
+	// those tests would still pass. Only comparing against the actor's own independently-
+	// named UPROPERTY fields catches that - see LayerComponentForTest's own comment.
+	TestEqual(TEXT("Road is MeshComponent"),
+		Actor->LayerComponentForTest(ESurfaceLayer::Road), Actor->MeshComponent.Get());
+	TestEqual(TEXT("Ghost is GhostComponent"),
+		Actor->LayerComponentForTest(ESurfaceLayer::Ghost), Actor->GhostComponent.Get());
+	TestEqual(TEXT("Apron is ApronComponent"),
+		Actor->LayerComponentForTest(ESurfaceLayer::Apron), Actor->ApronComponent.Get());
+	TestEqual(TEXT("HoldingPaint is MarkingComponent"),
+		Actor->LayerComponentForTest(ESurfaceLayer::HoldingPaint), Actor->MarkingComponent.Get());
+	TestEqual(TEXT("RunwayPaint is RunwayMarkingComponent"),
+		Actor->LayerComponentForTest(ESurfaceLayer::RunwayPaint), Actor->RunwayMarkingComponent.Get());
+
 	// The facade owns creating the network. Until Slice 3's build tool exists nothing
 	// else ever would, which is exactly why RebuildMesh used to do nothing at all.
 	TestTrue(TEXT("no network before the first edit"), Actor->Network == nullptr);
