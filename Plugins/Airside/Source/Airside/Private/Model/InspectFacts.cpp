@@ -127,20 +127,12 @@ namespace InspectFacts
 		// Captured at placement - see FEntityInstance::PoseRole. It is how the panel tells a
 		// stand from a service installation without this layer knowing what either is for.
 		Out.PoseRole = E.PoseRole;
-		Out.bReachable = false;
-		if (Network.GetGuidelineNode(E.PoseNode) != nullptr)
-		{
-			// Any live edge touching the pose node. Walk the edges rather than trust a
-			// degree field: the node struct's edge list, if it has one, is derived state.
-			for (const FGuidelineEdge& Edge : Network.GetGuidelineEdges())
-			{
-				if (Edge.bAlive && (Edge.A == E.PoseNode || Edge.B == E.PoseNode))
-				{
-					Out.bReachable = true;
-					break;
-				}
-			}
-		}
+		// Any live edge touching the pose node - Incident, not a scan of every edge in the
+		// graph: RoadGuideline.h says URoadNetwork maintains it (add/remove/retarget all keep
+		// it live-edges-only), and InspectFacts has no business re-deriving a fact the model
+		// already guarantees (#104).
+		const FGuidelineNode* Node = Network.GetGuidelineNode(E.PoseNode);
+		Out.bReachable = Node != nullptr && Node->Incident.Num() > 0;
 		Out.OccupantAgent = 0;
 		Out.bOccupantParked = false;
 		if (Traffic != nullptr && E.PoseNode.IsSet())
