@@ -90,6 +90,20 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("a figure set on the ACTOR reaches the model's rules within one tick"),
 		Model->Rules.VehicleGap, 777.0, 1e-9);
 
+	// MaxSubstepSeconds/MaxSubsteps THE SAME WAY (#107 item 6): both used to be
+	// UPROPERTY(EditAnywhere) on UGroundTraffic itself, which is Transient and never exposed
+	// EditAnywhere one layer up - so a designer could type into a field the Details panel
+	// would never show, and it would do nothing. Living on FTrafficRules instead means this
+	// same seam - already proven above for VehicleGap - covers them for free; asserted
+	// explicitly anyway because "for free" is exactly the kind of claim CLAUDE.md's "check
+	// where a list is CONSUMED" says to measure rather than assume.
+	Actor->TrafficRules.MaxSubstepSeconds = 0.01;
+	Actor->TrafficRules.MaxSubsteps = 3;
+	Actor->Tick(0.05f);
+	TestEqual(TEXT("MaxSubstepSeconds set on the ACTOR reaches the model's rules within one tick"),
+		Model->Rules.MaxSubstepSeconds, 0.01, 1e-9);
+	TestEqual(TEXT("MaxSubsteps too"), Model->Rules.MaxSubsteps, 3);
+
 	// THE REBUILD SEAM, at the level of the composition: ARoadNetworkActor::RebuildMesh must
 	// call UGroundTraffic::OnGraphRebuilt. Airside.Model.Traffic.GraphRebuild pins what that
 	// function DOES, but it calls it by hand, so deleting the actor's three lines left every

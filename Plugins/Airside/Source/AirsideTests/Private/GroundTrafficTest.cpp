@@ -1332,7 +1332,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	//
 	// THAT BOOKKEEPING IS ONLY VALID WHILE ONE CALL IS ONE PASS, which is why the tick below
 	// is the substep and not the 0.05 the other fixtures use. Advance now splits a long delta
-	// into bounded substeps (see UGroundTraffic::MaxSubstepSeconds), and a call holding two
+	// into bounded substeps (see FTrafficRules::MaxSubstepSeconds), and a call holding two
 	// passes arbitrates twice - at the start pose and half a tick later - while this variable
 	// still names only the first. Every threshold here would then be read against a pose the
 	// agent had already left, which is measuring the substep count rather than the crossing
@@ -1373,7 +1373,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 			}
 		}
 		return Q->Follower.Travelled < 25000.0;
-	}, Traffic->MaxSubstepSeconds);
+	}, Traffic->Rules.MaxSubstepSeconds);
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
 	UE_LOG(LogM2TrafficTest, Log,
@@ -1400,7 +1400,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	// releases 33 uu past 22750 - a tick, exactly - so the wider bounds were tolerance for the
 	// sampling rate and not for the rule. Tightening them is the point of ticking finer: at 60
 	// the arming could drift more than a whole tick late and this test would still pass.
-	const double OneTick = Traffic->MaxSubstepSeconds * 1000.0 + 1.0;
+	const double OneTick = Traffic->Rules.MaxSubstepSeconds * 1000.0 + 1.0;
 	TestTrue(FString::Printf(TEXT("armed no later than the nose entered the strip (%.0f, bound 17250 + one tick)"), ArmedAt),
 		ArmedAt >= 0.0 && ArmedAt <= 20000.0 - HalfWidth - Half + OneTick);
 	TestTrue(FString::Printf(TEXT("released no earlier than the tail left it, and within one tick after (%.0f, want 22750)"), ReleasedAt),
@@ -2174,7 +2174,7 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 	for (int32 Which = 0; Which < 3; ++Which)
 	{
 		Runs[Which] = NewObject<UGroundTraffic>(GetTransientPackage());
-		Runs[Which]->MaxSubstepSeconds = Longest[Which];
+		Runs[Which]->Rules.MaxSubstepSeconds = Longest[Which];
 		Ids[Which] = Runs[Which]->DispatchAgent(Net,
 			M2TrafficRoute(*Net, W, N, ETraversalClass::Aircraft),
 			TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);

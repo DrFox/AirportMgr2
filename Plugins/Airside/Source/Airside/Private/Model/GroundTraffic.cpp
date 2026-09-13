@@ -493,14 +493,14 @@ void UGroundTraffic::Advance(double DeltaSeconds, const URoadNetwork* Network)
 		return;
 	}
 
-	const double Longest = FMath::Max(MaxSubstepSeconds, KINDA_SMALL_NUMBER);
+	const double Longest = FMath::Max(Rules.MaxSubstepSeconds, KINDA_SMALL_NUMBER);
 	const int32 Steps = FMath::Clamp(
-		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(MaxSubsteps, 1));
+		FMath::CeilToInt(DeltaSeconds / Longest), 1, FMath::Max(Rules.MaxSubsteps, 1));
 
 	// Divided rather than repeatedly subtracted: the steps then sum to exactly DeltaSeconds,
 	// so SimSeconds and every integration inside stay in step with the caller's clock. Past
 	// the ceiling this simply makes each step longer than Longest, which is the documented
-	// trade - see MaxSubsteps.
+	// trade - see FTrafficRules::MaxSubsteps.
 	const double Step = DeltaSeconds / Steps;
 	for (int32 Index = 0; Index < Steps; ++Index)
 	{

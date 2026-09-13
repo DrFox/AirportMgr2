@@ -45,6 +45,39 @@ struct AIRSIDE_API FTrafficRules
 	/** After a graph rebuild, how near a live node must be to a step's end to be it. */
 	UPROPERTY(EditAnywhere) double ResolveRadius = 25.0;
 
+	/**
+	 * The longest step the model will take in one go, in sim seconds.
+	 *
+	 * THE FRAME IS NOT THE STEP. UAirsideTraffic hands this the frame time multiplied by the
+	 * player's speed, so at x8 a 16 ms frame arrives as 133 ms of simulation - and an
+	 * aeroplane crossing 133 ms of ground in one jump can pass the waypoint it was turning
+	 * onto and be pulled back onto the line next frame. That is the rubber-banding reported
+	 * from play, and it appeared at x2 and got worse from there while x1 looked perfect,
+	 * which is exactly the signature of a step that scales with the multiplier.
+	 *
+	 * Substepping costs arbitration and motion passes in proportion to the speed multiplier,
+	 * which is the right place to spend: the player asked for more simulation per second.
+	 *
+	 * MOVED HERE FROM UGroundTraffic (#107 item 6): a UPROPERTY(EditAnywhere) on that
+	 * Transient, non-instanced UObject never reached the Details panel - the exact trap
+	 * RoadNetworkActor.h documents for Presenter/Facade/Traffic, one layer further down
+	 * (UGroundTraffic itself is a subobject of a subobject, neither exposed EditAnywhere).
+	 * FTrafficRules already IS the level-authored knob (ARoadNetworkActor::TrafficRules,
+	 * copied into the model every tick by UAirsideTraffic::Advance - see its header), so
+	 * living here instead makes both fields reachable for free.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0.001")) double MaxSubstepSeconds = 1.0 / 30.0;
+
+	/**
+	 * The most substeps one call will take, whatever the delta.
+	 *
+	 * A CEILING RATHER THAN A PROMISE. A frame that hitches badly - a level loading, a
+	 * breakpoint - would otherwise ask for hundreds of steps and hitch the next frame too,
+	 * which is the spiral that turns one stutter into a freeze. Past this the remaining time
+	 * is taken in one longer step: slightly wrong once beats compounding.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1")) int32 MaxSubsteps = 8;
+
 	double FootprintFor(ETraversalClass Class) const;
 	double GapFor(ETraversalClass Class) const;
 };
@@ -521,32 +554,11 @@ public:
 	 */
 	void Advance(double DeltaSeconds, const URoadNetwork* Network);
 
-	/**
-	 * The longest step the model will take in one go, in sim seconds.
-	 *
-	 * THE FRAME IS NOT THE STEP. UAirsideTraffic hands this the frame time multiplied by the
-	 * player's speed, so at x8 a 16 ms frame arrives as 133 ms of simulation - and an
-	 * aeroplane crossing 133 ms of ground in one jump can pass the waypoint it was turning
-	 * onto and be pulled back onto the line next frame. That is the rubber-banding reported
-	 * from play, and it appeared at x2 and got worse from there while x1 looked perfect,
-	 * which is exactly the signature of a step that scales with the multiplier.
-	 *
-	 * Substepping costs arbitration and motion passes in proportion to the speed multiplier,
-	 * which is the right place to spend: the player asked for more simulation per second.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.001"))
-	double MaxSubstepSeconds = 1.0 / 30.0;
-
-	/**
-	 * The most substeps one call will take, whatever the delta.
-	 *
-	 * A CEILING RATHER THAN A PROMISE. A frame that hitches badly - a level loading, a
-	 * breakpoint - would otherwise ask for hundreds of steps and hitch the next frame too,
-	 * which is the spiral that turns one stutter into a freeze. Past this the remaining time
-	 * is taken in one longer step: slightly wrong once beats compounding.
-	 */
-	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "1"))
-	int32 MaxSubsteps = 8;
+	// MaxSubstepSeconds AND MaxSubsteps MOVED TO FTrafficRules (#107 item 6): both were
+	// UPROPERTY(EditAnywhere) here, but this class is a Transient, non-instanced UObject one
+	// layer below ARoadNetworkActor and never exposed EditAnywhere itself, so neither figure
+	// could ever reach the Details panel - see FTrafficRules's own comment on the two. Read
+	// as Rules.MaxSubstepSeconds / Rules.MaxSubsteps now.
 
 	/** How many agents are currently under way or parked at their destination. */
 	int32 GetAgentCount() const { return Agents.Num(); }
@@ -742,7 +754,7 @@ private:
 	 */
 	void Arbitrate(const URoadNetwork& Network);
 
-	/** One bounded step. Advance splits a long frame into these - see MaxSubstepSeconds. */
+	/** One bounded step. Advance splits a long frame into these - see FTrafficRules::MaxSubstepSeconds. */
 	void AdvanceOnce(double DeltaSeconds, const URoadNetwork* Network);
 
 	// ClaimAhead's full header (the numbered sequence, the box-junction entry rule, the two
