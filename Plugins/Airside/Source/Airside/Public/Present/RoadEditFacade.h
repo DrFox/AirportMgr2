@@ -186,6 +186,14 @@ public:
 	void SetPurse(IBuildPurse* InPurse) { Purse = InPurse; }
 	virtual IBuildPurse* GetPurse() const override { return Purse; }
 
+	/**
+	 * What connecting FromIndex to a point would cost, at the profile a click would ACTUALLY
+	 * lay - see ResolveProfileForKind. The ghost's price, and the reason the tool does not
+	 * resolve the profile for itself.
+	 */
+	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+		int32 WidthIndex) const override;
+
 	/** True when there is no purse (design time) or the purse says the player can pay. */
 	bool CanAfford(const FBuildQuote& Quote) const;
 
@@ -208,6 +216,9 @@ public:
 	URoadEditHistory* HistoryForEdit();
 
 private:
+	/** The profile a connection of this kind and width would use. One answer, two callers. */
+	URoadProfile* ResolveProfileForKind(ERoadKind Kind, int32 WidthIndex) const;
+
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 

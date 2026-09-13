@@ -282,6 +282,53 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 	return Node.Index;
 }
 
+URoadProfile* URoadEditFacade::ResolveProfileForKind(ERoadKind Kind, int32 WidthIndex) const
+{
+	// EXTRACTED FROM ConnectNodes SO THE GHOST AND THE CLICK CANNOT DISAGREE. The preview has
+	// to price what a click would actually lay, and a tool resolving the profile for itself
+	// would be a second answer to "which profile is this?" - the exact shape of bug the
+	// registry and the action table exist to prevent elsewhere.
+	//
+	// A CHOSEN WIDTH WINS OVER THE DEFAULT, and only for a taxiway: WidthIndex names one of
+	// the content set's standard widths (the tool cycles it on key-again), INDEX_NONE means
+	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
+	// which ResolveProfile keeps the content set out of on purpose - so a player who never
+	// touches the cycle lays exactly the road this level was tuned for.
+	//
+	// A service road ignores the index outright: it has one authored cross-section, and an
+	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	ARoadNetworkActor& Owner = Actor();
+	URoadProfile* Chosen = nullptr;
+	if (Kind == ERoadKind::ServiceRoad)
+	{
+		Chosen = Owner.ResolveServiceRoadProfile();
+	}
+	else if (WidthIndex != INDEX_NONE)
+	{
+		Chosen = Owner.ResolveTaxiwayProfile(WidthIndex);
+	}
+	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
+	{
+		// No index, or an index the content set cannot answer. Either way the level's own
+		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
+		Chosen = Owner.ResolveProfile();
+	}
+	return Chosen;
+}
+
+FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+	int32 WidthIndex) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	const URoadProfile* Profile = ResolveProfileForKind(Kind, WidthIndex);
+	if (Network == nullptr || Profile == nullptr || !Network->GetNodes().IsValidIndex(FromIndex))
+	{
+		return FBuildQuote();
+	}
+	return BuildCost::ForSegment(*Profile,
+		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To));
+}
+
 bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
 {
 	if (FromIndex == ToIndex)
@@ -319,22 +366,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	//
 	// A service road ignores the index outright: it has one authored cross-section, and an
 	// index reaching it would lay a taxiway's width on a lane meant for vans.
-	URoadProfile* Chosen = nullptr;
-	if (Kind == ERoadKind::ServiceRoad)
-	{
-		Chosen = Owner.ResolveServiceRoadProfile();
-	}
-	else if (WidthIndex != INDEX_NONE)
-	{
-		Chosen = Owner.ResolveTaxiwayProfile(WidthIndex);
-	}
-	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
-	{
-		// No index, or an index the content set cannot answer. Either way the level's own
-		// tuning is the honest fallback here - unlike the service road below, a taxiway
-		// always has one.
-		Chosen = Owner.ResolveProfile();
-	}
+	URoadProfile* Chosen = ResolveProfileForKind(Kind, WidthIndex);
 	if (Chosen == nullptr && Kind == ERoadKind::ServiceRoad)
 	{
 		UE_LOG(LogRoadMesh, Warning,

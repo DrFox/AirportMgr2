@@ -6,6 +6,8 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Model/BuildPurse.h"
+#include "Tool/RoadDrawTool.h"
+#include "Tool/RoadBuildTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -305,6 +307,77 @@ bool FBuildPurseDragRevertsWhenBrokeTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("and it is back where the drag started, not left out at 200 m"),
 		Network->GetNodes()[B].Position.X, 1000.0, 1e-6);
+	return true;
+}
+
+namespace
+{
+	/** Records the labels a tool asked to have drawn, and with which style. */
+	struct FPricingSink : public IToolPreviewSink
+	{
+		TArray<FString> Labels;
+		TArray<EPreviewStyle> Styles;
+
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString& Text, EPreviewStyle Style) override
+		{
+			Labels.Add(Text);
+			Styles.Add(Style);
+		}
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGhostPricesTheRoadTest,
+	"Airside.Tool.GhostPricesTheRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGhostPricesTheRoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	PriceTheTaxiway(*World.Actor);
+
+	FRecordingPurse Purse;
+	World.Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const int32 A = World.Actor->PlaceNode(FVector2D(0.0, 0.0));
+
+	// A Node snap needs its HANDLE filled in as well as its kind - see TestTool::ContextAt,
+	// which sets only what every snap kind has in common. Without the handle the first click
+	// starts no chain and the tool stays idle, which draws no preview at all.
+	FToolContext Start = TestTool::ContextAt(*World.Actor, FVector2D(0.0, 0.0), ERoadSnapKind::Node);
+	Start.Snap.Node.Index = A;
+	Start.Snap.Node.Generation = World.Actor->GetNetwork()->GetNodes()[A].Generation;
+	Start.Limits.MinSegmentLength = 250.0;
+	Start.Limits.MinTurnDegrees = 25.0;
+
+	FRoadDrawTool Tool(ERoadKind::Taxiway);
+	Tool.OnClick(Start);
+
+	FToolContext Context = TestTool::ContextAt(*World.Actor, FVector2D(10000.0, 0.0));
+	Context.Limits.MinSegmentLength = 250.0;
+	Context.Limits.MinTurnDegrees = 25.0;
+
+	FPricingSink Affordable;
+	Tool.BuildPreview(Context, Affordable);
+
+	// THE PRICE BEFORE THE CLICK, and through Label rather than a new sink message: Label
+	// already exists, so the sink's contract - intent in road-plane coordinates naming a
+	// MEANING - is untouched.
+	TestTrue(TEXT("the ghost prices what the click would lay"), Affordable.Labels.Num() > 0);
+	TestTrue(TEXT("and while it is affordable the label is Pending, not Refused"),
+		Affordable.Styles.Contains(EPreviewStyle::Pending));
+
+	// EPreviewStyle::Refused is already defined as "something the gesture cannot do, with the
+	// reason", which is exactly what a road the player cannot pay for is.
+	Purse.Funds = 0.0;
+	FPricingSink Broke;
+	Tool.BuildPreview(Context, Broke);
+	TestTrue(TEXT("a road nobody can pay for is drawn Refused, so the player sees the refusal "
+		"before the click rather than after it"),
+		Broke.Styles.Contains(EPreviewStyle::Refused));
 	return true;
 }
 

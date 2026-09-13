@@ -244,6 +244,19 @@ public:
 	// see URoadEditFacade.cpp.
 	// =====================================================================================
 
+	/**
+	 * The build purse and the quote a tool prices its ghost with - forwarded to the facade,
+	 * like every other IRoadEditTarget member.
+	 *
+	 * FORWARDED AND NOT INHERITED FROM THE DEFAULT. FToolContext::Target is THIS ACTOR, so a
+	 * tool asking the interface gets the actor's answer; leaving these to IRoadEditTarget's
+	 * null default meant the ghost silently priced nothing, with the facade's own purse sitting
+	 * right there behind it.
+	 */
+	virtual IBuildPurse* GetPurse() const override;
+	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+		int32 WidthIndex) const override;
+
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 PlaceNode(FVector2D Where) override;
