@@ -189,15 +189,26 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	//   put the envelope a wheelbase - about 2.6 m - ahead of the aircraft inside it.
 	//
 	// WHAT THIS COSTS: parking one on a stand. A stand's origin is the nose gear stop mark,
-	// so composing the two needs the wheelbase, which the other types do not. Nothing does
-	// that yet; the day something does, that offset belongs here as a field and not as a
-	// constant at the call site.
+	// so composing the two needs the wheelbase, which the other types do not. THAT DAY
+	// ARRIVED on 2026-09-13, and the offset is a field exactly as this comment asked - see
+	// SteerAxleX below and FAirframe::SteerAxleX.
 	Type->Footprint.NoseX = 385.1;
 	Type->Footprint.TailX = -531.5;
 	Type->Footprint.Wingspan = PiperMeridianWingspan();   // 43 ft 0 in, published, and the import asserts it
 
 	// The mains are ON the wing, which is why the axle sits essentially under the spar.
 	Type->Footprint.WingX = 0.0;
+
+	// THE AXLES, MEASURED off SK_PiperMeridian's own rig rather than taken from the "about
+	// 2.6 m" this comment used to estimate: the reference pose puts wheel_f at x = 237.8
+	// and wheel_rl/wheel_rr at x = 0, so the wheelbase is 2.378 m and the mains really are
+	// on the origin, as this type's deviation claims. (Their z of 21.0 is the 0.210 m wheel
+	// radius MainWheelRadius carries, which is the same measurement arriving twice.)
+	//
+	// FixedAxleX is therefore zero and SteerAxleX is the wheelbase - the mirror image of a
+	// conforming airframe, and the whole content of this type's declared deviation.
+	Type->SteerAxleX = 237.8;
+	Type->FixedAxleX = 0.0;
 
 	// Tailplane is the one estimate here rather than a measurement - it is used only to
 	// draw, and nothing decides anything from it.
@@ -284,6 +295,20 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 	// aeroplane and is why FGroundRegime keeps the two apart rather than carrying one rate.
 	Ground.Taxi.Accel = 100.0;
 	Ground.Taxi.Decel = 200.0;
+
+	// STEERING, which is what actually governs this type's turns now that it carries axle
+	// figures (see BuildPiperMeridian) - MaxTurnRateDegPerSec above is left for the pivot
+	// law and the take-off line-up, and the rolling law never reads it.
+	//
+	// 50 degrees of lock on a 2.38 m wheelbase makes the tightest followable radius 3.1 m,
+	// which is well inside anything a taxiway or a stand lead-in asks of it.
+	Ground.MaxSteerDegrees = 50.0;
+
+	// 0.25 g, against the 0.15 an airliner's cabin will take: a light single on a quiet
+	// apron corners harder than a jet with a cabin full of standing passengers, and the
+	// figure is authored per type for exactly that reason. Same comfort argument as the
+	// accel and decel above - the tyres would take far more.
+	Ground.MaxLateralAccelUu = 245.0;
 
 	// TAKE-OFF, derived from two published figures rather than dialled in.
 	//

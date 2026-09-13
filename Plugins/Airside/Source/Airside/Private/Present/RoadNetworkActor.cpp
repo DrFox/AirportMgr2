@@ -164,7 +164,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	return Settings;
 }
 
-URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSettings(ERoadKind Kind)
+URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSettings(ERoadKind Kind, int32 WidthIndex)
 {
 	// Only what UpdateGhost/BuildGhostBuffers read - narrower than MakeSurfaceSettings so
 	// the ghost path never pays for SurfaceMaterial/ApronMaterial/MaterialSet, each a
@@ -181,7 +181,19 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	// then acts on. Null for a road with no profile is correct and needs no guard here: the
 	// presenter already draws nothing without half-widths, which is what the refusal in
 	// URoadEditFacade::ConnectNodes is about to say out loud.
-	Settings.Profile = Kind == ERoadKind::ServiceRoad ? ResolveServiceRoadProfile() : ResolveProfile();
+	// THE WIDTH THE CLICK WILL ACTUALLY LAY, cycled or default - the same resolution
+	// URoadEditFacade::ConnectNodes does, because a ghost that disagreed with it would be
+	// the lie IRoadEditTarget::UpdateGhost's own comment warns about.
+	URoadProfile* Ghost = nullptr;
+	if (Kind == ERoadKind::ServiceRoad)
+	{
+		Ghost = ResolveServiceRoadProfile();
+	}
+	else if (WidthIndex != INDEX_NONE)
+	{
+		Ghost = ResolveTaxiwayProfile(WidthIndex);
+	}
+	Settings.Profile = Ghost != nullptr || Kind == ERoadKind::ServiceRoad ? Ghost : ResolveProfile();
 	return Settings;
 }
 
@@ -387,6 +399,28 @@ URoadProfile* ARoadNetworkActor::ResolveServiceRoadProfile() const
 	return Content != nullptr ? Content->ServiceRoadProfile.LoadSynchronous() : nullptr;
 }
 
+int32 ARoadNetworkActor::GetTaxiwayProfileCount() const
+{
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->TaxiwayProfiles.Num() : 0;
+}
+
+URoadProfile* ARoadNetworkActor::ResolveTaxiwayProfile(int32 Index) const
+{
+	// THE CONTENT SET, unlike ResolveProfile below, and the two answer different questions:
+	// this is the standard set a player cycles through, that one is this level's own tuning.
+	// Keeping them apart is what lets the width cycle exist without the content set
+	// overriding an instance whose width was tuned in the Details panel - the exact defect
+	// ResolveProfile's own comment records.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	if (Content == nullptr || Content->TaxiwayProfiles.Num() == 0)
+	{
+		return nullptr;
+	}
+	const int32 Clamped = FMath::Clamp(Index, 0, Content->TaxiwayProfiles.Num() - 1);
+	return Content->TaxiwayProfiles[Clamped].LoadSynchronous();
+}
+
 URoadProfile* ARoadNetworkActor::ResolveProfile()
 {
 	// AUTHORED INPUT, READ AND NEVER WRITTEN. This briefly assigned Profile when it found it
@@ -502,7 +536,7 @@ double ARoadNetworkActor::GetApronSurfaceZ() const
 }
 
 void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& SnapResult, bool bValid,
-	ERoadKind Kind)
+	ERoadKind Kind, int32 WidthIndex)
 {
 	// Asked FIRST, before anything is resolved: a still drag calls this every frame with an
 	// unchanged FromNodeIndex/SnapResult, and the cache already knows that without a Resolve*
@@ -517,7 +551,8 @@ void ARoadNetworkActor::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& 
 		return;
 	}
 
-	Presenter->UpdateGhost(Network, FromNodeIndex, SnapResult, bValid, MakeGhostSurfaceSettings(Kind));
+	Presenter->UpdateGhost(Network, FromNodeIndex, SnapResult, bValid,
+		MakeGhostSurfaceSettings(Kind, WidthIndex));
 }
 
 bool ARoadNetworkActor::BuildGhostBuffers(
@@ -659,9 +694,10 @@ int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 	return Facade->PlaceNode(Where);
 }
 
-bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind)
+bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,
+	int32 WidthIndex)
 {
-	return Facade->ConnectNodes(FromIndex, ToIndex, Kind);
+	return Facade->ConnectNodes(FromIndex, ToIndex, Kind, WidthIndex);
 }
 
 int32 ARoadNetworkActor::ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex)

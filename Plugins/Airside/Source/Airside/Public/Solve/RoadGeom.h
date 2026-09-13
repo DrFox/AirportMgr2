@@ -36,6 +36,21 @@ namespace RoadGeom
 	 */
 	AIRSIDE_API double SlewAngle(double Current, double Target, double MaxStep);
 
+	/**
+	 * A point rigidly offset from At, along the body axis of something facing Heading.
+	 *
+	 * ONE FUNCTION RATHER THAN INLINE ARITHMETIC, because it is about to have a second
+	 * caller and then a third. FRouteFollower derives an airframe's ORIGIN from its steered
+	 * axle with it, and a towed unit - a tug on a bar, a baggage train - is this same
+	 * function applied again with the hitch as its lead point. Nothing in the game is
+	 * articulated yet; this is the shape that lets it be without a rewrite.
+	 *
+	 * Positive OffsetAlongBody is forward. Zero returns At unchanged and EXACTLY so: every
+	 * airframe with no axle figures takes that path and must not move by a float epsilon.
+	 */
+	AIRSIDE_API FVector2D TrailPoint(const FVector2D& At, double HeadingRadians,
+		double OffsetAlongBody);
+
 	/** Intersection of the two infinite lines. False if near-parallel. */
 	AIRSIDE_API bool LineIntersect(const FRay2D& A, const FRay2D& B, FVector2D& OutPoint);
 

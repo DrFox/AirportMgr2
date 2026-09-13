@@ -33,7 +33,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			[] { return MakeUnique<FSelectTool>(); } },
 
 		{ EKeys::One,   TEXT("Taxiway"),  LOCTEXT("Taxiway",   "Taxiway"),
-			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node."),
+			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node, drag a node to move it. The taxiway key pressed again cycles the width."),
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
 		{ EKeys::Two,   TEXT("Apron"),    LOCTEXT("Apron",     "Apron"),
 			LOCTEXT("ApronTooltip", "Draw a polygon of pavement; click the first corner again to close it."),

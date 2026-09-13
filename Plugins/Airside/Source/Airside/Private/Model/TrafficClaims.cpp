@@ -166,11 +166,23 @@ void FClaimPass::ReleaseForDeadPlan(FRoadAgent& Agent)
 	Agent.LastOverlaps.Reset();
 }
 
+double FClaimPass::CentreOf(const FRoadAgent& Agent)
+{
+	// ALONG THE ROUTE rather than along the body axis, and the approximation is deliberate:
+	// on a bend the two differ by well under a centimetre at these offsets, and the exact
+	// form would need the heading here - turning a distance into a pose, and this function
+	// into a second evaluator of where the agent is. See the guideline invariant.
+	return Agent.Follower.Travelled - Agent.Airframe.SteerAxleX + Agent.Airframe.BodyCentreX;
+}
+
 FClaimPass::FClaimWindow FClaimPass::WindowFor(const FRoadAgent& Agent) const
 {
 	const FRoutePlan& Plan = Agent.Follower.Plan;
 
-	const double T = Agent.Follower.Travelled;
+	// THE CENTRE, which is no longer Follower.Travelled - see CentreOf. It was, back when
+	// every mesh origin sat mid-fuselage; plane2's re-export about its nose gear made the
+	// two differ by 6.3 m and moved this window silently with it.
+	const double T = CentreOf(Agent);
 	const double F = Rules.FootprintFor(Agent.Class);
 	const double G = Rules.GapFor(Agent.Class);
 

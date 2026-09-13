@@ -224,6 +224,11 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		// THE CAP IS THE GEOMETRY, and it is arithmetic rather than a tuned number: a turn is
 		// v/R, so the fastest this radius can be taken at is MaxTurnRate times R. At 20 deg/s
 		// and 25 m that is 8.7 m/s, against a 10 m/s taxi speed.
+		//
+		// THIS FIXTURE HAS NO AXLE FIGURES, deliberately: it is the PIVOT law's test and
+		// must keep asserting the flat rate, which every service vehicle still steers on.
+		// An airframe WITH a wheelbase is capped by sqrt(a*R) instead and never consults
+		// MaxTurnRateDegPerSec at all - see Airside.Model.CornerSpeedIsLateralAccel.
 		const double Allowed = FMath::DegreesToRadians(Piper.MaxTurnRateDegPerSec) * Radius;
 		TestTrue(FString::Printf(
 			TEXT("and the turn holds it to MaxTurnRate x R = %.0f uu/s (fastest %.0f)"),

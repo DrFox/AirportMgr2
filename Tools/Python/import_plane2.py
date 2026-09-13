@@ -85,6 +85,61 @@ def joint_names():
     return names
 
 
+def gear_centres_uu():
+    """(nose gear, main gear) X in uu, measured off the .glb's own wheel meshes.
+
+    READ FROM THE FILE, like joint_names above and for the same reason: the export is the
+    authority on its own geometry, and a constant here would need re-typing every time the
+    model moved - which is exactly the edit that was missed the last time the origin changed.
+
+    glTF x is UE X for this export (the span lies on glTF z, see report_bounds), and a glTF
+    metre is 100 uu. The wheel MESH nodes are matched by exact name, so a renamed rig reports
+    a miss rather than quietly measuring the wrong part: 'nosewheel_steer' is a joint with no
+    mesh of its own and must not be mistaken for the wheel.
+    """
+    try:
+        with open(SOURCE, "rb") as handle:
+            handle.read(12)
+            length = struct.unpack("<I4s", handle.read(8))[0]
+            doc = json.loads(handle.read(length).decode("utf-8"))
+    except Exception as exc:
+        fail("could not read the gear from %s: %s" % (SOURCE, exc))
+        return None, None
+
+    accessors = doc.get("accessors", [])
+    meshes = doc.get("meshes", [])
+
+    def centre_x(mesh_index):
+        low = None
+        high = None
+        for primitive in meshes[mesh_index].get("primitives", []):
+            at = primitive.get("attributes", {}).get("POSITION")
+            if at is None or at >= len(accessors):
+                continue
+            accessor = accessors[at]
+            low = accessor["min"][0] if low is None else min(low, accessor["min"][0])
+            high = accessor["max"][0] if high is None else max(high, accessor["max"][0])
+        return None if low is None else (low + high) * 0.5 * 100.0
+
+    nose = None
+    mains = []
+    for node in doc.get("nodes", []):
+        index = node.get("mesh")
+        if index is None or index >= len(meshes):
+            continue
+        name = node.get("name", "")
+        if name == "nosewheel":
+            nose = centre_x(index)
+        elif name in ("wheel_L", "wheel_R"):
+            at = centre_x(index)
+            if at is not None:
+                mains.append(at)
+
+    if nose is None or not mains:
+        return None, None
+    return nose, sum(mains) / float(len(mains))
+
+
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -291,24 +346,59 @@ def report_bounds(mesh):
         say("NOTE span is on X (%.1f) and length on Y (%.1f) - set YAW to 90 and re-run"
             % (x, y))
 
-    # WHICH WAY IT FACES, not merely which axis it lies on. A 180-degree error keeps the
-    # span on Y and the length on X and passes every check above - it just taxis backwards.
-    # The nose is the +X reach: the nosewheel is the forward wheel in the export, and the
-    # derivation at YAW traces it from there to this axis.
-    nose = bounds.max.x
-    tail = -bounds.min.x
-    if nose > tail:
-        say("PASS nose reach %.1f exceeds tail reach %.1f, so it faces +X" % (nose, tail))
+    # WHICH WAY IT FACES, FROM THE GEAR rather than from the bounds.
+    #
+    # This was "the +X reach exceeds the -X reach", and that measured the ORIGIN at least as
+    # much as the facing. It passed only because the origin happened to sit mid-fuselage. The
+    # export now puts the origin ON THE NOSE GEAR - UAircraftType's documented local space,
+    # "origin at the NOSE GEAR, +X forward, +Y starboard" - so the airframe legitimately lies
+    # almost entirely aft, +167 against -1426, and the old test called a CORRECT model
+    # backwards. Which end is the front is a fact about the gear, not about the origin.
+    nose, main = gear_centres_uu()
+    if nose is None:
+        fail("could not find the wheel meshes in the export, so nothing here knows which way "
+             "it faces - check the node names against gear_centres_uu")
+    elif nose > main:
+        say("PASS nose gear %.1f uu is forward of the mains %.1f uu, so it faces +X"
+            % (nose, main))
     else:
-        fail("+X reach is %.1f and -X reach is %.1f - the airframe is backwards and would "
-             "taxi tail-first. Check YAW." % (nose, tail))
+        fail("nose gear is at %.1f uu and the mains at %.1f - the airframe is backwards and "
+             "would taxi tail-first. Check the export's final rotation." % (nose, main))
 
-    # Wheels on the ground is what lets a taxiing agent sit at Z = SurfaceZ with no lift.
+    # THE ORIGIN IS THE NOSE GEAR, and it is asserted here because everything downstream
+    # assumes it: ARoadAgentActor::SetPose puts this origin on the guideline, so the point
+    # the aircraft keeps on the painted line IS this point. With the origin 6.4 m aft of the
+    # nose gear - where this model had it until 2026-09-13 - the aeroplane taxis with its
+    # mid-fuselage on the centreline, which is what was reported from play.
+    #
+    # The Piper deviates from this deliberately (main-gear origin, see BuildPiperMeridian) and
+    # carries the offset as a field. A deviation nobody declared is a defect, so a NOTE rather
+    # than a pass is the honest report here.
+    if nose is not None and abs(nose) > 10.0:
+        say("NOTE the nose gear is %.1f uu from the origin, not on it - UAircraftType's local "
+            "space wants the origin AT the nose gear, and a type that deviates has to say so "
+            "in SteerAxleX" % nose)
+    elif nose is not None:
+        say("PASS the origin is the nose gear (%.1f uu), as UAircraftType's local space wants"
+            % nose)
+
+    # WHEELS ON THE GROUND, and this is a FAIL rather than the NOTE it used to be.
+    #
+    # Two things rest on z = 0 being the ground plane, and both break silently if it is not.
+    # ARoadAgentActor::SetMotion applies no lift to an airframe, so the aircraft floats or
+    # sinks by whatever this is; and the pitch pivot is taken at z = 0 on the assumption
+    # that it is the main gear's CONTACT PATCH, so a model exported a metre up pitches about
+    # a point a metre underground - which reads as the gear sinking through the runway
+    # during the flare, exactly the defect reported on 2026-09-13 from a different cause.
+    #
+    # Noting it was not enough: a NOTE in a log nobody greps is an assumption, not a check.
     if abs(bounds.min.z) > 10.0:
-        say("NOTE mesh bottom is at Z=%.1f rather than 0 - an agent would float or sink"
-            % bounds.min.z)
+        fail("mesh bottom is at Z=%.1f rather than 0. The agent would float or sink, and the "
+             "pitch pivot - taken at z=0 as the main gear's contact patch - would be that far "
+             "underground. Re-export with the wheels on the ground plane." % bounds.min.z)
     else:
-        say("PASS wheels are on the ground at Z=%.1f" % bounds.min.z)
+        say("PASS wheels are on the ground at Z=%.1f, so z=0 is the contact plane"
+            % bounds.min.z)
 
 
 def report_skeleton(skeletal_mesh):

@@ -81,8 +81,49 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	// Pitch is FRotator's FIRST argument and yaw its second, which is the opposite order to
 	// the way they are spoken of. Getting them the wrong way round yaws the aircraft by its
 	// climb attitude and pitches it by its heading - a Piper lying on its side, pointing north.
-	SetActorLocationAndRotation(
-		At, FRotator(Motion.PitchDegrees, FMath::RadiansToDegrees(Motion.Heading), 0.0));
+	const FRotator Rotation(Motion.PitchDegrees, FMath::RadiansToDegrees(Motion.Heading), 0.0);
+
+	// PITCHED ABOUT THE MAIN GEAR, not about the origin.
+	//
+	// SetActorLocationAndRotation rotates about the ACTOR ORIGIN, which was harmless while
+	// every airframe's origin sat mid-fuselage. plane2's origin is its NOSE GEAR - the
+	// local space UAircraftType documents - so a nose-up attitude about it swings everything
+	// aft downwards: 8 degrees of flare put the mains 63 uu under the tarmac, reported from
+	// play as the rear wheels pushing into the ground on landing.
+	//
+	// The correction holds the pivot still while the body pitches about it. Zero pivot is
+	// exactly zero correction, so an unmeasured airframe - every vehicle, both airliners -
+	// and the Piper, whose origin already IS its main-gear axle, are untouched by this.
+	//
+	// IN THE VIEW rather than in the model, because it is a fact about drawing a rigid body
+	// at an attitude, not about where the aircraft is: FAgentMotion::Position still means
+	// the origin, and the model still decides it alone.
+	//
+	// THE CONTACT PATCH, NOT THE HUB, which is why the pivot is a scalar X and this Z is a
+	// hard zero rather than anything read off the airframe. The main-gear BONE sits at the
+	// axle - on plane2 at z = 68.6, which is exactly the wheel's radius - and pitching about
+	// the hub would drag the tyre through the tarmac by that radius. An aeroplane rotates
+	// about where the rubber touches, one radius below.
+	//
+	// Zero IS the ground here because the export puts the wheels at z = 0 and the import
+	// fails if they are not - see import_plane2.py's ground check, and the comment above
+	// about the origin needing no lift. That assertion is what this line rests on.
+	//
+	// AGAINST THE YAWED PIVOT, NOT THE UNROTATED ONE, and this is the correction's whole
+	// subtlety. The pivot is a point on the BODY, so it turns with the heading whether the
+	// aircraft is pitched or not; only the PITCH is supposed to move it. Differencing
+	// against the raw offset instead made the correction non-zero at zero pitch - it
+	// displaced every agent sideways by up to twice the wheelbase depending on which way it
+	// was pointing, reported from play as tracking way off the centre line.
+	//
+	// So: where the pivot would be with this heading and no pitch, minus where the full
+	// rotation puts it. Identical rotations cancel exactly, so level flight and every
+	// taxiing aircraft get a correction of precisely zero.
+	const FVector Pivot(Motion.PitchPivotX, 0.0, 0.0);
+	const FRotator YawOnly(0.0, Rotation.Yaw, 0.0);
+	const FVector Correction = YawOnly.RotateVector(Pivot) - Rotation.RotateVector(Pivot);
+
+	SetActorLocationAndRotation(At + Correction, Rotation);
 
 	// KEPT, NOT CONSUMED, until the mesh is skeletal. The animation reads these - wheel rate
 	// is GroundSpeed over the wheel radius, the propeller turns while the engine does - and

@@ -87,7 +87,11 @@ public:
 	virtual const URoadNetwork* GetNetwork() const override;
 
 	virtual int32 PlaceNode(FVector2D Where) override;
-	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind) override;
+	virtual bool ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex) override;
+
+	/** Forwarded to the actor, which owns the content lookup - see IRoadEditTarget. */
+	virtual int32 GetTaxiwayProfileCount() const override;
+	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
 	using IRoadEditTarget::ConnectNodes;
 	virtual int32 ConnectGuidelines(int32 FromNodeIndex, int32 ToNodeIndex) override;
 	virtual bool PlaceRunway(FVector2D From, FVector2D To, URoadProfile* RunwayProfile, const FRunwayFacts& Facts) override;
@@ -130,7 +134,7 @@ public:
 	 * nothing would silently do the wrong thing if that ever changed.
 	 */
 	virtual void UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
-		ERoadKind Kind) override;
+		ERoadKind Kind, int32 WidthIndex) override;
 	using IRoadEditTarget::UpdateGhost;
 	virtual void HideGhost() override;
 	virtual void RebuildMesh() override;

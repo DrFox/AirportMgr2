@@ -84,6 +84,28 @@ struct AIRSIDE_API FRouteFollower
 	UPROPERTY() double Heading = 0.0;
 
 	/**
+	 * The steering angle this frame, degrees, signed the way Heading turns.
+	 *
+	 * STATE RATHER THAN AN OUT-PARAMETER, because Advance's signature is the one FAgentMotion
+	 * exists to keep from growing again: "SetPose used to take a position, a heading, a
+	 * surface height, an altitude and a pitch... Eight arguments in a row is a signature
+	 * nobody can call correctly."
+	 *
+	 * It is the INPUT to the motion rather than a description of it - the view animates the
+	 * nose gear from this exact number, so what the player sees the wheel doing is what
+	 * turned the aeroplane. Zero on a pivot-law airframe, which has no steered wheel to draw.
+	 */
+	UPROPERTY() double SteerDegrees = 0.0;
+
+	/**
+	 * The yaw actually applied this frame, degrees per second.
+	 *
+	 * Kept beside SteerDegrees so a reader can check the two agree - they are the same fact
+	 * stated as an angle and as a rate. Nothing outside a test reads it.
+	 */
+	UPROPERTY() double YawRateDegPerSec = 0.0;
+
+	/**
 	 * What this route permits, worked out once in Start. See FSpeedProfile.
 	 *
 	 * Held by value rather than rebuilt per frame because the route does not change: an

@@ -93,6 +93,17 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	default:                     Motion.GroundSpeed = Follower.Speed;  break;
 	}
 
+	// WHERE IT PITCHES ABOUT, which is a fact about the airframe rather than about this
+	// frame - carried here because FAgentMotion is everything the view needs and the view
+	// has no airframe to ask. See FAgentMotion::PitchPivotX.
+	Motion.PitchPivotX = Airframe.FixedAxleX;
+
+	// THE STEERING, from the follower WHATEVER THE PHASE - unlike GroundSpeed above. A
+	// landing rollout and a take-off roll are steered on the rudder with the nosewheel
+	// trailing straight, so the follower's zero is the right answer there rather than a
+	// missing one.
+	Motion.SteerAngleDegrees = Follower.SteerDegrees;
+
 	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
 	// turning propeller, which is what this used to get wrong.
 	Motion.bEngineRunning = bEngineRunning;

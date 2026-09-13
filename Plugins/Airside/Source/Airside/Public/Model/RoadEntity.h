@@ -130,6 +130,27 @@ struct AIRSIDE_API FAgentMotion
 	UPROPERTY() double PitchDegrees = 0.0;
 
 	/**
+	 * The point the airframe pitches ABOUT, local X, uu. The main gear.
+	 *
+	 * X ALONE, deliberately: the pivot is the CONTACT PATCH, on the ground directly below
+	 * the axle, and the axle's own height is discarded. A main-gear bone sits at the hub -
+	 * one wheel radius up, 68.6 uu on plane2 - and pitching about that would drag the tyre
+	 * through the tarmac. The view supplies the zero; see ARoadAgentActor::SetMotion.
+	 *
+	 * WITHOUT IT THE PIVOT IS THE ORIGIN, and that only looked right while origins sat
+	 * mid-fuselage. plane2's origin is its nose gear (UAircraftType's local space), so a
+	 * nose-up attitude about the origin levers everything aft of it into the ground - at 8
+	 * degrees of flare the mains ended up 63 uu under the tarmac, which is exactly how it
+	 * was reported from play.
+	 *
+	 * An aeroplane on the ground pitches about its MAIN GEAR, and in the air about a centre
+	 * of gravity that sits close to it, so the mains serve both. Zero - an unmeasured
+	 * airframe, or one whose origin already IS the mains, like the Piper - pitches about
+	 * the origin exactly as it always did.
+	 */
+	UPROPERTY() double PitchPivotX = 0.0;
+
+	/**
 	 * Speed over the ground, uu per second.
 	 *
 	 * DRIVES THE WHEELS ON THE GROUND ONLY (#107 item 8). It stays meaningful once airborne -
@@ -156,6 +177,19 @@ struct AIRSIDE_API FAgentMotion
 
 	/** Off the wheels. Stage 2's gear retraction hangs on this. */
 	UPROPERTY() bool bAirborne = false;
+
+	/**
+	 * The steered wheel's deflection, degrees, signed the way Heading turns.
+	 *
+	 * THE CONTROL INPUT, not a description of the motion: this is the angle the follower
+	 * steered with, and the yaw the aircraft took came out of it. An earlier design had the
+	 * view derive this from the yaw rate for the animation's sake, which would have been a
+	 * second model of the same thing - and the two would have drifted the first time either
+	 * was retuned.
+	 *
+	 * Zero on a pivot-steered vehicle, which has no steered wheel to draw.
+	 */
+	UPROPERTY() double SteerAngleDegrees = 0.0;
 };
 
 /**
@@ -352,6 +386,37 @@ struct AIRSIDE_API FGroundPerformance
 	 */
 	UPROPERTY(EditAnywhere) double MaxTurnRateDegPerSec = 10.0;
 
+	/**
+	 * The steering lock, degrees either side of straight ahead.
+	 *
+	 * READ ONLY BY THE ROLLING-STEER LAW - see FAirframe::HasAxles. Where there is a
+	 * wheelbase it REPLACES MaxTurnRateDegPerSec rather than capping it, and the difference
+	 * matters: the airliner's hand-tuned 8 deg/s binds at every ordinary bend (a 30 m turn
+	 * at 5 m/s needs 9.5), so keeping the old figure as a ceiling would defeat the geometry
+	 * it was standing in for. MaxTurnRateDegPerSec above says as much itself - it is "v/R at
+	 * the tightest turn the steering allows", which is this, once the wheelbase is known.
+	 *
+	 * 60 degrees is tiller range. Rudder-pedal steering is nearer 10 and is a different
+	 * manoeuvre, not what a taxi turn uses.
+	 */
+	UPROPERTY(EditAnywhere) double MaxSteerDegrees = 60.0;
+
+	/**
+	 * What a turn may pull sideways, uu/s^2. 147 is 0.15 g.
+	 *
+	 * THIS IS WHAT LIMITS CORNER SPEED once steering is geometric, and the reason is worth
+	 * stating because it replaces a yaw-rate cap that looked like physics and was not.
+	 * Required yaw is v/R, available yaw is v*sin(lock)/L - speed cancels, so whether a
+	 * corner can be FOLLOWED is purely geometric (R >= L/sin(lock)) and says nothing about
+	 * how fast it may be taken. What actually stops an aircraft rounding a 15 m bend at taxi
+	 * speed is tyre side load and the cabin, which is this.
+	 *
+	 * Authored per type rather than left to this default, for the reason UAirsideSettings
+	 * gives about the van's figures: this is where a type's performance is DECIDED, and a
+	 * reader must be able to see it without opening another header.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0")) double MaxLateralAccelUu = 147.0;
+
 	/** False when nothing was authored, so a caller can fall back rather than freeze an agent. */
 	bool IsSet() const
 	{
@@ -511,6 +576,51 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
+
+	/**
+	 * The STEERED axle, uu along local +X. Nose gear on an aircraft, front axle on a vehicle.
+	 *
+	 * ZERO MEANS THE ORIGIN IS THAT AXLE, which is UAircraftType's documented local space:
+	 * "origin at the NOSE GEAR, +X forward, +Y starboard". Non-zero is a DECLARED deviation,
+	 * and exactly one type declares it - see BuildPiperMeridian, whose own comment asked for
+	 * this field by name: "that offset belongs here as a field and not as a constant at the
+	 * call site".
+	 *
+	 * Named for the axle rather than the nose gear because vehicles carry this struct too,
+	 * and a truck has no nose gear.
+	 */
+	UPROPERTY(EditAnywhere) double SteerAxleX = 0.0;
+
+	/**
+	 * The FIXED axle, uu along local +X. Main gear, or a vehicle's rear axle. Negative on a
+	 * conforming airframe, since the mains sit aft of the nose gear.
+	 */
+	UPROPERTY(EditAnywhere) double FixedAxleX = 0.0;
+
+	/**
+	 * The body's plan centre, uu along local +X. Derived from the footprint in Airframe().
+	 *
+	 * NOT THE ORIGIN, and that is why it exists. The traffic model's claim windows are
+	 * measured from the agent's centre - see FClaimPass::FClaimWindow, "the agent's CENTRE,
+	 * never its nose" - and used Follower.Travelled for it. That was roughly true while mesh
+	 * origins sat mid-fuselage, and became wrong by half a length the moment plane2 was
+	 * re-exported about its nose gear.
+	 */
+	UPROPERTY(EditAnywhere) double BodyCentreX = 0.0;
+
+	/**
+	 * Nose gear to main gear, always positive, zero when unmeasured.
+	 *
+	 * THE LAW SELECTOR, through HasAxles below. An airframe with a wheelbase steers
+	 * geometrically; one without keeps the flat MaxTurnRateDegPerSec. That is not a
+	 * migration crutch - a van is authored at 90 deg/s and would need 83 degrees of lock at
+	 * its creep speed, so it is pivoting rather than steering, and a bicycle model would
+	 * cripple every service vehicle on the airport.
+	 */
+	double Wheelbase() const { return FMath::Abs(SteerAxleX - FixedAxleX); }
+
+	/** True when this airframe steers on geometry rather than on a flat yaw rate. */
+	bool HasAxles() const { return Wheelbase() > KINDA_SMALL_NUMBER; }
 
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;

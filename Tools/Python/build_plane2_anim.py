@@ -71,6 +71,17 @@ def bone_plan():
             continue
         if "prop" in lowered:
             plan.append((name, "PropAngleDegrees"))
+        elif "steer" in lowered:
+            # BEFORE the wheel rule, because 'nosewheel_steer' matches both and the wheel
+            # rule would tell someone to wire a STEERING bone to the ROLL angle - which
+            # spins the nose gear about the strut and looks like a broken castor.
+            #
+            # The variable does not exist yet: SteerAngleDegrees arrives with the nose-gear
+            # steering work (docs/superpowers/specs/2026-09-13-nose-gear-steering-design.md).
+            # Named here anyway so the plan says what the bone is FOR rather than calling a
+            # correctly-rigged joint unrecognised.
+            plan.append((name, "SteerAngleDegrees  (NOT YET IN UAirsideAgentAnim - see the "
+                               "nose-gear steering spec; leave this bone unwired until it is)"))
         elif "wheel" in lowered:
             plan.append((name, "WheelAngleDegrees"))
         else:

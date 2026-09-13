@@ -36,6 +36,25 @@ LANE_WIDTH = 600.0
 KERB_WIDTH = 60.0
 FILLET_RADIUS = 500.0
 
+# THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning
+# UAirsideContent::RunwayProfiles gives for its own set: a taxiway conforms to one of these
+# or it is not a taxiway, and a tool that picks from a list makes that true by construction
+# rather than by validation.
+#
+# THE FILLET SCALES WITH THE WIDTH rather than sitting at one figure for all five. A junction
+# between two 25 m taxiways that turned on the same radius as one between two 10.5 m ones
+# would pave a corner the wider aircraft cannot use - and the corner radius is what decides
+# whether an aircraft can take the turn at all (FSpeedProfile: R >= L/sin(lock)). Two thirds
+# of the width is the ratio the standard 23 m taxiway already uses at its 1500 uu fillet.
+TAXIWAY_WIDTHS = [
+    ("B", 1050.0),
+    ("C", 1500.0),
+    ("D", 1800.0),
+    ("E", 2300.0),   # the project's standard, and URoadProfile::StandardTaxiwayWidth
+    ("F", 2500.0),
+]
+TAXIWAY_FILLET_RATIO = 2.0 / 3.0
+
 
 def replace_asset(name, asset_class, factory):
     """Delete any existing asset of this name and create a fresh one."""
@@ -92,6 +111,43 @@ def build_service_road():
     return profile
 
 
+def build_taxiways():
+    """One asset per standard width, narrowest first - the order the tool cycles in."""
+    built = []
+    for letter, width in TAXIWAY_WIDTHS:
+        name = "DA_RoadProfile_Taxiway_%s" % letter
+        profile = replace_asset(name, unreal.RoadProfile, data_asset_factory(unreal.RoadProfile))
+        if profile is None:
+            continue
+
+        fillet = width * TAXIWAY_FILLET_RATIO
+        unreal.RoadProfile.fill(profile, width, fillet)
+        unreal.EditorAssetLibrary.save_asset("%s/%s" % (ASSET_DIR, name))
+
+        unreal.log("MARKER: %s built, %.1f m wide, %.1f m fillet" % (
+            name, width / 100.0, fillet / 100.0))
+        built.append(profile)
+    return built
+
+
+def wire_taxiways_into_content(profiles):
+    """Point the content set's TaxiwayProfiles at them, in width order.
+
+    NOT the actor's own Profile, which is per-instance tuning the content set has no
+    business in - see ARoadNetworkActor::ResolveProfile. This is the standard set the width
+    cycle offers, and a level that never uses the cycle is untouched by it.
+    """
+    content = unreal.EditorAssetLibrary.load_asset(CONTENT_SET)
+    if content is None:
+        unreal.log_error("MARKER: %s not found - nothing to wire the taxiways into." % CONTENT_SET)
+        return
+
+    content.set_editor_property("taxiway_profiles", profiles)
+    unreal.EditorAssetLibrary.save_asset(CONTENT_SET)
+    unreal.log("MARKER: %s.TaxiwayProfiles -> %d profile(s)" % (
+        CONTENT_SET, len(content.get_editor_property("taxiway_profiles"))))
+
+
 def wire_into_content(profile):
     """Point the content set's ServiceRoadProfile at it.
 
@@ -115,3 +171,7 @@ def wire_into_content(profile):
 road = build_service_road()
 if road is not None:
     wire_into_content(road)
+
+taxiways = build_taxiways()
+if taxiways:
+    wire_taxiways_into_content(taxiways)

@@ -18,7 +18,7 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
-	Profile.Build(Plan.Polyline, InAirframe.Ground);
+	Profile.Build(Plan.Polyline, InAirframe);
 
 	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
 	// on the first frame is the same defect as the corner this class was just taught about
@@ -66,6 +66,15 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// The stop point in route distance, fixed BEFORE the move: StopWithin was measured from
 	// where the agent was when the arbiter looked, and re-measuring it after moving would
 	// let the agent creep past it one frame at a time.
+	//
+	// NOT CONVERTED for the steered axle, and that is worth stating because the obvious
+	// thing to do here is wrong. Travelled measures the STEERED axle while the claim pass
+	// measures its windows from the BODY CENTRE (FClaimPass::CentreOf), so it looks as
+	// though the two frames must be reconciled. They reconcile themselves: StopWithinFor
+	// returns a distance RELATIVE to the agent's own route position, this adds it to that
+	// same agent's Travelled, and the offset between the two points appears on both sides
+	// and cancels. Adding SteerAxleX here double-counts it - it parked a deviating airframe
+	// a wheelbase short, which Airside.Model.AuthoredStopPointsDoNotMove caught.
 	const double StopAt = FMath::Min(Plan.Length, Travelled + FMath::Max(0.0, StopWithin));
 
 	// Clamped rather than allowed to run on, so a long frame - a hitch, or a breakpoint -
@@ -87,18 +96,71 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 
 	const double Error = FMath::UnwindRadians(LineHeading - Heading);
 
+	// HOW FAR THE NOSE MAY COME ROUND THIS FRAME, and there are two laws because there are
+	// two kinds of vehicle on an airport - see FAirframe::HasAxles.
+	//
+	// ROLLING-STEER is the kinematic bicycle model, and the change is smaller than it
+	// sounds because the steering angle was already being computed here: Error IS the angle
+	// between the body axis and the direction the steered axle is being asked to travel.
+	// Only the limit and what it yields are new.
+	//
+	//     d    = clamp(Error, +/- lock)
+	//     Step = v * sin(d) / L * dt
+	//
+	// sin rather than tan because Speed is the STEERED axle's speed along the line - that
+	// is what Travelled measures. The rear-axle form of the same model would overstate the
+	// yaw by 1/cos(d): invisible at small angles, double at full lock.
+	//
+	// No lookahead and no gain to tune, which is why this is not a pursuit controller with
+	// the usual oscillation: the steered axle is CONSTRAINED to the line rather than
+	// chasing it, so there is no lateral error to feed back on.
+	//
+	// PIVOT keeps the flat rate, permanently rather than pending measurement. A van is
+	// authored at 90 deg/s with the note "a van CAN pivot"; at its 0.5 m/s creep that needs
+	// 83 degrees of lock, so it is not steering at all and a geometric law would cripple it.
+	const double Lock = FMath::DegreesToRadians(FMath::Max(0.0, Ground.MaxSteerDegrees));
+
+	double MaxStep = 0.0;
+	if (InAirframe.HasAxles())
+	{
+		const double Steer = FMath::Clamp(Error, -Lock, Lock);
+		SteerDegrees = FMath::RadiansToDegrees(Steer);
+		MaxStep = FMath::Abs(Speed * FMath::Sin(Steer) / InAirframe.Wheelbase()) * DeltaSeconds;
+	}
+	else
+	{
+		// No steered wheel, so the view must not draw one turning.
+		SteerDegrees = 0.0;
+		MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
+	}
+
 	// Unwound first, so a turn across the +/-PI seam is taken the short way round rather
 	// than very nearly all the way about. Step kept apart from the slew itself (RoadGeom::
 	// SlewAngle) because Crab below needs the exact clamped step, not just the new heading.
-	const double MaxStep = FMath::DegreesToRadians(Ground.MaxTurnRateDegPerSec) * DeltaSeconds;
 	const double Step = FMath::Clamp(Error, -MaxStep, MaxStep);
 	Heading = RoadGeom::SlewAngle(Heading, LineHeading, MaxStep);
+	YawRateDegPerSec = DeltaSeconds > 0.0
+		? FMath::RadiansToDegrees(Step) / DeltaSeconds
+		: 0.0;
 
-	// WHAT COULD NOT BE TAKEN OUT THIS FRAME, which is the crab the player is now looking
-	// at. Measured after the slew rather than before it: an airframe that CAN make the turn
-	// has no reason to slow for it, and taking the pre-slew error instead would have shaved
-	// a few percent off the speed of every agent on every gentle bend for nothing.
-	const double Crab = FMath::RadiansToDegrees(FMath::Abs(Error - Step));
+	// WHAT COULD NOT BE TAKEN OUT, which is the crab the player is now looking at - and the
+	// two laws disagree about what that means, which is the subtlety that cost a test run.
+	//
+	// PIVOT: what is left after this frame's slew. Measured after the slew rather than
+	// before it - an airframe that CAN make the turn has no reason to slow for it, and
+	// taking the pre-slew error would have shaved a few percent off every agent on every
+	// gentle bend for nothing.
+	//
+	// ROLLING-STEER: what is left after FULL LOCK, not after one frame's yaw. A steady
+	// heading error IS steering under this law - a body following a radius R settles at
+	// asin(L/R), 8.7 degrees on an ordinary taxiway bend - so measuring the crab the pivot
+	// way reads correct steering as a failure to keep up and crawls through every corner at
+	// a seventh of the speed. What genuinely cannot be tracked is only the error the lock
+	// itself cannot absorb, and on a corner too tight for the lock that is exactly what
+	// grows - so the crab term still does its job where it should.
+	const double Crab = InAirframe.HasAxles()
+		? FMath::RadiansToDegrees(FMath::Max(0.0, FMath::Abs(Error) - Lock))
+		: FMath::RadiansToDegrees(FMath::Abs(Error - Step));
 
 	// TWO THINGS DECIDE THE TARGET SPEED, and they have different jobs.
 	//
@@ -132,6 +194,12 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 		? FMath::Min(Target, Speed + Ground.Taxi.Accel * DeltaSeconds)
 		: FMath::Max(Target, Speed - Ground.Taxi.Decel * DeltaSeconds);
 
+	// WHAT THE CALLER GETS IS THE ORIGIN, unchanged in meaning from before this law existed:
+	// ARoadAgentActor::SetPose puts it on the ground, stands compose against it, and claims
+	// derive the body centre from it. The STEERED AXLE is what rides the line, and on every
+	// conforming airframe those are the same point - TrailPoint then returns OutPosition
+	// untouched rather than nudging it by a rounding error.
+	OutPosition = RoadGeom::TrailPoint(OutPosition, Heading, -InAirframe.SteerAxleX);
 	OutHeading = Heading;
 	return true;
 }
@@ -140,7 +208,7 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 {
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
-	Profile.Build(Plan.Polyline, InAirframe.Ground);
+	Profile.Build(Plan.Polyline, InAirframe);
 }
 
 bool FRouteFollower::HasArrived() const

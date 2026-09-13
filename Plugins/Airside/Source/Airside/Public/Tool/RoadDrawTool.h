@@ -27,6 +27,16 @@ struct AIRSIDE_API IRoadDrawState
 
 	/** The node a segment would run from, or INDEX_NONE. Read by the ghost. */
 	virtual int32 GetPendingNode() const { return INDEX_NONE; }
+
+	/**
+	 * Which standard taxiway width this state's next click lays, INDEX_NONE for the
+	 * level's default. See FRoadDrawTool::WidthIndex, which owns the choice.
+	 *
+	 * ON THE BASE, unlike Kind, and the difference is that this one CHANGES: cycling the
+	 * width mid-chain has to reach the part-drawn state, which the tool can only do
+	 * through this pointer. Kind is fixed at construction and never needs reaching.
+	 */
+	int32 WidthIndex = INDEX_NONE;
 };
 
 /** Nothing part-drawn. A click puts down the start of a road. */
@@ -35,7 +45,8 @@ class AIRSIDE_API FRoadIdleState : public IRoadDrawState
 public:
 	/** Kind is carried by the STATE as well as by the tool because a state builds its own
 	 *  successor, and the successor must lay the same cross-section this one started. */
-	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway) : Kind(InKind) {}
+	explicit FRoadIdleState(ERoadKind InKind = ERoadKind::Taxiway, int32 InWidthIndex = INDEX_NONE)
+		: Kind(InKind) { WidthIndex = InWidthIndex; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
@@ -55,8 +66,9 @@ private:
 class AIRSIDE_API FRoadChainingState : public IRoadDrawState
 {
 public:
-	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway)
-		: From(InFrom), bCreated(bInCreated), Kind(InKind) {}
+	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway,
+		int32 InWidthIndex = INDEX_NONE)
+		: From(InFrom), bCreated(bInCreated), Kind(InKind) { WidthIndex = InWidthIndex; }
 
 	virtual TUniquePtr<IRoadDrawState> OnClick(const FToolContext& Context) override;
 	virtual TUniquePtr<IRoadDrawState> OnCancel(const FToolContext& Context) override;
@@ -70,6 +82,7 @@ private:
 
 	/** See FRoadIdleState::Kind. */
 	ERoadKind Kind = ERoadKind::Taxiway;
+
 };
 
 /**
@@ -110,6 +123,13 @@ public:
 	/** The node a segment would run from, or INDEX_NONE. For tests and the ghost. */
 	int32 GetPendingNode() const;
 
+	/** Which standard width the next click lays, or INDEX_NONE for the level's default. */
+	int32 GetWidthIndex() const { return WidthIndex; }
+
+	/** Selecting this tool while it is already active cycles the taxiway width - the same
+	 *  gesture FRunwayTool::OnReselect gives runways. */
+	virtual void OnReselect(const FToolContext& Context) override;
+
 private:
 	/** Ctrl+click: remove whatever the snap chain resolved. */
 	void Remove(const FToolContext& Context);
@@ -125,4 +145,21 @@ private:
 	/** Which cross-section this tool lays. Fixed at construction by the registry entry that
 	 *  made it - a tool is picked, never transitioned into, so this never changes. */
 	ERoadKind Kind = ERoadKind::Taxiway;
+
+	/**
+	 * Which standard taxiway width the next click lays, or INDEX_NONE for the level's own
+	 * default.
+	 *
+	 * ON THE TOOL, not on FToolContext, for the reason ERoadKind gives about itself: it is
+	 * a fact about the TOOL the player selected rather than about the gesture, and a
+	 * context field would let two tools disagree about it.
+	 *
+	 * STARTS UNSET so a player who never presses the key again lays exactly the road this
+	 * level was tuned for - see ARoadNetworkActor::ResolveProfile, whose comment records
+	 * what happened the last time a default was quietly overridden.
+	 *
+	 * A SERVICE ROAD NEVER SETS IT: that kind has one authored cross-section, so the cycle
+	 * refuses rather than laying a taxiway's width on a lane meant for vans.
+	 */
+	int32 WidthIndex = INDEX_NONE;
 };
