@@ -127,4 +127,32 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFeeLeverIsInTheOneListTest,
+	"AirportMgr.Actions.FeeLeverIsInTheOneList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFeeLeverIsInTheOneListTest::RunTest(const FString& Parameters)
+{
+	// THROUGH BuildActions AND NOT BESIDE IT. The bar, the key bindings and the inspector all
+	// read this one table, so a fee button added straight to the widget would exist on the bar
+	// and nowhere else - the "lists that must agree" failure this codebase has shipped three
+	// times. This test is what makes that a rule rather than an intention.
+	const FBuildAction* Up = FindAction(FName(TEXT("game.feeup")));
+	const FBuildAction* Down = FindAction(FName(TEXT("game.feedown")));
+
+	if (!TestNotNull(TEXT("the fee can be raised from the one action list"), Up)) { return false; }
+	if (!TestNotNull(TEXT("and lowered from it"), Down)) { return false; }
+
+	TestEqual(TEXT("both sit in the Game section, beside save and load"),
+		Up->Section, EActionSection::Game);
+	TestEqual(TEXT("and so does the other"), Down->Section, EActionSection::Game);
+
+	// NO KEYS, deliberately: a mis-hit that silently repriced every future offer is worse than
+	// a click that has to be aimed at.
+	TestFalse(TEXT("raising the fee has no key binding"), Up->Key.IsValid());
+	TestFalse(TEXT("nor does lowering it"), Down->Key.IsValid());
+	return true;
+}
+
 #endif

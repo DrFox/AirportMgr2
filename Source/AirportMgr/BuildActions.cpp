@@ -112,6 +112,19 @@ namespace
 			[](ARoadBuildController& C) { C.QuickSave(); }, Never, HasRuntime));
 		Out.Add(Make(TEXT("game.load"), EActionSection::Game, LOCTEXT("Load", "Load"), EKeys::L, false,
 			[](ARoadBuildController& C) { C.QuickLoad(); }, Never, HasRuntime));
+
+		// THE FEE LEVER, and it goes THROUGH THIS TABLE rather than beside it. BuildActions is
+		// already the one list the bar, the key bindings and the inspector all read, and a pair
+		// of hand-added buttons next to the generated ones is this codebase's named recurring
+		// bug - see CLAUDE.md, "Check where a list is CONSUMED".
+		//
+		// No keys: a mis-hit that silently repriced every future offer is worse than a click.
+		Out.Add(Make(TEXT("game.feedown"), EActionSection::Game, LOCTEXT("FeeDown", "Fee -"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.StepLandingFee(-1); }, Never, HasRuntime));
+		Out.Add(Make(TEXT("game.feeup"), EActionSection::Game, LOCTEXT("FeeUp", "Fee +"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.StepLandingFee(+1); }, Never, HasRuntime));
 		return Out;
 	}
 }

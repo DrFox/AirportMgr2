@@ -14,6 +14,8 @@
 #include "Components/VerticalBoxSlot.h"
 #include "Model/OpsEvents.h"
 #include "Model/SimClock.h"
+#include "Model/Ledger.h"
+#include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
@@ -232,14 +234,27 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		}
 	}
 
-	// RESERVED, AND DELIBERATELY EMPTY. UScenario::StartingBalance is authored but nothing
-	// consumes it until the ledger arrives in M3 (OpsRuntime.cpp:123), so a readout here
-	// would show a number that never changes - worse than showing none. The slot holds the
-	// space so adding it later does not shove everything else along the strip.
+	// THE SLOT THAT WAS RESERVED. It held a sized USpacer while UScenario::StartingBalance was
+	// authored and consumed by nobody; the spacer's comment said a readout would wait for the
+	// ledger, and this is it. The Fill spacer STAYS, pushing the balance to the right-hand end
+	// of the strip - it was always doing two jobs, and only one of them has been taken over.
 	if (UHorizontalBox* StatusBox = Cast<UHorizontalBox>(StatusRow))
 	{
-		USpacer* Ledger = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("LedgerSlot"));
-		StatusBox->AddChildToHorizontalBox(Ledger)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		USpacer* Gap = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("LedgerSlot"));
+		StatusBox->AddChildToHorizontalBox(Gap)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+
+		if (BalanceText == nullptr)
+		{
+			BalanceText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(),
+				TEXT("BalanceText"));
+			// THE CLOCK'S ROLE, not Label: the balance is the other number the player watches
+			// without looking for it, and a smaller one beside the clock would read as a
+			// caption rather than as a readout.
+			Style->ApplyText(*BalanceText, EUITextRole::Clock, Style->Text);
+			UHorizontalBoxSlot* MoneySlot = StatusBox->AddChildToHorizontalBox(BalanceText);
+			MoneySlot->SetPadding(FMargin(0.0f, 0.0f, 14.0f, 0.0f));
+			MoneySlot->SetVerticalAlignment(VAlign_Center);
+		}
 	}
 }
 
@@ -351,6 +366,7 @@ void UBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	RefreshState();
 	RefreshClock();
+	RefreshBalance();
 }
 
 void UBuildBarWidget::RefreshState()
@@ -406,6 +422,39 @@ void UBuildBarWidget::RefreshClock()
 	ClockText->SetText(FText::FromString(FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
 		Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
 		Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""))));
+}
+
+void UBuildBarWidget::RefreshBalance()
+{
+	if (BalanceText == nullptr)
+	{
+		return;
+	}
+
+	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	const ULedger* Ledger = Runtime != nullptr ? Runtime->GetLedger() : nullptr;
+	const UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
+	if (Ledger == nullptr || Pricing == nullptr)
+	{
+		// SAME SHAPE AS RefreshClock's "no clock": an empty readout would look like a balance
+		// of nothing, which is a very different thing from no game running.
+		BalanceText->SetText(FText::FromString(TEXT("no ledger")));
+		return;
+	}
+
+	// THE FEE BESIDE THE MONEY, because the lever only means anything next to what it earns -
+	// a percentage on its own tells the player nothing about whether to move it.
+	const FText Balance = Pricing->Format(Ledger->Balance());
+	BalanceText->SetText(FText::FromString(FString::Printf(TEXT("%s   fee %.0f%%"),
+		*Balance.ToString(), Pricing->LandingFeeMultiplier * 100.0)));
+
+	// RED BELOW ZERO, through the style's semantic slot rather than a literal colour - see
+	// UUIStyle. A negative balance locks placement, so it has to be visible without reading.
+	if (const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle())
+	{
+		BalanceText->SetColorAndOpacity(FSlateColor(
+			Ledger->Balance() < 0.0 ? Style->Warning : Style->Text));
+	}
 }
 
 int32 UBuildBarWidget::ButtonCountForTest(EActionSection Section) const
