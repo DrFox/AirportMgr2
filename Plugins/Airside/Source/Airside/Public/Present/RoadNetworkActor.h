@@ -948,9 +948,6 @@ public:
 	 */
 	int32 RebuildCountForTest() const { return RebuildCount; }
 
-	/** Agents alive right now, for Airside.Present.ArrivalDispatch. Forwards to Traffic. */
-	int32 AgentCountForTest() const;
-
 	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
 	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */
 	EAgentPhase LastAgentPhaseForTest() const;
