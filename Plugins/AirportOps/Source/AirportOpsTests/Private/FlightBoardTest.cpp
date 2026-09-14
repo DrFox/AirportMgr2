@@ -141,34 +141,34 @@ bool FFlightBoardFollowsTheAgentTest::RunTest(const FString& Parameters)
 	Flight->Phase = EFlightPhase::Landing;
 	Board->AddOffer(*Clock, Flight);
 
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Arriving, EAgentPhase::Taxiing);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Arriving, EAgentPhase::Taxiing);
 	TestEqual(TEXT("taxiing before the stand is TaxiIn"), Flight->Phase, EFlightPhase::TaxiIn);
 
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Parked);
 	TestEqual(TEXT("parked is the turnaround"), Flight->Phase, EFlightPhase::Turnaround);
 
 	// THE REAL SEQUENCE NOW GOES THROUGH THE MANOEUVRE. An aeroplane is pushed off its stand
 	// before it taxis out, so the board has to show that rather than jumping from Turnaround
 	// to TaxiOut - and this step is also what makes the NEXT assertion mean something.
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Parked, EAgentPhase::Manoeuvring);
 	TestEqual(TEXT("coming off the stand is the manoeuvre"),
 		Flight->Phase, EFlightPhase::Manoeuvring);
 
 	// THE POINT OF THE TEST: the same agent phase, the other answer. Taxiing is the agent's
 	// phase both into the stand and out of it, and only the flight's own progress tells them
 	// apart - which is why EFlightPhase's declaration order is load-bearing.
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Manoeuvring, EAgentPhase::Taxiing);
 	TestEqual(TEXT("taxiing after the turnaround is TaxiOut"), Flight->Phase, EFlightPhase::TaxiOut);
 
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Taxiing, EAgentPhase::Departing);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Taxiing, EAgentPhase::Departing);
 	TestEqual(TEXT("departing"), Flight->Phase, EFlightPhase::Departing);
 
-	Board->OnAgentPhase(*Traffic, *Net, 5, EAgentPhase::Departing, EAgentPhase::Gone);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 5, EAgentPhase::Departing, EAgentPhase::Gone);
 	TestEqual(TEXT("gone is departed"), Flight->Phase, EFlightPhase::Departed);
 	TestEqual(TEXT("and the agent handle is given back"), Flight->AgentId, INDEX_NONE);
 
 	// An agent nobody owns - a fuel truck - must move no flight at all.
-	Board->OnAgentPhase(*Traffic, *Net, 99, EAgentPhase::Taxiing, EAgentPhase::Parked);
+	Board->OnAgentPhase(*Traffic, *Net, *Clock, 99, EAgentPhase::Taxiing, EAgentPhase::Parked);
 	TestEqual(TEXT("a truck's phase change moves no flight"), Flight->Phase, EFlightPhase::Departed);
 	return true;
 }

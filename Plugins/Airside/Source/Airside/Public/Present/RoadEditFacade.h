@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/BuildPurse.h"
 #include "Tool/RoadEditTarget.h"
 #include "RoadEditFacade.generated.h"
 
@@ -9,6 +10,7 @@ class URoadNetwork;
 class URoadEditHistory;
 class UGroundTraffic;
 class FRoadEditScope;
+class IBuildPurse;
 
 /**
  * Every graph edit, undo, and query the build tools drive - split out of ARoadNetworkActor
@@ -171,6 +173,30 @@ public:
 	 */
 	void SetTrafficModelProvider(TFunction<const UGroundTraffic*()> Provider) { TrafficModelProvider = MoveTemp(Provider); }
 
+	// --- Money ---------------------------------------------------------------------------
+
+	/**
+	 * Where the money for a build comes from, or NULL for free.
+	 *
+	 * A RAW POINTER, not a UPROPERTY: the purse is the ledger, which the ops runtime owns and
+	 * which outlives any edit, and this facade is Transient wiring re-made on every attach.
+	 * Null is the normal state at design time - URoadBuildEdMode and every tool test build for
+	 * nothing, and one test asserts they still can.
+	 */
+	void SetPurse(IBuildPurse* InPurse) { Purse = InPurse; }
+	virtual IBuildPurse* GetPurse() const override { return Purse; }
+
+	/**
+	 * What connecting FromIndex to a point would cost, at the profile a click would ACTUALLY
+	 * lay - see ResolveProfileForKind. The ghost's price, and the reason the tool does not
+	 * resolve the profile for itself.
+	 */
+	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+		int32 WidthIndex) const override;
+
+	/** True when there is no purse (design time) or the purse says the player can pay. */
+	bool CanAfford(const FBuildQuote& Quote) const;
+
 	// --- Undo ----------------------------------------------------------------------------
 
 	bool Undo();
@@ -190,6 +216,9 @@ public:
 	URoadEditHistory* HistoryForEdit();
 
 private:
+	/** The profile a connection of this kind and width would use. One answer, two callers. */
+	URoadProfile* ResolveProfileForKind(ERoadKind Kind, int32 WidthIndex) const;
+
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 
@@ -201,13 +230,53 @@ private:
 	void NotifyChanged();
 
 	/**
-	 * Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits an edit
-	 * cannot forget to notify - which is exactly how ten of these went silent before issue
-	 * #77 (see the class comment). Takes the scope by reference rather than being a method
-	 * ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not know
-	 * about this facade's OnChanged, or Tool/ would depend on Present/.
+	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits
+	 * an edit cannot forget to notify - which is exactly how ten of these went silent before
+	 * issue #77 (see the class comment). Takes the scope by reference rather than being a
+	 * method ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not
+	 * know about this facade's OnChanged, or Tool/ would depend on Present/.
+	 *
+	 * FOR AN EDIT THAT MOVES NO PAVEMENT - placing a bare node, naming a runway, splitting a
+	 * segment, unlinking a guideline. Anything that CREATES or DESTROYS surface must use
+	 * CommitPurchase or CommitDisposal below instead. Three doors rather than one because
+	 * there are three different things to do about money and a single door would have to be
+	 * told which anyway - but all three end here, so NotifyChanged still has exactly one call
+	 * site, which is what issue #77 was about.
 	 */
 	void CommitAndNotify(FRoadEditScope& Edit);
+
+	/**
+	 * Commit an edit that built something, and take the money for it.
+	 *
+	 * THE CHARGE HAPPENS AT COMMIT, BUT THE REFUSAL MUST HAPPEN BEFORE THE MUTATION. An
+	 * FRoadEditScope that is not committed discards its undo SNAPSHOT; it does NOT roll the
+	 * network back. So a caller that let the edit happen and then found it could not pay would
+	 * leave the segment built, unpaid for, and with no undo step for it. Every charged mutator
+	 * therefore calls CanAfford among its guards, before it opens the scope.
+	 *
+	 * The charge id is recorded on the pending undo snapshot before the scope's destructor
+	 * pushes it, which is what lets Undo reverse exactly what was taken.
+	 */
+	void CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote);
+
+	/** Commit an edit that tore something out, and credit its scrap value. See IBuildPurse::Credit. */
+	void CommitDisposal(FRoadEditScope& Edit, const FBuildQuote& Quote);
+
+	/** What the pavement a segment occupies is worth today, for a charge or a credit. */
+	FBuildQuote QuoteForSegment(int32 SegmentIndex) const;
+
+	/**
+	 * What every live segment on the network is worth today, summed.
+	 *
+	 * FOR THE DRAG, which is the one edit that changes how much pavement exists WITHOUT
+	 * creating or destroying a segment - see EndInteractiveEdit. Walking the whole graph twice
+	 * per drag (once at the start, once at the end) is cheap, and it is the only measure that
+	 * cannot miss a length change: a drag can move a node that six segments meet at.
+	 */
+	FBuildQuote QuoteForAllPavement() const;
+
+	/** What an apron outline is worth today, at the settings' rate. */
+	FBuildQuote QuoteForApron(TConstArrayView<FVector2D> Outline) const;
 
 	/**
 	 * Undo and Redo were the same six lines apart from which of URoadEditHistory's two
@@ -225,7 +294,13 @@ private:
 	 * is the one that knows how to turn its own index into its own handle type - and, for
 	 * DisconnectGuideline, checks its own extra derived-edge refusal first.
 	 */
-	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove);
+	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove,
+		const FBuildQuote& Quote = FBuildQuote());
+
+	IBuildPurse* Purse = nullptr;
+
+	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */
+	double PavementValueAtDragStart = 0.0;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.

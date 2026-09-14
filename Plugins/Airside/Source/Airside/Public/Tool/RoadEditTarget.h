@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/BuildPurse.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RoadEntity.h"
@@ -12,6 +13,7 @@
 #include "Tool/RoadSnap.h"
 
 class URoadNetwork;
+class IBuildPurse;
 class URoadProfile;
 class UGroundTraffic;
 class UEntityDefinition;
@@ -48,6 +50,27 @@ public:
 	 * mutation instead goes through a named method below that the facade can make undoable.
 	 */
 	virtual const URoadNetwork* GetNetwork() const = 0;
+
+	/**
+	 * Where the money for a build comes from, or null when building is free.
+	 *
+	 * ON THE TARGET so a TOOL can reach it through FToolContext::Target, the way it reaches
+	 * everything else - the ghost needs to price what it is about to build and grey itself out
+	 * when the player cannot pay. Default null rather than pure virtual: every existing
+	 * implementer builds for nothing and should keep compiling.
+	 */
+	virtual IBuildPurse* GetPurse() const { return nullptr; }
+
+	/**
+	 * What connecting FromIndex to a point would cost, at the profile a click would actually
+	 * lay. A free quote by default, which is what a target with no money answers.
+	 *
+	 * ON THE TARGET so the PREVIEW prices the same thing the click builds: a tool resolving
+	 * the profile for itself would be a second answer to "which profile is this?", and the
+	 * ghost would eventually quote one road while the click laid another.
+	 */
+	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+		int32 WidthIndex) const { return FBuildQuote(); }
 
 	/**
 	 * The agents, read-only, for a tool that asks about them (Select). Model/, so Tool/ may

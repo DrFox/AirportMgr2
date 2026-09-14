@@ -1,5 +1,8 @@
 #include "Model/FuelService.h"
 
+#include "Model/Ledger.h"
+#include "Model/Pricing.h"
+
 #include "AirportOpsLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
@@ -243,6 +246,23 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		Result.Why = EFuelRefusal::NoRoute;
 	}
 	return Result;
+}
+
+void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
+{
+	if (Ledger == nullptr || Pricing == nullptr)
+	{
+		return;
+	}
+
+	const double Fee = Pricing->FuelServiceFee(Airframe);
+	if (Fee <= 0.0)
+	{
+		return;
+	}
+
+	Ledger->Post(Now, ELedgerCategory::ServiceFee, Fee,
+		NSLOCTEXT("Ledger", "Fuelling", "Fuelling"));
 }
 
 void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -520,6 +540,14 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: aircraft %d fuelled at stand %d by truck %d"),
 				Demand.AircraftId, Demand.Stand.Index, Demand.TruckId);
+
+			// EARNED HERE AND NOWHERE ELSE. The aircraft's own airframe prices it, so a code F
+			// fuelling is worth more than a code A one for the same reason its landing is. An
+			// Unserviceable demand never reaches this branch, which IS the forfeit.
+			if (const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId))
+			{
+				PostServiceFee(Clock.Now(), Fuelled->Airframe);
+			}
 
 			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing
 			// else - see that member for why a home-bound truck cannot stay on a demand.

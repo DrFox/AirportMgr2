@@ -1,5 +1,7 @@
 #include "Tool/RoadDrawTool.h"
 
+#include "Model/BuildPurse.h"
+
 #include "AirsideLog.h"
 
 #include "Model/RoadNetwork.h"
@@ -175,6 +177,20 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			Sink.Label(Context.Snap.Position, RoadPlacement::Describe(Judgement), EPreviewStyle::Refused);
+		}
+		else if (const IBuildPurse* Purse = Context.Target->GetPurse())
+		{
+			// THE PRICE BEFORE THE CLICK. NO NEW SINK MESSAGE: Label already exists and
+			// EPreviewStyle::Refused already means "something the gesture cannot do, with the
+			// reason" - which is exactly what an unaffordable road is. The purse formats the
+			// money, so no currency symbol ever enters this plugin.
+			const FBuildQuote Quote = Context.Target->QuoteForConnect(
+				From, Context.Snap.Position, Kind, WidthIndex);
+			if (!Quote.IsFree())
+			{
+				Sink.Label(Context.Snap.Position, Purse->Describe(Quote).ToString(),
+					Purse->CanAfford(Quote) ? EPreviewStyle::Pending : EPreviewStyle::Refused);
+			}
 		}
 	}
 }

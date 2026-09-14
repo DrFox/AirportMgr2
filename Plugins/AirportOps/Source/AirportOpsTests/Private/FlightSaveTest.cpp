@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
+#include "OpsSaveTestHelpers.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
@@ -137,14 +138,14 @@ bool FFlightOfferedExpirySurvivesLoadTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("offered before the save"), Flight->Phase, EFlightPhase::Offered);
 
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, Snapshot);
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
 
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
 	USimClock* RestoredClock = NewObject<USimClock>();
 	UFlightBoard* RestoredBoard = SaveTestBoard();
 	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel))) { return false; }
+		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
 
 	const TArray<UFlight*> Offers = RestoredBoard->Offers();
 	if (!TestEqual(TEXT("the offer came back"), Offers.Num(), 1)) { return false; }
@@ -227,7 +228,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
 
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, Snapshot);
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
 	Snapshot.Version = 2;
 
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
@@ -235,7 +236,7 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	UFlightBoard* RestoredBoard = SaveTestBoard();
 	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel))) { return false; }
+		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
 
 	const TArray<UFlight*> Live = RestoredBoard->Live();
 	TestEqual(TEXT("the flight came back"), Live.Num(), 1);

@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "OpsSaveTestHelpers.h"
 #include "Model/AirsideCapability.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
@@ -47,7 +48,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	UFuelService* Fuel = NewObject<UFuelService>();
 
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Source, *Board, *Fuel, Snapshot);
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Source, Snapshot);
 	TestTrue(TEXT("the snapshot holds a blob for the clock and the network"),
 		Snapshot.Blobs.FindRef(TEXT("Clock")).Bytes.Num() > 0 && Snapshot.Blobs.FindRef(TEXT("Network")).Bytes.Num() > 0);
 	TestTrue(TEXT("and one for fuel, new since issue #105 item 8"),
@@ -58,7 +59,7 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
 	UFuelService* RestoredFuel = NewObject<UFuelService>();
 	if (!TestTrue(TEXT("restore succeeds"),
-		OpsSave::Restore(Snapshot, *RestoredClock, *Restored, *RestoredBoard, *RestoredFuel))) { return false; }
+		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *Restored))) { return false; }
 
 	TestEqual(TEXT("game time survives"), RestoredClock->Now(), SavedNow, 1e-9);
 	TestEqual(TEXT("speed survives"), RestoredClock->GetSpeed(), ESimSpeed::X4);
@@ -139,7 +140,7 @@ bool FOpsSaveLegacyShimTest::RunTest(const FString& Parameters)
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
 	UFuelService* RestoredFuel = NewObject<UFuelService>();
 	if (!TestTrue(TEXT("restore succeeds against a legacy snapshot"),
-		OpsSave::Restore(Legacy, *RestoredClock, *RestoredNetwork, *RestoredBoard, *RestoredFuel)))
+		OpsSave::Restore(Legacy, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNetwork)))
 	{
 		return false;
 	}
@@ -196,14 +197,14 @@ bool FOpsSaveFuelResetOnRestoreTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>();
 	UFlightBoard* Board = NewObject<UFlightBoard>();
 	FOpsSnapshot RoundTrip;
-	OpsSave::Capture(*Clock, *Net, *Board, *Fuel, RoundTrip);
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, RoundTrip);
 
 	USimClock* RestoredClock = NewObject<USimClock>();
 	URoadNetwork* RestoredNet = NewObject<URoadNetwork>();
 	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
 	UFuelService* RestoredFuel = NewObject<UFuelService>();
 	if (!TestTrue(TEXT("round-trip restore succeeds"),
-		OpsSave::Restore(RoundTrip, *RestoredClock, *RestoredNet, *RestoredBoard, *RestoredFuel)))
+		OpsSave::Restore(RoundTrip, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet)))
 	{
 		return false;
 	}

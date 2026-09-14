@@ -12,6 +12,8 @@ class USimClock;
 
 class UGroundTraffic;
 class URoadNetwork;
+class ULedger;
+class UPricing;
 enum class EAgentPhase : uint8;
 
 /**
@@ -224,6 +226,24 @@ public:
 	void OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network, const USimClock& Clock,
 		int32 AgentId,
 		EAgentPhase From, EAgentPhase To);
+
+	/**
+	 * The money, or null in a test that does not care. Set by UOpsRuntime::Attach, in the same
+	 * breath as the board's and the generator's, so none of them is the one left unconnected.
+	 */
+	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
+	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
+	/**
+	 * Bank the fee for one completed fuelling.
+	 *
+	 * THERE IS NO MATCHING PENALTY METHOD, and that is the design rather than an omission (spec
+	 * 2026-09-13 D7): an aircraft that times out Unserviceable never reaches here, so the
+	 * forfeit is an entry that does not happen. A negative entry would be a FINE, which is a
+	 * different thing needing a promised time to be late against - and nothing in this build
+	 * has one, because FFuelDemand::TurnaroundEndsAt is computed from the actual park time.
+	 */
+	void PostServiceFee(double Now, const FAirframe& Airframe);
 
 	/**
 	 * One pass: offer every Needed demand a truck, run the dwells down, and re-offer the

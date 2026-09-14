@@ -7,6 +7,8 @@
 
 #include "OfferGenerator.generated.h"
 
+class UPricing;
+
 class UAirlineDefinition;
 class UFlight;
 class URoadNetwork;
@@ -52,6 +54,29 @@ class AIRPORTOPS_API UOfferGenerator : public UObject
 	GENERATED_BODY()
 
 public:
+
+	/**
+	 * What a landing is worth, or null for a test that does not care.
+	 *
+	 * THE OFFER IS PRICED, NOT THE LANDING. See MakeOffer - the fee is fixed here so the inbox
+	 * row can show what accepting it is worth, and so the player's lever moves NEW offers only.
+	 */
+	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
+	/**
+	 * Which aeroplane this generator picks, next.
+	 *
+	 * A SEEDED STREAM AND NOT FMath::RandHelper, which is what this used. The global RNG is
+	 * shared with everything else in the process and is advanced by anything that draws from
+	 * it, so the same save reloaded twice offered different aeroplanes - and the determinism
+	 * the systems map asks for ("same seed, same inputs, same ledger") could not be written as
+	 * a test at all, which is why M1 deferred it.
+	 *
+	 * SAVED, so a reload continues the same sequence rather than restarting it: a player who
+	 * reloads to dodge an offer they did not like should get the same one back.
+	 */
+	UPROPERTY() FRandomStream Stream;
+
 	/** How far ahead of the offer an accepted flight lands, GAME seconds. */
 	UPROPERTY(EditAnywhere, Category = "Offers", meta = (ClampMin = "0.0"))
 	double LeadTimeSeconds = 900.0;
@@ -104,5 +129,6 @@ public:
 	 * this one. Static and world-free for the same reason CouldEverAdmit is: it reads its
 	 * argument and nothing else, so a test can ask it without owning a generator.
 	 */
-	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines);
+	static double OfferIntervalSeconds(const TArray<UAirlineDefinition*>& Airlines,
+		double DemandFactor = 1.0);
 };

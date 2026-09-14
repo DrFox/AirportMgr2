@@ -6,6 +6,10 @@
 
 #include "Present/RoadEditFacade.h"
 
+#include "Build/BuildCost.h"
+#include "Content/AirsideSettings.h"
+#include "Model/BuildPurse.h"
+
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
@@ -158,6 +162,93 @@ void URoadEditFacade::NotifyChanged()
 	OnChanged.Broadcast();
 }
 
+bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
+{
+	// NO PURSE MEANS FREE, and that is the design-time answer: URoadBuildEdMode has no runtime
+	// and no money, and a default that refused would make the editor mode unable to build.
+	return Purse == nullptr || Quote.IsFree() || Purse->CanAfford(Quote);
+}
+
+FBuildQuote URoadEditFacade::QuoteForSegment(int32 SegmentIndex) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr || !Network->GetSegments().IsValidIndex(SegmentIndex))
+	{
+		return FBuildQuote();
+	}
+	const FRoadSegment& Segment = Network->GetSegments()[SegmentIndex];
+	const URoadProfile* Profile = Network->ProfileFor(Segment);
+	if (Profile == nullptr)
+	{
+		return FBuildQuote();
+	}
+	return BuildCost::ForSegment(*Profile, BuildCost::SegmentLengthUu(*Network, Segment));
+}
+
+FBuildQuote URoadEditFacade::QuoteForAllPavement() const
+{
+	FBuildQuote Total;
+	const URoadNetwork* Network = Actor().Network;
+	if (Network == nullptr)
+	{
+		return Total;
+	}
+
+	for (int32 Index = 0; Index < Network->GetSegments().Num(); ++Index)
+	{
+		if (!Network->GetSegments()[Index].bAlive)
+		{
+			continue;
+		}
+		const FBuildQuote Each = QuoteForSegment(Index);
+		Total.BaseAmount += Each.BaseAmount;
+		if (!Total.Source.IsValid())
+		{
+			// The first profile met stands in for the lot, for discounts only - the AMOUNT is
+			// the true sum whichever one it is.
+			Total.Source = Each.Source;
+		}
+	}
+	Total.What = NSLOCTEXT("BuildCost", "MovedPavement", "Moved pavement");
+	return Total;
+}
+
+FBuildQuote URoadEditFacade::QuoteForApron(TConstArrayView<FVector2D> Outline) const
+{
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	return BuildCost::ForApron(Outline,
+		Settings != nullptr ? Settings->ApronCostPerSquareMetre : 0.0);
+}
+
+void URoadEditFacade::CommitPurchase(FRoadEditScope& Edit, const FBuildQuote& Quote)
+{
+	if (Purse != nullptr && !Quote.IsFree())
+	{
+		const int32 ChargeId = Purse->Charge(Quote);
+		if (URoadEditHistory* History = HistoryForEdit())
+		{
+			// ONTO THE PENDING SNAPSHOT, before the scope's destructor pushes it: the snapshot
+			// IS the edit as far as undo is concerned, so the charge to reverse has to travel
+			// with it. In an editor world HistoryForEdit is null and the id is simply dropped,
+			// which is correct there - the transaction system owns undo and nothing was paid.
+			History->SetPendingCharge(ChargeId, Quote);
+		}
+	}
+	CommitAndNotify(Edit);
+}
+
+void URoadEditFacade::CommitDisposal(FRoadEditScope& Edit, const FBuildQuote& Quote)
+{
+	if (Purse != nullptr && !Quote.IsFree())
+	{
+		// CREDIT, not Reverse: tearing something out is a NEW transaction valuing the geometry
+		// at today's price, not the undoing of the one that built it. See IBuildPurse::Credit -
+		// that asymmetry is what keeps a BuiltFor field out of FRoadSegment.
+		Purse->Credit(Quote);
+	}
+	CommitAndNotify(Edit);
+}
+
 void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit)
 {
 	Edit.Commit();
@@ -189,6 +280,53 @@ int32 URoadEditFacade::PlaceNode(FVector2D Where)
 		*Actor().GetName(), Actor().GetWorld() ? *Actor().GetWorld()->GetName() : TEXT("no world"));
 	CommitAndNotify(Edit);
 	return Node.Index;
+}
+
+URoadProfile* URoadEditFacade::ResolveProfileForKind(ERoadKind Kind, int32 WidthIndex) const
+{
+	// EXTRACTED FROM ConnectNodes SO THE GHOST AND THE CLICK CANNOT DISAGREE. The preview has
+	// to price what a click would actually lay, and a tool resolving the profile for itself
+	// would be a second answer to "which profile is this?" - the exact shape of bug the
+	// registry and the action table exist to prevent elsewhere.
+	//
+	// A CHOSEN WIDTH WINS OVER THE DEFAULT, and only for a taxiway: WidthIndex names one of
+	// the content set's standard widths (the tool cycles it on key-again), INDEX_NONE means
+	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
+	// which ResolveProfile keeps the content set out of on purpose - so a player who never
+	// touches the cycle lays exactly the road this level was tuned for.
+	//
+	// A service road ignores the index outright: it has one authored cross-section, and an
+	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	ARoadNetworkActor& Owner = Actor();
+	URoadProfile* Chosen = nullptr;
+	if (Kind == ERoadKind::ServiceRoad)
+	{
+		Chosen = Owner.ResolveServiceRoadProfile();
+	}
+	else if (WidthIndex != INDEX_NONE)
+	{
+		Chosen = Owner.ResolveTaxiwayProfile(WidthIndex);
+	}
+	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
+	{
+		// No index, or an index the content set cannot answer. Either way the level's own
+		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
+		Chosen = Owner.ResolveProfile();
+	}
+	return Chosen;
+}
+
+FBuildQuote URoadEditFacade::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+	int32 WidthIndex) const
+{
+	const URoadNetwork* Network = Actor().Network;
+	const URoadProfile* Profile = ResolveProfileForKind(Kind, WidthIndex);
+	if (Network == nullptr || Profile == nullptr || !Network->GetNodes().IsValidIndex(FromIndex))
+	{
+		return FBuildQuote();
+	}
+	return BuildCost::ForSegment(*Profile,
+		FVector2D::Distance(Network->GetNodes()[FromIndex].Position, To));
 }
 
 bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind, int32 WidthIndex)
@@ -228,28 +366,27 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	//
 	// A service road ignores the index outright: it has one authored cross-section, and an
 	// index reaching it would lay a taxiway's width on a lane meant for vans.
-	URoadProfile* Chosen = nullptr;
-	if (Kind == ERoadKind::ServiceRoad)
-	{
-		Chosen = Owner.ResolveServiceRoadProfile();
-	}
-	else if (WidthIndex != INDEX_NONE)
-	{
-		Chosen = Owner.ResolveTaxiwayProfile(WidthIndex);
-	}
-	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
-	{
-		// No index, or an index the content set cannot answer. Either way the level's own
-		// tuning is the honest fallback here - unlike the service road below, a taxiway
-		// always has one.
-		Chosen = Owner.ResolveProfile();
-	}
+	URoadProfile* Chosen = ResolveProfileForKind(Kind, WidthIndex);
 	if (Chosen == nullptr && Kind == ERoadKind::ServiceRoad)
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("ConnectNodes refused: %d -> %d, no service road profile. Author "
 				 "DA_RoadProfile_ServiceRoad with Tools/Python/build_road_profiles.py, or set "
 				 "ServiceRoadProfile on the actor."), FromIndex, ToIndex);
+		return false;
+	}
+
+	// PRICED AND REFUSED BEFORE THE SCOPE, not at commit. An FRoadEditScope that is not
+	// committed discards its undo snapshot but does NOT roll the network back, so a refusal
+	// after AddStraightSegment would leave the taxiway built and unpaid for - see
+	// CommitPurchase's own comment.
+	const FBuildQuote Quote = BuildCost::ForSegment(*Chosen,
+		FVector2D::Distance(Owner.Network->GetNodes()[From.Index].Position,
+			Owner.Network->GetNodes()[To.Index].Position));
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("ConnectNodes refused: cannot afford %s"),
+			*Quote.What.ToString());
 		return false;
 	}
 
@@ -269,7 +406,7 @@ bool URoadEditFacade::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kin
 	}
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Segment %d connected: node %d -> node %d"), Segment.Index, FromIndex, ToIndex);
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 	return true;
 }
 
@@ -303,6 +440,16 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 
 	// After the guards, all of which refuse without mutating, so a rejected runway never
 	// costs a snapshot - the same rule ConnectNodes follows.
+	// Priced from the two ENDS the caller asked for, before anything is mutated - see
+	// ConnectNodes above for why the refusal cannot wait until commit.
+	const FBuildQuote Quote = BuildCost::ForSegment(*RunwayProfile, FVector2D::Distance(From, To));
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceRunway refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return false;
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("place runway"));
 
 	const FRoadNodeId A = Owner.Network->AddNode(From);
@@ -325,7 +472,7 @@ bool URoadEditFacade::PlaceRunway(FVector2D From, FVector2D To, URoadProfile* Ru
 	// runway the player never placed.
 	Owner.Network->SetRunwayFacts(Segment, Facts);
 
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 
 	UE_LOG(LogRoadMesh, Log, TEXT("Runway %s placed, %.0f uu long, %.0f uu wide, %s, %s approach"),
 		*RunwayDesignator::ToPairText(To - From), Length, RunwayProfile->GetTotalWidth(),
@@ -595,6 +742,11 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	{
 		Use->BeginEdit(*Network, Label);
 	}
+
+	// WHAT THE PAVEMENT WAS WORTH BEFORE THE DRAG. Without this the cost model has a hole big
+	// enough to drive through: build ten metres of taxiway, drag its end two kilometres, and
+	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
+	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount;
 }
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
@@ -605,14 +757,52 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		return;
 	}
 
-	if (bKeep)
-	{
-		History->CommitEdit();
-	}
-	else
+	if (!bKeep)
 	{
 		History->AbandonEdit();
+		return;
 	}
+
+	// THE DIFFERENCE THE DRAG MADE, priced at today's rates. A drag that lengthened the
+	// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
+	// value rather than refunded in full - otherwise dragging a taxiway long and short again
+	// would be a loop that returns more than it costs.
+	FBuildQuote Delta = QuoteForAllPavement();
+	const double After = Delta.BaseAmount;
+	Delta.BaseAmount = After - PavementValueAtDragStart;
+	PavementValueAtDragStart = 0.0;
+
+	if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+	{
+		// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
+		// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
+		// the one edit that has to be undone rather than merely refused - see
+		// URoadEditHistory::RevertEdit.
+		if (URoadNetwork* Reverted = History->RevertEdit())
+		{
+			Actor().Network = Reverted;
+			HideGhost();
+			NotifyChanged();
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
+		return;
+	}
+
+	if (Purse != nullptr)
+	{
+		if (Delta.BaseAmount > 0.0)
+		{
+			History->SetPendingCharge(Purse->Charge(Delta), Delta);
+		}
+		else if (Delta.BaseAmount < 0.0)
+		{
+			Delta.BaseAmount = -Delta.BaseAmount;
+			Purse->Credit(Delta);
+		}
+	}
+
+	History->CommitEdit();
 }
 
 bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
@@ -719,6 +909,24 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		return false;
 	}
 
+	// EVERY SEGMENT THIS TAKES WITH IT, summed before the removal. Deleting a node destroys
+	// the roads meeting it - SegmentsIncidentTo is what the deletion plan already shows the
+	// player - so crediting only the node would pay back nothing for the pavement that
+	// actually disappears.
+	FBuildQuote Quote;
+	for (const int32 Incident : SegmentsIncidentTo(NodeIndex))
+	{
+		const FBuildQuote Each = QuoteForSegment(Incident);
+		Quote.BaseAmount += Each.BaseAmount;
+		if (!Quote.Source.IsValid())
+		{
+			// The first profile met stands for the lot. A junction of two widths is priced on
+			// one of them for discount purposes only - the AMOUNT is the true sum either way.
+			Quote.Source = Each.Source;
+			Quote.What = Each.What;
+		}
+	}
+
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
@@ -745,7 +953,7 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 		Owner.Network->RemoveNode(Litter);
 	}
 
-	CommitAndNotify(Edit);
+	CommitDisposal(Edit, Quote);
 	return true;
 }
 
@@ -765,6 +973,10 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 	const FRoadSegment* Doomed = Owner.Network->GetSegment(Segment);
 	const FRoadNodeId EndA = Doomed != nullptr ? Doomed->A : FRoadNodeId();
 	const FRoadNodeId EndB = Doomed != nullptr ? Doomed->B : FRoadNodeId();
+
+	// QUOTED BEFORE THE REMOVAL, because afterwards the segment is not there to measure. Its
+	// value TODAY rather than what was paid for it - see IBuildPurse::Credit.
+	const FBuildQuote Quote = QuoteForSegment(SegmentIndex);
 
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete segment"));
 
@@ -788,7 +1000,7 @@ bool URoadEditFacade::DeleteSegment(int32 SegmentIndex)
 		}
 	}
 
-	CommitAndNotify(Edit);
+	CommitDisposal(Edit, Quote);
 	return true;
 }
 

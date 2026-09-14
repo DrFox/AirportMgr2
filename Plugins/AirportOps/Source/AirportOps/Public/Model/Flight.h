@@ -123,13 +123,33 @@ public:
 	UPROPERTY() int32 AgentId = INDEX_NONE;
 
 	/**
-	 * Banked by the ledger when it exists.
+	 * USimClock::Now at which it parked, or 0 if it never did.
 	 *
-	 * Carried HERE rather than recomputed later so that adding the ledger is a column in a
-	 * widget and a post, not a redesign. Zero until then, and nothing reads them.
+	 * THE START OF THE PARKING CLOCK. Zero means "never parked" and is CHECKED rather than
+	 * trusted: a flight restored from a save mid-flight, or one put on the field by the debug
+	 * land key, can reach TaxiOut without ever having parked, and billing it from the epoch
+	 * would hand the player a fee larger than the airport.
+	 */
+	UPROPERTY() double ParkedAt = 0.0;
+
+	/**
+	 * What this flight earned.
+	 *
+	 * LandingFee is fixed at the OFFER (see UOfferGenerator) so the inbox row can show what
+	 * accepting it is worth and the player's fee lever moves NEW offers only; ParkingFee is
+	 * filled in when it leaves, because nobody knows how long it stayed until it goes.
 	 */
 	UPROPERTY() double LandingFee = 0.0;
 	UPROPERTY() double ParkingFee = 0.0;
+
+	/**
+	 * Whether the landing fee has been banked, so it cannot be banked twice.
+	 *
+	 * SAVED, not transient: a reload that forgot this would re-bank every live flight's landing
+	 * fee the next time its phase changed, and the player would be quietly paid again for
+	 * aeroplanes that landed an hour ago.
+	 */
+	UPROPERTY() bool bLandingFeePaid = false;
 
 	/**
 	 * The id this flight holds a stand under.

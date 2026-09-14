@@ -41,6 +41,29 @@ class AIRSIDE_API UAirsideSettings : public UDeveloperSettings
 public:
 	UAirsideSettings();
 
+	/**
+	 * What a square metre of apron costs to lay, and what a day of owning one costs.
+	 *
+	 * HERE AND NOT ON AN ASSET, which is the one exception to the rule URoadProfile and
+	 * UEntityDefinition follow - and it is forced, not a shortcut. FApronSurface is an outline
+	 * and a material slot name; there is deliberately NO per-apron asset, because bands and
+	 * lanes are meaningless for a polygon (see RoadApron.h). This class is already this
+	 * project's single door for a content default with no better home, so the rate goes here.
+	 *
+	 * The consequence, named so the null is not read later as a bug: an apron's FBuildQuote
+	 * carries no Source asset, so an M4 research discount cannot single aprons out the way it
+	 * can single out a taxiway profile.
+	 *
+	 * 15 per square metre sits between taxiway (13) and runway (25), which is the ORDERING to
+	 * preserve when these are tuned; the magnitude is an unplayed first pass.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0"))
+	double ApronCostPerSquareMetre = 15.0;
+
+	/** A thousandth of the build cost per day, the same ratio the profiles are authored at. */
+	UPROPERTY(config, EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0"))
+	double ApronUpkeepPerSquareMetrePerDay = 0.015;
+
 	/** Defaults for materials, profiles and the stand. See UAirsideContent. */
 	UPROPERTY(config, EditAnywhere, Category = "Content")
 	TSoftObjectPtr<UAirsideContent> Content;
