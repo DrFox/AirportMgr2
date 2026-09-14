@@ -6,6 +6,7 @@
 class UBuildBarWidget;
 class UInspectorWidget;
 class UOfferInboxWidget;
+class ULedgerPanelWidget;
 class UToastStackWidget;
 class APlayerController;
 
@@ -52,9 +53,16 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
 	TSubclassOf<UOfferInboxWidget> OfferInboxClass;
 
+	/** Optional Blueprint for the ledger panel. Code builds a plain card without one. */
+	UPROPERTY(EditAnywhere, Category = "HUD")
+	TSubclassOf<ULedgerPanelWidget> LedgerPanelClass;
+
 	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
 	UPROPERTY(Transient)
 	TObjectPtr<UOfferInboxWidget> OfferInbox;
+
+	/** Where the money went. Hidden until the player asks - see ULedgerPanelWidget. */
+	UPROPERTY() TObjectPtr<ULedgerPanelWidget> LedgerPanel;
 
 	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")

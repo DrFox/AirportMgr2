@@ -10,6 +10,7 @@ void ULedger::Open(double InStartingBalance)
 	Rows.Reset();
 	NextId = 1;
 	Recache();
+	++RevisionCount;
 	UE_LOG(LogAirportOps, Log, TEXT("Ledger opened at %.0f"), StartingBalance);
 }
 
@@ -25,6 +26,7 @@ int32 ULedger::Post(double At, ELedgerCategory Category, double Amount, FText Wh
 	// Added rather than recomputed: Post is the hot path, and the fold that would verify it is
 	// what FoldBalanceForTest and its test are for.
 	CachedBalance += Amount;
+	++RevisionCount;
 	return Entry.Id;
 }
 
@@ -96,6 +98,7 @@ void ULedger::RollUp(double Now)
 	// rather than reasoned about, because the arithmetic that "obviously" cancels is exactly
 	// where a rounding or an off-by-one would hide.
 	Recache();
+	++RevisionCount;
 	UE_LOG(LogAirportOps, Log, TEXT("Ledger rolled up %d entries into %.0f; balance %.0f"),
 		Count, Folded, CachedBalance);
 }

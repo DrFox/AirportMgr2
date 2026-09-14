@@ -217,6 +217,12 @@ public:
 	 * and a tenfold one would empty the inbox with no way back that reads as a mistake.
 	 */
 	void StepLandingFee(int32 Delta);
+
+	/** Open or close the ledger panel. The game.ledger action's verb. */
+	void ToggleLedger();
+
+	/** Whether the ledger panel is open, so the bar's button can light itself. */
+	bool IsLedgerShowing() const;
 	bool IsPaused() const;
 
 	void StepSpeed(int32 Delta);

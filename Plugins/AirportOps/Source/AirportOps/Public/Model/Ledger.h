@@ -137,6 +137,17 @@ public:
 
 	double Balance() const { return CachedBalance; }
 
+	/**
+	 * Bumped by every Post and every RollUp. A view rebuilds only when this changes.
+	 *
+	 * A COUNTER AND NOT A DELEGATE. The HUD polls - UBuildBarWidget::RefreshClock already
+	 * does, every tick - and a panel that re-derived two hundred rows per tick to discover
+	 * nothing had happened would be the expensive kind of correct. The same idiom
+	 * URoadNetwork::GetGuidelineRevision uses, and for the same reason: the cheapest question
+	 * a poller can ask is "has anything changed since the number I remember".
+	 */
+	int32 Revision() const { return RevisionCount; }
+
 	const TArray<FLedgerEntry>& Entries() const { return Rows; }
 
 	/** Fold entries older than Now minus MaxDays days into one BroughtForward entry. */
@@ -155,6 +166,10 @@ private:
 	UPROPERTY() TArray<FLedgerEntry> Rows;
 	UPROPERTY() int32 NextId = 1;
 	UPROPERTY() double CachedBalance = 0.0;
+
+	/** See Revision(). Not saved: a view's idea of "since when" is a session's, and a restored
+	 *  counter that happened to match would leave a panel showing the previous game's rows. */
+	int32 RevisionCount = 0;
 
 	void Recache();
 

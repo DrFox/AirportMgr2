@@ -3,6 +3,7 @@
 #include "BuildActions.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
+#include "LedgerPanelWidget.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
@@ -617,6 +618,21 @@ void ARoadBuildController::StepLandingFee(int32 Delta)
 	// did the offers dry up" is otherwise a question the log cannot answer.
 	UE_LOG(LogRoadBuild, Log, TEXT("Landing fee %.0f%% -> %.0f%%"),
 		Was * 100.0, Pricing->LandingFeeMultiplier * 100.0);
+}
+
+void ARoadBuildController::ToggleLedger()
+{
+	if (Hud != nullptr && Hud->LedgerPanel != nullptr)
+	{
+		Hud->LedgerPanel->Toggle();
+		UE_LOG(LogRoadBuild, Log, TEXT("Ledger panel %s"),
+			Hud->LedgerPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
+	}
+}
+
+bool ARoadBuildController::IsLedgerShowing() const
+{
+	return Hud != nullptr && Hud->LedgerPanel != nullptr && Hud->LedgerPanel->IsShowing();
 }
 
 bool ARoadBuildController::IsPaused() const
