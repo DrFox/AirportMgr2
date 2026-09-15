@@ -130,16 +130,29 @@ public:
 	UPROPERTY(EditAnywhere) double PreferredFilletRadius = 1500.0;
 
 	/**
-	 * Headroom over the bare steering limit, because RoadNetworkSolver scales a preferred
-	 * radius DOWN to fit a junction's arms - which is how a 500 uu fillet became 418 on the
-	 * route that reported this in 2026-09-14, under a lock that needed 510. A fillet that
-	 * merely clears the lock on paper does not clear it on a real junction.
+	 * How much wider than the bare steering limit a fillet must be asked for, because THE
+	 * VEHICLE DOES NOT DRIVE THE FILLET.
 	 *
-	 * 1.25 covers the scaling seen in play with room to spare, without demanding a motorway
-	 * sweep on an apron road. It is the figure Airside.Model.ServiceRoadFilletClearsTheTruckLock
-	 * already argued for; this moves that decision from the test into the code it judges.
+	 * This rounds the PAVEMENT. The guideline through the corner is a QUADRATIC whose control
+	 * point is the node and whose ends are the trimmed arm ends (FRoadGuidelineBuilder), and
+	 * the quadratic is the tighter of the two. For legs d meeting at a right angle its
+	 * midpoint curvature is sqrt(2)/d, so R = d/sqrt(2) = 0.707 d - and at a right angle a
+	 * circular fillet's tangent length IS its radius, so the turn path comes out at 0.707 of
+	 * the figure asked for here. Corners sharper than square come out tighter still.
+	 *
+	 * 1.6: the 1.414 that arithmetic demands, plus 13% for a corner sharper than square.
+	 *
+	 * WAS 1.25 UNTIL 2026-09-15, AND THAT WAS BELOW THE FLOOR - it could not have worked for
+	 * any vehicle. It survived because the truck was small: 750 * 0.707 = 530 still cleared a
+	 * 471 uu lock. An 8.5 m dispenser needs 699, the derived 874 delivered 618, and the route
+	 * log read "Route asks for R=580 uu, but the steering lock allows only R>=699". The old
+	 * comment here blamed RoadNetworkSolver for scaling the radius down; it does not -
+	 * RoadGeom::SolveFillet passes the radius through verbatim. The loss is the quadratic, and
+	 * naming the wrong mechanism is why the number was wrong.
+	 *
+	 * Airside.Solve.TurnPathIsTighterThanItsFillet pins the arithmetic and the delivery.
 	 */
-	static constexpr double JunctionScalingMargin = 1.25;
+	static constexpr double JunctionScalingMargin = 1.6;
 
 	/**
 	 * The radius a junction on this profile actually turns on: the authored one, or - when

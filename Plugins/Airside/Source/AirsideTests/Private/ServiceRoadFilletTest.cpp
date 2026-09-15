@@ -68,16 +68,23 @@ bool FServiceRoadFilletClearsTheTruckLockTest::RunTest(const FString& Parameters
 		return false;
 	}
 
-	// HEADROOM, NOT MERE SUFFICIENCY - unchanged in reasoning from the original test. An exact
-	// match would pass while sitting on the cliff edge, and RoadNetworkSolver scales the
-	// preferred radius DOWN when a junction's arms cannot fit it, which is how 500 became 418
-	// on the reported route. 1.25 covers the scaling seen in play with room to spare, without
-	// demanding a motorway sweep on an apron road.
+	// HEADROOM, AND THE REASON IS NOT THE ONE THIS TEST USED TO GIVE. It blamed
+	// RoadNetworkSolver for scaling the preferred radius down to fit a junction's arms; it
+	// does not - RoadGeom::SolveFillet passes the radius through verbatim. What actually loses
+	// 30% is that a vehicle drives the GUIDELINE through the corner, which is a QUADRATIC, not
+	// the pavement fillet: R = d/sqrt(2) at a right angle. Naming the wrong mechanism is how
+	// the margin came to be 1.25, below the 1.414 the arithmetic demands - it could not have
+	// been right for any vehicle, and survived only because the truck was small enough that
+	// 750 * 0.707 still cleared its 471 uu lock.
+	//
+	// Airside.Solve.TurnPathIsTighterThanItsFillet pins that arithmetic and measures the
+	// DELIVERED radius. This test keeps the coarser check - that the REQUEST clears the lock
+	// with margin - because it is the one a reader of the profile can verify by eye.
 	//
 	// RESTATED rather than read from URoadProfile::JunctionScalingMargin, for exactly the
 	// reason the radius is restated: a test that imported the constant would still pass if
 	// someone set it to 1.0.
-	const double Required = TightestFollowable * 1.25;
+	const double Required = TightestFollowable * 1.6;
 
 	TestTrue(
 		FString::Printf(
