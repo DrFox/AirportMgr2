@@ -26,7 +26,7 @@ inspector panel cannot tell them apart."* There are in fact four.
 |---|---|---|---|
 | 1 | A wheeled aircraft cannot yaw without rolling | `SpeedProfile.cpp:121`, `TakeoffRun.cpp:94-96,133`, `LandingRun.cpp:237` | **Yes** — physics, per type |
 | 2 | A follower must not stop dead mid-turn and snap | `AirsideSettings.cpp:102` (the van's 50) | **No longer** — see below |
-| 3 | The crab loop must not deadlock at zero | `RouteFollower.cpp:180` | **Yes** — but it is a solver guard, not a data sheet figure |
+| 3 | The crab loop must not deadlock at zero | `RouteFollower.cpp:180` **and `SpeedProfile.cpp:140`** | **Yes** — but it is a solver guard, not a data sheet figure |
 | 4 | The penalty for a corner tighter than the lock | `SpeedProfile.cpp:99` | **No** — it is a symptom report |
 
 ### Why #2 is dead
@@ -75,6 +75,13 @@ authored per vehicle.
   for ground vehicles, because the van's figure becomes 0. Removing the line instead would
   have broken the aircraft to fix the truck — the floor was never the problem, the shared
   number was.
+
+### The second deadlock, found while planning
+
+`SpeedProfile.cpp:140` sets a **sharp vertex**'s limit to the floor. With a van at zero that
+is not a crawl, it is a permanent stop: the backward pass brakes the agent to rest at the
+vertex and `LimitAt` returns zero for ever after. Both floors take
+`max(MinSteeringSpeed, ProgressEpsilon)`.
 
 ### The landmine
 
@@ -166,8 +173,8 @@ fixed a too-tight corner by **shrinking the truck's steering** — the inverse o
 already on record for aircraft geometry: *size infrastructure for the largest thing admitted,
 never for the one using it now.*
 
-With a 699 uu truck, today's 750 uu fillet clears by 1.07×, against the 1.6× it happens to
-have now. `RoadNetworkSolver` scales a preferred radius **down** to fit a junction's arms —
+With a 699 uu truck, today's 750 uu fillet clears by 1.07×, against the 1.25× the test
+requires and the 1.6× it happens to have. `RoadNetworkSolver` scales a preferred radius **down** to fit a junction's arms —
 that is what turned 500 into 418 and started this whole thread — so 1.07× will fail as soon as
 two junctions sit close together.
 
@@ -183,8 +190,10 @@ two junctions sit close together.
   derivation. That keeps four sites and makes the test the only thing holding them together —
   which is the arrangement this change exists to remove. (Fall back to it only if a zero
   sentinel turns out to break the profile editor UI.)
-- **`JunctionScalingMargin = 1.5`**, stated as headroom for `RoadNetworkSolver`'s down-scaling
-  rather than as taste. 699 × 1.5 = **1050 uu**.
+- **`JunctionScalingMargin = 1.25`**, stated as headroom for `RoadNetworkSolver`'s down-scaling
+  rather than as taste. 699 × 1.25 = **874 uu**. Corrected from 1.5 while planning:
+  `ServiceRoadFilletTest.cpp:70` already argues 1.25 and says why, and a second margin with no
+  argument behind it is the drift this change exists to remove.
 - **`Airside.Model.ServiceRoadFilletClearsTheTruckLock` becomes an assertion on the
   derivation** — that a laid junction's *solved* radius still clears the largest vehicle —
   rather than a check that two hand-typed constants match.
