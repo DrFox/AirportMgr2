@@ -68,7 +68,7 @@ struct AIRSIDE_API FRouteFollower
 	// Advance and Replace take the airframe by reference from FRoadAgent::Airframe instead.
 
 	/**
-	 * The crab angle at which speed has fallen all the way to FGroundPerformance::MinTaxiSpeed.
+	 * The crab angle at which speed has fallen all the way to FGroundPerformance::MinSteeringSpeed.
 	 *
 	 * The CONTROLLER's tolerance for "still tracking the line", not a fact about any
 	 * airframe - which is why it is here and not on the type. Ten degrees is deliberately

@@ -290,7 +290,7 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 	Profile.Build(Tight, Airframe);
 	const double Limit = Profile.LimitAt(MidArc);
 	TestTrue(FString::Printf(TEXT("an impossible corner crawls (%.0f uu/s)"), Limit),
-		Limit <= Airframe.Ground.MinTaxiSpeed + 1.0);
+		Limit <= Airframe.Ground.MinSteeringSpeed + 1.0);
 
 	// AND A FOLLOWABLE ONE DOES NOT, or the assertion above would pass on a profile that
 	// crawled everywhere. The same arc at a tiller's 60 degrees is well within the lock.
@@ -298,7 +298,7 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 	FSpeedProfile Roomy;
 	Roomy.Build(Tight, Tiller);
 	TestTrue(TEXT("the same corner at full tiller is not reduced to a crawl"),
-		Roomy.LimitAt(MidArc) > Tiller.Ground.MinTaxiSpeed + 1.0);
+		Roomy.LimitAt(MidArc) > Tiller.Ground.MinSteeringSpeed + 1.0);
 
 	return true;
 }

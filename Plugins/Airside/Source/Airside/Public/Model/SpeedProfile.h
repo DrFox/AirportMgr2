@@ -79,7 +79,7 @@ private:
 	 * The cap AT each vertex, after the backward pass. Distances.Num() entries.
 	 *
 	 * The last is zero: an aircraft arriving at its destination stops there. That is also
-	 * why FGroundPerformance::MinTaxiSpeed is not applied here - it bounds what a TURN may
+	 * why FGroundPerformance::MinSteeringSpeed is not applied here - it bounds what a TURN may
 	 * slow the aircraft to, and an aeroplane parked on a stand is not turning.
 	 */
 	UPROPERTY() TArray<double> VertexLimits;

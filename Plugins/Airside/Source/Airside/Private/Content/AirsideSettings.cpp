@@ -99,7 +99,7 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// Kept rolling to steer, like an aircraft, for a different reason that lands in the same
 	// place: a van CAN pivot, but a follower allowed to stop dead mid-turn would snap its
 	// heading round rather than swing it. 0.5 m/s.
-	Van.Ground.MinTaxiSpeed = 50.0;
+	Van.Ground.MinSteeringSpeed = 50.0;
 
 	// NINE TIMES an airframe's 10 deg/s. A van turns into a depot in its own length; an
 	// aircraft's rate here would sweep it across the kerb and back.
@@ -141,7 +141,7 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// A rigid vehicle cannot follow an arc tighter than Wheelbase / sin(lock) at ANY speed,
 	// so 45 asked for a 5.10 m corner while the service road was authored with a 5.00 m one.
 	// Ten centimetres apart, on opposite sides of a cliff: every corner between the depot and
-	// the stand hit TIGHTER THAN THE STEERING LOCK and crawled at MinTaxiSpeed. 50 asks for
+	// the stand hit TIGHTER THAN THE STEERING LOCK and crawled at MinSteeringSpeed. 50 asks for
 	// 4.71 m, and Airside.Model.ServiceRoadFilletClearsTheTruckLock now holds the pair
 	// together so neither can drift into the other again.
 	//

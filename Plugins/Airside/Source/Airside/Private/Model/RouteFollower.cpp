@@ -174,10 +174,10 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// within CrabAtMinSpeedDegrees of the line" a property of this loop rather than a
 	// prediction that happens to come true. A plan alone would have nothing to notice with.
 	//
-	// It floors at MinTaxiSpeed and the profile does not, which is what lets the aircraft
+	// It floors at MinSteeringSpeed and the profile does not, which is what lets the aircraft
 	// creep through a turn but still stop when it has arrived.
 	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
-	const double CrabLimit = FMath::Max(Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap * Slowing);
+	const double CrabLimit = FMath::Max(Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap * Slowing);
 
 	// The THIRD cap: what the stop point permits. sqrt(2 a s), the braking curve, so the
 	// agent arrives at the stop at rest having braked at the rate it actually has - the

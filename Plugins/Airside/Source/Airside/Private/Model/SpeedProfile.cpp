@@ -96,7 +96,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 			{
 				// The lock cannot hold this line at any speed. Crawl and wear the crab -
 				// the same answer the vertex caps below give an instant corner.
-				Cap = Ground.MinTaxiSpeed;
+				Cap = Ground.MinSteeringSpeed;
 				Rule = TEXT("TIGHTER THAN THE STEERING LOCK");
 			}
 			else
@@ -110,15 +110,15 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 			{
 				TightestRadius = Radius;
 				TightestAt = Distances[Span];
-				TightestCap = FMath::Max(Cap, Ground.MinTaxiSpeed);
+				TightestCap = FMath::Max(Cap, Ground.MinSteeringSpeed);
 				TightestRule = Rule;
 			}
 		}
 
 		// Never below the creep speed. A span this tight is one the aircraft has to crab
 		// through, and crawling is the slowest an aeroplane may do that at - see
-		// FGroundPerformance::MinTaxiSpeed.
-		SpanCaps[Span] = FMath::Max(Cap, Ground.MinTaxiSpeed);
+		// FGroundPerformance::MinSteeringSpeed.
+		SpanCaps[Span] = FMath::Max(Cap, Ground.MinSteeringSpeed);
 	}
 
 	int32 SharpVertices = 0;
@@ -137,7 +137,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		const double Instant = FMath::Abs(FMath::UnwindRadians(Leaving[At] - Arriving[At]));
 		if (Instant > CornerEpsilon)
 		{
-			Limit = Ground.MinTaxiSpeed;
+			Limit = Ground.MinSteeringSpeed;
 
 			// The FIRST one only, and where it is. A route with a sharp vertex crawls
 			// through it whatever its curvature says, so this is the other answer the log
@@ -156,7 +156,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		VertexLimits[At] = Limit;
 	}
 
-	// An aircraft arriving at its destination stops. Not floored at MinTaxiSpeed, because
+	// An aircraft arriving at its destination stops. Not floored at MinSteeringSpeed, because
 	// that floor is about steering and there is nothing left to steer.
 	VertexLimits[Count - 1] = 0.0;
 
@@ -178,7 +178,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// Build runs on Start and Replace, so this is one line per route rather than one per
 	// tick - cheap enough to leave in, and the only way to answer the question it answers.
 	//
-	// THREE RULES ALL REPORT MinTaxiSpeed and the inspector panel cannot tell them apart,
+	// THREE RULES ALL REPORT MinSteeringSpeed and the inspector panel cannot tell them apart,
 	// because it shows the speed and not the reason: a vertex too sharp to sample, a radius
 	// tighter than the steering lock can hold, and a curvature whose lateral-accel cap
 	// happens to land on the floor. "It crawls round that corner" was about to be diagnosed
@@ -199,7 +199,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		SharpVertices > 0
 			? *FString::Printf(TEXT(", first %.0f deg at %.0f"), SharpestDegrees, SharpestAt)
 			: TEXT(""),
-		Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap, TightestFollowable,
+		Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap, TightestFollowable,
 		Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 }
 

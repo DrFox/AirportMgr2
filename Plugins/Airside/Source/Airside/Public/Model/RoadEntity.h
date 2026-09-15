@@ -352,23 +352,38 @@ struct AIRSIDE_API FGroundPerformance
 	 * Decel is wheel braking with reverse or beta, which is harder than a rejected take-off
 	 * because there is no question of stopping and going again. Accel is small and real: an
 	 * aircraft that has slowed too far still has to keep rolling to steer, and the same
-	 * MinTaxiSpeed rule applies on a runway as anywhere else.
+	 * MinSteeringSpeed rule applies on a runway as anywhere else.
 	 */
 	UPROPERTY(EditAnywhere) FGroundRegime Landing;
 
 	/**
-	 * The slowest this type can be kept rolling WHILE STEERING - NOT zero, and that is the
-	 * point.
+	 * The slowest this type can be kept rolling WHILE STEERING - non-zero for an aircraft,
+	 * and ZERO for anything that can stop mid-turn.
 	 *
 	 * A wheeled aircraft cannot yaw without rolling: a prop or a fan produces thrust along
 	 * the airframe, and a nosewheel steers the direction that thrust is taken in. It has no
 	 * way to pivot on the spot. So a turn that cannot be made at speed is made at a crawl,
 	 * which is what a pilot riding the brakes against idle thrust actually does.
 	 *
+	 * A GROUND VEHICLE SETS THIS TO ZERO and means it. A truck's wheels are driven and
+	 * steered independently of any thrust line; it can stop with the wheel turned and pull
+	 * away again. The van was authored at 50 uu/s until 2026-09-15 for a reason that had
+	 * stopped being true - "a follower allowed to stop dead mid-turn would snap its heading
+	 * round" - which is a PIVOT-law artefact. Under the rolling-steer law MaxStep is
+	 * proportional to speed (FRouteFollower), so at zero the heading cannot move at all, let
+	 * alone snap.
+	 *
+	 * WAS CALLED MinSteeringSpeed, and was FOUR THINGS AT ONCE - FSpeedProfile's own comment said
+	 * as much: "THREE RULES ALL REPORT MinSteeringSpeed and the inspector panel cannot tell them
+	 * apart". This is the only one of the four that is a fact about an airframe. The others
+	 * now live where they belong: FRouteFollower::ProgressEpsilon guards the two loops that
+	 * divide by their own progress, and a corner too tight for the steering lock logs a
+	 * warning instead of quietly reporting this number.
+	 *
 	 * Not a floor on speed in general: an aircraft parked at its destination is stopped.
 	 * This bounds only what a TURN may slow it to.
 	 */
-	UPROPERTY(EditAnywhere) double MinTaxiSpeed = 50.0;
+	UPROPERTY(EditAnywhere) double MinSteeringSpeed = 50.0;
 
 	/**
 	 * How fast the nose can be swung, in DEGREES per second.
@@ -423,7 +438,14 @@ struct AIRSIDE_API FGroundPerformance
 		// Landing is NOT required here. This answers "can this thing move about an airport",
 		// which every agent needs; an arrival additionally checks Landing.IsSet() for itself,
 		// so an airframe with no landing figures declines to land rather than failing to taxi.
-		return Taxi.IsSet() && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
+		//
+		// MinSteeringSpeed IS NOT CHECKED, since 2026-09-15. Zero is a legitimate authored
+		// value - it is what every ground vehicle says, because a truck can stop with the
+		// wheel turned - and requiring it non-zero would have frozen the van outright, since
+		// ArrivalPlanner and FRoadAgent both branch on exactly this call. A van that never
+		// moves reads as a routing bug and would have been hunted as one. See
+		// Airside.Model.SteeringFloorZeroStillTaxis.
+		return Taxi.IsSet() && MaxTurnRateDegPerSec > 0.0;
 	}
 };
 
@@ -656,7 +678,7 @@ struct AIRSIDE_API FAirframe
 	 *
 	 * Required yaw is v/R and available yaw is v*sin(lock)/L, so SPEED CANCELS: a corner is
 	 * followable at every speed or at none, and the threshold is L/sin(lock). FSpeedProfile
-	 * drops an agent to MinTaxiSpeed below it, and FServiceLoopBuild sizes a spur's run so it
+	 * drops an agent to MinSteeringSpeed below it, and FServiceLoopBuild sizes a spur's run so it
 	 * does not have to.
 	 *
 	 * ZERO for an airframe with no measured axles. That one steers on the flat

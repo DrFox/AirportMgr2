@@ -538,7 +538,7 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	// not a regression. A spur now meets the lane PreferredSpurRun further along and curves
 	// back, so the truck drives that run twice - against which the junction it used to reach
 	// was a 90 degree instant turn, which FSpeedProfile calls untakeable at any speed and
-	// crawls at MinTaxiSpeed. 854 uu at the 600 uu/s the new bend allows is under two
+	// crawls at MinSteeringSpeed. 854 uu at the 600 uu/s the new bend allows is under two
 	// seconds; the crawl it replaces was tens.
 	//
 	// STILL NOWHERE NEAR A TOUR, which is what this bound exists to catch: half this ring's
@@ -699,7 +699,7 @@ bool FSpursLeaveTheLaneTangentiallyTest::RunTest(const FString& Parameters)
 	//
 	// An anchor spur used to meet the lane at the anchor's NEAREST point, which is square on -
 	// so the junction was a vertex whose heading changed by 90 degrees instantly, and
-	// FSpeedProfile calls that untakeable at any speed and drops the agent to MinTaxiSpeed.
+	// FSpeedProfile calls that untakeable at any speed and drops the agent to MinSteeringSpeed.
 	//
 	// ROUNDING IT AFTERWARDS CANNOT WORK, and was tried. A 90 degree turn at the 471 uu a
 	// truck's steering lock allows needs 666 uu of run on each arm, so two spurs sharing a

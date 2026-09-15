@@ -197,7 +197,7 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		if (TestTrue(TEXT("the arrival completes"), Trace.bVacated))
 		{
 			TestTrue(FString::Printf(TEXT("down to taxi speed (%.0f uu/s)"), Trace.VacatedSpeed),
-				Trace.VacatedSpeed <= FMath::Max(Ground.Taxi.SpeedCap, Ground.MinTaxiSpeed) + 1.0);
+				Trace.VacatedSpeed <= FMath::Max(Ground.Taxi.SpeedCap, Ground.MinSteeringSpeed) + 1.0);
 
 			TestTrue(FString::Printf(
 				TEXT("and stopped on the runway: vacated %.0f uu of %.0f available"),

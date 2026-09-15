@@ -115,7 +115,7 @@ void UAircraftType::BuildA320(UAircraftType* Type)
 	// the nose. Roughly a third of the Piper's rate, which is the whole reason this is on
 	// the type: the same corner is a different manoeuvre for the two.
 	Type->Ground.Taxi.SpeedCap = 800.0;
-	Type->Ground.MinTaxiSpeed = 50.0;
+	Type->Ground.MinSteeringSpeed = 50.0;
 	Type->Ground.MaxTurnRateDegPerSec = 8.0;
 
 	// Seventy tonnes moving on idle thrust: it gets under way slowly and is braked gently,
@@ -160,7 +160,7 @@ void UAircraftType::Build737(UAircraftType* Type)
 
 	// Longer than the A320 and steered the same way, so it turns no faster.
 	Type->Ground.Taxi.SpeedCap = 800.0;
-	Type->Ground.MinTaxiSpeed = 50.0;
+	Type->Ground.MinSteeringSpeed = 50.0;
 	Type->Ground.MaxTurnRateDegPerSec = 8.0;
 }
 
@@ -281,7 +281,7 @@ FGroundPerformance UAircraftType::PiperMeridianGround()
 
 	// 0.8 m/s, about 1.6 kt - a slow walk. Idle thrust against brakes. See FGroundPerformance:
 	// the floor exists because an aeroplane cannot yaw while stopped.
-	Ground.MinTaxiSpeed = 80.0;
+	Ground.MinSteeringSpeed = 80.0;
 
 	// COMFORTABLE figures, not maximum-performance ones. A Meridian's PT6A can shove it
 	// along far harder than this and its brakes can stop it far shorter - on dry concrete

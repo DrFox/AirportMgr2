@@ -21,7 +21,7 @@ bool FServiceRoadFilletClearsTheTruckLockTest::RunTest(const FString& Parameters
 	//
 	// A rigid vehicle cannot follow an arc tighter than Wheelbase / sin(lock) AT ANY SPEED -
 	// FSpeedProfile calls that TightestFollowable, and on a corner below it drops the agent
-	// to MinTaxiSpeed and wears the crab. So a service road whose own corners are tighter
+	// to MinSteeringSpeed and wears the crab. So a service road whose own corners are tighter
 	// than its own trucks can steer is a road the traffic crawls round for ever.
 	//
 	// THAT IS NOT HYPOTHETICAL. Reported from play 2026-09-14: the fuel truck crawled every
