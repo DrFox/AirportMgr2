@@ -80,6 +80,31 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	static constexpr double CrabAtMinSpeedDegrees = 10.0;
 
+	/**
+	 * The slowest a PLAN may ask for, uu/s. 0.1 m/s - small enough never to be seen.
+	 *
+	 * A SOLVER GUARD, NOT A PERFORMANCE FIGURE, and that is why it lives here rather than on
+	 * FGroundPerformance. Two loops in this model divide by their own progress, and both
+	 * deadlock at zero:
+	 *
+	 *   the crab loop - if v = 0 and the heading error exceeds the lock, MaxStep is zero, the
+	 *   heading never moves, the crab never shrinks, and the agent sits at zero for ever with
+	 *   an error it cannot resolve;
+	 *
+	 *   a sharp vertex - FSpeedProfile plans a stop there, the backward pass brakes to rest,
+	 *   and LimitAt returns zero from then on.
+	 *
+	 * Neither is physics. FGroundPerformance::MinSteeringSpeed was doing this by accident, at
+	 * 0.5 m/s - five times larger than it needs to be, authored per vehicle as though it were
+	 * a fact about the machine, and indistinguishable in the logs from the other rules
+	 * reporting the same number.
+	 *
+	 * APPLIED BESIDE THE PHYSICAL FLOOR, never instead of it: an aircraft keeps its own
+	 * steering minimum, which is far above this, and only something authored at zero ever
+	 * sees this figure at all.
+	 */
+	static constexpr double ProgressEpsilon = 10.0;
+
 	/** Which way the agent is FACING, radians. Its own state now, not a function of where it is. */
 	UPROPERTY() double Heading = 0.0;
 

@@ -1,6 +1,7 @@
 #include "Model/SpeedProfile.h"
 
 #include "AirsideLog.h"
+#include "Model/RouteFollower.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -137,7 +138,12 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		const double Instant = FMath::Abs(FMath::UnwindRadians(Leaving[At] - Arriving[At]));
 		if (Instant > CornerEpsilon)
 		{
-			Limit = Ground.MinSteeringSpeed;
+			// THE GREATER OF THE TWO, never the airframe's figure alone. MinSteeringSpeed is
+			// physics and may legitimately be zero - a truck stops with the wheel turned -
+			// and zero HERE is not a crawl, it is a permanent stop: the backward pass brakes
+			// the agent to rest at this vertex and LimitAt answers zero for ever after. See
+			// FRouteFollower::ProgressEpsilon, and Airside.Model.SteeringFloorSharpVertexStillCreeps.
+			Limit = FMath::Max(Ground.MinSteeringSpeed, FRouteFollower::ProgressEpsilon);
 
 			// The FIRST one only, and where it is. A route with a sharp vertex crawls
 			// through it whatever its curvature says, so this is the other answer the log

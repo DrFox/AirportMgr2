@@ -177,7 +177,11 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// It floors at MinSteeringSpeed and the profile does not, which is what lets the aircraft
 	// creep through a turn but still stop when it has arrived.
 	const double Slowing = 1.0 - FMath::Clamp(Crab / CrabAtMinSpeedDegrees, 0.0, 1.0);
-	const double CrabLimit = FMath::Max(Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap * Slowing);
+	// THREE-WAY, not two. MinSteeringSpeed is the airframe's physics and may legitimately be
+	// zero - a truck can stop with the wheel turned - so the solver's own epsilon has to sit
+	// beside it or this loop has nothing to climb out of. See FRouteFollower::ProgressEpsilon.
+	const double CrabLimit = FMath::Max3(
+		Ground.MinSteeringSpeed, ProgressEpsilon, Ground.Taxi.SpeedCap * Slowing);
 
 	// The THIRD cap: what the stop point permits. sqrt(2 a s), the braking curve, so the
 	// agent arrives at the stop at rest having braked at the rate it actually has - the
