@@ -3,7 +3,7 @@
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
-#include "Tool/PlotDrawTool.h"
+#include "Tool/PlotPlaceTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
@@ -70,9 +70,12 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// FStandPlaceTool under two entries until the depot became a drawn plot. A stand
 		// keeps press-drag-release because it has no plot: its extent is its design
 		// aircraft's, and a rectangle round it would be a second opinion about how big it is.
+		//
+		// AND A STAGED GESTURE, not the apron's freeform one it briefly borrowed. That reuse
+		// was cheap and PIE showed what it cost - see the plot gesture design doc.
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
-			LOCTEXT("FuelDepotTooltip", "Draw a fuel depot plot: click each corner, click the first again to close. One edge must run along a service road, and the plot's width decides how many bays it holds."),
-			[] { return MakeUnique<FPlotDrawTool>(EPlaceableEntity::FuelDepot); } },
+			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: click a service road to anchor it, drag along the road for width, away from it for depth, then press Build."),
+			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }

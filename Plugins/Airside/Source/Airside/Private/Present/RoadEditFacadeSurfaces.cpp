@@ -224,6 +224,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 }
 
 int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+	FVector2D FrontageA, FVector2D FrontageB,
 	const TArray<EDepotModule>& Modules, EPlaceableEntity Kind)
 {
 	ARoadNetworkActor& Owner = Actor();
@@ -241,20 +242,11 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 
 	URoadNetwork& Net = EnsureNetwork();
 
-	// COUNTER-CLOCKWISE FIRST, AND BEFORE THE FRONTAGE IS FOUND. Exactly the correction
-	// AddApron makes and for the same reason - the pad goes through the same triangulator,
-	// which orients its triangles from the winding, and the surface is not two-sided. Drawn
-	// clockwise and left alone, the pad faces DOWN: the fence and the modules still stand up
-	// (PlotFit derives the interior side from the signed area) and the concrete is simply
-	// not there, which is what shipped and what PIE showed on 2026-09-15.
-	//
-	// BEFORE, not after, because FindFrontageEdge returns its edge in the outline's winding
-	// order and PlotFit derives which side the interior is on from that direction. Reversing
-	// afterwards would leave the two disagreeing and lay every bay across the road.
 	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
-	// fed a figure-eight it produces overlapping triangles rather than an error. The draw
-	// tool refuses a crossing edge as it is placed, so this is the second line of the same
-	// defence, exactly as AddApron keeps it.
+	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
+	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
+	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
+	// calling this month.
 	if (!RoadGeom::IsSimplePolygon(Outline))
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -262,27 +254,35 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		return INDEX_NONE;
 	}
 
+	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the
+	// pad goes through the same triangulator, which orients its triangles from the winding,
+	// and the surface is not two-sided. Stored clockwise, the pad faces DOWN - the fence and
+	// the modules still stand up, because PlotFit derives the interior side from the signed
+	// area, and the concrete is simply absent. That shipped on 2026-09-15 and took a
+	// screenshot to find.
+	//
+	// KEPT EVEN THOUGH THE GESTURE NOW HANDS IN A COUNTER-CLOCKWISE RECTANGLE. It costs a
+	// shoelace sum, and the alternative is a facade that is correct only for the one caller
+	// that happens to get the winding right.
 	TArray<FVector2D> Wound = Outline;
 	if (RoadGeom::PolygonArea(Wound) < 0.0)
 	{
 		Algo::Reverse(Wound);
+
+		// The frontage travels with it. It was given in the ORIGINAL winding order, and
+		// PlotFit reads which side the interior is on from that direction - left alone
+		// across a reversal, it would lay every bay across the road instead of into the plot.
+		Swap(FrontageA, FrontageB);
 	}
 
-	// THE ACTOR'S RADIUS, not the constant. It is level-authored per-airport gameplay tuning
-	// (see ARoadNetworkActor::ServiceLinkRadius), and asking with a different reach than
-	// FAnchorLink::Build will later use is how a plot gets accepted that then never joins.
-	FVector2D FrontageA = FVector2D::ZeroVector;
-	FVector2D FrontageB = FVector2D::ZeroVector;
-	if (!FAnchorLink::FindFrontageEdge(Net, Wound, Owner.ServiceLinkRadius,
-		FrontageA, FrontageB))
-	{
-		UE_LOG(LogRoadMesh, Warning,
-			TEXT("PlaceEntityInPlot refused: no edge of the plot is within %.0f uu of a "
-				 "service road. A depot must front onto one to be of any use."),
-			Owner.ServiceLinkRadius);
-		return INDEX_NONE;
-	}
-
+	// THE FRONTAGE IS GIVEN, NOT SEARCHED FOR. A road-snapped rectangle knows which of its
+	// edges is on the road by construction, so searching would be a second opinion about a
+	// fact the gesture already established - and that is why FAnchorLink::FindFrontageEdge
+	// was deleted rather than left sitting there looking authoritative.
+	//
+	// The plot also touches a road BY CONSTRUCTION, so the old "no road within reach"
+	// refusal went with it. The Idle stage reports a cursor near no service road before a
+	// click is even possible, which is earlier and cheaper than refusing at commit.
 	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Wound, FrontageA, FrontageB);
 	if (!Fit.bFits)
 	{

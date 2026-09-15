@@ -116,6 +116,7 @@ public:
 
 	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
 	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		FVector2D FrontageA, FVector2D FrontageB,
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 	virtual bool DeleteEntity(int32 EntityIndex) override;

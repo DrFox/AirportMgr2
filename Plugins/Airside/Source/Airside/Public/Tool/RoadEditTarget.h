@@ -196,6 +196,7 @@ public:
 	 * logs which; see URoadEditFacade::PlaceEntityInPlot.
 	 */
 	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		FVector2D FrontageA, FVector2D FrontageB,
 		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) = 0;
 
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;

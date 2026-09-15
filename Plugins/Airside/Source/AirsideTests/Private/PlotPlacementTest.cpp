@@ -1,4 +1,7 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
+#include "Present/RoadNetworkActor.h"
+#include "Tool/RoadEditTarget.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
@@ -116,6 +119,62 @@ bool FTrucksDerivedFromShedsTest::RunTest(const FString& Parameters)
 		if (!TestNotNull(TEXT("a plotless depot places"), Plain)) { return false; }
 		TestEqual(TEXT("and keeps the count it was given"), Plain->Trucks, 3);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotOutlineIsAlwaysCounterClockwiseTest,
+	"Airside.Entities.PlotOutlineIsAlwaysCounterClockwise",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters)
+{
+	// A CLOCKWISE plot handed to the facade must be STORED counter-clockwise. The pad goes
+	// through the same ear-clipper an apron does, which orients triangles from the winding,
+	// and the surface is not two-sided - stored clockwise, the concrete faces DOWN and the
+	// depot stands on visible grass. That shipped on 2026-09-15 and took a screenshot to
+	// find, with nothing pinning it until now.
+	//
+	// DRIVEN THROUGH THE FACADE, not the model: URoadNetwork stores what it is given and the
+	// correction is the facade's, so a model-level assertion would pass straight over the bug.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+
+	// Clockwise: the same rectangle GridOutline makes, walked the other way round.
+	const TArray<FVector2D> Clockwise = {
+		FVector2D(0.0, 0.0), FVector2D(0.0, 800.0),
+		FVector2D(1200.0, 800.0), FVector2D(1200.0, 0.0) };
+
+	// The frontage in THAT winding order: the y = 0 edge runs from (1200,0) to (0,0).
+	IRoadEditTarget* Target = Actor;
+	Target->PlaceEntityInPlot(Clockwise, FVector2D(1200.0, 0.0), FVector2D(0.0, 0.0),
+		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
+
+	const TArray<FEntityInstance>& Entities = Actor->Network->GetEntities();
+	if (!TestTrue(TEXT("a depot was placed"), Entities.Num() > 0)) { return false; }
+
+	double Twice = 0.0;
+	const TArray<FVector2D>& Stored = Entities[0].Outline;
+	for (int32 I = 0; I < Stored.Num(); ++I)
+	{
+		const FVector2D& P = Stored[I];
+		const FVector2D& Q = Stored[(I + 1) % Stored.Num()];
+		Twice += P.X * Q.Y - Q.X * P.Y;
+	}
+	TestTrue(TEXT("stored counter-clockwise however it was drawn"), Twice > 0.0);
+
+	// AND THE MODULE IS STILL INSIDE THE PLOT. Reversing the outline without swapping the
+	// frontage with it would leave PlotFit reading the interior side backwards and lay every
+	// bay across the road - a subtler failure than the invisible pad, and one the winding
+	// assertion alone would not catch.
+	TestTrue(TEXT("and the pose sits on the frontage, not across the road"),
+		Entities[0].Position.Y > -1.0 && Entities[0].Position.Y < 1.0);
 
 	return true;
 }
