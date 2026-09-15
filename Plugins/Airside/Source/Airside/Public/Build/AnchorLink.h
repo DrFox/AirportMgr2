@@ -101,6 +101,36 @@ struct AIRSIDE_API FAnchorLink
 	static void Gather(URoadNetwork& Network, double MaxLeadIn, double ServiceLinkRadius,
 		TArray<FPendingLink>& OutPending, TSet<FGuidelineNodeId>& OutAnchorNodes);
 
+	/**
+	 * Which edge of a drawn plot faces a service road - the plot's road frontage.
+	 *
+	 * HERE AND NOT IN Solve/PlotFit, which fits the bays: finding the nearest road needs the
+	 * network, and that layer may include nothing beyond CoreMinimal.h. The split is what
+	 * keeps the bay solver world-free testable, and PlotFit is handed the answer.
+	 *
+	 * HERE AND NOT ON THE FACADE either, though the tool is what asks. It needs a
+	 * URoadNetwork and nothing else, so putting it on the facade would have forced its test
+	 * to build an actor to ask a question about a polygon.
+	 *
+	 * IT ASKS THE SAME QUESTION THE LEAD-IN WILL, through Resolve and the same
+	 * FProximityLinkFinder a depot's pose uses, rather than measuring to roads itself. That
+	 * matters more here than anywhere else in this file: a plot accepted by a second,
+	 * slightly different measurement would place, and then silently never join, and the
+	 * player would be looking at a depot that simply does not work.
+	 *
+	 * Outline is implicitly closed and its winding is preserved: OutA and OutB come back in
+	 * the outline's own order, which is what PlotFit::FitBays needs to tell which side of
+	 * the frontage the plot's interior is on.
+	 *
+	 * False, with the out-parameters untouched, when no guideline admitting GroundVehicle is
+	 * within ServiceLinkRadius of any edge. The caller refuses and says so; it must NOT fall
+	 * back to the first edge, which would aim the installation at whatever the player
+	 * happened to click first.
+	 */
+	static bool FindFrontageEdge(const URoadNetwork& Network,
+		TArrayView<const FVector2D> Outline, double ServiceLinkRadius,
+		FVector2D& OutA, FVector2D& OutB);
+
 	/** Strategy dispatch: LinkFinderFor(Link.Kind)'s best candidate, or an unset hit. */
 	static FLinkHit Resolve(const URoadNetwork& Network, const FPendingLink& Link,
 		const TSet<FGuidelineNodeId>& AnchorNodes);

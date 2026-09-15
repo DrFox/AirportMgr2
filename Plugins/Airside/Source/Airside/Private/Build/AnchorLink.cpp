@@ -752,3 +752,81 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 
 	return Joined;
 }
+
+bool FAnchorLink::FindFrontageEdge(const URoadNetwork& Network,
+	TArrayView<const FVector2D> Outline, double ServiceLinkRadius,
+	FVector2D& OutA, FVector2D& OutB)
+{
+	if (Outline.Num() < 3)
+	{
+		return false;
+	}
+
+	// NOTHING IS EXCLUDED. The plot is not placed yet, so it owns no anchor or pose nodes
+	// for a probe to be told to avoid - unlike Build, which gathers them precisely because
+	// joining one anchor must not target another.
+	const TSet<FGuidelineNodeId> NoAnchorNodes;
+
+	double BestDistance = TNumericLimits<double>::Max();
+	int32 BestEdge = INDEX_NONE;
+
+	for (int32 I = 0; I < Outline.Num(); ++I)
+	{
+		const FVector2D& A = Outline[I];
+		const FVector2D& B = Outline[(I + 1) % Outline.Num()];
+		const FVector2D Midpoint = (A + B) * 0.5;
+
+		// THE SAME LINK A DEPOT'S POSE WILL MAKE: proximity, ground vehicle, the service
+		// radius. Asking a different question here is how a plot gets accepted that the
+		// lead-in then cannot join - and the player would be looking at a placed depot
+		// that simply never works, with nothing on screen to say why.
+		FPendingLink Probe;
+		Probe.Kind = ELinkKind::Proximity;
+		Probe.At = Midpoint;
+		Probe.Class = ETraversalClass::GroundVehicle;
+		Probe.Reach = ServiceLinkRadius;
+
+		const FLinkHit Hit = Resolve(Network, Probe, NoAnchorNodes);
+		if (!Hit.IsSet())
+		{
+			continue;
+		}
+
+		const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Hit.Edge);
+		if (Edge == nullptr)
+		{
+			continue;
+		}
+
+		const FGuidelineNode* NodeA = Network.GetGuidelineNode(Edge->A);
+		const FGuidelineNode* NodeB = Network.GetGuidelineNode(Edge->B);
+		if (NodeA == nullptr || NodeB == nullptr)
+		{
+			continue;
+		}
+
+		// Where on that guideline the link would land, through the ONE evaluator - the
+		// same call Join makes to find its corner. A second measurement of the same hit is
+		// how the tool and the lead-in come to disagree about which edge is the front.
+		const FVector2D Where = GuidelineGeom::Eval(
+			NodeA->Position, Edge->Control, NodeB->Position, Hit.Param);
+
+		const double Distance = FVector2D::Distance(Midpoint, Where);
+		if (Distance < BestDistance)
+		{
+			BestDistance = Distance;
+			BestEdge = I;
+		}
+	}
+
+	if (BestEdge == INDEX_NONE)
+	{
+		return false;
+	}
+
+	// IN WINDING ORDER. PlotFit::FitBays derives which side the plot's interior is on from
+	// the direction of this edge, so swapping these would lay every bay across the road.
+	OutA = Outline[BestEdge];
+	OutB = Outline[(BestEdge + 1) % Outline.Num()];
+	return true;
+}
