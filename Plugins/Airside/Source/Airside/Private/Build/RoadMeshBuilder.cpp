@@ -640,7 +640,14 @@ void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult
 
 void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
 {
-	if (Apron.Outline.Num() < 3)
+	// A forwarder. SurfaceMaterialSlot stays unread here, as the slot-0 comment below
+	// already records, so the struct carries nothing this needs beyond its outline.
+	AddApron(Apron.Outline);
+}
+
+void FRoadMeshBuilder::AddApron(const TArray<FVector2D>& Outline)
+{
+	if (Outline.Num() < 3)
 	{
 		return;
 	}
@@ -650,11 +657,11 @@ void FRoadMeshBuilder::AddApron(const FApronSurface& Apron)
 	// terminal frontage is not star-shaped.
 	TArray<UE::Geometry::FIndex3i> Triangles;
 	PolygonTriangulation::TriangulateSimplePolygon(
-		Apron.Outline, Triangles, /*bOrientAsHoleFill*/ false);
+		Outline, Triangles, /*bOrientAsHoleFill*/ false);
 
 	TArray<int32> Corners;
-	Corners.Reserve(Apron.Outline.Num());
-	for (const FVector2D& Corner : Apron.Outline)
+	Corners.Reserve(Outline.Num());
+	for (const FVector2D& Corner : Outline)
 	{
 		// UV1 zero, and UV2 carrying no junction blend with the reserved channel at one -
 		// the same values a segment far from any junction would hold.

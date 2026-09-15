@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Components/DynamicMeshComponent.h"
+#include "DynamicMesh/DynamicMesh3.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
@@ -91,6 +93,42 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 	Actor->RebuildMesh();
 	TestEqual(TEXT("rebuilding again does not double the boxes"),
 		Actor->GetPlotPresenter()->GetInstanceCount(), One * 2);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPadIsPavementTest,
+	"Airside.Present.PlotPadIsPavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPadIsPavementTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("an apron component"), Actor->ApronComponent.Get())) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->RebuildMesh();
+
+	// Read the count BEFORE, so the claim is about what the plot ADDED rather than an
+	// absolute number that moves with every other surface in the level.
+	const int32 Before =
+		Actor->ApronComponent->GetDynamicMesh()->GetMeshRef().TriangleCount();
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+
+	PlaceDepot(Actor, Depot, 0.0);
+	Actor->RebuildMesh();
+
+	// ON THE APRON COMPONENT, not a component of its own. The pad is pavement and shares
+	// the surface, the Z and the material of the aprons it abuts - two components would be
+	// two surfaces the player can see the seam between.
+	TestTrue(TEXT("the drawn plot became pavement, not bare grass"),
+		Actor->ApronComponent->GetDynamicMesh()->GetMeshRef().TriangleCount() > Before);
 
 	return true;
 }
