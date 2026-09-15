@@ -95,10 +95,29 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 			}
 			else if (Radius < TightestFollowable)
 			{
-				// The lock cannot hold this line at any speed. Crawl and wear the crab -
-				// the same answer the vertex caps below give an instant corner.
-				Cap = Ground.MinSteeringSpeed;
+				// THE LOCK CANNOT HOLD THIS LINE AT ANY SPEED, so no speed is the right answer
+				// and slowing down does not make it one - the body crabs through regardless.
+				// This used to substitute MinTaxiSpeed, which is indistinguishable from an
+				// INTENDED crawl: the profile log reported the same 50 uu/s here, at a
+				// takeable-but-tight corner, and at a sharp vertex, and "it crawls round that
+				// corner" was diagnosed by reasoning about which of the three it was. That
+				// guesswork is what this project's notes say to instrument instead.
+				//
+				// So the cap is the lateral-accel speed for the radius ACTUALLY asked for -
+				// lower than the lock's own, and arrived at by the same rule as every other
+				// corner - and the warning carries the diagnosis. A corner this tight is a
+				// defect in whatever laid the line; the log is what finds it rather than
+				// leaving it to be lived with.
+				Cap = FMath::Min(Cap, FMath::Sqrt(
+					FMath::Max(0.0, Ground.MaxLateralAccelUu) * Radius));
 				Rule = TEXT("TIGHTER THAN THE STEERING LOCK");
+
+				UE_LOG(LogAirsideTraffic, Warning,
+					TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
+					     "R>=%.0f (wheelbase %.0f, lock %.0f deg). The body will crab through "
+					     "it. Widen the corner that laid this line."),
+					Radius, Distances[Span], TightestFollowable,
+					Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 			}
 			else
 			{
@@ -196,7 +215,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// aircraft - and that is the decision this log exists to inform.
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
-		     "(%s). %d sharp vertex/vertices%s. Floor %.0f, taxi cap %.0f, lock allows "
+		     "(%s). %d sharp vertex/vertices%s. Steering floor %.0f, taxi cap %.0f, lock allows "
 		     "R>=%.0f (wheelbase %.0f, lock %.0f deg)."),
 		Distances.Last(), Count,
 		TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius,
