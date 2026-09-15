@@ -1,5 +1,6 @@
 #include "Present/PlotPresenter.h"
 
+#include "AirsideLog.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -118,6 +119,9 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	Boxes->ClearInstances();
 	GateGaps = 0;
 
+	int32 Plots = 0;
+	int32 ModuleBoxes = 0;
+
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
 		if (!Entity.bAlive || Entity.Outline.Num() < 3)
@@ -135,7 +139,20 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			continue;
 		}
 
+		++Plots;
+
 		const PlotFit::FPlotFit Fit = PlotFit::FitBays(Entity.Outline, FrontageA, FrontageB);
+
+		// THE BAYS AND THE MODULES ARE SEPARATE COUNTS, and the pair is the whole diagnosis
+		// when a depot looks wrong: fewer bays than modules is a plot too small for the mix,
+		// and fewer modules than bays is a yard the player has not finished filling. One
+		// combined number would say neither.
+		if (Fit.Bays.Num() != Entity.Modules.Num())
+		{
+			UE_LOG(LogAirside, Log,
+				TEXT("Plot at (%.0f, %.0f): %d bay(s) fit, %d module(s) chosen."),
+				Entity.Position.X, Entity.Position.Y, Fit.Bays.Num(), Entity.Modules.Num());
+		}
 
 		const int32 Count = FMath::Min(Fit.Bays.Num(), Entity.Modules.Num());
 		for (int32 I = 0; I < Count; ++I)
@@ -144,6 +161,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			Boxes->AddInstance(BoxAt(Bay.Centre, Bay.Heading,
 				PlotFit::BayDepthUu, PlotFit::BayWidthUu, HeightFor(Entity.Modules[I])),
 				/*bWorldSpace=*/true);
+			++ModuleBoxes;
 		}
 
 		// --- The fence -----------------------------------------------------------------
@@ -185,5 +203,18 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 					FenceBayUu, FenceThicknessUu, FenceHeightUu), /*bWorldSpace=*/true);
 			}
 		}
+	}
+
+	// ONE CENSUS LINE PER REBUILD, beside the surface builder's own. Zero plots is the
+	// common idle rebuild and stays quiet.
+	//
+	// IT NAMES THE GATE GAPS, which is the one thing that cannot be seen from a box count:
+	// a fence with no gap is a depot no truck can leave, and it looks completely correct
+	// from every angle on screen.
+	if (Plots > 0)
+	{
+		UE_LOG(LogAirside, Log,
+			TEXT("Plots: %d plot(s), %d module box(es), %d fence panel(s), %d gate gap(s)"),
+			Plots, ModuleBoxes, Boxes->GetInstanceCount() - ModuleBoxes, GateGaps);
 	}
 }
