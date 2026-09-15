@@ -6,6 +6,7 @@
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
+#include "Present/PlotPresenter.h"
 #include "Present/RoadSurfacePresenter.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
@@ -194,6 +195,9 @@ public:
 	 * three-line forwarders AND this accessor was the growth this whole issue was about.
 	 */
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
+
+	/** The plot boxes - see UPlotPresenter. */
+	UPlotPresenter* GetPlotPresenter() const { return Plots; }
 
 	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
@@ -805,6 +809,15 @@ private:
 	 * disposable as it always was.
 	 */
 	UPROPERTY(Transient) TObjectPtr<URoadSurfacePresenter> Presenter;
+
+	/** The boxes standing in plotted installations' bays - see UPlotPresenter's own header.
+	 *  Same CreateDefaultSubobject and Transient reasoning as Presenter. */
+	UPROPERTY(Transient) TObjectPtr<UPlotPresenter> Plots;
+
+	/** The one component every plot box and fence panel is an instance in. A UPROPERTY and
+	 *  NOT Transient, unlike the presenter that fills it: it is a scene component this actor
+	 *  owns, exactly as the five dynamic mesh components are. */
+	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotBoxes;
 
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */

@@ -4,10 +4,13 @@
 #include "Containers/StaticArray.h"
 #include "Components/BillboardComponent.h"
 #include "Components/DynamicMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
+#include "UObject/ConstructorHelpers.h"
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
@@ -102,6 +105,29 @@ ARoadNetworkActor::ARoadNetworkActor()
 	SurfaceComponents[static_cast<int32>(ESurfaceLayer::HoldingPaint)] = MarkingComponent;
 	SurfaceComponents[static_cast<int32>(ESurfaceLayer::RunwayPaint)] = RunwayMarkingComponent;
 	Presenter->Initialize(SurfaceComponents);
+
+	// The plot boxes: one instanced component, every module and fence panel an instance in
+	// it. The ENGINE'S OWN primitive, not an authored asset, for the reason
+	// ARoadAgentActor's placeholder records at its own FObjectFinder - grey-box geometry
+	// that shows only until real meshes arrive has no business owning content of its own.
+	PlotBoxes = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotBoxes"));
+	PlotBoxes->SetupAttachment(RootComponent);
+	{
+		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(
+			TEXT("/Engine/BasicShapes/Cube.Cube"));
+		if (Cube.Succeeded())
+		{
+			PlotBoxes->SetStaticMesh(Cube.Object);
+		}
+	}
+
+	// No collision, matching every other surface this actor draws: the world is flat and
+	// every pick is exact maths against the road plane, so a collider here would be
+	// something the build tools could trace against by accident.
+	PlotBoxes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
+	Plots->Initialise(PlotBoxes);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
@@ -209,6 +235,17 @@ void ARoadNetworkActor::PostInitProperties()
 	Presenter = Cast<URoadSurfacePresenter>(GetDefaultSubobjectByName(TEXT("Presenter")));
 	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
 	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
+	Plots = Cast<UPlotPresenter>(GetDefaultSubobjectByName(TEXT("Plots")));
+
+	// The component travels the same way, and the presenter must be re-pointed AT IT: a
+	// duplicate's presenter would otherwise still be filling the CDO s component, so the
+	// boxes would be added to an object no level ever renders.
+	PlotBoxes = Cast<UInstancedStaticMeshComponent>(
+		GetDefaultSubobjectByName(TEXT("PlotBoxes")));
+	if (Plots != nullptr)
+	{
+		Plots->Initialise(PlotBoxes);
+	}
 }
 
 UObject* ARoadNetworkActor::FacadeOuterForTest() const
@@ -520,6 +557,13 @@ void ARoadNetworkActor::RebuildMesh()
 		return;
 	}
 	Presenter->Rebuild(*Network, MakeSurfaceSettings());
+
+	// The boxes standing on that surface. After the surface, so a plot drawn this frame has
+	// its pad underneath it before its sheds go up.
+	if (Plots != nullptr)
+	{
+		Plots->RebuildFrom(*Network);
+	}
 
 	// The guideline graph was just regenerated with new handles. Every agent's route must be
 	// re-pointed at the nodes that now hold its positions, or the occupancy table would be
