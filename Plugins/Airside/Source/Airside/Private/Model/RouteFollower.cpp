@@ -121,7 +121,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	const double Lock = FMath::DegreesToRadians(FMath::Max(0.0, Ground.MaxSteerDegrees));
 
 	double MaxStep = 0.0;
-	if (InAirframe.HasAxles())
+	if (InAirframe.EffectiveSteerLaw() == ESteerLaw::RollingSteer)
 	{
 		const double Steer = FMath::Clamp(Error, -Lock, Lock);
 		SteerDegrees = FMath::RadiansToDegrees(Steer);
@@ -158,7 +158,7 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 	// a seventh of the speed. What genuinely cannot be tracked is only the error the lock
 	// itself cannot absorb, and on a corner too tight for the lock that is exactly what
 	// grows - so the crab term still does its job where it should.
-	const double Crab = InAirframe.HasAxles()
+	const double Crab = InAirframe.EffectiveSteerLaw() == ESteerLaw::RollingSteer
 		? FMath::RadiansToDegrees(FMath::Max(0.0, FMath::Abs(Error) - Lock))
 		: FMath::RadiansToDegrees(FMath::Abs(Error - Step));
 

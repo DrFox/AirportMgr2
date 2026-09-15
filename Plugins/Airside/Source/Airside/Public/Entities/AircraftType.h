@@ -72,6 +72,24 @@ public:
 	UPROPERTY(EditAnywhere) double MainWheelRadius = 21.0;
 
 	/**
+	 * How this type steers on the ground - see ESteerLaw.
+	 *
+	 * ROLLINGSTEER BY DEFAULT, which is the opposite of FAirframe's own default, and the
+	 * asymmetry is deliberate. A bare FAirframe is a struct a test built by hand, and the
+	 * safe assumption for one of those is the law that needs no measurements. An AIRCRAFT
+	 * TYPE is different: every aeroplane in this game steers on a nosewheel, so Pivot here
+	 * would be a claim no real type makes - and defaulting to it would have silently turned
+	 * every already-authored type asset into a pivot on load, since a new UPROPERTY takes
+	 * its default on assets saved before it existed.
+	 *
+	 * A type with this default and no axles therefore declares a law its data cannot support,
+	 * which FAirframe::EffectiveSteerLaw reports as an error and falls back from. That is the
+	 * intended outcome: the behaviour is what it always was, and it is now loud instead of
+	 * silent.
+	 */
+	UPROPERTY(EditAnywhere) ESteerLaw SteerLaw = ESteerLaw::RollingSteer;
+
+	/**
 	 * The steered axle in local X, uu. Zero is this class's convention - the origin IS the
 	 * nose gear, so there is nothing to offset. See FAirframe::SteerAxleX.
 	 */
@@ -155,6 +173,7 @@ public:
 		Out.Approach = Approach;
 		Out.Engine = Engine;
 		Out.Wingspan = Footprint.Wingspan;
+		Out.SteerLaw = SteerLaw;
 		Out.SteerAxleX = SteerAxleX;
 		Out.FixedAxleX = FixedAxleX;
 

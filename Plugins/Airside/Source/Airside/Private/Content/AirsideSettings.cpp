@@ -129,6 +129,9 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// README fixes its origin at "rear axle centre, projected to the ground, because that is
 	// what a front-steered truck pivots about". Airside.Content.VehicleFootprintMatchesTheMesh
 	// asserts both figures against the mesh's own bones so they cannot drift from it.
+	// DECLARED, since the law stopped being inferred from these two numbers on
+	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
+	Van.SteerLaw = ESteerLaw::RollingSteer;
 	Van.SteerAxleX = 360.7;
 	Van.FixedAxleX = 0.0;
 

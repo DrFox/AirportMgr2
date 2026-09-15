@@ -58,6 +58,13 @@ namespace
 		Airframe.Ground = TestAirframes::Piper().Ground;
 		Airframe.Ground.MaxSteerDegrees = 60.0;
 		Airframe.Ground.MaxLateralAccelUu = 147.0;
+
+		// DECLARED SINCE 2026-09-15, and these four tests are the reason the declaration had
+		// to become explicit. They used to get the rolling-steer law for free by filling in
+		// the axles below, which is the same inference that silently turned a fuel truck into
+		// something that pivots on the spot. FAirframe defaults to Pivot now, so an airframe
+		// that means to steer says so.
+		Airframe.SteerLaw = ESteerLaw::RollingSteer;
 		Airframe.SteerAxleX = 0.0;
 		Airframe.FixedAxleX = -454.3;
 		return Airframe;

@@ -87,7 +87,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		{
 			const double Radius = Length / Turn;
 			const TCHAR* Rule = TEXT("?");
-			if (!Airframe.HasAxles())
+			if (Airframe.EffectiveSteerLaw() != ESteerLaw::RollingSteer)
 			{
 				Cap = FMath::Min(Cap, MaxTurnRate * Radius);
 				Rule = TEXT("pivot yaw rate");

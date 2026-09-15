@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirsideLog.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RunwayFacts.h"
@@ -65,6 +66,42 @@ struct AIRSIDE_API FEntityFootprint
 
 	/** False when nothing has been authored, so callers can skip drawing rather than draw a dot. */
 	bool IsSet() const { return Wingspan > 0.0 && NoseX > TailX; }
+};
+
+/**
+ * Which law moves an airframe on the ground.
+ *
+ * AN ENUM AND NOT A DERIVED BOOL, since 2026-09-15. It used to be inferred from
+ * FAirframe::HasAxles() - "has anyone measured the wheelbase?" - which meant forgetting to
+ * measure a vehicle silently changed its physics. That is not hypothetical: it is the
+ * 2026-09-14 report of a fuel truck driving up to a stand, stopping, swinging ninety degrees
+ * on the spot and driving off. CLAUDE.md's rule is that a phase is an enum and never a set
+ * of bools, for exactly this reason - an illegal state that cannot be represented cannot be
+ * shipped.
+ */
+UENUM()
+enum class ESteerLaw : uint8
+{
+	/**
+	 * A flat yaw rate - FGroundPerformance::MaxTurnRateDegPerSec - independent of speed.
+	 *
+	 * What a tug, a belt loader or a pushback tractor actually does: it turns about itself,
+	 * and it can do so from a standstill. THE DEFAULT, because it is the law that needs no
+	 * measurements, and an airframe nobody has measured is precisely the one that must not
+	 * claim to steer geometrically.
+	 */
+	Pivot,
+
+	/**
+	 * The kinematic bicycle model: yaw is v*sin(lock)/L about the steered axle.
+	 *
+	 * Two consequences the pivot law does not have, and both are load-bearing. Yaw VANISHES
+	 * at a standstill, so such a vehicle cannot snap its heading while stopped - which is why
+	 * a ground vehicle's MinSteeringSpeed can be zero. And a corner tighter than L/sin(lock)
+	 * cannot be followed at ANY speed, because speed cancels out of the requirement - see
+	 * FAirframe::TightestFollowableRadius.
+	 */
+	RollingSteer
 };
 
 /**
@@ -670,8 +707,48 @@ struct AIRSIDE_API FAirframe
 	 */
 	double Wheelbase() const { return FMath::Abs(SteerAxleX - FixedAxleX); }
 
-	/** True when this airframe steers on geometry rather than on a flat yaw rate. */
+	/**
+	 * Which law moves this airframe - DECLARED, not inferred from whether the axles happen
+	 * to have been filled in. See ESteerLaw for the bug that inference caused.
+	 */
+	UPROPERTY(EditAnywhere) ESteerLaw SteerLaw = ESteerLaw::Pivot;
+
+	/**
+	 * True when the axle figures can actually support the rolling-steer law.
+	 *
+	 * NO LONGER THE LAW SELECTOR, since 2026-09-15 - it is now the DATA CHECK that
+	 * EffectiveSteerLaw runs against the declared law. Kept rather than inlined because
+	 * "are these axles measured" and "how does this thing steer" are two questions, and
+	 * collapsing them into one predicate is what caused the pivoting truck.
+	 */
 	bool HasAxles() const { return Wheelbase() > KINDA_SMALL_NUMBER; }
+
+	/**
+	 * The law this airframe will actually be moved by: the declared one, UNLESS the data
+	 * cannot support it.
+	 *
+	 * TWO STATEMENTS THAT MUST AGREE, and UE gives no way to make them one - the law is a
+	 * UPROPERTY and the wheelbase is two more. So the consumer checks identity rather than
+	 * trusting either, which is CLAUDE.md's rule for the case where a second list is forced
+	 * on us. A RollingSteer airframe with no wheelbase would divide by zero in
+	 * TightestFollowableRadius and yaw without bound in FRouteFollower; falling back to Pivot
+	 * is wrong but survivable, and the log is what gets it fixed rather than lived with.
+	 *
+	 * THE ONLY LEGAL WAY TO ASK. Read SteerLaw directly and the check is bypassed.
+	 */
+	ESteerLaw EffectiveSteerLaw() const
+	{
+		if (SteerLaw == ESteerLaw::RollingSteer && !HasAxles())
+		{
+			UE_LOG(LogAirside, Error,
+				TEXT("Airframe '%s' declares RollingSteer with no wheelbase (steer axle %.1f, "
+				     "fixed axle %.1f). Falling back to the pivot law - it will turn about "
+				     "itself rather than steer."),
+				*TypeCode.ToString(), SteerAxleX, FixedAxleX);
+			return ESteerLaw::Pivot;
+		}
+		return SteerLaw;
+	}
 
 	/**
 	 * The tightest arc this airframe can follow AT ANY SPEED, uu. Zero when it pivots.
@@ -694,7 +771,8 @@ struct AIRSIDE_API FAirframe
 	{
 		const double Lock = FMath::Sin(FMath::DegreesToRadians(
 			FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
-		return (HasAxles() && Lock > KINDA_SMALL_NUMBER) ? Wheelbase() / Lock : 0.0;
+		return (EffectiveSteerLaw() == ESteerLaw::RollingSteer && Lock > KINDA_SMALL_NUMBER)
+			? Wheelbase() / Lock : 0.0;
 	}
 
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
