@@ -159,6 +159,19 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 			continue;
 		}
 
+		// NO PUMP, NO FUELLING - checked HERE, before a truck is dispatched, rather than at
+		// the hydrant where the dwell is computed. A truck sent from a pumpless depot would
+		// drive the whole way and then have nothing to do, which reads on screen as the
+		// service hanging rather than as a depot the player has not finished building.
+		//
+		// Only a MODULAR depot can be pumpless. One placed without a plot has no modules at
+		// all and is not being claimed to lack a pump - see FEntityPlacement, where the two
+		// paths are exclusive.
+		if (!HasWorkingPump(Instance))
+		{
+			continue;
+		}
+
 		if (TrucksOutFor(DepotId) >= Instance.Trucks)
 		{
 			// BUSY, NOT BROKEN. A demand whose only depot is out on another job is Needed and
@@ -350,11 +363,17 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 		if (Demand->State == EFuelDemandState::TruckEnRoute
 			&& Agent->GoalNode == FuelAnchorOf(Network, Demand->Stand))
 		{
+			// THE DEPOT'S OWN DWELL, not the service-wide one: its pumps divide it. Read
+			// from the depot the truck came FROM, which the demand records precisely so a
+			// truck can be traced back to its owner after it has left home.
+			const FEntityInstance* Depot = Network.GetEntity(Demand->Depot);
+			const double Dwell = Depot != nullptr ? DwellSecondsFor(*Depot) : DwellSeconds;
+
 			Demand->State = EFuelDemandState::Fuelling;
-			Demand->DwellEndsAt = Traffic.GetSimSeconds() + DwellSeconds;
+			Demand->DwellEndsAt = Traffic.GetSimSeconds() + Dwell;
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: truck %d at stand %d for aircraft %d; fuelling for %.0f s"),
-				AgentId, Demand->Stand.Index, Demand->AircraftId, DwellSeconds);
+				AgentId, Demand->Stand.Index, Demand->AircraftId, Dwell);
 		}
 		return;
 	}
@@ -628,4 +647,49 @@ FString UFuelService::DescribeAgent(int32 AgentId) const
 	case EFuelDemandState::Unserviceable: return RefusalText(Demand->Why);
 	default:                             return FString();
 	}
+}
+
+bool UFuelService::HasWorkingPump(const FEntityInstance& Depot)
+{
+	// NO MODULES IS NOT "NO PUMP". A depot placed without a plot - every depot in every save
+	// written before plots existed, and every one a test places through the old signature -
+	// fuels exactly as it always did. Answering false here would break the fuel loop for all
+	// of them at once, which is how a feature nobody asked about stops an existing one.
+	if (Depot.Modules.Num() == 0)
+	{
+		return true;
+	}
+
+	for (const EDepotModule Module : Depot.Modules)
+	{
+		if (Module == EDepotModule::Pump)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+double UFuelService::DwellSecondsFor(const FEntityInstance& Depot) const
+{
+	int32 Pumps = 0;
+	for (const EDepotModule Module : Depot.Modules)
+	{
+		if (Module == EDepotModule::Pump)
+		{
+			++Pumps;
+		}
+	}
+
+	// A plotless depot keeps the service-wide figure - see HasWorkingPump for why its empty
+	// module list is not a claim about pumps.
+	if (Pumps == 0)
+	{
+		return DwellSeconds;
+	}
+
+	// FLOORED, so a yard full of pumps cannot make refuelling instant. The dwell is the only
+	// pressure the fuel loop applies; discharging a demand on the frame it arrived would
+	// delete the reason to build a second depot at all.
+	return FMath::Max(DwellSeconds / static_cast<double>(Pumps), MinDwellSeconds);
 }
