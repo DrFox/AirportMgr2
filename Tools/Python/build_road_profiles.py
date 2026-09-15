@@ -33,20 +33,19 @@ CONTENT_SET = "/Game/DA_AirsideContent"
 # a 23 m taxiway. These are the defaults URoadProfile::MakeServiceRoadTransient uses, so the
 # shipped asset and every test fixture are the same cross-section.
 #
-# FILLET_RADIUS WAS 500 UNTIL 2026-09-14, AND THE TRUCKS COULD NOT TURN ON IT. A rigid
-# vehicle cannot follow an arc tighter than Wheelbase / sin(lock) at any speed; the fuel
-# truck's is 4.71 m, and RoadNetworkSolver scales the preferred radius DOWN when a junction
-# cannot fit it - 500 became 418 on the reported route, under the 510 the lock then needed,
-# so every corner from depot to stand dropped to MinTaxiSpeed and crawled. Raised WITH
-# ResolveDefaultVehicle's lock (45 -> 50 deg); the two are one decision, and
-# Airside.Model.ServiceRoadFilletClearsTheTruckLock now fails if they drift apart.
+# THERE IS NO FILLET_RADIUS HERE ANY MORE, and its absence is the point. It was 500 until
+# 2026-09-14 and 750 after, while the figure it had to agree with - the truck's
+# Wheelbase / sin(lock) - lived in another language in another directory. The two drifted ten
+# centimetres apart, RoadNetworkSolver scaled 500 down to 418 to fit a junction, and every
+# corner from depot to stand crawled. The fix at the time went the WRONG WAY: the truck's
+# steering lock was widened to fit the road.
 #
-# KEEP EQUAL TO URoadProfile::MakeServiceRoadTransient's default. This script authors
-# DA_RoadProfile_ServiceRoad and the asset is what the game lays; the C++ default is what
-# the tests exercise. They are two transcriptions of one cross-section.
+# The radius is now DERIVED in C++ from the largest service vehicle admitted - see
+# URoadProfile::ResolvedFilletRadius - so this script states nothing and can drift from
+# nothing. Passing zero below is what asks for that derivation.
 LANE_WIDTH = 600.0
 KERB_WIDTH = 60.0
-FILLET_RADIUS = 750.0
+DERIVE_FILLET = 0.0
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning
 # UAirsideContent::RunwayProfiles gives for its own set: a taxiway conforms to one of these
@@ -102,7 +101,7 @@ def build_service_road():
     if profile is None:
         return None
 
-    unreal.RoadProfile.fill_service_road(profile, LANE_WIDTH, KERB_WIDTH, FILLET_RADIUS)
+    unreal.RoadProfile.fill_service_road(profile, LANE_WIDTH, KERB_WIDTH, DERIVE_FILLET)
     unreal.EditorAssetLibrary.save_asset("%s/DA_RoadProfile_ServiceRoad" % ASSET_DIR)
 
     bands = profile.get_editor_property("bands")

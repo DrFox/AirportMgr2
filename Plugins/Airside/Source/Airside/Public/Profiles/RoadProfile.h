@@ -120,8 +120,41 @@ public:
 	/** Distance from the leftmost band edge to the centreline. Defaults to half the total width. */
 	UPROPERTY(EditAnywhere) double CentrelineOffset = -1.0;
 
-	/** Preferred corner radius in uu. Clamped by geometry at solve time. */
+	/**
+	 * Preferred corner radius in uu, clamped by geometry at solve time. ZERO MEANS DERIVE -
+	 * see ResolvedFilletRadius, and never read this field directly.
+	 *
+	 * 1500 is a TAXIWAY's, authored, and stays authored: a taxiway's corner is swept for the
+	 * largest AIRCRAFT admitted, and that figure comes from IcaoCode rather than any vehicle.
+	 */
 	UPROPERTY(EditAnywhere) double PreferredFilletRadius = 1500.0;
+
+	/**
+	 * Headroom over the bare steering limit, because RoadNetworkSolver scales a preferred
+	 * radius DOWN to fit a junction's arms - which is how a 500 uu fillet became 418 on the
+	 * route that reported this in 2026-09-14, under a lock that needed 510. A fillet that
+	 * merely clears the lock on paper does not clear it on a real junction.
+	 *
+	 * 1.25 covers the scaling seen in play with room to spare, without demanding a motorway
+	 * sweep on an apron road. It is the figure Airside.Model.ServiceRoadFilletClearsTheTruckLock
+	 * already argued for; this moves that decision from the test into the code it judges.
+	 */
+	static constexpr double JunctionScalingMargin = 1.25;
+
+	/**
+	 * The radius a junction on this profile actually turns on: the authored one, or - when
+	 * that is zero - one derived from the largest vehicle admitted.
+	 *
+	 * THE ONLY LEGAL READER OF PreferredFilletRadius. Read the field directly and a service
+	 * road turns on nothing at all.
+	 *
+	 * The sentinel exists so the ASSET CARRIES NO NUMBER. A stored radius is stale the moment
+	 * a larger vehicle joins the fleet, and the four places this figure used to be typed -
+	 * this header, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test holding
+	 * two of them together - are exactly the arrangement that shipped a ten-centimetre
+	 * shortfall nobody could see.
+	 */
+	double ResolvedFilletRadius() const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are
@@ -223,20 +256,19 @@ public:
 	/**
 	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are a 6 m lane with 0.6 m kerbs on a 7.5 m corner: wide enough for two
-	 * vans to pass, tight enough that a road reads as a road beside a 23 m taxiway - whose
-	 * own fillet is 15.3 m, so this is still visibly the smaller junction.
+	 * The defaults are a 6 m lane with 0.6 m kerbs: wide enough for two vans to pass, tight
+	 * enough that a road reads as a road beside a 23 m taxiway - whose own fillet is 15.3 m,
+	 * so this is still visibly the smaller junction.
 	 *
-	 * THE CORNER IS 7.5 m AND NOT 5 m BECAUSE THE TRUCKS HAVE TO TURN ON IT. A rigid vehicle
-	 * cannot follow an arc tighter than Wheelbase / sin(lock) at any speed, which for
-	 * ResolveDefaultVehicle is 4.71 m - and RoadNetworkSolver scales the preferred radius
-	 * DOWN when a junction's arms cannot fit it (500 became 418 on the route that reported
-	 * this), so a fillet that merely clears the lock on paper does not clear it in play.
-	 * Airside.Model.ServiceRoadFilletClearsTheTruckLock asserts the margin.
-	 *
-	 * Keep this figure and Tools/Python/build_road_profiles.py's FILLET_RADIUS equal: that
-	 * script authors DA_RoadProfile_ServiceRoad, and the asset is what the game lays.
+	 * THE CORNER IS NOT A NUMBER ANY MORE. It was 500 uu, then 750, typed in four places -
+	 * here, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test pinning two of
+	 * them together - and a rigid vehicle cannot follow an arc tighter than Wheelbase /
+	 * sin(lock) at any speed. In 2026-09-14 the authored 500 was ten centimetres under what
+	 * the truck's lock needed, and the fix went the WRONG WAY: the lock was widened to fit
+	 * the road. A zero here means "derive it from the largest vehicle admitted", which is the
+	 * rule aircraft geometry already follows, and leaves no second figure to drift.
+	 * See URoadProfile::ResolvedFilletRadius.
 	 */
 	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
-		double KerbWidth = 60.0, double FilletRadius = 750.0);
+		double KerbWidth = 60.0, double FilletRadius = 0.0);
 };

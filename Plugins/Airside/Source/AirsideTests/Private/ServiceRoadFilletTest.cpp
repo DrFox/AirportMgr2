@@ -34,25 +34,33 @@ bool FServiceRoadFilletClearsTheTruckLockTest::RunTest(const FString& Parameters
 	// CENTIMETRES, and 418 once RoadNetworkSolver scaled it down to fit the junction. Two
 	// figures a couple of percent apart, on opposite sides of a cliff, neither wrong on its
 	// own. Exactly the drift a test pins and review does not.
-	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	// WHAT CHANGED 2026-09-15. The two numbers above no longer exist as two numbers. The
+	// service road's fillet is DERIVED from the largest vehicle admitted, the way a painted
+	// taxi line is swept for the largest aircraft admitted (IcaoCode::RadiusForLetter), so
+	// there is nothing left to drift and this test asserts the derivation holds rather than
+	// that two transcriptions still match.
+	//
+	// It still MEASURES rather than trusting: ResolvedFilletRadius could be wired to the
+	// wrong resolver, or the margin dropped, and the arithmetic below catches both.
+	const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
 
-	// Guard rather than assume: a Van with no axles would divide by zero below and would
-	// also mean ResolveDefaultVehicle had stopped describing a steered vehicle at all.
-	if (!TestTrue(TEXT("the default vehicle has measured axles, or it is not steering"),
-			Van.HasAxles()))
+	// Guard rather than assume: a largest vehicle that pivots would divide by zero below, and
+	// would also mean the resolver had stopped describing a steered vehicle at all.
+	if (!TestEqual(TEXT("the largest service vehicle steers geometrically"),
+			Largest.EffectiveSteerLaw(), ESteerLaw::RollingSteer))
 	{
 		return false;
 	}
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
-		FMath::Clamp(Van.Ground.MaxSteerDegrees, 0.0, 90.0)));
-	if (!TestTrue(TEXT("and a steering lock above zero"), Lock > KINDA_SMALL_NUMBER))
+		FMath::Clamp(Largest.Ground.MaxSteerDegrees, 0.0, 90.0)));
+	if (!TestTrue(TEXT("and has a steering lock above zero"), Lock > KINDA_SMALL_NUMBER))
 	{
 		return false;
 	}
 
-	// The same expression FSpeedProfile::Build uses. Written out rather than shared because
-	// a helper both sides called could be wrong in one place and agree with itself.
-	const double TightestFollowable = Van.Wheelbase() / Lock;
+	// The same expression FSpeedProfile::Build uses. Written out rather than shared because a
+	// helper both sides called could be wrong in one place and agree with itself.
+	const double TightestFollowable = Largest.Wheelbase() / Lock;
 
 	const URoadProfile* Service = URoadProfile::MakeServiceRoadTransient();
 	if (!TestNotNull(TEXT("the service road profile is buildable"), Service))
@@ -60,22 +68,44 @@ bool FServiceRoadFilletClearsTheTruckLockTest::RunTest(const FString& Parameters
 		return false;
 	}
 
-	// HEADROOM, NOT MERE SUFFICIENCY. An exact match would pass while sitting on the cliff
-	// edge, and the junction solver does not lay the preferred radius unconditionally:
-	// RoadNetworkSolver scales it down when the arms cannot fit it, which is how 500 became
-	// 418 on the reported route. A fillet that only just clears the lock in the profile is
-	// therefore one that does NOT clear it on a real junction. 1.25 covers the scaling seen
-	// in play with room to spare, without demanding a motorway sweep on an apron road.
+	// HEADROOM, NOT MERE SUFFICIENCY - unchanged in reasoning from the original test. An exact
+	// match would pass while sitting on the cliff edge, and RoadNetworkSolver scales the
+	// preferred radius DOWN when a junction's arms cannot fit it, which is how 500 became 418
+	// on the reported route. 1.25 covers the scaling seen in play with room to spare, without
+	// demanding a motorway sweep on an apron road.
+	//
+	// RESTATED rather than read from URoadProfile::JunctionScalingMargin, for exactly the
+	// reason the radius is restated: a test that imported the constant would still pass if
+	// someone set it to 1.0.
 	const double Required = TightestFollowable * 1.25;
 
 	TestTrue(
 		FString::Printf(
-			TEXT("the service road's %.0f uu fillet clears the %.0f uu the default vehicle's "
-			     "steering needs, with margin for the junction solver scaling it down "
-			     "(wheelbase %.1f, lock %.1f deg, needs >= %.0f)"),
-			Service->PreferredFilletRadius, TightestFollowable,
-			Van.Wheelbase(), Van.Ground.MaxSteerDegrees, Required),
-		Service->PreferredFilletRadius >= Required);
+			TEXT("the service road's derived %.0f uu fillet clears the %.0f uu the largest "
+			     "service vehicle's steering needs, with margin for the junction solver "
+			     "scaling it down (wheelbase %.1f, lock %.1f deg, needs >= %.0f)"),
+			Service->ResolvedFilletRadius(), TightestFollowable,
+			Largest.Wheelbase(), Largest.Ground.MaxSteerDegrees, Required),
+		Service->ResolvedFilletRadius() >= Required);
+
+	// AND THE PROFILE CARRIES NO NUMBER TO DRIFT. A stored radius would be stale the moment a
+	// larger vehicle joined the fleet, which is precisely the failure this change removes - so
+	// asserting the sentinel is asserting that the derivation is actually reached, rather than
+	// that some authored figure happens to be big enough today.
+	TestEqual(
+		TEXT("the service road profile stores the derive sentinel rather than a radius"),
+		Service->PreferredFilletRadius, 0.0);
+
+	// A TAXIWAY IS UNAFFECTED, which is what says the sentinel narrowed the change to the
+	// roads it was meant for. Its corner is swept for the largest AIRCRAFT admitted and stays
+	// authored.
+	const URoadProfile* Taxiway = URoadProfile::MakeTransient(2300.0, 1530.0);
+	if (Taxiway != nullptr)
+	{
+		TestEqual(
+			TEXT("a taxiway still turns on its own authored radius, not a vehicle's"),
+			Taxiway->ResolvedFilletRadius(), 1530.0);
+	}
 
 	return true;
 }

@@ -79,6 +79,16 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	return Piper;
 }
 
+FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
+{
+	// ONE CLASS TODAY, and deliberately no taxonomy yet: an EVehicleClass enum with a single
+	// member would be a list nothing chooses from - the "authored numbers nothing reads"
+	// failure this codebase has shipped three times. When the second dispenser arrives, this
+	// function gains the comparison and every service road corner widens on the next rebuild,
+	// with no other site to find.
+	return ResolveDefaultVehicle();
+}
+
 FAirframe UAirsideSettings::ResolveDefaultVehicle()
 {
 	// NO CONTENT LOOKUP, unlike ResolveDefaultAirframe above, and deliberately: there is no

@@ -119,6 +119,25 @@ public:
 	static FAirframe ResolveDefaultVehicle();
 
 	/**
+	 * The biggest thing that may drive on a service road, which is what the road's corners
+	 * are sized for.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveDefaultVehicle even though it returns the same airframe
+	 * today, because the two answer different questions and will diverge the moment a second
+	 * vehicle class exists: "what does a truck without a type look like" against "what must
+	 * every service road be able to turn". Merged, a new larger dispenser would silently
+	 * widen nothing, or a small van would silently narrow every junction.
+	 *
+	 * THE RULE IS THE ONE AIRCRAFT GEOMETRY ALREADY USES. IcaoCode::RadiusForLetter sweeps a
+	 * painted taxi line for the largest aircraft a stand admits, never for the one taxiing
+	 * now. This is that rule, for vehicles. It was INVERTED on 2026-09-14 - a truck's steering
+	 * lock was widened from 45 to 50 degrees so it would fit an authored 500 uu corner, which
+	 * is shrinking the vehicle to fit the road - and this function exists to make that
+	 * inversion impossible to repeat.
+	 */
+	static FAirframe ResolveLargestServiceVehicle();
+
+	/**
 	 * What an aircraft's view should wear: THE AGENT'S OWN AIRFRAME FIRST, falling back to
 	 * the content set's - and if the type has a mesh but no anim Blueprint of its own, the
 	 * content default anim Blueprint drives it rather than leaving it unanimated.
