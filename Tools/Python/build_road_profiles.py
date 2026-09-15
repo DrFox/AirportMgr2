@@ -28,13 +28,25 @@ import unreal
 ASSET_DIR = "/Game"
 CONTENT_SET = "/Game/DA_AirsideContent"
 
-# The service road, in uu (a uu is a centimetre): a 6 m lane between 0.6 m kerbs, on a 5 m
+# The service road, in uu (a uu is a centimetre): a 6 m lane between 0.6 m kerbs, on a 7.5 m
 # corner. Wide enough for two vans to pass, tight enough that a road reads as a road beside
 # a 23 m taxiway. These are the defaults URoadProfile::MakeServiceRoadTransient uses, so the
 # shipped asset and every test fixture are the same cross-section.
+#
+# FILLET_RADIUS WAS 500 UNTIL 2026-09-14, AND THE TRUCKS COULD NOT TURN ON IT. A rigid
+# vehicle cannot follow an arc tighter than Wheelbase / sin(lock) at any speed; the fuel
+# truck's is 4.71 m, and RoadNetworkSolver scales the preferred radius DOWN when a junction
+# cannot fit it - 500 became 418 on the reported route, under the 510 the lock then needed,
+# so every corner from depot to stand dropped to MinTaxiSpeed and crawled. Raised WITH
+# ResolveDefaultVehicle's lock (45 -> 50 deg); the two are one decision, and
+# Airside.Model.ServiceRoadFilletClearsTheTruckLock now fails if they drift apart.
+#
+# KEEP EQUAL TO URoadProfile::MakeServiceRoadTransient's default. This script authors
+# DA_RoadProfile_ServiceRoad and the asset is what the game lays; the C++ default is what
+# the tests exercise. They are two transcriptions of one cross-section.
 LANE_WIDTH = 600.0
 KERB_WIDTH = 60.0
-FILLET_RADIUS = 500.0
+FILLET_RADIUS = 750.0
 
 # THE STANDARD TAXIWAY WIDTHS, by ICAO aerodrome code letter - the same reasoning
 # UAirsideContent::RunwayProfiles gives for its own set: a taxiway conforms to one of these

@@ -1082,6 +1082,23 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, X3, B, { EGuidelineDir::AToB });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	// THE FIXTURE OWNS ITS FOOTPRINT, because every number in the comment above is derived
+	// from it: 750 uu lanes shorter than footprint + gap (800), a waiter sitting 450 uu past
+	// the corner behind it, and a node holding that corner for F/sqrt(2) = 354 - which is
+	// what lets the waiter clear it and the ring turn over.
+	//
+	// It used to read the default, and on 2026-09-14 that default became fueltruck1's real
+	// length: 620, up from 500. F/sqrt(2) goes to 438 against an unchanged 450, so the margin
+	// that makes this ring ESCAPABLE - 96 uu - collapses to 12, and the ring gridlocks
+	// exactly as this fixture's own comment says a 60-degree one does. The resolver is right
+	// to fail to turn it; the geometry no longer has the property the test was built on.
+	//
+	// Pinned rather than scaling the lanes to suit, because what is under test is the
+	// DEADLOCK RESOLVER, not how long a fuel truck is. DeadlockMixedClass pins its aircraft
+	// footprint to the van's for the same reason and says so at the assignment.
+	Traffic->Rules.VehicleFootprint = 500.0;
+
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 V2 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, B, D, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
 	const int32 V3 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, C, A, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
@@ -1211,6 +1228,10 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 	// WHAT IS UNDER TEST SURVIVES IT UNTOUCHED: the candidate ordering reads
 	// TraversalPriority(Class), never a size. This agent still ranks as an aircraft
 	// everywhere it matters.
+	// Pinned for the reason DeadlockRing's is, and BEFORE the line below so the aircraft
+	// still matches the van: this ring is the same 750 uu square, so it needs the same 500
+	// the geometry was drawn around rather than fueltruck1's 620.
+	Traffic->Rules.VehicleFootprint = 500.0;
 	Traffic->Rules.AircraftFootprint = Traffic->Rules.VehicleFootprint;
 	Traffic->Rules.AircraftGap = Traffic->Rules.VehicleGap;
 	const int32 V1 = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, A, C, ETraversalClass::GroundVehicle), TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);

@@ -223,9 +223,20 @@ public:
 	/**
 	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are a 6 m lane with 0.6 m kerbs on a 5 m corner: wide enough for two vans
-	 * to pass, tight enough that a road reads as a road beside a 23 m taxiway.
+	 * The defaults are a 6 m lane with 0.6 m kerbs on a 7.5 m corner: wide enough for two
+	 * vans to pass, tight enough that a road reads as a road beside a 23 m taxiway - whose
+	 * own fillet is 15.3 m, so this is still visibly the smaller junction.
+	 *
+	 * THE CORNER IS 7.5 m AND NOT 5 m BECAUSE THE TRUCKS HAVE TO TURN ON IT. A rigid vehicle
+	 * cannot follow an arc tighter than Wheelbase / sin(lock) at any speed, which for
+	 * ResolveDefaultVehicle is 4.71 m - and RoadNetworkSolver scales the preferred radius
+	 * DOWN when a junction's arms cannot fit it (500 became 418 on the route that reported
+	 * this), so a fillet that merely clears the lock on paper does not clear it in play.
+	 * Airside.Model.ServiceRoadFilletClearsTheTruckLock asserts the margin.
+	 *
+	 * Keep this figure and Tools/Python/build_road_profiles.py's FILLET_RADIUS equal: that
+	 * script authors DA_RoadProfile_ServiceRoad, and the asset is what the game lays.
 	 */
 	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
-		double KerbWidth = 60.0, double FilletRadius = 500.0);
+		double KerbWidth = 60.0, double FilletRadius = 750.0);
 };

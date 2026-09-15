@@ -135,4 +135,22 @@ public:
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();
+
+	/**
+	 * A service vehicle's RIGGED body and the graph that drives it, or an empty view when the
+	 * content set names none - in which case the caller falls back to ResolveVehicleMesh.
+	 *
+	 * THE SIBLING OF ResolveAgentView, and deliberately not a branch inside it: an aircraft
+	 * resolves its mesh from its own FAirframe FIRST and only then from the content set,
+	 * because a Twin Otter offered as a Meridian was a real defect. A vehicle has no such
+	 * per-type asset yet - ResolveDefaultVehicle hands every truck the same scaffolding
+	 * FAirframe - so there is nothing to prefer and adding the branch now would be inventing
+	 * a fallback order for a choice nobody makes.
+	 *
+	 * The anim class is taken WITHOUT a fallback to AgentAnimClass: an aircraft's graph
+	 * drives bones named prop and nosewheel_steer, and pointed at a truck it would find none
+	 * of them and silently animate nothing. Better an unanimated truck that is obviously
+	 * unwired than one that looks wired and is not.
+	 */
+	static FResolvedAgentView ResolveVehicleView();
 };

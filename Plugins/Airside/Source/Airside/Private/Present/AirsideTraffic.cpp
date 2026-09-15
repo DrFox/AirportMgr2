@@ -127,8 +127,20 @@ void UAirsideTraffic::SpawnView(int32 AgentId)
 		// length that actually stopped. Half the length across and half again tall, which is
 		// a van's proportions.
 		const double Length = Model->Rules.FootprintFor(Agent->Class);
-		View->SetVehicleBody(UAirsideSettings::ResolveVehicleMesh(),
-			FVector(Length, Length * 0.5, Length * 0.5));
+		const FVector Box(Length, Length * 0.5, Length * 0.5);
+
+		// RIGGED FIRST, STATIC SECOND. A vehicle with a skeleton has wheels that turn and
+		// steer; one without is a body that slides. Asking for the rigged one and falling
+		// back leaves the choice in the content set rather than in this branch.
+		const FResolvedAgentView Vehicle = UAirsideSettings::ResolveVehicleView();
+		if (Vehicle.Mesh != nullptr)
+		{
+			View->SetVehicleAirframe(Vehicle.Mesh, Vehicle.AnimClass, Box);
+		}
+		else
+		{
+			View->SetVehicleBody(UAirsideSettings::ResolveVehicleMesh(), Box);
+		}
 	}
 
 	// Posed before its first tick, so it appears at the start of its route rather than at the

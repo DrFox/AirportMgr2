@@ -26,7 +26,17 @@ struct AIRSIDE_API FTrafficRules
 
 	/** How much of the line an agent's body covers, uu. Half ahead of Travelled, half behind. */
 	UPROPERTY(EditAnywhere) double AircraftFootprint = 1000.0;
-	UPROPERTY(EditAnywhere) double VehicleFootprint = 500.0;
+
+	/**
+	 * 620, which is fueltruck1's own length: 6.200 m, the one dimension that model's README
+	 * fixes exactly. It was 500, chosen before there was a truck to measure.
+	 *
+	 * IT HAS TO MATCH THE MESH, because UAirsideContent::VehicleMesh says the placeholder box
+	 * is sized from this figure so that "what is on screen is the length the arbiter actually
+	 * keeps clear". A 6.2 m truck reserving 5 m is that promise broken in the direction that
+	 * hurts: the arbiter would let a second agent into road this one is occupying.
+	 */
+	UPROPERTY(EditAnywhere) double VehicleFootprint = 620.0;
 
 	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;

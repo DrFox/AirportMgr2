@@ -103,7 +103,51 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 
 	// NINE TIMES an airframe's 10 deg/s. A van turns into a depot in its own length; an
 	// aircraft's rate here would sweep it across the kerb and back.
+	//
+	// A CEILING NOW, NOT THE LAW, because the axles below turn the geometric law on. It stays
+	// as the guard it always was against a rate nothing else bounds.
 	Van.Ground.MaxTurnRateDegPerSec = 90.0;
+
+	// MEASURED AXLES, which is what stops the truck PIVOTING.
+	//
+	// FAirframe::Wheelbase's own comment argues the other way - "a van is authored at 90
+	// deg/s and would need 83 degrees of lock at its creep speed, so it is pivoting rather
+	// than steering, and a bicycle model would cripple every service vehicle on the airport".
+	// That was right about a van NOBODY HAD MEASURED: with no axles the wheelbase is zero,
+	// HasAxles() is false, and the flat rate is all there is. Its arithmetic is also exactly
+	// the symptom - 90 deg/s at the 50 uu/s creep is a 0.32 m radius, which is not a turn,
+	// it is a spin about the rear axle. Reported from play on 2026-09-14: the truck drives up
+	// to the stand, stops, swings 90 degrees on the spot and drives off.
+	//
+	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 360.7 uu and wheel_RL/RR
+	// at the origin, so the wheelbase is 3.607 m and the geometric law has real figures to
+	// work with. At the 45 degrees of lock below that is a 3.6 m turn radius for a 6.2 m
+	// truck - tight, correct for a rigid bowser, and nothing like crippled.
+	//
+	// ORIGIN AT THE FIXED AXLE, which is the Piper's declared deviation rather than plane2's
+	// nose-gear convention - and it is the model's, not a choice made here: fueltruck1's
+	// README fixes its origin at "rear axle centre, projected to the ground, because that is
+	// what a front-steered truck pivots about". Airside.Content.VehicleFootprintMatchesTheMesh
+	// asserts both figures against the mesh's own bones so they cannot drift from it.
+	Van.SteerAxleX = 360.7;
+	Van.FixedAxleX = 0.0;
+
+	// 50 degrees, written out rather than left at FGroundRegime's 60. The struct default is
+	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 2.1 m
+	// radius, which is inside the truck's own length and reads as the pivot the axles above
+	// removed.
+	//
+	// WAS 45, RAISED 2026-09-14 with the service road's fillet - the two are one decision.
+	// A rigid vehicle cannot follow an arc tighter than Wheelbase / sin(lock) at ANY speed,
+	// so 45 asked for a 5.10 m corner while the service road was authored with a 5.00 m one.
+	// Ten centimetres apart, on opposite sides of a cliff: every corner between the depot and
+	// the stand hit TIGHTER THAN THE STEERING LOCK and crawled at MinTaxiSpeed. 50 asks for
+	// 4.71 m, and Airside.Model.ServiceRoadFilletClearsTheTruckLock now holds the pair
+	// together so neither can drift into the other again.
+	//
+	// 50 rather than the 60 that would also have "fixed" it: at 4.71 m this is still a turn
+	// a 6.2 m rigid truck plausibly makes, where 2.1 m is a pirouette.
+	Van.Ground.MaxSteerDegrees = 50.0;
 
 	// A TRUCK CANNOT FLY, AND SAYS SO. Zeroed rather than left at the struct defaults, which
 	// are a light twin's and are all NON-ZERO - so a default-constructed FApproachPerformance
@@ -153,4 +197,23 @@ UStaticMesh* UAirsideSettings::ResolveVehicleMesh()
 {
 	const UAirsideContent* Content = GetContent();
 	return Content != nullptr ? Content->VehicleMesh.LoadSynchronous() : nullptr;
+}
+
+FResolvedAgentView UAirsideSettings::ResolveVehicleView()
+{
+	const UAirsideContent* Content = GetContent();
+
+	FResolvedAgentView View;
+	if (Content != nullptr)
+	{
+		View.Mesh = Content->VehicleSkeletalMesh.LoadSynchronous();
+		// ONLY WITH A MESH. An anim class on its own has nothing to drive, and letting it
+		// through would make the caller's "did this resolve?" test - View.Mesh != nullptr -
+		// disagree with what was actually configured.
+		if (View.Mesh != nullptr)
+		{
+			View.AnimClass = Content->VehicleAnimClass.LoadSynchronous();
+		}
+	}
+	return View;
 }
