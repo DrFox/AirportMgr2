@@ -115,6 +115,8 @@ public:
 	virtual int32 FindApronAt(FVector2D Where) const override;
 
 	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 	virtual bool DeleteEntity(int32 EntityIndex) override;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const override;

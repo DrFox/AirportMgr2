@@ -800,6 +800,14 @@ int32 ARoadNetworkActor::PlaceEntity(FVector2D Where, double Heading, EPlaceable
 	return Facade->PlaceEntity(Where, Heading, Kind);
 }
 
+int32 ARoadNetworkActor::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+	const TArray<EDepotModule>& Modules, EPlaceableEntity Kind)
+{
+	// Forwarding, as every other IRoadEditTarget method on this actor does: the actor is a
+	// composition root and the facade owns the mutators.
+	return Facade->PlaceEntityInPlot(Outline, Modules, Kind);
+}
+
 bool ARoadNetworkActor::DeleteEntity(int32 EntityIndex)
 {
 	return Facade->DeleteEntity(EntityIndex);

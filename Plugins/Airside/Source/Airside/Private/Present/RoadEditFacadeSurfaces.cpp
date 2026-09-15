@@ -9,12 +9,14 @@
 
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
+#include "Build/AnchorLink.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadSlotMap.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
+#include "Solve/PlotFit.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
 
@@ -212,6 +214,88 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	// allowed to see the definition, so it reads both and hands them down.
 	const FEntityInstanceId Placed = Net.PlaceEntity(Definition, Definition->Anchors, Where,
 		Heading, DesignWingspan, Definition->PoseRole, Definition->Trucks);
+	if (!Placed.IsSet())
+	{
+		return INDEX_NONE;
+	}
+
+	CommitAndNotify(Edit);
+	return Placed.Index;
+}
+
+int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+	const TArray<EDepotModule>& Modules, EPlaceableEntity Kind)
+{
+	ARoadNetworkActor& Owner = Actor();
+
+	// RESOLVED BY KIND, through the same one place PlaceEntity uses, so a plot and a plop
+	// cannot end up placing different objects for the same key.
+	UEntityDefinition* Definition = Owner.ResolveEntityDefinition(Kind);
+	if (Definition == nullptr)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: no FuelDepotDefinition (author DA_FuelDepot) "
+				 "with Tools/Python/build_stand_asset.py, or set one on the actor."));
+		return INDEX_NONE;
+	}
+
+	URoadNetwork& Net = EnsureNetwork();
+
+	// THE ACTOR'S RADIUS, not the constant. It is level-authored per-airport gameplay tuning
+	// (see ARoadNetworkActor::ServiceLinkRadius), and asking with a different reach than
+	// FAnchorLink::Build will later use is how a plot gets accepted that then never joins.
+	FVector2D FrontageA = FVector2D::ZeroVector;
+	FVector2D FrontageB = FVector2D::ZeroVector;
+	if (!FAnchorLink::FindFrontageEdge(Net, Outline, Owner.ServiceLinkRadius,
+		FrontageA, FrontageB))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: no edge of the plot is within %.0f uu of a "
+				 "service road. A depot must front onto one to be of any use."),
+			Owner.ServiceLinkRadius);
+		return INDEX_NONE;
+	}
+
+	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Outline, FrontageA, FrontageB);
+	if (!Fit.bFits)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: the plot is smaller than one %.0f m bay."),
+			PlotFit::BayWidthUu / 100.0);
+		return INDEX_NONE;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place fuel depot"));
+
+	FEntityPlacement Placement;
+	Placement.Definition = Definition;
+	Placement.Anchors = Definition->Anchors;
+
+	// THE GATE IS THE POSE, and there is exactly one of it however many sheds the plot
+	// holds - BuildFuelDepot's ruling that two lead-ins from one small building into one
+	// road is a duplicate painted line. It sits at the middle of the frontage edge, which
+	// is the one point on the plot the road is reliably nearest.
+	Placement.Position = (FrontageA + FrontageB) * 0.5;
+
+	// The bays all face the same way, so the first one's heading IS the installation's.
+	Placement.Heading = Fit.Bays[0].Heading;
+	Placement.PoseRole = Definition->PoseRole;
+	Placement.Outline = Outline;
+	Placement.Modules = Modules;
+
+	// TRAILING MODULES ARE DROPPED, not squeezed in. A player who chose four modules for a
+	// three-bay plot gets three and is told so; scaling the bays to fit would silently
+	// change the size they drew, which is the one thing a drawn plot must never do.
+	if (Placement.Modules.Num() > Fit.Bays.Num())
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot: %d modules chosen but only %d bays fit; dropped %d."),
+			Placement.Modules.Num(), Fit.Bays.Num(),
+			Placement.Modules.Num() - Fit.Bays.Num());
+		Placement.Modules.SetNum(Fit.Bays.Num());
+	}
+
+	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
 	if (!Placed.IsSet())
 	{
 		return INDEX_NONE;

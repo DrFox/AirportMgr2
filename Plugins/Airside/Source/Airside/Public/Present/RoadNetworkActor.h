@@ -416,6 +416,8 @@ public:
 	/** Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */

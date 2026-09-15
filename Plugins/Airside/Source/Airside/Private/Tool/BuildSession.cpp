@@ -3,6 +3,7 @@
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
+#include "Tool/PlotDrawTool.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RunwayTool.h"
@@ -65,8 +66,8 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for. One FStandPlaceTool, two entries - see that class.
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
-			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: press to position, drag to aim, release. It needs a service road within reach to be of any use."),
-			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::FuelDepot); } },
+			LOCTEXT("FuelDepotTooltip", "Draw a fuel depot plot: click each corner, click the first again to close. One edge must run along a service road, and the plot's width decides how many bays it holds."),
+			[] { return MakeUnique<FPlotDrawTool>(EPlaceableEntity::FuelDepot); } },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
