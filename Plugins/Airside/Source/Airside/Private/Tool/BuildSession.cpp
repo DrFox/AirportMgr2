@@ -64,7 +64,12 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
 
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
-		// number is spoken for. One FStandPlaceTool, two entries - see that class.
+		// number is spoken for.
+		//
+		// A DIFFERENT TOOL FROM KEY 3, which it did not used to be - this was one
+		// FStandPlaceTool under two entries until the depot became a drawn plot. A stand
+		// keeps press-drag-release because it has no plot: its extent is its design
+		// aircraft's, and a rectangle round it would be a second opinion about how big it is.
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
 			LOCTEXT("FuelDepotTooltip", "Draw a fuel depot plot: click each corner, click the first again to close. One edge must run along a service road, and the plot's width decides how many bays it holds."),
 			[] { return MakeUnique<FPlotDrawTool>(EPlaceableEntity::FuelDepot); } },
