@@ -2,10 +2,12 @@
 
 #include "AirsideLog.h"
 #include "Build/ExitGeometry.h"
+#include "Content/AirsideSettings.h"
 #include "Build/RoadMeshBuilder.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/GuidelineGeom.h"
 
 namespace
 {
@@ -571,6 +573,54 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					Turn.bDerived = true;
 					// DerivedFrom stays unset: a turn path belongs to the junction, not to
 					// either segment, and that is how the two are told apart.
+
+					// WHAT THIS CORNER ACTUALLY HANDS A DRIVER, measured on the curve that is
+					// about to be added rather than inferred from the fillet that shaped it.
+					// Those are not the same number and the gap between them is where three
+					// sessions went:
+					//
+					//   the profile asks for a fillet;
+					//   FRoadNetworkSolver::SolveNodeCuts SCALES IT DOWN to fit the arms,
+					//     which is bounded by how long the player drew the segment;
+					//   and the quadratic laid across the survivors is tighter again by
+					//     1/sqrt(2) at a right angle.
+					//
+					// So a fillet that clears a truck's steering lock on paper routinely does
+					// not clear it here, and NO PROFILE VALUE CAN FIX IT once the arms are
+					// short - raising the request only gives the solver more to scale away.
+					// Reported from play 2026-09-15 as a truck that crabbed a corner, missed
+					// the junction and reversed; the route log said R=120 uu where the vehicle
+					// needed 699.
+					//
+					// A WARNING AND NOT A REFUSAL. The corner is still the best this junction
+					// can do, and refusing to lay it would leave the network disconnected -
+					// which is worse than a slow corner and much harder to diagnose. What the
+					// player can act on is the segment length, so that is what this names.
+					{
+						const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+						const double Needed = Largest.TightestFollowableRadius();
+						if (Needed > 0.0)
+						{
+							const double Delivered = GuidelineGeom::TightestRadius(
+								Network.GetGuidelineNode(Turn.A)->Position,
+								Turn.Control,
+								Network.GetGuidelineNode(Turn.B)->Position);
+							if (Delivered < Needed)
+							{
+								UE_LOG(LogAirside, Warning,
+									TEXT("Junction at (%.0f,%.0f): turn path radius %.0f uu, but the "
+									     "largest service vehicle needs %.0f (wheelbase %.0f, lock "
+									     "%.0f deg). The arms are cut back %.0f uu; a right-angle "
+									     "corner needs about %.0f, so the segments meeting here are "
+									     "too short. Draw them longer."),
+									Node->Position.X, Node->Position.Y, Delivered, Needed,
+									Largest.Wheelbase(), Largest.Ground.MaxSteerDegrees,
+									FVector2D::Distance(
+										Network.GetGuidelineNode(Turn.A)->Position, Turn.Control),
+									Needed * UE_DOUBLE_SQRT_2);
+							}
+						}
+					}
 
 					Network.AddGuidelineEdge(MoveTemp(Turn));
 				}
