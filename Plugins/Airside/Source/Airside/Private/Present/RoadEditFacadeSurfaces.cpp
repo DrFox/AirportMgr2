@@ -241,12 +241,39 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 
 	URoadNetwork& Net = EnsureNetwork();
 
+	// COUNTER-CLOCKWISE FIRST, AND BEFORE THE FRONTAGE IS FOUND. Exactly the correction
+	// AddApron makes and for the same reason - the pad goes through the same triangulator,
+	// which orients its triangles from the winding, and the surface is not two-sided. Drawn
+	// clockwise and left alone, the pad faces DOWN: the fence and the modules still stand up
+	// (PlotFit derives the interior side from the signed area) and the concrete is simply
+	// not there, which is what shipped and what PIE showed on 2026-09-15.
+	//
+	// BEFORE, not after, because FindFrontageEdge returns its edge in the outline's winding
+	// order and PlotFit derives which side the interior is on from that direction. Reversing
+	// afterwards would leave the two disagreeing and lay every bay across the road.
+	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
+	// fed a figure-eight it produces overlapping triangles rather than an error. The draw
+	// tool refuses a crossing edge as it is placed, so this is the second line of the same
+	// defence, exactly as AddApron keeps it.
+	if (!RoadGeom::IsSimplePolygon(Outline))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: the outline crosses itself"));
+		return INDEX_NONE;
+	}
+
+	TArray<FVector2D> Wound = Outline;
+	if (RoadGeom::PolygonArea(Wound) < 0.0)
+	{
+		Algo::Reverse(Wound);
+	}
+
 	// THE ACTOR'S RADIUS, not the constant. It is level-authored per-airport gameplay tuning
 	// (see ARoadNetworkActor::ServiceLinkRadius), and asking with a different reach than
 	// FAnchorLink::Build will later use is how a plot gets accepted that then never joins.
 	FVector2D FrontageA = FVector2D::ZeroVector;
 	FVector2D FrontageB = FVector2D::ZeroVector;
-	if (!FAnchorLink::FindFrontageEdge(Net, Outline, Owner.ServiceLinkRadius,
+	if (!FAnchorLink::FindFrontageEdge(Net, Wound, Owner.ServiceLinkRadius,
 		FrontageA, FrontageB))
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -256,7 +283,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 		return INDEX_NONE;
 	}
 
-	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Outline, FrontageA, FrontageB);
+	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Wound, FrontageA, FrontageB);
 	if (!Fit.bFits)
 	{
 		UE_LOG(LogRoadMesh, Warning,
@@ -280,7 +307,7 @@ int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
 	// The bays all face the same way, so the first one's heading IS the installation's.
 	Placement.Heading = Fit.Bays[0].Heading;
 	Placement.PoseRole = Definition->PoseRole;
-	Placement.Outline = Outline;
+	Placement.Outline = Wound;
 	Placement.Modules = Modules;
 
 	// TRAILING MODULES ARE DROPPED, not squeezed in. A player who chose four modules for a
