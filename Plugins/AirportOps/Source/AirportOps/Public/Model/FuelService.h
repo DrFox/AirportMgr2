@@ -73,7 +73,17 @@ enum class EFuelRefusal : uint8
 	StandUnjoined,
 
 	/** Everything is joined and the graph still does not connect the two. */
-	NoRoute
+	NoRoute,
+
+	/**
+	 * A depot is on a road and has a truck, but no PUMP was built in its plot.
+	 *
+	 * ITS OWN REFUSAL AND NOT NoRoute, for the reason ChooseDepot's busy branch records at
+	 * length: a pumpless depot falling through to the chain's default would report "no road
+	 * from depot" and send the player to look at a road that is already there. What they
+	 * actually need to do is build a pump in a bay.
+	 */
+	NoPump
 };
 
 /** One parked aircraft's fuel job. */

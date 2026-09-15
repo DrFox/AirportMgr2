@@ -37,6 +37,7 @@ namespace
 		case EFuelRefusal::NoRoad:        return TEXT("depot not on a road");
 		case EFuelRefusal::StandUnjoined: return TEXT("stand not on a road");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
+		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
 		default:                          return TEXT("unserviceable");
 		}
 	}
@@ -112,6 +113,9 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	 */
 	bool bAnyBusyDepot = false;
 
+	/** A depot skipped for want of a pump - see the NoPump branch below. */
+	bool bAnyPumplessDepot = false;
+
 	// JOINED, NOT MERELY RESOLVED - and since the service loop, not merely INCIDENT either.
 	//
 	// This tested StandFuel.IsSet() alone, which is a fact about PLACEMENT and not about the
@@ -169,6 +173,7 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		// paths are exclusive.
 		if (!HasWorkingPump(Instance))
 		{
+			bAnyPumplessDepot = true;
 			continue;
 		}
 
@@ -239,6 +244,14 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	else if (!bStandJoined)
 	{
 		Result.Why = EFuelRefusal::StandUnjoined;
+	}
+	else if (bAnyPumplessDepot)
+	{
+		// BEFORE busy and before NoRoute, because this is a thing the player can go and fix
+		// and the other two are not. Falling through to NoRoute would have told them "no
+		// road from depot" about a depot sitting on a road - the same misdirection the busy
+		// branch below was added to stop.
+		Result.Why = EFuelRefusal::NoPump;
 	}
 	else if (bAnyBusyDepot)
 	{
