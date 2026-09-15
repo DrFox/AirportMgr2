@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
 #include "Build/ServiceLoopBuild.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -68,7 +69,11 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 
 	const FServiceLoopBuild::FResult First = FServiceLoopBuild::Build(*Net);
 	TestEqual(TEXT("one stand, one lane"), First.LoopsBuilt, 1);
-	TestEqual(TEXT("a spur for every service anchor"), First.SpursBuilt, 5);
+	// A MIRRORED PAIR WHERE THE LANE HAS ROOM: one curving each way, so a truck has a smooth
+	// approach whichever direction it comes round the ring from. See FServiceLoopBuild's spur
+	// block for what one alone cost - the agent crabbed into position from the wrong side.
+	//
+	TestEqual(TEXT("a mirrored pair of spurs for every service anchor"), First.SpursBuilt, 10);
 
 	// EVERY SERVICE ANCHOR NOW HAS LINE ON IT, and the AIRCRAFT stop mark still does not -
 	// the lane is for vehicles, and a painted lead-in is not this builder's business.
@@ -476,7 +481,17 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 
 	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600) and spurs to the
 	// EAST side; with one entry at the tail corner a truck drove the length of the stand and
-	// back to reach it. From the nose corner it is 1490 up the east side plus a 1400 spur.
+	// back to reach it. From the nose corner it is up the east side plus the spur.
+	//
+	// THE FIGURE ROSE BY 854 uu WHEN SPURS WERE MADE TANGENTIAL, and that is a purchase and
+	// not a regression. A spur now meets the lane PreferredSpurRun further along and curves
+	// back, so the truck drives that run twice - against which the junction it used to reach
+	// was a 90 degree instant turn, which FSpeedProfile calls untakeable at any speed and
+	// crawls at MinTaxiSpeed. 854 uu at the 600 uu/s the new bend allows is under two
+	// seconds; the crawl it replaces was tens.
+	//
+	// STILL NOWHERE NEAR A TOUR, which is what this bound exists to catch: half this ring's
+	// perimeter is another 9400 uu on top.
 	{
 		FRouteQuery Query;
 		Query.Start = East;
@@ -487,9 +502,12 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 		if (TestTrue(TEXT("a truck routes from the road to the ground power"), Plan.IsValid()))
 		{
 			// Measured from the ROAD's east end, so the figure is the journey and not an
-			// arbitrary start: 28300 of road, then under 3500 inside the stand.
-			TestTrue(TEXT("and turns in at the nearest corner rather than touring the lane"),
-				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 3500.0);
+			// arbitrary start: 28300 of road, then under 4700 inside the stand.
+			TestTrue(*FString::Printf(
+					TEXT("and turns in at the nearest corner rather than touring the lane "
+					     "- %.0f uu"),
+					GuidelineGeom::PolylineLength(Plan.Polyline)),
+				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 4700.0);
 		}
 	}
 	return true;
@@ -573,6 +591,271 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 			GuidelineGeom::PolylineLength(Plan.Polyline)
 				< FVector2D::Distance(Start->Position, Goal->Position) * 2.0);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSpursLeaveTheLaneTangentiallyTest,
+	"Airside.Build.SpursLeaveTheLaneTangentially",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSpursLeaveTheLaneTangentiallyTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// REPORTED FROM PLAY, 2026-09-14: the fuel truck crawls the corner onto the stand.
+	//
+	// An anchor spur used to meet the lane at the anchor's NEAREST point, which is square on -
+	// so the junction was a vertex whose heading changed by 90 degrees instantly, and
+	// FSpeedProfile calls that untakeable at any speed and drops the agent to MinTaxiSpeed.
+	//
+	// ROUNDING IT AFTERWARDS CANNOT WORK, and was tried. A 90 degree turn at the 471 uu a
+	// truck's steering lock allows needs 666 uu of run on each arm, so two spurs sharing a
+	// side need 1332 uu between them. On a Code C stand three spurs land on the north side
+	// 900 uu apart, and that side has four gaps in 5250 uu - 78 uu short of the 5328 that
+	// perfect spacing would need. There is no room to round into. Measured 2026-09-15.
+	//
+	// SO THE SPUR CARRIES THE CURVE INSTEAD. It joins the lane RUN uu back from the anchor's
+	// perpendicular foot, with its control point ON that foot - so it leaves along the lane's
+	// own direction and there is no turn at the junction at all.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	const FServiceLoopBuild::FResult Built = FServiceLoopBuild::Build(*Net);
+	if (!TestTrue(*FString::Printf(TEXT("every service anchor got a spur - %d laid"),
+			Built.SpursBuilt), Built.SpursBuilt >= 5))
+	{
+		return false;
+	}
+
+	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
+	if (!TestNotNull(TEXT("the stand got a lane"), Lane))
+	{
+		return false;
+	}
+
+	// A PAIR ON EVERY ANCHOR. One spur is tangent for a truck arriving from ONE side and a
+	// hairpin from the other, so an anchor with a single spur is one the agent crabs into
+	// whenever the short way round is the wrong way. Counted on the ANCHOR, not on the
+	// builder's census, because the census cannot say they landed where they were meant to.
+	{
+		const FEntityInstance* Entity = Net->GetEntity(Placed);
+		if (!TestNotNull(TEXT("the stand is placed"), Entity))
+		{
+			return false;
+		}
+		int32 Paired = 0;
+		for (const FResolvedAnchor& Anchor : Entity->ResolvedAnchors)
+		{
+			if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
+			{
+				continue;
+			}
+			const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
+			if (Node == nullptr)
+			{
+				continue;
+			}
+			TestEqual(
+				*FString::Printf(TEXT("anchor '%s' has a spur each way"), *Anchor.Id.ToString()),
+				Node->Incident.Num(), 2);
+			Paired += Node->Incident.Num();
+		}
+
+		// TEN LINES ONTO FIVE BOXES. Pinned as a figure because the pair is the whole point:
+		// one spur is smooth from one side of the ring and a crab from the other.
+		TestEqual(TEXT("ten spurs over five anchors"), Paired, 10);
+	}
+
+	// AND NOT ONE OF THEM CROSSES THE AEROPLANE. Airside.Entities.ServiceLoopClearsTheAircraft
+	// makes this promise on the DEFINITION, judging a spur as a straight line from the anchor
+	// to the nearest point on the loop. Neither half of that is true any more - a spur is a
+	// quadratic and it joins the lane some way off the nearest point - so the promise has to
+	// be measured again here, on the geometry that actually gets laid.
+	//
+	// The centreline as a finite segment, never the footprint outline: forbidding the
+	// footprint would forbid passing UNDER A WING, which is normal and which the hydrant
+	// requires - HydrantPit is under the starboard wing root because that is where one is.
+	{
+		const FEntityFootprint& Footprint = Stand->DesignAircraft->Footprint;
+		const FVector2D Tail(Footprint.TailX, 0.0);
+		const FVector2D Nose(Footprint.NoseX, 0.0);
+
+		int32 Crossings = 0;
+		for (const FGuidelineEdgeId& EdgeId : *Lane)
+		{
+			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(EdgeId);
+			TArray<FVector2D> Points;
+			if (Edge == nullptr || !Edge->bAlive || !Edge->bServiceSpur
+				|| !Net->SampleGuideline(EdgeId, Points))
+			{
+				continue;
+			}
+			for (int32 At = 1; At < Points.Num(); ++At)
+			{
+				Crossings += RoadGeom::SegmentsCross(Points[At - 1], Points[At], Tail, Nose)
+					? 1 : 0;
+			}
+		}
+		TestEqual(TEXT("no spur crosses the fuselage lengthwise"), Crossings, 0);
+	}
+
+	// The same expression FSpeedProfile::Build uses, written out rather than shared - for the
+	// reason Airside.Model.ServiceRoadFilletClearsTheTruckLock gives at its own copy.
+	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	const double Lock = FMath::Sin(FMath::DegreesToRadians(
+		FMath::Clamp(Van.Ground.MaxSteerDegrees, 0.0, 90.0)));
+	if (!TestTrue(TEXT("the default vehicle steers on measured axles"),
+			Van.HasAxles() && Lock > KINDA_SMALL_NUMBER))
+	{
+		return false;
+	}
+	const double TightestFollowable = Van.Wheelbase() / Lock;
+
+	// A SPUR DOES NOT ALWAYS MEET THE LANE. Three of a Code C stand's five meet an EARLIER
+	// SPUR instead: the search runs over the lane's current edges, spurs included, and
+	// EquipmentFwd is 900 uu from HydrantPit's spur against 990 from the north side. So the
+	// thing to assert is not "tangent to the lane" but "tangent to whatever it joins", which
+	// is the same property and is what a truck actually drives through.
+	// THE ANALYTIC TANGENT AT AN EDGE'S END, never a difference of samples. A quadratic's
+	// first sampled chord is a degree or two off its true tangent, and a test that measured
+	// the chord would report a turn that no follower ever makes - GuidelineGeom::Tangent is
+	// the derivative of the very function Sample evaluates, which is the point of it.
+	auto LeavingAlong = [Net](FGuidelineEdgeId Id, FGuidelineNodeId From, FVector2D& Out) -> bool
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		if (Edge == nullptr || !Edge->bAlive)
+		{
+			return false;
+		}
+		const FGuidelineNode* A = Net->GetGuidelineNode(Edge->A);
+		const FGuidelineNode* B = Net->GetGuidelineNode(Edge->B);
+		if (A == nullptr || B == nullptr)
+		{
+			return false;
+		}
+		const bool bFromB = Edge->B == From;
+		const FVector2D Dir = GuidelineGeom::Tangent(
+			A->Position, Edge->Control, B->Position, bFromB ? 1.0 : 0.0);
+		Out = bFromB ? -Dir : Dir;
+		return !Out.IsNearlyZero();
+	};
+
+	// THE ANCHOR ITSELF IS NOT A JUNCTION. Its two spurs meet there in a V, and that V is
+	// deliberate - see FServiceLoopBuild's spur block. A truck stops at an anchor; one driving
+	// THROUGH one would be cutting across a painted equipment box, and the V is what makes
+	// FSpeedProfile cost that more than going round.
+	TSet<FGuidelineNodeId> Anchors;
+	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
+	{
+		Anchors.Add(Anchor.Node);
+	}
+
+	int32 Checked = 0;
+	for (const FGuidelineEdgeId& SpurId : *Lane)
+	{
+		const FGuidelineEdge* Spur = Net->GetGuidelineEdge(SpurId);
+		if (Spur == nullptr || !Spur->bAlive || !Spur->bServiceSpur)
+		{
+			continue;
+		}
+
+		TArray<FVector2D> SpurPoints;
+		if (!Net->SampleGuideline(SpurId, SpurPoints) || SpurPoints.Num() < 2)
+		{
+			continue;
+		}
+
+		for (const FGuidelineNodeId& End : { Spur->A, Spur->B })
+		{
+			const FGuidelineNode* Node = Net->GetGuidelineNode(End);
+			if (Node == nullptr || Node->Incident.Num() < 2 || Anchors.Contains(End))
+			{
+				// A dead end is nothing to turn at, and an anchor is a destination.
+				continue;
+			}
+
+			FVector2D OutSpur;
+			if (!LeavingAlong(SpurId, End, OutSpur))
+			{
+				continue;
+			}
+			const FVector2D JoinAt = Net->GetGuidelineNode(End)->Position;
+
+			// STRAIGHT THROUGH ONTO SOMETHING. At least one other arm here must leave in the
+			// OPPOSITE direction, which is what makes arriving along it and turning onto this
+			// spur a move with no heading change in it at all - the test FSpeedProfile applies
+			// to a vertex, asked of two whole edges.
+			//
+			// At least one, not all: the other side of a lane is a 90 degree turn whichever
+			// way the spur leaves, and the lane is a closed ring, so a truck simply comes
+			// round the way that works.
+			double Best = 0.0;
+			for (const FGuidelineEdgeId& OtherId : Node->Incident)
+			{
+				if (OtherId == SpurId)
+				{
+					continue;
+				}
+				FVector2D OutOther;
+				if (!LeavingAlong(OtherId, End, OutOther))
+				{
+					continue;
+				}
+				Best = FMath::Max(Best, -FVector2D::DotProduct(OutSpur, OutOther));
+			}
+
+			++Checked;
+			TestTrue(
+				*FString::Printf(
+					TEXT("the spur at (%.0f,%.0f) can be joined without turning - its best "
+					     "neighbour is %.1f deg off straight"),
+					JoinAt.X, JoinAt.Y,
+					FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Best, -1.0, 1.0)))),
+				Best > FMath::Cos(0.02));
+		}
+
+		// AND THE CURVE IT CARRIES INSTEAD IS ONE THE TRUCK CAN HOLD, measured the way
+		// FSpeedProfile measures curvature, over the spur's own samples.
+		//
+		// LONG SPURS ONLY. This construction's apex radius is 0.77 of the anchor's distance
+		// from what it joins, so an anchor nearer than 612 uu cannot reach 471 however it is
+		// laid - TugStand waits 300 uu off the lane and tops out at 231. Those are the last
+		// few metres of a journey that ends in a stop, and 1200 uu of spur separates them
+		// cleanly from the four that have room: the hydrant's is ~2400 and the boxes' ~1700.
+		const double Length = GuidelineGeom::PolylineLength(SpurPoints);
+		if (Length < 1200.0)
+		{
+			continue;
+		}
+
+		double Tightest = TNumericLimits<double>::Max();
+		for (int32 At = 1; At + 1 < SpurPoints.Num(); ++At)
+		{
+			const FVector2D Before = SpurPoints[At] - SpurPoints[At - 1];
+			const FVector2D After = SpurPoints[At + 1] - SpurPoints[At];
+			const double Turn = FMath::Abs(FMath::UnwindRadians(
+				RoadGeom::Bearing(After) - RoadGeom::Bearing(Before)));
+			if (Turn > 1.0e-9)
+			{
+				Tightest = FMath::Min(Tightest, After.Size() / Turn);
+			}
+		}
+
+		TestTrue(
+			*FString::Printf(
+				TEXT("and the %.0f uu spur's tightest bend is %.0f uu, clearing the %.0f uu "
+				     "the truck's steering needs"),
+				Length, Tightest == TNumericLimits<double>::Max() ? 0.0 : Tightest,
+				TightestFollowable),
+			Tightest >= TightestFollowable);
+	}
+
+	// NOT VACUOUS. A loop whose spurs all failed the end-finding above would assert nothing.
+	// Five spurs, each with at least one junction end - more when a later spur has split one.
+	TestTrue(*FString::Printf(TEXT("every spur junction was measured - %d found"), Checked),
+		Checked >= 10);
 	return true;
 }
 

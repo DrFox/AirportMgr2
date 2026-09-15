@@ -411,3 +411,47 @@ namespace GuidelineGeom
 		return false;
 	}
 }
+
+double GuidelineGeom::ParamAtArcOffset(const TArray<FVector2D>& Points, double Param, double Offset)
+{
+	if (Points.Num() < 2)
+	{
+		return FMath::Clamp(Param, 0.0, 1.0);
+	}
+
+	const int32 Spans = Points.Num() - 1;
+	const double Scaled = FMath::Clamp(Param, 0.0, 1.0) * Spans;
+	int32 Index = FMath::Clamp(static_cast<int32>(Scaled), 0, Spans - 1);
+	double Fraction = Scaled - Index;
+
+	double Remaining = FMath::Abs(Offset);
+	const bool bForward = Offset >= 0.0;
+
+	while (Remaining > 0.0)
+	{
+		const double SpanLength = FVector2D::Distance(Points[Index], Points[Index + 1]);
+		const double Available = bForward ? SpanLength * (1.0 - Fraction) : SpanLength * Fraction;
+
+		if (SpanLength <= 0.0 || Available >= Remaining)
+		{
+			Fraction += (bForward ? 1.0 : -1.0) * (SpanLength > 0.0 ? Remaining / SpanLength : 0.0);
+			break;
+		}
+
+		Remaining -= Available;
+		if (bForward)
+		{
+			if (Index + 1 >= Spans) { Fraction = 1.0; break; }
+			++Index;
+			Fraction = 0.0;
+		}
+		else
+		{
+			if (Index == 0) { Fraction = 0.0; break; }
+			--Index;
+			Fraction = 1.0;
+		}
+	}
+
+	return ParamAtSample(Index, FMath::Clamp(Fraction, 0.0, 1.0), Points.Num());
+}

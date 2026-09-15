@@ -149,6 +149,23 @@ namespace GuidelineGeom
 		double& OutArriving, double& OutLeaving);
 
 	/**
+	 * The curve parameter Offset of ARC LENGTH away from Param, walked on the sampled
+	 * polyline. Negative walks backwards. Clamped to the curve's own ends.
+	 *
+	 * Walked on the SAMPLES rather than integrated in closed form, because the samples are
+	 * what every other consumer of this graph measures - the search costs them, the overlay
+	 * draws them, a follower walks them. An exact arc length here would be more accurate and
+	 * would disagree with all three.
+	 *
+	 * HERE RATHER THAN IN AnchorLink.cpp, where it was written, because two passes now slide
+	 * a point along a guideline by a distance - FAnchorLink trims an arm back for its lead-in
+	 * sweep, and FServiceLoopBuild slides a spur's join along the lane - and "how far back
+	 * along this curve" has to be the same walk in both or the two disagree by a sample.
+	 */
+	AIRSIDE_API double ParamAtArcOffset(
+		const TArray<FVector2D>& Points, double Param, double Offset);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from

@@ -56,6 +56,146 @@ namespace
 		Edge.bServiceSpur = bSpur;
 		return Edge;
 	}
+
+	/**
+	 * How far back along the lane a spur's join sits from the anchor's perpendicular foot, uu.
+	 *
+	 * A SPUR LEAVES THE LANE ALONG IT, NOT ACROSS IT. Its control point is the foot itself, so
+	 * the first leg of the quadratic runs down the lane and the curve is tangent to it - there
+	 * is no heading change at the junction at all, and nothing for FSpeedProfile to call a
+	 * corner.
+	 *
+	 * WITH a run of p, a gap of q and the right angle between them that this construction
+	 * always has, the quadratic's apex radius is 2p^2q^2 / (p^2+q^2)^(3/2). It peaks at
+	 * p = q*sqrt(2), where it is 0.77q, and falls away on both sides.
+	 *
+	 * NOT THE PEAK, DELIBERATELY. The run is a DETOUR: the truck leaves the lane this far past
+	 * the anchor and the curve brings it back, so every uu of run is driven twice. The peak
+	 * for the hydrant's 1390 uu gap is a 1966 uu run, and asking for it lengthened a measured
+	 * route by about 3000 uu for radius nobody needed. What is needed is the 471 uu a truck's
+	 * steering lock allows - FAirframe::TightestFollowableRadius - and 800 uu of run clears
+	 * that with margin at every gap a stand presents:
+	 *
+	 *     gap 1390 (hydrant)      -> 599 uu     gap 990 (equipment) -> 608 uu
+	 *     gap 1400 (fixed GPU)    -> 599 uu     gap 757             -> 549 uu
+	 *
+	 * The curve is widest in the MIDDLE of that range rather than at its end, which is why one
+	 * figure serves all of them.
+	 *
+	 * RUN IS ALSO ROOM, and on a crowded side there is not enough of it for every anchor to
+	 * get its pair. Three of a Code C stand's anchors sit on the north side 900 uu apart, and
+	 * two joins 800 uu either side of neighbours that close would overrun each other - so the
+	 * equipment boxes get one spur apiece and the hydrant, the GPU and the tug get two.
+	 *
+	 * SHORTENING THE RUN DOES NOT BUY THE MISSING ONES. Joins from anchors 900 uu apart clear
+	 * each other only below 450 uu of run, and 450 reaches 309 uu of radius against the 471 a
+	 * truck's lock needs - so the choice is one good spur or two bad ones. Tried at 700 and
+	 * measured: the same eight. What WOULD buy them is moving an anchor off that side, which
+	 * is a change to the stand's layout and not to this.
+	 *
+	 * CAPPED AT THE PEAK for a close anchor, because past it a longer run makes the curve
+	 * TIGHTER as well as longer - both costs, no benefit. TugStand waits 300 uu off the lane
+	 * and takes the peak, 424 uu of run for 231 uu of radius; no geometry could do better with
+	 * three metres to work in, and it is the last few metres of a journey that ends in a stop.
+	 *
+	 * WHY NOT ROUND THE JUNCTION AFTERWARDS INSTEAD: there is no room. A 90 degree turn at
+	 * 471 uu needs 666 uu of run on each arm, so two spurs sharing a side need 1332 uu between
+	 * them; three land on a Code C stand's north side, whose four gaps have 5250 uu to share
+	 * and need 5328. Measured 2026-09-15, after a rounding pass was built and failed on
+	 * exactly those junctions.
+	 */
+	constexpr double PreferredSpurRun = 800.0;
+
+	double SpurRunFor(double Gap)
+	{
+		return FMath::Min(PreferredSpurRun, Gap * UE_DOUBLE_SQRT_2);
+	}
+
+	/**
+	 * Walk Distance along the RING from (Edge, Param) and report where it lands. Negative
+	 * walks the other way. The sign of Distance is read against Edge's own A-to-B sense.
+	 *
+	 * ACROSS EDGE BOUNDARIES, which is the whole reason it exists. A ring side is split by
+	 * every spur that has already joined it, so "800 uu along the lane" routinely lands on a
+	 * different EDGE from the one the anchor is nearest - and a walk that stopped at the end
+	 * of its own edge would report no room where the ring has plenty. On a Code C stand that
+	 * cost the two equipment boxes their second spur: their joins belonged in the piece next
+	 * door, which had 1600 uu going spare. Measured 2026-09-15.
+	 *
+	 * SPURS ARE NOT THE RING and are stepped over, so a ring node carries exactly two ring
+	 * edges and the way onward is never ambiguous. Bounded by the lane's own edge count, so a
+	 * ring that somehow did not close cannot spin here.
+	 *
+	 * OutForward says which way the walk was travelling when it stopped, in the LANDING
+	 * edge's own sense - which the caller needs, because the landing edge may be parameterised
+	 * the opposite way round from the one it started on.
+	 */
+	bool WalkRing(const URoadNetwork& Network, const TArray<FGuidelineEdgeId>& Lane,
+		FGuidelineEdgeId Edge, double Param, double Distance,
+		FGuidelineEdgeId& OutEdge, double& OutParam, bool& OutForward)
+	{
+		OutEdge = Edge;
+		OutParam = Param;
+		OutForward = Distance >= 0.0;
+
+		double Remaining = FMath::Abs(Distance);
+
+		for (int32 Step = 0; Step <= Lane.Num(); ++Step)
+		{
+			const FGuidelineEdge* Here = Network.GetGuidelineEdge(OutEdge);
+			TArray<FVector2D> Points;
+			if (Here == nullptr || !Network.SampleGuideline(OutEdge, Points) || Points.Num() < 2)
+			{
+				return false;
+			}
+
+			const double Length = GuidelineGeom::PolylineLength(Points);
+			const double Available = OutForward ? Length * (1.0 - OutParam) : Length * OutParam;
+			if (Available >= Remaining)
+			{
+				OutParam = GuidelineGeom::ParamAtArcOffset(
+					Points, OutParam, OutForward ? Remaining : -Remaining);
+				return true;
+			}
+
+			Remaining -= Available;
+
+			// Over the node at that end and onto the ring's next edge, carrying on in the
+			// same direction of travel - which is whichever of that edge's ends is NOT the
+			// node just arrived at.
+			const FGuidelineNodeId At = OutForward ? Here->B : Here->A;
+			const FGuidelineNode* Node = Network.GetGuidelineNode(At);
+			if (Node == nullptr)
+			{
+				return false;
+			}
+
+			FGuidelineEdgeId Next;
+			for (const FGuidelineEdgeId& Id : Node->Incident)
+			{
+				if (Id == OutEdge)
+				{
+					continue;
+				}
+				const FGuidelineEdge* Candidate = Network.GetGuidelineEdge(Id);
+				if (Candidate != nullptr && Candidate->bAlive && !Candidate->bServiceSpur)
+				{
+					Next = Id;
+					break;
+				}
+			}
+			if (!Next.IsSet())
+			{
+				return false;
+			}
+
+			const FGuidelineEdge* NextEdge = Network.GetGuidelineEdge(Next);
+			OutForward = NextEdge->A == At;
+			OutParam = OutForward ? 0.0 : 1.0;
+			OutEdge = Next;
+		}
+		return false;
+	}
 }
 
 FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
@@ -145,10 +285,23 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 		}
 		++Result.LoopsBuilt;
 
-		// SPURS. Each service anchor to its nearest point on the lane. On a Code C stand every
-		// one is under fourteen metres and none crosses the aeroplane - measured, on the
-		// definition, by Airside.Entities.ServiceLoopClearsTheAircraft rather than trusted
-		// here.
+		// SPURS. TWO to each service anchor, one curving each way along the lane.
+		//
+		// WHY TWO. A spur is tangent to the lane at its join, which makes it smooth for a
+		// truck arriving from ONE side and a hairpin from the other. The lane is a closed
+		// ring, so a truck CAN come round the long way - but the route search costs length,
+		// takes the short way, and the agent crabs into position at the end of it. Reported
+		// from play 2026-09-15 with a picture: "the truck comes from the bottom right of the
+		// stand and then crabs into its position".
+		//
+		// A mirrored pair gives every anchor a smooth approach from either direction, and the
+		// search picks whichever suits the journey. They meet at the anchor in a V, which is
+		// sharp - deliberately so: a truck has no business driving THROUGH a painted
+		// equipment box, and FSpeedProfile costs that V at MinTaxiSpeed, which is what makes
+		// going round cheaper than cutting through.
+		//
+		// On a Code C stand none of them crosses the aeroplane - measured on the sampled
+		// geometry by Airside.Build.SpursLeaveTheLaneTangentially, not trusted here.
 		for (const FResolvedAnchor& Resolved : Instance.ResolvedAnchors)
 		{
 			if (TraversalForRole(Resolved.Role) == ETraversalClass::Aircraft)
@@ -162,70 +315,162 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 			const FGuidelineNode* AnchorNode = Network.GetGuidelineNode(Resolved.Node);
 			if (AnchorNode == nullptr || AnchorNode->Incident.Num() > 0)
 			{
-				// Already joined - by hand, or by a pass that survived. A second spur would
-				// leave two lines into one painted box.
+				// Already joined - by hand, or by a pass that survived. Laying the pair again
+				// would leave four lines into one painted box.
 				continue;
 			}
 			const FVector2D At = AnchorNode->Position;
 
-			// Across the lane's CURRENT edges, re-read every time: an earlier spur may have
-			// split the very side this one is about to meet, and it must see the halves
-			// rather than the edge that is gone.
-			FGuidelineEdgeId BestEdge;
-			double BestDistance = TNumericLimits<double>::Max();
-			double BestParam = 0.0;
-			FVector2D BestPoint = FVector2D::ZeroVector;
-
-			for (const FGuidelineEdgeId& EdgeId : Lane)
+			/**
+			 * Lay one spur, curving the way Direction says. False only when the ring cannot
+			 * be walked at all, which on a closed ring means the graph is broken.
+			 */
+			auto LaySpur = [&](double Direction) -> bool
 			{
-				TArray<FVector2D> Points;
-				if (!Network.SampleGuideline(EdgeId, Points))
+				// Across the lane's CURRENT edges, re-read every time: an earlier spur has
+				// split the very side this one is about to meet - its own mirror twin, often -
+				// and it must see the halves rather than the edge that is gone.
+				FGuidelineEdgeId BestEdge;
+				double BestDistance = TNumericLimits<double>::Max();
+				double BestParam = 0.0;
+				FVector2D BestPoint = FVector2D::ZeroVector;
+
+				for (const FGuidelineEdgeId& EdgeId : Lane)
 				{
-					continue;
+					// THE RING ONLY, NEVER ANOTHER SPUR. Left to itself the search chains: on
+					// a Code C stand EquipmentFwd is 900 uu from HydrantPit's spur against 990
+					// from the north side, so three of the five used to hang off each other.
+					//
+					// TWO REASONS THAT IS WRONG, and the second is why it is fixed here rather
+					// than tolerated. A spur is a QUADRATIC, so a spur joining one leaves it at
+					// an angle the tangent construction below cannot straighten - 315 uu of
+					// radius against the 471 a truck's lock needs, measured 2026-09-15. And
+					// Airside.Entities.ServiceLoopClearsTheAircraft judges every spur as a line
+					// from the anchor to the nearest point ON THE LOOP, so a chained one is
+					// geometry that test never looked at.
+					const FGuidelineEdge* Candidate = Network.GetGuidelineEdge(EdgeId);
+					if (Candidate == nullptr || !Candidate->bAlive || Candidate->bServiceSpur)
+					{
+						continue;
+					}
+
+					TArray<FVector2D> Points;
+					if (!Network.SampleGuideline(EdgeId, Points))
+					{
+						continue;
+					}
+
+					int32 Span = 0;
+					double Fraction = 0.0;
+					const double Distance =
+						GuidelineGeom::NearestOnPolyline(Points, At, Span, Fraction);
+					if (Distance >= BestDistance)
+					{
+						continue;
+					}
+
+					BestDistance = Distance;
+					BestEdge = EdgeId;
+					BestParam = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
+					BestPoint = FMath::Lerp(Points[Span], Points[Span + 1], Fraction);
 				}
 
-				int32 Span = 0;
-				double Fraction = 0.0;
-				const double Distance = GuidelineGeom::NearestOnPolyline(Points, At, Span, Fraction);
-				if (Distance >= BestDistance)
+				if (!BestEdge.IsSet())
 				{
-					continue;
+					return false;
 				}
 
-				BestDistance = Distance;
-				BestEdge = EdgeId;
-				BestParam = GuidelineGeom::ParamAtSample(Span, Fraction, Points.Num());
-				BestPoint = FMath::Lerp(Points[Span], Points[Span + 1], Fraction);
-			}
+				// SLIDE THE JOIN ALONG THE LANE, so the spur can leave along it rather than
+				// cross it - see SpurRunFor. The anchor does not move: a hydrant pit is where
+				// a hydrant pit is, and only the point the line meets the lane at is ours.
+				//
+				// ALONG THE RING, not along this EDGE. The ring is continuous and its edges
+				// are just where earlier spurs happened to cut it, so the join is as free to
+				// land on the next piece as on this one - see WalkRing for the two spurs that
+				// were refused when it was not.
+				const double Run = SpurRunFor(BestDistance);
 
-			if (!BestEdge.IsSet())
-			{
-				continue;
-			}
+				FGuidelineEdgeId JoinEdge;
+				double JoinParam = 0.0;
+				bool bForward = true;
+				if (!WalkRing(Network, Lane, BestEdge, BestParam, Run * Direction,
+						JoinEdge, JoinParam, bForward))
+				{
+					return false;
+				}
 
-			FGuidelineNodeId Join;
-			FGuidelineEdgeId Head, Tail;
-			if (!Network.SplitGuidelineEdge(BestEdge, BestParam, LaneWeldTolerance, Join, Head, Tail))
-			{
-				continue;
-			}
+				// AND THE CONTROL POINT FOLLOWS THE RING'S OWN TANGENT AT THE JOIN, which is
+				// not the anchor's perpendicular foot the moment the ring is CURVED there -
+				// and it is curved as soon as the join lands on a rounded corner. Controlling
+				// to the foot left 28 degrees of turn at the junction, measured 2026-09-15.
+				FVector2D SpurControl = BestPoint;
+				{
+					const FGuidelineEdge* Host = Network.GetGuidelineEdge(JoinEdge);
+					const FGuidelineNode* HostA =
+						Host != nullptr ? Network.GetGuidelineNode(Host->A) : nullptr;
+					const FGuidelineNode* HostB =
+						Host != nullptr ? Network.GetGuidelineNode(Host->B) : nullptr;
+					if (HostA == nullptr || HostB == nullptr)
+					{
+						return false;
+					}
 
-			if (Head.IsSet() && Tail.IsSet())
-			{
-				// An actual split, not a weld to an existing endpoint: the halves inherit the
-				// owner from the original edge (SplitGuidelineEdge copies every field but the
-				// endpoint and control that moved), which is what keeps the whole lane
-				// recognisable as one entity's after any number of splits.
-				Lane.Remove(BestEdge);
-				Lane.Add(Head);
-				Lane.Add(Tail);
-				Result.Nodes.Add(Join);
-			}
+					// Analytic, not a difference of samples: a tangent measured off a sampled
+					// chord is a second evaluator, and it shows up as a degree or two of turn
+					// at exactly the junction this exists to make turnless.
+					const FVector2D JoinPoint = GuidelineGeom::Eval(
+						HostA->Position, Host->Control, HostB->Position, JoinParam);
+					const FVector2D Along = GuidelineGeom::Tangent(
+						HostA->Position, Host->Control, HostB->Position, JoinParam);
 
-			const FVector2D JoinAt = Network.GetGuidelineNode(Join)->Position;
-			Lane.Add(Network.AddGuidelineEdge(
-				MakeServiceEdge(Resolved.Node, Join, At, JoinAt, EntityId, /*bSpur=*/true)));
-			++Result.SpursBuilt;
+					// BACK the way the walk came, by the distance it walked - so the
+					// quadratic's first leg lies on the ring and the curve leaves tangentially.
+					SpurControl = JoinPoint - (bForward ? Along : -Along) * Run;
+				}
+
+				BestEdge = JoinEdge;
+				BestParam = JoinParam;
+
+				FGuidelineNodeId Join;
+				FGuidelineEdgeId Head, Tail;
+				if (!Network.SplitGuidelineEdge(
+						BestEdge, BestParam, LaneWeldTolerance, Join, Head, Tail))
+				{
+					return false;
+				}
+
+				if (Head.IsSet() && Tail.IsSet())
+				{
+					// An actual split, not a weld to an existing endpoint: the halves inherit
+					// the owner from the original edge (SplitGuidelineEdge copies every field
+					// but the endpoint and control that moved), which is what keeps the whole
+					// lane recognisable as one entity's after any number of splits.
+					Lane.Remove(BestEdge);
+					Lane.Add(Head);
+					Lane.Add(Tail);
+					Result.Nodes.Add(Join);
+				}
+
+				const FVector2D JoinAt = Network.GetGuidelineNode(Join)->Position;
+
+				FGuidelineEdge Spur =
+					MakeServiceEdge(Resolved.Node, Join, At, JoinAt, EntityId, /*bSpur=*/true);
+
+				// The edge is spelled anchor-to-join, which changes nothing: a quadratic read
+				// backwards is the same curve, and GuidelineGeom::Sample takes the ends in
+				// whichever order it is given.
+				Spur.Control = SpurControl;
+
+				Lane.Add(Network.AddGuidelineEdge(MoveTemp(Spur)));
+				++Result.SpursBuilt;
+				return true;
+			};
+
+			// BOTH WAYS, ALWAYS. The ring is closed, so there is always somewhere to walk to;
+			// what used to refuse a direction was a room check that could not see past the
+			// edge it started on.
+			LaySpur(1.0);
+			LaySpur(-1.0);
 		}
 	}
 
