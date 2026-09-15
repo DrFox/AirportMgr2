@@ -49,6 +49,24 @@ PIPELINE_NAME = "PL_FuelTruck1_Combine"
 EXPECTED_LENGTH_UU = 620.0
 TOLERANCE_UU = 20.0
 
+# DO NOT SCALE HERE. Tried and rejected 2026-09-15, when the truck needed to grow from 6.2 m
+# to a real dispenser's 8.5 m: InterchangeGenericAssetsPipeline.import_offset_uniform_scale
+# is applied INCONSISTENTLY to a skinned import, and there is no value that gets both halves
+# right. Measured, twice, off this script's own assertions and
+# Airside.Content.VehicleFootprintMatchesTheMesh:
+#
+#   requested 1.371  -> mesh 1165.3 uu (620 * 1.371^2), bones 494.5 uu (360.7 * 1.371)
+#   requested 1.1709 -> mesh  850.0 uu (620 * 1.1709^2), bones 422.4 uu (360.7 * 1.1709)
+#
+# The vertices take the global offset TWICE - once baked in, once on the bind pose - and the
+# skeleton takes it ONCE. So the body and the rig scale by different factors: the second run
+# above produced a correctly sized 8.5 m truck whose wheelbase was 4.22 m instead of 4.95,
+# a wheelbase/length ratio of 0.497 against the model's authored 0.582. A wheel whose mesh
+# and whose bone disagree about where it is does not stay on its axle when it turns.
+#
+# RESIZE IN BLENDER AND RE-EXPORT instead. That scales vertices and bones together, which is
+# the only place the two are guaranteed to stay in step.
+
 # ZERO, for the same reason import_plane2.py's is: the orientation is correct AT SOURCE.
 # fueltruck1/scripts/build_export.py yaws the export copies so the truck arrives nose on
 # glTF +X, which lands on UE +X - the convention every other asset here follows. The checks
