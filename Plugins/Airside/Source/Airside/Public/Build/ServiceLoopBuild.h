@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoadHandles.h"
 
 class URoadNetwork;
 
@@ -57,6 +58,39 @@ struct AIRSIDE_API FServiceLoopBuild
 	 * a test that had to hardcode how far would be a second statement of this decision.
 	 */
 	static constexpr double LaneTurnRadius = 750.0;
+
+	/**
+	 * How far along the ring a line joining it should slide from the point it is nearest.
+	 *
+	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT. Sliding the join this far and putting the
+	 * curve's control back at the nearest point makes the first leg run down the ring, so the
+	 * curve leaves tangentially and there is no turn at the junction to take. Gap is how far
+	 * off the ring the other end is.
+	 *
+	 * SHARED BY SPURS AND ROAD LINKS, because the two are the same thing with a different
+	 * far end - an anchor or a road. A link that crossed square-on while its spurs swept was
+	 * the last tight turn left on a stand, and the one the router kept choosing.
+	 */
+	static double TangentRunFor(double Gap);
+
+	/**
+	 * Walk Distance along the RING from (Edge, Param) and report where it lands. Negative
+	 * walks the other way; the sign is read against Edge's own A-to-B sense.
+	 *
+	 * ACROSS EDGE BOUNDARIES, which is the whole reason it exists. A ring side is cut by every
+	 * spur and every link that joins it, so "800 uu along the lane" routinely lands on a
+	 * different EDGE from the one a line is nearest - and a walk that stopped at the end of
+	 * its own edge would report no room where the ring has plenty.
+	 *
+	 * ONLY THE RING. Spurs and links hang off it and are stepped over, so a ring node carries
+	 * exactly two ring edges and the way onward is never ambiguous.
+	 *
+	 * OutForward says which way the walk was travelling when it stopped, in the LANDING edge's
+	 * own sense - which a caller needs, because that edge may be parameterised the opposite
+	 * way round from the one it started on.
+	 */
+	static bool WalkRing(const URoadNetwork& Network, FGuidelineEdgeId Edge, double Param,
+		double Distance, FGuidelineEdgeId& OutEdge, double& OutParam, bool& OutForward);
 
 	/** What one pass laid, and what the link search needs to know about it. */
 	struct FResult

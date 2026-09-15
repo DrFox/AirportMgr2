@@ -166,6 +166,23 @@ namespace GuidelineGeom
 		const TArray<FVector2D>& Points, double Param, double Offset);
 
 	/**
+	 * The tightest radius anywhere on the quadratic A -> B with control Control.
+	 *
+	 * Curvature is |B'|^3 / |B' x B''| and the cross product is CONSTANT, so the tightest
+	 * point is wherever |B'| is least - and B'(t)/2 traces the straight segment from
+	 * (Control - A) to (B - Control). On a symmetric curve the nearest point of that segment
+	 * to the origin falls in the middle, which is the apex; on a lopsided one it falls OFF
+	 * THE END and the tightest point is an endpoint. Clamping the parameter is what makes
+	 * this right in both cases, and the closed-form apex expression wrong in the second.
+	 *
+	 * HERE rather than in a builder because three of them now ask it: a spur sizing its run,
+	 * a lane corner, and a road link's entrance. One evaluator, as with everything else in
+	 * this namespace.
+	 */
+	AIRSIDE_API double TightestRadius(
+		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from

@@ -481,51 +481,31 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 
 	const double CornerReach = FServiceLoopBuild::LaneTurnRadius * UE_DOUBLE_SQRT_2;
 
-	// THE NEAR SIDE, ALONG ITS LENGTH - not at a corner. The tie between every point of a side
-	// running parallel to a road is broken at the MIDDLE by GuidelineGeom::
-	// NearestBetweenPolylines, and this is the assertion that fails without it.
+	// THE NEAR SIDE, IN THE MIDDLE OF ITS OVERLAP WITH THE ROAD - not at the first point that
+	// tied. This is the assertion that fails without GuidelineGeom::NearestBetweenPolylines
+	// breaking its tie at the middle.
 	//
-	// NOT THE MIDDLE ITSELF ANY MORE, AND THAT IS A KNOWN REGRESSION. Rounding the ring's
-	// corners made each bend an edge of its own, sharing an endpoint with the side beside it -
-	// so the BEND's link sweep cuts into the side, and the side's own entry comes out 195 uu
-	// from the bend's foot rather than at -925. Measured 2026-09-15.
-	//
-	// Pinned loosely rather than dropped, because what the rule is FOR still holds: the near
-	// side is entered somewhere along it, so a truck can turn either way on arriving. Grouping
-	// a side with its bends in FAnchorLink was tried as the fix and traded this entry for the
-	// nose end's, three down to two, which is worse. The real fix belongs with FAnchorLink's
-	// per-side linking - the same code that still joins a lane square-on at (16334,2488) - and
-	// when it lands, this assertion should go back to demanding the middle.
-	const double NearSide = LaneBounds.Min.Y;
-	bool bAlongTheNearSide = false;
-	for (const FVector2D& Entry : Entries)
-	{
-		bAlongTheNearSide = bAlongTheNearSide
-			|| (FMath::IsNearlyEqual(Entry.Y, NearSide, 50.0)
-				&& Entry.X > LaneBounds.Min.X + CornerReach + 100.0
-				&& Entry.X < LaneBounds.Max.X - CornerReach - 100.0);
-	}
-	TestTrue(*FString::Printf(
-			TEXT("the near side is entered along it, clear of both bends - at %s"), *Where),
-		bAlongTheNearSide);
+	// EXACT AGAIN. It was loosened while a bend could take this side's entrance and leave it
+	// 195 uu from the bend's foot; a bend is no longer a candidate, so the side gets its own
+	// entrance back and the middle is the middle.
+	TestTrue(*FString::Printf(TEXT("the near side is entered at its middle - at %s"), *Where),
+		Has(Entries, FVector2D(LaneBounds.GetCenter().X, LaneBounds.Min.Y)));
 
-	// THE END SIDES, at the corner each brings nearest the road. A corner here is right where
-	// it was wrong on the near side: it genuinely IS the nearest point, and the connector
-	// leaving it runs away from the lane rather than across it.
+	// THE END SIDES, each at the nearest point of ITS OWN STRAIGHT.
 	//
-	// NOT AT THE SQUARE CORNER OF ServiceLaneBounds ANY MORE. The ring's corners are rounded
-	// as it is laid, so it turns in this far before the box corner and never reaches it; the
-	// foot of that bend is where an end side now comes nearest a road along the near one.
+	// NOT AT A BEND, and that is the rule rather than an accident of this layout. A bend is
+	// the turn between two sides and belongs to both, so an entrance on one is an entrance
+	// neither side can call its own - which left a stand with three connections clustered
+	// along its bottom edge, of three different qualities, instead of one per side. Reported
+	// from play 2026-09-15 with a picture.
 	//
-	// DERIVED, not the 1061 uu it happens to be. T = R / tan(theta/2), the circular fillet, is
-	// NOT the figure: the ring's corners are quadratics, whose radius at the apex is
-	// T sin^2(theta/2) / cos(theta/2), so a right angle needs T = R * sqrt(2). Restated from
-	// the geometry rather than calling the builder's own inverse, which could be wrong in one
-	// place and agree with itself.
-	TestTrue(TEXT("the tail end side joins at the foot of its near bend"),
-		Has(Entries, FVector2D(LaneBounds.Min.X + CornerReach, LaneBounds.Min.Y)));
-	TestTrue(TEXT("the nose end side joins at the foot of its near bend"),
-		Has(Entries, FVector2D(LaneBounds.Max.X - CornerReach, LaneBounds.Min.Y)));
+	// So an end side is entered where its own straight comes closest to the road, and its
+	// straight starts CornerReach up from the near side because that is how far the bend
+	// reaches back. Derived rather than the 1029 uu it happens to be.
+	TestTrue(*FString::Printf(TEXT("the tail end side joins at the near end of its own straight - at %s"), *Where),
+		Has(Entries, FVector2D(LaneBounds.Min.X, LaneBounds.Min.Y + CornerReach)));
+	TestTrue(*FString::Printf(TEXT("the nose end side joins at the near end of its own straight - at %s"), *Where),
+		Has(Entries, FVector2D(LaneBounds.Max.X, LaneBounds.Min.Y + CornerReach)));
 
 	// AND THE FAR SIDE DOES NOT, though it is 4580 uu from the road and the service radius is
 	// 5000. Its connector would run the whole depth of the stand, through the parked
@@ -540,7 +520,15 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	// IDEMPOTENT. The graph is rebuilt on every road edit and this runs each time; a pass
 	// that could not see its own previous links would stack an entry per side per rebuild.
 	FAnchorLink::Build(*Net);
-	TestEqual(TEXT("a second pass adds no further entries"), EntryPoints(*Net).Num(), 3);
+	{
+		FString Again;
+		for (const FVector2D& Entry : EntryPoints(*Net))
+		{
+			Again += FString::Printf(TEXT("(%.0f,%.0f) "), Entry.X, Entry.Y);
+		}
+		TestEqual(*FString::Printf(TEXT("a second pass adds no further entries - at %s"), *Again),
+			EntryPoints(*Net).Num(), 3);
+	}
 
 	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600) and spurs to the
 	// EAST side; with one entry at the tail corner a truck drove the length of the stand and
@@ -571,6 +559,47 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 					     "- %.0f uu"),
 					GuidelineGeom::PolylineLength(Plan.Polyline)),
 				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 4700.0);
+
+			// TEMPORARY, 2026-09-15. The entrance is on the right side now and there is still
+			// a tight bend onto the stand. Measured the way FSpeedProfile measures it, over
+			// the route the truck actually drives.
+			{
+				const TArray<FVector2D>& P = Plan.Polyline;
+				int32 Sharp = 0;
+				double Worst = 0.0;
+				FString SharpAt;
+				double Tightest = TNumericLimits<double>::Max();
+				FVector2D TightAt = FVector2D::ZeroVector;
+				for (int32 At = 0; At < P.Num(); ++At)
+				{
+					double In = 0.0, Out = 0.0;
+					GuidelineGeom::VertexHeadings(P, At, In, Out);
+					const double Instant = FMath::Abs(FMath::UnwindRadians(Out - In));
+					if (Instant > 1.0e-6)
+					{
+						++Sharp;
+						Worst = FMath::Max(Worst, FMath::RadiansToDegrees(Instant));
+						SharpAt += FString::Printf(TEXT("%.0fdeg@(%.0f,%.0f) "),
+							FMath::RadiansToDegrees(Instant), P[At].X, P[At].Y);
+					}
+					if (At + 1 < P.Num())
+					{
+						double NextIn = 0.0, NextOut = 0.0;
+						GuidelineGeom::VertexHeadings(P, At + 1, NextIn, NextOut);
+						const double Turn = FMath::Abs(FMath::UnwindRadians(NextIn - Out));
+						const double Len = FVector2D::Distance(P[At], P[At + 1]);
+						if (Turn > 1.0e-6 && Len > 0.0 && Len / Turn < Tightest)
+						{
+							Tightest = Len / Turn;
+							TightAt = P[At];
+						}
+					}
+				}
+				AddInfo(FString::Printf(
+					TEXT("ROUTE: %d sharp [%s], tightest %.0f uu at (%.0f,%.0f), start (%.0f,%.0f) end (%.0f,%.0f)"),
+					Sharp, *SharpAt, Tightest == TNumericLimits<double>::Max() ? 0.0 : Tightest,
+					TightAt.X, TightAt.Y, P[0].X, P[0].Y, P.Last().X, P.Last().Y));
+			}
 		}
 	}
 	return true;

@@ -455,3 +455,26 @@ double GuidelineGeom::ParamAtArcOffset(const TArray<FVector2D>& Points, double P
 
 	return ParamAtSample(Index, FMath::Clamp(Fraction, 0.0, 1.0), Points.Num());
 }
+
+double GuidelineGeom::TightestRadius(
+	const FVector2D& A, const FVector2D& Control, const FVector2D& B)
+{
+	const FVector2D First = Control - A;
+	const FVector2D Second = B - Control;
+
+	const double Cross = FMath::Abs(First.X * Second.Y - First.Y * Second.X);
+	if (Cross <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		// Collinear control: a straight line, which bends nowhere.
+		return TNumericLimits<double>::Max();
+	}
+
+	const FVector2D Sweep = Second - First;
+	const double Length = Sweep.SizeSquared();
+	const double At = Length > 0.0
+		? FMath::Clamp(-FVector2D::DotProduct(First, Sweep) / Length, 0.0, 1.0)
+		: 0.0;
+
+	const double Least = (First + Sweep * At).Size();
+	return 2.0 * Least * Least * Least / Cross;
+}

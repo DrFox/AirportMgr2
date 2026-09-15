@@ -107,51 +107,9 @@ namespace
 	 */
 	constexpr double PreferredSpurRun = 800.0;
 
-	double SpurRunFor(double Gap)
-	{
-		return FMath::Min(PreferredSpurRun, Gap * UE_DOUBLE_SQRT_2);
-	}
 
-	/**
-	 * The tightest radius anywhere on the quadratic P0 -> P2 with control Control.
-	 *
-	 * THE GENERAL FORM OF WHAT SpurRunFor AND CornerRunFor INVERT. Each of those solves a
-	 * special case - a right angle against a straight host, and the symmetric corner - and
-	 * each is right only while its assumption holds. A spur whose join lands on a ROUNDED
-	 * CORNER breaks the first: the ring's tangent there is not square to the anchor, and the
-	 * run that should have given 599 uu gave 433 against the 471 a truck's lock needs.
-	 * Measured 2026-09-15, the day the corners were rounded. So the run is no longer trusted
-	 * to a formula - it is chosen by measuring this.
-	 *
-	 * NOT THE APEX FORMULA, and that distinction cost a round. A quadratic's curvature is
-	 * |B'|^3 / |B' x B''| with the cross product CONSTANT, so the tightest point is wherever
-	 * |B'| is least - and B'(t)/2 traces the straight segment from (Control - P0) to
-	 * (P2 - Control). On a symmetric curve the nearest point of that segment to the origin
-	 * falls in the middle, which is the apex and which the closed form assumes. On a lopsided
-	 * one it falls OFF THE END, the tightest point is an endpoint, and the closed form reports
-	 * a radius the curve never has. Clamping the parameter is the whole fix.
-	 */
-	double TightestRadius(const FVector2D& P0, const FVector2D& Control, const FVector2D& P2)
-	{
-		const FVector2D A = Control - P0;
-		const FVector2D B = P2 - Control;
 
-		const double Cross = FMath::Abs(A.X * B.Y - A.Y * B.X);
-		if (Cross <= UE_DOUBLE_KINDA_SMALL_NUMBER)
-		{
-			// Collinear control: a straight line, which bends nowhere.
-			return TNumericLimits<double>::Max();
-		}
 
-		const FVector2D Sweep = B - A;
-		const double Length = Sweep.SizeSquared();
-		const double At = Length > 0.0
-			? FMath::Clamp(-FVector2D::DotProduct(A, Sweep) / Length, 0.0, 1.0)
-			: 0.0;
-
-		const double Least = (A + Sweep * At).Size();
-		return 2.0 * Least * Least * Least / Cross;
-	}
 
 
 
@@ -206,72 +164,7 @@ namespace
 	 * edge's own sense - which the caller needs, because the landing edge may be parameterised
 	 * the opposite way round from the one it started on.
 	 */
-	bool WalkRing(const URoadNetwork& Network, const TArray<FGuidelineEdgeId>& Lane,
-		FGuidelineEdgeId Edge, double Param, double Distance,
-		FGuidelineEdgeId& OutEdge, double& OutParam, bool& OutForward)
-	{
-		OutEdge = Edge;
-		OutParam = Param;
-		OutForward = Distance >= 0.0;
 
-		double Remaining = FMath::Abs(Distance);
-
-		for (int32 Step = 0; Step <= Lane.Num(); ++Step)
-		{
-			const FGuidelineEdge* Here = Network.GetGuidelineEdge(OutEdge);
-			TArray<FVector2D> Points;
-			if (Here == nullptr || !Network.SampleGuideline(OutEdge, Points) || Points.Num() < 2)
-			{
-				return false;
-			}
-
-			const double Length = GuidelineGeom::PolylineLength(Points);
-			const double Available = OutForward ? Length * (1.0 - OutParam) : Length * OutParam;
-			if (Available >= Remaining)
-			{
-				OutParam = GuidelineGeom::ParamAtArcOffset(
-					Points, OutParam, OutForward ? Remaining : -Remaining);
-				return true;
-			}
-
-			Remaining -= Available;
-
-			// Over the node at that end and onto the ring's next edge, carrying on in the
-			// same direction of travel - which is whichever of that edge's ends is NOT the
-			// node just arrived at.
-			const FGuidelineNodeId At = OutForward ? Here->B : Here->A;
-			const FGuidelineNode* Node = Network.GetGuidelineNode(At);
-			if (Node == nullptr)
-			{
-				return false;
-			}
-
-			FGuidelineEdgeId Next;
-			for (const FGuidelineEdgeId& Id : Node->Incident)
-			{
-				if (Id == OutEdge)
-				{
-					continue;
-				}
-				const FGuidelineEdge* Candidate = Network.GetGuidelineEdge(Id);
-				if (Candidate != nullptr && Candidate->bAlive && !Candidate->bServiceSpur)
-				{
-					Next = Id;
-					break;
-				}
-			}
-			if (!Next.IsSet())
-			{
-				return false;
-			}
-
-			const FGuidelineEdge* NextEdge = Network.GetGuidelineEdge(Next);
-			OutForward = NextEdge->A == At;
-			OutParam = OutForward ? 0.0 : 1.0;
-			OutEdge = Next;
-		}
-		return false;
-	}
 }
 
 FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
@@ -480,7 +373,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 		// A mirrored pair gives every anchor a smooth approach from either direction, and the
 		// search picks whichever suits the journey. They meet at the anchor in a V, which is
 		// sharp - deliberately so: a truck has no business driving THROUGH a painted
-		// equipment box, and FSpeedProfile costs that V at MinTaxiSpeed, which is what makes
+		// equipment box, and FSpeedProfile costs that V at MinSteeringSpeed, which is what makes
 		// going round cheaper than cutting through.
 		//
 		// On a Code C stand none of them crosses the aeroplane - measured on the sampled
@@ -582,7 +475,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 				double JoinParam = 0.0;
 				FVector2D SpurControl = BestPoint;
 				{
-					const double Shortest = SpurRunFor(BestDistance);
+					const double Shortest = FServiceLoopBuild::TangentRunFor(BestDistance);
 					bool bClears = false;
 
 					// Six, spanning one to three times the nominal run. Enough to clear a
@@ -596,7 +489,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 						FGuidelineEdgeId TryEdge;
 						double TryParam = 0.0;
 						bool bForward = true;
-						if (!WalkRing(Network, Lane, BestEdge, BestParam, Candidate * Direction,
+						if (!FServiceLoopBuild::WalkRing(Network, BestEdge, BestParam, Candidate * Direction,
 								TryEdge, TryParam, bForward))
 						{
 							continue;
@@ -627,7 +520,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 							JoinPoint - (bForward ? Along : -Along) * Candidate;
 
 						// The spur as it will actually be laid: anchor, control, join.
-						const double Radius = TightestRadius(At, Control, JoinPoint);
+						const double Radius = GuidelineGeom::TightestRadius(At, Control, JoinPoint);
 
 						// THE SHORTEST THAT CLEARS, or the shortest full stop.
 						//
@@ -712,4 +605,81 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 	}
 
 	return Result;
+}
+
+double FServiceLoopBuild::TangentRunFor(double Gap)
+{
+	return FMath::Min(PreferredSpurRun, Gap * UE_DOUBLE_SQRT_2);
+}
+
+bool FServiceLoopBuild::WalkRing(const URoadNetwork& Network, FGuidelineEdgeId Edge,
+	double Param, double Distance, FGuidelineEdgeId& OutEdge, double& OutParam,
+	bool& OutForward)
+{
+	OutEdge = Edge;
+	OutParam = Param;
+	OutForward = Distance >= 0.0;
+
+	double Remaining = FMath::Abs(Distance);
+
+	for (int32 Step = 0; Step <= Network.GetGuidelineEdges().Num(); ++Step)
+	{
+		const FGuidelineEdge* Here = Network.GetGuidelineEdge(OutEdge);
+		TArray<FVector2D> Points;
+		if (Here == nullptr || !Network.SampleGuideline(OutEdge, Points) || Points.Num() < 2)
+		{
+			return false;
+		}
+
+		const double Length = GuidelineGeom::PolylineLength(Points);
+		const double Available = OutForward ? Length * (1.0 - OutParam) : Length * OutParam;
+		if (Available >= Remaining)
+		{
+			OutParam = GuidelineGeom::ParamAtArcOffset(
+				Points, OutParam, OutForward ? Remaining : -Remaining);
+			return true;
+		}
+
+		Remaining -= Available;
+
+		// Over the node at that end and onto the ring's next edge, carrying on in the
+		// same direction of travel - which is whichever of that edge's ends is NOT the
+		// node just arrived at.
+		const FGuidelineNodeId At = OutForward ? Here->B : Here->A;
+		const FGuidelineNode* Node = Network.GetGuidelineNode(At);
+		if (Node == nullptr)
+		{
+			return false;
+		}
+
+		FGuidelineEdgeId Next;
+		for (const FGuidelineEdgeId& Id : Node->Incident)
+		{
+			if (Id == OutEdge)
+			{
+				continue;
+			}
+			const FGuidelineEdge* Candidate = Network.GetGuidelineEdge(Id);
+			// OWNED AND NOT A SPUR is what makes an edge part of the RING. Testing only
+			// for "not a spur" was enough while this ran before any road link existed;
+			// a link hangs off a lane node too and carries no owner by design, so the
+			// walk would have stepped off the ring and onto the road.
+			if (Candidate != nullptr && Candidate->bAlive && !Candidate->bServiceSpur
+				&& Candidate->ServiceLoopOwner.IsSet())
+			{
+				Next = Id;
+				break;
+			}
+		}
+		if (!Next.IsSet())
+		{
+			return false;
+		}
+
+		const FGuidelineEdge* NextEdge = Network.GetGuidelineEdge(Next);
+		OutForward = NextEdge->A == At;
+		OutParam = OutForward ? 0.0 : 1.0;
+		OutEdge = Next;
+	}
+	return false;
 }
