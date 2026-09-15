@@ -67,11 +67,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// that threshold is 5.2 m, tighter than any taxiway bend. What remains is the physical
 	// limit the yaw-rate cap was always standing in for - lateral acceleration, sqrt(a*R),
 	// which is tyre side load and the cabin.
-	const double Lock = FMath::Sin(FMath::DegreesToRadians(
-		FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
-	const double TightestFollowable = (Airframe.HasAxles() && Lock > KINDA_SMALL_NUMBER)
-		? Airframe.Wheelbase() / Lock
-		: 0.0;
+	const double TightestFollowable = Airframe.TightestFollowableRadius();
 
 	// WHY THIS ROUTE IS AS SLOW AS IT IS, gathered as the caps are built and logged once at
 	// the end - see the UE_LOG below for why it is worth carrying.

@@ -651,6 +651,30 @@ struct AIRSIDE_API FAirframe
 	/** True when this airframe steers on geometry rather than on a flat yaw rate. */
 	bool HasAxles() const { return Wheelbase() > KINDA_SMALL_NUMBER; }
 
+	/**
+	 * The tightest arc this airframe can follow AT ANY SPEED, uu. Zero when it pivots.
+	 *
+	 * Required yaw is v/R and available yaw is v*sin(lock)/L, so SPEED CANCELS: a corner is
+	 * followable at every speed or at none, and the threshold is L/sin(lock). FSpeedProfile
+	 * drops an agent to MinTaxiSpeed below it, and FServiceLoopBuild sizes a spur's run so it
+	 * does not have to.
+	 *
+	 * ZERO for an airframe with no measured axles. That one steers on the flat
+	 * MaxTurnRateDegPerSec instead and has no such threshold - see HasAxles - so zero means
+	 * "nothing to clear", not "clears nothing".
+	 *
+	 * THE TESTS DELIBERATELY DO NOT CALL THIS. They restate the arithmetic, for the reason
+	 * Airside.Model.ServiceRoadFilletClearsTheTruckLock gives at its own copy: a helper that
+	 * both the production code and its test called could be wrong in one place and agree with
+	 * itself.
+	 */
+	double TightestFollowableRadius() const
+	{
+		const double Lock = FMath::Sin(FMath::DegreesToRadians(
+			FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
+		return (HasAxles() && Lock > KINDA_SMALL_NUMBER) ? Wheelbase() / Lock : 0.0;
+	}
+
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 
