@@ -1,8 +1,10 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
 #include "Engine/SkeletalMesh.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "UObject/UObjectGlobals.h"
 
@@ -196,6 +198,91 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		TestEqual(*FString::Printf(TEXT("%s carries it into the airframe"), Each.Path),
 			Type->Airframe().PushbackNeed, Each.Need);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FVehicleFootprintMatchesTheMeshTest,
+	"Airside.Content.VehicleFootprintMatchesTheMesh",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FVehicleFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
+{
+	// FootprintMatchesTheMesh above guards the AIRCRAFT figures against their mesh. This is
+	// the same guard for the ground vehicle, and it exists because the coupling is the same
+	// and just as invisible: FTrafficRules::VehicleFootprint is a hand-typed length that has
+	// to equal the vehicle mesh's, because UAirsideContent::VehicleMesh promises the box is
+	// sized from it so that what is on screen is "the length the arbiter actually keeps
+	// clear". Re-export fueltruck1 a little longer and nothing on screen changes - the truck
+	// looks right and reserves the wrong amount of road, so the arbiter admits a second agent
+	// into road this one is occupying.
+	//
+	// THE MESH COMES FROM THE CONTENT SET rather than a path written here, so this follows
+	// whichever vehicle is configured instead of asserting a fact about one asset.
+	const USkeletalMesh* Mesh = UAirsideSettings::ResolveVehicleView().Mesh;
+	if (Mesh == nullptr)
+	{
+		// NOT A FAILURE. A project with no rigged vehicle configured has nothing to
+		// disagree with - and the automation projects that carry no content set are exactly
+		// that, which is why ResolveDefaultAirframe has a Piper fallback at all.
+		AddInfo(TEXT("no rigged vehicle configured; nothing to compare the footprint against"));
+		return true;
+	}
+
+	const FTrafficRules Rules;
+	const double MeshLengthUu = Mesh->GetBounds().BoxExtent.X * 2.0;
+
+	// A centimetre either way, the tolerance FootprintMatchesTheMesh uses and for its reason:
+	// both figures come from one measurement, so anything larger is a step that was not
+	// re-run rather than rounding.
+	TestEqual(TEXT("VehicleFootprint matches the configured vehicle mesh's length"),
+		Rules.VehicleFootprint, MeshLengthUu, 1.0);
+
+	// AND THE AXLES MATCH THE RIG, which is what makes the truck STEER rather than pivot.
+	//
+	// ResolveDefaultVehicle types these figures in - there is no UVehicleType asset to author
+	// them on yet - so they are exactly the "authored number describing a mesh" this test
+	// exists to pin. Get them wrong and nothing looks broken until a corner: a wheelbase of
+	// zero turns HasAxles() off and the truck spins about its rear axle, which is how this
+	// was found.
+	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	const TArray<FTransform>& Pose = Ref.GetRefBonePose();
+
+	auto BoneX = [&Ref, &Pose](const TCHAR* Name) -> TOptional<double>
+	{
+		const int32 Index = Ref.FindBoneIndex(FName(Name));
+		if (Index == INDEX_NONE)
+		{
+			return TOptional<double>();
+		}
+		// Up the parent chain, because a bone's ref pose is relative to its parent - and the
+		// front wheels hang off their steer bones, so their own translation is not where they
+		// are on the truck.
+		FTransform At = Pose[Index];
+		for (int32 Parent = Ref.GetParentIndex(Index); Parent != INDEX_NONE;
+			Parent = Ref.GetParentIndex(Parent))
+		{
+			At = At * Pose[Parent];
+		}
+		return TOptional<double>(At.GetLocation().X);
+	};
+
+	const TOptional<double> FrontX = BoneX(TEXT("steer_FL"));
+	const TOptional<double> RearX = BoneX(TEXT("wheel_RL"));
+	if (!FrontX.IsSet() || !RearX.IsSet())
+	{
+		AddError(TEXT("the configured vehicle has no steer_FL/wheel_RL bones to measure - "
+			"either the rig was renamed or a different vehicle is configured, and "
+			"ResolveDefaultVehicle's axle figures are describing something else"));
+		return false;
+	}
+
+	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	TestTrue(TEXT("the service vehicle steers geometrically rather than pivoting"),
+		Van.HasAxles());
+	TestEqual(TEXT("SteerAxleX matches the rig's front axle"), Van.SteerAxleX, FrontX.GetValue(), 1.0);
+	TestEqual(TEXT("FixedAxleX matches the rig's rear axle"), Van.FixedAxleX, RearX.GetValue(), 1.0);
 
 	return true;
 }

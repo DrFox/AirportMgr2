@@ -218,4 +218,41 @@ void ARoadAgentActor::SetVehicleBody(UStaticMesh* Mesh, const FVector& BoxSizeUu
 	// records for the airframe and its wingspan.
 	Placeholder->SetRelativeScale3D(FVector::OneVector);
 	PlaceholderSizeUu = Mesh->GetBounds().BoxExtent * 2.0;
+
+	// NO LIFT ONCE A REAL MESH IS ON, which the cube still needs and this no longer does.
+	//
+	// SetMotion lifts by half PlaceholderSizeUu.Z because the engine cube's pivot is at its
+	// CENTRE. An authored vehicle's is on the ground - the import asserts it, see
+	// import_fueltruck.py's "wheels are on the ground" check - so the same lift floats it by
+	// half its own height, which for a 299 uu truck is a metre and a half of clear air. The
+	// flag reads "airframe" and means "the visible body's origin is on the ground"; it is
+	// the same fact for a truck as for an aeroplane.
+	bHasAirframe = true;
+}
+
+void ARoadAgentActor::SetVehicleAirframe(USkeletalMesh* Mesh, UClass* AnimClass,
+	const FVector& BoxSizeUu)
+{
+	bIsVehicle = true;
+
+	// SIZED FIRST for the reason SetVehicleBody is: a null mesh must still leave a
+	// correctly-sized box rather than an aircraft-sized one.
+	PlaceholderSizeUu = BoxSizeUu;
+	if (Placeholder != nullptr)
+	{
+		Placeholder->SetRelativeScale3D(BoxSizeUu / CubeUnits);
+	}
+
+	if (Mesh == nullptr)
+	{
+		// The box stands, exactly as the static path leaves it.
+		return;
+	}
+
+	// THROUGH SetAirframe, not a copy of it. A rigged truck and a rigged aeroplane want the
+	// identical treatment - skeletal mesh on the root, anim instance class, material slots
+	// logged, box hidden, lift cleared - and the only thing this adds is that the arbiter's
+	// footprint was recorded above. A second implementation would be that list again, free
+	// to drift.
+	SetAirframe(Mesh, AnimClass);
 }
