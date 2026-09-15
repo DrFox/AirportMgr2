@@ -120,7 +120,24 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 		VanMinSpeedWhileWaiting < 0.5 * VanNow->Airframe.Ground.Taxi.SpeedCap);
 	TestTrue(TEXT("the aircraft never was"), PlaneMinStopWithin > 1000.0);
 	TestTrue(TEXT("the van's wait named the aircraft"), bVanWaitedOnPlane);
-	TestTrue(FString::Printf(TEXT("never closer than the van's own footprint (%.0f uu)"), MinSeparation), MinSeparation >= Traffic->Rules.VehicleFootprint - 1.0);
+	// SEPARATION AGAINST WHAT THE RULE ACTUALLY RESERVES, which is the gap plus half the
+	// BLOCKER's footprint - not, as this line read until 2026-09-15, the van's own length.
+	// That was a coincidental yardstick: it happened to sit just under the separation this
+	// geometry produces, so it passed at a 620 uu van and failed at 850 by six centimetres,
+	// while the arbiter's behaviour had not changed at all (the van still yielded, still
+	// named the aircraft, still came down from 1000 to 250 uu/s).
+	//
+	// A CENTRE-TO-CENTRE DISTANCE IS A PROXY HERE AND ALWAYS WAS. The two cross at ninety
+	// degrees, so the van passes behind the tail and their centres are legitimately closer
+	// than their combined half-lengths. The real safety property - the yielder stayed off the
+	// node while the blocker held it - is what Airside.Model.Traffic.TruckCrossesTaxiway
+	// measures directly. This assertion's job is only to catch a van that drove through.
+	const double Reserved = Traffic->Rules.VehicleGap + Traffic->Rules.AircraftFootprint * 0.5;
+	TestTrue(
+		FString::Printf(
+			TEXT("never closer than the %.0f uu the crossing rule reserves (measured %.0f)"),
+			Reserved, MinSeparation),
+		MinSeparation >= Reserved);
 	TestEqual(TEXT("both arrive"), PlaneNow->Phase, EAgentPhase::Parked);
 	TestEqual(TEXT("both arrive (van)"), VanNow->Phase, EAgentPhase::Parked);
 	return true;

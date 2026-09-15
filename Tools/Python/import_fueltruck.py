@@ -38,15 +38,19 @@ SKEL_NAME = "SK_FuelTruck1"
 PIPELINE_PATH = "/Game/Vehicles/FuelTruck1"
 PIPELINE_NAME = "PL_FuelTruck1_Combine"
 
-# Measured off the glTF's own POSITION accessors before importing: length 6.200 m on glTF X,
-# height 2.990 m on glTF Y, width 2.791 m on glTF Z. Asserted after import so a re-export
-# that changes scale is caught HERE rather than as a truck that looks right and makes every
-# clearance and footprint figure in the sim quietly false.
+# Measured off the glTF's own POSITION accessors before importing. Asserted after import so a
+# re-export that changes scale is caught HERE rather than as a truck that looks right and
+# makes every clearance and footprint figure in the sim quietly false.
+#
+# 8.500 m SINCE 2026-09-15, up from 6.200 - which was a Ford Transit, an 11.2 m kerb-to-kerb
+# circle parked beside a 737. 8.5 m is the smallest real hydrant dispenser. The resize was
+# done in the MODEL (align_and_scale.py's LENGTH_TARGET) and not here; see the note above
+# YAW for why an import-time scale cannot do it.
 #
 # LENGTH is the asserted dimension, not width: the model's README states length as the one
-# matched dimension ("6.200 m exactly") and records the width as deliberately +10% over
-# target. Asserting the width would fail a model that is correct by its own convention.
-EXPECTED_LENGTH_UU = 620.0
+# matched dimension and records the width as deliberately over target. Asserting the width
+# would fail a model that is correct by its own convention.
+EXPECTED_LENGTH_UU = 850.0
 TOLERANCE_UU = 20.0
 
 # DO NOT SCALE HERE. Tried and rejected 2026-09-15, when the truck needed to grow from 6.2 m

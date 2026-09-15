@@ -36,7 +36,7 @@ struct AIRSIDE_API FTrafficRules
 	 * keeps clear". A 6.2 m truck reserving 5 m is that promise broken in the direction that
 	 * hurts: the arbiter would let a second agent into road this one is occupying.
 	 */
-	UPROPERTY(EditAnywhere) double VehicleFootprint = 620.0;
+	UPROPERTY(EditAnywhere) double VehicleFootprint = 850.0;
 
 	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;

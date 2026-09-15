@@ -106,10 +106,25 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	Van.Ground.Taxi.Decel = 200.0;
 	Van.Ground.Taxi.SpeedCap = 1000.0;
 
-	// Kept rolling to steer, like an aircraft, for a different reason that lands in the same
-	// place: a van CAN pivot, but a follower allowed to stop dead mid-turn would snap its
-	// heading round rather than swing it. 0.5 m/s.
-	Van.Ground.MinSteeringSpeed = 50.0;
+	// ZERO, AND IT MEANS IT. A truck's wheels are driven and steered independently of any
+	// thrust line, so it can stop with the wheel turned and pull away again. None of the "a
+	// wheeled aircraft cannot yaw without rolling" physics MinSteeringSpeed exists for applies
+	// to it.
+	//
+	// It was 50 uu/s until 2026-09-15, justified as "a follower allowed to stop dead mid-turn
+	// would snap its heading round". True of the PIVOT law, and it stopped being true the
+	// moment this truck got measured axles: under rolling-steer the yaw is v*sin(d)/L, so at
+	// zero speed the heading cannot move at all, let alone snap. What genuinely needs a
+	// non-zero floor is the SOLVER, not the vehicle - FRouteFollower::ProgressEpsilon.
+	Van.Ground.MinSteeringSpeed = 0.0;
+
+	// 0.3 g. AUTHORED RATHER THAN INHERITED, which it was until 2026-09-15: the struct default
+	// is 147 uu/s^2, an AIRCRAFT CABIN comfort figure, and nothing here ever chose it. A van on
+	// dry concrete does 0.3 g without drama, and this is what decides corner speed once
+	// steering is geometric - at the 699 uu the lock allows, the difference between 11.5 km/h
+	// and 16. The note above about writing every figure out rather than inheriting it applies
+	// to this one too; it was simply missed.
+	Van.Ground.MaxLateralAccelUu = 294.0;
 
 	// NINE TIMES an airframe's 10 deg/s. A van turns into a depot in its own length; an
 	// aircraft's rate here would sweep it across the kerb and back.
@@ -129,10 +144,20 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// it is a spin about the rear axle. Reported from play on 2026-09-14: the truck drives up
 	// to the stand, stops, swings 90 degrees on the spot and drives off.
 	//
-	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 360.7 uu and wheel_RL/RR
-	// at the origin, so the wheelbase is 3.607 m and the geometric law has real figures to
-	// work with. At the 45 degrees of lock below that is a 3.6 m turn radius for a 6.2 m
-	// truck - tight, correct for a rigid bowser, and nothing like crippled.
+	// fueltruck1 HAS been measured. Its rig puts steer_FL/FR at x = 494.5 uu and wheel_RL/RR
+	// at the origin, so the wheelbase is 4.945 m and the geometric law has real figures to
+	// work with.
+	//
+	// RESIZED 2026-09-15 from 3.607 m, when the truck itself went from 6.2 m to 8.5. The old
+	// figures were a Ford Transit's: an 11.2 m kerb-to-kerb circle, parked beside a 737. 8.5 m
+	// is the SMALLEST real hydrant dispenser, and larger classes follow - which is why the
+	// road this turns on is sized from ResolveLargestServiceVehicle and never from here.
+	//
+	// The resize happened in the MODEL, not at import: align_and_scale.py's LENGTH_TARGET.
+	// Interchange's import_offset_uniform_scale was tried first and cannot do it - it lands
+	// twice on a skinned mesh's vertices and once on its bind pose, so it produced a correct
+	// 8.5 m body on a 4.22 m wheelbase. Airside.Content.VehicleFootprintMatchesTheMesh caught
+	// it, and the rejection is written down in Tools/Python/import_fueltruck.py.
 	//
 	// ORIGIN AT THE FIXED AXLE, which is the Piper's declared deviation rather than plane2's
 	// nose-gear convention - and it is the model's, not a choice made here: fueltruck1's
@@ -142,25 +167,25 @@ FAirframe UAirsideSettings::ResolveDefaultVehicle()
 	// DECLARED, since the law stopped being inferred from these two numbers on
 	// 2026-09-15 - see ESteerLaw. A truck steers on a front axle; it does not pivot.
 	Van.SteerLaw = ESteerLaw::RollingSteer;
-	Van.SteerAxleX = 360.7;
+	Van.SteerAxleX = 494.5;
 	Van.FixedAxleX = 0.0;
 
-	// 50 degrees, written out rather than left at FGroundRegime's 60. The struct default is
-	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 2.1 m
-	// radius, which is inside the truck's own length and reads as the pivot the axles above
-	// removed.
+	// 45 degrees, written out rather than left at FGroundRegime's 60. The struct default is
+	// an aircraft nose gear's, and a rigid truck does not have that: 60 would give a 5.7 m
+	// radius on this wheelbase, a turning circle no 8.5 m truck makes.
 	//
-	// WAS 45, RAISED 2026-09-14 with the service road's fillet - the two are one decision.
-	// A rigid vehicle cannot follow an arc tighter than Wheelbase / sin(lock) at ANY speed,
-	// so 45 asked for a 5.10 m corner while the service road was authored with a 5.00 m one.
-	// Ten centimetres apart, on opposite sides of a cliff: every corner between the depot and
-	// the stand hit TIGHTER THAN THE STEERING LOCK and crawled at MinSteeringSpeed. 50 asks for
-	// 4.71 m, and Airside.Model.ServiceRoadFilletClearsTheTruckLock now holds the pair
-	// together so neither can drift into the other again.
+	// BACK TO 45 FROM 50, 2026-09-15, AND THE 50 WAS NEVER A MEASUREMENT. It was raised on
+	// 2026-09-14 so the truck's lock would clear a service road fillet authored at 500 uu -
+	// which is shrinking a vehicle's turning circle to fit the road, the exact inverse of the
+	// rule this airport uses everywhere else: size ground geometry for the largest thing
+	// admitted, never for the one using it now. The fillet is DERIVED from the vehicle now
+	// (URoadProfile::ResolvedFilletRadius), so the lock can go back to what a rigid truck has.
 	//
-	// 50 rather than the 60 that would also have "fixed" it: at 4.71 m this is still a turn
-	// a 6.2 m rigid truck plausibly makes, where 2.1 m is a pirouette.
-	Van.Ground.MaxSteerDegrees = 50.0;
+	// 45 on a 4.945 m wheelbase is a 6.99 m front-axle radius - a kerb-to-kerb circle near
+	// 16.2 m, correct for a rigid 8.5 m truck, where the old figures gave 11.2 m and a
+	// Transit. Reversing is tighter still, Wheelbase / tan(lock) = 4.95 m, which is why a
+	// driver backs into a tight space rather than nosing in.
+	Van.Ground.MaxSteerDegrees = 45.0;
 
 	// A TRUCK CANNOT FLY, AND SAYS SO. Zeroed rather than left at the struct defaults, which
 	// are a light twin's and are all NON-ZERO - so a default-constructed FApproachPerformance
