@@ -386,6 +386,16 @@ public:
 		int32 Trucks = 0);
 
 	/**
+	 * Place from a full description, including a drawn plot and the modules filling it.
+	 *
+	 * THIS OVERLOAD HOLDS THE LOGIC and the signature above forwards to it, not the other
+	 * way round - the refactor contract's rule that every interface stays reachable at its
+	 * old name, as a forwarder if the logic moved. Roughly thirty call sites use the old
+	 * form, almost all of them tests, and churning them is not this slice's work.
+	 */
+	FEntityInstanceId PlaceEntity(const FEntityPlacement& Placement);
+
+	/**
 	 * Removes the entity, the anchor nodes it owns, and every guideline edge incident to
 	 * them - RemoveGuidelineNode cascades. So deleting a stand also deletes the taxi line
 	 * drawn into it, which is intended (a lead-in to a deleted stand leads nowhere) but is

@@ -862,7 +862,23 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	const FVector2D& Position, double Heading, double DesignWingspan, EServiceRole PoseRole,
 	int32 Trucks)
 {
-	if (Definition == nullptr)
+	// A FORWARDER. The logic moved to the overload below when the plot and its modules
+	// became the fourth and fifth things a placement carries - see FEntityPlacement. Every
+	// caller written before plots existed keeps meaning exactly what it meant.
+	FEntityPlacement Placement;
+	Placement.Definition = Definition;
+	Placement.Anchors = Anchors;
+	Placement.Position = Position;
+	Placement.Heading = Heading;
+	Placement.DesignWingspan = DesignWingspan;
+	Placement.PoseRole = PoseRole;
+	Placement.Trucks = Trucks;
+	return PlaceEntity(Placement);
+}
+
+FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
+{
+	if (Placement.Definition == nullptr)
 	{
 		return FEntityInstanceId();
 	}
@@ -871,33 +887,40 @@ FEntityInstanceId URoadNetwork::PlaceEntity(
 	// Anchors itself, is a UEntityDefinition method Model/ cannot call - see the header.
 
 	FEntityInstance Instance;
-	Instance.Position = Position;
-	Instance.Heading = Heading;
-	Instance.Definition = Definition;
-	Instance.DesignWingspan = DesignWingspan;
+	Instance.Position = Placement.Position;
+	Instance.Heading = Placement.Heading;
+	Instance.Definition = Placement.Definition;
+	Instance.DesignWingspan = Placement.DesignWingspan;
 
 	// Captured for the same Model/-must-not-see-Entities/ reason as DesignWingspan, and read
 	// by FAnchorLink to decide which class of guideline the pose's lead-in may join.
-	Instance.PoseRole = PoseRole;
-	Instance.Trucks = Trucks;
+	Instance.PoseRole = Placement.PoseRole;
+	Instance.Trucks = Placement.Trucks;
 
-	Instance.ResolvedAnchors.Reserve(Anchors.Num());
+	Instance.Outline = Placement.Outline;
+	Instance.Modules = Placement.Modules;
+
+	Instance.ResolvedAnchors.Reserve(Placement.Anchors.Num());
 
 	// The stop position itself, as a node an aircraft can be routed to. NON-DERIVED for
 	// the same reason the anchor nodes are: it carries no edge until a lead-in is cast to
 	// it, and a derived one would be swept by the next rebuild.
-	Instance.PoseNode = AddGuidelineNode(Position, /*bDerived=*/false);
+	//
+	// ONE OF THEM, however many bays the plot holds. BuildFuelDepot already ruled that two
+	// lead-ins from one small building into one road is a duplicate painted line, so a
+	// depot's sheds are capacity and visuals - the yard's single gate is the pose.
+	Instance.PoseNode = AddGuidelineNode(Placement.Position, /*bDerived=*/false);
 
-	const double Cos = FMath::Cos(Heading);
-	const double Sin = FMath::Sin(Heading);
+	const double Cos = FMath::Cos(Placement.Heading);
+	const double Sin = FMath::Sin(Placement.Heading);
 
-	for (const FEntityAnchor& Anchor : Anchors)
+	for (const FEntityAnchor& Anchor : Placement.Anchors)
 	{
 		// Local to world. Rotating by the entity's heading is what makes an anchor mean
 		// "off the aircraft's left wing" rather than "somewhere north of here".
 		const FVector2D World(
-			Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
-			Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
+			Placement.Position.X + Anchor.LocalPosition.X * Cos - Anchor.LocalPosition.Y * Sin,
+			Placement.Position.Y + Anchor.LocalPosition.X * Sin + Anchor.LocalPosition.Y * Cos);
 
 		// NON-DERIVED. See the header: an anchor node has no incident edges until a
 		// guideline is drawn to it, so a derived one would be swept by the next rebuild
