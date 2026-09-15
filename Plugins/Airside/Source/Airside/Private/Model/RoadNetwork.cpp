@@ -895,10 +895,36 @@ FEntityInstanceId URoadNetwork::PlaceEntity(const FEntityPlacement& Placement)
 	// Captured for the same Model/-must-not-see-Entities/ reason as DesignWingspan, and read
 	// by FAnchorLink to decide which class of guideline the pose's lead-in may join.
 	Instance.PoseRole = Placement.PoseRole;
-	Instance.Trucks = Placement.Trucks;
 
 	Instance.Outline = Placement.Outline;
 	Instance.Modules = Placement.Modules;
+
+	// DERIVED FROM THE SHEDS, not captured, whenever there are modules at all. A shed is a
+	// truck: the player's mix IS the fleet size, so a separately-stated count could only
+	// ever disagree with the sheds they actually built.
+	//
+	// UFuelService is untouched by this and always will be - it reads Instance.Trucks, and
+	// that a module system landed without its consumer changing is the sign the seam was
+	// already in the right place.
+	//
+	// A PLOTLESS caller keeps its own number: it has no modules to derive one from. Exactly
+	// one of the two branches applies to any placement, so the two cannot both be true.
+	if (Placement.Modules.Num() > 0)
+	{
+		int32 Sheds = 0;
+		for (const EDepotModule Module : Placement.Modules)
+		{
+			if (Module == EDepotModule::Shed)
+			{
+				++Sheds;
+			}
+		}
+		Instance.Trucks = Sheds;
+	}
+	else
+	{
+		Instance.Trucks = Placement.Trucks;
+	}
 
 	Instance.ResolvedAnchors.Reserve(Placement.Anchors.Num());
 

@@ -66,4 +66,58 @@ bool FPlotPlacementCarriesOutlineTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrucksDerivedFromShedsTest,
+	"Airside.Entities.TrucksDerivedFromSheds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrucksDerivedFromShedsTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>();
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+
+	auto PlaceWith = [&](const TArray<EDepotModule>& Modules, double X)
+	{
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(X, 0.0);
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = ThreeBayPlot(X);
+		Placement.Modules = Modules;
+		return Net->GetEntity(Net->PlaceEntity(Placement));
+	};
+
+	// Two sheds is two trucks. The number UFuelService counts dispatches against, so this
+	// is the one module whose effect is real today.
+	{
+		const FEntityInstance* Two = PlaceWith(
+			{ EDepotModule::Shed, EDepotModule::Shed, EDepotModule::Tank }, 0.0);
+		if (!TestNotNull(TEXT("two sheds placed"), Two)) { return false; }
+		TestEqual(TEXT("two sheds is two trucks"), Two->Trucks, 2);
+	}
+
+	// No shed is no trucks - allowed, because a part-built depot is a legitimate state and
+	// the census warns rather than forbidding. It must not silently become one.
+	{
+		const FEntityInstance* None = PlaceWith(
+			{ EDepotModule::Tank, EDepotModule::Pump }, 5000.0);
+		if (!TestNotNull(TEXT("a shedless depot still places"), None)) { return false; }
+		TestEqual(TEXT("no shed is no trucks, not a default of one"), None->Trucks, 0);
+	}
+
+	// A PLOTLESS caller still states its own count outright, because it has no modules to
+	// derive one from. The two paths are exclusive by construction, which is the whole
+	// reason FEntityPlacement::Trucks and Modules can coexist without disagreeing.
+	{
+		const FEntityInstance* Plain = Net->GetEntity(Net->PlaceEntity(
+			Depot, Depot->Anchors, FVector2D(9000.0, 0.0), 0.0, 0.0, EServiceRole::Fuel, 3));
+		if (!TestNotNull(TEXT("a plotless depot places"), Plain)) { return false; }
+		TestEqual(TEXT("and keeps the count it was given"), Plain->Trucks, 3);
+	}
+
+	return true;
+}
+
 #endif

@@ -183,12 +183,26 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	// player placing one would have followed.
 	Definition->PoseRole = EServiceRole::Fuel;
 
-	// HALF-extents: 12 m by 8 m overall. A tank, a pump, and room to turn a bowser round.
-	// A placeholder box, and the only geometry the depot has this slice.
-	Definition->FootprintExtent = FVector2D(600.0, 400.0);
+	// HALF-extents of ONE BAY: 4 m by 8 m. It used to be the whole site - 12 m by 8 m, "a
+	// tank, a pump, and room to turn a bowser round" - but a depot is DRAWN now, so the site
+	// is whatever the player outlined and the only fixed extent left is the module that
+	// fills a bay.
+	//
+	// The old 12 m was not wrong, and it is where the 4 m bay came from: it is exactly three
+	// of them, which is the Tier 1 depot on the concept sheet - one shed, one tank, one
+	// pump. See Solve/PlotFit.h.
+	Definition->FootprintExtent = FVector2D(200.0, 400.0);
 
-	// ONE truck. The number UFuelService counts trucks-out against; M3's job board replaces
-	// the counting, not the number.
+	// ONE truck, and this is now the PLOTLESS default rather than the whole story. A depot
+	// DRAWN as a plot takes its count from the sheds the player built in it - see
+	// URoadNetwork::PlaceEntity(const FEntityPlacement&), where a non-empty module list
+	// overrides this outright. A depot placed without a plot still needs a number from
+	// somewhere, and this is it.
+	//
+	// It was briefly zeroed when the derivation landed, on the reasoning that a definition
+	// cannot know how many bays a plot holds. True, but it does not follow: the plotless
+	// path never asks about bays, and zeroing this silently gave every pre-plot caller a
+	// depot that could not dispatch. Six fuel tests said so immediately.
 	Definition->Trucks = 1;
 
 	// What this installation can provide. Fuel and nothing else, which is the whole slice.
