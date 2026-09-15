@@ -59,6 +59,85 @@ namespace
 	}
 }
 
+PlotFit::FPlotGrid PlotFit::BuildGrid(FVector2D FrontageA, FVector2D FrontageB,
+	int32 Width, int32 Depth)
+{
+	FPlotGrid Grid;
+	if (Width <= 0 || Depth <= 0)
+	{
+		return Grid;
+	}
+
+	const FVector2D Along = FrontageB - FrontageA;
+	const double Length = Along.Size();
+	if (Length <= 0.0)
+	{
+		return Grid;
+	}
+
+	const FVector2D Unit = Along / Length;
+
+	// Interior on the LEFT of A->B - the caller's convention, not a discovery. See the
+	// header for why this differs from FitBays, which has to read it off a drawn polygon.
+	const FVector2D Inward = RoadGeom::PerpCCW(Unit);
+	const double Heading = RoadGeom::Bearing(Inward);
+
+	Grid.Width = Width;
+	Grid.Depth = Depth;
+	Grid.Slots.Reserve(Width * Depth);
+
+	// ROW-MAJOR, FRONT ROW FIRST. Row is the outer loop, so Slots[0 .. Width-1] is the row
+	// on the road - the contract FPlotGrid states and the presenter relies on.
+	for (int32 Row = 0; Row < Depth; ++Row)
+	{
+		for (int32 Bay = 0; Bay < Width; ++Bay)
+		{
+			FPlotBay Slot;
+			Slot.Centre = FrontageA
+				+ Unit * ((static_cast<double>(Bay) + 0.5) * BayWidthUu)
+				+ Inward * ((static_cast<double>(Row) + 0.5) * BayDepthUu);
+			Slot.Heading = Heading;
+			Grid.Slots.Add(Slot);
+		}
+	}
+	return Grid;
+}
+
+TArray<FVector2D> PlotFit::GridOutline(FVector2D FrontageA, FVector2D FrontageB,
+	int32 Width, int32 Depth)
+{
+	TArray<FVector2D> Outline;
+	if (Width <= 0 || Depth <= 0)
+	{
+		return Outline;
+	}
+
+	const FVector2D Along = FrontageB - FrontageA;
+	const double Length = Along.Size();
+	if (Length <= 0.0)
+	{
+		return Outline;
+	}
+
+	const FVector2D Unit = Along / Length;
+	const FVector2D Inward = RoadGeom::PerpCCW(Unit);
+
+	// THE GRID'S OWN EXTENT, not the frontage edge that was passed in. A->B is the edge the
+	// gesture snapped to and may be any length; the plot is exactly Width bays wide, so
+	// measuring the boundary from the bay count is what keeps the outline and the slots
+	// describing the same rectangle.
+	const FVector2D Front = Unit * (static_cast<double>(Width) * BayWidthUu);
+	const FVector2D Back = Inward * (static_cast<double>(Depth) * BayDepthUu);
+
+	// A -> A+Front -> A+Front+Back -> A+Back. Walking the frontage first and THEN turning
+	// inward is what makes this counter-clockwise, given Inward is the left normal.
+	Outline.Add(FrontageA);
+	Outline.Add(FrontageA + Front);
+	Outline.Add(FrontageA + Front + Back);
+	Outline.Add(FrontageA + Back);
+	return Outline;
+}
+
 PlotFit::FPlotFit PlotFit::FitBays(TArrayView<const FVector2D> Outline,
 	FVector2D FrontageA, FVector2D FrontageB)
 {

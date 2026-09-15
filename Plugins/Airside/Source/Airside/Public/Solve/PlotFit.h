@@ -69,6 +69,46 @@ namespace PlotFit
 	};
 
 	/**
+	 * A plot's slots: Width bays across the frontage, Depth rows back from it.
+	 *
+	 * ROW-MAJOR AND FRONT ROW FIRST. Slots[0 .. Width-1] is the row that fronts the road and
+	 * takes the modules; everything after it is expansion space the player buys into later.
+	 * The presenter fills in this order, so the order is part of the contract rather than an
+	 * accident of the loop - a row-major slip would put a shed in the back yard.
+	 */
+	struct FPlotGrid
+	{
+		TArray<FPlotBay> Slots;
+		int32 Width = 0;
+		int32 Depth = 0;
+	};
+
+	/**
+	 * Lay Width x Depth slots against the frontage edge A->B, interior on its LEFT.
+	 *
+	 * NO POLYGON AND NO CONTAINMENT TEST, unlike FitBays below: a rectangle built out from
+	 * its own edge cannot fall outside itself. That is the whole reason a staged gesture is
+	 * cheaper than a freeform one - the shape is known before the geometry is asked about.
+	 *
+	 * THE CALLER OWNS THE INTERIOR SIDE. FitBays has to discover it from the polygon's
+	 * winding because the player drew that polygon; here the gesture built the frontage from
+	 * a road and the side the cursor was on, so there is nothing to discover.
+	 */
+	AIRSIDE_API FPlotGrid BuildGrid(FVector2D FrontageA, FVector2D FrontageB,
+		int32 Width, int32 Depth);
+
+	/**
+	 * The plot's own boundary, counter-clockwise and implicitly closed.
+	 *
+	 * COUNTER-CLOCKWISE IS NOT COSMETIC. The pad is triangulated by the same ear-clipper an
+	 * apron uses, which orients its triangles from the winding, and the surface is not
+	 * two-sided - so a clockwise outline renders as no concrete at all. That shipped on
+	 * 2026-09-15 and took a screenshot to find.
+	 */
+	AIRSIDE_API TArray<FVector2D> GridOutline(FVector2D FrontageA, FVector2D FrontageB,
+		int32 Width, int32 Depth);
+
+	/**
 	 * Lay bays along the frontage edge, inside Outline.
 	 *
 	 * Outline is a simple polygon, closed implicitly - the last point joins the first and

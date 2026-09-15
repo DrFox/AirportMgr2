@@ -520,6 +520,63 @@ Both test doubles gain:
 			const TArray<EDepotModule>&, EPlaceableEntity) override { return INDEX_NONE; }
 ```
 
+- [ ] **Step 2b: Pin the winding correction, which nothing tests**
+
+The correction stays (Step 2) but no test covers it, and it was a real shipped bug - a
+clockwise plot rendered as no concrete at all and took a screenshot to find. Add to
+`PlotPlacementTest.cpp`:
+
+```cpp
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotOutlineIsAlwaysCounterClockwiseTest,
+	"Airside.Entities.PlotOutlineIsAlwaysCounterClockwise",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters)
+{
+	// A CLOCKWISE plot handed to the facade must be STORED counter-clockwise. The pad goes
+	// through the same ear-clipper an apron does, which orients triangles from the winding,
+	// and the surface is not two-sided - stored clockwise, the concrete faces DOWN and the
+	// depot stands on visible grass. That shipped on 2026-09-15.
+	//
+	// Drive it through the facade, not the model: URoadNetwork stores what it is given, and
+	// the correction is the facade's. A model-level assertion would pass over the bug.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+
+	// Clockwise: the same rectangle as GridOutline makes, walked the other way round.
+	const TArray<FVector2D> Clockwise = {
+		FVector2D(0.0, 0.0), FVector2D(0.0, 800.0),
+		FVector2D(1200.0, 800.0), FVector2D(1200.0, 0.0) };
+
+	IRoadEditTarget* Target = Actor;
+	Target->PlaceEntityInPlot(Clockwise, FVector2D(1200.0, 0.0), FVector2D(0.0, 0.0),
+		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
+
+	const TArray<FEntityInstance>& Entities = Actor->Network->GetEntities();
+	if (!TestTrue(TEXT("a depot was placed"), Entities.Num() > 0)) { return false; }
+
+	double Twice = 0.0;
+	const TArray<FVector2D>& Stored = Entities[0].Outline;
+	for (int32 I = 0; I < Stored.Num(); ++I)
+	{
+		const FVector2D& P = Stored[I];
+		const FVector2D& Q = Stored[(I + 1) % Stored.Num()];
+		Twice += P.X * Q.Y - Q.X * P.Y;
+	}
+	TestTrue(TEXT("stored counter-clockwise however it was drawn"), Twice > 0.0);
+
+	return true;
+}
+```
+
+**A depot placed with no service road nearby may be refused** depending on what survives
+Step 2 - if it is, lay a service road first as `PlotPlaceToolTest` does.
+
 - [ ] **Step 3: Delete the search and its test**
 
 ```bash
