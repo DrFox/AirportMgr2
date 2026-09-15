@@ -38,6 +38,26 @@ struct AIRSIDE_API FServiceLoopBuild
 	 */
 	static constexpr double LaneWidth = 400.0;
 
+	/**
+	 * The radius every corner of the ring is rounded to, uu.
+	 *
+	 * A BOX IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN. UEntityDefinition::ServiceLoop
+	 * stays four points, but a corner where two straight sides meet is a vertex whose heading
+	 * changes instantly, and FSpeedProfile calls one of those untakeable at any speed.
+	 *
+	 * NOT IcaoCode::RadiusForLetter, which is what a PAINTED taxi line is swept at, sized for
+	 * the largest aircraft a stand admits - 2500 uu for a Code C, on a lane four metres wide
+	 * whose longest side is 5250. 750 uu is the SERVICE ROAD's junction fillet
+	 * (URoadProfile::MakeServiceRoadTransient, and DA_RoadProfile_ServiceRoad beside it): one
+	 * decision, so a lane is never tighter than the road feeding it. It clears the 471 uu a
+	 * truck's steering lock allows by 1.6x.
+	 *
+	 * PUBLIC because it MOVES THINGS A CALLER CAN SEE. A road no longer joins a lane at the
+	 * square corner of the definition - the ring turns in before it and never reaches it - and
+	 * a test that had to hardcode how far would be a second statement of this decision.
+	 */
+	static constexpr double LaneTurnRadius = 750.0;
+
 	/** What one pass laid, and what the link search needs to know about it. */
 	struct FResult
 	{

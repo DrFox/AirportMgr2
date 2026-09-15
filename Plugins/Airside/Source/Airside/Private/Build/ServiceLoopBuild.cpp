@@ -1,6 +1,7 @@
 #include "Build/ServiceLoopBuild.h"
 
 #include "AirsideLog.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
@@ -109,6 +110,81 @@ namespace
 	double SpurRunFor(double Gap)
 	{
 		return FMath::Min(PreferredSpurRun, Gap * UE_DOUBLE_SQRT_2);
+	}
+
+	/**
+	 * The tightest radius anywhere on the quadratic P0 -> P2 with control Control.
+	 *
+	 * THE GENERAL FORM OF WHAT SpurRunFor AND CornerRunFor INVERT. Each of those solves a
+	 * special case - a right angle against a straight host, and the symmetric corner - and
+	 * each is right only while its assumption holds. A spur whose join lands on a ROUNDED
+	 * CORNER breaks the first: the ring's tangent there is not square to the anchor, and the
+	 * run that should have given 599 uu gave 433 against the 471 a truck's lock needs.
+	 * Measured 2026-09-15, the day the corners were rounded. So the run is no longer trusted
+	 * to a formula - it is chosen by measuring this.
+	 *
+	 * NOT THE APEX FORMULA, and that distinction cost a round. A quadratic's curvature is
+	 * |B'|^3 / |B' x B''| with the cross product CONSTANT, so the tightest point is wherever
+	 * |B'| is least - and B'(t)/2 traces the straight segment from (Control - P0) to
+	 * (P2 - Control). On a symmetric curve the nearest point of that segment to the origin
+	 * falls in the middle, which is the apex and which the closed form assumes. On a lopsided
+	 * one it falls OFF THE END, the tightest point is an endpoint, and the closed form reports
+	 * a radius the curve never has. Clamping the parameter is the whole fix.
+	 */
+	double TightestRadius(const FVector2D& P0, const FVector2D& Control, const FVector2D& P2)
+	{
+		const FVector2D A = Control - P0;
+		const FVector2D B = P2 - Control;
+
+		const double Cross = FMath::Abs(A.X * B.Y - A.Y * B.X);
+		if (Cross <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+		{
+			// Collinear control: a straight line, which bends nowhere.
+			return TNumericLimits<double>::Max();
+		}
+
+		const FVector2D Sweep = B - A;
+		const double Length = Sweep.SizeSquared();
+		const double At = Length > 0.0
+			? FMath::Clamp(-FVector2D::DotProduct(A, Sweep) / Length, 0.0, 1.0)
+			: 0.0;
+
+		const double Least = (A + Sweep * At).Size();
+		return 2.0 * Least * Least * Least / Cross;
+	}
+
+
+
+	/**
+	 * How far back along each leg a CORNER of the ring is cut, for a bend of Radius.
+	 *
+	 * ONE FORMULA, TWO SPECIALISATIONS, and this is the other one. A quadratic with legs p and
+	 * q meeting at angle theta has apex radius
+	 *
+	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
+	 *
+	 * A SPUR is the asymmetric right-angled case - run along the lane against the anchor's
+	 * offset from it - which SpurRunFor above inverts. A CORNER is the symmetric case, the
+	 * same cut on both legs, where it collapses to
+	 *
+	 *     R = T sin^2(theta/2) / cos(theta/2)
+	 *
+	 * and this is that read backwards. For the right angle a rectangular lane is made of it is
+	 * T = R * sqrt(2), so a 750 uu corner reaches 1061 uu back along each side - and a Code C
+	 * stand's shortest side is 4180 uu, so its two corners use half of it between them.
+	 */
+	double CornerRunFor(double Radius, double Interior)
+	{
+		const double Half = Interior * 0.5;
+		const double Sin = FMath::Sin(Half);
+		if (Sin * Sin < UE_DOUBLE_KINDA_SMALL_NUMBER)
+		{
+			// A hairpin. No cut gives it this radius, so the caller's clamp is asked for the
+			// most the legs allow rather than an infinity, which would scale both corners of
+			// a leg to nothing instead of cutting this one down.
+			return TNumericLimits<double>::Max();
+		}
+		return Radius * FMath::Cos(Half) / (Sin * Sin);
 	}
 
 	/**
@@ -229,6 +305,15 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 	// By index, like FAnchorLink::Build: nothing here adds or removes an ENTITY, so holding
 	// this reference across the mutations below is safe, and the handle still has to be built
 	// by hand from the slot - the array elements have no stable handle of their own.
+	// WHAT THE FLEET NEEDS OF A BEND, resolved once. A spur's run exists for exactly one
+	// reason - so the truck that drives it does not have to crawl - so the figure it is sized
+	// against is the truck's, not a constant of the lane's own.
+	//
+	// WITH MARGIN, because the run is chosen from a handful of candidates and the one that
+	// merely touches the limit is one a re-measure could put on the wrong side of it.
+	const double RequiredSpurRadius =
+		UAirsideSettings::ResolveDefaultVehicle().TightestFollowableRadius() * 1.15;
+
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
@@ -258,30 +343,128 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 				+ FVector2D(Point.X * Cosine - Point.Y * Sine, Point.X * Sine + Point.Y * Cosine);
 		};
 
-		TArray<FGuidelineNodeId> Corners;
-		Corners.Reserve(Local.Num());
+		// EVERY CORNER IN WORLD SPACE FIRST, with both leg directions and the angle between
+		// them. Rounding one reaches back along the legs it SHARES with its two neighbours, so
+		// no corner can be decided alone and none laid until all have been measured.
+		//
+		// A BOX IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN. UEntityDefinition::
+		// ServiceLoop stays four points - see its header for why - but a corner where two
+		// straight sides meet is a vertex whose heading changes instantly, and FSpeedProfile
+		// calls one of those untakeable at any speed. The bend carries the turn instead,
+		// exactly as an anchor spur does one level down.
+		//
+		// Held as VALUES, which is why the old "read fresh each time" guard has gone: nothing
+		// here dereferences a node pointer across an AddGuidelineNode that could have
+		// reallocated the slot array under it.
+		const int32 CornerCount = Local.Num();
+		TArray<FVector2D> World, Back, Onward;
+		TArray<double> Interior, Run;
+		World.Reserve(CornerCount);
 		for (const FVector2D& Point : Local)
-		{
-			Corners.Add(Network.AddGuidelineNode(ToWorld(Point), /*bDerived=*/true));
-		}
-
-		TArray<FGuidelineEdgeId>& Lane = Result.Lanes.FindOrAdd(EntityId);
-		for (int32 At = 0; At < Corners.Num(); ++At)
 		{
 			// CLOSED IMPLICITLY: the last corner joins the first, and the definition's array
 			// does not repeat it - see UEntityDefinition::ServiceLoop for why storing the
 			// repeat would be a value that has to agree with another value beside it.
-			const FGuidelineNodeId A = Corners[At];
-			const FGuidelineNodeId B = Corners[(At + 1) % Corners.Num()];
+			World.Add(ToWorld(Point));
+		}
 
-			// Read fresh each time: adding a node or an edge can reallocate the array a
-			// pointer taken before it was pointing into.
-			const FVector2D PositionA = Network.GetGuidelineNode(A)->Position;
-			const FVector2D PositionB = Network.GetGuidelineNode(B)->Position;
+		Back.SetNumZeroed(CornerCount);
+		Onward.SetNumZeroed(CornerCount);
+		Interior.SetNumZeroed(CornerCount);
+		Run.SetNumZeroed(CornerCount);
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			const FVector2D& Previous = World[(At + CornerCount - 1) % CornerCount];
+			const FVector2D& Next = World[(At + 1) % CornerCount];
+			Back[At] = (Previous - World[At]).GetSafeNormal();
+			Onward[At] = (Next - World[At]).GetSafeNormal();
 
-			Lane.Add(Network.AddGuidelineEdge(MakeServiceEdge(A, B, PositionA, PositionB, EntityId, /*bSpur=*/false)));
-			Result.Nodes.Add(A);
-			Result.Nodes.Add(B);
+			// UNSIGNED, and that is right for a convex corner and a reflex one alike: the
+			// quadratic bulges toward its control point either way, so which side of the lane
+			// the bend falls on changes nothing about how far back it has to reach.
+			Interior[At] = FMath::Acos(
+				FMath::Clamp(FVector2D::DotProduct(Back[At], Onward[At]), -1.0, 1.0));
+			Run[At] = CornerRunFor(FServiceLoopBuild::LaneTurnRadius, Interior[At]);
+
+			// Never past either neighbour, before the shared-leg clamp below sees it. A
+			// near-hairpin corner asks for an unbounded run, and an infinity reaching that
+			// clamp would scale BOTH corners of its leg to nothing rather than cutting this
+			// one down to what its own legs can give.
+			Run[At] = FMath::Min(Run[At],
+				FMath::Min(FVector2D::Distance(World[At], Previous),
+				           FVector2D::Distance(World[At], Next)));
+		}
+
+		// THE CLAMP. Two corners sharing a leg cannot both reach further than half of it, and
+		// when they ask for more they SHRINK IN PROPORTION rather than one being cut to fit -
+		// which would make the lane's shape depend on which corner the definition happened to
+		// be authored from. A weld tolerance of straight is kept between them, because two
+		// cuts that met exactly would leave a zero-length side edge.
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			const int32 Next = (At + 1) % CornerCount;
+			const double Room = FMath::Max(
+				FVector2D::Distance(World[At], World[Next]) - LaneWeldTolerance, 0.0);
+			const double Want = Run[At] + Run[Next];
+			if (Want > Room && Want > 0.0)
+			{
+				const double Scale = Room / Want;
+				Run[At] *= Scale;
+				Run[Next] *= Scale;
+			}
+		}
+
+		// TWO NODES PER ROUNDED CORNER - where the bend leaves the incoming leg and where it
+		// rejoins the outgoing one - and ONE where there is no bend to lay.
+		TArray<FGuidelineNodeId> Enter, Exit;
+		TArray<FVector2D> EnterAt, ExitAt;
+		Enter.Reserve(CornerCount); Exit.Reserve(CornerCount);
+		EnterAt.Reserve(CornerCount); ExitAt.Reserve(CornerCount);
+
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			if (Run[At] < LaneWeldTolerance)
+			{
+				// Collinear, or clamped to nothing. One node and no bend: putting a curve
+				// through a straight run would be inventing a corner.
+				const FGuidelineNodeId Node =
+					Network.AddGuidelineNode(World[At], /*bDerived=*/true);
+				Enter.Add(Node);
+				Exit.Add(Node);
+				EnterAt.Add(World[At]);
+				ExitAt.Add(World[At]);
+				continue;
+			}
+
+			const FVector2D In = World[At] + Back[At] * Run[At];
+			const FVector2D Out = World[At] + Onward[At] * Run[At];
+			Enter.Add(Network.AddGuidelineNode(In, /*bDerived=*/true));
+			Exit.Add(Network.AddGuidelineNode(Out, /*bDerived=*/true));
+			EnterAt.Add(In);
+			ExitAt.Add(Out);
+		}
+
+		TArray<FGuidelineEdgeId>& Lane = Result.Lanes.FindOrAdd(EntityId);
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			if (Enter[At] != Exit[At])
+			{
+				// THE BEND. Both legs' tangent lines meet AT the corner, so the single control
+				// point they define is the corner itself - the quadratic case, and what makes
+				// the curve leave each side tangentially instead of at an angle to it. The
+				// same spelling FRoadGuidelineBuilder uses for a junction turn path.
+				FGuidelineEdge Bend = MakeServiceEdge(
+					Enter[At], Exit[At], EnterAt[At], ExitAt[At], EntityId, /*bSpur=*/false);
+				Bend.Control = World[At];
+				Lane.Add(Network.AddGuidelineEdge(MoveTemp(Bend)));
+			}
+
+			const int32 Next = (At + 1) % CornerCount;
+			Lane.Add(Network.AddGuidelineEdge(MakeServiceEdge(
+				Exit[At], Enter[Next], ExitAt[At], EnterAt[Next], EntityId, /*bSpur=*/false)));
+
+			Result.Nodes.Add(Enter[At]);
+			Result.Nodes.Add(Exit[At]);
 		}
 		++Result.LoopsBuilt;
 
@@ -381,51 +564,97 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 				}
 
 				// SLIDE THE JOIN ALONG THE LANE, so the spur can leave along it rather than
-				// cross it - see SpurRunFor. The anchor does not move: a hydrant pit is where
-				// a hydrant pit is, and only the point the line meets the lane at is ours.
+				// cross it. The anchor does not move: a hydrant pit is where a hydrant pit is,
+				// and only the point the line meets the lane at is ours to choose.
 				//
 				// ALONG THE RING, not along this EDGE. The ring is continuous and its edges
 				// are just where earlier spurs happened to cut it, so the join is as free to
 				// land on the next piece as on this one - see WalkRing for the two spurs that
 				// were refused when it was not.
-				const double Run = SpurRunFor(BestDistance);
-
+				//
+				// AND THE RUN IS MEASURED, NOT ASSUMED. SpurRunFor solves for a right angle
+				// against a straight host, which is what a lane side used to be everywhere; a
+				// join that lands on a ROUNDED CORNER has neither, and took 433 uu of radius
+				// where the formula promised 599. So several runs are tried and the shortest
+				// one that actually reaches FServiceLoopBuild::LaneTurnRadius is kept - run is detour, and the
+				// truck drives every uu of it twice.
 				FGuidelineEdgeId JoinEdge;
 				double JoinParam = 0.0;
-				bool bForward = true;
-				if (!WalkRing(Network, Lane, BestEdge, BestParam, Run * Direction,
-						JoinEdge, JoinParam, bForward))
-				{
-					return false;
-				}
-
-				// AND THE CONTROL POINT FOLLOWS THE RING'S OWN TANGENT AT THE JOIN, which is
-				// not the anchor's perpendicular foot the moment the ring is CURVED there -
-				// and it is curved as soon as the join lands on a rounded corner. Controlling
-				// to the foot left 28 degrees of turn at the junction, measured 2026-09-15.
 				FVector2D SpurControl = BestPoint;
 				{
-					const FGuidelineEdge* Host = Network.GetGuidelineEdge(JoinEdge);
-					const FGuidelineNode* HostA =
-						Host != nullptr ? Network.GetGuidelineNode(Host->A) : nullptr;
-					const FGuidelineNode* HostB =
-						Host != nullptr ? Network.GetGuidelineNode(Host->B) : nullptr;
-					if (HostA == nullptr || HostB == nullptr)
+					const double Shortest = SpurRunFor(BestDistance);
+					bool bClears = false;
+
+					// Six, spanning one to three times the nominal run. Enough to clear a
+					// corner landing and few enough that a spur costs six ring walks, which
+					// are a handful of additions each.
+					constexpr int32 Attempts = 6;
+					for (int32 Try = 0; Try < Attempts; ++Try)
+					{
+						const double Candidate = Shortest * (1.0 + 0.4 * Try);
+
+						FGuidelineEdgeId TryEdge;
+						double TryParam = 0.0;
+						bool bForward = true;
+						if (!WalkRing(Network, Lane, BestEdge, BestParam, Candidate * Direction,
+								TryEdge, TryParam, bForward))
+						{
+							continue;
+						}
+
+						const FGuidelineEdge* Host = Network.GetGuidelineEdge(TryEdge);
+						const FGuidelineNode* HostA =
+							Host != nullptr ? Network.GetGuidelineNode(Host->A) : nullptr;
+						const FGuidelineNode* HostB =
+							Host != nullptr ? Network.GetGuidelineNode(Host->B) : nullptr;
+						if (HostA == nullptr || HostB == nullptr)
+						{
+							continue;
+						}
+
+						// Analytic, not a difference of samples: a tangent measured off a
+						// sampled chord is a second evaluator, and it shows up as a degree or
+						// two of turn at exactly the junction this exists to make turnless.
+						const FVector2D JoinPoint = GuidelineGeom::Eval(
+							HostA->Position, Host->Control, HostB->Position, TryParam);
+						const FVector2D Along = GuidelineGeom::Tangent(
+							HostA->Position, Host->Control, HostB->Position, TryParam);
+
+						// BACK the way the walk came, by the distance it walked - so the
+						// quadratic's first leg lies on the ring and the curve leaves it
+						// tangentially.
+						const FVector2D Control =
+							JoinPoint - (bForward ? Along : -Along) * Candidate;
+
+						// The spur as it will actually be laid: anchor, control, join.
+						const double Radius = TightestRadius(At, Control, JoinPoint);
+
+						// THE SHORTEST THAT CLEARS, or the shortest full stop.
+						//
+						// The first attempt is kept unconditionally, so a spur that can never
+						// be made wide enough is at least the least detour - it is the last
+						// few metres of a journey that ends in a stop, and a long windy
+						// approach to a box three metres off the lane helps nobody. TugStand
+						// is exactly that: no run reaches the limit and chasing it turned a
+						// 520 uu spur into 1594. Measured 2026-09-15.
+						if (Try == 0 || Radius >= RequiredSpurRadius)
+						{
+							JoinEdge = TryEdge;
+							JoinParam = TryParam;
+							SpurControl = Control;
+							bClears = Radius >= RequiredSpurRadius;
+						}
+
+						if (bClears)
+						{
+							break;
+						}
+					}
+
+					if (!JoinEdge.IsSet())
 					{
 						return false;
 					}
-
-					// Analytic, not a difference of samples: a tangent measured off a sampled
-					// chord is a second evaluator, and it shows up as a degree or two of turn
-					// at exactly the junction this exists to make turnless.
-					const FVector2D JoinPoint = GuidelineGeom::Eval(
-						HostA->Position, Host->Control, HostB->Position, JoinParam);
-					const FVector2D Along = GuidelineGeom::Tangent(
-						HostA->Position, Host->Control, HostB->Position, JoinParam);
-
-					// BACK the way the walk came, by the distance it walked - so the
-					// quadratic's first leg lies on the ring and the curve leaves tangentially.
-					SpurControl = JoinPoint - (bForward ? Along : -Along) * Run;
 				}
 
 				BestEdge = JoinEdge;
