@@ -37,9 +37,23 @@ enum class EPlaceableEntity : uint8
  * resolve a plain enum named by a USTRUCT's UPROPERTY, and a forward declaration does not
  * satisfy it either.
  *
- * BlueprintType, like EServiceRole beside it, because Tools/Python/build_stand_asset.py reads
- * this back off the authored asset - and a listing of positions with no kind beside them would
- * read as correct on a lane whose anchors had come unstuck from it.
+ * BlueprintType FOR CONSISTENCY, NOT BECAUSE PYTHON NEEDS IT - and the distinction is written
+ * out because "Python needs BlueprintType" is exactly the wrong rule a reader would otherwise
+ * infer from finding it on the one type a script happens to walk.
+ *
+ * get_editor_property DOES NOT CARE. It resolves a name through FindPropertyByName and reads
+ * the FProperty, gated by neither BlueprintType nor CPF_BlueprintVisible - which is why
+ * Tools/Python/build_stand_asset.py already reads FEntityAnchor's Id and LocalPosition, and
+ * those are plain UPROPERTY(EditAnywhere) with no BlueprintReadWrite between them.
+ *
+ * WHAT IT DOES GATE is whether the type gets its own generated Python wrapper
+ * (PyGenUtil::ShouldExportStruct / ShouldExportEnum) - and even that is moot here, because a
+ * type reached through a property of an already-exported class is force-exported anyway
+ * (EPyTypeGenerationFlags::ForceShouldExport, and UEntityDefinition is UCLASS(BlueprintType)).
+ *
+ * So the real reason is ONE CONVENTION: FEntityAnchor, FProfileBand and every other struct the
+ * Python authors walk carry it, and matching them means nobody has to work out per type whether
+ * this particular one came out exposed.
  */
 UENUM(BlueprintType)
 enum class EStandWaypointKind : uint8
@@ -60,8 +74,9 @@ enum class EStandWaypointKind : uint8
  * agree with another value in the same asset, which is the drift FResolvedAnchor exists to
  * remove.
  *
- * BlueprintType for the same reason FEntityAnchor is: the Python asset author reads the lane
- * back to log it, and that is a read through the reflection system.
+ * BlueprintType to match FEntityAnchor and the other structs the Python asset authors walk. See
+ * EStandWaypointKind above for why that is a convention and NOT a requirement of
+ * get_editor_property, which needs neither.
  */
 USTRUCT(BlueprintType)
 struct AIRSIDE_API FStandWaypoint
