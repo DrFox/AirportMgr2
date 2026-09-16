@@ -63,25 +63,46 @@ changed is that the long sides pass THROUGH the anchors instead of outboard of e
 
 ## The arithmetic, all derived
 
+**A CORNER HERE IS A QUADRATIC, NOT A CIRCULAR FILLET**, and the first draft of this spec
+costed every corner as if it were an arc. It is the same mistake `8be494c` made one level up,
+in the same week, about the same kind of curve.
+
+`FServiceLoopBuild` lays a quadratic whose control is the corner and whose ends are `Run` back
+along each leg. Its delivered radius is `Run · sin²(θ/2) / cos(θ/2)` for an interior angle θ,
+which inverts to exactly the `CornerRunFor` already in the file:
+
+```
+CornerRunFor(R, θ) = R · cos(θ/2) / sin²(θ/2)
+```
+
+At a right angle that is **1.414 R**, not R. Every figure below is computed from it.
+
 | Quantity | Value | From |
 |---|---|---|
 | `TightestFollowableRadius` | 699.4 uu | 494.538 / sin 45° |
-| Hydrant S-curve: sweep, run | 44.44°, **979.3 uu** | 400 uu offset over two arcs at R |
-| Right-angle corner tangent run | 699.4 uu | equals R at 90° |
-| Cross-lane needs / has | 1399 / 1700 uu | two corners; y = 1100 to −600 |
-| Side entry S-curve: sweep, run | 73.0°, **1337.7 uu** | 990 uu offset, y = 2090 to 1100 |
-| Lane length available for it | 5650 uu | x = −3550 to +2100 |
+| Right-angle corner run | **989.1 uu** | `CornerRunFor(R, 90°)` = 1.414 R |
+| Hydrant dip, half-extent | **1018.4 uu** | flat-bottomed, legs at 40.5°, `2·Run + 400/tan α` |
+| Crossing as a square corner | 1978.2 needed / 1700 available | **does not fit** — see below |
+| Crossing as a diagonal | legs at ≤ 73.55°, run 652.6 uu | 1807.2 uu of X beyond the last anchor |
+| Side entry ramp | legs at ≤ 59.55°, run 461.0 uu | 1504.0 uu of X, against 5650 of lane |
 
-Two arcs of radius R each sweeping θ give lateral `2R(1 − cos θ)` over longitudinal
-`2R sin θ`. That is the whole of the S-curve arithmetic, and it is restated in the tests
-rather than shared with production code, for the reason `FAirframe::TightestFollowableRadius`
-gives at its own copy.
+The corner arithmetic is restated in the tests rather than shared with production code, for the
+reason `FAirframe::TightestFollowableRadius` gives at its own copy.
 
-### The boxes are 79 uu too close, and stop being typed
+### The boxes are 118 uu too close, and stop being typed
 
-`EquipmentFwd` is authored at x = −300 and must be at x ≥ −221. `EquipmentAft` is at −2100 and
-must be at x ≤ −2179. One metre each. Today's spacing was fine for a ring approached square-on
-and is not fine for a lane that has to S past the pit.
+The hydrant dip is a flat-bottomed trapezoid, not a pure two-arc S: the pit sits on a flat
+whose half-length is one corner's run, with a leg rising at 40.5° to the box row and a corner
+at each end. Half-extent `2·Run + 400/tan α` = **1018.4 uu**.
+
+`EquipmentFwd` is authored at x = −300 and must be at x ≥ −182. `EquipmentAft` is at −2100 and
+must be at x ≤ −2218. About 1.2 m each. Today's spacing was fine for a ring approached
+square-on and is not fine for a lane that has to dip past the pit.
+
+The flat bottom is not a detail. A pure V at the pit would be a corner no vehicle can take,
+and under the rolling-steer law from part 1 — where `MaxStep` is proportional to speed — an
+agent that stopped there could not turn at all, so it would not crawl through, it would be
+stuck. The flat is what makes the pit a place a truck drives THROUGH.
 
 So `BuildCodeCStand` **derives** those two X values from the S-curve run the largest admitted
 vehicle needs, and types neither. This is the move the service-road fillet made six commits
@@ -92,12 +113,21 @@ bigger dispenser and the boxes move; nobody has to notice.
 `HydrantPit` stays where it is. A hydrant pit is plant dug into concrete under the wing root —
 it is the fixed thing the paint is arranged around, not the other way about.
 
-### The crossings clear the aircraft
+### The crossings are DIAGONAL, because a square corner does not fit
 
-Nose crossing at x ≈ +2100: forward of the nose at +507, and ≥ 699 uu ahead of `TugStand` at
-1400 so the corner has its run. Tail crossing at x ≈ −3550: aft of the tail at −3250. Neither
-enters the fuselage rectangle, so the existing "no route crosses the fuselage lengthwise"
-assertions hold unchanged.
+Two square corners between the starboard lane (y = 1100) and the port lane (y = −600) need
+2 × 989.1 = 1978.2 uu of lateral run, and there is 1700. **Short by 278.** The first draft had
+this fitting with room to spare only because it costed the corner as a circular fillet.
+
+So a crossing runs diagonally: legs no steeper than 73.55°, each corner delivering R with a
+652.6 uu run, consuming 1807.2 uu of X beyond the outermost anchor on each side. The builder
+derives the diagonal from the clearance it must keep and the run its corners need; it is not
+a hand-drawn figure, and the stand's fore-and-aft extent falls out of it rather than being
+typed.
+
+Both crossings stay clear of the fuselage rectangle — forward of the nose at +507, aft of the
+tail at −3250 — so the existing "no route crosses the fuselage lengthwise" assertions hold
+unchanged.
 
 ## Six decisions, taken 2026-09-16
 
