@@ -448,50 +448,74 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 namespace ServiceLinkFixture
 {
 	/**
-	 * Every lane node that carries a link to a road - an incident edge no stand lane owns.
+	 * The nodes a stand's declared entries became.
 	 *
-	 * The link edge's OTHER end is on the road, and the road's own splits and fillets are
-	 * unowned too, so the test has to start from the LANE side. Counting nodes rather than
-	 * edges is what makes an entry welded onto a shared corner count once.
+	 * ASKED OF THE BUILDER, which is the only thing that knows: nothing marks a node as "an
+	 * entry waypoint became this" once it is laid - see FStandLaneBuild::FResult::Entries.
+	 *
+	 * SAFE AFTER FAnchorLink::Build, and that is the point of calling it that way round here.
+	 * The lane is already in the graph by then, so this takes the builder's idempotent skip
+	 * path and RECOVERS the entries rather than laying a second lane - which is the same path
+	 * the linking pass itself took, so a recovery that disagreed with the laying would show up
+	 * as a test that cannot find the node the road is plainly joined to.
 	 */
-	TArray<FVector2D> EntryPoints(const URoadNetwork& Net)
+	TArray<FGuidelineNodeId> EntriesOf(URoadNetwork& Net, FEntityInstanceId Entity)
 	{
-		TSet<FGuidelineNodeId> LaneNodes;
-		for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
-		{
-			if (Edge.bAlive && Edge.StandGeometryOwner.IsSet())
-			{
-				LaneNodes.Add(Edge.A);
-				LaneNodes.Add(Edge.B);
-			}
-		}
-
-		TArray<FVector2D> Entries;
-		for (const FGuidelineNodeId& Id : LaneNodes)
-		{
-			const FGuidelineNode* Node = Net.GetGuidelineNode(Id);
-			if (Node == nullptr) { continue; }
-			for (const FGuidelineEdgeId& Incident : Node->Incident)
-			{
-				const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Incident);
-				if (Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet())
-				{
-					Entries.AddUnique(Node->Position);
-					break;
-				}
-			}
-		}
-		return Entries;
+		const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(Net);
+		const TArray<FGuidelineNodeId>* Found = Built.Entries.Find(Entity);
+		return Found != nullptr ? *Found : TArray<FGuidelineNodeId>();
 	}
 
-	/** Is one of these points within Tolerance of At? */
-	bool Has(const TArray<FVector2D>& Points, const FVector2D& At, double Tolerance = 50.0)
+	/**
+	 * Where each declared entry that a road actually joined is.
+	 *
+	 * THREE EDGES ON A NODE THE LANE GAVE TWO. Every entry node sits mid-cycle with a lane edge
+	 * either side of it, so counting edges is the whole test - and counting them on the ENTRY
+	 * rather than looking for unowned edges near the lane is what makes this measure the claim
+	 * "a road joined THIS declared entry" instead of "something unowned is lying about".
+	 */
+	TArray<FVector2D> LinkedEntries(const URoadNetwork& Net, const TArray<FGuidelineNodeId>& Entries)
 	{
+		TArray<FVector2D> At;
+		for (const FGuidelineNodeId& Id : Entries)
+		{
+			const FGuidelineNode* Node = Net.GetGuidelineNode(Id);
+			if (Node != nullptr && Node->Incident.Num() > 2)
+			{
+				At.Add(Node->Position);
+			}
+		}
+		return At;
+	}
+
+	/** The linked entries as a string, so a failure names WHICH ones rather than how many. */
+	FString Where(const TArray<FVector2D>& Points)
+	{
+		FString Out;
 		for (const FVector2D& Point : Points)
 		{
-			if (FVector2D::Distance(Point, At) <= Tolerance) { return true; }
+			Out += FString::Printf(TEXT("(%.0f,%.0f) "), Point.X, Point.Y);
 		}
-		return false;
+		return Out;
+	}
+
+	/** A stand at the origin facing +X with one straight service road laid beside it. */
+	struct FStandBesideARoad
+	{
+		URoadNetwork* Net = nullptr;
+		FEntityInstanceId Placed;
+		FGuidelineNodeId RoadNear, RoadFar;
+	};
+
+	FStandBesideARoad StandBesideARoad(UEntityDefinition& Stand,
+		const FVector2D& RoadFrom, const FVector2D& RoadTo)
+	{
+		FStandBesideARoad Built;
+		Built.Net = NewObject<URoadNetwork>(GetTransientPackage());
+		Built.RoadNear = Lay(*Built.Net, RoadFrom, RoadTo, ETraversalClass::GroundVehicle, Built.RoadFar);
+		Built.Placed = PlaceStand(*Built.Net, Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Built.Net);
+		return Built;
 	}
 }
 
@@ -504,8 +528,18 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 {
 	using namespace ServiceLinkFixture;
 
-	// A ROAD ALONGSIDE, 4 m clear of the lane's south side. The whole case: a service road
-	// running past a row of stands, which is how a player builds one.
+	// A ROAD JOINS A DECLARED ENTRY, and this measures the declaration rather than a
+	// heuristic. The ring this replaces had to DISCOVER which sides of itself a road was
+	// beside - IsLaneBend, WholeSide and three thresholds tuned against one another - because
+	// it declared no entrances at all. A stand now authors four, at the corners where a
+	// crossing meets a run (see UEntityDefinition::BuildCodeCStandFor), and what is left to
+	// measure is which of them a given road should have.
+	//
+	// EIGHT NODES, NOT FOUR, and that is the shape of the thing rather than a defect. An entry
+	// is authored AT a corner and a rounded corner carries no node of its own: the bend's
+	// control sits on the corner and its two ends sit back along the two legs. So each declared
+	// entry offers a PAIR - one node on the run, one on the crossing, each with a clean heading
+	// along its own straight - and the linking pass takes whichever is nearer the road.
 	//
 	// ServiceLinkFixture::LaneBoundsOf, not the lane's corners typed a second time (#104):
 	// derived in BuildCodeCStand from the design aircraft's footprint and the anchors. The
@@ -513,123 +547,158 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	// assumed.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
+
+	// 4 m clear of the lane, which is how close a player draws a service road to a stand. The
+	// figure is only ever a clearance here: nothing in the rule under test is tuned to it.
 	constexpr double RoadClearance = 400.0;
 
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	FGuidelineNodeId East;
-	const double RoadY = LaneBounds.Min.Y - RoadClearance;
-	const FGuidelineNodeId West = Lay(*Net, FVector2D(-30000.0, RoadY), FVector2D(30000.0, RoadY),
-		ETraversalClass::GroundVehicle, East);
-
-	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-	FAnchorLink::Build(*Net);
-
-	const TArray<FVector2D> Entries = EntryPoints(*Net);
-
-	// THREE, not one. The near side reaches the road along its whole length; the two END
-	// sides reach it at the corner each shares with the near side. One entry made the ring a
-	// cul-de-sac a truck had to drive half way round; three make it a drive-through.
-	// THE POSITIONS ARE IN THE MESSAGE, not just the count. A bare "expected 3, got 5" says
-	// nothing about WHICH two sides linked wrongly, and every failure this test found while
-	// it was being written was diagnosed from exactly this list.
-	FString Where;
-	for (const FVector2D& Entry : Entries)
+	// A ROAD ALONGSIDE, past the port run. The whole case: a service road running past a row of
+	// stands, which is how a player builds one.
+	FStandBesideARoad Alongside;
 	{
-		Where += FString::Printf(TEXT("(%.0f,%.0f) "), Entry.X, Entry.Y);
-	}
-	TestEqual(*FString::Printf(TEXT("the lane joins the road on all three sides within reach - at %s"), *Where),
-		Entries.Num(), 3);
+		const double RoadY = LaneBounds.Min.Y - RoadClearance;
+		Alongside = StandBesideARoad(*Stand,
+			FVector2D(-30000.0, RoadY), FVector2D(30000.0, RoadY));
 
-	// HOW FAR BACK A ROUNDED CORNER REACHES, derived exactly as the builder derives it: the
-	// radius the largest admitted service vehicle needs, cut at a right angle, which is
-	// R*sqrt(2) and not R. FStandLaneBuild::LaneTurnRadius was a typed 750 until 2026-09-16
-	// and this restated it; both read the same one function now.
-	const double CornerReach =
-		UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius()
-			* UE_DOUBLE_SQRT_2;
+		const TArray<FGuidelineNodeId> Entries = EntriesOf(*Alongside.Net, Alongside.Placed);
+		TestEqual(TEXT("four declared entries, each a pair of nodes round its rounded corner"),
+			Entries.Num(), 8);
 
-	// THE NEAR SIDE, IN THE MIDDLE OF ITS OVERLAP WITH THE ROAD - not at the first point that
-	// tied. This is the assertion that fails without GuidelineGeom::NearestBetweenPolylines
-	// breaking its tie at the middle.
-	//
-	// EXACT AGAIN. It was loosened while a bend could take this side's entrance and leave it
-	// 195 uu from the bend's foot; a bend is no longer a candidate, so the side gets its own
-	// entrance back and the middle is the middle.
-	TestTrue(*FString::Printf(TEXT("the near side is entered at its middle - at %s"), *Where),
-		Has(Entries, FVector2D(LaneBounds.GetCenter().X, LaneBounds.Min.Y)));
+		const TArray<FVector2D> Linked = LinkedEntries(*Alongside.Net, Entries);
+		const FString At = Where(Linked);
 
-	// THE END SIDES, each at the nearest point of ITS OWN STRAIGHT.
-	//
-	// NOT AT A BEND, and that is the rule rather than an accident of this layout. A bend is
-	// the turn between two sides and belongs to both, so an entrance on one is an entrance
-	// neither side can call its own - which left a stand with three connections clustered
-	// along its bottom edge, of three different qualities, instead of one per side. Reported
-	// from play 2026-09-15 with a picture.
-	//
-	// So an end side is entered where its own straight comes closest to the road, and its
-	// straight starts CornerReach up from the near side because that is how far the bend
-	// reaches back. Derived rather than the 1029 uu it happens to be.
-	TestTrue(*FString::Printf(TEXT("the tail end side joins at the near end of its own straight - at %s"), *Where),
-		Has(Entries, FVector2D(LaneBounds.Min.X, LaneBounds.Min.Y + CornerReach)));
-	TestTrue(*FString::Printf(TEXT("the nose end side joins at the near end of its own straight - at %s"), *Where),
-		Has(Entries, FVector2D(LaneBounds.Max.X, LaneBounds.Min.Y + CornerReach)));
+		// TWO, ONE AT EACH END OF THE SIDE THE ROAD RUNS PAST - which is what makes the lane a
+		// drive-through rather than a cul-de-sac. With one entrance a truck drove up to half
+		// the lane's perimeter to reach an anchor a few metres from where it came in.
+		//
+		// THE POSITIONS ARE IN THE MESSAGE, not just the count. A bare "expected 2, got 4" says
+		// nothing about WHICH entries linked wrongly, and every failure this test found while
+		// it was being written was diagnosed from exactly this list.
+		TestEqual(*FString::Printf(
+				TEXT("a road alongside is joined at both ends of the side it passes - at %s"), *At),
+			Linked.Num(), 2);
 
-	// AND THE FAR SIDE DOES NOT, though it is 4580 uu from the road and the service radius is
-	// 5000. Its connector would run the whole depth of the stand, through the parked
-	// aircraft, to reach a road the near side already touches. Refused by measuring the
-	// crossing, not by shortening the radius - the radius is the player's knob for how far a
-	// stand may sit from its road and must not silently double as this rule.
-	for (const FVector2D& Entry : Entries)
-	{
-		TestTrue(TEXT("no entry is on the far side of the lane"), Entry.Y < 0.0);
-	}
-
-	// IDEMPOTENT. The graph is rebuilt on every road edit and this runs each time; a pass
-	// that could not see its own previous links would stack an entry per side per rebuild.
-	FAnchorLink::Build(*Net);
-	{
-		FString Again;
-		for (const FVector2D& Entry : EntryPoints(*Net))
+		for (const FVector2D& Entry : Linked)
 		{
-			Again += FString::Printf(TEXT("(%.0f,%.0f) "), Entry.X, Entry.Y);
+			// ON THE NEAR RUN ITSELF, which says both which SIDE was chosen and which node of
+			// each pair: the run's node lies exactly on the run, the crossing's sits back up
+			// the crossing. A road parallel to the run is nearer the first.
+			TestEqual(*FString::Printf(TEXT("and on the near run itself - at %s"), *At),
+				Entry.Y, LaneBounds.Min.Y, 1.0);
 		}
-		TestEqual(*FString::Printf(TEXT("a second pass adds no further entries - at %s"), *Again),
-			EntryPoints(*Net).Num(), 3);
+
+		// AND ONE AT EACH END rather than two side by side. The two entries are at opposite
+		// ends of a lane 62 m long; anything less than half of that is two entrances at one
+		// corner, which is the defect the pair rule exists to prevent.
+		if (Linked.Num() == 2)
+		{
+			TestTrue(*FString::Printf(TEXT("one at each end of the run, not two at one - at %s"), *At),
+				FMath::Abs(Linked[0].X - Linked[1].X) > LaneBounds.GetSize().X * 0.5);
+		}
+
+		// AND THE FAR SIDE IS NOT JOINED, though it is 2100 uu from the road and the service
+		// radius is 62 m. Its connector would run the whole depth of the stand, across both of
+		// the lane's crossings, to reach a road the near run is 4 m from.
+		//
+		// REFUSED BY MEASURING, NOT BY A THRESHOLD. The rule is that the entry NEAREST a point
+		// of road is the one that gets it - see FAnchorLink::Gather - which is the same
+		// sentence that refuses the far END of a stand for a road at one end of it. The
+		// service radius is the player's knob for how far a stand may sit from its road and
+		// must not silently double as this rule.
+		for (const FVector2D& Entry : Linked)
+		{
+			TestTrue(*FString::Printf(TEXT("no entry on the far side of the aeroplane - at %s"), *At),
+				Entry.Y < LaneBounds.GetCenter().Y);
+		}
+
+		// IDEMPOTENT. The graph is rebuilt on every road edit and this runs each time; a pass
+		// that could not see its own previous links would stack an entrance per rebuild.
+		//
+		// ASKED OF THE WHOLE CORNER, which is what makes this more than a formality now that an
+		// entry is a PAIR: the joined node reads as taken, and its sibling 300 uu away reads as
+		// free unless the pass looks at both.
+		FAnchorLink::Build(*Alongside.Net);
+		const TArray<FVector2D> Again = LinkedEntries(*Alongside.Net,
+			EntriesOf(*Alongside.Net, Alongside.Placed));
+		TestEqual(*FString::Printf(TEXT("a second pass adds no further entrances - at %s"),
+				*Where(Again)),
+			Again.Num(), 2);
 	}
 
-	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600) and spurs to the
-	// EAST side; with one entry at the tail corner a truck drove the length of the stand and
-	// back to reach it. From the nose corner it is up the east side plus the spur.
+	// WHICH NODE OF THE PAIR, measured by putting the road on the two sides that disagree.
 	//
-	// THE FIGURE ROSE BY 854 uu WHEN SPURS WERE MADE TANGENTIAL, and that is a purchase and
-	// not a regression. A spur now meets the lane PreferredSpurRun further along and curves
-	// back, so the truck drives that run twice - against which the junction it used to reach
-	// was a 90 degree instant turn, which FSpeedProfile calls untakeable at any speed and
-	// crawls at MinSteeringSpeed. 854 uu at the 600 uu/s the new bend allows is under two
-	// seconds; the crawl it replaces was tens.
+	// A road OUTBOARD of a run arrives square to it and the run's own node is nearest; a road
+	// across the END of the stand arrives along the crossing, and the crossing's node - which
+	// is the one whose heading points at it - is nearest. The pair exists precisely so that
+	// both of those have an entrance with a heading a vehicle can leave on.
+	{
+		const double RoadY = LaneBounds.Max.Y + RoadClearance;
+		const FStandBesideARoad Outboard = StandBesideARoad(*Stand,
+			FVector2D(-30000.0, RoadY), FVector2D(30000.0, RoadY));
+
+		const TArray<FVector2D> Linked =
+			LinkedEntries(*Outboard.Net, EntriesOf(*Outboard.Net, Outboard.Placed));
+		const FString At = Where(Linked);
+
+		TestEqual(*FString::Printf(TEXT("a road outboard of the box row joins two entries - at %s"), *At),
+			Linked.Num(), 2);
+		for (const FVector2D& Entry : Linked)
+		{
+			TestEqual(*FString::Printf(TEXT("and takes the node ON the row - at %s"), *At),
+				Entry.Y, LaneBounds.Max.Y, 1.0);
+		}
+	}
+
+	{
+		const double RoadX = LaneBounds.Max.X + RoadClearance;
+		const FStandBesideARoad Ahead = StandBesideARoad(*Stand,
+			FVector2D(RoadX, -30000.0), FVector2D(RoadX, 30000.0));
+
+		const TArray<FVector2D> Linked =
+			LinkedEntries(*Ahead.Net, EntriesOf(*Ahead.Net, Ahead.Placed));
+		const FString At = Where(Linked);
+
+		TestEqual(*FString::Printf(TEXT("a road across the nose joins two entries - at %s"), *At),
+			Linked.Num(), 2);
+		for (const FVector2D& Entry : Linked)
+		{
+			// NEITHER RUN. Both runs are at a fixed Y - the box row and the port line the
+			// bridge sits on - so "off both of them" is exactly "on the crossing", and the
+			// crossing's node is the one that faces a road ahead of the aeroplane.
+			TestTrue(*FString::Printf(TEXT("and takes the node back along the crossing - at %s"), *At),
+				Entry.Y > LaneBounds.Min.Y + 1.0 && Entry.Y < LaneBounds.Max.Y - 1.0);
+		}
+	}
+
+	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600), on the port run;
+	// a truck coming down the road should turn in at the near end of that run rather than tour
+	// the lane to reach it.
 	//
-	// STILL NOWHERE NEAR A TOUR, which is what this bound exists to catch: half this ring's
-	// perimeter is another 9400 uu on top.
+	// STILL NOWHERE NEAR A TOUR, which is what this bound exists to catch: half this lane's
+	// perimeter is another 9400 uu on top. Measured from the ROAD's east end, so the figure is
+	// the journey and not an arbitrary start.
 	{
 		FRouteQuery Query;
-		Query.Start = East;
-		Query.Goal = AnchorNode(*Net, Placed, TEXT("FixedGPU"));
+		Query.Start = Alongside.RoadFar;
+		Query.Goal = AnchorNode(*Alongside.Net, Alongside.Placed, TEXT("FixedGPU"));
 		Query.Class = ETraversalClass::GroundVehicle;
 
-		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+		const FRoutePlan Plan = RouteSearch::Find(*Alongside.Net, Query);
 		if (TestTrue(TEXT("a truck routes from the road to the ground power"), Plan.IsValid()))
 		{
-			// Measured from the ROAD's east end, so the figure is the journey and not an
-			// arbitrary start: 28300 of road, then under 4700 inside the stand.
 			TestTrue(*FString::Printf(
-					TEXT("and turns in at the nearest corner rather than touring the lane "
+					TEXT("and turns in at the nearest entry rather than touring the lane "
 					     "- %.0f uu"),
 					GuidelineGeom::PolylineLength(Plan.Polyline)),
 				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 4700.0);
 
-			// TEMPORARY, 2026-09-15. The entrance is on the right side now and there is still
-			// a tight bend onto the stand. Measured the way FSpeedProfile measures it, over
-			// the route the truck actually drives.
+			// THE ROUTE'S OWN CORNERS, REPORTED AND NOT ASSERTED, 2026-09-16. The entrance is
+			// where the stand says it is now and it leaves ALONG the lane, but the run it
+			// leaves on is FStandLaneBuild::PreferredTangentRun - a figure measured against a
+			// spur's 1000-1400 uu gaps, not a road's - so the curve onto a road 54 m away is
+			// tighter than the truck's lock. FAnchorLink::Join records the measurement; this
+			// prints what the router actually hands a driver, which is how that will be
+			// checked when the figure is revisited.
 			{
 				const TArray<FVector2D>& P = Plan.Polyline;
 				int32 Sharp = 0;
@@ -803,10 +872,12 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// THE WHOLE CYCLE: every lane edge, straight runs and the bends between them alike, which
 	// together are what a truck drives round.
 	//
-	// THE bStandApproach FILTER IS A NO-OP TODAY and is kept as the statement of what this
-	// measures rather than as live selection. Nothing writes the mark true since the anchor
-	// spurs went - see FGuidelineEdge::bStandApproach - but Task 5's road approach will, and an
-	// approach is not part of the cycle: it arrives at it.
+	// THE bStandApproach FILTER IS A NO-OP, and stays as the statement of what this measures
+	// rather than as live selection. Nothing has written the mark true since the anchor spurs
+	// went, and after 2026-09-16 nothing is expected to: the road link a declared entry casts
+	// carries no StandGeometryOwner - which is what lets IsServiceNodeConnected tell a lane that
+	// reaches a road from one that only reaches itself - so it never appears in *Lane at all.
+	// See FGuidelineEdge::bStandApproach, where that question is closed.
 	TArray<FGuidelineEdgeId> Cycle;
 	for (const FGuidelineEdgeId& Id : *Lane)
 	{

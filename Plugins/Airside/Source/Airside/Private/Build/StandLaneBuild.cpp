@@ -19,6 +19,26 @@ namespace
 	constexpr double LaneWeldTolerance = 10.0;
 
 	/**
+	 * How far a re-derived lane position may sit from the node that was laid at it, uu.
+	 *
+	 * ITS OWN CONSTANT, AND MUCH SMALLER THAN THE WELD. RecoverEntries re-runs MeasureLane and
+	 * looks for the node each answer was laid at; that derivation is BIT-EXACT - same
+	 * definition, same pose, same arithmetic - so what this covers is nothing but the last bit
+	 * of a re-derivation, and a uu of it is generous.
+	 *
+	 * ONE CONSTANT DOING BOTH JOBS IS THE BUG THIS SPLITS. Matching at the weld tolerance is
+	 * only safe while the weld's guaranteed MINIMUM separation equals the match's MAXIMUM
+	 * acceptance - and this construction deliberately leaves gaps of exactly LaneWeldTolerance,
+	 * because the shared-leg clamp gives two corners Room = distance - LaneWeldTolerance and
+	 * they then meet exactly that far apart. A match of "<= 10" on nodes exactly 10 apart is
+	 * decided by whichever the gather happened to walk first, and Result.Lanes is re-gathered
+	 * from graph slot order, which a split perturbs. URoadNetwork::SplitGuidelineEdge widens
+	 * the same hole from the other side: it welds to an endpoint only when given a non-zero
+	 * tolerance, and two callers pass 0.0, so a split node can land arbitrarily close to one.
+	 */
+	constexpr double LaneMatchTolerance = 1.0;
+
+	/**
 	 * One edge of the lane cycle - a straight run, or the bend that rounds a corner.
 	 *
 	 * One function for both because they differ in nothing but their control point, and a
@@ -250,6 +270,12 @@ namespace
 	 * made at - the same values, not merely near ones. A split never MOVES a node, so this
 	 * survives any number of them; it is only a definition edited under a placed instance that
 	 * could put a node somewhere this no longer looks, and that says so in the log.
+	 *
+	 * THE DEFINITION IS NOT THE ONLY INPUT THAT CAN MOVE, and naming only it would send whoever
+	 * reads that log line looking in the wrong asset: MeasureLane is equally sensitive to the
+	 * INSTANCE'S POSE and to the turn radius Build re-resolves from
+	 * UAirsideSettings::ResolveLargestServiceVehicle() on every pass, so moving a placed stand
+	 * without a sweep, or changing that vehicle between passes, produces the identical failure.
 	 */
 	void RecoverEntries(const URoadNetwork& Network, const FEntityInstance& Instance,
 		const TArray<FGuidelineEdgeId>& Lane, double TurnRadius,
@@ -285,21 +311,33 @@ namespace
 			}
 		}
 
-		// WITHIN THE WELD TOLERANCE, never simply "nearest". The derivation above is exact, so
-		// the tolerance covers nothing but the last bit of a re-derivation; a bare nearest would
-		// hand back the wrong end of a bend - or a node belonging to a different corner
+		// WITHIN A TOLERANCE, never simply "nearest". The derivation above is exact, so
+		// LaneMatchTolerance covers nothing but the last bit of a re-derivation; a bare nearest
+		// would hand back the wrong end of a bend - or a node belonging to a different corner
 		// altogether - on a lane whose definition had been edited under a placed instance,
 		// which is precisely the case that must be reported rather than papered over.
+		//
+		// AND THE NEAREST OF THOSE, not the first one found. Two nodes can sit inside one
+		// tolerance of each other by construction, not by accident: see LaneMatchTolerance for
+		// the clamp that puts a pair exactly LaneWeldTolerance apart and for the splits that
+		// can land closer still. First-within-tolerance then answers by the order this gather
+		// happened to walk the lane's edges in, which is graph slot order, which a split
+		// perturbs - so the same stand could recover a different node on a later pass and the
+		// entry a road is joined at would move with it.
 		auto NodeNear = [&Nodes, &At](const FVector2D& Want) -> FGuidelineNodeId
 		{
+			FGuidelineNodeId Best;
+			double Nearest = LaneMatchTolerance;
 			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 			{
-				if (FVector2D::Distance(At[Index], Want) <= LaneWeldTolerance)
+				if (const double Distance = FVector2D::Distance(At[Index], Want);
+					Distance <= Nearest)
 				{
-					return Nodes[Index];
+					Nearest = Distance;
+					Best = Nodes[Index];
 				}
 			}
-			return FGuidelineNodeId();
+			return Best;
 		};
 
 		for (int32 Index = 0; Index < Waypoints.Num(); ++Index)
@@ -323,9 +361,10 @@ namespace
 
 				UE_LOG(LogAirside, Warning,
 					TEXT("Stand lane entry %d expects a node at (%.0f, %.0f) and the laid lane "
-					     "has none within %.0f uu. The definition has changed under a placed "
-					     "stand; sweep and rebuild, or nothing will link to that entry."),
-					Index, Want.X, Want.Y, LaneWeldTolerance);
+					     "has none within %.1f uu. Something the lane is measured from has "
+					     "changed under a placed stand; sweep and rebuild, or nothing will link "
+					     "to that entry."),
+					Index, Want.X, Want.Y, LaneMatchTolerance);
 			}
 		}
 	}
@@ -557,6 +596,14 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 		// THE ENTRY COUNT IS IN IT because nothing in this pass reads Result.Entries, so the
 		// log is the only evidence the declared entries reached the graph at all - and a lane
 		// laid with none of them is a stand no road can be joined to.
+		//
+		// IT IS THE WHOLE RESULT'S COUNT, NOT THIS PASS'S. Entries is filled on the idempotent
+		// skip path too (see RecoverEntries), and this line is printed on any pass that laid at
+		// least one lane - so on a mixed pass the figure includes entries RECOVERED for stands
+		// laid earlier. That is the right number to print, because it is what the linking pass
+		// will actually be handed; it is not evidence that the lanes laid THIS pass reached the
+		// graph, and reading it as though it were is how a stand with no entries at all could
+		// hide behind its neighbours' figures.
 		int32 EntryNodes = 0;
 		for (const TPair<FEntityInstanceId, TArray<FGuidelineNodeId>>& Entry : Result.Entries)
 		{

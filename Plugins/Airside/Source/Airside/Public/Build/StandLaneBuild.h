@@ -50,11 +50,12 @@ struct AIRSIDE_API FStandLaneBuild
 	 * curve leaves tangentially and there is no turn at the junction to take. Gap is how far
 	 * off the lane the other end is.
 	 *
-	 * NO CALLER TODAY, and that is a stated intermediate state rather than dead code. It was
-	 * shared by the anchor spurs - gone, because the anchors are on the lane now - and by the
-	 * road link, which Task 5 of the stand routing work restores through declared Entry
-	 * waypoints and which needs exactly this construction and this figure. The 800 uu and the
-	 * measurements that settled it are on PreferredTangentRun in StandLaneBuild.cpp.
+	 * ONE CALLER: FAnchorLink::Join, where a road's connector leaves a DECLARED ENTRY. It was
+	 * shared with the anchor spurs until 2026-09-16 and they are gone - an anchor is a waypoint
+	 * ON the lane now and has nothing to spur. The 800 uu and the measurements that settled it
+	 * are on PreferredTangentRun in StandLaneBuild.cpp; the gaps they were measured against are
+	 * a spur's 1000-1400 uu, which is SHORTER than a road link's, and Join records what the
+	 * figure delivers at a road's distance.
 	 */
 	static double TangentRunFor(double Gap);
 

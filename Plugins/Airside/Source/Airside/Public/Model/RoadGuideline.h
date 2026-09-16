@@ -192,10 +192,15 @@ struct AIRSIDE_API FGuidelineEdge
 	 * True for an edge that APPROACHES a stand's lane rather than being part of the cycle
 	 * itself. Meaningless unless StandGeometryOwner is set.
 	 *
-	 * NOTHING SETS IT TRUE TODAY, 2026-09-16, and that is the intermediate state rather than
-	 * a dead field. It marked the SPUR from a service anchor into the old ring; the anchors
-	 * are waypoints ON the lane now and there is no stub to tell apart. Task 5 of the stand
-	 * routing work is where an approach from a declared entry returns.
+	 * NOTHING SETS IT TRUE, and after 2026-09-16 nothing is expected to - the question is
+	 * CLOSED rather than pending. It marked the SPUR from a service anchor into the old ring;
+	 * the anchors are waypoints ON the lane now and there is no stub to tell apart. The road
+	 * link that a declared entry casts is not one either, and cannot be: it deliberately
+	 * carries no StandGeometryOwner (see the paragraph above - that is what lets
+	 * IsServiceNodeConnected tell a lane that reaches a road from one that only reaches
+	 * itself), and this mark is meaningless without it. What would earn a writer is geometry a
+	 * stand OWNS that is not part of its cycle; nothing the builders lay is that today, so the
+	 * field states the shape of the cycle for its readers and measures nothing.
 	 *
 	 * STATED, not inferred, and that is the part worth keeping. It was read off the endpoints
 	 * - "an approach touches an anchor node" - which is true of one nobody has split and false
