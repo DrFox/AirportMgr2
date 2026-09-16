@@ -104,6 +104,10 @@ namespace
 	 * them; three land on a Code C stand's north side, whose four gaps have 5250 uu to share
 	 * and need 5328. Measured 2026-09-15, after a rounding pass was built and failed on
 	 * exactly those junctions.
+	 *
+	 * ONE FORMULA, TWO SPECIALISATIONS: this is the asymmetric right-angled case. The symmetric
+	 * case (same cut on both legs) is GuidelineGeom::CornerRunFor in Solve/GuidelineGeom.h, which
+	 * holds the general two-leg formula they both derive from.
 	 */
 	constexpr double PreferredSpurRun = 800.0;
 
@@ -112,25 +116,6 @@ namespace
 
 
 
-
-	/**
-	 * How far back along each leg a CORNER of the ring is cut, for a bend of Radius.
-	 *
-	 * ONE FORMULA, TWO SPECIALISATIONS, and this is the other one. A quadratic with legs p and
-	 * q meeting at angle theta has apex radius
-	 *
-	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
-	 *
-	 * A SPUR is the asymmetric right-angled case - run along the lane against the anchor's
-	 * offset from it - which SpurRunFor above inverts. A CORNER is the symmetric case, the
-	 * same cut on both legs, where it collapses to
-	 *
-	 *     R = T sin^2(theta/2) / cos(theta/2)
-	 *
-	 * and this is that read backwards. For the right angle a rectangular lane is made of it is
-	 * T = R * sqrt(2), so a 750 uu corner reaches 1061 uu back along each side - and a Code C
-	 * stand's shortest side is 4180 uu, so its two corners use half of it between them.
-	 */
 
 	/**
 	 * Walk Distance along the RING from (Edge, Param) and report where it lands. Negative

@@ -186,6 +186,17 @@ namespace GuidelineGeom
 	 * How far back along each leg a corner must be cut so the quadratic laid across the cut
 	 * delivers Radius. Interior is the unsigned angle between the two leg directions, radians.
 	 *
+	 * ONE FORMULA, TWO SPECIALISATIONS. A quadratic with legs p and q meeting at angle theta has
+	 * apex radius:
+	 *
+	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
+	 *
+	 * A SPUR is the asymmetric right-angled case - run along the lane against the anchor's offset
+	 * from it - which the builder inverts separately. A CORNER is the symmetric case, the same cut
+	 * on both legs, where it collapses to:
+	 *
+	 *     R = T sin^2(theta/2) / cos(theta/2)
+	 *
 	 * THE EXACT INVERSE OF TightestRadius, which is why it lives beside it. A corner cut back
 	 * Run with its control ON the corner has delivered radius Run*sin^2(t/2)/cos(t/2); solve
 	 * for Run and this is what falls out. Airside.Solve.CornerRunRoundTripsToItsRadius measures
@@ -195,7 +206,9 @@ namespace GuidelineGeom
 	 * equals its radius, and the 2026-09-16 stand spec costed every corner that way and lost
 	 * 40% of the run it needed - the same mistake 8be494c made one level up, in the same week,
 	 * about the same kind of curve. It was a file-static in ServiceLoopBuild.cpp when that
-	 * happened, where nothing outside the builder could find it.
+	 * happened, where nothing outside the builder could find it. For a 750 uu corner (from the
+	 * builder's historical lane radius), this costs 1061 uu back along each side; a Code C stand's
+	 * shortest side is 4180 uu, so its two corners use half of it between them.
 	 *
 	 * A HAIRPIN RETURNS THE MAXIMUM rather than an infinity: no cut gives it this radius, and a
 	 * caller's proportional clamp asked for an infinity scales BOTH corners of a leg to nothing
