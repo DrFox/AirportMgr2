@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
+#include "BuildActions.h"
 #include "RoadBuildController.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
@@ -100,11 +101,85 @@ void ARoadBuildHUD::DrawHUD()
 	// the click cannot disagree.
 	if (IBuildTool* Tool = Controller->GetActiveTool())
 	{
-		Tool->BuildPreview(Controller->MakeToolContext(), *this);
+		// ONE CONTEXT for both, not two calls: the prompt must describe the same frame the
+		// ghost does, which is the whole reason the readout is filled beside the preview.
+		const FToolContext Context = Controller->MakeToolContext();
+		Tool->BuildPreview(Context, *this);
 
 		// The tool name and the clock moved to UBuildBarWidget; this class draws only in
-		// world space now.
+		// world space now - and this prompt, which is world space on purpose. See
+		// DrawCommitPrompt for why the bar's Build button was not enough on its own.
+		//
+		// THE CONTROLLER'S READOUT, not a second BuildReadout call here. The bar's Build
+		// button reads that same collected value, so the prompt cannot offer a commit the
+		// button would refuse.
+		const FString Prompt = CommitPromptText(Controller->GetToolReadout());
+		if (!Prompt.IsEmpty())
+		{
+			DrawCommitPrompt(Context.Cursor, Prompt);
+		}
 	}
+}
+
+FString ARoadBuildHUD::CommitPromptText(const FToolReadout& Readout)
+{
+	if (!Readout.bCommittable)
+	{
+		return FString();
+	}
+
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (Build == nullptr)
+	{
+		return FString();
+	}
+
+	// THE LABEL AND THE KEY BOTH COME FROM THE REGISTRY. Typing either here would be a
+	// second source for something BuildActions() already owns, and the bar button beside it
+	// would be free to drift - see CLAUDE.md, "Lists that must agree are ONE list".
+	if (!Build->Key.IsValid())
+	{
+		return Build->Label.ToString();
+	}
+	return FString::Printf(TEXT("%s  [%s]"), *Build->Label.ToString(),
+		*Build->Key.GetDisplayName().ToString());
+}
+
+void ARoadBuildHUD::DrawCommitPrompt(const FVector2D& PlanePoint, const FString& Text)
+{
+	FVector2D Screen;
+	if (!ProjectPlanePoint(PlanePoint, PlaneZ, Screen) || GEngine == nullptr)
+	{
+		return;
+	}
+
+	UFont* Font = GEngine->GetMediumFont();
+	if (Font == nullptr)
+	{
+		return;
+	}
+
+	float TextWidth = 0.0f;
+	float TextHeight = 0.0f;
+	GetTextSize(Text, TextWidth, TextHeight, Font);
+
+	// ABOVE THE CURSOR AND CENTRED ON IT. Below it the prompt would sit under the pointer
+	// itself, and to one side it would fall off screen on plots drawn near an edge.
+	const float PadX = 12.0f;
+	const float PadY = 7.0f;
+	const float Rise = 34.0f;
+	const float Left = static_cast<float>(Screen.X) - (TextWidth * 0.5f + PadX);
+	const float Top = static_cast<float>(Screen.Y) - (TextHeight + PadY * 2.0f) - Rise;
+
+	// A GROUND BEHIND IT, unlike every other label this class draws. Those name a node on a
+	// dark road; this one lands on whatever the plot is over - grass, concrete, the ghost's
+	// own green - and coloured text alone is unreadable on at least one of them.
+	DrawRect(FLinearColor(0.02f, 0.03f, 0.04f, 0.72f),
+		Left, Top, TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
+
+	// Pending's colour: this IS the pending gesture, named by meaning rather than by picking
+	// a green here - the same table every other mark on screen reads.
+	DrawText(Text, LookFor(EPreviewStyle::Pending).Colour, Left + PadX, Top + PadY, Font);
 }
 
 ARoadBuildController* ARoadBuildHUD::GetBuildController() const

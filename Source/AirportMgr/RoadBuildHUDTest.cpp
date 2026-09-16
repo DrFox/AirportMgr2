@@ -2,10 +2,52 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "BuildActions.h"
 #include "RoadBuildHUD.h"
 #include "Tool/RoadBuildTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+/**
+ * THE COMMIT PROMPT'S ONE DECISION, with no Canvas and no PIE.
+ *
+ * The drawing itself cannot be tested headlessly, so the part that CAN go wrong silently is
+ * split out: whether the prompt appears at all, and whether it names the key the registry
+ * actually bound. A prompt reading "Build [Enter]" beside an unbound Enter is this project's
+ * most-repeated bug - see CLAUDE.md on the startup banner that advertised four routes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCommitPromptNamesTheBoundKeyTest,
+	"AirportMgr.HUD.CommitPromptNamesTheBoundKey",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCommitPromptNamesTheBoundKeyTest::RunTest(const FString& Parameters)
+{
+	// NOTHING TO COMMIT, NOTHING OFFERED. bCommittable is false by default for every tool
+	// but one, so a prompt that ignored it would hang over every gesture in the game.
+	TestTrue(TEXT("an empty readout offers nothing"),
+		ARoadBuildHUD::CommitPromptText(FToolReadout()).IsEmpty());
+
+	FToolReadout Ready;
+	Ready.bCommittable = true;
+	const FString Prompt = ARoadBuildHUD::CommitPromptText(Ready);
+
+	TestFalse(TEXT("a committable readout offers something"), Prompt.IsEmpty());
+	TestTrue(TEXT("and it is the registry's own label"), Prompt.Contains(TEXT("Build")));
+
+	// THE KEY IS REAL, not decoration. FindAction(Key) is what SetupInputComponent binds
+	// from, so asking it back is asking whether the key in the prompt actually does anything.
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (!TestNotNull(TEXT("a Build action"), Build)) { return false; }
+	if (!TestTrue(TEXT("Build has a key bound"), Build->Key.IsValid())) { return false; }
+
+	TestTrue(TEXT("the prompt names that key"),
+		Prompt.Contains(Build->Key.GetDisplayName().ToString()));
+	TestEqual(TEXT("and that key reaches the same action when pressed"),
+		FindAction(Build->Key, Build->bRequiresCtrl), Build);
+
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildHUDLooksTest,

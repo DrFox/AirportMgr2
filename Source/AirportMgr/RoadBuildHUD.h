@@ -4,6 +4,7 @@
 #include "GameFramework/HUD.h"
 #include "Tool/PreviewPalette.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/ToolReadout.h"
 #include "RoadBuildHUD.generated.h"
 
 class ARoadBuildController;
@@ -95,7 +96,29 @@ public:
 	virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override;
 	virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override;
 
+	/**
+	 * What to offer the player when a gesture is ready to commit - "Build  [Enter]" - or an
+	 * empty string when nothing is.
+	 *
+	 * STATIC AND TAKING THE READOUT, so the one decision that matters is testable with no
+	 * Canvas, no world and no PIE: that the prompt appears exactly when bCommittable is set,
+	 * and that its key comes from BuildActions() rather than a literal typed here. A literal
+	 * would be a second place naming the Build key, and CLAUDE.md records three separate
+	 * occasions this project shipped a key that went nowhere.
+	 */
+	static FString CommitPromptText(const FToolReadout& Readout);
+
 private:
+	/**
+	 * The commit prompt, drawn AT THE CURSOR rather than on the bar.
+	 *
+	 * The bar already carries a Build button and it was not enough: it is the tenth control
+	 * along in a group of six that all look alike, and reaching the last stage only un-greys
+	 * it. The player's eyes are on the plot they are dragging, which is where the offer to
+	 * build has to be - PIE, 2026-09-16, "i cant see the option to build".
+	 */
+	void DrawCommitPrompt(const FVector2D& PlanePoint, const FString& Text);
+
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;
 
