@@ -80,7 +80,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 	// THE SUM AND NOT THE LARGER, which is the correction that reshaped this layout. Two
 	// corners cut back into the same straight from opposite ends, so a straight shorter than
 	// Run(a) + Run(b) has the two curves overlapping and NEITHER delivers its radius - exactly
-	// the clamp FServiceLoopBuild applies one level down. The first draft of this layout costed
+	// the clamp FStandLaneBuild applies one level down. The first draft of this layout costed
 	// each corner against the larger of its two legs alone and put a square 90 degree crossing
 	// on a 1700 uu straight that needs 1978 for its two ends.
 	//

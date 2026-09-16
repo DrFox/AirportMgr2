@@ -1,11 +1,15 @@
 #include "CoreMinimal.h"
+#include "Build/StandLaneBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadGuideline.h"
+#include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -84,7 +88,7 @@ bool FStandLaneCarriesItsAnchorsTest::RunTest(const FString& Parameters)
 	// A DEPOT HAS NONE, and empty is a supported state rather than an unfinished one. Carried
 	// over from Airside.Entities.ServiceLoopEnclosesTheStand, which this file replaces: every
 	// other assertion that test made was about the ring's four corners and died with them, but
-	// "a definition may have no lane at all" is a live contract FServiceLoopBuild branches on.
+	// "a definition may have no lane at all" is a live contract FStandLaneBuild branches on.
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (TestNotNull(TEXT("a depot definition"), Depot))
 	{
@@ -158,7 +162,7 @@ bool FStandLaneCornersClearTheTruckLockTest::RunTest(const FString& Parameters)
 	// long enough for each of them SEPARATELY can still be too short for both: the first draft
 	// put two square 90 degree corners, 989 uu of run each, on the 1700 uu straight between the
 	// two runs, and every per-corner assertion above passed on it while the two curves overlapped
-	// by 278 uu and neither delivered its radius. This is the clamp FServiceLoopBuild applies
+	// by 278 uu and neither delivered its radius. This is the clamp FStandLaneBuild applies
 	// one level down, asked of the definition instead.
 	for (int32 At = 0; At < Count; ++At)
 	{
@@ -389,6 +393,160 @@ bool FStandBoxesMoveWithTheLargestVehicleTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("and the hydrant pit does not move, because concrete does not"),
 		FMath::IsNearlyEqual(
 			XOf(Roomier, TEXT("HydrantPit")), XOf(Normal, TEXT("HydrantPit")), 0.5));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlacedStandLaneIsOneDrivableCycleTest,
+	"Airside.Build.PlacedStandLaneIsOneDrivableCycle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlacedStandLaneIsOneDrivableCycleTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE DEFINITION'S PROMISES, ASKED OF WHAT THE BUILDER ACTUALLY LAID. Every other test in
+	// this file measures UEntityDefinition::ServiceLane - a polyline of straights, which is how
+	// a lane is DESCRIBED. This one places the stand and measures the GRAPH, which is what a
+	// truck drives: a definition whose legs are long enough can still deliver a tight curve if
+	// the builder's proportional clamp shrank a corner to fit its leg. That is the 8be494c
+	// lesson, one level up.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+
+	const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(*Net);
+	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
+	if (!TestNotNull(TEXT("the stand got a lane"), Lane))
+	{
+		return false;
+	}
+
+	// NO DEAD END. Forward-only rests entirely on this: a stub is a reverse, and reverse does
+	// not exist yet. Every lane node carries two lane edges - the anchors included, which is
+	// what "the lane runs THROUGH the box" means and what the ring's spur pairs never had.
+	TMap<FGuidelineNodeId, int32> Degree;
+	for (const FGuidelineEdgeId& Id : *Lane)
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		if (Edge == nullptr || !Edge->bAlive)
+		{
+			continue;
+		}
+		++Degree.FindOrAdd(Edge->A);
+		++Degree.FindOrAdd(Edge->B);
+	}
+	for (const TPair<FGuidelineNodeId, int32>& Node : Degree)
+	{
+		TestEqual(TEXT("every lane node is driven through, never into"), Node.Value, 2);
+	}
+
+	// AND EVERY CURVE IS DRIVABLE, measured on the SAMPLED geometry rather than on the
+	// definition's corners - the 8be494c lesson. A definition whose legs are long enough can
+	// still deliver a tight curve if the builder's clamp shrank a corner to fit its leg.
+	const double Needed =
+		UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
+	for (const FGuidelineEdgeId& Id : *Lane)
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		if (Edge == nullptr || !Edge->bAlive)
+		{
+			continue;
+		}
+		const FGuidelineNode* A = Net->GetGuidelineNode(Edge->A);
+		const FGuidelineNode* B = Net->GetGuidelineNode(Edge->B);
+		if (A == nullptr || B == nullptr)
+		{
+			continue;
+		}
+		const double Delivered =
+			GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
+		TestTrue(
+			*FString::Printf(TEXT("a lane curve delivers %.0f uu against the %.0f needed"),
+				Delivered, Needed),
+			Delivered >= Needed - 0.5);
+	}
+
+	// AND NOTHING RUNS THROUGH THE AEROPLANE. The rule is unchanged - under a wing is normal,
+	// through the fuselage is not - but the fuselage is a RECTANGLE now, not an axis, because
+	// this lane runs alongside it where a zero-width centreline would permit a route down the
+	// skin. Measured on the sampled curve, not on the definition's corners.
+	{
+		const FEntityFootprint& Footprint = Stand->DesignAircraft->Footprint;
+		const double HalfWidth = Footprint.FuselageWidth * 0.5;
+		const FBox2D Fuselage(
+			FVector2D(Footprint.TailX, -HalfWidth), FVector2D(Footprint.NoseX, HalfWidth));
+		TestTrue(TEXT("the design aircraft has a fuselage width to test against"),
+			Footprint.FuselageWidth > 0.0);
+
+		for (const FGuidelineEdgeId& Id : *Lane)
+		{
+			TArray<FVector2D> Points;
+			if (!Net->SampleGuideline(Id, Points))
+			{
+				continue;
+			}
+			for (const FVector2D& Point : Points)
+			{
+				TestFalse(
+					*FString::Printf(TEXT("a lane point at (%.0f,%.0f) is inside the fuselage"),
+						Point.X, Point.Y),
+					Fuselage.IsInside(Point));
+			}
+		}
+	}
+
+	// THE ANCHORS KEPT THEIR OWN NODES. A lane that made fresh nodes at the anchor positions
+	// would look identical here and route nothing: FuelService asks for the ANCHOR's node.
+	const FEntityInstance* Entity = Net->GetEntity(Placed);
+	if (TestNotNull(TEXT("the stand is placed"), Entity))
+	{
+		for (const FResolvedAnchor& Anchor : Entity->ResolvedAnchors)
+		{
+			if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
+			{
+				continue;
+			}
+			const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
+			if (TestNotNull(
+					*FString::Printf(TEXT("anchor '%s' has a node"), *Anchor.Id.ToString()),
+					Node))
+			{
+				TestEqual(
+					*FString::Printf(TEXT("and the lane runs through '%s'"),
+						*Anchor.Id.ToString()),
+					Node->Incident.Num(), 2);
+			}
+		}
+	}
+
+	// AND THE DECLARED ENTRIES REACHED THE GRAPH. Nothing in this task READS FResult::Entries -
+	// Task 5 of the stand routing work is its consumer - so without this the map could be empty
+	// on every stand and no test above would notice until that task started and blamed itself.
+	// Four entries, each a corner and so each rounded into a pair of nodes.
+	if (const TArray<FGuidelineNodeId>* Entries = Built.Entries.Find(Placed))
+	{
+		int32 Declared = 0;
+		for (const FStandWaypoint& Point : Stand->ServiceLane)
+		{
+			Declared += Point.Kind == EStandWaypointKind::Entry ? 1 : 0;
+		}
+		TestTrue(
+			*FString::Printf(TEXT("%d declared entries reached the graph as %d node(s)"),
+				Declared, Entries->Num()),
+			Declared > 0 && Entries->Num() >= Declared);
+
+		for (const FGuidelineNodeId& Id : *Entries)
+		{
+			TestTrue(TEXT("and an entry node is a node of the lane itself"),
+				Built.Nodes.Contains(Id));
+		}
+	}
+	else
+	{
+		AddError(TEXT("the stand recorded no entries at all"));
+	}
 
 	return true;
 }

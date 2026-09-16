@@ -192,7 +192,7 @@ public:
 	/**
 	 * Splits Edge at curve parameter T (GuidelineGeom::Split), replacing it with two edges
 	 * that together trace the original curve. Both halves copy every field of the original
-	 * (AllowedTraffic, ServiceLoopOwner, DerivedFrom, ...) except A/B/Control, so provenance
+	 * (AllowedTraffic, StandGeometryOwner, DerivedFrom, ...) except A/B/Control, so provenance
 	 * survives the split exactly as it did at each of this method's five former call sites.
 	 *
 	 * Within WeldTolerance of an existing endpoint, no split happens: OutNode is that
@@ -213,7 +213,7 @@ public:
 
 	/**
 	 * THE graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach, GuidelineOverlay,
-	 * AnchorLink, AnchorLinkFinder and ServiceLoopBuild each used to fetch A/B themselves and
+	 * AnchorLink, AnchorLinkFinder and StandLaneBuild each used to fetch A/B themselves and
 	 * call it directly - a dozen near-identical bodies for "look up both ends, sample the
 	 * curve between them."
 	 *
@@ -324,9 +324,9 @@ public:
 	 * True when Node has line on it that leads OFF the service geometry it belongs to.
 	 *
 	 * "Does this anchor have an edge on it" used to be the same question, and stopped being
-	 * it the moment stands grew SERVICE LOOPS: a hydrant is always incident to its own spur,
+	 * it the moment stands grew SERVICE LANES: a hydrant is a waypoint ON its stand's lane,
 	 * so the count is true for a stand in the middle of a field. This walks only the edges
-	 * marked FGuidelineEdge::ServiceLoopOwner - the lane and its spurs - and reports whether
+	 * marked FGuidelineEdge::StandGeometryOwner - the stand's own lane - and reports whether
 	 * the component they reach touches anything that is not one of them.
 	 *
 	 * A node with no service geometry at all is answered by its own first edge, so a depot's

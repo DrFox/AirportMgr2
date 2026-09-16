@@ -32,10 +32,15 @@ class URoadNetwork;
  * none of them. A service link therefore joins the NEAREST guideline of its class in any
  * direction, within a much shorter reach - see DefaultServiceLinkRadius.
  *
- * Service ANCHORS do not link here at all on a stand with a lane. FServiceLoopBuild has
- * already spurred each of them to the stand's service loop, because a straight spur from a
- * road on one side to a box on the other crosses 37 m of fuselage - and it is the LANE that
- * links to the road, entering wherever it comes nearest.
+ * Service ANCHORS do not link here at all on a stand with a lane. FStandLaneBuild has already
+ * laid the lane THROUGH each of them, because a straight connector from a road on one side to
+ * a box on the other crosses 37 m of fuselage - and it is the LANE that links to the road, at
+ * an entry the definition declares.
+ *
+ * THAT LAST LINK IS NOT MADE HERE TODAY, 2026-09-16. The block that cast it is deleted with
+ * the ring's discovered entrances; Task 5 of the stand routing work restores it through
+ * FStandLaneBuild::FResult::Entries. Until then a stand's lane is in the graph and joined to
+ * nothing, and every test that needs a road-to-stand connection fails.
  *
  * Only DERIVED guidelines are split. A hand-drawn one is left alone: splitting it would
  * either discard the player's edit on the next rebuild, or - if the halves inherited its
@@ -78,7 +83,7 @@ struct AIRSIDE_API FAnchorLink
 	 *
 	 * An anchor that already has an incident edge is skipped, so a hand-drawn connection
 	 * wins over the automatic one rather than being doubled up by it - and so does an anchor
-	 * FServiceLoopBuild has just spurred to its stand's lane.
+	 * FStandLaneBuild has just laid its stand's lane through.
 	 *
 	 * Three steps, in order, per Pending link: Gather collects every anchor/pose/lane-side
 	 * awaiting a link before anything mutates; Resolve dispatches to the ILinkFinder for the

@@ -485,7 +485,7 @@ bool FServiceNodeConnectedTest::RunTest(const FString& Parameters)
 		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
 		Edge.Direction = EGuidelineDir::Bidirectional;
 		Edge.bDerived = true;
-		Edge.ServiceLoopOwner = Owned;
+		Edge.StandGeometryOwner = Owned;
 		Net->AddGuidelineEdge(MoveTemp(Edge));
 	};
 

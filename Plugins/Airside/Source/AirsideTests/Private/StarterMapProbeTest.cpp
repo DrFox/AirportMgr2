@@ -130,7 +130,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			int32 LaneEdges = 0;
 			for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
 			{
-				LaneEdges += (Edge.bAlive && Edge.ServiceLoopOwner == Id) ? 1 : 0;
+				LaneEdges += (Edge.bAlive && Edge.StandGeometryOwner == Id) ? 1 : 0;
 			}
 			for (const FResolvedAnchor& Anchor : Instance.ResolvedAnchors)
 			{

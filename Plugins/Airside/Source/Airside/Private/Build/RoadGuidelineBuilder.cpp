@@ -281,7 +281,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 		// T is strictly inside (0,1) - Chord > Length was just checked - so this is never a
 		// snap to an existing endpoint; WeldTolerance is 0 rather than the LeadInWeldTolerance
-		// AnchorLink and ServiceLoopBuild use for their own, unrelated proximity joins.
+		// AnchorLink and StandLaneBuild use for their own, unrelated proximity joins.
 		FGuidelineNodeId Split;
 		FGuidelineEdgeId Head, Tail;
 		if (!Network.SplitGuidelineEdge(EdgeId, T, /*WeldTolerance=*/0.0, Split, Head, Tail))

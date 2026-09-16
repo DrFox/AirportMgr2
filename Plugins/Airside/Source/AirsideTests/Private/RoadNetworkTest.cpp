@@ -209,7 +209,7 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 /**
  * THE graph-edge call of GuidelineGeom::Sample, introduced by issue #105 item 5 to replace
  * a dozen near-identical bodies in RouteSearch/NodeReach/GuidelineOverlay/AnchorLink/
- * AnchorLinkFinder/ServiceLoopBuild that each fetched A/B themselves (one documented
+ * AnchorLinkFinder/StandLaneBuild that each fetched A/B themselves (one documented
  * exception remains - see URoadNetwork::SampleGuideline's own comment). Fails if
  * SampleGuideline ever stops resolving the edge, or if bFromB stops being the "walked from
  * B" curve.

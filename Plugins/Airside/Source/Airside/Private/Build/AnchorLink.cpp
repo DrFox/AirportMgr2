@@ -2,7 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Build/AnchorLinkFinder.h"
-#include "Build/ServiceLoopBuild.h"
+#include "Build/StandLaneBuild.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -14,170 +14,25 @@
 
 namespace
 {
-	/**
-	 * How near does this ring side come to a road it could actually join?
-	 *
-	 * Measured on the graph as it stands BEFORE any of this pass's links, which is what makes
-	 * the answer independent of the order the sides are taken in - each link splits the road
-	 * it joins, and a side measured after that is measuring a different airport from the one
-	 * measured before it.
-	 *
-	 * Reach, not infinity, so a side with nothing near it costs one sweep and not a search of
-	 * the whole graph.
-	 */
-	double NearestRoadApproach(const URoadNetwork& Network, const TSet<FGuidelineNodeId>& AnchorNodes,
-		FGuidelineEdgeId SideId, ETraversalClass Class, double Reach)
-	{
-		TArray<FVector2D> SidePoints;
-		if (!Network.SampleGuideline(SideId, SidePoints))
-		{
-			return TNumericLimits<double>::Max();
-		}
-
-		double Best = Reach;
-		const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-		for (int32 Index = 0; Index < Edges.Num(); ++Index)
-		{
-			const FGuidelineEdge& Edge = Edges[Index];
-
-			// The same eligibility the search below applies, and for the same reasons: a lane
-			// side that measured against a target the search would refuse would be selected on
-			// a distance it can never actually have.
-			if (!Edge.bAlive || !Edge.bDerived || Edge.A == Edge.B
-				|| AnchorNodes.Contains(Edge.A) || AnchorNodes.Contains(Edge.B)
-				|| !Edge.AllowedTraffic.Allows(Class))
-			{
-				continue;
-			}
-
-			TArray<FVector2D> Points;
-			if (!Network.SampleGuideline(Network.GuidelineEdgeIdAt(Index), Points))
-			{
-				continue;
-			}
-
-			int32 SideSpan = 0, RoadSpan = 0;
-			double SideFraction = 0.0, RoadFraction = 0.0;
-			Best = FMath::Min(Best, GuidelineGeom::NearestBetweenPolylines(
-				SidePoints, Points, SideSpan, SideFraction, RoadSpan, RoadFraction));
-		}
-		return Best;
-	}
-
-	/**
-	 * True when this lane edge is one of the ring's BENDS rather than one of its sides.
-	 *
-	 * ASKED OF THE GEOMETRY, and here that is the question itself rather than an inference
-	 * about identity: a bend IS the lane edge that curves. GuidelineGeom::IsStraight is this
-	 * graph's own spelling of straight - the control on the midpoint, which is how
-	 * FServiceLoopBuild writes a side and is not how it writes a corner.
-	 *
-	 * Spurs curve too, and are excluded by the caller before this is asked.
-	 */
-	bool IsLaneBend(const URoadNetwork& Network, const FGuidelineEdge& Edge)
-	{
-		const FGuidelineNode* A = Network.GetGuidelineNode(Edge.A);
-		const FGuidelineNode* B = Network.GetGuidelineNode(Edge.B);
-		return A != nullptr && B != nullptr
-			&& !GuidelineGeom::IsStraight(A->Position, Edge.Control, B->Position);
-	}
-
-	/**
-	 * A WHOLE SIDE of the ring: every straight edge it has been cut into, in one list.
-	 *
-	 * A side is not an EDGE. Every anchor spur that joins one splits it, so the east side of a
-	 * Code C stand is three edges - and treated as three candidates it takes three entrances,
-	 * which is how a stand ended up with more connections than sides and of three different
-	 * qualities. Reported from play 2026-09-15 with a picture.
-	 *
-	 * Walked through straights and STOPPED AT A BEND, which is exactly where one side ends and
-	 * the next begins. Bends separate the runs, so no two sides share an edge - and that is
-	 * what makes "has this side got an entrance" an exact question with the same answer every
-	 * time it is asked, which the rebuild-on-every-edit contract needs.
-	 */
-	TArray<FGuidelineEdgeId> WholeSide(const URoadNetwork& Network,
-		const TArray<FGuidelineEdgeId>& Lane, FGuidelineEdgeId FromId)
-	{
-		TArray<FGuidelineEdgeId> Run;
-		Run.Add(FromId);
-
-		const FGuidelineEdge* From = Network.GetGuidelineEdge(FromId);
-		if (From == nullptr)
-		{
-			return Run;
-		}
-
-		for (const FGuidelineNodeId& End : { From->A, From->B })
-		{
-			FGuidelineEdgeId Came = FromId;
-			FGuidelineNodeId At = End;
-
-			for (int32 Step = 0; Step < Lane.Num(); ++Step)
-			{
-				const FGuidelineNode* Node = Network.GetGuidelineNode(At);
-				if (Node == nullptr)
-				{
-					break;
-				}
-
-				FGuidelineEdgeId Next;
-				for (const FGuidelineEdgeId& Id : Node->Incident)
-				{
-					const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
-					if (Id == Came || Edge == nullptr || !Edge->bAlive || Edge->bServiceSpur)
-					{
-						continue;
-					}
-					Next = Id;
-					break;
-				}
-
-				const FGuidelineEdge* Edge =
-					Next.IsSet() ? Network.GetGuidelineEdge(Next) : nullptr;
-				if (Edge == nullptr || IsLaneBend(Network, *Edge) || Run.Contains(Next))
-				{
-					// A bend: the side ends here. Or back where we started, on a ring with no
-					// bends at all.
-					break;
-				}
-
-				Run.Add(Next);
-				At = Edge->A == At ? Edge->B : Edge->A;
-				Came = Next;
-			}
-		}
-		return Run;
-	}
-
-	/**
-	 * Does either end of this lane side already carry a link to a road?
-	 *
-	 * A LOCAL test, deliberately, where URoadNetwork::IsServiceNodeConnected is a WALK. The
-	 * walk answers "can this ring reach a road at all", which is the right question when a
-	 * ring gets one link and the wrong one when it gets several - the first link would make
-	 * it true and suppress every other side. What identifies a link is that it carries no
-	 * ServiceLoopOwner: the ring's own sides and spurs all carry one.
-	 */
-	bool SideAlreadyLinked(const URoadNetwork& Network, const FGuidelineEdge& Side)
-	{
-		for (const FGuidelineNodeId& End : { Side.A, Side.B })
-		{
-			const FGuidelineNode* Node = Network.GetGuidelineNode(End);
-			if (Node == nullptr)
-			{
-				continue;
-			}
-			for (const FGuidelineEdgeId& Incident : Node->Incident)
-			{
-				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Incident);
-				if (Edge != nullptr && Edge->bAlive && !Edge->ServiceLoopOwner.IsSet())
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
+	// WHERE THE RING'S SIDE-FINDING APPARATUS WENT, 2026-09-16.
+	//
+	// Four helpers stood here - NearestRoadApproach, IsLaneBend, WholeSide and
+	// SideAlreadyLinked - and together they answered "which sides of this stand's ring are
+	// beside a road, and which of them has an entrance already". They existed because the
+	// entrance was DISCOVERED: the ring was searched for its nearest approach to a road and
+	// cut wherever that fell, so the pass had to reconstruct what a "side" even was from a
+	// graph that anchor spurs had already chopped into pieces.
+	//
+	// A stand's lane now DECLARES where a road may join - UEntityDefinition::ServiceLane
+	// carries Entry waypoints, and FStandLaneBuild::FResult::Entries reports the node each one
+	// became - so there is nothing left to reconstruct and the whole apparatus goes with the
+	// question. Task 5 of the stand routing work links through those entries; between this
+	// task and that one a stand is laid but UNLINKED, which is a planned intermediate state
+	// and not a regression. Every test that needs a road-to-stand connection fails here.
+	//
+	// The deleted code is in git at the commit before this one; it is not worth carrying
+	// commented out, because what replaces it is a different question and not a better answer
+	// to this one.
 
 	/**
 	 * Minimum centreline curve radius, in uu, for an ICAO aerodrome code letter.
@@ -204,16 +59,16 @@ namespace
 void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double ServiceLinkRadius,
 	TArray<FPendingLink>& OutPending, TSet<FGuidelineNodeId>& OutAnchorNodes)
 {
-	// THE LANES FIRST. A service anchor spurred to its stand's loop is already joined by the
-	// time the walk below asks, so it is skipped there rather than cast at a road on the far
-	// side of the aeroplane - and the LANE becomes the thing that links.
-	const FServiceLoopBuild::FResult Loops = FServiceLoopBuild::Build(Network);
+	// THE LANES FIRST. A service anchor is a waypoint ON its stand's lane, so it is already
+	// joined by the time the walk below asks, and is skipped there rather than cast at a road
+	// on the far side of the aeroplane - and the LANE becomes the thing that links.
+	const FStandLaneBuild::FResult Lanes = FStandLaneBuild::Build(Network);
 
 	// EVERY NODE A LINK MUST NOT TARGET: anchor and pose nodes as always, PLUS every node of
-	// every service lane and spur. A lane is itself a vehicle guideline, so without the
-	// second half a lane would join ITSELF - four metres away, across its own box - every
-	// stand would read as connected, and no truck would ever route anywhere.
-	OutAnchorNodes = Loops.Nodes;
+	// every service lane. A lane is itself a vehicle guideline, so without the second half a
+	// lane would join ITSELF - four metres away, across its own box - every stand would read
+	// as connected, and no truck would ever route anywhere.
+	OutAnchorNodes = Lanes.Nodes;
 
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
@@ -348,131 +203,19 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			OutPending.Add(Link);
 		}
 
-		// THE LANE'S LINKS TO A ROAD. ONE PER SIDE, not one per stand.
+		// NO LINK FROM THE LANE TO A ROAD, 2026-09-16, and that is deliberate for one task only.
 		//
-		// One per stand made the lane a CUL-DE-SAC: a truck entered at the single point where
-		// the ring came nearest a road and then drove up to half the ring's perimeter - 94 m
-		// on a Code C stand - to reach an anchor a few metres from where it started. A side
-		// per entry makes it a drive-through, and the search then picks whichever entry is
-		// nearest the anchor it is actually going to.
+		// A whole block stood here that measured how near each side of the stand's ring came to
+		// a road and cast one link per qualifying side. It is gone with the ring's side-finding
+		// helpers above, for the reason given there: the entrance is DECLARED now, not
+		// discovered, and FStandLaneBuild::FResult::Entries already says which node each
+		// authored Entry waypoint became. Task 5 of the stand routing work reads that map and
+		// links through it.
 		//
-		// A road within reach of two stands is still joined by BOTH, each getting its own
-		// connections - the normal case, one service road serving a row, not a conflict.
-		if (const TArray<FGuidelineEdgeId>* Lane = Loops.Lanes.Find(EntityId))
-		{
-			// HOW NEAR EACH SIDE COMES, measured before anything is linked, so that "which
-			// sides are beside the road" is a property of the airport and not of the order
-			// this loop happens to visit them in.
-			// EVERY SIDE ONCE, keyed by the first edge of it this loop happens to meet. The
-			// run itself is kept, because the link pass needs the whole of it: a side may come
-			// nearest the road on a piece other than the one it is keyed by.
-			TMap<FGuidelineEdgeId, TArray<FGuidelineEdgeId>> Sides;
-			TMap<FGuidelineEdgeId, double> Approach;
-			TSet<FGuidelineEdgeId> Seen;
-			double NearestSide = TNumericLimits<double>::Max();
-			for (const FGuidelineEdgeId& EdgeId : *Lane)
-			{
-				const FGuidelineEdge* Side = Network.GetGuidelineEdge(EdgeId);
-				if (Side == nullptr || !Side->bAlive || Side->bServiceSpur || Seen.Contains(EdgeId))
-				{
-					continue;
-				}
-
-				// A BEND IS NOT A SIDE. It is the turn between two of them and belongs to
-				// both, so a link landing on one is an entrance neither side can call its own
-				// - which is how a stand ended up with three entrances clustered along its
-				// bottom edge instead of one per side.
-				if (IsLaneBend(Network, *Side))
-				{
-					continue;
-				}
-
-				const TArray<FGuidelineEdgeId> Run = WholeSide(Network, *Lane, EdgeId);
-				for (const FGuidelineEdgeId& PartId : Run)
-				{
-					Seen.Add(PartId);
-				}
-
-				double Distance = TNumericLimits<double>::Max();
-				for (const FGuidelineEdgeId& PartId : Run)
-				{
-					Distance = FMath::Min(Distance, NearestRoadApproach(Network, OutAnchorNodes,
-						PartId, ETraversalClass::GroundVehicle, ServiceLinkRadius));
-				}
-
-				Sides.Add(EdgeId, Run);
-				Approach.Add(EdgeId, Distance);
-				NearestSide = FMath::Min(NearestSide, Distance);
-			}
-
-			// THE CORNER REACH IS PART OF IT, and was not until the ring's corners were
-			// rounded. An END side used to run all the way to the box corner and so measured
-			// the SAME clearance as the near side - which is what "twice the best side" was
-			// sized for. It now stops CornerReach short of that corner, so on a Code C stand
-			// beside a road 400 uu away it measures 1461 rather than 400, and every threshold
-			// that admitted it before rejects it. Without this the stand gets ONE entrance and
-			// the cul-de-sac the per-side rule exists to prevent comes straight back.
-			//
-			// The far side is still refused: it measures the clearance plus the depth of the
-			// stand, 4580 uu on the same stand, which is well past this.
-			const double CornerReach = FServiceLoopBuild::LaneTurnRadius * UE_DOUBLE_SQRT_2;
-			const double Qualifies = FMath::Max(NearestSide + CornerReach,
-				FMath::Max(NearestSide * 2.0, NearestSide + FServiceLoopBuild::LaneWidth));
-
-			for (const TPair<FGuidelineEdgeId, TArray<FGuidelineEdgeId>>& Entry : Sides)
-			{
-				const FGuidelineEdgeId SideId = Entry.Key;
-				const TArray<FGuidelineEdgeId>& Run = Entry.Value;
-
-				const FGuidelineEdge* Side = Network.GetGuidelineEdge(SideId);
-				if (Side == nullptr || !Side->bAlive)
-				{
-					continue;
-				}
-
-				if (const double* Distance = Approach.Find(SideId);
-					Distance == nullptr || *Distance > Qualifies)
-				{
-					continue;
-				}
-
-				// ALREADY CONNECTED, ASKED OF THE WHOLE SIDE. Asked of one edge of it, a side
-				// cut in three by anchor spurs reads as unlinked on the two pieces that did
-				// not take the link and takes two more - which a second pass over the same
-				// graph then does again.
-				bool bLinked = false;
-				for (const FGuidelineEdgeId& PartId : Run)
-				{
-					const FGuidelineEdge* Part = Network.GetGuidelineEdge(PartId);
-					bLinked = bLinked || (Part != nullptr && SideAlreadyLinked(Network, *Part));
-				}
-				if (bLinked)
-				{
-					continue;
-				}
-
-				const FGuidelineNode* SideA = Network.GetGuidelineNode(Side->A);
-				if (SideA == nullptr)
-				{
-					continue;
-				}
-
-				FPendingLink Link;
-				Link.Kind = ELinkKind::Lane;
-				Link.Lane = Run;
-				Link.LaneOwner = EntityId;
-				Link.Class = ETraversalClass::GroundVehicle;
-
-				// A placeholder until the search says where the road comes nearest, and the
-				// side is split there. Only the unjoined WARNING reads it before then, and a
-				// corner of the side is the right thing for that to name.
-				Link.At = SideA->Position;
-				Link.MaxWingspan = 0.0;
-				Link.Radius = StandRadius;
-				Link.Reach = ServiceLinkRadius;
-				OutPending.Add(Link);
-			}
-		}
+		// UNTIL IT DOES, A STAND IS LAID BUT UNREACHABLE. Its lane is in the graph and its
+		// anchors are on the lane, so a truck already standing on the lane can drive to any of
+		// them; nothing joins that lane to the airport. Airside.Build.RoadAlongsideARowOfStands
+		// and the fuel service suite fail on exactly that, by design, for one commit.
 	}
 }
 
@@ -514,117 +257,22 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const FVector2D Corner =
 		GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Hit.Param);
 
-	// Set only by a Lane link, and only when the ring gave it room to sweep - see below.
+	// SET ONLY BY A LANE LINK, and no link is a Lane link between this task and Task 5 of the
+	// stand routing work - see Gather, which no longer casts one. So the lead-in below is
+	// always the straight midpoint case for now.
+	//
+	// THE BLOCK THAT FILLED IT IS DELETED, NOT COMMENTED OUT. It split the ring at the road's
+	// nearest point, walked the ring both ways looking for room to sweep, and kept whichever
+	// direction bent least - an apparatus that existed because the entrance was DISCOVERED.
+	// An entrance is DECLARED now (UEntityDefinition::ServiceLane's Entry waypoints, reported
+	// by FStandLaneBuild::FResult::Entries), so what replaces it is a different construction
+	// and not a tidier version of this one. The reason it must sweep at all survives and is
+	// worth restating where it lands: a square-on entrance is a tight turn WE BUILT, and
+	// however well the router is taught to avoid tight turns it can only choose among the ones
+	// that exist - a lane whose entrances crossed at a right angle left exactly one tight
+	// option on every stand, and that is the one it kept taking. Reported from play
+	// 2026-09-15, twice.
 	TOptional<FVector2D> OutLaneControl;
-
-	if (Link.Kind == ELinkKind::Lane)
-	{
-		// THE LANE IS SPLIT TO MAKE THE LINK'S OWN END. Entry in the MIDDLE of a side, not
-		// at a corner: a corner-to-road connector would run diagonally across the very
-		// ground the lane exists to keep clear, and the split costs one node on a lane
-		// nobody can see.
-		//
-		// Safe here even though Original/PositionA/PositionB/Corner were captured above:
-		// those are values, not pointers, and nothing below touches the ROAD edge.
-		//
-		// SplitGuidelineEdge welds to an existing endpoint within LeadInWeldTolerance, or
-		// splits and hands the halves Original's fields (ServiceLoopOwner included), which
-		// is what keeps the lane recognisable as this entity's after the split. Link.Node
-		// IS the join it reports either way; the piece ids themselves are not needed here.
-		// SLID ALONG THE RING FIRST, so the connector can leave the lane ALONG it rather
-		// than across it - the same construction FServiceLoopBuild lays every anchor spur
-		// with, and for the same reason.
-		//
-		// A SQUARE-ON ENTRANCE IS A TIGHT TURN WE BUILT. However well the router is taught to
-		// avoid tight turns, it can only choose among the ones that exist; a lane whose spurs
-		// all swept and whose entrances still crossed at a right angle left exactly one tight
-		// option on every stand, and that is the one it kept taking. Reported from play
-		// 2026-09-15, twice.
-		//
-		// BOTH WAYS TRIED, and the one that bends least is kept. Which way round the ring has
-		// the room depends on where the nearest point fell - next to a bend, one direction
-		// runs straight into it - and guessing was wrong often enough to be worth measuring.
-		FGuidelineEdgeId JoinEdge = Hit.LaneEdge;
-		double JoinParam = Hit.LaneParam;
-		FVector2D LeadControl = FVector2D::ZeroVector;
-		bool bSwept = false;
-		{
-			const FGuidelineEdge* Host = Network.GetGuidelineEdge(Hit.LaneEdge);
-			const FGuidelineNode* HostA =
-				Host != nullptr ? Network.GetGuidelineNode(Host->A) : nullptr;
-			const FGuidelineNode* HostB =
-				Host != nullptr ? Network.GetGuidelineNode(Host->B) : nullptr;
-			if (HostA != nullptr && HostB != nullptr)
-			{
-				const FVector2D Foot = GuidelineGeom::Eval(
-					HostA->Position, Host->Control, HostB->Position, Hit.LaneParam);
-				const double Run = FServiceLoopBuild::TangentRunFor(
-					FVector2D::Distance(Foot, Corner));
-
-				double Widest = -1.0;
-				for (const double Direction : { 1.0, -1.0 })
-				{
-					FGuidelineEdgeId TryEdge;
-					double TryParam = 0.0;
-					bool bForward = true;
-					if (!FServiceLoopBuild::WalkRing(Network, Hit.LaneEdge, Hit.LaneParam,
-							Run * Direction, TryEdge, TryParam, bForward))
-					{
-						continue;
-					}
-
-					const FGuidelineEdge* Landed = Network.GetGuidelineEdge(TryEdge);
-					const FGuidelineNode* LandedA =
-						Landed != nullptr ? Network.GetGuidelineNode(Landed->A) : nullptr;
-					const FGuidelineNode* LandedB =
-						Landed != nullptr ? Network.GetGuidelineNode(Landed->B) : nullptr;
-					if (LandedA == nullptr || LandedB == nullptr)
-					{
-						continue;
-					}
-
-					// Analytic, never a difference of samples: a tangent measured off a
-					// sampled chord is a second evaluator, and it shows up as a degree or two
-					// of turn at exactly the junction this exists to make turnless.
-					const FVector2D JoinAt = GuidelineGeom::Eval(
-						LandedA->Position, Landed->Control, LandedB->Position, TryParam);
-					const FVector2D Along = GuidelineGeom::Tangent(
-						LandedA->Position, Landed->Control, LandedB->Position, TryParam);
-
-					// Back the way the walk came, by the distance it walked, so the curve's
-					// first leg lies on the ring.
-					const FVector2D Control = JoinAt - (bForward ? Along : -Along) * Run;
-					const double Radius =
-						GuidelineGeom::TightestRadius(JoinAt, Control, Corner);
-
-					if (Radius > Widest)
-					{
-						Widest = Radius;
-						JoinEdge = TryEdge;
-						JoinParam = TryParam;
-						LeadControl = Control;
-						bSwept = true;
-					}
-				}
-			}
-		}
-
-		FGuidelineEdgeId LaneHead, LaneTail;
-		if (!Network.SplitGuidelineEdge(JoinEdge, JoinParam, LeadInWeldTolerance,
-			Link.Node, LaneHead, LaneTail))
-		{
-			return FGuidelineNodeId();
-		}
-
-		// The link now has a real node to leave from, and LeadRoom below measures from it.
-		Link.At = Network.GetGuidelineNode(Link.Node)->Position;
-		AnchorNodes.Add(Link.Node);
-
-		if (bSwept)
-		{
-			OutLaneControl = LeadControl;
-		}
-	}
 
 	if (Link.Kind != ELinkKind::Ray)
 	{
@@ -748,7 +396,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	//
 	// PAINTED for an aircraft, and merely a connector for a service link - the lane it
 	// leaves is invisible, so nothing about this one is drawn either. It deliberately
-	// carries NO ServiceLoopOwner: leaving it unowned is what lets
+	// carries NO StandGeometryOwner: leaving it unowned is what lets
 	// URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
 	// only reaches itself.
 	FGuidelineEdge Lead;

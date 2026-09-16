@@ -774,8 +774,8 @@ struct AIRSIDE_API FAirframe
 	 *
 	 * Required yaw is v/R and available yaw is v*sin(lock)/L, so SPEED CANCELS: a corner is
 	 * followable at every speed or at none, and the threshold is L/sin(lock). FSpeedProfile
-	 * drops an agent to MinSteeringSpeed below it, and FServiceLoopBuild sizes a spur's run so it
-	 * does not have to.
+	 * drops an agent to MinSteeringSpeed below it, and FStandLaneBuild rounds a stand lane's corners
+	 * to it so it does not have to.
 	 *
 	 * ZERO for an airframe with no measured axles. That one steers on the flat
 	 * MaxTurnRateDegPerSec instead and has no such threshold - see HasAxles - so zero means

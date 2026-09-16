@@ -169,36 +169,45 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() bool bDerived = true;
 
 	/**
-	 * The entity whose SERVICE LOOP or anchor spur this edge is. Unset for everything else,
-	 * which is almost every edge.
+	 * The entity whose SERVICE LANE this edge is part of. Unset for everything else, which is
+	 * almost every edge.
 	 *
 	 * Provenance, exactly as DerivedFrom is for a road's own guidelines, and needed for the
 	 * same reason turned inside out: a stand's lane is ITSELF a vehicle guideline, so a link
 	 * search that did not know which edges were the searcher's own would join a lane to
 	 * itself four metres away, report every stand connected, and route no truck anywhere.
 	 *
+	 * THE MARK IS WHAT ANSWERS "DOES THIS HYDRANT REACH A ROAD".
+	 * URoadNetwork::IsServiceNodeConnected walks the component this mark spans and reports
+	 * whether it touches anything that is NOT marked; FuelService.cpp:131 and :472 are its
+	 * callers. Delete the mark and every stand standing alone in an empty field reads as
+	 * connected, every fuel job is accepted, and no truck arrives.
+	 *
 	 * The LINK from a lane to a road deliberately does NOT carry this. It is a lead-in like
-	 * any other, and leaving it unowned is exactly what lets
-	 * URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
-	 * only ever reaches itself.
+	 * any other, and leaving it unowned is exactly what makes that walk work.
 	 */
-	UPROPERTY() FEntityInstanceId ServiceLoopOwner;
+	UPROPERTY() FEntityInstanceId StandGeometryOwner;
 
 	/**
-	 * True for a SPUR - the stub from a service anchor to the ring - and false for a side of
-	 * the ring itself. Meaningless unless ServiceLoopOwner is set.
+	 * True for an edge that APPROACHES a stand's lane rather than being part of the cycle
+	 * itself. Meaningless unless StandGeometryOwner is set.
 	 *
-	 * STATED, not inferred. It was read off the endpoints - "a spur touches an anchor node" -
-	 * which is true of a spur nobody has split and false the moment a second anchor spurs
-	 * onto the first, leaving an inner piece with an anchor node at neither end. That piece
-	 * then read as a ring side, took a link of its own, and the truck drove from the road
-	 * across the aeroplane to reach it.
+	 * NOTHING SETS IT TRUE TODAY, 2026-09-16, and that is the intermediate state rather than
+	 * a dead field. It marked the SPUR from a service anchor into the old ring; the anchors
+	 * are waypoints ON the lane now and there is no stub to tell apart. Task 5 of the stand
+	 * routing work is where an approach from a declared entry returns.
+	 *
+	 * STATED, not inferred, and that is the part worth keeping. It was read off the endpoints
+	 * - "an approach touches an anchor node" - which is true of one nobody has split and false
+	 * the moment a second anchor joins the first, leaving an inner piece with an anchor node
+	 * at neither end. That piece then read as part of the cycle, took a link of its own, and
+	 * the truck drove from the road across the aeroplane to reach it.
 	 *
 	 * It has to live on the EDGE rather than in the builder's result, because the result is
-	 * re-gathered from the graph on every later pass - see FServiceLoopBuild::Build's opening
+	 * re-gathered from the graph on every later pass - see FStandLaneBuild::Build's opening
 	 * block - and a pass that did not lay the lane has nothing else to tell the two apart.
 	 */
-	UPROPERTY() bool bServiceSpur = false;
+	UPROPERTY() bool bStandApproach = false;
 
 	/**
 	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.

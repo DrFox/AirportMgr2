@@ -221,7 +221,7 @@ bool FRoadGuidelineGraphTest::RunTest(const FString& Parameters)
 
 	// SplitGuidelineEdge: the ordinary case replaces the edge with two that trace the same
 	// curve, preserving every field of the original except the endpoint and control that
-	// actually moved - see AnchorLink/ServiceLoopBuild/RoadGuidelineBuilder, which used to
+	// actually moved - see AnchorLink/StandLaneBuild/RoadGuidelineBuilder, which used to
 	// duplicate this surgery five times over.
 	{
 		const FGuidelineNodeId SplitA = Net->AddGuidelineNode(FVector2D(0.0, 4000.0));

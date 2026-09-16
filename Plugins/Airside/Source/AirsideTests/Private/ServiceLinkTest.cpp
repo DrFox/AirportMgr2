@@ -1,6 +1,6 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
-#include "Build/ServiceLoopBuild.h"
+#include "Build/StandLaneBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -12,6 +12,7 @@
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
+#include "StandFixture.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -58,13 +59,9 @@ namespace ServiceLinkFixture
 		return Bounds;
 	}
 
-	FEntityInstanceId PlaceStand(URoadNetwork& Net, UEntityDefinition& Stand,
-		const FVector2D& At, double Heading)
-	{
-		return Net.PlaceEntity(&Stand, Stand.Anchors, At, Heading,
-			Stand.DesignAircraft != nullptr ? Stand.DesignAircraft->Footprint.Wingspan : 0.0,
-			Stand.PoseRole, Stand.Trucks);
-	}
+	// ServiceLinkFixture::PlaceStand MOVED to StandFixture.h, 2026-09-16: StandLaneTest.cpp
+	// needs the same placement, and a copied one is a second statement of which of
+	// PlaceEntity's arguments come off the definition. Included above, same namespace.
 
 	/**
 	 * The direction an edge LEAVES From in, taken analytically.
@@ -116,22 +113,29 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 
-	const FServiceLoopBuild::FResult First = FServiceLoopBuild::Build(*Net);
-	TestEqual(TEXT("one stand, one lane"), First.LoopsBuilt, 1);
-	// A MIRRORED PAIR WHERE THE LANE HAS ROOM: one curving each way, so a truck has a smooth
-	// approach whichever direction it comes round the ring from. See FServiceLoopBuild's spur
-	// block for what one alone cost - the agent crabbed into position from the wrong side.
-	//
-	TestEqual(TEXT("a mirrored pair of spurs for every service anchor"), First.SpursBuilt, 10);
+	const FStandLaneBuild::FResult First = FStandLaneBuild::Build(*Net);
+	TestEqual(TEXT("one stand, one lane"), First.LanesBuilt, 1);
 
 	// EVERY SERVICE ANCHOR NOW HAS LINE ON IT, and the AIRCRAFT stop mark still does not -
 	// the lane is for vehicles, and a painted lead-in is not this builder's business.
+	//
+	// TWO EDGES, NOT MERELY ONE. A spurred anchor had a stub into the ring and one edge would
+	// have been the whole story; the lane runs THROUGH the box now, so an anchor with one edge
+	// on it is a dead end - and reverse does not exist, so a dead end is an anchor no truck can
+	// leave. Airside.Build.PlacedStandLaneIsOneDrivableCycle measures the same property over
+	// the whole cycle.
 	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
 	{
+		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
+		{
+			continue;
+		}
 		const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
 		if (TestNotNull(TEXT("the anchor resolves"), Node))
 		{
-			TestTrue(TEXT("and is spurred to the lane"), Node->Incident.Num() > 0);
+			TestEqual(
+				*FString::Printf(TEXT("and the lane runs through '%s'"), *Anchor.Id.ToString()),
+				Node->Incident.Num(), 2);
 		}
 	}
 	TestEqual(TEXT("the aircraft stop mark is untouched"),
@@ -142,9 +146,8 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a lane with no road near it is not a connection"),
 		Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
 
-	// AND IT IS A LOOP, not four unjoined sides: every corner has two lane edges on it, so a
-	// truck can go round either way. Counted on the anchor-free corners, since a corner that
-	// took a spur has three.
+	// AND IT IS A CYCLE, not a set of unjoined runs: every node has two lane edges on it, so a
+	// truck can go round either way.
 	{
 		int32 CornersWithTwoWaysRound = 0;
 		for (const FGuidelineNodeId& Node : First.Nodes)
@@ -158,9 +161,8 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 
 	// A SECOND PASS ADDS NOTHING. The graph is rebuilt on every road edit and this runs each
 	// time; a builder that could not see its own previous output would stack a lane per pass.
-	const FServiceLoopBuild::FResult Second = FServiceLoopBuild::Build(*Net);
-	TestEqual(TEXT("a second pass builds no second lane"), Second.LoopsBuilt, 0);
-	TestEqual(TEXT("and no second spur"), Second.SpursBuilt, 0);
+	const FStandLaneBuild::FResult Second = FStandLaneBuild::Build(*Net);
+	TestEqual(TEXT("a second pass builds no second lane"), Second.LanesBuilt, 0);
 	TestEqual(TEXT("but it still reports the lane that is there"), Second.Lanes.Num(), 1);
 
 	// A DEPOT HAS NO LANE, so nothing is built for it at all - one pose, nothing parked.
@@ -169,7 +171,7 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 		Bare->PlaceEntity(Depot, Depot->Anchors, FVector2D::ZeroVector, 0.0, 0.0,
 			Depot->PoseRole, Depot->Trucks);
-		TestEqual(TEXT("a depot gets no lane"), FServiceLoopBuild::Build(*Bare).LoopsBuilt, 0);
+		TestEqual(TEXT("a depot gets no lane"), FStandLaneBuild::Build(*Bare).LanesBuilt, 0);
 	}
 	return true;
 }
@@ -406,7 +408,7 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 namespace ServiceLinkFixture
 {
 	/**
-	 * Every lane node that carries a link to a road - an incident edge no service loop owns.
+	 * Every lane node that carries a link to a road - an incident edge no stand lane owns.
 	 *
 	 * The link edge's OTHER end is on the road, and the road's own splits and fillets are
 	 * unowned too, so the test has to start from the LANE side. Counting nodes rather than
@@ -417,7 +419,7 @@ namespace ServiceLinkFixture
 		TSet<FGuidelineNodeId> LaneNodes;
 		for (const FGuidelineEdge& Edge : Net.GetGuidelineEdges())
 		{
-			if (Edge.bAlive && Edge.ServiceLoopOwner.IsSet())
+			if (Edge.bAlive && Edge.StandGeometryOwner.IsSet())
 			{
 				LaneNodes.Add(Edge.A);
 				LaneNodes.Add(Edge.B);
@@ -432,7 +434,7 @@ namespace ServiceLinkFixture
 			for (const FGuidelineEdgeId& Incident : Node->Incident)
 			{
 				const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Incident);
-				if (Edge != nullptr && Edge->bAlive && !Edge->ServiceLoopOwner.IsSet())
+				if (Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet())
 				{
 					Entries.AddUnique(Node->Position);
 					break;
@@ -498,7 +500,13 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	TestEqual(*FString::Printf(TEXT("the lane joins the road on all three sides within reach - at %s"), *Where),
 		Entries.Num(), 3);
 
-	const double CornerReach = FServiceLoopBuild::LaneTurnRadius * UE_DOUBLE_SQRT_2;
+	// HOW FAR BACK A ROUNDED CORNER REACHES, derived exactly as the builder derives it: the
+	// radius the largest admitted service vehicle needs, cut at a right angle, which is
+	// R*sqrt(2) and not R. FStandLaneBuild::LaneTurnRadius was a typed 750 until 2026-09-16
+	// and this restated it; both read the same one function now.
+	const double CornerReach =
+		UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius()
+			* UE_DOUBLE_SQRT_2;
 
 	// THE NEAR SIDE, IN THE MIDDLE OF ITS OVERLAP WITH THE ROAD - not at the first point that
 	// tied. This is the assertion that fails without GuidelineGeom::NearestBetweenPolylines
@@ -705,314 +713,22 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FSpursLeaveTheLaneTangentiallyTest,
-	"Airside.Build.SpursLeaveTheLaneTangentially",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FSpursLeaveTheLaneTangentiallyTest::RunTest(const FString& Parameters)
-{
-	using namespace ServiceLinkFixture;
-
-	// REPORTED FROM PLAY, 2026-09-14: the fuel truck crawls the corner onto the stand.
-	//
-	// An anchor spur used to meet the lane at the anchor's NEAREST point, which is square on -
-	// so the junction was a vertex whose heading changed by 90 degrees instantly, and
-	// FSpeedProfile calls that untakeable at any speed and drops the agent to MinSteeringSpeed.
-	//
-	// ROUNDING IT AFTERWARDS CANNOT WORK, and was tried. A 90 degree turn at the 471 uu a
-	// truck's steering lock allows needs 666 uu of run on each arm, so two spurs sharing a
-	// side need 1332 uu between them. On a Code C stand three spurs land on the north side
-	// 900 uu apart, and that side has four gaps in 5250 uu - 78 uu short of the 5328 that
-	// perfect spacing would need. There is no room to round into. Measured 2026-09-15.
-	//
-	// SO THE SPUR CARRIES THE CURVE INSTEAD. It joins the lane RUN uu back from the anchor's
-	// perpendicular foot, with its control point ON that foot - so it leaves along the lane's
-	// own direction and there is no turn at the junction at all.
-	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-
-	const FServiceLoopBuild::FResult Built = FServiceLoopBuild::Build(*Net);
-	if (!TestTrue(*FString::Printf(TEXT("every service anchor got a spur - %d laid"),
-			Built.SpursBuilt), Built.SpursBuilt >= 5))
-	{
-		return false;
-	}
-
-	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
-	if (!TestNotNull(TEXT("the stand got a lane"), Lane))
-	{
-		return false;
-	}
-
-	// A PAIR ON EVERY ANCHOR. One spur is tangent for a truck arriving from ONE side and a
-	// hairpin from the other, so an anchor with a single spur is one the agent crabs into
-	// whenever the short way round is the wrong way. Counted on the ANCHOR, not on the
-	// builder's census, because the census cannot say they landed where they were meant to.
-	{
-		const FEntityInstance* Entity = Net->GetEntity(Placed);
-		if (!TestNotNull(TEXT("the stand is placed"), Entity))
-		{
-			return false;
-		}
-		int32 Paired = 0;
-		for (const FResolvedAnchor& Anchor : Entity->ResolvedAnchors)
-		{
-			if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
-			{
-				continue;
-			}
-			const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
-			if (Node == nullptr)
-			{
-				continue;
-			}
-			TestEqual(
-				*FString::Printf(TEXT("anchor '%s' has a spur each way"), *Anchor.Id.ToString()),
-				Node->Incident.Num(), 2);
-			Paired += Node->Incident.Num();
-		}
-
-		// TEN LINES ONTO FIVE BOXES. Pinned as a figure because the pair is the whole point:
-		// one spur is smooth from one side of the ring and a crab from the other.
-		TestEqual(TEXT("ten spurs over five anchors"), Paired, 10);
-	}
-
-	// AND NOT ONE OF THEM CROSSES THE AEROPLANE. Airside.Entities.StandLaneClearsTheAircraft
-	// makes this promise on the DEFINITION's own segments, and says nothing at all about a
-	// spur - a spur is a quadratic, and it joins the lane some way off the nearest point - so
-	// the promise has to be measured again here, on the geometry that actually gets laid.
-	//
-	// The centreline as a finite segment, never the footprint outline: forbidding the
-	// footprint would forbid passing UNDER A WING, which is normal and which the hydrant
-	// requires - HydrantPit is under the starboard wing root because that is where one is.
-	{
-		const FEntityFootprint& Footprint = Stand->DesignAircraft->Footprint;
-		const FVector2D Tail(Footprint.TailX, 0.0);
-		const FVector2D Nose(Footprint.NoseX, 0.0);
-
-		int32 Crossings = 0;
-		for (const FGuidelineEdgeId& EdgeId : *Lane)
-		{
-			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(EdgeId);
-			TArray<FVector2D> Points;
-			if (Edge == nullptr || !Edge->bAlive || !Edge->bServiceSpur
-				|| !Net->SampleGuideline(EdgeId, Points))
-			{
-				continue;
-			}
-			for (int32 At = 1; At < Points.Num(); ++At)
-			{
-				Crossings += RoadGeom::SegmentsCross(Points[At - 1], Points[At], Tail, Nose)
-					? 1 : 0;
-			}
-		}
-		TestEqual(TEXT("no spur crosses the fuselage lengthwise"), Crossings, 0);
-	}
-
-	// The same expression FSpeedProfile::Build uses, written out rather than shared - for the
-	// reason Airside.Model.ServiceRoadFilletClearsTheTruckLock gives at its own copy.
-	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
-	const double Lock = FMath::Sin(FMath::DegreesToRadians(
-		FMath::Clamp(Van.Ground.MaxSteerDegrees, 0.0, 90.0)));
-	if (!TestTrue(TEXT("the default vehicle steers on measured axles"),
-			Van.HasAxles() && Lock > KINDA_SMALL_NUMBER))
-	{
-		return false;
-	}
-	const double TightestFollowable = Van.Wheelbase() / Lock;
-
-	// A SPUR DOES NOT ALWAYS MEET THE LANE. Three of a Code C stand's five meet an EARLIER
-	// SPUR instead: the search runs over the lane's current edges, spurs included, and
-	// EquipmentFwd is 900 uu from HydrantPit's spur against 990 from the north side. So the
-	// thing to assert is not "tangent to the lane" but "tangent to whatever it joins", which
-	// is the same property and is what a truck actually drives through.
-	// THE ANALYTIC TANGENT AT AN EDGE'S END, never a difference of samples. A quadratic's
-	// first sampled chord is a degree or two off its true tangent, and a test that measured
-	// the chord would report a turn that no follower ever makes - GuidelineGeom::Tangent is
-	// the derivative of the very function Sample evaluates, which is the point of it.
-	auto LeavingAlong = [Net](FGuidelineEdgeId Id, FGuidelineNodeId From, FVector2D& Out) -> bool
-	{
-		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
-		if (Edge == nullptr || !Edge->bAlive)
-		{
-			return false;
-		}
-		const FGuidelineNode* A = Net->GetGuidelineNode(Edge->A);
-		const FGuidelineNode* B = Net->GetGuidelineNode(Edge->B);
-		if (A == nullptr || B == nullptr)
-		{
-			return false;
-		}
-		const bool bFromB = Edge->B == From;
-		const FVector2D Dir = GuidelineGeom::Tangent(
-			A->Position, Edge->Control, B->Position, bFromB ? 1.0 : 0.0);
-		Out = bFromB ? -Dir : Dir;
-		return !Out.IsNearlyZero();
-	};
-
-	// THE ANCHOR ITSELF IS NOT A JUNCTION. Its two spurs meet there in a V, and that V is
-	// deliberate - see FServiceLoopBuild's spur block. A truck stops at an anchor; one driving
-	// THROUGH one would be cutting across a painted equipment box, and the V is what makes
-	// FSpeedProfile cost that more than going round.
-	TSet<FGuidelineNodeId> Anchors;
-	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
-	{
-		Anchors.Add(Anchor.Node);
-	}
-
-	// Which anchors a truck can reach without slowing for the bend. Filled below.
-	TSet<FGuidelineNodeId> Drivable;
-
-	int32 Checked = 0;
-	for (const FGuidelineEdgeId& SpurId : *Lane)
-	{
-		const FGuidelineEdge* Spur = Net->GetGuidelineEdge(SpurId);
-		if (Spur == nullptr || !Spur->bAlive || !Spur->bServiceSpur)
-		{
-			continue;
-		}
-
-		TArray<FVector2D> SpurPoints;
-		if (!Net->SampleGuideline(SpurId, SpurPoints) || SpurPoints.Num() < 2)
-		{
-			continue;
-		}
-
-		for (const FGuidelineNodeId& End : { Spur->A, Spur->B })
-		{
-			const FGuidelineNode* Node = Net->GetGuidelineNode(End);
-			if (Node == nullptr || Node->Incident.Num() < 2 || Anchors.Contains(End))
-			{
-				// A dead end is nothing to turn at, and an anchor is a destination.
-				continue;
-			}
-
-			FVector2D OutSpur;
-			if (!LeavingAlong(SpurId, End, OutSpur))
-			{
-				continue;
-			}
-			const FVector2D JoinAt = Net->GetGuidelineNode(End)->Position;
-
-			// STRAIGHT THROUGH ONTO SOMETHING. At least one other arm here must leave in the
-			// OPPOSITE direction, which is what makes arriving along it and turning onto this
-			// spur a move with no heading change in it at all - the test FSpeedProfile applies
-			// to a vertex, asked of two whole edges.
-			//
-			// At least one, not all: the other side of a lane is a 90 degree turn whichever
-			// way the spur leaves, and the lane is a closed ring, so a truck simply comes
-			// round the way that works.
-			double Best = 0.0;
-			for (const FGuidelineEdgeId& OtherId : Node->Incident)
-			{
-				if (OtherId == SpurId)
-				{
-					continue;
-				}
-				FVector2D OutOther;
-				if (!LeavingAlong(OtherId, End, OutOther))
-				{
-					continue;
-				}
-				Best = FMath::Max(Best, -FVector2D::DotProduct(OutSpur, OutOther));
-			}
-
-			++Checked;
-			TestTrue(
-				*FString::Printf(
-					TEXT("the spur at (%.0f,%.0f) can be joined without turning - its best "
-					     "neighbour is %.1f deg off straight"),
-					JoinAt.X, JoinAt.Y,
-					FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Best, -1.0, 1.0)))),
-				Best > FMath::Cos(0.02));
-		}
-
-		// AND THE CURVE IT CARRIES INSTEAD IS ONE THE TRUCK CAN HOLD, measured the way
-		// FSpeedProfile measures curvature, over the spur's own samples.
-		//
-		// COUNTED PER ANCHOR, NOT DEMANDED OF EVERY SPUR. The pair exists so a truck has a
-		// smooth approach from either way round the ring, and near a corner one of the two has
-		// nowhere to put its bend - EquipmentAft's foot is 389 uu from the north-west bend, so
-		// going that way tops out at 240 uu of radius whatever run it is given. What must hold
-		// is that every anchor is reachable AT SPEED from somewhere; the other spur of the
-		// pair is still the shorter way in from its own side, taken slower.
-		double Tightest = TNumericLimits<double>::Max();
-		for (int32 At = 1; At + 1 < SpurPoints.Num(); ++At)
-		{
-			const FVector2D Before = SpurPoints[At] - SpurPoints[At - 1];
-			const FVector2D After = SpurPoints[At + 1] - SpurPoints[At];
-			const double Turn = FMath::Abs(FMath::UnwindRadians(
-				RoadGeom::Bearing(After) - RoadGeom::Bearing(Before)));
-			if (Turn > 1.0e-9)
-			{
-				Tightest = FMath::Min(Tightest, After.Size() / Turn);
-			}
-		}
-
-		if (Tightest >= TightestFollowable)
-		{
-			for (const FGuidelineNodeId& End : { Spur->A, Spur->B })
-			{
-				if (Anchors.Contains(End))
-				{
-					Drivable.Add(End);
-				}
-			}
-		}
-	}
-
-	// NOT VACUOUS. A loop whose spurs all failed the end-finding above would assert nothing.
-	// Five spurs, each with at least one junction end - more when a later spur has split one.
-	TestTrue(*FString::Printf(TEXT("every spur junction was measured - %d found"), Checked),
-		Checked >= 10);
-
-	// THE ASSERTION THAT MATTERS. An anchor none of whose spurs clears the lock is one a
-	// truck crawls into however it comes, which is the reported defect itself.
-	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
-	{
-		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
-		{
-			continue;
-		}
-
-		// TugStand excepted, and by geometry rather than by name: it waits 300 uu off the
-		// lane, and this construction's radius is bounded by that offset - 0.77 of it at the
-		// very best, which is 231 against the 471 the lock needs. Nothing laid on three metres
-		// could do better, and it is the last few metres of a journey that ends in a stop.
-		//
-		// Measured off the RING as it now stands, not off UEntityDefinition::ServiceLane: what
-		// an anchor is actually offset from is the lane with its corners rounded, not the
-		// polyline those corners were cut from.
-		const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
-		double Offset = TNumericLimits<double>::Max();
-		for (const FGuidelineEdgeId& Id : *Lane)
-		{
-			const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
-			TArray<FVector2D> Points;
-			if (Edge == nullptr || !Edge->bAlive || Edge->bServiceSpur
-				|| !Net->SampleGuideline(Id, Points))
-			{
-				continue;
-			}
-			int32 Span = 0;
-			double Fraction = 0.0;
-			Offset = FMath::Min(Offset,
-				GuidelineGeom::NearestOnPolyline(Points, Node->Position, Span, Fraction));
-		}
-		if (Offset * 0.77 < TightestFollowable)
-		{
-			continue;
-		}
-
-		TestTrue(
-			*FString::Printf(TEXT("anchor '%s' is reachable at speed from at least one side"),
-				*Anchor.Id.ToString()),
-			Drivable.Contains(Anchor.Node));
-	}
-	return true;
-}
+// Airside.Build.SpursLeaveTheLaneTangentially IS DELETED, 2026-09-16, and a deleted test is a
+// claim that needs an argument. Every assertion it made was about the SPUR PAIR - two lines
+// from each anchor into the ring, meeting at the anchor in a V - and there is no spur any
+// more: an anchor is a waypoint ON the lane, reached by driving along it. The properties the
+// test actually protected have all moved, none of them dropped:
+//
+//   "an anchor has line on it"        -> Airside.Build.ServiceLoopReachesTheGraph, which now
+//                                        demands TWO edges rather than at least one
+//   "the junction needs no turning"   -> Airside.Build.PlacedStandLaneIsOneDrivableCycle,
+//                                        which measures the delivered radius of every lane
+//                                        curve against the vehicle's own lock
+//   "nothing crosses the aeroplane"   -> the same test, on the sampled curve and against the
+//                                        fuselage RECTANGLE rather than a zero-width axis
+//
+// What it can no longer say is anything at all: with the anchors on the lane its spur search
+// finds nothing, and every loop in it would run zero times while the test reported success.
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FLaneCornersAreDrivableTest,
@@ -1036,7 +752,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 
-	const FServiceLoopBuild::FResult Built = FServiceLoopBuild::Build(*Net);
+	const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(*Net);
 	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
 	if (!TestNotNull(TEXT("the stand got a lane"), Lane))
 	{
@@ -1049,7 +765,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	for (const FGuidelineEdgeId& Id : *Lane)
 	{
 		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
-		if (Edge != nullptr && Edge->bAlive && !Edge->bServiceSpur)
+		if (Edge != nullptr && Edge->bAlive && !Edge->bStandApproach)
 		{
 			Ring.Add(Id);
 		}
@@ -1096,7 +812,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 			{
 				const FGuidelineEdge* Other = Net->GetGuidelineEdge(OtherId);
 				FVector2D Theirs;
-				if (OtherId == Id || Other == nullptr || Other->bServiceSpur
+				if (OtherId == Id || Other == nullptr || Other->bStandApproach
 					|| !LeavingAlong(*Net, OtherId, End, Theirs))
 				{
 					continue;

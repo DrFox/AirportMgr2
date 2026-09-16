@@ -1,0 +1,98 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Model/RoadHandles.h"
+
+class URoadNetwork;
+
+/**
+ * Puts each placed entity's SERVICE LANE - the closed cycle its equipment boxes are painted
+ * on - into the guideline graph.
+ *
+ * WHY A LANE AT ALL is UEntityDefinition::ServiceLane's business; this is only where it
+ * reaches the graph. What matters here is that all of it is DERIVED, so it is swept and
+ * remade by the ordinary rebuild, follows the stand when the stand moves, and goes when the
+ * stand goes - the same lifecycle as any other derived edge, and the reason no instance
+ * stores a lane and no saved level needs migrating.
+ *
+ * THE ANCHORS ARE ON THE LANE, not spurred to it, since 2026-09-16. The old ring ran outboard
+ * of the wingtips with a stub from every service anchor into it, and a stub needs a 90 degree
+ * turn: 989 uu of run on each of its two arms against the 990 uu of depth there was between
+ * the ring and the box row. So the lane was moved INSIDE the wingtip, onto the row itself, and
+ * an anchor is now a waypoint the lane passes straight THROUGH. Nothing turns into a box.
+ *
+ * RUNS BEFORE FAnchorLink, which joins each lane to a road. The lane has to exist before
+ * anything can link it.
+ *
+ * IDEMPOTENT, because the two callers cannot promise the sweep ran in between: the presenter
+ * always rebuilds first, and a test may call FAnchorLink twice to check a second pass adds
+ * nothing. An entity that already owns live lane edges is left alone rather than given a
+ * second lane, detected from FGuidelineEdge::StandGeometryOwner - the same mark the link
+ * search uses to avoid joining a lane to itself.
+ */
+struct AIRSIDE_API FStandLaneBuild
+{
+	/**
+	 * Physical width given to a lane nobody paints, uu.
+	 *
+	 * A number rather than a profile lookup because there is no surface here to read one
+	 * from: the lane is invisible by design, and FGuidelineEdge::Width drives marking
+	 * geometry and clearance, neither of which this has. Four metres is a service road's
+	 * lane, which is what a lane round a stand is.
+	 */
+	static constexpr double LaneWidth = 400.0;
+
+	/**
+	 * How far along the lane a line joining it should slide from the point it is nearest.
+	 *
+	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT. Sliding the join this far and putting the
+	 * curve's control back at the nearest point makes the first leg run down the lane, so the
+	 * curve leaves tangentially and there is no turn at the junction to take. Gap is how far
+	 * off the lane the other end is.
+	 *
+	 * NO CALLER TODAY, and that is a stated intermediate state rather than dead code. It was
+	 * shared by the anchor spurs - gone, because the anchors are on the lane now - and by the
+	 * road link, which Task 5 of the stand routing work restores through declared Entry
+	 * waypoints and which needs exactly this construction and this figure. The 800 uu and the
+	 * measurements that settled it are on PreferredTangentRun in StandLaneBuild.cpp.
+	 */
+	static double TangentRunFor(double Gap);
+
+	/** What one pass laid, and what the link search needs to know about it. */
+	struct FResult
+	{
+		/**
+		 * Every node of every lane now in the graph.
+		 *
+		 * FAnchorLink excludes these as link TARGETS, exactly the way it excludes anchor
+		 * nodes: a lane is itself a vehicle guideline, so without this a lane would join
+		 * itself four metres away, every stand would read as connected, and no truck would
+		 * ever route anywhere.
+		 */
+		TSet<FGuidelineNodeId> Nodes;
+
+		/** Per entity, the edges of its lane - what the link search measures FROM. */
+		TMap<FEntityInstanceId, TArray<FGuidelineEdgeId>> Lanes;
+
+		/**
+		 * Per entity, the node laid at each of its declared Entry waypoints, in the
+		 * definition's own order.
+		 *
+		 * WHERE A ROAD MAY JOIN, said by the asset rather than measured off the graph. The
+		 * ring used to be searched for its nearest approach to a road and cut wherever that
+		 * fell, which put entrances on bends, clustered three of them along one edge, and
+		 * needed a whole side-walking apparatus to undo. An Entry is authored on the side it
+		 * belongs to, once.
+		 *
+		 * NOTHING IN THIS PASS READS IT. Task 5 of the stand routing work is the consumer;
+		 * it is recorded here because this is the only place that knows which node a given
+		 * waypoint became, and re-deriving that from positions afterwards would be a second
+		 * evaluator of the same question.
+		 */
+		TMap<FEntityInstanceId, TArray<FGuidelineNodeId>> Entries;
+
+		int32 LanesBuilt = 0;
+	};
+
+	static FResult Build(URoadNetwork& Network);
+};
