@@ -115,6 +115,34 @@ keeping — the corner-cost formula, the 2R floor for a 180 degree turn, the der
 distinction — but the shape they describe threads a lane past an aeroplane, and that shape is
 what we are abandoning.
 
+## What A found on its first run
+
+Both findings below came from the oracle within minutes of it existing, and neither was
+visible to 361 passing tests.
+
+**The route passes the radius rule by 0.6 uu.** `Tightest R=700` against the 699.4 the lock
+allows — a margin of 0.09%. That is not a design, it is a coincidence, and it explains why
+every attempt felt like it nearly worked.
+
+**The route reverses 175 degrees on the spot**, at (-3236, -600) — a tail-crossing entry node.
+`FSpeedProfile` has TWO rules and only the radius one had been made readable, so the first test
+written against the oracle passed while its route contained a near-complete reversal. Exposing
+half an authority is still an authority nobody can fully ask. Both rules are now readable and
+the test asks both.
+
+### The finding that shapes C
+
+Each crossing has two entry nodes whose merges face OPPOSITE directions, and
+`RouteSearch::EdgeCost` is sampled polyline length plus congestion — **no curvature term, no
+heading-continuity term**. So the search picks the NEARER entry, and when that entry's merge
+faces the wrong way the vehicle reverses on the spot to travel the other way round.
+
+**A correct layout can still be handed an undrivable route by a search that does not know what
+drivable means.** C can solve staging and bays perfectly and still reproduce the crabbing,
+because the search will route in through an entry the vehicle cannot use. C therefore needs
+either entries that serve any direction, or a search that can ask the oracle — which is now
+possible for the first time.
+
 ## Unresolved questions
 
 1. When the solver cannot fit a stand in a drawn apron, should that REFUSE the placement, or
@@ -122,6 +150,15 @@ what we are abandoning.
 2. Does a route want its curve computed ONCE over the whole path, rather than as a jigsaw of
    quadratic Bezier edges that must each be legal and agree pairwise at their joins? Every
    guideline edge today is a single-control-point quadratic, so it cannot inflect, so every S
-   is two edges and every corner its own. The joins are where the crabbing was. Deferred:
-   A will say whether joins remain the problem once there are fewer of them.
-3. Does the existing `feature/lane-entrances` work get reverted, or left for C to replace?
+   is two edges and every corner its own. The joins are where the crabbing was.
+3. **Should `RouteSearch::EdgeCost` know about drivability at all?** Raised by A's first run.
+   Three shapes, and this is C's first real decision:
+   - the SOLVER guarantees every entry is usable from every direction, and the search stays a
+     pure shortest-path over length — simplest search, most constrained layout;
+   - the SEARCH consults the oracle and costs or refuses a join whose heading does not carry —
+     most general, and makes every future layout safer, but puts geometry inside the search;
+   - the GRAPH encodes it: a directed entry edge that simply cannot be traversed the wrong way,
+     so the search cannot choose it. No new cost term, and illegal states stop being
+     representable - which is this codebase's stated preference (see "a phase is an enum, never
+     a set of bools").
+4. Does the existing `feature/lane-entrances` work get reverted, or left for C to replace?
