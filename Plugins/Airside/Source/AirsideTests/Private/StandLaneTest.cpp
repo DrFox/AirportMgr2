@@ -577,9 +577,16 @@ bool FStandLaneFrozenForASmallerVehicleIsShavedTest::RunTest(const FString& Para
 	// FStandLaneBuild::MeasureLane logs a Warning naming the stand and the corner whenever a
 	// corner as laid comes in under the radius it was sized for; a UE_LOG is not an assertable
 	// value here (warnings are not elevated to errors in this project's automation), so what is
-	// asserted is the measurable fact the log line reports - and the line itself is read out of
-	// Saved/Logs/AirsideTests.log. If this test ever goes green with no such line, the warning
-	// has been unwired.
+	// asserted below is the measurable fact the log line reports.
+	//
+	// AddExpectedMessage PINS THE LOG LINE ITSELF, separately from the fact. Without it, deleting
+	// the UE_LOG would leave every TestTrue below unchanged and this test green - the shave is
+	// real regardless of whether anything says so. Occurrences=0 means "one or more", which is
+	// the seam: the warning MUST fire, at least once, for the corner this fixture shaves.
+	AddExpectedMessagePlain(
+		TEXT("Re-author the stand for that vehicle (Tools/Python/build_stand_asset.py)."),
+		ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, /*Occurrences=*/0);
+
 	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
 	UAircraftType::BuildA320(A320);
 

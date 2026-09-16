@@ -1005,8 +1005,14 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		// LaneRadius on the 135-degree sweep and Offset*sin^2(22.5)/cos(22.5) on the 45-degree
 		// one, which is a fourteenth of it. MEASURED in the same test's crossing block: merge
 		// 769 uu, turn-back 55 uu, IDENTICAL at a 4 m gap and at a 20 m one. Moving the road
-		// does not move that figure, and a truck that arrives on the side the turn-back serves
-		// cuts it - there is no other entry of that crossing facing the other way.
+		// does not move that figure, and nothing STEERS a truck to the entry that would spare
+		// it. The crossing's two entries depart on MIRRORED legs - (NoseX,BoxY) leaves (+1,-1)
+		// and (NoseX,PortY) leaves (+1,+1), see UEntityDefinition::BuildCodeCStandFor - so each
+		// merge carries on a different way along the road, and the entry a truck did not use
+		// has the gentle 769 uu approach for the direction the other one turns back on. Nothing
+		// routes it there: RouteSearch::EdgeCost is sampled length plus congestion, no
+		// curvature term, so whichever entry is nearer wins regardless of which way its merge
+		// faces.
 		//
 		// IT IS STILL EXCLUDED, and the reason is what the warning is FOR. The line below names
 		// the gap, because the gap is the one thing the player can act on; on this branch it is
