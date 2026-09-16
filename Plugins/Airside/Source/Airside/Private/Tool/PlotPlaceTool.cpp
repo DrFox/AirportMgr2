@@ -39,6 +39,28 @@ namespace
 		return false;
 	}
 
+	/**
+	 * How far off the centreline the plot's frontage sits, uu.
+	 *
+	 * A SEGMENT'S ENDS ARE NODE POSITIONS, so everything derived from them is on the road's
+	 * CENTRELINE - and a plot anchored there is built over half the carriageway, which is
+	 * what PIE showed on 2026-09-16. The frontage belongs against the kerb.
+	 *
+	 * THE SIDE'S OWN HALF WIDTH, not the larger of the two: a profile may be asymmetric
+	 * (URoadProfile::CentrelineOffset), and taking the max would leave a strip of unbuilt
+	 * ground on the narrow side that nothing explains.
+	 */
+	double KerbOffset(const URoadNetwork& Network, FRoadSegmentId Id, bool bLeftOfSegment)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Id);
+		if (Segment == nullptr || Segment->Profile == nullptr)
+		{
+			return 0.0;
+		}
+		return bLeftOfSegment ? Segment->Profile->GetHalfWidthLeft()
+			: Segment->Profile->GetHalfWidthRight();
+	}
+
 	/** A segment's straight-line ends, or false if either is dead. */
 	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
 		FVector2D& OutA, FVector2D& OutB)
@@ -166,6 +188,11 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		const double Side = FVector2D::DotProduct(Context.Cursor - Anchor, Left);
 		Inward = Side >= 0.0 ? Left : -Left;
 
+		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
+		// step, because the side has to be read against the centreline the cursor was
+		// judged from - offsetting first would tilt that test by half a road width.
+		Anchor += Inward * KerbOffset(*Network, Context.Snap.Segment, Side >= 0.0);
+
 		Stage = EPlotStage::Width;
 		return;
 	}
@@ -277,10 +304,21 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 				const FVector2D Span = RoadB - RoadA;
 				const double Length = Span.Size();
 				const FVector2D Unit = Span.GetSafeNormal();
+
+				// THE DOTS STAND WHERE THE CORNER WILL, off the kerb on the side the cursor
+				// is on - not on the centreline they are derived from. A dot you aim at and
+				// a corner that lands half a road away is the preview disagreeing with the
+				// click, which is the one thing this codebase will not have.
+				const FVector2D Left = RoadGeom::PerpCCW(Unit);
+				const bool bLeft = FVector2D::DotProduct(Context.Cursor - RoadA, Left) >= 0.0;
+				const FVector2D Offset = (bLeft ? Left : -Left)
+					* KerbOffset(*Network, Context.Snap.Segment, bLeft);
+
 				const int32 Count = FMath::FloorToInt(Length / PlotFit::BayWidthUu);
 				for (int32 I = 0; I <= Count; ++I)
 				{
-					Sink.Marker(RoadA + Unit * (I * PlotFit::BayWidthUu), EPreviewStyle::Snap);
+					Sink.Marker(RoadA + Unit * (I * PlotFit::BayWidthUu) + Offset,
+						EPreviewStyle::Snap);
 				}
 			}
 		}

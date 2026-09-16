@@ -4,6 +4,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "Profiles/RoadProfile.h"
 #include "Solve/PlotFit.h"
 #include "Tool/PlotPlaceTool.h"
 #include "Tool/RoadEditTarget.h"
@@ -75,10 +76,22 @@ namespace
 	 */
 	struct FPlotGhostSink : IToolPreviewSink
 	{
-		double DeepestY = 0.0;
+		double NearestY = TNumericLimits<double>::Max();
+		double DeepestY = -TNumericLimits<double>::Max();
+
+		/**
+		 * How deep the ghost is, measured FRONT EDGE TO BACK rather than from y = 0.
+		 *
+		 * An absolute Y would fold the road's half width into the answer, and it did: this
+		 * asserted 800 until the frontage moved off the centreline, then failed at 1100 for
+		 * a ghost that was perfectly correct. The claim is the plot's DEPTH.
+		 */
+		double Depth() const { return DeepestY - NearestY; }
+
 		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
 		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle) override
 		{
+			NearestY = FMath::Min3(NearestY, From.Y, To.Y);
 			DeepestY = FMath::Max3(DeepestY, From.Y, To.Y);
 		}
 		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
@@ -370,6 +383,91 @@ bool FPlotIgnoresATaxiwayTest::RunTest(const FString& Parameters)
  * what the last gesture locked, so a stale depth is there to be drawn; the first plot of a
  * session cannot catch this because Depth still holds its initial 1.
  */
+/**
+ * THE PAD DOES NOT LIE ON THE ROAD.
+ *
+ * A segment's ends are NODE positions, so every frame of this gesture is derived from the
+ * centreline; anchoring there built the depot over half the carriageway. PIE, 2026-09-16:
+ * "the plot needs to be built on the side of the road, not overlapping".
+ *
+ * Measured against the profile's own half width rather than a typed number, so widening the
+ * service road cannot quietly re-break this.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotClearsTheCarriagewayTest,
+	"Airside.Tool.PlotClearsTheCarriageway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	const FRoadSegment* Road = Actor->Network->GetSegment(Actor->Network->SegmentIdAt(0));
+	if (!TestNotNull(TEXT("a road segment"), Road)) { return false; }
+	if (!TestNotNull(TEXT("with a profile"), Road->Profile.Get())) { return false; }
+	const double HalfWidth = Road->Profile->GetMaxHalfWidth();
+	if (!TestTrue(TEXT("the road has width to clear"), HalfWidth > 0.0)) { return false; }
+
+	// Drawn on the +Y side: cursor north of the road at every stage.
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
+		FVector2D(600.0, 1600.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(600.0, 1600.0)));
+
+	const FEntityInstance* Placed = nullptr;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive) { Placed = &Entity; break; }
+	}
+	if (!TestNotNull(TEXT("a depot was placed"), Placed)) { return false; }
+
+	double NearestY = TNumericLimits<double>::Max();
+	for (const FVector2D& Point : Placed->Outline)
+	{
+		NearestY = FMath::Min(NearestY, Point.Y);
+	}
+
+	// NOT "greater than zero" - that would pass with the frontage one millimetre off the
+	// centreline, still buried in the tarmac. It has to clear the kerb.
+	TestTrue(*FString::Printf(
+		TEXT("the pad starts at the kerb (%.0f) rather than on the centreline, got %.0f"),
+		HalfWidth, NearestY), NearestY >= HalfWidth - 1.0);
+
+	// AND THE OTHER SIDE, because the offset travels with Inward and a sign error would
+	// clear the road going north and drive the plot straight through it going south.
+	Actor->ClearNetwork();
+	LayServiceRoad(Actor, 0.0);
+	FPlotPlaceTool South(EPlaceableEntity::FuelDepot);
+	DrawPlot(South, Actor, FVector2D(0.0, -200.0), FVector2D(1200.0, -200.0),
+		FVector2D(600.0, -1600.0));
+	South.OnCommit(PlotAt(Actor, FVector2D(600.0, -1600.0)));
+
+	const FEntityInstance* Below = nullptr;
+	for (const FEntityInstance& Entity : Actor->Network->GetEntities())
+	{
+		if (Entity.bAlive) { Below = &Entity; break; }
+	}
+	if (!TestNotNull(TEXT("a depot was placed south of the road"), Below)) { return false; }
+
+	double FurthestY = -TNumericLimits<double>::Max();
+	for (const FVector2D& Point : Below->Outline)
+	{
+		FurthestY = FMath::Max(FurthestY, Point.Y);
+	}
+	TestTrue(*FString::Printf(
+		TEXT("a plot drawn south clears the kerb too, got %.0f"), FurthestY),
+		FurthestY <= -HalfWidth + 1.0);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotGhostAgreesWithTheBarTest,
 	"Airside.Tool.PlotGhostAgreesWithTheBar",
@@ -418,11 +516,11 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the bar says one row, depth not being chosen yet"),
 		Rows->Value, FString(TEXT("1")));
 
-	// THE GHOST IS MEASURED, not asked. The road runs along y = 0 and the cursor anchored on
-	// its +Y side, so the plot's far edge sits at exactly Rows * BayDepthUu - and a ghost
-	// still drawing the previous gesture's three rows reaches 2400 instead of 800.
+	// THE GHOST IS MEASURED, not asked. Front edge to back edge is exactly
+	// Rows * BayDepthUu - and a ghost still drawing the previous gesture's three rows spans
+	// 2400 instead of 800, wherever the frontage happens to sit relative to the road.
 	TestEqual(TEXT("and the ghost is drawn exactly that deep"),
-		Sink.DeepestY, PlotFit::BayDepthUu);
+		Sink.Depth(), PlotFit::BayDepthUu);
 
 	return true;
 }
