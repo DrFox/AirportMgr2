@@ -770,7 +770,12 @@ git commit -m "feat(entities): a stand's lane runs along the aeroplane, not arou
 **Files:**
 - Rename: `Public/Build/ServiceLoopBuild.h` → `Public/Build/StandLaneBuild.h`, `Private/Build/ServiceLoopBuild.cpp` → `Private/Build/StandLaneBuild.cpp` (use `git mv`, so the diff reads as a move)
 - Modify: `Public/Model/RoadGuideline.h:185` and `:201` (the two marks)
-- Modify: `Private/Build/AnchorLink.cpp:210` (the call), `:418-420`, `:561`, `:570`
+- Modify: `Private/Build/AnchorLink.cpp:210` (the call), and **DELETE** the lane-link block at
+  `:352-600`. That block calls `WalkRing` and `LaneTurnRadius` at `:418-420`, `:561` and `:570`,
+  and this task removes both — so it cannot be updated, only removed. **Stands are left
+  unlinked to roads between this task and Task 5, and link tests WILL fail in this task's
+  suite run.** That is a planned intermediate state, not a regression; Task 5 restores
+  linking through declared entries.
 - Modify: `Plugins/Airside/Source/AirsideTests/Private/StandLaneTest.cpp` (add the placed-geometry test)
 
 **Interfaces:**
