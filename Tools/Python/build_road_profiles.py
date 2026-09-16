@@ -28,10 +28,16 @@ import unreal
 ASSET_DIR = "/Game"
 CONTENT_SET = "/Game/DA_AirsideContent"
 
-# The service road, in uu (a uu is a centimetre): a 6 m lane between 0.6 m kerbs, on a 7.5 m
-# corner. Wide enough for two vans to pass, tight enough that a road reads as a road beside
-# a 23 m taxiway. These are the defaults URoadProfile::MakeServiceRoadTransient uses, so the
+# The service road's CROSS-SECTION, in uu (a uu is a centimetre): a 6 m lane between 0.6 m
+# kerbs. Wide enough for two vans to pass, tight enough that a road reads as a road beside a
+# 23 m taxiway. These are the defaults URoadProfile::MakeServiceRoadTransient uses, so the
 # shipped asset and every test fixture are the same cross-section.
+#
+# THE CORNER IS NOT STATED HERE, and this comment used to name one - "on a 7.5 m corner" -
+# for a breath after the constant beneath it had gone. A figure in prose drifts exactly as a
+# figure in code does, and is harder to grep. The corner is whatever
+# URoadProfile::ResolvedFilletRadius derives; at the vehicles admitted on 2026-09-16 that is
+# about 11.2 m, and it will move again the day a bigger one is admitted.
 #
 # THERE IS NO FILLET_RADIUS HERE ANY MORE, and its absence is the point. It was 500 until
 # 2026-09-14 and 750 after, while the figure it had to agree with - the truck's
