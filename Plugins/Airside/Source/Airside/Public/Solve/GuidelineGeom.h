@@ -183,6 +183,27 @@ namespace GuidelineGeom
 		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
 
 	/**
+	 * How far back along each leg a corner must be cut so the quadratic laid across the cut
+	 * delivers Radius. Interior is the unsigned angle between the two leg directions, radians.
+	 *
+	 * THE EXACT INVERSE OF TightestRadius, which is why it lives beside it. A corner cut back
+	 * Run with its control ON the corner has delivered radius Run*sin^2(t/2)/cos(t/2); solve
+	 * for Run and this is what falls out. Airside.Solve.CornerRunRoundTripsToItsRadius measures
+	 * the two against each other rather than restating either.
+	 *
+	 * AT A RIGHT ANGLE THIS IS 1.414 R, NOT R. A circular fillet's tangent length at 90 degrees
+	 * equals its radius, and the 2026-09-16 stand spec costed every corner that way and lost
+	 * 40% of the run it needed - the same mistake 8be494c made one level up, in the same week,
+	 * about the same kind of curve. It was a file-static in ServiceLoopBuild.cpp when that
+	 * happened, where nothing outside the builder could find it.
+	 *
+	 * A HAIRPIN RETURNS THE MAXIMUM rather than an infinity: no cut gives it this radius, and a
+	 * caller's proportional clamp asked for an infinity scales BOTH corners of a leg to nothing
+	 * instead of cutting this one down to what its legs allow.
+	 */
+	AIRSIDE_API double CornerRunFor(double Radius, double Interior);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from

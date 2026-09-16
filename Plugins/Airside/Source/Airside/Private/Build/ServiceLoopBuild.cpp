@@ -131,19 +131,6 @@ namespace
 	 * T = R * sqrt(2), so a 750 uu corner reaches 1061 uu back along each side - and a Code C
 	 * stand's shortest side is 4180 uu, so its two corners use half of it between them.
 	 */
-	double CornerRunFor(double Radius, double Interior)
-	{
-		const double Half = Interior * 0.5;
-		const double Sin = FMath::Sin(Half);
-		if (Sin * Sin < UE_DOUBLE_KINDA_SMALL_NUMBER)
-		{
-			// A hairpin. No cut gives it this radius, so the caller's clamp is asked for the
-			// most the legs allow rather than an infinity, which would scale both corners of
-			// a leg to nothing instead of cutting this one down.
-			return TNumericLimits<double>::Max();
-		}
-		return Radius * FMath::Cos(Half) / (Sin * Sin);
-	}
 
 	/**
 	 * Walk Distance along the RING from (Edge, Param) and report where it lands. Negative
@@ -277,7 +264,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 			// the bend falls on changes nothing about how far back it has to reach.
 			Interior[At] = FMath::Acos(
 				FMath::Clamp(FVector2D::DotProduct(Back[At], Onward[At]), -1.0, 1.0));
-			Run[At] = CornerRunFor(FServiceLoopBuild::LaneTurnRadius, Interior[At]);
+			Run[At] = GuidelineGeom::CornerRunFor(FServiceLoopBuild::LaneTurnRadius, Interior[At]);
 
 			// Never past either neighbour, before the shared-leg clamp below sees it. A
 			// near-hairpin corner asks for an unbounded run, and an infinity reaching that

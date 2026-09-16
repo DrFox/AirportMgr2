@@ -478,3 +478,14 @@ double GuidelineGeom::TightestRadius(
 	const double Least = (First + Sweep * At).Size();
 	return 2.0 * Least * Least * Least / Cross;
 }
+
+double GuidelineGeom::CornerRunFor(double Radius, double Interior)
+{
+	const double Half = Interior * 0.5;
+	const double Sin = FMath::Sin(Half);
+	if (Sin * Sin < UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		return TNumericLimits<double>::Max();
+	}
+	return Radius * FMath::Cos(Half) / (Sin * Sin);
+}
