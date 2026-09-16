@@ -1037,46 +1037,145 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	// to measure one alone, either - any segment near enough for one is nearer still to the
 	// other, which is what the "nearest entry wins the contact point" rule then acts on - so the
 	// pair IS the case, and both are asserted.
+	//
+	// AND THE TURN-BACK IS ASSERTED HERE, NOT MERELY PRINTED, which is the correction of the
+	// final review. It is NOT asserted against the lock, because it does not clear it and no
+	// layout makes it: on this branch the deflection is the fixed angle at which the lane's
+	// crossing meets the road, so BOTH sweeps are cut back the same Offset and the sharper one
+	// gets Offset*sin^2(t/2)/cos(t/2) at the supplement of the angle the merge got. What is
+	// asserted instead is that RELATION - the turn-back is the merge's own construction read at
+	// the other angle - and that it does not move with the gap, which is the claim the builder's
+	// comment now rests on. See there for why nothing warns.
+	//
+	// TWO GAPS, for exactly that: the lane-change branch above clears at a wide gap and the
+	// reader could carry that expectation over. 2000 rather than the 5400 used above because a
+	// crossing further off than the link may reach is not a crossing this branch takes at all -
+	// the meeting point is 1.414 times the gap on a 45-degree crossing, and past Link.Reach
+	// FAnchorLink::Join falls to the lane change - so 5400 would silently measure the other
+	// branch twice.
 	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const double RoadX = LaneBounds.Max.X + 400.0;
-
-		FGuidelineNodeId North;
-		Lay(*Net, FVector2D(RoadX, -30000.0), FVector2D(RoadX, 30000.0),
-			ETraversalClass::GroundVehicle, North);
-
-		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net);
-
-		int32 Measured = 0;
-		FString Merges;
-		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		double LastSharper = 0.0;
+		for (const double Gap : { 400.0, 2000.0 })
 		{
-			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
-			if (Link.Num() < 3)
+			URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+			const double RoadX = LaneBounds.Max.X + Gap;
+
+			FGuidelineNodeId North;
+			Lay(*Net, FVector2D(RoadX, -30000.0), FVector2D(RoadX, 30000.0),
+				ETraversalClass::GroundVehicle, North);
+
+			const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+			FAnchorLink::Build(*Net);
+
+			int32 Measured = 0;
+			FString Merges;
+			double Sharpest = TNumericLimits<double>::Max();
+			for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
 			{
-				continue;
+				const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+				if (Link.Num() < 3)
+				{
+					continue;
+				}
+				++Measured;
+
+				const double Lead = DeliveredRadius(*Net, Link[0]);
+				const double Merge = DeliveredRadius(*Net, Link[1]);
+				const double TurnBack = DeliveredRadius(*Net, Link[2]);
+				Merges += Curvature(Merge) + TEXT(" ");
+				Sharpest = FMath::Min(Sharpest, FMath::Min(Merge, TurnBack));
+
+				// THE TWO SWEEPS' OWN ANGLES, off the graph rather than off the spec. A
+				// quadratic cut back Run on each leg of an interior angle t delivers
+				// Run*sin^2(t/2)/cos(t/2), so an interior and a leg length are the whole of
+				// what either sweep is - and reading them from the edges as laid is what makes
+				// the relation below a measurement of the construction rather than a restatement
+				// of it.
+				const auto Interior = [Net](FGuidelineEdgeId Id)
+				{
+					const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+					const FGuidelineNode* A = Net->GetGuidelineNode(Edge->A);
+					const FGuidelineNode* B = Net->GetGuidelineNode(Edge->B);
+					return FMath::Acos(FMath::Clamp(FVector2D::DotProduct(
+						(A->Position - Edge->Control).GetSafeNormal(),
+						(B->Position - Edge->Control).GetSafeNormal()), -1.0, 1.0));
+				};
+				const auto Leg = [Net](FGuidelineEdgeId Id)
+				{
+					const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+					return FVector2D::Distance(
+						Net->GetGuidelineNode(Edge->A)->Position, Edge->Control);
+				};
+
+				AddInfo(FString::Printf(
+					TEXT("CROSSING at a %.0f uu gap: lead %s, merge %s (%.1f deg, leg %.0f), "
+					     "turn-back %s uu (%.1f deg, leg %.0f)"),
+					Gap, *Curvature(Lead),
+					*Curvature(Merge), FMath::RadiansToDegrees(Interior(Link[1])), Leg(Link[1]),
+					*Curvature(TurnBack), FMath::RadiansToDegrees(Interior(Link[2])), Leg(Link[2])));
+
+				TestTrue(*FString::Printf(
+						TEXT("a link onto a crossing road leaves straight - %s uu"), *Curvature(Lead)),
+					Lead > Followable);
+				TestTrue(*FString::Printf(
+						TEXT("and rounds onto it at %s uu, against a lock of %.0f"),
+						*Curvature(Merge), Followable),
+					Merge >= Followable);
+
+				// THE TURN-BACK, ASSERTED AND NOT ONLY PRINTED, and asserted as the CONSTRUCTION
+				// rather than against the lock - which it does not clear and, on this branch,
+				// cannot be made to. Both sweeps are cut back the same leg from the same corner,
+				// so each delivers leg*sin^2(t/2)/cos(t/2) at its own interior angle t: the
+				// merge gets the gentle one, the turn-back its supplement. Holding BOTH to that
+				// identity says the sharp sweep is the same fillet read at the other angle,
+				// which is the fact the builder's comment now rests on - and it fails if either
+				// sweep ever stops being sized from the corner it shares.
+				for (int32 Which : { 1, 2 })
+				{
+					const double Angle = Interior(Link[Which]);
+
+					// A SWEEP THAT DOES NOT TURN HAS NO RADIUS TO PREDICT, and that is a real
+					// case rather than a guard against arithmetic: at a 4 m gap the second entry
+					// to be joined meets the road INSIDE the fillet the first already cut, so
+					// its merge comes out dead straight (180.0 deg, measured) - and both
+					// sin^2(t/2)/cos(t/2) and TightestRadius run away there.
+					if (Angle > UE_DOUBLE_PI - 0.05)
+					{
+						continue;
+					}
+
+					const double Predicted = Leg(Link[Which])
+						* FMath::Square(FMath::Sin(Angle * 0.5)) / FMath::Cos(Angle * 0.5);
+					TestEqual(
+						*FString::Printf(
+							TEXT("sweep %d delivers what a %.1f deg corner cut back %.0f uu can "
+							     "- %s uu"),
+							Which, FMath::RadiansToDegrees(Angle), Leg(Link[Which]),
+							*Curvature(DeliveredRadius(*Net, Link[Which]))),
+						DeliveredRadius(*Net, Link[Which]), Predicted,
+						FMath::Max(1.0, Predicted * 0.01));
+				}
 			}
-			++Measured;
 
-			const double Lead = DeliveredRadius(*Net, Link[0]);
-			const double Merge = DeliveredRadius(*Net, Link[1]);
-			Merges += Curvature(Merge) + TEXT(" ");
-			AddInfo(FString::Printf(TEXT("CROSSING: lead %s, merge %s, turn-back %s uu"),
-				*Curvature(Lead), *Curvature(Merge),
-				*Curvature(DeliveredRadius(*Net, Link[2]))));
+			TestEqual(*FString::Printf(
+					TEXT("a road %.0f uu across the nose is joined at both of its entries"), Gap),
+				Measured, 2);
+			AddInfo(FString::Printf(TEXT("CROSSING merges at a %.0f uu gap: %s"), Gap, *Merges));
 
-			TestTrue(*FString::Printf(
-					TEXT("a link onto a crossing road leaves straight - %s uu"), *Curvature(Lead)),
-				Lead > Followable);
-			TestTrue(*FString::Printf(
-					TEXT("and rounds onto it at %s uu, against a lock of %.0f"),
-					*Curvature(Merge), Followable),
-				Merge >= Followable);
+			// THE GAP IS NOT THE LEVER ON THIS BRANCH, and that is the whole of why the builder
+			// does not warn here - a warning naming the gap would be false advice. Asserted as
+			// an equality across the two gaps rather than as a bound, because a bound would pass
+			// on a figure that had merely got worse.
+			if (LastSharper > 0.0)
+			{
+				TestEqual(
+					*FString::Printf(
+						TEXT("the sharpest sweep on a crossing is the same %.0f uu at every gap"),
+						Sharpest),
+					Sharpest, LastSharper, 1.0);
+			}
+			LastSharper = Sharpest;
 		}
-
-		TestEqual(TEXT("a road across the nose is joined at both of its entries"), Measured, 2);
-		AddInfo(FString::Printf(TEXT("CROSSING merges: %s"), *Merges));
 	}
 
 	// AND WHERE THE GROUND CANNOT GIVE IT, THE BUILDER SAYS SO. A road drawn as a short stub
@@ -1280,11 +1379,19 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FAirframe Van = UAirsideSettings::ResolveDefaultVehicle();
+	// THE LARGEST VEHICLE ADMITTED, and not the van this measured until the final review of
+	// 2026-09-16. FStandLaneBuild rounds these very corners to
+	// ResolveLargestServiceVehicle().TightestFollowableRadius(), so measuring them against
+	// ResolveDefaultVehicle() (471 uu, against 699.4) left a 228 uu band in which the lane could
+	// shrink with this test still green. Airside.Build.PlacedStandLaneIsOneDrivableCycle already
+	// held the same edges to the right bar, so two tests were using two vehicles as the bar for
+	// one property - a pair that drifts, and the rule is that ground geometry is sized for the
+	// largest vehicle ADMITTED, never the one driving now.
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
 	const double Lock = FMath::Sin(FMath::DegreesToRadians(
-		FMath::Clamp(Van.Ground.MaxSteerDegrees, 0.0, 90.0)));
-	if (!TestTrue(TEXT("the default vehicle steers on measured axles"),
-			Van.HasAxles() && Lock > KINDA_SMALL_NUMBER))
+		FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0)));
+	if (!TestTrue(TEXT("the largest service vehicle steers on measured axles"),
+			Truck.HasAxles() && Lock > KINDA_SMALL_NUMBER))
 	{
 		return false;
 	}
@@ -1293,7 +1400,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// reason Airside.Model.ServiceRoadFilletClearsTheTruckLock gives at its own copy: a helper
 	// both the production code and its test called could be wrong in one place and agree with
 	// itself.
-	const double TightestFollowable = Van.Wheelbase() / Lock;
+	const double TightestFollowable = Truck.Wheelbase() / Lock;
 
 	// NOWHERE ON THE CYCLE DOES A TRUCK HAVE TO TURN. Asked of every node the cycle passes
 	// through - the bends' own ends, the anchors it runs through, and any join a later split

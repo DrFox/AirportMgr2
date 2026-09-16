@@ -378,8 +378,17 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			continue;
 		}
 
-		// The same painted radius the stand's other links sweep at - see RadiusForCode. It
-		// sizes the fillet where this connector meets the ROAD, not the lane.
+		// The same painted radius the stand's other links sweep at - see RadiusForCode.
+		//
+		// DEAD ON EVERY LANE LINK THAT LEAVES ALONG ITS LANE, and said here because tuning
+		// IcaoCode::RadiusForLetter and watching a stand's entry for the effect is a session
+		// lost. Join sizes its fillet from LaneRadius wherever it has one, and it has one on
+		// every entry link whose EntryDeparture resolves - which is all of them on a lane laid
+		// by FStandLaneBuild. What is left for this figure is the one case that has no lane
+		// heading to leave along: an entry whose departure cannot be read, where Join falls
+		// back to the circular fillet Link.Radius / tan(theta/2). It is carried rather than
+		// dropped because that fallback still needs a radius, and 2500 uu for a Code C is the
+		// painted line's own.
 		const double StandRadius = RadiusForCode(
 			Instance->Definition->DesignAircraft != nullptr
 				? Instance->Definition->DesignAircraft->Code
@@ -975,19 +984,40 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		Sweep.bDerived = true;
 
 		// THE MERGE ONLY, not the turn-back. Both sweeps are tangent to the lead-in at one end
-		// and to the road at the other; what differs is how far they turn. The one that carries
-		// on the way the lead-in was pointing turns by the deflection, and is the one this
-		// construction sizes; the OTHER turns by 180 minus it, and at a shallow deflection that
-		// is a hairpin no vehicle can take. It is laid anyway, because without it a truck
-		// arriving from the far side has no way in at all, and the router costs it and avoids it
-		// wherever another entry will do.
+		// and to the road at the other and both are cut back the SAME Offset; what differs is
+		// the angle each turns through. The one that carries on the way the lead-in was pointing
+		// takes the gentler of the two - the one Offset above was sized for - and the OTHER
+		// takes its supplement. It is laid anyway, because without it a truck arriving from the
+		// far side has no way in at all.
 		//
-		// NO GEOMETRY FIXES THAT ONE at a close gap, which is why it is excluded here rather
-		// than reported: merging onto a road 4 m away needs a shallow slant, and turning back
-		// the other way from a shallow slant is a U-turn. At a gap wider than 2.83 times the
-		// lock the deflection reaches its right-angle cap and BOTH sweeps clear - see
-		// GuidelineGeom::ShiftDeflectionFor, and Airside.Build.StandLinkClearsTheTruckLock,
-		// which measures both at both gaps.
+		// TRUE OF THE LANE CHANGE, AND ONLY OF IT. There the deflection is a function of the
+		// GAP: merging onto a road 4 m away needs a shallow slant, and turning back the other
+		// way out of a shallow slant is a U-turn no geometry fixes. Past 2.83 times the lock the
+		// deflection reaches its right-angle cap and BOTH sweeps clear - GuidelineGeom::
+		// ShiftDeflectionFor, measured at 769 and 769 uu on the 54 m fixture of
+		// Airside.Build.StandLinkClearsTheTruckLock against 38 uu on the 4 m one. So the gap IS
+		// the lever there, and it is the lever the warning below names.
+		//
+		// ON A CROSSING THE TURN-BACK IS UNBOUNDED, and it is a different fact that the
+		// paragraph above used to cover as though it were the same one. Here the deflection is
+		// not a function of the gap at all: it is the fixed angle at which the lane's crossing
+		// meets the road - 45 degrees on the shipping Code C stand - so the same Offset delivers
+		// LaneRadius on the 135-degree sweep and Offset*sin^2(22.5)/cos(22.5) on the 45-degree
+		// one, which is a fourteenth of it. MEASURED in the same test's crossing block: merge
+		// 769 uu, turn-back 55 uu, IDENTICAL at a 4 m gap and at a 20 m one. Moving the road
+		// does not move that figure, and a truck that arrives on the side the turn-back serves
+		// cuts it - there is no other entry of that crossing facing the other way.
+		//
+		// IT IS STILL EXCLUDED, and the reason is what the warning is FOR. The line below names
+		// the gap, because the gap is the one thing the player can act on; on this branch it is
+		// not the lever, so the same line would be false advice - and it would fire on every
+		// stand with a road across its nose, which is an ordinary layout and not a fault. What
+		// reports the crossing turn-back instead is FSpeedProfile, at the moment a route
+		// actually uses it: "Route asks for R=55 uu ... The body will crab through it", with the
+		// place on the route. Per journey rather than per build, which is when it is true.
+		// Making the curve itself takeable is a change to what this builder LAYS - a sweep it
+		// declines to lay, or a second entry whose slant faces the other way - and wants its own
+		// design, not a warning bolted to the existing one.
 		const FVector2D SweepEndAt = Network.GetGuidelineNode(SweepEnd)->Position;
 		if (LaneRadius > 0.0
 			&& FVector2D::DotProduct(SweepEndAt - Corner, Link.Dir) > 0.0)
@@ -1003,10 +1033,13 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// follow an arc tighter than its lock at any speed, so a link under it is a stand whose
 	// service traffic will cut the corner however slowly it crawls.
 	//
-	// THE GAP IS IN THE LINE because it is the only lever - the radius is the truck's and the
-	// entry is the stand's. Moving the road out fixes this and nothing else will: past 2.83
-	// times the lock (about 20 m for the shipping dispenser) the transition stops being
-	// constrained at all.
+	// THE GAP IS IN THE LINE because on the shape that reaches here it is the only lever - the
+	// radius is the truck's and the entry is the stand's. Moving the road out fixes a LANE
+	// CHANGE and nothing else will: past 2.83 times the lock (about 20 m for the shipping
+	// dispenser) that transition stops being constrained at all. Tightest holds the lead-in and
+	// the merge, never the crossing's turn-back, whose figure the gap does not move - see the
+	// sweep loop above for the measurement and for why a line naming the gap would be a lie
+	// about it.
 	if (const double Lock =
 			UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
 		LaneRadius > 0.0 && Lock > 0.0 && Tightest < Lock)

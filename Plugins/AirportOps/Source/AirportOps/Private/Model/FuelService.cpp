@@ -38,7 +38,14 @@ namespace
 		{
 		case EFuelRefusal::NoDepot:       return TEXT("no fuel depot");
 		case EFuelRefusal::NoRoad:        return TEXT("depot not on a road");
-		case EFuelRefusal::StandUnjoined: return TEXT("stand not on a road");
+		// THE ENTRANCES, NAMED, since 2026-09-16 - the message the stand-routing spec promised
+		// and the only one of the four that can say something more useful than the bare fact.
+		// A stand's lane declares its entrances and a road reaches them or does not, so "not on
+		// a road" was true and sent the player looking at the stand's own sides, where there is
+		// nothing to draw: the road has to reach an ENTRANCE, which on a Code C is a corner of
+		// the nose or tail crossing. How many there are is per-definition, so the count is not
+		// in the text - a number that has to agree with an asset is a number that drifts.
+		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
 		default:                          return TEXT("unserviceable");
 		}
@@ -469,8 +476,8 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					Demand.AircraftId, Demand.Stand.Index, RefusalText(Choice.Why),
 					Choice.Depots, Choice.DepotsOnRoad,
 					!Hydrant.IsSet() ? TEXT("has no node at all")
-						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
-						: TEXT("is NOT on a road"));
+						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("reaches a road")
+						: TEXT("reaches NO road from any of its stand's entrances"));
 				break;
 			}
 

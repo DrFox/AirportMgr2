@@ -515,9 +515,13 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the reason names the STAND, not the depot"),
 			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
 			static_cast<int32>(EFuelRefusal::StandUnjoined));
-		TestEqual(TEXT("and the card says so"),
+		// THE WORDING IS THE ASSERTION, not just the enum: this string is what the offer card
+		// puts in front of the player, and the stand-routing spec promised it name the
+		// ENTRANCES rather than report a bare "not on a road" (which sent the player looking at
+		// the stand's sides, where there is nothing to draw).
+		TestEqual(TEXT("and the card names what the road has to reach"),
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("stand not on a road")));
+			FString(TEXT("no road within reach of the stand's entrances")));
 	}
 	return true;
 }

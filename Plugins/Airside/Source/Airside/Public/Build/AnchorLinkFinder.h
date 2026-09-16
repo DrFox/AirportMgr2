@@ -59,7 +59,7 @@ struct FPendingLink
 	 * Which stand's lane this link LEAVES. Unset for every ordinary anchor or pose link.
 	 *
 	 * Read THREE times. FAnchorLink::Build reads it twice - once to defer an unresolved entry
-	 * into RingsRefused, once to record a resolved one into RingsJoined - keyed on the owner
+	 * into StandsRefused, once to record a resolved one into StandsJoined - keyed on the owner
 	 * rather than on a list of the lane's edges, because joining retires handles and the
 	 * stand must still be identifiable by something else afterwards. FAnchorLink::Join reads
 	 * it a third time, as the one thing that says "this link leaves a lane": a lane is joined

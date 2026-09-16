@@ -249,8 +249,14 @@ stand — the same property the tangential join was buying by sliding along a ri
 Falls out with no new mechanism. `StandGeometryOwner` is on every lane and approach edge, the
 entry-to-road link still deliberately carries none, so `IsServiceNodeConnected` answers exactly
 as it does today and `FuelService.cpp:131` needs no change. What is new is that the answer is
-reportable per ENTRY, so the message becomes "no road within reach of any of this stand's four
-entrances" rather than a bare false.
+reportable per ENTRY, so the message names the entrances rather than reporting a bare false.
+
+DELIVERED 2026-09-16 as "no road within reach of the stand's entrances", on
+`EFuelRefusal::StandUnjoined` — which is the string the offer card shows and
+`AirportOps.Model.FuelServiceRefusals` now asserts, plus the same wording on the dispatch
+warning at `FuelService.cpp:472`. Without the word "four": how many entrances a stand declares
+is a property of its definition, and a count in a player-facing string is a number that has to
+agree with an asset it cannot see.
 
 ## Tests
 

@@ -6,14 +6,18 @@
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
-	// A stand with no design aircraft draws no envelope, offers no service positions and -
-	// since the service lane is laid out along the aeroplane - gets its crossings placed off
-	// the anchors alone, which in a test reads as "the feature is broken" rather than "the
-	// fixture is thin".
-	//
-	// BUILT FIRST now, because the layout is measured FROM it: this used to be set after
+	// BUILT FIRST, because the layout is measured FROM it: this used to be set after
 	// BuildCodeCStand had already run, which was harmless only for as long as nothing in the
 	// layout depended on it.
+	//
+	// AND BECAUSE THE FIXTURE HAS TO BE THE SHIPPING STAND. A definition with no design
+	// aircraft is SUPPORTED - it gets a lane whose crossings are placed off the anchors alone
+	// rather than pushed clear of a nose and a tail that are not there, which is what a stand
+	// with no envelope wants, and BuildCodeCStandFor's header says so. It is simply a
+	// different stand from the one the suite is about: without an envelope the tail clamp
+	// that puts the aft crossing at x = -3550 never binds and the fuselage the lane is
+	// asserted to clear does not exist, so every figure measured here would be another
+	// layout's.
 	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
 	UAircraftType::BuildA320(A320);
 

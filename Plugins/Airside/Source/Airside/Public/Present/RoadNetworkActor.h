@@ -754,7 +754,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Traffic") FTrafficRules TrafficRules;
 
 	/**
-	 * How far a SERVICE connection may reach, in any direction, uu. 50 m by default.
+	 * How far a SERVICE connection may reach, in any direction, uu. 65 m by default, which is
+	 * 50 m from where a Code C stand's edge is drawn plus the 15 m its lane sits inboard of
+	 * that line - the derivation is on FAnchorLink::DefaultServiceLinkRadius.
 	 *
 	 * HERE AND NOT A CONSTANT, for the same reason TrafficRules is here: it is per-airport
 	 * gameplay tuning a designer sets on the level, not a content default to fall back on

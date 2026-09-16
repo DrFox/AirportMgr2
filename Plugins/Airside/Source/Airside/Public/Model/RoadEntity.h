@@ -68,8 +68,17 @@ struct AIRSIDE_API FEntityFootprint
 	 *
 	 * WINGS AND TAILPLANE STAY PASSABLE, and that is unchanged rather than overlooked: driving
 	 * under a wing is normal, and HydrantPit is under the starboard wing root because that is
-	 * where a hydrant pit is. What is forbidden is passing THROUGH the aeroplane, and this only
-	 * gives that rule a width.
+	 * where a hydrant pit is.
+	 *
+	 * A BUILD-TIME ASSERTION, NOT A RUNTIME KEEP-OUT, and that is the whole of what it is
+	 * today. Nothing in RouteSearch, NodeReach or the follower reads this field: no route is
+	 * refused for entering the box and no agent steers round it. Its ONE consumer is
+	 * Airside.Entities.StandLaneClearsTheAircraft (StandLaneTest.cpp), which inflates it to a
+	 * rectangle and asserts no point of the laid lane falls inside - so what it actually buys
+	 * is that an AUTHORED lane cannot be laid down the aircraft's skin. Written down because a
+	 * field that reads as a rule invites a caller to rely on one that is not there; a keep-out
+	 * at route time would be a second evaluator of the same geometry, and wants a decision
+	 * rather than an assumption.
 	 *
 	 * ZERO IS THE DEFAULT so a definition authored before this field keeps its old meaning
 	 * rather than silently gaining a keep-out it was never laid out around.

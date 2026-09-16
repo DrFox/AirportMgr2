@@ -110,8 +110,15 @@ namespace
 		TArray<double> Interior;
 	};
 
+	/**
+	 * bReport asks for a line when a corner cannot be given the radius it was asked for.
+	 *
+	 * A PARAMETER RATHER THAN ALWAYS, because RecoverEntries measures the same lane a second
+	 * time on every idempotent pass and a defect reported once per rebuild is a defect nobody
+	 * reads. Build's own call passes true; the recovery call passes false.
+	 */
 	FLaneShape MeasureLane(const TArray<FStandWaypoint>& Waypoints,
-		const FEntityInstance& Instance, double TurnRadius)
+		const FEntityInstance& Instance, double TurnRadius, bool bReport = false)
 	{
 		const double Cosine = FMath::Cos(Instance.Heading);
 		const double Sine = FMath::Sin(Instance.Heading);
@@ -193,6 +200,13 @@ namespace
 		Shape.EnterAt.Reserve(CornerCount);
 		Shape.ExitAt.Reserve(CornerCount);
 		Shape.bBend.Reserve(CornerCount);
+		// WHAT TO CALL THE STAND IN A LINE ABOUT IT. The definition names WHICH asset to go and
+		// re-author; the position is what finds it on the map when several placed instances
+		// share one.
+		const FString Named = FString::Printf(TEXT("'%s' at (%.0f,%.0f)"),
+			Instance.Definition != nullptr ? *Instance.Definition->GetName() : TEXT("?"),
+			Instance.Position.X, Instance.Position.Y);
+
 		for (int32 At = 0; At < CornerCount; ++At)
 		{
 			if (Run[At] < LaneWeldTolerance)
@@ -200,6 +214,29 @@ namespace
 				// Collinear, or clamped to nothing. One point and no bend: putting a curve
 				// through a straight run would be inventing a corner. This is the case every
 				// anchor takes, which is what "the lane runs THROUGH the box" means.
+				//
+				// AND THE TWO ARE NOT THE SAME THING, which is why the second one says so. A
+				// corner that is genuinely straight owes no bend; a corner with a real angle in
+				// it whose run was clamped away is a VERTEX - an instant heading change, which
+				// FSpeedProfile calls untakeable at any speed - and the lane was authored to
+				// have none. Straight is measured generously: a hundredth of a radian is 0.6
+				// degrees, below which no bend would be laid worth laying.
+				if (bReport && Shape.Interior[At] < UE_DOUBLE_PI - 0.01)
+				{
+					UE_LOG(LogAirside, Warning,
+						TEXT("Stand lane %s: the corner at (%.0f,%.0f) turns %.1f deg and has no "
+						     "room to round it - its legs are %.0f and %.0f uu - so it is laid as "
+						     "a vertex no vehicle can take at any speed. The lane is authored "
+						     "into the definition: re-author it for the vehicle now admitted "
+						     "(Tools/Python/build_stand_asset.py)."),
+						*Named, Shape.Corner[At].X, Shape.Corner[At].Y,
+						180.0 - FMath::RadiansToDegrees(Shape.Interior[At]),
+						FVector2D::Distance(Shape.Corner[At],
+							Shape.Corner[(At + CornerCount - 1) % CornerCount]),
+						FVector2D::Distance(Shape.Corner[At],
+							Shape.Corner[(At + 1) % CornerCount]));
+				}
+
 				Shape.EnterAt.Add(Shape.Corner[At]);
 				Shape.ExitAt.Add(Shape.Corner[At]);
 				Shape.bBend.Add(false);
@@ -209,6 +246,45 @@ namespace
 			Shape.EnterAt.Add(Shape.Corner[At] + Back[At] * Run[At]);
 			Shape.ExitAt.Add(Shape.Corner[At] + Onward[At] * Run[At]);
 			Shape.bBend.Add(true);
+
+			// SAID OUT LOUD WHEN THE CORNER COMES OUT UNDER THE RADIUS IT WAS SIZED FOR, which
+			// is the case a frozen asset walks into and nothing else would report.
+			// UEntityDefinition::BuildCodeCStandFor lays the lane's legs long enough for
+			// CornerRunFor at the vehicle admitted ON THE DAY IT IS AUTHORED and bakes the
+			// result into DA_Stand_CodeC; this builder re-resolves
+			// ResolveLargestServiceVehicle() on EVERY rebuild. Admit a bigger dispenser next
+			// month and the clamp above quietly shaves every corner of every placed stand
+			// instead - no test fails, because the suite builds from MakeStandTransient() and
+			// never from the shipped asset, and the first symptom would be a truck crabbing
+			// through a corner in play.
+			//
+			// MEASURED ON THE CURVE AS LAID, never on the run asked for: TightestRadius of the
+			// very quadratic the loop below will lay, for the reason 8be494c cost this project
+			// three sessions - a builder that checks what it requested is green while the
+			// follower drives what it got.
+			//
+			// A PERCENT OF SLACK, because the clamp gives up LaneWeldTolerance of run between
+			// two corners that were authored to fit exactly, and a line about the fraction of a
+			// uu that costs is a line that trains the reader to ignore this one. MEASURED over
+			// the whole suite: 58 lanes laid, and the only stand it speaks about is
+			// Airside.Build.StandLaneFrozenForASmallerVehicleIsShaved's - a lane authored for a
+			// half-wheelbase vehicle and built for the real one, where it names 24 corners
+			// delivering 265 to 482 uu against the 699 wanted. The shipping stand is silent.
+			if (bReport)
+			{
+				const double Delivered = GuidelineGeom::TightestRadius(
+					Shape.EnterAt.Last(), Shape.Corner[At], Shape.ExitAt.Last());
+				if (Delivered < TurnRadius * 0.99)
+				{
+					UE_LOG(LogAirside, Warning,
+						TEXT("Stand lane %s: the corner at (%.0f,%.0f) delivers %.0f uu where the "
+						     "largest admitted service vehicle needs %.0f - its run was cut from "
+						     "%.0f to %.0f uu to fit the legs it was authored with. Re-author the "
+						     "stand for that vehicle (Tools/Python/build_stand_asset.py)."),
+						*Named, Shape.Corner[At].X, Shape.Corner[At].Y, Delivered, TurnRadius,
+						GuidelineGeom::CornerRunFor(TurnRadius, Shape.Interior[At]), Run[At]);
+				}
+			}
 		}
 
 		return Shape;
@@ -431,7 +507,8 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 		// waypoint's Kind is now what decides which node it gets.
 		const TArray<FStandWaypoint>& Waypoints = Instance.Definition->ServiceLane;
 		const int32 CornerCount = Waypoints.Num();
-		const FLaneShape Shape = MeasureLane(Waypoints, Instance, LaneTurnRadius);
+		const FLaneShape Shape =
+			MeasureLane(Waypoints, Instance, LaneTurnRadius, /*bReport=*/true);
 
 		// AN ANCHOR WAYPOINT DOES NOT GET A NEW NODE. The anchor already owns one, made at
 		// placement, and FuelService routes to THAT handle - a lane that laid a fresh node at

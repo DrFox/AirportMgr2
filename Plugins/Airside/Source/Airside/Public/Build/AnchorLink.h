@@ -56,34 +56,54 @@ struct AIRSIDE_API FAnchorLink
 	static constexpr double DefaultMaxLeadIn = 20000.0;
 
 	/**
-	 * 62 m: how far a SERVICE connection may reach, in any direction.
+	 * 65 m: how far a SERVICE connection may reach, in any direction.
 	 *
 	 * SHORT ON PURPOSE, and the shortness is what keeps the rejected case rejected. A Code C
 	 * stand is about 40 m deep and the gap from stand to service road is typically 10-30 m,
 	 * so this reaches the road the player meant and cannot reach the far side of a terminal -
 	 * which is the whole reason nearest-guideline was refused for aircraft.
 	 *
-	 * IT WAS 50 m UNTIL 2026-09-16, AND THE MEASUREMENT IT IS TAKEN FROM MOVED. The reach is
-	 * measured from the thing that links, and until that date it was a ring lying 3 m OUTBOARD
-	 * of the wingtips - the stand's own edge. The lane runs INSIDE the wingtip now (see
-	 * UEntityDefinition::ServiceLane for why), so the same road is further away by exactly how
-	 * far the lane came in: on the Code C stand the port run sits at y=-600 against a wingtip
-	 * at -1790, which is 1190 uu. 5000 + 1190 = 6190, taken as 6200.
+	 * IT WAS 50 m UNTIL 2026-09-16, AND WHAT MOVED IS THE END THE MEASUREMENT IS TAKEN FROM.
+	 * This reach is measured from the node that links to the nearest point of the road, and
+	 * that node used to be on a ring lying 3 m outboard of the wingtips - the line a player
+	 * read as the edge of the stand. The lane runs INSIDE the wingtip now (see
+	 * UEntityDefinition::ServiceLane for why), so the same road is further from the thing that
+	 * reaches it by exactly the distance between the two lines:
 	 *
-	 * SO THE PLAYER'S PROMISE IS UNCHANGED - 50 m from the edge of the stand - and that is the
-	 * point of deriving the new figure rather than picking a rounder one. Measured on the
-	 * suite's own fixture: a road 42 m off the wingtip (y = -6000 with the stand at the origin,
-	 * which FuelServiceTest, RoadAlongsideARowOfStands and StandFuelAnchorJoinsRoad all use)
-	 * is 5400 uu from the nearest declared entry and joins; the 200 m case
-	 * Airside.Build.ServiceLinkJoinsFromAnyDirection refuses is four times this and still does.
+	 *     port side       ring at y = -2090, lane run at y =  -600   ->  1490 uu
+	 *     starboard side  ring at y = +2090, box row at y = +1100   ->   990 uu
+	 *
+	 * THE PORT SIDE BINDS, being the side that came furthest in, so 5000 + 1490 = 6490, taken
+	 * as 6500. Sizing on the starboard 990 would shorten the reach on the port side, which is
+	 * the side a service road is actually drawn past on this layout.
+	 *
+	 * SO THE PLAYER'S PROMISE IS UNCHANGED - 50 m from where the stand's edge is drawn - and
+	 * that is the point of deriving the figure rather than picking a rounder one. MEASURED on
+	 * the suite's own fixture (Airside.Build.StandLinkClearsTheTruckLock, the 5400 uu gap): the
+	 * road at y = -6000 that FuelServiceTest, RoadAlongsideARowOfStands and
+	 * StandFuelAnchorJoinsRoad all lay is joined at the entries at (1431, -600) and
+	 * (-3236, -600), 5400 uu away - the PERPENDICULAR from the port run, not a diagonal, since
+	 * an entry sits at each end of the run and a road that spans the stand has a foot square
+	 * abeam each of them. A road that stops SHORT of an entry is nearest at its own end
+	 * instead, so such a road is reached on the diagonal and needs more of this reach than its
+	 * clearance alone suggests; nothing in the suite measures that case yet.
+	 *
+	 * The 200 m case Airside.Build.ServiceLinkJoinsFromAnyDirection refuses is three times this
+	 * and still does.
 	 *
 	 * The DEFAULT only. The live figure is level-authored on
 	 * ARoadNetworkActor::ServiceLinkRadius, because it is per-airport gameplay tuning rather
 	 * than a content default - the same distinction FTrafficRules records. M_Starter authors
 	 * no value for it, so the placed actor takes this one; a level that HAS authored one keeps
 	 * what it authored, and its stands stop reaching their roads until it is raised by hand.
+	 *
+	 * NOT DERIVED IN CODE, because there is nothing here to derive it from: the two lines above
+	 * are a property of a DEFINITION (which stand, sized for which aircraft) and this is one
+	 * constant for every stand on every airport. The arithmetic and its inputs are therefore
+	 * written out, and a second stand type whose lane sits further inboard than the port run
+	 * has to be checked against this figure by hand.
 	 */
-	static constexpr double DefaultServiceLinkRadius = 6200.0;
+	static constexpr double DefaultServiceLinkRadius = 6500.0;
 
 	/**
 	 * Within this of an endpoint, join the endpoint rather than splitting off a stub - and,

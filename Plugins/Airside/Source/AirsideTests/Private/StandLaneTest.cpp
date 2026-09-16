@@ -551,4 +551,97 @@ bool FPlacedStandLaneIsOneDrivableCycleTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLaneFrozenForASmallerVehicleIsShavedTest,
+	"Airside.Build.StandLaneFrozenForASmallerVehicleIsShaved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLaneFrozenForASmallerVehicleIsShavedTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE ASSET IS FROZEN AND THE RADIUS IS NOT, which is the one way this lane can go bad
+	// without anybody editing it. UEntityDefinition::BuildCodeCStandFor sizes every leg from
+	// ResolveLargestServiceVehicle() AT AUTHORING TIME and bakes the answer into
+	// DA_Stand_CodeC; FStandLaneBuild::Build re-resolves the same call on EVERY rebuild. Admit
+	// a bigger dispenser next month and the two disagree - the builder asks each corner for
+	// more run than the frozen legs can give, its proportional clamp shaves them, and the
+	// corners come out under the lock they exist to clear.
+	//
+	// NO OTHER TEST CAN SEE THIS. Every one of them builds the definition and the lane from
+	// the SAME vehicle, so the two figures agree by construction; the shipped asset is the one
+	// place they can drift. Authoring for a SHORTER vehicle and building for the real one is
+	// that drift, staged.
+	//
+	// WHAT THIS PINS IS THE CONDITION THE BUILDER WARNS ON, not the wording of the warning.
+	// FStandLaneBuild::MeasureLane logs a Warning naming the stand and the corner whenever a
+	// corner as laid comes in under the radius it was sized for; a UE_LOG is not an assertable
+	// value here (warnings are not elevated to errors in this project's automation), so what is
+	// asserted is the measurable fact the log line reports - and the line itself is read out of
+	// Saved/Logs/AirsideTests.log. If this test ever goes green with no such line, the warning
+	// has been unwired.
+	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildA320(A320);
+
+	FAirframe Smaller = UAirsideSettings::ResolveLargestServiceVehicle();
+	Smaller.SteerAxleX *= 0.5;
+
+	UEntityDefinition* Frozen = NewObject<UEntityDefinition>(GetTransientPackage());
+	UEntityDefinition::BuildCodeCStandFor(Frozen, A320, Smaller);
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Frozen, FVector2D::ZeroVector, 0.0);
+
+	const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(*Net);
+	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
+	if (!TestNotNull(TEXT("the frozen stand still gets a lane"), Lane))
+	{
+		return false;
+	}
+
+	// THE RADIUS THE BUILDER ASKED FOR, which is the live one and not the frozen one.
+	const double Needed =
+		UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
+
+	double Tightest = TNumericLimits<double>::Max();
+	FVector2D TightAt = FVector2D::ZeroVector;
+	for (const FGuidelineEdgeId& Id : *Lane)
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		if (Edge == nullptr || !Edge->bAlive)
+		{
+			continue;
+		}
+		const FGuidelineNode* A = Net->GetGuidelineNode(Edge->A);
+		const FGuidelineNode* B = Net->GetGuidelineNode(Edge->B);
+		if (A == nullptr || B == nullptr)
+		{
+			continue;
+		}
+		const double Delivered =
+			GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
+		if (Delivered < Tightest)
+		{
+			Tightest = Delivered;
+			TightAt = Edge->Control;
+		}
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("FROZEN: tightest laid corner %.0f uu at (%.0f,%.0f), against the %.0f the live "
+		     "vehicle needs"),
+		Tightest, TightAt.X, TightAt.Y, Needed));
+
+	// SHAVED, AND BY MORE THAN THE WELD TOLERANCE'S SHARE. The builder's own report threshold
+	// is one percent of the radius, so asserting below that is asserting exactly the state it
+	// speaks up about rather than a state it tolerates.
+	TestTrue(*FString::Printf(
+			TEXT("a lane frozen for a smaller vehicle comes out under the lock - %.0f uu "
+			     "against %.0f"),
+			Tightest, Needed),
+		Tightest < Needed * 0.99);
+
+	return true;
+}
+
 #endif

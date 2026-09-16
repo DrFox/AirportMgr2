@@ -217,10 +217,11 @@ public:
 	 * call it directly - a dozen near-identical bodies for "look up both ends, sample the
 	 * curve between them."
 	 *
-	 * ONE DOCUMENTED EXCEPTION remains (PR #137 review): FAnchorLink::Join samples a curve
-	 * captured BEFORE a lane split that may already have replaced its edge with two new
-	 * pieces, so there is no live FGuidelineEdgeId left for this to look up - see that call
-	 * site's own comment.
+	 * NO EXCEPTION REMAINS, since 2026-09-16. One did (PR #137 review): FAnchorLink::Join
+	 * sampled a curve captured BEFORE a lane split that had already replaced its edge with two
+	 * new pieces, so there was no live FGuidelineEdgeId left to look up. A stand declares its
+	 * entries now, so nothing is split before that point and Join calls this like everyone
+	 * else - see the comment at its own call.
 	 *
 	 * bFromB walks the curve from B to A instead of A to B by swapping the endpoints handed
 	 * to GuidelineGeom::Sample, not by sampling then reversing the array: a quadratic Bezier

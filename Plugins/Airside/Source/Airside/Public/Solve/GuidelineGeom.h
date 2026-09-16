@@ -175,9 +175,11 @@ namespace GuidelineGeom
 	 * THE END and the tightest point is an endpoint. Clamping the parameter is what makes
 	 * this right in both cases, and the closed-form apex expression wrong in the second.
 	 *
-	 * HERE rather than in a builder because three of them now ask it: a spur sizing its run,
-	 * a lane corner, and a road link's entrance. One evaluator, as with everything else in
-	 * this namespace.
+	 * HERE rather than in a builder because three places now ask it: a road junction's turn
+	 * path (FRoadGuidelineBuilder), a stand link's lead-in and both its entry sweeps
+	 * (FAnchorLink::Join), and the tests that hold a laid lane against a steering lock. One
+	 * evaluator, as with everything else in this namespace. The SPUR that used to be the first
+	 * of those is deleted - see FStandLaneBuild.
 	 */
 	AIRSIDE_API double TightestRadius(
 		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
@@ -191,9 +193,11 @@ namespace GuidelineGeom
 	 *
 	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
 	 *
-	 * A SPUR is the asymmetric right-angled case - run along the lane against the anchor's offset
-	 * from it - which the builder inverts separately. A CORNER is the symmetric case, the same cut
-	 * on both legs, where it collapses to:
+	 * The ASYMMETRIC case - different cuts on the two legs - is what that general form is for,
+	 * and NOTHING INVERTS IT ANY MORE: the spur that did (FServiceLoopBuild::TangentRunFor, an
+	 * anchor's offset against a run along the lane) went with the anchors onto the lane on
+	 * 2026-09-16. It is kept written out because it is where the line below comes from. A
+	 * CORNER is the symmetric case, the same cut on both legs, where it collapses to:
 	 *
 	 *     R = T sin^2(theta/2) / cos(theta/2)
 	 *
