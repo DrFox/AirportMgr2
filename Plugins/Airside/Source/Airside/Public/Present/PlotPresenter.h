@@ -31,11 +31,20 @@ public:
 	/** The component to fill. The actor owns it, as it owns every other draw target. */
 	void Initialise(UInstancedStaticMeshComponent* InBoxes);
 
-	/** Clear and re-add an instance per module, plus a fence round every plot's outline. */
+	/**
+	 * Clear and re-add an instance per module, a flat marker per slot still empty, and a
+	 * fence round every plot's outline.
+	 */
 	void RebuildFrom(const URoadNetwork& Network);
 
 	/** For tests: how many boxes are standing. */
 	int32 GetInstanceCount() const;
+
+	/**
+	 * How many slots across every plot are standing empty - the room the player has to grow
+	 * into. For tests, and for the census line.
+	 */
+	int32 GetEmptySlotCount() const { return EmptySlots; }
 
 	/**
 	 * For tests: how many fence bays were skipped to leave a gate.
@@ -50,4 +59,7 @@ private:
 
 	/** Counted during the last RebuildFrom. See GetGateGapCount. */
 	int32 GateGaps = 0;
+
+	/** Counted during the last RebuildFrom. See GetEmptySlotCount. */
+	int32 EmptySlots = 0;
 };

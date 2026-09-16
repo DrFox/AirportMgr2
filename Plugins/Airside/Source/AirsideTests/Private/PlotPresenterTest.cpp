@@ -8,6 +8,7 @@
 #include "Model/RoadNetwork.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
+#include "Solve/PlotFit.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -93,6 +94,86 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 	Actor->RebuildMesh();
 	TestEqual(TEXT("rebuilding again does not double the boxes"),
 		Actor->GetPlotPresenter()->GetInstanceCount(), One * 2);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotShowsRoomToGrowTest,
+	"Airside.Present.PlotShowsRoomToGrow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotShowsRoomToGrowTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+
+	// The same placement PlaceDepot makes, with the plot's own size as the variable - the
+	// outline comes from PlotFit::GridOutline so it is the rectangle the gesture commits,
+	// not a hand-typed one that could disagree with it.
+	const TArray<EDepotModule> AllThree =
+		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+
+	auto PlaceMix = [&](int32 Width, int32 Depth, const TArray<EDepotModule>& Modules)
+	{
+		Actor->ClearNetwork();
+
+		const FVector2D A(0.0, 0.0);
+		const FVector2D B(Width * PlotFit::BayWidthUu, 0.0);
+
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = (A + B) * 0.5;
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = PlotFit::GridOutline(A, B, Width, Depth);
+		Placement.Modules = Modules;
+		Actor->Network->PlaceEntity(Placement);
+		Actor->RebuildMesh();
+	};
+
+	auto PlaceSized = [&](int32 Width, int32 Depth) { PlaceMix(Width, Depth, AllThree); };
+
+	// THREE WIDE, TWO DEEP holds six slots and three modules, so three stand empty. This is
+	// the whole payoff of the depth step before buying exists: a plot that visibly says
+	// "three more fit here" rather than three sheds dumped in a corner.
+	PlaceSized(3, 2);
+	TestEqual(TEXT("a 3x2 plot with three modules has three slots to grow into"),
+		Actor->GetPlotPresenter()->GetEmptySlotCount(), 3);
+
+	// ONE ROW DEEP has nowhere to grow, which is what the gesture warned about.
+	PlaceSized(3, 1);
+	TestEqual(TEXT("a one-row plot has no room to grow"),
+		Actor->GetPlotPresenter()->GetEmptySlotCount(), 0);
+
+	// AND A NARROW PLOT DROPS MODULES RATHER THAN OVERFLOWING INTO ROW 2. Two bays across
+	// take two modules; the third is not quietly moved to the back where no truck reaches.
+	PlaceSized(2, 2);
+	TestEqual(TEXT("two bays take two modules, not three"),
+		Actor->GetPlotPresenter()->GetEmptySlotCount(), 2);
+
+	// AND THE MARKERS ARE REAL INSTANCES, not just a counter. GetEmptySlotCount could be
+	// arithmetic that never reached the component - the "declared but never consumed" shape
+	// CLAUDE.md names three times - and every assertion above would still pass.
+	//
+	// THE CLAIM IS AN INVARIANT, not a number: on ONE plot geometry, a slot is drawn whether
+	// it holds a module or not, so taking modules away must leave the instance count exactly
+	// where it was. Comparing two different plot SIZES would prove nothing, because their
+	// fences differ too and the fence is most of the count.
+	PlaceSized(3, 2);
+	const int32 ThreeModules = Actor->GetPlotPresenter()->GetInstanceCount();
+	PlaceMix(3, 2, { EDepotModule::Shed });
+	TestEqual(TEXT("an emptier yard is the same six slots, drawn differently"),
+		Actor->GetPlotPresenter()->GetInstanceCount(), ThreeModules);
+	TestEqual(TEXT("and five of them are now room to grow"),
+		Actor->GetPlotPresenter()->GetEmptySlotCount(), 5);
 
 	return true;
 }
