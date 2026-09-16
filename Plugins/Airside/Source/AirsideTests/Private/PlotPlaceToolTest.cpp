@@ -3,10 +3,12 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadNode.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/PlotFit.h"
+#include "Solve/RoadGeom.h"
 #include "Tool/PlotPlaceTool.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/ToolReadout.h"
@@ -61,10 +63,20 @@ namespace
 	FToolContext OnRoad(ARoadNetworkActor* Actor, const FVector2D& Where)
 	{
 		FToolContext Context = TestTool::ContextAt(*Actor, Where, ERoadSnapKind::Segment);
-
-		// The one segment laid above, running from x = -10000 to x = +10000.
 		Context.Snap.Segment = Actor->Network->SegmentIdAt(0);
-		Context.Snap.SegmentT = FMath::Clamp((Where.X + 10000.0) / 20000.0, 0.0, 1.0);
+
+		// T FROM THE SEGMENT'S REAL ENDS, not from the coordinates LayRoad was asked for.
+		// This assumed the road ran -10000 to +10000 and it does not, so every anchor landed
+		// somewhere other than under the cursor - harmless while nothing measured absolute
+		// positions, and the cause of three baffling failures the moment something did.
+		const FRoadSegment* Segment = Actor->Network->GetSegment(Context.Snap.Segment);
+		const FRoadNode* A = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
+		const FRoadNode* B = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
+		if (A != nullptr && B != nullptr)
+		{
+			Context.Snap.SegmentT =
+				RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Where);
+		}
 		return Context;
 	}
 
@@ -121,17 +133,167 @@ namespace
 		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
 	};
 
-	/** Anchor, width east, depth north, in the stages the gesture expects. */
+	/**
+	 * Anchor, frontage east, then BOTH back corners: the four points the gesture expects.
+	 *
+	 * The fourth click is placed directly above the anchor, so a caller that asks for a
+	 * rectangle gets one - callers that want a trapezoid place their own corners.
+	 *
+	 * ONLY THE ANCHOR NEEDS THE ROAD. Every later click is read off the cursor against the
+	 * anchored frame, so its snap kind is irrelevant - which is also why a plot can be
+	 * dragged out over open ground.
+	 */
 	void DrawPlot(FPlotPlaceTool& Tool, ARoadNetworkActor* Actor,
-		const FVector2D& AnchorAt, const FVector2D& WidthAt, const FVector2D& DepthAt)
+		const FVector2D& AnchorAt, const FVector2D& FrontageAt, const FVector2D& DepthAt)
 	{
-		// ONLY THE ANCHOR NEEDS THE ROAD. The width and depth clicks are read off the cursor
-		// against the anchored frame, so their snap kind is irrelevant - which is also why a
-		// plot can be dragged out over open ground.
 		Tool.OnClick(OnRoad(Actor, AnchorAt));
-		Tool.OnClick(PlotAt(Actor, WidthAt));
+		Tool.OnClick(PlotAt(Actor, FrontageAt));
 		Tool.OnClick(PlotAt(Actor, DepthAt));
+		Tool.OnClick(PlotAt(Actor, FVector2D(AnchorAt.X, DepthAt.Y)));
 	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPinsOneCornerAtATimeTest,
+	"Airside.Tool.PlotPinsOneCornerAtATime",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPinsOneCornerAtATimeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	TestEqual(TEXT("a fresh tool has pinned nothing"), Tool.PinnedCount(), 0);
+
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	TestEqual(TEXT("the first click pins the anchor"), Tool.PinnedCount(), 1);
+
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+	TestEqual(TEXT("the second pins the frontage"), Tool.PinnedCount(), 2);
+
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
+	TestEqual(TEXT("the third pins a back corner"), Tool.PinnedCount(), 3);
+
+	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1500.0)));
+	TestEqual(TEXT("the fourth pins the last corner"), Tool.PinnedCount(), 4);
+	TestEqual(TEXT("and the gesture is ready to commit"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm));
+
+	// THE LAST CLICK LOCKS, IT DOES NOT BUILD. The review beat is the whole point of a
+	// staged gesture; a click that committed would delete it.
+	TestEqual(TEXT("and nothing was built by pinning it"), LiveEntities(Actor), 0);
+
+	// AND CANCEL WALKS BACK ONE AT A TIME, which is the answer a misclick deserves.
+	Tool.OnCancel(PlotAt(Actor, FVector2D(0.0, 1500.0)));
+	TestEqual(TEXT("cancel unpins the last corner"), Tool.PinnedCount(), 3);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotFrontageSnapsInFiveMetreStepsTest,
+	"Airside.Tool.PlotFrontageSnapsInFiveMetreSteps",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotFrontageSnapsInFiveMetreStepsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// MEASURED FROM THE ANCHOR THE TOOL ACTUALLY CHOSE, not from an assumed one. OnRoad
+	// computes SegmentT as if the road ran from -10000 to +10000 and it does not, so the
+	// anchor lands somewhere this test has no business predicting - and an earlier version
+	// of it silently measured every frontage from the wrong origin.
+	auto FrontageFor = [&](double Reach)
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+
+		TArray<FVector2D> Anchored;
+		Tool.Quad(PlotAt(Actor, FVector2D(0.0, 200.0)), Anchored);
+		if (Anchored.Num() < 1)
+		{
+			return 0.0;
+		}
+
+		TArray<FVector2D> Quad;
+		Tool.Quad(PlotAt(Actor, Anchored[0] + FVector2D(Reach, 0.0)), Quad);
+		return Quad.Num() >= 2 ? FVector2D::Distance(Quad[0], Quad[1]) : 0.0;
+	};
+
+	// ROUNDED, NOT TRUNCATED, and not left at 17. Rounding is the difference between a grid
+	// that feels magnetic and one that feels grudging.
+	TestEqual(TEXT("a 17 m drag locks at 15 m"), FrontageFor(1700.0), 1500.0);
+	TestEqual(TEXT("an 18 m drag locks at 20 m"), FrontageFor(1800.0), 2000.0);
+	TestEqual(TEXT("a 23 m drag locks at 25 m"), FrontageFor(2300.0), 2500.0);
+
+	// THE FLOOR IS 15 m AND IT IS A FLOOR, not a step. A yard narrower is not a yard, so a
+	// cursor 3 m along asks for the smallest plot there is rather than one nothing fits in.
+	TestEqual(TEXT("a 3 m drag still asks for the 15 m minimum"), FrontageFor(300.0), 1500.0);
+
+	// DRAGGED BACK PAST THE ANCHOR RUNS THE PLOT THE OTHER WAY rather than refusing or
+	// collapsing. A player who anchors then changes their mind about direction should not
+	// have to cancel and start again. This is what FPlotWidthRunsBothWaysTest used to pin.
+	TestEqual(TEXT("dragging west of the anchor still gives a 20 m frontage"),
+		FrontageFor(-1800.0), 2000.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotBackCornersAreFreeTest,
+	"Airside.Tool.PlotBackCornersAreFree",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotBackCornersAreFreeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+
+	// AN ARBITRARY DEPTH, deliberately not a multiple of anything. The frontage is quantised
+	// because it must tile with the plot next door; a back corner is shared with nothing, and
+	// snapping it would only refuse shapes the ground calls for.
+	TArray<FVector2D> Quad;
+	Tool.Quad(PlotAt(Actor, FVector2D(2000.0, 1737.0)), Quad);
+	if (!TestEqual(TEXT("a quad has four corners"), Quad.Num(), 4)) { return false; }
+
+	TestTrue(*FString::Printf(TEXT("the back corner keeps the depth asked for, got %.0f"),
+		Quad[2].Y), FMath::IsNearlyEqual(Quad[2].Y, 1737.0, 1.0));
+
+	// AND THE TWO RULES ARE DEMONSTRABLY DIFFERENT, not accidentally the same: the frontage
+	// in the very same quad did snap.
+	TestEqual(TEXT("while the frontage in the same quad snapped to 20 m"),
+		FVector2D::Distance(Quad[0], Quad[1]), 2000.0);
+
+	// AND THE NEAR CORNER MIRRORS THE FAR ONE until the player reaches it, so two pinned
+	// corners read as a rectangle rather than an open shape trailing off.
+	TestTrue(TEXT("the unreached corner mirrors the one being dragged"),
+		FMath::IsNearlyEqual(Quad[3].Y, Quad[2].Y, 1.0));
+
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -155,15 +317,19 @@ bool FPlotStagesAdvanceTest::RunTest(const FString& Parameters)
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Idle));
 
 	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
-	TestEqual(TEXT("the first click anchors and asks for width"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Width));
+	TestEqual(TEXT("the first click anchors and asks for the frontage"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage));
 
 	Tool.OnClick(PlotAt(Actor, FVector2D(1200.0, 200.0)));
-	TestEqual(TEXT("the second locks width and asks for depth"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Depth));
+	TestEqual(TEXT("the second pins the frontage and asks for a back corner"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerA));
 
 	Tool.OnClick(PlotAt(Actor, FVector2D(600.0, 1600.0)));
-	TestEqual(TEXT("the third locks depth and asks for confirmation"),
+	TestEqual(TEXT("the third pins that corner and asks for the last"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerB));
+
+	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1500.0)));
+	TestEqual(TEXT("the fourth pins the last corner and asks for confirmation"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm));
 
 	// THE LAST CLICK BUILDS NOTHING. The review beat is the whole point of the Build button;
@@ -213,12 +379,16 @@ bool FPlotCancelStepsBackOneStageTest::RunTest(const FString& Parameters)
 	const FToolContext Anywhere = PlotAt(Actor, FVector2D(600.0, 1600.0));
 
 	Tool.OnCancel(Anywhere);
-	TestEqual(TEXT("cancel from Confirm goes back to Depth"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Depth));
+	TestEqual(TEXT("cancel from Confirm goes back to the last corner"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerB));
 
 	Tool.OnCancel(Anywhere);
-	TestEqual(TEXT("and again to Width"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Width));
+	TestEqual(TEXT("and again to the first back corner"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerA));
+
+	Tool.OnCancel(Anywhere);
+	TestEqual(TEXT("and again to the frontage"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage));
 
 	Tool.OnCancel(Anywhere);
 	TestEqual(TEXT("and again to Idle"),
@@ -248,80 +418,38 @@ bool FPlotCommitsOnlyFromConfirmTest::RunTest(const FString& Parameters)
 	LayServiceRoad(Actor, 0.0);
 
 	// Build is a WIDGET, not a stage of the gesture, so OnCommit is reachable whenever the
-	// bar is on screen. Every stage but the last must ignore it - committing from Width
-	// would build a plot with no depth at all.
+	// bar is on screen. EVERY stage but the last must ignore it - committing from a half
+	// drawn quad would build a plot the player never finished describing.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
 
 	Tool.OnCommit(PlotAt(Actor, FVector2D(0.0, 200.0)));
-	TestEqual(TEXT("Build in Idle builds nothing"), LiveEntities(Actor), 0);
+	TestEqual(TEXT("Build with nothing pinned builds nothing"), LiveEntities(Actor), 0);
 
 	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
 	Tool.OnCommit(PlotAt(Actor, FVector2D(0.0, 200.0)));
-	TestEqual(TEXT("Build in Width builds nothing"), LiveEntities(Actor), 0);
+	TestEqual(TEXT("Build with one corner builds nothing"), LiveEntities(Actor), 0);
 
-	Tool.OnClick(PlotAt(Actor, FVector2D(1200.0, 200.0)));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(1200.0, 200.0)));
-	TestEqual(TEXT("Build in Depth builds nothing"), LiveEntities(Actor), 0);
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+	TestEqual(TEXT("Build with the frontage alone builds nothing"), LiveEntities(Actor), 0);
 
-	Tool.OnClick(PlotAt(Actor, FVector2D(600.0, 1600.0)));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(600.0, 1600.0)));
-	TestEqual(TEXT("and only from Confirm does it build"), LiveEntities(Actor), 1);
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
+	TestEqual(TEXT("Build with three corners builds nothing"), LiveEntities(Actor), 0);
 
-	return true;
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotWidthRunsBothWaysTest,
-	"Airside.Tool.PlotWidthRunsBothWays",
-	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
-
-bool FPlotWidthRunsBothWaysTest::RunTest(const FString& Parameters)
-{
-	FAirsideTestWorld TestWorld;
-	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
-	ARoadNetworkActor* Actor = TestWorld.Actor;
-	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
-
-	Actor->ClearNetwork();
-	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
-	LayServiceRoad(Actor, 0.0);
-
-	// WEST of the anchor. Dragging back past it must run the plot the other way rather than
-	// refusing or collapsing - a player who anchors and then changes their mind about which
-	// way to go should not have to cancel and start again.
-	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(-1200.0, 200.0),
-		FVector2D(-600.0, 1600.0));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(-600.0, 1600.0)));
-
-	if (!TestEqual(TEXT("a westward plot is built"), LiveEntities(Actor), 1)) { return false; }
-
-	const FEntityInstance& Depot = Actor->Network->GetEntities()[0];
-
-	double MinX = TNumericLimits<double>::Max();
-	for (const FVector2D& Corner : Depot.Outline)
-	{
-		MinX = FMath::Min(MinX, Corner.X);
-	}
-	TestTrue(TEXT("and it lies west of the anchor"), MinX < -100.0);
-
-	// STILL NORTH OF THE ROAD. Flipping the along-direction without flipping the side with
-	// it would put the whole plot across the road - a much worse outcome than refusing, and
-	// invisible in a test that only checked which way it ran.
-	for (const FVector2D& Corner : Depot.Outline)
-	{
-		TestTrue(TEXT("and still on the side the cursor was"), Corner.Y > -1.0);
-	}
+	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1800.0)));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(0.0, 1800.0)));
+	TestEqual(TEXT("and only with four does it build"), LiveEntities(Actor), 1);
 
 	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotAnchorsSnapToBaysTest,
-	"Airside.Tool.PlotAnchorsSnapToBays",
+	FPlotAnchorsSnapToTheFrontageStepTest,
+	"Airside.Tool.PlotAnchorsSnapToTheFrontageStep",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FPlotAnchorsSnapToBaysTest::RunTest(const FString& Parameters)
+bool FPlotAnchorsSnapToTheFrontageStepTest::RunTest(const FString& Parameters)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
@@ -342,17 +470,18 @@ bool FPlotAnchorsSnapToBaysTest::RunTest(const FString& Parameters)
 
 	if (!TestEqual(TEXT("a depot is built"), LiveEntities(Actor), 1)) { return false; }
 
-	// The road runs from x = -10000, so a bay multiple measured from its A end is
-	// -10000 + N * 400 - which is itself a multiple of 400.
+	// The road runs from x = -10000, so an anchor measured from its A end is -10000 + N * the
+	// frontage step - itself a multiple of that step. NOT a bay multiple any more: 4 m is the
+	// width of a SHED, and a plot strides in 5 m.
 	double MinX = TNumericLimits<double>::Max();
 	for (const FVector2D& Corner : Actor->Network->GetEntities()[0].Outline)
 	{
 		MinX = FMath::Min(MinX, Corner.X);
 	}
 
-	const double Remainder = FMath::Fmod(FMath::Abs(MinX), PlotFit::BayWidthUu);
-	TestTrue(TEXT("the plot starts on a bay multiple, not where the cursor was"),
-		Remainder < 1.0 || Remainder > PlotFit::BayWidthUu - 1.0);
+	const double Remainder = FMath::Fmod(FMath::Abs(MinX), PlotGesture::FrontageStepUu);
+	TestTrue(TEXT("the plot starts on a frontage step, not where the cursor was"),
+		Remainder < 1.0 || Remainder > PlotGesture::FrontageStepUu - 1.0);
 
 	return true;
 }
@@ -515,11 +644,13 @@ bool FPlotGhostDrawsTheModulesTest::RunTest(const FString& Parameters)
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	LayServiceRoad(Actor, 0.0);
 
+	// 30 m of frontage, 24 m deep - big enough that every module of the mix stands, so the
+	// footprint count below is a real number rather than whatever survived a cramped plot.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
-		FVector2D(600.0, 2700.0));
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(3000.0, 200.0),
+		FVector2D(1500.0, 2700.0));
 
-	const FToolContext Confirming = PlotAt(Actor, FVector2D(600.0, 2700.0));
+	const FToolContext Confirming = PlotAt(Actor, FVector2D(1500.0, 2700.0));
 
 	FPlotGhostSink Sink;
 	Tool.BuildPreview(Confirming, Sink);
@@ -629,19 +760,19 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 	// as well; what matters is only that Depth is left holding 3.
 	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
 		FVector2D(600.0, 2400.0));
-	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
-	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
-	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
+	for (int32 I = 0; I < 4; ++I)
+	{
+		Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
+	}
 	TestEqual(TEXT("backed all the way out"),
 		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Idle));
 
-	// The second gesture, anchored and dragging its WIDTH - the stage where depth has not
-	// been chosen yet and the two descriptions came apart.
+	// The second gesture, mid-frontage: the stage where a stale corner would show.
 	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
 	TestEqual(TEXT("anchored again"),
-		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Width));
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage));
 
-	const FToolContext Dragging = PlotAt(Actor, FVector2D(800.0, 200.0));
+	const FToolContext Dragging = PlotAt(Actor, FVector2D(1600.0, 200.0));
 
 	FPlotGhostSink Sink;
 	Tool.BuildPreview(Dragging, Sink);
@@ -649,17 +780,16 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 	FToolReadoutCollector Collector;
 	Tool.BuildReadout(Dragging, Collector);
 
-	const TPair<FString, FString>* Rows = Collector.Readout.Facts.FindByPredicate(
-		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Rows"); });
-	if (!TestNotNull(TEXT("a Rows fact"), Rows)) { return false; }
-	TestEqual(TEXT("the bar says one row, depth not being chosen yet"),
-		Rows->Value, FString(TEXT("1")));
+	const TPair<FString, FString>* Frontage = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Frontage"); });
+	if (!TestNotNull(TEXT("a Frontage fact"), Frontage)) { return false; }
 
-	// THE GHOST IS MEASURED, not asked. Front edge to back edge is exactly
-	// Rows * BayDepthUu - and a ghost still drawing the previous gesture's three rows spans
-	// 2400 instead of 800, wherever the frontage happens to sit relative to the road.
-	TestEqual(TEXT("and the ghost is drawn exactly that deep"),
-		Sink.Depth(), PlotFit::BayDepthUu);
+	// 16 m ASKED FOR ROUNDS TO 15 m, and the readout must say what the line on the ground
+	// says. The predecessor of this assertion caught a ghost drawing the PREVIOUS gesture's
+	// depth, which is why the first gesture above is drawn and backed out of: on a session's
+	// FIRST gesture every member still holds its initial value, where stale and correct agree.
+	TestEqual(TEXT("the readout reports the frontage that actually snapped"),
+		Frontage->Value, FString(TEXT("15 m")));
 
 	return true;
 }
@@ -689,13 +819,15 @@ bool FPlotReadoutCountsRoomNotSlotsTest::RunTest(const FString& Parameters)
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	LayServiceRoad(Actor, 0.0);
 
-	// Three bays across and three rows deep - room to spare, so "Room for" is not trivially
-	// zero and the agreement below is a real comparison rather than 0 == 0.
+	// 30 m OF FRONTAGE, 24 m DEEP, and the size is the point. Drawn 12 m wide this passed
+	// only because a broken anchor put the plot's origin 20 m up the road and made it
+	// accidentally 30 m after all; at a true 15 m there is no room left once the mix is
+	// standing, and "reports room to grow" would have been asserting the opposite of itself.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
-		FVector2D(600.0, 2700.0));
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(3000.0, 200.0),
+		FVector2D(1500.0, 2700.0));
 
-	const FToolContext Confirming = PlotAt(Actor, FVector2D(600.0, 2700.0));
+	const FToolContext Confirming = PlotAt(Actor, FVector2D(1500.0, 2700.0));
 	FToolReadoutCollector Collector;
 	Tool.BuildReadout(Confirming, Collector);
 
@@ -761,14 +893,14 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("confirm is committable"), Collector.Readout.bCommittable);
 
 	const TPair<FString, FString>* Bays = Collector.Readout.Facts.FindByPredicate(
-		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Bays"); });
-	if (!TestNotNull(TEXT("a Bays fact"), Bays)) { return false; }
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Frontage"); });
+	if (!TestNotNull(TEXT("a Frontage fact"), Bays)) { return false; }
 
 	// THE NUMBER THE PLAYER READS IS THE WIDTH THAT WAS DRAGGED. That agreement is the whole
 	// reason facts are emitted from a const per-frame call beside the preview rather than
 	// held as state the bar polls.
 	TestEqual(TEXT("three bays, the width that was dragged"),
-		Bays->Value, FString(TEXT("3")));
+		Bays->Value, FString(TEXT("15 m")));
 
 	// ONE ROW DEEP WARNS, and does not refuse - a one-row depot works perfectly well and
 	// may be exactly what the player wants. The analogue of Manor Lords' "Plots without

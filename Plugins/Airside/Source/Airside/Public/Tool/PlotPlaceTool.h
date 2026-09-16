@@ -22,18 +22,36 @@
 UENUM()
 enum class EPlotStage : uint8
 {
-	/** Nothing anchored. The cursor hunts for a service road. */
+	/** Nothing pinned. The cursor hunts for a service road. */
 	Idle,
 
-	/** Anchored. The cursor runs along the road, setting the frontage width in bays. */
-	Width,
+	/** The anchor is pinned. The cursor runs along the road setting the frontage. */
+	Frontage,
 
-	/** Width locked. The cursor runs away from the road, setting the depth in rows. */
-	Depth,
+	/** The frontage is pinned. The cursor places the back corner at its far end. */
+	CornerA,
 
-	/** Everything chosen. Nothing moves until Build, or until Cancel steps back. */
+	/** Three corners pinned. The cursor places the last one. */
+	CornerB,
+
+	/** Four corners. Nothing moves until Build, or until Cancel steps back. */
 	Confirm
 };
+
+namespace PlotGesture
+{
+	/** 15 m. A yard narrower than this is not a yard - see the 2026-09-16 gesture spec. */
+	inline constexpr double MinFrontageUu = 1500.0;
+
+	/**
+	 * 5 m. The step above the minimum.
+	 *
+	 * PUBLIC because the tests assert against it and a copy of the number in a test is a
+	 * second source for it - which is exactly how the anchor came to stride 4 m under a
+	 * frontage growing in 5 m steps.
+	 */
+	inline constexpr double FrontageStepUu = 500.0;
+}
 
 /**
  * Placing a fuel depot: snap to a service road, drag a width, drag a depth, press Build.
@@ -65,53 +83,32 @@ public:
 	/** For tests. */
 	EPlotStage GetStage() const { return Stage; }
 
-	/** What fills row 1. For tests, and for the mix UI when buying arrives. */
+	/** What fills the yard. For tests, and for the mix UI when buying arrives. */
 	void SetModules(const TArray<EDepotModule>& InModules) { Modules = InModules; }
 
+	/** How many corners the player has placed, 0 to 4. What the readout reports as "N/4". */
+	int32 PinnedCount() const;
+
+	/**
+	 * The plot as it stands THIS frame: pinned corners as placed, the moving one taken from
+	 * the cursor, in the outline's own winding with the frontage as edge 0->1.
+	 *
+	 * ONE DERIVATION, EVERY CALLER. The preview draws it, the readout measures it and
+	 * OnCommit builds from it, so the ghost, the facts and the built thing cannot describe
+	 * three different shapes. Fewer than two pinned corners gives fewer than four out.
+	 */
+	void Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const;
+
 private:
-	/** The frontage edge as the grid wants it: interior on the LEFT of A->B. */
-	void Frontage(FVector2D& OutA, FVector2D& OutB) const;
-
-	/** Bays the cursor is asking for, at least one. */
-	int32 WidthAt(const FToolContext& Context) const;
-
-	/** Rows the cursor is asking for, at least one. */
-	int32 DepthAt(const FToolContext& Context) const;
-
-	/**
-	 * The plot as it stands THIS frame: dragged where the cursor decides it, locked where a
-	 * click already has, and one row wherever depth has not been reached yet.
-	 *
-	 * ONE FUNCTION, TWO CALLERS, because BuildPreview and BuildReadout describing the same
-	 * gesture is the entire contract IToolReadoutSink exists to keep. They carried a copy of
-	 * this each and had already drifted: during the Width stage the readout said one row
-	 * while the preview drew the PREVIOUS gesture's depth, so the second depot a player drew
-	 * showed a ghost that disagreed with the bar above it. Two copies of a rule is how that
-	 * happens; see CLAUDE.md, "Lists that must agree are ONE list".
-	 */
-	void ShownSize(const FToolContext& Context, int32& OutWidth, int32& OutDepth) const;
-
-	/**
-	 * This frame's plot: its size, and the frontage edge ordered as the grid wants it.
-	 *
-	 * SHARED BY THE PREVIEW AND THE READOUT for the same reason ShownSize is. The ordering
-	 * rule - interior on the LEFT of A->B - was written out twice, once here and once in
-	 * Frontage(), and a third copy for the readout is how the ghost and the facts come to
-	 * describe different rectangles.
-	 */
-	void ShownPlot(const FToolContext& Context, FVector2D& OutA, FVector2D& OutB,
-		int32& OutWidth, int32& OutDepth) const;
-
 	/**
 	 * The yard this plot would get, laid out by the same solver the presenter runs.
 	 *
 	 * SHARED BY THE GHOST AND THE READOUT. The ghost draws these footprints and the readout
-	 * counts them, so the boxes on screen and the numbers on the bar are ONE computation -
+	 * counts them, so the boxes on screen and the numbers beside them are ONE computation -
 	 * and because DepotYardSeed keys off the pose the facade will store, they are also the
 	 * boxes Build actually puts down rather than an impression of them.
 	 */
-	PlotYard::FYard YardFor(const FVector2D& FrontA, const FVector2D& FrontB,
-		int32 InWidth, int32 InDepth) const;
+	PlotYard::FYard YardFor(TArrayView<const FVector2D> Outline) const;
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
@@ -121,16 +118,25 @@ private:
 
 	EPlotStage Stage = EPlotStage::Idle;
 
-	/** Where the frontage starts, quantised onto the road's own bay grid. */
-	FVector2D Anchor = FVector2D::ZeroVector;
-
 	/** Unit vector along the road at the anchor. */
 	FVector2D Along = FVector2D(1.0, 0.0);
 
 	/** Unit vector away from the road, on the side the cursor was when it anchored. */
 	FVector2D Inward = FVector2D(0.0, 1.0);
 
-	/** Locked at the Width click, and at the Depth click. Meaningless before. */
-	int32 Width = 1;
-	int32 Depth = 1;
+	/**
+	 * The corners, in the order they are pinned: anchor, far frontage end, far back, near
+	 * back.
+	 *
+	 * Corners[0] IS the anchor - it had a member of its own until the quad landed, and two
+	 * names for one point is how the two come to disagree. It is quantised onto the road's
+	 * own step and stood off the kerb at the first click; see OnClick.
+	 *
+	 * ENTRIES PAST PinnedCount() ARE STALE and must not be read. Quad() rebuilds the moving
+	 * one from the cursor every frame rather than trusting what is here, because drawing a
+	 * stale corner is how a ghost shows the PREVIOUS gesture's geometry - which this tool
+	 * has already done once, with a depth that outlived the gesture that set it.
+	 */
+	FVector2D Corners[4] = { FVector2D::ZeroVector, FVector2D::ZeroVector,
+		FVector2D::ZeroVector, FVector2D::ZeroVector };
 };

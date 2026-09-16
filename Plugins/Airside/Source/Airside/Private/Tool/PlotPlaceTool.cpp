@@ -63,6 +63,30 @@ namespace
 			: Segment->Profile->GetHalfWidthRight();
 	}
 
+	using PlotGesture::MinFrontageUu;
+	using PlotGesture::FrontageStepUu;
+
+	/**
+	 * A frontage length quantised to the plot's own steps.
+	 *
+	 * ROUNDED, NOT FLOORED, which is the difference between a grid that feels magnetic and
+	 * one that feels grudging: floored, the cursor must travel a whole further step before
+	 * the plot grows, so it always lags behind the hand.
+	 *
+	 * NOT PlotFit::BayWidthUu. That is 4 m because a SHED is 4 m, and it used to mean the
+	 * plot's step as well - one number doing two jobs, which is how a plot could be drawn
+	 * narrower than anything that could stand in it.
+	 */
+	double QuantisedFrontage(double Raw)
+	{
+		if (Raw <= MinFrontageUu)
+		{
+			return MinFrontageUu;
+		}
+		const double Steps = FMath::RoundToDouble((Raw - MinFrontageUu) / FrontageStepUu);
+		return MinFrontageUu + Steps * FrontageStepUu;
+	}
+
 	/**
 	 * Which anchor point a click would take on this road, and where it stands.
 	 *
@@ -73,9 +97,25 @@ namespace
 	 */
 	int32 AnchorIndexAt(double SegmentT, double Length)
 	{
+		// FrontageStepUu, not BayWidthUu: an anchor on a 4 m grid under a frontage growing in
+		// 5 m steps would let two plots drawn side by side never sit flush, which is the
+		// entire reason the frontage has a quantum.
 		const double AlongRoad = FMath::Clamp(SegmentT, 0.0, 1.0) * Length;
-		const int32 Count = FMath::FloorToInt(Length / PlotFit::BayWidthUu);
-		return FMath::Clamp(FMath::RoundToInt(AlongRoad / PlotFit::BayWidthUu), 0, Count);
+		const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
+		return FMath::Clamp(FMath::RoundToInt(AlongRoad / FrontageStepUu), 0, Count);
+	}
+
+	/**
+	 * How far along the road anchor N stands, uu.
+	 *
+	 * THE MULTIPLICATION LIVES HERE, once. Both callers used to do it themselves against
+	 * PlotFit::BayWidthUu, so moving the index to the 5 m step left them multiplying by 4 m -
+	 * the anchor landed 2 km from the cursor and three tests failed for reasons that looked
+	 * nothing like the cause. An index and its stride are one fact.
+	 */
+	double AnchorOffset(int32 Index)
+	{
+		return Index * FrontageStepUu;
 	}
 
 	/** A segment's straight-line ends, or false if either is dead. */
@@ -106,68 +146,91 @@ FText FPlotPlaceTool::GetDisplayName() const
 	return LOCTEXT("FuelDepotTool", "Fuel depot");
 }
 
-void FPlotPlaceTool::Frontage(FVector2D& OutA, FVector2D& OutB) const
+int32 FPlotPlaceTool::PinnedCount() const
 {
-	const FVector2D Far = Anchor + Along * (static_cast<double>(Width) * PlotFit::BayWidthUu);
-
-	// THE GRID WANTS THE INTERIOR ON THE LEFT of A->B, so the two ends are ordered to make
-	// that true rather than assumed to be in the right order. Along already points whichever
-	// way the player dragged, so half the time it is not.
-	const FVector2D Unit = (Far - Anchor).GetSafeNormal();
-	if (FVector2D::DotProduct(RoadGeom::PerpCCW(Unit), Inward) >= 0.0)
+	// READ OFF THE STAGE so the two cannot disagree. A separate counter would be a second
+	// thing to keep in step with the stage machine, and the readout's "N/4" would be free to
+	// drift from what the gesture is actually doing.
+	switch (Stage)
 	{
-		OutA = Anchor;
-		OutB = Far;
+	case EPlotStage::Idle:     return 0;
+	case EPlotStage::Frontage: return 1;
+	case EPlotStage::CornerA:  return 2;
+	case EPlotStage::CornerB:  return 3;
+	case EPlotStage::Confirm:  return 4;
 	}
-	else
+	return 0;
+}
+
+void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const
+{
+	OutQuad.Reset();
+
+	const int32 Pinned = PinnedCount();
+	if (Pinned < 1)
 	{
-		OutA = Far;
-		OutB = Anchor;
+		return;
 	}
+
+	// Corner 0 is the anchor, pinned by the first click and never moving after.
+	OutQuad.Add(Corners[0]);
+
+	// Corner 1: the far end of the frontage. Along the road, quantised, and it may run EITHER
+	// WAY - a player who anchors and then changes their mind about direction should not have
+	// to cancel and start again.
+	FVector2D Far = Corners[1];
+	if (Pinned == 1)
+	{
+		const double Reach = FVector2D::DotProduct(Context.Cursor - Corners[0], Along);
+		const double Sign = Reach < 0.0 ? -1.0 : 1.0;
+		Far = Corners[0] + Along * (Sign * QuantisedFrontage(FMath::Abs(Reach)));
+	}
+	OutQuad.Add(Far);
+
+	if (Pinned < 2)
+	{
+		return;
+	}
+
+	// Corners 2 and 3: the back pair, free of any quantum. Depth is measured along the inward
+	// normal FROM THE ANCHOR, so dragging depth does not slide a corner sideways along road.
+	auto DepthAtCursor = [&]()
+	{
+		return FMath::Max(FVector2D::DotProduct(Context.Cursor - Corners[0], Inward), 0.0);
+	};
+	auto DepthOf = [&](const FVector2D& Corner)
+	{
+		return FVector2D::DotProduct(Corner - Corners[0], Inward);
+	};
+
+	const double DepthFar = Pinned == 2 ? DepthAtCursor() : DepthOf(Corners[2]);
+	OutQuad.Add(Far + Inward * DepthFar);
+
+	// UNTIL IT IS REACHED, THE NEAR CORNER MIRRORS THE FAR ONE, so two pinned corners read as
+	// a rectangle the player then adjusts rather than as an open shape trailing off.
+	//
+	// IT MUST NOT READ Corners[3] HERE: that entry is stale until the fourth click writes it,
+	// and drawing a stale corner is how a ghost shows the PREVIOUS gesture's geometry - the
+	// exact bug the old Depth member caused, which took a deliberate re-break to prove.
+	double DepthNear = DepthFar;
+	if (Pinned == 3)
+	{
+		DepthNear = DepthAtCursor();
+	}
+	else if (Pinned >= 4)
+	{
+		DepthNear = DepthOf(Corners[3]);
+	}
+	OutQuad.Add(Corners[0] + Inward * DepthNear);
 }
 
-int32 FPlotPlaceTool::WidthAt(const FToolContext& Context) const
+PlotYard::FYard FPlotPlaceTool::YardFor(TArrayView<const FVector2D> Outline) const
 {
-	// ROUNDED, NOT FLOORED, and this is the difference between a grid that feels magnetic
-	// and one that feels grudging: floored, the cursor must travel a whole further bay
-	// before the plot grows, so it always lags behind the hand.
-	const double Reach = FVector2D::DotProduct(Context.Cursor - Anchor, Along);
-	return FMath::Max(1, FMath::RoundToInt(FMath::Abs(Reach) / PlotFit::BayWidthUu));
-}
+	if (Outline.Num() < 4)
+	{
+		return PlotYard::FYard();
+	}
 
-int32 FPlotPlaceTool::DepthAt(const FToolContext& Context) const
-{
-	const double Reach = FVector2D::DotProduct(Context.Cursor - Anchor, Inward);
-	return FMath::Max(1, FMath::RoundToInt(Reach / PlotFit::BayDepthUu));
-}
-
-void FPlotPlaceTool::ShownSize(const FToolContext& Context, int32& OutWidth, int32& OutDepth) const
-{
-	// ONE ROW UNTIL DEPTH IS REACHED, and not the Depth member, which still holds whatever
-	// the LAST gesture locked - Stage returning to Idle does not reset it. Drawing that stale
-	// depth is what made the second plot of a session ghost three rows deep while the bar
-	// beside it said one.
-	OutWidth = Stage == EPlotStage::Width ? WidthAt(Context) : Width;
-	OutDepth = Stage == EPlotStage::Depth ? DepthAt(Context)
-		: (Stage == EPlotStage::Width ? 1 : Depth);
-}
-
-void FPlotPlaceTool::ShownPlot(const FToolContext& Context, FVector2D& OutA, FVector2D& OutB,
-	int32& OutWidth, int32& OutDepth) const
-{
-	ShownSize(Context, OutWidth, OutDepth);
-
-	// Frontage() uses the LOCKED width; while dragging, the shown one is what matters.
-	const FVector2D Far = Anchor + Along * (static_cast<double>(OutWidth) * PlotFit::BayWidthUu);
-	const FVector2D Unit = (Far - Anchor).GetSafeNormal();
-	const bool bLeft = FVector2D::DotProduct(RoadGeom::PerpCCW(Unit), Inward) >= 0.0;
-	OutA = bLeft ? Anchor : Far;
-	OutB = bLeft ? Far : Anchor;
-}
-
-PlotYard::FYard FPlotPlaceTool::YardFor(const FVector2D& FrontA, const FVector2D& FrontB,
-	int32 InWidth, int32 InDepth) const
-{
 	TArray<PlotYard::FFootprint> Footprints;
 	Footprints.Reserve(Modules.Num());
 	for (const EDepotModule Module : Modules)
@@ -176,15 +239,11 @@ PlotYard::FYard FPlotPlaceTool::YardFor(const FVector2D& FrontA, const FVector2D
 	}
 
 	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
-	// gets built rather than one that merely resembles it - see Build/DepotKit.h.
-	const FVector2D Pose = (FrontA + FrontB) * 0.5;
+	// gets BUILT rather than one that merely resembles it - see Build/DepotKit.h.
+	const FVector2D Pose = (Outline[0] + Outline[1]) * 0.5;
 
-	// The outline is rebuilt here rather than passed in, because GridOutline is exactly what
-	// PlaceEntityInPlot is handed on commit: same rectangle, same solver, same answer.
-	return PlotYard::LayOut(
-		PlotFit::GridOutline(FrontA, FrontB, InWidth, InDepth),
-		FrontA, FrontB, Pose, Footprints, DepotYardSeed(Pose),
-		DepotFootprint(EDepotModule::Tank));
+	return PlotYard::LayOut(Outline, Outline[0], Outline[1], Pose, Footprints,
+		DepotYardSeed(Pose), DepotFootprint(EDepotModule::Tank));
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -228,55 +287,74 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
 		// per SEGMENT rather than globally means two plots on one segment sit flush and a
 		// plot never straddles a junction - see the design doc's open question 1.
-		Anchor = RoadA + Along
-			* (AnchorIndexAt(Context.Snap.SegmentT, Length) * PlotFit::BayWidthUu);
+		Corners[0] = RoadA + Along
+			* AnchorOffset(AnchorIndexAt(Context.Snap.SegmentT, Length));
 
 		// WHICH SIDE THE CURSOR IS ON, not a rule. A depot goes on the side of the road the
 		// player is pointing at; the alternative is a fixed side that is wrong half the time
 		// and cannot be argued with.
 		const FVector2D Left = RoadGeom::PerpCCW(Along);
-		const double Side = FVector2D::DotProduct(Context.Cursor - Anchor, Left);
+		const double Side = FVector2D::DotProduct(Context.Cursor - Corners[0], Left);
 		Inward = Side >= 0.0 ? Left : -Left;
 
 		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
 		// step, because the side has to be read against the centreline the cursor was
 		// judged from - offsetting first would tilt that test by half a road width.
-		Anchor += Inward * KerbOffset(*Network, Context.Snap.Segment, Side >= 0.0);
+		Corners[0] += Inward * KerbOffset(*Network, Context.Snap.Segment, Side >= 0.0);
 
-		Stage = EPlotStage::Width;
+		Stage = EPlotStage::Frontage;
 		return;
 	}
 
-	case EPlotStage::Width:
+	case EPlotStage::Frontage:
 	{
-		Width = WidthAt(Context);
-
-		// DRAGGED BACK PAST THE ANCHOR RUNS THE PLOT THE OTHER WAY, rather than refusing or
-		// collapsing to nothing. A player who anchors and then changes their mind about
-		// which way to go should not have to cancel and start again.
-		if (FVector2D::DotProduct(Context.Cursor - Anchor, Along) < 0.0)
+		// PINNED FROM WHAT WAS ON SCREEN, not recomputed. Quad() is what the ghost drew this
+		// frame, so a click can only ever pin the shape the player was looking at.
+		TArray<FVector2D> Shown;
+		Quad(Context, Shown);
+		if (Shown.Num() < 2)
 		{
-			Along = -Along;
+			return;
+		}
+		Corners[1] = Shown[1];
+		Stage = EPlotStage::CornerA;
+		return;
+	}
 
-			// INWARD IS NOT FLIPPED WITH IT. It is an absolute world direction - the side of
-			// the road the cursor was on when the plot was anchored - and that side does not
-			// change because the player dragged west instead of east. Flipping it here put
-			// the whole plot across the road, which Airside.Tool.PlotWidthRunsBothWays
-			// caught: the plot ran the right way and sat on the wrong side.
-			//
-			// Nothing downstream needs Inward to be Along's left normal. Frontage() orders
-			// its two ends to put the interior on the left, which is where that contract is
-			// actually met.
+	case EPlotStage::CornerA:
+	{
+		TArray<FVector2D> Shown;
+		Quad(Context, Shown);
+		if (Shown.Num() < 3)
+		{
+			return;
+		}
+		Corners[2] = Shown[2];
+		Stage = EPlotStage::CornerB;
+		return;
+	}
+
+	case EPlotStage::CornerB:
+	{
+		TArray<FVector2D> Shown;
+		Quad(Context, Shown);
+		if (Shown.Num() < 4)
+		{
+			return;
 		}
 
-		Stage = EPlotStage::Depth;
-		return;
-	}
-
-	case EPlotStage::Depth:
-		Depth = DepthAt(Context);
+		// REFUSED AT THE CLICK THAT WOULD MAKE IT, not at commit, so the player is never left
+		// holding a shape that cannot be built and can only escape by cancelling.
+		// PlaceEntityInPlot asks the same question and keeps asking it: this is earlier,
+		// not instead.
+		if (!RoadGeom::IsSimplePolygon(Shown))
+		{
+			return;
+		}
+		Corners[3] = Shown[3];
 		Stage = EPlotStage::Confirm;
 		return;
+	}
 
 	case EPlotStage::Confirm:
 		// NOTHING. The gesture is locked and the Build button is the only way on - a click
@@ -291,34 +369,34 @@ void FPlotPlaceTool::OnCancel(const FToolContext& Context)
 	// whole gesture is a harsher response than the mistake deserves.
 	switch (Stage)
 	{
-	case EPlotStage::Confirm: Stage = EPlotStage::Depth; return;
-	case EPlotStage::Depth:   Stage = EPlotStage::Width; return;
-	case EPlotStage::Width:   Stage = EPlotStage::Idle;  return;
-	case EPlotStage::Idle:    return;
+	case EPlotStage::Confirm:  Stage = EPlotStage::CornerB;  return;
+	case EPlotStage::CornerB:  Stage = EPlotStage::CornerA;  return;
+	case EPlotStage::CornerA:  Stage = EPlotStage::Frontage; return;
+	case EPlotStage::Frontage: Stage = EPlotStage::Idle;     return;
+	case EPlotStage::Idle:     return;
 	}
 }
 
 void FPlotPlaceTool::OnCommit(const FToolContext& Context)
 {
 	// EVERY STAGE BUT THE LAST IGNORES THIS. Build is a widget, not a stage of the gesture,
-	// so it is reachable whenever the bar is on screen - committing from Width would build a
+	// so it is reachable whenever the bar is on screen - committing from Frontage would build a
 	// plot with no depth at all.
 	if (Stage != EPlotStage::Confirm || Context.Target == nullptr)
 	{
 		return;
 	}
 
-	FVector2D FrontA = FVector2D::ZeroVector;
-	FVector2D FrontB = FVector2D::ZeroVector;
-	Frontage(FrontA, FrontB);
-
-	const TArray<FVector2D> Outline = PlotFit::GridOutline(FrontA, FrontB, Width, Depth);
-	if (Outline.Num() < 3)
+	TArray<FVector2D> Outline;
+	Quad(Context, Outline);
+	if (Outline.Num() < 4)
 	{
 		return;
 	}
 
-	Context.Target->PlaceEntityInPlot(Outline, FrontA, FrontB, Modules, Kind);
+	// THE SAME QUAD THE GHOST DREW. Built from Quad() rather than rebuilt from a width and a
+	// depth, so what is committed cannot differ from what was on screen when Build was hit.
+	Context.Target->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Modules, Kind);
 
 	// BACK TO IDLE, ready for the next one. A tool that stayed in Confirm would let the
 	// player press Build twice and get two depots stacked on one plot.
@@ -370,10 +448,10 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 				// it double-rings, so the chosen point reads at a glance.
 				const int32 Chosen = AnchorIndexAt(Context.Snap.SegmentT, Length);
 
-				const int32 Count = FMath::FloorToInt(Length / PlotFit::BayWidthUu);
+				const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
 				for (int32 I = 0; I <= Count; ++I)
 				{
-					Sink.Marker(RoadA + Unit * (I * PlotFit::BayWidthUu) + Offset,
+					Sink.Marker(RoadA + Unit * AnchorOffset(I) + Offset,
 						I == Chosen ? EPreviewStyle::Pending : EPreviewStyle::Snap);
 				}
 			}
@@ -385,14 +463,14 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		return;
 	}
 
-	FVector2D FrontA = FVector2D::ZeroVector;
-	FVector2D FrontB = FVector2D::ZeroVector;
-	int32 ShownWidth = 0;
-	int32 ShownDepth = 0;
-	ShownPlot(Context, FrontA, FrontB, ShownWidth, ShownDepth);
+	TArray<FVector2D> Shown;
+	Quad(Context, Shown);
+	if (Shown.Num() < 4)
+	{
+		return;
+	}
 
-	Sink.Polygon(PlotFit::GridOutline(FrontA, FrontB, ShownWidth, ShownDepth),
-		EPreviewStyle::Pending);
+	Sink.Polygon(Shown, EPreviewStyle::Pending);
 
 	// THE MODULES THEMSELVES, where they will actually stand.
 	//
@@ -405,17 +483,17 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the
 	// boxes Build puts down, not an impression of them.
-	const PlotYard::FYard Yard = YardFor(FrontA, FrontB, ShownWidth, ShownDepth);
+	const PlotYard::FYard Yard = YardFor(Shown);
 
-	TArray<FVector2D> Corners;
-	for (int32 I = 0; I < Yard.Stands.Num(); ++I)
+	TArray<FVector2D> StandOutline;
+	for (int32 I = 0; I < Yard.Stands.Num() && I < Modules.Num(); ++I)
 	{
 		if (!Yard.Stands[I].bPlaced)
 		{
 			continue;
 		}
-		PlotYard::StandCorners(Yard.Stands[I], DepotFootprint(Modules[I]), Corners);
-		Sink.Polygon(Corners, EPreviewStyle::Pending);
+		PlotYard::StandCorners(Yard.Stands[I], DepotFootprint(Modules[I]), StandOutline);
+		Sink.Polygon(StandOutline, EPreviewStyle::Pending);
 	}
 }
 
@@ -434,18 +512,27 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		return;
 	}
 
-	FVector2D FrontA = FVector2D::ZeroVector;
-	FVector2D FrontB = FVector2D::ZeroVector;
-	int32 ShownWidth = 0;
-	int32 ShownDepth = 0;
-	ShownPlot(Context, FrontA, FrontB, ShownWidth, ShownDepth);
+	TArray<FVector2D> Shown;
+	Quad(Context, Shown);
+	if (Shown.Num() < 2)
+	{
+		Sink.Committable(false);
+		return;
+	}
 
-	Sink.Fact(TEXT("Bays"), FString::FromInt(ShownWidth));
-	Sink.Fact(TEXT("Rows"), FString::FromInt(ShownDepth));
+	// FIRST, because it is the line that says where the player is in the gesture; every other
+	// fact is about a shape that may not be finished.
+	Sink.Fact(TEXT("Plot Points"), FString::Printf(TEXT("%d/4"), PinnedCount()));
+
+	// BAYS AND ROWS ARE GONE: a quadrilateral has neither, and a fact whose NAME survived its
+	// meaning is worse than one that was removed - the player reads a number describing a
+	// structure the plot does not have. Same reasoning that retired "Expansion slots".
+	Sink.Fact(TEXT("Frontage"), FString::Printf(TEXT("%.0f m"),
+		FVector2D::Distance(Shown[0], Shown[1]) / 100.0));
 
 	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
 	// the boxes on screen and the counts on the bar are one computation, not two that agree.
-	const PlotYard::FYard Yard = YardFor(FrontA, FrontB, ShownWidth, ShownDepth);
+	const PlotYard::FYard Yard = YardFor(Shown);
 
 	// WHAT YOU GET against what you asked for. A plot too tight silently dropping the pump
 	// is exactly the kind of thing a player discovers after paying for it.
@@ -453,7 +540,7 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		Modules.Num() - Yard.DroppedCount(), Modules.Num()));
 	Sink.Fact(TEXT("Room for"), FString::FromInt(Yard.RoomForMore));
 
-	if (Stage == EPlotStage::Confirm && ShownDepth <= 1)
+	if (Stage == EPlotStage::Confirm && Yard.RoomForMore == 0)
 	{
 		// The direct analogue of Manor Lords' "Plots without Extension Space". A warning and
 		// never a refusal: a one-row depot works perfectly well and may be exactly what the
