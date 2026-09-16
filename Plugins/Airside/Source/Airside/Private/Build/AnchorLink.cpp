@@ -710,6 +710,16 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 				FMath::Abs(FVector2D::DotProduct(Along, RoadDir)), -1.0, 1.0));
 			const double Needs = GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Turn);
 
+			// LINK.REACH IS DOING TWO JOBS HERE, and the second one is named so it is deliberate.
+			// Its first is the player's knob for how far a stand may sit from its road
+			// (ARoadNetworkActor::ServiceLinkRadius, and FAnchorLink::DefaultServiceLinkRadius).
+			// Its second is this: a crossing further off than a link may reach is a crossing
+			// this connector would have to run to along a line that is no longer the lane, so
+			// the lane change is the better shape. Raising the knob therefore widens the
+			// crossing branch as well as the search - which is right, since both answer "how far
+			// from its road may a stand be", but it is a coupling to know about rather than to
+			// discover. There is no second figure because a second figure is one more thing that
+			// can disagree with this one.
 			if (MeetsAt > 0.0 && MeetsAt <= Link.Reach && Needs + LeadInWeldTolerance <= MeetsAt)
 			{
 				// THE CROSSING. Re-asked of the road rather than taken from the tangent line, so
@@ -920,14 +930,24 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	Lead.MaxWingspan = Link.MaxWingspan;
 	Lead.bDerived = true;
 
-	// MEASURED, NOT ASSUMED, and only for the link that is sized to a radius in the first place.
-	// The lead-in's DELIVERED radius is what a truck drives; the run that was asked for is not.
-	// This project has paid three sessions for that distinction once already (8be494c, where a
-	// test checked the radius requested while the follower drove the radius delivered), so the
-	// figure the warning below prints comes off the edge as laid.
+	// MEASURED, NOT ASSUMED, for every link that is sized to a radius in the first place. The
+	// lead-in's DELIVERED radius is what a truck drives; the run that was asked for is not. This
+	// project has paid three sessions for that distinction once already (8be494c, where a test
+	// checked the radius requested while the follower drove the radius delivered), so the figure
+	// the warning below prints comes off the edge as laid.
+	//
+	// ON LaneRadius AND NOT LaneRun, which is the difference between measuring one branch and
+	// both. LaneRun belongs to the lane CHANGE; a link that ran on to a crossing has none, and
+	// gating on it left the crossing branch unmeasured and unable to warn - the same shape as
+	// the defect above, one branch over. Analytically a crossing is exact while it is unclamped,
+	// but Behind and Ahead clamp it whenever the road is short or ends near the stand, and an
+	// analytic argument is not a measurement.
+	//
+	// A STRAIGHT LEAD-IN REPORTS THE MAXIMUM and so never trips the warning, which is right: the
+	// crossing branch leaves the lane along the lane and has no curve to be tight.
 	const FVector2D LeadEndAt = Network.GetGuidelineNode(LeadEnd)->Position;
 	double Tightest = TNumericLimits<double>::Max();
-	if (LaneRun > 0.0)
+	if (LaneRadius > 0.0)
 	{
 		Tightest = GuidelineGeom::TightestRadius(Link.At, Lead.Control, LeadEndAt);
 	}
@@ -969,7 +989,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		// GuidelineGeom::ShiftDeflectionFor, and Airside.Build.StandLinkClearsTheTruckLock,
 		// which measures both at both gaps.
 		const FVector2D SweepEndAt = Network.GetGuidelineNode(SweepEnd)->Position;
-		if (LaneRun > 0.0
+		if (LaneRadius > 0.0
 			&& FVector2D::DotProduct(SweepEndAt - Corner, Link.Dir) > 0.0)
 		{
 			Tightest = FMath::Min(Tightest,
@@ -989,7 +1009,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// constrained at all.
 	if (const double Lock =
 			UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
-		LaneRun > 0.0 && Lock > 0.0 && Tightest < Lock)
+		LaneRadius > 0.0 && Lock > 0.0 && Tightest < Lock)
 	{
 		UE_LOG(LogAirside, Warning,
 			TEXT("Service lane entry at (%.0f, %.0f) joins its road %.0f uu away on a %.0f uu "

@@ -519,6 +519,122 @@ namespace ServiceLinkFixture
 	}
 }
 
+namespace ServiceLinkFixture
+{
+	/**
+	 * The edges one link laid, from the entry outwards: the lead-in, then the MERGE sweep, then
+	 * the turn-back. Empty when this entry took no link.
+	 *
+	 * OFF THE GRAPH, not off the builder's word for it. A link is three edges - a lead-in from
+	 * the declared entry to a node short of the road, and a sweep onto the road each way - and
+	 * all three are UNOWNED, which is what tells them from the lane they leave (see
+	 * FGuidelineEdge's StandGeometryOwner, and IsServiceNodeConnected, which lives on the same
+	 * distinction).
+	 *
+	 * THE MERGE BEFORE THE TURN-BACK, and told apart by geometry rather than by index: both
+	 * sweeps leave the lead-in's far end along the same tangent and both meet the road
+	 * tangentially, so what differs is WHICH WAY along the road they go. The one on the side the
+	 * lead-in was already pointing is the merge, and it turns by the transition's deflection;
+	 * the other turns by 180 minus it. Their radii differ by an order of magnitude at a close
+	 * gap and the test would be measuring a coin toss without this.
+	 */
+	TArray<FGuidelineEdgeId> LinkEdgesAt(const URoadNetwork& Net, FGuidelineNodeId Entry)
+	{
+		auto Unowned = [&Net](FGuidelineEdgeId Id)
+		{
+			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+			return Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet();
+		};
+
+		TArray<FGuidelineEdgeId> Found;
+		const FGuidelineNode* Node = Net.GetGuidelineNode(Entry);
+		if (Node == nullptr)
+		{
+			return Found;
+		}
+
+		FGuidelineEdgeId LeadId;
+		for (const FGuidelineEdgeId& Id : Node->Incident)
+		{
+			if (Unowned(Id)) { LeadId = Id; }
+		}
+		if (!LeadId.IsSet())
+		{
+			return Found;
+		}
+		Found.Add(LeadId);
+
+		const FGuidelineEdge* Lead = Net.GetGuidelineEdge(LeadId);
+		const FGuidelineNodeId LeadEndId = Lead->A == Entry ? Lead->B : Lead->A;
+		const FGuidelineNode* LeadEnd = Net.GetGuidelineNode(LeadEndId);
+		if (LeadEnd == nullptr)
+		{
+			return Found;
+		}
+
+		// The sweeps share the lead-in's far end and take their control from the point on the
+		// road the transition aims at - the same point for both, which is why comparing against
+		// it separates them.
+		FVector2D Arriving = FVector2D::ZeroVector;
+		if (!LeavingAlong(Net, LeadId, LeadEndId, Arriving))
+		{
+			return Found;
+		}
+		Arriving = -Arriving;   // The direction the lead-in ARRIVES in, not the way back up it.
+
+		// AHEAD OF THE MEETING POINT, measured from the sweep's own control - which IS that
+		// point, for both of them. A sweep whose road end lies further along the way the lead-in
+		// was heading is the merge; the one behind it is the turn-back.
+		auto Ahead = [&Net, &Arriving, LeadEndId](const FGuidelineEdgeId& Id)
+		{
+			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+			const FGuidelineNode* Far =
+				Net.GetGuidelineNode(Edge->A == LeadEndId ? Edge->B : Edge->A);
+			return Far != nullptr
+				? FVector2D::DotProduct(Far->Position - Edge->Control, Arriving)
+				: 0.0;
+		};
+
+		TArray<FGuidelineEdgeId> Sweeps;
+		for (const FGuidelineEdgeId& Id : LeadEnd->Incident)
+		{
+			if (Id != LeadId && Unowned(Id)) { Sweeps.Add(Id); }
+		}
+		Sweeps.Sort([&Ahead](const FGuidelineEdgeId& L, const FGuidelineEdgeId& R)
+		{
+			return Ahead(L) > Ahead(R);
+		});
+		Found.Append(Sweeps);
+		return Found;
+	}
+
+	/**
+	 * A delivered radius as a reader can take it in.
+	 *
+	 * A STRAIGHT EDGE HAS NO RADIUS AT ALL and TightestRadius says so with a numeric maximum, so
+	 * a diagnostic that printed the number would be three hundred digits of nothing. Infinity is
+	 * also the RIGHT answer for a lead-in on the crossing branch, which leaves the lane along
+	 * the lane, so this case is common rather than exotic.
+	 */
+	FString Curvature(double Radius)
+	{
+		return Radius > 1.0e6 ? TEXT("straight") : FString::Printf(TEXT("%.0f"), Radius);
+	}
+
+	/** The radius the edge AS LAID delivers, which is the one a truck has to follow. */
+	double DeliveredRadius(const URoadNetwork& Net, FGuidelineEdgeId Id)
+	{
+		const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+		const FGuidelineNode* A = Edge != nullptr ? Net.GetGuidelineNode(Edge->A) : nullptr;
+		const FGuidelineNode* B = Edge != nullptr ? Net.GetGuidelineNode(Edge->B) : nullptr;
+		if (A == nullptr || B == nullptr)
+		{
+			return 0.0;
+		}
+		return GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
+	}
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FServiceLaneEntersOnEverySideWithinReachTest,
 	"Airside.Build.ServiceLaneEntersOnEverySideWithinReach",
@@ -668,6 +784,49 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 			TestTrue(*FString::Printf(TEXT("and takes the node back along the crossing - at %s"), *At),
 				Entry.Y > LaneBounds.Min.Y + 1.0 && Entry.Y < LaneBounds.Max.Y - 1.0);
 		}
+
+		// AND THE CURVE ONTO THE ROAD IS ONE A TRUCK CAN FOLLOW, which is the property this
+		// fixture is uniquely placed to measure: it is the only one in the suite that reaches
+		// FAnchorLink::Join's CROSSING branch - a road across the end of a stand meets the
+		// lane's own heading at 45 degrees rather than lying beside it, so the connector runs
+		// on to where they meet and rounds the corner instead of changing lanes.
+		//
+		// EVERY ONE OF THEM, which is what the figures allow: the nose crossing's two entries
+		// face the road along converging diagonals and aim at nearly the same point of it, so
+		// the second to be joined meets the road inside the fillet the first already cut - and
+		// what that costs it is a SHALLOWER merge rather than a tighter one. Both clear.
+		// Airside.Build.StandLinkClearsTheTruckLock prints both figures and pins the lead-in as
+		// straight, which is what tells this branch from the lane change.
+		const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+		const double Lock = FMath::Sin(FMath::DegreesToRadians(
+			FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0)));
+		const double Followable = Lock > KINDA_SMALL_NUMBER ? Truck.Wheelbase() / Lock : 0.0;
+
+		FString Merges;
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Ahead.Net, Ahead.Placed))
+		{
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Ahead.Net, Entry);
+			if (Link.Num() < 2)
+			{
+				continue;
+			}
+			const double Merge = DeliveredRadius(*Ahead.Net, Link[1]);
+			Merges += Curvature(Merge) + TEXT(" ");
+			TestTrue(*FString::Printf(
+					TEXT("and the merge onto it clears a %.0f uu lock - %s"),
+					Followable, *Curvature(Merge)),
+				Merge >= Followable);
+
+			// THE LEAD-IN IS STRAIGHT on this branch, by construction: it runs along the lane's
+			// own heading to the corner, so there is no curve on it to be tight. Measuring it
+			// is what would catch the S being taken here by mistake, which is how this fixture
+			// failed when the crossing branch did not yet exist.
+			TestTrue(*FString::Printf(
+					TEXT("the lead-in onto a crossing road is straight - %s uu"),
+					*Curvature(DeliveredRadius(*Ahead.Net, Link[0]))),
+				DeliveredRadius(*Ahead.Net, Link[0]) > Followable);
+		}
+		AddInfo(FString::Printf(TEXT("NOSE merges: %s"), *Merges));
 	}
 
 	// WHAT IT BUYS, MEASURED ON A JOURNEY. The GPU sits at local (300, -600), on the port run;
@@ -692,13 +851,15 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 					GuidelineGeom::PolylineLength(Plan.Polyline)),
 				GuidelineGeom::PolylineLength(Plan.Polyline) < 28300.0 + 4700.0);
 
-			// THE ROUTE'S OWN CORNERS, REPORTED AND NOT ASSERTED, 2026-09-16. The entrance is
-			// where the stand says it is now and it leaves ALONG the lane, but the run it
-			// leaves on is FStandLaneBuild::PreferredTangentRun - a figure measured against a
-			// spur's 1000-1400 uu gaps, not a road's - so the curve onto a road 54 m away is
-			// tighter than the truck's lock. FAnchorLink::Join records the measurement; this
-			// prints what the router actually hands a driver, which is how that will be
-			// checked when the figure is revisited.
+			// THE ROUTE'S OWN CORNERS, REPORTED AND NOT ASSERTED. The entrance is where the
+			// stand says it is and it leaves ALONG the lane, on a run sized from the radius it
+			// owes rather than from a constant - GuidelineGeom::ShiftDeflectionFor, which is
+			// what makes the curves on this route ones a truck can actually follow. The RADII
+			// are asserted by Airside.Build.StandLinkClearsTheTruckLock, which measures the
+			// edges as laid; this prints what the ROUTER hands a driver, end to end, because a
+			// route can still be poor while every edge on it is fine - a detour, or a turn at a
+			// junction the link never made. What would show here is an instant heading change,
+			// and there is none left on it.
 			{
 				const TArray<FVector2D>& P = Plan.Polyline;
 				int32 Sharp = 0;
@@ -739,109 +900,6 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 		}
 	}
 	return true;
-}
-
-namespace ServiceLinkFixture
-{
-	/**
-	 * The edges one link laid, from the entry outwards: the lead-in, then the MERGE sweep, then
-	 * the turn-back. Empty when this entry took no link.
-	 *
-	 * OFF THE GRAPH, not off the builder's word for it. A link is three edges - a lead-in from
-	 * the declared entry to a node short of the road, and a sweep onto the road each way - and
-	 * all three are UNOWNED, which is what tells them from the lane they leave (see
-	 * FGuidelineEdge's StandGeometryOwner, and IsServiceNodeConnected, which lives on the same
-	 * distinction).
-	 *
-	 * THE MERGE BEFORE THE TURN-BACK, and told apart by geometry rather than by index: both
-	 * sweeps leave the lead-in's far end along the same tangent and both meet the road
-	 * tangentially, so what differs is WHICH WAY along the road they go. The one on the side the
-	 * lead-in was already pointing is the merge, and it turns by the transition's deflection;
-	 * the other turns by 180 minus it. Their radii differ by an order of magnitude at a close
-	 * gap and the test would be measuring a coin toss without this.
-	 */
-	TArray<FGuidelineEdgeId> LinkEdgesAt(const URoadNetwork& Net, FGuidelineNodeId Entry)
-	{
-		auto Unowned = [&Net](FGuidelineEdgeId Id)
-		{
-			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
-			return Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet();
-		};
-
-		TArray<FGuidelineEdgeId> Found;
-		const FGuidelineNode* Node = Net.GetGuidelineNode(Entry);
-		if (Node == nullptr)
-		{
-			return Found;
-		}
-
-		FGuidelineEdgeId LeadId;
-		for (const FGuidelineEdgeId& Id : Node->Incident)
-		{
-			if (Unowned(Id)) { LeadId = Id; }
-		}
-		if (!LeadId.IsSet())
-		{
-			return Found;
-		}
-		Found.Add(LeadId);
-
-		const FGuidelineEdge* Lead = Net.GetGuidelineEdge(LeadId);
-		const FGuidelineNodeId LeadEndId = Lead->A == Entry ? Lead->B : Lead->A;
-		const FGuidelineNode* LeadEnd = Net.GetGuidelineNode(LeadEndId);
-		if (LeadEnd == nullptr)
-		{
-			return Found;
-		}
-
-		// The sweeps share the lead-in's far end and take their control from the point on the
-		// road the transition aims at - the same point for both, which is why comparing against
-		// it separates them.
-		FVector2D Arriving = FVector2D::ZeroVector;
-		if (!LeavingAlong(Net, LeadId, LeadEndId, Arriving))
-		{
-			return Found;
-		}
-		Arriving = -Arriving;   // The direction the lead-in ARRIVES in, not the way back up it.
-
-		// AHEAD OF THE MEETING POINT, measured from the sweep's own control - which IS that
-		// point, for both of them. A sweep whose road end lies further along the way the lead-in
-		// was heading is the merge; the one behind it is the turn-back.
-		auto Ahead = [&Net, &Arriving, LeadEndId](const FGuidelineEdgeId& Id)
-		{
-			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
-			const FGuidelineNode* Far =
-				Net.GetGuidelineNode(Edge->A == LeadEndId ? Edge->B : Edge->A);
-			return Far != nullptr
-				? FVector2D::DotProduct(Far->Position - Edge->Control, Arriving)
-				: 0.0;
-		};
-
-		TArray<FGuidelineEdgeId> Sweeps;
-		for (const FGuidelineEdgeId& Id : LeadEnd->Incident)
-		{
-			if (Id != LeadId && Unowned(Id)) { Sweeps.Add(Id); }
-		}
-		Sweeps.Sort([&Ahead](const FGuidelineEdgeId& L, const FGuidelineEdgeId& R)
-		{
-			return Ahead(L) > Ahead(R);
-		});
-		Found.Append(Sweeps);
-		return Found;
-	}
-
-	/** The radius the edge AS LAID delivers, which is the one a truck has to follow. */
-	double DeliveredRadius(const URoadNetwork& Net, FGuidelineEdgeId Id)
-	{
-		const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
-		const FGuidelineNode* A = Edge != nullptr ? Net.GetGuidelineNode(Edge->A) : nullptr;
-		const FGuidelineNode* B = Edge != nullptr ? Net.GetGuidelineNode(Edge->B) : nullptr;
-		if (A == nullptr || B == nullptr)
-		{
-			return 0.0;
-		}
-		return GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
-	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -960,6 +1018,67 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 			Measured, 2);
 	}
 
+	// THE CROSSING BRANCH, WHICH IS A DIFFERENT CONSTRUCTION AND WAS UNMEASURED. A road across
+	// the END of a stand meets the lane's own heading rather than lying beside it, so
+	// FAnchorLink::Join runs on to where the two meet and rounds the corner - sized by
+	// CornerRunFor rather than ShiftDeflectionFor. Until this fixture nothing measured what it
+	// delivered, which is the same defect as the one this whole test exists for, one branch over.
+	//
+	// A STRAIGHT LEAD-IN IS THE BRANCH'S SIGNATURE, and asserting it on BOTH links is what makes
+	// this a test of the branch rather than of one link: the lane change always curves its
+	// lead-in, so a curve here would mean the S had been taken by mistake. That is exactly how
+	// this fixture failed while the crossing branch did not yet exist.
+	//
+	// BOTH ENTRIES, AND BOTH MERGES, because the nose crossing's two face the road along
+	// CONVERGING diagonals and their aims land 75 uu apart on the shipping stand - so the second
+	// to be joined meets the road inside the fillet the first already cut and has to work with
+	// what is left. Measured here: 769 uu on the first and a merge that barely turns at all on
+	// the second, both of which a truck can follow. They cannot be separated by moving the road
+	// to measure one alone, either - any segment near enough for one is nearer still to the
+	// other, which is what the "nearest entry wins the contact point" rule then acts on - so the
+	// pair IS the case, and both are asserted.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const double RoadX = LaneBounds.Max.X + 400.0;
+
+		FGuidelineNodeId North;
+		Lay(*Net, FVector2D(RoadX, -30000.0), FVector2D(RoadX, 30000.0),
+			ETraversalClass::GroundVehicle, North);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		int32 Measured = 0;
+		FString Merges;
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		{
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+			if (Link.Num() < 3)
+			{
+				continue;
+			}
+			++Measured;
+
+			const double Lead = DeliveredRadius(*Net, Link[0]);
+			const double Merge = DeliveredRadius(*Net, Link[1]);
+			Merges += Curvature(Merge) + TEXT(" ");
+			AddInfo(FString::Printf(TEXT("CROSSING: lead %s, merge %s, turn-back %s uu"),
+				*Curvature(Lead), *Curvature(Merge),
+				*Curvature(DeliveredRadius(*Net, Link[2]))));
+
+			TestTrue(*FString::Printf(
+					TEXT("a link onto a crossing road leaves straight - %s uu"), *Curvature(Lead)),
+				Lead > Followable);
+			TestTrue(*FString::Printf(
+					TEXT("and rounds onto it at %s uu, against a lock of %.0f"),
+					*Curvature(Merge), Followable),
+				Merge >= Followable);
+		}
+
+		TestEqual(TEXT("a road across the nose is joined at both of its entries"), Measured, 2);
+		AddInfo(FString::Printf(TEXT("CROSSING merges: %s"), *Merges));
+	}
+
 	// AND WHERE THE GROUND CANNOT GIVE IT, THE BUILDER SAYS SO. A road drawn as a short stub
 	// has no room either side of the join for the fillet, so the clamp in FAnchorLink::Join
 	// takes what is left and the delivered radius falls under the lock however it was sized.
@@ -998,13 +1117,10 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 			}
 			++Joined;
 
-			// A STRAIGHT EDGE HAS NO RADIUS AT ALL - TightestRadius says so with a numeric
-			// maximum - and printing 1.8e308 in a diagnostic is a line nobody can read.
 			FString Radii;
 			for (const FGuidelineEdgeId& Id : Link)
 			{
-				const double R = DeliveredRadius(*Net, Id);
-				Radii += R > 1.0e6 ? TEXT("straight ") : FString::Printf(TEXT("%.0f "), R);
+				Radii += Curvature(DeliveredRadius(*Net, Id)) + TEXT(" ");
 			}
 			AddInfo(FString::Printf(TEXT("STUB: %d edge(s), radii %s uu"), Link.Num(), *Radii));
 		}
