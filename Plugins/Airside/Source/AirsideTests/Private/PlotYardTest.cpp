@@ -269,4 +269,123 @@ bool FPlotYardLeavesTheGateClearTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardIsDeterministicTest,
+	"Airside.Solve.PlotYardIsDeterministic",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardIsDeterministicTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
+	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+
+	auto Lay = [&]()
+	{
+		return PlotYard::LayOut(Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
+			FVector2D(1200.0, 0.0), Footprints, /*Seed=*/4242, Tank());
+	};
+
+	const PlotYard::FYard First = Lay();
+	const PlotYard::FYard Second = Lay();
+
+	if (!TestEqual(TEXT("both lay out the same number of stands"),
+		First.Stands.Num(), Second.Stands.Num()))
+	{
+		return false;
+	}
+
+	for (int32 Index = 0; Index < First.Stands.Num(); ++Index)
+	{
+		// BITWISE, not nearly. UPlotPresenter::RebuildFrom clears and rebuilds on every
+		// graph change, so "close enough" is a yard that shivers every time the player lays
+		// a road somewhere else on the airport - and nothing on screen would explain why.
+		TestTrue(*FString::Printf(TEXT("stand %d lands on exactly the same spot"), Index),
+			First.Stands[Index].Centre == Second.Stands[Index].Centre);
+		TestTrue(*FString::Printf(TEXT("stand %d takes exactly the same heading"), Index),
+			First.Stands[Index].Heading == Second.Stands[Index].Heading);
+		TestEqual(*FString::Printf(TEXT("stand %d agrees about being placed"), Index),
+			First.Stands[Index].bPlaced, Second.Stands[Index].bPlaced);
+	}
+	TestEqual(TEXT("and both agree how much room is left"),
+		First.RoomForMore, Second.RoomForMore);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardVariesWithSeedTest,
+	"Airside.Solve.PlotYardVariesWithSeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardVariesWithSeedTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
+	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+
+	auto LaySeeded = [&](int32 Seed)
+	{
+		return PlotYard::LayOut(Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
+			FVector2D(1200.0, 0.0), Footprints, Seed, Tank());
+	};
+
+	const PlotYard::FYard A = LaySeeded(1);
+	const PlotYard::FYard B = LaySeeded(2);
+
+	// WITHOUT THIS, a solver that ignored the seed entirely - or one that quietly placed
+	// everything on a grid again - would pass every other test in this file. Two depots
+	// looking identical IS the complaint this whole feature answers.
+	bool bAnyDifference = false;
+	for (int32 Index = 0; Index < A.Stands.Num() && Index < B.Stands.Num(); ++Index)
+	{
+		if (A.Stands[Index].Centre != B.Stands[Index].Centre
+			|| A.Stands[Index].Heading != B.Stands[Index].Heading)
+		{
+			bAnyDifference = true;
+			break;
+		}
+	}
+	TestTrue(TEXT("two seeds lay out two different yards"), bAnyDifference);
+
+	// THE SHED IS THE EXCEPTION and must NOT vary: its pose is functional, not decorative.
+	TestTrue(TEXT("but the shed still faces the gate in both"),
+		A.Stands[0].Heading == B.Stands[0].Heading);
+	TestTrue(TEXT("and stands in the same place in both"),
+		A.Stands[0].Centre == B.Stands[0].Centre);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardDropsWhatWillNotFitTest,
+	"Airside.Solve.PlotYardDropsWhatWillNotFit",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardDropsWhatWillNotFitTest::RunTest(const FString& Parameters)
+{
+	// One bay wide and one row deep: the shed alone fills it.
+	const TArray<FVector2D> Outline = YardRect(400.0, 800.0);
+	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+
+	const PlotYard::FYard Yard = PlotYard::LayOut(
+		Outline, FVector2D(0.0, 0.0), FVector2D(400.0, 0.0), FVector2D(200.0, 0.0),
+		Footprints, /*Seed=*/7, Tank());
+
+	// ONE ENTRY PER FOOTPRINT, IN ORDER, even for the ones that did not fit. A compacted
+	// array would re-associate a pump's stand with a tank, and the depot would draw the
+	// wrong box in the wrong place with nothing to say so.
+	if (!TestEqual(TEXT("three footprints in, three stands out"), Yard.Stands.Num(), 3))
+	{
+		return false;
+	}
+	TestTrue(TEXT("something had to be dropped from a one-bay plot"), Yard.DroppedCount() > 0);
+
+	// THE SHED IS NOT ONE OF THEM. Its pose is decided rather than sampled, so a plot too
+	// small loses the things that were looking for space - never the one the truck needs.
+	TestTrue(TEXT("but the shed still stands"), Yard.Stands[0].bPlaced);
+
+	TestEqual(TEXT("and there is no room for more"), Yard.RoomForMore, 0);
+
+	return true;
+}
+
 #endif
