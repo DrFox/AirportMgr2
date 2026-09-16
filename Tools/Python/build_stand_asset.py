@@ -120,8 +120,8 @@ def build_stand(design_aircraft):
     if stand is None:
         return None
 
-    # The design aircraft goes IN rather than being set afterwards: the stand's service loop
-    # is measured from the aeroplane it is sized for, so the builder has to know which one.
+    # The design aircraft goes IN rather than being set afterwards: the stand's service lane
+    # is measured ALONG the aeroplane it is sized for, so the builder has to know which one.
     unreal.EntityDefinition.build_code_c_stand(stand, design_aircraft)
 
     if not unreal.EntityDefinition.has_usable_anchor_ids(stand):
@@ -138,11 +138,20 @@ def build_stand(design_aircraft):
             fixture.get_editor_property("id"), local.x, local.y))
 
     # THE LANE, logged as its own fact. It is invisible in the editor - no mesh, no material,
-    # no marking builder - so this line is the only place its corners can be read back.
-    loop = stand.get_editor_property("service_loop")
-    unreal.log("MARKER: DA_Stand_CodeC service loop, %d corner(s)" % len(loop))
-    for corner in loop:
-        unreal.log("MARKER:   (%.0f, %.0f)" % (corner.x, corner.y))
+    # no marking builder - so this line is the only place its waypoints can be read back.
+    #
+    # THE KIND AND THE ID, not just the position, and that is the whole reason this loop was
+    # rewritten rather than repointed. A waypoint that lost its anchor id still has a position,
+    # so a position-only listing reads as correct on a lane whose anchors have come unstuck from
+    # it - which is precisely the failure ServiceLane exists to make impossible.
+    lane = stand.get_editor_property("service_lane")
+    unreal.log("MARKER: DA_Stand_CodeC service lane, %d waypoint(s)" % len(lane))
+    for point in lane:
+        local = point.get_editor_property("local")
+        unreal.log("MARKER:   (%.0f, %.0f) %s %s" % (
+            local.x, local.y,
+            point.get_editor_property("kind"),
+            point.get_editor_property("anchor_id")))
     return stand
 
 

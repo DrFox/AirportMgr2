@@ -17,8 +17,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FStandLaneCarriesItsAnchorsTest::RunTest(const FString& Parameters)
 {
 	// THE WHOLE REDESIGN IN ONE ASSERTION. The ring ran outboard of the wingtips and every
-	// anchor hung off it on a spur, which needed a 90 degree turn in 990 uu of depth against
-	// the 1399 a truck's steering lock demands. The lane now runs ALONG the row the boxes are
+	// anchor hung off it on a spur, which needs a 90 degree turn: 989.1 uu of run on each of
+	// its two arms, both cut into the same straight, so 1978 uu against the 990 uu of depth
+	// there was between the ring and the box row. The lane now runs ALONG the row the boxes are
 	// painted on, so the anchors are ON it and nothing turns into one.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	if (!TestNotNull(TEXT("a stand definition"), Stand))
@@ -246,6 +247,104 @@ bool FStandLaneClearsTheAircraftTest::RunTest(const FString& Parameters)
 
 		TestTrue(TEXT("a crossing laid level with the tailplane cuts the fuselage"),
 			CountCentrelineCrossings(*Bad) > 0);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLaneDoesNotFoldThroughItselfTest,
+	"Airside.Entities.StandLaneDoesNotFoldThroughItself",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLaneDoesNotFoldThroughItselfTest::RunTest(const FString& Parameters)
+{
+	// THE ONE CONTRACT OF THE DELETED ServiceLoopEnclosesTheStand THAT WAS NOT ABOUT THE RING.
+	// That test reached for PointInPolygon rather than a bounds comparison for a stated reason -
+	// "a bounds test would still pass if the builder emitted the corners in an order that folds
+	// the box through itself" - and when the ring's shape assertions died, that one nearly went
+	// with them. It is worth more now: a four-point box could hardly fold, and a seventeen-point
+	// cycle with a dip in its upper edge and a bulge at each end very much can.
+	//
+	// AT TWO RADII, because the shape is DERIVED and a layout that is simple at one vehicle is
+	// not thereby simple at another - the dip deepens, the crossings bulge further out, and the
+	// boxes march apart, all at different rates. Checking one radius would be checking one
+	// arithmetic result, which is the thing this task exists to stop.
+	FAirframe Longer = UAirsideSettings::ResolveLargestServiceVehicle();
+	Longer.SteerAxleX *= 1.5;
+
+	UAircraftType* A320 = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildA320(A320);
+
+	struct FCase
+	{
+		const TCHAR* Name;
+		FAirframe Vehicle;
+	};
+	const FCase Cases[2] = {
+		{ TEXT("the shipping dispenser"), UAirsideSettings::ResolveLargestServiceVehicle() },
+		{ TEXT("a vehicle half as long again"), Longer } };
+
+	for (const FCase& Case : Cases)
+	{
+		UEntityDefinition* Stand = NewObject<UEntityDefinition>(GetTransientPackage());
+		UEntityDefinition::BuildCodeCStandFor(Stand, A320, Case.Vehicle);
+
+		const int32 Count = Stand->ServiceLane.Num();
+		if (!TestTrue(
+				*FString::Printf(TEXT("%s gets a lane with enough points to fold"), Case.Name),
+				Count >= 4))
+		{
+			continue;
+		}
+
+		TArray<FVector2D> Outline;
+		Outline.Reserve(Count);
+		for (const FStandWaypoint& Point : Stand->ServiceLane)
+		{
+			Outline.Add(Point.Local);
+		}
+
+		// THE PAIRWISE LOOP IS HERE TO NAME THE PAIR, not to be the authority. RoadGeom::
+		// IsSimplePolygon below is the codebase's one evaluator of this question and the
+		// assertion that counts; a bare "it folded" with no segment indices would be diagnosed
+		// by hand off a dump, which is exactly what this test replaces.
+		//
+		// CLOSED IMPLICITLY, so segment At runs from At to (At+1) % Count and the LAST segment
+		// is a real one, adjacent to both the first segment and the one before it. Getting that
+		// wrong would skip the only two segments the wrap introduces.
+		for (int32 At = 0; At < Count; ++At)
+		{
+			const int32 AEnd = (At + 1) % Count;
+			for (int32 Other = At + 1; Other < Count; ++Other)
+			{
+				const int32 BEnd = (Other + 1) % Count;
+				if (AEnd == Other || BEnd == At)
+				{
+					// Adjacent: they share a vertex by construction and always "touch".
+					continue;
+				}
+
+				TestFalse(
+					*FString::Printf(
+						TEXT("%s: segment %d->%d (%.0f,%.0f)-(%.0f,%.0f) crosses %d->%d "
+						     "(%.0f,%.0f)-(%.0f,%.0f)"),
+						Case.Name, At, AEnd, Outline[At].X, Outline[At].Y,
+						Outline[AEnd].X, Outline[AEnd].Y, Other, BEnd,
+						Outline[Other].X, Outline[Other].Y, Outline[BEnd].X, Outline[BEnd].Y),
+					RoadGeom::SegmentsCross(
+						Outline[At], Outline[AEnd], Outline[Other], Outline[BEnd]));
+			}
+		}
+
+		// AND THE AUTHORITY, which must agree with every TestFalse above. It reports only
+		// TRANSVERSAL crossings - a vertex touch and a collinear overlap are documented as not
+		// counted - so this is "the cycle does not fold through itself" and not "the cycle is
+		// non-degenerate in every way". The corner-run assertions in
+		// Airside.Entities.StandLaneCornersClearTheTruckLock are what rule out the degenerate
+		// cases, because a zero-length side cannot carry a cut.
+		TestTrue(*FString::Printf(TEXT("%s: the closed lane is a simple polygon"), Case.Name),
+			RoadGeom::IsSimplePolygon(Outline));
 	}
 
 	return true;

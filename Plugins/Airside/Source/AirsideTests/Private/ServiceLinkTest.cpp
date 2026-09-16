@@ -633,7 +633,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 {
 	using namespace ServiceLinkFixture;
 
-	// THE INVARIANT, MEASURED ON A ROUTE. Airside.Entities.ServiceLoopClearsTheAircraft
+	// THE INVARIANT, MEASURED ON A ROUTE. Airside.Entities.StandLaneClearsTheAircraft
 	// measures the definition; this measures what the SEARCH will actually hand a driver,
 	// which is the thing the player watches. A lane that cleared the aeroplane and a link
 	// that did not would pass the first test and fail here.
@@ -779,11 +779,10 @@ bool FSpursLeaveTheLaneTangentiallyTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("ten spurs over five anchors"), Paired, 10);
 	}
 
-	// AND NOT ONE OF THEM CROSSES THE AEROPLANE. Airside.Entities.ServiceLoopClearsTheAircraft
-	// makes this promise on the DEFINITION, judging a spur as a straight line from the anchor
-	// to the nearest point on the loop. Neither half of that is true any more - a spur is a
-	// quadratic and it joins the lane some way off the nearest point - so the promise has to
-	// be measured again here, on the geometry that actually gets laid.
+	// AND NOT ONE OF THEM CROSSES THE AEROPLANE. Airside.Entities.StandLaneClearsTheAircraft
+	// makes this promise on the DEFINITION's own segments, and says nothing at all about a
+	// spur - a spur is a quadratic, and it joins the lane some way off the nearest point - so
+	// the promise has to be measured again here, on the geometry that actually gets laid.
 	//
 	// The centreline as a finite segment, never the footprint outline: forbidding the
 	// footprint would forbid passing UNDER A WING, which is normal and which the hydrant

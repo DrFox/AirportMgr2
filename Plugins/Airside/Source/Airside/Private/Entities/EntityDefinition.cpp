@@ -109,8 +109,9 @@ void UEntityDefinition::BuildCodeCStandFor(
 	// 40.5 DEGREES IS THE MINIMUM OF THE DIP'S X EXTENT, not a taste: steeper legs shorten the
 	// diagonal but lengthen the corner runs, shallower ones the reverse. The expression
 	// 2*Run(angle) + Depth/tan(angle) bottoms out at 1018 uu anywhere between about 40 and 42
-	// degrees at the shipping truck, and costs within 5% of that from 30 to 50; the figure is
-	// stated so the arithmetic below has one input rather than a search.
+	// degrees at the shipping truck, and costs within 7% of that anywhere from 30 to 50 - the
+	// worst of that range is 30 degrees, at 1081 uu. The figure is stated so the arithmetic
+	// below has one input rather than a search.
 	constexpr double DipLegAngleDegrees = 40.5;
 	constexpr double DipDepth = BoxY - PitY;
 	const double DipLeg = FMath::DegreesToRadians(DipLegAngleDegrees);
@@ -227,23 +228,40 @@ void UEntityDefinition::BuildCodeCStandFor(
 	}
 
 	Definition->ServiceLane.Reset();
-	auto Add = [Definition](double X, double Y, EStandWaypointKind Kind, const TCHAR* Id = nullptr)
+	auto Coincident = [](const FStandWaypoint& A, const FStandWaypoint& B)
 	{
-		// A COINCIDENT POINT IS DROPPED, and only a PIVOTING vehicle produces one: its corners
-		// need no run at all, which collapses each crossing's two shaping points onto its
-		// corners. Dropping the repeat is what leaves a square U-turn rather than a polyline
-		// with zero-length sides, which has no direction and so no corner angle either.
-		const FVector2D Local(X, Y);
-		if (Definition->ServiceLane.Num() > 0
-			&& Definition->ServiceLane.Last().Local.Equals(Local, UE_DOUBLE_KINDA_SMALL_NUMBER))
+		return A.Local.Equals(B.Local, UE_DOUBLE_KINDA_SMALL_NUMBER);
+	};
+
+	auto Add = [Definition, &Coincident](
+		double X, double Y, EStandWaypointKind Kind, const TCHAR* Id = nullptr)
+	{
+		FStandWaypoint Point;
+		Point.Local = FVector2D(X, Y);
+		Point.Kind = Kind;
+		Point.AnchorId = Id != nullptr ? FName(Id) : NAME_None;
+
+		// A COINCIDENT POINT IS MERGED, and only a PIVOTING vehicle produces one: its corners
+		// need no run at all, so EntryLeg is zero, NoseX lands exactly on TugX, and each
+		// crossing's two shaping points collapse onto its corners. Merging is what leaves a
+		// square U-turn rather than a polyline with zero-length sides, which has no direction
+		// and so no corner angle either.
+		//
+		// AND THE ANCHOR ALWAYS WINS, whichever of the two arrived first. Dropping the LATER
+		// point unconditionally - which is what this guard did when it was written - silently
+		// loses the TugStand anchor to the entry that landed on top of it, and a lane missing an
+		// anchor is the one thing StandLaneCarriesItsAnchors exists to catch. Only a Plain or an
+		// Entry is ever thrown away.
+		if (Definition->ServiceLane.Num() > 0 && Coincident(Definition->ServiceLane.Last(), Point))
 		{
+			if (Point.Kind == EStandWaypointKind::Anchor
+				&& Definition->ServiceLane.Last().Kind != EStandWaypointKind::Anchor)
+			{
+				Definition->ServiceLane.Last() = Point;
+			}
 			return;
 		}
 
-		FStandWaypoint Point;
-		Point.Local = Local;
-		Point.Kind = Kind;
-		Point.AnchorId = Id != nullptr ? FName(Id) : NAME_None;
 		Definition->ServiceLane.Add(Point);
 	};
 
@@ -281,6 +299,25 @@ void UEntityDefinition::BuildCodeCStandFor(
 	Add(TailX - CrossBulge,   PortY + CrossBulge,  EStandWaypointKind::Plain);
 	Add(TailX - CrossBulge,   BoxY - CrossBulge,   EStandWaypointKind::Plain);
 	Add(TailX,                BoxY,                EStandWaypointKind::Entry);
+
+	// AND THE WRAP, which the guard inside Add cannot see. The cycle CLOSES IMPLICITLY, so the
+	// last waypoint is as much a neighbour of the first as of the one before it, and a
+	// coincident pair across that join is the same defect one place further round. It is the
+	// same pivoting vehicle that causes it: with no corner run, TailX lands exactly on
+	// EquipmentAft's X and the tail crossing's last entry sits on top of the first waypoint.
+	//
+	// A LOOP rather than one comparison, because each pop exposes a new last - and it
+	// terminates on every pass, since it only ever shortens the array.
+	while (Definition->ServiceLane.Num() > 1
+		&& Coincident(Definition->ServiceLane.Last(), Definition->ServiceLane[0]))
+	{
+		if (Definition->ServiceLane.Last().Kind == EStandWaypointKind::Anchor
+			&& Definition->ServiceLane[0].Kind != EStandWaypointKind::Anchor)
+		{
+			Definition->ServiceLane[0] = Definition->ServiceLane.Last();
+		}
+		Definition->ServiceLane.Pop();
+	}
 }
 
 UEntityDefinition* UEntityDefinition::MakeFuelDepotTransient()

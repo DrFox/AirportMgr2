@@ -404,9 +404,10 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 					// than tolerated. A spur is a QUADRATIC, so a spur joining one leaves it at
 					// an angle the tangent construction below cannot straighten - 315 uu of
 					// radius against the 471 a truck's lock needs, measured 2026-09-15. And
-					// Airside.Entities.ServiceLoopClearsTheAircraft judges every spur as a line
-					// from the anchor to the nearest point ON THE LOOP, so a chained one is
-					// geometry that test never looked at.
+					// Airside.Entities.StandLaneClearsTheAircraft judges the DEFINITION's own
+					// segments and nothing else - it stopped judging spurs at all when the
+					// anchors moved onto the lane - so a chained spur is geometry no test above
+					// this one looks at.
 					const FGuidelineEdge* Candidate = Network.GetGuidelineEdge(EdgeId);
 					if (Candidate == nullptr || !Candidate->bAlive || Candidate->bServiceSpur)
 					{

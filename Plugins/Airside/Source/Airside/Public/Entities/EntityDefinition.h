@@ -36,8 +36,12 @@ enum class EPlaceableEntity : uint8
  * A UENUM rather than a plain enum for the reason EPlaceableEntity records above: UHT cannot
  * resolve a plain enum named by a USTRUCT's UPROPERTY, and a forward declaration does not
  * satisfy it either.
+ *
+ * BlueprintType, like EServiceRole beside it, because Tools/Python/build_stand_asset.py reads
+ * this back off the authored asset - and a listing of positions with no kind beside them would
+ * read as correct on a lane whose anchors had come unstuck from it.
  */
-UENUM()
+UENUM(BlueprintType)
 enum class EStandWaypointKind : uint8
 {
 	/** Shape only - a corner, or the flat a dip needs so the pit is driven through. */
@@ -55,8 +59,11 @@ enum class EStandWaypointKind : uint8
  * an anchor's is already FEntityAnchor::LocalHeading; a copy here would be a value that must
  * agree with another value in the same asset, which is the drift FResolvedAnchor exists to
  * remove.
+ *
+ * BlueprintType for the same reason FEntityAnchor is: the Python asset author reads the lane
+ * back to log it, and that is a read through the reflection system.
  */
-USTRUCT()
+USTRUCT(BlueprintType)
 struct AIRSIDE_API FStandWaypoint
 {
 	GENERATED_BODY()
@@ -118,11 +125,12 @@ public:
 	 *
 	 * IT RUNS ALONG THE AEROPLANE, NOT AROUND IT, and that is the whole of the 2026-09-16
 	 * redesign. The ring this replaces ran outboard of the wingtips and every anchor hung off
-	 * it on a spur - which needs a 90 degree turn, and a 90 degree turn at the 699 uu a real
-	 * 8.5 m dispenser's steering lock allows needs 989 uu of run on each arm against the 990 uu
-	 * of depth between the ring and the box row. It did not fit, and widening the ring made it
-	 * worse. So the lane comes inside the wingtip and runs along the row the boxes are already
-	 * painted on: every service anchor sits ON it and nothing turns into one.
+	 * it on a spur - which needs a 90 degree turn, and at the 699 uu a real 8.5 m dispenser's
+	 * steering lock allows, that is 989.1 uu of run on EACH of its two arms. The two arms meet
+	 * on the same straight, so the straight has to carry 1978 uu, and there were 990 between the
+	 * ring and the box row. Short by half. Widening the ring made it worse. So the lane comes
+	 * inside the wingtip and runs along the row the boxes are already painted on: every service
+	 * anchor sits ON it and nothing turns into one.
 	 *
 	 * ONE CYCLE, because a dead end is a reverse and reverse is a later stage. The hydrant, 400
 	 * uu inboard of the row, is a flat-bottomed DIP in the lane rather than a stub - a pure V
@@ -244,9 +252,10 @@ public:
 	 * because UHT refuses a UFUNCTION parameter that shadows a UPROPERTY of the same class. Both callers used to set DesignAircraft
 	 * afterwards, which was harmless only for as long as nothing in the layout depended on
 	 * it - and ServiceLane does: a stand's geometry is laid out ALONG the aircraft it is
-	 * sized for, so the builder has to know which one that is. A null aircraft is allowed and
-	 * gives a lane round the anchors alone, which is what a definition with no envelope to
-	 * clear actually wants.
+	 * sized for, so the builder has to know which one that is. A null aircraft is allowed: the
+	 * lane is still laid, and its two crossings are placed off the anchors alone rather than
+	 * being pushed clear of a nose and a tail that are not there - which is what a definition
+	 * with no envelope to clear actually wants.
 	 *
 	 * A FORWARDER since 2026-09-16, and it KEEPS THIS NAME AND THIS UFUNCTION because
 	 * Tools/Python/build_stand_asset.py calls build_code_c_stand() on it. A UFUNCTION that

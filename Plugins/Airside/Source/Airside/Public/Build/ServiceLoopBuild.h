@@ -40,7 +40,7 @@ struct AIRSIDE_API FServiceLoopBuild
 	static constexpr double LaneWidth = 400.0;
 
 	/**
-	 * The radius every corner of the ring is rounded to, uu.
+	 * The radius every corner of the lane is rounded to, uu.
 	 *
 	 * A POLYLINE IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN.
 	 * UEntityDefinition::ServiceLane is a sequence of straights, but a corner where two of
@@ -55,8 +55,8 @@ struct AIRSIDE_API FServiceLoopBuild
 	 * truck's steering lock allows by 1.6x.
 	 *
 	 * PUBLIC because it MOVES THINGS A CALLER CAN SEE. A road no longer joins a lane at the
-	 * square corner of the definition - the ring turns in before it and never reaches it - and
-	 * a test that had to hardcode how far would be a second statement of this decision.
+	 * square corner of the definition - the laid lane turns in before it and never reaches it -
+	 * and a test that had to hardcode how far would be a second statement of this decision.
 	 */
 	static constexpr double LaneTurnRadius = 750.0;
 
