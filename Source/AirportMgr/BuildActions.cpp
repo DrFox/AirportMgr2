@@ -72,6 +72,14 @@ namespace
 		}
 
 		// --- Edit ---
+		// BUILD IS AN EDIT VERB, and the first of them: it is the positive counterpart of
+		// Undo and Clear, and a staged gesture's last click LOCKS rather than commits, so
+		// something has to say "now". IsEnabled reads the readout the active tool filled
+		// THIS frame rather than asking the tool a second question, which is the whole
+		// reason IToolReadoutSink carries Committable beside the facts.
+		Out.Add(Make(TEXT("edit.build"), EActionSection::Edit, LOCTEXT("Build", "Build"), EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.OnBuild(); }, Never,
+			[](const ARoadBuildController& C) { return C.GetToolReadout().bCommittable; }));
 		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
 			[](ARoadBuildController& C) { C.ToggleClickModifier(EClickModifier::Remove); },
 			[](const ARoadBuildController& C) { return C.GetClickModifier() == EClickModifier::Remove; }, Always));

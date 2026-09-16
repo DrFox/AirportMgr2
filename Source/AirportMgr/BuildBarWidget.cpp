@@ -241,6 +241,86 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		USpacer* Ledger = WidgetTree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("LedgerSlot"));
 		StatusBox->AddChildToHorizontalBox(Ledger)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	}
+
+	// AFTER the filling spacer, so the readout sits hard against the RIGHT edge of the strip
+	// and the clock keeps the left. The two never fight for position as the readout's width
+	// changes from frame to frame, which it does on every bay the player drags.
+	if (ReadoutSection == nullptr)
+	{
+		UHorizontalBox* ReadoutBox = WidgetTree->ConstructWidget<UHorizontalBox>(
+			UHorizontalBox::StaticClass(), TEXT("ReadoutSection"));
+		if (UHorizontalBox* StatusBox = Cast<UHorizontalBox>(StatusRow))
+		{
+			UHorizontalBoxSlot* ReadoutSlot = StatusBox->AddChildToHorizontalBox(ReadoutBox);
+			ReadoutSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		else if (StatusRow != nullptr)
+		{
+			StatusRow->AddChild(ReadoutBox);
+		}
+		else if (UPanelWidget* Root = Cast<UPanelWidget>(WidgetTree->RootWidget))
+		{
+			// The asset has a root but no status row: same fallback the sections take, and
+			// the same warning, because a readout appended to the root is visible but wrong.
+			Root->AddChild(ReadoutBox);
+			UE_LOG(LogBuildBar, Warning,
+				TEXT("Bar asset has no StatusRow; appended the readout to the root"));
+		}
+		ReadoutSection = ReadoutBox;
+	}
+}
+
+void UBuildBarWidget::ApplyReadout(const FToolReadout& Readout)
+{
+	if (ReadoutSection == nullptr)
+	{
+		return;
+	}
+
+	// CLEARED AND REBUILT, never patched in place. FToolReadoutCollector::Reset makes the
+	// same promise one level down for exactly the same reason: a line left over from last
+	// frame describes a gesture the player has already changed, and the whole point of this
+	// strip is that what it says and what the ghost shows cannot disagree.
+	//
+	// A dozen text blocks a frame is not a cost worth optimising against - the bar polls
+	// fifteen booleans a frame already (see this class's comment), and a pool keyed on the
+	// PREVIOUS frame's line count is how a stale label survives a tool change.
+	ReadoutSection->ClearChildren();
+
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+
+	auto AddLine = [&](const FString& Text, FLinearColor Colour)
+	{
+		UTextBlock* Line = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+		Line->SetText(FText::FromString(Text));
+		Style->ApplyText(*Line, EUITextRole::Body, Colour);
+		if (UHorizontalBox* Box = Cast<UHorizontalBox>(ReadoutSection))
+		{
+			UHorizontalBoxSlot* LineSlot = Box->AddChildToHorizontalBox(Line);
+			LineSlot->SetPadding(FMargin(0.0f, 0.0f, 14.0f, 0.0f));
+			LineSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		else
+		{
+			ReadoutSection->AddChild(Line);
+		}
+	};
+
+	// FACTS FIRST AND IN THE ORDER EMITTED - see FToolReadout::Facts, which keeps that order
+	// precisely so the tool decides what the player reads first. ONE BLOCK PER FACT, label
+	// and value together: splitting them into two would double the widget count to buy a
+	// second colour, and the strip is read at a glance while the cursor is elsewhere.
+	for (const TPair<FString, FString>& Fact : Readout.Facts)
+	{
+		AddLine(FString::Printf(TEXT("%s  %s"), *Fact.Key, *Fact.Value), Style->Text);
+	}
+
+	// WARNINGS LAST, in the warning colour, because they qualify the facts above them:
+	// "No room to grow" means nothing until you have read the row count it is about.
+	for (const FString& Warning : Readout.Warnings)
+	{
+		AddLine(Warning, Style->Warning);
+	}
 }
 
 UPanelWidget* UBuildBarWidget::SectionPanel(EActionSection Section) const
@@ -386,6 +466,12 @@ void UBuildBarWidget::RefreshState()
 			Entry->Icon->SetColorAndOpacity(Content);
 		}
 	}
+
+	// THE SAME FRAME the Build button's enabled state was just read from, and from the same
+	// FToolReadout - so a lit button and the facts beside it cannot describe different
+	// gestures. That agreement is the entire reason Committable travels with the facts
+	// rather than being a second question asked of the tool (see IToolReadoutSink).
+	ApplyReadout(C->GetToolReadout());
 }
 
 void UBuildBarWidget::RefreshClock()
@@ -420,6 +506,11 @@ int32 UBuildBarWidget::ButtonCountForTest(EActionSection Section) const
 		}
 	}
 	return Count;
+}
+
+int32 UBuildBarWidget::ReadoutLineCountForTest() const
+{
+	return ReadoutSection != nullptr ? ReadoutSection->GetChildrenCount() : 0;
 }
 
 bool UBuildBarWidget::HasRootWidgetForTest() const

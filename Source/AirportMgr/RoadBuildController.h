@@ -185,6 +185,19 @@ public:
 	/** Everything the active tool needs to judge the current cursor. */
 	FToolContext MakeToolContext() const;
 
+	/**
+	 * What the active tool says about the gesture in progress - bays, warnings, whether
+	 * Build would succeed. Refilled every PlayerTick; empty when no tool is speaking.
+	 *
+	 * COLLECTED HERE AND NOT IN THE HUD, though the HUD is where BuildPreview is called
+	 * from: a readout is not a drawing concern, and the bar must be able to read it whether
+	 * or not the world preview is switched on (see bDrawBuildPreview).
+	 */
+	const FToolReadout& GetToolReadout() const { return ToolReadoutCollector.Readout; }
+
+	/** Drives one frame's collection without a whole tick. Same precedent as GetHudForTest. */
+	void CollectToolReadoutForTest() { CollectToolReadout(); }
+
 	// --- Actions ---------------------------------------------------------------------
 	//
 	// Everything below is what BuildActions() calls. The registry, not this class, decides
@@ -242,6 +255,16 @@ public:
 	void OnClearNetwork();
 	void OnUndo();
 	void OnRedo();
+
+	/**
+	 * Build: the active tool commits whatever it has been drawing.
+	 *
+	 * A VERB ON THE CONTROLLER rather than the bar reaching into the tool, for the same
+	 * reason every other entry in BuildActions() is: the registry generates the key bindings
+	 * and the buttons from one list, and an action whose Execute knew about IBuildTool would
+	 * be the only one that did.
+	 */
+	void OnBuild();
 
 	/**
 	 * C: orbit the SELECTED aircraft, or the newest when none is selected; or go back to the
@@ -304,6 +327,15 @@ private:
 
 	/** Promote a held press to a drag once it has travelled, and feed the tool. */
 	void UpdateDrag();
+
+	/**
+	 * One frame's readout from the active tool.
+	 *
+	 * RESETS UNCONDITIONALLY, before any guard: a frame with no target or no tool must leave
+	 * the readout EMPTY rather than holding the last gesture's facts on the bar. Called from
+	 * PlayerTick ahead of the target guard for exactly that reason.
+	 */
+	void CollectToolReadout();
 
 	void OnCancelGesture();
 
@@ -371,6 +403,14 @@ private:
 	 * way they did before issue #33.
 	 */
 	FBuildSession Session;
+
+	/**
+	 * This frame's readout, refilled by CollectToolReadout.
+	 *
+	 * NOT A UPROPERTY: FToolReadoutCollector is a plain struct holding FStrings, with no
+	 * UObject reference in it, so there is nothing here for the GC to keep alive.
+	 */
+	FToolReadoutCollector ToolReadoutCollector;
 
 	// --- Press, drag, release ---------------------------------------------------------
 	//

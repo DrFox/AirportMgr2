@@ -63,6 +63,9 @@ ICONS = {
     "tool.road":           ("delapouite", "road"),
     "tool.fuel depot":     ("delapouite", "fuel-tank"),
 
+    # lorc, not delapouite: "delapouite/hammer-nails" is one of the names that returns an
+    # HTML 404 under HTTP 200, checked the way this file's docstring says to.
+    "edit.build":          ("lorc",       "hammer-nails"),
     "edit.remove":         ("delapouite", "trash-can"),
     "edit.insert":         ("delapouite", "split-arrows"),
     "edit.undo":           ("delapouite", "anticlockwise-rotation"),

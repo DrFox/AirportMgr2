@@ -4,6 +4,7 @@
 #include "AirportMgrPanelWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
+#include "Tool/ToolReadout.h"
 #include "BuildBarWidget.generated.h"
 
 class UButton;
@@ -77,6 +78,19 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ClockText;
 
 	/**
+	 * Where the active tool's facts and warnings are written, on the status row.
+	 *
+	 * ON THE STATUS ROW AND NOT BESIDE THE BUTTONS, because that is what it is: a reading of
+	 * the gesture in progress, changing every frame, with no verb in it. The tools row below
+	 * is a row of things to press, and mixing a live readout into it is what would put the
+	 * bar back to reading as an undifferentiated run of controls.
+	 *
+	 * BindWidgetOptional, like every other section - a Blueprint that has not been re-saved
+	 * must degrade to drawing nothing rather than failing to construct.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> ReadoutSection;
+
+	/**
 	 * The upper row: clock, the time controls, and the reserved ledger slot.
 	 *
 	 * A SECOND ROW IS THE WHOLE POINT. The six sections in EActionSection already existed
@@ -107,7 +121,19 @@ public:
 	 */
 	static float BarHeightFor(const UUIStyle& Style);
 
+	/**
+	 * Draws one frame's readout: a line per fact, then a line per warning.
+	 *
+	 * PUBLIC AND TAKING THE READOUT, rather than reaching for the controller itself, so the
+	 * one function that turns facts into widgets has two callers that cannot disagree -
+	 * RefreshState with the live one, and AirportMgr.Actions.PlotReadoutReachesTheBar with a
+	 * hand-built one. A ReadoutSection created and never filled would otherwise pass every
+	 * test there is.
+	 */
+	void ApplyReadout(const FToolReadout& Readout);
+
 	int32 ButtonCountForTest(EActionSection Section) const;
+	int32 ReadoutLineCountForTest() const;
 	bool HasRootWidgetForTest() const;
 
 protected:
