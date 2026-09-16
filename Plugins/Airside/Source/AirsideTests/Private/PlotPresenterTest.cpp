@@ -40,6 +40,55 @@ namespace
 		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
 		return Actor->Network->PlaceEntity(Placement);
 	}
+
+	/**
+	 * A 12 m x 24 m plot - three bays across, three rows deep.
+	 *
+	 * DEEPER THAN ThreeBayPlotAt ON PURPOSE. The Tier 1 plot is 8 m deep and the shed is 8 m
+	 * long, so square to the gate it spans the whole depth and leaves two 4 m strips; a
+	 * rotated tank needs its DIAGONAL of clear space and does not fit in one. Under the bay
+	 * grid three modules sat side by side there, which is why this only shows up now. A plot
+	 * the player dragged depth into is what holds a scattered mix.
+	 */
+	TArray<FVector2D> DeepPlotAt(double X)
+	{
+		return { FVector2D(X, 0.0), FVector2D(X + 1200.0, 0.0),
+		         FVector2D(X + 1200.0, 2400.0), FVector2D(X, 2400.0) };
+	}
+
+	/** PlaceDepot's mix and pose, on a plot with room behind the shed. */
+	FEntityInstanceId PlaceDeepDepot(ARoadNetworkActor* Actor, UEntityDefinition* Depot, double X)
+	{
+		FEntityPlacement Placement;
+		Placement.Definition = Depot;
+		Placement.Anchors = Depot->Anchors;
+		Placement.Position = FVector2D(X + 600.0, 0.0);
+		Placement.Heading = UE_DOUBLE_HALF_PI;
+		Placement.PoseRole = EServiceRole::Fuel;
+		Placement.Outline = DeepPlotAt(X);
+		Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+		return Actor->Network->PlaceEntity(Placement);
+	}
+
+	/** Every instance the plot presenter is holding, in the order it added them. */
+	TArray<FTransform> PlotInstances(const ARoadNetworkActor* Actor)
+	{
+		TArray<FTransform> Out;
+		const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+		if (Plots == nullptr)
+		{
+			return Out;
+		}
+		for (int32 Index = 0; Index < Plots->GetInstanceCount(); ++Index)
+		{
+			FTransform Transform;
+			if (Plots->GetInstanceTransformForTest(Index, Transform))
+			{
+				Out.Add(Transform);
+			}
+		}
+		return Out;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -99,12 +148,15 @@ bool FPlotPresenterDressesEachBayTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotShowsRoomToGrowTest,
-	"Airside.Present.PlotShowsRoomToGrow",
+	FPlotPresenterScattersModulesTest,
+	"Airside.Present.PlotPresenterScattersModules",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FPlotShowsRoomToGrowTest::RunTest(const FString& Parameters)
+bool FPlotPresenterScattersModulesTest::RunTest(const FString& Parameters)
 {
+	// COMPOSITION LEVEL, per CLAUDE.md. Every Airside.Solve.PlotYard test would still pass
+	// if the presenter called the solver and then drew on a grid anyway, or never called it
+	// at all - the "declared but never consumed" shape this project has shipped three times.
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 	ARoadNetworkActor* Actor = TestWorld.Actor;
@@ -114,66 +166,87 @@ bool FPlotShowsRoomToGrowTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
 
-	// The same placement PlaceDepot makes, with the plot's own size as the variable - the
-	// outline comes from PlotFit::GridOutline so it is the rectangle the gesture commits,
-	// not a hand-typed one that could disagree with it.
-	const TArray<EDepotModule> AllThree =
-		{ EDepotModule::Shed, EDepotModule::Tank, EDepotModule::Pump };
+	Actor->ClearNetwork();
+	PlaceDeepDepot(Actor, Depot, 0.0);
+	Actor->RebuildMesh();
 
-	auto PlaceMix = [&](int32 Width, int32 Depth, const TArray<EDepotModule>& Modules)
+	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+
+	// THE MODULES ARE THE FIRST INSTANCES a plot adds, before its fence. That ordering is
+	// why this can name them at all - and why it uses ONE depot: with two, the second
+	// depot's modules sit after the first depot's fence and the slice would be wrong.
+	const int32 Modules = Plots->GetModuleCount();
+	if (!TestEqual(TEXT("all three modules of the mix stand"), Modules, 3))
 	{
-		Actor->ClearNetwork();
+		return false;
+	}
 
-		const FVector2D A(0.0, 0.0);
-		const FVector2D B(Width * PlotFit::BayWidthUu, 0.0);
+	const TArray<FTransform> Instances = PlotInstances(Actor);
+	if (!TestTrue(TEXT("the fence went up around them"), Instances.Num() > Modules))
+	{
+		return false;
+	}
 
-		FEntityPlacement Placement;
-		Placement.Definition = Depot;
-		Placement.Anchors = Depot->Anchors;
-		Placement.Position = (A + B) * 0.5;
-		Placement.Heading = UE_DOUBLE_HALF_PI;
-		Placement.PoseRole = EServiceRole::Fuel;
-		Placement.Outline = PlotFit::GridOutline(A, B, Width, Depth);
-		Placement.Modules = Modules;
-		Actor->Network->PlaceEntity(Placement);
-		Actor->RebuildMesh();
-	};
+	// NOT ONE HEADING REPEATED. A grid gives every module the same rotation, which is
+	// exactly the complaint this feature answers - and comparing ALL instances instead
+	// would pass on the fence alone, whose panels face four ways round a rectangle.
+	bool bHeadingsDiffer = false;
+	for (int32 Index = 1; Index < Modules; ++Index)
+	{
+		if (!Instances[Index].GetRotation().Equals(Instances[0].GetRotation(), 0.001f))
+		{
+			bHeadingsDiffer = true;
+			break;
+		}
+	}
+	TestTrue(TEXT("the modules do not all face the same way"), bHeadingsDiffer);
 
-	auto PlaceSized = [&](int32 Width, int32 Depth) { PlaceMix(Width, Depth, AllThree); };
+	// A REBUILD IS IDEMPOTENT, and here that is the determinism requirement seen from the
+	// outside: RebuildMesh runs on every graph change, and a yard reseeded each time would
+	// shift while the player laid a road on the far side of the airport.
+	Actor->RebuildMesh();
+	const TArray<FTransform> After = PlotInstances(Actor);
 
-	// THREE WIDE, TWO DEEP holds six slots and three modules, so three stand empty. This is
-	// the whole payoff of the depth step before buying exists: a plot that visibly says
-	// "three more fit here" rather than three sheds dumped in a corner.
-	PlaceSized(3, 2);
-	TestEqual(TEXT("a 3x2 plot with three modules has three slots to grow into"),
-		Actor->GetPlotPresenter()->GetEmptySlotCount(), 3);
+	if (!TestEqual(TEXT("a rebuild puts the same number of things up"),
+		Instances.Num(), After.Num()))
+	{
+		return false;
+	}
+	for (int32 Index = 0; Index < Instances.Num(); ++Index)
+	{
+		TestTrue(*FString::Printf(TEXT("instance %d did not move on rebuild"), Index),
+			Instances[Index].GetLocation().Equals(After[Index].GetLocation(), 0.0f));
+	}
 
-	// ONE ROW DEEP has nowhere to grow, which is what the gesture warned about.
-	PlaceSized(3, 1);
-	TestEqual(TEXT("a one-row plot has no room to grow"),
-		Actor->GetPlotPresenter()->GetEmptySlotCount(), 0);
+	// AND TWO DEPOTS DO NOT LOOK ALIKE. Seeded off position, so the second depot on the
+	// airport must lay out differently from the first - the complaint that started this.
+	PlaceDeepDepot(Actor, Depot, 4000.0);
+	Actor->RebuildMesh();
 
-	// AND A NARROW PLOT DROPS MODULES RATHER THAN OVERFLOWING INTO ROW 2. Two bays across
-	// take two modules; the third is not quietly moved to the back where no truck reaches.
-	PlaceSized(2, 2);
-	TestEqual(TEXT("two bays take two modules, not three"),
-		Actor->GetPlotPresenter()->GetEmptySlotCount(), 2);
+	const TArray<FTransform> Both = PlotInstances(Actor);
+	if (!TestTrue(TEXT("the second depot stood up too"), Both.Num() > Instances.Num()))
+	{
+		return false;
+	}
 
-	// AND THE MARKERS ARE REAL INSTANCES, not just a counter. GetEmptySlotCount could be
-	// arithmetic that never reached the component - the "declared but never consumed" shape
-	// CLAUDE.md names three times - and every assertion above would still pass.
-	//
-	// THE CLAIM IS AN INVARIANT, not a number: on ONE plot geometry, a slot is drawn whether
-	// it holds a module or not, so taking modules away must leave the instance count exactly
-	// where it was. Comparing two different plot SIZES would prove nothing, because their
-	// fences differ too and the fence is most of the count.
-	PlaceSized(3, 2);
-	const int32 ThreeModules = Actor->GetPlotPresenter()->GetInstanceCount();
-	PlaceMix(3, 2, { EDepotModule::Shed });
-	TestEqual(TEXT("an emptier yard is the same six slots, drawn differently"),
-		Actor->GetPlotPresenter()->GetInstanceCount(), ThreeModules);
-	TestEqual(TEXT("and five of them are now room to grow"),
-		Actor->GetPlotPresenter()->GetEmptySlotCount(), 5);
+	// The first depot's modules are unchanged, so the second depot's are the ones added
+	// after the first plot's fence - compared RELATIVE to each depot's own pose, or two
+	// identical yards 40 m apart would differ merely by being 40 m apart.
+	const int32 SecondStart = Instances.Num();
+	bool bYardsDiffer = false;
+	for (int32 Index = 0; Index < Modules; ++Index)
+	{
+		const FVector FirstLocal = Both[Index].GetLocation() - FVector(600.0, 0.0, 0.0);
+		const FVector SecondLocal =
+			Both[SecondStart + Index].GetLocation() - FVector(4600.0, 0.0, 0.0);
+		if (!FirstLocal.Equals(SecondLocal, 1.0f)
+			|| !Both[Index].GetRotation().Equals(Both[SecondStart + Index].GetRotation(), 0.001f))
+		{
+			bYardsDiffer = true;
+			break;
+		}
+	}
+	TestTrue(TEXT("two depots with the same mix lay out differently"), bYardsDiffer);
 
 	return true;
 }

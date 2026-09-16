@@ -32,7 +32,7 @@ public:
 	void Initialise(UInstancedStaticMeshComponent* InBoxes);
 
 	/**
-	 * Clear and re-add an instance per module, a flat marker per slot still empty, and a
+	 * Clear and re-add an instance per module standing where the yard solver put it, plus a
 	 * fence round every plot's outline.
 	 */
 	void RebuildFrom(const URoadNetwork& Network);
@@ -41,10 +41,29 @@ public:
 	int32 GetInstanceCount() const;
 
 	/**
-	 * How many slots across every plot are standing empty - the room the player has to grow
-	 * into. For tests, and for the census line.
+	 * How many more modules would still fit across every plot - the room the player has to
+	 * grow into. For tests, and for the census line.
+	 *
+	 * ANSWERED BY THE SOLVER THAT PLACES THINGS, not by arithmetic on a bay grid: the number
+	 * the player reads is produced by the code that would actually put the module down, so
+	 * it cannot drift from what they get.
 	 */
-	int32 GetEmptySlotCount() const { return EmptySlots; }
+	int32 GetRoomForMore() const { return RoomForMore; }
+
+	/** Module boxes standing across every plot. The first instances each plot adds. */
+	int32 GetModuleCount() const { return ModuleBoxes; }
+
+	/** Modules that had nowhere to stand. Reported, never hidden. */
+	int32 GetDroppedCount() const { return Dropped; }
+
+	/**
+	 * For tests: one instance's transform, false if there is no such instance.
+	 *
+	 * The component itself is private on ARoadNetworkActor, and widening it so a test can
+	 * read one transform would open it to everything else too. Same ...ForTest precedent as
+	 * GetHudForTest and SessionForTest.
+	 */
+	bool GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const;
 
 	/**
 	 * For tests: how many fence bays were skipped to leave a gate.
@@ -60,6 +79,12 @@ private:
 	/** Counted during the last RebuildFrom. See GetGateGapCount. */
 	int32 GateGaps = 0;
 
-	/** Counted during the last RebuildFrom. See GetEmptySlotCount. */
-	int32 EmptySlots = 0;
+	/** Counted during the last RebuildFrom. See GetRoomForMore. */
+	int32 RoomForMore = 0;
+
+	/** Counted during the last RebuildFrom. See GetModuleCount. */
+	int32 ModuleBoxes = 0;
+
+	/** Counted during the last RebuildFrom. See GetDroppedCount. */
+	int32 Dropped = 0;
 };

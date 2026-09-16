@@ -1,10 +1,11 @@
 #include "Present/PlotPresenter.h"
 
 #include "AirsideLog.h"
+#include "Build/DepotKit.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
-#include "Solve/PlotFit.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
 namespace
@@ -28,21 +29,6 @@ namespace
 	constexpr double FenceBayUu = 250.0;
 	constexpr double FenceHeightUu = 200.0;
 	constexpr double FenceThicknessUu = 10.0;
-
-	/**
-	 * An empty slot: 10 cm proud of the pad, so it reads as PAINT on the concrete rather
-	 * than as a structure the player has already bought.
-	 */
-	constexpr double SlotMarkerHeightUu = 10.0;
-
-	/**
-	 * 30 cm pulled in from every side of the slot.
-	 *
-	 * NOT COSMETIC. Slots abut, so markers drawn at full bay size touch, and three of them
-	 * in a row render as ONE 12 m slab - which reads as more pavement, the exact opposite of
-	 * "three more fit here". The gap is what makes them countable at a glance.
-	 */
-	constexpr double SlotMarkerInsetUu = 30.0;
 
 	double HeightFor(EDepotModule Module)
 	{
@@ -112,41 +98,19 @@ namespace
 	}
 
 	/**
-	 * How many bays wide and rows deep the stored outline is.
+	 * A stable seed for one depot.
 	 *
-	 * READ BACK OFF THE OUTLINE rather than stored on the entity, for the same reason the
-	 * frontage is: the rectangle was built by PlotFit::GridOutline from exactly these two
-	 * numbers, so measuring it recovers them instead of adding a second copy that could
-	 * disagree with the shape on screen.
+	 * POSITION, NOT AN ENTITY HANDLE: handles are slot indices that get reused, and a
+	 * position is set once at placement and never changes. Two depots cannot share one.
 	 *
-	 * DEPTH IS THE DEEPEST POINT, not the length of the opposite edge. That is the same
-	 * answer for the rectangle the gesture commits, and a defined one for any other outline
-	 * that reaches here - a plot saved before the staged tool landed, say.
+	 * QUANTISED to whole uu because a float that came back from a save one bit different
+	 * would re-roll that depot and only that depot - the kind of bug that takes a day.
 	 */
-	bool RecoverGridSize(const FEntityInstance& Entity, const FVector2D& FrontageA,
-		const FVector2D& FrontageB, int32& OutWidth, int32& OutDepth)
+	int32 SeedFor(const FEntityInstance& Entity)
 	{
-		const FVector2D Along = FrontageB - FrontageA;
-		const double Length = Along.Size();
-		if (Length <= 0.0)
-		{
-			return false;
-		}
-
-		const FVector2D Inward = RoadGeom::PerpCCW(Along / Length);
-
-		double Deepest = 0.0;
-		for (const FVector2D& Point : Entity.Outline)
-		{
-			Deepest = FMath::Max(Deepest, FVector2D::DotProduct(Point - FrontageA, Inward));
-		}
-
-		// ROUNDED, NOT FLOORED. The outline is built from whole bays, so the division is a
-		// whole number up to floating-point drift; flooring would turn 2.9999 into two rows
-		// and silently lose the back row of a plot the player paid for.
-		OutWidth = FMath::RoundToInt(Length / PlotFit::BayWidthUu);
-		OutDepth = FMath::RoundToInt(Deepest / PlotFit::BayDepthUu);
-		return OutWidth > 0 && OutDepth > 0;
+		const int32 X = FMath::RoundToInt(Entity.Position.X);
+		const int32 Y = FMath::RoundToInt(Entity.Position.Y);
+		return static_cast<int32>(HashCombine(GetTypeHash(X), GetTypeHash(Y)));
 	}
 }
 
@@ -158,6 +122,15 @@ void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes)
 int32 UPlotPresenter::GetInstanceCount() const
 {
 	return Boxes != nullptr ? Boxes->GetInstanceCount() : 0;
+}
+
+bool UPlotPresenter::GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const
+{
+	if (Boxes == nullptr || Index < 0 || Index >= Boxes->GetInstanceCount())
+	{
+		return false;
+	}
+	return Boxes->GetInstanceTransform(Index, OutTransform, /*bWorldSpace=*/true);
 }
 
 void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
@@ -172,10 +145,11 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	// is a second index that must agree with the model - and the counts here are tens.
 	Boxes->ClearInstances();
 	GateGaps = 0;
-	EmptySlots = 0;
+	RoomForMore = 0;
+	ModuleBoxes = 0;
+	Dropped = 0;
 
 	int32 Plots = 0;
-	int32 ModuleBoxes = 0;
 
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
@@ -196,55 +170,41 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 
 		++Plots;
 
-		// THE GRID, NOT FitBays. FitBays discovers what will fit inside a freeform polygon,
-		// and there is no longer a tool that draws one - FPlotPlaceTool commits a rectangle
-		// of whole bays, and the grid is what it showed the player while they dragged it.
-		// Asking a containment solver to rediscover a shape the gesture already decided is
-		// how the preview and the built thing come to disagree.
-		int32 Width = 0;
-		int32 Depth = 0;
-		if (!RecoverGridSize(Entity, FrontageA, FrontageB, Width, Depth))
+		// THE YARD, NOT A GRID. PlotFit::BuildGrid still answers what the PLOT is - the
+		// gesture's preview uses it - but where each module stands is a different question
+		// with different inputs, and a row of identical boxes all facing one way is what
+		// made a built depot read as a placeholder. See the 2026-09-16 design doc.
+		TArray<PlotYard::FFootprint> Footprints;
+		Footprints.Reserve(Entity.Modules.Num());
+		for (const EDepotModule Module : Entity.Modules)
 		{
-			continue;
-		}
-		const PlotFit::FPlotGrid Grid = PlotFit::BuildGrid(FrontageA, FrontageB, Width, Depth);
-
-		// THE FRONT ROW TAKES THE MODULES, and only the front row - Slots[0 .. Width-1], per
-		// FPlotGrid's contract. A module in the back rank would be one no truck can reach.
-		const int32 Placed = FMath::Min(Grid.Width, Entity.Modules.Num());
-
-		// THE BAYS AND THE MODULES ARE SEPARATE COUNTS, and the pair is the whole diagnosis
-		// when a depot looks wrong: fewer bays than modules is a plot too small for the mix,
-		// and fewer modules than bays is a yard the player has not finished filling. One
-		// combined number would say neither.
-		if (Grid.Width != Entity.Modules.Num())
-		{
-			UE_LOG(LogAirside, Log,
-				TEXT("Plot at (%.0f, %.0f): %d bay(s) across, %d module(s) chosen."),
-				Entity.Position.X, Entity.Position.Y, Grid.Width, Entity.Modules.Num());
+			Footprints.Add(DepotFootprint(Module));
 		}
 
-		for (int32 I = 0; I < Placed && I < Grid.Slots.Num(); ++I)
+		// The gate is where the fence is left open, which is the entity's own pose - see the
+		// fence loop below, which skips the bay nearest exactly this point.
+		const PlotYard::FYard Yard = PlotYard::LayOut(Entity.Outline, FrontageA, FrontageB,
+			Entity.Position, Footprints, SeedFor(Entity), DepotFootprint(EDepotModule::Tank));
+
+		RoomForMore += Yard.RoomForMore;
+
+		// MODULES BEFORE THE FENCE, always: Airside.Present.PlotPresenterScattersModules
+		// names the first ModuleBoxes instances of a plot as its modules, and reordering
+		// these two loops would silently make it measure fence panels instead.
+		for (int32 I = 0; I < Yard.Stands.Num() && I < Entity.Modules.Num(); ++I)
 		{
-			const PlotFit::FPlotBay& Bay = Grid.Slots[I];
-			Boxes->AddInstance(BoxAt(Bay.Centre, Bay.Heading,
-				PlotFit::BayDepthUu, PlotFit::BayWidthUu, HeightFor(Entity.Modules[I])),
+			const PlotYard::FStand& Stand = Yard.Stands[I];
+			if (!Stand.bPlaced)
+			{
+				// REPORTED, not hidden. A module shoved in anyway would intersect something,
+				// and a mesh through a mesh is the one failure no camera angle hides.
+				++Dropped;
+				continue;
+			}
+			Boxes->AddInstance(BoxAt(Stand.Centre, Stand.Heading,
+				Footprints[I].LengthUu, Footprints[I].WidthUu, HeightFor(Entity.Modules[I])),
 				/*bWorldSpace=*/true);
 			++ModuleBoxes;
-		}
-
-		// AN EMPTY SLOT IS DRAWN, not left as bare concrete. It is the whole payoff of the
-		// depth step before buying exists: a plot that visibly says "three more fit here" is
-		// the difference between a yard with capacity and a yard with three sheds dumped in
-		// a corner, which is what PIE showed on 2026-09-15.
-		for (int32 I = Placed; I < Grid.Slots.Num(); ++I)
-		{
-			const PlotFit::FPlotBay& Slot = Grid.Slots[I];
-			Boxes->AddInstance(BoxAt(Slot.Centre, Slot.Heading,
-				PlotFit::BayDepthUu - SlotMarkerInsetUu * 2.0,
-				PlotFit::BayWidthUu - SlotMarkerInsetUu * 2.0,
-				SlotMarkerHeightUu), /*bWorldSpace=*/true);
-			++EmptySlots;
 		}
 
 		// --- The fence -----------------------------------------------------------------
@@ -297,9 +257,9 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	if (Plots > 0)
 	{
 		UE_LOG(LogAirside, Log,
-			TEXT("Plots: %d plot(s), %d module box(es), %d empty slot(s), %d fence panel(s), "
-				 "%d gate gap(s)"),
-			Plots, ModuleBoxes, EmptySlots,
-			Boxes->GetInstanceCount() - ModuleBoxes - EmptySlots, GateGaps);
+			TEXT("Plots: %d plot(s), %d module box(es), %d dropped, room for %d more, "
+				 "%d fence panel(s), %d gate gap(s)"),
+			Plots, ModuleBoxes, Dropped, RoomForMore,
+			Boxes->GetInstanceCount() - ModuleBoxes, GateGaps);
 	}
 }
