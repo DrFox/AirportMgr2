@@ -741,6 +741,278 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	return true;
 }
 
+namespace ServiceLinkFixture
+{
+	/**
+	 * The edges one link laid, from the entry outwards: the lead-in, then the MERGE sweep, then
+	 * the turn-back. Empty when this entry took no link.
+	 *
+	 * OFF THE GRAPH, not off the builder's word for it. A link is three edges - a lead-in from
+	 * the declared entry to a node short of the road, and a sweep onto the road each way - and
+	 * all three are UNOWNED, which is what tells them from the lane they leave (see
+	 * FGuidelineEdge's StandGeometryOwner, and IsServiceNodeConnected, which lives on the same
+	 * distinction).
+	 *
+	 * THE MERGE BEFORE THE TURN-BACK, and told apart by geometry rather than by index: both
+	 * sweeps leave the lead-in's far end along the same tangent and both meet the road
+	 * tangentially, so what differs is WHICH WAY along the road they go. The one on the side the
+	 * lead-in was already pointing is the merge, and it turns by the transition's deflection;
+	 * the other turns by 180 minus it. Their radii differ by an order of magnitude at a close
+	 * gap and the test would be measuring a coin toss without this.
+	 */
+	TArray<FGuidelineEdgeId> LinkEdgesAt(const URoadNetwork& Net, FGuidelineNodeId Entry)
+	{
+		auto Unowned = [&Net](FGuidelineEdgeId Id)
+		{
+			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+			return Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet();
+		};
+
+		TArray<FGuidelineEdgeId> Found;
+		const FGuidelineNode* Node = Net.GetGuidelineNode(Entry);
+		if (Node == nullptr)
+		{
+			return Found;
+		}
+
+		FGuidelineEdgeId LeadId;
+		for (const FGuidelineEdgeId& Id : Node->Incident)
+		{
+			if (Unowned(Id)) { LeadId = Id; }
+		}
+		if (!LeadId.IsSet())
+		{
+			return Found;
+		}
+		Found.Add(LeadId);
+
+		const FGuidelineEdge* Lead = Net.GetGuidelineEdge(LeadId);
+		const FGuidelineNodeId LeadEndId = Lead->A == Entry ? Lead->B : Lead->A;
+		const FGuidelineNode* LeadEnd = Net.GetGuidelineNode(LeadEndId);
+		if (LeadEnd == nullptr)
+		{
+			return Found;
+		}
+
+		// The sweeps share the lead-in's far end and take their control from the point on the
+		// road the transition aims at - the same point for both, which is why comparing against
+		// it separates them.
+		FVector2D Arriving = FVector2D::ZeroVector;
+		if (!LeavingAlong(Net, LeadId, LeadEndId, Arriving))
+		{
+			return Found;
+		}
+		Arriving = -Arriving;   // The direction the lead-in ARRIVES in, not the way back up it.
+
+		// AHEAD OF THE MEETING POINT, measured from the sweep's own control - which IS that
+		// point, for both of them. A sweep whose road end lies further along the way the lead-in
+		// was heading is the merge; the one behind it is the turn-back.
+		auto Ahead = [&Net, &Arriving, LeadEndId](const FGuidelineEdgeId& Id)
+		{
+			const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+			const FGuidelineNode* Far =
+				Net.GetGuidelineNode(Edge->A == LeadEndId ? Edge->B : Edge->A);
+			return Far != nullptr
+				? FVector2D::DotProduct(Far->Position - Edge->Control, Arriving)
+				: 0.0;
+		};
+
+		TArray<FGuidelineEdgeId> Sweeps;
+		for (const FGuidelineEdgeId& Id : LeadEnd->Incident)
+		{
+			if (Id != LeadId && Unowned(Id)) { Sweeps.Add(Id); }
+		}
+		Sweeps.Sort([&Ahead](const FGuidelineEdgeId& L, const FGuidelineEdgeId& R)
+		{
+			return Ahead(L) > Ahead(R);
+		});
+		Found.Append(Sweeps);
+		return Found;
+	}
+
+	/** The radius the edge AS LAID delivers, which is the one a truck has to follow. */
+	double DeliveredRadius(const URoadNetwork& Net, FGuidelineEdgeId Id)
+	{
+		const FGuidelineEdge* Edge = Net.GetGuidelineEdge(Id);
+		const FGuidelineNode* A = Edge != nullptr ? Net.GetGuidelineNode(Edge->A) : nullptr;
+		const FGuidelineNode* B = Edge != nullptr ? Net.GetGuidelineNode(Edge->B) : nullptr;
+		if (A == nullptr || B == nullptr)
+		{
+			return 0.0;
+		}
+		return GuidelineGeom::TightestRadius(A->Position, Edge->Control, B->Position);
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandLinkClearsTheTruckLockTest,
+	"Airside.Build.StandLinkClearsTheTruckLock",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE ONE CURVE NOBODY MEASURED. Every corner INSIDE the lane is held against the truck's
+	// steering lock - Airside.Build.LaneCornersAreDrivable, PlacedStandLaneIsOneDrivableCycle,
+	// Airside.Entities.StandLaneCornersClearTheTruckLock - and the whole reason the lane was
+	// redesigned on 2026-09-16 is that the ring's corners were tighter than a real 8.5 m
+	// dispenser can follow. The LINK from the road onto that lane had no such test, and it was
+	// delivering 40 uu where 699 is needed: a curve tighter than the lock is untakeable at any
+	// speed, not merely slow, so a truck could not drive onto the stand at all.
+	//
+	// THE RADIUS AS LAID, NEVER THE RUN REQUESTED. Commit 8be494c cost this project three
+	// sessions because a test checked the figure a builder asked for while the follower drove
+	// the figure it got, and ServiceRoadFilletClearsTheTruckLock was green throughout. So this
+	// measures GuidelineGeom::TightestRadius on the edge that is in the graph.
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const double Lock = FMath::Sin(FMath::DegreesToRadians(
+		FMath::Clamp(Truck.Ground.MaxSteerDegrees, 0.0, 90.0)));
+	if (!TestTrue(TEXT("the largest service vehicle steers on measured axles"),
+			Truck.HasAxles() && Lock > KINDA_SMALL_NUMBER))
+	{
+		return false;
+	}
+
+	// Written out rather than calling TightestFollowableRadius, for the reason that function's
+	// own header gives: a helper both the production code and its test called could be wrong in
+	// one place and agree with itself.
+	const double Followable = Truck.Wheelbase() / Lock;
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
+
+	// TWO GAPS, because the answer depends on the gap and one fixture could pass by luck. 4 m is
+	// as close as a player can draw a road to a stand; 54 m is what the rest of the suite uses
+	// (FuelServiceTest, RoadAlongsideARowOfStands and StandFuelAnchorJoinsRoad all put their
+	// road at y = -6000 with the stand at the origin), and it is past the point where the
+	// transition stops being constrained at all - see GuidelineGeom::ShiftDeflectionFor.
+	for (const double Gap : { 400.0, 5400.0 })
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const double RoadY = LaneBounds.Min.Y - Gap;
+
+		// LONG, so the fillet is never clamped by the road running out - that is a different
+		// failure with a different fix, and mixing the two would leave neither measured.
+		FGuidelineNodeId East;
+		Lay(*Net, FVector2D(-60000.0, RoadY), FVector2D(60000.0, RoadY),
+			ETraversalClass::GroundVehicle, East);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		int32 Measured = 0;
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		{
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+			if (Link.Num() < 3)
+			{
+				continue;
+			}
+			++Measured;
+
+			const FGuidelineNode* At = Net->GetGuidelineNode(Entry);
+			const FString Where = FString::Printf(TEXT("(%.0f,%.0f) at a %.0f uu gap"),
+				At != nullptr ? At->Position.X : 0.0, At != nullptr ? At->Position.Y : 0.0, Gap);
+
+			// THE LEAD-IN, which every truck entering this stand drives whichever way it came.
+			const double Lead = DeliveredRadius(*Net, Link[0]);
+			TestTrue(*FString::Printf(
+					TEXT("the lead-in from %s delivers %.0f uu, and the truck's lock wants %.0f"),
+					*Where, Lead, Followable),
+				Lead >= Followable);
+
+			// AND THE MERGE ONTO THE ROAD, which is the other half of the same transition.
+			const double Merge = DeliveredRadius(*Net, Link[1]);
+			TestTrue(*FString::Printf(
+					TEXT("the merge onto the road at %s delivers %.0f uu, and the truck's lock "
+					     "wants %.0f"),
+					*Where, Merge, Followable),
+				Merge >= Followable);
+
+			// THE TURN-BACK IS THE ACHIEVABLE BOUND, NOT THE IDEAL, and the difference is a fact
+			// about the ground rather than about this builder. Merging onto a road 4 m away has
+			// to be done at a slant - there is no room for a square turn - and turning the OTHER
+			// way out of a slant is a U-turn, which needs about twice the lock of lateral room
+			// and has four metres. So it is laid (without it a truck arriving from the far side
+			// has no way in at all), the builder WARNS naming the gap, and the router costs it.
+			//
+			// AT A WIDER GAP THERE IS NOTHING TO EXCUSE: the deflection reaches its right-angle
+			// cap, both sweeps become the same shape, and both clear. That is the assertion that
+			// would fail if the transition ever stopped being sized from the radius.
+			const double TurnBack = DeliveredRadius(*Net, Link[2]);
+			AddInfo(FString::Printf(TEXT("LINK %s: lead %.0f, merge %.0f, turn-back %.0f uu"),
+				*Where, Lead, Merge, TurnBack));
+			if (Gap > Followable * 2.83)
+			{
+				TestTrue(*FString::Printf(
+						TEXT("and past 2.83 times the lock the turn-back clears too - %s "
+						     "delivers %.0f against %.0f"),
+						*Where, TurnBack, Followable),
+					TurnBack >= Followable);
+			}
+		}
+
+		// NOT VACUOUS. Every loop above runs zero times on a stand that joined nothing, and the
+		// test would report success on a builder that had stopped linking altogether.
+		TestEqual(*FString::Printf(
+				TEXT("a road %.0f uu off the lane is joined at both ends of the near side"), Gap),
+			Measured, 2);
+	}
+
+	// AND WHERE THE GROUND CANNOT GIVE IT, THE BUILDER SAYS SO. A road drawn as a short stub
+	// has no room either side of the join for the fillet, so the clamp in FAnchorLink::Join
+	// takes what is left and the delivered radius falls under the lock however it was sized.
+	// That is a fact about the layout rather than about the construction - the player can move
+	// or lengthen the road, and nothing else will fix it - so the builder warns naming the gap
+	// and this exercises the path rather than leaving it to a reader.
+	//
+	// NO ASSERTION ON THE RADIUS HERE, deliberately: the figure is whatever the stub allows, and
+	// pinning it would be pinning the clamp rather than the rule. What is asserted is that the
+	// stand is still JOINED - a cramped road is worse service, not no service.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const double RoadY = LaneBounds.Min.Y - 400.0;
+
+		// 900 uu of road, which is shorter than the fillet a 4 m gap asks for at either end.
+		FGuidelineNodeId East;
+		Lay(*Net, FVector2D(1000.0, RoadY), FVector2D(1900.0, RoadY),
+			ETraversalClass::GroundVehicle, East);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		// ONE EDGE IS ENOUGH TO COUNT HERE, and that is the shape of the answer rather than a
+		// looser test: with no room for a fillet FAnchorLink::Join falls back to the hard join -
+		// the lead-in runs to a node cut straight into the road and there are no sweeps at all -
+		// which is deliberate (see the comment at its Offset test: an ugly corner is
+		// recoverable, an inverted arc is not). So the stub gets a one-edge link, the builder
+		// warns, and the stand is still served.
+		int32 Joined = 0;
+		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
+		{
+			const TArray<FGuidelineEdgeId> Link = LinkEdgesAt(*Net, Entry);
+			if (Link.Num() == 0)
+			{
+				continue;
+			}
+			++Joined;
+
+			// A STRAIGHT EDGE HAS NO RADIUS AT ALL - TightestRadius says so with a numeric
+			// maximum - and printing 1.8e308 in a diagnostic is a line nobody can read.
+			FString Radii;
+			for (const FGuidelineEdgeId& Id : Link)
+			{
+				const double R = DeliveredRadius(*Net, Id);
+				Radii += R > 1.0e6 ? TEXT("straight ") : FString::Printf(TEXT("%.0f "), R);
+			}
+			AddInfo(FString::Printf(TEXT("STUB: %d edge(s), radii %s uu"), Link.Num(), *Radii));
+		}
+		TestTrue(TEXT("a stand beside a short stub of road is still joined to it"), Joined >= 1);
+	}
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTruckReachesHydrantWithoutCrossingTheAircraftTest,
 	"Airside.Model.Traffic.TruckReachesHydrantWithoutCrossingTheAircraft",
@@ -872,17 +1144,17 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// THE WHOLE CYCLE: every lane edge, straight runs and the bends between them alike, which
 	// together are what a truck drives round.
 	//
-	// THE bStandApproach FILTER IS A NO-OP, and stays as the statement of what this measures
-	// rather than as live selection. Nothing has written the mark true since the anchor spurs
-	// went, and after 2026-09-16 nothing is expected to: the road link a declared entry casts
-	// carries no StandGeometryOwner - which is what lets IsServiceNodeConnected tell a lane that
-	// reaches a road from one that only reaches itself - so it never appears in *Lane at all.
-	// See FGuidelineEdge::bStandApproach, where that question is closed.
+	// EVERY EDGE *Lane HOLDS IS THE CYCLE, and that needs no filter of its own: FStandLaneBuild
+	// puts its owner on the lane and on nothing else, and the road link a declared entry casts is
+	// deliberately unowned - which is what lets IsServiceNodeConnected tell a lane that reaches a
+	// road from one that only reaches itself. A bStandApproach flag stood here until 2026-09-16
+	// to tell an owned APPROACH from an owned cycle edge; there is no owned approach any more,
+	// and the flag is deleted rather than left as a mark nothing writes.
 	TArray<FGuidelineEdgeId> Cycle;
 	for (const FGuidelineEdgeId& Id : *Lane)
 	{
 		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
-		if (Edge != nullptr && Edge->bAlive && !Edge->bStandApproach)
+		if (Edge != nullptr && Edge->bAlive)
 		{
 			Cycle.Add(Id);
 		}
@@ -930,7 +1202,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 			{
 				const FGuidelineEdge* Other = Net->GetGuidelineEdge(OtherId);
 				FVector2D Theirs;
-				if (OtherId == Id || Other == nullptr || Other->bStandApproach
+				if (OtherId == Id || Other == nullptr
 					|| !LeavingAlong(*Net, OtherId, End, Theirs))
 				{
 					continue;

@@ -42,22 +42,19 @@ struct AIRSIDE_API FStandLaneBuild
 	 */
 	static constexpr double LaneWidth = 400.0;
 
-	/**
-	 * How far along the lane a line joining it should slide from the point it is nearest.
-	 *
-	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT. Sliding the join this far and putting the
-	 * curve's control back at the nearest point makes the first leg run down the lane, so the
-	 * curve leaves tangentially and there is no turn at the junction to take. Gap is how far
-	 * off the lane the other end is.
-	 *
-	 * ONE CALLER: FAnchorLink::Join, where a road's connector leaves a DECLARED ENTRY. It was
-	 * shared with the anchor spurs until 2026-09-16 and they are gone - an anchor is a waypoint
-	 * ON the lane now and has nothing to spur. The 800 uu and the measurements that settled it
-	 * are on PreferredTangentRun in StandLaneBuild.cpp; the gaps they were measured against are
-	 * a spur's 1000-1400 uu, which is SHORTER than a road link's, and Join records what the
-	 * figure delivers at a road's distance.
-	 */
-	static double TangentRunFor(double Gap);
+	// TangentRunFor IS DELETED, 2026-09-16, and where its answer comes from now is the point.
+	//
+	// It sized the run of a tangential join from the GAP, capped at a preferred 800 uu, and that
+	// figure was measured against an anchor spur's 1000-1400 uu gaps. A road link's gaps are
+	// three to five times that, and the same 800 delivered 40 uu of radius at 4 m and 67 at 54
+	// against the 699 a service vehicle's steering lock demands - a curve no truck can follow at
+	// any speed, which is the defect this whole redesign exists to delete. A run cannot be a
+	// constant tuned against one distance.
+	//
+	// GuidelineGeom::ShiftDeflectionFor answers it instead, by INVERTING the radius relation:
+	// give it the radius that must be cleared and the gap to cross and it returns the deflection
+	// and the run that deliver it. It lives beside CornerRunFor because it is that formula read
+	// the other way round. FAnchorLink::Join is the caller.
 
 	/** What one pass laid, and what the link search needs to know about it. */
 	struct FResult

@@ -188,31 +188,26 @@ struct AIRSIDE_API FGuidelineEdge
 	 */
 	UPROPERTY() FEntityInstanceId StandGeometryOwner;
 
-	/**
-	 * True for an edge that APPROACHES a stand's lane rather than being part of the cycle
-	 * itself. Meaningless unless StandGeometryOwner is set.
-	 *
-	 * NOTHING SETS IT TRUE, and after 2026-09-16 nothing is expected to - the question is
-	 * CLOSED rather than pending. It marked the SPUR from a service anchor into the old ring;
-	 * the anchors are waypoints ON the lane now and there is no stub to tell apart. The road
-	 * link that a declared entry casts is not one either, and cannot be: it deliberately
-	 * carries no StandGeometryOwner (see the paragraph above - that is what lets
-	 * IsServiceNodeConnected tell a lane that reaches a road from one that only reaches
-	 * itself), and this mark is meaningless without it. What would earn a writer is geometry a
-	 * stand OWNS that is not part of its cycle; nothing the builders lay is that today, so the
-	 * field states the shape of the cycle for its readers and measures nothing.
-	 *
-	 * STATED, not inferred, and that is the part worth keeping. It was read off the endpoints
-	 * - "an approach touches an anchor node" - which is true of one nobody has split and false
-	 * the moment a second anchor joins the first, leaving an inner piece with an anchor node
-	 * at neither end. That piece then read as part of the cycle, took a link of its own, and
-	 * the truck drove from the road across the aeroplane to reach it.
-	 *
-	 * It has to live on the EDGE rather than in the builder's result, because the result is
-	 * re-gathered from the graph on every later pass - see FStandLaneBuild::Build's opening
-	 * block - and a pass that did not lay the lane has nothing else to tell the two apart.
-	 */
-	UPROPERTY() bool bStandApproach = false;
+	// bStandApproach IS DELETED, 2026-09-16. It marked an edge that APPROACHED a stand's lane
+	// rather than being part of the cycle - the SPUR from a service anchor into the old ring -
+	// and was meaningless without StandGeometryOwner beside it, since it said which of an
+	// OWNED edge's two kinds this was.
+	//
+	// NOTHING CAN SET IT ANY MORE, which is why it goes rather than waiting for a writer. An
+	// anchor is a waypoint ON the lane now, so there is no stub; and the road link a declared
+	// entry casts deliberately carries no owner at all - see the paragraph above, where being
+	// unowned is what lets IsServiceNodeConnected tell a lane that reaches a road from one that
+	// only reaches itself. A UPROPERTY every reader gets false from is a false statement in the
+	// data model, and the next session would spend an hour looking for the code that was
+	// supposed to set it.
+	//
+	// WHAT IT PROTECTED IS NOT LOST, and that was the argument for keeping it: it was read off
+	// the ENDPOINTS once - "an approach touches an anchor node" - which was true of a spur
+	// nobody had split and false the moment a second anchor joined the first, leaving an inner
+	// piece with an anchor node at neither end; that piece read as part of the cycle, took a
+	// link of its own, and a truck drove from the road across the aeroplane to reach it. The
+	// same question is answered by StandGeometryOwner now, which IS written and load-bearing:
+	// everything the lane builder lays carries it and nothing else does.
 
 	/**
 	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.

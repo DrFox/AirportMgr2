@@ -479,6 +479,32 @@ double GuidelineGeom::TightestRadius(
 	return 2.0 * Least * Least * Least / Cross;
 }
 
+double GuidelineGeom::ShiftDeflectionFor(double Radius, double Shift, double& OutRun)
+{
+	OutRun = 0.0;
+	if (Shift <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	// The right-angle cap, and the answer outright for a caller with no radius to clear.
+	double Deflect = UE_DOUBLE_HALF_PI;
+	if (Radius > UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		// sin^2(b/2) = (sqrt(1 + 4k^2) - 1) / (2k^2), k = 4R/Shift. See the header for where
+		// that comes from; it is CornerRunFor solved for its second argument.
+		const double K = 4.0 * Radius / Shift;
+		const double SinSquared = (FMath::Sqrt(1.0 + 4.0 * K * K) - 1.0) / (2.0 * K * K);
+		Deflect = FMath::Min(2.0 * FMath::Asin(FMath::Sqrt(FMath::Clamp(SinSquared, 0.0, 1.0))),
+			UE_DOUBLE_HALF_PI);
+	}
+
+	// Both curves carry half the shift between them: 2 s sin(b) = Shift.
+	const double Sine = FMath::Sin(Deflect);
+	OutRun = Sine > UE_DOUBLE_KINDA_SMALL_NUMBER ? Shift / (2.0 * Sine) : 0.0;
+	return Deflect;
+}
+
 double GuidelineGeom::CornerRunFor(double Radius, double Interior)
 {
 	const double Half = Interior * 0.5;

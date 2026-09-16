@@ -70,51 +70,14 @@ namespace
 		Edge.bDerived = true;
 		Edge.StandGeometryOwner = Owner;
 
-		// NEVER AN APPROACH. Every edge this builder lays is part of the cycle itself; see
-		// FGuidelineEdge::bStandApproach for what reading that off the endpoints instead cost,
-		// and for who is expected to set it. Stated rather than left to the default, because
-		// the two splits FAnchorLink makes copy from Original and a mark nobody writes is a
-		// mark nobody can trust.
-		Edge.bStandApproach = false;
+		// AND THE OWNER IS THE WHOLE MARK. Every edge this builder lays is part of the cycle
+		// itself, and nothing else in the graph carries this entity's id - the road link a
+		// declared entry casts is deliberately unowned - so "owned by this stand" and "part of
+		// this stand's lane" are the same statement. A second flag saying which of the two an
+		// owned edge was is deleted with the spurs that needed it; see FGuidelineEdge, where
+		// StandGeometryOwner is declared, for what reading that off the ENDPOINTS instead cost.
 		return Edge;
 	}
-
-	/**
-	 * How far back along the lane a line joining it puts its join, uu.
-	 *
-	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT. Its control point is the point it was
-	 * nearest, so the first leg of the quadratic runs down the lane and the curve is tangent
-	 * to it - there is no heading change at the junction at all, and nothing for FSpeedProfile
-	 * to call a corner.
-	 *
-	 * WITH a run of p, a gap of q and the right angle between them that this construction
-	 * always has, the quadratic's apex radius is 2p^2q^2 / (p^2+q^2)^(3/2). It peaks at
-	 * p = q*sqrt(2), where it is 0.77q, and falls away on both sides.
-	 *
-	 * NOT THE PEAK, DELIBERATELY. The run is a DETOUR: the vehicle leaves the lane this far
-	 * past where it wanted to be and the curve brings it back, so every uu of run is driven
-	 * twice. The peak for the hydrant's 1390 uu gap is a 1966 uu run, and asking for it
-	 * lengthened a measured route by about 3000 uu for radius nobody needed. What is needed is
-	 * the 471 uu a truck's steering lock allows - FAirframe::TightestFollowableRadius - and 800
-	 * uu of run clears that with margin at every gap a stand presents:
-	 *
-	 *     gap 1390 (hydrant)      -> 599 uu     gap 990 (equipment) -> 608 uu
-	 *     gap 1400 (fixed GPU)    -> 599 uu     gap 757             -> 549 uu
-	 *
-	 * The curve is widest in the MIDDLE of that range rather than at its end, which is why one
-	 * figure serves all of them.
-	 *
-	 * CAPPED AT THE PEAK for a close join, because past it a longer run makes the curve
-	 * TIGHTER as well as longer - both costs, no benefit. A box three metres off the lane took
-	 * the peak, 424 uu of run for 231 uu of radius; no geometry could do better with three
-	 * metres to work in, and it is the last few metres of a journey that ends in a stop.
-	 *
-	 * ONE FORMULA, TWO SPECIALISATIONS: this is the asymmetric right-angled case. The symmetric
-	 * case (same cut on both legs) is GuidelineGeom::CornerRunFor in Solve/GuidelineGeom.h,
-	 * which holds the general two-leg formula they both derive from and which is what rounds
-	 * this lane's own corners.
-	 */
-	constexpr double PreferredTangentRun = 800.0;
 
 	/**
 	 * Where a lane's nodes go, worked out before any of them exists.
@@ -614,9 +577,4 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 	}
 
 	return Result;
-}
-
-double FStandLaneBuild::TangentRunFor(double Gap)
-{
-	return FMath::Min(PreferredTangentRun, Gap * UE_DOUBLE_SQRT_2);
 }

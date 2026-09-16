@@ -3,6 +3,7 @@
 #include "AirsideLog.h"
 #include "Build/AnchorLinkFinder.h"
 #include "Build/StandLaneBuild.h"
+#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -55,11 +56,11 @@ namespace
 	/**
 	 * Which way a link LEAVES a declared entry, and how much lane there is that way.
 	 *
-	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT - see FStandLaneBuild::TangentRunFor for the
-	 * construction and the measurements that sized its run - so the one thing the join needs
-	 * from the graph here is the direction of the lane AT the entry. The lane offers two, one
-	 * per incident leg, and they are exact opposites: the lane is tangent-continuous at an
-	 * entry by construction, because a bend's control IS the corner it rounds.
+	 * A LINE JOINS A LANE ALONG IT, NOT ACROSS IT - see GuidelineGeom::ShiftDeflectionFor for
+	 * the construction and Join for what it delivers - so the one thing the join needs from the
+	 * graph here is the direction of the lane AT the entry. The lane offers two, one per
+	 * incident leg, and they are exact opposites: the lane is tangent-continuous at an entry by
+	 * construction, because a bend's control IS the corner it rounds.
 	 *
 	 * TOWARD THE ROAD WHEN THE LANE POINTS THAT WAY AT ALL. An entry across the END of a stand
 	 * has a road roughly ahead of it, and leaving backwards to reach it is a curve that swings
@@ -75,9 +76,12 @@ namespace
 	 * came in at the near entry and reversed through 179 degrees to get to it, which a truck
 	 * cannot do at all under the rolling-steer law.
 	 *
-	 * HOW MUCH ROOM depends on which leg was taken. On the bend side it is the distance to the
-	 * corner, past which the control would be round the turn and aiming at nothing; on a
-	 * straight it is that straight's own length. Either way TangentRunFor is capped by it.
+	 * HOW MUCH ROOM each leg has decides nothing but that TIE, and is not reported: the control
+	 * goes on the tangent LINE at the entry, and a transition wide enough to clear a truck's
+	 * lock regularly wants more run than the leg it leaves on is long. Past the corner that line
+	 * leaves a lane whose every turn bends the same way, so it lands OUTSIDE the cycle on the
+	 * side the road is, and the curve's own hull stays between the two. Capping the run to the
+	 * leg instead is what delivered 67 uu of radius where 699 was needed.
 	 *
 	 * ANALYTIC, never a difference of samples: a quadratic's first sampled chord is a degree or
 	 * two off its true tangent, and a heading taken from the chord describes a turn no follower
@@ -88,7 +92,7 @@ namespace
 	 * than guessing a heading.
 	 */
 	bool EntryDeparture(const URoadNetwork& Network, FGuidelineNodeId NodeId,
-		const FVector2D& Toward, FVector2D& OutAlong, double& OutRoom)
+		const FVector2D& Toward, FVector2D& OutAlong)
 	{
 		const FGuidelineNode* Node = Network.GetGuidelineNode(NodeId);
 		if (Node == nullptr)
@@ -99,6 +103,7 @@ namespace
 		bool bFound = false;
 		bool bBestIsBend = false;
 		double BestToward = 0.0;
+		double BestRoom = 0.0;
 		for (const FGuidelineEdgeId& Id : Node->Incident)
 		{
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
@@ -138,11 +143,11 @@ namespace
 			const bool bBetter = !bFound
 				|| Margin > UE_DOUBLE_KINDA_SMALL_NUMBER
 				|| (FMath::Abs(Margin) <= UE_DOUBLE_KINDA_SMALL_NUMBER
-					&& (bBend != bBestIsBend ? bBend : Room > OutRoom));
+					&& (bBend != bBestIsBend ? bBend : Room > BestRoom));
 			if (bBetter)
 			{
 				OutAlong = Along;
-				OutRoom = Room;
+				BestRoom = Room;
 				BestToward = Dot;
 				bBestIsBend = bBend;
 				bFound = true;
@@ -581,6 +586,21 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const FVector2D PositionA = EndA->Position;
 	const FVector2D PositionB = EndB->Position;
 
+	// THROUGH THE GRAPH AGAIN, 2026-09-16, and SAMPLED FIRST. A direct GuidelineGeom::Sample
+	// stood further down - the one deliberate exception to URoadNetwork::SampleGuideline being
+	// the only graph-edge caller of it (PR #137 review, issue #105 item 5) - because a Lane join
+	// had already split the LANE and the snapshot in Original was of an edge whose id no longer
+	// resolved. Nothing splits before this point now: an entry is DECLARED, so there is no lane
+	// cut to make, and Hit.Edge is still the road this link resolved against.
+	//
+	// UP HERE because a link leaving a lane RE-AIMS along the road below, and needs the
+	// polyline to do it. Everything after measures against this same array.
+	TArray<FVector2D> Curve;
+	if (!Network.SampleGuideline(Hit.Edge, Curve))
+	{
+		return FGuidelineNodeId();
+	}
+
 	// WHERE THE LEAD-IN RAY STRIKES IS THE CORNER, NOT THE JOIN.
 	//
 	// Joining here is what produced a hard turn: the ray meets the taxiway at whatever
@@ -588,8 +608,14 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// degrees. A curve cannot fix that in place - a quadratic's end tangents both point
 	// at its control, so being tangent to the lead-in AND to the taxiway would put the
 	// control exactly here, which is the straight line again. The join has to MOVE.
-	const FVector2D Corner =
-		GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Hit.Param);
+	//
+	// MUTABLE, AND SO IS THE PARAM IT COMES FROM, for one caller: a link leaving a lane is the
+	// only one that re-aims. The finder answers "where is this road NEAREST me", which is the
+	// right question for an anchor casting at a taxiway and the WRONG one for a lane change -
+	// the nearest point is square abeam, and square abeam is the one place a transition has no
+	// room to turn in. See the lane block below.
+	double Param = Hit.Param;
+	FVector2D Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
 
 	// SET ONLY BY A LINK THAT LEAVES A STAND'S LANE - see the block below, which is the only
 	// writer. Everything else keeps the straight midpoint control, because a straight lead-in
@@ -625,63 +651,129 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// from the node, which is what keeps the fillet below tangent to this curve instead of to a
 	// chord the curve never follows.
 	//
-	// WHAT IT DELIVERS IS STILL UNDER THE TRUCK'S LOCK, and saying so is the point of measuring
-	// it. On the suite's close fixture - a road 4 m off the entry, which is as cramped as a
-	// player can draw one - the route Airside.Build.ServiceLaneEntersOnEverySideWithinReach
-	// prints has NO instant heading change left on it at all and a tightest delivered radius of
-	// 40 uu, on the sweep onto the road. At the 54 m of RoadAlongsideARowOfStands the run is
-	// capped at the corner (313 uu on a Code C stand) and the lead-in's own curve delivers
-	// about 67. Both are inside the 699 uu the shipping truck's lock wants, so FSpeedProfile
-	// slows a truck entering a stand either way.
+	// THE RADIUS IS THE INPUT, NOT THE RUN, and that is the correction of 2026-09-16.
+	// FStandLaneBuild::TangentRunFor governed the run for one round - it is deleted, and
+	// StandLaneBuild.h says where its answer comes from now - and its 800 uu was measured
+	// against a SPUR's 1000-1400 uu gaps. A road is three to five times that, and the same 800
+	// delivered 40 uu of radius at 4 m and 67 at 54 against the 699.4 a real 8.5 m dispenser's
+	// steering lock demands. A curve tighter than the lock is untakeable AT ANY SPEED, which is
+	// the defect this whole piece of work exists to delete, so the figure cannot be a constant
+	// tuned against one gap.
 	//
-	// IT IS STILL THE RIGHT TRADE, because what it replaces is an INSTANT heading change, which
-	// is untakeable at ANY speed and which a rolling-steer truck cannot track at all. And the
-	// remedy is named rather than guessed at: TangentRunFor's 800 uu was measured against a
-	// SPUR's 1000-1400 uu gaps, and a road link's are three to five times that - the run that
-	// clears 699 at 2900 uu of gap is about 1120. Raising it needs the inverse of the radius
-	// formula rather than a bigger constant, and a test that measures the delivered radius of
-	// the link the way Airside.Build.LaneCornersAreDrivable measures the lane's own.
+	// TWO SHAPES, AND WHICH ONE IS A QUESTION ABOUT THE ROAD, not a preference. A road drawn
+	// ALONGSIDE the stand is parallel to the lane and the two lines never meet, so the connector
+	// is a lane change: an S of two curves, sized by GuidelineGeom::ShiftDeflectionFor. A road
+	// drawn ACROSS the end of the stand CROSSES the lane's heading, and that wants the ordinary
+	// thing - run on to where they meet and round the corner. The crossing is preferred wherever
+	// it exists within this link's own reach and its corner fits in front of the entry, because
+	// it leaves the lead-in dead straight and gives BOTH sweeps their radius rather than one: an
+	// S has to slant onto the road, and turning the other way out of a slant is a U-turn that no
+	// geometry fixes. Tried the other way round first, and a road across the nose came out with
+	// a transition longer than the distance to the road and no link at all.
 	//
-	// KEPT AFTERWARDS because the fillet below has to leave room for it - see LeadRoom.
+	// PLUS A TENTH ON THE LOCK, measured rather than chosen. Sized at exactly the lock, the 4 m
+	// fixture came out at 707 uu against 699.4 - a 1% margin, and the weld tolerance the fillet
+	// gives up below is enough to eat it. A tenth is what the stand layout allows itself for the
+	// same reason, at UEntityDefinition::BuildCodeCStandFor's LegSlack.
+	//
+	// KEPT AFTERWARDS: LaneRadius is what the fillet at the road must deliver (see Offset), and
+	// LaneRun is the room the S has already spent along the lane (see LeadRoom).
 	double LaneRun = 0.0;
+	double LaneRadius = 0.0;
 	if (Link.LaneOwner.IsSet())
 	{
 		FVector2D Along = FVector2D::ZeroVector;
-		double Room = 0.0;
-		if (EntryDeparture(Network, Link.Node, Corner - Link.At, Along, Room))
+		if (EntryDeparture(Network, Link.Node, Corner - Link.At, Along))
 		{
-			// NEVER PAST THE LEG IT IS ON. Past that the control is round the next turn and the
-			// first leg of the curve is down something else - see EntryDeparture for what Room
-			// is on each of the two sides.
-			const double Run = FMath::Min(
-				FStandLaneBuild::TangentRunFor(FVector2D::Distance(Link.At, Corner)), Room);
+			// THE LOCK OF THE LARGEST VEHICLE ADMITTED, never the one driving now - the same
+			// call the lane's own corners are rounded by (FStandLaneBuild::Build) and the same
+			// rule all this airport's ground geometry follows.
+			constexpr double Slack = 1.1;
+			LaneRadius = UAirsideSettings::ResolveLargestServiceVehicle()
+				.TightestFollowableRadius() * Slack;
 
-			const FVector2D Control = Link.At + Along * Run;
-			const FVector2D Out = Corner - Control;
-			if (Run > LeadInWeldTolerance && !Out.IsNearlyZero())
+			// WHERE THE LANE'S OWN HEADING MEETS THE ROAD, if it does at all. Parallel lines
+			// give a vanishing cross product and no crossing; a road BEHIND the entry gives a
+			// negative distance, which is not a crossing this link can use either.
+			const FVector2D RoadDir =
+				GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Param);
+			const double Converge = Along.X * RoadDir.Y - Along.Y * RoadDir.X;
+			const FVector2D ToRoad = Corner - Link.At;
+			const double MeetsAt = FMath::Abs(Converge) > UE_DOUBLE_KINDA_SMALL_NUMBER
+				? (ToRoad.X * RoadDir.Y - ToRoad.Y * RoadDir.X) / Converge
+				: -1.0;
+
+			// AND WHETHER ITS CORNER FITS IN FRONT OF THE ENTRY. The turn onto the road is the
+			// GENTLER of the two corners the connector makes with it - the one a truck joining
+			// the traffic takes - and CornerRunFor says how much run that needs.
+			const double Turn = FMath::Acos(FMath::Clamp(
+				FMath::Abs(FVector2D::DotProduct(Along, RoadDir)), -1.0, 1.0));
+			const double Needs = GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Turn);
+
+			if (MeetsAt > 0.0 && MeetsAt <= Link.Reach && Needs + LeadInWeldTolerance <= MeetsAt)
 			{
-				OutLaneControl = Control;
-				Link.Dir = Out.GetSafeNormal();
-				LaneRun = Run;
+				// THE CROSSING. Re-asked of the road rather than taken from the tangent line, so
+				// the corner sits ON a road that bends; Dir then runs from the entry to it, and
+				// the lead-in is straight - which is tangent to the lane at the entry by
+				// construction, and needs no control point of its own to be so.
+				int32 Span = 0;
+				double Fraction = 0.0;
+				GuidelineGeom::NearestOnPolyline(Curve, Link.At + Along * MeetsAt, Span, Fraction);
+				Param = GuidelineGeom::ParamAtSample(Span, Fraction, Curve.Num());
+				Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
+
+				const FVector2D Out = Corner - Link.At;
+				if (!Out.IsNearlyZero())
+				{
+					Link.Dir = Out.GetSafeNormal();
+				}
+			}
+			else
+			{
+				// THE LANE CHANGE. The entry cannot simply run on to the road - it is beside it,
+				// not aimed at it - so the connector leaves at the deflection that clears the
+				// lock across this gap and meets the road at the same angle on the other side.
+				double Run = 0.0;
+				const double Deflect =
+					GuidelineGeom::ShiftDeflectionFor(LaneRadius, ToRoad.Size(), Run);
+				if (Run > LeadInWeldTolerance)
+				{
+					// WHICH WAY IT BENDS is which side the road is on, and the cross product
+					// says so: positive when the road lies to the left of the way this link
+					// leaves.
+					const double Side = FMath::Sign(Along.X * ToRoad.Y - Along.Y * ToRoad.X);
+					const FVector2D Turned =
+						Along.GetRotated(FMath::RadiansToDegrees(Deflect) * Side);
+
+					// AND THE ROAD IS MET WHERE THE TRANSITION ARRIVES, not where it is nearest.
+					// Both curves get the same tangent length, so the meeting point sits two
+					// runs along the aim - and re-asking the road for the point nearest THAT is
+					// what keeps this honest when the road bends or ends: the fillet below still
+					// works from a point on the road, and Dir is taken from the control
+					// afterwards so the lead-in stays tangent to whatever came back.
+					const FVector2D Control = Link.At + Along * Run;
+					const FVector2D Aim = Control + Turned * (2.0 * Run);
+
+					int32 Span = 0;
+					double Fraction = 0.0;
+					GuidelineGeom::NearestOnPolyline(Curve, Aim, Span, Fraction);
+					Param = GuidelineGeom::ParamAtSample(Span, Fraction, Curve.Num());
+					Corner = GuidelineGeom::Eval(PositionA, Original.Control, PositionB, Param);
+
+					const FVector2D Out = Corner - Control;
+					if (!Out.IsNearlyZero())
+					{
+						OutLaneControl = Control;
+						Link.Dir = Out.GetSafeNormal();
+						LaneRun = Run;
+					}
+				}
 			}
 		}
 	}
 
 	const FVector2D TaxiDir =
-		GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Hit.Param);
-
-	// THROUGH THE GRAPH AGAIN, 2026-09-16. A direct GuidelineGeom::Sample stood here - the one
-	// deliberate exception to URoadNetwork::SampleGuideline being the only graph-edge caller of
-	// it (PR #137 review, issue #105 item 5) - because a Lane join above had already split the
-	// LANE, and the snapshot in Original was of an edge whose id no longer resolved. Nothing
-	// splits before this point now: an entry is DECLARED, so there is no lane cut to make, and
-	// Hit.Edge is still the road this link resolved against. The exception has nothing left to
-	// justify it, so it goes rather than being carried as a habit.
-	TArray<FVector2D> Curve;
-	if (!Network.SampleGuideline(Hit.Edge, Curve))
-	{
-		return FGuidelineNodeId();
-	}
+		GuidelineGeom::Tangent(PositionA, Original.Control, PositionB, Param);
 
 	// How far back along each line the tangent points sit, for a fillet of this radius.
 	// The lead-in makes two corners with the taxiway - theta one way, 180 - theta the
@@ -695,7 +787,18 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	double Offset = 0.0;
 	if (Sharper > UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
-		Offset = Link.Radius / FMath::Tan(Sharper * 0.5);
+		// A LANE LINK SIZES ITS FILLET FROM THE RADIUS IT OWES, and for the GENTLER of the two
+		// corners it makes with the road - which is pi minus the sharper, and is the one a truck
+		// joining the traffic takes. CornerRunFor is the quadratic's own inverse; Link.Radius
+		// over a tangent is the CIRCULAR fillet's, which is the 40%-short mistake 8be494c made
+		// and which this project has already paid three sessions for. The other corner is the
+		// turn-back, and at a slant no run clears the lock on both - see the sweep loop below.
+		//
+		// LEFT AS IT WAS FOR AN AIRCRAFT: Link.Radius is the PAINTED radius of its line, 2500 uu
+		// for a Code C, and a lead-in that generous is not what this change is about.
+		Offset = LaneRadius > 0.0
+			? GuidelineGeom::CornerRunFor(LaneRadius, UE_DOUBLE_PI - Sharper)
+			: Link.Radius / FMath::Tan(Sharper * 0.5);
 	}
 
 	// It has to fit: on the lead-in, and on the taxiway BOTH ways, with a weld
@@ -718,8 +821,8 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	const double LeadRoom =
 		FVector2D::Distance(LeadFrom, Corner) - LeadInWeldTolerance - LaneRun;
 	const double TotalLength = GuidelineGeom::PolylineLength(Curve);
-	const double Behind = TotalLength * Hit.Param - LeadInWeldTolerance;
-	const double Ahead = TotalLength * (1.0 - Hit.Param) - LeadInWeldTolerance;
+	const double Behind = TotalLength * Param - LeadInWeldTolerance;
+	const double Ahead = TotalLength * (1.0 - Param) - LeadInWeldTolerance;
 
 	Offset = FMath::Min(Offset, FMath::Min(LeadRoom, FMath::Min(Behind, Ahead)));
 
@@ -734,7 +837,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		// arc is not. The junction solver clamps its fillets for the same reason.
 		FGuidelineNodeId JoinNode;
 		FGuidelineEdgeId JoinHead, JoinTail;
-		if (!Network.SplitGuidelineEdge(Hit.Edge, Hit.Param, LeadInWeldTolerance,
+		if (!Network.SplitGuidelineEdge(Hit.Edge, Param, LeadInWeldTolerance,
 			JoinNode, JoinHead, JoinTail))
 		{
 			return FGuidelineNodeId();
@@ -762,8 +865,8 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		// least LeadInWeldTolerance of ARC LENGTH from either endpoint, but arc length
 		// exceeds chord length on a bend, so that bound alone would not stop the WELD
 		// TEST - which compares the chord - from firing anyway.
-		const double ParamBack = GuidelineGeom::ParamAtArcOffset(Curve, Hit.Param, -Offset);
-		const double ParamFwd  = GuidelineGeom::ParamAtArcOffset(Curve, Hit.Param, +Offset);
+		const double ParamBack = GuidelineGeom::ParamAtArcOffset(Curve, Param, -Offset);
+		const double ParamFwd  = GuidelineGeom::ParamAtArcOffset(Curve, Param, +Offset);
 
 		FGuidelineNodeId BackNode;
 		FGuidelineEdgeId HeadEdge, RestEdge;
@@ -816,6 +919,18 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	Lead.Width = Original.Width;
 	Lead.MaxWingspan = Link.MaxWingspan;
 	Lead.bDerived = true;
+
+	// MEASURED, NOT ASSUMED, and only for the link that is sized to a radius in the first place.
+	// The lead-in's DELIVERED radius is what a truck drives; the run that was asked for is not.
+	// This project has paid three sessions for that distinction once already (8be494c, where a
+	// test checked the radius requested while the follower drove the radius delivered), so the
+	// figure the warning below prints comes off the edge as laid.
+	const FVector2D LeadEndAt = Network.GetGuidelineNode(LeadEnd)->Position;
+	double Tightest = TNumericLimits<double>::Max();
+	if (LaneRun > 0.0)
+	{
+		Tightest = GuidelineGeom::TightestRadius(Link.At, Lead.Control, LeadEndAt);
+	}
 	Network.AddGuidelineEdge(MoveTemp(Lead));
 
 	// One sweep to each side, so the stand is reachable whichever way an aircraft
@@ -838,7 +953,49 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		Sweep.Width = Original.Width;
 		Sweep.MaxWingspan = Link.MaxWingspan;
 		Sweep.bDerived = true;
+
+		// THE MERGE ONLY, not the turn-back. Both sweeps are tangent to the lead-in at one end
+		// and to the road at the other; what differs is how far they turn. The one that carries
+		// on the way the lead-in was pointing turns by the deflection, and is the one this
+		// construction sizes; the OTHER turns by 180 minus it, and at a shallow deflection that
+		// is a hairpin no vehicle can take. It is laid anyway, because without it a truck
+		// arriving from the far side has no way in at all, and the router costs it and avoids it
+		// wherever another entry will do.
+		//
+		// NO GEOMETRY FIXES THAT ONE at a close gap, which is why it is excluded here rather
+		// than reported: merging onto a road 4 m away needs a shallow slant, and turning back
+		// the other way from a shallow slant is a U-turn. At a gap wider than 2.83 times the
+		// lock the deflection reaches its right-angle cap and BOTH sweeps clear - see
+		// GuidelineGeom::ShiftDeflectionFor, and Airside.Build.StandLinkClearsTheTruckLock,
+		// which measures both at both gaps.
+		const FVector2D SweepEndAt = Network.GetGuidelineNode(SweepEnd)->Position;
+		if (LaneRun > 0.0
+			&& FVector2D::DotProduct(SweepEndAt - Corner, Link.Dir) > 0.0)
+		{
+			Tightest = FMath::Min(Tightest,
+				GuidelineGeom::TightestRadius(LeadEndAt, Corner, SweepEndAt));
+		}
 		Network.AddGuidelineEdge(MoveTemp(Sweep));
+	}
+
+	// SAID OUT LOUD WHEN THE GROUND CANNOT TAKE THE VEHICLE IT IS BUILT FOR, and naming the
+	// thing a player can actually change: how far the stand sits from its road. A truck cannot
+	// follow an arc tighter than its lock at any speed, so a link under it is a stand whose
+	// service traffic will cut the corner however slowly it crawls.
+	//
+	// THE GAP IS IN THE LINE because it is the only lever - the radius is the truck's and the
+	// entry is the stand's. Moving the road out fixes this and nothing else will: past 2.83
+	// times the lock (about 20 m for the shipping dispenser) the transition stops being
+	// constrained at all.
+	if (const double Lock =
+			UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
+		LaneRun > 0.0 && Lock > 0.0 && Tightest < Lock)
+	{
+		UE_LOG(LogAirside, Warning,
+			TEXT("Service lane entry at (%.0f, %.0f) joins its road %.0f uu away on a %.0f uu "
+			     "curve, tighter than the %.0f uu a service vehicle's lock allows. A truck will "
+			     "cut that corner; move the road further from the stand."),
+			Link.At.X, Link.At.Y, FVector2D::Distance(Link.At, Corner), Tightest, Lock);
 	}
 
 	// THIS LINK'S OWN GEOMETRY IS NOT A TARGET FOR THE NEXT ONE. Every edge just added -

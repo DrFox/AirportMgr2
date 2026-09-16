@@ -218,6 +218,41 @@ namespace GuidelineGeom
 	AIRSIDE_API double CornerRunFor(double Radius, double Interior);
 
 	/**
+	 * How far a line may DEFLECT, in radians, to reach another line Shift away across it, and
+	 * still deliver Radius everywhere. OutRun is the tangent length each of the two curves gets.
+	 *
+	 * THE SHAPE IS AN S, and it has to be: two parallel lines never meet, so a single fillet
+	 * cannot join them. The transition leaves the first line deflecting by the returned angle,
+	 * runs straight across, and deflects back onto the second - two quadratics, and the tighter
+	 * of them is what this sizes. A SERVICE ROAD BESIDE A STAND IS EXACTLY THAT CASE: the road
+	 * is drawn parallel to the lane because that is how a row of stands is served, and the
+	 * connector between them is a lane change, not a junction.
+	 *
+	 * ONE FORMULA, READ THE OTHER WAY ROUND, which is why it lives here beside CornerRunFor
+	 * rather than in the builder that wants it. With a deflection of b, each curve is the
+	 * SYMMETRIC case with tangent length s and interior angle (pi - b), and the two together
+	 * have to carry the whole shift, so 2 s sin(b) = Shift. Substituting one into the other:
+	 *
+	 *     R = Shift cos(b/2) / (4 sin^2(b/2))   =   CornerRunFor(Shift/4, b)
+	 *
+	 * so this is CornerRunFor solved for its SECOND argument, and the two round-trip. Inverting
+	 * it is closed form rather than a search: with x = b/2 and k = 4R/Shift, cos x = k sin^2 x
+	 * gives k^2 sin^4 x + sin^2 x - 1 = 0, so sin^2 x = (sqrt(1 + 4k^2) - 1) / (2k^2).
+	 *
+	 * CAPPED AT A RIGHT ANGLE, because past that the line is not shifting off its neighbour any
+	 * more, it is leaving. The cap binds whenever Shift is wider than 2.83 R - at a right angle
+	 * each curve gets Shift/2 of tangent and delivers 0.354 Shift - so a road a stand's width
+	 * away constrains nothing and only a CLOSE one has to be met at a slant.
+	 *
+	 * A SHIFT OF NOTHING RETURNS NOTHING, with OutRun zero: two lines already on top of one
+	 * another need no transition, and a caller that treated a zero run as a curve would lay a
+	 * degenerate one. A Radius of zero or less returns the right-angle cap - no constraint -
+	 * which is what an airframe with no measured axles asks for (see
+	 * FAirframe::TightestFollowableRadius, where zero means "nothing to clear").
+	 */
+	AIRSIDE_API double ShiftDeflectionFor(double Radius, double Shift, double& OutRun);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from
