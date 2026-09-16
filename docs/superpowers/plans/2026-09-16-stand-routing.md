@@ -44,21 +44,30 @@ All derived from `UAirsideSettings::ResolveLargestServiceVehicle()`; none typed 
 | `EquipmentFwd` derived X | −182 | −1200 + 1018.4 |
 | `EquipmentAft` derived X | −2218 | −1200 − 1018.4 |
 | Crossing diagonal | ≤ 73.55°, run 652.6 uu | 1807.2 uu of X beyond the outermost anchor |
-| Side entry ramp | ≤ 59.55°, run 461.0 uu | 1504.0 uu of X, against 5650 of lane |
 
-### Correction against the spec
+### Corrections against the spec, ruled before execution
 
-The spec writes the authored data as `TArray<FStandLane> ServiceLanes` — plural, open polylines.
-**This plan uses a single CLOSED polyline, `TArray<FStandWaypoint> ServiceLane`**, for two reasons
-found by reading the builder rather than the spec:
+**1. A single CLOSED polyline, `TArray<FStandWaypoint> ServiceLane`**, not the spec's plural open
+`ServiceLanes`. `FServiceLoopBuild::Build` already rounds an implicitly-closing polyline, clamps
+corners that share a leg and lays quadratic bends; feeding it a longer closed polyline is a change
+of input, not of algorithm. Decision 1 makes the network one cycle, so plural open lanes is
+generality nothing uses.
 
-1. Spec decision 1 makes the lane network **one cycle**. Plural open lanes is generality nothing
-   uses, and `FServiceLoopBuild` would have to learn to join them.
-2. `FServiceLoopBuild::Build` already rounds a **closed, implicitly-closing** polyline, clamps
-   corners that share a leg, and lays quadratic bends. Feeding it a longer closed polyline is a
-   change of input, not of algorithm. Plural open lanes would throw that away.
+**2. The four entries are the four corners of the two crossings**, not the spec's first-draft
+port and starboard entries at y = ±2090. Those would have been STUBS hanging off the cycle, and
+a stub is the dead end decision 1 forbids — the two corrections stand or fall together, which is
+why they are ruled together. A stand sits in a row with neighbours abeam; the road runs fore or
+aft. Spec amended to match (`5f9066b`+).
 
-Amend the spec's "New, on `UEntityDefinition`" block to match.
+**3. `FuselageWidth` needs a consumer.** Spec test 4 — nothing crosses the fuselage *rectangle* —
+had no task, which would have left Task 2 shipping a field nothing reads. It is folded into Task
+4's placed-geometry test.
+
+**4. Task 4 must delete `FAnchorLink`'s lane-link block, not just update it.** That block calls
+`WalkRing` and `LaneTurnRadius` at `AnchorLink.cpp:418`, `:561` and `:570`, and Task 4 deletes
+both. So Task 4 leaves stands **unlinked to roads**, and its suite run will show link tests
+failing. That is a planned intermediate state, not a regression; Task 5 restores linking through
+entries.
 
 ---
 
@@ -837,6 +846,35 @@ bool FPlacedStandLaneIsOneDrivableCycleTest::RunTest(const FString& Parameters)
             *FString::Printf(TEXT("a lane curve delivers %.0f uu against the %.0f needed"),
                 Delivered, Needed),
             Delivered >= Needed - 0.5);
+    }
+
+    // AND NOTHING RUNS THROUGH THE AEROPLANE. The rule is unchanged - under a wing is normal,
+    // through the fuselage is not - but the fuselage is a RECTANGLE now, not an axis, because
+    // this lane runs alongside it where a zero-width centreline would permit a route down the
+    // skin. Measured on the sampled curve, not on the definition's corners.
+    {
+        const FEntityFootprint& Footprint = Stand->DesignAircraft->Footprint;
+        const double HalfWidth = Footprint.FuselageWidth * 0.5;
+        const FBox2D Fuselage(
+            FVector2D(Footprint.TailX, -HalfWidth), FVector2D(Footprint.NoseX, HalfWidth));
+        TestTrue(TEXT("the design aircraft has a fuselage width to test against"),
+            Footprint.FuselageWidth > 0.0);
+
+        for (const FGuidelineEdgeId& Id : *Lane)
+        {
+            TArray<FVector2D> Points;
+            if (!Net->SampleGuideline(Id, Points))
+            {
+                continue;
+            }
+            for (const FVector2D& Point : Points)
+            {
+                TestFalse(
+                    *FString::Printf(TEXT("a lane point at (%.0f,%.0f) is inside the fuselage"),
+                        Point.X, Point.Y),
+                    Fuselage.IsInside(Point));
+            }
+        }
     }
 
     // THE ANCHORS KEPT THEIR OWN NODES. A lane that made fresh nodes at the anchor positions

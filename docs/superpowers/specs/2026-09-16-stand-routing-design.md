@@ -84,7 +84,6 @@ At a right angle that is **1.414 R**, not R. Every figure below is computed from
 | Hydrant dip, half-extent | **1018.4 uu** | flat-bottomed, legs at 40.5°, `2·Run + 400/tan α` |
 | Crossing as a square corner | 1978.2 needed / 1700 available | **does not fit** — see below |
 | Crossing as a diagonal | legs at ≤ 73.55°, run 652.6 uu | 1807.2 uu of X beyond the last anchor |
-| Side entry ramp | legs at ≤ 59.55°, run 461.0 uu | 1504.0 uu of X, against 5650 of lane |
 
 The corner arithmetic is restated in the tests rather than shared with production code, for the
 reason `FAirframe::TightestFollowableRadius` gives at its own copy.
@@ -207,19 +206,23 @@ with another value in the same asset, which is the drift `FResolvedAnchor` exist
 
 ## The road handover
 
-**Four entries**, because the ring's header valued something worth keeping — "a closed loop
-gives entry from any side":
+**Four entries, and they are the four corners of the two crossings** — nose-starboard,
+nose-port, tail-starboard, tail-port. All four sit ON the cycle, so the lane stays one closed
+polyline and every lane node is still driven through.
 
-- **fore** and **aft**, at the nose and tail crossings. Open ground clear of the aircraft, and
-  where an apron service road actually runs.
-- **port** and **starboard**, out at y = ±2090 — clear of the wingtip at 1790, which is where
-  the ring itself ran. Each S-curves into its long lane over 1337.7 uu, against 5650 uu of
-  lane to spend it on.
+The first draft put two of them out at y = ±2090, abeam the aircraft, inheriting "a closed loop
+gives entry from any side" from the ring. That was the ring's property and not a requirement.
+**A stand sits in a row, with neighbouring stands abeam it**; the service road runs along the
+back of the row, which is aft of each stand, or in front of it. Nobody runs a road between two
+parked aeroplanes' wingtips. Abeam entries would also have had to S-curve 990 uu inward under
+the wing, as stubs off the cycle — which reintroduces the dead ends decision 1 exists to
+forbid.
 
-A side entry starts outboard of the wingtip because a road joining UNDER a wing would be
-wrong; the S is what brings it in. An entry no road reaches is an unvisited node — nothing
-routes into it, because nothing is there to reach, so it is not a dead end in the sense
-decision 1 cares about.
+Two corners per crossing rather than one, because a road may approach either lane's end: the
+search takes whichever entry is nearer what it is going to.
+
+An entry no road reaches is an ordinary lane corner — it is on the cycle, so there is nothing
+to strand.
 
 The link becomes `ELinkKind::Ray` along the entry's own heading, as the aircraft pose link
 already is, rather than `ELinkKind::Proximity`. A truck then turns off the road ALONG the
