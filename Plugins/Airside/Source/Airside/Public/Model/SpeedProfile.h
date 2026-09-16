@@ -5,6 +5,26 @@
 #include "SpeedProfile.generated.h"
 
 /**
+ * Which way round the vehicle is travelling along the line it is given.
+ *
+ * AN ENUM AND NOT A bool bReversing, per this codebase's standing rule - the two states are
+ * exclusive and naming them is what stops a caller writing !bReversing and meaning something
+ * slightly different from Forward.
+ *
+ * It exists because the two directions are judged by DIFFERENT LIMITS. Forwards a rigid
+ * vehicle pivots about its steered axle and cannot hold an arc under L/sin(lock); backwards it
+ * pivots about its fixed axle and the limit falls to L/tan(lock) - 495 uu against 699 for the
+ * 8.5 m dispenser. A reverse leg judged by the forward rule is refused for being legal.
+ */
+UENUM()
+enum class EDriveDirection : uint8
+{
+	Forward,
+	Reverse,
+};
+
+
+/**
  * How fast an aircraft MAY be at each point of a route. Built once, then read.
  *
  * Separate from FRouteFollower because it answers a different question. The follower knows
@@ -47,7 +67,8 @@ struct AIRSIDE_API FSpeedProfile
 	 * struct per thing" - the alternative was a second parameter that some caller would one
 	 * day forget to keep in step.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe);
+	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+		EDriveDirection Direction = EDriveDirection::Forward);
 
 	/**
 	 * The fastest the aircraft may be Distance along the route.

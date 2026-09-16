@@ -803,6 +803,32 @@ struct AIRSIDE_API FAirframe
 			? Wheelbase() / Lock : 0.0;
 	}
 
+	/**
+	 * The tightest arc this airframe can hold GOING BACKWARDS, uu. Zero when it does not steer
+	 * geometrically, exactly as TightestFollowableRadius reports zero.
+	 *
+	 * L/tan(lock), NOT L/sin(lock), and the difference is the whole reason a service bay is
+	 * affordable. Forwards, the body pivots about the STEERED axle and the arc the steered
+	 * wheels describe has radius L/sin(lock). Backwards it pivots about the FIXED axle, whose
+	 * arc is L/tan(lock) - strictly smaller for any lock under 90 degrees, since tan exceeds
+	 * sin there. For the 8.5 m dispenser that is 495 uu against 699, about 30% less room.
+	 *
+	 * WHY THAT MATTERS RATHER THAN BEING A CURIOSITY: a bay is a dead end, so a vehicle either
+	 * backs into it or the bay is a drive-through needing TWO forward corners. Backing in needs
+	 * less room than either, which is why real aprons do it and why the 2026-09-16 rethink
+	 * stopped trying to thread a drivable lane past the aeroplane.
+	 *
+	 * NOT A SPEED LIMIT. Like its forward sibling this is kinematic: an arc tighter than this
+	 * cannot be reversed along at any speed, because speed cancels out of the requirement.
+	 */
+	double TightestReversibleRadius() const
+	{
+		const double Lock = FMath::Tan(FMath::DegreesToRadians(
+			FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
+		return (EffectiveSteerLaw() == ESteerLaw::RollingSteer && Lock > KINDA_SMALL_NUMBER)
+			? Wheelbase() / Lock : 0.0;
+	}
+
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;
 

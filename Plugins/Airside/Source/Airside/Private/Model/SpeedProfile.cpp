@@ -17,7 +17,8 @@ namespace
 	constexpr double CornerEpsilon = 1.0e-6;
 }
 
-void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe)
+void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	EDriveDirection Direction)
 {
 	const FGroundPerformance& Ground = Airframe.Ground;
 
@@ -79,7 +80,12 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// that threshold is 5.2 m, tighter than any taxiway bend. What remains is the physical
 	// limit the yaw-rate cap was always standing in for - lateral acceleration, sqrt(a*R),
 	// which is tyre side load and the cabin.
-	const double TightestFollowable = Airframe.TightestFollowableRadius();
+	// WHICH LIMIT, and it is not the same number either way. See EDriveDirection: backwards the
+	// vehicle pivots about its FIXED axle and can hold a tighter arc than it could drive.
+	// Judging a reverse leg by the forward figure refuses a manoeuvre that is perfectly legal.
+	const double TightestFollowable = Direction == EDriveDirection::Reverse
+		? Airframe.TightestReversibleRadius()
+		: Airframe.TightestFollowableRadius();
 
 	// WHY THIS ROUTE IS AS SLOW AS IT IS, gathered as the caps are built and logged once at
 	// the end - see the UE_LOG below for why it is worth carrying.
@@ -130,9 +136,10 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 
 				UE_LOG(LogAirsideTraffic, Warning,
 					TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
-					     "R>=%.0f (wheelbase %.0f, lock %.0f deg). The body will crab through "
-					     "it. Widen the corner that laid this line."),
+					     "R>=%.0f going %s (wheelbase %.0f, lock %.0f deg). The body will crab "
+					     "through it. Widen the corner that laid this line."),
 					Radius, Distances[Span], TightestFollowable,
+					Direction == EDriveDirection::Reverse ? TEXT("backwards") : TEXT("forwards"),
 					Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 			}
 			else

@@ -50,6 +50,17 @@ enum class EAgentPhase : uint8
 	 */
 	Manoeuvring,
 
+	/**
+	 * A GROUND VEHICLE backing into its service bay. FReverseRun drives it.
+	 *
+	 * SEPARATE FROM Manoeuvring, which is an aeroplane coming off a stand. The two look alike
+	 * from outside - something reversing - and are different kinematics: a pushed aeroplane
+	 * pivots about its NOSE GEAR because that is where the tug couples, so the steered axle
+	 * still leads. A truck backing up pivots about its FIXED axle, and can hold a tighter arc
+	 * for it. Sharing a phase would mean sharing a motion law they do not share.
+	 */
+	Reversing,
+
 	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
 	Gone
 };
