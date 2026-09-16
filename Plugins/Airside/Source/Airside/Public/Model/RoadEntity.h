@@ -57,6 +57,25 @@ struct AIRSIDE_API FEntityFootprint
 	/** Wingtip to wingtip. */
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
 
+	/**
+	 * Side to side, uu, so the fuselage is a BOX and not an axis. Zero keeps the old line.
+	 *
+	 * WHY IT DID NOT MATTER UNTIL NOW. Every route that had an opinion about an aeroplane ran
+	 * OUTSIDE it - the service ring was outboard of the wingtips - so "does this line cross the
+	 * centreline" was the whole of the question and a zero-width segment answered it. The stand
+	 * lane now runs INSIDE the wingtip, alongside the fuselage, where a zero-width line permits
+	 * a route straight down the aircraft's skin.
+	 *
+	 * WINGS AND TAILPLANE STAY PASSABLE, and that is unchanged rather than overlooked: driving
+	 * under a wing is normal, and HydrantPit is under the starboard wing root because that is
+	 * where a hydrant pit is. What is forbidden is passing THROUGH the aeroplane, and this only
+	 * gives that rule a width.
+	 *
+	 * ZERO IS THE DEFAULT so a definition authored before this field keeps its old meaning
+	 * rather than silently gaining a keep-out it was never laid out around.
+	 */
+	UPROPERTY(EditAnywhere) double FuselageWidth = 0.0;
+
 	/** Where the wing crosses the centreline. */
 	UPROPERTY(EditAnywhere) double WingX = 0.0;
 

@@ -86,6 +86,10 @@ void UAircraftType::BuildA320(UAircraftType* Type)
 	Type->Footprint.NoseX = 507.0;
 	Type->Footprint.TailX = -3250.0;
 	Type->Footprint.Wingspan = 3580.0;
+	// 3.95 m over the skin, the A320's actual fuselage diameter. NOT inflated here: the
+	// clearance a vehicle keeps is the vehicle's business and is added where the route is
+	// judged, so this stays a fact about the aeroplane.
+	Type->Footprint.FuselageWidth = 395.0;
 	Type->Footprint.WingX = -1100.0;
 	Type->Footprint.TailplaneSpan = 1240.0;
 	Type->Footprint.TailplaneX = -2950.0;
