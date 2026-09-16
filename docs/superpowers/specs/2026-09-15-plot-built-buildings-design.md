@@ -176,6 +176,15 @@ determine.
 One Blender scene still, for proportion: an 8 m shed cannot be judged without the 6.2 m
 truck beside it.
 
+> **Superseded 2026-09-16** by `2026-09-16-organic-module-placement-design.md`. Modules take
+> free positions and headings, so they are no longer adjacent and their stubs no longer meet.
+> **Pipework between modules is not modelled** - a named fidelity debt, in the same class as
+> "trucks pop at the gate". The honest route to getting it back is a mated PAIR placed as one
+> rigid object, not the procedural pipe solver this section rejected.
+>
+> Per-module origins survive unchanged, and matter more than before: a module that is placed
+> and turned independently must have its own origin at its own centre, on the ground.
+
 ### 7.2 Parts
 
 | | Parts | Placed by |
