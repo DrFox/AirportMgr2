@@ -119,8 +119,12 @@ Enter key stay exactly as they are - the panel is a second way to reach the one 
 
 ## 6. What this costs elsewhere
 
-- `PlotFit::GridOutline` and `BuildGrid` lose their last callers in the tool. `BuildGrid`
-  still serves nothing; `FitBays` is still used by `PlaceEntityInPlot`. See §8.
+- **`PlotFit::BuildGrid` is already dead.** Measured, not assumed: since the ghost stopped
+  drawing bay marks it has no caller outside its own tests. `GridOutline`'s three callers are
+  all in `FPlotPlaceTool` and all go when the tool carries four corners instead of a width and
+  a depth. Both are deleted here, with the tests that only exercise them - a solver nothing
+  calls is a thing a later reader has to disprove the importance of. `FitBays` STAYS: it is
+  still `PlaceEntityInPlot`'s, for better and worse (§8).
 - `FPlotPlaceTool::Width`/`Depth` in bays become four `FVector2D` corners. `ShownSize` and
   `ShownPlot` collapse into one `ShownQuad`.
 - `Airside.Tool.PlotWidthRunsBothWays` and `PlotGhostAgreesWithTheBar` are about a rectangle's
@@ -176,11 +180,11 @@ rather than to the gesture.
 
 ## 11. Open questions
 
-1. Is the Build button in the panel CLICKABLE, or does the panel only announce that Enter
-   and the bar button exist? A drawn prompt cannot be clicked - the HUD canvas is not a
-   widget - so a clickable one is a UMG panel positioned from a projected point. This spec
-   assumes drawn-and-not-clickable for the first cut, with Enter and the bar button as the
-   two live routes, because that is a tenth of the work and answers whether the panel is
-   read at all.
+1. ~~Is the Build button in the panel clickable?~~ **Resolved 2026-09-16: no, Enter confirms.**
+   The panel announces Build and names the key; Enter and the bar button remain the two live
+   routes. A clickable prompt means a UMG panel positioned from a projected point, roughly ten
+   times the work, and this first answers whether the panel is read at all. The panel's text
+   comes from `ARoadBuildHUD::CommitPromptText`, which already reads the key off the registry,
+   so a rebound Build cannot leave the panel advertising the wrong one.
 2. Does the frontage quantum belong in `UAirsideSettings` rather than as a constant? It is
    the first number here a designer would want to change without a build.
