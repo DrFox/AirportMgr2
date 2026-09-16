@@ -83,7 +83,8 @@ At a right angle that is **1.414 R**, not R. Every figure below is computed from
 | Right-angle corner run | **989.1 uu** | `CornerRunFor(R, 90°)` = 1.414 R |
 | Hydrant dip, half-extent | **1018.4 uu** | flat-bottomed, legs at 40.5°, `2·Run + 400/tan α` |
 | Crossing as a square corner | 1978.2 needed / 1700 available | **does not fit** — see below |
-| Crossing as a diagonal | legs at ≤ 73.55°, run 652.6 uu | 1807.2 uu of X beyond the last anchor |
+| Crossing corner, 4 × 45° | 313.6 uu run each | a U-turn is 180°; two corners would be 90° each |
+| Floor for ANY 180° turn | 2R = 1398.8 uu lateral | the semicircle; 1700 available |
 
 The corner arithmetic is restated in the tests rather than shared with production code, for the
 reason `FAirframe::TightestFollowableRadius` gives at its own copy.
@@ -112,17 +113,31 @@ bigger dispenser and the boxes move; nobody has to notice.
 `HydrantPit` stays where it is. A hydrant pit is plant dug into concrete under the wing root —
 it is the fixed thing the paint is arranged around, not the other way about.
 
-### The crossings are DIAGONAL, because a square corner does not fit
+### A crossing is a U-TURN, and needs four corners, not two
 
-Two square corners between the starboard lane (y = 1100) and the port lane (y = −600) need
-2 × 989.1 = 1978.2 uu of lateral run, and there is 1700. **Short by 278.** The first draft had
-this fitting with room to spare only because it costed the corner as a circular fillet.
+The two runs are **anti-parallel** — starboard goes forward, port goes aft — so a crossing
+between them is a **180° reversal**, however it is cut up. That single observation governs
+everything here, and two drafts of this spec missed it:
 
-So a crossing runs diagonally: legs no steeper than 73.55°, each corner delivering R with a
-652.6 uu run, consuming 1807.2 uu of X beyond the outermost anchor on each side. The builder
-derives the diagonal from the clearance it must keep and the run its corners need; it is not
-a hand-drawn figure, and the stand's fore-and-aft extent falls out of it rather than being
-typed.
+- Two corners joining them are therefore **90° each**, because 2 × 90 = 180. There is no
+  diagonal that makes them shallower. The second draft's "legs no steeper than 73.55°" solved
+  a lateral-OFFSET problem — the hydrant dip's shape — and silently applied the answer to a
+  reversal, which is a different problem with a different constraint.
+- Two 90° corners cost 2 × 989.1 = 1978.2 uu of lateral run against the 1700 between
+  y = 1100 and y = −600. **Short by 278**, exactly as the second draft said; its proposed fix
+  simply did not fix it.
+
+**Four corners of 45° each** do fit: `CornerRunFor(R, 135°)` = 313.6 uu, so the worst shared
+straight carries 627.1 uu. An octagon's corner, twice.
+
+The floor underneath all of it is the semicircle: **any** 180° turn needs at least 2R =
+1398.8 uu of lateral room, and the crossing is possible at all only because 1700 > 1398.8.
+That figure, not a leg angle, is what a second stand type has to clear.
+
+The builder derives the crossing from the clearance it must keep and the run its corners need;
+the stand's fore-and-aft extent falls out of it rather than being typed. At the A320 the TAIL
+clamp binds — x = −3550 against the −2618 the anchors alone would allow — because a crossing
+level with the 12 m tailplane would have run under it.
 
 Both crossings stay clear of the fuselage rectangle — forward of the nose at +507, aft of the
 tail at −3250 — so the existing "no route crosses the fuselage lengthwise" assertions hold
