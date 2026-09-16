@@ -205,9 +205,10 @@ namespace GuidelineGeom
 	 * AT A RIGHT ANGLE THIS IS 1.414 R, NOT R. A circular fillet's tangent length at 90 degrees
 	 * equals its radius, and the 2026-09-16 stand spec costed every corner that way and lost
 	 * 40% of the run it needed - the same mistake 8be494c made one level up, in the same week,
-	 * about the same kind of curve. It was a file-static in StandLaneBuild.cpp (then ServiceLoopBuild.cpp) when that
-	 * happened, where nothing outside the builder could find it. For a 750 uu corner (from the
-	 * builder's historical lane radius), this costs 1061 uu back along each side; a Code C stand's
+	 * about the same kind of curve. It was a file-static in the stand lane builder when that
+	 * happened - ServiceLoopBuild.cpp then, StandLaneBuild.cpp since - where nothing outside
+	 * the builder could find it. For a 750 uu corner (the lane radius that builder typed until
+	 * it started deriving one), this costs 1061 uu back along each side; a Code C stand's
 	 * shortest side is 4180 uu, so its two corners use half of it between them.
 	 *
 	 * A HAIRPIN RETURNS THE MAXIMUM rather than an infinity: no cut gives it this radius, and a

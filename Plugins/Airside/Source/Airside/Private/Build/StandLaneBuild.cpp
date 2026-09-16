@@ -95,6 +95,240 @@ namespace
 	 * this lane's own corners.
 	 */
 	constexpr double PreferredTangentRun = 800.0;
+
+	/**
+	 * Where a lane's nodes go, worked out before any of them exists.
+	 *
+	 * ONE EVALUATOR, TWO CALLERS, and that is the whole reason this is a function rather than
+	 * a block inside Build. The BUILD path needs these positions to lay nodes at; the
+	 * idempotent SKIP path needs them to recognise the nodes an earlier pass already laid
+	 * there. A second derivation of "where does the bend at this corner start" would let the
+	 * two disagree - which is the guideline graph's own "sample once" rule, one level up.
+	 *
+	 * DETERMINISTIC IN THE DEFINITION AND THE INSTANCE'S POSE, and nothing else. That is what
+	 * makes the recognition exact rather than approximate: asked again with the same stand at
+	 * the same place, it returns the very values the nodes were made from.
+	 */
+	struct FLaneShape
+	{
+		/** Each waypoint in world space. A rounded corner's bend takes this as its control. */
+		TArray<FVector2D> Corner;
+
+		/** Where the bend leaves the incoming leg. Equal to Corner where there is no bend. */
+		TArray<FVector2D> EnterAt;
+
+		/** Where the bend rejoins the outgoing leg. Equal to Corner where there is no bend. */
+		TArray<FVector2D> ExitAt;
+
+		/** False when the two above are the same point: collinear, or clamped to nothing. */
+		TArray<bool> bBend;
+
+		/** The unsigned angle between the two legs, measured from the corner. PI is straight. */
+		TArray<double> Interior;
+	};
+
+	FLaneShape MeasureLane(const TArray<FStandWaypoint>& Waypoints,
+		const FEntityInstance& Instance, double TurnRadius)
+	{
+		const double Cosine = FMath::Cos(Instance.Heading);
+		const double Sine = FMath::Sin(Instance.Heading);
+		auto ToWorld = [&Instance, Cosine, Sine](const FVector2D& Point)
+		{
+			return Instance.Position
+				+ FVector2D(Point.X * Cosine - Point.Y * Sine, Point.X * Sine + Point.Y * Cosine);
+		};
+
+		// EVERY CORNER IN WORLD SPACE FIRST, with both leg directions and the angle between
+		// them. Rounding one reaches back along the legs it SHARES with its two neighbours, so
+		// no corner can be decided alone and none laid until all have been measured.
+		//
+		// Held as VALUES, which is why the old "read fresh each time" guard has gone: nothing
+		// here dereferences a node pointer across an AddGuidelineNode that could have
+		// reallocated the slot array under it.
+		const int32 CornerCount = Waypoints.Num();
+		FLaneShape Shape;
+		TArray<FVector2D> Back, Onward;
+		TArray<double> Run;
+		Shape.Corner.Reserve(CornerCount);
+		for (const FStandWaypoint& Waypoint : Waypoints)
+		{
+			// CLOSED IMPLICITLY: the last corner joins the first, and the definition's array
+			// does not repeat it - see UEntityDefinition::ServiceLane for why storing the
+			// repeat would be a value that has to agree with another value beside it.
+			Shape.Corner.Add(ToWorld(Waypoint.Local));
+		}
+
+		Back.SetNumZeroed(CornerCount);
+		Onward.SetNumZeroed(CornerCount);
+		Shape.Interior.SetNumZeroed(CornerCount);
+		Run.SetNumZeroed(CornerCount);
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			const FVector2D& Previous = Shape.Corner[(At + CornerCount - 1) % CornerCount];
+			const FVector2D& Next = Shape.Corner[(At + 1) % CornerCount];
+			Back[At] = (Previous - Shape.Corner[At]).GetSafeNormal();
+			Onward[At] = (Next - Shape.Corner[At]).GetSafeNormal();
+
+			// UNSIGNED, and that is right for a convex corner and a reflex one alike: the
+			// quadratic bulges toward its control point either way, so which side of the lane
+			// the bend falls on changes nothing about how far back it has to reach.
+			Shape.Interior[At] = FMath::Acos(
+				FMath::Clamp(FVector2D::DotProduct(Back[At], Onward[At]), -1.0, 1.0));
+			Run[At] = GuidelineGeom::CornerRunFor(TurnRadius, Shape.Interior[At]);
+
+			// Never past either neighbour, before the shared-leg clamp below sees it. A
+			// near-hairpin corner asks for an unbounded run, and an infinity reaching that
+			// clamp would scale BOTH corners of its leg to nothing rather than cutting this
+			// one down to what its own legs can give.
+			Run[At] = FMath::Min(Run[At],
+				FMath::Min(FVector2D::Distance(Shape.Corner[At], Previous),
+				           FVector2D::Distance(Shape.Corner[At], Next)));
+		}
+
+		// THE CLAMP. Two corners sharing a leg cannot both reach further than half of it, and
+		// when they ask for more they SHRINK IN PROPORTION rather than one being cut to fit -
+		// which would make the lane's shape depend on which corner the definition happened to
+		// be authored from. A weld tolerance of straight is kept between them, because two
+		// cuts that met exactly would leave a zero-length side edge.
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			const int32 Next = (At + 1) % CornerCount;
+			const double Room = FMath::Max(
+				FVector2D::Distance(Shape.Corner[At], Shape.Corner[Next]) - LaneWeldTolerance,
+				0.0);
+			const double Want = Run[At] + Run[Next];
+			if (Want > Room && Want > 0.0)
+			{
+				const double Scale = Room / Want;
+				Run[At] *= Scale;
+				Run[Next] *= Scale;
+			}
+		}
+
+		// TWO POINTS PER ROUNDED CORNER - where the bend leaves the incoming leg and where it
+		// rejoins the outgoing one - and ONE where there is no bend to lay.
+		Shape.EnterAt.Reserve(CornerCount);
+		Shape.ExitAt.Reserve(CornerCount);
+		Shape.bBend.Reserve(CornerCount);
+		for (int32 At = 0; At < CornerCount; ++At)
+		{
+			if (Run[At] < LaneWeldTolerance)
+			{
+				// Collinear, or clamped to nothing. One point and no bend: putting a curve
+				// through a straight run would be inventing a corner. This is the case every
+				// anchor takes, which is what "the lane runs THROUGH the box" means.
+				Shape.EnterAt.Add(Shape.Corner[At]);
+				Shape.ExitAt.Add(Shape.Corner[At]);
+				Shape.bBend.Add(false);
+				continue;
+			}
+
+			Shape.EnterAt.Add(Shape.Corner[At] + Back[At] * Run[At]);
+			Shape.ExitAt.Add(Shape.Corner[At] + Onward[At] * Run[At]);
+			Shape.bBend.Add(true);
+		}
+
+		return Shape;
+	}
+
+	/**
+	 * The nodes an EARLIER pass laid at this entity's declared Entry waypoints.
+	 *
+	 * THE IDEMPOTENT SKIP PATH OWES THE SAME RESULT AS THE BUILD PATH. Lanes and Nodes are
+	 * re-gathered from the graph by Build's opening block, so without this a skipped entity
+	 * came back with those two filled and Entries EMPTY - not merely incomplete but
+	 * INCONSISTENT, and silently: the census line is gated on LanesBuilt and says nothing at
+	 * all on a pass that laid none. The pass that links reads Entries, so a stand laid on one
+	 * pass and linked on the next would simply never be joined, with nothing anywhere to say
+	 * why - a failure remote from its cause, which is the shape the header's idempotence
+	 * paragraph exists to prevent.
+	 *
+	 * RECOVERED BY POSITION, because there is nothing to read back. No mark on an edge or a
+	 * node says "an entry waypoint became this"; an entry node is an ordinary lane node once it
+	 * is laid. What there is instead is MeasureLane, which is deterministic in the definition
+	 * and the instance's pose, so asking it again returns the very positions the nodes were
+	 * made at - the same values, not merely near ones. A split never MOVES a node, so this
+	 * survives any number of them; it is only a definition edited under a placed instance that
+	 * could put a node somewhere this no longer looks, and that says so in the log.
+	 */
+	void RecoverEntries(const URoadNetwork& Network, const FEntityInstance& Instance,
+		const TArray<FGuidelineEdgeId>& Lane, double TurnRadius,
+		TArray<FGuidelineNodeId>& OutEntries)
+	{
+		const TArray<FStandWaypoint>& Waypoints = Instance.Definition->ServiceLane;
+		const FLaneShape Shape = MeasureLane(Waypoints, Instance, TurnRadius);
+
+		// EVERY NODE THIS LANE HAS, with its position, gathered once. The lane's EDGES are the
+		// only handle on them - a node carries no owner of its own - and one stand's lane is a
+		// couple of dozen edges, so a flat pair of arrays beats an index by every measure that
+		// matters here.
+		TArray<FGuidelineNodeId> Nodes;
+		TArray<FVector2D> At;
+		for (const FGuidelineEdgeId& Id : Lane)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
+			if (Edge == nullptr || !Edge->bAlive)
+			{
+				continue;
+			}
+			for (const FGuidelineNodeId& End : { Edge->A, Edge->B })
+			{
+				if (Nodes.Contains(End))
+				{
+					continue;
+				}
+				if (const FGuidelineNode* Node = Network.GetGuidelineNode(End))
+				{
+					Nodes.Add(End);
+					At.Add(Node->Position);
+				}
+			}
+		}
+
+		// WITHIN THE WELD TOLERANCE, never simply "nearest". The derivation above is exact, so
+		// the tolerance covers nothing but the last bit of a re-derivation; a bare nearest would
+		// hand back the wrong end of a bend - or a node belonging to a different corner
+		// altogether - on a lane whose definition had been edited under a placed instance,
+		// which is precisely the case that must be reported rather than papered over.
+		auto NodeNear = [&Nodes, &At](const FVector2D& Want) -> FGuidelineNodeId
+		{
+			for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+			{
+				if (FVector2D::Distance(At[Index], Want) <= LaneWeldTolerance)
+				{
+					return Nodes[Index];
+				}
+			}
+			return FGuidelineNodeId();
+		};
+
+		for (int32 Index = 0; Index < Waypoints.Num(); ++Index)
+		{
+			if (Waypoints[Index].Kind != EStandWaypointKind::Entry)
+			{
+				continue;
+			}
+
+			// BOTH ENDS OF A ROUNDED ENTRY, exactly as the build path records them, and
+			// AddUnique for the same reason - a straight-through entry is one node offered
+			// twice.
+			for (const FVector2D& Want : { Shape.EnterAt[Index], Shape.ExitAt[Index] })
+			{
+				const FGuidelineNodeId Node = NodeNear(Want);
+				if (Node.IsSet())
+				{
+					OutEntries.AddUnique(Node);
+					continue;
+				}
+
+				UE_LOG(LogAirside, Warning,
+					TEXT("Stand lane entry %d expects a node at (%.0f, %.0f) and the laid lane "
+					     "has none within %.0f uu. The definition has changed under a placed "
+					     "stand; sweep and rebuild, or nothing will link to that entry."),
+					Index, Want.X, Want.Y, LaneWeldTolerance);
+			}
+		}
+	}
 }
 
 FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
@@ -138,7 +372,7 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 	// it is not, now that the lane dips inboard to run through the hydrant pit. The dip's flat
 	// is sized by UEntityDefinition::BuildCodeCStandFor from CornerRunFor at the LARGEST
 	// SERVICE VEHICLE's own radius, so a builder rounding those same corners to 750 asks for
-	// more run than the definition allowed for and the proportional clamp below shaves it back
+	// more run than the definition allowed for and the proportional clamp shaves it back
 	// - which is a lane whose shape is decided by a disagreement between two figures.
 	//
 	// ResolveLargestServiceVehicle, not ResolveDefaultVehicle, for the reason that function's
@@ -168,9 +402,24 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 		EntityId.Index = Index;
 		EntityId.Generation = Instance.Generation;
 
-		if (Result.Lanes.Contains(EntityId))
+		// THE ENTRIES, HELD LOCALLY UNTIL THERE IS ONE. Keyed straight into Result.Entries they
+		// would give every laid lane an array whether or not its definition declares an entry,
+		// so "this stand recorded no entries" - which is a real and reportable state - would be
+		// indistinguishable from "this stand's entries are all here". A caller's Find() is the
+		// question, so the map must only answer it when it has an answer.
+		TArray<FGuidelineNodeId> Entries;
+
+		if (const TArray<FGuidelineEdgeId>* Laid = Result.Lanes.Find(EntityId))
 		{
-			// Already laid, by a pass whose output nothing swept. See the header.
+			// ALREADY LAID, by a pass whose output nothing swept. See the header.
+			//
+			// THE ENTRIES ARE STILL OWED, though, and recovering them is the whole of
+			// RecoverEntries - see it for what returning an empty map here used to cost.
+			RecoverEntries(Network, Instance, *Laid, LaneTurnRadius, Entries);
+			if (Entries.Num() > 0)
+			{
+				Result.Entries.Add(EntityId, MoveTemp(Entries));
+			}
 			continue;
 		}
 
@@ -179,79 +428,8 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 		// moved ONTO the lane that spur is degenerate, and the anchor node joined nothing. A
 		// waypoint's Kind is now what decides which node it gets.
 		const TArray<FStandWaypoint>& Waypoints = Instance.Definition->ServiceLane;
-
-		const double Cosine = FMath::Cos(Instance.Heading);
-		const double Sine = FMath::Sin(Instance.Heading);
-		auto ToWorld = [&Instance, Cosine, Sine](const FVector2D& Point)
-		{
-			return Instance.Position
-				+ FVector2D(Point.X * Cosine - Point.Y * Sine, Point.X * Sine + Point.Y * Cosine);
-		};
-
-		// EVERY CORNER IN WORLD SPACE FIRST, with both leg directions and the angle between
-		// them. Rounding one reaches back along the legs it SHARES with its two neighbours, so
-		// no corner can be decided alone and none laid until all have been measured.
-		//
-		// Held as VALUES, which is why the old "read fresh each time" guard has gone: nothing
-		// here dereferences a node pointer across an AddGuidelineNode that could have
-		// reallocated the slot array under it.
 		const int32 CornerCount = Waypoints.Num();
-		TArray<FVector2D> World, Back, Onward;
-		TArray<double> Interior, Run;
-		World.Reserve(CornerCount);
-		for (const FStandWaypoint& Waypoint : Waypoints)
-		{
-			// CLOSED IMPLICITLY: the last corner joins the first, and the definition's array
-			// does not repeat it - see UEntityDefinition::ServiceLane for why storing the
-			// repeat would be a value that has to agree with another value beside it.
-			World.Add(ToWorld(Waypoint.Local));
-		}
-
-		Back.SetNumZeroed(CornerCount);
-		Onward.SetNumZeroed(CornerCount);
-		Interior.SetNumZeroed(CornerCount);
-		Run.SetNumZeroed(CornerCount);
-		for (int32 At = 0; At < CornerCount; ++At)
-		{
-			const FVector2D& Previous = World[(At + CornerCount - 1) % CornerCount];
-			const FVector2D& Next = World[(At + 1) % CornerCount];
-			Back[At] = (Previous - World[At]).GetSafeNormal();
-			Onward[At] = (Next - World[At]).GetSafeNormal();
-
-			// UNSIGNED, and that is right for a convex corner and a reflex one alike: the
-			// quadratic bulges toward its control point either way, so which side of the lane
-			// the bend falls on changes nothing about how far back it has to reach.
-			Interior[At] = FMath::Acos(
-				FMath::Clamp(FVector2D::DotProduct(Back[At], Onward[At]), -1.0, 1.0));
-			Run[At] = GuidelineGeom::CornerRunFor(LaneTurnRadius, Interior[At]);
-
-			// Never past either neighbour, before the shared-leg clamp below sees it. A
-			// near-hairpin corner asks for an unbounded run, and an infinity reaching that
-			// clamp would scale BOTH corners of its leg to nothing rather than cutting this
-			// one down to what its own legs can give.
-			Run[At] = FMath::Min(Run[At],
-				FMath::Min(FVector2D::Distance(World[At], Previous),
-				           FVector2D::Distance(World[At], Next)));
-		}
-
-		// THE CLAMP. Two corners sharing a leg cannot both reach further than half of it, and
-		// when they ask for more they SHRINK IN PROPORTION rather than one being cut to fit -
-		// which would make the lane's shape depend on which corner the definition happened to
-		// be authored from. A weld tolerance of straight is kept between them, because two
-		// cuts that met exactly would leave a zero-length side edge.
-		for (int32 At = 0; At < CornerCount; ++At)
-		{
-			const int32 Next = (At + 1) % CornerCount;
-			const double Room = FMath::Max(
-				FVector2D::Distance(World[At], World[Next]) - LaneWeldTolerance, 0.0);
-			const double Want = Run[At] + Run[Next];
-			if (Want > Room && Want > 0.0)
-			{
-				const double Scale = Room / Want;
-				Run[At] *= Scale;
-				Run[Next] *= Scale;
-			}
-		}
+		const FLaneShape Shape = MeasureLane(Waypoints, Instance, LaneTurnRadius);
 
 		// AN ANCHOR WAYPOINT DOES NOT GET A NEW NODE. The anchor already owns one, made at
 		// placement, and FuelService routes to THAT handle - a lane that laid a fresh node at
@@ -284,22 +462,18 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 		// TWO NODES PER ROUNDED CORNER - where the bend leaves the incoming leg and where it
 		// rejoins the outgoing one - and ONE where there is no bend to lay.
 		TArray<FGuidelineNodeId> Enter, Exit;
-		TArray<FVector2D> EnterAt, ExitAt;
-		Enter.Reserve(CornerCount); Exit.Reserve(CornerCount);
-		EnterAt.Reserve(CornerCount); ExitAt.Reserve(CornerCount);
+		Enter.Reserve(CornerCount);
+		Exit.Reserve(CornerCount);
 
 		for (int32 At = 0; At < CornerCount; ++At)
 		{
-			if (Run[At] < LaneWeldTolerance)
+			if (!Shape.bBend[At])
 			{
-				// Collinear, or clamped to nothing. One node and no bend: putting a curve
-				// through a straight run would be inventing a corner. This is the case every
-				// anchor takes, which is what "the lane runs THROUGH the box" means.
-				const FGuidelineNodeId Node = NodeAt(Waypoints[At], World[At]);
+				// Collinear, or clamped to nothing - the case every anchor takes, which is what
+				// "the lane runs THROUGH the box" means.
+				const FGuidelineNodeId Node = NodeAt(Waypoints[At], Shape.Corner[At]);
 				Enter.Add(Node);
 				Exit.Add(Node);
-				EnterAt.Add(World[At]);
-				ExitAt.Add(World[At]);
 				continue;
 			}
 
@@ -317,19 +491,14 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 					     "rounds it cannot start at the anchor's own node. Laying a plain "
 					     "corner; nothing will route to that service."),
 					*Waypoints[At].AnchorId.ToString(),
-					FMath::RadiansToDegrees(UE_DOUBLE_PI - Interior[At]));
+					FMath::RadiansToDegrees(UE_DOUBLE_PI - Shape.Interior[At]));
 			}
 
-			const FVector2D In = World[At] + Back[At] * Run[At];
-			const FVector2D Out = World[At] + Onward[At] * Run[At];
-			Enter.Add(Network.AddGuidelineNode(In, /*bDerived=*/true));
-			Exit.Add(Network.AddGuidelineNode(Out, /*bDerived=*/true));
-			EnterAt.Add(In);
-			ExitAt.Add(Out);
+			Enter.Add(Network.AddGuidelineNode(Shape.EnterAt[At], /*bDerived=*/true));
+			Exit.Add(Network.AddGuidelineNode(Shape.ExitAt[At], /*bDerived=*/true));
 		}
 
 		TArray<FGuidelineEdgeId>& Lane = Result.Lanes.FindOrAdd(EntityId);
-		TArray<FGuidelineNodeId>& Entries = Result.Entries.FindOrAdd(EntityId);
 		for (int32 At = 0; At < CornerCount; ++At)
 		{
 			if (Enter[At] != Exit[At])
@@ -339,14 +508,14 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 				// the curve leave each side tangentially instead of at an angle to it. The
 				// same spelling FRoadGuidelineBuilder uses for a junction turn path.
 				FGuidelineEdge Bend = MakeStandLaneEdge(
-					Enter[At], Exit[At], EnterAt[At], ExitAt[At], EntityId);
-				Bend.Control = World[At];
+					Enter[At], Exit[At], Shape.EnterAt[At], Shape.ExitAt[At], EntityId);
+				Bend.Control = Shape.Corner[At];
 				Lane.Add(Network.AddGuidelineEdge(MoveTemp(Bend)));
 			}
 
 			const int32 Next = (At + 1) % CornerCount;
 			Lane.Add(Network.AddGuidelineEdge(MakeStandLaneEdge(
-				Exit[At], Enter[Next], ExitAt[At], EnterAt[Next], EntityId)));
+				Exit[At], Enter[Next], Shape.ExitAt[At], Shape.EnterAt[Next], EntityId)));
 
 			Result.Nodes.Add(Enter[At]);
 			Result.Nodes.Add(Exit[At]);
@@ -364,9 +533,18 @@ FStandLaneBuild::FResult FStandLaneBuild::Build(URoadNetwork& Network)
 				// side the road is, which is the linking pass's question and not this one's, so
 				// both are offered. AddUnique because a straight-through entry - what a
 				// pivoting vehicle's zero run leaves - is one node offered twice.
+				//
+				// RecoverEntries MUST AGREE WITH THIS, node for node, or an idempotent pass
+				// hands the linking pass a different set from the one that laid the lane.
+				// Airside.Build.StandLaneReachesTheGraph measures the two against each other.
 				Entries.AddUnique(Enter[At]);
 				Entries.AddUnique(Exit[At]);
 			}
+		}
+
+		if (Entries.Num() > 0)
+		{
+			Result.Entries.Add(EntityId, MoveTemp(Entries));
 		}
 		++Result.LanesBuilt;
 	}

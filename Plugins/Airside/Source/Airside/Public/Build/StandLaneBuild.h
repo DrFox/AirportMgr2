@@ -84,10 +84,24 @@ struct AIRSIDE_API FStandLaneBuild
 		 * needed a whole side-walking apparatus to undo. An Entry is authored on the side it
 		 * belongs to, once.
 		 *
+		 * TWO NODES PER ENTRY on the shipping stand, because its entries are authored at
+		 * CORNERS and a rounded corner's own point carries no node - the bend's control sits
+		 * there and its two ends sit back along the two legs. Which of the pair a road should
+		 * join depends on which side the road is, which is the linking pass's question.
+		 *
+		 * FILLED ON THE IDEMPOTENT SKIP PATH TOO, and that is load-bearing rather than tidy.
+		 * Build re-gathers Lanes and Nodes from the graph for a lane it did not lay this pass;
+		 * an Entries that was filled only by the laying path would make this whole result
+		 * INCONSISTENT on the second of two passes, so a stand laid on one and linked on the
+		 * next would never be joined and no log would say why. See RecoverEntries in the .cpp.
+		 *
 		 * NOTHING IN THIS PASS READS IT. Task 5 of the stand routing work is the consumer;
 		 * it is recorded here because this is the only place that knows which node a given
-		 * waypoint became, and re-deriving that from positions afterwards would be a second
-		 * evaluator of the same question.
+		 * waypoint became.
+		 *
+		 * NO KEY AT ALL for a definition that declares no entry, rather than an empty array:
+		 * "this stand has no entries" is a real and reportable state, and a caller's Find()
+		 * is the question, so the map only answers when it has an answer.
 		 */
 		TMap<FEntityInstanceId, TArray<FGuidelineNodeId>> Entries;
 

@@ -101,11 +101,11 @@ namespace ServiceLinkFixture
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FServiceLoopReachesTheGraphTest,
-	"Airside.Build.ServiceLoopReachesTheGraph",
+	FStandLaneReachesTheGraphTest,
+	"Airside.Build.StandLaneReachesTheGraph",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
+bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
@@ -164,6 +164,46 @@ bool FServiceLoopReachesTheGraphTest::RunTest(const FString& Parameters)
 	const FStandLaneBuild::FResult Second = FStandLaneBuild::Build(*Net);
 	TestEqual(TEXT("a second pass builds no second lane"), Second.LanesBuilt, 0);
 	TestEqual(TEXT("but it still reports the lane that is there"), Second.Lanes.Num(), 1);
+
+	// AND IT REPORTS THE SAME ENTRIES, NODE FOR NODE.
+	//
+	// THE WHOLE RESULT OR NONE OF IT. Lanes and Nodes are re-gathered from the graph on the
+	// skip path and Entries is RECOVERED there - by FStandLaneBuild's own RecoverEntries,
+	// through the very measurement the laying path lays by. Filled only by the laying path, as
+	// it was when this builder was written, the second pass would hand back a correct Lanes, a
+	// correct Nodes and an EMPTY Entries: not merely incomplete but inconsistent, and silent,
+	// because the census line is gated on LanesBuilt and says nothing on a pass that laid none.
+	//
+	// THE CONSEQUENCE IS REMOTE FROM THE CAUSE, which is why it is pinned here rather than
+	// left to the pass that suffers it: the linking pass reads Entries, so a stand laid on one
+	// pass and linked on the next would simply never be joined to a road, with nothing anywhere
+	// to say why. FAnchorLink::Build is the production caller and this file already calls it
+	// twice, so the path is real.
+	{
+		const TArray<FGuidelineNodeId>* Laid = First.Entries.Find(Placed);
+		const TArray<FGuidelineNodeId>* Recovered = Second.Entries.Find(Placed);
+		if (TestNotNull(TEXT("the first pass recorded the stand's entries"), Laid)
+			&& TestNotNull(TEXT("and the second pass recovered them"), Recovered))
+		{
+			TestEqual(
+				*FString::Printf(TEXT("the same number of entry nodes - %d laid, %d recovered"),
+					Laid->Num(), Recovered->Num()),
+				Recovered->Num(), Laid->Num());
+
+			// BY HANDLE, not by count. A recovery that matched the wrong end of every bend
+			// would agree on the count and hand the linking pass four nodes on the inside of
+			// the turns - which is the failure a count alone would wave through.
+			for (const FGuidelineNodeId& Node : *Laid)
+			{
+				const FGuidelineNode* At = Net->GetGuidelineNode(Node);
+				TestTrue(
+					*FString::Printf(TEXT("entry node at (%.0f,%.0f) is recovered by handle"),
+						At != nullptr ? At->Position.X : 0.0,
+						At != nullptr ? At->Position.Y : 0.0),
+					Recovered->Contains(Node));
+			}
+		}
+	}
 
 	// A DEPOT HAS NO LANE, so nothing is built for it at all - one pose, nothing parked.
 	{
@@ -302,11 +342,11 @@ bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FServiceLoopDoesNotJoinItselfTest,
-	"Airside.Build.ServiceLoopDoesNotJoinItself",
+	FStandLaneDoesNotJoinItselfTest,
+	"Airside.Build.StandLaneDoesNotJoinItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FServiceLoopDoesNotJoinItselfTest::RunTest(const FString& Parameters)
+bool FStandLaneDoesNotJoinItselfTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
@@ -719,7 +759,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 // more: an anchor is a waypoint ON the lane, reached by driving along it. The properties the
 // test actually protected have all moved, none of them dropped:
 //
-//   "an anchor has line on it"        -> Airside.Build.ServiceLoopReachesTheGraph, which now
+//   "an anchor has line on it"        -> Airside.Build.StandLaneReachesTheGraph, which now
 //                                        demands TWO edges rather than at least one
 //   "the junction needs no turning"   -> Airside.Build.PlacedStandLaneIsOneDrivableCycle,
 //                                        which measures the delivered radius of every lane
@@ -739,15 +779,16 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// THE RING'S OWN CORNERS, which are authored as square and were laid that way.
+	// THE LANE'S OWN CORNERS, which are authored square and must not be laid that way.
 	// UEntityDefinition::ServiceLane is a polyline of straights - a polyline is how a lane is
 	// DESCRIBED - but it is not something a truck can drive round: a corner where two straight
 	// sides meet is a vertex whose heading changes instantly, and FSpeedProfile calls one of
 	// those untakeable at any speed.
 	//
-	// THIS IS THE SAME CONSTRUCTION THE SPURS USE, one level up: the corner is replaced by a
-	// quadratic whose control sits ON it, so both sides leave tangentially and the bend
-	// carries the turn. See Airside.Build.SpursLeaveTheLaneTangentially for the other half.
+	// THE CORNER IS REPLACED BY A QUADRATIC whose control sits ON it, so both sides leave
+	// tangentially and the bend carries the turn. See
+	// Airside.Build.PlacedStandLaneIsOneDrivableCycle for the other half of the same claim,
+	// measured as a delivered radius per edge rather than as a turn per junction.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
@@ -759,18 +800,23 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	// THE RING, which is every lane edge that is not a spur. Both the straight sides and the
-	// bends between them: together they are what a truck drives round.
-	TArray<FGuidelineEdgeId> Ring;
+	// THE WHOLE CYCLE: every lane edge, straight runs and the bends between them alike, which
+	// together are what a truck drives round.
+	//
+	// THE bStandApproach FILTER IS A NO-OP TODAY and is kept as the statement of what this
+	// measures rather than as live selection. Nothing writes the mark true since the anchor
+	// spurs went - see FGuidelineEdge::bStandApproach - but Task 5's road approach will, and an
+	// approach is not part of the cycle: it arrives at it.
+	TArray<FGuidelineEdgeId> Cycle;
 	for (const FGuidelineEdgeId& Id : *Lane)
 	{
 		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
 		if (Edge != nullptr && Edge->bAlive && !Edge->bStandApproach)
 		{
-			Ring.Add(Id);
+			Cycle.Add(Id);
 		}
 	}
-	if (!TestTrue(TEXT("the lane has a ring"), Ring.Num() >= 4))
+	if (!TestTrue(TEXT("the lane has a cycle to drive round"), Cycle.Num() >= 4))
 	{
 		return false;
 	}
@@ -790,12 +836,13 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// itself.
 	const double TightestFollowable = Van.Wheelbase() / Lock;
 
-	// NOWHERE ON THE RING DOES A TRUCK HAVE TO TURN. Asked of every node the ring passes
-	// through - the bends' own ends, and the joins where a spur split a side - by comparing
-	// the two ring arms' ANALYTIC tangents. Straight through means they leave in opposite
-	// directions, which is exactly the test FSpeedProfile applies to a vertex.
+	// NOWHERE ON THE CYCLE DOES A TRUCK HAVE TO TURN. Asked of every node the cycle passes
+	// through - the bends' own ends, the anchors it runs through, and any join a later split
+	// left behind - by comparing the two arms' ANALYTIC tangents. Straight through means they
+	// leave in opposite directions, which is exactly the test FSpeedProfile applies to a
+	// vertex.
 	int32 Checked = 0;
-	for (const FGuidelineEdgeId& Id : Ring)
+	for (const FGuidelineEdgeId& Id : Cycle)
 	{
 		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
 		for (const FGuidelineNodeId& End : { Edge->A, Edge->B })
@@ -822,14 +869,14 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 
 			if (Best < 0.0)
 			{
-				// No other ring edge here at all, which would mean the ring is not closed.
+				// No other lane edge here at all, which would mean the cycle is not closed.
 				continue;
 			}
 
 			++Checked;
 			TestTrue(
 				*FString::Printf(
-					TEXT("the ring runs straight through (%.0f,%.0f) - its best neighbour is "
+					TEXT("the lane runs straight through (%.0f,%.0f) - its best neighbour is "
 					     "%.1f deg off"),
 					Net->GetGuidelineNode(End)->Position.X,
 					Net->GetGuidelineNode(End)->Position.Y,
@@ -839,10 +886,10 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	}
 
 	// AND THE BENDS THAT CARRY THE TURN INSTEAD ARE ONES THE TRUCK CAN HOLD. Curvature the
-	// way FSpeedProfile measures it, over each ring edge's own samples.
+	// way FSpeedProfile measures it, over each lane edge's own samples.
 	double Tightest = TNumericLimits<double>::Max();
 	int32 Bends = 0;
-	for (const FGuidelineEdgeId& Id : Ring)
+	for (const FGuidelineEdgeId& Id : Cycle)
 	{
 		TArray<FVector2D> Points;
 		if (!Net->SampleGuideline(Id, Points) || Points.Num() < 3)
@@ -863,21 +910,21 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	// NOT VACUOUS. A ring still laid as four straight sides has no curved span at all, so the
-	// radius below would pass on a box with square corners - which is the defect itself.
-	if (!TestTrue(TEXT("the ring bends somewhere - its corners are rounded"), Bends > 0))
+	// NOT VACUOUS. A lane still laid as bare straight runs has no curved span at all, so the
+	// radius below would pass on a cycle with square corners - which is the defect itself.
+	if (!TestTrue(TEXT("the lane bends somewhere - its corners are rounded"), Bends > 0))
 	{
 		return false;
 	}
 
 	TestTrue(
 		*FString::Printf(
-			TEXT("and the ring's tightest bend is %.0f uu, clearing the %.0f uu the truck's "
+			TEXT("and the lane's tightest bend is %.0f uu, clearing the %.0f uu the truck's "
 			     "steering needs"),
 			Tightest, TightestFollowable),
 		Tightest >= TightestFollowable);
 
-	TestTrue(*FString::Printf(TEXT("every ring junction was measured - %d found"), Checked),
+	TestTrue(*FString::Printf(TEXT("every lane junction was measured - %d found"), Checked),
 		Checked >= 8);
 	return true;
 }
