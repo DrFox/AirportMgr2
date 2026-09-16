@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
+#include "Solve/PlotYard.h"
 #include "Tool/RoadBuildTool.h"
 
 /**
@@ -100,6 +101,17 @@ private:
 	 */
 	void ShownPlot(const FToolContext& Context, FVector2D& OutA, FVector2D& OutB,
 		int32& OutWidth, int32& OutDepth) const;
+
+	/**
+	 * The yard this plot would get, laid out by the same solver the presenter runs.
+	 *
+	 * SHARED BY THE GHOST AND THE READOUT. The ghost draws these footprints and the readout
+	 * counts them, so the boxes on screen and the numbers on the bar are ONE computation -
+	 * and because DepotYardSeed keys off the pose the facade will store, they are also the
+	 * boxes Build actually puts down rather than an impression of them.
+	 */
+	PlotYard::FYard YardFor(const FVector2D& FrontA, const FVector2D& FrontB,
+		int32 InWidth, int32 InDepth) const;
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 

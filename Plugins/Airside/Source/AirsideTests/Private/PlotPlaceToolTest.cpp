@@ -80,6 +80,21 @@ namespace
 		double NearestY = TNumericLimits<double>::Max();
 		double DeepestY = -TNumericLimits<double>::Max();
 
+		int32 Lines = 0;
+		int32 CrossMarks = 0;
+		TArray<EPreviewStyle> MarkerStyles;
+
+		/** Markers drawn in one style. The chosen anchor is the only Pending one. */
+		int32 MarkersOf(EPreviewStyle Style) const
+		{
+			int32 Count = 0;
+			for (const EPreviewStyle S : MarkerStyles)
+			{
+				if (S == Style) { ++Count; }
+			}
+			return Count;
+		}
+
 		/**
 		 * How deep the ghost is, measured FRONT EDGE TO BACK rather than from y = 0.
 		 *
@@ -89,13 +104,20 @@ namespace
 		 */
 		double Depth() const { return DeepestY - NearestY; }
 
-		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Marker(const FVector2D&, EPreviewStyle Style) override
+		{
+			MarkerStyles.Add(Style);
+		}
 		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle) override
 		{
+			++Lines;
 			NearestY = FMath::Min3(NearestY, From.Y, To.Y);
 			DeepestY = FMath::Max3(DeepestY, From.Y, To.Y);
 		}
-		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override
+		{
+			++CrossMarks;
+		}
 		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
 	};
 
@@ -465,6 +487,122 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(
 		TEXT("a plot drawn south clears the kerb too, got %.0f"), FurthestY),
 		FurthestY <= -HalfWidth + 1.0);
+
+	return true;
+}
+
+/**
+ * THE GHOST DRAWS THE MODULES, not marks about a grid that no longer exists.
+ *
+ * BuildPreview used to cross-mark "which way each bay faces" and ring "slots behind row 1",
+ * both from PlotFit::BuildGrid - which nothing has built since the yard solver landed. The
+ * player's verdict on marks describing a deleted structure: "I'm not actually sure what they
+ * are supposed to be telling me" (PIE, 2026-09-16).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotGhostDrawsTheModulesTest,
+	"Airside.Tool.PlotGhostDrawsTheModules",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotGhostDrawsTheModulesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
+		FVector2D(600.0, 2700.0));
+
+	const FToolContext Confirming = PlotAt(Actor, FVector2D(600.0, 2700.0));
+
+	FPlotGhostSink Sink;
+	Tool.BuildPreview(Confirming, Sink);
+
+	// NOT A CROSS-MARK IN SIGHT. They were the grid's own vocabulary and the grid is gone;
+	// leaving them would be drawing a claim about the plot that is no longer true.
+	TestEqual(TEXT("no bay cross-marks survive"), Sink.CrossMarks, 0);
+
+	// FOUR LINES FOR THE PLOT, FOUR FOR EACH MODULE. A rectangle is four Line calls through
+	// IToolPreviewSink::Polygon, so the count says exactly how many footprints were drawn -
+	// and it would not move at all if BuildPreview stopped drawing modules entirely.
+	FToolReadoutCollector Collector;
+	Tool.BuildReadout(Confirming, Collector);
+	const TPair<FString, FString>* Mix = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Modules"); });
+	if (!TestNotNull(TEXT("a Modules fact"), Mix)) { return false; }
+
+	// "N of M" - N is what stands, and N footprints are what the ghost must draw.
+	const int32 Standing = FCString::Atoi(*Mix->Value);
+	if (!TestTrue(TEXT("at least one module stands on a plot this size"), Standing > 0))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the ghost outlines the plot and every module standing in it"),
+		Sink.Lines, 4 + 4 * Standing);
+
+	return true;
+}
+
+/**
+ * THE ANCHOR A CLICK WOULD TAKE IS VISIBLE BEFORE THE CLICK.
+ *
+ * A row of identical dots says where anchors exist; it does not say which one the cursor
+ * has. "I would prefer a mouse snap to a point to select the initial point" (PIE,
+ * 2026-09-16) - the snap was always there, it just could not be seen.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotShowsTheAnchorItWouldTakeTest,
+	"Airside.Tool.PlotShowsTheAnchorItWouldTake",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotShowsTheAnchorItWouldTakeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// Idle, hovering the road: the stage where the anchor dots are offered.
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	FPlotGhostSink Sink;
+	Tool.BuildPreview(OnRoad(Actor, FVector2D(0.0, 200.0)), Sink);
+
+	TestTrue(TEXT("anchor dots are offered along the road"),
+		Sink.MarkerStyles.Num() > 1);
+
+	// EXACTLY ONE, or the highlight means nothing: none and the cursor is unreadable, more
+	// than one and it is pointing at several places at once.
+	TestEqual(TEXT("exactly one of them is the anchor the click would take"),
+		Sink.MarkersOf(EPreviewStyle::Pending), 1);
+
+	// AND IT MOVES WITH THE CURSOR. A highlight nailed to the segment's A end would satisfy
+	// the count above on every frame while telling the player nothing.
+	FPlotGhostSink Far;
+	Tool.BuildPreview(OnRoad(Actor, FVector2D(4000.0, 200.0)), Far);
+	TestEqual(TEXT("still exactly one, further down the road"),
+		Far.MarkersOf(EPreviewStyle::Pending), 1);
+
+	int32 NearIndex = INDEX_NONE;
+	int32 FarIndex = INDEX_NONE;
+	for (int32 I = 0; I < Sink.MarkerStyles.Num(); ++I)
+	{
+		if (Sink.MarkerStyles[I] == EPreviewStyle::Pending) { NearIndex = I; }
+	}
+	for (int32 I = 0; I < Far.MarkerStyles.Num(); ++I)
+	{
+		if (Far.MarkerStyles[I] == EPreviewStyle::Pending) { FarIndex = I; }
+	}
+	TestTrue(TEXT("and it is a different dot for a cursor 40 m along"), NearIndex != FarIndex);
 
 	return true;
 }

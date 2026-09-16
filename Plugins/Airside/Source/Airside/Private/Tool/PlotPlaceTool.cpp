@@ -63,6 +63,21 @@ namespace
 			: Segment->Profile->GetHalfWidthRight();
 	}
 
+	/**
+	 * Which anchor point a click would take on this road, and where it stands.
+	 *
+	 * ONE RULE, TWO CALLERS: OnClick takes it, and the Idle preview draws it heavier than its
+	 * neighbours so the snap is VISIBLE before the click rather than discovered after. A
+	 * second copy of this arithmetic is a dot that lights up in one place and anchors in
+	 * another.
+	 */
+	int32 AnchorIndexAt(double SegmentT, double Length)
+	{
+		const double AlongRoad = FMath::Clamp(SegmentT, 0.0, 1.0) * Length;
+		const int32 Count = FMath::FloorToInt(Length / PlotFit::BayWidthUu);
+		return FMath::Clamp(FMath::RoundToInt(AlongRoad / PlotFit::BayWidthUu), 0, Count);
+	}
+
 	/** A segment's straight-line ends, or false if either is dead. */
 	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
 		FVector2D& OutA, FVector2D& OutB)
@@ -150,6 +165,28 @@ void FPlotPlaceTool::ShownPlot(const FToolContext& Context, FVector2D& OutA, FVe
 	OutB = bLeft ? Far : Anchor;
 }
 
+PlotYard::FYard FPlotPlaceTool::YardFor(const FVector2D& FrontA, const FVector2D& FrontB,
+	int32 InWidth, int32 InDepth) const
+{
+	TArray<PlotYard::FFootprint> Footprints;
+	Footprints.Reserve(Modules.Num());
+	for (const EDepotModule Module : Modules)
+	{
+		Footprints.Add(DepotFootprint(Module));
+	}
+
+	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
+	// gets built rather than one that merely resembles it - see Build/DepotKit.h.
+	const FVector2D Pose = (FrontA + FrontB) * 0.5;
+
+	// The outline is rebuilt here rather than passed in, because GridOutline is exactly what
+	// PlaceEntityInPlot is handed on commit: same rectangle, same solver, same answer.
+	return PlotYard::LayOut(
+		PlotFit::GridOutline(FrontA, FrontB, InWidth, InDepth),
+		FrontA, FrontB, Pose, Footprints, DepotYardSeed(Pose),
+		DepotFootprint(EDepotModule::Tank));
+}
+
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
 {
 	const URoadNetwork* Network = Context.Network();
@@ -191,10 +228,8 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
 		// per SEGMENT rather than globally means two plots on one segment sit flush and a
 		// plot never straddles a junction - see the design doc's open question 1.
-		const double AlongRoad = FMath::Clamp(Context.Snap.SegmentT, 0.0, 1.0) * Length;
-		const double Snapped = FMath::RoundToDouble(AlongRoad / PlotFit::BayWidthUu)
-			* PlotFit::BayWidthUu;
-		Anchor = RoadA + Along * FMath::Clamp(Snapped, 0.0, Length);
+		Anchor = RoadA + Along
+			* (AnchorIndexAt(Context.Snap.SegmentT, Length) * PlotFit::BayWidthUu);
 
 		// WHICH SIDE THE CURSOR IS ON, not a rule. A depot goes on the side of the road the
 		// player is pointing at; the alternative is a fixed side that is wrong half the time
@@ -329,11 +364,17 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 				const FVector2D Offset = (bLeft ? Left : -Left)
 					* KerbOffset(*Network, Context.Snap.Segment, bLeft);
 
+				// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
+				// says where anchors exist; it does not say which one the cursor has. Pending
+				// is the style every other tool uses for "this is what the click does", and
+				// it double-rings, so the chosen point reads at a glance.
+				const int32 Chosen = AnchorIndexAt(Context.Snap.SegmentT, Length);
+
 				const int32 Count = FMath::FloorToInt(Length / PlotFit::BayWidthUu);
 				for (int32 I = 0; I <= Count; ++I)
 				{
 					Sink.Marker(RoadA + Unit * (I * PlotFit::BayWidthUu) + Offset,
-						EPreviewStyle::Snap);
+						I == Chosen ? EPreviewStyle::Pending : EPreviewStyle::Snap);
 				}
 			}
 		}
@@ -353,25 +394,28 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	Sink.Polygon(PlotFit::GridOutline(FrontA, FrontB, ShownWidth, ShownDepth),
 		EPreviewStyle::Pending);
 
-	const PlotFit::FPlotGrid Grid = PlotFit::BuildGrid(FrontA, FrontB, ShownWidth, ShownDepth);
+	// THE MODULES THEMSELVES, where they will actually stand.
+	//
+	// This drew cross-marks for "which way each bay faces" and rings for "slots behind row 1"
+	// - both derived from PlotFit::BuildGrid, which NOTHING HAS BUILT since the yard solver
+	// landed. They were describing a structure that no longer exists, which is why they read
+	// as decoration: "I'm not actually sure what they are supposed to be telling me" (PIE,
+	// 2026-09-16). A mark whose meaning has been deleted is worse than no mark.
+	//
+	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
+	// the frontage midpoint is the Position the facade will store, so these outlines are the
+	// boxes Build puts down, not an impression of them.
+	const PlotYard::FYard Yard = YardFor(FrontA, FrontB, ShownWidth, ShownDepth);
 
-	// WHICH WAY EACH FILLED BAY FACES. Not decoration: +X faces AWAY from the road and the
-	// truck leaves out of the back, so a depot built facing the wrong way looks perfectly
-	// correct until something drives - the most expensive class of mistake this project has.
-	const int32 Placed = FMath::Min(ShownWidth, Modules.Num());
-	for (int32 I = 0; I < Placed && I < Grid.Slots.Num(); ++I)
+	TArray<FVector2D> Corners;
+	for (int32 I = 0; I < Yard.Stands.Num(); ++I)
 	{
-		const PlotFit::FPlotBay& Slot = Grid.Slots[I];
-		Sink.CrossMark(Slot.Centre,
-			FVector2D(FMath::Cos(Slot.Heading), FMath::Sin(Slot.Heading)),
-			EPreviewStyle::Pending);
-	}
-
-	// The slots behind row 1, marked so the depth step's payoff is visible while it is being
-	// chosen rather than only after Build.
-	for (int32 I = ShownWidth; I < Grid.Slots.Num(); ++I)
-	{
-		Sink.Marker(Grid.Slots[I].Centre, EPreviewStyle::Heal);
+		if (!Yard.Stands[I].bPlaced)
+		{
+			continue;
+		}
+		PlotYard::StandCorners(Yard.Stands[I], DepotFootprint(Modules[I]), Corners);
+		Sink.Polygon(Corners, EPreviewStyle::Pending);
 	}
 }
 
@@ -399,26 +443,9 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 	Sink.Fact(TEXT("Bays"), FString::FromInt(ShownWidth));
 	Sink.Fact(TEXT("Rows"), FString::FromInt(ShownDepth));
 
-	// THE SAME SOLVER THE PRESENTER RUNS, on the rectangle being dragged, seeded off the
-	// frontage midpoint - which is the Position the facade will store for this depot. So
-	// these numbers are not an estimate of the yard: they ARE the yard, computed early.
-	//
-	// "width * depth - placed" was the old arithmetic and it described a bay grid nothing
-	// builds any more. A number the player reads that is derived differently from the thing
-	// they get is the drift this whole sink exists to make impossible.
-	const TArray<FVector2D> Outline =
-		PlotFit::GridOutline(FrontA, FrontB, ShownWidth, ShownDepth);
-
-	TArray<PlotYard::FFootprint> Footprints;
-	Footprints.Reserve(Modules.Num());
-	for (const EDepotModule Module : Modules)
-	{
-		Footprints.Add(DepotFootprint(Module));
-	}
-
-	const FVector2D Pose = (FrontA + FrontB) * 0.5;
-	const PlotYard::FYard Yard = PlotYard::LayOut(Outline, FrontA, FrontB, Pose,
-		Footprints, DepotYardSeed(Pose), DepotFootprint(EDepotModule::Tank));
+	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
+	// the boxes on screen and the counts on the bar are one computation, not two that agree.
+	const PlotYard::FYard Yard = YardFor(FrontA, FrontB, ShownWidth, ShownDepth);
 
 	// WHAT YOU GET against what you asked for. A plot too tight silently dropping the pump
 	// is exactly the kind of thing a player discovers after paying for it.
