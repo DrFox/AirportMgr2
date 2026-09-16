@@ -133,9 +133,15 @@ Enter key stay exactly as they are - the panel is a second way to reach the one 
 
 ## 7. Refusals and warnings
 
-- A self-crossing quad is refused at the click that would make it, not at commit.
-  `RoadGeom::IsSimplePolygon` already answers this and `PlaceEntityInPlot` already calls it;
-  the gesture asks earlier so the player is never holding an invalid shape.
+- ~~A self-crossing quad is refused at the click that would make it.~~ **Corrected
+  2026-09-16 during implementation: a self-crossing quad cannot be drawn.** Both back corners
+  are placed along the frontage's own normal at its two ends, so every shape the gesture can
+  make is a trapezoid with perpendicular sides. The test written for this refusal pinned a
+  legal plot instead, which is how the constraint was noticed. `RoadGeom::IsSimplePolygon`
+  stays on the click - not for this gesture but for the ear-clipper downstream, which
+  produces overlapping faces rather than an error when fed a crossed polygon, and for the day
+  a corner stops being normal-constrained. `Airside.Tool.PlotQuadIsAlwaysSimple` pins the
+  invariant that makes the refusal unreachable, rather than a refusal that cannot fire.
 - A frontage under 15 m cannot be reached: the quantum's floor IS 15 m, so there is nothing
   to refuse.
 - A plot too shallow for any module keeps the existing behaviour - it builds, the yard drops

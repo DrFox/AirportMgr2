@@ -95,6 +95,18 @@ namespace
 		int32 Lines = 0;
 		int32 CrossMarks = 0;
 		TArray<EPreviewStyle> MarkerStyles;
+		TArray<EPreviewStyle> LineStyles;
+
+		/** Lines drawn in one style. What "only what is pinned" is actually counted in. */
+		int32 LinesOf(EPreviewStyle Style) const
+		{
+			int32 Count = 0;
+			for (const EPreviewStyle S : LineStyles)
+			{
+				if (S == Style) { ++Count; }
+			}
+			return Count;
+		}
 
 		/** Markers drawn in one style. The chosen anchor is the only Pending one. */
 		int32 MarkersOf(EPreviewStyle Style) const
@@ -120,9 +132,10 @@ namespace
 		{
 			MarkerStyles.Add(Style);
 		}
-		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle) override
+		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
 		{
 			++Lines;
+			LineStyles.Add(Style);
 			NearestY = FMath::Min3(NearestY, From.Y, To.Y);
 			DeepestY = FMath::Max3(DeepestY, From.Y, To.Y);
 		}
@@ -628,6 +641,142 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
  * player's verdict on marks describing a deleted structure: "I'm not actually sure what they
  * are supposed to be telling me" (PIE, 2026-09-16).
  */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotDrawsOnlyWhatIsPinnedTest,
+	"Airside.Tool.PlotDrawsOnlyWhatIsPinned",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotDrawsOnlyWhatIsPinnedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	// ONE POINT: the frontage, and NOTHING ELSE. At one corner the shape is not decided, so
+	// a boundary drawn here is a promise the next click breaks - which is the whole reason
+	// this test, and the document behind it, exist.
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	{
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(PlotAt(Actor, FVector2D(3000.0, 200.0)), Sink);
+
+		TestEqual(TEXT("one pinned corner draws one frontage edge and no more"),
+			Sink.Lines, 1);
+		TestEqual(TEXT("and no module footprints"),
+			Sink.LinesOf(EPreviewStyle::Pending), 0);
+	}
+
+	// TWO POINTS: a boundary appears, and the edges still moving are provisional.
+	Tool.OnClick(PlotAt(Actor, FVector2D(3000.0, 200.0)));
+	{
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(PlotAt(Actor, FVector2D(3000.0, 1800.0)), Sink);
+
+		TestEqual(TEXT("the pinned frontage is solid"),
+			Sink.LinesOf(EPreviewStyle::Pinned), 1);
+		TestTrue(TEXT("and the rest of the boundary is provisional"),
+			Sink.LinesOf(EPreviewStyle::Provisional) > 0);
+
+		// STILL NO CONTENTS. Both back corners are unknown, so the plot has no settled depth
+		// anywhere and anything drawn inside it would move on the next two clicks.
+		TestEqual(TEXT("two corners is too early to promise what fits"),
+			Sink.LinesOf(EPreviewStyle::Pending), 0);
+	}
+
+	// THREE POINTS: only the last corner moves, so what is drawn inside is a promise the
+	// gesture can keep.
+	Tool.OnClick(PlotAt(Actor, FVector2D(3000.0, 1800.0)));
+	{
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(PlotAt(Actor, FVector2D(0.0, 1800.0)), Sink);
+
+		TestTrue(TEXT("three corners is when the contents appear"),
+			Sink.LinesOf(EPreviewStyle::Pending) > 0);
+
+		// WHOLE FOOTPRINTS, four lines apiece - the same rectangles the readout counts.
+		TestEqual(TEXT("and they are whole footprints, four lines each"),
+			Sink.LinesOf(EPreviewStyle::Pending) % 4, 0);
+
+		// TWO EDGES PINNED BY NOW: the frontage, and the one running back from its far end.
+		TestEqual(TEXT("and two edges have stopped moving"),
+			Sink.LinesOf(EPreviewStyle::Pinned), 2);
+	}
+
+	// A DOT PER PINNED CORNER, so "Plot Points: 3/4" has something on the ground to count
+	// against rather than being a number the player has to take on trust.
+	{
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(PlotAt(Actor, FVector2D(0.0, 1800.0)), Sink);
+		TestEqual(TEXT("three pinned corners draw three dots"),
+			Sink.MarkersOf(EPreviewStyle::Pinned), 3);
+	}
+
+	return true;
+}
+
+/**
+ * THE QUAD CANNOT FOLD, and that is a property worth pinning rather than a refusal.
+ *
+ * Both back corners are placed along the frontage's own normal at its two ends, so every
+ * shape the gesture can produce is a trapezoid with perpendicular sides. This began as
+ * Airside.Tool.PlotRefusesACrossedQuad, asserting that a folding fourth click was rejected -
+ * and it pinned a perfectly legal plot instead, because no cursor position can fold it. The
+ * refusal in OnClick is kept for the ear-clipper downstream and is unreachable from here;
+ * what IS testable is the invariant that makes it unreachable.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotQuadIsAlwaysSimpleTest,
+	"Airside.Tool.PlotQuadIsAlwaysSimple",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotQuadIsAlwaysSimpleTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// Cursor positions chosen to be hostile: far past the frontage's end, back behind the
+	// anchor, and hard up against the road on both sides.
+	const FVector2D Hostile[] = {
+		FVector2D(6000.0, 1800.0), FVector2D(-6000.0, 1800.0), FVector2D(0.0, 400.0),
+		FVector2D(2000.0, 310.0),  FVector2D(-3000.0, 5000.0), FVector2D(9000.0, 320.0) };
+
+	for (const FVector2D& Where : Hostile)
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+		Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+		Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
+
+		TArray<FVector2D> Shown;
+		Tool.Quad(PlotAt(Actor, Where), Shown);
+		if (!TestEqual(TEXT("four corners"), Shown.Num(), 4)) { return false; }
+
+		TestTrue(*FString::Printf(TEXT("a last corner at (%.0f, %.0f) leaves a simple quad"),
+			Where.X, Where.Y), RoadGeom::IsSimplePolygon(Shown));
+
+		// AND IT PINS, which is the other half: a shape the gesture can draw is a shape the
+		// gesture accepts, or the player is stuck with a cursor that refuses everything.
+		Tool.OnClick(PlotAt(Actor, Where));
+		TestEqual(*FString::Printf(TEXT("and pins, from (%.0f, %.0f)"), Where.X, Where.Y),
+			Tool.PinnedCount(), 4);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotGhostDrawsTheModulesTest,
 	"Airside.Tool.PlotGhostDrawsTheModules",

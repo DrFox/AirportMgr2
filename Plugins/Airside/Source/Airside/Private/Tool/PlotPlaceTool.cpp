@@ -343,10 +343,18 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 			return;
 		}
 
-		// REFUSED AT THE CLICK THAT WOULD MAKE IT, not at commit, so the player is never left
-		// holding a shape that cannot be built and can only escape by cancelling.
-		// PlaceEntityInPlot asks the same question and keeps asking it: this is earlier,
-		// not instead.
+		// UNREACHABLE TODAY, AND KEPT ANYWAY - which is worth stating rather than leaving for
+		// someone to discover by writing the test that cannot fail.
+		//
+		// Both back corners are placed along the frontage's own normal, at its two ends, so
+		// the quad is always a trapezoid with perpendicular sides and CANNOT fold through
+		// itself whatever the cursor does. A test was written for this refusal on 2026-09-16
+		// and pinned a legal shape instead, which is how the constraint was noticed.
+		//
+		// The guard stays because the thing it protects is not this function: it is the
+		// ear-clipper downstream, which produces overlapping faces rather than an error when
+		// fed a crossed polygon. The day a corner stops being normal-constrained - a dragged
+		// edge, a rotated plot - this is already here, on the click rather than at commit.
 		if (!RoadGeom::IsSimplePolygon(Shown))
 		{
 			return;
@@ -465,12 +473,47 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 
 	TArray<FVector2D> Shown;
 	Quad(Context, Shown);
+	if (Shown.Num() < 2)
+	{
+		return;
+	}
+
+	// A DOT PER CORNER ALREADY PLACED, so "Plot Points: 2/4" has something on the ground to
+	// count against rather than being a number the player has to take on trust.
+	const int32 Pinned = PinnedCount();
+	for (int32 I = 0; I < Pinned && I < Shown.Num(); ++I)
+	{
+		Sink.Marker(Shown[I], EPreviewStyle::Pinned);
+	}
+
+	// THE FRONTAGE IS PINNED FROM THE SECOND CLICK ON. At one corner it still follows the
+	// cursor, so it is drawn solid only once it has stopped moving.
+	Sink.Line(Shown[0], Shown[1],
+		Pinned >= 2 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+
 	if (Shown.Num() < 4)
 	{
 		return;
 	}
 
-	Sink.Polygon(Shown, EPreviewStyle::Pending);
+	// The rest of the boundary. AN EDGE IS PINNED WHEN BOTH ITS ENDS ARE, and provisional
+	// the moment either is still under the cursor.
+	Sink.Line(Shown[1], Shown[2],
+		Pinned >= 3 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+	Sink.Line(Shown[2], Shown[3],
+		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+	Sink.Line(Shown[3], Shown[0],
+		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+
+	// CONTENTS AT THREE CORNERS, NOT TWO. With two pinned both back corners are unknown and
+	// the plot has no settled depth anywhere, so anything drawn inside it is a promise the
+	// next two clicks break. With three, only one corner moves - and that is a promise the
+	// gesture can keep. Drawing them from the first click is what PIE called out on
+	// 2026-09-16; see the four-point gesture design doc.
+	if (Pinned < 3)
+	{
+		return;
+	}
 
 	// THE MODULES THEMSELVES, where they will actually stand.
 	//
