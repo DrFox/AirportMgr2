@@ -179,6 +179,22 @@ enum class EPreviewStyle : uint8
 
 	/** A resolved anchor: the guideline node a vehicle will actually route to on this stand. */
 	ServiceAnchor,
+
+	// --- The staged plot gesture's own two -----------------------------------------------
+	//
+	// PINNED AND PROVISIONAL SAY WHAT Pending CANNOT: whether the thing under them has
+	// stopped moving. Pending means "this is what the click would do", which is true of an
+	// edge being dragged AND of one already placed - and the player counts remaining corners
+	// by exactly that difference.
+	//
+	// ADDED AT THE END rather than beside Pending where they would read better: this is a
+	// UENUM, and renumbering it repoints any value already serialised against it.
+
+	/** An edge the player has already placed. It will not move again this gesture. */
+	Pinned,
+
+	/** An edge that follows the cursor. Drawn dashed - see ARoadBuildHUD::IsDashed. */
+	Provisional,
 };
 
 /**

@@ -9,6 +9,47 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
+ * PINNED AND PROVISIONAL MUST READ APART, because that is their whole job: one edge of the
+ * plot has stopped moving and the other has not, and the player counts corners by the
+ * difference. Identical looks would leave a dashed boundary reading as decoration - which is
+ * the verdict the bay marks this replaces actually earned in PIE.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPinnedAndProvisionalReadApartTest,
+	"AirportMgr.HUD.PinnedAndProvisionalReadApart",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPinnedAndProvisionalReadApartTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Ctx.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
+
+	const FPreviewLook& Pinned = Hud->LookForTest(EPreviewStyle::Pinned);
+	const FPreviewLook& Provisional = Hud->LookForTest(EPreviewStyle::Provisional);
+
+	TestTrue(TEXT("pinned has a positive thickness"), Pinned.ThicknessScale > 0.0f);
+	TestTrue(TEXT("provisional has a positive thickness"), Provisional.ThicknessScale > 0.0f);
+
+	// SAME WEIGHT, so the DASH is what tells them apart rather than a thickness the player
+	// would have to compare against some other line elsewhere on screen.
+	TestEqual(TEXT("both are drawn at the same weight"),
+		Pinned.ThicknessScale, Provisional.ThicknessScale);
+
+	TestTrue(TEXT("and the hud dashes one of them and not the other"),
+		ARoadBuildHUD::IsDashed(EPreviewStyle::Provisional)
+			&& !ARoadBuildHUD::IsDashed(EPreviewStyle::Pinned));
+
+	return true;
+}
+
+
+/**
  * THE COMMIT PROMPT'S ONE DECISION, with no Canvas and no PIE.
  *
  * The drawing itself cannot be tested headlessly, so the part that CAN go wrong silently is
@@ -69,9 +110,9 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
-	// EPreviewStyle is a plain 0-based enum ending at ServiceAnchor - iterated the same way
+	// EPreviewStyle is a plain 0-based enum ending at Provisional - iterated the same way
 	// FBuildActionsRegistryTest walks EActionSection, rather than by reflection.
-	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::ServiceAnchor); ++S)
+	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Provisional); ++S)
 	{
 		const EPreviewStyle Style = static_cast<EPreviewStyle>(S);
 		const FPreviewLook& Look = Hud->LookForTest(Style);

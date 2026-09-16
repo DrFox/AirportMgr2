@@ -79,6 +79,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
 	float PreviewThickness = 3.0f;
 
+	/**
+	 * Dash plus gap for a Provisional line, in PIXELS. Half is drawn, half is skipped.
+	 *
+	 * Screen space, not world space: a world-space dash shortens with distance until a far
+	 * edge reads as a solid line, which is the one thing the dash exists to deny. Same reason
+	 * CrossMark takes its length from this class rather than from the tool.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "4.0"))
+	float DashPitch = 18.0f;
+
 	/** Half-length of a cross mark, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "1.0"))
 	float CrossMarkRadius = 9.0f;
@@ -95,6 +105,15 @@ public:
 	virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override;
 	virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override;
 	virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override;
+
+	/**
+	 * Whether this style draws as a dashed line.
+	 *
+	 * STATIC AND PUBLIC so the one rule is testable with no Canvas. The PLUGIN never names a
+	 * dash length - it names a MEANING, and this is where meaning becomes look, in the same
+	 * class that turns a style into a colour.
+	 */
+	static bool IsDashed(EPreviewStyle Style) { return Style == EPreviewStyle::Provisional; }
 
 	/**
 	 * What to offer the player when a gesture is ready to commit - "Build  [Enter]" - or an

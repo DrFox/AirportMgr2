@@ -26,7 +26,7 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::RunwayHoldingPosition, EPreviewStyle::IntermediateHoldingPosition,
 		EPreviewStyle::Hover, EPreviewStyle::Selected, EPreviewStyle::NodeStub,
 		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
-		EPreviewStyle::ServiceAnchor })
+		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}
@@ -241,10 +241,34 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 	const FPreviewLook& Look = LookFor(Style);
 	const float Weight = PreviewThickness * Look.ThicknessScale;
 
-	DrawLine(
-		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
-		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
-		Look.Colour, Weight);
+	if (!IsDashed(Style))
+	{
+		DrawLine(
+			static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+			static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+			Look.Colour, Weight);
+		return;
+	}
+
+	// DASHED IN SCREEN SPACE - see DashPitch for why not world space. Stepping by the pitch
+	// and drawing the first half of each step is the whole of it; the last piece is clamped
+	// to the end rather than allowed to overshoot, or a boundary would grow a whisker past
+	// its own corner at some lengths and not others.
+	const FVector2D Span = ScreenB - ScreenA;
+	const double Length = Span.Size();
+	if (Length <= 0.0)
+	{
+		return;
+	}
+
+	const FVector2D Unit = Span / Length;
+	for (double Along = 0.0; Along < Length; Along += DashPitch)
+	{
+		const FVector2D From = ScreenA + Unit * Along;
+		const FVector2D To = ScreenA + Unit * FMath::Min(Along + DashPitch * 0.5, Length);
+		DrawLine(static_cast<float>(From.X), static_cast<float>(From.Y),
+			static_cast<float>(To.X), static_cast<float>(To.Y), Look.Colour, Weight);
+	}
 }
 
 void ARoadBuildHUD::CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style)
