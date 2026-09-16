@@ -156,17 +156,42 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	{
 		const FFootprint Grown = Padded(Footprint);
 
+		const double HalfLength = Grown.LengthUu * 0.5;
+		const double HalfWidth = Grown.WidthUu * 0.5;
+
 		for (int32 Try = 0; Try < MaxTries; ++Try)
 		{
 			FStand Candidate;
-			Candidate.Centre = FVector2D(
-				Stream.FRandRange(Min.X, Max.X), Stream.FRandRange(Min.Y, Max.Y));
 
-			// A QUARTER TURN PLUS A FEW DEGREES. Uniform over a circle reads as debris
-			// after an explosion; this reads as something parked in a hurry.
+			// THE HEADING IS CHOSEN FIRST, so the centre can be drawn from the band that
+			// heading can actually occupy. Sampling the centre across the whole bounding box
+			// and rejecting afterwards put most candidates half through the fence before any
+			// other test ran - on a narrow plot that is most of the draw wasted.
+			//
+			// A QUARTER TURN PLUS A FEW DEGREES. Uniform over a circle reads as debris after
+			// an explosion; this reads as something parked in a hurry.
 			Candidate.Heading = InwardBearing
 				+ Stream.RandRange(0, 3) * UE_DOUBLE_HALF_PI
 				+ Stream.FRandRange(-HeadingJitterRadians, HeadingJitterRadians);
+
+			// This heading's own axis-aligned reach - EXACT, not the half-diagonal. The
+			// diagonal holds for every rotation and so refuses poses a 12 degree turn allows,
+			// which quietly costs the yard modules it had room for.
+			const double Cos = FMath::Abs(FMath::Cos(Candidate.Heading));
+			const double Sin = FMath::Abs(FMath::Sin(Candidate.Heading));
+			const double ReachX = HalfLength * Cos + HalfWidth * Sin;
+			const double ReachY = HalfLength * Sin + HalfWidth * Cos;
+
+			if (Min.X + ReachX > Max.X - ReachX || Min.Y + ReachY > Max.Y - ReachY)
+			{
+				// No centre exists for this heading. Another turn may still fit, so this
+				// costs a try rather than abandoning the module.
+				continue;
+			}
+
+			Candidate.Centre = FVector2D(
+				Stream.FRandRange(Min.X + ReachX, Max.X - ReachX),
+				Stream.FRandRange(Min.Y + ReachY, Max.Y - ReachY));
 
 			StandCorners(Candidate, Grown, Corners);
 

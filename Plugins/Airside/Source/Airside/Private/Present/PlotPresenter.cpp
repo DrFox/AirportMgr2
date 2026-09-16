@@ -97,21 +97,6 @@ namespace
 		return true;
 	}
 
-	/**
-	 * A stable seed for one depot.
-	 *
-	 * POSITION, NOT AN ENTITY HANDLE: handles are slot indices that get reused, and a
-	 * position is set once at placement and never changes. Two depots cannot share one.
-	 *
-	 * QUANTISED to whole uu because a float that came back from a save one bit different
-	 * would re-roll that depot and only that depot - the kind of bug that takes a day.
-	 */
-	int32 SeedFor(const FEntityInstance& Entity)
-	{
-		const int32 X = FMath::RoundToInt(Entity.Position.X);
-		const int32 Y = FMath::RoundToInt(Entity.Position.Y);
-		return static_cast<int32>(HashCombine(GetTypeHash(X), GetTypeHash(Y)));
-	}
 }
 
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes)
@@ -184,7 +169,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 		// The gate is where the fence is left open, which is the entity's own pose - see the
 		// fence loop below, which skips the bay nearest exactly this point.
 		const PlotYard::FYard Yard = PlotYard::LayOut(Entity.Outline, FrontageA, FrontageB,
-			Entity.Position, Footprints, SeedFor(Entity), DepotFootprint(EDepotModule::Tank));
+			Entity.Position, Footprints, DepotYardSeed(Entity.Position), DepotFootprint(EDepotModule::Tank));
 
 		RoomForMore += Yard.RoomForMore;
 

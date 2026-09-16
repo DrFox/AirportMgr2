@@ -40,10 +40,14 @@ namespace PlotYard
 	/**
 	 * Candidate poses tried per module before it is dropped.
 	 *
-	 * BOUNDED AND SMALL. UPlotPresenter::RebuildFrom runs on every graph change, so an
+	 * BOUNDED, because UPlotPresenter::RebuildFrom runs on every graph change and an
 	 * unbounded search would make laying a road stutter on an airport full of depots.
+	 *
+	 * 64 RATHER THAN 24, which was the first figure and was too few: candidates are cheap
+	 * only because LayOut samples from the region a module can actually occupy, and even
+	 * then a well-filled yard rejects most of them on the modules already standing.
 	 */
-	inline constexpr int32 MaxTries = 24;
+	inline constexpr int32 MaxTries = 64;
 
 	/**
 	 * How far a heading may wander off its quarter turn, radians. ~12 degrees.

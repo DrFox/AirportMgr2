@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/PlotFit.h"
@@ -521,6 +522,67 @@ bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
 	// 2400 instead of 800, wherever the frontage happens to sit relative to the road.
 	TestEqual(TEXT("and the ghost is drawn exactly that deep"),
 		Sink.Depth(), PlotFit::BayDepthUu);
+
+	return true;
+}
+
+/**
+ * THE ROOM THE READOUT PROMISES IS THE ROOM THE DEPOT HAS.
+ *
+ * "Expansion slots" was width * depth - placed: arithmetic over a bay grid that nothing
+ * builds any more. The replacement runs the SAME solver UPlotPresenter runs, seeded off the
+ * frontage midpoint - which is the Position URoadEditFacade::PlaceEntityInPlot stores - so
+ * the two are not merely consistent by inspection, they are the same computation.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotReadoutCountsRoomNotSlotsTest,
+	"Airside.Tool.PlotReadoutCountsRoomNotSlots",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotReadoutCountsRoomNotSlotsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// Three bays across and three rows deep - room to spare, so "Room for" is not trivially
+	// zero and the agreement below is a real comparison rather than 0 == 0.
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
+		FVector2D(600.0, 2700.0));
+
+	const FToolContext Confirming = PlotAt(Actor, FVector2D(600.0, 2700.0));
+	FToolReadoutCollector Collector;
+	Tool.BuildReadout(Confirming, Collector);
+
+	// "EXPANSION SLOTS" WAS A CLAIM ABOUT BAYS, and modules no longer stand in bays. A fact
+	// whose name survived its meaning is worse than one that was removed: the player reads a
+	// number describing a structure the plot does not have.
+	const TPair<FString, FString>* Slots = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Expansion slots"); });
+	TestNull(TEXT("the bay-slot fact is gone"), Slots);
+
+	const TPair<FString, FString>* Room = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Room for"); });
+	if (!TestNotNull(TEXT("a Room for fact"), Room)) { return false; }
+
+	const int32 Promised = FCString::Atoi(*Room->Value);
+	TestTrue(TEXT("a plot this size reports room to grow"), Promised > 0);
+
+	// THE AGREEMENT. Commit the very gesture that was read out, then ask the presenter what
+	// the built depot actually has. A preview seeded differently from the placement would
+	// pass every other assertion here and quietly promise a yard the player never gets.
+	Tool.OnCommit(Confirming);
+	Actor->RebuildMesh();
+
+	TestEqual(TEXT("the room promised is the room the built depot has"),
+		Actor->GetPlotPresenter()->GetRoomForMore(), Promised);
 
 	return true;
 }

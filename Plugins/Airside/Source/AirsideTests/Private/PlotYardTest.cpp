@@ -269,6 +269,63 @@ bool FPlotYardLeavesTheGateClearTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ROOM TO GROW IS COUNTED, and counted as more than nothing.
+ *
+ * THE GAP THIS FILLS: DropsWhatWillNotFit asserts RoomForMore is ZERO on a tiny plot, and
+ * IsDeterministic only compares one run's figure against another's. Both pass if the count
+ * is always zero - which is exactly what it was, on every plot, until this test said so.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardCountsRoomToGrowTest,
+	"Airside.Solve.PlotYardCountsRoomToGrow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardCountsRoomToGrowTest::RunTest(const FString& Parameters)
+{
+	// 24 m x 24 m and EMPTY: nothing placed, nothing in the way, so a solver that cannot
+	// count room here cannot count it anywhere.
+	const TArray<FVector2D> Outline = YardRect(2400.0, 2400.0);
+
+	const PlotYard::FYard Bare = PlotYard::LayOut(
+		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
+		TArrayView<const PlotYard::FFootprint>(), /*Seed=*/11, Tank());
+
+	TestEqual(TEXT("no footprints in, no stands out"), Bare.Stands.Num(), 0);
+	TestTrue(*FString::Printf(
+		TEXT("an empty 24 m yard has room for several tanks, got %d"), Bare.RoomForMore),
+		Bare.RoomForMore > 1);
+
+	// THE SAME PLOT WITH A DEPOT IN IT still has room, and less of it. Filling a yard must
+	// REDUCE what is left rather than leaving the figure untouched, which is how a count
+	// that ignores what is standing would look.
+	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+	const PlotYard::FYard Filled = PlotYard::LayOut(
+		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
+		Footprints, /*Seed=*/11, Tank());
+
+	TestEqual(TEXT("the mix all fits in a yard this size"), Filled.DroppedCount(), 0);
+	TestTrue(*FString::Printf(TEXT("and there is still room to grow, got %d"),
+		Filled.RoomForMore), Filled.RoomForMore > 0);
+	TestTrue(TEXT("but less than the empty yard had"), Filled.RoomForMore < Bare.RoomForMore);
+
+	// THE SHAPE THE GESTURE ACTUALLY MAKES: three bays across, three rows deep. The presenter
+	// reported "room for 0 more" on exactly this plot while the 24 m square above reported
+	// several, which is what dragged this case into a world-free test where it can be
+	// iterated on in seconds rather than through a whole editor run.
+	const TArray<FVector2D> Narrow = YardRect(1200.0, 2400.0);
+	const PlotYard::FYard Drawn = PlotYard::LayOut(
+		Narrow, FVector2D(0.0, 0.0), FVector2D(1200.0, 0.0), FVector2D(600.0, 0.0),
+		Footprints, /*Seed=*/11, Tank());
+
+	TestEqual(TEXT("the mix fits a three by three plot"), Drawn.DroppedCount(), 0);
+	TestTrue(*FString::Printf(
+		TEXT("and a 12 m x 24 m yard has room for another tank, got %d"), Drawn.RoomForMore),
+		Drawn.RoomForMore > 0);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotYardIsDeterministicTest,
 	"Airside.Solve.PlotYardIsDeterministic",

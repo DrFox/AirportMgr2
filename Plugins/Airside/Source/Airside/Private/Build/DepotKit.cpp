@@ -33,3 +33,10 @@ PlotYard::FFootprint DepotFootprint(EDepotModule Module)
 	Out.WidthUu = 400.0;
 	return Out;
 }
+
+int32 DepotYardSeed(FVector2D Where)
+{
+	const int32 X = FMath::RoundToInt(Where.X);
+	const int32 Y = FMath::RoundToInt(Where.Y);
+	return static_cast<int32>(HashCombine(GetTypeHash(X), GetTypeHash(Y)));
+}

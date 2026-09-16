@@ -90,6 +90,17 @@ private:
 	 */
 	void ShownSize(const FToolContext& Context, int32& OutWidth, int32& OutDepth) const;
 
+	/**
+	 * This frame's plot: its size, and the frontage edge ordered as the grid wants it.
+	 *
+	 * SHARED BY THE PREVIEW AND THE READOUT for the same reason ShownSize is. The ordering
+	 * rule - interior on the LEFT of A->B - was written out twice, once here and once in
+	 * Frontage(), and a third copy for the readout is how the ghost and the facts come to
+	 * describe different rectangles.
+	 */
+	void ShownPlot(const FToolContext& Context, FVector2D& OutA, FVector2D& OutB,
+		int32& OutWidth, int32& OutDepth) const;
+
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
 	/** One of each is the concept sheet's depot, and the smallest one that actually works. */

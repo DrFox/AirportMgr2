@@ -2,7 +2,9 @@
 
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Build/DepotKit.h"
 #include "Solve/PlotFit.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -133,6 +135,19 @@ void FPlotPlaceTool::ShownSize(const FToolContext& Context, int32& OutWidth, int
 	OutWidth = Stage == EPlotStage::Width ? WidthAt(Context) : Width;
 	OutDepth = Stage == EPlotStage::Depth ? DepthAt(Context)
 		: (Stage == EPlotStage::Width ? 1 : Depth);
+}
+
+void FPlotPlaceTool::ShownPlot(const FToolContext& Context, FVector2D& OutA, FVector2D& OutB,
+	int32& OutWidth, int32& OutDepth) const
+{
+	ShownSize(Context, OutWidth, OutDepth);
+
+	// Frontage() uses the LOCKED width; while dragging, the shown one is what matters.
+	const FVector2D Far = Anchor + Along * (static_cast<double>(OutWidth) * PlotFit::BayWidthUu);
+	const FVector2D Unit = (Far - Anchor).GetSafeNormal();
+	const bool bLeft = FVector2D::DotProduct(RoadGeom::PerpCCW(Unit), Inward) >= 0.0;
+	OutA = bLeft ? Anchor : Far;
+	OutB = bLeft ? Far : Anchor;
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -329,20 +344,11 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		return;
 	}
 
-	int32 ShownWidth = 0;
-	int32 ShownDepth = 0;
-	ShownSize(Context, ShownWidth, ShownDepth);
-
 	FVector2D FrontA = FVector2D::ZeroVector;
 	FVector2D FrontB = FVector2D::ZeroVector;
-	{
-		// Frontage() uses the LOCKED width; while dragging, the shown one is what matters.
-		const FVector2D Far = Anchor + Along * (static_cast<double>(ShownWidth) * PlotFit::BayWidthUu);
-		const FVector2D Unit = (Far - Anchor).GetSafeNormal();
-		const bool bLeft = FVector2D::DotProduct(RoadGeom::PerpCCW(Unit), Inward) >= 0.0;
-		FrontA = bLeft ? Anchor : Far;
-		FrontB = bLeft ? Far : Anchor;
-	}
+	int32 ShownWidth = 0;
+	int32 ShownDepth = 0;
+	ShownPlot(Context, FrontA, FrontB, ShownWidth, ShownDepth);
 
 	Sink.Polygon(PlotFit::GridOutline(FrontA, FrontB, ShownWidth, ShownDepth),
 		EPreviewStyle::Pending);
@@ -384,19 +390,41 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		return;
 	}
 
+	FVector2D FrontA = FVector2D::ZeroVector;
+	FVector2D FrontB = FVector2D::ZeroVector;
 	int32 ShownWidth = 0;
 	int32 ShownDepth = 0;
-	ShownSize(Context, ShownWidth, ShownDepth);
+	ShownPlot(Context, FrontA, FrontB, ShownWidth, ShownDepth);
 
 	Sink.Fact(TEXT("Bays"), FString::FromInt(ShownWidth));
 	Sink.Fact(TEXT("Rows"), FString::FromInt(ShownDepth));
 
-	// WHAT YOU GET against what you asked for. A width of two silently dropping the pump is
-	// exactly the kind of thing a player discovers after paying for it.
-	const int32 Placed = FMath::Min(ShownWidth, Modules.Num());
-	Sink.Fact(TEXT("Modules"), FString::Printf(TEXT("%d of %d"), Placed, Modules.Num()));
-	Sink.Fact(TEXT("Expansion slots"),
-		FString::FromInt(ShownWidth * ShownDepth - Placed));
+	// THE SAME SOLVER THE PRESENTER RUNS, on the rectangle being dragged, seeded off the
+	// frontage midpoint - which is the Position the facade will store for this depot. So
+	// these numbers are not an estimate of the yard: they ARE the yard, computed early.
+	//
+	// "width * depth - placed" was the old arithmetic and it described a bay grid nothing
+	// builds any more. A number the player reads that is derived differently from the thing
+	// they get is the drift this whole sink exists to make impossible.
+	const TArray<FVector2D> Outline =
+		PlotFit::GridOutline(FrontA, FrontB, ShownWidth, ShownDepth);
+
+	TArray<PlotYard::FFootprint> Footprints;
+	Footprints.Reserve(Modules.Num());
+	for (const EDepotModule Module : Modules)
+	{
+		Footprints.Add(DepotFootprint(Module));
+	}
+
+	const FVector2D Pose = (FrontA + FrontB) * 0.5;
+	const PlotYard::FYard Yard = PlotYard::LayOut(Outline, FrontA, FrontB, Pose,
+		Footprints, DepotYardSeed(Pose), DepotFootprint(EDepotModule::Tank));
+
+	// WHAT YOU GET against what you asked for. A plot too tight silently dropping the pump
+	// is exactly the kind of thing a player discovers after paying for it.
+	Sink.Fact(TEXT("Modules"), FString::Printf(TEXT("%d of %d"),
+		Modules.Num() - Yard.DroppedCount(), Modules.Num()));
+	Sink.Fact(TEXT("Room for"), FString::FromInt(Yard.RoomForMore));
 
 	if (Stage == EPlotStage::Confirm && ShownDepth <= 1)
 	{
