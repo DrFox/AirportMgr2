@@ -31,6 +31,45 @@ enum class EPlaceableEntity : uint8
 };
 
 /**
+ * What a lane waypoint IS, so a builder never has to infer it from position.
+ *
+ * A UENUM rather than a plain enum for the reason EPlaceableEntity records above: UHT cannot
+ * resolve a plain enum named by a USTRUCT's UPROPERTY, and a forward declaration does not
+ * satisfy it either.
+ */
+UENUM()
+enum class EStandWaypointKind : uint8
+{
+	/** Shape only - a corner, or the flat a dip needs so the pit is driven through. */
+	Plain,
+	/** An anchor sits here. AnchorId names it, and the lane reuses that anchor's node. */
+	Anchor,
+	/** Where a road may join. The heading is the lane's own direction here. */
+	Entry,
+};
+
+/**
+ * One point of a stand's service lane, in the entity's own local space.
+ *
+ * NO HEADING FIELD, deliberately. An entry's heading is its lane's direction at that point and
+ * an anchor's is already FEntityAnchor::LocalHeading; a copy here would be a value that must
+ * agree with another value in the same asset, which is the drift FResolvedAnchor exists to
+ * remove.
+ */
+USTRUCT()
+struct AIRSIDE_API FStandWaypoint
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere) FVector2D Local = FVector2D::ZeroVector;
+
+	/** Set if and only if Kind is Anchor. */
+	UPROPERTY(EditAnywhere) FName AnchorId;
+
+	UPROPERTY(EditAnywhere) EStandWaypointKind Kind = EStandWaypointKind::Plain;
+};
+
+/**
  * Shared, immutable description of a kind of installation (Flyweight), matching
  * URoadProfile's role for cross-sections.
  *
@@ -70,41 +109,42 @@ public:
 
 
 	/**
-	 * A closed, INVISIBLE vehicle lane enclosing the parked aircraft and every anchor, in
-	 * the entity's own local space. Empty means none.
+	 * A closed, INVISIBLE vehicle lane threading the anchors, in the entity's own local space.
+	 * Empty means none.
 	 *
 	 * CLOSED IMPLICITLY: the last point joins the first, and the array does NOT repeat it.
 	 * Storing the repeat would be a value that must agree with another value in the same
 	 * array, which is exactly the drift FResolvedAnchor exists to remove.
 	 *
-	 * WHY A LOOP AT ALL, rather than joining each anchor straight to the road by proximity:
-	 * the anchors sit AROUND the aeroplane - the hydrant pit under the starboard wing, fixed
-	 * ground power off the port bow - so a straight spur from a road on one side to a box on
-	 * the other crosses 37 m of fuselage, and nothing in the guideline graph has ever had an
-	 * opinion about geometry crossing an aeroplane. Anchors spur to this; roads join this.
+	 * IT RUNS ALONG THE AEROPLANE, NOT AROUND IT, and that is the whole of the 2026-09-16
+	 * redesign. The ring this replaces ran outboard of the wingtips and every anchor hung off
+	 * it on a spur - which needs a 90 degree turn, and a 90 degree turn at the 699 uu a real
+	 * 8.5 m dispenser's steering lock allows needs 989 uu of run on each arm against the 990 uu
+	 * of depth between the ring and the box row. It did not fit, and widening the ring made it
+	 * worse. So the lane comes inside the wingtip and runs along the row the boxes are already
+	 * painted on: every service anchor sits ON it and nothing turns into one.
 	 *
-	 * COMPUTED by the builder that lays the anchors, never authored beside them. Four
-	 * hand-typed corners would be a third authored thing that must agree with the aircraft
-	 * AND with the anchors, and would drift from both. Deriving it at rebuild time was also
-	 * rejected: that is a runtime algorithm's opinion with no override, and a second
-	 * evaluator of the same geometry.
+	 * ONE CYCLE, because a dead end is a reverse and reverse is a later stage. The hydrant, 400
+	 * uu inboard of the row, is a flat-bottomed DIP in the lane rather than a stub - a pure V
+	 * there would be a corner no vehicle can take, and under the rolling-steer law an agent
+	 * stopped at one cannot turn at all, so it would be stuck rather than slow.
 	 *
-	 * INVISIBLE, and that is a decision rather than an omission: no marking builder, no
-	 * material, no mesh. It exists only as guideline nodes and edges, and shows in the G
-	 * overlay because everything in the graph does. It is a routing lane, not paint.
+	 * NOTHING CROSSES THE AEROPLANE STILL, which was the old ring's reason for existing and is
+	 * not weakened by bringing the lane inboard: both runs stay on one side of the fuselage
+	 * centreline, and the two crossings that join them sit clear ahead of the nose and clear
+	 * aft of the tail. Airside.Entities.StandLaneClearsTheAircraft measures it.
+	 *
+	 * COMPUTED by the builder that lays the anchors, never authored beside them, and sized from
+	 * the LARGEST SERVICE VEHICLE ADMITTED rather than the one driving - see BuildCodeCStandFor.
+	 * Deriving it at rebuild time was rejected for the reason the ring's own header gave: that
+	 * is a runtime algorithm's opinion with no override, and a second evaluator of the same
+	 * geometry.
+	 *
+	 * INVISIBLE, and a decision rather than an omission: no marking builder, no material, no
+	 * mesh. It exists only as guideline nodes and edges, and shows in the G overlay because
+	 * everything in the graph does. It is a routing lane, not paint.
 	 */
-	UPROPERTY(EditAnywhere) TArray<FVector2D> ServiceLoop;
-
-	/**
-	 * The axis-aligned box ServiceLoop occupies, in the entity's own local space - empty if
-	 * ServiceLoop is. Exists so a test that needs "where is the lane" (ServiceLinkTest,
-	 * FuelServiceTest) asks this instead of typing the four corners BuildCodeCStand computed
-	 * a second time (#104): the loop is a rectangle by construction, so its bounds are the
-	 * whole of what those tests actually needed, and a test that hand-typed the corners
-	 * could drift from BuildCodeCStand's own clearance/footprint arithmetic without either
-	 * side noticing.
-	 */
-	FBox2D ServiceLaneBounds() const;
+	UPROPERTY(EditAnywhere) TArray<FStandWaypoint> ServiceLane;
 
 	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
@@ -203,13 +243,28 @@ public:
 	 * TAKES THE DESIGN AIRCRAFT, and sets it. Named Aircraft rather than DesignAircraft
 	 * because UHT refuses a UFUNCTION parameter that shadows a UPROPERTY of the same class. Both callers used to set DesignAircraft
 	 * afterwards, which was harmless only for as long as nothing in the layout depended on
-	 * it - and ServiceLoop does: a stand's geometry is laid out AROUND the aircraft it is
+	 * it - and ServiceLane does: a stand's geometry is laid out ALONG the aircraft it is
 	 * sized for, so the builder has to know which one that is. A null aircraft is allowed and
 	 * gives a lane round the anchors alone, which is what a definition with no envelope to
 	 * clear actually wants.
+	 *
+	 * A FORWARDER since 2026-09-16, and it KEEPS THIS NAME AND THIS UFUNCTION because
+	 * Tools/Python/build_stand_asset.py calls build_code_c_stand() on it. A UFUNCTION that
+	 * moves is a Python script and a Blueprint that stop compiling.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft);
+
+	/**
+	 * BuildCodeCStand, with the vehicle the ground is sized for made explicit.
+	 *
+	 * EXISTS FOR THE TEST that proves the derivation is a derivation. Given a longer vehicle
+	 * the equipment boxes must move outward; asked of the shipping vehicle alone, that
+	 * assertion would pass just as well against a hand-typed figure, which is exactly what
+	 * this change removes. BuildCodeCStand forwards with ResolveLargestServiceVehicle().
+	 */
+	static void BuildCodeCStandFor(
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

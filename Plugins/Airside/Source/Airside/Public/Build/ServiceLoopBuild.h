@@ -10,7 +10,7 @@ class URoadNetwork;
  * Puts each placed entity's SERVICE LOOP - and a spur from every service anchor to it - into
  * the guideline graph.
  *
- * WHY A LANE AT ALL is UEntityDefinition::ServiceLoop's business; this is only where it
+ * WHY A LANE AT ALL is UEntityDefinition::ServiceLane's business; this is only where it
  * reaches the graph. What matters here is that all of it is DERIVED, so it is swept and
  * remade by the ordinary rebuild, follows the stand when the stand moves, and goes when the
  * stand goes - the same lifecycle as any other derived edge, and the reason no instance
@@ -42,9 +42,10 @@ struct AIRSIDE_API FServiceLoopBuild
 	/**
 	 * The radius every corner of the ring is rounded to, uu.
 	 *
-	 * A BOX IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN. UEntityDefinition::ServiceLoop
-	 * stays four points, but a corner where two straight sides meet is a vertex whose heading
-	 * changes instantly, and FSpeedProfile calls one of those untakeable at any speed.
+	 * A POLYLINE IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN.
+	 * UEntityDefinition::ServiceLane is a sequence of straights, but a corner where two of
+	 * them meet is a vertex whose heading changes instantly, and FSpeedProfile calls one of
+	 * those untakeable at any speed.
 	 *
 	 * NOT IcaoCode::RadiusForLetter, which is what a PAINTED taxi line is swept at, sized for
 	 * the largest aircraft a stand admits - 2500 uu for a Code C, on a lane four metres wide

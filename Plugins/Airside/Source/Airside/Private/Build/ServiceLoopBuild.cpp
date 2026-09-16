@@ -184,7 +184,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 	{
 		const FEntityInstance& Instance = Entities[Index];
 		if (!Instance.bAlive || Instance.Definition == nullptr
-			|| Instance.Definition->ServiceLoop.Num() < 3)
+			|| Instance.Definition->ServiceLane.Num() < 3)
 		{
 			continue;
 		}
@@ -199,7 +199,18 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 			continue;
 		}
 
-		const TArray<FVector2D>& Local = Instance.Definition->ServiceLoop;
+		// THE POSITIONS ALONE, for now. UEntityDefinition::ServiceLane carries a KIND on every
+		// waypoint - anchor, entry, plain - and this pass still treats the lane as a bare
+		// polygon of corners, which is what it was before 2026-09-16. Task 4 of the stand
+		// routing work is where the kinds start to mean something: an anchor waypoint reusing
+		// the anchor's own node instead of being spurred to, and an entry being where a road
+		// may join. Flattening here rather than changing that behaviour in the same breath.
+		TArray<FVector2D> Local;
+		Local.Reserve(Instance.Definition->ServiceLane.Num());
+		for (const FStandWaypoint& Waypoint : Instance.Definition->ServiceLane)
+		{
+			Local.Add(Waypoint.Local);
+		}
 		const double Cosine = FMath::Cos(Instance.Heading);
 		const double Sine = FMath::Sin(Instance.Heading);
 		auto ToWorld = [&Instance, Cosine, Sine](const FVector2D& Point)
@@ -212,9 +223,9 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 		// them. Rounding one reaches back along the legs it SHARES with its two neighbours, so
 		// no corner can be decided alone and none laid until all have been measured.
 		//
-		// A BOX IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN. UEntityDefinition::
-		// ServiceLoop stays four points - see its header for why - but a corner where two
-		// straight sides meet is a vertex whose heading changes instantly, and FSpeedProfile
+		// A POLYLINE IS HOW A LANE IS DESCRIBED, NOT HOW IT IS DRIVEN. UEntityDefinition::
+		// ServiceLane is a sequence of straights - see its header for why - but a corner where
+		// two of them meet is a vertex whose heading changes instantly, and FSpeedProfile
 		// calls one of those untakeable at any speed. The bend carries the turn instead,
 		// exactly as an anchor spur does one level down.
 		//
@@ -228,7 +239,7 @@ FServiceLoopBuild::FResult FServiceLoopBuild::Build(URoadNetwork& Network)
 		for (const FVector2D& Point : Local)
 		{
 			// CLOSED IMPLICITLY: the last corner joins the first, and the definition's array
-			// does not repeat it - see UEntityDefinition::ServiceLoop for why storing the
+			// does not repeat it - see UEntityDefinition::ServiceLane for why storing the
 			// repeat would be a value that has to agree with another value beside it.
 			World.Add(ToWorld(Point));
 		}

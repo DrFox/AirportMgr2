@@ -38,6 +38,26 @@ namespace ServiceLinkFixture
 		return Near;
 	}
 
+	/**
+	 * The axis-aligned box the definition's lane occupies, in its own local space.
+	 *
+	 * HERE RATHER THAN ON UEntityDefinition, where it was UEntityDefinition::ServiceLaneBounds()
+	 * until 2026-09-16. That accessor existed so a test could ask "where is the lane" without
+	 * typing the ring's four corners a second time (#104), and the reason it earned its place on
+	 * the asset - the lane is a rectangle by construction, so its bounds ARE its shape - stopped
+	 * being true the moment the lane became a seventeen-point cycle with a dip in it. A bounding
+	 * box of that is a TEST'S convenience and nothing else, so it lives with the tests.
+	 */
+	FBox2D LaneBoundsOf(const UEntityDefinition& Definition)
+	{
+		FBox2D Bounds(ForceInit);
+		for (const FStandWaypoint& Point : Definition.ServiceLane)
+		{
+			Bounds += Point.Local;
+		}
+		return Bounds;
+	}
+
 	FEntityInstanceId PlaceStand(URoadNetwork& Net, UEntityDefinition& Stand,
 		const FVector2D& At, double Heading)
 	{
@@ -209,9 +229,8 @@ bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
 	// may genuinely arrive from any side, so a service link measures distance, not direction.
 	//
 	// Each road below sits GapNear or GapFar beyond one of the lane's four sides -
-	// UEntityDefinition::ServiceLaneBounds(), not the four corners typed a second time (#104):
-	// for a Code C stand at the origin, heading 0, that box is x in [-3550, +1700], y in
-	// [-2090, +2090], derived from BuildCodeCStand's clearance round the aircraft and anchors.
+	// ServiceLinkFixture::LaneBoundsOf, not the lane's corners typed a second time (#104), and
+	// derived from BuildCodeCStand's own arithmetic round the aircraft and anchors.
 	//
 	// 4500 rather than exactly the 5000 uu radius: a boundary case measures the comparison
 	// operator rather than the rule, and would flip on a rounding error.
@@ -226,7 +245,7 @@ bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
 	};
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FBox2D LaneBounds = Stand->ServiceLaneBounds();
+	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
 
 	auto RoadsAt = [&LaneBounds](double Gap) -> TArray<FSide>
 	{
@@ -446,12 +465,12 @@ bool FServiceLaneEntersOnEverySideWithinReachTest::RunTest(const FString& Parame
 	// A ROAD ALONGSIDE, 4 m clear of the lane's south side. The whole case: a service road
 	// running past a row of stands, which is how a player builds one.
 	//
-	// UEntityDefinition::ServiceLaneBounds(), not the ring's four corners typed a second time
-	// (#104): for a Code C stand it is local X -3550..+1700, Y -2090..+2090, derived in
-	// BuildCodeCStand from the design aircraft's footprint and the anchors. The stand sits at
-	// the origin facing +X so local and world coincide, stated rather than assumed.
+	// ServiceLinkFixture::LaneBoundsOf, not the lane's corners typed a second time (#104):
+	// derived in BuildCodeCStand from the design aircraft's footprint and the anchors. The
+	// stand sits at the origin facing +X so local and world coincide, stated rather than
+	// assumed.
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FBox2D LaneBounds = Stand->ServiceLaneBounds();
+	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
 	constexpr double RoadClearance = 400.0;
 
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
@@ -964,9 +983,9 @@ bool FSpursLeaveTheLaneTangentiallyTest::RunTest(const FString& Parameters)
 		// very best, which is 231 against the 471 the lock needs. Nothing laid on three metres
 		// could do better, and it is the last few metres of a journey that ends in a stop.
 		//
-		// Measured off the RING as it now stands, not off UEntityDefinition::ServiceLoop: the
-		// definition is still a box, and what an anchor is actually offset from is the lane
-		// with its corners rounded.
+		// Measured off the RING as it now stands, not off UEntityDefinition::ServiceLane: what
+		// an anchor is actually offset from is the lane with its corners rounded, not the
+		// polyline those corners were cut from.
 		const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
 		double Offset = TNumericLimits<double>::Max();
 		for (const FGuidelineEdgeId& Id : *Lane)
@@ -1006,10 +1025,10 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	using namespace ServiceLinkFixture;
 
 	// THE RING'S OWN CORNERS, which are authored as square and were laid that way.
-	// UEntityDefinition::ServiceLoop is four points and stays four points - a box is how a
-	// lane is DESCRIBED - but a box is not something a truck can drive round: a corner where
-	// two straight sides meet is a vertex whose heading changes instantly, and FSpeedProfile
-	// calls one of those untakeable at any speed.
+	// UEntityDefinition::ServiceLane is a polyline of straights - a polyline is how a lane is
+	// DESCRIBED - but it is not something a truck can drive round: a corner where two straight
+	// sides meet is a vertex whose heading changes instantly, and FSpeedProfile calls one of
+	// those untakeable at any speed.
 	//
 	// THIS IS THE SAME CONSTRUCTION THE SPURS USE, one level up: the corner is replaced by a
 	// quadratic whose control sits ON it, so both sides leave tangentially and the bend
