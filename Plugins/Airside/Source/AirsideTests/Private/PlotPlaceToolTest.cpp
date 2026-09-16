@@ -66,6 +66,25 @@ namespace
 		return Context;
 	}
 
+	/**
+	 * Captures how far from the road the preview actually reaches.
+	 *
+	 * ONLY Line MATTERS: IToolPreviewSink::Polygon is non-virtual and lands here as four
+	 * Lines, while the bay marks arrive as CrossMark and Marker and contribute no geometry
+	 * to measure. So the deepest Y IS the plot's far edge.
+	 */
+	struct FPlotGhostSink : IToolPreviewSink
+	{
+		double DeepestY = 0.0;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle) override
+		{
+			DeepestY = FMath::Max3(DeepestY, From.Y, To.Y);
+		}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
+	};
+
 	/** Anchor, width east, depth north, in the stages the gesture expects. */
 	void DrawPlot(FPlotPlaceTool& Tool, ARoadNetworkActor* Actor,
 		const FVector2D& AnchorAt, const FVector2D& WidthAt, const FVector2D& DepthAt)
@@ -338,6 +357,72 @@ bool FPlotIgnoresATaxiwayTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and the readout says to move near a service road"),
 		Collector.Readout.Warnings.Num(), 1);
 	TestFalse(TEXT("and nothing is committable"), Collector.Readout.bCommittable);
+
+	return true;
+}
+
+/**
+ * THE PREVIEW AND THE READOUT, MEASURED AGAINST EACH OTHER - which the test named
+ * PlotReadoutMatchesPreview does not actually do: it reads facts at the Confirm stage and
+ * never looks at a line the tool drew.
+ *
+ * The case is the SECOND plot of a session. Stage returns to Idle but Width and Depth keep
+ * what the last gesture locked, so a stale depth is there to be drawn; the first plot of a
+ * session cannot catch this because Depth still holds its initial 1.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotGhostAgreesWithTheBarTest,
+	"Airside.Tool.PlotGhostAgreesWithTheBar",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotGhostAgreesWithTheBarTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	// A first plot THREE rows deep, then backed out of stage by stage. Committing would do
+	// as well; what matters is only that Depth is left holding 3.
+	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
+		FVector2D(600.0, 2400.0));
+	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
+	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
+	Tool.OnCancel(PlotAt(Actor, FVector2D(600.0, 2400.0)));
+	TestEqual(TEXT("backed all the way out"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Idle));
+
+	// The second gesture, anchored and dragging its WIDTH - the stage where depth has not
+	// been chosen yet and the two descriptions came apart.
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	TestEqual(TEXT("anchored again"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Width));
+
+	const FToolContext Dragging = PlotAt(Actor, FVector2D(800.0, 200.0));
+
+	FPlotGhostSink Sink;
+	Tool.BuildPreview(Dragging, Sink);
+
+	FToolReadoutCollector Collector;
+	Tool.BuildReadout(Dragging, Collector);
+
+	const TPair<FString, FString>* Rows = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Rows"); });
+	if (!TestNotNull(TEXT("a Rows fact"), Rows)) { return false; }
+	TestEqual(TEXT("the bar says one row, depth not being chosen yet"),
+		Rows->Value, FString(TEXT("1")));
+
+	// THE GHOST IS MEASURED, not asked. The road runs along y = 0 and the cursor anchored on
+	// its +Y side, so the plot's far edge sits at exactly Rows * BayDepthUu - and a ghost
+	// still drawing the previous gesture's three rows reaches 2400 instead of 800.
+	TestEqual(TEXT("and the ghost is drawn exactly that deep"),
+		Sink.DeepestY, PlotFit::BayDepthUu);
 
 	return true;
 }

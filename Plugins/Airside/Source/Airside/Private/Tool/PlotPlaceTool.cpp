@@ -102,6 +102,17 @@ int32 FPlotPlaceTool::DepthAt(const FToolContext& Context) const
 	return FMath::Max(1, FMath::RoundToInt(Reach / PlotFit::BayDepthUu));
 }
 
+void FPlotPlaceTool::ShownSize(const FToolContext& Context, int32& OutWidth, int32& OutDepth) const
+{
+	// ONE ROW UNTIL DEPTH IS REACHED, and not the Depth member, which still holds whatever
+	// the LAST gesture locked - Stage returning to Idle does not reset it. Drawing that stale
+	// depth is what made the second plot of a session ghost three rows deep while the bar
+	// beside it said one.
+	OutWidth = Stage == EPlotStage::Width ? WidthAt(Context) : Width;
+	OutDepth = Stage == EPlotStage::Depth ? DepthAt(Context)
+		: (Stage == EPlotStage::Width ? 1 : Depth);
+}
+
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
 {
 	const URoadNetwork* Network = Context.Network();
@@ -280,8 +291,9 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		return;
 	}
 
-	const int32 ShownWidth = Stage == EPlotStage::Width ? WidthAt(Context) : Width;
-	const int32 ShownDepth = Stage == EPlotStage::Depth ? DepthAt(Context) : Depth;
+	int32 ShownWidth = 0;
+	int32 ShownDepth = 0;
+	ShownSize(Context, ShownWidth, ShownDepth);
 
 	FVector2D FrontA = FVector2D::ZeroVector;
 	FVector2D FrontB = FVector2D::ZeroVector;
@@ -334,9 +346,9 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		return;
 	}
 
-	const int32 ShownWidth = Stage == EPlotStage::Width ? WidthAt(Context) : Width;
-	const int32 ShownDepth = Stage == EPlotStage::Depth ? DepthAt(Context)
-		: (Stage == EPlotStage::Width ? 1 : Depth);
+	int32 ShownWidth = 0;
+	int32 ShownDepth = 0;
+	ShownSize(Context, ShownWidth, ShownDepth);
 
 	Sink.Fact(TEXT("Bays"), FString::FromInt(ShownWidth));
 	Sink.Fact(TEXT("Rows"), FString::FromInt(ShownDepth));

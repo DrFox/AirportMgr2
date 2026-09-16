@@ -77,6 +77,19 @@ private:
 	/** Rows the cursor is asking for, at least one. */
 	int32 DepthAt(const FToolContext& Context) const;
 
+	/**
+	 * The plot as it stands THIS frame: dragged where the cursor decides it, locked where a
+	 * click already has, and one row wherever depth has not been reached yet.
+	 *
+	 * ONE FUNCTION, TWO CALLERS, because BuildPreview and BuildReadout describing the same
+	 * gesture is the entire contract IToolReadoutSink exists to keep. They carried a copy of
+	 * this each and had already drifted: during the Width stage the readout said one row
+	 * while the preview drew the PREVIOUS gesture's depth, so the second depot a player drew
+	 * showed a ghost that disagreed with the bar above it. Two copies of a rule is how that
+	 * happens; see CLAUDE.md, "Lists that must agree are ONE list".
+	 */
+	void ShownSize(const FToolContext& Context, int32& OutWidth, int32& OutDepth) const;
+
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
 	/** One of each is the concept sheet's depot, and the smallest one that actually works. */
