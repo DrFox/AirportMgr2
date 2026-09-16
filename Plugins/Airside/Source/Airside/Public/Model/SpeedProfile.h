@@ -71,6 +71,52 @@ struct AIRSIDE_API FSpeedProfile
 	 */
 	double GetFallback() const { return Fallback; }
 
+	/**
+	 * THE VERDICT THIS STRUCT ALREADY REACHES, kept instead of discarded.
+	 *
+	 * Build measures every span, decides whether the route asks for a radius the steering
+	 * lock cannot hold, logs that, and then threw the answer away - it lived in three locals.
+	 * So the one authority on "can this vehicle drive this line" could be READ only by a
+	 * human looking at a log, and every test that wanted to know RE-IMPLEMENTED the rule on
+	 * one edge at a time. Four attempts at the stand's routing passed a green suite and
+	 * produced a truck that crabbed, because no test ever asked THIS function about a WHOLE
+	 * ROUTE - and a route of individually-legal edges can still be illegal where two meet.
+	 * Grep for "the same expression FSpeedProfile::Build uses, written out rather than
+	 * shared": that comment appears at every site that should have called this instead.
+	 *
+	 * Restating arithmetic in a test is right, and FAirframe::TightestFollowableRadius argues
+	 * for it. Restating a JUDGEMENT is not the same thing: the judgement is what the game
+	 * acts on, and a copy of it can agree with itself while disagreeing with the original.
+	 */
+	bool WasTighterThanLock() const { return bTighterThanLock; }
+
+	/** The tightest radius any span asked for, uu. Zero for a route with no corner in it. */
+	double GetTightestRadius() const { return TightestRadiusUu; }
+
+	/** How far along the route that span began, uu - what the warning prints as "at". */
+	double GetTightestAt() const { return TightestRadiusAt; }
+
+	/**
+	 * THE SECOND RULE, and it is not the same question as the first.
+	 *
+	 * A span's radius asks "is this curve too tight to follow". A SHARP VERTEX asks "does the
+	 * heading change INSTANTLY here" - a corner with no curve in it at all, which no vehicle
+	 * takes at any speed, and which the radius rule cannot see because a zero-length turn has
+	 * no Length to divide by.
+	 *
+	 * SPLIT OUT BECAUSE EXPOSING ONLY THE FIRST REPEATED THE ORIGINAL MISTAKE. The verdict was
+	 * made readable on 2026-09-16 so tests could stop re-deriving it; the first test written
+	 * against it passed while its route contained a 175 degree instantaneous reversal, because
+	 * only the radius half had an accessor. Half an authority is still an authority nobody can
+	 * fully ask.
+	 */
+	bool HasSharpVertex() const { return SharpVertexCount > 0; }
+
+	/** How many, and the first one's turn in degrees and its distance along the route. */
+	int32 GetSharpVertexCount() const { return SharpVertexCount; }
+	double GetSharpestDegrees() const { return SharpestTurnDegrees; }
+	double GetSharpestAt() const { return SharpestTurnAt; }
+
 private:
 	/** Cumulative distance to each vertex. Distances[0] is 0. */
 	UPROPERTY() TArray<double> Distances;
@@ -98,4 +144,14 @@ private:
 
 	/** What LimitAt reports when nothing was built. */
 	UPROPERTY() double Fallback = 1000.0;
+
+	/** See WasTighterThanLock. Filled by Build; meaningless before it has run. */
+	UPROPERTY() double TightestRadiusUu = 0.0;
+	UPROPERTY() double TightestRadiusAt = 0.0;
+	UPROPERTY() bool bTighterThanLock = false;
+
+	/** See HasSharpVertex. Filled by Build; meaningless before it has run. */
+	UPROPERTY() int32 SharpVertexCount = 0;
+	UPROPERTY() double SharpestTurnDegrees = 0.0;
+	UPROPERTY() double SharpestTurnAt = 0.0;
 };

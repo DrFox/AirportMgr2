@@ -25,6 +25,17 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	VertexLimits.Reset();
 	SpanCaps.Reset();
 
+	// RESET WITH THE ARRAYS, ABOVE THE EARLY RETURN, because a profile is REBUILT on the same
+	// struct when a route is re-planned. Reset it further down and a rebuild that takes the
+	// degenerate path below keeps the LAST route's verdict - which is worse than not keeping
+	// one at all, since it reads as authoritative.
+	bTighterThanLock = false;
+	TightestRadiusUu = 0.0;
+	TightestRadiusAt = 0.0;
+	SharpVertexCount = 0;
+	SharpestTurnDegrees = 0.0;
+	SharpestTurnAt = 0.0;
+
 	Decel = Ground.Taxi.Decel;
 	Fallback = Ground.Taxi.SpeedCap;
 
@@ -112,6 +123,11 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 					FMath::Max(0.0, Ground.MaxLateralAccelUu) * Radius));
 				Rule = TEXT("TIGHTER THAN THE STEERING LOCK");
 
+				// KEPT, not just logged. See FSpeedProfile::WasTighterThanLock for what
+				// discarding it cost: the only authority on whether a line is drivable could
+				// be read by a human and by nothing else, so every test wrote its own.
+				bTighterThanLock = true;
+
 				UE_LOG(LogAirsideTraffic, Warning,
 					TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
 					     "R>=%.0f (wheelbase %.0f, lock %.0f deg). The body will crab through "
@@ -173,6 +189,13 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 				SharpestDegrees = FMath::RadiansToDegrees(Instant);
 			}
 			++SharpVertices;
+
+			// KEPT, for the reason FSpeedProfile::HasSharpVertex gives: exposing only the
+			// radius rule let a route with a 175 degree instantaneous reversal pass a test
+			// written specifically to catch undrivable routes.
+			SharpVertexCount = SharpVertices;
+			SharpestTurnDegrees = SharpestDegrees;
+			SharpestTurnAt = SharpestAt;
 		}
 
 		if (At > 0)          { Limit = FMath::Min(Limit, SpanCaps[At - 1]); }
@@ -213,6 +236,9 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// The lock threshold is printed even when nothing hit it, because knowing a corner was
 	// 6 m against a 5.2 m limit is what says whether to widen the taxiway or retune the
 	// aircraft - and that is the decision this log exists to inform.
+	TightestRadiusUu = TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius;
+	TightestRadiusAt = TightestAt;
+
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
 		     "(%s). %d sharp vertex/vertices%s. Steering floor %.0f, taxi cap %.0f, lock allows "

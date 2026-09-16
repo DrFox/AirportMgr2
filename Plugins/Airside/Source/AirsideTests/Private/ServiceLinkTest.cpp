@@ -10,6 +10,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RouteSearch.h"
+#include "Model/SpeedProfile.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RoadGeom.h"
 #include "StandFixture.h"
@@ -1225,6 +1226,96 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 		}
 		TestTrue(TEXT("a stand beside a short stub of road is still joined to it"), Joined >= 1);
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckDrivesTheWholeRouteToTheHydrantTest,
+	"Airside.Model.Traffic.TruckDrivesTheWholeRouteToTheHydrant",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// THE TEST THIS SUITE NEVER HAD, and the reason four attempts at the stand's routing
+	// shipped green and produced a truck that crabbed.
+	//
+	// FSpeedProfile::Build is the ONLY authority on whether a vehicle can drive a line. It
+	// measures Length/Turn across every span of the WHOLE ROUTE - a concatenation of edges,
+	// including the spans that straddle the join where two of them meet. Every other test in
+	// this file measures ONE EDGE, analytically, with the rule hand-copied into it; grep for
+	// "the same expression FSpeedProfile::Build uses, written out rather than shared" and
+	// every hit is a site that should have called it instead.
+	//
+	// A ROUTE OF INDIVIDUALLY-LEGAL EDGES CAN STILL BE ILLEGAL WHERE TWO MEET, and that is
+	// precisely what no per-edge test can see. Reported from PIE 2026-09-16 as a truck that
+	// crabbed twice, with four warnings on one journey - R=97, R=290, and three at 653-670
+	// against the 699 the lock allows, the last three 87 uu apart, which is the signature of
+	// a join and not of a corner anyone sized.
+	//
+	// So this asks the authority, about the journey the player actually watches.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	constexpr double RoadY = -6000.0;
+	FGuidelineNodeId RoadEast;
+	const FGuidelineNodeId RoadWest =
+		Lay(*Net, FVector2D(-9000.0, RoadY), FVector2D(9000.0, RoadY),
+			ETraversalClass::GroundVehicle, RoadEast);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net);
+
+	FRouteQuery Query;
+	Query.Start = RoadWest;
+	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+	Query.Class = ETraversalClass::GroundVehicle;
+
+	const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
+	if (!TestTrue(TEXT("a truck routes from the road to the hydrant"), Plan.IsValid())
+		|| Plan.Polyline.Num() < 2)
+	{
+		return false;
+	}
+
+	// THE LARGEST VEHICLE ADMITTED, not the one that happens to be driving - the same rule
+	// the ground geometry is sized by. A road a big dispenser cannot take is a defect whether
+	// or not a small van could have managed it.
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+
+	FSpeedProfile Profile;
+	Profile.Build(Plan.Polyline, Truck);
+
+	AddInfo(FString::Printf(
+		TEXT("route %.0f uu, %d point(s); tightest R=%.0f uu at %.0f against the %.0f the lock ")
+		TEXT("allows; %d sharp vertex/vertices, sharpest %.0f deg at %.0f"),
+		GuidelineGeom::PolylineLength(Plan.Polyline), Plan.Polyline.Num(),
+		Profile.GetTightestRadius(), Profile.GetTightestAt(), Truck.TightestFollowableRadius(),
+		Profile.GetSharpVertexCount(), Profile.GetSharpestDegrees(), Profile.GetSharpestAt()));
+
+	// BOTH RULES, because asking only the first is how this test passed while its route
+	// contained a 175 degree instantaneous reversal. A sharp vertex is a corner with no curve
+	// in it at all - the radius rule cannot see it, since a zero-length turn has no Length to
+	// divide by - and no vehicle takes one at any speed.
+	TestFalse(
+		*FString::Printf(
+			TEXT("no vertex of the route turns instantly (%d found, sharpest %.0f deg at %.0f)"),
+			Profile.GetSharpVertexCount(), Profile.GetSharpestDegrees(),
+			Profile.GetSharpestAt()),
+		Profile.HasSharpVertex());
+
+	// NOT a re-derivation of the rule. This is the profile's OWN verdict, which is what the
+	// follower acts on and what the warning in the log reports. A copy of the rule can agree
+	// with itself while disagreeing with the original, which is how this went wrong before.
+	TestFalse(
+		*FString::Printf(
+			TEXT("no span of the route asks for a radius the steering lock cannot hold ")
+			TEXT("(tightest R=%.0f uu at %.0f, lock allows R>=%.0f)"),
+			Profile.GetTightestRadius(), Profile.GetTightestAt(),
+			Truck.TightestFollowableRadius()),
+		Profile.WasTighterThanLock());
+
 	return true;
 }
 
