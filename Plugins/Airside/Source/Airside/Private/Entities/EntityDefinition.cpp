@@ -226,7 +226,11 @@ void UEntityDefinition::BuildCodeCStandFor(
 	constexpr double RowY = 700.0;
 	const double PitX = WingFwd + PlantClearance;
 	const double HoldFwdX = WingFwd + 600.0;
-	const double HoldAftX = WingAft - 450.0;
+	// 250 RATHER THAN 450 CLEAR OF THE TRAILING EDGE. The aft hold is the aft-most thing any
+	// vehicle drives to, so it is the bay whose serve leg has the least lane to complete its
+	// shift in - and 450 left that run 47 uu inside what its two corners need. It is paint
+	// clearance from a wing nothing drives under, not structural separation.
+	const double HoldAftX = WingAft - 250.0;
 
 	AddFixture(TEXT("HydrantPit"), PitX, RowY, -90.0, EServiceRole::Fuel);
 	AddFixture(TEXT("EquipmentFwd"), HoldFwdX, RowY, -90.0, EServiceRole::Baggage);
@@ -306,9 +310,20 @@ void UEntityDefinition::BuildStandTemplate(
 	// THE PARKING ROW. Slots stand at 45 degrees a short run in from the back edge, so a
 	// vehicle turning off the GSE road makes a 45 degree corner rather than a square one.
 	constexpr double ParkRun = 500.0;
-	constexpr double ParkPitch = 450.0;
 	const double ParkRowX = BackX + ParkRun;
-	const double ParkTopY = LaneY - 400.0;
+
+	// HOW FAR APART THE AFT-EDGE NODES SIT, DERIVED FROM THE ROAD'S OWN FILLET rather than
+	// chosen. Every entry and exit splits the road where it joins it, and the fillet either
+	// side of that contact wants Diagonal of run along the road; two neighbours therefore need
+	// twice that between them, plus the tenth everything else here gets.
+	//
+	// MEASURED, AND IT IS WHY THIS IS NOT 450. At 450 the six aft-edge nodes left 450 uu
+	// segments of road between them, the fillets were clamped to what was left, and BOTH
+	// sweeps onto the road came out at 89 and 6 uu against a lock of 699 - not the ruled
+	// one-good-one-shunt pair but two unusable ones. The aft edge is 5300 uu long and six
+	// nodes at this pitch need 3800, so the room was always there; it was the packing that
+	// was wrong.
+	const double AftPitch = 2.0 * Diagonal * LegSlack;
 
 	// A BAY PER ANCHOR A VEHICLE SERVICES FROM, which is not the same as every anchor that is
 	// not the aeroplane's own pose. The TUG is excluded by name: pushback couples at the nose
@@ -324,10 +339,48 @@ void UEntityDefinition::BuildStandTemplate(
 		}
 	}
 
-	// AFT-MOST FIRST, so the aft-most service takes the aft-most slot and no two vehicles'
-	// legs cross on their way out of the parking row.
+	// STARBOARD BEFORE PORT, AND AFT-MOST FIRST WITHIN A SIDE. The side ordering is what keeps
+	// one ladder's nodes in one run rather than interleaved; the aft-most ordering is what
+	// gives the bay with the least lane the entry that reaches the lane soonest.
 	Serviced.Sort([](const FEntityAnchor& A, const FEntityAnchor& B)
-		{ return A.LocalPosition.X < B.LocalPosition.X; });
+		{
+			const bool bStarboardA = A.LocalPosition.Y >= 0.0;
+			const bool bStarboardB = B.LocalPosition.Y >= 0.0;
+			if (bStarboardA != bStarboardB)
+			{
+				return bStarboardA;
+			}
+			return A.LocalPosition.X < B.LocalPosition.X;
+		});
+
+	// HOW MANY BAYS EACH SIDE HAS, counted before any is placed, because the EXIT sits inboard
+	// of every entry on its side and so cannot be positioned until they are all known.
+	int32 PortBays = 0;
+	int32 StarboardBays = 0;
+	for (const FEntityAnchor* Anchor : Serviced)
+	{
+		(Anchor->LocalPosition.Y >= 0.0 ? StarboardBays : PortBays)++;
+	}
+
+	// HOW FAR THE OUTERMOST AFT-EDGE NODE SITS FROM ITS LANE, and it is squeezed from BOTH
+	// sides, which is why it is derived rather than chosen.
+	//
+	// TOO SMALL AND THE SERVE LEG FOLDS AT THE PARK END. The run from a park pose out to its
+	// lane is Diagonalise * sqrt(2) long, and the 45 degree corner where it meets the lane
+	// wants Diagonal of that; give it less and the bend starts behind the leg's own first
+	// point. Measured at LaneGap 200: a 283 uu diagonal against the 345 needed, and the leg
+	// came back 179 degrees on itself.
+	//
+	// TOO LARGE AND IT FOLDS AT THE OTHER END. The 45 degree run meets the lane at
+	// BackX + (Lane - EntryY), so pushing the entries inboard pushes that meeting point
+	// FORWARD, and it has to land at least Diagonal + Square short of the aft-most bay's
+	// turn-in. Measured at LaneGap 400: 1480 uu of lane against the 1433 those two corners
+	// need, which passes by 47 - a margin of the kind this whole piece exists to stop
+	// shipping.
+	//
+	// Diagonal itself sits between the two with room at each end: the diagonal comes out at
+	// 488 uu against 345 needed, and the lane run at 1735 against 1433.
+	const double LaneGap = Diagonal;
 
 	Definition.ServiceBays.Reset();
 	int32 PortSlot = 0;
@@ -339,7 +392,44 @@ void UEntityDefinition::BuildStandTemplate(
 		const int32 Slot = Side > 0.0 ? StarboardSlot++ : PortSlot++;
 
 		const double Lane = Side * LaneY;
-		const double ParkY = Side * (ParkTopY - Slot * ParkPitch);
+
+		// THE ENTRIES FILL THE AFT EDGE FROM THE LANE INWARD AND THE EXIT GOES INNERMOST.
+		//
+		// THAT ORDER IS FORCED, not a preference. The aft-most bay is sorted to slot 0 because
+		// its turn-in is furthest aft and so it has the least lane to do its shift in - it
+		// therefore needs the entry NEAREST the lane, the one whose 45 degree run meets the
+		// lane soonest. Giving that slot to the exit pushed every bay one pitch inboard and
+		// folded the aft-most serve leg back on itself.
+		//
+		// A starboard bay's entry may end up on the port half of the back edge when a side has
+		// three of them, which is harmless: everything at ParkRowX is astern of the tail, and
+		// the two sides only have to stay apart where they run alongside the aeroplane.
+		// EACH SIDE COUNTS INBOARD FROM ITS OWN LANE, and the two ladders therefore approach
+		// each other in the middle. WITH THREE BAYS ON ONE SIDE THEY COLLIDE: measured at 175
+		// uu between the starboard exit and the port one, against the 759 their road fillets
+		// need, which is what StandLinkClearsTheTruckLock reports as two unusable sweeps.
+		//
+		// ONE GLOBAL LADDER WAS TRIED AND IS WORSE, which is why this is written down rather
+		// than left as an obvious improvement. It cannot collide, but it puts a side's exit up
+		// to 3121 uu inboard of that side's lane, and the depart leg's 45 degree turn off the
+		// lane then lands FORWARD of the aft-most bay's own clear pose - the leg folds back on
+		// itself at 179 degrees. Six road contacts at this pitch need 3795 uu of aft edge with
+		// the outermost within 845 of its lane, so the real lever is the stand's minimum WIDTH,
+		// which is a band this project chooses. 5300 does not hold them; about 5900 does.
+		const double EntryY = Lane - Side * (LaneGap + ParkRun + Slot * AftPitch);
+
+		// THE EXIT SITS ONE ParkRun IN FROM ITS LANE, which is the position that makes its
+		// depart turn exactly 45 degrees at a vertex ParkRun forward of the back edge.
+		//
+		// IT IS ONLY LaneGap FROM THE OUTERMOST ENTRY, WHICH IS SHORT OF AftPitch, and that is
+		// the one thing in this layout still measured as wrong: two road contacts that close
+		// leave the fillet between them clamped, and StandLinkClearsTheTruckLock reports the
+		// pair as 212 and 15 uu against a lock of 699. Placing it on the ladder instead moves
+		// it far enough inboard that its own depart leg folds. Six contacts at this pitch want
+		// 3795 uu of aft edge with the outermost within 845 of its lane; 5300 does not hold
+		// them and about 5900 does, so the lever is the minimum WIDTH rather than the packing.
+		const double ExitY = Lane - Side * ParkRun;
+		const double ParkY = EntryY + Side * ParkRun;
 		const FVector2D Service = Anchor->LocalPosition;
 
 		FServiceBay Bay;
@@ -352,20 +442,34 @@ void UEntityDefinition::BuildStandTemplate(
 
 		// ITS OWN ENTRY on the back edge, on the same 45 degree line, so the arrive leg is a
 		// STRAIGHT and every corner of it belongs to the road junction rather than to the stand.
-		Bay.EntryLocal = FVector2D(BackX, ParkY - Side * ParkRun);
+		Bay.EntryLocal = FVector2D(BackX, EntryY);
 		Bay.EntryHeading = Bay.ParkHeading;
 
 		// AND THE EXIT, which the side shares: a vehicle leaves along its lane, and one way out
 		// per side is one road junction per side rather than one per service.
-		Bay.ExitLocal = FVector2D(BackX, Lane);
-		Bay.ExitHeading = UE_DOUBLE_PI;
+		//
+		// ANGLED LIKE THE SLOTS, AND FOR THE SAME REASON. It left straight along the lane
+		// until 2026-09-17, which meets a road running behind the stand at a RIGHT ANGLE - and
+		// a square corner costs CornerRunFor(R, 90) = 1088 uu of run on each arm where the gap
+		// to the road is whatever the player left, measured at 400. The merge delivered 309 uu
+		// against a lock of 699. Turned 45 degrees aft-and-inboard it is the same corner the
+		// entries make, needs 345, and fits in the same 400.
+		//
+		// INBOARD RATHER THAN OUTBOARD because outboard leaves the stand: the lane already runs
+		// at half the width less half a lane, so turning away from the aeroplane puts the exit
+		// on the neighbour's ground.
+		Bay.ExitLocal = FVector2D(BackX, ExitY);
+		Bay.ExitHeading = -Side * 0.75 * UE_DOUBLE_PI;
 
 		BuildLeg({ Bay.EntryLocal, Bay.ParkLocal }, Radius, TEXT("arrive"), Bay.ArriveLeg);
 
 		// SERVE: out along the 45 to the lane, forward to abeam the service point, then square
 		// inboard to it. The turn inboard is where the wing would be if the fixture were not
 		// placed clear of it - see BuildCodeCStandFor, and the test that measures it.
-		const double Diagonalise = LaneY - FMath::Abs(ParkY);
+		// SIGNED, NEVER AN ABSOLUTE. How far the park pose has to move OUTBOARD to reach its
+		// lane, measured along its own side's outward direction - which is not |ParkY| the
+		// moment a slot sits across the centreline, as the third slot on a side now does.
+		const double Diagonalise = (Lane - ParkY) * Side;
 		BuildLeg({
 			Bay.ParkLocal,
 			FVector2D(ParkRowX + Diagonalise, Lane),
@@ -380,9 +484,13 @@ void UEntityDefinition::BuildStandTemplate(
 		BuildLeg({ Service, FVector2D(Service.X, Lane), Cleared },
 			ReverseRadius, TEXT("reverse"), Bay.ReverseLeg);
 
-		// DEPART: back down the lane and out. A straight, because the lane and the exit are the
-		// same line.
-		BuildLeg({ Cleared, Bay.ExitLocal }, Radius, TEXT("depart"), Bay.DepartLeg);
+		// DEPART: back down the lane, then 45 degrees off it, so the vehicle reaches the aft
+		// edge already pointing at the road.
+		//
+		// THE TURN VERTEX IS ParkRun FORWARD OF THE BACK EDGE, which with the exit ParkRun in
+		// from the lane makes the corner exactly 45 degrees.
+		BuildLeg({ Cleared, FVector2D(BackX + ParkRun, Lane), Bay.ExitLocal },
+			Radius, TEXT("depart"), Bay.DepartLeg);
 
 		Definition.ServiceBays.Add(MoveTemp(Bay));
 	}
