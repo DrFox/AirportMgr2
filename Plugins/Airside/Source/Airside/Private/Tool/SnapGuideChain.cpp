@@ -9,8 +9,19 @@
 
 namespace
 {
-	/** A live segment's two ends. False when the segment or either node has gone. */
-	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
+	/**
+	 * A live segment's two ends. False when the segment or either node has gone.
+	 *
+	 * PREFIXED because FPlotPlaceTool.cpp has a SegmentEnds of its own in ITS anonymous
+	 * namespace, and this module is a UNITY build: two such helpers of one name compile
+	 * perfectly alone and collide the moment they land in the same blob. That is not
+	 * hypothetical - it is what this file did on the build that introduced it, and it is the
+	 * same trap AirsideTestFixtures.h was written to close for the test module.
+	 *
+	 * THE DUPLICATION IS REAL and left deliberately: merging the two means a shared header and
+	 * an edit to the plot tool, which is not this change's business. Noted for stage 3.
+	 */
+	bool GuideSegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
 		FVector2D& OutA, FVector2D& OutB)
 	{
 		const FRoadSegment* Segment = Network.GetSegment(Id);
@@ -145,7 +156,7 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
-		if (!SegmentEnds(Network, Id, A, B))
+		if (!GuideSegmentEnds(Network, Id, A, B))
 		{
 			continue;
 		}
@@ -205,7 +216,7 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
-		if (!SegmentEnds(Network, Id, A, B))
+		if (!GuideSegmentEnds(Network, Id, A, B))
 		{
 			continue;
 		}
@@ -252,7 +263,7 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
-		if (!SegmentEnds(Network, Id, A, B))
+		if (!GuideSegmentEnds(Network, Id, A, B))
 		{
 			continue;
 		}

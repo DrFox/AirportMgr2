@@ -340,4 +340,62 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * SEVEN SOURCES, ONE ANGULAR SLOT. With a taxiway, a runway and the world grid all offering
+ * the same direction, the tiebreak must go to the most specific - and "most specific" is the
+ * design's section 3 order, not the order the chain happens to ask in.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuideChainPrefersTheLocalOverTheGlobalTest,
+	"Airside.Tool.GuideChainPrefersTheLocalOverTheGlobal",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// A taxiway and a runway both running along +X, which is also a world axis: three sources
+	// offering one direction, every one of them in tolerance at once.
+	Lay(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
+	if (!TestTrue(TEXT("the runway is placed"),
+		LayRunway(Actor, FVector2D(-40000.0, 8000.0), FVector2D(40000.0, 8000.0))))
+	{
+		return false;
+	}
+
+	const FSnapGuideChain Chain;
+	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
+
+	const SnapGuide::FResult Result = Chain.Resolve(
+		*Actor->Network, Anchor, FVector2D(3000.0, 2100.0), SnapGuide::FResult());
+
+	if (!TestTrue(TEXT("something answers"), Result.bActive)) { return false; }
+
+	// PARALLEL BEATS RUNWAY BEATS WORLD. An airport squares to its runways, but not in
+	// preference to the taxiway the player is actually working beside.
+	TestEqual(TEXT("the nearest road wins over the runway and the world grid"),
+		static_cast<int32>(Result.Winners[0].Source),
+		static_cast<int32>(SnapGuide::ESource::Parallel));
+
+	// CONTROL LEG: the runway was a live competitor, not one the reach quietly excluded. Take
+	// the taxiway out of range and the runway takes the slot - which also pins that Runway is
+	// exempt from SearchRadiusUu, since the drag is 80 m from it.
+	const FGuideAnchor FarFromTheRoad = BareAnchor(FVector2D(0.0, 30000.0));
+	const SnapGuide::FResult WithoutTheTaxiway = Chain.Resolve(
+		*Actor->Network, FarFromTheRoad, FVector2D(3000.0, 30100.0), SnapGuide::FResult());
+	if (!TestTrue(TEXT("the runway still answers from across the field"),
+		WithoutTheTaxiway.bActive))
+	{
+		return false;
+	}
+	TestEqual(TEXT("and takes the slot once no road is in reach"),
+		static_cast<int32>(WithoutTheTaxiway.Winners[0].Source),
+		static_cast<int32>(SnapGuide::ESource::Runway));
+
+	return true;
+}
+
 #endif
