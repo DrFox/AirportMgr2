@@ -147,4 +147,51 @@ namespace IcaoCode
 	 * nose GEAR, not the nose, and the overhang between them differs by type.
 	 */
 	AIRSIDE_API double MaxNoseFwdForLetter(const FString& Letter);
+
+	/**
+	 * The WING KEEP-OUT for this letter: the fore-aft extent, uu about the nose-gear stop
+	 * mark, of every wing the letter admits, laid over one another. Fwd is the forward-most
+	 * leading edge and Aft the aft-most trailing edge, so both are negative and Aft < Fwd.
+	 *
+	 * THE UNION ACROSS THE FLEET, NOT ONE TYPE'S WING, and that is the whole idea: a stand
+	 * admits several airframes and the ground has to be marked for all of them at once. Real
+	 * aprons paint exactly this - a no-entry box under a large swept wing - because the
+	 * marking cannot be repainted for each arrival.
+	 *
+	 * NOTHING DRIVES THROUGH IT. Ruled 2026-09-17: a vehicle may not pass under a wing at all,
+	 * so a route reaches a service point forward of the leading edge, aft of the trailing edge,
+	 * or outboard of the wingtip - never across. WingKeepOutContains and WingKeepOutCrossedBy
+	 * are the ONE place that test is written, so a layout and the test that judges it cannot
+	 * disagree about where the wing is.
+	 *
+	 * AUTHORED, like StandDepth and for the same reason - the model carries no wing planform.
+	 * FEntityFootprint has WingX, a single spanwise LINE where the wing crosses the centreline,
+	 * and no chord or sweep at all; there is nothing to derive a leading edge from. Code C's
+	 * figures are a 737-800 and an A320 root chord plus wing-body fairing, and every builder's
+	 * WingX is pinned inside its letter's band by a test, so the two cannot drift.
+	 */
+	AIRSIDE_API double WingFwdForLetter(const FString& Letter);
+	AIRSIDE_API double WingAftForLetter(const FString& Letter);
+
+	/**
+	 * True when Local, in the stand's own space, is inside the wing keep-out - between the two
+	 * edges above and no further out than the letter's span band.
+	 *
+	 * A RECTANGLE, NOT A PLANFORM, and said plainly because a reader will assume otherwise:
+	 * with no chord or sweep authored anywhere there is no planform to test against, so this
+	 * is the smallest box that certainly contains every admitted wing. It is conservative in
+	 * the right direction - it refuses ground a real wing leaves clear, never the reverse.
+	 */
+	AIRSIDE_API bool WingKeepOutContains(const FString& Letter, const FVector2D& Local);
+
+	/**
+	 * True when the segment A-B enters the wing keep-out anywhere along its length.
+	 *
+	 * SEGMENTS, NOT SAMPLED POINTS. A path checked point by point can step clean over a corner
+	 * of the box between two samples and report itself clear, which is the same class of defect
+	 * as a per-edge drivability test that cannot see a join. This clips the segment against the
+	 * box, so a crossing of any length is found.
+	 */
+	AIRSIDE_API bool WingKeepOutCrossedBy(
+		const FString& Letter, const FVector2D& A, const FVector2D& B);
 }

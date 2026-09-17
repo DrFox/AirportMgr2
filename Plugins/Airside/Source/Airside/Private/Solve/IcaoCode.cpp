@@ -52,16 +52,29 @@ namespace IcaoCode
 			 * with it. See MaxNoseFwdForLetter for why the pair is not one length.
 			 */
 			double MaxNoseFwd;
+
+			/**
+			 * The fore-aft extent of every wing this letter admits, uu about the stop mark -
+			 * forward-most leading edge and aft-most trailing edge. Both negative.
+			 *
+			 * Code C is measured against the two types this project ships: an A320 root
+			 * leading edge at about -990 and a 737-800's at -1030, with the wing-body fairing
+			 * running back to about -2080, so the band covers both with a little margin. The
+			 * rest are authored design values, as the rest of this table is. The test pins
+			 * every builder's WingX inside its own letter's band.
+			 */
+			double WingFwd;
+			double WingAft;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0 },
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0 },
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0 },
+			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0 },
+			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0,  -950.0, -2150.0 },
+			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0, -1600.0, -3700.0 },
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0 },
 		};
 
 		/**
@@ -215,6 +228,76 @@ namespace IcaoCode
 			return Row->MaxNoseFwd;
 		}
 		return CodeC().MaxNoseFwd;
+	}
+
+	double WingFwdForLetter(const FString& Letter)
+	{
+		const FRow* Row = FindRow(Letter);
+		return (Row != nullptr ? Row : &CodeC())->WingFwd;
+	}
+
+	double WingAftForLetter(const FString& Letter)
+	{
+		const FRow* Row = FindRow(Letter);
+		return (Row != nullptr ? Row : &CodeC())->WingAft;
+	}
+
+	bool WingKeepOutContains(const FString& Letter, const FVector2D& Local)
+	{
+		const FRow& Row = FindRow(Letter) != nullptr ? *FindRow(Letter) : CodeC();
+		return Local.X >= Row.WingAft && Local.X <= Row.WingFwd
+			&& FMath::Abs(Local.Y) <= 0.5 * Row.MaxWingspan;
+	}
+
+	bool WingKeepOutCrossedBy(const FString& Letter, const FVector2D& A, const FVector2D& B)
+	{
+		const FRow& Row = FindRow(Letter) != nullptr ? *FindRow(Letter) : CodeC();
+		const double HalfSpan = 0.5 * Row.MaxWingspan;
+
+		// LIANG-BARSKY against the box, which answers "does any part of this segment lie
+		// inside" rather than "is either end inside". A leg that clips a corner of the wing
+		// between two of its samples is exactly the crossing a per-point test would miss, and
+		// missing it is how a truck ends up driving through a wing in PIE with a green suite.
+		double Enter = 0.0;
+		double Leave = 1.0;
+		const FVector2D Delta = B - A;
+
+		const double P[4] = { -Delta.X, Delta.X, -Delta.Y, Delta.Y };
+		const double Q[4] = {
+			A.X - Row.WingAft, Row.WingFwd - A.X,
+			A.Y + HalfSpan, HalfSpan - A.Y };
+
+		for (int32 Side = 0; Side < 4; ++Side)
+		{
+			if (FMath::IsNearlyZero(P[Side]))
+			{
+				// PARALLEL TO THIS EDGE. Outside it means the whole segment is outside the
+				// slab and no amount of the other three can bring it back.
+				if (Q[Side] < 0.0)
+				{
+					return false;
+				}
+				continue;
+			}
+
+			const double T = Q[Side] / P[Side];
+			if (P[Side] < 0.0)
+			{
+				Enter = FMath::Max(Enter, T);
+			}
+			else
+			{
+				Leave = FMath::Min(Leave, T);
+			}
+		}
+
+		// STRICTLY GREATER excludes ONE case and it is worth naming, because the first draft of
+		// this comment claimed a larger one: a segment touching the box at a single POINT - a
+		// corner, or a tangent - is not a crossing. A segment lying ALONG an edge still
+		// overlaps it over a range and IS reported, which is right for a keep-out: a lane laid
+		// exactly on the wingtip is a lane under the wingtip. Measured, not assumed - the test
+		// asserting otherwise failed on its first run.
+		return Leave > Enter;
 	}
 
 	FString LetterForStandSize(double WidthUu, double DepthUu)

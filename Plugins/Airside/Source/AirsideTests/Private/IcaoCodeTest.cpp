@@ -159,4 +159,71 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FWingKeepOutIsTheUnionOfAdmittedWingsTest,
+	"Airside.Solve.WingKeepOutIsTheUnionOfAdmittedWings",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWingKeepOutIsTheUnionOfAdmittedWingsTest::RunTest(const FString& Parameters)
+{
+	// THE SHAPE OF THE RULE, not one aeroplane's wing. A stand admits several airframes and
+	// the ground is marked once for all of them, which is what a real apron paints under a
+	// large swept wing. So the band has to be ordered, negative, and inside the airframe it
+	// belongs to - every letter.
+	for (const TCHAR* Letter : { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E"), TEXT("F") })
+	{
+		const double Fwd = IcaoCode::WingFwdForLetter(Letter);
+		const double Aft = IcaoCode::WingAftForLetter(Letter);
+
+		TestTrue(*FString::Printf(TEXT("%s's wing band runs aft to fwd (%.0f .. %.0f)"),
+			Letter, Aft, Fwd), Aft < Fwd);
+		TestTrue(*FString::Printf(TEXT("%s's wing is behind the stop mark (%.0f)"), Letter, Fwd),
+			Fwd < 0.0);
+		TestTrue(*FString::Printf(TEXT("%s's wing is inside its own airframe (%.0f vs %.0f)"),
+			Letter, Aft, -IcaoCode::MaxTailAftForLetter(Letter)),
+			Aft > -IcaoCode::MaxTailAftForLetter(Letter));
+	}
+
+	// CONTAINMENT, at the corners that decide it. Code C's box is x in [-2150, -950] out to
+	// the span band's half, 1800.
+	TestTrue(TEXT("under the wing root is inside"),
+		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-1500.0, 700.0)));
+	TestFalse(TEXT("forward of the leading edge is clear"),
+		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-800.0, 700.0)));
+	TestFalse(TEXT("aft of the trailing edge is clear"),
+		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-2400.0, 700.0)));
+	TestFalse(TEXT("outboard of the wingtip is clear"),
+		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-1500.0, 1900.0)));
+
+	// AND THE SEGMENT TEST, which is the one a route is judged by. The first case is the whole
+	// point of clipping rather than sampling: both ENDS are clear and the middle is not.
+	TestTrue(TEXT("a lane crossing under the wing is caught, though both ends are clear"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-1500.0, -1900.0), FVector2D(-1500.0, 1900.0)));
+	TestFalse(TEXT("the same crossing made aft of the trailing edge is clear"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-2400.0, -1900.0), FVector2D(-2400.0, 1900.0)));
+	TestFalse(TEXT("and forward of the leading edge is clear"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-800.0, -1900.0), FVector2D(-800.0, 1900.0)));
+	TestFalse(TEXT("a lane running along outside the tip is clear"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-4000.0, 2450.0), FVector2D(500.0, 2450.0)));
+
+	// A DIAGONAL FROM ONE CLEAR SIDE TO THE OTHER IS NOT CLEAR, and this is the case the
+	// first draft of this test got wrong: both endpoints sit outside the box and the line
+	// between them goes straight through it. Getting round the wing means going round the
+	// TIP, which no single segment across the centreline can do.
+	TestTrue(TEXT("a diagonal between two clear points still crosses"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-2400.0, -1900.0), FVector2D(-800.0, 1900.0)));
+
+	// AND CONTACT COUNTS. A lane laid exactly on the wingtip is a lane under the wingtip.
+	TestTrue(TEXT("a lane laid exactly on the tip is not clear of it"),
+		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+			FVector2D(-4000.0, 1800.0), FVector2D(500.0, 1800.0)));
+
+	return true;
+}
+
 #endif

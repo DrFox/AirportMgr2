@@ -169,6 +169,18 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 			*FString::Printf(TEXT("%s's span of %.0f is within code %s"),
 				Case.What, Type->Footprint.Wingspan, *Letter),
 			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan) == Letter);
+
+		// AND ITS WING IS INSIDE ITS LETTER'S KEEP-OUT. The keep-out is authored as the union
+		// of every wing the letter admits, and WingX is the only wing datum any type carries -
+		// so this is what stops the two drifting. A type whose wing line fell outside the box
+		// would be one the painted no-entry marking does not cover.
+		const double WingLine = Type->Footprint.WingX - ToStopMark;
+		TestTrue(
+			*FString::Printf(TEXT("%s's wing line at %.0f is inside code %s's %.0f .. %.0f"),
+				Case.What, WingLine, *Letter,
+				IcaoCode::WingAftForLetter(Letter), IcaoCode::WingFwdForLetter(Letter)),
+			WingLine >= IcaoCode::WingAftForLetter(Letter)
+				&& WingLine <= IcaoCode::WingFwdForLetter(Letter));
 	}
 
 	return true;
