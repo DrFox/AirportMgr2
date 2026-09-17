@@ -135,9 +135,38 @@ namespace
 		 */
 		bool AdvanceUntil(TFunctionRef<bool()> Predicate, double MaxSeconds);
 
+		/**
+		 * The furthest any agent's body moved between two consecutive steps of this fixture, and
+		 * which agent, and when.
+		 *
+		 * WATCHED BY THE FIXTURE rather than by one test, because a teleport is a defect in the
+		 * HANDOVERS between motion phases and every test here drives a truck through all of them.
+		 * Watching it in one place means the next phase added gets the same check for free.
+		 *
+		 * IT EXISTS BECAUSE A SYNTHETIC TEST MISSED THE REAL FLOW. Airside's own reverse test
+		 * drives a FRESH agent down the way out and saw nothing; in the game the SAME agent is
+		 * parked at the service point and REDIRECTED home, which is a different handover, and
+		 * that is the one the player watched jump.
+		 */
+		double WorstJump = 0.0;
+		int32 WorstJumpAgent = 0;
+		double WorstJumpAt = 0.0;
+
+		/** Where it went from and to, and which phase it was in on arrival - so the report
+		 *  names the handover rather than only its size. */
+		FVector2D WorstJumpFrom = FVector2D::ZeroVector;
+		FVector2D WorstJumpTo = FVector2D::ZeroVector;
+		int32 WorstJumpPhase = 0;
+		int32 WorstJumpPhaseBefore = -1;
+
 	private:
 		void RelayPhases();
 		void RunAnchorLinks();
+		void WatchForJumps();
+
+		struct FSeen { FVector2D At = FVector2D::ZeroVector; int32 Phase = -1; };
+		TMap<int32, FSeen> LastSeen;
+		double Watched = 0.0;
 	};
 
 	void LayLine(URoadNetwork& Net, const FVector2D& From, const FVector2D& To,
@@ -354,6 +383,40 @@ void FFuelFixture::Advance(double Seconds)
 		// service reads both it and the movement seconds the traffic just advanced.
 		Clock->Advance(Step);
 		Service->Tick(*Traffic, *Net, *Clock);
+
+		// AFTER THE SERVICE, not before, and that is the whole point of watching here. The
+		// service is what REDIRECTS a truck - it hands the agent a new route, which poses it -
+		// so a jump introduced by a redirect only exists on this side of the call.
+		Watched += Step;
+		WatchForJumps();
+	}
+}
+
+void FFuelFixture::WatchForJumps()
+{
+	if (Traffic == nullptr)
+	{
+		return;
+	}
+
+	for (const FRoadAgent& Agent : Traffic->GetAgents())
+	{
+		const FVector2D At = FVector2D(Agent.LastMotion.Position);
+		if (const FSeen* Before = LastSeen.Find(Agent.Id))
+		{
+			const double Moved = FVector2D::Distance(Before->At, At);
+			if (Moved > WorstJump)
+			{
+				WorstJump = Moved;
+				WorstJumpAgent = Agent.Id;
+				WorstJumpAt = Watched;
+				WorstJumpFrom = Before->At;
+				WorstJumpTo = At;
+				WorstJumpPhaseBefore = Before->Phase;
+				WorstJumpPhase = static_cast<int32>(Agent.Phase);
+			}
+		}
+		LastSeen.Add(Agent.Id, FSeen{ At, static_cast<int32>(Agent.Phase) });
 	}
 }
 
@@ -775,6 +838,62 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 			const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
 			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
 		}, 300.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckNeverTeleportsOnItsRoundTripTest, "AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
+{
+	// THE WHOLE ROUND TRIP, WATCHED FRAME BY FRAME. Dispatch, the drive out, the dwell, the
+	// REDIRECT home and the drive back - every handover between motion phases the game has,
+	// in the order and by the caller the game uses.
+	//
+	// AIRSIDE'S OWN REVERSE TEST DOES NOT COVER THIS, and that gap is why the defect reached
+	// PIE twice. It starts a FRESH agent on the way out, so it exercises arming and the
+	// hand-back but never the REDIRECT: in the game the same agent is parked at the service
+	// point when the service hands it a route home, and the log shows the reverse being armed
+	// from inside that redirect's own posing step. A synthetic start cannot see it.
+	//
+	// A FIXTURE-WIDE WATCH rather than an assertion of this test's own, so every other test in
+	// this file pays for it too and the next phase added is covered without being remembered.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.JoinRoad();
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked and asked for fuel"), Aircraft != 0))
+	{
+		return false;
+	}
+
+	// UNTIL THE TRUCK IS HOME AND RETIRED, which is the last handover of the trip.
+	const bool bDone = Fixture.AdvanceUntil([&Fixture]
+		{
+			const TArray<FFuelDemand>& Demands = Fixture.Service->GetDemands();
+			return Demands.Num() > 0 && Demands[0].State == EFuelDemandState::Done;
+		}, 600.0);
+
+	AddInfo(FString::Printf(
+		TEXT("round trip %s; furthest any body moved in one 1/30 s step was %.1f uu, by agent "
+		     "%d at t=%.1f s, from (%.0f,%.0f) to (%.0f,%.0f), phase %d -> %d"),
+		bDone ? TEXT("completed") : TEXT("DID NOT COMPLETE"),
+		Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt,
+		Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y,
+		Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y,
+		Fixture.WorstJumpPhaseBefore, Fixture.WorstJumpPhase));
+
+	TestTrue(TEXT("the round trip completed, so the watch below saw all of it"), bDone);
+
+	// 60 uu IN A THIRTIETH is 1800 uu/s, nearly twice the taxi cap, so ordinary motion cannot
+	// reach it and a handover that re-poses the body cannot hide under it. The two already
+	// found were a wheelbase (494 uu) and a whole reverse span (2529 uu).
+	TestTrue(
+		*FString::Printf(TEXT("no body ever teleports (worst %.1f uu, agent %d, t=%.1f s)"),
+			Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt),
+		Fixture.WorstJump < 60.0);
+
 	return true;
 }
 

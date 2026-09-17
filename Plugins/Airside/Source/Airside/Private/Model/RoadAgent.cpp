@@ -437,6 +437,28 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 						// is the small version of a pose that disagrees with its phase.
 						Follower.Speed = 0.0;
 
+						// ONE WHEELBASE IN, because that is where the FIXED axle already is.
+						//
+						// THE TWO PHASES PUT DIFFERENT PARTS OF THE VEHICLE ON THEIR LINE, and
+						// nothing said so until a truck jumped in PIE. FRouteFollower walks the
+						// STEERED axle along its polyline and then reports the body ORIGIN,
+						// trailed back by SteerAxleX (see the last line of its Advance).
+						// FReverseRun walks the FIXED axle and reports that point as it stands.
+						// For a vehicle whose origin sits on its fixed axle - which the fuel
+						// truck's does, SteerAxleX being its wheelbase - those two reports are
+						// THE SAME POINT, so nothing has to be converted between them. What has
+						// to be right is WHERE ALONG THE LINE the manoeuvre starts.
+						//
+						// The vehicle is parked with its steered axle on the service point, so
+						// its fixed axle is one wheelbase back along the line it came in on -
+						// which is the line this span begins on, run the other way. Arming at
+						// zero claims the fixed axle sits ON the service point and steps the
+						// whole body forward by a wheelbase to suit. Measured at 494.3 uu on a
+						// 494 uu wheelbase by AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip,
+						// which is the test that reproduces the REDIRECT the player watched -
+						// a truck parked at a service point being handed its route home.
+						Reverse.Travelled = FMath::Min(Airframe.Wheelbase(), Span.Length);
+
 						// POSED ON THE ARMING FRAME, not on the next one, and this is the same
 						// rule UGroundTraffic follows at dispatch: a zero-second Advance asks
 						// where the manoeuvre starts without moving it. Reporting the taxi's
