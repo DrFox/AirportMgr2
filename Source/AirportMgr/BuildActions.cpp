@@ -12,6 +12,7 @@ namespace
 	constexpr const TCHAR* SectionNames[] =
 	{
 		TEXT("Time"), TEXT("Tools"), TEXT("Edit"), TEXT("Aircraft"), TEXT("Selection"), TEXT("Game"),
+		TEXT("Snap"),
 	};
 	static_assert(UE_ARRAY_COUNT(SectionNames) == static_cast<int32>(EActionSection::Count),
 		"Every EActionSection needs a name here");
@@ -124,6 +125,58 @@ namespace
 			[](ARoadBuildController& C) { C.QuickSave(); }, Never, HasRuntime));
 		Out.Add(Make(TEXT("game.load"), EActionSection::Game, LOCTEXT("Load", "Load"), EKeys::L, false,
 			[](ARoadBuildController& C) { C.QuickLoad(); }, Never, HasRuntime));
+
+		// ONE PER ESource, and AirportMgr.Actions.SnapTogglesAreInTheRegistry walks the enum
+		// against this list rather than counting it - a source added without a toggle is a
+		// guide the player cannot switch off, and nothing else would say so.
+		//
+		// NO KEYS. Eight more bindings would crowd a keyboard already spending 0-9 on tools,
+		// and a toggle is set once rather than reached for mid-drag. What mid-drag needs is the
+		// Alt hold, which is not a registry action - see FToolContext::bSuspendGuides.
+		Out.Add(Make(TEXT("snap.extending"), EActionSection::Snap, LOCTEXT("SnapExtending", "Extending"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Extending); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Extending); },
+			Always));
+		Out.Add(Make(TEXT("snap.pointalign"), EActionSection::Snap, LOCTEXT("SnapPointAlign", "Point"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::PointAlign); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::PointAlign); },
+			Always));
+		Out.Add(Make(TEXT("snap.aligned"), EActionSection::Snap, LOCTEXT("SnapAligned", "Aligned"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Aligned); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Aligned); },
+			Always));
+		Out.Add(Make(TEXT("snap.collinear"), EActionSection::Snap, LOCTEXT("SnapCollinear", "Collinear"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Collinear); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Collinear); },
+			Always));
+		Out.Add(Make(TEXT("snap.parallel"), EActionSection::Snap, LOCTEXT("SnapParallel", "Parallel"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Parallel); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Parallel); },
+			Always));
+		Out.Add(Make(TEXT("snap.runway"), EActionSection::Snap, LOCTEXT("SnapRunway", "Runway"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Runway); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Runway); },
+			Always));
+		Out.Add(Make(TEXT("snap.world"), EActionSection::Snap, LOCTEXT("SnapWorld", "World"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::World); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::World); },
+			Always));
+
+		// GREYED, NOT ABSENT: nothing proposes Offset until stage 4, and a lit button that did
+		// nothing would be a worse lie than a greyed one. Its row is still here because that is
+		// what makes the list walkable from the enum.
+		Out.Add(Make(TEXT("snap.offset"), EActionSection::Snap, LOCTEXT("SnapOffset", "Offset"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Offset); },
+			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Offset); },
+			Never));
 		return Out;
 	}
 }

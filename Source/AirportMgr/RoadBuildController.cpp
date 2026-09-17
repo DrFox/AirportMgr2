@@ -447,6 +447,20 @@ FToolContext ARoadBuildController::MakeToolContext() const
 		HoverAgentUnderCursor());
 }
 
+void ARoadBuildController::ToggleGuideSource(SnapGuide::ESource Source)
+{
+	if (ARoadNetworkActor* Actor = GetTarget())
+	{
+		Actor->GuideSources.Toggle(Source);
+	}
+}
+
+bool ARoadBuildController::IsGuideSourceOn(SnapGuide::ESource Source) const
+{
+	const ARoadNetworkActor* Actor = GetTarget();
+	return Actor != nullptr && Actor->GuideSources.IsEnabled(Source);
+}
+
 int32 ARoadBuildController::HoverAgentUnderCursor() const
 {
 	UGroundTraffic* AgentModel = Target != nullptr ? Target->GetGroundTraffic() : nullptr;

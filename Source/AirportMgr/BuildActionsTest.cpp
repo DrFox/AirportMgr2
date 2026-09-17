@@ -127,4 +127,56 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ONE TOGGLE PER SOURCE, WALKED FROM THE ENUM. Spec section 9's
+ * AirportMgr.Actions.SnapTogglesAreInTheRegistry: a source added in a later stage without a
+ * button is a guide the player cannot switch off, and nothing else would say so.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSnapTogglesAreInTheRegistryTest,
+	"AirportMgr.Actions.SnapTogglesAreInTheRegistry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSnapTogglesAreInTheRegistryTest::RunTest(const FString& Parameters)
+{
+	const TArray<TPair<SnapGuide::ESource, const TCHAR*>> Expected = {
+		{ SnapGuide::ESource::Extending,  TEXT("snap.extending")  },
+		{ SnapGuide::ESource::PointAlign, TEXT("snap.pointalign") },
+		{ SnapGuide::ESource::Aligned,    TEXT("snap.aligned")    },
+		{ SnapGuide::ESource::Collinear,  TEXT("snap.collinear")  },
+		{ SnapGuide::ESource::Parallel,   TEXT("snap.parallel")   },
+		{ SnapGuide::ESource::Runway,     TEXT("snap.runway")     },
+		{ SnapGuide::ESource::World,      TEXT("snap.world")      },
+		{ SnapGuide::ESource::Offset,     TEXT("snap.offset")     } };
+
+	// THE TABLE ABOVE IS ITSELF A SECOND LIST, so it is checked against the enum's own size
+	// first - otherwise a source added to ESource could be missed by this test as easily as by
+	// the registry, which is the failure the test exists to prevent.
+	TestEqual(TEXT("every ESource value is covered by this test's own table"),
+		Expected.Num(), static_cast<int32>(SnapGuide::ESource::Offset) + 1);
+
+	for (const TPair<SnapGuide::ESource, const TCHAR*>& Pair : Expected)
+	{
+		const FBuildAction* Action = FindAction(FName(Pair.Value));
+		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Pair.Value), Action))
+		{
+			continue;
+		}
+		TestEqual(*FString::Printf(TEXT("%s sits in the Snap section"), Pair.Value),
+			Action->Section, EActionSection::Snap);
+		TestTrue(*FString::Printf(TEXT("%s can be executed"), Pair.Value),
+			static_cast<bool>(Action->Execute));
+		TestTrue(*FString::Printf(TEXT("%s reports whether it is lit"), Pair.Value),
+			static_cast<bool>(Action->IsActive));
+	}
+
+	// AND THE SECTION HAS A NAME. ActionSectionName indexes SectionNames by the enum, so a row
+	// added in the wrong slot renames two sections at once and the static_assert cannot see it.
+	// SENTENCE CASE, like every other row - "Time", "Tools", "Game".
+	TestEqual(TEXT("the Snap section is named"),
+		FString(ActionSectionName(EActionSection::Snap)), FString(TEXT("Snap")));
+
+	return true;
+}
+
 #endif

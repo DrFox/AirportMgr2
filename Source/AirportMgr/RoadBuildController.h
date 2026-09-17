@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Solve/GuideArbiter.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
 #include "RoadBuildLog.h"
@@ -178,6 +179,18 @@ public:
 
 	/** The road actor being built into, or null when the level has none. */
 	ARoadNetworkActor* GetTarget() const { return Target; }
+
+	/**
+	 * Flip one guide source on the airport this controller drives. The bar buttons call this.
+	 *
+	 * THROUGH THE TARGET, because the settings live on the airport and not on the driver - see
+	 * FSnapGuideSettings. A copy here would be a second place for them to drift, which is the
+	 * failure FRoadSnapSettings already records.
+	 */
+	void ToggleGuideSource(SnapGuide::ESource Source);
+
+	/** Whether that source is live. What lights the button. */
+	bool IsGuideSourceOn(SnapGuide::ESource Source) const;
 
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;
