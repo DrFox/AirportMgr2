@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Solve/IcaoCode.h"
 
 class URoadNetwork;
 
@@ -39,8 +40,14 @@ struct AIRSIDE_API FStandLaneBuild
 	 * from: the lane is invisible by design, and FGuidelineEdge::Width drives marking
 	 * geometry and clearance, neither of which this has. Four metres is a service road's
 	 * lane, which is what a lane round a stand is.
+	 *
+	 * IT MOVED TO IcaoCode ON 2026-09-17 and this forwards to it. A stand's MINIMUM width is
+	 * now derived from the lane - a stand has to hold one down each side - and a figure that
+	 * sizes the table cannot be owned by something downstream of the table. A function rather
+	 * than a constexpr because the owner is a function; the constant is gone rather than
+	 * duplicated, so widening a lane widens every stand that has to hold two of them.
 	 */
-	static constexpr double LaneWidth = 400.0;
+	static double LaneWidth() { return IcaoCode::ServiceLaneWidth(); }
 
 	// TangentRunFor IS DELETED, 2026-09-16, and where its answer comes from now is the point.
 	//

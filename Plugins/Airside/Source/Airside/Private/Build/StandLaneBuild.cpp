@@ -62,7 +62,7 @@ namespace
 		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
 		Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
 		Edge.Direction = EGuidelineDir::Bidirectional;
-		Edge.Width = FStandLaneBuild::LaneWidth;
+		Edge.Width = FStandLaneBuild::LaneWidth();
 
 		// 0 is UNLIMITED - see FProfileGuideline::MaxWingspan. A span limit on a line no wing
 		// uses could never bind, and the class has already refused aircraft.

@@ -42,14 +42,51 @@ namespace IcaoCode
 	AIRSIDE_API double RadiusForLetter(const FString& Letter);
 
 	/**
-	 * How wide a stand of this letter is, uu: its span band plus twice the letter's wingtip
-	 * clearance. DERIVED, never stored - a stored width would be a third figure obliged to
-	 * agree with two others, and this table exists because three such figures once drifted.
+	 * The NARROWEST stand of this letter, uu: its span band, plus twice the letter's wingtip
+	 * clearance, plus twice a service lane.
+	 *
+	 * A MINIMUM, NOT A SIZE, since 2026-09-17. A stand is a polygon the PLAYER draws and the
+	 * letter is derived from what they drew (LetterForStandSize), so no stand has "the" width
+	 * of its letter - each letter owns a BAND, and this is its floor. MaxStandWidthForLetter
+	 * is the other end.
+	 *
+	 * DERIVED, never stored - a stored width would be a third figure obliged to agree with two
+	 * others, and this table exists because three such figures once drifted. The service lane
+	 * is in it because a vehicle has to get PAST the aeroplane to reach the far side, and the
+	 * wingtip clearance is separation from anything: a lane laid inside it is a lane that is
+	 * not clear of the wingtip. Code C is 3600 + 2 x (450 + 400) = 5300 rather than the 4500
+	 * the span and clearance alone give, and 4500 was measured on 2026-09-17 as too narrow to
+	 * turn a service vehicle in - every arrangement of a lane, a rank and a bay landed within
+	 * a few tens of uu of an edge.
 	 *
 	 * Letter matched case-insensitively, unknown letters resolving to C, as RadiusForLetter
 	 * does and for the same reason.
 	 */
 	AIRSIDE_API double StandWidthForLetter(const FString& Letter);
+
+	/**
+	 * The WIDEST stand still of this letter, uu - the next letter's minimum.
+	 *
+	 * NOT A COLUMN, and that is the whole point: a stored maximum would have to agree with the
+	 * next row's minimum, and the day the two disagreed there would be a width belonging to no
+	 * letter, or to two. Derived, the bands TILE: every width from Code A's floor upward has
+	 * exactly one letter, and LetterForStandSize needs no second test.
+	 *
+	 * The widest letter has no letter above it, so its maximum is unbounded and this reports
+	 * DBL_MAX. A stand wider than any aeroplane needs is not an error - see the ruling that a
+	 * small airframe on a large stand is fine.
+	 */
+	AIRSIDE_API double MaxStandWidthForLetter(const FString& Letter);
+
+	/**
+	 * How wide a lane a service vehicle needs, uu - four metres, a service road's own lane.
+	 *
+	 * HERE RATHER THAN ON THE STAND BUILDER because the stand's minimum WIDTH is derived from
+	 * it, and a figure that sizes the table cannot live downstream of the table. It was
+	 * FStandLaneBuild::LaneWidth, which is where it reached the graph; that constant now reads
+	 * this one, so widening a lane widens every stand that has to hold two of them.
+	 */
+	AIRSIDE_API double ServiceLaneWidth();
 
 	/**
 	 * How deep a stand of this letter is, uu - nose to the back of its GSE road. AUTHORED,
@@ -63,6 +100,9 @@ namespace IcaoCode
 	 * The letter a stand of this size is, or empty when it is smaller than any stand.
 	 * The mirror of LetterForWingspan: that one asks what an AIRCRAFT is, this asks what a
 	 * piece of GROUND is, and together they decide which aircraft a stand admits.
+	 *
+	 * THIS IS THE GAME MECHANIC, not a lookup. The player draws a stand polygon; its size
+	 * decides which aircraft may use it. Nobody picks a letter.
 	 *
 	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 30 m stand is D-wide and nothing bigger than a
 	 * King Air fits in 30 m of depth, so it is a Code B. The answer is the largest letter

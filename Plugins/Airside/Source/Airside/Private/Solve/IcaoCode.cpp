@@ -64,10 +64,23 @@ namespace IcaoCode
 			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0 },
 		};
 
-		/** The stand width a row implies, uu. The ONE place the derivation is written. */
+		/**
+		 * The NARROWEST stand a row admits, uu. The ONE place the derivation is written.
+		 *
+		 * The lane is in it twice because there is one down each side: a vehicle cannot cross
+		 * under the aeroplane, so each side of the stand is reached and left on its own lane,
+		 * and a stand with room for only one of them has a serviceable side and a dead one.
+		 */
 		static double WidthOf(const FRow& Row)
 		{
-			return Row.MaxWingspan + 2.0 * Row.WingtipClearance;
+			return Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth());
+		}
+
+		/** The row after this one, or null at Code F. */
+		static const FRow* RowAbove(const FRow& Row)
+		{
+			const int32 Index = static_cast<int32>(&Row - &Rows[0]);
+			return Index + 1 < UE_ARRAY_COUNT(Rows) ? &Rows[Index + 1] : nullptr;
 		}
 
 		/**
@@ -145,6 +158,13 @@ namespace IcaoCode
 		return CodeC().StandTurnRadius;
 	}
 
+	double ServiceLaneWidth()
+	{
+		// FOUR METRES, a service road's own lane, and the figure FStandLaneBuild carried as
+		// LaneWidth before the stand's minimum width was derived from it.
+		return 400.0;
+	}
+
 	double StandWidthForLetter(const FString& Letter)
 	{
 		if (const FRow* Row = FindRow(Letter))
@@ -154,6 +174,20 @@ namespace IcaoCode
 		// Same fallback and the same reason as RadiusForLetter: an unknown letter gets the
 		// commonest stand rather than the biggest, which would swallow the apron beside it.
 		return WidthOf(CodeC());
+	}
+
+	double MaxStandWidthForLetter(const FString& Letter)
+	{
+		const FRow* Row = FindRow(Letter);
+		if (Row == nullptr)
+		{
+			Row = &CodeC();
+		}
+		const FRow* Above = RowAbove(*Row);
+
+		// UNBOUNDED AT THE TOP. Code F has no letter above it, so there is no width at which a
+		// stand stops being one - and a stand wider than any aeroplane needs is not an error.
+		return Above != nullptr ? WidthOf(*Above) : TNumericLimits<double>::Max();
 	}
 
 	double StandDepthForLetter(const FString& Letter)
