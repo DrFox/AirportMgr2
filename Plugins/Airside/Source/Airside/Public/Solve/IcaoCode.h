@@ -83,7 +83,7 @@ namespace IcaoCode
 	 *
 	 * HERE RATHER THAN ON THE STAND BUILDER because the stand's minimum WIDTH is derived from
 	 * it, and a figure that sizes the table cannot live downstream of the table. It was
-	 * FStandLaneBuild::LaneWidth, which is where it reached the graph; that constant now reads
+	 * FStandLayoutBuild::LaneWidth, which is where it reached the graph; that constant now reads
 	 * this one, so widening a lane widens every stand that has to hold two of them.
 	 */
 	AIRSIDE_API double ServiceLaneWidth();

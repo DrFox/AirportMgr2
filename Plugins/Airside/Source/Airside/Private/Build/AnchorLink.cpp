@@ -2,7 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Build/AnchorLinkFinder.h"
-#include "Build/StandLaneBuild.h"
+#include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -25,7 +25,7 @@ namespace
 	// graph that anchor spurs had already chopped into pieces.
 	//
 	// A stand's lane now DECLARES where a road may join - UEntityDefinition::ServiceLane
-	// carries Entry waypoints, and FStandLaneBuild::FResult::Entries reports the node each one
+	// carries Entry waypoints, and FStandLayoutBuild::FResult::Entries reports the node each one
 	// became - so there is nothing left to reconstruct and the whole apparatus goes with the
 	// question. Gather links through those entries instead; what survives of the choosing is
 	// two measurements with no threshold between them, both in the entries loop there.
@@ -88,7 +88,7 @@ namespace
 	 * makes.
 	 *
 	 * False when the node has no live lane edge on it at all, which is a lane laid by something
-	 * other than FStandLaneBuild. The caller then falls back to the straight lead-in rather
+	 * other than FStandLayoutBuild. The caller then falls back to the straight lead-in rather
 	 * than guessing a heading.
 	 */
 	bool EntryDeparture(const URoadNetwork& Network, FGuidelineNodeId NodeId,
@@ -162,7 +162,7 @@ namespace
 	 * ONE ENTRY, TWO NODES. The pair is recognised off the graph rather than reported by the
 	 * builder because the graph already says it exactly - the lane edge joining two entry nodes
 	 * IS the bend that rounds their corner - and a second statement of the same fact would be
-	 * one more thing to keep in step with FStandLaneBuild::FResult::Entries, which is itself
+	 * one more thing to keep in step with FStandLayoutBuild::FResult::Entries, which is itself
 	 * re-gathered from graph order on an idempotent pass.
 	 *
 	 * Unset for a straight-through entry, which is one node and no bend.
@@ -208,7 +208,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 	// THE LANES FIRST. A service anchor is a waypoint ON its stand's lane, so it is already
 	// joined by the time the walk below asks, and is skipped there rather than cast at a road
 	// on the far side of the aeroplane - and the LANE becomes the thing that links.
-	const FStandLaneBuild::FResult Lanes = FStandLaneBuild::Build(Network);
+	const FStandLayoutBuild::FResult Lanes = FStandLayoutBuild::Build(Network);
 
 	// EVERY NODE A LINK MUST NOT TARGET: anchor and pose nodes as always, PLUS every node of
 	// every service lane. A lane is itself a vehicle guideline, so without the second half a
@@ -357,7 +357,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 	// A ROAD JOINS A STAND WHERE THE STAND SAYS IT MAY, 2026-09-16.
 	//
 	// ONE LINK PER DECLARED ENTRY. UEntityDefinition::ServiceLane authors Entry waypoints and
-	// FStandLaneBuild::FResult::Entries reports the node each one became, so this asks only
+	// FStandLayoutBuild::FResult::Entries reports the node each one became, so this asks only
 	// whether a road is within reach of each - never WHERE on the lane an entrance should go,
 	// which is what the deleted per-side search spent four helpers and three mutually-tuned
 	// thresholds answering. See the note at the top of this file for what went and why.
@@ -384,7 +384,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// IcaoCode::RadiusForLetter and watching a stand's entry for the effect is a session
 		// lost. Join sizes its fillet from LaneRadius wherever it has one, and it has one on
 		// every entry link whose EntryDeparture resolves - which is all of them on a lane laid
-		// by FStandLaneBuild. What is left for this figure is the one case that has no lane
+		// by FStandLayoutBuild. What is left for this figure is the one case that has no lane
 		// heading to leave along: an entry whose departure cannot be read, where Join falls
 		// back to the circular fillet Link.Radius / tan(theta/2). It is carried rather than
 		// dropped because that fallback still needs a radius, and 2500 uu for a Code C is the
@@ -661,7 +661,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// chord the curve never follows.
 	//
 	// THE RADIUS IS THE INPUT, NOT THE RUN, and that is the correction of 2026-09-16.
-	// FStandLaneBuild::TangentRunFor governed the run for one round - it is deleted, and
+	// FStandLayoutBuild::TangentRunFor governed the run for one round - it is deleted, and
 	// StandLaneBuild.h says where its answer comes from now - and its 800 uu was measured
 	// against a SPUR's 1000-1400 uu gaps. A road is three to five times that, and the same 800
 	// delivered 40 uu of radius at 4 m and 67 at 54 against the 699.4 a real 8.5 m dispenser's
@@ -695,7 +695,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 		if (EntryDeparture(Network, Link.Node, Corner - Link.At, Along))
 		{
 			// THE LOCK OF THE LARGEST VEHICLE ADMITTED, never the one driving now - the same
-			// call the lane's own corners are rounded by (FStandLaneBuild::Build) and the same
+			// call the lane's own corners are rounded by (FStandLayoutBuild::Build) and the same
 			// rule all this airport's ground geometry follows.
 			constexpr double Slack = 1.1;
 			LaneRadius = UAirsideSettings::ResolveLargestServiceVehicle()

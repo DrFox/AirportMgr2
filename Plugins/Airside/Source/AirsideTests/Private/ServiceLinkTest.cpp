@@ -1,6 +1,6 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
-#include "Build/StandLaneBuild.h"
+#include "Build/StandLayoutBuild.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -41,21 +41,34 @@ namespace ServiceLinkFixture
 	}
 
 	/**
-	 * The axis-aligned box the definition's lane occupies, in its own local space.
+	 * The axis-aligned box the definition's SERVICE LAYOUT occupies, in its own local space.
 	 *
 	 * HERE RATHER THAN ON UEntityDefinition, where it was UEntityDefinition::ServiceLaneBounds()
-	 * until 2026-09-16. That accessor existed so a test could ask "where is the lane" without
-	 * typing the ring's four corners a second time (#104), and the reason it earned its place on
-	 * the asset - the lane is a rectangle by construction, so its bounds ARE its shape - stopped
-	 * being true the moment the lane became a seventeen-point cycle with a dip in it. A bounding
-	 * box of that is a TEST'S convenience and nothing else, so it lives with the tests.
+	 * until 2026-09-16. That accessor existed so a test could ask "where is the layout" without
+	 * typing its corners a second time (#104), and the reason it earned its place on the asset -
+	 * the lane was a rectangle by construction, so its bounds WERE its shape - stopped being
+	 * true the moment it gained a dip, and is no truer of four legs per bay. A bounding box of
+	 * that is a TEST'S convenience and nothing else, so it lives with the tests.
+	 *
+	 * OFF THE SAMPLED LEGS, not off the poses. A bay's poses sit well inside the curve that
+	 * reaches them, so a box drawn round the poses alone would report a layout smaller than the
+	 * ground it actually uses - which is the figure every caller here wants.
 	 */
 	FBox2D LaneBoundsOf(const UEntityDefinition& Definition)
 	{
 		FBox2D Bounds(ForceInit);
-		for (const FStandWaypoint& Point : Definition.ServiceLane)
+		for (const FServiceBay& Bay : Definition.ServiceBays)
 		{
-			Bounds += Point.Local;
+			for (const FStandLeg* Leg :
+				{ &Bay.ArriveLeg, &Bay.ServeLeg, &Bay.ReverseLeg, &Bay.DepartLeg })
+			{
+				TArray<FVector2D> Sampled;
+				Leg->Sample(Sampled);
+				for (const FVector2D& At : Sampled)
+				{
+					Bounds += At;
+				}
+			}
 		}
 		return Bounds;
 	}
@@ -114,8 +127,8 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 
-	const FStandLaneBuild::FResult First = FStandLaneBuild::Build(*Net);
-	TestEqual(TEXT("one stand, one lane"), First.LanesBuilt, 1);
+	const FStandLayoutBuild::FResult First = FStandLayoutBuild::Build(*Net);
+	TestEqual(TEXT("one stand, one lane"), First.LayoutsBuilt, 1);
 
 	// EVERY SERVICE ANCHOR NOW HAS LINE ON IT, and the AIRCRAFT stop mark still does not -
 	// the lane is for vehicles, and a painted lead-in is not this builder's business.
@@ -162,14 +175,14 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 
 	// A SECOND PASS ADDS NOTHING. The graph is rebuilt on every road edit and this runs each
 	// time; a builder that could not see its own previous output would stack a lane per pass.
-	const FStandLaneBuild::FResult Second = FStandLaneBuild::Build(*Net);
-	TestEqual(TEXT("a second pass builds no second lane"), Second.LanesBuilt, 0);
-	TestEqual(TEXT("but it still reports the lane that is there"), Second.Lanes.Num(), 1);
+	const FStandLayoutBuild::FResult Second = FStandLayoutBuild::Build(*Net);
+	TestEqual(TEXT("a second pass builds no second lane"), Second.LayoutsBuilt, 0);
+	TestEqual(TEXT("but it still reports the lane that is there"), Second.Layouts.Num(), 1);
 
 	// AND IT REPORTS THE SAME ENTRIES, NODE FOR NODE.
 	//
 	// THE WHOLE RESULT OR NONE OF IT. Lanes and Nodes are re-gathered from the graph on the
-	// skip path and Entries is RECOVERED there - by FStandLaneBuild's own RecoverEntries,
+	// skip path and Entries is RECOVERED there - by FStandLayoutBuild's own RecoverEntries,
 	// through the very measurement the laying path lays by. Filled only by the laying path, as
 	// it was when this builder was written, the second pass would hand back a correct Lanes, a
 	// correct Nodes and an EMPTY Entries: not merely incomplete but inconsistent, and silent,
@@ -212,7 +225,7 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 		UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
 		Bare->PlaceEntity(Depot, Depot->Anchors, FVector2D::ZeroVector, 0.0, 0.0,
 			Depot->PoseRole, Depot->Trucks);
-		TestEqual(TEXT("a depot gets no lane"), FStandLaneBuild::Build(*Bare).LanesBuilt, 0);
+		TestEqual(TEXT("a depot gets no lane"), FStandLayoutBuild::Build(*Bare).LayoutsBuilt, 0);
 	}
 	return true;
 }
@@ -452,7 +465,7 @@ namespace ServiceLinkFixture
 	 * The nodes a stand's declared entries became.
 	 *
 	 * ASKED OF THE BUILDER, which is the only thing that knows: nothing marks a node as "an
-	 * entry waypoint became this" once it is laid - see FStandLaneBuild::FResult::Entries.
+	 * entry waypoint became this" once it is laid - see FStandLayoutBuild::FResult::Entries.
 	 *
 	 * SAFE AFTER FAnchorLink::Build, and that is the point of calling it that way round here.
 	 * The lane is already in the graph by then, so this takes the builder's idempotent skip
@@ -462,7 +475,7 @@ namespace ServiceLinkFixture
 	 */
 	TArray<FGuidelineNodeId> EntriesOf(URoadNetwork& Net, FEntityInstanceId Entity)
 	{
-		const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(Net);
+		const FStandLayoutBuild::FResult Built = FStandLayoutBuild::Build(Net);
 		const TArray<FGuidelineNodeId>* Found = Built.Entries.Find(Entity);
 		return Found != nullptr ? *Found : TArray<FGuidelineNodeId>();
 	}
@@ -1440,8 +1453,8 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 
-	const FStandLaneBuild::FResult Built = FStandLaneBuild::Build(*Net);
-	const TArray<FGuidelineEdgeId>* Lane = Built.Lanes.Find(Placed);
+	const FStandLayoutBuild::FResult Built = FStandLayoutBuild::Build(*Net);
+	const TArray<FGuidelineEdgeId>* Lane = Built.Layouts.Find(Placed);
 	if (!TestNotNull(TEXT("the stand got a lane"), Lane))
 	{
 		return false;
@@ -1450,7 +1463,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	// THE WHOLE CYCLE: every lane edge, straight runs and the bends between them alike, which
 	// together are what a truck drives round.
 	//
-	// EVERY EDGE *Lane HOLDS IS THE CYCLE, and that needs no filter of its own: FStandLaneBuild
+	// EVERY EDGE *Lane HOLDS IS THE CYCLE, and that needs no filter of its own: FStandLayoutBuild
 	// puts its owner on the lane and on nothing else, and the road link a declared entry casts is
 	// deliberately unowned - which is what lets IsServiceNodeConnected tell a lane that reaches a
 	// road from one that only reaches itself. A bStandApproach flag stood here until 2026-09-16
@@ -1471,7 +1484,7 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	}
 
 	// THE LARGEST VEHICLE ADMITTED, and not the van this measured until the final review of
-	// 2026-09-16. FStandLaneBuild rounds these very corners to
+	// 2026-09-16. FStandLayoutBuild rounds these very corners to
 	// ResolveLargestServiceVehicle().TightestFollowableRadius(), so measuring them against
 	// ResolveDefaultVehicle() (471 uu, against 699.4) left a 228 uu band in which the lane could
 	// shrink with this test still green. Airside.Build.PlacedStandLaneIsOneDrivableCycle already

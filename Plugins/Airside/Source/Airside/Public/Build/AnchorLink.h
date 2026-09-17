@@ -32,7 +32,7 @@ class URoadNetwork;
  * none of them. A service link therefore joins the NEAREST guideline of its class in any
  * direction, within a much shorter reach - see DefaultServiceLinkRadius.
  *
- * Service ANCHORS do not link here at all on a stand with a lane. FStandLaneBuild has already
+ * Service ANCHORS do not link here at all on a stand with a lane. FStandLayoutBuild has already
  * laid the lane THROUGH each of them, because a straight connector from a road on one side to
  * a box on the other crosses 37 m of fuselage - and it is the LANE that links to the road, at
  * an entry the definition declares.
@@ -122,7 +122,7 @@ struct AIRSIDE_API FAnchorLink
 	 *
 	 * An anchor that already has an incident edge is skipped, so a hand-drawn connection
 	 * wins over the automatic one rather than being doubled up by it - and so does an anchor
-	 * FStandLaneBuild has just laid its stand's lane through.
+	 * FStandLayoutBuild has just laid its stand's lane through.
 	 *
 	 * Three steps, in order, per Pending link: Gather collects every anchor, pose and declared
 	 * entry awaiting a link before anything mutates; Resolve dispatches to the ILinkFinder for

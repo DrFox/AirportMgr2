@@ -188,6 +188,23 @@ struct AIRSIDE_API FGuidelineEdge
 	 */
 	UPROPERTY() FEntityInstanceId StandGeometryOwner;
 
+	/**
+	 * True on the edges of a service bay's REVERSE leg - the back-out the vehicle makes once it
+	 * has finished at a service point.
+	 *
+	 * IT SAYS WHICH LIMIT JUDGES THE EDGE, and that is the whole of it. A reversing vehicle
+	 * pivots about its FIXED axle, so it holds L/tan(lock) where forward driving needs
+	 * L/sin(lock) - 494.5 uu against 699.3 for the shipping dispenser, about 30% tighter. A
+	 * reverse leg is therefore LEGITIMATELY tighter than the forward limit, and a test that
+	 * swept every laid edge past FSpeedProfile's forward rule would refuse the one manoeuvre
+	 * the layout was designed around.
+	 *
+	 * A FLAG ON THE EDGE rather than a lookup through StandGeometryOwner back to the bay,
+	 * because the consumer is a walk over edges that has an FGuidelineEdge and no idea which
+	 * of a stand's four legs it came from.
+	 */
+	UPROPERTY() bool bReverseLeg = false;
+
 	// bStandApproach IS DELETED, 2026-09-16. It marked an edge that APPROACHED a stand's lane
 	// rather than being part of the cycle - the SPUR from a service anchor into the old ring -
 	// and was meaningless without StandGeometryOwner beside it, since it said which of an

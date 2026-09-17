@@ -173,7 +173,7 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 // it was written for declared no entrance: the pass had to find a point on the lane to join
 // AT as well as something to join TO, and the point it found then had to be cut into the lane.
 // A stand declares its entries now - see UEntityDefinition::ServiceLane's Entry waypoints, and
-// FStandLaneBuild::FResult::Entries for the nodes they became - so the FROM end of the link is
+// FStandLayoutBuild::FResult::Entries for the nodes they became - so the FROM end of the link is
 // a node that already exists, and a node's rule is proximity. One question, one finder.
 //
 // What it really bought, a road drawn PARALLEL to a lane being measured side to side rather

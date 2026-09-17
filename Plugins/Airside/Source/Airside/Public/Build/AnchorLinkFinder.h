@@ -26,7 +26,7 @@ enum class ELinkKind : uint8
 	 * nothing, so the pass had to search the lane for a point to join at as well as searching
 	 * the airport for something to join to. A stand now says where it may be entered
 	 * (UEntityDefinition::ServiceLane's Entry waypoints, reported as nodes by
-	 * FStandLaneBuild::FResult::Entries), so the FROM end is a NODE like any other and one
+	 * FStandLayoutBuild::FResult::Entries), so the FROM end is a NODE like any other and one
 	 * question is left rather than two. FLaneLinkFinder went with it.
 	 */
 	Proximity,

@@ -181,7 +181,7 @@ namespace GuidelineGeom
 	 * (StandLaneBuild.cpp), and a stand link's lead-in and both its entry sweeps
 	 * (FAnchorLink::Join) - plus the tests that hold a laid lane against a steering lock. One
 	 * evaluator, as with everything else in this namespace. The SPUR that used to be the first
-	 * of those is deleted - see FStandLaneBuild.
+	 * of those is deleted - see FStandLayoutBuild.
 	 */
 	AIRSIDE_API double TightestRadius(
 		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
@@ -196,7 +196,7 @@ namespace GuidelineGeom
 	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
 	 *
 	 * The ASYMMETRIC case - different cuts on the two legs - is what that general form is for,
-	 * and NOTHING INVERTS IT ANY MORE: the spur that did (FStandLaneBuild::TangentRunFor, an
+	 * and NOTHING INVERTS IT ANY MORE: the spur that did (FStandLayoutBuild::TangentRunFor, an
 	 * anchor's offset against a run along the lane) went with the anchors onto the lane on
 	 * 2026-09-16. It is kept written out because it is where the line below comes from. A
 	 * CORNER is the symmetric case, the same cut on both legs, where it collapses to:

@@ -37,6 +37,138 @@ void UEntityDefinition::BuildCodeCStand(UEntityDefinition* Definition, UAircraft
 	BuildCodeCStandFor(Definition, Aircraft, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
+namespace
+{
+	/**
+	 * How much straighter than the limit every corner of the template is cut.
+	 *
+	 * A TENTH, and the reason is the one the lane's own header gave: a corner sized to the
+	 * exact limit leaves nothing but a rounding error between passing and failing, and the
+	 * oracle then reports a radius 0.6 uu inside the limit, which reads as working and is a
+	 * coincidence. Every run below is this times what the arithmetic demands.
+	 */
+	constexpr double LegSlack = 1.1;
+
+	/**
+	 * Turn a polyline of corner VERTICES into the chain of quadratics that rounds it.
+	 *
+	 * A POLYLINE IS HOW A PATH IS DESCRIBED, NOT HOW IT IS DRIVEN. A vertex where two straights
+	 * meet is a heading that changes instantly, and FSpeedProfile calls one of those untakeable
+	 * at any speed; the bend carries the turn instead. Both legs' tangents meet AT the vertex,
+	 * so the single control point they define IS the vertex - the quadratic case, and what
+	 * makes the curve leave each side tangentially rather than at an angle to it.
+	 *
+	 * IT DOES NOT CLAMP. A corner that cannot be given its run is LOGGED and laid anyway, at
+	 * the run it asked for, so the oracle sees a curve tighter than the limit and the test
+	 * fails with the figure. Shaving it to fit would produce a layout whose shape is decided by
+	 * a disagreement between two numbers, which is what the lane this replaces did, and the
+	 * resulting stand passed its tests and crabbed in PIE four times running.
+	 */
+	void BuildLeg(const TArray<FVector2D>& Vertices, double Radius, const TCHAR* What,
+		FStandLeg& OutLeg)
+	{
+		OutLeg.Points.Reset();
+		OutLeg.Controls.Reset();
+		if (Vertices.Num() < 2)
+		{
+			return;
+		}
+
+		auto Push = [&OutLeg](const FVector2D& To, const FVector2D& Control)
+		{
+			// A zero-length segment has no direction, so it has no corner angle either - which
+			// is the degenerate the lane's Add() guard existed to stop. Dropped rather than
+			// laid.
+			if (!OutLeg.Points.Last().Equals(To, UE_DOUBLE_KINDA_SMALL_NUMBER))
+			{
+				OutLeg.Controls.Add(Control);
+				OutLeg.Points.Add(To);
+			}
+		};
+
+		OutLeg.Points.Add(Vertices[0]);
+
+		for (int32 At = 1; At + 1 < Vertices.Num(); ++At)
+		{
+			const FVector2D In = (Vertices[At - 1] - Vertices[At]).GetSafeNormal();
+			const FVector2D Out = (Vertices[At + 1] - Vertices[At]).GetSafeNormal();
+			if (In.IsNearlyZero() || Out.IsNearlyZero())
+			{
+				continue;
+			}
+
+			const double Interior = FMath::Acos(FMath::Clamp(FVector2D::DotProduct(In, Out), -1.0, 1.0));
+			if (Interior > UE_DOUBLE_PI - 0.01)
+			{
+				// Collinear: no corner to round, and CornerRunFor would return nothing useful.
+				continue;
+			}
+
+			const double Run = LegSlack * GuidelineGeom::CornerRunFor(Radius, Interior);
+			const double Shortest = FMath::Min(
+				FVector2D::Distance(Vertices[At - 1], Vertices[At]),
+				FVector2D::Distance(Vertices[At], Vertices[At + 1]));
+			if (Run > Shortest)
+			{
+				UE_LOG(LogAirside, Warning,
+					TEXT("Stand template leg '%s': the %.0f degree corner at (%.0f, %.0f) needs "
+					     "%.0f uu of run and its shorter leg is %.0f. Laid at the run it asked "
+					     "for, so the drivability test reports the radius rather than a shape "
+					     "nobody chose."),
+					What, FMath::RadiansToDegrees(UE_DOUBLE_PI - Interior),
+					Vertices[At].X, Vertices[At].Y, Run, Shortest);
+			}
+
+			const FVector2D Enter = Vertices[At] + Run * In;
+			const FVector2D Exit = Vertices[At] + Run * Out;
+
+			// The straight into the bend, then the bend. The straight's control sits on its own
+			// midpoint, which is how this graph spells "straight" - see GuidelineGeom::IsStraight.
+			Push(Enter, (OutLeg.Points.Last() + Enter) * 0.5);
+			Push(Exit, Vertices[At]);
+		}
+
+		Push(Vertices.Last(), (OutLeg.Points.Last() + Vertices.Last()) * 0.5);
+	}
+}
+
+void FStandLeg::Sample(TArray<FVector2D>& OutPoints) const
+{
+	OutPoints.Reset();
+	if (!IsSet())
+	{
+		return;
+	}
+
+	for (int32 At = 0; At + 1 < Points.Num(); ++At)
+	{
+		// THE SHARED POINT IS DROPPED, exactly as a route does when it welds two edges: Sample
+		// appends both endpoints, so without this every joint would carry a duplicate, and a
+		// duplicate is a zero-length span that FSpeedProfile has no heading for.
+		TArray<FVector2D> Segment;
+		GuidelineGeom::Sample(Points[At], Controls[At], Points[At + 1], Segment);
+		OutPoints.Append(At == 0 ? Segment : TArrayView<const FVector2D>(Segment).RightChop(1));
+	}
+}
+
+FRoutePlan FStandLeg::ToPlan() const
+{
+	FRoutePlan Plan;
+	Sample(Plan.Polyline);
+	if (Plan.Polyline.Num() < 2)
+	{
+		return Plan;
+	}
+
+	Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+
+	// FOUND, WITHOUT WHICH EVERY CONSUMER REFUSES IT AT ITS FIRST GUARD. FRoutePlan::IsValid is
+	// Result == Found and not "has a polyline", so a plan carrying only geometry reads as the
+	// code rejecting a legal input - which cost a session on this branch already.
+	Plan.Result = ERouteResult::Found;
+	return Plan;
+}
+
 void UEntityDefinition::BuildCodeCStandFor(
 	UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest)
 {
@@ -47,9 +179,10 @@ void UEntityDefinition::BuildCodeCStandFor(
 
 	Definition->Anchors.Reset();
 
-	// SET HERE, not by the caller afterwards - see the header. The service lane below is
-	// measured along this aeroplane, so the builder that lays the ground round it has to know
-	// which aeroplane that is.
+	// SET HERE, not by the caller afterwards - see the header. The layout below is measured
+	// against the LETTER rather than against this aeroplane, but the envelope drawing and the
+	// stand's own inspect panel both read it, and a definition that names no design aircraft is
+	// a stand nothing can be shown parked on.
 	Definition->DesignAircraft = Aircraft;
 
 	// A Code C contact stand: the ground half of a turnaround.
@@ -75,100 +208,46 @@ void UEntityDefinition::BuildCodeCStandFor(
 		Definition->Anchors.Add(Fixture);
 	};
 
-	// WHAT THE GROUND HAS TO GIVE A DRIVER, resolved once and spent everywhere below. Sized for
-	// the largest vehicle ADMITTED and never for the one driving now - the same rule the
-	// taxiway geometry follows, and the reason a bigger dispenser needs no edit here.
-	const double Radius = Largest.TightestFollowableRadius();
+	const FString Letter(TEXT("C"));
 
-	// EVERY STRAIGHT CARRIES BOTH CUTS THAT MEET ON IT, PLUS A TENTH.
+	// EVERY FIXTURE IS CLEAR OF THE WING, and that is what places them rather than taste.
+	// Ruled 2026-09-17: nothing drives under a wing, so a service position beneath one could
+	// never be reached. IcaoCode's keep-out is every wing the letter admits laid over one
+	// another - Code C runs -2150 to -950 - and the three starboard fixtures sit forward of its
+	// leading edge or aft of its trailing edge, which is also where an airliner's holds
+	// actually are: one ahead of the wing box and one behind it.
+	const double WingFwd = IcaoCode::WingFwdForLetter(Letter);
+	const double WingAft = IcaoCode::WingAftForLetter(Letter);
+	constexpr double PlantClearance = 150.0;
+
+	// THE STARBOARD ROW. A hydrant pit sits under the refuel panel on the wing leading edge, so
+	// the dispenser stands just forward of it and reaches in; the two holds are where an
+	// airliner's holds are.
+	constexpr double RowY = 700.0;
+	const double PitX = WingFwd + PlantClearance;
+	const double HoldFwdX = WingFwd + 600.0;
+	const double HoldAftX = WingAft - 450.0;
+
+	AddFixture(TEXT("HydrantPit"), PitX, RowY, -90.0, EServiceRole::Fuel);
+	AddFixture(TEXT("EquipmentFwd"), HoldFwdX, RowY, -90.0, EServiceRole::Baggage);
+	AddFixture(TEXT("EquipmentAft"), HoldAftX, RowY, -90.0, EServiceRole::Baggage);
+
+	// HEADING -90, which is INBOARD on the starboard side: a vehicle at its service point faces
+	// the aeroplane it is working on. It drives in forwards and reverses out, so this is also
+	// the heading its reverse leg starts from - see FServiceBay.
+
+	// Fixed ground power at the bridge, off the port bow, facing inboard for the same reason.
+	AddFixture(TEXT("FixedGPU"), WingFwd + 600.0, -RowY, 90.0, EServiceRole::GPU);
+
+	// WHERE THE TUG WAITS, and it gets NO BAY - see BuildStandTemplate. A pushback tug does not
+	// service an aeroplane from a parking bay; it couples at the nose gear and pushes, which is
+	// FPushbackRun's business and already modelled. Forward and to port, abeam the nose.
 	//
-	// THE SUM AND NOT THE LARGER, which is the correction that reshaped this layout. Two
-	// corners cut back into the same straight from opposite ends, so a straight shorter than
-	// Run(a) + Run(b) has the two curves overlapping and NEITHER delivers its radius - exactly
-	// the clamp FStandLaneBuild applies one level down. The first draft of this layout costed
-	// each corner against the larger of its two legs alone and put a square 90 degree crossing
-	// on a 1700 uu straight that needs 1978 for its two ends.
-	//
-	// THE TENTH IS MEASURED, not chosen: a straight sized to the exact sum leaves the two
-	// curves meeting at a single point, with no straight at all between them and nothing but a
-	// rounding error between passing and failing. A tenth is the most the tightest place on the
-	// lane can afford - the 1700 uu between the two runs allows 1.12 - so it is set by the
-	// geometry rather than by taste.
-	constexpr double LegSlack = 1.1;
-
-	// WHERE THE GROUND PLANT IS. The pit and the two lane runs are FIXED: a hydrant is plant
-	// dug into concrete under the wing root, the box row is painted where the holds are, and
-	// the port run is the line the bridge's ground power and the tug's box already sit on. The
-	// paint is arranged around them, not the other way about.
-	constexpr double PitX = -1200.0;
-	constexpr double PitY = 700.0;
-	constexpr double BoxY = 1100.0;
-	constexpr double PortY = -600.0;
-	constexpr double GpuX = 400.0;
-	constexpr double TugX = -600.0;
-
-	// THE HYDRANT DIP. The pit sits 400 uu inboard of the box row, on a FLAT long enough to
-	// hold the cut of the corner at each of its ends, with a leg rising to the row at
-	// DipLegAngle and a corner where it meets the row.
-	//
-	// 40.5 DEGREES IS THE MINIMUM OF THE DIP'S X EXTENT, not a taste: steeper legs shorten the
-	// diagonal but lengthen the corner runs, shallower ones the reverse. The expression
-	// 2*Run(angle) + Depth/tan(angle) bottoms out at 1018 uu anywhere between about 40 and 42
-	// degrees at the shipping truck, and costs within 7% of that anywhere from 30 to 50 - the
-	// worst of that range is 30 degrees, at 1081 uu. The figure is stated so the arithmetic
-	// below has one input rather than a search.
-	constexpr double DipLegAngleDegrees = 40.5;
-	constexpr double DipDepth = BoxY - PitY;
-	const double DipLeg = FMath::DegreesToRadians(DipLegAngleDegrees);
-	const double DipRun = GuidelineGeom::CornerRunFor(Radius, UE_DOUBLE_PI - DipLeg);
-
-	// THE FLAT holds two cuts, one from each end, so it is 2*LegSlack*Run long and the pit sits
-	// in the middle of it - which is what "the pit is driven through" means: a vehicle stopped
-	// there is on straight ground, not mid-curve.
-	const double DipFlatHalf = LegSlack * DipRun;
-
-	// WHERE THE LEG MEETS THE ROW, and it is a CORNER rather than a box. The first draft put
-	// EquipmentFwd here and made the box itself the corner; that is a truck turning INTO an
-	// anchor, which is the exact thing this redesign exists to remove. The diagonal between
-	// this corner and the flat's is 616 uu against the 550 its two cuts need.
-	const double DipRowX = DipFlatHalf + DipDepth / FMath::Tan(DipLeg);
-
-	// AND THE BOXES SIT A CUT FURTHER OUT, on the straight run, where a vehicle reaches them
-	// pointing along the row and stops without turning.
-	const double DipHalfExtent = DipRowX + LegSlack * DipRun;
-
-	AddFixture(TEXT("HydrantPit"), PitX, PitY, 180.0, EServiceRole::Fuel);
-
-	// THE BOXES SIT WHERE THE DIP LETS THEM, not where they were typed. They were at -300 and
-	// -2100, which is 900 uu from the pit against the 1018 the dip needs with no slack at all -
-	// short by 118, and short by a different amount for any other vehicle. So the figure is
-	// derived. Airside.Entities.StandBoxesMoveWithTheLargestVehicle asserts the derivation by
-	// building the same stand around a longer vehicle, because asserting the OUTPUT would pass
-	// just as well against a hand-typed number.
-	//
-	// HEADING 180, re-authored 2026-09-16. They faced -90 because the old spur arrived square
-	// on from outboard; a truck driving along the row finishes pointing along the aircraft, so
-	// that is how the box is painted. Slightly wrong for a belt loader, which really does
-	// square up to a hold door - accepted until the reverse leg exists to do it properly. The
-	// pit's own heading moved for the same reason, and from the same -90.
-	const double BoxFwdX = PitX + DipHalfExtent;
-	const double BoxAftX = PitX - DipHalfExtent;
-	AddFixture(TEXT("EquipmentFwd"), BoxFwdX, BoxY, 180.0, EServiceRole::Baggage);
-	AddFixture(TEXT("EquipmentAft"), BoxAftX, BoxY, 180.0, EServiceRole::Baggage);
-
-	// Fixed ground power at the bridge, off the port bow.
-	AddFixture(TEXT("FixedGPU"), GpuX, PortY, 90.0, EServiceRole::GPU);
-
-	// Where the tug waits before pushback: port side, abeam the wing root, ready to come
-	// round to the nose gear it couples to.
-	//
-	// MOVED AFT 2026-09-17, from x = +1400 to x = -600, and the GPU forward from +300 to
-	// +400 to keep the two ten metres apart on the same run. A Code C stand is 55 m deep
-	// measured from the NOSE, and the airframe it admits fills 39.5 m of that with every bit
-	// of the slack behind - so +1400 was 8.8 m in FRONT of the stand's own forward edge, on
-	// ground belonging to the jet bridge or the taxilane. Nothing measured the stand's extent
-	// until RequiredExtent did, which is why it sat there unremarked.
-	AddFixture(TEXT("TugStand"), TugX, PortY, 180.0, EServiceRole::Tug);
+	// NOT AHEAD OF THE NOSE, which is where a tug really waits, because that is outside the
+	// stand: a Code C stand is 55 m deep measured from the nose and the airframe fills 39.5 m
+	// of it with every bit of the slack behind. Recorded rather than hidden - holding the tug
+	// on the stand wants either a deeper letter or a tug dispatched from the apron.
+	AddFixture(TEXT("TugStand"), 350.0, -1400.0, 180.0, EServiceRole::Tug);
 
 	// What this stand can provide at all. A contact stand does the lot.
 	Definition->AvailableServices = {
@@ -184,239 +263,134 @@ void UEntityDefinition::BuildCodeCStandFor(
 	Definition->FootprintExtent = FVector2D::ZeroVector;   // the stand's extent IS its aircraft's
 	Definition->Trucks = 0;                          // nothing is based here; a depot has the fleet
 
-	// THE CROSSINGS, which join the two runs into one cycle.
-	//
-	// AN OCTAGON'S CORNER FOUR TIMES, and that is forced rather than chosen. A U-turn is 180
-	// degrees however it is cut up, and two SQUARE corners want 2 * CornerRunFor(R, 90deg) =
-	// 1978 uu on the straight between the runs against the 1700 there is between y=1100 and
-	// y=-600. Three corners of 60 degrees fit, but with 50 uu to spare on a 950 uu leg, which
-	// is a layout that breaks on the next re-measure. Four corners of 45 spread the same turn
-	// over two diagonals and a straight and leave a tenth on each.
-	//
-	// THE FLOOR IS 2R WHATEVER THE CUT, because that is a semicircle - 1399 uu at the shipping
-	// truck against the 1700 available. There is room, and not much of it; the warning below is
-	// what says so out loud when a bigger vehicle takes it away.
-	constexpr double CrossDeflectDegrees = 45.0;
-	const double CrossDeflect = FMath::DegreesToRadians(CrossDeflectDegrees);
-	const double CrossRun = GuidelineGeom::CornerRunFor(Radius, UE_DOUBLE_PI - CrossDeflect);
-
-	// THE DIAGONALS get exactly their slack; the straight between them takes what is left of
-	// the 1700, because the two runs' y are fixed by the plant on them and cannot move.
-	const double CrossDiagonal = LegSlack * 2.0 * CrossRun;
-	const double CrossBulge = CrossDiagonal * FMath::Sin(CrossDeflect);
-	const double CrossStraight = (BoxY - PortY) - 2.0 * CrossBulge;
-	if (CrossStraight < 2.0 * CrossRun)
-	{
-		// NOT SILENTLY WRONG. The lane is still emitted - a shape that is too tight to drive is
-		// more use to whoever has to fix it than no shape at all - but the crossings will have
-		// corners no vehicle of this size can take, and the log is what gets that noticed
-		// rather than lived with.
-		UE_LOG(LogAirside, Warning,
-			TEXT("Stand lane crossings are too tight for a vehicle needing %.0f uu of radius: "
-			     "the two runs are %.0f uu apart and the crossing needs %.0f. A U-turn cannot "
-			     "be cut into less than twice the radius."),
-			Radius, BoxY - PortY, 2.0 * CrossBulge + 2.0 * CrossRun);
-	}
-
-	// HOW FAR OUT THE CROSSINGS SIT. Far enough that the corner where a crossing leaves a run
-	// has its cut clear of the last anchor on that run, and - the binding one at the tail -
-	// clear of the aeroplane itself.
-	//
-	// The clearance is a CONSTANT and not a UPROPERTY, deliberately: it is a fact about how
-	// this stand type is laid out, decided at authoring time beside the anchors. A
-	// level-authored version would be a knob that silently reshaped stands already placed.
-	constexpr double EndClearance = 300.0;
-	const double EntryLeg = LegSlack * CrossRun;
-	// THE FORWARD-MOST AND AFT-MOST ANCHOR ON EACH RUN, which swapped on the port side when
-	// the tug moved aft of the GPU - so the pair is named by position on the run rather than
-	// by which fixture used to be at each end.
-	double NoseX = FMath::Max3(GpuX, TugX, BoxFwdX) + EntryLeg;
-	double TailX = FMath::Min3(GpuX, TugX, BoxAftX) - EntryLeg;
-	if (Aircraft != nullptr && Aircraft->Footprint.IsSet())
-	{
-		// AHEAD OF THE NOSE AND ASTERN OF THE TAIL, which is what keeps the old ring's one real
-		// promise: a crossing is the only part of this lane that spans the fuselage centreline,
-		// so it is the only part that could cross the aeroplane. The tailplane is the reason
-		// this is the tail's binding constraint and not the aft box's - it is 12 m across, and a
-		// crossing level with it would run under it.
-		NoseX = FMath::Max(NoseX, Aircraft->Footprint.NoseX + EndClearance);
-		TailX = FMath::Min(TailX, Aircraft->Footprint.TailX - EndClearance);
-	}
-
-	Definition->ServiceLane.Reset();
-	auto Coincident = [](const FStandWaypoint& A, const FStandWaypoint& B)
-	{
-		return A.Local.Equals(B.Local, UE_DOUBLE_KINDA_SMALL_NUMBER);
-	};
-
-	auto Add = [Definition, &Coincident](
-		double X, double Y, EStandWaypointKind Kind, const TCHAR* Id = nullptr)
-	{
-		FStandWaypoint Point;
-		Point.Local = FVector2D(X, Y);
-		Point.Kind = Kind;
-		Point.AnchorId = Id != nullptr ? FName(Id) : NAME_None;
-
-		// A COINCIDENT POINT IS MERGED, and only a PIVOTING vehicle produces one: its corners
-		// need no run at all, so EntryLeg is zero, NoseX lands exactly on TugX, and each
-		// crossing's two shaping points collapse onto its corners. Merging is what leaves a
-		// square U-turn rather than a polyline with zero-length sides, which has no direction
-		// and so no corner angle either.
-		//
-		// AND THE ANCHOR ALWAYS WINS, whichever of the two arrived first. Dropping the LATER
-		// point unconditionally - which is what this guard did when it was written - silently
-		// loses the TugStand anchor to the entry that landed on top of it, and a lane missing an
-		// anchor is the one thing StandLaneCarriesItsAnchors exists to catch. Only a Plain or an
-		// Entry is ever thrown away.
-		if (Definition->ServiceLane.Num() > 0 && Coincident(Definition->ServiceLane.Last(), Point))
-		{
-			if (Point.Kind == EStandWaypointKind::Anchor
-				&& Definition->ServiceLane.Last().Kind != EStandWaypointKind::Anchor)
-			{
-				Definition->ServiceLane.Last() = Point;
-			}
-			return;
-		}
-
-		Definition->ServiceLane.Add(Point);
-	};
-
-	// THE CYCLE, laid out starboard-forward, across the nose, port-aft, across the tail. Order
-	// matters - it is a closed polyline and must not fold through itself.
-	//
-	// EVERY ANCHOR IS A STRAIGHT-THROUGH POINT. Not one of the five is a corner: the pit is in
-	// the middle of the dip's flat, the boxes are a cut clear of the row corners, and the GPU
-	// and the tug sit mid-run on the port side. That is the whole claim of the redesign, and
-	// Airside.Entities.StandLaneCornersClearTheTruckLock is where it is measured.
-	Add(BoxAftX,              BoxY,  EStandWaypointKind::Anchor, TEXT("EquipmentAft"));
-	Add(PitX - DipRowX,       BoxY,  EStandWaypointKind::Plain);
-	Add(PitX - DipFlatHalf,   PitY,  EStandWaypointKind::Plain);
-	Add(PitX,                 PitY,  EStandWaypointKind::Anchor, TEXT("HydrantPit"));
-	Add(PitX + DipFlatHalf,   PitY,  EStandWaypointKind::Plain);
-	Add(PitX + DipRowX,       BoxY,  EStandWaypointKind::Plain);
-	Add(BoxFwdX,              BoxY,  EStandWaypointKind::Anchor, TEXT("EquipmentFwd"));
-
-	// ACROSS THE NOSE. The entries are the two corners where the crossing meets a run, because
-	// those are the points a road outside the stand can actually reach: the shaping points
-	// between them are mid-turn, and a road joining one would arrive at a heading the lane does
-	// not have. An entry ON the cycle, never abeam it - a stub is a dead end, and reverse does
-	// not exist until a later stage.
-	Add(NoseX,                BoxY,                EStandWaypointKind::Entry);
-	Add(NoseX + CrossBulge,   BoxY - CrossBulge,   EStandWaypointKind::Plain);
-	Add(NoseX + CrossBulge,   PortY + CrossBulge,  EStandWaypointKind::Plain);
-	Add(NoseX,                PortY,               EStandWaypointKind::Entry);
-
-	// Port-aft, through the bridge's ground power and then the tug's box. GPU FIRST since
-	// 2026-09-17: this run is walked forward-to-aft and must not double back, and the tug
-	// moved from +1400 to -600, which put it aft of the GPU rather than ahead of it.
-	Add(GpuX,                 PortY, EStandWaypointKind::Anchor, TEXT("FixedGPU"));
-	Add(TugX,                 PortY, EStandWaypointKind::Anchor, TEXT("TugStand"));
-
-	// Across the tail, and back onto the starboard run - the close is implicit.
-	Add(TailX,                PortY,               EStandWaypointKind::Entry);
-	Add(TailX - CrossBulge,   PortY + CrossBulge,  EStandWaypointKind::Plain);
-	Add(TailX - CrossBulge,   BoxY - CrossBulge,   EStandWaypointKind::Plain);
-	Add(TailX,                BoxY,                EStandWaypointKind::Entry);
-
-	// AND THE WRAP, which the guard inside Add cannot see. The cycle CLOSES IMPLICITLY, so the
-	// last waypoint is as much a neighbour of the first as of the one before it, and a
-	// coincident pair across that join is the same defect one place further round. It is the
-	// same pivoting vehicle that causes it: with no corner run, TailX lands exactly on
-	// EquipmentAft's X and the tail crossing's last entry sits on top of the first waypoint.
-	//
-	// A LOOP rather than one comparison, because each pop exposes a new last - and it
-	// terminates on every pass, since it only ever shortens the array.
-	while (Definition->ServiceLane.Num() > 1
-		&& Coincident(Definition->ServiceLane.Last(), Definition->ServiceLane[0]))
-	{
-		if (Definition->ServiceLane.Last().Kind == EStandWaypointKind::Anchor
-			&& Definition->ServiceLane[0].Kind != EStandWaypointKind::Anchor)
-		{
-			Definition->ServiceLane[0] = Definition->ServiceLane.Last();
-		}
-		Definition->ServiceLane.Pop();
-	}
-
-	BuildStandTemplate(*Definition, TEXT("C"), Largest);
+	BuildStandTemplate(*Definition, Letter, Largest);
 }
 
 void UEntityDefinition::BuildStandTemplate(
 	UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest)
 {
-	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 45 m to just under 67 m is all
-	// Code C, and a template authored at a comfortable 55 would fail exactly where a player
-	// drew the smallest stand the rules allow. Every figure below therefore comes off
-	// IcaoCode, which reports the minimum.
+	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 53 m to just under 75 is all
+	// Code C, and a template authored at a comfortable 60 would fail exactly where a player
+	// drew the smallest stand the rules allow. Every figure below therefore comes off IcaoCode,
+	// which reports the minimum.
 	const double Width = IcaoCode::StandWidthForLetter(Letter);
 	const double Depth = IcaoCode::StandDepthForLetter(Letter);
 	const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
 	const double TailAft = IcaoCode::MaxTailAftForLetter(Letter);
 
-	// THE STAND BOX, in the definition's own local space - origin the nose gear stop mark,
-	// +X forward, +Y starboard. Depth is measured NOSE to the back of the GSE road, so the
-	// back edge is the nose overhang minus the depth and every bit of slack is behind the
-	// aeroplane. That single fact shapes the whole layout: there is no room in front to turn
-	// round in, which is why a bay is entered backwards and left forwards.
+	// THE STAND BOX, in the definition's own local space. Depth is measured NOSE to the back of
+	// the GSE road, so the back edge is the nose overhang minus the depth and every bit of the
+	// slack is behind the aeroplane.
 	const double HalfWidth = 0.5 * Width;
 	const double BackX = NoseFwd - Depth;
 
-	// The two limits, resolved once. Forward is L/sin(lock) and reverse L/tan(lock) - about
-	// 30% tighter, because a reversing vehicle pivots about its FIXED axle.
+	// The two limits, resolved once. Forward is L/sin(lock) and reverse L/tan(lock) - about 30%
+	// tighter, because a reversing vehicle pivots about its FIXED axle.
 	const double Radius = Largest.TightestFollowableRadius();
 	const double ReverseRadius = Largest.TightestReversibleRadius();
 
-	// WHERE THE SPINES RUN. Outboard of the service anchors and inboard of the stand edge, so
-	// a vehicle on one is clear of the fuselage box and still on the stand's own ground. The
-	// wingtip is not a constraint: driving under a wing is normal, and HydrantPit is under the
-	// starboard wing root because that is where a hydrant pit is.
-	const double SpineY = HalfWidth - 750.0;
+	// THE LANE DOWN EACH SIDE, outboard of the wingtip because nothing may pass under a wing.
+	// Its own width is what the stand's minimum width was derived from, so this sits exactly
+	// inside the boundary with the letter's wingtip clearance between it and the aeroplane.
+	const double LaneY = HalfWidth - 0.5 * IcaoCode::ServiceLaneWidth();
 
-	// THE RANK RUNS FORE AND AFT ON THE CENTRELINE, ASTERN OF THE TAIL, and the entry leg is
-	// the same line continued to the back edge - so the entry leg is a STRAIGHT and carries no
-	// corner at all. Every approach leg then leaves the head heading forward and reaches its
-	// spine with a lateral SHIFT rather than a pair of right angles, which is what a 1250 uu
-	// strip can actually afford: one 90 degree corner alone costs CornerRunFor(R, 90) = 1.41 R.
-	constexpr double RankSpacing = 1000.0;
-	const double StagingX = BackX + RankSpacing + 80.0;
+	// WHAT EACH KIND OF CORNER COSTS, resolved once and spent everywhere below. A right angle
+	// is 1.414 R of run on EACH arm; 45 degrees is 0.448 R, which is why the parking slots are
+	// angled and the turn off the road is not square.
+	const double Square = LegSlack * GuidelineGeom::CornerRunFor(Radius, UE_DOUBLE_HALF_PI);
+	const double Diagonal =
+		LegSlack * GuidelineGeom::CornerRunFor(Radius, UE_DOUBLE_PI * 0.75);
+	const double SquareBack =
+		LegSlack * GuidelineGeom::CornerRunFor(ReverseRadius, UE_DOUBLE_HALF_PI);
 
-	Definition.EntryLocal = FVector2D(BackX, 0.0);
-	Definition.EntryHeading = 0.0;
-	Definition.StagingLocal = FVector2D(StagingX, 0.0);
-	Definition.StagingHeading = 0.0;
+	// THE PARKING ROW. Slots stand at 45 degrees a short run in from the back edge, so a
+	// vehicle turning off the GSE road makes a 45 degree corner rather than a square one.
+	constexpr double ParkRun = 500.0;
+	constexpr double ParkPitch = 450.0;
+	const double ParkRowX = BackX + ParkRun;
+	const double ParkTopY = LaneY - 400.0;
 
-	// HOW MANY FIT, DERIVED RATHER THAN TYPED: the rank occupies the entry straight, so its
-	// capacity is how many spacings fit between the head and the back edge, plus the head
-	// itself. A typed 2 would go on saying 2 after the stand's depth changed.
-	Definition.StagingCapacity = 1 + FMath::FloorToInt32((StagingX - BackX) / RankSpacing);
-
-	// A BAY PER ANCHOR A VEHICLE DRIVES TO. The aircraft's own pose is not one - nothing
-	// drives to a stop mark - and TraversalForRole is what distinguishes them, rather than a
-	// list here that would have to agree with the anchor table.
-	Definition.ServiceBays.Reset();
+	// A BAY PER ANCHOR A VEHICLE SERVICES FROM, which is not the same as every anchor that is
+	// not the aeroplane's own pose. The TUG is excluded by name: pushback couples at the nose
+	// gear and is FPushbackRun's manoeuvre, so a tug never drives from a parking bay to a
+	// service point and giving it the four legs would be geometry nothing walks.
+	TArray<const FEntityAnchor*> Serviced;
 	for (const FEntityAnchor& Anchor : Definition.Anchors)
 	{
-		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
+		if (TraversalForRole(Anchor.Role) != ETraversalClass::Aircraft
+			&& Anchor.Role != EServiceRole::Tug)
 		{
-			continue;
+			Serviced.Add(&Anchor);
 		}
-
-		FServiceBay Bay;
-		Bay.AnchorId = Anchor.Id;
-
-		// THE VEHICLE PARKS AT ITS ANCHOR, NOSE OUT. Outboard is where it came from, so a
-		// vehicle that backed in points that way, and its working end - a dispenser's reels,
-		// a loader's belt - is the end nearest the aeroplane. That is also what makes the bay
-		// the turn-round: it leaves forwards, going back the way it came.
-		Bay.Local = Anchor.LocalPosition;
-		Bay.LocalHeading = Anchor.LocalPosition.Y >= 0.0 ? UE_DOUBLE_HALF_PI : -UE_DOUBLE_HALF_PI;
-
-		Definition.ServiceBays.Add(Bay);
 	}
 
-	// WHAT THE LAYOUT ACTUALLY NEEDS, measured off what was placed - never typed, and never
-	// off the DESIGN aircraft. Width is the greater of the paint's own reach and the airframe
-	// the LETTER admits with its wingtip clearance; depth likewise runs from that airframe's
-	// nose to the aft-most thing placed.
+	// AFT-MOST FIRST, so the aft-most service takes the aft-most slot and no two vehicles'
+	// legs cross on their way out of the parking row.
+	Serviced.Sort([](const FEntityAnchor& A, const FEntityAnchor& B)
+		{ return A.LocalPosition.X < B.LocalPosition.X; });
+
+	Definition.ServiceBays.Reset();
+	int32 PortSlot = 0;
+	int32 StarboardSlot = 0;
+
+	for (const FEntityAnchor* Anchor : Serviced)
+	{
+		const double Side = Anchor->LocalPosition.Y >= 0.0 ? 1.0 : -1.0;
+		const int32 Slot = Side > 0.0 ? StarboardSlot++ : PortSlot++;
+
+		const double Lane = Side * LaneY;
+		const double ParkY = Side * (ParkTopY - Slot * ParkPitch);
+		const FVector2D Service = Anchor->LocalPosition;
+
+		FServiceBay Bay;
+		Bay.AnchorId = Anchor->Id;
+
+		// THE SLOT, at 45 degrees, pointing forward and outboard so the vehicle parks already
+		// aimed at the lane it will leave along.
+		Bay.ParkLocal = FVector2D(ParkRowX, ParkY);
+		Bay.ParkHeading = Side * 0.25 * UE_DOUBLE_PI;
+
+		// ITS OWN ENTRY on the back edge, on the same 45 degree line, so the arrive leg is a
+		// STRAIGHT and every corner of it belongs to the road junction rather than to the stand.
+		Bay.EntryLocal = FVector2D(BackX, ParkY - Side * ParkRun);
+		Bay.EntryHeading = Bay.ParkHeading;
+
+		// AND THE EXIT, which the side shares: a vehicle leaves along its lane, and one way out
+		// per side is one road junction per side rather than one per service.
+		Bay.ExitLocal = FVector2D(BackX, Lane);
+		Bay.ExitHeading = UE_DOUBLE_PI;
+
+		BuildLeg({ Bay.EntryLocal, Bay.ParkLocal }, Radius, TEXT("arrive"), Bay.ArriveLeg);
+
+		// SERVE: out along the 45 to the lane, forward to abeam the service point, then square
+		// inboard to it. The turn inboard is where the wing would be if the fixture were not
+		// placed clear of it - see BuildCodeCStandFor, and the test that measures it.
+		const double Diagonalise = LaneY - FMath::Abs(ParkY);
+		BuildLeg({
+			Bay.ParkLocal,
+			FVector2D(ParkRowX + Diagonalise, Lane),
+			FVector2D(Service.X, Lane),
+			Service }, Radius, TEXT("serve"), Bay.ServeLeg);
+
+		// REVERSE: straight out to the lane and square onto it, backwards. The vehicle ends
+		// facing the way it came, which is what makes this the turn-round - it drives away
+		// forwards without ever retracing this curve, so the curve only has to satisfy the
+		// REVERSE limit and the 30% that buys is not spent on a path that works both ways.
+		const FVector2D Cleared(Service.X + SquareBack, Lane);
+		BuildLeg({ Service, FVector2D(Service.X, Lane), Cleared },
+			ReverseRadius, TEXT("reverse"), Bay.ReverseLeg);
+
+		// DEPART: back down the lane and out. A straight, because the lane and the exit are the
+		// same line.
+		BuildLeg({ Cleared, Bay.ExitLocal }, Radius, TEXT("depart"), Bay.DepartLeg);
+
+		Definition.ServiceBays.Add(MoveTemp(Bay));
+	}
+
+	// WHAT THE LAYOUT ACTUALLY NEEDS, measured off every point of every leg - never typed, and
+	// never off the DESIGN aircraft. Width is the greater of the paint's own reach and the
+	// airframe the LETTER admits with its wingtip clearance; depth likewise runs from that
+	// airframe's nose to the aft-most thing laid.
 	double MinX = -TailAft;
 	double MaxX = NoseFwd;
 	double MaxAbsY = 0.5 * Width;
@@ -426,35 +400,41 @@ void UEntityDefinition::BuildStandTemplate(
 		MaxX = FMath::Max(MaxX, At.X);
 		MaxAbsY = FMath::Max(MaxAbsY, FMath::Abs(At.Y));
 	};
-	Cover(Definition.EntryLocal);
-	Cover(Definition.StagingLocal);
-	Cover(FVector2D(StagingX, SpineY));
-	Cover(FVector2D(StagingX, -SpineY));
 	for (const FServiceBay& Bay : Definition.ServiceBays)
 	{
-		Cover(Bay.Local);
+		for (const FStandLeg* Leg : { &Bay.ArriveLeg, &Bay.ServeLeg, &Bay.ReverseLeg, &Bay.DepartLeg })
+		{
+			TArray<FVector2D> Sampled;
+			Leg->Sample(Sampled);
+			for (const FVector2D& At : Sampled)
+			{
+				Cover(At);
+			}
+		}
 	}
 
 	Definition.RequiredExtent = FVector2D(2.0 * MaxAbsY, MaxX - MinX);
 
-	// READ THESE RATHER THAN TRUST THEM. The poses above are written from the geometry, and
-	// the figures they imply are what say whether that geometry was right - see the plan's
-	// own note that this is where it is most likely to be wrong.
+	// READ THESE RATHER THAN TRUST THEM. The poses are written from the geometry and the
+	// figures they imply are what say whether that geometry was right.
 	UE_LOG(LogAirside, Log,
 		TEXT("Stand template '%s': box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
-		     "entry (%.0f, %.0f) hdg %.0f, staging (%.0f, %.0f) x%d, spine y %.0f, "
-		     "needs %.0f x %.0f"),
+		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, park row x %.0f, "
+		     "%d bay(s), needs %.0f x %.0f"),
 		*Letter, Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
-		Definition.EntryLocal.X, Definition.EntryLocal.Y,
-		FMath::RadiansToDegrees(Definition.EntryHeading),
-		Definition.StagingLocal.X, Definition.StagingLocal.Y, Definition.StagingCapacity,
-		SpineY, Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
+		Square, Diagonal, SquareBack, LaneY, ParkRowX,
+		Definition.ServiceBays.Num(), Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
 
 	for (const FServiceBay& Bay : Definition.ServiceBays)
 	{
-		UE_LOG(LogAirside, Log, TEXT("  bay '%s' at (%.0f, %.0f) hdg %.0f"),
-			*Bay.AnchorId.ToString(), Bay.Local.X, Bay.Local.Y,
-			FMath::RadiansToDegrees(Bay.LocalHeading));
+		UE_LOG(LogAirside, Log,
+			TEXT("  bay '%s': entry (%.0f, %.0f) park (%.0f, %.0f) hdg %.0f exit (%.0f, %.0f) "
+			     "legs %d/%d/%d/%d"),
+			*Bay.AnchorId.ToString(), Bay.EntryLocal.X, Bay.EntryLocal.Y,
+			Bay.ParkLocal.X, Bay.ParkLocal.Y, FMath::RadiansToDegrees(Bay.ParkHeading),
+			Bay.ExitLocal.X, Bay.ExitLocal.Y,
+			Bay.ArriveLeg.Points.Num(), Bay.ServeLeg.Points.Num(),
+			Bay.ReverseLeg.Points.Num(), Bay.DepartLeg.Points.Num());
 	}
 }
 
@@ -477,10 +457,11 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	// asset that once had some really does clear them.
 	Definition->Anchors.Reset();
 
-	// AND NO SERVICE LANE. A lane threads the boxes an aeroplane is serviced from; a depot has
+	// AND NO SERVICE BAYS. A bay is where a vehicle waits to work on an aeroplane; a depot has
 	// one pose and nothing parked at it, and its pose IS its road connection. Reset for the
 	// same reason Anchors is.
-	Definition->ServiceLane.Reset();
+	Definition->ServiceBays.Reset();
+	Definition->RequiredExtent = FVector2D::ZeroVector;
 
 	// ORIGIN IS THE TRUCK BAY - where a truck stands when it is home, and the node it is
 	// dispatched from and back to.
