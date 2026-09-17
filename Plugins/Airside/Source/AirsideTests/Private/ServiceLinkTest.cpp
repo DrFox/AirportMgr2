@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
 #include "Build/StandLayoutBuild.h"
+#include "Solve/IcaoCode.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -130,14 +131,20 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 	const FStandLayoutBuild::FResult First = FStandLayoutBuild::Build(*Net);
 	TestEqual(TEXT("one stand, one lane"), First.LayoutsBuilt, 1);
 
-	// EVERY SERVICE ANCHOR NOW HAS LINE ON IT, and the AIRCRAFT stop mark still does not -
-	// the lane is for vehicles, and a painted lead-in is not this builder's business.
+	// EVERY SERVICE POINT HAS A WAY IN AND A WAY OUT, and the AIRCRAFT stop mark still has
+	// neither - the layout is for vehicles, and a painted lead-in is not this builder's
+	// business.
 	//
-	// TWO EDGES, NOT MERELY ONE. A spurred anchor had a stub into the ring and one edge would
-	// have been the whole story; the lane runs THROUGH the box now, so an anchor with one edge
-	// on it is a dead end - and reverse does not exist, so a dead end is an anchor no truck can
-	// leave. Airside.Build.PlacedStandLaneIsOneDrivableCycle measures the same property over
-	// the whole cycle.
+	// TWO EDGES, AND WHICH TWO IS THE POINT: the SERVE leg arrives and the REVERSE leg leaves.
+	// One edge would be a dead end, and a service point a vehicle cannot leave is the pile-up
+	// this whole design exists to prevent. The two are not the same curve - the vehicle does
+	// not retrace what it drove in on, which is what lets the reverse be judged by the reverse
+	// limit alone.
+	//
+	// THE TUG IS THE EXCEPTION AND IS ASSERTED AS ONE. It has no bay, because pushback couples
+	// at the nose gear and is FPushbackRun's manoeuvre; a tug never drives from a parking bay
+	// to a service point. Left as a skip it would be indistinguishable from a bay this builder
+	// silently failed to lay.
 	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
 	{
 		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
@@ -148,8 +155,11 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 		if (TestNotNull(TEXT("the anchor resolves"), Node))
 		{
 			TestEqual(
-				*FString::Printf(TEXT("and the lane runs through '%s'"), *Anchor.Id.ToString()),
-				Node->Incident.Num(), 2);
+				*FString::Printf(TEXT("'%s' is %s"), *Anchor.Id.ToString(),
+					Anchor.Role == EServiceRole::Tug
+						? TEXT("a waiting position with no bay")
+						: TEXT("served by a leg in and a leg out")),
+				Node->Incident.Num(), Anchor.Role == EServiceRole::Tug ? 0 : 2);
 		}
 	}
 	TestEqual(TEXT("the aircraft stop mark is untouched"),
@@ -160,17 +170,23 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("a lane with no road near it is not a connection"),
 		Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
 
-	// AND IT IS A CYCLE, not a set of unjoined runs: every node has two lane edges on it, so a
-	// truck can go round either way.
+	// AND IT IS CONNECTED, which is a weaker claim than the cycle this replaces and a truer
+	// one. A layout is a TREE per side, not a ring: nothing may pass under a wing, so the two
+	// sides never meet, and each bay is a dead end whose turn-round is the reverse leg. What
+	// must hold is that no laid node is ISOLATED - a node with nothing on it is a leg the
+	// builder made and then failed to connect, which would read as a working layout in the
+	// overlay and route nothing.
 	{
-		int32 CornersWithTwoWaysRound = 0;
+		int32 Isolated = 0;
 		for (const FGuidelineNodeId& Node : First.Nodes)
 		{
 			const FGuidelineNode* Found = Net->GetGuidelineNode(Node);
-			CornersWithTwoWaysRound += (Found != nullptr && Found->Incident.Num() >= 2) ? 1 : 0;
+			Isolated += (Found == nullptr || Found->Incident.Num() == 0) ? 1 : 0;
 		}
-		TestTrue(TEXT("the lane closes - every lane node has a way round both sides"),
-			CornersWithTwoWaysRound >= 4);
+
+		// THE TUG'S NODE IS THE ONE ALLOWED ISOLATE, and it is not in First.Nodes at all - the
+		// builder never touches it - so the figure here is zero rather than one.
+		TestEqual(TEXT("no laid node is left with nothing on it"), Isolated, 0);
 	}
 
 	// A SECOND PASS ADDS NOTHING. The graph is rebuilt on every road edit and this runs each
@@ -271,87 +287,113 @@ bool FAircraftLeadInStillCastsARayTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FServiceLinkJoinsFromAnyDirectionTest,
-	"Airside.Build.ServiceLinkJoinsFromAnyDirection",
+	FStandIsEnteredWhereItDeclaresTest,
+	"Airside.Build.StandIsEnteredWhereItDeclares",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FServiceLinkJoinsFromAnyDirectionTest::RunTest(const FString& Parameters)
+bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 {
 	using namespace ServiceLinkFixture;
 
-	// THE WHOLE POINT OF THE CHANGE. A stand's five service anchors nearly all cast the same
-	// way - three at -90, one at +90, one at 180 - so a road drawn the way a player draws
-	// one, ALONGSIDE the stands, was parallel to every ray and served none of them. A vehicle
-	// may genuinely arrive from any side, so a service link measures distance, not direction.
+	// THIS REPLACES ServiceLinkJoinsFromAnyDirection, AND REVERSES ITS CLAIM. That test said
+	// "a service link measures distance, not direction", which was the right rule for a lane
+	// that was a CYCLE: a truck could join it anywhere and drive round to any anchor, so
+	// refusing a road for being on the wrong side refused a stand a player had every reason to
+	// expect would work.
 	//
-	// Each road below sits GapNear or GapFar beyond one of the lane's four sides -
-	// ServiceLinkFixture::LaneBoundsOf, not the lane's corners typed a second time (#104), and
-	// derived from BuildCodeCStand's own arithmetic round the aircraft and anchors.
+	// THE LAYOUT IS NOT A CYCLE. Nothing may pass under a wing, so each side of a stand is its
+	// own dead end, and every way in is DECLARED - on the aft edge, where a GSE road runs
+	// behind a row of stands. Direction is now the whole of the question, and the old claim
+	// would pass only by finding a connection the design says should not exist.
 	//
-	// 4500 rather than exactly the 5000 uu radius: a boundary case measures the comparison
-	// operator rather than the rule, and would flip on a rounding error.
+	// SO WHAT IS MEASURED IS THE RULE THE PLAYER MEETS: put a road where the stand says it may
+	// be entered and every service is reachable; put one anywhere else and the stand is
+	// refused, which is a refusal they can act on.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	// 4500 rather than exactly the reach: a boundary case measures the comparison operator
+	// rather than the rule, and would flip on a rounding error.
 	constexpr double GapNear = 4500.0;
 	constexpr double GapFar = 20000.0;
 
-	struct FSide
+	// THE AFT EDGE IS READ OFF THE TEMPLATE, never typed. Every entry is authored there, so
+	// asking the bays where they are is the same question placement asks - and moving the
+	// entries moves this fixture with them.
+	double AftX = TNumericLimits<double>::Max();
+	for (const FServiceBay& Bay : Stand->ServiceBays)
 	{
-		const TCHAR* Name;
-		FVector2D From;
-		FVector2D To;
-	};
+		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
+	}
 
-	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
-
-	auto RoadsAt = [&LaneBounds](double Gap) -> TArray<FSide>
-	{
-		return {
-			{ TEXT("south"), FVector2D(-20000.0, LaneBounds.Min.Y - Gap), FVector2D(20000.0, LaneBounds.Min.Y - Gap) },
-			{ TEXT("north"), FVector2D(-20000.0, LaneBounds.Max.Y + Gap), FVector2D(20000.0, LaneBounds.Max.Y + Gap) },
-			{ TEXT("west"),  FVector2D(LaneBounds.Min.X - Gap, -20000.0), FVector2D(LaneBounds.Min.X - Gap, 20000.0) },
-			{ TEXT("east"),  FVector2D(LaneBounds.Max.X + Gap, -20000.0), FVector2D(LaneBounds.Max.X + Gap, 20000.0) },
-		};
-	};
-
-	for (const FSide& Side : RoadsAt(GapNear))
+	// BEHIND THE STAND, which is where a road belongs.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
 		const FGuidelineNodeId Near =
-			Lay(*Net, Side.From, Side.To, ETraversalClass::GroundVehicle, Far);
+			Lay(*Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+				ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 		FAnchorLink::Build(*Net);
 
-		const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
-		TestTrue(*FString::Printf(TEXT("a road to the %s reaches the lane"), Side.Name),
-			Net->IsServiceNodeConnected(Hydrant));
+		// EVERY SERVICE, not just the fuel one. The two sides never meet, so a test that asked
+		// only about the hydrant would pass with the whole port side orphaned - which is
+		// exactly the state this suite sat in before the road moved behind the stand.
+		for (const FServiceBay& Bay : Stand->ServiceBays)
+		{
+			const FGuidelineNodeId Node = AnchorNode(*Net, Placed, *Bay.AnchorId.ToString());
+			if (!TestTrue(*FString::Printf(TEXT("'%s' is connected"), *Bay.AnchorId.ToString()),
+				Net->IsServiceNodeConnected(Node)))
+			{
+				continue;
+			}
 
-		// AND A TRUCK CAN ACTUALLY GET THERE. Connectivity is the claim; a route is the proof,
-		// and "the search found nothing" would otherwise read like a broken search.
-		FRouteQuery Query;
-		Query.Start = Near;
-		Query.Goal = Hydrant;
-		Query.Class = ETraversalClass::GroundVehicle;
-		TestTrue(*FString::Printf(TEXT("and a truck routes from the %s to the hydrant"), Side.Name),
-			RouteSearch::Find(*Net, Query).IsValid());
+			// AND A TRUCK CAN ACTUALLY GET THERE. Connectivity is the claim; a route is the
+			// proof, and "the search found nothing" would otherwise read like a broken search.
+			FRouteQuery Query;
+			Query.Start = Near;
+			Query.Goal = Node;
+			Query.Class = ETraversalClass::GroundVehicle;
+			TestTrue(
+				*FString::Printf(TEXT("and a truck routes to '%s'"), *Bay.AnchorId.ToString()),
+				RouteSearch::Find(*Net, Query).IsValid());
+		}
 	}
 
-	for (const FSide& Side : RoadsAt(GapFar))
+	// IN FRONT OF THE NOSE, at the same gap, WHERE A ROAD CANNOT SERVE IT. This is the case
+	// the old test would have called a pass: the road is near the stand, just not near
+	// anything the stand declared. A player who draws one there gets a refusal naming the
+	// entry rather than a stand that half works.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
-		Lay(*Net, Side.From, Side.To, ETraversalClass::GroundVehicle, Far);
+		const double NoseX = IcaoCode::MaxNoseFwdForLetter(TEXT("C"));
+		Lay(*Net, FVector2D(NoseX + GapNear, -20000.0), FVector2D(NoseX + GapNear, 20000.0),
+			ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 		FAnchorLink::Build(*Net);
 
-		// THE SHORT RADIUS IS WHAT KEEPS THE REJECTED CASE REJECTED: at 200 m the nearest
-		// vehicle line is regularly the service road on the far side of a terminal, and the
-		// link would run straight through the building with nothing to report it.
-		TestFalse(*FString::Printf(TEXT("a road 200 m to the %s does not"), Side.Name),
+		TestFalse(TEXT("a road across the nose enters nothing - the entries are all aft"),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
 	}
+
+	// AND BEHIND, BUT TOO FAR. The short radius is what keeps the rejected case rejected: at
+	// 200 m the nearest vehicle line is regularly the service road on the far side of a
+	// terminal, and the link would run straight through the building with nothing to report it.
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		FGuidelineNodeId Far;
+		Lay(*Net, FVector2D(AftX - GapFar, -20000.0), FVector2D(AftX - GapFar, 20000.0),
+			ETraversalClass::GroundVehicle, Far);
+
+		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+		FAnchorLink::Build(*Net);
+
+		TestFalse(TEXT("a road 200 m behind the stand does not reach it"),
+			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
+	}
+
 	return true;
 }
 
@@ -411,25 +453,35 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 	using namespace ServiceLinkFixture;
 
 	// THE CASE THAT FAILED IN PIE ON 2026-09-07, and the one this whole design exists for:
-	// one service road drawn alongside a row of stands, which is how a player draws one.
+	// one service road serving a whole row of stands, which is how a player builds one.
 	// Measured then: 9 of 25 lead-ins joined, and the only service anchor that joined at any
-	// stand was TugStand - the one anchor that casts ACROSS the road instead of along it.
+	// stand was TugStand - the one anchor that cast ACROSS the road instead of along it.
+	//
+	// THE ROW IS SIDE BY SIDE AND THE ROAD RUNS BEHIND IT, since 2026-09-17. It used to be
+	// four stands nose-to-tail along X with the road ALONGSIDE at y = -6000, which is not a row
+	// of stands at all - it is four stands parked one behind another - and it only ever worked
+	// because a lane was a cycle a road could join from any side. Stands sit shoulder to
+	// shoulder facing the terminal, and the GSE road runs along the back of the row past every
+	// one of their aft edges. That is also the only arrangement the layout admits: nothing may
+	// pass under a wing, so a stand is entered from behind or not at all.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
-	constexpr double RoadY = -6000.0;
-	FGuidelineNodeId RoadEast;
-	const FGuidelineNodeId RoadWest =
-		Lay(*Net, FVector2D(-40000.0, RoadY), FVector2D(40000.0, RoadY),
-			ETraversalClass::GroundVehicle, RoadEast);
+	// 420 uu behind the aft edge, which every stand in the row shares because they all face
+	// the same way.
+	constexpr double RoadX = -5400.0;
+	FGuidelineNodeId RoadNorth;
+	const FGuidelineNodeId RoadSouth =
+		Lay(*Net, FVector2D(RoadX, -40000.0), FVector2D(RoadX, 40000.0),
+			ETraversalClass::GroundVehicle, RoadNorth);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 
 	TArray<FEntityInstanceId> Row;
 	for (int32 At = 0; At < 4; ++At)
 	{
-		// 8000 uu apart: a lane is 5250 uu wide, so that leaves 27 m of clear ground between
-		// neighbours and no lane is nearer to another lane than it is to the road.
-		Row.Add(PlaceStand(*Net, *Stand, FVector2D(-15000.0 + At * 8000.0, 0.0), 0.0));
+		// 8000 uu apart: a Code C stand is 5300 wide, so that leaves 27 m of clear ground
+		// between neighbours and no layout is nearer to another layout than it is to the road.
+		Row.Add(PlaceStand(*Net, *Stand, FVector2D(0.0, -12000.0 + At * 8000.0), 0.0));
 	}
 
 	FAnchorLink::Build(*Net);
@@ -441,7 +493,7 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 			Net->IsServiceNodeConnected(Hydrant));
 
 		FRouteQuery Query;
-		Query.Start = RoadWest;
+		Query.Start = RoadSouth;
 		Query.Goal = Hydrant;
 		Query.Class = ETraversalClass::GroundVehicle;
 		TestTrue(*FString::Printf(TEXT("and a truck routes to stand %d"), At),
@@ -955,20 +1007,27 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
 
 	// TWO GAPS, because the answer depends on the gap and one fixture could pass by luck. 4 m is
-	// as close as a player can draw a road to a stand; 54 m is what the rest of the suite uses
-	// (FuelServiceTest, RoadAlongsideARowOfStands and StandFuelAnchorJoinsRoad all put their
-	// road at y = -6000 with the stand at the origin), and it is past the point where the
-	// transition stops being constrained at all - see GuidelineGeom::ShiftDeflectionFor.
+	// as close as a player can draw a road to a stand; 54 m is a comfortable one, past the
+	// point where the transition stops being constrained at all - see
+	// GuidelineGeom::ShiftDeflectionFor.
+	//
+	// BEHIND THE AFT EDGE, since 2026-09-17. The road used to run ALONGSIDE at
+	// LaneBounds.Min.Y - Gap, which was the right fixture for a lane a road could join from any
+	// side. A stand declares its entries now and they are all on the aft edge, so a road to the
+	// south asks every link to turn out of an entry facing 45 degrees INTO the stand and run
+	// the depth of it - measured at 212 uu of delivered radius against a lock of 699. That is a
+	// road in the wrong place, not a builder that cannot lay a fillet, and putting it where the
+	// stand says a road goes is what makes this measure the transition rather than the fixture.
 	for (const double Gap : { 400.0, 5400.0 })
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const double RoadY = LaneBounds.Min.Y - Gap;
+		const double RoadX = LaneBounds.Min.X - Gap;
 
 		// LONG, so the fillet is never clamped by the road running out - that is a different
 		// failure with a different fix, and mixing the two would leave neither measured.
-		FGuidelineNodeId East;
-		Lay(*Net, FVector2D(-60000.0, RoadY), FVector2D(60000.0, RoadY),
-			ETraversalClass::GroundVehicle, East);
+		FGuidelineNodeId North;
+		Lay(*Net, FVector2D(RoadX, -60000.0), FVector2D(RoadX, 60000.0),
+			ETraversalClass::GroundVehicle, North);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 		FAnchorLink::Build(*Net);
@@ -1572,11 +1631,30 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 	}
 
 	// AND THE BENDS THAT CARRY THE TURN INSTEAD ARE ONES THE TRUCK CAN HOLD. Curvature the
-	// way FSpeedProfile measures it, over each lane edge's own samples.
+	// way FSpeedProfile measures it, over each laid edge's own samples.
+	//
+	// FORWARD EDGES ONLY, and skipping the rest is the whole reason FGuidelineEdge::bReverseLeg
+	// exists. A reverse leg is LEGITIMATELY tighter than the forward limit - a reversing
+	// vehicle pivots about its FIXED axle and holds L/tan(lock) where forward driving needs
+	// L/sin(lock), 494.5 against 699.3 - so sweeping every laid edge past the forward rule
+	// refuses the one manoeuvre the layout is designed around. Measured: it reported 547 uu,
+	// which is a reverse leg comfortably inside its own limit and 152 uu outside a limit that
+	// does not apply to it.
+	//
+	// THE REVERSE LEGS ARE NOT UNJUDGED. FReverseRun::Start arms every one of them at
+	// template-build time and refuses a curve it cannot hold -
+	// Airside.Entities.EveryTemplateLegIsDrivableByEveryVehicle is where that is measured, and
+	// re-judging them here by the wrong rule would be a second evaluator disagreeing with it.
 	double Tightest = TNumericLimits<double>::Max();
 	int32 Bends = 0;
 	for (const FGuidelineEdgeId& Id : Cycle)
 	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Id);
+		if (Edge != nullptr && Edge->bReverseLeg)
+		{
+			continue;
+		}
+
 		TArray<FVector2D> Points;
 		if (!Net->SampleGuideline(Id, Points) || Points.Num() < 3)
 		{
