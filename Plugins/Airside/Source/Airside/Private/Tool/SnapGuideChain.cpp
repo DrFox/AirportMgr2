@@ -364,18 +364,28 @@ void FSnapGuideChain::AddSource(TUniquePtr<IGuideSource> Source)
 
 SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 	const FGuideAnchor& Anchor, const FVector2D& Cursor,
-	const SnapGuide::FResult& Previous, const SnapGuide::FTuning& Tuning) const
+	const SnapGuide::FResult& Previous, const FSnapGuideSettings& Enabled,
+	const SnapGuide::FTuning& Tuning) const
 {
 	TArray<SnapGuide::FCandidate> Candidates;
 
-	// Stage 1 gathers at most six. Reserved anyway because stage 2's Parallel and Collinear
-	// propose per segment, and the array is rebuilt on every context - about three times a
-	// frame, per FBuildSession::MakeContext.
+	// Stage 1 gathered at most six. Reserved for more because Parallel and Collinear propose
+	// per segment, and the array is rebuilt on every context - about three times a frame, per
+	// FBuildSession::MakeContext.
 	Candidates.Reserve(16);
 
+	// THE PARAMETER IS `Enabled`, NOT `Sources`: the member holding the links is already called
+	// Sources, and a parameter of that name would shadow it - the loop below would then be
+	// iterating the settings struct.
 	for (const TUniquePtr<IGuideSource>& Source : Sources)
 	{
-		Source->Propose(Network, Anchor, Candidates);
+		// SKIPPED BEFORE IT WORKS, not filtered after. Collinear walks every segment in reach;
+		// doing that and discarding the result is waste, and filtering the candidates afterwards
+		// would lose which source had done the work.
+		if (Enabled.IsEnabled(Source->Kind()))
+		{
+			Source->Propose(Network, Anchor, Candidates);
+		}
 	}
 
 	return SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
