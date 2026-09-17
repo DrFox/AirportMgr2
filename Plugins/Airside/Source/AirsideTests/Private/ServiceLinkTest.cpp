@@ -141,25 +141,28 @@ bool FStandLaneReachesTheGraphTest::RunTest(const FString& Parameters)
 	// not retrace what it drove in on, which is what lets the reverse be judged by the reverse
 	// limit alone.
 	//
-	// THE TUG IS THE EXCEPTION AND IS ASSERTED AS ONE. It has no bay, because pushback couples
-	// at the nose gear and is FPushbackRun's manoeuvre; a tug never drives from a parking bay
-	// to a service point. Left as a skip it would be indistinguishable from a bay this builder
-	// silently failed to lay.
+	// TWO ANCHORS HAVE NO BAY AND BOTH ARE ASSERTED AS SUCH, rather than skipped - a skip is
+	// indistinguishable from a bay this builder silently failed to lay. The TUG has none
+	// because pushback couples at the nose gear and is FPushbackRun's manoeuvre; the PASSENGER
+	// DOOR has none because an air bridge is a structure and drives nowhere.
 	for (const FResolvedAnchor& Anchor : Net->GetEntity(Placed)->ResolvedAnchors)
 	{
 		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
 		{
 			continue;
 		}
+
+		const bool bDrives = TraversalForRole(Anchor.Role) == ETraversalClass::GroundVehicle
+			&& Anchor.Role != EServiceRole::Tug;
+
 		const FGuidelineNode* Node = Net->GetGuidelineNode(Anchor.Node);
 		if (TestNotNull(TEXT("the anchor resolves"), Node))
 		{
 			TestEqual(
 				*FString::Printf(TEXT("'%s' is %s"), *Anchor.Id.ToString(),
-					Anchor.Role == EServiceRole::Tug
-						? TEXT("a waiting position with no bay")
-						: TEXT("served by a leg in and a leg out")),
-				Node->Incident.Num(), Anchor.Role == EServiceRole::Tug ? 0 : 2);
+					bDrives ? TEXT("served by a leg in and a leg out")
+					        : TEXT("a position no vehicle parks at")),
+				Node->Incident.Num(), bDrives ? 2 : 0);
 		}
 	}
 	TestEqual(TEXT("the aircraft stop mark is untouched"),

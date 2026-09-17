@@ -74,12 +74,14 @@ bool FStandLayoutFitsItsLettersFloorTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the layout's own extent still reads as a Code C stand"),
 		IcaoCode::LetterForStandSize(Stand->RequiredExtent.X, Stand->RequiredExtent.Y), Letter);
 
-	// A BAY PER SERVICE A VEHICLE DRIVES TO - and the TUG is not one of them. Pushback couples
-	// at the nose gear and is FPushbackRun's manoeuvre, so a tug never drives from a parking
-	// bay to a service point; giving it the four legs would be geometry nothing walks.
+	// A BAY PER SERVICE A GROUND VEHICLE DRIVES TO, which is narrower than "not the aeroplane"
+	// in two ways that both matter. The TUG is a ground vehicle and still gets none: pushback
+	// couples at the nose gear and is FPushbackRun's manoeuvre. The PASSENGER DOOR is not a
+	// ground vehicle at all - an air bridge is a structure - so it gets none either, and asking
+	// the loose question would have handed it four legs and a road entry nothing would use.
 	for (const FEntityAnchor& Anchor : Stand->Anchors)
 	{
-		const bool bWants = TraversalForRole(Anchor.Role) != ETraversalClass::Aircraft
+		const bool bWants = TraversalForRole(Anchor.Role) == ETraversalClass::GroundVehicle
 			&& Anchor.Role != EServiceRole::Tug;
 		const FServiceBay* Bay = Stand->ServiceBays.FindByPredicate(
 			[&Anchor](const FServiceBay& Candidate) { return Candidate.AnchorId == Anchor.Id; });
