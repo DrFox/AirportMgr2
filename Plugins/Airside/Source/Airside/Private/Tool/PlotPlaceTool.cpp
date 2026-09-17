@@ -244,6 +244,23 @@ bool FPlotPlaceTool::DescribeGuideAnchor(FGuideAnchor& Out) const
 	// without knowing what a frontage is - the same split that keeps EPreviewStyle a meaning
 	// rather than a colour.
 	Out.ReferenceName = TEXT("the frontage");
+
+	// THE CORNERS ALREADY PINNED, so the moving one can line up with them - "0 degrees to
+	// corner 3" (the 2026-09-17 request). ONLY AS FAR AS PinnedCount: entries past it are
+	// stale, and offering one would align the player against the PREVIOUS gesture's geometry,
+	// which is the bug Quad's own comment records having shipped once.
+	//
+	// THE CORNER BEING DRAGGED IS NOT IN THE LIST. A point cannot line up with itself: its
+	// own two lines pass through wherever the cursor is, so both would always be in tolerance
+	// and the guide would say "you are level with yourself" on every frame.
+	const int32 Pinned = PinnedCount();
+	for (int32 Index = 0; Index < Pinned && Index < 4; ++Index)
+	{
+		// NUMBERED AS THE PLAYER COUNTS THEM - the readout says "Plot Points: 2/4", so corner
+		// 0 is "corner 1" on screen. A label naming a corner the bar does not is worse than
+		// no label.
+		Out.AlignTo.Add({ Corners[Index], FString::Printf(TEXT("corner %d"), Index + 1) });
+	}
 	return true;
 }
 
@@ -614,8 +631,18 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	if (Context.Guide.bActive && (Pinned == 2 || Pinned == 3) && Shown.IsValidIndex(Pinned))
 	{
 		const FVector2D Moving = Shown[Pinned];
-		Sink.Line(Moving, Context.Guide.Winner.ReferenceAt, EPreviewStyle::Guide);
-		Sink.Label(Moving, Context.Guide.Winner.Description, EPreviewStyle::Guide);
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// THE LABEL SITS AT ITS OWN LINE'S MIDPOINT, not at the corner. With one guide the
+			// corner was the obvious place - it is where the eye is - but two guides put both
+			// labels on the same point and the plugin has no camera to offset them by a
+			// readable number of pixels. The midpoint needs no measurement and puts each label
+			// on the line it describes.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
 	}
 
 	// CONTENTS AT THREE CORNERS, NOT TWO. With two pinned both back corners are unknown and

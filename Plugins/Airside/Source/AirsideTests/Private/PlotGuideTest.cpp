@@ -196,6 +196,77 @@ bool FPlotCornerFollowsTheGuideTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * TWO ALIGNMENTS ON THE LAST CORNER, which is the 2026-09-17 request in its own geometry:
+ * square to the frontage from the anchor, AND level with the back corner already placed. The
+ * two are perpendicular, so they genuinely cross - and the corner lands where they do, which
+ * is the corner that makes the plot an exact rectangle.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotLastCornerTakesTwoGuidesTest,
+	"Airside.Tool.PlotLastCornerTakesTwoGuides",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotLastCornerTakesTwoGuidesTest::RunTest(const FString& Parameters)
+{
+	FDepotGesture Gesture;
+	if (!TestTrue(TEXT("a depot gesture with its frontage pinned"), StartGesture(Gesture)))
+	{
+		return false;
+	}
+
+	// Pin the first back corner exactly square, 2000 uu out from the frontage's far end.
+	const FVector2D FarEnd = Gesture.Frontage[1];
+	Gesture.Tool->OnClick(Gesture.At(FarEnd + FVector2D(0.0, 2000.0)));
+
+	TArray<FVector2D> ThreePinned;
+	Gesture.Plot()->Quad(Gesture.At(FarEnd + FVector2D(0.0, 2000.0)), ThreePinned);
+	if (!TestEqual(TEXT("three corners are pinned"), ThreePinned.Num(), 4)) { return false; }
+
+	const FVector2D Anchor = ThreePinned[0];
+	const FVector2D BackFar = ThreePinned[2];
+
+	// THE LAST CORNER, dragged near the rectangle's corner but not on it: 70 uu off square
+	// from the anchor, and 80 uu off level with the back corner. Both inside tolerance, and
+	// neither exact - so landing exactly on both can only come from the intersection.
+	const FVector2D Target(Anchor.X + 70.0, BackFar.Y - 80.0);
+	const FToolContext Guided = Gesture.At(Target);
+
+	if (!TestTrue(TEXT("the driver resolved a guide"), Guided.Guide.bActive)) { return false; }
+	if (!TestEqual(TEXT("and two alignments hold at once"), Guided.Guide.Winners.Num(), 2))
+	{
+		return false;
+	}
+
+	TArray<FVector2D> Shown;
+	Gesture.Plot()->Quad(Guided, Shown);
+	if (!TestEqual(TEXT("the quad shows four corners"), Shown.Num(), 4)) { return false; }
+
+	// EXACT ON BOTH COUNTS, which is what makes both labels honest.
+	TestTrue(TEXT("the last corner is exactly square to the frontage from the anchor"),
+		FMath::IsNearlyEqual(Shown[3].X, Anchor.X, 1.0e-6));
+	TestTrue(TEXT("and exactly level with the back corner already placed"),
+		FMath::IsNearlyEqual(Shown[3].Y, BackFar.Y, 1.0e-6));
+
+	// TWO LINES AND TWO LABELS, one per guide.
+	FGuideSink Sink;
+	Gesture.Tool->BuildPreview(Guided, Sink);
+	TestEqual(TEXT("a dashed line is drawn for each guide"),
+		Sink.Of(EPreviewStyle::Guide).Num(), 2);
+	if (!TestEqual(TEXT("and a label for each"), Sink.GuideLabels.Num(), 2)) { return false; }
+
+	// NAMING THE CORNER AS THE BAR COUNTS IT. The readout says "Plot Points: 3/4", so the
+	// corner pinned third is "corner 3" on screen and must be "corner 3" in the label.
+	TestTrue(TEXT("one label names the frontage it is square to"),
+		Sink.GuideLabels.ContainsByPredicate([](const FString& L)
+			{ return L.Contains(TEXT("the frontage")); }));
+	TestTrue(TEXT("and the other names the corner it is level with"),
+		Sink.GuideLabels.ContainsByPredicate([](const FString& L)
+			{ return L.Contains(TEXT("corner 3")); }));
+
+	return true;
+}
+
+/**
  * THE CONTROL: the guide must be OFF most of the time. A corner dragged nowhere near an
  * alignment keeps the cursor it was given and nothing is drawn - otherwise the feature is a
  * constraint the player never asked for rather than an aid.

@@ -8,9 +8,10 @@
 namespace
 {
 	/**
-	 * An EMPTY network, because stage 1's two sources read nothing from one - Extending is
-	 * handed its reference by the tool and World is absolute. A network with roads in it
-	 * would suggest these sources consult it, which is exactly what stage 2 changes.
+	 * An EMPTY network, because none of the three sources installed so far reads one -
+	 * Extending and PointAlign are handed their geometry by the tool, and World is absolute.
+	 * A network with roads in it would suggest these sources consult it, which is exactly
+	 * what stage 2 changes.
 	 */
 	URoadNetwork* EmptyNetwork()
 	{
@@ -40,7 +41,7 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	if (!TestNotNull(TEXT("a network"), Network)) { return false; }
 
 	const FSnapGuideChain Chain;
-	TestEqual(TEXT("stage 1 installs Extending and World"), Chain.NumSources(), 2);
+	TestEqual(TEXT("the chain installs Extending, PointAlign and World"), Chain.NumSources(), 3);
 
 	const FGuideAnchor Anchor = Frontage();
 
@@ -57,15 +58,15 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	}
 
 	TestEqual(TEXT("the perpendicular of the tool's own reference is what wins"),
-		static_cast<int32>(Result.Winner.Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
 	TestEqual(TEXT("and it is described by the name the TOOL gave its reference"),
-		Result.Winner.Description, FString(TEXT("square to the frontage")));
+		Result.Winners[0].Description, FString(TEXT("square to the frontage")));
 
 	// THE DASHED LINE POINTS AT THE EDGE, not along the guide - design section 6. This is the
 	// field the overlay draws to, so an anchor whose ReferenceAt did not travel would draw a
 	// line to the world origin and look like a bug in the gesture.
 	TestTrue(TEXT("the reference point the tool supplied travels to the winner"),
-		Result.Winner.ReferenceAt.Equals(Anchor.ReferenceAt, 1.0e-6));
+		Result.Winners[0].ReferenceAt.Equals(Anchor.ReferenceAt, 1.0e-6));
 
 	// EXACTLY SQUARE, not nearly: the constrained point is what the corner becomes.
 	TestTrue(TEXT("the constrained point is exactly square to the frontage"),
@@ -77,7 +78,7 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	const SnapGuide::FResult AlongIt = Chain.Resolve(
 		*Network, Anchor, Anchor.Origin + FVector2D(2000.0, 30.0), SnapGuide::FResult());
 	TestEqual(TEXT("dragging along the frontage gets the frontage's own direction"),
-		AlongIt.Winner.Description, FString(TEXT("along the frontage")));
+		AlongIt.Winners[0].Description, FString(TEXT("along the frontage")));
 
 	return true;
 }
@@ -102,7 +103,7 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 	const SnapGuide::FResult Result = Chain.Resolve(
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestEqual(TEXT("a tie between the frontage and a world axis goes to the frontage"),
-		static_cast<int32>(Result.Winner.Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
 
 	// CONTROL LEG: World was a live competitor, not an absent one. With no reference the
 	// Extending source proposes nothing and the same cursor gets the world axis instead - so
@@ -112,11 +113,11 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestTrue(TEXT("with no reference the world grid still answers"), WorldOnly.bActive);
 	TestEqual(TEXT("and it is the world axis that does"),
-		static_cast<int32>(WorldOnly.Winner.Source), static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(WorldOnly.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
 	TestEqual(TEXT("named as an angle, since the grid has no thing to point at"),
-		WorldOnly.Winner.Description, FString(TEXT("90 degrees")));
+		WorldOnly.Winners[0].Description, FString(TEXT("90 degrees")));
 	TestTrue(TEXT("and its line points back at the corner it swings around"),
-		WorldOnly.Winner.ReferenceAt.Equals(Anchor.Origin, 1.0e-6));
+		WorldOnly.Winners[0].ReferenceAt.Equals(Anchor.Origin, 1.0e-6));
 
 	return true;
 }

@@ -6,6 +6,20 @@
 class URoadNetwork;
 
 /**
+ * A point worth lining up with, and what to call it in the label.
+ *
+ * ONE STRUCT PER THING: the position and its name are one fact, and two parallel arrays are
+ * exactly how they come apart.
+ */
+struct FGuidePoint
+{
+	FVector2D At = FVector2D::ZeroVector;
+
+	/** "corner 3". The source composes "0 degrees to corner 3" from it. */
+	FString Name;
+};
+
+/**
  * What the tool is dragging, and what it is dragging it against.
  *
  * THE TOOL SUPPLIES IT, THE DRIVER RESOLVES FROM IT - see IBuildTool::DescribeGuideAnchor.
@@ -39,6 +53,17 @@ struct FGuideAnchor
 	 * own reference because the tool is the only thing that knows what it is.
 	 */
 	FString ReferenceName;
+
+	/**
+	 * Points the moving point may line UP WITH - the gesture's own pinned corners.
+	 *
+	 * Supplied by the tool for the same reason Reference is: only the tool knows which of its
+	 * points are still meaningful this frame, and a source that went looking would be reading
+	 * stale corners (see FPlotPlaceTool::Quad on entries past PinnedCount being stale).
+	 *
+	 * Stage 2's Aligned source feeds network points into the SAME source without changing it.
+	 */
+	TArray<FGuidePoint> AlignTo;
 };
 
 /**
@@ -85,6 +110,22 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 };
 
 /**
+ * Source 2: lines THROUGH each point the tool named, along the reference and its perpendicular.
+ *
+ * THE FIRST SOURCE WHOSE LINES DO NOT PASS THROUGH THE DRAG'S ORIGIN, which is why
+ * FCandidate carries Through at all. Its candidates are EFit::Perpendicular: "level with
+ * corner 3" is about where the cursor ended up, not about which way it set off, and an angle
+ * measured from an origin that is nowhere on the line would answer a different question.
+ *
+ * It needs no network: the tool supplies the points, as it supplies the reference.
+ */
+struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
  * Gathers every source's candidates and arbitrates between them - design sections 3 and 5.
  *
  * MODELLED ON FRoadSnapChain, deliberately, down to the move-only ownership: a source added
@@ -97,7 +138,7 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 class AIRSIDE_API FSnapGuideChain
 {
 public:
-	/** Extending then World: stage 1's two, in design section 3's order. */
+	/** Extending, PointAlign, then World, in design section 3's order. */
 	FSnapGuideChain();
 
 	// Move-only for the same reason FRoadSnapChain is: the chain OWNS its sources through
