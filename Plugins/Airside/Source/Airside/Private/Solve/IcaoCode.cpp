@@ -65,16 +65,34 @@ namespace IcaoCode
 			 */
 			double WingFwd;
 			double WingAft;
+
+			/**
+			 * Extra width, uu, for the road contacts along a stand's aft edge.
+			 *
+			 * A STAND IS ENTERED FROM BEHIND AND EVERY BAY HAS ITS OWN WAY IN, so a Code C
+			 * stand puts six contacts on its back edge - four bay entries and one exit per
+			 * side. Each splits the GSE road where it joins it, and the fillet either side
+			 * wants its own run along that road, so neighbours cannot be closer than twice
+			 * that. The aeroplane and its two lanes do not pay for any of it.
+			 *
+			 * 600 EVERYWHERE, and that is right rather than lazy: the figure is set by the
+			 * service VEHICLE's turning radius and by how many services a stand has, neither
+			 * of which is a property of the code letter. It cannot be derived here because
+			 * the vehicle lives in Content/ and Solve/ may see only CoreMinimal - so it is
+			 * authored, and Airside.Entities.StandLayoutFitsItsLettersFloor measures what the
+			 * layout actually reaches against the width this produces.
+			 */
+			double AftEdgeAllowance;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0,  -950.0, -2150.0 },
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0, -1600.0, -3700.0 },
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0 },
+			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0, 600.0 },
+			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0, 600.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0,  -950.0, -2150.0, 600.0 },
+			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0, -1600.0, -3700.0, 600.0 },
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0, 600.0 },
 		};
 
 		/**
@@ -86,7 +104,8 @@ namespace IcaoCode
 		 */
 		static double WidthOf(const FRow& Row)
 		{
-			return Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth());
+			return Row.MaxWingspan + 2.0 * (Row.WingtipClearance + IcaoCode::ServiceLaneWidth())
+				+ Row.AftEdgeAllowance;
 		}
 
 		/** The row after this one, or null at Code F. */

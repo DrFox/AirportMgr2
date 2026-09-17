@@ -63,28 +63,28 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 {
-	// THE DERIVATION, NOT ITS OUTPUT. Asserting 5300 for Code C would pass just as well against
-	// a typed 5300, which is the thing this change exists to stop. A stand's MINIMUM width is
-	// the span band plus twice the wingtip clearance plus twice a service lane - every letter,
-	// to the centimetre - so that is what is asserted, and the figures move together or the
-	// test fails.
-	struct FCase { const TCHAR* Letter; double Span; double Clearance; };
+	// THE DERIVATION, NOT ITS OUTPUT. Asserting 5900 for Code C would pass just as well against
+	// a typed 5900, which is the thing this change exists to stop. A stand's MINIMUM width is
+	// the span band, plus twice the wingtip clearance, plus twice a service lane, plus the aft
+	// edge's own allowance - every letter, to the centimetre - so that is what is asserted, and
+	// the figures move together or the test fails.
+	struct FCase { const TCHAR* Letter; double Span; double Clearance; double AftEdge; };
 	const FCase Cases[] = {
-		{ TEXT("A"), 1500.0, 300.0 },
-		{ TEXT("B"), 2400.0, 300.0 },
-		{ TEXT("C"), 3600.0, 450.0 },
-		{ TEXT("D"), 5200.0, 750.0 },
-		{ TEXT("E"), 6500.0, 750.0 },
-		{ TEXT("F"), 8000.0, 750.0 },
+		{ TEXT("A"), 1500.0, 300.0, 600.0 },
+		{ TEXT("B"), 2400.0, 300.0, 600.0 },
+		{ TEXT("C"), 3600.0, 450.0, 600.0 },
+		{ TEXT("D"), 5200.0, 750.0, 600.0 },
+		{ TEXT("E"), 6500.0, 750.0, 600.0 },
+		{ TEXT("F"), 8000.0, 750.0, 600.0 },
 	};
 
 	for (const FCase& Case : Cases)
 	{
 		TestEqual(
-			*FString::Printf(TEXT("stand %s is its span band plus twice its clearance and lane"),
+			*FString::Printf(TEXT("stand %s is its span, clearances, lanes and aft edge"),
 				Case.Letter),
 			IcaoCode::StandWidthForLetter(Case.Letter),
-			Case.Span + 2.0 * (Case.Clearance + IcaoCode::ServiceLaneWidth()),
+			Case.Span + 2.0 * (Case.Clearance + IcaoCode::ServiceLaneWidth()) + Case.AftEdge,
 			0.5);
 	}
 
@@ -110,21 +110,21 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// BOTH DIMENSIONS, NEVER ONE. Width alone would call a 67 x 30 m stand Code D, when nothing
 	// bigger than a King Air fits in 30 m of depth. The letter is the largest whose width AND
 	// depth both fit, and the shallow case below is the one that discriminates.
-	TestEqual(TEXT("53 x 55 m is a Code C stand - exactly its floor"),
-		IcaoCode::LetterForStandSize(5300.0, 5500.0), FString(TEXT("C")));
-	TestEqual(TEXT("70 x 55 m is still Code C - D needs 75 m of width"),
-		IcaoCode::LetterForStandSize(7000.0, 5500.0), FString(TEXT("C")));
-	TestEqual(TEXT("75 x 70 m is genuinely Code D"),
-		IcaoCode::LetterForStandSize(7500.0, 7000.0), FString(TEXT("D")));
-	TestEqual(TEXT("75 x 30 m is a Code B - D-wide but far too shallow"),
-		IcaoCode::LetterForStandSize(7500.0, 3000.0), FString(TEXT("B")));
-	TestEqual(TEXT("53 x 90 m is a Code C - deep, but the span binds"),
-		IcaoCode::LetterForStandSize(5300.0, 9000.0), FString(TEXT("C")));
+	TestEqual(TEXT("59 x 55 m is a Code C stand - exactly its floor"),
+		IcaoCode::LetterForStandSize(5900.0, 5500.0), FString(TEXT("C")));
+	TestEqual(TEXT("76 x 55 m is still Code C - D needs 81 m of width"),
+		IcaoCode::LetterForStandSize(7600.0, 5500.0), FString(TEXT("C")));
+	TestEqual(TEXT("81 x 70 m is genuinely Code D"),
+		IcaoCode::LetterForStandSize(8100.0, 7000.0), FString(TEXT("D")));
+	TestEqual(TEXT("81 x 30 m is a Code B - D-wide but far too shallow"),
+		IcaoCode::LetterForStandSize(8100.0, 3000.0), FString(TEXT("B")));
+	TestEqual(TEXT("59 x 90 m is a Code C - deep, but the span binds"),
+		IcaoCode::LetterForStandSize(5900.0, 9000.0), FString(TEXT("C")));
 
 	// A HAIR UNDER THE FLOOR IS THE LETTER BELOW, which is the property a player dragging a
 	// polygon actually feels: the stand does not "nearly" admit a 737, it admits a Dash 8.
 	TestEqual(TEXT("a centimetre under Code C's floor is a Code B stand"),
-		IcaoCode::LetterForStandSize(5299.0, 5500.0), FString(TEXT("B")));
+		IcaoCode::LetterForStandSize(5899.0, 5500.0), FString(TEXT("B")));
 
 	// Below the smallest stand there is no letter to give, and saying "A" would admit a Cessna
 	// to a space it does not fit. Empty means "no stand of any letter fits this", which is a

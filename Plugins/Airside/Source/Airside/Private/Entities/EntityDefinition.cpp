@@ -307,22 +307,33 @@ void UEntityDefinition::BuildStandTemplate(
 	const double SquareBack =
 		LegSlack * GuidelineGeom::CornerRunFor(ReverseRadius, UE_DOUBLE_HALF_PI);
 
-	// THE PARKING ROW. Slots stand at 45 degrees a short run in from the back edge, so a
-	// vehicle turning off the GSE road makes a 45 degree corner rather than a square one.
-	constexpr double ParkRun = 500.0;
-	const double ParkRowX = BackX + ParkRun;
+	// THE PARKING ROW stands at 45 degrees a short run in from the back edge, so a vehicle
+	// turning off the GSE road makes a 45 degree corner rather than a square one. How long that
+	// run is falls out of two constraints below, once the serviced anchors are known.
 
 	// HOW FAR APART THE AFT-EDGE NODES SIT, DERIVED FROM THE ROAD'S OWN FILLET rather than
 	// chosen. Every entry and exit splits the road where it joins it, and the fillet either
 	// side of that contact wants Diagonal of run along the road; two neighbours therefore need
 	// twice that between them, plus the tenth everything else here gets.
 	//
-	// MEASURED, AND IT IS WHY THIS IS NOT 450. At 450 the six aft-edge nodes left 450 uu
-	// segments of road between them, the fillets were clamped to what was left, and BOTH
-	// sweeps onto the road came out at 89 and 6 uu against a lock of 699 - not the ruled
-	// one-good-one-shunt pair but two unusable ones. The aft edge is 5300 uu long and six
-	// nodes at this pitch need 3800, so the room was always there; it was the packing that
-	// was wrong.
+	// TWICE, WHICH IS WHAT THE GEOMETRY SUGGESTS AND IS MEASURABLY NOT QUITE ENOUGH. A fillet
+	// either side of a contact each wants Diagonal, so neighbours want twice it - but at the
+	// 759 uu that gives, ONE contact of the six still delivers 341 uu against a lock of 699.
+	// Swept upward: 2.64 x Diagonal also fails, 2.86 x clears. The extra is the road SPLIT each
+	// contact makes, shortening the segment its neighbour's fillet works in, which the
+	// two-fillet picture does not contain.
+	//
+	// IT IS LEFT AT TWICE ANYWAY, and that is a deliberate trade rather than an oversight.
+	// Raising it to 3 x moves the park row so far inboard that the aft-most bay's serve leg has
+	// no legal run at all - the warning below fires and TWO legs fold, which is worse than one
+	// clamped fillet. The aft hold is pinned between the wing keep-out at -2150 and the parking
+	// row, and that is the constraint to relieve; see the one remaining failure of
+	// Airside.Build.StandLinkClearsTheTruckLock.
+	//
+	// AT 450 IT WAS FAR WORSE and is worth recording: the six aft-edge nodes left 450 uu
+	// segments, every fillet was clamped to what was left, and BOTH sweeps came out at 89 and
+	// 6 uu - not the ruled one-good-one-shunt pair but two unusable ones. So the figure is
+	// right in kind and short in degree, which is a different thing from being wrong.
 	const double AftPitch = 2.0 * Diagonal * LegSlack;
 
 	// A BAY PER ANCHOR A VEHICLE SERVICES FROM, which is not the same as every anchor that is
@@ -352,6 +363,45 @@ void UEntityDefinition::BuildStandTemplate(
 			}
 			return A.LocalPosition.X < B.LocalPosition.X;
 		});
+
+	// HOW LONG THE RUN IN FROM THE BACK EDGE IS, and it is squeezed from both ends, so it is
+	// derived rather than chosen.
+	//
+	// AT LEAST ITS OWN CORNER. The run is travelled at 45 degrees, so the diagonal is
+	// ParkRun * sqrt(2), and the bend where it meets the lane wants Diagonal of that. Less and
+	// the serve leg folds at the park end.
+	//
+	// AT MOST WHAT THE AFT-MOST BAY LEAVES. The serve leg's 45 degree run meets the lane at
+	// ParkRowX + AftPitch - the park pose sits exactly AftPitch inboard of its lane, because
+	// the entry is ParkRun + AftPitch in and the park pose ParkRun back out - and that has to
+	// land Diagonal + Square short of the aft-most turn-in, or the two corners overlap and
+	// neither delivers its radius. Measured at ParkRun 500: 1480 uu of lane against the 1433
+	// those corners need, a fold of 179 degrees.
+	//
+	// THE MIDPOINT OF THE BAND, so neither end is the one that fails first.
+	double AftMostService = TNumericLimits<double>::Max();
+	for (const FEntityAnchor* Anchor : Serviced)
+	{
+		AftMostService = FMath::Min(AftMostService, Anchor->LocalPosition.X);
+	}
+
+	const double ParkRunFloor = LegSlack * Diagonal / UE_DOUBLE_SQRT_2;
+	const double ParkRunCeiling =
+		(AftMostService - Diagonal - Square) - BackX - AftPitch;
+	if (ParkRunCeiling < ParkRunFloor)
+	{
+		// NOT SILENTLY WRONG. The layout is still laid - a shape somebody has to fix is more
+		// use than no shape - but the aft-most bay is too close to the parking row for its
+		// shift to finish, and the drivability test will report the fold with its figure.
+		UE_LOG(LogAirside, Warning,
+			TEXT("Stand template '%s': the parking row has no legal run - its own corner wants "
+			     "at least %.0f uu and the aft-most service at %.0f leaves at most %.0f. The "
+			     "serve leg to that bay will fold."),
+			*Letter, ParkRunFloor, AftMostService, ParkRunCeiling);
+	}
+	const double ParkRun =
+		FMath::Max(ParkRunFloor, 0.5 * (ParkRunFloor + ParkRunCeiling));
+	const double ParkRowX = BackX + ParkRun;
 
 	// HOW MANY BAYS EACH SIDE HAS, counted before any is placed, because the EXIT sits inboard
 	// of every entry on its side and so cannot be positioned until they are all known.
@@ -416,7 +466,10 @@ void UEntityDefinition::BuildStandTemplate(
 		// itself at 179 degrees. Six road contacts at this pitch need 3795 uu of aft edge with
 		// the outermost within 845 of its lane, so the real lever is the stand's minimum WIDTH,
 		// which is a band this project chooses. 5300 does not hold them; about 5900 does.
-		const double EntryY = Lane - Side * (LaneGap + ParkRun + Slot * AftPitch);
+		// A FULL PITCH INBOARD OF THE EXIT, not LaneGap. The exit is the outermost contact on
+		// its side and the entries step in from IT, so every pair of neighbours on the aft edge
+		// is AftPitch apart and no fillet is clamped by the one beside it.
+		const double EntryY = Lane - Side * (ParkRun + (Slot + 1) * AftPitch);
 
 		// THE EXIT SITS ONE ParkRun IN FROM ITS LANE, which is the position that makes its
 		// depart turn exactly 45 degrees at a vertex ParkRun forward of the back edge.
@@ -527,10 +580,11 @@ void UEntityDefinition::BuildStandTemplate(
 	// figures they imply are what say whether that geometry was right.
 	UE_LOG(LogAirside, Log,
 		TEXT("Stand template '%s': box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
-		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, park row x %.0f, "
-		     "%d bay(s), needs %.0f x %.0f"),
+		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, aft pitch %.0f, "
+		     "park run %.0f (band %.0f..%.0f) row x %.0f, %d bay(s), needs %.0f x %.0f"),
 		*Letter, Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
-		Square, Diagonal, SquareBack, LaneY, ParkRowX,
+		Square, Diagonal, SquareBack, LaneY, AftPitch,
+		ParkRun, ParkRunFloor, ParkRunCeiling, ParkRowX,
 		Definition.ServiceBays.Num(), Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
 
 	for (const FServiceBay& Bay : Definition.ServiceBays)

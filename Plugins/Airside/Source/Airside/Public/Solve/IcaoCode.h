@@ -43,7 +43,8 @@ namespace IcaoCode
 
 	/**
 	 * The NARROWEST stand of this letter, uu: its span band, plus twice the letter's wingtip
-	 * clearance, plus twice a service lane.
+	 * clearance, plus twice a service lane, plus the room its road contacts need along the
+	 * aft edge.
 	 *
 	 * A MINIMUM, NOT A SIZE, since 2026-09-17. A stand is a polygon the PLAYER draws and the
 	 * letter is derived from what they drew (LetterForStandSize), so no stand has "the" width
@@ -54,10 +55,15 @@ namespace IcaoCode
 	 * others, and this table exists because three such figures once drifted. The service lane
 	 * is in it because a vehicle has to get PAST the aeroplane to reach the far side, and the
 	 * wingtip clearance is separation from anything: a lane laid inside it is a lane that is
-	 * not clear of the wingtip. Code C is 3600 + 2 x (450 + 400) = 5300 rather than the 4500
-	 * the span and clearance alone give, and 4500 was measured on 2026-09-17 as too narrow to
-	 * turn a service vehicle in - every arrangement of a lane, a rank and a bay landed within
-	 * a few tens of uu of an edge.
+	 * not clear of the wingtip. The aft-edge allowance is in it because every bay is entered
+	 * from behind by its own way in, and each of those contacts splits the GSE road and wants
+	 * its fillet's run along it.
+	 *
+	 * Code C is 3600 + 2 x (450 + 400) + 600 = 5900 rather than the 4500 the span and
+	 * clearance alone give. 4500 was measured on 2026-09-17 as too narrow to turn a service
+	 * vehicle in - every arrangement of a lane, a rank and a bay landed within a few tens of
+	 * uu of an edge - and 5300 held the lanes but not the six road contacts, which left
+	 * fillets clamped to 212 and 15 uu against a lock of 699.
 	 *
 	 * Letter matched case-insensitively, unknown letters resolving to C, as RadiusForLetter
 	 * does and for the same reason.
