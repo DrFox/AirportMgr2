@@ -6,6 +6,7 @@
 #include "Model/RoadHandles.h"
 #include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
+#include "Present/PlotPresenter.h"
 #include "Present/RoadSurfacePresenter.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
@@ -194,6 +195,9 @@ public:
 	 * three-line forwarders AND this accessor was the growth this whole issue was about.
 	 */
 	URoadSurfacePresenter* GetPresenter() const { return Presenter; }
+
+	/** The plot boxes - see UPlotPresenter. */
+	UPlotPresenter* GetPlotPresenter() const { return Plots; }
 
 	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
@@ -416,6 +420,9 @@ public:
 	/** Place a stand, facing Heading in radians. Returns its slot index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual int32 PlaceEntity(FVector2D Where, double Heading, EPlaceableEntity Kind) override;
+	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		FVector2D FrontageA, FVector2D FrontageB,
+		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) override;
 	using IRoadEditTarget::PlaceStand;
 
 	/** Remove a placed entity, and the anchor nodes it owns. */
@@ -803,6 +810,15 @@ private:
 	 * disposable as it always was.
 	 */
 	UPROPERTY(Transient) TObjectPtr<URoadSurfacePresenter> Presenter;
+
+	/** The boxes standing in plotted installations' bays - see UPlotPresenter's own header.
+	 *  Same CreateDefaultSubobject and Transient reasoning as Presenter. */
+	UPROPERTY(Transient) TObjectPtr<UPlotPresenter> Plots;
+
+	/** The one component every plot box and fence panel is an instance in. A UPROPERTY and
+	 *  NOT Transient, unlike the presenter that fills it: it is a scene component this actor
+	 *  owns, exactly as the five dynamic mesh components are. */
+	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotBoxes;
 
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */

@@ -750,5 +750,43 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 			Joined, Pending.Num(), Unjoined);
 	}
 
+	// A PLOT THAT CANNOT WORK YET, warned rather than refused. A part-built depot is a
+	// legitimate state - the player may be about to add the missing module - so the census
+	// says what is missing and the placement still stands. This is the same habit as the
+	// unjoined-anchor warning above: name the thing the player would go and fix.
+	//
+	// HERE AND NOT AT PLACEMENT, because it must be said again after an EDIT. A depot built
+	// correctly and later reduced would otherwise have been warned about once, at a moment
+	// the player was not looking at it.
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive || Entity.Modules.Num() == 0)
+		{
+			continue;
+		}
+
+		int32 Sheds = 0;
+		int32 Pumps = 0;
+		for (const EDepotModule Module : Entity.Modules)
+		{
+			Sheds += Module == EDepotModule::Shed ? 1 : 0;
+			Pumps += Module == EDepotModule::Pump ? 1 : 0;
+		}
+
+		if (Sheds == 0)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Fuel depot at (%.0f, %.0f): no shed, so no trucks. Build one in a bay."),
+				Entity.Position.X, Entity.Position.Y);
+		}
+		if (Pumps == 0)
+		{
+			UE_LOG(LogAirside, Warning,
+				TEXT("Fuel depot at (%.0f, %.0f): no pump, so nothing can be fuelled. "
+					 "Build one in a bay."),
+				Entity.Position.X, Entity.Position.Y);
+		}
+	}
+
 	return Joined;
 }

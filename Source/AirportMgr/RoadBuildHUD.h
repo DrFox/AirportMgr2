@@ -4,6 +4,7 @@
 #include "GameFramework/HUD.h"
 #include "Tool/PreviewPalette.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/ToolReadout.h"
 #include "RoadBuildHUD.generated.h"
 
 class ARoadBuildController;
@@ -78,6 +79,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "0.5"))
 	float PreviewThickness = 3.0f;
 
+	/**
+	 * Dash plus gap for a Provisional line, in PIXELS. Half is drawn, half is skipped.
+	 *
+	 * Screen space, not world space: a world-space dash shortens with distance until a far
+	 * edge reads as a solid line, which is the one thing the dash exists to deny. Same reason
+	 * CrossMark takes its length from this class rather than from the tool.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "4.0"))
+	float DashPitch = 18.0f;
+
 	/** Half-length of a cross mark, in pixels. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Preview", meta = (ClampMin = "1.0"))
 	float CrossMarkRadius = 9.0f;
@@ -95,7 +106,47 @@ public:
 	virtual void CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style) override;
 	virtual void Label(const FVector2D& At, const FString& Text, EPreviewStyle Style) override;
 
+	/**
+	 * Whether this style draws as a dashed line.
+	 *
+	 * STATIC AND PUBLIC so the one rule is testable with no Canvas. The PLUGIN never names a
+	 * dash length - it names a MEANING, and this is where meaning becomes look, in the same
+	 * class that turns a style into a colour.
+	 */
+	static bool IsDashed(EPreviewStyle Style) { return Style == EPreviewStyle::Provisional; }
+
+	/**
+	 * What to offer the player when a gesture is ready to commit - "Build  [Enter]" - or an
+	 * empty string when nothing is.
+	 *
+	 * STATIC AND TAKING THE READOUT, so the one decision that matters is testable with no
+	 * Canvas, no world and no PIE: that the prompt appears exactly when bCommittable is set,
+	 * and that its key comes from BuildActions() rather than a literal typed here. A literal
+	 * would be a second place naming the Build key, and CLAUDE.md records three separate
+	 * occasions this project shipped a key that went nowhere.
+	 */
+	static FString CommitPromptText(const FToolReadout& Readout);
+
+	/**
+	 * The plot panel's text, one line per entry, empty when there is nothing to say.
+	 *
+	 * STATIC AND TAKING THE READOUT, for the same reason CommitPromptText is: the drawing
+	 * needs a Canvas and the CONTENT does not, so the part that can go silently wrong stays
+	 * testable with no world and no PIE.
+	 */
+	static TArray<FString> PanelLines(const FToolReadout& Readout);
+
 private:
+	/**
+	 * The commit prompt, drawn AT THE CURSOR rather than on the bar.
+	 *
+	 * The bar already carries a Build button and it was not enough: it is the tenth control
+	 * along in a group of six that all look alike, and reaching the last stage only un-greys
+	 * it. The player's eyes are on the plot they are dragging, which is where the offer to
+	 * build has to be - PIE, 2026-09-16, "i cant see the option to build".
+	 */
+	void DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FString>& Lines);
+
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;
 

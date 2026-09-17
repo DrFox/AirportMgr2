@@ -73,7 +73,17 @@ enum class EFuelRefusal : uint8
 	StandUnjoined,
 
 	/** Everything is joined and the graph still does not connect the two. */
-	NoRoute
+	NoRoute,
+
+	/**
+	 * A depot is on a road and has a truck, but no PUMP was built in its plot.
+	 *
+	 * ITS OWN REFUSAL AND NOT NoRoute, for the reason ChooseDepot's busy branch records at
+	 * length: a pumpless depot falling through to the chain's default would report "no road
+	 * from depot" and send the player to look at a road that is already there. What they
+	 * actually need to do is build a pump in a bay.
+	 */
+	NoPump
 };
 
 /** One parked aircraft's fuel job. */
@@ -203,6 +213,38 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0"))
 	double DwellSeconds = 40.0;
+
+	/**
+	 * The floor DwellSecondsFor cannot go below, however many pumps a depot has.
+	 *
+	 * A pump farm must not make refuelling instant: the dwell is the only pressure the fuel
+	 * loop applies, and a depot that discharged a demand the frame it arrived would delete
+	 * the reason to build a second one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Fuel", meta = (ClampMin = "0.0"))
+	double MinDwellSeconds = 5.0;
+
+	/**
+	 * True when Depot can fuel at all - it has a pump, or it predates modules entirely.
+	 *
+	 * A depot placed WITHOUT a plot has an empty module list and fuels as it always did.
+	 * That is not a claim it has a pump; it is that the question does not apply, and a save
+	 * written before plots existed must keep working.
+	 */
+	static bool HasWorkingPump(const FEntityInstance& Depot);
+
+	/**
+	 * How long a truck from Depot dwells at the hydrant - the base divided by its pumps.
+	 *
+	 * READS EDepotModule DIRECTLY, which this layer may do because that enum lives in
+	 * Airside's Model/ rather than its Entities/. Had it been an Entities/ type the count
+	 * would have needed a captured field on FEntityInstance to reach here at all, exactly as
+	 * Trucks did - that it does not is the test that the enum sits in the right layer.
+	 *
+	 * A depot with no modules gets the base dwell: see HasWorkingPump. A depot with modules
+	 * and no pump never reaches here, because ChooseDepot will not dispatch to one.
+	 */
+	double DwellSecondsFor(const FEntityInstance& Depot) const;
 
 	/**
 	 * The truck's performance figures, dispatched with every fuel demand.

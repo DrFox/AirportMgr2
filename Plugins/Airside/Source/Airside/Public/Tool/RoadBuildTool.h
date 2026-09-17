@@ -4,6 +4,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/ToolReadout.h"
 #include "Tool/Selection.h"
 #include "RoadBuildTool.generated.h"
 
@@ -178,6 +179,22 @@ enum class EPreviewStyle : uint8
 
 	/** A resolved anchor: the guideline node a vehicle will actually route to on this stand. */
 	ServiceAnchor,
+
+	// --- The staged plot gesture's own two -----------------------------------------------
+	//
+	// PINNED AND PROVISIONAL SAY WHAT Pending CANNOT: whether the thing under them has
+	// stopped moving. Pending means "this is what the click would do", which is true of an
+	// edge being dragged AND of one already placed - and the player counts remaining corners
+	// by exactly that difference.
+	//
+	// ADDED AT THE END rather than beside Pending where they would read better: this is a
+	// UENUM, and renumbering it repoints any value already serialised against it.
+
+	/** An edge the player has already placed. It will not move again this gesture. */
+	Pinned,
+
+	/** An edge that follows the cursor. Drawn dashed - see ARoadBuildHUD::IsDashed. */
+	Provisional,
 };
 
 /**
@@ -283,6 +300,31 @@ struct AIRSIDE_API IBuildTool
 	virtual void OnReselect(const FToolContext& Context) {}
 
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;
+
+	/**
+	 * What to tell the player about this gesture - bays, cost, what is wrong. Silent by
+	 * default.
+	 *
+	 * A SEPARATE VIRTUAL and not a second parameter on BuildPreview, which has eight
+	 * implementors and two test doubles, NONE of which has a readout. Changing that signature
+	 * would churn ten classes to add a parameter they ignore.
+	 *
+	 * The argument for emitting through a per-frame const call survives the split: both are
+	 * const, both are called from the same place on the same frame, so a fact still cannot
+	 * describe a different gesture from the geometry drawn beside it. Airside.Tool.
+	 * ToolsAreSilentByDefault pins the default; the plot tool's own test pins the agreement.
+	 */
+	virtual void BuildReadout(const FToolContext& Context, IToolReadoutSink& Sink) const {}
+
+	/**
+	 * The player pressed Build. Does nothing by default, so no existing tool changes.
+	 *
+	 * SEPARATE FROM OnClick because a staged gesture's last click LOCKS rather than commits -
+	 * the review beat between the two is where cost and warnings actually get read. It is
+	 * also reachable at ANY moment, the Build button being a widget rather than a stage, so
+	 * a tool that implements it must ignore it in every state but the last.
+	 */
+	virtual void OnCommit(const FToolContext& Context) {}
 
 	/** True when nothing is part-drawn, so the owner can tell whether cancel means anything. */
 	virtual bool IsIdle() const = 0;

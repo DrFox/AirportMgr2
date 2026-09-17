@@ -10,6 +10,7 @@ drives the downloads, so it cannot drift from what was fetched.
 |---|---|---|
 | `aircraft.guidelines` | control-tower | delapouite |
 | `aircraft.land` | commercial-airplane | delapouite |
+| `edit.build` | hammer-nails | lorc |
 | `edit.clear` | broom | delapouite |
 | `edit.insert` | split-arrows | delapouite |
 | `edit.redo` | clockwise-rotation | delapouite |
