@@ -50,9 +50,20 @@ struct AIRSIDE_API FStandLeg
 {
 	GENERATED_BODY()
 
-	/** Segment i runs Points[i] to Points[i+1], bending about Controls[i]. */
-	UPROPERTY() TArray<FVector2D> Points;
-	UPROPERTY() TArray<FVector2D> Controls;
+	/**
+	 * Segment i runs Points[i] to Points[i+1], bending about Controls[i].
+	 *
+	 * VisibleAnywhere, LIKE EVERY FIELD OF THE LAYOUT, and the reason is a readback rather
+	 * than a UI. A bare UPROPERTY() serialises perfectly well but cannot be reached by
+	 * get_editor_property - FindPropertyByName does not see it - so the Python that authors
+	 * DA_Stand_CodeC could not print what it had just saved. The layout is invisible in the
+	 * editor (no mesh, no material, no marking builder), so that log IS the only way to tell
+	 * a stand carrying four bays from one carrying none, and the two look identical in the
+	 * content browser. VISIBLE rather than Edit, because all of it is derived: a hand-edited
+	 * leg would be overwritten by the next build and undriveable in the meantime.
+	 */
+	UPROPERTY(VisibleAnywhere) TArray<FVector2D> Points;
+	UPROPERTY(VisibleAnywhere) TArray<FVector2D> Controls;
 
 	bool IsSet() const { return Points.Num() >= 2 && Controls.Num() == Points.Num() - 1; }
 
@@ -93,7 +104,7 @@ struct AIRSIDE_API FServiceBay
 	GENERATED_BODY()
 
 	/** Which service this bay serves. Matches an FEntityAnchor::Id on the same definition. */
-	UPROPERTY() FName AnchorId;
+	UPROPERTY(VisibleAnywhere) FName AnchorId;
 
 	/**
 	 * Where this bay's road entry meets the stand's edge, and pointing which way.
@@ -104,28 +115,28 @@ struct AIRSIDE_API FServiceBay
 	 * Placement now VALIDATES - a road either passes through here or the stand is refused by
 	 * name - and computes no geometry at all.
 	 */
-	UPROPERTY() FVector2D EntryLocal = FVector2D::ZeroVector;
-	UPROPERTY() double EntryHeading = 0.0;
+	UPROPERTY(VisibleAnywhere) FVector2D EntryLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double EntryHeading = 0.0;
 
 	/** Where the vehicle waits, and pointing which way. Angled; see the struct comment. */
-	UPROPERTY() FVector2D ParkLocal = FVector2D::ZeroVector;
-	UPROPERTY() double ParkHeading = 0.0;
+	UPROPERTY(VisibleAnywhere) FVector2D ParkLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double ParkHeading = 0.0;
 
 	/** Where this bay's traffic leaves the stand. Shared with its side's other bays. */
-	UPROPERTY() FVector2D ExitLocal = FVector2D::ZeroVector;
-	UPROPERTY() double ExitHeading = 0.0;
+	UPROPERTY(VisibleAnywhere) FVector2D ExitLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double ExitHeading = 0.0;
 
 	/** Road entry to the parking bay, forwards. Checked against the FORWARD limit. */
-	UPROPERTY() FStandLeg ArriveLeg;
+	UPROPERTY(VisibleAnywhere) FStandLeg ArriveLeg;
 
 	/** Parking bay to the service point, forwards. Checked against the FORWARD limit. */
-	UPROPERTY() FStandLeg ServeLeg;
+	UPROPERTY(VisibleAnywhere) FStandLeg ServeLeg;
 
 	/** Clear of the aeroplane, backwards. Checked by FReverseRun::Start, which arms it. */
-	UPROPERTY() FStandLeg ReverseLeg;
+	UPROPERTY(VisibleAnywhere) FStandLeg ReverseLeg;
 
 	/** Clear pose to the stand's exit, forwards. Checked against the FORWARD limit. */
-	UPROPERTY() FStandLeg DepartLeg;
+	UPROPERTY(VisibleAnywhere) FStandLeg DepartLeg;
 };
 
 /**
@@ -186,7 +197,7 @@ public:
 	 * the wing keep-out, which real aprons mark as a no-entry box - see
 	 * IcaoCode::WingKeepOutContains, and note that nothing draws it yet.
 	 */
-	UPROPERTY() TArray<FServiceBay> ServiceBays;
+	UPROPERTY(VisibleAnywhere) TArray<FServiceBay> ServiceBays;
 
 	/**
 	 * How much ground this layout actually needs: X is WIDTH (across, the local Y axis) and
