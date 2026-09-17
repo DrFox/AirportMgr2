@@ -112,4 +112,95 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	return true;
 }
 
+/**
+ * THE THIRD CLICK SQUARES TO THE SECOND SEGMENT, landing exactly on the perpendicular rather
+ * than merely near it. This is the assertion that fails if the tool never reads
+ * FToolContext::Guide at all - every other test in this file passes on a tool that ignores it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadCornerFollowsTheGuideTest,
+	"Airside.Tool.RoadCornerFollowsTheGuide",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadCornerFollowsTheGuideTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	// A third click dragged nearly square to the run just drawn: 2000 out and 60 along, about
+	// 1.7 degrees off the perpendicular and inside the 7-degree tolerance.
+	const FVector2D NearSquare(6060.0, 2000.0);
+	const FToolContext Guided = Gesture.At(NearSquare);
+	if (!TestTrue(TEXT("the driver resolved a guide for the third click"), Guided.Guide.bActive))
+	{
+		return false;
+	}
+
+	Gesture.Tool->OnClick(Guided);
+
+	// READ BACK FROM THE GRAPH, not from the tool, so this measures what was BUILT.
+	const URoadNetwork* Network = Gesture.Network();
+	if (!TestTrue(TEXT("a network"), Network != nullptr)) { return false; }
+
+	const int32 Pending = Gesture.Road()->GetPendingNode();
+	const FRoadNode* Placed = Network->GetNode(Network->NodeIdAt(Pending));
+	if (!TestNotNull(TEXT("the third click placed a node"), Placed)) { return false; }
+
+	TestTrue(TEXT("the new node is exactly square to the segment behind it"),
+		FMath::IsNearlyEqual(Placed->Position.X, 6000.0, 1.0e-6));
+	TestFalse(TEXT("and therefore not where the raw cursor was"),
+		FMath::IsNearlyEqual(NearSquare.X, 6000.0, 1.0e-6));
+
+	return true;
+}
+
+/**
+ * A SNAP BEATS A GUIDE. Closing a junction on an existing node must win over any alignment, or
+ * the player could never join two roads while a guide happened to be live.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadSnapBeatsTheGuideTest,
+	"Airside.Tool.RoadSnapBeatsTheGuide",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadSnapBeatsTheGuideTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	// An existing node to close onto, placed deliberately OFF the square: if the guide won, the
+	// click would land at x = 6000 instead of on this node.
+	IRoadEditTarget* Target = Gesture.TestWorld.Actor;
+	const int32 Existing = Target->PlaceNode(FVector2D(6080.0, 2000.0));
+
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	const URoadNetwork* Network = Gesture.Network();
+	if (!TestTrue(TEXT("a network"), Network != nullptr)) { return false; }
+
+	// A cursor ON the existing node: near enough to square that a guide is live, and near
+	// enough to the node that the snap claims it.
+	const FToolContext OnNode = Gesture.At(FVector2D(6080.0, 2000.0));
+	if (!TestEqual(TEXT("the snap claimed the existing node"),
+		static_cast<int32>(OnNode.Snap.Kind), static_cast<int32>(ERoadSnapKind::Node)))
+	{
+		return false;
+	}
+
+	Gesture.Tool->OnClick(OnNode);
+
+	// THE NODE DID NOT MOVE to satisfy the guide, which is the whole assertion: a snap is a
+	// statement about the graph and an alignment is only an aid.
+	const FRoadNode* Reused = Network->GetNode(Network->NodeIdAt(Existing));
+	if (!TestNotNull(TEXT("the existing node survives the click"), Reused)) { return false; }
+	TestTrue(TEXT("and stayed exactly where it was put"),
+		Reused->Position.Equals(FVector2D(6080.0, 2000.0), 1.0e-6));
+
+	return true;
+}
+
 #endif

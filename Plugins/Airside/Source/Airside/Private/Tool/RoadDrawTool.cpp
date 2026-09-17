@@ -11,6 +11,33 @@
 
 namespace
 {
+	/**
+	 * The snap as this tool should ACT on it: its position moved onto the guide when the chain
+	 * claimed nothing.
+	 *
+	 * A SNAP BEATS A GUIDE. When the chain claimed a node or a segment the player is attaching
+	 * to something REAL - closing a junction, splitting a run - and that is a statement about
+	 * the graph, where an alignment is only an aid. A guide allowed to override it would make a
+	 * junction impossible to close while any guide was live, which is far worse than a guide
+	 * occasionally not applying.
+	 *
+	 * RETURNS THE WHOLE RESULT so the ghost, all three placement judgements and the click take
+	 * the same value. Handing some of them a position and others the raw snap is how a preview
+	 * comes to promise what a click does not do.
+	 *
+	 * PREFIXED because this module is a unity build and "GuidedSnap" is exactly the name a
+	 * second tool would also choose - see the SegmentEnds collision in SnapGuideChain.cpp.
+	 */
+	FRoadSnapResult RoadGuidedSnap(const FToolContext& Context)
+	{
+		FRoadSnapResult Guided = Context.Snap;
+		if (Guided.Kind == ERoadSnapKind::Free)
+		{
+			Guided.Position = Context.GuidedCursor();
+		}
+		return Guided;
+	}
+
 	/** Position of a live node, or the cursor when there is not one. */
 	FVector2D NodePosition(const FToolContext& Context, int32 NodeIndex)
 	{
@@ -47,7 +74,7 @@ namespace
 
 		case ERoadSnapKind::Free:
 		default:
-			return Context.Target->PlaceNode(Context.Snap.Position);
+			return Context.Target->PlaceNode(RoadGuidedSnap(Context).Position);
 		}
 	}
 }
@@ -106,7 +133,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 			return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 		}
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Network, FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Network, FromId, RoadGuidedSnap(Context), Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			return nullptr;
@@ -172,10 +199,12 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 	if (Context.Network() != nullptr && Context.Target->MakeLiveNodeId(From, FromId))
 	{
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Network(), FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context),
+				Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
-			Sink.Label(Context.Snap.Position, RoadPlacement::Describe(Judgement), EPreviewStyle::Refused);
+			Sink.Label(RoadGuidedSnap(Context).Position, RoadPlacement::Describe(Judgement),
+				EPreviewStyle::Refused);
 		}
 	}
 }
@@ -494,8 +523,8 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// Shown even when illegal, coloured rather than withheld: hiding it would answer "why
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
-		RoadPlacement::Validate(*Context.Network(), FromId, Context.Snap, Context.Limits);
-	Context.Target->UpdateGhost(Pending, Context.Snap,
+		RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context), Context.Limits);
+	Context.Target->UpdateGhost(Pending, RoadGuidedSnap(Context),
 		Judgement == ERoadPlacement::Valid, Kind, WidthIndex);
 }
 
@@ -628,7 +657,27 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 
 	// Where the click lands on the PLANE, which under an angled view is not where the
 	// mouse pointer is drawn - and the shallower the view, the further apart they are.
-	Sink.Marker(Context.Snap.Position, EPreviewStyle::Pending);
+	Sink.Marker(RoadGuidedSnap(Context).Position, EPreviewStyle::Pending);
+
+	// THE DASHED LINE TO WHAT IT IS LINED UP WITH, one per winner - the same emission the plot
+	// gesture makes, and deliberately the same shape: two tools drawing one meaning two
+	// different ways would be presentation drifting apart inside the plugin.
+	//
+	// FROM THE POINT THE CLICK WOULD TAKE, so the line touches the marker above rather than
+	// floating beside it.
+	if (Context.Guide.bActive)
+	{
+		const FVector2D Moving = RoadGuidedSnap(Context).Position;
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// At the line's MIDPOINT: two labels at the moving point overprint, and the plugin
+			// has no camera to offset them by a readable number of pixels. Design section 6.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
+	}
 
 	if (Context.Snap.Kind == ERoadSnapKind::Segment && Context.Network() != nullptr)
 	{
