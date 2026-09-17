@@ -90,6 +90,13 @@ public:
 	virtual void BuildReadout(const FToolContext& Context, IToolReadoutSink& Sink) const override;
 	virtual bool IsIdle() const override { return Stage == EPlotStage::Idle; }
 
+	/**
+	 * THE BACK CORNERS ONLY - see the implementation for why the anchor and the frontage are
+	 * left alone. This is what tells the driver's guide chain which point is moving and which
+	 * edge it grew from; the tool resolves nothing itself and remembers no frame.
+	 */
+	virtual bool DescribeGuideAnchor(FGuideAnchor& Out) const override;
+
 	/** For tests. */
 	EPlotStage GetStage() const { return Stage; }
 
