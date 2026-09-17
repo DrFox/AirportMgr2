@@ -127,6 +127,15 @@ public:
 	 */
 	static FString CommitPromptText(const FToolReadout& Readout);
 
+	/**
+	 * The plot panel's text, one line per entry, empty when there is nothing to say.
+	 *
+	 * STATIC AND TAKING THE READOUT, for the same reason CommitPromptText is: the drawing
+	 * needs a Canvas and the CONTENT does not, so the part that can go silently wrong stays
+	 * testable with no world and no PIE.
+	 */
+	static TArray<FString> PanelLines(const FToolReadout& Readout);
+
 private:
 	/**
 	 * The commit prompt, drawn AT THE CURSOR rather than on the bar.
@@ -136,7 +145,7 @@ private:
 	 * it. The player's eyes are on the plot they are dragging, which is where the offer to
 	 * build has to be - PIE, 2026-09-16, "i cant see the option to build".
 	 */
-	void DrawCommitPrompt(const FVector2D& PlanePoint, const FString& Text);
+	void DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FString>& Lines);
 
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;

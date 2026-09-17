@@ -113,11 +113,7 @@ void ARoadBuildHUD::DrawHUD()
 		// THE CONTROLLER'S READOUT, not a second BuildReadout call here. The bar's Build
 		// button reads that same collected value, so the prompt cannot offer a commit the
 		// button would refuse.
-		const FString Prompt = CommitPromptText(Controller->GetToolReadout());
-		if (!Prompt.IsEmpty())
-		{
-			DrawCommitPrompt(Context.Cursor, Prompt);
-		}
+		DrawPlotPanel(Context.Cursor, PanelLines(Controller->GetToolReadout()));
 	}
 }
 
@@ -145,7 +141,30 @@ FString ARoadBuildHUD::CommitPromptText(const FToolReadout& Readout)
 		*Build->Key.GetDisplayName().ToString());
 }
 
-void ARoadBuildHUD::DrawCommitPrompt(const FVector2D& PlanePoint, const FString& Text)
+TArray<FString> ARoadBuildHUD::PanelLines(const FToolReadout& Readout)
+{
+	TArray<FString> Lines;
+	for (const TPair<FString, FString>& Fact : Readout.Facts)
+	{
+		Lines.Add(FString::Printf(TEXT("%s: %s"), *Fact.Key, *Fact.Value));
+	}
+	for (const FString& Warning : Readout.Warnings)
+	{
+		Lines.Add(Warning);
+	}
+
+	// BUILD LAST, under the facts it is a decision about, and only when the gesture can
+	// actually take it. CommitPromptText answers both and reads the key off the registry, so
+	// this does not get to hold a second opinion about either.
+	const FString Prompt = CommitPromptText(Readout);
+	if (!Prompt.IsEmpty())
+	{
+		Lines.Add(Prompt);
+	}
+	return Lines;
+}
+
+void ARoadBuildHUD::DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FString>& Lines)
 {
 	FVector2D Screen;
 	if (!ProjectPlanePoint(PlanePoint, PlaneZ, Screen) || GEngine == nullptr)
@@ -154,32 +173,51 @@ void ARoadBuildHUD::DrawCommitPrompt(const FVector2D& PlanePoint, const FString&
 	}
 
 	UFont* Font = GEngine->GetMediumFont();
-	if (Font == nullptr)
+	if (Font == nullptr || Lines.Num() == 0)
 	{
 		return;
 	}
 
-	float TextWidth = 0.0f;
-	float TextHeight = 0.0f;
-	GetTextSize(Text, TextWidth, TextHeight, Font);
+	// SIZED TO THE WIDEST LINE, measured rather than guessed: a panel sized off the first
+	// line clips every longer one, and a fixed width leaves a slab of ground behind a short
+	// readout.
+	float Widest = 0.0f;
+	float LineHeight = 0.0f;
+	for (const FString& Line : Lines)
+	{
+		float LineWidth = 0.0f;
+		float Height = 0.0f;
+		GetTextSize(Line, LineWidth, Height, Font);
+		Widest = FMath::Max(Widest, LineWidth);
+		LineHeight = FMath::Max(LineHeight, Height);
+	}
 
-	// ABOVE THE CURSOR AND CENTRED ON IT. Below it the prompt would sit under the pointer
-	// itself, and to one side it would fall off screen on plots drawn near an edge.
 	const float PadX = 12.0f;
 	const float PadY = 7.0f;
 	const float Rise = 34.0f;
-	const float Left = static_cast<float>(Screen.X) - (TextWidth * 0.5f + PadX);
-	const float Top = static_cast<float>(Screen.Y) - (TextHeight + PadY * 2.0f) - Rise;
+	const float Block = LineHeight * Lines.Num();
+
+	// ABOVE THE POINT AND CENTRED ON IT. Below, the panel sits under the pointer itself; to
+	// one side it falls off screen on plots drawn near an edge.
+	//
+	// THE POINT IS THE CURSOR, NOT THE PLOT'S CENTROID. The centroid is what this should
+	// anchor to and DrawHUD has no quad to take it from - the tool owns that shape. Named
+	// here rather than left as a silent difference between this code and the spec, which
+	// calls the panel plot-anchored.
+	const float Left = static_cast<float>(Screen.X) - (Widest * 0.5f + PadX);
+	const float Top = static_cast<float>(Screen.Y) - (Block + PadY * 2.0f) - Rise;
 
 	// A GROUND BEHIND IT, unlike every other label this class draws. Those name a node on a
-	// dark road; this one lands on whatever the plot is over - grass, concrete, the ghost's
-	// own green - and coloured text alone is unreadable on at least one of them.
+	// dark road; this lands on whatever the plot is over - grass, concrete, the ghost's own
+	// white - and coloured text alone is unreadable on at least one of them.
 	DrawRect(FLinearColor(0.02f, 0.03f, 0.04f, 0.72f),
-		Left, Top, TextWidth + PadX * 2.0f, TextHeight + PadY * 2.0f);
+		Left, Top, Widest + PadX * 2.0f, Block + PadY * 2.0f);
 
-	// Pending's colour: this IS the pending gesture, named by meaning rather than by picking
-	// a green here - the same table every other mark on screen reads.
-	DrawText(Text, LookFor(EPreviewStyle::Pending).Colour, Left + PadX, Top + PadY, Font);
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		DrawText(Lines[Index], LookFor(EPreviewStyle::Pending).Colour,
+			Left + PadX, Top + PadY + LineHeight * Index, Font);
+	}
 }
 
 ARoadBuildController* ARoadBuildHUD::GetBuildController() const

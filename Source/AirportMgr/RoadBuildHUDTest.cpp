@@ -9,6 +9,65 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
+ * THE PANEL'S CONTENT, with no Canvas and no PIE.
+ *
+ * The drawing cannot be tested headlessly; what CAN go wrong silently is what it says - a
+ * panel that never mentions Build, one that offers it before the shape is finished, or one
+ * that quietly drops the warning that would have changed the player's mind.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPanelShowsProgressAndBuildTest,
+	"AirportMgr.HUD.PlotPanelShowsProgressAndBuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPanelShowsProgressAndBuildTest::RunTest(const FString& Parameters)
+{
+	// NOTHING TO SAY, NOTHING DRAWN. A panel hanging over an idle cursor is clutter the
+	// player cannot dismiss.
+	TestEqual(TEXT("an empty readout draws no panel"),
+		ARoadBuildHUD::PanelLines(FToolReadout()).Num(), 0);
+
+	FToolReadout Mid;
+	Mid.Facts.Emplace(TEXT("Plot Points"), TEXT("2/4"));
+	Mid.Facts.Emplace(TEXT("Frontage"), TEXT("20 m"));
+	Mid.bCommittable = false;
+
+	const TArray<FString> MidLines = ARoadBuildHUD::PanelLines(Mid);
+	TestTrue(TEXT("the panel reports progress through the gesture"),
+		MidLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("2/4")); }));
+	TestFalse(TEXT("and does not offer Build before the shape is finished"),
+		MidLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Build")); }));
+
+	FToolReadout Ready = Mid;
+	Ready.bCommittable = true;
+	const TArray<FString> ReadyLines = ARoadBuildHUD::PanelLines(Ready);
+
+	TestTrue(TEXT("a committable gesture is offered Build, by name"),
+		ReadyLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Build")); }));
+
+	// THE KEY COMES FROM THE REGISTRY, through CommitPromptText - so a rebound Build cannot
+	// leave the panel advertising a key that does nothing.
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (!TestNotNull(TEXT("a Build action"), Build)) { return false; }
+	TestTrue(TEXT("and the key it names is the one the registry bound"),
+		ReadyLines.ContainsByPredicate([Build](const FString& L)
+		{
+			return L.Contains(Build->Key.GetDisplayName().ToString());
+		}));
+
+	// WARNINGS SURVIVE. "No room to grow" is the one line that changes a decision, and a
+	// panel that dropped it would be a readout which only ever reports good news.
+	FToolReadout Warned = Ready;
+	Warned.Warnings.Add(TEXT("No room to grow"));
+	TestTrue(TEXT("a warning reaches the panel"),
+		ARoadBuildHUD::PanelLines(Warned).ContainsByPredicate(
+			[](const FString& L) { return L.Contains(TEXT("No room to grow")); }));
+
+	return true;
+}
+
+
+/**
  * PINNED AND PROVISIONAL MUST READ APART, because that is their whole job: one edge of the
  * plot has stopped moving and the other has not, and the player counts corners by the
  * difference. Identical looks would leave a dashed boundary reading as decoration - which is

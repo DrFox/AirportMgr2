@@ -1,6 +1,5 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
-#include "BuildBarWidget.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
@@ -54,27 +53,11 @@ bool FPlotReadoutReachesTheBarTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("two idle frames leave no facts behind"),
 		C->GetToolReadout().Facts.Num(), 0);
 
-	// AND THE BAR DRAWS THEM. ApplyReadout is called with a hand-built readout rather than
-	// one squeezed out of a real gesture: the controller half is pinned above, and what is
-	// left to prove here is that the widget turns facts and warnings into lines at all.
-	// Without this, ReadoutSection could be created and never filled and every other
-	// assertion in this file would still pass.
-	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(World, UBuildBarWidget::StaticClass());
-	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
-	TestEqual(TEXT("an untouched bar shows no readout"), Bar->ReadoutLineCountForTest(), 0);
-
-	FToolReadout Readout;
-	Readout.Facts.Emplace(TEXT("Bays"), TEXT("3"));
-	Readout.Facts.Emplace(TEXT("Rows"), TEXT("2"));
-	Readout.Warnings.Add(TEXT("No room to grow"));
-	Bar->ApplyReadout(Readout);
-	TestEqual(TEXT("two facts and a warning draw three lines"), Bar->ReadoutLineCountForTest(), 3);
-
-	// THE SAME REFILL CONTRACT, ONE LEVEL UP. The collector resetting is worth nothing if
-	// the widget it feeds keeps last frame's lines on screen beside this frame's.
-	Bar->ApplyReadout(FToolReadout());
-	TestEqual(TEXT("an empty readout clears the section"), Bar->ReadoutLineCountForTest(), 0);
-
+	// THE BAR NO LONGER DRAWS THEM. Its readout section was retired on 2026-09-17 in favour
+	// of a panel at the plot - see ARoadBuildHUD::PanelLines and the four-point gesture spec.
+	// What this file still guards is the half that did not move: that edit.build is in the
+	// registry, and that the controller refills the readout every frame rather than letting
+	// last frame's facts stand.
 	return true;
 }
 
