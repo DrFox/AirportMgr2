@@ -157,9 +157,32 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
 	// from two searches that merely tend to agree.
 	FRoadSnapResult Snapped;
-	ResolveSnap(Target != nullptr ? Target->GetNetwork() : nullptr, PlaneHit, Tunables.Snap, Snapped);
+	const URoadNetwork* Network = Target != nullptr ? Target->GetNetwork() : nullptr;
+	ResolveSnap(Network, PlaneHit, Tunables.Snap, Snapped);
 
 	Context.SetCursor(PlaneHit, Snapped);
+
+	// THE GUIDE, RESOLVED HERE AND NOWHERE ELSE - beside Snap, from the same place, for the
+	// same recorded reason (snap-guides design, section 2). The active tool says what it is
+	// dragging; this asks the chain what that lines up with and hands the tool the answer, so
+	// a tool can neither resolve a guide of its own nor remember one between frames.
+	//
+	// THE NETWORK GUARD IS NOT COSMETIC: every source takes a URoadNetwork& because stage 2's
+	// four of them must query it. With no target there is nothing to guide against and
+	// nothing on screen to guide, so the default inactive FResult is the right answer.
+	FGuideAnchor Anchor;
+	SnapGuide::FResult Guide;
+	const IBuildTool* Tool = GetActiveTool();
+	if (Tool != nullptr && Network != nullptr && Tool->DescribeGuideAnchor(Anchor))
+	{
+		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide);
+	}
+
+	// ASSIGNED EVEN WHEN NOTHING RESOLVED, which is the clearing half: a gesture that ends
+	// must not leave its winner behind for the next one to inherit and then hold on to
+	// through the hysteresis rule itself.
+	LastGuide = Guide;
+	Context.Guide = Guide;
 	return Context;
 }
 

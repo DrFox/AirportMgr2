@@ -6,6 +6,7 @@
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
+#include "Tool/SnapGuideChain.h"
 
 class URoadNetwork;
 class IRoadEditTarget;
@@ -210,6 +211,27 @@ private:
 	 * TUniquePtr and holds no state worth saving, only the ordering.
 	 */
 	FRoadSnapChain SnapChain;
+
+	/**
+	 * Extending then World. Not a UPROPERTY, like SnapChain above: it owns its sources
+	 * through TUniquePtr and holds no state worth saving, only the ordering.
+	 */
+	FSnapGuideChain GuideChain;
+
+	/**
+	 * THE PREVIOUS WINNER - the one piece of state the flicker rule needs, and the reason
+	 * the DRIVER resolves the guide rather than the tool. IBuildTool::BuildPreview and
+	 * BuildReadout are both const and could not hold it; a member on the tool would also put
+	 * it on the wrong side of the two-driver split, where PIE and the editor mode each kept
+	 * their own copy of a number and drifted.
+	 *
+	 * mutable for the same reason Selection and LastPlaneHitValue are: MakeContext is const,
+	 * deliberately (see FBuildSessionTunables), and this is a reported answer, not a decision.
+	 *
+	 * CLEARED WHENEVER NO TOOL OFFERS AN ANCHOR, so a winner cannot outlive the gesture that
+	 * earned it and then be HELD into the next one by the hysteresis rule itself.
+	 */
+	mutable SnapGuide::FResult LastGuide;
 
 	/** See RecordPlaneHit/LastPlaneHit. mutable for the same reason Selection is. */
 	mutable FVector2D LastPlaneHitValue = FVector2D::ZeroVector;

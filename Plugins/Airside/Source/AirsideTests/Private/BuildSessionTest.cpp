@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Tool/BuildSession.h"
+#include "Tool/SnapGuideChain.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -63,6 +64,25 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 		PlaneHitSession.RecordPlaneHit(FVector2D(1234.0, -500.0));
 		TestTrue(TEXT("RecordPlaneHit's value reads back exactly"),
 			PlaneHitSession.LastPlaneHit().Equals(FVector2D(1234.0, -500.0), 1e-6));
+	}
+
+	// 5. EVERY TOOL DECLINES AN ANCHOR WHEN IDLE. The registry walk, not a list of tools
+	// written here - the same check items 2 and 3 above make, applied to the guide hook.
+	// A tool that offered an anchor from its idle state would guide a gesture that has not
+	// started, and the player would see a dashed line hanging off nothing.
+	{
+		FBuildSession IdleSession;
+		for (int32 Index = 0; Index < Registry.Num(); ++Index)
+		{
+			IdleSession.SelectTool(Index);
+			const IBuildTool* Active = IdleSession.GetActiveTool();
+			if (Active == nullptr) { continue; }
+
+			FGuideAnchor Anchor;
+			TestFalse(
+				FString::Printf(TEXT("tool %d offers no guide anchor while it is idle"), Index),
+				Active->DescribeGuideAnchor(Anchor));
+		}
 	}
 
 	return true;
