@@ -69,7 +69,10 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 
 	// The same geometry the world-free fixture uses - see AirportOps.Ops.FuelService for
 	// where each ray goes and why.
-	constexpr double RoadY = -6000.0;
+	// -4000 SINCE 2026-09-17, the same figure and the same reason as the world-free fixture's
+	// FFuelFixture::RoadY: a stand offers its aft-edge entries now, and the furthest of them
+	// was 8450 uu from a road at -6000 against a reach of 6500.
+	constexpr double RoadY = -4000.0;
 	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadWest, RoadEast;
 	LayFuelLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);

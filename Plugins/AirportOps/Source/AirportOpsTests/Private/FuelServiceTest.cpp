@@ -87,7 +87,21 @@ namespace
 		 */
 		bool bWithRunway = false;
 
-		double RoadY = -6000.0;
+		/**
+		 * How far south of the stands the service road runs.
+		 *
+		 * MOVED IN FROM -6000 ON 2026-09-17, because the stands' reach moved. A stand offers
+		 * its declared ENTRIES now, all on its aft edge, and the furthest of them sits 8450 uu
+		 * from a road at -6000 against a DefaultServiceLinkRadius of 6500 - so not one linked,
+		 * and with nothing able to pass under a wing the starboard services had no route at
+		 * all. At -4000 the furthest entry is 6450 away, inside the reach with 50 to spare.
+		 *
+		 * THE DEPOT-ONLY FIXTURE STILL MEANS WHAT IT SAYS: with RoadFromX at 9000 the nearest
+		 * road point is 8000 uu from the nearer stand's entries, well outside the reach, while
+		 * the depot's pose at (12000, -2000) is 2000 from the road. See
+		 * Build_RoadReachesDepotOnly.
+		 */
+		double RoadY = -4000.0;
 
 		/** West end of the road. Default reaches under the stand; see Build_RoadReachesDepotOnly. */
 		double RoadFromX = -20000.0;
@@ -271,11 +285,11 @@ void FFuelFixture::Build_RoadReachesDepotOnly()
 	// A ROAD THE STAND CANNOT REACH, and the number moved because the stand's reach did.
 	//
 	// The hydrant used to cast a RAY down -Y from x = -1200, and a road starting at x = 5000
-	// was simply not on it. A stand now offers its whole SERVICE LANE - a box out to
-	// (+1700, -2090) - and joins anything within 50 m of any part of it in any direction. At
-	// x = 5000 that leaves 51 m of margin, which is a fixture one rounding away from testing
-	// the opposite of what it says. The depot's pose at x = 12000 is 40 m from the road
-	// either way, so what this fixture means is unchanged.
+	// was simply not on it. A stand now offers its DECLARED ENTRIES, all on its aft edge, and
+	// joins anything within DefaultServiceLinkRadius of one. The nearer stand's aft edge is at
+	// x = 1020, so a road starting at x = 9000 is about 8000 uu from its closest entry against
+	// a reach of 6500 - outside it, which is what this fixture needs. The depot's pose at
+	// (12000, -2000) is 2000 uu from the road, so what this fixture means is unchanged.
 	RoadFromX = 9000.0;
 	Build(/*bWithRoad=*/true);
 }
