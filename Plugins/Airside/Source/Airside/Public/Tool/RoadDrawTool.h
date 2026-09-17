@@ -130,6 +130,16 @@ public:
 	 *  gesture FRunwayTool::OnReselect gives runways. */
 	virtual void OnReselect(const FToolContext& Context) override;
 
+	/**
+	 * The node the chain is drawing FROM, and the direction of the segment already arriving
+	 * there - design section 3's "the incoming segment's direction, and its perpendicular".
+	 *
+	 * ASKS THE GRAPH, because FRoadChainingState holds only the node it draws from and never
+	 * the one before it. See IBuildTool::DescribeGuideAnchor on why the network is a parameter
+	 * where the context deliberately is not.
+	 */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const override;
+
 private:
 	/** Ctrl+click: remove whatever the snap chain resolved. */
 	void Remove(const FToolContext& Context);

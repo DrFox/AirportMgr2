@@ -4,6 +4,7 @@
 
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -204,6 +205,86 @@ FText FRoadDrawTool::GetDisplayName() const
 bool FRoadDrawTool::IsIdle() const
 {
 	return State.IsValid() && State->IsIdle();
+}
+
+bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+{
+	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
+	// speak of, and a guide offered there would be squaring to an edge that does not exist.
+	const int32 Pending = GetPendingNode();
+	if (Network == nullptr || Pending == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const FRoadNodeId FromId = Network->NodeIdAt(Pending);
+	const FRoadNode* From = Network->GetNode(FromId);
+	if (From == nullptr)
+	{
+		return false;
+	}
+
+	Out.Origin = From->Position;
+
+	// THE SEGMENT ALREADY ARRIVING AT THE PENDING NODE. With exactly one incident segment the
+	// answer is unambiguous - that is the road being extended. At a junction there are several
+	// and none of them is "the" incoming one, so no reference is offered rather than an
+	// arbitrary one: a guide that squared to whichever segment happened to be stored first
+	// would change with an edit nobody connected to guides at all.
+	int32 Incident = 0;
+	FVector2D Along = FVector2D::ZeroVector;
+	FVector2D OtherEnd = FVector2D::ZeroVector;
+
+	const TArray<FRoadSegment>& Segments = Network->GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegment& Segment = Segments[Index];
+		if (!Segment.bAlive || (Segment.A != FromId && Segment.B != FromId))
+		{
+			continue;
+		}
+
+		const FRoadNode* Far = Network->GetNode(Segment.A == FromId ? Segment.B : Segment.A);
+		if (Far == nullptr)
+		{
+			continue;
+		}
+
+		++Incident;
+		Along = (From->Position - Far->Position).GetSafeNormal();
+		OtherEnd = Far->Position;
+	}
+
+	if (Incident == 1 && !Along.IsNearlyZero())
+	{
+		Out.Reference = Along;
+		Out.ReferenceAt = OtherEnd;
+		Out.ReferenceName = TEXT("this road");
+	}
+
+	// EVERY LIVE NODE IN REACH IS SOMETHING TO LINE UP WITH - "level with that junction" is what
+	// a player squinting at a taxiway layout actually wants. A node has no name, so the label
+	// cannot say WHICH; the dashed line drawn to it is what does.
+	//
+	// A DELETED NODE KEEPS ITS SLOT, so bAlive is checked here as the segment loop above checks
+	// its own: offering one would draw a guide to a junction the player has removed.
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+	const TArray<FRoadNode>& Nodes = Network->GetNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		const FRoadNode& Node = Nodes[Index];
+
+		// NOT THE NODE BEING EXTENDED FROM: its own lines pass through the origin, so both would
+		// always be in tolerance and the guide would say "you are level with yourself".
+		if (Index == Pending || !Node.bAlive
+			|| FVector2D::DistSquared(Node.Position, Out.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+		Out.AlignTo.Add({ Node.Position, TEXT("that node") });
+	}
+
+	return true;
 }
 
 int32 FRoadDrawTool::GetPendingNode() const
