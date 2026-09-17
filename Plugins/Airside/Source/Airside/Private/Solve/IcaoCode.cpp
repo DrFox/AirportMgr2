@@ -45,16 +45,23 @@ namespace IcaoCode
 			 * it, and the drift test in StandLayoutTest is what will say so.
 			 */
 			double MaxTailAft;
+
+			/**
+			 * The same airframe's nose, as uu FORWARD of the stop mark. Code C is the
+			 * 737-800's 520, measured from Build737 like its tail; the rest are authored
+			 * with it. See MaxNoseFwdForLetter for why the pair is not one length.
+			 */
+			double MaxNoseFwd;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0 },
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0 },
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0 },
+			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0 },
+			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0 },
+			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0 },
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0 },
 		};
 
 		/** The stand width a row implies, uu. The ONE place the derivation is written. */
@@ -165,6 +172,15 @@ namespace IcaoCode
 			return Row->MaxTailAft;
 		}
 		return CodeC().MaxTailAft;
+	}
+
+	double MaxNoseFwdForLetter(const FString& Letter)
+	{
+		if (const FRow* Row = FindRow(Letter))
+		{
+			return Row->MaxNoseFwd;
+		}
+		return CodeC().MaxNoseFwd;
 	}
 
 	FString LetterForStandSize(double WidthUu, double DepthUu)

@@ -3,6 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/IcaoCode.h"
 
 UEntityDefinition* UEntityDefinition::MakeStandTransient()
 {
@@ -103,8 +104,8 @@ void UEntityDefinition::BuildCodeCStandFor(
 	constexpr double PitY = 700.0;
 	constexpr double BoxY = 1100.0;
 	constexpr double PortY = -600.0;
-	constexpr double GpuX = 300.0;
-	constexpr double TugX = 1400.0;
+	constexpr double GpuX = 400.0;
+	constexpr double TugX = -600.0;
 
 	// THE HYDRANT DIP. The pit sits 400 uu inboard of the box row, on a FLAT long enough to
 	// hold the cut of the corner at each of its ends, with a leg rising to the row at
@@ -158,7 +159,15 @@ void UEntityDefinition::BuildCodeCStandFor(
 	// Fixed ground power at the bridge, off the port bow.
 	AddFixture(TEXT("FixedGPU"), GpuX, PortY, 90.0, EServiceRole::GPU);
 
-	// Where the tug waits before pushback, clear of the nose.
+	// Where the tug waits before pushback: port side, abeam the wing root, ready to come
+	// round to the nose gear it couples to.
+	//
+	// MOVED AFT 2026-09-17, from x = +1400 to x = -600, and the GPU forward from +300 to
+	// +400 to keep the two ten metres apart on the same run. A Code C stand is 55 m deep
+	// measured from the NOSE, and the airframe it admits fills 39.5 m of that with every bit
+	// of the slack behind - so +1400 was 8.8 m in FRONT of the stand's own forward edge, on
+	// ground belonging to the jet bridge or the taxilane. Nothing measured the stand's extent
+	// until RequiredExtent did, which is why it sat there unremarked.
 	AddFixture(TEXT("TugStand"), TugX, PortY, 180.0, EServiceRole::Tug);
 
 	// What this stand can provide at all. A contact stand does the lot.
@@ -218,8 +227,11 @@ void UEntityDefinition::BuildCodeCStandFor(
 	// level-authored version would be a knob that silently reshaped stands already placed.
 	constexpr double EndClearance = 300.0;
 	const double EntryLeg = LegSlack * CrossRun;
-	double NoseX = FMath::Max(TugX, BoxFwdX) + EntryLeg;
-	double TailX = FMath::Min(GpuX, BoxAftX) - EntryLeg;
+	// THE FORWARD-MOST AND AFT-MOST ANCHOR ON EACH RUN, which swapped on the port side when
+	// the tug moved aft of the GPU - so the pair is named by position on the run rather than
+	// by which fixture used to be at each end.
+	double NoseX = FMath::Max3(GpuX, TugX, BoxFwdX) + EntryLeg;
+	double TailX = FMath::Min3(GpuX, TugX, BoxAftX) - EntryLeg;
 	if (Aircraft != nullptr && Aircraft->Footprint.IsSet())
 	{
 		// AHEAD OF THE NOSE AND ASTERN OF THE TAIL, which is what keeps the old ring's one real
@@ -294,9 +306,11 @@ void UEntityDefinition::BuildCodeCStandFor(
 	Add(NoseX + CrossBulge,   PortY + CrossBulge,  EStandWaypointKind::Plain);
 	Add(NoseX,                PortY,               EStandWaypointKind::Entry);
 
-	// Port-aft, through the tug's box and the bridge's ground power.
-	Add(TugX,                 PortY, EStandWaypointKind::Anchor, TEXT("TugStand"));
+	// Port-aft, through the bridge's ground power and then the tug's box. GPU FIRST since
+	// 2026-09-17: this run is walked forward-to-aft and must not double back, and the tug
+	// moved from +1400 to -600, which put it aft of the GPU rather than ahead of it.
 	Add(GpuX,                 PortY, EStandWaypointKind::Anchor, TEXT("FixedGPU"));
+	Add(TugX,                 PortY, EStandWaypointKind::Anchor, TEXT("TugStand"));
 
 	// Across the tail, and back onto the starboard run - the close is implicit.
 	Add(TailX,                PortY,               EStandWaypointKind::Entry);
@@ -321,6 +335,126 @@ void UEntityDefinition::BuildCodeCStandFor(
 			Definition->ServiceLane[0] = Definition->ServiceLane.Last();
 		}
 		Definition->ServiceLane.Pop();
+	}
+
+	BuildStandTemplate(*Definition, TEXT("C"), Largest);
+}
+
+void UEntityDefinition::BuildStandTemplate(
+	UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest)
+{
+	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 45 m to just under 67 m is all
+	// Code C, and a template authored at a comfortable 55 would fail exactly where a player
+	// drew the smallest stand the rules allow. Every figure below therefore comes off
+	// IcaoCode, which reports the minimum.
+	const double Width = IcaoCode::StandWidthForLetter(Letter);
+	const double Depth = IcaoCode::StandDepthForLetter(Letter);
+	const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
+	const double TailAft = IcaoCode::MaxTailAftForLetter(Letter);
+
+	// THE STAND BOX, in the definition's own local space - origin the nose gear stop mark,
+	// +X forward, +Y starboard. Depth is measured NOSE to the back of the GSE road, so the
+	// back edge is the nose overhang minus the depth and every bit of slack is behind the
+	// aeroplane. That single fact shapes the whole layout: there is no room in front to turn
+	// round in, which is why a bay is entered backwards and left forwards.
+	const double HalfWidth = 0.5 * Width;
+	const double BackX = NoseFwd - Depth;
+
+	// The two limits, resolved once. Forward is L/sin(lock) and reverse L/tan(lock) - about
+	// 30% tighter, because a reversing vehicle pivots about its FIXED axle.
+	const double Radius = Largest.TightestFollowableRadius();
+	const double ReverseRadius = Largest.TightestReversibleRadius();
+
+	// WHERE THE SPINES RUN. Outboard of the service anchors and inboard of the stand edge, so
+	// a vehicle on one is clear of the fuselage box and still on the stand's own ground. The
+	// wingtip is not a constraint: driving under a wing is normal, and HydrantPit is under the
+	// starboard wing root because that is where a hydrant pit is.
+	const double SpineY = HalfWidth - 750.0;
+
+	// THE RANK RUNS FORE AND AFT ON THE CENTRELINE, ASTERN OF THE TAIL, and the entry leg is
+	// the same line continued to the back edge - so the entry leg is a STRAIGHT and carries no
+	// corner at all. Every approach leg then leaves the head heading forward and reaches its
+	// spine with a lateral SHIFT rather than a pair of right angles, which is what a 1250 uu
+	// strip can actually afford: one 90 degree corner alone costs CornerRunFor(R, 90) = 1.41 R.
+	constexpr double RankSpacing = 1000.0;
+	const double StagingX = BackX + RankSpacing + 80.0;
+
+	Definition.EntryLocal = FVector2D(BackX, 0.0);
+	Definition.EntryHeading = 0.0;
+	Definition.StagingLocal = FVector2D(StagingX, 0.0);
+	Definition.StagingHeading = 0.0;
+
+	// HOW MANY FIT, DERIVED RATHER THAN TYPED: the rank occupies the entry straight, so its
+	// capacity is how many spacings fit between the head and the back edge, plus the head
+	// itself. A typed 2 would go on saying 2 after the stand's depth changed.
+	Definition.StagingCapacity = 1 + FMath::FloorToInt32((StagingX - BackX) / RankSpacing);
+
+	// A BAY PER ANCHOR A VEHICLE DRIVES TO. The aircraft's own pose is not one - nothing
+	// drives to a stop mark - and TraversalForRole is what distinguishes them, rather than a
+	// list here that would have to agree with the anchor table.
+	Definition.ServiceBays.Reset();
+	for (const FEntityAnchor& Anchor : Definition.Anchors)
+	{
+		if (TraversalForRole(Anchor.Role) == ETraversalClass::Aircraft)
+		{
+			continue;
+		}
+
+		FServiceBay Bay;
+		Bay.AnchorId = Anchor.Id;
+
+		// THE VEHICLE PARKS AT ITS ANCHOR, NOSE OUT. Outboard is where it came from, so a
+		// vehicle that backed in points that way, and its working end - a dispenser's reels,
+		// a loader's belt - is the end nearest the aeroplane. That is also what makes the bay
+		// the turn-round: it leaves forwards, going back the way it came.
+		Bay.Local = Anchor.LocalPosition;
+		Bay.LocalHeading = Anchor.LocalPosition.Y >= 0.0 ? UE_DOUBLE_HALF_PI : -UE_DOUBLE_HALF_PI;
+
+		Definition.ServiceBays.Add(Bay);
+	}
+
+	// WHAT THE LAYOUT ACTUALLY NEEDS, measured off what was placed - never typed, and never
+	// off the DESIGN aircraft. Width is the greater of the paint's own reach and the airframe
+	// the LETTER admits with its wingtip clearance; depth likewise runs from that airframe's
+	// nose to the aft-most thing placed.
+	double MinX = -TailAft;
+	double MaxX = NoseFwd;
+	double MaxAbsY = 0.5 * Width;
+	auto Cover = [&MinX, &MaxX, &MaxAbsY](const FVector2D& At)
+	{
+		MinX = FMath::Min(MinX, At.X);
+		MaxX = FMath::Max(MaxX, At.X);
+		MaxAbsY = FMath::Max(MaxAbsY, FMath::Abs(At.Y));
+	};
+	Cover(Definition.EntryLocal);
+	Cover(Definition.StagingLocal);
+	Cover(FVector2D(StagingX, SpineY));
+	Cover(FVector2D(StagingX, -SpineY));
+	for (const FServiceBay& Bay : Definition.ServiceBays)
+	{
+		Cover(Bay.Local);
+	}
+
+	Definition.RequiredExtent = FVector2D(2.0 * MaxAbsY, MaxX - MinX);
+
+	// READ THESE RATHER THAN TRUST THEM. The poses above are written from the geometry, and
+	// the figures they imply are what say whether that geometry was right - see the plan's
+	// own note that this is where it is most likely to be wrong.
+	UE_LOG(LogAirside, Log,
+		TEXT("Stand template '%s': box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
+		     "entry (%.0f, %.0f) hdg %.0f, staging (%.0f, %.0f) x%d, spine y %.0f, "
+		     "needs %.0f x %.0f"),
+		*Letter, Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
+		Definition.EntryLocal.X, Definition.EntryLocal.Y,
+		FMath::RadiansToDegrees(Definition.EntryHeading),
+		Definition.StagingLocal.X, Definition.StagingLocal.Y, Definition.StagingCapacity,
+		SpineY, Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
+
+	for (const FServiceBay& Bay : Definition.ServiceBays)
+	{
+		UE_LOG(LogAirside, Log, TEXT("  bay '%s' at (%.0f, %.0f) hdg %.0f"),
+			*Bay.AnchorId.ToString(), Bay.Local.X, Bay.Local.Y,
+			FMath::RadiansToDegrees(Bay.LocalHeading));
 	}
 }
 

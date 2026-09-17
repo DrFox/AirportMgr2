@@ -4,6 +4,7 @@
 #include "Engine/DataAsset.h"
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
+#include "Model/RouteSearch.h"
 #include "EntityDefinition.generated.h"
 
 class URoadNetwork;
@@ -92,6 +93,59 @@ struct AIRSIDE_API FStandWaypoint
 };
 
 /**
+ * One service vehicle's parking bay, and the three legs that serve it.
+ *
+ * THREE LEGS, NOT TWO, and the third is not an oversight. A bay is a dead end: the vehicle
+ * backs in and then drives out FORWARDS. If it retraced the reverse leg, that curve would have
+ * to satisfy the FORWARD limit of 699 uu and the whole 30% that reversing buys would be spent
+ * on a path that has to work both ways. It does not retrace it - from the parked pose it leaves
+ * along its own curve.
+ *
+ * AND THE BAY IS THE TURN-ROUND. There is no room forward of the nose to turn in - a Code C
+ * stand is 55 m deep and the airframe it admits is 39.5 m of that, all of the slack being
+ * behind - so a vehicle that drove up a spine forwards would have nowhere to come back from.
+ * Reversing in and leaving nose-out is what turns it, which is the same thing a lorry does at
+ * a loading dock and is why the three legs are approach/reverse/exit rather than there-and-back.
+ *
+ * AIRFRAME-INDEPENDENT. A bay is paint on concrete, and paint does not move when a different
+ * type parks; where a service connects to the AIRCRAFT lives on UAircraftType, because an A320
+ * and a 737-800 park here with their doors metres apart.
+ *
+ * LEGS MEET TANGENTIALLY, and that is a contract rather than an observation: each leg is
+ * checked ALONE by FSpeedProfile, so a corner that fell between two legs would be judged by
+ * nothing. That is the exact shape of the defect this whole piece exists to remove - "a route
+ * of individually-legal edges can still be illegal WHERE TWO MEET". Every leg therefore carries
+ * its own corners whole and ends pointing the way the next one starts.
+ */
+USTRUCT()
+struct AIRSIDE_API FServiceBay
+{
+	GENERATED_BODY()
+
+	/** Which service this bay serves. Matches an FEntityAnchor::Id on the same definition. */
+	UPROPERTY(EditAnywhere) FName AnchorId;
+
+	/**
+	 * Where the vehicle ends up, and pointing which way, in the entity's local space.
+	 *
+	 * NOSE OUT. The heading is the parked vehicle's, and it points AWAY from the aeroplane,
+	 * because the vehicle backed in - so its working end (a dispenser's reels, a loader's
+	 * belt) is the end nearest the aircraft, and its exit leg leaves the way it is pointing.
+	 */
+	UPROPERTY(EditAnywhere) FVector2D Local = FVector2D::ZeroVector;
+	UPROPERTY(EditAnywhere) double LocalHeading = 0.0;
+
+	/** Staging past the bay, forwards. Checked against the FORWARD limit. */
+	UPROPERTY() FRoutePlan ApproachLeg;
+
+	/** The back-in, which FReverseRun plays. Checked against the REVERSE limit. */
+	UPROPERTY() FRoutePlan ReverseLeg;
+
+	/** Bay to onward, forwards. Checked against the FORWARD limit. */
+	UPROPERTY() FRoutePlan ExitLeg;
+};
+
+/**
  * Shared, immutable description of a kind of installation (Flyweight), matching
  * URoadProfile's role for cross-sections.
  *
@@ -168,6 +222,74 @@ public:
 	 * everything in the graph does. It is a routing lane, not paint.
 	 */
 	UPROPERTY(EditAnywhere) TArray<FStandWaypoint> ServiceLane;
+
+	/**
+	 * Where a road may join this installation, and pointing which way, in local space.
+	 *
+	 * FIXED, AND IT MUST MEET A ROAD. This is the last per-placement geometry the design had
+	 * and the reason it is gone: with the entry floating, one curve was still solved fresh on
+	 * every placement, which is one remaining chance to produce something undrivable. Placement
+	 * now VALIDATES - a road either passes through here or the stand is refused by name - and
+	 * computes no geometry at all.
+	 *
+	 * ON THE AFT EDGE, because a stand sits in a row and the GSE road runs along the back of
+	 * the row. Its sides are its neighbours' and its front is the terminal.
+	 *
+	 * DIRECTED, which is what makes the defect the oracle found unrepresentable rather than
+	 * merely detectable: a route reversed 175 degrees on the spot at a stand entry, because
+	 * RouteSearch::EdgeCost is sampled length plus congestion with NO heading term, so the
+	 * nearer entry won regardless of which way its merge faced. An entry the search cannot
+	 * enter backwards has no wrong choice to offer.
+	 */
+	UPROPERTY(EditAnywhere) FVector2D EntryLocal = FVector2D::ZeroVector;
+	UPROPERTY(EditAnywhere) double EntryHeading = 0.0;
+
+	/** Entry to the head of the staging rank, forwards. Checked against the FORWARD limit. */
+	UPROPERTY() FRoutePlan EntryLeg;
+
+	/**
+	 * The head of the staging rank, and the direction vehicles face on it. Waiting vehicles
+	 * queue BEHIND the head, against StagingHeading.
+	 *
+	 * A RANK, NOT A POINT, and StagingCapacity is why. A bay is claimed before a vehicle
+	 * leaves the rank, so an occupied bay means it waits here - and a single pose would mean
+	 * the second truck waits on the GSE road outside, blocking it for every other stand in the
+	 * row. "So the vehicles don't pile up on each other" is the requirement, and a queue on a
+	 * shared road is the pile-up wearing a different hat.
+	 */
+	UPROPERTY(EditAnywhere) FVector2D StagingLocal = FVector2D::ZeroVector;
+	UPROPERTY(EditAnywhere) double StagingHeading = 0.0;
+
+	/**
+	 * How many vehicles the rank holds, including the one at the head.
+	 *
+	 * ONE FIGURE FOR EVERY LETTER for now, and that is an open question rather than a ruling:
+	 * a Code F stand plausibly services more vehicles at once than a Code B. Recorded in the
+	 * spec's unresolved questions; scaling it is a table column away.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "0")) int32 StagingCapacity = 0;
+
+	/** Every bay this layout paints - one per anchor a VEHICLE drives to. */
+	UPROPERTY(EditAnywhere) TArray<FServiceBay> ServiceBays;
+
+	/**
+	 * How much ground this layout actually needs: X is WIDTH (across, the local Y axis) and
+	 * Y is DEPTH (along, the local X axis), uu.
+	 *
+	 * WIDTH-THEN-DEPTH RATHER THAN AN (X, Y) EXTENT, so that it reads straight into
+	 * IcaoCode::LetterForStandSize and the template can name its own letter. An extent in
+	 * local axes would have to be swapped at that call, and a swap nobody notices is a stand
+	 * that reports the wrong code.
+	 *
+	 * DERIVED FROM THE POSES AND LEGS, never typed. A typed figure would be a second opinion
+	 * about how big the layout is, and the two would drift the first time a bay moved - which
+	 * is the whole reason StandWidthForLetter derives width rather than storing it.
+	 *
+	 * It includes the largest airframe the LETTER admits, not the design aircraft: the stand
+	 * geometry was sized from the A320's tail at -3250 while a 737-800 parks on it at -3430,
+	 * and that is 1.2 m of tail clearance where 3 m was intended.
+	 */
+	UPROPERTY(VisibleAnywhere) FVector2D RequiredExtent = FVector2D::ZeroVector;
 
 	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
@@ -289,6 +411,21 @@ public:
 	 */
 	static void BuildCodeCStandFor(
 		UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest);
+
+	/**
+	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs
+	 * between them - for a stand of this ICAO code Letter, sized for Largest.
+	 *
+	 * SEPARATE FROM BuildCodeCStandFor, and not merely extracted from it: the anchors above
+	 * are Code C's plant, and this is the RULE that turns any letter's anchors into a
+	 * drivable layout. It reads its box from IcaoCode and nothing else, which is what lets
+	 * one verification cover a whole width band - see UEntityDefinition::RequiredExtent.
+	 *
+	 * TAKES THE ANCHORS AS IT FINDS THEM. It adds no fixture and moves none: a bay is paint
+	 * laid beside plant that is already there.
+	 */
+	static void BuildStandTemplate(
+		UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

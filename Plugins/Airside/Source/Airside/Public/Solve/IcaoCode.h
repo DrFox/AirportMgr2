@@ -93,4 +93,18 @@ namespace IcaoCode
 	 * Letter matched as StandWidthForLetter matches it.
 	 */
 	AIRSIDE_API double MaxTailAftForLetter(const FString& Letter);
+
+	/**
+	 * How far FORWARD of the nose-gear stop mark the longest airframe this letter admits
+	 * reaches, uu. Positive.
+	 *
+	 * THE SIBLING OF MaxTailAftForLetter, and it exists because StandDepthForLetter is
+	 * measured NOSE to the back of the GSE road. Without the nose overhang there is no way to
+	 * turn that depth into the x the layout may actually use, and a layout would silently
+	 * gain the overhang as free room.
+	 *
+	 * Two figures rather than one length for the reason the aft one gives: the origin is the
+	 * nose GEAR, not the nose, and the overhang between them differs by type.
+	 */
+	AIRSIDE_API double MaxNoseFwdForLetter(const FString& Letter);
 }
