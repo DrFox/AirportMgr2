@@ -4,6 +4,7 @@
 #include "Solve/GuideArbiter.h"
 
 class URoadNetwork;
+struct FEntityInstance;
 
 /**
  * A point worth lining up with, and what to call it in the label.
@@ -172,6 +173,32 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
  * but not in preference to the taxiway the player is actually working on.
  */
 struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/** What to call a placed entity where the player reads it. Falls back to the asset name. */
+namespace EntityNaming
+{
+	// DECLARED AT FILE SCOPE, not as `const struct FEntityInstance&` in the signature below:
+	// an elaborated type specifier inside a namespace declares a NEW type in THAT namespace,
+	// so the parameter became EntityNaming::FEntityInstance and nothing could be passed to it.
+	AIRSIDE_API FString Describe(const FEntityInstance& Entity);
+}
+
+/**
+ * Source 3: a placed entity's pose direction, and its perpendicular.
+ *
+ * Bounded by SearchRadiusUu like the other local sources. Angular, through the drag's own
+ * origin: "point the way that stand points" is a direction, not a line the cursor is on.
+ *
+ * THE WEAKEST OF THE FOUR NETWORK SOURCES, and worth saying why it is still here: a stand's
+ * pose is usually square to the taxiway it serves, so Parallel already offers the same
+ * direction most of the time. It earns its place on the apron, where a row of stands sets the
+ * local grain and the nearest road is a long way off.
+ */
+struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;

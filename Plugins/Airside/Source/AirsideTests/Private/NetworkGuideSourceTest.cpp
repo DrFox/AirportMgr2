@@ -277,4 +277,67 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A STAND'S POSE SETS A DIRECTION, and the guide must take it from the pose rather than from
+ * anything the stand happens to sit beside.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAlignedGuideTakesThePoseDirectionTest,
+	"Airside.Tool.AlignedGuideTakesThePoseDirection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// A stand at the origin facing 45 degrees - deliberately NOT a world axis, so a source that
+	// quietly proposed an axis instead of the pose would be caught here.
+	IRoadEditTarget* Target = Actor;
+	Target->PlaceStand(FVector2D(0.0, 0.0), FMath::DegreesToRadians(45.0));
+
+	if (!TestTrue(TEXT("the network exists to be searched"), Actor->Network != nullptr))
+	{
+		return false;
+	}
+
+	const FAlignedGuideSource Source;
+	const TArray<SnapGuide::FCandidate> Candidates =
+		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(2000.0, 2000.0)));
+
+	if (!TestEqual(TEXT("the stand proposes its facing and its perpendicular"),
+		Candidates.Num(), 2))
+	{
+		return false;
+	}
+
+	// RADIANS, NOT DEGREES. cos(45 deg) and sin(45 deg) are the same number, so this leg also
+	// pins that the source did not read Heading as degrees - 45 radians points somewhere else
+	// entirely, and plausible-but-wrong is the worst kind of wrong.
+	const double Root2Over2 = FMath::Sin(FMath::DegreesToRadians(45.0));
+	TestTrue(TEXT("the candidate points the way the stand faces, in radians not degrees"),
+		FMath::IsNearlyEqual(Candidates[0].Direction.X, Root2Over2, 1.0e-6)
+			&& FMath::IsNearlyEqual(Candidates[0].Direction.Y, Root2Over2, 1.0e-6));
+	TestTrue(TEXT("and the dashed line points at the stand itself"),
+		Candidates[0].ReferenceAt.Equals(FVector2D::ZeroVector, 1.0e-6));
+	TestEqual(TEXT("angular, through the drag's own origin"),
+		static_cast<int32>(Candidates[0].Fit), static_cast<int32>(SnapGuide::EFit::Angular));
+
+	// NAMED, AND NOT EMPTY. The definition carries no authored DisplayName in a test, so this
+	// is the asset-name fallback doing its job - an empty label would read as a bug on screen.
+	TestFalse(TEXT("the label names the thing rather than reading blank"),
+		Candidates[0].Description.IsEmpty());
+	TestTrue(TEXT("and says what the relationship is"),
+		Candidates[0].Description.StartsWith(TEXT("aligned with ")));
+
+	// CONTROL LEG: the reach applies here too, so this source cannot quietly become global.
+	const TArray<SnapGuide::FCandidate> FarAway =
+		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 40000.0)));
+	TestEqual(TEXT("a stand beyond the search reach proposes nothing"), FarAway.Num(), 0);
+
+	return true;
+}
+
 #endif

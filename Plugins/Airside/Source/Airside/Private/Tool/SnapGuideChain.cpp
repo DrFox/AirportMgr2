@@ -1,5 +1,7 @@
 #include "Tool/SnapGuideChain.h"
 
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
@@ -281,10 +283,60 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	}
 }
 
+FString EntityNaming::Describe(const FEntityInstance& Entity)
+{
+	if (Entity.Definition == nullptr)
+	{
+		return TEXT("the installation");
+	}
+
+	// THE AUTHORED NAME WHEN THERE IS ONE, the asset's own when there is not. An unset
+	// DisplayName is a content task rather than a bug, so this must not read as one on screen.
+	const FString Authored = Entity.Definition->DisplayName.ToString();
+	return Authored.IsEmpty() ? Entity.Definition->GetName() : Authored;
+}
+
+void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive
+			|| FVector2D::DistSquared(Entity.Position, Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		// HEADING IS RADIANS - see FEntityInstance::Heading. A degrees/radians slip here would
+		// point the guide somewhere plausible and wrong, which is the worst kind.
+		const FVector2D Facing(FMath::Cos(Entity.Heading), FMath::Sin(Entity.Heading));
+		const FString Name = EntityNaming::Describe(Entity);
+
+		SnapGuide::FCandidate Along;
+		Along.Direction = Facing;
+		Along.Through = Anchor.Origin;
+		Along.Fit = SnapGuide::EFit::Angular;
+
+		// THE DASHED LINE GOES TO THE THING ITSELF, which for an entity is simply its pose.
+		Along.ReferenceAt = Entity.Position;
+		Along.Source = SnapGuide::ESource::Aligned;
+		Along.Description = FString::Printf(TEXT("aligned with %s"), *Name);
+		Out.Add(Along);
+
+		SnapGuide::FCandidate Square = Along;
+		Square.Direction = RoadGeom::PerpCCW(Facing);
+		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+		Out.Add(Square);
+	}
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
 	AddSource(MakeUnique<FPointAlignGuideSource>());
+	AddSource(MakeUnique<FAlignedGuideSource>());
 	AddSource(MakeUnique<FCollinearGuideSource>());
 	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FRunwayGuideSource>());

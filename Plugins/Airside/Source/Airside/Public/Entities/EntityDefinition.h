@@ -45,6 +45,20 @@ class AIRSIDE_API UEntityDefinition : public UDataAsset
 
 public:
 	/**
+	 * What to call one of these where the PLAYER reads it - "the stand", "the fuel depot".
+	 *
+	 * ADDED FOR THE GUIDE LABELS, which are the first player-facing text that has to name a
+	 * placed entity: FEntityInstance carries a pose, a definition and anchors, and the only
+	 * naming anywhere in the codebase before this was a log line printing the asset's name.
+	 *
+	 * FALLS BACK TO THE ASSET NAME when unset - see EntityNaming::Describe - so every existing
+	 * .uasset keeps working without being re-authored. An empty FText here is a content task,
+	 * not a bug, and must not read as one on screen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Presentation")
+	FText DisplayName;
+
+	/**
 	 * Things dug into the concrete: a hydrant pit, fixed ground power, a PCA point, the
 	 * painted boxes equipment stages in.
 	 *
