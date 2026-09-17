@@ -38,11 +38,15 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// Warm, so it reads against the cyan route and grey nodes.
 	case EPreviewStyle::Selected:                    return FLinearColor(1.0f, 0.75f, 0.2f);
 
-	// VIOLET, and deliberately nothing else in this table wears it. A guide line is drawn
-	// TOUCHING a Provisional edge every frame it exists, so white was out; Snap's amber and
-	// Route's cyan both already mean something a gesture would DO, and this means something
-	// the gesture is measured against.
-	case EPreviewStyle::Guide:                       return FLinearColor(0.75f, 0.5f, 1.0f);
+	// DARK CYAN. A guide line is drawn TOUCHING a Provisional edge every frame it exists, so
+	// white was out, and Snap's amber and Pending's green both already mean something a
+	// gesture would DO - this means something the gesture is measured AGAINST.
+	//
+	// DARK, and that is the whole distinction from Route's bright cyan above: the two share a
+	// hue, so the difference has to be value rather than colour. They are never drawn by the
+	// same gesture (the plot tool draws no routes), which is what makes sharing a hue safe at
+	// all; if a future tool draws both at once, this is the pair to re-check.
+	case EPreviewStyle::Guide:                       return FLinearColor(0.0f, 0.55f, 0.55f);
 
 	// GraphOverlay's context styles - the same colours ARoadBuildHUD::DrawNodes/DrawStands
 	// used to wire to their own StubColour/EndColour/JunctionColour/StandColour/
