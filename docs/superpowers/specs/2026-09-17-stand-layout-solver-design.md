@@ -49,6 +49,22 @@ A stand's SIZE decides which airframes may use it, not the reverse. `IcaoCode::L
 already exists; this is its mirror. A player who drags a bigger stand gets bigger aircraft as a
 consequence rather than as a setting.
 
+**BOTH DIMENSIONS, NEVER ONE.** The letter is the largest whose width AND depth both fit. Width
+alone would call a 67 x 30 m stand Code D, when nothing bigger than a King Air fits in 30 m of
+depth; depth alone would admit a 52 m span to a stand 45 m wide. Worked through the table:
+
+| Stand | Letter | Why |
+|---|---|---|
+| 45 x 55 m | C | exactly Code C |
+| 60 x 55 m | C | wider than C needs; D needs 67 |
+| 67 x 30 m | **B** | D-wide, but only 30 m deep |
+| 67 x 70 m | D | genuinely Code D |
+| 45 x 90 m | C | deep but narrow - the span binds |
+| 20 x 20 m | none | under the smallest stand; no letter fits |
+
+"No letter" is a real answer and not an error: a stand too small for anything is refused at
+placement, which is the same refusal the rest of this spec describes.
+
 ### Width is a BAND, and the template is built for its floor
 
 45 m to just under 67 m is all Code C. **The template is authored at 45 m** — the tightest legal
