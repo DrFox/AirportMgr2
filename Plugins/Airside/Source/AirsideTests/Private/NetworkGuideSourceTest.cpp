@@ -130,4 +130,59 @@ bool FRoadNamingSaysWhatARoadAdmitsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * IN LINE WITH A ROAD IS NOT THE SAME AS PARALLEL TO IT. A cursor past the end of a taxiway,
+ * dead on its centreline, is collinear with it; a cursor the same distance to the SIDE is
+ * parallel and not collinear. The two sources must disagree there, or one is redundant.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCollinearGuideIsNotParallelTest,
+	"Airside.Tool.CollinearGuideIsNotParallel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCollinearGuideIsNotParallelTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// One east-west taxiway, from the origin eastwards.
+	Lay(Actor, FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), ERoadKind::Taxiway);
+
+	const FCollinearGuideSource Source;
+	const TArray<SnapGuide::FCandidate> Candidates =
+		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(7000.0, 0.0)));
+
+	if (!TestEqual(TEXT("the one road in reach proposes its own line"), Candidates.Num(), 1))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("perpendicular, because it is about where the cursor ended up"),
+		static_cast<int32>(Candidates[0].Fit),
+		static_cast<int32>(SnapGuide::EFit::Perpendicular));
+	TestTrue(TEXT("the line passes through the road, not through the drag"),
+		FMath::IsNearlyZero(Candidates[0].Through.Y, 1.0e-6));
+	TestEqual(TEXT("named as being in line with it"),
+		Candidates[0].Description, FString(TEXT("in line with the taxiway")));
+
+	// THE LINE IS THE ROAD'S, so the arbiter finds the cursor ON it however far past the end
+	// the drag has gone - which is the case Parallel cannot express.
+	const SnapGuide::FResult Result = SnapGuide::Arbitrate(
+		Candidates, FVector2D(7000.0, 0.0), FVector2D(9000.0, 40.0), SnapGuide::FResult());
+	TestTrue(TEXT("a cursor on the road's extension is offered the guide"), Result.bActive);
+	TestTrue(TEXT("and is pulled exactly onto the centreline"),
+		FMath::IsNearlyZero(Result.Point.Y, 1.0e-6));
+
+	// CONTROL LEG: a cursor well to the SIDE of the road is not in line with it, however
+	// parallel it may be. Without this the test would pass on a source that proposed a line
+	// through the drag instead of through the road.
+	const SnapGuide::FResult Beside = SnapGuide::Arbitrate(
+		Candidates, FVector2D(7000.0, 0.0), FVector2D(9000.0, 3000.0), SnapGuide::FResult());
+	TestFalse(TEXT("a cursor 30 m to the side is not in line with anything"), Beside.bActive);
+
+	return true;
+}
+
 #endif

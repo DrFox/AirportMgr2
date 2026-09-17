@@ -142,6 +142,25 @@ struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 };
 
 /**
+ * Source 4: the line an existing segment already lies on.
+ *
+ * PERPENDICULAR, not angular, and that is the whole difference from Parallel above. Parallel
+ * says "point the same way as that taxiway"; this says "you are ON the line that taxiway lies
+ * along", which is a statement about where the cursor ENDED UP. Measuring it as an angle from
+ * an origin that is nowhere on the line would answer a different question - the same
+ * reasoning that gave PointAlign its fit kind.
+ *
+ * ONE CANDIDATE PER SEGMENT IN REACH, not just the nearest: a cursor can be on the extension
+ * of one segment while standing beside another, and that is exactly the case worth telling
+ * the player about.
+ */
+struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
  * Gathers every source's candidates and arbitrates between them - design sections 3 and 5.
  *
  * MODELLED ON FRoadSnapChain, deliberately, down to the move-only ownership: a source added

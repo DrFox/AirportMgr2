@@ -192,10 +192,55 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	Out.Add(Square);
 }
 
+void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!SegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		if (Span.IsNearlyZero()
+			|| FVector2D::DistSquared(On, Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		// THROUGH THE SEGMENT'S OWN END, which is what makes this the line the road LIES ON
+		// rather than one through the drag. The arbiter measures the cursor's distance from
+		// that line, so the candidate is eligible exactly when the cursor is on the road's
+		// extension - however far along it the drag has gone.
+		SnapGuide::FCandidate InLine;
+		InLine.Direction = Span.GetSafeNormal();
+		InLine.Through = A;
+		InLine.Fit = SnapGuide::EFit::Perpendicular;
+		InLine.Source = SnapGuide::ESource::Collinear;
+		InLine.Description = FString::Printf(TEXT("in line with %s"),
+			*RoadNaming::Describe(Network, Id));
+
+		// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
+		// cursor happens to be: the player needs to see WHICH road they are in line with, and
+		// the near end of it is the part they can recognise.
+		InLine.ReferenceAt = On;
+		Out.Add(InLine);
+	}
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
 	AddSource(MakeUnique<FPointAlignGuideSource>());
+	AddSource(MakeUnique<FCollinearGuideSource>());
 	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 }

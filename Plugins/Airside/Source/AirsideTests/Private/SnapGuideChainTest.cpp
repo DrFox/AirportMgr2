@@ -45,7 +45,7 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	// source written, declared and never installed in the constructor would be invisible
 	// otherwise - its candidates simply never appear, and every other test of the chain still
 	// passes. Stage 2 takes this from 3 to 7, one at a time.
-	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 4);
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 5);
 
 	const FGuideAnchor Anchor = Frontage();
 
