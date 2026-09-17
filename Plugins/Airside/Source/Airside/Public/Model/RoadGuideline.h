@@ -205,6 +205,7 @@ struct AIRSIDE_API FGuidelineEdge
 	 */
 	UPROPERTY() bool bReverseLeg = false;
 
+
 	// bStandApproach IS DELETED, 2026-09-16. It marked an edge that APPROACHED a stand's lane
 	// rather than being part of the cycle - the SPUR from a service anchor into the old ring -
 	// and was meaningless without StandGeometryOwner beside it, since it said which of an

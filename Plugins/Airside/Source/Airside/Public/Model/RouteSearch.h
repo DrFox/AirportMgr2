@@ -90,6 +90,20 @@ struct AIRSIDE_API FRouteStep
 	UPROPERTY() bool bReversed = false;
 
 	/**
+	 * True when this step's edge is a service bay's REVERSE leg - a span meant to be driven
+	 * BACKWARDS. Copied off FGuidelineEdge::bReverseLeg by the search.
+	 *
+	 * NOT bReversed ABOVE, AND THE TWO ARE EASY TO CONFUSE. That one says the edge is walked B
+	 * to A, which reverses its sampled POINTS and says nothing about the vehicle. This one says
+	 * the vehicle travels the span facing the other way.
+	 *
+	 * COPIED RATHER THAN LOOKED UP, because FRoadAgent holds no URoadNetwork - it is world-free,
+	 * like the five motion phases it switches between - so a plan is the only thing it can read
+	 * this from.
+	 */
+	UPROPERTY() bool bReverseLeg = false;
+
+	/**
 	 * Cumulative route distance at which this step's edge ends, and the index of that point
 	 * in FRoutePlan::Polyline. Filled by RunSearch from the SAME polyline it appends - never
 	 * from the Bezier - so "which edge am I on at Travelled" is answered off the array the
@@ -125,6 +139,26 @@ struct AIRSIDE_API FRoutePlan
 
 	bool IsValid() const { return Result == ERouteResult::Found; }
 };
+
+namespace RouteSearch
+{
+	/**
+	 * The portion of Plan covering steps [First, Last] inclusive, as a plan of its own.
+	 *
+	 * FOR HANDING A SPAN TO A DIFFERENT MOTION PHASE. FReverseRun plays back a whole FRoutePlan
+	 * and knows nothing of routes, so the reverse leg buried in the middle of a taxi has to be
+	 * cut out before it can be armed. Distances and vertex indices are rebased, so the section
+	 * reads as though it had been searched for on its own.
+	 *
+	 * OFF THE STEP MAP, NEVER RE-SAMPLED. FRouteStep::EndVertex indexes the SAME Polyline the
+	 * follower walks - see the comment there - so a section built from it shares those exact
+	 * points rather than a second evaluation of the curve that would differ on every bend.
+	 *
+	 * An empty plan back when the range is not a range, which is what a caller that found no
+	 * span should already have checked.
+	 */
+	AIRSIDE_API FRoutePlan Section(const FRoutePlan& Plan, int32 First, int32 Last);
+}
 
 struct FTrafficOccupancy;
 struct FAirframe;

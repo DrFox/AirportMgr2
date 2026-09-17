@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackRun.h"
+#include "Model/ReverseRun.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
@@ -223,6 +224,31 @@ struct AIRSIDE_API FRoadAgent
 	 * four is driving, so none of them has to know the others exist.
 	 */
 	UPROPERTY() FPushbackRun Pushback;
+
+	/**
+	 * The back-out a ground vehicle is making, when Phase is Reversing.
+	 *
+	 * ARMED FROM INSIDE THE TAXI, unlike Pushback, which is armed from outside by whoever
+	 * decides an aeroplane is leaving. A reverse leg is part of a route the vehicle is already
+	 * driving - one span of a stand's four-leg cycle - so the agent finds it for itself, cuts it
+	 * out of the plan with RouteSearch::Section, and picks the taxi up again afterwards.
+	 */
+	UPROPERTY() FReverseRun Reverse;
+
+	/**
+	 * How fast this vehicle backs up, uu/s. Copied in at dispatch, like ShutdownPause, because
+	 * FRoadAgent is world-free and cannot read the rules for itself.
+	 */
+	UPROPERTY() double ReverseSpeed = 0.0;
+
+	/**
+	 * Distance along Follower.Plan at which the taxi resumes once the current reverse span ends.
+	 *
+	 * A DISTANCE INTO THE SAME PLAN, not a second plan. FRouteFollower::Start takes a Travelled,
+	 * so the vehicle picks up exactly where the reverse left it on the route it was already
+	 * driving - and the two cannot disagree about what that route is.
+	 */
+	UPROPERTY() double ResumeTravelled = 0.0;
 
 	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback

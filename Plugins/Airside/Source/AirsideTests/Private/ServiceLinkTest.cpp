@@ -3,6 +3,7 @@
 #include "Build/StandLayoutBuild.h"
 #include "Solve/IcaoCode.h"
 #include "Content/AirsideSettings.h"
+#include "Model/RoadAgent.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -1226,6 +1227,140 @@ bool FLaneCornersAreDrivableTest::RunTest(const FString& Parameters)
 
 	TestTrue(*FString::Printf(TEXT("every lane junction was measured - %d found"), Checked),
 		Checked >= 8);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckLeavesTheServicePointBackwardsTest,
+	"Airside.Model.Traffic.TruckLeavesTheServicePointBackwards",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// REPORTED FROM PIE, 2026-09-17: "the fuel truck didn't reverse out of the service point,
+	// it just flipped 180 degrees and went out forwards".
+	//
+	// THE LAYOUT IS RIGHT AND THE ROUTE IS WRONG, which is why this test is here and not in
+	// StandLayoutTest. The reverse leg is laid, it is marked, and it is drivable - the whole
+	// four-leg cycle exists in the graph. What was never built is the consumer: grep
+	// bReverseLeg and the only reader outside FStandLayoutBuild is a test. Nothing in Model/
+	// asks whether the span it is about to drive is meant to be driven backwards, so the
+	// follower turns the body round and drives it forwards, which is exactly what was seen.
+	//
+	// THIS TEST ASKS THE ROUTE, not the follower, because the route decides first. A follower
+	// taught to honour the flag still produces a 180 on a route that leaves the service point
+	// by retracing the serve leg it arrived on - the way out has to BE the reverse leg before
+	// anything can drive it as one.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	constexpr double RoadX = -5400.0;
+	FGuidelineNodeId RoadNorth;
+	const FGuidelineNodeId RoadSouth =
+		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
+			ETraversalClass::GroundVehicle, RoadNorth);
+
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
+	FAnchorLink::Build(*Net);
+
+	const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
+	if (!TestTrue(TEXT("the hydrant resolves to a node"), Hydrant.IsSet()))
+	{
+		return false;
+	}
+
+	FRouteQuery Out;
+	Out.Start = Hydrant;
+	Out.Goal = RoadSouth;
+	Out.Class = ETraversalClass::GroundVehicle;
+
+	const FRoutePlan Leaving = RouteSearch::Find(*Net, Out);
+	if (!TestTrue(TEXT("a truck routes off the hydrant and back to the road"),
+			Leaving.IsValid() && Leaving.Steps.Num() > 0))
+	{
+		return false;
+	}
+
+	// WHAT THE ROUTE ACTUALLY DOES FIRST, reported whichever way it comes out, because the
+	// figure is the point of the test as much as the verdict is.
+	const FGuidelineEdge* First = Net->GetGuidelineEdge(Leaving.Steps[0].Edge);
+	int32 ReverseSteps = 0;
+	for (const FRouteStep& Step : Leaving.Steps)
+	{
+		const FGuidelineEdge* Edge = Net->GetGuidelineEdge(Step.Edge);
+		ReverseSteps += (Edge != nullptr && Edge->bReverseLeg) ? 1 : 0;
+	}
+	AddInfo(FString::Printf(
+		TEXT("leaving the hydrant: %d step(s), %.0f uu, %d marked as reverse legs; the first "
+		     "step is %s"),
+		Leaving.Steps.Num(), Leaving.Length, ReverseSteps,
+		First != nullptr && First->bReverseLeg ? TEXT("a REVERSE leg") : TEXT("a FORWARD leg")));
+
+	// THE FIRST STEP OFF A SERVICE POINT IS THE REVERSE LEG. The serve leg arrives facing the
+	// aeroplane and the reverse leg is the only span that leaves without turning the body
+	// round, so any other first step is a pirouette on the spot beside a parked aircraft.
+	TestTrue(
+		TEXT("the way off the service point is the bay's reverse leg, not a turn on the spot"),
+		First != nullptr && First->bReverseLeg);
+
+	// AND THE AGENT DRIVES IT BACKWARDS, which is the half a route test cannot see. The three
+	// pieces this needs - the mark on the step, FReverseRun, and EAgentPhase::Reversing - all
+	// existed before today and none referred to any other, so the follower drove the reverse
+	// leg forwards and the body swung round to face along it.
+	//
+	// AT THE LEVEL OF THE COMPOSITION, not the struct. Airside.Model.ReverseRun already drives
+	// FReverseRun to its limits on a hand-made arc and passed throughout; what was untested was
+	// whether anything ever HANDS it one. That is the seam, so that is where the test goes.
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+
+	FRoadAgent Agent;
+	Agent.StartTaxi(Leaving, Truck);
+	Agent.Class = ETraversalClass::GroundVehicle;
+	Agent.ReverseSpeed = 100.0;
+
+	FAgentMotion Motion;
+	EAgentEvent Event = EAgentEvent::None;
+	Agent.Advance(0.0, Motion, Event);
+
+	double Previous = Motion.Heading;
+	double Sharpest = 0.0;
+	double SharpestAt = 0.0;
+	bool bEverReversed = false;
+	int32 Frames = 0;
+
+	// A CEILING, so a manoeuvre that never finishes fails as a test rather than hanging one.
+	for (; Frames < 20000 && Agent.Phase != EAgentPhase::Parked; ++Frames)
+	{
+		Agent.Advance(1.0 / 60.0, Motion, Event);
+		bEverReversed |= Agent.Phase == EAgentPhase::Reversing;
+
+		const double Turned = FMath::Abs(FMath::FindDeltaAngleDegrees(
+			FMath::RadiansToDegrees(Previous), FMath::RadiansToDegrees(Motion.Heading)));
+		if (Turned > Sharpest)
+		{
+			Sharpest = Turned;
+			SharpestAt = Frames / 60.0;
+		}
+		Previous = Motion.Heading;
+	}
+
+	AddInfo(FString::Printf(
+		TEXT("drove the way out in %d frame(s); reversed: %s; sharpest heading change in one "
+		     "frame %.1f deg at t=%.1f s"),
+		Frames, bEverReversed ? TEXT("yes") : TEXT("NO"), Sharpest, SharpestAt));
+
+	TestTrue(TEXT("the agent enters EAgentPhase::Reversing on the way out"), bEverReversed);
+
+	// 20 DEGREES IN A SIXTIETH OF A SECOND is 1200 deg/s, which nothing on an apron does. The
+	// bug this pins turned the body through 180 in ONE frame, so the threshold is not delicate
+	// - it only has to separate "drove round a corner" from "pirouetted".
+	TestTrue(
+		*FString::Printf(TEXT("the body never spins on the spot (sharpest %.1f deg in one "
+		                      "frame, at t=%.1f s)"), Sharpest, SharpestAt),
+		Sharpest < 20.0);
+
 	return true;
 }
 

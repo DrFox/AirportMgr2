@@ -59,6 +59,16 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double HandTugPushSpeed       = 80.0;   // 0.8 m/s, walking pace
 	UPROPERTY(EditAnywhere) double VehicleTugPushSpeed    = 150.0;  // 1.5 m/s
 
+	/**
+	 * How fast a ground vehicle backs out of a service point, uu/s.
+	 *
+	 * HERE RATHER THAN ON THE VEHICLE, with the push speeds, because it is the same kind of
+	 * figure and answers the same question: how fast a manoeuvre reads on screen. A crawl by
+	 * nature - nobody reverses beside an aeroplane at taxi speed - and EditAnywhere so it can be
+	 * tuned against what the player watches.
+	 */
+	UPROPERTY(EditAnywhere) double ServiceReverseSpeed    = 100.0;  // 1.0 m/s
+
 	/** Into and out of a push, uu/s^2. Gentle: a towbar does not snatch. */
 	UPROPERTY(EditAnywhere) double PushAccel              = 30.0;   // 0.3 m/s^2
 

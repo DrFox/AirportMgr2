@@ -27,7 +27,20 @@ namespace
 		// aeroplane routed round a service layout would be driving round itself.
 		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
 		Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
-		Edge.Direction = EGuidelineDir::Bidirectional;
+		// A STAND'S FOUR LEGS ARE A ONE-WAY CYCLE, and until 2026-09-17 they were laid
+		// Bidirectional. Arrive, serve, reverse and depart are a SEQUENCE; laid two-way they are
+		// four curves that happen to touch, and RouteSearch - which costs by length and
+		// congestion, with no heading term - found the obvious shortcut. Measured: the route OFF
+		// the hydrant was 11 steps and 14015 uu with ZERO reverse legs in it. It retraced the
+		// serve leg it had arrived on, which means turning the body through 180 degrees on the
+		// spot beside a parked aeroplane. Reported from PIE: "it just flipped 180 degrees and went
+		// out forwards".
+		//
+		// EGuidelineDir, NOT A FLAG OF ITS OWN. The first fix for this added bOneWayAtoB to
+		// FGuidelineEdge and a test for it to RouteSearch - a second statement of a fact the edge
+		// already carried, and URoadNetwork::GetOutgoingGuidelines has honoured Direction all
+		// along, which is the one place the search asks. Two fields that must agree are one field.
+		Edge.Direction = EGuidelineDir::AToB;
 		Edge.Width = FStandLayoutBuild::LaneWidth();
 
 		// 0 is UNLIMITED - see FProfileGuideline::MaxWingspan. A span limit on a line no wing

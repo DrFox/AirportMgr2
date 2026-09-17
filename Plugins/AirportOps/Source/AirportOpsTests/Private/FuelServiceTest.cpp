@@ -650,14 +650,22 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 
 	// AND THE QUEUE ACTUALLY DRAINS, with NO edit to the airport. This is the half a
 	// state-only assertion would miss: Needed is worth nothing if the demand is never
-	// re-offered once the truck is home. 300 s covers the first truck's drive out, its
+	// re-offered once the truck is home. The figure covers the first truck's drive out, its
 	// 40 s dwell and its drive home, and is a bound rather than a wait.
+	//
+	// 450 s, RAISED FROM 300 ON 2026-09-17, and the round trip got genuinely longer rather
+	// than the bound getting sloppy. The truck now BACKS OUT of the service point instead of
+	// turning round on the spot and driving away forwards: 2529 uu of reverse leg at the 100
+	// uu/s of FTrafficRules::ServiceReverseSpeed is 25 s where a forward pass took 5, and the
+	// way out is 1658 uu longer besides, because the one-way cycle no longer lets the route
+	// retrace the serve leg. Verified as a bound and not a stall before the number moved: the
+	// same test passes at 1200 s, so the truck does get home.
 	TestTrue(TEXT("and once the truck is home the second aircraft gets it"),
 		Fixture.AdvanceUntil([&SecondDemand]
 		{
 			const FFuelDemand* Demand = SecondDemand();
 			return Demand != nullptr && Demand->TruckId != 0;
-		}, 300.0));
+		}, 450.0));
 
 	// The card never said anything false along the way.
 	if (const FFuelDemand* Served = SecondDemand())
