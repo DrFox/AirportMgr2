@@ -81,7 +81,9 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 			FGuideAnchor Anchor;
 			TestFalse(
 				FString::Printf(TEXT("tool %d offers no guide anchor while it is idle"), Index),
-				Active->DescribeGuideAnchor(Anchor));
+				// NULL NETWORK ON PURPOSE: an idle tool must decline before it looks at the
+				// graph at all, which is also the first-click-of-a-session case.
+				Active->DescribeGuideAnchor(nullptr, Anchor));
 		}
 	}
 

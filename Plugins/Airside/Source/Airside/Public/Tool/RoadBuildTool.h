@@ -352,9 +352,15 @@ struct AIRSIDE_API IBuildTool
 	 * What this tool is dragging, and against what, for the guide chain. False means "no
 	 * gesture is in progress", and the driver then resolves no guide at all.
 	 *
-	 * CONST AND CONTEXT-FREE, read off what the tool has already pinned. It cannot take an
-	 * FToolContext because the driver calls it WHILE BUILDING ONE - and it should not want
-	 * to: where the cursor is now is the chain's input, not the anchor's.
+	 * CONST AND STATELESS, read off what the tool has already pinned.
+	 *
+	 * IT TAKES THE NETWORK BUT NOT THE CONTEXT, and the distinction is not fussiness: the
+	 * driver calls this WHILE BUILDING a context, so there is none to pass - but it has
+	 * already resolved the network two lines earlier, and a tool that must ask the graph what
+	 * it is extending would otherwise keep its own copy of something the graph already knows.
+	 * FRoadDrawTool is exactly that tool: its chaining state holds only the node it draws
+	 * FROM, never the one before it. Null when there is no network yet, which is the first
+	 * click of a session.
 	 *
 	 * RETURNS BOOL rather than setting a flag inside FGuideAnchor, so a caller branches on
 	 * the return - CLAUDE.md's rule about honouring anything that fills an out-parameter.
@@ -362,7 +368,10 @@ struct AIRSIDE_API IBuildTool
 	 * Silent by default, like BuildReadout below: eight tools implement this interface and
 	 * stage 1 of the snap-guides design gives an anchor to exactly one of them.
 	 */
-	virtual bool DescribeGuideAnchor(FGuideAnchor& Out) const { return false; }
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+	{
+		return false;
+	}
 
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;
 
