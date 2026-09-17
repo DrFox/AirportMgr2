@@ -340,6 +340,37 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 				continue;
 			}
 
+			// A GROUND VEHICLE REACHES A STAND WITH A LAYOUT THROUGH THE LAYOUT, OR NOT AT ALL.
+			//
+			// THIS IS StandIsEnteredWhereItDeclares APPLIED TO ANCHORS, and the loop reaches
+			// here only for one the layout did NOT join - the Incident test above has already
+			// passed over every anchor a serve leg ends at. So what is left is an anchor with
+			// no bay, and a direct link to it is the shortcut the declared entries exist to
+			// make unrepresentable: TugStand sits at (350, -1400), its link ran dead straight
+			// from the road to it, and that line crosses the wing keep-out at |y| = 1400 -
+			// under the wing, which NO vehicle may do. The careful legs and the shortcut were
+			// in one graph together and RouteSearch costs by length.
+			//
+			// AND IT WAS TAKING THE ROAD THE ENTRIES NEED. That same link split the road 506 uu
+			// from the port contact and clamped its square corner to 404 uu against a lock of
+			// 699. Two claims on one stretch of road, one of which nothing drives.
+			//
+			// WARNED, NOT DROPPED IN SILENCE. Nothing routes to TugStand today - FPushbackRun
+			// couples at the AIRCRAFT's own NoseGear service point, not at the stand's anchor -
+			// but an anchor that becomes unreachable is a fact about the stand, and a stand
+			// that grows a service with no bay should say so rather than look connected.
+			if (TraversalForRole(Declared->Role) == ETraversalClass::GroundVehicle
+				&& !Instance.Definition->ServiceBays.IsEmpty())
+			{
+				UE_LOG(LogAirside, Warning,
+					TEXT("Anchor '%s' has no service bay on a stand that has a layout, so no "
+					     "road link is cast to it: a direct one would cross the wing keep-out. "
+					     "Give it a bay in UEntityDefinition::BuildStandTemplate to make it "
+					     "reachable."),
+					*Resolved.Id.ToString());
+				continue;
+			}
+
 			FPendingLink Link;
 			Link.Node = Resolved.Node;
 			Link.At = Node->Position;
@@ -627,20 +658,33 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	//
 	// KEPT AFTERWARDS: LaneRadius is what the fillet at the road must deliver (see Offset), and
 	// LaneRun is the room the S has already spent along the lane (see LeadRoom).
+	// THE RADIUS THIS LINK OWES IS DECIDED BY WHAT DRIVES IT, not by whether it owns a lane.
+	//
+	// THE LOCK OF THE LARGEST VEHICLE ADMITTED, never the one driving now - the same call the
+	// lane's own corners are rounded by (FStandLayoutBuild::Build) and the same rule all this
+	// airport's ground geometry follows. An AIRCRAFT link keeps Link.Radius instead, which is
+	// the PAINTED radius of its lead-in line and is not what this is about.
+	//
+	// IT WAS LANE LINKS ALONE UNTIL 2026-09-17, and that left every other ground anchor link
+	// filleted at a Code C's painted 2500 uu - three and a half times what a truck's lock asks
+	// for. Harmless by itself, and not harmless BESIDE A STAND'S ENTRY: TugStand's link at
+	// y = -1400 swept 2500 each way, split the road at y = +1100, and left the entry contact at
+	// +1906 only 796 uu of road where its own square corner wanted 1088. The entry was clamped
+	// to 563 against a lock of 699 by a fillet belonging to a vehicle that never drives it.
 	double LaneRun = 0.0;
 	double LaneRadius = 0.0;
-	if (Link.LaneOwner.IsSet())
+	if (Link.Class == ETraversalClass::GroundVehicle)
+	{
+		constexpr double Slack = 1.1;
+		LaneRadius = UAirsideSettings::ResolveLargestServiceVehicle()
+			.TightestFollowableRadius() * Slack;
+	}
+
+	if (Link.LaneOwner.IsSet() && LaneRadius > 0.0)
 	{
 		FVector2D Along = FVector2D::ZeroVector;
 		if (EntryDeparture(Network, Link.Node, Corner - Link.At, Along))
 		{
-			// THE LOCK OF THE LARGEST VEHICLE ADMITTED, never the one driving now - the same
-			// call the lane's own corners are rounded by (FStandLayoutBuild::Build) and the same
-			// rule all this airport's ground geometry follows.
-			constexpr double Slack = 1.1;
-			LaneRadius = UAirsideSettings::ResolveLargestServiceVehicle()
-				.TightestFollowableRadius() * Slack;
-
 			// WHERE THE LANE'S OWN HEADING MEETS THE ROAD, if it does at all. Parallel lines
 			// give a vanishing cross product and no crossing; a road BEHIND the entry gives a
 			// negative distance, which is not a crossing this link can use either.

@@ -42,36 +42,29 @@ namespace ServiceLinkFixture
 	}
 
 	/**
-	 * The axis-aligned box the definition's SERVICE LAYOUT occupies, in its own local space.
+	 * The ground the STAND occupies, in its own local space - what a player draws a road against.
 	 *
 	 * HERE RATHER THAN ON UEntityDefinition, where it was UEntityDefinition::ServiceLaneBounds()
 	 * until 2026-09-16. That accessor existed so a test could ask "where is the layout" without
 	 * typing its corners a second time (#104), and the reason it earned its place on the asset -
 	 * the lane was a rectangle by construction, so its bounds WERE its shape - stopped being
-	 * true the moment it gained a dip, and is no truer of four legs per bay. A bounding box of
-	 * that is a TEST'S convenience and nothing else, so it lives with the tests.
+	 * true the moment it gained a dip, and is no truer of four legs per bay.
 	 *
-	 * OFF THE SAMPLED LEGS, not off the poses. A bay's poses sit well inside the curve that
-	 * reaches them, so a box drawn round the poses alone would report a layout smaller than the
-	 * ground it actually uses - which is the figure every caller here wants.
+	 * OFF THE DECLARED EXTENT, NOT OFF THE SAMPLED LEGS, since 2026-09-17. It was the legs until
+	 * the road contacts moved a corner run INSIDE the back edge, at which point measuring the
+	 * legs put this fixture's "4 m behind the stand" road 4 m behind the CONTACT instead - well
+	 * inside the stand's own footprint, where no player would draw one, and handing the square
+	 * corner exactly the 400 uu it was moved inboard to stop depending on. A fixture that tracks
+	 * the geometry it exists to test cannot fail, whatever that geometry does.
 	 */
-	FBox2D LaneBoundsOf(const UEntityDefinition& Definition)
+	FBox2D StandGroundOf(const UEntityDefinition& Definition)
 	{
-		FBox2D Bounds(ForceInit);
-		for (const FServiceBay& Bay : Definition.ServiceBays)
-		{
-			for (const FStandLeg* Leg :
-				{ &Bay.ArriveLeg, &Bay.ServeLeg, &Bay.ReverseLeg, &Bay.DepartLeg })
-			{
-				TArray<FVector2D> Sampled;
-				Leg->Sample(Sampled);
-				for (const FVector2D& At : Sampled)
-				{
-					Bounds += At;
-				}
-			}
-		}
-		return Bounds;
+		const FString Letter = IcaoCode::LetterForStandSize(
+			Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
+		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
+		const double HalfWidth = 0.5 * Definition.RequiredExtent.X;
+		return FBox2D(FVector2D(NoseFwd - Definition.RequiredExtent.Y, -HalfWidth),
+			FVector2D(NoseFwd, HalfWidth));
 	}
 
 	// ServiceLinkFixture::PlaceStand MOVED to StandFixture.h, 2026-09-16: StandLaneTest.cpp
@@ -752,7 +745,7 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	const double Followable = Truck.Wheelbase() / Lock;
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
-	const FBox2D LaneBounds = LaneBoundsOf(*Stand);
+	const FBox2D StandGround = StandGroundOf(*Stand);
 
 	// TWO GAPS, because the answer depends on the gap and one fixture could pass by luck. 4 m is
 	// as close as a player can draw a road to a stand; 54 m is a comfortable one.
@@ -762,7 +755,7 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 	for (const double Gap : { 400.0, 5400.0 })
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-		const double RoadX = LaneBounds.Min.X - Gap;
+		const double RoadX = StandGround.Min.X - Gap;
 
 		// LONG, so the fillet is never clamped by the road running out - that is a different
 		// failure with a different fix, and mixing the two would leave neither measured.
@@ -796,31 +789,38 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 					*Where, Lead, Followable),
 				Lead >= Followable);
 
-			// AND THE BETTER OF THE TWO SWEEPS ONTO THE ROAD, which is the one a truck coming
-			// from the favourable direction takes.
+			// BOTH SWEEPS, AND THAT REVERSES THIS TEST'S OWN RULING OF 2026-09-17.
 			//
-			// THE BETTER, NOT BOTH, AND THAT IS A RULING RATHER THAN A CONCESSION. An entry is
-			// authored at 45 degrees so that the turn off the road costs CornerRunFor(R, 135)
-			// = 345 uu instead of the 1088 a square one would - which is what lets a road sit
-			// 4 m behind a stand at all. A vehicle arriving from the OTHER direction meets the
-			// mirror of that corner, about 135 degrees, and no radius fixes it: the user's
-			// ruling of 2026-09-17 is that such a vehicle MANOEUVRES in - a shunt, forward
-			// then back then forward - and never crabs. Measured here at 89 and 101 uu, which
-			// is a U-turn wearing a fillet, exactly as expected.
+			// IT USED TO ASK FOR THE BETTER OF THE TWO, on the grounds that an entry authored
+			// at 45 degrees makes the turn off the road cost CornerRunFor(R, 135) = 345 uu
+			// instead of the 1088 a square one would, and that a vehicle arriving from the
+			// other direction would MANOEUVRE in - forward, back, forward - as the user ruled.
+			// Two things were wrong with that. Nothing emits the manoeuvre, so what the graph
+			// actually holds is the clamped fillet, measured here at 27 to 55 uu against a
+			// lock of 699 - a 0.55 m turning circle, which is a pirouette and not a shunt. And
+			// nothing stops a route choosing it: RouteSearch::EdgeCost is sampled length plus
+			// congestion with no curvature term, and the hairpin is the SHORTER of the pair.
 			//
-			// WHICH OF THE PAIR IS WHICH IS NOT FIXED, so taking the better of the two is
-			// direction-agnostic; asking for Link[1] by index would pass or fail on the order
-			// a node happens to list its edges in.
+			// The user reported it from PIE on 2026-09-17 - "very tight hairpins to get onto
+			// the stand parking that the vehicles cannot make" - which is exactly what a green
+			// suite had been hiding behind FMath::Max.
+			//
+			// A 45 DEGREE POSE CANNOT SATISFY THIS AND IS NOT MEANT TO. Turning onto it costs
+			// 345 uu from one direction and CornerRunFor(R, 45) = 4853 from the other, and a
+			// road 4 m behind the stand offers 566. 90 degrees is the only heading that costs
+			// the same both ways - 1088 either side - which is why the layout puts its road
+			// contacts on the LANE, where a 55 m straight can supply that run whatever gap the
+			// player left. See UEntityDefinition::BuildStandTemplate.
 			const double SweepA = DeliveredRadius(*Net, Link[1]);
 			const double SweepB = DeliveredRadius(*Net, Link[2]);
 			AddInfo(FString::Printf(TEXT("LINK %s: lead %.0f, sweeps %.0f and %.0f uu"),
 				*Where, Lead, SweepA, SweepB));
 
 			TestTrue(*FString::Printf(
-					TEXT("one way onto the road at %s clears the lock - sweeps %.0f and %.0f "
+					TEXT("BOTH ways onto the road at %s clear the lock - sweeps %.0f and %.0f "
 					     "against %.0f"),
 					*Where, SweepA, SweepB, Followable),
-				FMath::Max(SweepA, SweepB) >= Followable);
+				FMath::Min(SweepA, SweepB) >= Followable);
 		}
 
 		// NOT VACUOUS. Every loop above runs zero times on a stand that joined nothing, and the
@@ -830,15 +830,10 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 			Measured > 0);
 	}
 
-	// A KNOWN GAP, RECORDED HERE BECAUSE THIS IS WHERE IT WOULD BITE. Nothing stops the SEARCH
-	// choosing the unfavourable sweep: RouteSearch::EdgeCost is sampled length plus congestion,
-	// with no curvature and no heading term - see AnchorLink.cpp, which says the same thing at
-	// the sweep it lays. That is the identical root cause as the 175 degree on-the-spot
-	// reversal piece A found, and it is not fixed by the layout: the layout made the wrong
-	// ENTRY unrepresentable, not the wrong APPROACH to a right one. What will catch it is
-	// FSpeedProfile at the moment a route is driven, which is where the acceptance test looks.
-	AddInfo(TEXT("EdgeCost has no curvature term, so a route may still choose the sweep that "
-	             "needs a shunt - see Airside.Model.Traffic.TruckDrivesTheWholeRouteToTheHydrant"));
+	// EdgeCost STILL has no curvature term - sampled length plus congestion, with no heading
+	// term either - and that is now harmless rather than latent. Both sweeps clear the lock, so
+	// there is no longer a cheap wrong one for the search to find. If a heading term is ever
+	// added it will be for comfort, not for correctness, and this test is what says so.
 	return true;
 }
 

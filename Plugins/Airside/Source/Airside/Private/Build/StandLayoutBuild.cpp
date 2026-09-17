@@ -193,10 +193,34 @@ FStandLayoutBuild::FResult FStandLayoutBuild::Build(URoadNetwork& Network)
 			return Previous;
 		};
 
-		// ONE EXIT PER SIDE, SHARED. Two bays on the same side leave along the same lane, so
-		// they leave through the same node - keyed on the authored pose, which is the same
-		// value for both rather than two values that happen to match.
-		TArray<TPair<FVector2D, FGuidelineNodeId>> ExitNodes;
+		// ONE NODE PER AUTHORED POSE, SHARED BY EVERY BAY THAT NAMES IT - and that covers
+		// ENTRIES AND EXITS TOGETHER, not exits alone.
+		//
+		// IT WAS EXITS ONLY UNTIL 2026-09-17, which was correct exactly while entries were one
+		// per bay. They are not any more: a side's road contact is a single square pose that
+		// serves as both the way in and the way out (see BuildStandTemplate), so the same
+		// position is now named up to three times on one side. Making a fresh node per naming
+		// put three COINCIDENT nodes on the back edge, and FAnchorLink then laid a lead-in to
+		// each - measured at 309 uu against a lock of 699, and one sweep at 1 uu.
+		//
+		// KEYED ON THE AUTHORED POSE, which is the same value at every naming rather than two
+		// values that happen to agree to a tolerance. Welding by position afterwards would make
+		// the join true only while the arithmetic agreed.
+		TArray<TPair<FVector2D, FGuidelineNodeId>> PoseNodes;
+
+		auto NodeAt = [&PoseNodes, &MakeNode](const FVector2D& Local)
+		{
+			for (const TPair<FVector2D, FGuidelineNodeId>& Made : PoseNodes)
+			{
+				if (Made.Key.Equals(Local, UE_DOUBLE_KINDA_SMALL_NUMBER))
+				{
+					return Made.Value;
+				}
+			}
+			const FGuidelineNodeId Fresh = MakeNode(Local);
+			PoseNodes.Emplace(Local, Fresh);
+			return Fresh;
+		};
 
 		for (const FServiceBay& Bay : Instance.Definition->ServiceBays)
 		{
@@ -221,22 +245,13 @@ FStandLayoutBuild::FResult FStandLayoutBuild::Build(URoadNetwork& Network)
 				continue;
 			}
 
-			FGuidelineNodeId ExitNode;
-			for (const TPair<FVector2D, FGuidelineNodeId>& Made : ExitNodes)
-			{
-				if (Made.Key.Equals(Bay.ExitLocal, UE_DOUBLE_KINDA_SMALL_NUMBER))
-				{
-					ExitNode = Made.Value;
-					break;
-				}
-			}
-			if (!ExitNode.IsSet())
-			{
-				ExitNode = MakeNode(Bay.ExitLocal);
-				ExitNodes.Emplace(Bay.ExitLocal, ExitNode);
-			}
+			const FGuidelineNodeId ExitNode = NodeAt(Bay.ExitLocal);
+			const FGuidelineNodeId EntryNode = NodeAt(Bay.EntryLocal);
 
-			const FGuidelineNodeId EntryNode = MakeNode(Bay.EntryLocal);
+			// THE PARK POSE IS NOT SHARED, and is made rather than looked up. Two bays have
+			// their own slots by construction, and a layout that ever authored two at one
+			// position wants that seen as two nodes on top of each other rather than silently
+			// merged into a bay serving two anchors.
 			const FGuidelineNodeId ParkNode = MakeNode(Bay.ParkLocal);
 
 			LayLeg(Bay.ArriveLeg, EntryNode, ParkNode, /*bReverse=*/false);

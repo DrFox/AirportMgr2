@@ -320,31 +320,39 @@ void UEntityDefinition::BuildStandTemplate(
 	const double SquareBack =
 		LegSlack * GuidelineGeom::CornerRunFor(ReverseRadius, UE_DOUBLE_HALF_PI);
 
-	// THE PARKING ROW stands at 45 degrees a short run in from the back edge, so a vehicle
-	// turning off the GSE road makes a 45 degree corner rather than a square one. How long that
-	// run is falls out of two constraints below, once the serviced anchors are known.
+	// WHERE THE ROAD MEETS THE STAND, and since 2026-09-17 it meets it SQUARE.
+	//
+	// A 45 DEGREE CONTACT IS ASYMMETRIC, WHICH IS WHY THIS CHANGED. Turning off a road onto a
+	// 45 degree pose costs CornerRunFor(R, 135) = 345 uu from one direction and
+	// CornerRunFor(R, 45) = 4853 from the other, and a road 4 m behind a stand offers 566. The
+	// builder clamped the second fillet to the run it had and laid a 55 uu corner - a 0.55 m
+	// turning circle, which is a pirouette and not the shunt the 2026-09-17 ruling imagined -
+	// and RouteSearch::EdgeCost has no curvature term, so the search took it BECAUSE it was
+	// also the shorter of the pair. Reported from PIE the same day: "very tight hairpins to
+	// get onto the stand parking that the vehicles cannot make".
+	//
+	// 90 DEGREES IS THE ONLY HEADING THAT COSTS THE SAME BOTH WAYS, Square either side, so it
+	// is the only one a two-way road can use. What a square corner needs is Square of STRAIGHT
+	// on the stand side, and that cannot come from the gap between the road and the back edge
+	// because the PLAYER chooses that gap - 4 m is legal. It comes from the spur instead: the
+	// contact leads into a straight at least Square long before its first bend, so the corner
+	// has its run at any gap, including none.
+	//
+	// AND SQUARE CONTACTS DO NOT PACK, which is the other half of it. A square fillet reaches
+	// Square along the road where a 45 reaches Diagonal, so two neighbours need three times
+	// Square between them where the old ladder needed three times Diagonal - 33 m against 10.
+	// Five contacts wanted 87 m of a 59 m edge. So there is ONE per side now, entry and exit
+	// at the same pose, and the ladder moved inside the stand where the branches are one-way
+	// and may stay at 45 degrees.
+	const double ContactSpan = 3.0 * Square;
 
-	// HOW FAR APART THE AFT-EDGE NODES SIT, DERIVED FROM THE ROAD'S OWN FILLET rather than
-	// chosen. Every entry and exit splits the road where it joins it, and the fillet either
-	// side of that contact wants Diagonal of run along the road; two neighbours therefore need
-	// twice that between them, plus the tenth everything else here gets.
-	//
-	// THREE TIMES DIAGONAL, AND THE FIGURE IS MEASURED. Twice is what the geometry suggests -
-	// a fillet either side of a contact, each wanting Diagonal - and it is short: at the 759 uu
-	// that gives, one contact still delivered 341 against a lock of 699. Swept upward, 2.64 x
-	// also failed and 2.86 x cleared, so this sits at 3 x with margin. The extra is the road
-	// SPLIT each contact makes, shortening the segment its neighbour's fillet works in, which
-	// the two-fillet picture does not contain.
-	//
-	// IT COULD NOT BE AFFORDED UNTIL THE AFT HOLD WENT. With a bay astern of the wing, the
-	// ceiling this pitch leaves ParkRun fell under its own floor and two serve legs folded - the
-	// two windows were 911 < pitch and pitch <= 879, which is empty. One baggage bay forward of
-	// the wing moves the binding service from -2400 to -800, and with it the competition.
-	//
-	// AT 450 IT WAS FAR WORSE and is worth recording: the aft-edge nodes left 450 uu segments,
-	// every fillet was clamped to what was left, and BOTH sweeps came out at 89 and 6 uu - not
-	// the ruled one-good-one-shunt pair but two unusable ones.
-	const double AftPitch = 3.0 * Diagonal;
+	// HOW FAR APART THE BRANCHES OFF A SPUR SIT. Twice Diagonal, not the three times the aft
+	// edge wanted: those were ROAD contacts, and the third Diagonal paid for the SPLIT each one
+	// makes in the road, which shortens the segment its neighbour's fillet works in. A branch
+	// splits nothing - every bay lays its own copy of the spur as its own edge - so this has
+	// only to keep the park poses apart, and at 2 x Diagonal the echelon is 488 uu between
+	// neighbours measured across the branches.
+	const double BranchPitch = 2.0 * Diagonal;
 
 	// A BAY PER ANCHOR A GROUND VEHICLE SERVICES FROM.
 	//
@@ -380,29 +388,22 @@ void UEntityDefinition::BuildStandTemplate(
 			return A.LocalPosition.X < B.LocalPosition.X;
 		});
 
-	// HOW LONG THE RUN IN FROM THE BACK EDGE IS, and it is squeezed from both ends, so it is
-	// derived rather than chosen.
+	// HOW FAR OUTBOARD THE TWO CONTACTS SIT, DERIVED FROM THE SERVICES THEY FEED.
 	//
-	// AT LEAST ITS OWN CORNER. The run is travelled at 45 degrees, so the diagonal is
-	// ParkRun * sqrt(2), and the bend where it meets the lane wants Diagonal of that. Less and
-	// the serve leg folds at the park end.
+	// SQUEEZED FROM BOTH ENDS, like everything else on this stand. Too far inboard and a bay's
+	// 45 degree branch meets its lane too far FORWARD: the meeting has to land Diagonal + Square
+	// short of that bay's turn-in, or the two corners overlap and neither delivers its radius.
+	// Too far outboard and the branch has no room to reach the lane at all.
 	//
-	// AT MOST WHAT EVERY BAY LEAVES, AND THAT IS PER SLOT RATHER THAN PER STAND. The serve
-	// leg's 45 degree run meets the lane at ParkRowX + (Slot + 1) * AftPitch - the park pose
-	// sits exactly that far inboard of its lane, because the entry is ParkRun + (Slot+1) *
-	// AftPitch in and the park pose ParkRun back out - and it has to land Diagonal + Square
-	// short of THAT bay's turn-in, or the two corners overlap and neither delivers its radius.
+	// THE MEETING POINT DOES NOT DEPEND ON ParkRun, which is what makes this solvable in one
+	// pass rather than two. The park pose sits ParkRun along the branch, and the branch then has
+	// (LaneY - ContactMag - ParkRun) of outboard left to run; the two cancel, and the meeting
+	// lands at BranchX + (LaneY - ContactMag) wherever along the branch the pose is put.
 	//
-	// THE FIRST DRAFT CHECKED ONLY THE AFT-MOST BAY and that is not the binding one. A bay
-	// further down the ladder has a longer diagonal - (Slot+1) grows - so the FORWARD-most bay
-	// on a three-bay side can run out of lane before the aft-most does. Measured: at a pitch of
-	// 1000 the aft-most left 297 uu of headroom and the forward-most left 197, and it was the
-	// forward-most leg that folded at 179 degrees while the check reported the band as legal.
-	//
-	// THE MIDPOINT OF THE BAND, so neither end is the one that fails first.
-	const double ParkRunFloor = LegSlack * Diagonal / UE_DOUBLE_SQRT_2;
-
-	double ParkRunCeiling = TNumericLimits<double>::Max();
+	// PER SLOT, NEVER PER STAND. A bay further down its side's ladder branches further forward,
+	// so it meets its lane further forward too - the FORWARD-most bay on a side is the binding
+	// one, not the aft-most, and checking only one of them is a bug this file has already had.
+	double ContactFloor = 0.5 * ContactSpan;
 	const FEntityAnchor* Binding = nullptr;
 	{
 		int32 PortAt = 0;
@@ -410,61 +411,42 @@ void UEntityDefinition::BuildStandTemplate(
 		for (const FEntityAnchor* Anchor : Serviced)
 		{
 			const int32 At = Anchor->LocalPosition.Y >= 0.0 ? StarboardAt++ : PortAt++;
-			const double Leaves = (Anchor->LocalPosition.X - Diagonal - Square)
-				- BackX - (At + 1) * AftPitch;
-			if (Leaves < ParkRunCeiling)
+			const double BranchX = BackX + Square + Diagonal + At * BranchPitch;
+			const double Wants =
+				LaneY + BranchX - Anchor->LocalPosition.X + Diagonal + Square;
+			if (Wants > ContactFloor)
 			{
-				ParkRunCeiling = Leaves;
+				ContactFloor = Wants;
 				Binding = Anchor;
 			}
 		}
 	}
 
-	if (ParkRunCeiling < ParkRunFloor)
+	// AT MOST WHAT LEAVES THE BRANCH A LEGAL RUN: ParkRun is at least its own corner's Diagonal,
+	// and the corner onto the lane wants Diagonal of the diagonal that is left over.
+	const double ParkRunFloor = Diagonal;
+	const double LaneCorner = LegSlack * Diagonal / UE_DOUBLE_SQRT_2;
+	const double ContactCeiling = LaneY - ParkRunFloor - LaneCorner;
+
+	if (ContactCeiling < ContactFloor)
 	{
-		// NOT SILENTLY WRONG. The layout is still laid - a shape somebody has to fix is more
-		// use than no shape - but that bay is too close to the parking row for its shift to
-		// finish, and the drivability test will report the fold with its figure.
+		// NOT SILENTLY WRONG. The layout is still laid - a shape somebody has to fix is more use
+		// than no shape - but no contact position serves every bay, and the drivability test will
+		// report the fold with its figure.
 		UE_LOG(LogAirside, Warning,
-			TEXT("Stand template '%s': the parking row has no legal run - its own corner wants "
-			     "at least %.0f uu and '%s' at %.0f leaves at most %.0f. That bay's serve leg "
-			     "will fold."),
-			*Letter, ParkRunFloor,
+			TEXT("Stand template '%s': no legal road contact - '%s' at %.0f wants it at least "
+			     "%.0f outboard and the branch run allows at most %.0f. That bay's serve leg will "
+			     "fold."),
+			*Letter,
 			Binding != nullptr ? *Binding->Id.ToString() : TEXT("?"),
-			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ParkRunCeiling);
-	}
-	const double ParkRun =
-		FMath::Max(ParkRunFloor, 0.5 * (ParkRunFloor + ParkRunCeiling));
-	const double ParkRowX = BackX + ParkRun;
-
-	// HOW MANY BAYS EACH SIDE HAS, counted before any is placed, because the EXIT sits inboard
-	// of every entry on its side and so cannot be positioned until they are all known.
-	int32 PortBays = 0;
-	int32 StarboardBays = 0;
-	for (const FEntityAnchor* Anchor : Serviced)
-	{
-		(Anchor->LocalPosition.Y >= 0.0 ? StarboardBays : PortBays)++;
+			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ContactFloor, ContactCeiling);
 	}
 
-	// HOW FAR THE OUTERMOST AFT-EDGE NODE SITS FROM ITS LANE, and it is squeezed from BOTH
-	// sides, which is why it is derived rather than chosen.
-	//
-	// TOO SMALL AND THE SERVE LEG FOLDS AT THE PARK END. The run from a park pose out to its
-	// lane is Diagonalise * sqrt(2) long, and the 45 degree corner where it meets the lane
-	// wants Diagonal of that; give it less and the bend starts behind the leg's own first
-	// point. Measured at LaneGap 200: a 283 uu diagonal against the 345 needed, and the leg
-	// came back 179 degrees on itself.
-	//
-	// TOO LARGE AND IT FOLDS AT THE OTHER END. The 45 degree run meets the lane at
-	// BackX + (Lane - EntryY), so pushing the entries inboard pushes that meeting point
-	// FORWARD, and it has to land at least Diagonal + Square short of the aft-most bay's
-	// turn-in. Measured at LaneGap 400: 1480 uu of lane against the 1433 those two corners
-	// need, which passes by 47 - a margin of the kind this whole piece exists to stop
-	// shipping.
-	//
-	// Diagonal itself sits between the two with room at each end: the diagonal comes out at
-	// 488 uu against 345 needed, and the lane run at 1735 against 1433.
-	const double LaneGap = Diagonal;
+	// THE MIDPOINT OF EACH BAND, so neither end is the one that fails first.
+	const double ContactMag =
+		FMath::Max(ContactFloor, 0.5 * (ContactFloor + ContactCeiling));
+	const double ParkRunCeiling = (LaneY - ContactMag) - LaneCorner;
+	const double ParkRun = FMath::Max(ParkRunFloor, 0.5 * (ParkRunFloor + ParkRunCeiling));
 
 	Definition.ServiceBays.Reset();
 	int32 PortSlot = 0;
@@ -477,89 +459,68 @@ void UEntityDefinition::BuildStandTemplate(
 
 		const double Lane = Side * LaneY;
 
-		// THE ENTRIES FILL THE AFT EDGE FROM THE LANE INWARD AND THE EXIT GOES INNERMOST.
-		//
-		// THAT ORDER IS FORCED, not a preference. The aft-most bay is sorted to slot 0 because
-		// its turn-in is furthest aft and so it has the least lane to do its shift in - it
-		// therefore needs the entry NEAREST the lane, the one whose 45 degree run meets the
-		// lane soonest. Giving that slot to the exit pushed every bay one pitch inboard and
-		// folded the aft-most serve leg back on itself.
-		//
-		// A starboard bay's entry may end up on the port half of the back edge when a side has
-		// three of them, which is harmless: everything at ParkRowX is astern of the tail, and
-		// the two sides only have to stay apart where they run alongside the aeroplane.
-		// EACH SIDE COUNTS INBOARD FROM ITS OWN LANE, and the two ladders therefore approach
-		// each other in the middle. WITH THREE BAYS ON ONE SIDE THEY COLLIDE: measured at 175
-		// uu between the starboard exit and the port one, against the 759 their road fillets
-		// need, which is what StandLinkClearsTheTruckLock reports as two unusable sweeps.
-		//
-		// ONE GLOBAL LADDER WAS TRIED AND IS WORSE, which is why this is written down rather
-		// than left as an obvious improvement. It cannot collide, but it puts a side's exit up
-		// to 3121 uu inboard of that side's lane, and the depart leg's 45 degree turn off the
-		// lane then lands FORWARD of the aft-most bay's own clear pose - the leg folds back on
-		// itself at 179 degrees. Six road contacts at this pitch need 3795 uu of aft edge with
-		// the outermost within 845 of its lane, so the real lever is the stand's minimum WIDTH,
-		// which is a band this project chooses. 5300 does not hold them; about 5900 does.
-		// A FULL PITCH INBOARD OF THE EXIT, not LaneGap. The exit is the outermost contact on
-		// its side and the entries step in from IT, so every pair of neighbours on the aft edge
-		// is AftPitch apart and no fillet is clamped by the one beside it.
-		const double EntryY = Lane - Side * (ParkRun + (Slot + 1) * AftPitch);
-
-		// THE EXIT SITS ONE ParkRun IN FROM ITS LANE, which is the position that makes its
-		// depart turn exactly 45 degrees at a vertex ParkRun forward of the back edge.
-		//
-		// IT IS ONLY LaneGap FROM THE OUTERMOST ENTRY, WHICH IS SHORT OF AftPitch, and that is
-		// the one thing in this layout still measured as wrong: two road contacts that close
-		// leave the fillet between them clamped, and StandLinkClearsTheTruckLock reports the
-		// pair as 212 and 15 uu against a lock of 699. Placing it on the ladder instead moves
-		// it far enough inboard that its own depart leg folds. Six contacts at this pitch want
-		// 3795 uu of aft edge with the outermost within 845 of its lane; 5300 does not hold
-		// them and about 5900 does, so the lever is the minimum WIDTH rather than the packing.
-		const double ExitY = Lane - Side * ParkRun;
-		const double ParkY = EntryY + Side * ParkRun;
 		const FVector2D Service = Anchor->LocalPosition;
 
 		FServiceBay Bay;
 		Bay.AnchorId = Anchor->Id;
 
-		// THE SLOT, at 45 degrees, pointing forward and outboard so the vehicle parks already
-		// aimed at the lane it will leave along.
-		Bay.ParkLocal = FVector2D(ParkRowX, ParkY);
+		// ONE CONTACT PER SIDE, AND ENTRY AND EXIT ARE THE SAME POSE. Two square contacts want
+		// ContactSpan between them and the band outboard of the wingtip is not that wide, so they
+		// share one. The lane is two-way in consequence - which it already was, since every depart
+		// leg on a side ran back down the lane its serve legs had come up - and making two vehicles
+		// take turns over it is ClaimServiceBay's job rather than the geometry's.
+		//
+		// STRAIGHT IN AND STRAIGHT OUT, because the heading is exactly what the road corner is
+		// measured against. Square to the back edge is square to a road drawn behind it, and that
+		// is the only heading a vehicle can reach from either direction for the same price.
+		//
+		// AND THE POSE SITS Square INSIDE THE BACK EDGE, not on it, which is the part that makes
+		// the heading pay off. FAnchorLink measures the corner's stand-side arm from where the
+		// entry's own line crosses the road TO THE ENTRY NODE - see the MeetsAt test in Join -
+		// so a pose on the boundary offers that corner nothing but the gap, and the gap belongs
+		// to the PLAYER: at the 4 m the fixture draws, a square corner wanting 1088 uu got 400,
+		// fell through to the lane-change branch, and delivered a 1 uu sweep. Declaring the pose
+		// Square in hands the same corner gap + 1088 whatever the player left, including none.
+		//
+		// THE LEAD-IN THEREFORE CROSSES STAND GROUND the layout did not lay, which is correct
+		// rather than merely tolerable: the apron between the boundary and this pose is the
+		// stand's, the vehicle is entering it, and the alternative is a corner whose length
+		// depends on how close somebody drew a road.
+		const double Contact = Side * ContactMag;
+
+		Bay.EntryLocal = FVector2D(BackX + Square, Contact);
+		Bay.EntryHeading = 0.0;
+		Bay.ExitLocal = Bay.EntryLocal;
+		Bay.ExitHeading = UE_DOUBLE_PI;
+
+		// WHERE THIS BAY LEAVES THE SPUR, Diagonal on from the contact - that being the 45
+		// degree corner's own arm, and the only run between the two that belongs to the stand.
+		const double BranchX = BackX + Square + Diagonal + Slot * BranchPitch;
+
+		// THE SLOT, at 45 degrees on its branch, pointing forward and outboard so the vehicle
+		// parks already aimed at the lane it will leave along.
+		Bay.ParkLocal = FVector2D(BranchX + ParkRun, Contact + Side * ParkRun);
 		Bay.ParkHeading = Side * 0.25 * UE_DOUBLE_PI;
 
-		// ITS OWN ENTRY on the back edge, on the same 45 degree line, so the arrive leg is a
-		// STRAIGHT and every corner of it belongs to the road junction rather than to the stand.
-		Bay.EntryLocal = FVector2D(BackX, EntryY);
-		Bay.EntryHeading = Bay.ParkHeading;
-
-		// AND THE EXIT, which the side shares: a vehicle leaves along its lane, and one way out
-		// per side is one road junction per side rather than one per service.
-		//
-		// ANGLED LIKE THE SLOTS, AND FOR THE SAME REASON. It left straight along the lane
-		// until 2026-09-17, which meets a road running behind the stand at a RIGHT ANGLE - and
-		// a square corner costs CornerRunFor(R, 90) = 1088 uu of run on each arm where the gap
-		// to the road is whatever the player left, measured at 400. The merge delivered 309 uu
-		// against a lock of 699. Turned 45 degrees aft-and-inboard it is the same corner the
-		// entries make, needs 345, and fits in the same 400.
-		//
-		// INBOARD RATHER THAN OUTBOARD because outboard leaves the stand: the lane already runs
-		// at half the width less half a lane, so turning away from the aeroplane puts the exit
-		// on the neighbour's ground.
-		Bay.ExitLocal = FVector2D(BackX, ExitY);
-		Bay.ExitHeading = -Side * 0.75 * UE_DOUBLE_PI;
-
-		BuildLeg({ Bay.EntryLocal, Bay.ParkLocal }, Radius, TEXT("arrive"), Bay.ArriveLeg);
+		// ARRIVE: square in off the road, then 45 degrees onto this bay's branch. The straight
+		// between them is what gives the ROAD's corner its run, which is why it is Square long
+		// before any of this bends - the gap behind the stand belongs to the player and cannot
+		// be relied on for a single uu of it.
+		BuildLeg({ Bay.EntryLocal, FVector2D(BranchX, Contact), Bay.ParkLocal },
+			Radius, TEXT("arrive"), Bay.ArriveLeg);
 
 		// SERVE: out along the 45 to the lane, forward to abeam the service point, then square
 		// inboard to it. The turn inboard is where the wing would be if the fixture were not
 		// placed clear of it - see BuildCodeCStandFor, and the test that measures it.
 		// SIGNED, NEVER AN ABSOLUTE. How far the park pose has to move OUTBOARD to reach its
-		// lane, measured along its own side's outward direction - which is not |ParkY| the
-		// moment a slot sits across the centreline, as the third slot on a side now does.
-		const double Diagonalise = (Lane - ParkY) * Side;
+		// lane, measured along its own side's outward direction - which is not an absolute the
+		// moment a slot sits across the centreline, as one did while the ladder was on the aft
+		// edge. It reads the pose rather than recomputing it, so the leg cannot disagree with
+		// the node it starts from.
+		const double Diagonalise = (Lane - Bay.ParkLocal.Y) * Side;
 		BuildLeg({
 			Bay.ParkLocal,
-			FVector2D(ParkRowX + Diagonalise, Lane),
+			FVector2D(Bay.ParkLocal.X + Diagonalise, Lane),
 			FVector2D(Service.X, Lane),
 			Service }, Radius, TEXT("serve"), Bay.ServeLeg);
 
@@ -571,12 +532,17 @@ void UEntityDefinition::BuildStandTemplate(
 		BuildLeg({ Service, FVector2D(Service.X, Lane), Cleared },
 			ReverseRadius, TEXT("reverse"), Bay.ReverseLeg);
 
-		// DEPART: back down the lane, then 45 degrees off it, so the vehicle reaches the aft
-		// edge already pointing at the road.
+		// DEPART: back down the lane, then 45 degrees inboard onto the contact spur, so the
+		// vehicle reaches the back edge already square to the road and leaves by the same corner
+		// it arrived through, mirrored.
 		//
-		// THE TURN VERTEX IS ParkRun FORWARD OF THE BACK EDGE, which with the exit ParkRun in
-		// from the lane makes the corner exactly 45 degrees.
-		BuildLeg({ Cleared, FVector2D(BackX + ParkRun, Lane), Bay.ExitLocal },
+		// THE SHIFT VERTEX IS SET, NOT CHOSEN. The final straight has to carry Square for the
+		// road's corner plus Diagonal for this one, and a 45 degree shift costs one of x for every
+		// one of y - so the vertex sits exactly that far forward, plus the shift itself.
+		const double Shift = LaneY - ContactMag;
+		const double ShiftVertex = BackX + Square + Diagonal + Shift;
+		BuildLeg({ Cleared, FVector2D(ShiftVertex, Lane),
+			FVector2D(ShiftVertex - Shift, Contact), Bay.ExitLocal },
 			Radius, TEXT("depart"), Bay.DepartLeg);
 
 		Definition.ServiceBays.Add(MoveTemp(Bay));
@@ -597,6 +563,13 @@ void UEntityDefinition::BuildStandTemplate(
 	};
 	for (const FServiceBay& Bay : Definition.ServiceBays)
 	{
+		// THE RUN IN FRONT OF THE CONTACT IS GROUND THE LAYOUT NEEDS, though no leg is laid
+		// across it. The contact pose sits Square inside the back edge precisely so the road's
+		// corner has that run, and FAnchorLink lays the lead-in over it - so it is used, it is
+		// this stand's, and a stand claiming only as far back as its first leg measures a Code
+		// C's depth as a Code B's.
+		Cover(FVector2D(Bay.EntryLocal.X - Square, Bay.EntryLocal.Y));
+
 		for (const FStandLeg* Leg : { &Bay.ArriveLeg, &Bay.ServeLeg, &Bay.ReverseLeg, &Bay.DepartLeg })
 		{
 			TArray<FVector2D> Sampled;
@@ -614,11 +587,13 @@ void UEntityDefinition::BuildStandTemplate(
 	// figures they imply are what say whether that geometry was right.
 	UE_LOG(LogAirside, Log,
 		TEXT("Stand template '%s': box %.0f x %.0f (x %.0f..%.0f), radius fwd %.1f rev %.1f, "
-		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, aft pitch %.0f, "
-		     "park run %.0f (band %.0f..%.0f) row x %.0f, %d bay(s), needs %.0f x %.0f"),
+		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, branch pitch %.0f, "
+		     "contact y %.0f (band %.0f..%.0f), park run %.0f (band %.0f..%.0f), %d bay(s), "
+		     "needs %.0f x %.0f"),
 		*Letter, Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
-		Square, Diagonal, SquareBack, LaneY, AftPitch,
-		ParkRun, ParkRunFloor, ParkRunCeiling, ParkRowX,
+		Square, Diagonal, SquareBack, LaneY, BranchPitch,
+		ContactMag, ContactFloor, ContactCeiling,
+		ParkRun, ParkRunFloor, ParkRunCeiling,
 		Definition.ServiceBays.Num(), Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
 
 	for (const FServiceBay& Bay : Definition.ServiceBays)
