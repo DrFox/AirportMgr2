@@ -472,9 +472,16 @@ bool FOffsetGuideIgnoresACrossingRoadTest::RunTest(const FString& Parameters)
 	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
 
-	// One east-west reference, and one north-south road crossing it.
+	// One east-west reference, and one road crossing it at 45 degrees.
+	//
+	// THE CROSSING IS DIAGONAL, AND AWAY FROM WHERE THE GAP IS MEASURED. A north-south road
+	// through x = 2000 also crosses, but its nearest point to the reference's measuring point
+	// lies ON the reference - a perpendicular gap of exactly zero - so the near-zero guard
+	// rejected it and this test passed with the parallel filter deleted. It was measuring the
+	// wrong rule, which only a deliberate mutation showed. This road's nearest point is
+	// (1000, -1000): a gap of 1000, so nothing but the parallel test can reject it.
 	LayTaxiway(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0));
-	LayTaxiway(Actor, FVector2D(2000.0, -8000.0), FVector2D(2000.0, 8000.0));
+	LayTaxiway(Actor, FVector2D(0.0, -2000.0), FVector2D(4000.0, 2000.0));
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	const FOffsetGuideSource Source;

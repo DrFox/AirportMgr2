@@ -200,6 +200,28 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Runway; }
 };
 
+/**
+ * Source 8: the gap a neighbouring parallel road already keeps.
+ *
+ * PERPENDICULAR, NOT A NEW "DISTANCE FAMILY". Design §2 asked for direction and distance to be
+ * separate lists with separate arbitration, because "a rule that picked one winner across both
+ * would have 'parallel to that taxiway' losing to '30 m from the last one'". EFit already does
+ * exactly that: one winner per kind, so an angular guide and this one both hold and never
+ * compete. And §4's "how far along the perpendicular" IS a line parallel to the reference at
+ * that offset - which is what a Perpendicular candidate already means.
+ *
+ * WHAT WOULD still need the second family, and is not this: a LENGTH guide - "make this segment
+ * the same 40 m as the last one" - which constrains distance ALONG the drag and is a point on a
+ * ray, not a line. §3 lists no such source.
+ */
+struct AIRSIDE_API FOffsetGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Offset; }
+};
+
 /** What to call a placed entity where the player reads it. Falls back to the asset name. */
 namespace EntityNaming
 {

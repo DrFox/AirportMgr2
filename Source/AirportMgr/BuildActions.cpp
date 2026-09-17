@@ -169,14 +169,13 @@ namespace
 			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::World); },
 			Always));
 
-		// GREYED, NOT ABSENT: nothing proposes Offset until stage 4, and a lit button that did
-		// nothing would be a worse lie than a greyed one. Its row is still here because that is
-		// what makes the list walkable from the enum.
+		// LIVE SINCE STAGE 5: FOffsetGuideSource proposes for it, so the button is no longer a
+		// promise. It was greyed rather than absent precisely so this change is one word.
 		Out.Add(Make(TEXT("snap.offset"), EActionSection::Snap, LOCTEXT("SnapOffset", "Offset"),
 			EKeys::Invalid, false,
 			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Offset); },
 			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Offset); },
-			Never));
+			Always));
 		return Out;
 	}
 }
