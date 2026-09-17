@@ -7,6 +7,7 @@
 #include "Tool/RoadSnap.h"
 #include "Tool/Selection.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 class URoadNetwork;
 class IRoadEditTarget;
@@ -75,6 +76,10 @@ struct FBuildSessionTunables
 {
 	/** Radii and toggles the snap chain judges a click against. */
 	FRoadSnapSettings Snap;
+
+	/** Which guide sources are live. From ARoadNetworkActor, like Snap above and for the
+	 *  same reason: the two drivers must agree about what is switched on. */
+	FSnapGuideSettings GuideSources;
 
 	/** Shortest segment and tightest turn a click may build. */
 	FRoadPlacementLimits Limits;
@@ -161,7 +166,7 @@ public:
 	 */
 	FToolContext MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
 		const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-		int32 HoverAgent = 0) const;
+		bool bSuspendGuides = false, int32 HoverAgent = 0) const;
 
 	/**
 	 * Right click (or Escape, in the editor): step back out of whatever is part-drawn. With

@@ -435,10 +435,15 @@ FToolContext ARoadBuildController::MakeToolContext() const
 	// it rather than being folded into it.
 	// The sticky modifier ORs with the held key: the bar's Remove button and a held Ctrl
 	// mean the same thing, and either lights the same button.
+	// ALT GOES BEFORE THE HOVER AGENT, and the order is load-bearing: bSuspendGuides was
+	// inserted ahead of HoverAgent, so leaving this call as it was would have passed an int32
+	// agent id into a bool - compiling perfectly and suspending every guide the moment the
+	// cursor was over an aeroplane, while the hover pick silently became 0.
 	return Session.MakeContext(Target, PlaneHit, Tunables,
 		ClickModifier == EClickModifier::Remove || IsRemoveHeld(),
 		ClickModifier == EClickModifier::Insert
 			|| IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
+		IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt),
 		HoverAgentUnderCursor());
 }
 

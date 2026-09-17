@@ -5,6 +5,8 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadEditTarget.h"
+#include "Tool/BuildSession.h"
+#include "Tool/PlotPlaceTool.h"
 #include "Tool/SnapGuideChain.h"
 #include "Tool/SnapGuideSettings.h"
 
@@ -146,6 +148,82 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("from the world grid this time"),
 		static_cast<int32>(World.Winners[0].Source),
 		static_cast<int32>(SnapGuide::ESource::World));
+
+	return true;
+}
+
+/**
+ * ALT MEANS NOT THIS TIME. Toggles are for "I never want this"; without a hold the player
+ * fights the guide for a position it will not give them.
+ *
+ * Driven through FBuildSession::MakeContext, because that is where both drivers meet and the
+ * only place the flag can be shown to reach the resolution at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuideSuspendsOnHoldTest,
+	"Airside.Tool.GuideSuspendsOnHold",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuideSuspendsOnHoldTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	IRoadEditTarget* Target = Actor;
+	const int32 West = Target->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 East = Target->PlaceNode(FVector2D(20000.0, 0.0));
+	Target->ConnectNodes(West, East, ERoadKind::ServiceRoad, INDEX_NONE);
+
+	// The depot tool BY ID, never by a literal index - the next tool added moves every index.
+	int32 Depot = INDEX_NONE;
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	for (int32 Index = 0; Index < Registry.Num(); ++Index)
+	{
+		if (Registry[Index].Id == FName(TEXT("FuelDepot"))) { Depot = Index; }
+	}
+	if (!TestTrue(TEXT("the registry lists a fuel-depot tool"), Depot != INDEX_NONE))
+	{
+		return false;
+	}
+
+	FBuildSession Session;
+	const FBuildSessionTunables Tunables = Actor->MakeTunables(10000.0);
+	Session.SelectTool(Depot);
+	IBuildTool* Tool = Session.GetActiveTool();
+	if (!TestNotNull(TEXT("the depot tool is active"), Tool)) { return false; }
+
+	// Anchor beside the road and run the frontage east, so a back corner has a guide to get.
+	Tool->OnClick(Session.MakeContext(Actor, FVector2D(0.0, 1000.0), Tunables, false, false));
+	Tool->OnClick(Session.MakeContext(Actor, FVector2D(6000.0, 1000.0), Tunables, false, false));
+
+	TArray<FVector2D> Frontage;
+	static_cast<FPlotPlaceTool*>(Tool)->Quad(
+		Session.MakeContext(Actor, FVector2D(6000.0, 3000.0), Tunables, false, false), Frontage);
+	if (!TestTrue(TEXT("two corners are pinned"), Frontage.Num() >= 2)) { return false; }
+
+	// A corner dragged near square: with Alt up this is exactly the case stage 1 guides.
+	const FVector2D NearSquare = Frontage[1] + FVector2D(60.0, 2000.0);
+
+	const FToolContext Free = Session.MakeContext(
+		Actor, NearSquare, Tunables, false, false, false);
+	if (!TestTrue(TEXT("with Alt up, the corner is guided"), Free.Guide.bActive))
+	{
+		return false;
+	}
+
+	const FToolContext Held = Session.MakeContext(
+		Actor, NearSquare, Tunables, false, false, true);
+	TestFalse(TEXT("with Alt held, the same drag is offered nothing"), Held.Guide.bActive);
+	TestTrue(TEXT("and the raw cursor is what the tool would use"),
+		Held.GuidedCursor().Equals(NearSquare, 1.0e-6));
+
+	// RELEASING ALT STARTS AFRESH rather than resuming the winner it was holding: the suspended
+	// frame cleared LastGuide, so this is the hysteresis rule being handed an empty previous.
+	const FToolContext Released = Session.MakeContext(
+		Actor, NearSquare, Tunables, false, false, false);
+	TestTrue(TEXT("and releasing Alt gives the guide back"), Released.Guide.bActive);
 
 	return true;
 }

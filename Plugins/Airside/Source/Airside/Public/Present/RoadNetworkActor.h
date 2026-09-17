@@ -13,6 +13,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/SnapGuideSettings.h"
 #include "RoadNetworkActor.generated.h"
 
 class URoadNetwork;
@@ -381,6 +382,16 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Placement")
 	FRoadSnapSettings Snap;
+
+	/**
+	 * Which guide sources the player has switched on.
+	 *
+	 * PER AIRPORT, beside Snap and for the reason that property records: the editor mode and
+	 * PIE must agree about what is live, and a per-driver copy is how the two came to disagree
+	 * about snap radii before issue #93.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Placement")
+	FSnapGuideSettings GuideSources;
 
 	/**
 	 * Snap and placement tunables, for a driver-supplied view scale, as one bundle - see

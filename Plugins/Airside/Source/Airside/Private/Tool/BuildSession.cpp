@@ -142,7 +142,7 @@ bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& Pl
 
 FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D& PlaneHit,
 	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
-	int32 HoverAgent) const
+	bool bSuspendGuides, int32 HoverAgent) const
 {
 	FToolContext Context;
 	Context.Target = Target;
@@ -152,6 +152,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	Context.SnapRadius = Tunables.ToolPickRadius;
 	Context.bRemoveModifier = bRemoveModifier;
 	Context.bInsertModifier = bInsertModifier;
+	Context.bSuspendGuides = bSuspendGuides;
 
 	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
@@ -172,10 +173,16 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// nothing on screen to guide, so the default inactive FResult is the right answer.
 	FGuideAnchor Anchor;
 	SnapGuide::FResult Guide;
+	// ALT SUSPENDS EVERY SOURCE AT ONCE, checked first so no source does any work while the
+	// player is holding it. The line below that stores LastGuide unconditionally is what makes
+	// releasing Alt start afresh rather than resume the winner it was holding - a held winner
+	// surviving a suspend would be the hysteresis rule working against the gesture that asked
+	// it to stop.
 	const IBuildTool* Tool = GetActiveTool();
-	if (Tool != nullptr && Network != nullptr && Tool->DescribeGuideAnchor(Anchor))
+	if (!bSuspendGuides && Tool != nullptr && Network != nullptr
+		&& Tool->DescribeGuideAnchor(Anchor))
 	{
-		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide);
+		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide, Tunables.GuideSources);
 	}
 
 	// ASSIGNED EVEN WHEN NOTHING RESOLVED, which is the clearing half: a gesture that ends
