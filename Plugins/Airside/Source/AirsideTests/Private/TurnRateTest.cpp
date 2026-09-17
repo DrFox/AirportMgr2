@@ -316,8 +316,8 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 			// with the timestep, as section 6 demonstrates on a case where it can be measured.
 			TestTrue(FString::Printf(
 				TEXT("while crabbed it is held at the %.0f uu/s floor (fastest %.0f)"),
-				Piper.MinTaxiSpeed, PinnedTopSpeed),
-				PinnedTopSpeed <= Piper.MinTaxiSpeed * 1.25);
+				Piper.MinSteeringSpeed, PinnedTopSpeed),
+				PinnedTopSpeed <= Piper.MinSteeringSpeed * 1.25);
 
 			// THE NUMBER THAT MAKES IT LOOK LIKE AN AEROPLANE. Held at the floor from 90
 			// degrees of crab down to CrabAtMinSpeedDegrees, so the whole manoeuvre is a few
@@ -330,7 +330,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 			const double PinnedSeconds =
 				(90.0 - FRouteFollower::CrabAtMinSpeedDegrees) / Piper.MaxTurnRateDegPerSec;
 			const double Allowed =
-				(Piper.MinTaxiSpeed * PinnedSeconds + Piper.Taxi.SpeedCap * TurnRateFrame) * 1.05;
+				(Piper.MinSteeringSpeed * PinnedSeconds + Piper.Taxi.SpeedCap * TurnRateFrame) * 1.05;
 
 			TestTrue(FString::Printf(
 				TEXT("covering only %.0f uu of creep, within the %.0f that allows"),
@@ -437,7 +437,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		// reactive law was still doing right up to the corner.
 		auto Curve = [&Piper](double Out)
 		{
-			return FMath::Sqrt(FMath::Square(Piper.MinTaxiSpeed) + 2.0 * Piper.Taxi.Decel * Out);
+			return FMath::Sqrt(FMath::Square(Piper.MinSteeringSpeed) + 2.0 * Piper.Taxi.Decel * Out);
 		};
 
 		TestTrue(FString::Printf(
@@ -454,7 +454,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 		// degenerating into "creep the whole route" - that would satisfy the two above and
 		// look nothing like an aeroplane.
 		const double Expected =
-			(FMath::Square(Piper.Taxi.SpeedCap) - FMath::Square(Piper.MinTaxiSpeed))
+			(FMath::Square(Piper.Taxi.SpeedCap) - FMath::Square(Piper.MinSteeringSpeed))
 			/ (2.0 * Piper.Taxi.Decel);
 
 		if (TestTrue(TEXT("it does reach taxi speed and then brake"), BrakedAt > 0.0))
@@ -535,7 +535,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 
 		TestTrue(FString::Printf(
 			TEXT("and stops on arrival rather than at %.0f uu/s"), Coarse.FinalSpeed),
-			Coarse.FinalSpeed <= Piper.MinTaxiSpeed);
+			Coarse.FinalSpeed <= Piper.MinSteeringSpeed);
 
 		const double CoarseGap = FMath::Abs(Coarse.Elapsed - Expected);
 		const double FineGap = FMath::Abs(Fine.Elapsed - Expected);
@@ -583,7 +583,7 @@ bool FTurnRateTest::RunTest(const FString& Parameters)
 
 			if (TurnRateCrabDegrees(Follower, Heading) > 1.0)
 			{
-				bRollingWhileTurning &= Follower.Speed >= Piper.MinTaxiSpeed - KINDA_SMALL_NUMBER;
+				bRollingWhileTurning &= Follower.Speed >= Piper.MinSteeringSpeed - KINDA_SMALL_NUMBER;
 			}
 		}
 

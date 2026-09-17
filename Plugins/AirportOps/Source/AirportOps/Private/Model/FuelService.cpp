@@ -1,5 +1,8 @@
 #include "Model/FuelService.h"
 
+#include "Model/Ledger.h"
+#include "Model/Pricing.h"
+
 #include "AirportOpsLog.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadAgent.h"
@@ -35,7 +38,14 @@ namespace
 		{
 		case EFuelRefusal::NoDepot:       return TEXT("no fuel depot");
 		case EFuelRefusal::NoRoad:        return TEXT("depot not on a road");
-		case EFuelRefusal::StandUnjoined: return TEXT("stand not on a road");
+		// THE ENTRANCES, NAMED, since 2026-09-16 - the message the stand-routing spec promised
+		// and the only one of the four that can say something more useful than the bare fact.
+		// A stand's lane declares its entrances and a road reaches them or does not, so "not on
+		// a road" was true and sent the player looking at the stand's own sides, where there is
+		// nothing to draw: the road has to reach an ENTRANCE, which on a Code C is a corner of
+		// the nose or tail crossing. How many there are is per-definition, so the count is not
+		// in the text - a number that has to agree with an asset is a number that drifts.
+		case EFuelRefusal::StandUnjoined: return TEXT("no road within reach of the stand's entrances");
 		case EFuelRefusal::NoRoute:       return TEXT("no road from depot");
 		case EFuelRefusal::NoPump:        return TEXT("depot has no pump");
 		default:                          return TEXT("unserviceable");
@@ -271,6 +281,23 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	return Result;
 }
 
+void UFuelService::PostServiceFee(double Now, const FAirframe& Airframe)
+{
+	if (Ledger == nullptr || Pricing == nullptr)
+	{
+		return;
+	}
+
+	const double Fee = Pricing->FuelServiceFee(Airframe);
+	if (Fee <= 0.0)
+	{
+		return;
+	}
+
+	Ledger->Post(Now, ELedgerCategory::ServiceFee, Fee,
+		NSLOCTEXT("Ledger", "Fuelling", "Fuelling"));
+}
+
 void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Network,
 	int32 TruckId, FEntityInstanceId Depot)
 {
@@ -481,8 +508,8 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 					Demand.AircraftId, Demand.Stand.Index, RefusalText(Choice.Why),
 					Choice.Depots, Choice.DepotsOnRoad,
 					!Hydrant.IsSet() ? TEXT("has no node at all")
-						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("is on a road")
-						: TEXT("is NOT on a road"));
+						: Network.IsServiceNodeConnected(Hydrant) ? TEXT("reaches a road")
+						: TEXT("reaches NO road from any of its stand's entrances"));
 				break;
 			}
 
@@ -552,6 +579,14 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 			UE_LOG(LogAirportOps, Log,
 				TEXT("Fuel: aircraft %d fuelled at stand %d by truck %d"),
 				Demand.AircraftId, Demand.Stand.Index, Demand.TruckId);
+
+			// EARNED HERE AND NOWHERE ELSE. The aircraft's own airframe prices it, so a code F
+			// fuelling is worth more than a code A one for the same reason its landing is. An
+			// Unserviceable demand never reaches this branch, which IS the forfeit.
+			if (const FRoadAgent* Fuelled = Traffic.FindAgent(Demand.AircraftId))
+			{
+				PostServiceFee(Clock.Now(), Fuelled->Airframe);
+			}
 
 			// CLEARED BEFORE THE TRIP HOME, so the truck belongs to GoingHome and to nothing
 			// else - see that member for why a home-bound truck cannot stay on a demand.

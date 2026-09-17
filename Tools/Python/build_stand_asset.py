@@ -13,7 +13,7 @@ puts a hold door in one place in code and another in content.
 Four assets, and the splits between them are the point:
 
   DA_Aircraft_A320 / DA_Aircraft_B738   where each service CONNECTS to that airframe
-  DA_Stand_CodeC                        what the ground PROVIDES, its plant, and the lane
+  DA_Stand_CodeC                        what the ground PROVIDES, its plant, and its bays
   DA_FuelDepot                          where the trucks live, and how many
 
 Both types park on the same Code C stand and put their hold doors metres apart, which is
@@ -120,8 +120,10 @@ def build_stand(design_aircraft):
     if stand is None:
         return None
 
-    # The design aircraft goes IN rather than being set afterwards: the stand's service loop
-    # is measured from the aeroplane it is sized for, so the builder has to know which one.
+    # The design aircraft goes IN rather than being set afterwards. The LAYOUT is measured
+    # against the code letter rather than against this aeroplane, but the envelope drawing and
+    # the inspect panel both read it, and a stand naming no design aircraft is one nothing can
+    # be shown parked on.
     unreal.EntityDefinition.build_code_c_stand(stand, design_aircraft)
 
     if not unreal.EntityDefinition.has_usable_anchor_ids(stand):
@@ -137,12 +139,31 @@ def build_stand(design_aircraft):
         unreal.log("MARKER:   %s at (%.0f, %.0f)" % (
             fixture.get_editor_property("id"), local.x, local.y))
 
-    # THE LANE, logged as its own fact. It is invisible in the editor - no mesh, no material,
-    # no marking builder - so this line is the only place its corners can be read back.
-    loop = stand.get_editor_property("service_loop")
-    unreal.log("MARKER: DA_Stand_CodeC service loop, %d corner(s)" % len(loop))
-    for corner in loop:
-        unreal.log("MARKER:   (%.0f, %.0f)" % (corner.x, corner.y))
+    # THE BAYS, logged as their own fact. The layout is invisible in the editor - no mesh, no
+    # material, no marking builder - so this is the only place it can be read back, and an
+    # asset that saved an EMPTY ServiceBays array looks identical in the content browser to one
+    # that saved four. That is not hypothetical: it is exactly the state this asset was left in
+    # when ServiceLane was deleted from the class, and no stand in the game had a layout at all
+    # until it was re-authored.
+    #
+    # THE ID AND THE LEG COUNTS, not just the poses. A bay whose legs failed to build still has
+    # an anchor id and three poses, so a pose-only listing reads as correct on a layout no
+    # vehicle can drive - which is the failure the whole piece exists to make impossible. The
+    # four counts are arrive / serve / reverse / depart, in that order.
+    bays = stand.get_editor_property("service_bays")
+    extent = stand.get_editor_property("required_extent")
+    unreal.log("MARKER: DA_Stand_CodeC layout, %d bay(s), needs %.0f x %.0f uu"
+               % (len(bays), extent.x, extent.y))
+    for bay in bays:
+        entry = bay.get_editor_property("entry_local")
+        park = bay.get_editor_property("park_local")
+        exit_at = bay.get_editor_property("exit_local")
+        legs = [len(bay.get_editor_property(leg).get_editor_property("points"))
+                for leg in ("arrive_leg", "serve_leg", "reverse_leg", "depart_leg")]
+        unreal.log("MARKER:   %s entry (%.0f, %.0f) park (%.0f, %.0f) exit (%.0f, %.0f) legs %s"
+                   % (bay.get_editor_property("anchor_id"), entry.x, entry.y,
+                      park.x, park.y, exit_at.x, exit_at.y,
+                      "/".join(str(n) for n in legs)))
     return stand
 
 

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
+#include "Model/SpeedProfile.h"
 #include "RouteSearch.generated.h"
 
 class URoadNetwork;
@@ -90,6 +91,20 @@ struct AIRSIDE_API FRouteStep
 	UPROPERTY() bool bReversed = false;
 
 	/**
+	 * True when this step's edge is a service bay's REVERSE leg - a span meant to be driven
+	 * BACKWARDS. Copied off FGuidelineEdge::bReverseLeg by the search.
+	 *
+	 * NOT bReversed ABOVE, AND THE TWO ARE EASY TO CONFUSE. That one says the edge is walked B
+	 * to A, which reverses its sampled POINTS and says nothing about the vehicle. This one says
+	 * the vehicle travels the span facing the other way.
+	 *
+	 * COPIED RATHER THAN LOOKED UP, because FRoadAgent holds no URoadNetwork - it is world-free,
+	 * like the five motion phases it switches between - so a plan is the only thing it can read
+	 * this from.
+	 */
+	UPROPERTY() bool bReverseLeg = false;
+
+	/**
 	 * Cumulative route distance at which this step's edge ends, and the index of that point
 	 * in FRoutePlan::Polyline. Filled by RunSearch from the SAME polyline it appends - never
 	 * from the Bezier - so "which edge am I on at Travelled" is answered off the array the
@@ -124,7 +139,42 @@ struct AIRSIDE_API FRoutePlan
 	UPROPERTY() double Length = 0.0;
 
 	bool IsValid() const { return Result == ERouteResult::Found; }
+
+	/**
+	 * Which way the vehicle travels along each SPAN of Polyline - one entry per span, so
+	 * Polyline.Num() - 1 of them, Forward unless the step covering it is a bay's reverse leg.
+	 *
+	 * HERE BECAUSE THE PLAN IS WHAT KNOWS. FSpeedProfile takes the answer and has no idea what
+	 * a route step is; FRouteFollower needs it and would otherwise have to walk the step map
+	 * itself, which is a second reading of FRouteStep::EndVertex and the kind of duplicate
+	 * this file's own comment on that field warns about.
+	 *
+	 * OFF EndVertex, NEVER RE-SAMPLED, for the same reason RouteSearch::Section is: that index
+	 * points into the SAME polyline the follower walks, so the spans it names are the spans
+	 * that exist rather than a second evaluation of the curve.
+	 */
+	void DescribeSpanDirections(TArray<EDriveDirection>& Out) const;
 };
+
+namespace RouteSearch
+{
+	/**
+	 * The portion of Plan covering steps [First, Last] inclusive, as a plan of its own.
+	 *
+	 * FOR HANDING A SPAN TO A DIFFERENT MOTION PHASE. FReverseRun plays back a whole FRoutePlan
+	 * and knows nothing of routes, so the reverse leg buried in the middle of a taxi has to be
+	 * cut out before it can be armed. Distances and vertex indices are rebased, so the section
+	 * reads as though it had been searched for on its own.
+	 *
+	 * OFF THE STEP MAP, NEVER RE-SAMPLED. FRouteStep::EndVertex indexes the SAME Polyline the
+	 * follower walks - see the comment there - so a section built from it shares those exact
+	 * points rather than a second evaluation of the curve that would differ on every bend.
+	 *
+	 * An empty plan back when the range is not a range, which is what a caller that found no
+	 * span should already have checked.
+	 */
+	AIRSIDE_API FRoutePlan Section(const FRoutePlan& Plan, int32 First, int32 Last);
+}
 
 struct FTrafficOccupancy;
 struct FAirframe;

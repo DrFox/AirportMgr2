@@ -3,6 +3,7 @@
 #include "BuildActions.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
+#include "LedgerPanelWidget.h"
 #include "Components/InputComponent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
@@ -17,6 +18,7 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/GroundTraffic.h"
+#include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
@@ -589,6 +591,48 @@ bool ARoadBuildController::HasAgent() const
 bool ARoadBuildController::HasOpsRuntime() const
 {
 	return UOpsRuntimeSubsystem::Get(GetWorld()) != nullptr;
+}
+
+void ARoadBuildController::StepLandingFee(int32 Delta)
+{
+	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
+	if (Pricing == nullptr || Delta == 0)
+	{
+		return;
+	}
+
+	// TEN PER CENT A STEP, and clamped at both ends. Zero would make UPricing::DemandFactor
+	// meaningless - a free landing is priced by a guard rather than by the curve - and a
+	// tenfold fee would empty the inbox so completely that the way back would not read as the
+	// player's own doing.
+	constexpr double Step = 0.1;
+	constexpr double Floor = 0.5;
+	constexpr double Ceiling = 2.0;
+
+	const double Was = Pricing->LandingFeeMultiplier;
+	Pricing->LandingFeeMultiplier =
+		FMath::Clamp(Was + (Delta > 0 ? Step : -Step), Floor, Ceiling);
+
+	// LOGGED, because the lever changes the offer cadence for the rest of the game and "why
+	// did the offers dry up" is otherwise a question the log cannot answer.
+	UE_LOG(LogRoadBuild, Log, TEXT("Landing fee %.0f%% -> %.0f%%"),
+		Was * 100.0, Pricing->LandingFeeMultiplier * 100.0);
+}
+
+void ARoadBuildController::ToggleLedger()
+{
+	if (Hud != nullptr && Hud->LedgerPanel != nullptr)
+	{
+		Hud->LedgerPanel->Toggle();
+		UE_LOG(LogRoadBuild, Log, TEXT("Ledger panel %s"),
+			Hud->LedgerPanel->IsShowing() ? TEXT("opened") : TEXT("closed"));
+	}
+}
+
+bool ARoadBuildController::IsLedgerShowing() const
+{
+	return Hud != nullptr && Hud->LedgerPanel != nullptr && Hud->LedgerPanel->IsShowing();
 }
 
 bool ARoadBuildController::IsPaused() const

@@ -90,7 +90,21 @@ namespace
 		 */
 		bool bWithRunway = false;
 
-		double RoadY = -6000.0;
+		/**
+		 * How far south of the stands the service road runs.
+		 *
+		 * MOVED IN FROM -6000 ON 2026-09-17, because the stands' reach moved. A stand offers
+		 * its declared ENTRIES now, all on its aft edge, and the furthest of them sits 8450 uu
+		 * from a road at -6000 against a DefaultServiceLinkRadius of 6500 - so not one linked,
+		 * and with nothing able to pass under a wing the starboard services had no route at
+		 * all. At -4000 the furthest entry is 6450 away, inside the reach with 50 to spare.
+		 *
+		 * THE DEPOT-ONLY FIXTURE STILL MEANS WHAT IT SAYS: with RoadFromX at 9000 the nearest
+		 * road point is 8000 uu from the nearer stand's entries, well outside the reach, while
+		 * the depot's pose at (12000, -2000) is 2000 from the road. See
+		 * Build_RoadReachesDepotOnly.
+		 */
+		double RoadY = -4000.0;
 
 		/** West end of the road. Default reaches under the stand; see Build_RoadReachesDepotOnly. */
 		double RoadFromX = -20000.0;
@@ -124,9 +138,38 @@ namespace
 		 */
 		bool AdvanceUntil(TFunctionRef<bool()> Predicate, double MaxSeconds);
 
+		/**
+		 * The furthest any agent's body moved between two consecutive steps of this fixture, and
+		 * which agent, and when.
+		 *
+		 * WATCHED BY THE FIXTURE rather than by one test, because a teleport is a defect in the
+		 * HANDOVERS between motion phases and every test here drives a truck through all of them.
+		 * Watching it in one place means the next phase added gets the same check for free.
+		 *
+		 * IT EXISTS BECAUSE A SYNTHETIC TEST MISSED THE REAL FLOW. Airside's own reverse test
+		 * drives a FRESH agent down the way out and saw nothing; in the game the SAME agent is
+		 * parked at the service point and REDIRECTED home, which is a different handover, and
+		 * that is the one the player watched jump.
+		 */
+		double WorstJump = 0.0;
+		int32 WorstJumpAgent = 0;
+		double WorstJumpAt = 0.0;
+
+		/** Where it went from and to, and which phase it was in on arrival - so the report
+		 *  names the handover rather than only its size. */
+		FVector2D WorstJumpFrom = FVector2D::ZeroVector;
+		FVector2D WorstJumpTo = FVector2D::ZeroVector;
+		int32 WorstJumpPhase = 0;
+		int32 WorstJumpPhaseBefore = -1;
+
 	private:
 		void RelayPhases();
 		void RunAnchorLinks();
+		void WatchForJumps();
+
+		struct FSeen { FVector2D At = FVector2D::ZeroVector; int32 Phase = -1; };
+		TMap<int32, FSeen> LastSeen;
+		double Watched = 0.0;
 	};
 
 	void LayLine(URoadNetwork& Net, const FVector2D& From, const FVector2D& To,
@@ -293,11 +336,11 @@ void FFuelFixture::Build_RoadReachesDepotOnly()
 	// A ROAD THE STAND CANNOT REACH, and the number moved because the stand's reach did.
 	//
 	// The hydrant used to cast a RAY down -Y from x = -1200, and a road starting at x = 5000
-	// was simply not on it. A stand now offers its whole SERVICE LANE - a box out to
-	// (+1700, -2090) - and joins anything within 50 m of any part of it in any direction. At
-	// x = 5000 that leaves 51 m of margin, which is a fixture one rounding away from testing
-	// the opposite of what it says. The depot's pose at x = 12000 is 40 m from the road
-	// either way, so what this fixture means is unchanged.
+	// was simply not on it. A stand now offers its DECLARED ENTRIES, all on its aft edge, and
+	// joins anything within DefaultServiceLinkRadius of one. The nearer stand's aft edge is at
+	// x = 1020, so a road starting at x = 9000 is about 8000 uu from its closest entry against
+	// a reach of 6500 - outside it, which is what this fixture needs. The depot's pose at
+	// (12000, -2000) is 2000 uu from the road, so what this fixture means is unchanged.
 	RoadFromX = 9000.0;
 	Build(/*bWithRoad=*/true);
 }
@@ -362,6 +405,40 @@ void FFuelFixture::Advance(double Seconds)
 		// service reads both it and the movement seconds the traffic just advanced.
 		Clock->Advance(Step);
 		Service->Tick(*Traffic, *Net, *Clock);
+
+		// AFTER THE SERVICE, not before, and that is the whole point of watching here. The
+		// service is what REDIRECTS a truck - it hands the agent a new route, which poses it -
+		// so a jump introduced by a redirect only exists on this side of the call.
+		Watched += Step;
+		WatchForJumps();
+	}
+}
+
+void FFuelFixture::WatchForJumps()
+{
+	if (Traffic == nullptr)
+	{
+		return;
+	}
+
+	for (const FRoadAgent& Agent : Traffic->GetAgents())
+	{
+		const FVector2D At = FVector2D(Agent.LastMotion.Position);
+		if (const FSeen* Before = LastSeen.Find(Agent.Id))
+		{
+			const double Moved = FVector2D::Distance(Before->At, At);
+			if (Moved > WorstJump)
+			{
+				WorstJump = Moved;
+				WorstJumpAgent = Agent.Id;
+				WorstJumpAt = Watched;
+				WorstJumpFrom = Before->At;
+				WorstJumpTo = At;
+				WorstJumpPhaseBefore = Before->Phase;
+				WorstJumpPhase = static_cast<int32>(Agent.Phase);
+			}
+		}
+		LastSeen.Add(Agent.Id, FSeen{ At, static_cast<int32>(Agent.Phase) });
 	}
 }
 
@@ -558,9 +635,13 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the reason names the STAND, not the depot"),
 			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
 			static_cast<int32>(EFuelRefusal::StandUnjoined));
-		TestEqual(TEXT("and the card says so"),
+		// THE WORDING IS THE ASSERTION, not just the enum: this string is what the offer card
+		// puts in front of the player, and the stand-routing spec promised it name the
+		// ENTRANCES rather than report a bare "not on a road" (which sent the player looking at
+		// the stand's sides, where there is nothing to draw).
+		TestEqual(TEXT("and the card names what the road has to reach"),
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
-			FString(TEXT("stand not on a road")));
+			FString(TEXT("no road within reach of the stand's entrances")));
 	}
 	return true;
 }
@@ -675,14 +756,22 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 
 	// AND THE QUEUE ACTUALLY DRAINS, with NO edit to the airport. This is the half a
 	// state-only assertion would miss: Needed is worth nothing if the demand is never
-	// re-offered once the truck is home. 300 s covers the first truck's drive out, its
+	// re-offered once the truck is home. The figure covers the first truck's drive out, its
 	// 40 s dwell and its drive home, and is a bound rather than a wait.
+	//
+	// 450 s, RAISED FROM 300 ON 2026-09-17, and the round trip got genuinely longer rather
+	// than the bound getting sloppy. The truck now BACKS OUT of the service point instead of
+	// turning round on the spot and driving away forwards: 2529 uu of reverse leg at the 100
+	// uu/s of FTrafficRules::ServiceReverseSpeed is 25 s where a forward pass took 5, and the
+	// way out is 1658 uu longer besides, because the one-way cycle no longer lets the route
+	// retrace the serve leg. Verified as a bound and not a stall before the number moved: the
+	// same test passes at 1200 s, so the truck does get home.
 	TestTrue(TEXT("and once the truck is home the second aircraft gets it"),
 		Fixture.AdvanceUntil([&SecondDemand]
 		{
 			const FFuelDemand* Demand = SecondDemand();
 			return Demand != nullptr && Demand->TruckId != 0;
-		}, 300.0));
+		}, 450.0));
 
 	// The card never said anything false along the way.
 	if (const FFuelDemand* Served = SecondDemand())
@@ -792,6 +881,62 @@ bool FFuelUnserviceableStillDepartsTest::RunTest(const FString& Parameters)
 			const FRoadAgent* Agent = Fixture.Traffic->FindAgent(Aircraft);
 			return Agent == nullptr || Agent->Phase != EAgentPhase::Parked;
 		}, 300.0));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTruckNeverTeleportsOnItsRoundTripTest, "AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTruckNeverTeleportsOnItsRoundTripTest::RunTest(const FString& Parameters)
+{
+	// THE WHOLE ROUND TRIP, WATCHED FRAME BY FRAME. Dispatch, the drive out, the dwell, the
+	// REDIRECT home and the drive back - every handover between motion phases the game has,
+	// in the order and by the caller the game uses.
+	//
+	// AIRSIDE'S OWN REVERSE TEST DOES NOT COVER THIS, and that gap is why the defect reached
+	// PIE twice. It starts a FRESH agent on the way out, so it exercises arming and the
+	// hand-back but never the REDIRECT: in the game the same agent is parked at the service
+	// point when the service hands it a route home, and the log shows the reverse being armed
+	// from inside that redirect's own posing step. A synthetic start cannot see it.
+	//
+	// A FIXTURE-WIDE WATCH rather than an assertion of this test's own, so every other test in
+	// this file pays for it too and the next phase added is covered without being remembered.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true);
+	Fixture.JoinRoad();
+	const int32 Aircraft = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked and asked for fuel"), Aircraft != 0))
+	{
+		return false;
+	}
+
+	// UNTIL THE TRUCK IS HOME AND RETIRED, which is the last handover of the trip.
+	const bool bDone = Fixture.AdvanceUntil([&Fixture]
+		{
+			const TArray<FFuelDemand>& Demands = Fixture.Service->GetDemands();
+			return Demands.Num() > 0 && Demands[0].State == EFuelDemandState::Done;
+		}, 600.0);
+
+	AddInfo(FString::Printf(
+		TEXT("round trip %s; furthest any body moved in one 1/30 s step was %.1f uu, by agent "
+		     "%d at t=%.1f s, from (%.0f,%.0f) to (%.0f,%.0f), phase %d -> %d"),
+		bDone ? TEXT("completed") : TEXT("DID NOT COMPLETE"),
+		Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt,
+		Fixture.WorstJumpFrom.X, Fixture.WorstJumpFrom.Y,
+		Fixture.WorstJumpTo.X, Fixture.WorstJumpTo.Y,
+		Fixture.WorstJumpPhaseBefore, Fixture.WorstJumpPhase));
+
+	TestTrue(TEXT("the round trip completed, so the watch below saw all of it"), bDone);
+
+	// 60 uu IN A THIRTIETH is 1800 uu/s, nearly twice the taxi cap, so ordinary motion cannot
+	// reach it and a handover that re-poses the body cannot hide under it. The two already
+	// found were a wheelbase (494 uu) and a whole reverse span (2529 uu).
+	TestTrue(
+		*FString::Printf(TEXT("no body ever teleports (worst %.1f uu, agent %d, t=%.1f s)"),
+			Fixture.WorstJump, Fixture.WorstJumpAgent, Fixture.WorstJumpAt),
+		Fixture.WorstJump < 60.0);
+
 	return true;
 }
 

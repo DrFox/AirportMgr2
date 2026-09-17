@@ -188,15 +188,46 @@ public:
 	TSoftObjectPtr<USkeletalMesh> AgentMesh;
 
 	/**
-	 * What a GROUND VEHICLE agent looks like. Null leaves the placeholder box.
+	 * What a GROUND VEHICLE agent looks like when there is no rigged one. Null leaves the
+	 * placeholder box.
 	 *
-	 * STATIC, not skeletal, and beside AgentMesh rather than replacing a branch inside it: a
-	 * truck's wheels turn and nothing else does, and there is no rig yet. The box it falls
-	 * back to is sized from FTrafficRules::VehicleFootprint, so what is on screen is the
-	 * length the arbiter actually keeps clear - see ARoadAgentActor::SetVehicleBody.
+	 * STATIC, and now the FALLBACK rather than the only option - see VehicleSkeletalMesh
+	 * below, which is preferred when it is set. This stays because a vehicle whose wheels do
+	 * not need to turn has no business carrying a skeleton. The box it falls back to is sized
+	 * from FTrafficRules::VehicleFootprint, so what is on screen is the length the arbiter
+	 * actually keeps clear - see ARoadAgentActor::SetVehicleBody.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<UStaticMesh> VehicleMesh;
+
+	/**
+	 * A RIGGED ground vehicle. Preferred over VehicleMesh; null falls back to it.
+	 *
+	 * "A truck's wheels turn and nothing else does, and there is no rig yet" is what stood
+	 * beside VehicleMesh, and it was true until 2026-09-14. fueltruck1 now exports four wheel
+	 * bones, two STEER bones carrying the front pair, and a beacon - the same steer->roll
+	 * chain plane2's nose gear uses, so the roll axis turns with the steering rather than
+	 * fighting it.
+	 *
+	 * BESIDE VehicleMesh rather than replacing it, which is the call AgentMesh already made:
+	 * one property that might be either kind would have to be a TSoftObjectPtr<UObject> with
+	 * a cast at the point of use, and the editor would offer every asset in the project in
+	 * its picker.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftObjectPtr<USkeletalMesh> VehicleSkeletalMesh;
+
+	/**
+	 * What drives the rigged vehicle's wheels and steering. Null leaves it in its reference
+	 * pose - a truck that slides along with its wheels held still.
+	 *
+	 * A SOFT CLASS for the reason AgentAnimClass is one, and it must likewise be built on
+	 * UAirsideAgentAnim, which is what computes WheelAngleDegrees and SteerAngleDegrees. A
+	 * SEPARATE property from AgentAnimClass because the two graphs drive different bones: an
+	 * aircraft's has no steer_FR to find.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TSoftClassPtr<UAnimInstance> VehicleAnimClass;
 
 	/**
 	 * What drives the airframe's moving parts. Null leaves it posed in its reference pose.

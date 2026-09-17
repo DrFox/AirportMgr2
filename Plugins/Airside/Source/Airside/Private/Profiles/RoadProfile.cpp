@@ -1,5 +1,23 @@
 #include "Profiles/RoadProfile.h"
 
+#include "Content/AirsideSettings.h"
+
+double URoadProfile::ResolvedFilletRadius() const
+{
+	if (PreferredFilletRadius > 0.0)
+	{
+		return PreferredFilletRadius;
+	}
+
+	// ONE PLACE, which is the whole point - Content/ resolves every content default in exactly
+	// one function, and this is that function for a vehicle-sized corner. A road that admits
+	// the largest service vehicle can be turned on by every smaller one; sizing it for the
+	// truck that happens to be driving now is the mistake the aircraft geometry rule already
+	// names.
+	const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
+	return Largest.TightestFollowableRadius() * JunctionScalingMargin;
+}
+
 double URoadProfile::GetTotalWidth() const
 {
 	double Total = 0.0;

@@ -13,6 +13,8 @@ class UGroundTraffic;
 class UOfferGenerator;
 class URoadNetwork;
 class UStandAllocator;
+class ULedger;
+class UPricing;
 class USimClock;
 enum class EAgentPhase : uint8;
 
@@ -39,6 +41,16 @@ public:
 	/** "Flights": the name OpsSave.h's shim already expects for a pre-v4 save's bytes. */
 	virtual FName SaveBlobName() const override { return TEXT("Flights"); }
 	virtual UObject& AsPersistentObject() override { return *this; }
+
+	/**
+	 * Recreate every flight's own ApproachFocus from this board's one field, for a snapshot
+	 * older than FOpsSnapshot::Version 3.
+	 *
+	 * MOVED HERE FROM OpsSave::Restore so that Restore could become a plain loop over every
+	 * persistent object rather than naming this class as a parameter and calling it in one
+	 * particular position - see IOpsPersistent::OnAfterRestore.
+	 */
+	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
 	 * What actually puts an aeroplane in the world. UOpsRuntime::Attach points this at
@@ -73,6 +85,27 @@ public:
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
 	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
+
+	/**
+	 * The money, or null in a test that does not care about it. Set by UOpsRuntime::Attach.
+	 *
+	 * NULL IS A WORKING STATE, not a bug to guard against at every call: dozens of existing
+	 * board tests drive flights through their whole lifecycle and have no interest in fees, and
+	 * making them all construct a ledger would be churn for nothing.
+	 */
+	UPROPERTY() TObjectPtr<ULedger> Ledger = nullptr;
+	UPROPERTY() TObjectPtr<UPricing> Pricing = nullptr;
+
+	/**
+	 * Bank the landing fee this flight was OFFERED at. Idempotent - a flight lands once.
+	 *
+	 * PUBLIC so a test can post a fee without driving a whole agent through its phases; the
+	 * production caller is OnAgentPhase, and there is only the one.
+	 */
+	void PostLandingFee(double Now, UFlight& Flight);
+
+	/** Bank the parking fee for the hours actually occupied, and record it on the flight. */
+	void PostParkingFee(double Now, UFlight& Flight);
 
 	/**
 	 * The DEFAULT focus for the next generated offer - UOpsRuntime writes it before calling
@@ -152,8 +185,14 @@ public:
 	EArrivalRefusal WhyNotAcceptable(const UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const UFlight& Flight) const;
 
-	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network, int32 AgentId,
-		EAgentPhase From, EAgentPhase To);
+	/**
+	 * TAKES THE CLOCK because the fees posted here are dated, and a ledger entry that could not
+	 * say when it happened would break the roll-up and the determinism test both. The sibling
+	 * UFuelService::OnAgentPhase already takes one, so this is the neighbouring shape rather
+	 * than a second way of getting at the time.
+	 */
+	void OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwork& Network,
+		const USimClock& Clock, int32 AgentId, EAgentPhase From, EAgentPhase To);
 
 	/** Re-make every accepted flight's stand hold. See UStandAllocator::Reapply. */
 	void OnGraphRebuilt(UGroundTraffic& Traffic, const URoadNetwork& Network);

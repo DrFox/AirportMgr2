@@ -733,6 +733,17 @@ FRoutePlan ARoadNetworkActor::FindRoute(
 // Blueprint, the game module and every existing test compile and behave exactly as before.
 // =========================================================================================
 
+IBuildPurse* ARoadNetworkActor::GetPurse() const
+{
+	return Facade->GetPurse();
+}
+
+FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+	int32 WidthIndex) const
+{
+	return Facade->QuoteForConnect(FromIndex, To, Kind, WidthIndex);
+}
+
 int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 {
 	return Facade->PlaceNode(Where);

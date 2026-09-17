@@ -1,5 +1,6 @@
 #include "Present/OpsRuntime.h"
 #include "AirportOpsLog.h"
+#include "Build/BuildCost.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
 #include "Model/OpsCatalog.h"
@@ -9,12 +10,15 @@
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/FuelService.h"
+#include "Model/Ledger.h"
 #include "Model/OfferGenerator.h"
 #include "Model/StandAllocator.h"
 #include "Model/OpsEvents.h"
+#include "Model/Pricing.h"
 #include "Model/OpsSave.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditHistory.h"
 
@@ -31,6 +35,11 @@ UOpsRuntime::UOpsRuntime()
 	FlightBoard->Allocator = CreateDefaultSubobject<UStandAllocator>(TEXT("StandAllocator"));
 	OfferGenerator = CreateDefaultSubobject<UOfferGenerator>(TEXT("OfferGenerator"));
 	FlightBoard->Generator = OfferGenerator;
+
+	// The money, and the same forwarding shape: this class gains two pointers and a line in
+	// Attach, and every decision about what things cost lives in UPricing, not here.
+	Ledger = CreateDefaultSubobject<ULedger>(TEXT("Ledger"));
+	Pricing = CreateDefaultSubobject<UPricing>(TEXT("Pricing"));
 }
 
 TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
@@ -111,8 +120,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	PhaseHandle = Traffic->OnAgentPhaseChanged.AddUObject(this, &UOpsRuntime::OnAgentPhase);
 	RefusalHandle = Traffic->OnArrivalRefused.AddUObject(this, &UOpsRuntime::OnArrivalRefused);
 
-	// Content is resolved ONCE, here, and applied to the clock. Balance goes to the ledger
-	// when it exists (M3); until then the scenario's day length is the only field consumed.
+	// Content is resolved ONCE, here, and applied to the clock and the ledger.
 	if (Catalog->Num() == 0)
 	{
 		Catalog->LoadFromAssetManager();
@@ -131,16 +139,47 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 		// The designer figures set from the same asset in the same breath, so none of them
 		// is the one somebody forgot to copy.
 		FuelService->DwellSeconds = Scenario->FuelDwellSeconds;
+
+		// THE BALANCE A NEW GAME OPENS AT. The comment that used to stand at the top of this
+		// block said this would happen "when the ledger exists (M3)"; this is that. A LOAD
+		// overwrites it moments later from the saved entries, which is why Open is safe here:
+		// it is the new-game path, and OpsSave::Restore is the other one.
+		Ledger->Open(Scenario->StartingBalance);
+
 		UE_LOG(LogAirportOps, Log,
-			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell"),
+			TEXT("Scenario '%s': %.0f real s per game day, starts %02.0f:00, %.0f s fuel dwell, opens at %.0f"),
 			*Scenario->GetName(), Scenario->RealSecondsPerGameDay, Scenario->StartHour,
-			Scenario->FuelDwellSeconds);
+			Scenario->FuelDwellSeconds, Scenario->StartingBalance);
 	}
 
 	// TruckAirframe resolved HERE, once, not by FuelService at every dispatch (#104): this is
 	// Present/, where every other content default gets resolved, and Model/ has no business
 	// reaching Content/ for it.
 	FuelService->TruckAirframe = UAirsideSettings::ResolveDefaultVehicle();
+
+	// THE MONEY, wired in one breath like the scenario figures above, so none of these is the
+	// one somebody forgot to connect. Each of the three posts to the ledger for its own part of
+	// a flight: the generator prices the offer, the board banks landing and parking, the fuel
+	// service banks a completed fuelling.
+	OfferGenerator->Pricing = Pricing;
+	FlightBoard->Ledger = Ledger;
+	FlightBoard->Pricing = Pricing;
+	FuelService->Ledger = Ledger;
+	FuelService->Pricing = Pricing;
+	Ledger->Pricing = Pricing;
+	Ledger->Clock = Clock;
+
+	// THE LEDGER IS THE PURSE the build tools spend from. Handed to the facade here and
+	// nowhere else, so design-time building - which has no runtime and therefore no purse -
+	// stays free. See IBuildPurse.
+	if (URoadEditFacade* Facade = Target->GetEditFacade())
+	{
+		Facade->SetPurse(Ledger);
+	}
+
+	// ONE ENTRY A DAY, not one per object: a hundred-stand airport would otherwise write a
+	// hundred rows a day into a saved array, and RollUp would spend its life folding them.
+	UpkeepHandle = Clock->Every(USimClock::SecondsPerDay, [this]() { PostDailyUpkeep(); });
 	// THE ONE PRODUCTION DISPATCHER. Weak, because the board outlives a level change and a
 	// captured raw pointer would keep a dead actor alive - or worse, be used.
 	TWeakObjectPtr<ARoadNetworkActor> WeakTarget = Target;
@@ -157,7 +196,7 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 	// USimClock::SecondsPerDay rather than a local figure duplicating it - see
 	// UOfferGenerator::OfferIntervalSeconds (issue #98).
 	const TArray<UAirlineDefinition*> Airlines = Catalog->All<UAirlineDefinition>();
-	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines);
+	const double Interval = UOfferGenerator::OfferIntervalSeconds(Airlines, Pricing->DemandFactor());
 	if (Interval > 0.0)
 	{
 		OfferHandle = Clock->Every(Interval, [this]() { GenerateOffer(); });
@@ -182,6 +221,11 @@ void UOpsRuntime::Detach()
 	{
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
 		Target->GetTraffic()->OnArrivalRefused.Remove(RefusalHandle);
+	}
+	if (UpkeepHandle != INDEX_NONE)
+	{
+		Clock->Cancel(UpkeepHandle);
+		UpkeepHandle = INDEX_NONE;
 	}
 	if (OfferHandle != INDEX_NONE)
 	{
@@ -290,7 +334,7 @@ void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
 		if (UGroundTraffic* Model = Target->GetTraffic()->GetModel())
 		{
 			FuelService->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
-			FlightBoard->OnAgentPhase(*Model, *Target->Network, AgentId, From, To);
+			FlightBoard->OnAgentPhase(*Model, *Target->Network, *Clock, AgentId, From, To);
 		}
 	}
 
@@ -302,6 +346,49 @@ void UOpsRuntime::OnArrivalRefused(EArrivalRefusal Why)
 	Events->NotifyArrivalRefused(Why);
 }
 
+void UOpsRuntime::PostDailyUpkeep()
+{
+	if (Target == nullptr || Target->Network == nullptr || Ledger == nullptr)
+	{
+		return;
+	}
+
+	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
+	const double Base = BuildCost::DailyUpkeep(*Target->Network,
+		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
+	if (Base <= 0.0)
+	{
+		// An airport with nothing standing on it costs nothing to own, and an entry saying so
+		// every day would be noise in the one place the player goes to find out where the
+		// money went.
+		return;
+	}
+
+	Ledger->Post(Clock->Now(), ELedgerCategory::Upkeep, -Base,
+		NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
+
+	// FOLDED HERE, on the same daily beat, because this is the only thing that happens once a
+	// game day and the roll-up has no reason to be its own schedule.
+	Ledger->RollUp(Clock->Now());
+
+	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
+		Clock->Day(), Base, Ledger->Balance());
+}
+
+TArray<IOpsPersistent*> UOpsRuntime::Persistents() const
+{
+	// ORDER IS THE SAME ON BOTH SIDES and that is all it has to be: every blob is keyed by its
+	// own SaveBlobName, and OnBeforeRestore runs for all of them before any is deserialised, so
+	// nothing here depends on a neighbour having been restored first.
+	TArray<IOpsPersistent*> Out;
+	Out.Add(Clock);
+	Out.Add(FuelService);
+	Out.Add(FlightBoard);
+	Out.Add(Ledger);
+	Out.Add(Pricing);
+	return Out;
+}
+
 bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 {
 	if (Target == nullptr || Target->Network == nullptr)
@@ -310,7 +397,8 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 		return false;
 	}
 	FOpsSnapshot Snapshot;
-	OpsSave::Capture(*Clock, *Target->Network, *FlightBoard, *FuelService, Snapshot);
+	const TArray<IOpsPersistent*> Saved = Persistents();
+	OpsSave::Capture(Saved, *Target->Network, Snapshot);
 	const bool bOk = OpsSave::WriteSlot(SlotName, Snapshot);
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
@@ -336,7 +424,8 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	// Agents first: they were never saved, and one mid-taxi on a network about to be
 	// replaced would be following a polyline through pavement that no longer exists.
 	Target->GetTraffic()->ClearAgents();
-	if (!OpsSave::Restore(Snapshot, *Clock, *Target->Network, *FlightBoard, *FuelService))
+	const TArray<IOpsPersistent*> Loaded = Persistents();
+	if (!OpsSave::Restore(Snapshot, Loaded, *Target->Network))
 	{
 		return false;
 	}

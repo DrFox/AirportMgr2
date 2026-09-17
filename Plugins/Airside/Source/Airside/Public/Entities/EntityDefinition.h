@@ -4,6 +4,7 @@
 #include "Engine/DataAsset.h"
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
+#include "Model/RouteSearch.h"
 #include "EntityDefinition.generated.h"
 
 class URoadNetwork;
@@ -28,6 +29,114 @@ enum class EPlaceableEntity : uint8
 {
 	Stand,
 	FuelDepot
+};
+
+/**
+ * One piece of a stand's authored geometry: a chain of quadratic segments.
+ *
+ * POINTS AND CONTROLS, NOT A POLYLINE, because that is what a guideline edge IS - two
+ * endpoints and one control - so laying this into the graph is a copy rather than a
+ * re-interpretation. The sampled polyline the oracle judges is DERIVED from these by the same
+ * GuidelineGeom::Sample the graph uses, which is the guideline graph's own sample-once rule:
+ * a second evaluator lets the line a vehicle drives differ from the one that was verified,
+ * visibly and only on bends.
+ *
+ * EVERY CORNER IS CARRIED WHOLE. A leg is checked ALONE by FSpeedProfile, so a corner that fell
+ * between two legs would be judged by nothing - which is the exact defect this piece exists to
+ * remove, one level up. Legs therefore meet TANGENTIALLY and each owns its own bends.
+ */
+USTRUCT()
+struct AIRSIDE_API FStandLeg
+{
+	GENERATED_BODY()
+
+	/**
+	 * Segment i runs Points[i] to Points[i+1], bending about Controls[i].
+	 *
+	 * VisibleAnywhere, LIKE EVERY FIELD OF THE LAYOUT, and the reason is a readback rather
+	 * than a UI. A bare UPROPERTY() serialises perfectly well but cannot be reached by
+	 * get_editor_property - FindPropertyByName does not see it - so the Python that authors
+	 * DA_Stand_CodeC could not print what it had just saved. The layout is invisible in the
+	 * editor (no mesh, no material, no marking builder), so that log IS the only way to tell
+	 * a stand carrying four bays from one carrying none, and the two look identical in the
+	 * content browser. VISIBLE rather than Edit, because all of it is derived: a hand-edited
+	 * leg would be overwritten by the next build and undriveable in the meantime.
+	 */
+	UPROPERTY(VisibleAnywhere) TArray<FVector2D> Points;
+	UPROPERTY(VisibleAnywhere) TArray<FVector2D> Controls;
+
+	bool IsSet() const { return Points.Num() >= 2 && Controls.Num() == Points.Num() - 1; }
+
+	/** The chain as one welded polyline - the array the oracle costs and a follower walks. */
+	void Sample(TArray<FVector2D>& OutPoints) const;
+
+	/** The same chain as an FRoutePlan, Result Found, for FSpeedProfile and FReverseRun. */
+	FRoutePlan ToPlan() const;
+};
+
+/**
+ * One service vehicle's parking bay, and the four legs of its visit.
+ *
+ * FOUR LEGS, and the shape is the user's of 2026-09-17 (samples/standPlan.png) rather than
+ * anything derived: off the service road into a PARKING BAY, forward to the service point,
+ * REVERSE clear of the aeroplane, then forward out. Three earlier designs had the vehicle back
+ * INTO its working position; this one drives in forwards and reverses out, which is what the
+ * ground actually costs - the expensive manoeuvre lands in open ground at the reverse limit of
+ * 494.5 uu instead of beside the aircraft at the forward limit of 699.3.
+ *
+ * THE PARKING BAY IS NOT THE SERVICE POINT. The vehicle WAITS in the bay; it WORKS at the
+ * anchor. Collapsing the two is what produced a layout where every service position had to
+ * double as a turn-round, and it is why the staging rank had nowhere to go.
+ *
+ * ITS OWN ENTRY OFF THE ROAD. Ruled 2026-09-17: a vehicle never threads past a parked one to
+ * reach its own bay. The slots are angled so the turn off the road is 45 degrees and costs
+ * CornerRunFor(R, 135) = 313 uu of run rather than the 989 a square one would; a vehicle
+ * arriving from the other direction has the tight corner and manoeuvres in - which is a SHUNT,
+ * forward-reverse-forward, and never a crab.
+ *
+ * AIRFRAME-INDEPENDENT. A bay is paint on concrete, and paint does not move when a different
+ * type parks; where a service connects to the AIRCRAFT lives on UAircraftType, because an A320
+ * and a 737-800 park here with their doors metres apart.
+ */
+USTRUCT()
+struct AIRSIDE_API FServiceBay
+{
+	GENERATED_BODY()
+
+	/** Which service this bay serves. Matches an FEntityAnchor::Id on the same definition. */
+	UPROPERTY(VisibleAnywhere) FName AnchorId;
+
+	/**
+	 * Where this bay's road entry meets the stand's edge, and pointing which way.
+	 *
+	 * FIXED, AND IT MUST MEET A ROAD. This is the last per-placement geometry the design had
+	 * and the reason it is gone: with the entry floating, one curve was still solved fresh on
+	 * every placement, which is one remaining chance to produce something undrivable.
+	 * Placement now VALIDATES - a road either passes through here or the stand is refused by
+	 * name - and computes no geometry at all.
+	 */
+	UPROPERTY(VisibleAnywhere) FVector2D EntryLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double EntryHeading = 0.0;
+
+	/** Where the vehicle waits, and pointing which way. Angled; see the struct comment. */
+	UPROPERTY(VisibleAnywhere) FVector2D ParkLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double ParkHeading = 0.0;
+
+	/** Where this bay's traffic leaves the stand. Shared with its side's other bays. */
+	UPROPERTY(VisibleAnywhere) FVector2D ExitLocal = FVector2D::ZeroVector;
+	UPROPERTY(VisibleAnywhere) double ExitHeading = 0.0;
+
+	/** Road entry to the parking bay, forwards. Checked against the FORWARD limit. */
+	UPROPERTY(VisibleAnywhere) FStandLeg ArriveLeg;
+
+	/** Parking bay to the service point, forwards. Checked against the FORWARD limit. */
+	UPROPERTY(VisibleAnywhere) FStandLeg ServeLeg;
+
+	/** Clear of the aeroplane, backwards. Checked by FReverseRun::Start, which arms it. */
+	UPROPERTY(VisibleAnywhere) FStandLeg ReverseLeg;
+
+	/** Clear pose to the stand's exit, forwards. Checked against the FORWARD limit. */
+	UPROPERTY(VisibleAnywhere) FStandLeg DepartLeg;
 };
 
 /**
@@ -60,41 +169,50 @@ public:
 	UPROPERTY(EditAnywhere) TArray<FEntityAnchor> Anchors;
 
 	/**
-	 * A closed, INVISIBLE vehicle lane enclosing the parked aircraft and every anchor, in
-	 * the entity's own local space. Empty means none.
+	 * What placing one costs, and what a day of owning it costs.
 	 *
-	 * CLOSED IMPLICITLY: the last point joins the first, and the array does NOT repeat it.
-	 * Storing the repeat would be a value that must agree with another value in the same
-	 * array, which is exactly the drift FResolvedAnchor exists to remove.
-	 *
-	 * WHY A LOOP AT ALL, rather than joining each anchor straight to the road by proximity:
-	 * the anchors sit AROUND the aeroplane - the hydrant pit under the starboard wing, fixed
-	 * ground power off the port bow - so a straight spur from a road on one side to a box on
-	 * the other crosses 37 m of fuselage, and nothing in the guideline graph has ever had an
-	 * opinion about geometry crossing an aeroplane. Anchors spur to this; roads join this.
-	 *
-	 * COMPUTED by the builder that lays the anchors, never authored beside them. Four
-	 * hand-typed corners would be a third authored thing that must agree with the aircraft
-	 * AND with the anchors, and would drift from both. Deriving it at rebuild time was also
-	 * rejected: that is a runtime algorithm's opinion with no override, and a second
-	 * evaluator of the same geometry.
-	 *
-	 * INVISIBLE, and that is a decision rather than an omission: no marking builder, no
-	 * material, no mesh. It exists only as guideline nodes and edges, and shows in the G
-	 * overlay because everything in the graph does. It is a routing lane, not paint.
+	 * See URoadProfile::CostPerMetre for why the figure lives on the asset rather than in a
+	 * table beside it, and why a number only AirportOps reads sits in this plugin.
 	 */
-	UPROPERTY(EditAnywhere) TArray<FVector2D> ServiceLoop;
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double PlacementCost = 0.0;
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double UpkeepPerDay = 0.0;
+
 
 	/**
-	 * The axis-aligned box ServiceLoop occupies, in the entity's own local space - empty if
-	 * ServiceLoop is. Exists so a test that needs "where is the lane" (ServiceLinkTest,
-	 * FuelServiceTest) asks this instead of typing the four corners BuildCodeCStand computed
-	 * a second time (#104): the loop is a rectangle by construction, so its bounds are the
-	 * whole of what those tests actually needed, and a test that hand-typed the corners
-	 * could drift from BuildCodeCStand's own clearance/footprint arithmetic without either
-	 * side noticing.
+	 * Every bay this layout paints - one per anchor a VEHICLE drives to, with the four legs
+	 * of its visit already solved and proven.
+	 *
+	 * SOLVED ONCE, FOR EVERY VEHICLE, and that is the property the whole piece exists to get.
+	 * Four attempts failed because each derived geometry per stand and therefore had to
+	 * re-prove it drivable per stand; placement is now a TRANSFORM, and a transform preserves
+	 * curvature, so a verified template cannot become undrivable by being put somewhere.
+	 *
+	 * COMPUTED by BuildStandTemplate, never authored beside the anchors. Deriving it at rebuild
+	 * time instead was rejected for the reason the old ring's header gave: that is a runtime
+	 * algorithm's opinion with no override, and a second evaluator of the same geometry.
+	 *
+	 * INVISIBLE, and a decision rather than an omission: no marking builder, no material, no
+	 * mesh. It exists as guideline nodes and edges and shows in the G overlay because
+	 * everything in the graph does. The one thing here that SHOULD eventually be painted is
+	 * the wing keep-out, which real aprons mark as a no-entry box - see
+	 * IcaoCode::WingKeepOutContains, and note that nothing draws it yet.
 	 */
-	FBox2D ServiceLaneBounds() const;
+	UPROPERTY(VisibleAnywhere) TArray<FServiceBay> ServiceBays;
+
+	/**
+	 * How much ground this layout actually needs: X is WIDTH (across, the local Y axis) and
+	 * Y is DEPTH (along, the local X axis), uu.
+	 *
+	 * WIDTH-THEN-DEPTH RATHER THAN AN (X, Y) EXTENT, so that it reads straight into
+	 * IcaoCode::LetterForStandSize and the template can name its own letter. An extent in
+	 * local axes would have to be swapped at that call, and a swap nobody notices is a stand
+	 * that reports the wrong code.
+	 *
+	 * DERIVED FROM THE POSES AND LEGS, never typed. A typed figure would be a second opinion
+	 * about how big the layout is, and the two would drift the first time a bay moved - which
+	 * is the whole reason StandWidthForLetter derives width rather than storing it.
+	 */
+	UPROPERTY(VisibleAnywhere) FVector2D RequiredExtent = FVector2D::ZeroVector;
 
 	/**
 	 * What the ground here can provide at all, whether from fixed plant or from equipment
@@ -193,13 +311,44 @@ public:
 	 * TAKES THE DESIGN AIRCRAFT, and sets it. Named Aircraft rather than DesignAircraft
 	 * because UHT refuses a UFUNCTION parameter that shadows a UPROPERTY of the same class. Both callers used to set DesignAircraft
 	 * afterwards, which was harmless only for as long as nothing in the layout depended on
-	 * it - and ServiceLoop does: a stand's geometry is laid out AROUND the aircraft it is
-	 * sized for, so the builder has to know which one that is. A null aircraft is allowed and
-	 * gives a lane round the anchors alone, which is what a definition with no envelope to
-	 * clear actually wants.
+	 * it - and ServiceLane does: a stand's geometry is laid out ALONG the aircraft it is
+	 * sized for, so the builder has to know which one that is. A null aircraft is allowed: the
+	 * lane is still laid, and its two crossings are placed off the anchors alone rather than
+	 * being pushed clear of a nose and a tail that are not there - which is what a definition
+	 * with no envelope to clear actually wants.
+	 *
+	 * A FORWARDER since 2026-09-16, and it KEEPS THIS NAME AND THIS UFUNCTION because
+	 * Tools/Python/build_stand_asset.py calls build_code_c_stand() on it. A UFUNCTION that
+	 * moves is a Python script and a Blueprint that stop compiling.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildCodeCStand(UEntityDefinition* Definition, UAircraftType* Aircraft);
+
+	/**
+	 * BuildCodeCStand, with the vehicle the ground is sized for made explicit.
+	 *
+	 * EXISTS FOR THE TEST that proves the derivation is a derivation. Given a longer vehicle
+	 * the equipment boxes must move outward; asked of the shipping vehicle alone, that
+	 * assertion would pass just as well against a hand-typed figure, which is exactly what
+	 * this change removes. BuildCodeCStand forwards with ResolveLargestServiceVehicle().
+	 */
+	static void BuildCodeCStandFor(
+		UEntityDefinition* Definition, UAircraftType* Aircraft, const FAirframe& Largest);
+
+	/**
+	 * Lay the layout template - entry, staging rank, a bay per service anchor, and the legs
+	 * between them - for a stand of this ICAO code Letter, sized for Largest.
+	 *
+	 * SEPARATE FROM BuildCodeCStandFor, and not merely extracted from it: the anchors above
+	 * are Code C's plant, and this is the RULE that turns any letter's anchors into a
+	 * drivable layout. It reads its box from IcaoCode and nothing else, which is what lets
+	 * one verification cover a whole width band - see UEntityDefinition::RequiredExtent.
+	 *
+	 * TAKES THE ANCHORS AS IT FINDS THEM. It adds no fixture and moves none: a bay is paint
+	 * laid beside plant that is already there.
+	 */
+	static void BuildStandTemplate(
+		UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

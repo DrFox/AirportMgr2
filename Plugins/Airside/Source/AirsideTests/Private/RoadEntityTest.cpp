@@ -127,8 +127,8 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 		// And every anchor that DID exist still resolves - the new one shifted nothing.
 		TestNotNull(TEXT("the hydrant fixture still resolves"),
 			Net->GetAnchorNode(Placed, FName(TEXT("HydrantPit"))));
-		TestNotNull(TEXT("the aft equipment box still resolves"),
-			Net->GetAnchorNode(Placed, FName(TEXT("EquipmentAft"))));
+		TestNotNull(TEXT("the baggage hold still resolves"),
+			Net->GetAnchorNode(Placed, FName(TEXT("BaggageHold"))));
 
 		// The role query must not offer an id the instance cannot follow.
 		for (const FName Id : Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel))
@@ -158,11 +158,14 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("one hydrant pit"),
 				Net->GetAnchorIdsForRole(Placed, EServiceRole::Fuel).Num(), 1);
 
-			// Role is a CATEGORY, not an identity, and this is the case that proves it: a
-			// Code C stand paints two equipment boxes, so asking for "the baggage position"
-			// by role alone has two answers and any scheme keyed on role must pick one.
-			TestEqual(TEXT("and TWO equipment boxes, fore and aft"),
-				Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 2);
+			// ONE BAGGAGE BAY since 2026-09-17, where the Code C stand used to paint two. The
+			// query still returns an ARRAY rather than a single id, and that is the point
+			// worth keeping: role is a CATEGORY, not an identity. A stand with two belt
+			// loaders is legal and would answer twice here, so anything that addresses a
+			// service position does it by ID - which is the invariant FResolvedAnchor exists
+			// to hold, and the reason this asks by role at all.
+			TestEqual(TEXT("one baggage bay, and the query is still a list"),
+				Net->GetAnchorIdsForRole(Placed, EServiceRole::Baggage).Num(), 1);
 
 			int32 IdsThatResolve = 0;
 			for (const FEntityAnchor& Anchor : Stand->Anchors)
@@ -485,7 +488,7 @@ bool FServiceNodeConnectedTest::RunTest(const FString& Parameters)
 		Edge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
 		Edge.Direction = EGuidelineDir::Bidirectional;
 		Edge.bDerived = true;
-		Edge.ServiceLoopOwner = Owned;
+		Edge.StandGeometryOwner = Owned;
 		Net->AddGuidelineEdge(MoveTemp(Edge));
 	};
 

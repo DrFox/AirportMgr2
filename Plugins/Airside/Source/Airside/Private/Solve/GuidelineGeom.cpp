@@ -411,3 +411,107 @@ namespace GuidelineGeom
 		return false;
 	}
 }
+
+double GuidelineGeom::ParamAtArcOffset(const TArray<FVector2D>& Points, double Param, double Offset)
+{
+	if (Points.Num() < 2)
+	{
+		return FMath::Clamp(Param, 0.0, 1.0);
+	}
+
+	const int32 Spans = Points.Num() - 1;
+	const double Scaled = FMath::Clamp(Param, 0.0, 1.0) * Spans;
+	int32 Index = FMath::Clamp(static_cast<int32>(Scaled), 0, Spans - 1);
+	double Fraction = Scaled - Index;
+
+	double Remaining = FMath::Abs(Offset);
+	const bool bForward = Offset >= 0.0;
+
+	while (Remaining > 0.0)
+	{
+		const double SpanLength = FVector2D::Distance(Points[Index], Points[Index + 1]);
+		const double Available = bForward ? SpanLength * (1.0 - Fraction) : SpanLength * Fraction;
+
+		if (SpanLength <= 0.0 || Available >= Remaining)
+		{
+			Fraction += (bForward ? 1.0 : -1.0) * (SpanLength > 0.0 ? Remaining / SpanLength : 0.0);
+			break;
+		}
+
+		Remaining -= Available;
+		if (bForward)
+		{
+			if (Index + 1 >= Spans) { Fraction = 1.0; break; }
+			++Index;
+			Fraction = 0.0;
+		}
+		else
+		{
+			if (Index == 0) { Fraction = 0.0; break; }
+			--Index;
+			Fraction = 1.0;
+		}
+	}
+
+	return ParamAtSample(Index, FMath::Clamp(Fraction, 0.0, 1.0), Points.Num());
+}
+
+double GuidelineGeom::TightestRadius(
+	const FVector2D& A, const FVector2D& Control, const FVector2D& B)
+{
+	const FVector2D First = Control - A;
+	const FVector2D Second = B - Control;
+
+	const double Cross = FMath::Abs(First.X * Second.Y - First.Y * Second.X);
+	if (Cross <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		// Collinear control: a straight line, which bends nowhere.
+		return TNumericLimits<double>::Max();
+	}
+
+	const FVector2D Sweep = Second - First;
+	const double Length = Sweep.SizeSquared();
+	const double At = Length > 0.0
+		? FMath::Clamp(-FVector2D::DotProduct(First, Sweep) / Length, 0.0, 1.0)
+		: 0.0;
+
+	const double Least = (First + Sweep * At).Size();
+	return 2.0 * Least * Least * Least / Cross;
+}
+
+double GuidelineGeom::ShiftDeflectionFor(double Radius, double Shift, double& OutRun)
+{
+	OutRun = 0.0;
+	if (Shift <= UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		return 0.0;
+	}
+
+	// The right-angle cap, and the answer outright for a caller with no radius to clear.
+	double Deflect = UE_DOUBLE_HALF_PI;
+	if (Radius > UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		// sin^2(b/2) = (sqrt(1 + 4k^2) - 1) / (2k^2), k = 4R/Shift. See the header for where
+		// that comes from; it is CornerRunFor solved for its second argument.
+		const double K = 4.0 * Radius / Shift;
+		const double SinSquared = (FMath::Sqrt(1.0 + 4.0 * K * K) - 1.0) / (2.0 * K * K);
+		Deflect = FMath::Min(2.0 * FMath::Asin(FMath::Sqrt(FMath::Clamp(SinSquared, 0.0, 1.0))),
+			UE_DOUBLE_HALF_PI);
+	}
+
+	// Both curves carry half the shift between them: 2 s sin(b) = Shift.
+	const double Sine = FMath::Sin(Deflect);
+	OutRun = Sine > UE_DOUBLE_KINDA_SMALL_NUMBER ? Shift / (2.0 * Sine) : 0.0;
+	return Deflect;
+}
+
+double GuidelineGeom::CornerRunFor(double Radius, double Interior)
+{
+	const double Half = Interior * 0.5;
+	const double Sin = FMath::Sin(Half);
+	if (Sin * Sin < UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		return TNumericLimits<double>::Max();
+	}
+	return Radius * FMath::Cos(Half) / (Sin * Sin);
+}

@@ -41,6 +41,29 @@ class AIRSIDE_API UAirsideSettings : public UDeveloperSettings
 public:
 	UAirsideSettings();
 
+	/**
+	 * What a square metre of apron costs to lay, and what a day of owning one costs.
+	 *
+	 * HERE AND NOT ON AN ASSET, which is the one exception to the rule URoadProfile and
+	 * UEntityDefinition follow - and it is forced, not a shortcut. FApronSurface is an outline
+	 * and a material slot name; there is deliberately NO per-apron asset, because bands and
+	 * lanes are meaningless for a polygon (see RoadApron.h). This class is already this
+	 * project's single door for a content default with no better home, so the rate goes here.
+	 *
+	 * The consequence, named so the null is not read later as a bug: an apron's FBuildQuote
+	 * carries no Source asset, so an M4 research discount cannot single aprons out the way it
+	 * can single out a taxiway profile.
+	 *
+	 * 15 per square metre sits between taxiway (13) and runway (25), which is the ORDERING to
+	 * preserve when these are tuned; the magnitude is an unplayed first pass.
+	 */
+	UPROPERTY(config, EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0"))
+	double ApronCostPerSquareMetre = 15.0;
+
+	/** A thousandth of the build cost per day, the same ratio the profiles are authored at. */
+	UPROPERTY(config, EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0"))
+	double ApronUpkeepPerSquareMetrePerDay = 0.015;
+
 	/** Defaults for materials, profiles and the stand. See UAirsideContent. */
 	UPROPERTY(config, EditAnywhere, Category = "Content")
 	TSoftObjectPtr<UAirsideContent> Content;
@@ -96,6 +119,25 @@ public:
 	static FAirframe ResolveDefaultVehicle();
 
 	/**
+	 * The biggest thing that may drive on a service road, which is what the road's corners
+	 * are sized for.
+	 *
+	 * A SEPARATE FUNCTION FROM ResolveDefaultVehicle even though it returns the same airframe
+	 * today, because the two answer different questions and will diverge the moment a second
+	 * vehicle class exists: "what does a truck without a type look like" against "what must
+	 * every service road be able to turn". Merged, a new larger dispenser would silently
+	 * widen nothing, or a small van would silently narrow every junction.
+	 *
+	 * THE RULE IS THE ONE AIRCRAFT GEOMETRY ALREADY USES. IcaoCode::RadiusForLetter sweeps a
+	 * painted taxi line for the largest aircraft a stand admits, never for the one taxiing
+	 * now. This is that rule, for vehicles. It was INVERTED on 2026-09-14 - a truck's steering
+	 * lock was widened from 45 to 50 degrees so it would fit an authored 500 uu corner, which
+	 * is shrinking the vehicle to fit the road - and this function exists to make that
+	 * inversion impossible to repeat.
+	 */
+	static FAirframe ResolveLargestServiceVehicle();
+
+	/**
 	 * What an aircraft's view should wear: THE AGENT'S OWN AIRFRAME FIRST, falling back to
 	 * the content set's - and if the type has a mesh but no anim Blueprint of its own, the
 	 * content default anim Blueprint drives it rather than leaving it unanimated.
@@ -112,4 +154,22 @@ public:
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();
+
+	/**
+	 * A service vehicle's RIGGED body and the graph that drives it, or an empty view when the
+	 * content set names none - in which case the caller falls back to ResolveVehicleMesh.
+	 *
+	 * THE SIBLING OF ResolveAgentView, and deliberately not a branch inside it: an aircraft
+	 * resolves its mesh from its own FAirframe FIRST and only then from the content set,
+	 * because a Twin Otter offered as a Meridian was a real defect. A vehicle has no such
+	 * per-type asset yet - ResolveDefaultVehicle hands every truck the same scaffolding
+	 * FAirframe - so there is nothing to prefer and adding the branch now would be inventing
+	 * a fallback order for a choice nobody makes.
+	 *
+	 * The anim class is taken WITHOUT a fallback to AgentAnimClass: an aircraft's graph
+	 * drives bones named prop and nosewheel_steer, and pointed at a truck it would find none
+	 * of them and silently animate nothing. Better an unanimated truck that is obviously
+	 * unwired than one that looks wired and is not.
+	 */
+	static FResolvedAgentView ResolveVehicleView();
 };

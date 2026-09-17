@@ -167,84 +167,28 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 	return true;
 }
 
-bool FLaneLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
-	const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const
-{
-	double Best = Link.Reach;
-	FGuidelineEdgeId BestEdge;
-	double BestParam = 0.0;
-	FGuidelineEdgeId BestLaneEdge;
-	double BestLaneParam = 0.0;
-
-	const TArray<FGuidelineEdge>& Edges = Network.GetGuidelineEdges();
-	for (int32 Index = 0; Index < Edges.Num(); ++Index)
-	{
-		const FGuidelineEdge& Edge = Edges[Index];
-		if (!IsJoinable(Edge, Link, AnchorNodes))
-		{
-			continue;
-		}
-
-		FGuidelineEdgeId Id;
-		Id.Index = Index;
-		Id.Generation = Edge.Generation;
-
-		TArray<FVector2D> Points;
-		if (!Network.SampleGuideline(Id, Points))
-		{
-			continue;
-		}
-
-		// LANE TO ROAD: closest approach between two polylines, so a road drawn PARALLEL to
-		// the lane is measured side to side rather than corner to corner. That parallel case
-		// is the whole point - it is how a player draws a service road along a row of stands.
-		for (const FGuidelineEdgeId& LaneId : Link.Lane)
-		{
-			TArray<FVector2D> LanePoints;
-			if (!Network.SampleGuideline(LaneId, LanePoints))
-			{
-				continue;
-			}
-
-			int32 LaneSpan = 0, RoadSpan = 0;
-			double LaneFraction = 0.0, RoadFraction = 0.0;
-			const double Distance = GuidelineGeom::NearestBetweenPolylines(
-				LanePoints, Points, LaneSpan, LaneFraction, RoadSpan, RoadFraction);
-
-			if (Distance <= FAnchorLink::LeadInWeldTolerance || Distance >= Best)
-			{
-				continue;
-			}
-
-			Best = Distance;
-			BestEdge = Id;
-			BestParam = GuidelineGeom::ParamAtSample(RoadSpan, RoadFraction, Points.Num());
-			BestLaneEdge = LaneId;
-			BestLaneParam = GuidelineGeom::ParamAtSample(LaneSpan, LaneFraction, LanePoints.Num());
-		}
-	}
-
-	if (!BestEdge.IsSet())
-	{
-		return false;
-	}
-	OutHit.Edge = BestEdge;
-	OutHit.Param = BestParam;
-	OutHit.LaneEdge = BestLaneEdge;
-	OutHit.LaneParam = BestLaneParam;
-	return true;
-}
+// FLaneLinkFinder IS DELETED, 2026-09-16, and a deleted strategy needs an argument.
+//
+// It measured the closest approach between a stand's WHOLE LANE and a road, because the ring
+// it was written for declared no entrance: the pass had to find a point on the lane to join
+// AT as well as something to join TO, and the point it found then had to be cut into the lane.
+// A stand declares its entries now - see UEntityDefinition::ServiceLane's Entry waypoints, and
+// FStandLayoutBuild::FResult::Entries for the nodes they became - so the FROM end of the link is
+// a node that already exists, and a node's rule is proximity. One question, one finder.
+//
+// What it really bought, a road drawn PARALLEL to a lane being measured side to side rather
+// than corner to corner, is not lost: the four declared entries ARE the corners, and
+// FAnchorLink::Gather gives each point of road to the entry nearest it. The measurement itself
+// survives as GuidelineGeom::NearestBetweenPolylines, which the clearance tests still use.
 
 const ILinkFinder& LinkFinderFor(ELinkKind Kind)
 {
 	static const FRayLinkFinder Ray;
 	static const FProximityLinkFinder Proximity;
-	static const FLaneLinkFinder Lane;
 
 	switch (Kind)
 	{
 	case ELinkKind::Ray:        return Ray;
-	case ELinkKind::Lane:       return Lane;
 	case ELinkKind::Proximity:
 	default:                    return Proximity;
 	}

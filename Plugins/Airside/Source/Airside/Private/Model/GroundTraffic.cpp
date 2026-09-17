@@ -176,6 +176,12 @@ int32 UGroundTraffic::DispatchAgent(const URoadNetwork* Network, const FRoutePla
 	// FRoadAgent is world-free and cannot read the actor's UPROPERTY for itself, so the
 	// pause is copied in at dispatch - the only time the two ever need to meet.
 	Agent.ShutdownPause = ShutdownPauseSeconds;
+
+	// AND THE REVERSE SPEED, for the same reason and at the same moment: the agent arms its own
+	// back-out mid-taxi when its route reaches a bay's reverse leg, so it must already hold the
+	// figure by then. Zero would refuse every reverse leg and strand the vehicle at the service
+	// point, which is why this is stamped here rather than defaulted on the struct.
+	Agent.ReverseSpeed = Rules.ServiceReverseSpeed;
 	Agent.Class = Class;
 	Agent.SetGoalFrom(Plan);
 

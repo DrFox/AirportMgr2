@@ -200,6 +200,15 @@ public:
 	UPlotPresenter* GetPlotPresenter() const { return Plots; }
 
 	/**
+	 * Every graph mutator, query and undo step - see URoadEditFacade.
+	 *
+	 * READ ACCESS TO THE SUBOBJECT, not a forwarder per method, for exactly the reason
+	 * GetPresenter above gives. The ops runtime reaches through it at attach to hand the facade
+	 * its build purse, and the purse tests reach through it to substitute a recorder.
+	 */
+	URoadEditFacade* GetEditFacade() const { return Facade; }
+
+	/**
 	 * Multiplier applied to every Tick's DeltaSeconds before it reaches Traffic. Set each
 	 * frame by AirportOps from the sim clock's SPEED (x0..x8), never from its day
 	 * compression - see USimClock's class comment for why the two are different numbers.
@@ -238,6 +247,19 @@ public:
 	// line; the real work, and the WHY comments that used to sit here, moved with the code -
 	// see URoadEditFacade.cpp.
 	// =====================================================================================
+
+	/**
+	 * The build purse and the quote a tool prices its ghost with - forwarded to the facade,
+	 * like every other IRoadEditTarget member.
+	 *
+	 * FORWARDED AND NOT INHERITED FROM THE DEFAULT. FToolContext::Target is THIS ACTOR, so a
+	 * tool asking the interface gets the actor's answer; leaving these to IRoadEditTarget's
+	 * null default meant the ghost silently priced nothing, with the facade's own purse sitting
+	 * right there behind it.
+	 */
+	virtual IBuildPurse* GetPurse() const override;
+	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
+		int32 WidthIndex) const override;
 
 	/** Add a node at a world-space XY position. Returns its index, or INDEX_NONE. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
@@ -739,7 +761,9 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Traffic") FTrafficRules TrafficRules;
 
 	/**
-	 * How far a SERVICE connection may reach, in any direction, uu. 50 m by default.
+	 * How far a SERVICE connection may reach, in any direction, uu. 65 m by default, which is
+	 * 50 m from where a Code C stand's edge is drawn plus the 15 m its lane sits inboard of
+	 * that line - the derivation is on FAnchorLink::DefaultServiceLinkRadius.
 	 *
 	 * HERE AND NOT A CONSTANT, for the same reason TrafficRules is here: it is per-airport
 	 * gameplay tuning a designer sets on the level, not a content default to fall back on

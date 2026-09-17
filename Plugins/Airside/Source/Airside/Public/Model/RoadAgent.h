@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/LandingRun.h"
 #include "Model/PushbackRun.h"
+#include "Model/ReverseRun.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
@@ -49,6 +50,17 @@ enum class EAgentPhase : uint8
 	 * which cannot manage alone is pushback, and that is the job board's business.
 	 */
 	Manoeuvring,
+
+	/**
+	 * A GROUND VEHICLE backing into its service bay. FReverseRun drives it.
+	 *
+	 * SEPARATE FROM Manoeuvring, which is an aeroplane coming off a stand. The two look alike
+	 * from outside - something reversing - and are different kinematics: a pushed aeroplane
+	 * pivots about its NOSE GEAR because that is where the tug couples, so the steered axle
+	 * still leads. A truck backing up pivots about its FIXED axle, and can hold a tighter arc
+	 * for it. Sharing a phase would mean sharing a motion law they do not share.
+	 */
+	Reversing,
 
 	/** The take-off has cleared. FRoadAgent::Advance returns false from here on. */
 	Gone
@@ -212,6 +224,37 @@ struct AIRSIDE_API FRoadAgent
 	 * four is driving, so none of them has to know the others exist.
 	 */
 	UPROPERTY() FPushbackRun Pushback;
+
+	/**
+	 * The back-out a ground vehicle is making, when Phase is Reversing.
+	 *
+	 * ARMED FROM INSIDE THE TAXI, unlike Pushback, which is armed from outside by whoever
+	 * decides an aeroplane is leaving. A reverse leg is part of a route the vehicle is already
+	 * driving - one span of a stand's four-leg cycle - so the agent finds it for itself, cuts it
+	 * out of the plan with RouteSearch::Section, and picks the taxi up again afterwards.
+	 */
+	UPROPERTY() FReverseRun Reverse;
+
+	/**
+	 * How fast this vehicle backs up, uu/s. Copied in at dispatch, like ShutdownPause, because
+	 * FRoadAgent is world-free and cannot read the rules for itself.
+	 */
+	UPROPERTY() double ReverseSpeed = 0.0;
+
+	/**
+	 * The step of Follower.Plan the taxi resumes at once the current reverse span ends, and
+	 * INDEX_NONE when the reverse is the last thing the route does.
+	 *
+	 * A STEP, NOT A DISTANCE, and that correction cost a PIE session. FRouteFollower::Start's
+	 * third parameter is InitialSpeed - it has no Travelled, and always begins a plan at its
+	 * beginning. Handing it a resume distance there restarted the route at the SERVICE POINT
+	 * with an absurd speed, so the truck backed out correctly, snapped back to the aeroplane
+	 * facing away from it, and drove the reverse arm forwards. Reported as exactly that.
+	 *
+	 * So the remainder is CUT instead, with RouteSearch::Section, and the follower is given a
+	 * plan whose beginning is where it should start.
+	 */
+	UPROPERTY() int32 ResumeStep = INDEX_NONE;
 
 	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback

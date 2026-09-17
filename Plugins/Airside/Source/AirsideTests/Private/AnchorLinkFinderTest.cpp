@@ -116,95 +116,25 @@ bool FAnchorLinkFinderTest::RunTest(const FString& Parameters)
 			Finder.Find(*Net, ShortReach, AnchorNodes, TooFar));
 	}
 
-	// FLaneLinkFinder: nearest approach between the LANE (Link.Lane) and a road, not between
-	// the anchor point and the road - the lane has no single point to link from.
-	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-
-		// The lane: a short side of a stand's service ring, well clear of the road.
-		const FGuidelineNodeId LaneA = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
-		const FGuidelineNodeId LaneB = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
-		FGuidelineEdge LaneEdge;
-		LaneEdge.A = LaneA;
-		LaneEdge.B = LaneB;
-		LaneEdge.Control = FVector2D(500.0, 0.0);
-		LaneEdge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
-		LaneEdge.bDerived = true;
-		const FGuidelineEdgeId LaneId = Net->AddGuidelineEdge(MoveTemp(LaneEdge));
-
-		// The road: drawn PARALLEL to the lane, 5000 uu away - the case this finder exists
-		// for, where a corner-to-corner measure would answer wrong.
-		FGuidelineNodeId RoadWest, RoadEast;
-		const FGuidelineEdgeId RoadId =
-			LayStraight(*Net, 5000.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
-
-		FPendingLink Link;
-		Link.Kind = ELinkKind::Lane;
-		Link.Lane = { LaneId };
-		Link.Class = ETraversalClass::GroundVehicle;
-		Link.Reach = 20000.0;
-
-		const FLaneLinkFinder Finder;
-		// The lane's own nodes are excluded, exactly as FAnchorLink::Gather excludes every
-		// node of every service lane and spur - otherwise the lane would be a candidate for
-		// itself at zero distance.
-		TSet<FGuidelineNodeId> AnchorNodes = { LaneA, LaneB };
-
-		FLinkHit Hit;
-		TestTrue(TEXT("the lane finds the parallel road, not itself"),
-			Finder.Find(*Net, Link, AnchorNodes, Hit));
-		TestEqual(TEXT("the road is reported as the target edge"), Hit.Edge, RoadId);
-		TestEqual(TEXT("and the lane side as the source edge"), Hit.LaneEdge, LaneId);
-
-		const FGuidelineNode* RoadWestNode = Net->GetGuidelineNode(RoadWest);
-		const FGuidelineNode* RoadEastNode = Net->GetGuidelineNode(RoadEast);
-		if (TestNotNull(TEXT("road west resolves"), RoadWestNode) &&
-			TestNotNull(TEXT("road east resolves"), RoadEastNode))
-		{
-			const FVector2D RoadPoint = GuidelineGeom::Eval(
-				RoadWestNode->Position, FVector2D(0.0, 5000.0), RoadEastNode->Position, Hit.Param);
-			TestEqual(TEXT("the road point measured is on the road's line"), RoadPoint.Y, 5000.0, 0.01);
-		}
-
-		// The lane itself is not a candidate road: excluding it is what AnchorNodes is for,
-		// and without that exclusion this would report a zero-distance hit on itself.
-		FPendingLink NoRoad;
-		NoRoad.Kind = ELinkKind::Lane;
-		NoRoad.Lane = { LaneId };
-		NoRoad.Class = ETraversalClass::GroundVehicle;
-		NoRoad.Reach = 20000.0;
-
-		FLinkHit ShortOfIt;
-		TSet<FGuidelineNodeId> ExcludeRoad = { LaneA, LaneB, RoadWest, RoadEast };
-		TestFalse(TEXT("with the road itself excluded, nothing is left to join"),
-			Finder.Find(*Net, NoRoad, ExcludeRoad, ShortOfIt));
-
-		FPendingLink ShortReach = Link;
-		ShortReach.Reach = 1000.0;
-		FLinkHit TooFar;
-		TestFalse(TEXT("a reach capped short of the road finds nothing"),
-			Finder.Find(*Net, ShortReach, AnchorNodes, TooFar));
-
-		// An empty Lane array is the tag for "this is not actually a lane link" - the finder
-		// must not silently fall back to measuring the anchor point itself.
-		FPendingLink EmptyLane = Link;
-		EmptyLane.Lane.Empty();
-		FLinkHit Nothing;
-		TestFalse(TEXT("a lane link with no sides to measure from finds nothing"),
-			Finder.Find(*Net, EmptyLane, AnchorNodes, Nothing));
-	}
+	// THE FLaneLinkFinder BLOCK IS DELETED, 2026-09-16, with the finder it measured.
+	//
+	// It asserted that a stand's whole LANE was measured against a road polyline to polyline -
+	// which existed because a ring declared no entrance, so the pass had to find a point on the
+	// lane to join at. A stand declares its entries now (UEntityDefinition::ServiceLane), so
+	// the FROM end of the link is a node and FProximityLinkFinder above is the whole rule. The
+	// property that block really protected - a road drawn PARALLEL to a lane being measured
+	// side to side rather than corner to corner - moved to
+	// Airside.Build.ServiceLaneEntersOnEverySideWithinReach, which measures it on the real
+	// stand: a road alongside enters at BOTH near corners, not once at whichever end came
+	// first. GuidelineGeom::NearestBetweenPolylines keeps its own tests in
+	// Airside.Solve.GuidelineGeom.
 
 	// LinkFinderFor: dispatches to the strategy matching Kind. Proved by BEHAVIOUR that only
 	// the right strategy can produce, not by a result a wrong one could match by accident:
-	//
-	// - Ray fails facing away and succeeds facing toward the SAME guideline - a fingerprint
-	//   neither Proximity (succeeds either way) nor Lane (Link.Lane is empty here, so it
-	//   always fails) can reproduce. Testing only the "away" half was the bug: a switch that
-	//   wrongly returned the Lane finder for Ray would ALSO report false there, for the
-	//   wrong reason, and the test would not have noticed.
-	// - Lane's hit alone is not proof either, since a wrongly-dispatched Ray or Proximity
-	//   finder can still land on the same edge by its own rule. FLinkHit::LaneEdge is the
-	//   fingerprint instead: only FLaneLinkFinder ever writes it.
+	// Ray fails facing away and succeeds facing toward the SAME guideline, which Proximity
+	// (which succeeds either way) cannot reproduce. Testing only the "away" half was the bug:
+	// a switch that wrongly returned some other finder for Ray would ALSO report false there,
+	// for the wrong reason, and the test would not have noticed.
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId West, East;
@@ -232,36 +162,6 @@ bool FAnchorLinkFinderTest::RunTest(const FString& Parameters)
 		FLinkHit RayTowardHit;
 		TestTrue(TEXT("LinkFinderFor(Ray) still finds the same guideline when facing it"),
 			LinkFinderFor(RayTowardLink.Kind).Find(*Net, RayTowardLink, AnchorNodes, RayTowardHit));
-	}
-
-	{
-		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
-
-		const FGuidelineNodeId LaneA = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
-		const FGuidelineNodeId LaneB = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
-		FGuidelineEdge LaneEdge;
-		LaneEdge.A = LaneA;
-		LaneEdge.B = LaneB;
-		LaneEdge.Control = FVector2D(500.0, 0.0);
-		LaneEdge.AllowedTraffic = FTrafficMask::Only(ETraversalClass::GroundVehicle);
-		LaneEdge.bDerived = true;
-		const FGuidelineEdgeId LaneId = Net->AddGuidelineEdge(MoveTemp(LaneEdge));
-
-		FGuidelineNodeId RoadWest, RoadEast;
-		LayStraight(*Net, 5000.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
-
-		FPendingLink LaneLink;
-		LaneLink.Kind = ELinkKind::Lane;
-		LaneLink.Lane = { LaneId };
-		LaneLink.Class = ETraversalClass::GroundVehicle;
-		LaneLink.Reach = 20000.0;
-
-		TSet<FGuidelineNodeId> AnchorNodes = { LaneA, LaneB };
-		FLinkHit LaneHit;
-		TestTrue(TEXT("LinkFinderFor(Lane) finds the road"),
-			LinkFinderFor(LaneLink.Kind).Find(*Net, LaneLink, AnchorNodes, LaneHit));
-		TestTrue(TEXT("and only the Lane strategy ever sets LaneEdge"), LaneHit.LaneEdge.IsSet());
-		TestEqual(TEXT("naming the lane side it measured from"), LaneHit.LaneEdge, LaneId);
 	}
 
 	return true;
