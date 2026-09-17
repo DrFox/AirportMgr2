@@ -226,10 +226,18 @@ void UEntityDefinition::BuildCodeCStandFor(
 	constexpr double RowY = 700.0;
 	const double PitX = WingFwd + PlantClearance;
 	const double HoldFwdX = WingFwd + 600.0;
-	// 250 RATHER THAN 450 CLEAR OF THE TRAILING EDGE. The aft hold is the aft-most thing any
-	// vehicle drives to, so it is the bay whose serve leg has the least lane to complete its
-	// shift in - and 450 left that run 47 uu inside what its two corners need. It is paint
-	// clearance from a wing nothing drives under, not structural separation.
+	// 250 CLEAR OF THE TRAILING EDGE, and the figure is set by the parking row rather than by
+	// the wing. The aft hold is the aft-most thing any vehicle drives to, so its serve leg has
+	// the least lane to complete its shift in, and it is the bay that binds ParkRun's ceiling.
+	// At 450 clear that run came 47 uu inside what its two corners need.
+	//
+	// IT IS THE FIGURE THAT WOULD GIVE if the aft edge ever needed a wider pitch - it is paint
+	// clearance from a wing nothing drives under, not structural separation. Measured: moving
+	// it to 150 lets the pitch reach the 948 uu that clears every road fillet, but the band it
+	// leaves ParkRun is then 31 uu wide and the serve leg's two corners clear each other by 15,
+	// which delivers 523 uu against a lock of 699. A window that narrow is the shape of thing
+	// this whole piece exists to stop shipping, so the pitch stays where the band is 120 wide
+	// and one fillet stays clamped instead.
 	const double HoldAftX = WingAft - 250.0;
 
 	AddFixture(TEXT("HydrantPit"), PitX, RowY, -90.0, EServiceRole::Fuel);
@@ -316,24 +324,22 @@ void UEntityDefinition::BuildStandTemplate(
 	// side of that contact wants Diagonal of run along the road; two neighbours therefore need
 	// twice that between them, plus the tenth everything else here gets.
 	//
-	// TWICE, WHICH IS WHAT THE GEOMETRY SUGGESTS AND IS MEASURABLY NOT QUITE ENOUGH. A fillet
-	// either side of a contact each wants Diagonal, so neighbours want twice it - but at the
-	// 759 uu that gives, ONE contact of the six still delivers 341 uu against a lock of 699.
-	// Swept upward: 2.64 x Diagonal also fails, 2.86 x clears. The extra is the road SPLIT each
+	// 2.75 TIMES, AND THE FIGURE IS MEASURED AT BOTH ENDS. Twice is what the geometry suggests
+	// - a fillet either side of a contact, each wanting Diagonal - and it is short: at the 759
+	// uu that gives, one contact of the six still delivered 341 against a lock of 699. Swept
+	// upward, 2.64 x Diagonal also failed and 2.86 x cleared. The extra is the road SPLIT each
 	// contact makes, shortening the segment its neighbour's fillet works in, which the
 	// two-fillet picture does not contain.
 	//
-	// IT IS LEFT AT TWICE ANYWAY, and that is a deliberate trade rather than an oversight.
-	// Raising it to 3 x moves the park row so far inboard that the aft-most bay's serve leg has
-	// no legal run at all - the warning below fires and TWO legs fold, which is worse than one
-	// clamped fillet. The aft hold is pinned between the wing keep-out at -2150 and the parking
-	// row, and that is the constraint to relieve; see the one remaining failure of
-	// Airside.Build.StandLinkClearsTheTruckLock.
+	// AND IT CANNOT SIMPLY GO HIGHER. The k-th slot's serve leg diagonalises (k + 1) * AftPitch
+	// before it reaches its lane, so raising the pitch eats the lane that the LAST bay on a
+	// side needs for its turn-in - at 2.9 x the forward-most bay had 197 uu of headroom against
+	// a floor of 268 and its leg folded. The window between the two is narrow and real: above
+	// about 2.6 x the road fillets clear, below about 2.8 x the serve legs fit.
 	//
 	// AT 450 IT WAS FAR WORSE and is worth recording: the six aft-edge nodes left 450 uu
 	// segments, every fillet was clamped to what was left, and BOTH sweeps came out at 89 and
-	// 6 uu - not the ruled one-good-one-shunt pair but two unusable ones. So the figure is
-	// right in kind and short in degree, which is a different thing from being wrong.
+	// 6 uu - not the ruled one-good-one-shunt pair but two unusable ones.
 	const double AftPitch = 2.0 * Diagonal * LegSlack;
 
 	// A BAY PER ANCHOR A VEHICLE SERVICES FROM, which is not the same as every anchor that is
@@ -371,33 +377,51 @@ void UEntityDefinition::BuildStandTemplate(
 	// ParkRun * sqrt(2), and the bend where it meets the lane wants Diagonal of that. Less and
 	// the serve leg folds at the park end.
 	//
-	// AT MOST WHAT THE AFT-MOST BAY LEAVES. The serve leg's 45 degree run meets the lane at
-	// ParkRowX + AftPitch - the park pose sits exactly AftPitch inboard of its lane, because
-	// the entry is ParkRun + AftPitch in and the park pose ParkRun back out - and that has to
-	// land Diagonal + Square short of the aft-most turn-in, or the two corners overlap and
-	// neither delivers its radius. Measured at ParkRun 500: 1480 uu of lane against the 1433
-	// those corners need, a fold of 179 degrees.
+	// AT MOST WHAT EVERY BAY LEAVES, AND THAT IS PER SLOT RATHER THAN PER STAND. The serve
+	// leg's 45 degree run meets the lane at ParkRowX + (Slot + 1) * AftPitch - the park pose
+	// sits exactly that far inboard of its lane, because the entry is ParkRun + (Slot+1) *
+	// AftPitch in and the park pose ParkRun back out - and it has to land Diagonal + Square
+	// short of THAT bay's turn-in, or the two corners overlap and neither delivers its radius.
+	//
+	// THE FIRST DRAFT CHECKED ONLY THE AFT-MOST BAY and that is not the binding one. A bay
+	// further down the ladder has a longer diagonal - (Slot+1) grows - so the FORWARD-most bay
+	// on a three-bay side can run out of lane before the aft-most does. Measured: at a pitch of
+	// 1000 the aft-most left 297 uu of headroom and the forward-most left 197, and it was the
+	// forward-most leg that folded at 179 degrees while the check reported the band as legal.
 	//
 	// THE MIDPOINT OF THE BAND, so neither end is the one that fails first.
-	double AftMostService = TNumericLimits<double>::Max();
-	for (const FEntityAnchor* Anchor : Serviced)
+	const double ParkRunFloor = LegSlack * Diagonal / UE_DOUBLE_SQRT_2;
+
+	double ParkRunCeiling = TNumericLimits<double>::Max();
+	const FEntityAnchor* Binding = nullptr;
 	{
-		AftMostService = FMath::Min(AftMostService, Anchor->LocalPosition.X);
+		int32 PortAt = 0;
+		int32 StarboardAt = 0;
+		for (const FEntityAnchor* Anchor : Serviced)
+		{
+			const int32 At = Anchor->LocalPosition.Y >= 0.0 ? StarboardAt++ : PortAt++;
+			const double Leaves = (Anchor->LocalPosition.X - Diagonal - Square)
+				- BackX - (At + 1) * AftPitch;
+			if (Leaves < ParkRunCeiling)
+			{
+				ParkRunCeiling = Leaves;
+				Binding = Anchor;
+			}
+		}
 	}
 
-	const double ParkRunFloor = LegSlack * Diagonal / UE_DOUBLE_SQRT_2;
-	const double ParkRunCeiling =
-		(AftMostService - Diagonal - Square) - BackX - AftPitch;
 	if (ParkRunCeiling < ParkRunFloor)
 	{
 		// NOT SILENTLY WRONG. The layout is still laid - a shape somebody has to fix is more
-		// use than no shape - but the aft-most bay is too close to the parking row for its
-		// shift to finish, and the drivability test will report the fold with its figure.
+		// use than no shape - but that bay is too close to the parking row for its shift to
+		// finish, and the drivability test will report the fold with its figure.
 		UE_LOG(LogAirside, Warning,
 			TEXT("Stand template '%s': the parking row has no legal run - its own corner wants "
-			     "at least %.0f uu and the aft-most service at %.0f leaves at most %.0f. The "
-			     "serve leg to that bay will fold."),
-			*Letter, ParkRunFloor, AftMostService, ParkRunCeiling);
+			     "at least %.0f uu and '%s' at %.0f leaves at most %.0f. That bay's serve leg "
+			     "will fold."),
+			*Letter, ParkRunFloor,
+			Binding != nullptr ? *Binding->Id.ToString() : TEXT("?"),
+			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ParkRunCeiling);
 	}
 	const double ParkRun =
 		FMath::Max(ParkRunFloor, 0.5 * (ParkRunFloor + ParkRunCeiling));
