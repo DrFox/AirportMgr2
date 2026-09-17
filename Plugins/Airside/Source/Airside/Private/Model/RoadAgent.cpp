@@ -427,9 +427,8 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 					if (Reverse.Start(Span, Airframe, ReverseSpeed))
 					{
 						// WHERE THE TAXI PICKS UP, read before the phase changes because
-						// Follower.Plan is what it is read from and the follower is restarted
-						// on that same plan when the manoeuvre ends.
-						ResumeTravelled = Follower.Plan.Steps[To].EndDistance;
+						// Follower.Plan is what it is read from.
+						ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
 						Phase = EAgentPhase::Reversing;
 
 						// ZEROED for the reason the Parked branch zeroes it: DescribeMotion
@@ -558,7 +557,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 			return true;
 		}
 
-		// BACKED OUT: pick the taxi up where the span ended, on the SAME plan it was cut from.
+		// BACKED OUT: pick the taxi up on what is LEFT of the route.
+		//
+		// THE REMAINDER IS CUT, not seeked to. FRouteFollower::Start takes an InitialSpeed and
+		// no Travelled - it always starts a plan at its beginning - so resuming means handing
+		// it a plan that begins where the vehicle is. Passing a distance in that slot is what
+		// put the truck back at the service point driving the reverse arm forwards.
 		//
 		// THE HEADING CARRIES ACROSS UNCHANGED, which is the whole point of the four-leg cycle.
 		// The reverse leg ends with the body already facing the way the depart leg leaves, so
@@ -570,9 +574,46 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// A COPY OF THE PLAN, because Follower.Start assigns to Follower.Plan and passing a
 		// member into a function that overwrites it is how a self-assignment bug looks.
 		const FRoutePlan Continue = Follower.Plan;
+		const FRoutePlan Remainder = Continue.Steps.IsValidIndex(ResumeStep)
+			? RouteSearch::Section(Continue, ResumeStep, Continue.Steps.Num() - 1)
+			: FRoutePlan();
+		ResumeStep = INDEX_NONE;
+
+		if (!Remainder.IsValid())
+		{
+			// THE REVERSE WAS THE LAST THING THE ROUTE DID. Nothing left to drive, so this is
+			// the same arrival the follower reports at the end of a taxi - taken here because
+			// the follower never ran on this stretch and so will never report it itself.
+			Phase = EAgentPhase::Parked;
+			OutEvent = EAgentEvent::Parked;
+			ShutdownCountdown = ShutdownPause;
+			Follower.Speed = 0.0;
+			OutMotion = LastMotion;
+			UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; nothing further to drive."));
+			return true;
+		}
+
 		Phase = EAgentPhase::Taxiing;
-		Follower.Start(Continue, Airframe, ResumeTravelled, LastMotion.Heading);
-		UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; driving on."));
+		Follower.Start(Remainder, Airframe, 0.0, LastMotion.Heading);
+
+		// AND ONE WHEELBASE IN, because the two phases measure DIFFERENT AXLES along their
+		// polyline and this is where that bites. FReverseRun tracks the FIXED axle - it is what
+		// a reversing body pivots about, which is the whole reason the struct exists - and
+		// FRouteFollower tracks the STEERED one. So at the handover the fixed axle is at the
+		// span's end and the steered axle is already a wheelbase along what comes next; a
+		// follower started at zero puts it back at the end instead, and the body snaps forward.
+		// Measured at 495 uu on a 494 uu wheelbase, which is how the convention was found.
+		//
+		// SET AFTER Start RATHER THAN PASSED IN, because Start's third parameter is InitialSpeed
+		// and it has no Travelled - the same fact that put the truck back at the service point
+		// an hour ago. Travelled is a cursor Start zeroes and nothing else in Start reads, so
+		// moving it afterwards is the whole of the correction.
+		//
+		// CLAMPED, so a remainder shorter than the vehicle cannot seek past its own end.
+		Follower.Travelled = FMath::Min(Airframe.Wheelbase(), Remainder.Length);
+
+		UE_LOG(LogAirsideTraffic, Log, TEXT("Backed out; driving on (%.0f uu left)."),
+			Remainder.Length);
 
 		// AND DRIVE THIS SAME FRAME rather than returning, exactly as the push's handover does:
 		// the reverse declined this frame without moving, so the frame's dt is the follower's,

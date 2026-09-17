@@ -1324,9 +1324,25 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	EAgentEvent Event = EAgentEvent::None;
 	Agent.Advance(0.0, Motion, Event);
 
+	// WHERE ARMING PUT THE BODY, against the node the route starts from. The loop below cannot
+	// see this: it takes its first sample AFTER the zero-second pose, by which time the
+	// manoeuvre is already armed, so an offset introduced by the handover ITSELF is invisible
+	// to it. Reported rather than asserted, because the two phases measure different axles by
+	// design - FReverseRun the fixed one, FRouteFollower the steered - and which of them a
+	// service pose refers to is a contract this codebase has not written down yet.
+	const FGuidelineNode* HydrantNode = Net->GetGuidelineNode(Hydrant);
+	AddInfo(FString::Printf(
+		TEXT("arming the reverse moved the body %.1f uu from the service point (wheelbase %.0f)"),
+		HydrantNode != nullptr
+			? FVector2D::Distance(HydrantNode->Position, Motion.Position) : 0.0,
+		Truck.Wheelbase()));
+
 	double Previous = Motion.Heading;
+	FVector2D Was = Motion.Position;
 	double Sharpest = 0.0;
 	double SharpestAt = 0.0;
+	double Furthest = 0.0;
+	double FurthestAt = 0.0;
 	bool bEverReversed = false;
 	int32 Frames = 0;
 
@@ -1344,12 +1360,28 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 			SharpestAt = Frames / 60.0;
 		}
 		Previous = Motion.Heading;
+
+		// AND HOW FAR THE BODY MOVED, which is the half this test did NOT measure the first
+		// time and is exactly what got through. A handover that puts the vehicle back where it
+		// started changes no heading sharply and drives on smoothly afterwards, so a
+		// heading-only test reads it as a clean journey: reported from PIE as a truck that
+		// "reversed, then reset back to the service point facing away from it, drove to the end
+		// of the reverse arm forwards and crabbed around".
+		const double Moved = FVector2D::Distance(Was, Motion.Position);
+		if (Moved > Furthest)
+		{
+			Furthest = Moved;
+			FurthestAt = Frames / 60.0;
+		}
+		Was = Motion.Position;
 	}
 
 	AddInfo(FString::Printf(
 		TEXT("drove the way out in %d frame(s); reversed: %s; sharpest heading change in one "
-		     "frame %.1f deg at t=%.1f s"),
-		Frames, bEverReversed ? TEXT("yes") : TEXT("NO"), Sharpest, SharpestAt));
+		     "frame %.1f deg at t=%.1f s; furthest the body moved in one frame %.1f uu at "
+		     "t=%.1f s"),
+		Frames, bEverReversed ? TEXT("yes") : TEXT("NO"), Sharpest, SharpestAt,
+		Furthest, FurthestAt));
 
 	TestTrue(TEXT("the agent enters EAgentPhase::Reversing on the way out"), bEverReversed);
 
@@ -1360,6 +1392,15 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 		*FString::Printf(TEXT("the body never spins on the spot (sharpest %.1f deg in one "
 		                      "frame, at t=%.1f s)"), Sharpest, SharpestAt),
 		Sharpest < 20.0);
+
+	// AND NEVER TELEPORTS. The taxi cap is 1000 uu/s, so a sixtieth of a second moves at most
+	// 17 uu; 60 leaves room for the substep ceiling without leaving room for a handover that
+	// drops the vehicle somewhere else. The two failures this pins were a wheelbase (494 uu)
+	// and the whole reverse span (2529 uu).
+	TestTrue(
+		*FString::Printf(TEXT("the body never jumps (furthest %.1f uu in one frame, at "
+		                      "t=%.1f s)"), Furthest, FurthestAt),
+		Furthest < 60.0);
 
 	return true;
 }

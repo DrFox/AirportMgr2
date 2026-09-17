@@ -242,13 +242,19 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() double ReverseSpeed = 0.0;
 
 	/**
-	 * Distance along Follower.Plan at which the taxi resumes once the current reverse span ends.
+	 * The step of Follower.Plan the taxi resumes at once the current reverse span ends, and
+	 * INDEX_NONE when the reverse is the last thing the route does.
 	 *
-	 * A DISTANCE INTO THE SAME PLAN, not a second plan. FRouteFollower::Start takes a Travelled,
-	 * so the vehicle picks up exactly where the reverse left it on the route it was already
-	 * driving - and the two cannot disagree about what that route is.
+	 * A STEP, NOT A DISTANCE, and that correction cost a PIE session. FRouteFollower::Start's
+	 * third parameter is InitialSpeed - it has no Travelled, and always begins a plan at its
+	 * beginning. Handing it a resume distance there restarted the route at the SERVICE POINT
+	 * with an absurd speed, so the truck backed out correctly, snapped back to the aeroplane
+	 * facing away from it, and drove the reverse arm forwards. Reported as exactly that.
+	 *
+	 * So the remainder is CUT instead, with RouteSearch::Section, and the follower is given a
+	 * plan whose beginning is where it should start.
 	 */
-	UPROPERTY() double ResumeTravelled = 0.0;
+	UPROPERTY() int32 ResumeStep = INDEX_NONE;
 
 	/**
 	 * RPM at or above which a powerback may begin. Copied from FTrafficRules at StartPushback
