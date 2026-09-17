@@ -58,6 +58,16 @@ namespace PlotYard
 	 */
 	inline constexpr double HeadingJitterRadians = 0.21;
 
+	/**
+	 * Depths tried when standing a module against the back fence, deepest first.
+	 *
+	 * A SCAN RATHER THAN A BINARY SEARCH, because "does it fit at this depth" is not
+	 * monotonic: the four-point gesture can draw a concave quad, where a module may fit deep,
+	 * foul a notch mid-way, and fit again nearer the road. A bisection would happily land in
+	 * the notch. Thirty-two containment tests on one module, once per rebuild, is nothing.
+	 */
+	inline constexpr int32 BackFenceProbes = 32;
+
 	struct FFootprint
 	{
 		/** Along the module's own +X, which faces away from the road. */

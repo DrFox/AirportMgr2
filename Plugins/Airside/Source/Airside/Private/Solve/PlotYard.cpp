@@ -105,6 +105,8 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	const FVector2D Inward = InwardOf(Outline, FrontageA, FrontageB);
 	const double InwardBearing = RoadGeom::Bearing(Inward);
 
+	TArray<FVector2D> Corners;
+
 	// HOW DEEP THE PLOT RUNS on the gate's own ray, so a back-standing module can be pushed
 	// as far from the road as the outline allows.
 	double Deepest = 0.0;
@@ -128,20 +130,56 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 		// until 2026-09-17, which put the shed squarely in the entrance - a depot whose only
 		// way in is blocked by the building you drive out of.
 		//
-		// Clamped at HalfLength so a plot too shallow to hold it still gets it wholly inside
-		// the fence rather than hanging out across the road.
-		const double Depth = FMath::Max(Deepest - HalfLength, HalfLength);
-
+		// AS DEEP AS ITS WHOLE FOOTPRINT FITS, not as deep as the plot's deepest POINT. The
+		// first version measured the deepest vertex and put the centre a half-length in front
+		// of it, which is right only when the back edge is square to the gate ray. The
+		// four-point gesture makes slanted backs the ordinary case, and PIE on 2026-09-17
+		// showed the shed "quite often sticks out of the back boundary of the plot" - three
+		// corners through the fence on the wedge its test now uses.
+		//
+		// EVERY CORNER TESTED, the same question FitBays and the sampler ask, and inset by the
+		// same CornerInsetUu for the same reason: a corner exactly on the boundary answers a
+		// containment test by floating-point coin flip.
 		FStand& Stand = Yard.Stands[Index];
 		Stand.Heading = InwardBearing;
-		Stand.Centre = Gate + Inward * Depth;
-		Stand.bPlaced = true;
+
+		for (int32 Probe = 0; Probe < BackFenceProbes; ++Probe)
+		{
+			const double Alpha = static_cast<double>(Probe) / (BackFenceProbes - 1);
+			const double Depth = FMath::Lerp(Deepest - HalfLength, HalfLength, Alpha);
+			if (Depth < HalfLength)
+			{
+				continue;
+			}
+
+			Stand.Centre = Gate + Inward * Depth;
+			StandCorners(Stand, Footprints[Index], Corners);
+
+			bool bInside = true;
+			for (const FVector2D& Corner : Corners)
+			{
+				if (!RoadGeom::PointInPolygon(Outline, Corner))
+				{
+					bInside = false;
+					break;
+				}
+			}
+			if (bInside)
+			{
+				Stand.bPlaced = true;
+				break;
+			}
+		}
+
+		// NOT PLACED IS A REAL ANSWER. A plot with no room for the shed anywhere on the gate's
+		// ray reports it dropped, exactly as a sampled module would - the readout already says
+		// "Modules 2 of 3" and the depot is warned as inert. Forcing it in would put a
+		// building through the fence, which is what this whole change is fixing.
 	}
 
 	// PLACED FOOTPRINTS GROW AS WE GO, and a candidate is tested against every one already
 	// standing - including the shed, which took its ground first for exactly this reason.
 	TArray<TArray<FVector2D>> Taken;
-	TArray<FVector2D> Corners;
 	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
 	{
 		if (Yard.Stands[Index].bPlaced)

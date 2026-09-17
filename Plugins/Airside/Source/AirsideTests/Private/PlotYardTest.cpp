@@ -150,6 +150,47 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 			Shallow.Stands[0].Centre.Y >= 400.0 - 1.0);
 	}
 
+	// AND A SLANTED BACK FENCE KEEPS IT IN, which a rectangle cannot test: with the back edge
+	// square to the gate ray the deepest POINT and the boundary above the shed are the same
+	// depth, so a placement that only checks its centre still looks right. The four-point
+	// gesture makes slanted backs the ordinary case, and PIE on 2026-09-17 showed the shed
+	// "quite often sticks out of the back boundary of the plot".
+	//
+	// This quad runs 24 m deep at its left corner and 10 m at its right; the gate sits in the
+	// middle, so the deepest POINT is nowhere near the boundary above the shed.
+	const TArray<FVector2D> Wedge = {
+		FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0),
+		FVector2D(2400.0, 1000.0), FVector2D(0.0, 2400.0) };
+
+	const PlotYard::FYard Slanted = PlotYard::LayOut(
+		Wedge, FrontageA, FrontageB, Gate, Footprints, /*Seed=*/1234, Shed());
+	if (!TestEqual(TEXT("one stand on the wedge"), Slanted.Stands.Num(), 1)) { return false; }
+
+	// PLACED, ASSERTED - not skipped. The wedge is 17 m deep above the gate and the shed is
+	// 8 m, so there is room; guarding the corner checks behind bPlaced would let this pass
+	// on a solver that simply gave up, which is the vacuous shape it is meant to catch.
+	if (!TestTrue(TEXT("the shed stands on the wedge"), Slanted.Stands[0].bPlaced))
+	{
+		return false;
+	}
+
+	TArray<FVector2D> Corners;
+	PlotYard::StandCorners(Slanted.Stands[0], Shed(), Corners);
+	for (const FVector2D& Corner : Corners)
+	{
+		// EVERY CORNER, not the centre. A centre-only placement is exactly what put the shed
+		// through the fence.
+		TestTrue(*FString::Printf(
+			TEXT("shed corner (%.0f, %.0f) is inside the wedge"), Corner.X, Corner.Y),
+			RoadGeom::PointInPolygon(Wedge, Corner));
+	}
+
+	// AND IT IS STILL AT THE BACK, not shoved to the front to make the corners fit. The
+	// boundary above the gate is 17 m out and the shed is 8 m long, so a centre nearer the
+	// road than 8 m means the scan gave up rather than found the deepest fit.
+	TestTrue(*FString::Printf(TEXT("and still deep in the plot, got y %.0f"),
+		Slanted.Stands[0].Centre.Y), Slanted.Stands[0].Centre.Y > 800.0);
+
 	return true;
 }
 
