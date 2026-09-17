@@ -11,17 +11,74 @@ namespace IcaoCode
 			double MaxWingspan;
 			double RunwayWidth;
 			double StandTurnRadius;
+
+			/**
+			 * Wingtip clearance on a stand, uu - the gap ICAO wants between a parked
+			 * aeroplane's wingtip and anything beside it.
+			 *
+			 * THE STAND'S WIDTH IS NOT A COLUMN, because it is this plus the span band twice
+			 * over and a stored width would be a third figure that has to agree with two
+			 * others. See StandWidthForLetter, and this file's header for the three call
+			 * sites that once typed the same table separately.
+			 */
+			double WingtipClearance;
+
+			/**
+			 * How deep a stand of this letter is, uu - nose to the back of its GSE road.
+			 *
+			 * AUTHORED, not derived, and it is the only figure here that is. Width follows
+			 * from span and clearance; depth follows from aircraft LENGTH and the room an
+			 * equipment area and a service road need, and no clean rule produces it. Standard
+			 * aerodrome design values, as the header says of the rest - the first thing to
+			 * check if a real layout looks wrong.
+			 */
+			double StandDepth;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0 },
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0 },
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0 },
+			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0 },
+			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0 },
+			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0 },
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0 },
 		};
+
+		/** The stand width a row implies, uu. The ONE place the derivation is written. */
+		static double WidthOf(const FRow& Row)
+		{
+			return Row.MaxWingspan + 2.0 * Row.WingtipClearance;
+		}
+
+		/**
+		 * The row for a letter, or null. Case-insensitive, as the letter arrives from a
+		 * data asset a human typed.
+		 */
+		static const FRow* FindRow(const FString& Letter)
+		{
+			const FString Upper = Letter.ToUpper();
+			for (const FRow& Row : Rows)
+			{
+				if (Upper == Row.Letter)
+				{
+					return &Row;
+				}
+			}
+			return nullptr;
+		}
+
+		/**
+		 * Code C's row, the fallback every letter-keyed lookup here shares. Looked up by
+		 * letter rather than indexed, so inserting a row cannot silently move the fallback
+		 * to a neighbouring code.
+		 */
+		static const FRow& CodeC()
+		{
+			const FRow* Row = FindRow(TEXT("C"));
+			check(Row != nullptr);
+			return *Row;
+		}
 	}
 
 	FString LetterForWingspan(double WingspanUu)
@@ -60,16 +117,50 @@ namespace IcaoCode
 
 	double RadiusForLetter(const FString& Letter)
 	{
-		const FString Upper = Letter.ToUpper();
-		for (const FRow& Row : Rows)
+		if (const FRow* Row = FindRow(Letter))
 		{
-			if (Upper == Row.Letter)
-			{
-				return Row.StandTurnRadius;
-			}
+			return Row->StandTurnRadius;
 		}
 		// No code, or one nobody recognises. Code C is the commonest stand in the world, and
 		// erring to Code F instead would put a 60 m curve on a light-aircraft apron.
-		return 2500.0;
+		return CodeC().StandTurnRadius;
+	}
+
+	double StandWidthForLetter(const FString& Letter)
+	{
+		if (const FRow* Row = FindRow(Letter))
+		{
+			return WidthOf(*Row);
+		}
+		// Same fallback and the same reason as RadiusForLetter: an unknown letter gets the
+		// commonest stand rather than the biggest, which would swallow the apron beside it.
+		return WidthOf(CodeC());
+	}
+
+	double StandDepthForLetter(const FString& Letter)
+	{
+		if (const FRow* Row = FindRow(Letter))
+		{
+			return Row->StandDepth;
+		}
+		return CodeC().StandDepth;
+	}
+
+	FString LetterForStandSize(double WidthUu, double DepthUu)
+	{
+		// LARGEST THAT FITS, walked backwards, and it must be a search rather than the first
+		// row that fails: the rows are ordered by span, and a stand can be D-wide while only
+		// B-deep, so the letters that fit are not a prefix of the table.
+		for (int32 Index = UE_ARRAY_COUNT(Rows) - 1; Index >= 0; --Index)
+		{
+			const FRow& Row = Rows[Index];
+			if (WidthUu >= WidthOf(Row) && DepthUu >= Row.StandDepth)
+			{
+				return Row.Letter;
+			}
+		}
+		// Smaller than Code A in one dimension or both. Empty, not "A": see the header for
+		// why a letter here would admit an aircraft to a space it does not fit.
+		return FString();
 	}
 }

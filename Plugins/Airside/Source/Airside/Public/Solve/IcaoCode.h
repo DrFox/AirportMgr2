@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 
 /**
- * ICAO Annex 14 code letters A-F, and the four figures each one sets, kept as ONE table.
+ * ICAO Annex 14 code letters A-F, and the figures each one sets, kept as ONE table.
  *
  * Three call sites used to type this table separately, in three different orderings -
  * RunwayAdmission (width -> max wingspan, D/E collapsed to one row), InspectFacts
@@ -40,4 +40,36 @@ namespace IcaoCode
 	 * light-aircraft apron.
 	 */
 	AIRSIDE_API double RadiusForLetter(const FString& Letter);
+
+	/**
+	 * How wide a stand of this letter is, uu: its span band plus twice the letter's wingtip
+	 * clearance. DERIVED, never stored - a stored width would be a third figure obliged to
+	 * agree with two others, and this table exists because three such figures once drifted.
+	 *
+	 * Letter matched case-insensitively, unknown letters resolving to C, as RadiusForLetter
+	 * does and for the same reason.
+	 */
+	AIRSIDE_API double StandWidthForLetter(const FString& Letter);
+
+	/**
+	 * How deep a stand of this letter is, uu - nose to the back of its GSE road. AUTHORED,
+	 * and the only figure here that is; see the row's comment for why no rule produces it.
+	 *
+	 * Letter matched as StandWidthForLetter matches it.
+	 */
+	AIRSIDE_API double StandDepthForLetter(const FString& Letter);
+
+	/**
+	 * The letter a stand of this size is, or empty when it is smaller than any stand.
+	 * The mirror of LetterForWingspan: that one asks what an AIRCRAFT is, this asks what a
+	 * piece of GROUND is, and together they decide which aircraft a stand admits.
+	 *
+	 * BOTH DIMENSIONS, NEVER ONE. A 67 x 30 m stand is D-wide and nothing bigger than a
+	 * King Air fits in 30 m of depth, so it is a Code B. The answer is the largest letter
+	 * whose width AND depth both fit, which is not the largest whose width fits.
+	 *
+	 * Empty is a real answer, not a failure: a stand smaller than Code A is refused at
+	 * placement, and returning "A" would admit an aircraft to a space it does not fit.
+	 */
+	AIRSIDE_API FString LetterForStandSize(double WidthUu, double DepthUu);
 }

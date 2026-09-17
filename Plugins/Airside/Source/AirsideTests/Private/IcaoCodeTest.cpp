@@ -56,4 +56,64 @@ bool FIcaoCodeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FStandWidthIsDerivedFromClearanceTest,
+	"Airside.Solve.StandWidthIsDerivedFromClearance",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
+{
+	// THE DERIVATION, NOT ITS OUTPUT. Asserting 4500 for Code C would pass just as well against
+	// a typed 4500, which is the thing this change exists to stop. A stand's width IS the span
+	// band plus twice the wingtip clearance - every letter, to the centimetre - so that is what
+	// is asserted, and the figures move together or the test fails.
+	struct FCase { const TCHAR* Letter; double Span; double Clearance; };
+	const FCase Cases[] = {
+		{ TEXT("A"), 1500.0, 300.0 },
+		{ TEXT("B"), 2400.0, 300.0 },
+		{ TEXT("C"), 3600.0, 450.0 },
+		{ TEXT("D"), 5200.0, 750.0 },
+		{ TEXT("E"), 6500.0, 750.0 },
+		{ TEXT("F"), 8000.0, 750.0 },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		TestEqual(
+			*FString::Printf(TEXT("stand %s is its span band plus twice its clearance"), Case.Letter),
+			IcaoCode::StandWidthForLetter(Case.Letter),
+			Case.Span + 2.0 * Case.Clearance,
+			0.5);
+	}
+
+	// AND THE MIRROR. A stand's SIZE decides which airframes may use it, which is the mechanic:
+	// a player who drags a bigger stand gets bigger aircraft as a consequence.
+	//
+	// BOTH DIMENSIONS, NEVER ONE. Width alone would call a 67 x 30 m stand Code D, when nothing
+	// bigger than a King Air fits in 30 m of depth. The letter is the largest whose width AND
+	// depth both fit, and the shallow case below is the one that discriminates.
+	TestEqual(TEXT("45 x 55 m is a Code C stand"),
+		IcaoCode::LetterForStandSize(4500.0, 5500.0), FString(TEXT("C")));
+	TestEqual(TEXT("60 x 55 m is still Code C - D needs 67 m of width"),
+		IcaoCode::LetterForStandSize(6000.0, 5500.0), FString(TEXT("C")));
+	TestEqual(TEXT("67 x 70 m is genuinely Code D"),
+		IcaoCode::LetterForStandSize(6700.0, 7000.0), FString(TEXT("D")));
+	TestEqual(TEXT("67 x 30 m is a Code B - D-wide but far too shallow"),
+		IcaoCode::LetterForStandSize(6700.0, 3000.0), FString(TEXT("B")));
+	TestEqual(TEXT("45 x 90 m is a Code C - deep, but the span binds"),
+		IcaoCode::LetterForStandSize(4500.0, 9000.0), FString(TEXT("C")));
+
+	// Below the smallest stand there is no letter to give, and saying "A" would admit a Cessna
+	// to a space it does not fit. Empty means "no stand of any letter fits this", which is a
+	// real answer: such a stand is refused at placement.
+	TestTrue(TEXT("under the smallest stand, no letter"),
+		IcaoCode::LetterForStandSize(2000.0, 2000.0).IsEmpty());
+
+	// Depth is authored rather than derived, so it is asserted by value - with its provenance
+	// in the table, which is where a reader checks it against a real aerodrome.
+	TestEqual(TEXT("a Code C stand is 55 m deep"), IcaoCode::StandDepthForLetter(TEXT("C")), 5500.0, 0.5);
+
+	return true;
+}
+
 #endif
