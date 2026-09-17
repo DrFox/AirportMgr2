@@ -46,6 +46,14 @@ fill the plot only once the last corner is the only thing still moving.
   frontage is the edge that must TILE with the plot next door, which is the whole reason a
   quantum exists; the back corners are shared with nothing and snapping them would only
   refuse shapes the ground calls for.
+- **The back corners are free IN THE PLANE, not just in depth** (2026-09-17). They were first
+  built riding the frontage's own normal, which let the player set each corner's depth and
+  never its position along the road - so every plot came out a trapezoid with perpendicular
+  sides, and "a real quadrilateral" is what makes this a v1. One constraint survives: a
+  corner may not fall BEHIND the frontage, because the plot goes on the side of the road the
+  anchor chose and a corner across that line lays concrete on the carriageway. A cursor
+  dragged there slides onto the frontage line rather than being refused - refusing a drag
+  mid-gesture gives the player nothing to correct.
 - **4 m stops being the plot's unit.** `PlotFit::BayWidthUu` is 4 m and currently means two
   things - the width of a shed AND the step of a plot. They separate: a shed is 4 m because a
   shed is 4 m, and a plot is 15 m minimum because a yard narrower than that is not a yard.
@@ -133,15 +141,21 @@ Enter key stay exactly as they are - the panel is a second way to reach the one 
 
 ## 7. Refusals and warnings
 
-- ~~A self-crossing quad is refused at the click that would make it.~~ **Corrected
-  2026-09-16 during implementation: a self-crossing quad cannot be drawn.** Both back corners
-  are placed along the frontage's own normal at its two ends, so every shape the gesture can
-  make is a trapezoid with perpendicular sides. The test written for this refusal pinned a
-  legal plot instead, which is how the constraint was noticed. `RoadGeom::IsSimplePolygon`
-  stays on the click - not for this gesture but for the ear-clipper downstream, which
-  produces overlapping faces rather than an error when fed a crossed polygon, and for the day
-  a corner stops being normal-constrained. `Airside.Tool.PlotQuadIsAlwaysSimple` pins the
-  invariant that makes the refusal unreachable, rather than a refusal that cannot fire.
+- **A self-crossing quad is refused at the click that would make it**, not at commit, so the
+  player is never left holding a shape that can only be escaped by cancelling.
+
+  This entry has been written three times and the history is the point. As specified, the
+  refusal was assumed reachable. On 2026-09-16 the test written for it pinned a legal plot
+  instead: with both back corners riding the frontage's normal, no cursor position could fold
+  the shape, so the refusal was unreachable and `Airside.Tool.PlotQuadIsAlwaysSimple` pinned
+  that invariant instead. Freeing the corners to move sideways on 2026-09-17 brought the fold
+  back - drag the last corner past the one before it and edge 3->0 crosses edge 1->2 - so the
+  refusal is load-bearing again and `Airside.Tool.PlotRefusesACrossedQuad` is back with it.
+  That test now ASSERTS the shape it builds is really crossed before checking the refusal,
+  which is the step whose absence let its first version pass while checking nothing.
+
+  `RoadGeom::IsSimplePolygon` protects the ear-clipper downstream, which produces overlapping
+  faces rather than an error when fed a crossed polygon.
 - A frontage under 15 m cannot be reached: the quantum's floor IS 15 m, so there is nothing
   to refuse.
 - A plot too shallow for any module keeps the existing behaviour - it builds, the yard drops

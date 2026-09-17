@@ -192,36 +192,42 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 		return;
 	}
 
-	// Corners 2 and 3: the back pair, free of any quantum. Depth is measured along the inward
-	// normal FROM THE ANCHOR, so dragging depth does not slide a corner sideways along road.
-	auto DepthAtCursor = [&]()
+	// Corners 2 and 3: the back pair, FREE IN THE PLANE. They rode the frontage's own normal
+	// until 2026-09-17, which made every plot a trapezoid with perpendicular sides - the
+	// player could set each corner's depth and never its position along the road.
+	//
+	// ONE CONSTRAINT SURVIVES: a corner may not fall BEHIND the frontage. The plot goes on
+	// the side of the road the player chose at the anchor, and a corner across that line
+	// would lay concrete on the carriageway. A cursor dragged back there slides onto the
+	// frontage line rather than being refused, because refusing a drag mid-gesture gives the
+	// player nothing to correct.
+	auto InFront = [&](const FVector2D& Point)
 	{
-		return FMath::Max(FVector2D::DotProduct(Context.Cursor - Corners[0], Inward), 0.0);
-	};
-	auto DepthOf = [&](const FVector2D& Corner)
-	{
-		return FVector2D::DotProduct(Corner - Corners[0], Inward);
+		const double Depth = FVector2D::DotProduct(Point - Corners[0], Inward);
+		return Depth >= 0.0 ? Point : Point - Inward * Depth;
 	};
 
-	const double DepthFar = Pinned == 2 ? DepthAtCursor() : DepthOf(Corners[2]);
-	OutQuad.Add(Far + Inward * DepthFar);
+	const FVector2D Back = Pinned == 2 ? InFront(Context.Cursor) : Corners[2];
+	OutQuad.Add(Back);
 
-	// UNTIL IT IS REACHED, THE NEAR CORNER MIRRORS THE FAR ONE, so two pinned corners read as
-	// a rectangle the player then adjusts rather than as an open shape trailing off.
+	// UNTIL IT IS REACHED, THE NEAR CORNER COMPLETES A PARALLELOGRAM. Two pinned corners then
+	// read as a finished shape the player adjusts, rather than one trailing off - and a
+	// parallelogram is the honest completion now that the corners are free, where mirroring
+	// the DEPTH would quietly snap the plot square and hide the freedom just gained.
 	//
 	// IT MUST NOT READ Corners[3] HERE: that entry is stale until the fourth click writes it,
 	// and drawing a stale corner is how a ghost shows the PREVIOUS gesture's geometry - the
 	// exact bug the old Depth member caused, which took a deliberate re-break to prove.
-	double DepthNear = DepthFar;
+	FVector2D Near = Corners[0] + (Back - Far);
 	if (Pinned == 3)
 	{
-		DepthNear = DepthAtCursor();
+		Near = InFront(Context.Cursor);
 	}
 	else if (Pinned >= 4)
 	{
-		DepthNear = DepthOf(Corners[3]);
+		Near = Corners[3];
 	}
-	OutQuad.Add(Corners[0] + Inward * DepthNear);
+	OutQuad.Add(Near);
 }
 
 PlotYard::FYard FPlotPlaceTool::YardFor(TArrayView<const FVector2D> Outline) const
@@ -343,18 +349,18 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 			return;
 		}
 
-		// UNREACHABLE TODAY, AND KEPT ANYWAY - which is worth stating rather than leaving for
-		// someone to discover by writing the test that cannot fail.
+		// REFUSED AT THE CLICK THAT WOULD MAKE IT, not at commit, so the player is never left
+		// holding a shape that cannot be built and can only escape by cancelling.
 		//
-		// Both back corners are placed along the frontage's own normal, at its two ends, so
-		// the quad is always a trapezoid with perpendicular sides and CANNOT fold through
-		// itself whatever the cursor does. A test was written for this refusal on 2026-09-16
-		// and pinned a legal shape instead, which is how the constraint was noticed.
+		// LOAD-BEARING AGAIN as of 2026-09-17. While the back corners rode the frontage's
+		// normal the quad could not fold and this could not fire - it was documented as
+		// unreachable, and a test written for it pinned a legal plot instead. Freeing the
+		// corners to move sideways brought the fold back: drag the last corner across the
+		// one before it and edge 3->0 crosses edge 1->2.
 		//
-		// The guard stays because the thing it protects is not this function: it is the
-		// ear-clipper downstream, which produces overlapping faces rather than an error when
-		// fed a crossed polygon. The day a corner stops being normal-constrained - a dragged
-		// edge, a rotated plot - this is already here, on the click rather than at commit.
+		// What it protects is the ear-clipper downstream, which produces overlapping faces
+		// rather than an error when fed a crossed polygon. PlaceEntityInPlot asks the same
+		// question and keeps asking it: this is earlier, not instead.
 		if (!RoadGeom::IsSimplePolygon(Shown))
 		{
 			return;

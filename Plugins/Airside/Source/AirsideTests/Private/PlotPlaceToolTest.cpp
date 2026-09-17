@@ -301,10 +301,27 @@ bool FPlotBackCornersAreFreeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("while the frontage in the same quad snapped to 20 m"),
 		FVector2D::Distance(Quad[0], Quad[1]), 2000.0);
 
-	// AND THE NEAR CORNER MIRRORS THE FAR ONE until the player reaches it, so two pinned
-	// corners read as a rectangle rather than an open shape trailing off.
-	TestTrue(TEXT("the unreached corner mirrors the one being dragged"),
-		FMath::IsNearlyEqual(Quad[3].Y, Quad[2].Y, 1.0));
+	// AND THE UNREACHED CORNER COMPLETES A PARALLELOGRAM, so two pinned corners read as a
+	// finished shape the player adjusts rather than one trailing off.
+	TestTrue(TEXT("the unreached corner completes a parallelogram"),
+		(Quad[3] - Quad[0]).Equals(Quad[2] - Quad[1], 1.0));
+
+	// SIDEWAYS, NOT JUST DEEPER. The back corners rode the frontage's normal until
+	// 2026-09-17, which made every plot a trapezoid with perpendicular sides; a corner
+	// dragged past the frontage's far end must actually go there.
+	TArray<FVector2D> Leaning;
+	Tool.Quad(PlotAt(Actor, FVector2D(3400.0, 1737.0)), Leaning);
+	if (!TestEqual(TEXT("still four corners"), Leaning.Num(), 4)) { return false; }
+	TestTrue(*FString::Printf(TEXT("a back corner goes where the cursor is, got x %.0f"),
+		Leaning[2].X), FMath::IsNearlyEqual(Leaning[2].X, 3400.0, 1.0));
+
+	// BUT NEVER BEHIND THE FRONTAGE. The plot goes on the side of the road the anchor chose;
+	// a corner across that line would lay concrete on the carriageway.
+	TArray<FVector2D> Behind;
+	Tool.Quad(PlotAt(Actor, FVector2D(1000.0, -500.0)), Behind);
+	if (!TestEqual(TEXT("four corners again"), Behind.Num(), 4)) { return false; }
+	TestTrue(*FString::Printf(TEXT("a corner dragged onto the road slides to the frontage, "
+		"got y %.0f"), Behind[2].Y), Behind[2].Y >= Behind[0].Y - 1.0);
 
 	return true;
 }
@@ -722,21 +739,19 @@ bool FPlotDrawsOnlyWhatIsPinnedTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE QUAD CANNOT FOLD, and that is a property worth pinning rather than a refusal.
+ * A FOLDED QUAD IS REFUSED AT THE CLICK THAT WOULD MAKE IT.
  *
- * Both back corners are placed along the frontage's own normal at its two ends, so every
- * shape the gesture can produce is a trapezoid with perpendicular sides. This began as
- * Airside.Tool.PlotRefusesACrossedQuad, asserting that a folding fourth click was rejected -
- * and it pinned a perfectly legal plot instead, because no cursor position can fold it. The
- * refusal in OnClick is kept for the ear-clipper downstream and is unreachable from here;
- * what IS testable is the invariant that makes it unreachable.
+ * This began life asserting the same thing on 2026-09-16, pinned a perfectly legal plot, and
+ * was replaced by an invariant - because while the back corners rode the frontage's normal
+ * no cursor position could fold the shape. Freeing them to move sideways on 2026-09-17
+ * brought the fold back, and the refusal with it.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotQuadIsAlwaysSimpleTest,
-	"Airside.Tool.PlotQuadIsAlwaysSimple",
+	FPlotRefusesACrossedQuadTest,
+	"Airside.Tool.PlotRefusesACrossedQuad",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FPlotQuadIsAlwaysSimpleTest::RunTest(const FString& Parameters)
+bool FPlotRefusesACrossedQuadTest::RunTest(const FString& Parameters)
 {
 	FAirsideTestWorld TestWorld;
 	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
@@ -747,32 +762,34 @@ bool FPlotQuadIsAlwaysSimpleTest::RunTest(const FString& Parameters)
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 	LayServiceRoad(Actor, 0.0);
 
-	// Cursor positions chosen to be hostile: far past the frontage's end, back behind the
-	// anchor, and hard up against the road on both sides.
-	const FVector2D Hostile[] = {
-		FVector2D(6000.0, 1800.0), FVector2D(-6000.0, 1800.0), FVector2D(0.0, 400.0),
-		FVector2D(2000.0, 310.0),  FVector2D(-3000.0, 5000.0), FVector2D(9000.0, 320.0) };
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
+	if (!TestEqual(TEXT("three corners are down"), Tool.PinnedCount(), 3)) { return false; }
 
-	for (const FVector2D& Where : Hostile)
+	// PAST THE CORNER BEFORE IT. The quad is (0,300) (2000,300) (2000,1800) and a last corner
+	// at (3000,1800) closes back across the edge running out to corner 2 - the shape folds
+	// through itself, and the ear-clipper downstream would make overlapping faces of it
+	// rather than refusing.
+	const FVector2D Folding(3000.0, 1800.0);
 	{
-		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
-		Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
-		Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 200.0)));
-		Tool.OnClick(PlotAt(Actor, FVector2D(2000.0, 1800.0)));
-
 		TArray<FVector2D> Shown;
-		Tool.Quad(PlotAt(Actor, Where), Shown);
-		if (!TestEqual(TEXT("four corners"), Shown.Num(), 4)) { return false; }
+		Tool.Quad(PlotAt(Actor, Folding), Shown);
+		if (!TestEqual(TEXT("four corners to judge"), Shown.Num(), 4)) { return false; }
 
-		TestTrue(*FString::Printf(TEXT("a last corner at (%.0f, %.0f) leaves a simple quad"),
-			Where.X, Where.Y), RoadGeom::IsSimplePolygon(Shown));
-
-		// AND IT PINS, which is the other half: a shape the gesture can draw is a shape the
-		// gesture accepts, or the player is stuck with a cursor that refuses everything.
-		Tool.OnClick(PlotAt(Actor, Where));
-		TestEqual(*FString::Printf(TEXT("and pins, from (%.0f, %.0f)"), Where.X, Where.Y),
-			Tool.PinnedCount(), 4);
+		// ASSERTED, not assumed: if this shape is simple then the test below proves nothing,
+		// which is exactly how its predecessor passed while checking the wrong thing.
+		TestFalse(TEXT("that really is a crossed quad"), RoadGeom::IsSimplePolygon(Shown));
 	}
+
+	Tool.OnClick(PlotAt(Actor, Folding));
+	TestEqual(TEXT("a crossed quad does not pin"), Tool.PinnedCount(), 3);
+
+	// AND A LEGAL LAST CORNER STILL PINS, or this would pass on a tool that refused
+	// everything - the shape a refusal test fails in.
+	Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1500.0)));
+	TestEqual(TEXT("but a legal one is accepted"), Tool.PinnedCount(), 4);
 
 	return true;
 }
