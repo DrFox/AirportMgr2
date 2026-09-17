@@ -199,14 +199,30 @@ The 16 commits of the lane design on `feature/lane-entrances` are superseded her
 measurements remain true and are worth keeping: the quadratic corner cost, the 2R floor for a
 180 degree turn, and the delivered-versus-requested distinction.
 
+## A small airframe on a large stand is fine
+
+**Ruled 2026-09-17.** One template per letter, laid out for the largest airframe that letter
+admits, and a smaller type simply parks in a stand bigger than it needs. In theory a Cessna 172
+could sit on a Code C. That is also what happens on real aprons when traffic does not match the
+apron's design, so it reads correctly rather than merely being tolerable.
+
+### Services placed BY AIRFRAME is deferred, not overlooked
+
+The better answer eventually is that a service position is derived from the aeroplane actually
+parked — its refuel panel, its hold doors — rather than from paint laid out for the letter's
+largest. **Explicitly out of scope for this phase**, recorded so a later session knows it was
+considered and set aside.
+
+The consequence of deferring it, stated so nobody is surprised: with bays fixed for the letter's
+largest, a small airframe parks at the same stop mark while the hydrant pit and equipment boxes
+stay where a 36 m-span aircraft would need them. Nothing breaks - the vehicle still drives to
+its bay and services - but the distances are those of the stand, not of the aeroplane, so a
+Cessna is served from a hydrant a long way from its wing. Realism of reach is what the deferred
+work buys.
+
 ## Unresolved questions
 
-1. **Does a Code C template serve a Q400 and an A320 equally?** Both are Code C, but a Q400 is
-   28 m long against an A320's 37.6, and its doors are elsewhere. The bays are fixed paint, so
-   either the stand is laid out for the largest the letter admits and a Q400 parks in a big
-   stand, or a letter needs more than one template. Sized for the largest here; flagged because
-   it may read oddly on screen.
-2. **Does the staging rank's capacity scale with the letter**, or is it one figure? A Code F
+1. **Does the staging rank's capacity scale with the letter**, or is it one figure? A Code F
    stand plausibly services more vehicles at once than a Code B.
 3. **Does depth get the same band treatment as width** — minimum authored, extra absorbed as
    straight fore-aft? Written that way; confirm.
