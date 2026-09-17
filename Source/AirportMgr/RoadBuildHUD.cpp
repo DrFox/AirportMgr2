@@ -26,7 +26,8 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::RunwayHoldingPosition, EPreviewStyle::IntermediateHoldingPosition,
 		EPreviewStyle::Hover, EPreviewStyle::Selected, EPreviewStyle::NodeStub,
 		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
-		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional })
+		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional,
+		EPreviewStyle::Guide })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}

@@ -169,15 +169,65 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
-	// EPreviewStyle is a plain 0-based enum ending at Provisional - iterated the same way
+	// EPreviewStyle is a plain 0-based enum ending at Guide - iterated the same way
 	// FBuildActionsRegistryTest walks EActionSection, rather than by reflection.
-	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Provisional); ++S)
+	//
+	// THIS BOUND IS THE FIFTH LIST a new style has to appear in, and the only one nothing
+	// else would have caught: a value added after the old bound was simply not tested, so
+	// the constructor's seeding list could have missed it in silence. Adding a style means
+	// moving this line.
+	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Guide); ++S)
 	{
 		const EPreviewStyle Style = static_cast<EPreviewStyle>(S);
 		const FPreviewLook& Look = Hud->LookForTest(Style);
 		TestTrue(*FString::Printf(TEXT("style %d has a positive radius scale"), S), Look.RadiusScale > 0.0f);
 		TestTrue(*FString::Printf(TEXT("style %d has a positive thickness scale"), S), Look.ThicknessScale > 0.0f);
 	}
+	return true;
+}
+
+/**
+ * A GUIDE MUST NOT READ AS A PLOT EDGE. It is drawn from the very corner a Provisional edge
+ * ends at, in the same frame, so if the two shared a look the player would see a five-sided
+ * plot rather than a four-sided one with an aid attached.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuideReadsApartFromProvisionalTest,
+	"AirportMgr.HUD.GuideReadsApartFromProvisional",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuideReadsApartFromProvisionalTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Ctx.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
+
+	const FPreviewLook& Guide = Hud->LookForTest(EPreviewStyle::Guide);
+	const FPreviewLook& Provisional = Hud->LookForTest(EPreviewStyle::Provisional);
+
+	// SEEDED AT ALL. LookFor falls back rather than crashing, so a style left out of the
+	// constructor's list would otherwise pass every assertion below by accident.
+	TestTrue(TEXT("the guide style is seeded with a positive thickness"),
+		Guide.ThicknessScale > 0.0f);
+
+	TestFalse(TEXT("a guide is not drawn in the plot boundary's colour"),
+		Guide.Colour.Equals(Provisional.Colour));
+	TestTrue(TEXT("and it is lighter than the edge it helps draw"),
+		Guide.ThicknessScale < Provisional.ThicknessScale);
+
+	// DASHED, BOTH - and that is deliberate: the dash says "not settled", which is true of
+	// both. The colour is what separates them.
+	TestTrue(TEXT("a guide line is dashed"), ARoadBuildHUD::IsDashed(EPreviewStyle::Guide));
+	TestTrue(TEXT("as is a provisional edge"),
+		ARoadBuildHUD::IsDashed(EPreviewStyle::Provisional));
+	TestFalse(TEXT("while a pinned edge is solid"),
+		ARoadBuildHUD::IsDashed(EPreviewStyle::Pinned));
+
 	return true;
 }
 

@@ -195,6 +195,18 @@ enum class EPreviewStyle : uint8
 
 	/** An edge that follows the cursor. Drawn dashed - see ARoadBuildHUD::IsDashed. */
 	Provisional,
+
+	/**
+	 * What the cursor is lined up with: the dashed line to the thing it is squared to.
+	 *
+	 * NOT Provisional, which already means "this edge is still moving" - and the two are
+	 * drawn in the same frame, touching the same corner. Two meanings, two styles; whether
+	 * the overlay dashes both is its business, not the plugin's (snap-guides design section 6).
+	 *
+	 * AT THE END, like Pinned and Provisional above and for the same reason: this is a UENUM
+	 * and renumbering it repoints any value already serialised against it.
+	 */
+	Guide,
 };
 
 /**

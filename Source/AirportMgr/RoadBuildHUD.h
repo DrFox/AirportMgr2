@@ -113,7 +113,13 @@ public:
 	 * dash length - it names a MEANING, and this is where meaning becomes look, in the same
 	 * class that turns a style into a colour.
 	 */
-	static bool IsDashed(EPreviewStyle Style) { return Style == EPreviewStyle::Provisional; }
+	// TWO STYLES DASH, for two different reasons: Provisional because the edge has not
+	// stopped moving, Guide because it is not an edge at all. They are told apart by COLOUR
+	// - see PreviewPalette::Default - not by the dash they share.
+	static bool IsDashed(EPreviewStyle Style)
+	{
+		return Style == EPreviewStyle::Provisional || Style == EPreviewStyle::Guide;
+	}
 
 	/**
 	 * What to offer the player when a gesture is ready to commit - "Build  [Enter]" - or an

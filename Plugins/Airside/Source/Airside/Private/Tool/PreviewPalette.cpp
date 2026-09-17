@@ -38,6 +38,12 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// Warm, so it reads against the cyan route and grey nodes.
 	case EPreviewStyle::Selected:                    return FLinearColor(1.0f, 0.75f, 0.2f);
 
+	// VIOLET, and deliberately nothing else in this table wears it. A guide line is drawn
+	// TOUCHING a Provisional edge every frame it exists, so white was out; Snap's amber and
+	// Route's cyan both already mean something a gesture would DO, and this means something
+	// the gesture is measured against.
+	case EPreviewStyle::Guide:                       return FLinearColor(0.75f, 0.5f, 1.0f);
+
 	// GraphOverlay's context styles - the same colours ARoadBuildHUD::DrawNodes/DrawStands
 	// used to wire to their own StubColour/EndColour/JunctionColour/StandColour/
 	// ServiceAnchorColour UPROPERTYs, now the default ARoadBuildHUD::Looks is seeded from.
@@ -101,6 +107,13 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 
 	case EPreviewStyle::Provisional:
 		Look.ThicknessScale = 2.0f;
+		break;
+
+	// THINNER THAN THE BOUNDARY IT HELPS DRAW. Pinned and Provisional are 2.0 because a plot
+	// edge has to read over grass; the guide is an aid to that edge, and at the same weight
+	// it competes with the shape the player is actually making.
+	case EPreviewStyle::Guide:
+		Look.ThicknessScale = 1.0f;
 		break;
 
 	case EPreviewStyle::RunwayHoldingPosition:       break;
