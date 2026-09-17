@@ -65,12 +65,19 @@ namespace PlotYard
 		double WidthUu = 0.0;
 
 		/**
-		 * Square to the frontage and nearest the gate, rather than sampled.
+		 * Stood against the plot's BACK boundary rather than sampled into the yard.
 		 *
-		 * The shed, because a truck drives out of it. Its heading is FUNCTIONAL and is the
-		 * one thing here that may not be turned for looks.
+		 * POSITION ONLY - the name says where it stands and nothing about which way it
+		 * points, deliberately. It was called bFrontsTheGate, which reads as either, and was
+		 * built as a position: the shed stood IN the gateway (PIE, 2026-09-17, "the position
+		 * of the shed should not be in the gate, it should be further back").
+		 *
+		 * The HEADING is separate and is not sampled either: a footprint flagged here is laid
+		 * square to the frontage, +X away from the road, so its opening faces the yard and the
+		 * gate beyond it. See UEntityDefinition::BuildFuelDepot, whose comment records that
+		 * this convention was once stated the wrong way round.
 		 */
-		bool bFrontsTheGate = false;
+		bool bAgainstTheBackFence = false;
 	};
 
 	struct FStand

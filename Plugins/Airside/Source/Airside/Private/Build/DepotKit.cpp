@@ -13,9 +13,10 @@ PlotYard::FFootprint DepotFootprint(EDepotModule Module)
 	case EDepotModule::Shed:
 		Out.LengthUu = 800.0;
 		Out.WidthUu = 400.0;
-		// THE ONLY ONE THAT FRONTS THE GATE. A truck drives out of it, so its heading is
-		// functional and may not be turned for looks.
-		Out.bFrontsTheGate = true;
+		// THE ONLY ONE STOOD AGAINST THE BACK FENCE. A truck drives out of it, so its heading
+		// is functional and may not be turned for looks - and it stands at the back rather
+		// than in the gateway, which is where it used to be.
+		Out.bAgainstTheBackFence = true;
 		return Out;
 	case EDepotModule::Tank:
 		Out.LengthUu = 500.0;

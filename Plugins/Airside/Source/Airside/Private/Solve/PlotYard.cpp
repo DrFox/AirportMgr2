@@ -105,18 +105,36 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	const FVector2D Inward = InwardOf(Outline, FrontageA, FrontageB);
 	const double InwardBearing = RoadGeom::Bearing(Inward);
 
-	// The gate-fronting modules first: their pose is decided, not sampled, so they take
-	// their ground before anything is allowed to sample into it.
+	// HOW DEEP THE PLOT RUNS on the gate's own ray, so a back-standing module can be pushed
+	// as far from the road as the outline allows.
+	double Deepest = 0.0;
+	for (const FVector2D& Point : Outline)
+	{
+		Deepest = FMath::Max(Deepest, FVector2D::DotProduct(Point - Gate, Inward));
+	}
+
+	// The back-standing modules first: their pose is decided, not sampled, so they take their
+	// ground before anything is allowed to sample into it.
 	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
 	{
-		if (!Footprints[Index].bFrontsTheGate)
+		if (!Footprints[Index].bAgainstTheBackFence)
 		{
 			continue;
 		}
 
+		const double HalfLength = Footprints[Index].LengthUu * 0.5;
+
+		// AGAINST THE BACK FENCE, not in the gateway. It stood at Gate + Inward * HalfLength
+		// until 2026-09-17, which put the shed squarely in the entrance - a depot whose only
+		// way in is blocked by the building you drive out of.
+		//
+		// Clamped at HalfLength so a plot too shallow to hold it still gets it wholly inside
+		// the fence rather than hanging out across the road.
+		const double Depth = FMath::Max(Deepest - HalfLength, HalfLength);
+
 		FStand& Stand = Yard.Stands[Index];
 		Stand.Heading = InwardBearing;
-		Stand.Centre = Gate + Inward * (Footprints[Index].LengthUu * 0.5);
+		Stand.Centre = Gate + Inward * Depth;
 		Stand.bPlaced = true;
 	}
 
@@ -258,7 +276,7 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	TArray<int32> Order;
 	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
 	{
-		if (!Footprints[Index].bFrontsTheGate)
+		if (!Footprints[Index].bAgainstTheBackFence)
 		{
 			Order.Add(Index);
 		}

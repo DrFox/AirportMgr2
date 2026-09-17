@@ -42,7 +42,7 @@ namespace
 	}
 
 	/**
-	 * A 12 m x 24 m plot - three bays across, three rows deep.
+	 * A 20 m x 24 m plot, with room for the mix once the shed takes the back fence.
 	 *
 	 * DEEPER THAN ThreeBayPlotAt ON PURPOSE. The Tier 1 plot is 8 m deep and the shed is 8 m
 	 * long, so square to the gate it spans the whole depth and leaves two 4 m strips; a
@@ -52,8 +52,8 @@ namespace
 	 */
 	TArray<FVector2D> DeepPlotAt(double X)
 	{
-		return { FVector2D(X, 0.0), FVector2D(X + 1200.0, 0.0),
-		         FVector2D(X + 1200.0, 2400.0), FVector2D(X, 2400.0) };
+		return { FVector2D(X, 0.0), FVector2D(X + 2000.0, 0.0),
+		         FVector2D(X + 2000.0, 2400.0), FVector2D(X, 2400.0) };
 	}
 
 	/** PlaceDepot's mix and pose, on a plot with room behind the shed. */
@@ -62,7 +62,7 @@ namespace
 		FEntityPlacement Placement;
 		Placement.Definition = Depot;
 		Placement.Anchors = Depot->Anchors;
-		Placement.Position = FVector2D(X + 600.0, 0.0);
+		Placement.Position = FVector2D(X + 1000.0, 0.0);
 		Placement.Heading = UE_DOUBLE_HALF_PI;
 		Placement.PoseRole = EServiceRole::Fuel;
 		Placement.Outline = DeepPlotAt(X);
@@ -236,9 +236,9 @@ bool FPlotPresenterScattersModulesTest::RunTest(const FString& Parameters)
 	bool bYardsDiffer = false;
 	for (int32 Index = 0; Index < Modules; ++Index)
 	{
-		const FVector FirstLocal = Both[Index].GetLocation() - FVector(600.0, 0.0, 0.0);
+		const FVector FirstLocal = Both[Index].GetLocation() - FVector(1000.0, 0.0, 0.0);
 		const FVector SecondLocal =
-			Both[SecondStart + Index].GetLocation() - FVector(4600.0, 0.0, 0.0);
+			Both[SecondStart + Index].GetLocation() - FVector(5000.0, 0.0, 0.0);
 		if (!FirstLocal.Equals(SecondLocal, 1.0f)
 			|| !Both[Index].GetRotation().Equals(Both[SecondStart + Index].GetRotation(), 0.001f))
 		{

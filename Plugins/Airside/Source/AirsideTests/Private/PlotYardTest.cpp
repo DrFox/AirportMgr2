@@ -15,13 +15,13 @@ namespace
 		         FVector2D(Width, Depth), FVector2D(0.0, Depth) };
 	}
 
-	/** A shed-sized footprint that fronts the gate. 8 m deep, 4 m wide. */
+	/** A shed-sized footprint, stood against the back fence. 8 m deep, 4 m wide. */
 	PlotYard::FFootprint Shed()
 	{
 		PlotYard::FFootprint F;
 		F.LengthUu = 800.0;
 		F.WidthUu = 400.0;
-		F.bFrontsTheGate = true;
+		F.bAgainstTheBackFence = true;
 		return F;
 	}
 
@@ -31,7 +31,7 @@ namespace
 		PlotYard::FFootprint F;
 		F.LengthUu = 500.0;
 		F.WidthUu = 500.0;
-		F.bFrontsTheGate = false;
+		F.bAgainstTheBackFence = false;
 		return F;
 	}
 
@@ -41,7 +41,17 @@ namespace
 		PlotYard::FFootprint F;
 		F.LengthUu = 300.0;
 		F.WidthUu = 200.0;
-		F.bFrontsTheGate = false;
+		F.bAgainstTheBackFence = false;
+		return F;
+	}
+
+	/** 16 m x 16 m. Big enough to actually compete with a phantom tank for room. */
+	PlotYard::FFootprint Hangar()
+	{
+		PlotYard::FFootprint F;
+		F.LengthUu = 1600.0;
+		F.WidthUu = 1600.0;
+		F.bAgainstTheBackFence = false;
 		return F;
 	}
 
@@ -90,11 +100,11 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FPlotYardFrontsTheShedOnTheGateTest,
-	"Airside.Solve.PlotYardFrontsTheShedOnTheGate",
+	FPlotYardStandsTheShedAtTheBackTest,
+	"Airside.Solve.PlotYardStandsTheShedAtTheBack",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FPlotYardFrontsTheShedOnTheGateTest::RunTest(const FString& Parameters)
+bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 {
 	const TArray<FVector2D> Outline = YardRect(2400.0, 1600.0);
 	const FVector2D FrontageA(0.0, 0.0);
@@ -112,16 +122,33 @@ bool FPlotYardFrontsTheShedOnTheGateTest::RunTest(const FString& Parameters)
 	}
 	TestTrue(TEXT("the shed was placed"), Yard.Stands[0].bPlaced);
 
-	// SQUARE TO THE FRONTAGE, not jittered. The truck drives out of the shed, so its
-	// heading is functional - it is the one module that may not be turned for looks.
-	// Interior is +Y here, so the inward bearing is +90 degrees.
+	// SQUARE TO THE FRONTAGE, not jittered. The truck drives out of the shed, so its heading
+	// is functional - the one module that may not be turned for looks. Interior is +Y here,
+	// so the inward bearing is +90 degrees.
 	TestEqual(TEXT("the shed faces away from the road, square"),
 		Yard.Stands[0].Heading, UE_DOUBLE_HALF_PI);
 
-	// AND IT IS ON THE GATE. A shed behind the tank is a shed the truck cannot leave, and
-	// it would look perfectly correct from every angle.
-	TestTrue(TEXT("the shed sits at the gate, not deep in the yard"),
-		FVector2D::Distance(Yard.Stands[0].Centre, Gate) < 800.0);
+	// AND IT STANDS AT THE BACK. It stood in the gateway until 2026-09-17 - a depot whose
+	// only way in is blocked by the building you drive out of. The plot is 16 m deep and the
+	// shed 8 m long, so its centre belongs at 12 m: hard against the back fence.
+	TestTrue(*FString::Printf(TEXT("the shed is against the back fence, got y %.0f"),
+		Yard.Stands[0].Centre.Y),
+		FMath::IsNearlyEqual(Yard.Stands[0].Centre.Y, 1200.0, 1.0));
+
+	// NOT IN THE GATEWAY, stated as its own claim: "deep in the yard" and "clear of the gate"
+	// are different facts, and it was the second that failed.
+	TestTrue(TEXT("and well clear of the gate it used to block"),
+		FVector2D::Distance(Yard.Stands[0].Centre, Gate) > PlotYard::GateCorridorUu);
+
+	// A PLOT TOO SHALLOW still gets it wholly inside the fence rather than hanging across
+	// the road - the clamp, which no other case reaches.
+	const PlotYard::FYard Shallow = PlotYard::LayOut(
+		YardRect(2400.0, 600.0), FrontageA, FrontageB, Gate, Footprints, 1234, Shed());
+	if (TestEqual(TEXT("still one stand"), Shallow.Stands.Num(), 1))
+	{
+		TestTrue(TEXT("a shallow plot keeps the shed off the road"),
+			Shallow.Stands[0].Centre.Y >= 400.0 - 1.0);
+	}
 
 	return true;
 }
@@ -175,15 +202,20 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotYardDoesNotOverlapModulesTest::RunTest(const FString& Parameters)
 {
-	// A TIGHT PLOT, deliberately: on a large one a naive sampler passes by luck. Two bays
-	// wide and two deep has to hold a shed, a tank and a pump with little room to spare.
-	const TArray<FVector2D> Outline = YardRect(800.0, 1600.0);
+	// TIGHT, BUT NOT SO TIGHT NOTHING FITS: on a large plot a naive sampler passes by luck,
+	// and on too small a one there is no pair left to compare.
+	//
+	// It was 8 m x 16 m until 2026-09-17, when the shed moved from the gateway to the back
+	// fence. The shed then took the back, the gate corridor took the front, and on a plot
+	// only 8 m wide the strips either side of the corridor are too narrow for anything -
+	// one module stood and this test's own guard caught it.
+	const TArray<FVector2D> Outline = YardRect(1600.0, 2000.0);
 	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
 
 	for (int32 Seed = 1; Seed <= 8; ++Seed)
 	{
 		const PlotYard::FYard Yard = PlotYard::LayOut(
-			Outline, FVector2D(0.0, 0.0), FVector2D(800.0, 0.0), FVector2D(400.0, 0.0),
+			Outline, FVector2D(0.0, 0.0), FVector2D(1600.0, 0.0), FVector2D(800.0, 0.0),
 			Footprints, Seed, Tank());
 
 		// AT LEAST TWO STANDING, or the loops below compare nothing and this test goes
@@ -307,20 +339,34 @@ bool FPlotYardCountsRoomToGrowTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the mix all fits in a yard this size"), Filled.DroppedCount(), 0);
 	TestTrue(*FString::Printf(TEXT("and there is still room to grow, got %d"),
 		Filled.RoomForMore), Filled.RoomForMore > 0);
-	TestTrue(TEXT("but less than the empty yard had"), Filled.RoomForMore < Bare.RoomForMore);
 
-	// THE SHAPE THE GESTURE ACTUALLY MAKES: three bays across, three rows deep. The presenter
-	// reported "room for 0 more" on exactly this plot while the 24 m square above reported
-	// several, which is what dragged this case into a world-free test where it can be
-	// iterated on in seconds rather than through a whole editor run.
-	const TArray<FVector2D> Narrow = YardRect(1200.0, 2400.0);
+	// WHAT IS STANDING REDUCES WHAT IS LEFT - shown with something big enough to actually
+	// compete for the space. The depot's own mix does NOT reduce it at this size (both come
+	// back 4): the shed hugs the back fence and the tank and pump tuck into slack a 6 m
+	// phantom could never have used, so "filling a yard leaves less room" is simply false
+	// here. Asserting it anyway passed until the shed moved, and would have gone on passing
+	// as <= while proving nothing.
+	const PlotYard::FFootprint Big[] = { Hangar() };
+	const PlotYard::FYard Blocked = PlotYard::LayOut(
+		Outline, FVector2D(0.0, 0.0), FVector2D(2400.0, 0.0), FVector2D(1200.0, 0.0),
+		Big, /*Seed=*/11, Tank());
+
+	TestEqual(TEXT("the hangar stands"), Blocked.DroppedCount(), 0);
+	TestTrue(*FString::Printf(TEXT("a 16 m hangar eats the room: blocked %d, bare %d"),
+		Blocked.RoomForMore, Bare.RoomForMore), Blocked.RoomForMore < Bare.RoomForMore);
+
+	// A SHAPE THE GESTURE CAN ACTUALLY MAKE. This was 12 m wide until 2026-09-17 and the
+	// gesture's minimum frontage is 15 m, so it was testing a plot no player could draw -
+	// and once the shed moved to the back fence a plot that narrow had no usable middle at
+	// all, which is how the staleness surfaced.
+	const TArray<FVector2D> Drawn20 = YardRect(2000.0, 2400.0);
 	const PlotYard::FYard Drawn = PlotYard::LayOut(
-		Narrow, FVector2D(0.0, 0.0), FVector2D(1200.0, 0.0), FVector2D(600.0, 0.0),
+		Drawn20, FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0), FVector2D(1000.0, 0.0),
 		Footprints, /*Seed=*/11, Tank());
 
-	TestEqual(TEXT("the mix fits a three by three plot"), Drawn.DroppedCount(), 0);
+	TestEqual(TEXT("the mix fits a 20 m x 24 m plot"), Drawn.DroppedCount(), 0);
 	TestTrue(*FString::Printf(
-		TEXT("and a 12 m x 24 m yard has room for another tank, got %d"), Drawn.RoomForMore),
+		TEXT("and it has room for another tank, got %d"), Drawn.RoomForMore),
 		Drawn.RoomForMore > 0);
 
 	return true;
