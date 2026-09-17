@@ -118,6 +118,58 @@ namespace
 		return Index * FrontageStepUu;
 	}
 
+	/**
+	 * The service road nearest the cursor, and where along it the cursor falls.
+	 *
+	 * ASKED OF THE NETWORK, not read off FToolContext::Snap. That answers "what did the
+	 * cursor HIT", which is only ever a segment while the cursor is over the carriageway -
+	 * and this gesture is used from where the plot will stand, off the road entirely. A
+	 * different question deserves its own search rather than a widened snap radius, which
+	 * would change what every other tool's click means.
+	 *
+	 * NOT FAnchorLink, which was deleted for a related reason: it searched the LIVE graph to
+	 * recover a placed depot's frontage, so a road laid later could move it. Searching at
+	 * GESTURE time is the safe half - the answer is frozen into the outline at commit.
+	 */
+	bool NearestServiceRoad(const URoadNetwork& Network, const FVector2D& Cursor,
+		FRoadSegmentId& OutSegment, double& OutT)
+	{
+		double BestSquared = PlotGesture::AnchorReachUu * PlotGesture::AnchorReachUu;
+		bool bFound = false;
+
+		const TArray<FRoadSegment>& Segments = Network.GetSegments();
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			const FRoadSegment& Segment = Segments[Index];
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			if (!Segment.bAlive || !IsServiceRoad(Network, Id))
+			{
+				continue;
+			}
+
+			const FRoadNode* A = Network.GetNode(Segment.A);
+			const FRoadNode* B = Network.GetNode(Segment.B);
+			if (A == nullptr || B == nullptr)
+			{
+				continue;
+			}
+
+			const double T = RoadGeom::ClosestPointOnSegment(A->Position, B->Position, Cursor);
+			const double DistanceSquared =
+				FVector2D::DistSquared(FMath::Lerp(A->Position, B->Position, T), Cursor);
+			if (DistanceSquared > BestSquared)
+			{
+				continue;
+			}
+
+			BestSquared = DistanceSquared;
+			OutSegment = Id;
+			OutT = T;
+			bFound = true;
+		}
+		return bFound;
+	}
+
 	/** A segment's straight-line ends, or false if either is dead. */
 	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
 		FVector2D& OutA, FVector2D& OutB)
@@ -264,19 +316,18 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 	{
 	case EPlotStage::Idle:
 	{
-		// THE DRIVER HAS ALREADY SNAPPED. Both drivers resolve FToolContext::Snap from the
-		// one per-airport FRoadSnapSettings before a tool sees it, so running a chain here
-		// would make the same click behave differently in PIE and in the editor mode -
-		// which is the bug that struct's own comment records being fixed.
-		if (Context.Snap.Kind != ERoadSnapKind::Segment
-			|| !IsServiceRoad(*Network, Context.Snap.Segment))
+		// FROM WHERE THE PLOT GOES, not from the carriageway. See NearestServiceRoad for why
+		// this searches rather than reading the driver's snap.
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		if (!NearestServiceRoad(*Network, Context.Cursor, Road, AlongT))
 		{
 			return;
 		}
 
 		FVector2D RoadA = FVector2D::ZeroVector;
 		FVector2D RoadB = FVector2D::ZeroVector;
-		if (!SegmentEnds(*Network, Context.Snap.Segment, RoadA, RoadB))
+		if (!SegmentEnds(*Network, Road, RoadA, RoadB))
 		{
 			return;
 		}
@@ -293,8 +344,7 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		// ANCHORED ON THE ROAD'S OWN BAY GRID, measured from the segment's A end. Quantising
 		// per SEGMENT rather than globally means two plots on one segment sit flush and a
 		// plot never straddles a junction - see the design doc's open question 1.
-		Corners[0] = RoadA + Along
-			* AnchorOffset(AnchorIndexAt(Context.Snap.SegmentT, Length));
+		Corners[0] = RoadA + Along * AnchorOffset(AnchorIndexAt(AlongT, Length));
 
 		// WHICH SIDE THE CURSOR IS ON, not a rule. A depot goes on the side of the road the
 		// player is pointing at; the alternative is a fixed side that is wrong half the time
@@ -306,7 +356,7 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		// OFF THE CARRIAGEWAY, and only now that the side is known. Measured BEFORE this
 		// step, because the side has to be read against the centreline the cursor was
 		// judged from - offsetting first would tilt that test by half a road width.
-		Corners[0] += Inward * KerbOffset(*Network, Context.Snap.Segment, Side >= 0.0);
+		Corners[0] += Inward * KerbOffset(*Network, Road, Side >= 0.0);
 
 		Stage = EPlotStage::Frontage;
 		return;
@@ -436,12 +486,13 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	{
 		// The anchors the player could take, so the grid is visible before it is committed
 		// to. Snap style: these are what the gesture would attach to.
-		if (Context.Snap.Kind == ERoadSnapKind::Segment
-			&& IsServiceRoad(*Network, Context.Snap.Segment))
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		if (NearestServiceRoad(*Network, Context.Cursor, Road, AlongT))
 		{
 			FVector2D RoadA = FVector2D::ZeroVector;
 			FVector2D RoadB = FVector2D::ZeroVector;
-			if (SegmentEnds(*Network, Context.Snap.Segment, RoadA, RoadB))
+			if (SegmentEnds(*Network, Road, RoadA, RoadB))
 			{
 				const FVector2D Span = RoadB - RoadA;
 				const double Length = Span.Size();
@@ -454,13 +505,13 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 				const FVector2D Left = RoadGeom::PerpCCW(Unit);
 				const bool bLeft = FVector2D::DotProduct(Context.Cursor - RoadA, Left) >= 0.0;
 				const FVector2D Offset = (bLeft ? Left : -Left)
-					* KerbOffset(*Network, Context.Snap.Segment, bLeft);
+					* KerbOffset(*Network, Road, bLeft);
 
 				// THE ONE A CLICK WOULD TAKE IS DRAWN DIFFERENTLY. A row of identical dots
 				// says where anchors exist; it does not say which one the cursor has. Pending
 				// is the style every other tool uses for "this is what the click does", and
 				// it double-rings, so the chosen point reads at a glance.
-				const int32 Chosen = AnchorIndexAt(Context.Snap.SegmentT, Length);
+				const int32 Chosen = AnchorIndexAt(AlongT, Length);
 
 				const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
 				for (int32 I = 0; I <= Count; ++I)
@@ -552,9 +603,12 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	if (Stage == EPlotStage::Idle)
 	{
-		if (Network == nullptr || Context.Snap.Kind != ERoadSnapKind::Segment
-			|| !IsServiceRoad(*Network, Context.Snap.Segment))
+		FRoadSegmentId Road;
+		double AlongT = 0.0;
+		if (Network == nullptr || !NearestServiceRoad(*Network, Context.Cursor, Road, AlongT))
 		{
+			// THE SAME QUESTION THE CLICK ASKS, so the warning cannot say "move near a
+			// service road" while a click would have anchored perfectly well.
 			Sink.Warning(TEXT("Move near a service road"));
 		}
 		Sink.Committable(false);

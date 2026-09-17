@@ -51,6 +51,16 @@ namespace PlotGesture
 	 * frontage growing in 5 m steps.
 	 */
 	inline constexpr double FrontageStepUu = 500.0;
+
+	/**
+	 * How far from a service road a plot can be started, uu. 20 m.
+	 *
+	 * THE PLAYER STANDS WHERE THE PLOT GOES, not on the road it fronts. Requiring the cursor
+	 * to be over the carriageway made the anchors vanish the moment you moved off it, which
+	 * reads as placing the depot ON the road (PIE, 2026-09-17). Far enough to stand inside
+	 * the plot's own footprint; near enough not to grab a road across the field.
+	 */
+	inline constexpr double AnchorReachUu = 2000.0;
 }
 
 /**

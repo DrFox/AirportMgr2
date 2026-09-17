@@ -166,6 +166,84 @@ namespace
 	}
 }
 
+/**
+ * THE PLOT IS STARTED FROM WHERE IT GOES, not from the carriageway.
+ *
+ * Every other test in this file anchors with PlotAt/OnRoad putting the cursor ON the road,
+ * which is exactly why none of them noticed that moving off it made the anchors vanish:
+ * "as soon as you mouse move off the road the option to start the plot process disappears
+ * which doesn't feel very natural, as it seems as if you are placing it on the road not next
+ * to it" (PIE, 2026-09-17).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotStartsFromOffTheRoadTest,
+	"Airside.Tool.PlotStartsFromOffTheRoad",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotStartsFromOffTheRoadTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	// TEN METRES OUT, IN THE GRASS, and with a FREE snap - PlotAt names no segment at all,
+	// which is what the cursor actually carries once it leaves the carriageway.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1000.0)));
+		TestEqual(TEXT("a click 10 m off the road still anchors"), Tool.PinnedCount(), 1);
+
+		// AND ON THE RIGHT SIDE. The side comes from where the cursor is, so standing north
+		// of the road must put the plot north of it.
+		TArray<FVector2D> Quad;
+		Tool.Quad(PlotAt(Actor, FVector2D(2000.0, 1000.0)), Quad);
+		if (!TestTrue(TEXT("a frontage to measure"), Quad.Num() >= 2)) { return false; }
+		TestTrue(*FString::Printf(TEXT("and the plot is on the cursor's side, got y %.0f"),
+			Quad[0].Y), Quad[0].Y > 0.0);
+	}
+
+	// THE OTHER SIDE TOO, or the side would be a constant that happened to match.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(PlotAt(Actor, FVector2D(0.0, -1000.0)));
+		if (!TestEqual(TEXT("anchors from the south as well"), Tool.PinnedCount(), 1))
+		{
+			return false;
+		}
+		TArray<FVector2D> Quad;
+		Tool.Quad(PlotAt(Actor, FVector2D(2000.0, -1000.0)), Quad);
+		if (!TestTrue(TEXT("a frontage to measure"), Quad.Num() >= 2)) { return false; }
+		TestTrue(*FString::Printf(TEXT("and it goes south, got y %.0f"), Quad[0].Y),
+			Quad[0].Y < 0.0);
+	}
+
+	// BUT THE ROAD STILL HAS TO BE NEAR. Without a limit the whole map would offer anchors
+	// against whatever road happened to be closest, which is no guidance at all.
+	{
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(PlotAt(Actor, FVector2D(0.0, PlotGesture::AnchorReachUu + 500.0)));
+		TestEqual(TEXT("a click well beyond the reach anchors nothing"), Tool.PinnedCount(), 0);
+	}
+
+	// AND A TAXIWAY IS STILL NOT A SERVICE ROAD. The search skips anything without a ground
+	// vehicle guideline, so widening WHERE you can stand did not widen WHAT you can stand by.
+	{
+		Actor->ClearNetwork();
+		LayRoad(Actor, 0.0, ERoadKind::Taxiway);
+
+		FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+		Tool.OnClick(PlotAt(Actor, FVector2D(0.0, 1000.0)));
+		TestEqual(TEXT("standing beside a taxiway anchors nothing"), Tool.PinnedCount(), 0);
+	}
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotPinsOneCornerAtATimeTest,
 	"Airside.Tool.PlotPinsOneCornerAtATime",
