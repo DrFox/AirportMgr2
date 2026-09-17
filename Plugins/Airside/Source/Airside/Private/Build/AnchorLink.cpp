@@ -124,8 +124,8 @@ namespace
 			const bool bFromB = Edge->B == NodeId;
 			const FVector2D Tangent = GuidelineGeom::Tangent(
 				A->Position, Edge->Control, B->Position, bFromB ? 1.0 : 0.0);
-			const FVector2D Along = (bFromB ? -Tangent : Tangent).GetSafeNormal();
-			if (Along.IsNearlyZero())
+			const FVector2D Leaving = (bFromB ? -Tangent : Tangent).GetSafeNormal();
+			if (Leaving.IsNearlyZero())
 			{
 				continue;
 			}
@@ -135,70 +135,73 @@ namespace
 				? FVector2D::Distance(bFromB ? B->Position : A->Position, Edge->Control)
 				: FVector2D::Distance(A->Position, B->Position);
 
-			// THE ORDER OF THE THREE TESTS IS THE RULE ITSELF: toward the road first, then the
-			// corner side, then room. The second and third only ever decide a tie in the first,
-			// because the two legs' headings are exact opposites and so are their dot products.
-			const double Dot = FVector2D::DotProduct(Along, Toward);
-			const double Margin = Dot - BestToward;
-			const bool bBetter = !bFound
-				|| Margin > UE_DOUBLE_KINDA_SMALL_NUMBER
-				|| (FMath::Abs(Margin) <= UE_DOUBLE_KINDA_SMALL_NUMBER
-					&& (bBend != bBestIsBend ? bBend : Room > BestRoom));
-			if (bBetter)
+			// BOTH SENSES OF EVERY EDGE, since 2026-09-17, and this is the fix for a defect the
+			// shape change exposed rather than caused. What is wanted is the LINE the lead-in
+			// should leave along, and a line has two directions; the connector takes whichever
+			// of them faces the road.
+			//
+			// IT USED TO FALL OUT FOR FREE. A lane entry sat mid-cycle with TWO incident edges
+			// whose headings were exact opposites, so offering one sense of each offered both
+			// senses of the line. A LAYOUT entry begins its bay's arrive leg and has exactly
+			// ONE edge, pointing into the stand - so the only candidate faced away from the
+			// road, the lead-in was built leaving the entry in that direction, and it hairpinned
+			// back: measured as R=93 uu against a lock of 699, with five vertices turning
+			// instantly, the sharpest at 71 degrees.
+			for (const FVector2D& Along : { Leaving, -Leaving })
 			{
-				OutAlong = Along;
-				BestRoom = Room;
-				BestToward = Dot;
-				bBestIsBend = bBend;
-				bFound = true;
+				// THE ORDER OF THE THREE TESTS IS THE RULE ITSELF: toward the road first, then
+				// the corner side, then room. The second and third only ever decide a tie in
+				// the first, because the two senses' dot products are exact opposites.
+				const double Dot = FVector2D::DotProduct(Along, Toward);
+				const double Margin = Dot - BestToward;
+				const bool bBetter = !bFound
+					|| Margin > UE_DOUBLE_KINDA_SMALL_NUMBER
+					|| (FMath::Abs(Margin) <= UE_DOUBLE_KINDA_SMALL_NUMBER
+						&& (bBend != bBestIsBend ? bBend : Room > BestRoom));
+				if (bBetter)
+				{
+					OutAlong = Along;
+					BestRoom = Room;
+					BestToward = Dot;
+					bBestIsBend = bBend;
+					bFound = true;
+				}
 			}
 		}
 		return bFound;
 	}
 
 	/**
-	 * The other end of the BEND at this entry's corner, when that end is a declared entry too.
+	 * True when a road link is ALREADY attached at this node.
 	 *
-	 * ONE ENTRY, TWO NODES. The pair is recognised off the graph rather than reported by the
-	 * builder because the graph already says it exactly - the lane edge joining two entry nodes
-	 * IS the bend that rounds their corner - and a second statement of the same fact would be
-	 * one more thing to keep in step with FStandLayoutBuild::FResult::Entries, which is itself
-	 * re-gathered from graph order on an idempotent pass.
+	 * ASKED BY KIND, NOT BY COUNT, and that distinction is the whole of this function. It used
+	 * to be "more than two incident edges", which was true only while every entry sat mid-cycle
+	 * on a lane with exactly two layout edges through it. The four-leg layout breaks that in
+	 * both directions at once: an ENTRY node begins its bay's arrive leg and has ONE edge, and
+	 * an EXIT node is shared by every bay on its side and has THREE - so a stand's exits read as
+	 * already joined and were skipped in silence, which is 1 of 7 lead-ins joined.
 	 *
-	 * Unset for a straight-through entry, which is one node and no bend.
+	 * A link is the edge that is NOT part of a layout: FStandLayoutBuild stamps
+	 * StandGeometryOwner on everything it lays and FAnchorLink deliberately leaves its lead-ins
+	 * unowned, so "unowned edge here" and "a road has been joined here" are the same statement.
 	 */
-	FGuidelineNodeId BendSibling(const URoadNetwork& Network, FGuidelineNodeId NodeId,
-		const TArray<FGuidelineNodeId>& Entries)
+	bool AlreadyJoined(const URoadNetwork& Network, FGuidelineNodeId NodeId)
 	{
 		const FGuidelineNode* Node = Network.GetGuidelineNode(NodeId);
 		if (Node == nullptr)
 		{
-			return FGuidelineNodeId();
+			return true;
 		}
 
 		for (const FGuidelineEdgeId& Id : Node->Incident)
 		{
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Id);
-			if (Edge == nullptr || !Edge->bAlive || !Edge->StandGeometryOwner.IsSet())
+			if (Edge != nullptr && Edge->bAlive && !Edge->StandGeometryOwner.IsSet())
 			{
-				continue;
-			}
-
-			const FGuidelineNode* A = Network.GetGuidelineNode(Edge->A);
-			const FGuidelineNode* B = Network.GetGuidelineNode(Edge->B);
-			if (A == nullptr || B == nullptr
-				|| GuidelineGeom::IsStraight(A->Position, Edge->Control, B->Position))
-			{
-				continue;
-			}
-
-			const FGuidelineNodeId Other = Edge->A == NodeId ? Edge->B : Edge->A;
-			if (Entries.Contains(Other))
-			{
-				return Other;
+				return true;
 			}
 		}
-		return FGuidelineNodeId();
+		return false;
 	}
 }
 
@@ -465,104 +468,41 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			Reach.Add(NodeId, Found);
 		}
 
-		// EVERY DECLARED ENTRY, AS THE PAIR OR THE SINGLE NODE IT REACHED THE GRAPH AS. See
-		// BendSibling for why the pair is read off the bend rather than reported by the builder.
-		TArray<TArray<FGuidelineNodeId>> Corners;
-		TSet<FGuidelineNodeId> Grouped;
+		// ONE LINK PER DECLARED ENTRY, and no grouping at all.
+		//
+		// THE PAIRING IS DELETED WITH THE LANE THAT NEEDED IT. A lane's entries were authored
+		// at CORNERS, and a rounded corner's own point carries no node - the bend's control
+		// sits there and its two ends sit back along the two legs - so an entry reached the
+		// graph as a PAIR and something had to choose between them. The layout authors every
+		// entry on a STRAIGHT, so there is exactly one node at it and nothing to choose.
+		//
+		// AND THE NEAREST-ENTRY REFUSAL IS DELETED TOO, which is the bigger change. It existed
+		// because a cycle offered entries on all four sides of a stand, and a road alongside
+		// could be "in reach" of the far ones, whose connectors would then run the whole depth
+		// of the stand across the lane's own crossings. The layout declares entries only where
+		// a road is meant to meet it - all on the aft edge - and the user's ruling of
+		// 2026-09-17 is that EVERY service bay gets its own way in, so that a vehicle never
+		// threads past a parked one. Refusing all but the nearest is exactly the behaviour that
+		// ruling forbids. What bounds a connector now is ServiceLinkRadius alone, which is the
+		// question actually being asked: is a road within reach of THIS entry.
 		for (const FGuidelineNodeId& NodeId : Declared.Value)
 		{
-			if (Grouped.Contains(NodeId))
-			{
-				continue;
-			}
-			Grouped.Add(NodeId);
-
-			TArray<FGuidelineNodeId>& Corner = Corners.AddDefaulted_GetRef();
-			Corner.Add(NodeId);
-
-			const FGuidelineNodeId Other = BendSibling(Network, NodeId, Declared.Value);
-			if (Other.IsSet() && !Grouped.Contains(Other))
-			{
-				Grouped.Add(Other);
-				Corner.Add(Other);
-			}
-		}
-
-		for (const TArray<FGuidelineNodeId>& Corner : Corners)
-		{
-			// ALREADY JOINED, ASKED OF THE WHOLE CORNER AND NOT OF ONE NODE OF IT. Two lane
-			// edges is an unjoined node; more means a road is already on it, by a previous pass
-			// that survived or by hand. Asked of one node, the OTHER end of a joined corner
-			// reads as free and takes a second entrance 300 uu from the first - which the
-			// rebuild-on-every-edit contract would then do again on every pass.
-			bool bJoined = false;
-			for (const FGuidelineNodeId& NodeId : Corner)
-			{
-				const FGuidelineNode* Node = Network.GetGuidelineNode(NodeId);
-				bJoined = bJoined || (Node == nullptr || Node->Incident.Num() > 2);
-			}
-			if (bJoined)
+			if (AlreadyJoined(Network, NodeId))
 			{
 				continue;
 			}
 
-			// THE NEARER OF THE PAIR. A rounded corner offers one node on each of its two legs,
-			// each with a clean heading along its own straight, and which of them a road should
-			// take depends on which side that road is: one approaching along the run wants the
-			// run's node, one approaching across the end wants the crossing's. Nearest says
-			// that exactly, and both would be two entrances at one declared entry.
-			const FEntryReach* Best = Reach.Find(Corner[0]);
-			for (const FGuidelineNodeId& NodeId : Corner)
-			{
-				const FEntryReach* Other = Reach.Find(NodeId);
-				if (Other != nullptr && (Best == nullptr || Other->Distance < Best->Distance))
-				{
-					Best = Other;
-				}
-			}
-			if (Best == nullptr)
+			const FEntryReach* Found = Reach.Find(NodeId);
+			if (Found == nullptr)
 			{
 				continue;
-			}
-
-			// AND THE ENTRY NEAREST A POINT OF ROAD IS THE ONE THAT GETS IT.
-			//
-			// THIS IS WHAT REFUSES THE FAR SIDE, and it refuses it by measuring rather than by
-			// a threshold. A stand's far entries are within reach of a road alongside it - the
-			// lane is only 17 m deep - and their connectors would run the whole depth of the
-			// stand, across the lane's own crossings, to reach a road the near entry is 4 m
-			// from. It refuses the same way a road at one END of the stand is refused by the
-			// far end's entries, which no distance threshold on its own ever got right: the
-			// question is not "how far is this entry" but "is this entry the nearest thing to
-			// the road it is claiming".
-			//
-			// AGAINST EVERY ENTRY NODE, not only the ones selected above, because the answer
-			// must not depend on which corner is considered first. The globally nearest
-			// candidate can never be refused by it - anything nearer to ITS contact point would
-			// have a shorter reach of its own - so a stand with a road in reach always keeps at
-			// least one entrance.
-			if (Best->bReaches)
-			{
-				bool bNearerEntry = false;
-				for (const FGuidelineNodeId& NodeId : Declared.Value)
-				{
-					const FGuidelineNode* Node =
-						NodeId != Best->Node ? Network.GetGuidelineNode(NodeId) : nullptr;
-					bNearerEntry = bNearerEntry
-						|| (Node != nullptr
-							&& FVector2D::Distance(Node->Position, Best->Contact) < Best->Distance);
-				}
-				if (bNearerEntry)
-				{
-					continue;
-				}
 			}
 
 			// EMITTED EVEN WHEN THE PROBE FOUND NOTHING, deliberately: Build is what reports a
 			// stand that joined nothing at all, and it can only do that for a link it was
 			// given. A stand out of reach of every road therefore gets one warning line naming
 			// it, not silence.
-			OutPending.Add(EntryLink(Best->Node, Best->At));
+			OutPending.Add(EntryLink(Found->Node, Found->At));
 		}
 	}
 }

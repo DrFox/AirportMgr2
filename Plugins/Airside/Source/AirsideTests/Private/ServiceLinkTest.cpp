@@ -1270,18 +1270,29 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 	// So this asks the authority, about the journey the player actually watches.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
-	constexpr double RoadY = -6000.0;
-	FGuidelineNodeId RoadEast;
-	const FGuidelineNodeId RoadWest =
-		Lay(*Net, FVector2D(-9000.0, RoadY), FVector2D(9000.0, RoadY),
-			ETraversalClass::GroundVehicle, RoadEast);
+	// THE ROAD RUNS BEHIND THE STAND, along its aft edge, and that moved on 2026-09-17 with
+	// the layout it serves. It used to run ALONGSIDE at y = -6000, which worked while the lane
+	// was a cycle reachable from any side. It is not one any more: nothing may pass under a
+	// wing, so each side of the stand is its own dead end reached only from the aft edge, and
+	// a road alongside leaves the far side orphaned. MEASURED rather than assumed - with the
+	// road at y = -6000 the starboard entries sit 6650 to 8450 uu away against a
+	// DefaultServiceLinkRadius of 6500, so not one of them linked and the hydrant, which is a
+	// starboard service, had no route at all.
+	//
+	// THE ASSERTIONS BELOW ARE UNCHANGED. This is the fixture put where the design says a road
+	// must be, not the question made easier.
+	constexpr double RoadX = -5400.0;
+	FGuidelineNodeId RoadNorth;
+	const FGuidelineNodeId RoadSouth =
+		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
+			ETraversalClass::GroundVehicle, RoadNorth);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 	FAnchorLink::Build(*Net);
 
 	FRouteQuery Query;
-	Query.Start = RoadWest;
+	Query.Start = RoadSouth;
 	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
 	Query.Class = ETraversalClass::GroundVehicle;
 
@@ -1346,18 +1357,23 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	// which is the thing the player watches. A lane that cleared the aeroplane and a link
 	// that did not would pass the first test and fail here.
 	//
-	// The road is on the PORT side and the hydrant is under the STARBOARD wing, which is the
-	// arrangement that makes a straight spur cross 37 m of fuselage. That is exactly why the
-	// lane exists, and why joining each anchor directly to the road was rejected.
+	// The road is BEHIND the stand and the hydrant is on the far side of the aeroplane from
+	// where the route enters, which is the arrangement that makes a straight spur cross 37 m
+	// of fuselage. That is exactly why the layout exists, and why joining each anchor directly
+	// to the road was rejected.
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 
 	// A SHORT road, so the journey's length is about the STAND rather than about how far
 	// down the road the start node happens to sit.
-	constexpr double RoadY = -6000.0;
-	FGuidelineNodeId RoadEast;
+	//
+	// ALONG THE AFT EDGE since 2026-09-17, for the reason
+	// Airside.Model.Traffic.TruckDrivesTheWholeRouteToTheHydrant gives at its own fixture: with
+	// no way under a wing, a road alongside the stand can only reach the side it is on.
+	constexpr double RoadX = -5400.0;
+	FGuidelineNodeId RoadNorth;
 	const FGuidelineNodeId RoadWest =
-		Lay(*Net, FVector2D(-9000.0, RoadY), FVector2D(9000.0, RoadY),
-			ETraversalClass::GroundVehicle, RoadEast);
+		Lay(*Net, FVector2D(RoadX, -6000.0), FVector2D(RoadX, 6000.0),
+			ETraversalClass::GroundVehicle, RoadNorth);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	if (!TestNotNull(TEXT("a design aircraft to clear"), Stand->DesignAircraft.Get())) { return false; }

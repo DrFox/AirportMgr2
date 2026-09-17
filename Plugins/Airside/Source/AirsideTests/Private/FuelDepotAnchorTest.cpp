@@ -148,7 +148,13 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadWest, RoadEast;
 	LayNorthSouth(*Net, -10000.0, ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
-	LayEastWest(*Net, -6000.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
+
+	// THE GSE ROAD RUNS BEHIND THE STAND, along its aft edge, and that moved on 2026-09-17
+	// with the layout it serves. Nothing may pass under a wing, so each side of the stand is
+	// its own dead end reached only from the aft edge; a road ALONGSIDE at y = -6000 left every
+	// starboard entry 6650 to 8450 uu away against a reach of 6500, so the hydrant - a
+	// starboard service - had no route at all. RoadWest is the road's southern end.
+	LayNorthSouth(*Net, -5400.0, ETraversalClass::GroundVehicle, RoadWest, RoadEast);
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	TestEqual(TEXT("a stand's pose is still an aircraft's"),
