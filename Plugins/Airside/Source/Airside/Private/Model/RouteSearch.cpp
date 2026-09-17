@@ -468,3 +468,28 @@ FRoutePlan RouteSearch::Section(const FRoutePlan& Plan, int32 First, int32 Last)
 	}
 	return Out;
 }
+
+void FRoutePlan::DescribeSpanDirections(TArray<EDriveDirection>& Out) const
+{
+	Out.Reset();
+	if (Polyline.Num() < 2)
+	{
+		return;
+	}
+
+	Out.Init(EDriveDirection::Forward, Polyline.Num() - 1);
+
+	int32 From = 0;
+	for (const FRouteStep& Step : Steps)
+	{
+		const int32 To = FMath::Clamp(Step.EndVertex, From, Polyline.Num() - 1);
+		if (Step.bReverseLeg)
+		{
+			for (int32 Span = From; Span < To; ++Span)
+			{
+				Out[Span] = EDriveDirection::Reverse;
+			}
+		}
+		From = To;
+	}
+}

@@ -18,7 +18,16 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 
 	// The whole route costed before the first frame. See FSpeedProfile: once braking is
 	// limited, a corner discovered by arriving at it is already twenty-five metres too late.
-	Profile.Build(Plan.Polyline, InAirframe);
+	{
+		// PER SPAN, because a route may contain a bay's reverse leg and judging that by the
+		// forward limit refuses a manoeuvre that is legal - see FSpeedProfile's overload. The
+		// follower does not DRIVE those spans (FRoadAgent hands them to FReverseRun) but it
+		// profiles the plan it was given, and a profile that lies about part of it is read by
+		// everything downstream, including the warning a human acts on.
+		TArray<EDriveDirection> Spans;
+		Plan.DescribeSpanDirections(Spans);
+		Profile.Build(Plan.Polyline, InAirframe, Spans);
+	}
 
 	// FROM REST BY DEFAULT. An aeroplane on a stand is stopped, and snapping to taxi speed
 	// on the first frame is the same defect as the corner this class was just taught about
@@ -212,7 +221,16 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 {
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
-	Profile.Build(Plan.Polyline, InAirframe);
+	{
+		// PER SPAN, because a route may contain a bay's reverse leg and judging that by the
+		// forward limit refuses a manoeuvre that is legal - see FSpeedProfile's overload. The
+		// follower does not DRIVE those spans (FRoadAgent hands them to FReverseRun) but it
+		// profiles the plan it was given, and a profile that lies about part of it is read by
+		// everything downstream, including the warning a human acts on.
+		TArray<EDriveDirection> Spans;
+		Plan.DescribeSpanDirections(Spans);
+		Profile.Build(Plan.Polyline, InAirframe, Spans);
+	}
 }
 
 bool FRouteFollower::HasArrived() const

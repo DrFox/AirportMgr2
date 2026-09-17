@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
+#include "Model/SpeedProfile.h"
 #include "RouteSearch.generated.h"
 
 class URoadNetwork;
@@ -138,6 +139,21 @@ struct AIRSIDE_API FRoutePlan
 	UPROPERTY() double Length = 0.0;
 
 	bool IsValid() const { return Result == ERouteResult::Found; }
+
+	/**
+	 * Which way the vehicle travels along each SPAN of Polyline - one entry per span, so
+	 * Polyline.Num() - 1 of them, Forward unless the step covering it is a bay's reverse leg.
+	 *
+	 * HERE BECAUSE THE PLAN IS WHAT KNOWS. FSpeedProfile takes the answer and has no idea what
+	 * a route step is; FRouteFollower needs it and would otherwise have to walk the step map
+	 * itself, which is a second reading of FRouteStep::EndVertex and the kind of duplicate
+	 * this file's own comment on that field warns about.
+	 *
+	 * OFF EndVertex, NEVER RE-SAMPLED, for the same reason RouteSearch::Section is: that index
+	 * points into the SAME polyline the follower walks, so the spans it names are the spans
+	 * that exist rather than a second evaluation of the curve.
+	 */
+	void DescribeSpanDirections(TArray<EDriveDirection>& Out) const;
 };
 
 namespace RouteSearch

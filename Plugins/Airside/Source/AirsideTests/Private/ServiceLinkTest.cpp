@@ -1305,6 +1305,59 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 		TEXT("the way off the service point is the bay's reverse leg, not a turn on the spot"),
 		First != nullptr && First->bReverseLeg);
 
+	// AND THE AUTHORITY CALLS THE WHOLE ROUTE DRIVABLE, which it did not until 2026-09-17.
+	//
+	// FSpeedProfile judged a plan by ONE limit end to end, so a route home - which begins with
+	// a bay's reverse leg and then drives forwards - was judged forwards throughout. The
+	// reverse span was refused for being legal (measured in PIE at R=547 against its own 495
+	// limit, warned about seven times in a row) and the point where the vehicle stops and
+	// changes direction read as a 178 degree instantaneous turn. Reported by the player from
+	// the log, with "not sure what it is talking about as it seemed ok going through the
+	// corners" - which was the correct reading.
+	//
+	// ASKED OF THE AUTHORITY ITSELF, never re-derived here. This file's own notes say four
+	// attempts shipped green because tests re-implemented the rule per edge instead of asking
+	// FSpeedProfile over a whole route; this asks it, about the route the player watched.
+	{
+		const FAirframe Dispenser = UAirsideSettings::ResolveLargestServiceVehicle();
+
+		TArray<EDriveDirection> Spans;
+		Leaving.DescribeSpanDirections(Spans);
+
+		int32 ReverseSpans = 0;
+		for (const EDriveDirection Way : Spans)
+		{
+			ReverseSpans += Way == EDriveDirection::Reverse ? 1 : 0;
+		}
+
+		FSpeedProfile Mixed;
+		Mixed.Build(Leaving.Polyline, Dispenser, Spans);
+
+		AddInfo(FString::Printf(
+			TEXT("the way out profiles as %d span(s), %d of them backwards; tightest R=%.0f at "
+			     "%.0f; %d sharp vertex/vertices"),
+			Spans.Num(), ReverseSpans, Mixed.GetTightestRadius(), Mixed.GetTightestAt(),
+			Mixed.GetSharpVertexCount()));
+
+		// NOT VACUOUS: a plan with no reverse spans would pass the two below for the wrong
+		// reason, and this test's whole subject is the span that is there.
+		TestTrue(TEXT("the way out really does contain reverse spans to judge"),
+			ReverseSpans > 0);
+
+		TestFalse(
+			*FString::Printf(TEXT("no span of the way out is tighter than the limit that "
+			                      "judges it (tightest R=%.0f at %.0f)"),
+				Mixed.GetTightestRadius(), Mixed.GetTightestAt()),
+			Mixed.WasTighterThanLock());
+
+		TestFalse(
+			*FString::Printf(TEXT("changing direction is not an instantaneous turn (%d sharp "
+			                      "vertex/vertices, sharpest %.0f deg at %.0f)"),
+				Mixed.GetSharpVertexCount(), Mixed.GetSharpestDegrees(),
+				Mixed.GetSharpestAt()),
+			Mixed.HasSharpVertex());
+	}
+
 	// AND THE AGENT DRIVES IT BACKWARDS, which is the half a route test cannot see. The three
 	// pieces this needs - the mark on the step, FReverseRun, and EAgentPhase::Reversing - all
 	// existed before today and none referred to any other, so the follower drove the reverse

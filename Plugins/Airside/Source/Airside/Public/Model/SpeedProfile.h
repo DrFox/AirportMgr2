@@ -71,6 +71,28 @@ struct AIRSIDE_API FSpeedProfile
 		EDriveDirection Direction = EDriveDirection::Forward);
 
 	/**
+	 * The same, for a line the vehicle drives PARTLY FORWARDS AND PARTLY BACKWARDS - one
+	 * direction per span, so a route containing a service bay's reverse leg can be judged
+	 * honestly instead of twice wrongly.
+	 *
+	 * BECAUSE A MIXED ROUTE IS DRIVABLE AND THE UNIFORM BUILD SAYS IT IS NOT. Judged forwards
+	 * end to end, the reverse span is refused for being legal - measured in PIE at R=547 on a
+	 * span whose own limit is 495, warned about seven times in a row - and the place where the
+	 * vehicle stops and changes direction reads as a 178 degree instantaneous turn. Both are
+	 * artefacts of asking one question about two different manoeuvres.
+	 *
+	 * THIS MATTERS BECAUSE THIS CLASS IS THE AUTHORITY. Everything downstream - the follower's
+	 * caps, the tests, and the warning a human reads - takes its answer from here, so an
+	 * authority that cries wolf on correct geometry is worse than one that says nothing: it
+	 * teaches the next person to skip the warning that matters.
+	 *
+	 * SpanDirections is one entry per SPAN, so Points.Num() - 1 of them. An empty view means
+	 * the whole line is Forward, which is what the overload above passes.
+	 */
+	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+		TConstArrayView<EDriveDirection> SpanDirections);
+
+	/**
 	 * The fastest the aircraft may be Distance along the route.
 	 *
 	 * Interpolated as sqrt(v^2 + 2 a s) rather than linearly, because that is the shape a
