@@ -126,6 +126,22 @@ struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 };
 
 /**
+ * Source 5: the nearest road's direction, and its perpendicular.
+ *
+ * THE NEAREST ONE ONLY. Every road proposing would put the whole field in the race, and the
+ * winner would be decided by a road the player cannot see - see FTuning::SearchRadiusUu.
+ *
+ * Angular, through the drag's own origin: this answers "which way from here", the same
+ * question Extending answers, and it loses to Extending on a tie because the edge you are
+ * extending is what you are thinking about.
+ */
+struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
  * Gathers every source's candidates and arbitrates between them - design sections 3 and 5.
  *
  * MODELLED ON FRoadSnapChain, deliberately, down to the move-only ownership: a source added

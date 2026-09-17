@@ -129,6 +129,19 @@ namespace SnapGuide
 		 * would be obeying a rule the player cannot see. NO PIE PASS YET - see design §11.
 		 */
 		double MaxPullUu = 1000.0;
+
+		/**
+		 * How far from the drag a network source will look for something to line up with. uu -
+		 * 100 m.
+		 *
+		 * WITHOUT A REACH, every road on the field proposes and the nearest-wins race is
+		 * decided by geometry the player cannot see - a taxiway half a kilometre away winning
+		 * because it happened to be a degree closer. Runways are deliberately exempt (see
+		 * FRunwayGuideSource): an airport squares to its runways from anywhere on it.
+		 *
+		 * NO PIE PASS YET.
+		 */
+		double SearchRadiusUu = 10000.0;
 	};
 
 	struct FResult

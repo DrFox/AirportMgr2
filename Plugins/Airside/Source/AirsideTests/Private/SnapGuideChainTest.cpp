@@ -41,7 +41,11 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	if (!TestNotNull(TEXT("a network"), Network)) { return false; }
 
 	const FSnapGuideChain Chain;
-	TestEqual(TEXT("the chain installs Extending, PointAlign and World"), Chain.NumSources(), 3);
+	// THE NUMBER MOVES WITH EVERY SOURCE ADDED, and that is exactly why it is asserted: a
+	// source written, declared and never installed in the constructor would be invisible
+	// otherwise - its candidates simply never appear, and every other test of the chain still
+	// passes. Stage 2 takes this from 3 to 7, one at a time.
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 4);
 
 	const FGuideAnchor Anchor = Frontage();
 

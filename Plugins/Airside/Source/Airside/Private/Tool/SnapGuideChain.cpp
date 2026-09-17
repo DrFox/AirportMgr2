@@ -1,6 +1,38 @@
 #include "Tool/SnapGuideChain.h"
 
+#include "Model/RoadNetwork.h"
+#include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/RoadNaming.h"
+
+namespace
+{
+	/** A live segment's two ends. False when the segment or either node has gone. */
+	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
+		FVector2D& OutA, FVector2D& OutB)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Id);
+		if (Segment == nullptr || !Segment->bAlive)
+		{
+			return false;
+		}
+		const FRoadNode* A = Network.GetNode(Segment->A);
+		const FRoadNode* B = Network.GetNode(Segment->B);
+		if (A == nullptr || B == nullptr)
+		{
+			return false;
+		}
+		OutA = A->Position;
+		OutB = B->Position;
+		return true;
+	}
+
+	/** The point on segment A-B nearest P. Clamped to the segment, not to its infinite line. */
+	FVector2D ClosestOn(const FVector2D& A, const FVector2D& B, const FVector2D& P)
+	{
+		return FMath::Lerp(A, B, RoadGeom::ClosestPointOnSegment(A, B, P));
+	}
+}
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	TArray<SnapGuide::FCandidate>& Out) const
@@ -95,10 +127,76 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 	}
 }
 
+void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	FRoadSegmentId Nearest;
+	FVector2D NearestAt = FVector2D::ZeroVector;
+	FVector2D NearestDir = FVector2D::ZeroVector;
+	double BestSquared = Reach * Reach;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!SegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// MEASURED FROM THE ORIGIN, not from the cursor: the road the gesture STARTED beside
+		// is the one it is being drawn parallel to, and a search keyed to the cursor would
+		// hand the guide to a different road halfway through the drag.
+		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
+		if (Squared > BestSquared)
+		{
+			continue;
+		}
+
+		BestSquared = Squared;
+		Nearest = Id;
+		NearestAt = On;
+		NearestDir = Span.GetSafeNormal();
+	}
+
+	if (NearestDir.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FString Name = RoadNaming::Describe(Network, Nearest);
+
+	SnapGuide::FCandidate Along;
+	Along.Direction = NearestDir;
+	Along.Through = Anchor.Origin;
+	Along.Fit = SnapGuide::EFit::Angular;
+	Along.ReferenceAt = NearestAt;
+	Along.Source = SnapGuide::ESource::Parallel;
+	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
+	Out.Add(Along);
+
+	SnapGuide::FCandidate Square = Along;
+	Square.Direction = RoadGeom::PerpCCW(NearestDir);
+	Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+	Out.Add(Square);
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
 	AddSource(MakeUnique<FPointAlignGuideSource>());
+	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 }
 
