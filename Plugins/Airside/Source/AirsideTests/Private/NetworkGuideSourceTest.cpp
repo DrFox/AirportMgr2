@@ -31,6 +31,33 @@ namespace
 		return Anchor;
 	}
 
+	/**
+	 * A runway strip. NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a
+	 * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
+	 * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
+	 *
+	 * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
+	 * anything under it, so a test strip either lowers the bar or is half a kilometre long.
+	 * MeshFreshnessTest does exactly this, for exactly this reason.
+	 */
+	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
+	{
+		// A NODE FIRST, PURELY TO BRING THE NETWORK INTO BEING. The facade creates URoadNetwork
+		// lazily inside PlaceNode and PlaceRunway does NOT - so a test whose first call is
+		// PlaceRunway leaves Actor->Network null, and dereferencing it reads offset 0x60 off a
+		// null pointer. That is not hypothetical: it crashed this very test, and a crash hides
+		// its cause where a failure would have named it. MeshFreshnessTest places a node first
+		// for the same reason and says so.
+		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+
+		URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Profile->bContinuousThroughJunctions = true;
+
+		// Defaults to 50000 uu, and PlaceRunway refuses anything under it.
+		Actor->MinimumRunwayLength = 100.0;
+		return Actor->PlaceRunway(From, To, Profile);
+	}
+
 	/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
 	TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
 		const URoadNetwork& Network, const FGuideAnchor& Anchor)
@@ -181,6 +208,71 @@ bool FCollinearGuideIsNotParallelTest::RunTest(const FString& Parameters)
 	const SnapGuide::FResult Beside = SnapGuide::Arbitrate(
 		Candidates, FVector2D(7000.0, 0.0), FVector2D(9000.0, 3000.0), SnapGuide::FResult());
 	TestFalse(TEXT("a cursor 30 m to the side is not in line with anything"), Beside.bActive);
+
+	return true;
+}
+
+/**
+ * A RUNWAY IS OFFERED FROM ANYWHERE ON THE FIELD, which is the one way this source differs
+ * from Parallel - and that difference is the point of it: an airport squares to its runways.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayGuideReachesTheWholeFieldTest,
+	"Airside.Tool.RunwayGuideReachesTheWholeField",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// A runway along +X through the origin. NORTH IS +X in this project (see RunwayDesignator's
+	// own header comment), so this strip is 18/36 and NOT 09/27 - the first draft of this test
+	// asserted 09/27 and would have failed against a correct source.
+	if (!TestTrue(TEXT("the runway is placed"),
+		LayRunway(Actor, FVector2D(-40000.0, 0.0), FVector2D(40000.0, 0.0))))
+	{
+		return false;
+	}
+
+	// HONOURED, NOT ASSUMED. PlaceRunway can refuse - too short, no profile - and every
+	// assertion below would then be measuring an empty field while looking like a source bug.
+	if (!TestTrue(TEXT("and the network exists to be searched"), Actor->Network != nullptr))
+	{
+		return false;
+	}
+
+	const FRunwayGuideSource Source;
+
+	// FAR BEYOND SearchRadiusUu - 500 m out, where every other network source has given up.
+	const TArray<SnapGuide::FCandidate> Candidates =
+		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
+
+	if (!TestEqual(TEXT("the runway proposes its heading and its perpendicular"),
+		Candidates.Num(), 2))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("offered from right across the field, unlike every other network source"),
+		FMath::IsNearlyZero(Candidates[0].Direction.Y, 1.0e-6));
+	TestEqual(TEXT("angular, through the drag's own origin"),
+		static_cast<int32>(Candidates[0].Fit), static_cast<int32>(SnapGuide::EFit::Angular));
+
+	// NAMED AS A RUNWAY IS SPOKEN OF, both ends, low first - a label saying "the taxiway" over
+	// a runway would be the classification quietly disagreeing with itself.
+	TestTrue(*FString::Printf(TEXT("named by its designators, got '%s'"),
+		*Candidates[0].Description),
+		Candidates[0].Description.Contains(TEXT("runway 18/36")));
+
+	// CONTROL LEG: the source is selective. A taxiway laid beside it must NOT be offered here,
+	// or this test would pass on a source that proposed every segment on the field.
+	Lay(Actor, FVector2D(-10000.0, 20000.0), FVector2D(10000.0, 20000.0), ERoadKind::Taxiway);
+	const TArray<SnapGuide::FCandidate> Again =
+		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
+	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 2);
 
 	return true;
 }

@@ -236,12 +236,58 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	}
 }
 
+void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		if (!Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!SegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// NO REACH TEST, and that one absence is the only thing separating this source from
+		// Parallel - see the declaration for why it is deliberate.
+		const FString Name = RoadNaming::Describe(Network, Id);
+
+		SnapGuide::FCandidate Along;
+		Along.Direction = Span.GetSafeNormal();
+		Along.Through = Anchor.Origin;
+		Along.Fit = SnapGuide::EFit::Angular;
+		Along.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+		Along.Source = SnapGuide::ESource::Runway;
+		Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
+		Out.Add(Along);
+
+		SnapGuide::FCandidate Square = Along;
+		Square.Direction = RoadGeom::PerpCCW(Along.Direction);
+		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+		Out.Add(Square);
+	}
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
 	AddSource(MakeUnique<FPointAlignGuideSource>());
 	AddSource(MakeUnique<FCollinearGuideSource>());
 	AddSource(MakeUnique<FParallelGuideSource>());
+	AddSource(MakeUnique<FRunwayGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 }
 

@@ -161,6 +161,23 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
 };
 
 /**
+ * Source 6: every runway's heading, and its perpendicular.
+ *
+ * DELIBERATELY UNBOUNDED by SearchRadiusUu, unlike every other network source. An airport
+ * squares to its runways from anywhere on it - that is what makes a field read as one place
+ * rather than as a pile of unrelated pavement - and there are at most a handful of runways to
+ * walk. Design section 3 says "every runway's heading" and means it.
+ *
+ * Below the local sources and above the world axes, because an airport squares to its runways
+ * but not in preference to the taxiway the player is actually working on.
+ */
+struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
  * Gathers every source's candidates and arbitrates between them - design sections 3 and 5.
  *
  * MODELLED ON FRoadSnapChain, deliberately, down to the move-only ownership: a source added
