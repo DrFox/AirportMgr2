@@ -760,6 +760,10 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 
 	UpdateView(DeltaTime);
 
+	// BEFORE THE TARGET GUARD, so a frame with no road actor clears the bar instead of
+	// leaving the last gesture's bay count sitting on it forever.
+	CollectToolReadout();
+
 	if (Target == nullptr)
 	{
 		return;
@@ -776,6 +780,35 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	if (IBuildTool* Tool = GetActiveTool())
 	{
 		Tool->Tick(MakeToolContext());
+	}
+}
+
+void ARoadBuildController::CollectToolReadout()
+{
+	ToolReadoutCollector.Reset();
+
+	// The target guard is the same one MakeToolContext's callers already obey: a context
+	// built with no actor has no network to snap against, and a tool asked about one would
+	// be describing a gesture it could not commit anyway.
+	if (Target == nullptr)
+	{
+		return;
+	}
+	if (const IBuildTool* Tool = GetActiveTool())
+	{
+		Tool->BuildReadout(MakeToolContext(), ToolReadoutCollector);
+	}
+}
+
+void ARoadBuildController::OnBuild()
+{
+	if (IBuildTool* Tool = GetActiveTool())
+	{
+		// NOT GUARDED ON bCommittable HERE. FBuildAction::TryRun is the one door and has
+		// already checked IsEnabled; a tool's OnCommit ignores the call in every stage but
+		// its last anyway (see FPlotPlaceTool::OnCommit), so a second copy of the rule here
+		// would be a second thing to keep in agreement with the readout.
+		Tool->OnCommit(MakeToolContext());
 	}
 }
 

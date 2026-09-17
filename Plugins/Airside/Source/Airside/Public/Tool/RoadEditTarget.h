@@ -208,6 +208,20 @@ public:
 		return PlaceEntity(Where, Heading, EPlaceableEntity::Stand);
 	}
 
+	/**
+	 * Drop an installation into a DRAWN plot, filling its bays with Modules.
+	 *
+	 * NOT AN OVERLOAD OF PlaceEntity, because the pose is not the caller's to give: it comes
+	 * from the fit against whichever plot edge faces a road, and a tool that passed a pose
+	 * here would be stating an answer the solver owns.
+	 *
+	 * INDEX_NONE when the plot has no road frontage or is smaller than one bay. The facade
+	 * logs which; see URoadEditFacade::PlaceEntityInPlot.
+	 */
+	virtual int32 PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+		FVector2D FrontageA, FVector2D FrontageB,
+		const TArray<EDepotModule>& Modules, EPlaceableEntity Kind) = 0;
+
 	virtual bool DeleteEntity(int32 EntityIndex) = 0;
 	virtual int32 FindEntityAt(FVector2D Where, double Radius) const = 0;
 

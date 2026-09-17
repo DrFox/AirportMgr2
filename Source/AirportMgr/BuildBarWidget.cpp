@@ -402,6 +402,7 @@ void UBuildBarWidget::RefreshState()
 			Entry->Icon->SetColorAndOpacity(Content);
 		}
 	}
+
 }
 
 void UBuildBarWidget::RefreshClock()

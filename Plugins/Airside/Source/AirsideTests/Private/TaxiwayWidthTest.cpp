@@ -57,6 +57,8 @@ namespace
 		virtual bool DeleteApron(int32) override { return false; }
 		virtual int32 FindApronAt(FVector2D) const override { return INDEX_NONE; }
 		virtual int32 PlaceEntity(FVector2D, double, EPlaceableEntity) override { return INDEX_NONE; }
+		virtual int32 PlaceEntityInPlot(const TArray<FVector2D>&, FVector2D, FVector2D,
+			const TArray<EDepotModule>&, EPlaceableEntity) override { return INDEX_NONE; }
 		using IRoadEditTarget::PlaceStand;
 		virtual bool DeleteEntity(int32) override { return false; }
 		virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }

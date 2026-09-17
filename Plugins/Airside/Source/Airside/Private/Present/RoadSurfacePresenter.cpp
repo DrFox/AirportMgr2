@@ -226,6 +226,25 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 					++Count;
 				}
 			}
+
+			// A PLOTTED INSTALLATION'S PAD IS PAVEMENT, and it is the polygon the player
+			// drew - not new geometry. Through the SAME builder and the same triangulator
+			// the aprons above use, on the same component and the same Z, so a depot's pad
+			// and the apron it abuts are one surface rather than two that must agree.
+			//
+			// The pad's painted lines are deliberately NOT here. The white and yellow lines
+			// on the concept sheet mark the truck's path off the pad, and that path is the
+			// pose's lead-in, which the guideline graph already computes and draws. Painting
+			// them into the mesh would be a second evaluator of where the truck drives -
+			// they would agree at one rotation and visibly disagree at every other.
+			for (const FEntityInstance& Entity : Network.GetEntities())
+			{
+				if (Entity.bAlive && Entity.Outline.Num() >= 3)
+				{
+					Builder.AddApron(Entity.Outline);
+					++Count;
+				}
+			}
 			// A COPY, not the zero-copy const& this held before issue #81: Builder is scoped
 			// to this lambda, and GetBuffers() returns a const& into IT, which stops existing
 			// the moment this lambda returns - MoveTemp cannot turn that into a move either,

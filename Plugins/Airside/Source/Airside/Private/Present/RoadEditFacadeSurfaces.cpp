@@ -12,12 +12,14 @@
 
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
+#include "Build/AnchorLink.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadSlotMap.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
+#include "Solve/PlotFit.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadEditHistory.h"
 
@@ -291,6 +293,115 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 	}
 
 	CommitPurchase(Edit, Quote);
+	return Placed.Index;
+}
+
+int32 URoadEditFacade::PlaceEntityInPlot(const TArray<FVector2D>& Outline,
+	FVector2D FrontageA, FVector2D FrontageB,
+	const TArray<EDepotModule>& Modules, EPlaceableEntity Kind)
+{
+	ARoadNetworkActor& Owner = Actor();
+
+	// RESOLVED BY KIND, through the same one place PlaceEntity uses, so a plot and a plop
+	// cannot end up placing different objects for the same key.
+	UEntityDefinition* Definition = Owner.ResolveEntityDefinition(Kind);
+	if (Definition == nullptr)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: no FuelDepotDefinition (author DA_FuelDepot) "
+				 "with Tools/Python/build_stand_asset.py, or set one on the actor."));
+		return INDEX_NONE;
+	}
+
+	URoadNetwork& Net = EnsureNetwork();
+
+	// The triangulator's contract is a SIMPLE polygon, and it is this layer that owes it -
+	// fed a figure-eight it produces overlapping triangles rather than an error. The gesture
+	// cannot produce one now that a plot is a rectangle, which is exactly why this stays:
+	// the guarantee belongs to whoever feeds the triangulator, not to whoever happens to be
+	// calling this month.
+	if (!RoadGeom::IsSimplePolygon(Outline))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: the outline crosses itself"));
+		return INDEX_NONE;
+	}
+
+	// COUNTER-CLOCKWISE, exactly the correction AddApron makes and for the same reason: the
+	// pad goes through the same triangulator, which orients its triangles from the winding,
+	// and the surface is not two-sided. Stored clockwise, the pad faces DOWN - the fence and
+	// the modules still stand up, because PlotFit derives the interior side from the signed
+	// area, and the concrete is simply absent. That shipped on 2026-09-15 and took a
+	// screenshot to find.
+	//
+	// KEPT EVEN THOUGH THE GESTURE NOW HANDS IN A COUNTER-CLOCKWISE RECTANGLE. It costs a
+	// shoelace sum, and the alternative is a facade that is correct only for the one caller
+	// that happens to get the winding right.
+	TArray<FVector2D> Wound = Outline;
+	if (RoadGeom::PolygonArea(Wound) < 0.0)
+	{
+		Algo::Reverse(Wound);
+
+		// The frontage travels with it. It was given in the ORIGINAL winding order, and
+		// PlotFit reads which side the interior is on from that direction - left alone
+		// across a reversal, it would lay every bay across the road instead of into the plot.
+		Swap(FrontageA, FrontageB);
+	}
+
+	// THE FRONTAGE IS GIVEN, NOT SEARCHED FOR. A road-snapped rectangle knows which of its
+	// edges is on the road by construction, so searching would be a second opinion about a
+	// fact the gesture already established - and that is why FAnchorLink::FindFrontageEdge
+	// was deleted rather than left sitting there looking authoritative.
+	//
+	// The plot also touches a road BY CONSTRUCTION, so the old "no road within reach"
+	// refusal went with it. The Idle stage reports a cursor near no service road before a
+	// click is even possible, which is earlier and cheaper than refusing at commit.
+	const PlotFit::FPlotFit Fit = PlotFit::FitBays(Wound, FrontageA, FrontageB);
+	if (!Fit.bFits)
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot refused: the plot is smaller than one %.0f m bay."),
+			PlotFit::BayWidthUu / 100.0);
+		return INDEX_NONE;
+	}
+
+	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("place fuel depot"));
+
+	FEntityPlacement Placement;
+	Placement.Definition = Definition;
+	Placement.Anchors = Definition->Anchors;
+
+	// THE GATE IS THE POSE, and there is exactly one of it however many sheds the plot
+	// holds - BuildFuelDepot's ruling that two lead-ins from one small building into one
+	// road is a duplicate painted line. It sits at the middle of the frontage edge, which
+	// is the one point on the plot the road is reliably nearest.
+	Placement.Position = (FrontageA + FrontageB) * 0.5;
+
+	// The bays all face the same way, so the first one's heading IS the installation's.
+	Placement.Heading = Fit.Bays[0].Heading;
+	Placement.PoseRole = Definition->PoseRole;
+	Placement.Outline = Wound;
+	Placement.Modules = Modules;
+
+	// TRAILING MODULES ARE DROPPED, not squeezed in. A player who chose four modules for a
+	// three-bay plot gets three and is told so; scaling the bays to fit would silently
+	// change the size they drew, which is the one thing a drawn plot must never do.
+	if (Placement.Modules.Num() > Fit.Bays.Num())
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("PlaceEntityInPlot: %d modules chosen but only %d bays fit; dropped %d."),
+			Placement.Modules.Num(), Fit.Bays.Num(),
+			Placement.Modules.Num() - Fit.Bays.Num());
+		Placement.Modules.SetNum(Fit.Bays.Num());
+	}
+
+	const FEntityInstanceId Placed = Net.PlaceEntity(Placement);
+	if (!Placed.IsSet())
+	{
+		return INDEX_NONE;
+	}
+
+	CommitAndNotify(Edit);
 	return Placed.Index;
 }
 

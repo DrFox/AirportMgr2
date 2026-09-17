@@ -70,7 +70,10 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("its pose is a vehicle's, not an aircraft's"),
 		static_cast<int32>(Depot->PoseRole), static_cast<int32>(EServiceRole::Fuel));
-	TestEqual(TEXT("it has one truck"), Depot->Trucks, 1);
+	// ONE truck, which is now what a depot placed WITHOUT a plot gets. A drawn depot's count
+	// comes from its sheds instead - see Airside.Entities.TrucksDerivedFromSheds, which
+	// makes that claim about a PLACED depot, where it belongs.
+	TestEqual(TEXT("it has one truck when placed without a plot"), Depot->Trucks, 1);
 	TestEqual(TEXT("and NO anchors - the pose IS its road connection"), Depot->Anchors.Num(), 0);
 
 	// ON A ROAD. The pose lead-in leaves along heading + 180 (see FAnchorLink), so a depot

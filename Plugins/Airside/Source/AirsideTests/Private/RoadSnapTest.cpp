@@ -7,6 +7,72 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+/**
+ * THE ROAD YOU CAN SEE IS THE ROAD YOU HIT.
+ *
+ * SegmentRadius is a band about the CENTRELINE, so on any road wider than twice that band
+ * the outer pavement resolved Free - the plot tool refused to anchor while the cursor was
+ * plainly on the tarmac (PIE, 2026-09-16). FRoadNodeSnapRule had already learned this for
+ * junctions; this pins the same rule for the segments between them.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadSnapReachesAcrossThePavementTest,
+	"Airside.Tool.SnapReachesAcrossThePavement",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadSnapReachesAcrossThePavementTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Network = NewObject<URoadNetwork>(GetTransientPackage());
+	if (!TestNotNull(TEXT("network constructed"), Network)) { return false; }
+
+	// 12 m wide, so 6 m of pavement either side of the centreline - four times the 1.5 m
+	// SegmentRadius below, which is what makes the gap this test covers reachable at all.
+	URoadProfile* Wide = URoadProfile::MakeTransient(1200.0, 100.0, 0.0);
+	if (!TestNotNull(TEXT("a wide profile"), Wide)) { return false; }
+
+	const FRoadNodeId West = Network->AddNode(FVector2D(-5000.0, 0.0));
+	const FRoadNodeId East = Network->AddNode(FVector2D(5000.0, 0.0));
+	Network->AddStraightSegment(West, East, Wide);
+
+	FRoadSnapSettings Settings;
+	Settings.NodeRadius = 150.0;
+	Settings.SegmentRadius = 150.0;
+	Settings.MinSplitFromEndpoint = 50.0;
+	Settings.bSnapToSegments = true;
+
+	const FRoadSnapChain Chain;
+
+	// 4 m off the centreline: well outside SegmentRadius, and well INSIDE the road.
+	const FRoadSnapResult OnPavement =
+		Chain.Resolve(*Network, FVector2D(0.0, 400.0), Settings);
+	TestTrue(TEXT("a cursor on the tarmac snaps to the road it is standing on"),
+		OnPavement.Kind == ERoadSnapKind::Segment);
+
+	// AND THE ROAD STILL ENDS. Reach is the road's own half width, not an excuse to snap
+	// from anywhere - a cursor off the pavement by more than the near-miss margin is Free,
+	// or the player could never place anything beside a road again.
+	const FRoadSnapResult Beyond =
+		Chain.Resolve(*Network, FVector2D(0.0, 900.0), Settings);
+	TestTrue(TEXT("but a cursor clear of the pavement is still Free"),
+		Beyond.Kind == ERoadSnapKind::Free);
+
+	// A NARROW ROAD KEEPS THE AUTHORED MARGIN. The reach is a floor, not a replacement, so
+	// hovering just off a thin road still finds it.
+	URoadProfile* Thin = URoadProfile::MakeTransient(100.0, 100.0, 0.0);
+	if (!TestNotNull(TEXT("a thin profile"), Thin)) { return false; }
+	URoadNetwork* Second = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId A = Second->AddNode(FVector2D(-5000.0, 0.0));
+	const FRoadNodeId B = Second->AddNode(FVector2D(5000.0, 0.0));
+	Second->AddStraightSegment(A, B, Thin);
+
+	const FRoadSnapResult NearMiss =
+		Chain.Resolve(*Second, FVector2D(0.0, 120.0), Settings);
+	TestTrue(TEXT("just off a 1 m road still finds it, on SegmentRadius alone"),
+		NearMiss.Kind == ERoadSnapKind::Segment);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadSnapTest,
 	"Airside.Tool.Snap",

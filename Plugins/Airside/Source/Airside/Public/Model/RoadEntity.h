@@ -964,6 +964,33 @@ struct AIRSIDE_API FResolvedAnchor
 };
 
 /**
+ * One module in a depot's plot: what occupies a bay.
+ *
+ * A UENUM in this UHT-parsed header rather than a plain enum beside the tool, for the reason
+ * EPlaceableEntity records at its own declaration: UHT cannot resolve a type declared in a
+ * header with no .generated.h, and a forward declaration does not satisfy it either.
+ *
+ * IN Model/ AND NOT Entities/, deliberately. UFuelService lives in another plugin's Model/
+ * layer and counts a depot's pumps for itself; had this been an Entities/ type it could not
+ * have, and the count would have needed a fifth captured fact to reach it. That it did not
+ * is the test that this enum is in the right layer.
+ *
+ * WHAT EACH ONE DRIVES, and how real that is today:
+ *   Shed - the truck count. LIVE: UFuelService gates dispatch on FEntityInstance::Trucks.
+ *   Pump - the dwell. LIVE: UFuelService::DwellSecondsFor divides by these.
+ *   Tank - storage. INERT: no fuel inventory exists anywhere yet. Counted, never read.
+ * The asymmetry is deliberate and is recorded in the design doc §2: growing a consumable
+ * economy inside a feel probe is how a probe stops being one.
+ */
+UENUM()
+enum class EDepotModule : uint8
+{
+	Shed,
+	Tank,
+	Pump
+};
+
+/**
  * A placed entity. The Flyweight instance: pose plus a shared definition.
  *
  * ResolvedAnchors holds a guideline node per anchor the definition declared AT THE TIME IT
@@ -1047,8 +1074,75 @@ struct AIRSIDE_API FEntityInstance
 	 */
 	UPROPERTY() int32 Trucks = 0;
 
+	/**
+	 * The plot the player drew, in WORLD space. Empty means an ordinary plop with no plot -
+	 * which is every stand, and every depot placed before this field existed.
+	 *
+	 * CLOSED IMPLICITLY: the last point joins the first and the array does NOT repeat it,
+	 * the same contract UEntityDefinition::ServiceLoop states and for the same reason - a
+	 * repeated point is a value that must agree with another value in the same array, which
+	 * is exactly the drift FResolvedAnchor exists to remove.
+	 *
+	 * WORLD AND NOT LOCAL, unlike ServiceLoop, and that is a deliberate difference rather
+	 * than an inconsistency: a ServiceLoop is authored once on a shared definition and must
+	 * therefore be relative to whatever pose it is stamped at, while this outline is drawn
+	 * by the player at world coordinates and belongs to this instance alone. Storing it
+	 * local would mean unrotating the player's own clicks and rotating them back to draw,
+	 * which is arithmetic that can only lose.
+	 */
+	UPROPERTY() TArray<FVector2D> Outline;
+
+	/**
+	 * What the player put in the bays, in bay order. Empty for a plotless entity.
+	 *
+	 * THE FOURTH CAPTURED FACT - see Trucks above, whose comment called for exactly this:
+	 * the three trailing defaulted parameters became FEntityPlacement rather than growing
+	 * a fourth that a caller could still get right only by luck.
+	 */
+	UPROPERTY() TArray<EDepotModule> Modules;
+
 	UPROPERTY() int32 Generation = 0;
 	UPROPERTY() bool  bAlive = false;
+};
+
+/**
+ * Everything one placement needs, replacing the three trailing defaulted parameters that
+ * FEntityInstance::Trucks' own comment warned would not survive a fourth.
+ *
+ * A PLAIN STRUCT, NOT A USTRUCT. It holds a TConstArrayView, which cannot be a UPROPERTY,
+ * and it is never saved, never reflected and never seen by Blueprint - it exists for the
+ * length of one call. Marking it USTRUCT to match its neighbours would mean copying the
+ * anchors into an owned array for no reason but decoration.
+ *
+ * TRUCKS IS STILL HERE, and is NOT what a plotted depot uses. A plot's truck count is
+ * derived from the sheds in Modules, because the player's mix IS the fleet size and a
+ * separately-stated number could only ever disagree with it. This field is what a PLOTLESS
+ * caller states - every stand, and every pre-plot depot - and exactly one of the two paths
+ * is taken, so the two can never both apply.
+ */
+struct AIRSIDE_API FEntityPlacement
+{
+	UEntityDefinition* Definition = nullptr;
+
+	/** Handed in rather than read off Definition: Model/ must not dereference Entities/. */
+	TConstArrayView<FEntityAnchor> Anchors;
+
+	FVector2D Position = FVector2D::ZeroVector;
+
+	/** Radians, as everywhere else a placement is involved. */
+	double Heading = 0.0;
+
+	double DesignWingspan = 0.0;
+	EServiceRole PoseRole = EServiceRole::Aircraft;
+
+	/** Only read when Modules is empty. See the struct comment. */
+	int32 Trucks = 0;
+
+	/** The drawn plot, world space, implicitly closed. Empty for an ordinary plop. */
+	TArray<FVector2D> Outline;
+
+	/** What fills the bays, in bay order. Empty for an ordinary plop. */
+	TArray<EDepotModule> Modules;
 };
 
 /**

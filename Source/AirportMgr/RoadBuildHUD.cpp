@@ -6,6 +6,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNode.h"
 #include "Present/RoadNetworkActor.h"
+#include "BuildActions.h"
 #include "RoadBuildController.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
@@ -25,7 +26,7 @@ ARoadBuildHUD::ARoadBuildHUD()
 		EPreviewStyle::RunwayHoldingPosition, EPreviewStyle::IntermediateHoldingPosition,
 		EPreviewStyle::Hover, EPreviewStyle::Selected, EPreviewStyle::NodeStub,
 		EPreviewStyle::NodeThrough, EPreviewStyle::NodeJunction, EPreviewStyle::StandPose,
-		EPreviewStyle::ServiceAnchor })
+		EPreviewStyle::ServiceAnchor, EPreviewStyle::Pinned, EPreviewStyle::Provisional })
 	{
 		Looks.Add(Style, PreviewPalette::DefaultLook(Style));
 	}
@@ -100,10 +101,122 @@ void ARoadBuildHUD::DrawHUD()
 	// the click cannot disagree.
 	if (IBuildTool* Tool = Controller->GetActiveTool())
 	{
-		Tool->BuildPreview(Controller->MakeToolContext(), *this);
+		// ONE CONTEXT for both, not two calls: the prompt must describe the same frame the
+		// ghost does, which is the whole reason the readout is filled beside the preview.
+		const FToolContext Context = Controller->MakeToolContext();
+		Tool->BuildPreview(Context, *this);
 
 		// The tool name and the clock moved to UBuildBarWidget; this class draws only in
-		// world space now.
+		// world space now - and this prompt, which is world space on purpose. See
+		// DrawCommitPrompt for why the bar's Build button was not enough on its own.
+		//
+		// THE CONTROLLER'S READOUT, not a second BuildReadout call here. The bar's Build
+		// button reads that same collected value, so the prompt cannot offer a commit the
+		// button would refuse.
+		DrawPlotPanel(Context.Cursor, PanelLines(Controller->GetToolReadout()));
+	}
+}
+
+FString ARoadBuildHUD::CommitPromptText(const FToolReadout& Readout)
+{
+	if (!Readout.bCommittable)
+	{
+		return FString();
+	}
+
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (Build == nullptr)
+	{
+		return FString();
+	}
+
+	// THE LABEL AND THE KEY BOTH COME FROM THE REGISTRY. Typing either here would be a
+	// second source for something BuildActions() already owns, and the bar button beside it
+	// would be free to drift - see CLAUDE.md, "Lists that must agree are ONE list".
+	if (!Build->Key.IsValid())
+	{
+		return Build->Label.ToString();
+	}
+	return FString::Printf(TEXT("%s  [%s]"), *Build->Label.ToString(),
+		*Build->Key.GetDisplayName().ToString());
+}
+
+TArray<FString> ARoadBuildHUD::PanelLines(const FToolReadout& Readout)
+{
+	TArray<FString> Lines;
+	for (const TPair<FString, FString>& Fact : Readout.Facts)
+	{
+		Lines.Add(FString::Printf(TEXT("%s: %s"), *Fact.Key, *Fact.Value));
+	}
+	for (const FString& Warning : Readout.Warnings)
+	{
+		Lines.Add(Warning);
+	}
+
+	// BUILD LAST, under the facts it is a decision about, and only when the gesture can
+	// actually take it. CommitPromptText answers both and reads the key off the registry, so
+	// this does not get to hold a second opinion about either.
+	const FString Prompt = CommitPromptText(Readout);
+	if (!Prompt.IsEmpty())
+	{
+		Lines.Add(Prompt);
+	}
+	return Lines;
+}
+
+void ARoadBuildHUD::DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FString>& Lines)
+{
+	FVector2D Screen;
+	if (!ProjectPlanePoint(PlanePoint, PlaneZ, Screen) || GEngine == nullptr)
+	{
+		return;
+	}
+
+	UFont* Font = GEngine->GetMediumFont();
+	if (Font == nullptr || Lines.Num() == 0)
+	{
+		return;
+	}
+
+	// SIZED TO THE WIDEST LINE, measured rather than guessed: a panel sized off the first
+	// line clips every longer one, and a fixed width leaves a slab of ground behind a short
+	// readout.
+	float Widest = 0.0f;
+	float LineHeight = 0.0f;
+	for (const FString& Line : Lines)
+	{
+		float LineWidth = 0.0f;
+		float Height = 0.0f;
+		GetTextSize(Line, LineWidth, Height, Font);
+		Widest = FMath::Max(Widest, LineWidth);
+		LineHeight = FMath::Max(LineHeight, Height);
+	}
+
+	const float PadX = 12.0f;
+	const float PadY = 7.0f;
+	const float Rise = 34.0f;
+	const float Block = LineHeight * Lines.Num();
+
+	// ABOVE THE POINT AND CENTRED ON IT. Below, the panel sits under the pointer itself; to
+	// one side it falls off screen on plots drawn near an edge.
+	//
+	// THE POINT IS THE CURSOR, NOT THE PLOT'S CENTROID. The centroid is what this should
+	// anchor to and DrawHUD has no quad to take it from - the tool owns that shape. Named
+	// here rather than left as a silent difference between this code and the spec, which
+	// calls the panel plot-anchored.
+	const float Left = static_cast<float>(Screen.X) - (Widest * 0.5f + PadX);
+	const float Top = static_cast<float>(Screen.Y) - (Block + PadY * 2.0f) - Rise;
+
+	// A GROUND BEHIND IT, unlike every other label this class draws. Those name a node on a
+	// dark road; this lands on whatever the plot is over - grass, concrete, the ghost's own
+	// white - and coloured text alone is unreadable on at least one of them.
+	DrawRect(FLinearColor(0.02f, 0.03f, 0.04f, 0.72f),
+		Left, Top, Widest + PadX * 2.0f, Block + PadY * 2.0f);
+
+	for (int32 Index = 0; Index < Lines.Num(); ++Index)
+	{
+		DrawText(Lines[Index], LookFor(EPreviewStyle::Pending).Colour,
+			Left + PadX, Top + PadY + LineHeight * Index, Font);
 	}
 }
 
@@ -166,10 +279,34 @@ void ARoadBuildHUD::Line(const FVector2D& From, const FVector2D& To, EPreviewSty
 	const FPreviewLook& Look = LookFor(Style);
 	const float Weight = PreviewThickness * Look.ThicknessScale;
 
-	DrawLine(
-		static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
-		static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
-		Look.Colour, Weight);
+	if (!IsDashed(Style))
+	{
+		DrawLine(
+			static_cast<float>(ScreenA.X), static_cast<float>(ScreenA.Y),
+			static_cast<float>(ScreenB.X), static_cast<float>(ScreenB.Y),
+			Look.Colour, Weight);
+		return;
+	}
+
+	// DASHED IN SCREEN SPACE - see DashPitch for why not world space. Stepping by the pitch
+	// and drawing the first half of each step is the whole of it; the last piece is clamped
+	// to the end rather than allowed to overshoot, or a boundary would grow a whisker past
+	// its own corner at some lengths and not others.
+	const FVector2D Span = ScreenB - ScreenA;
+	const double Length = Span.Size();
+	if (Length <= 0.0)
+	{
+		return;
+	}
+
+	const FVector2D Unit = Span / Length;
+	for (double Along = 0.0; Along < Length; Along += DashPitch)
+	{
+		const FVector2D From = ScreenA + Unit * Along;
+		const FVector2D To = ScreenA + Unit * FMath::Min(Along + DashPitch * 0.5, Length);
+		DrawLine(static_cast<float>(From.X), static_cast<float>(From.Y),
+			static_cast<float>(To.X), static_cast<float>(To.Y), Look.Colour, Weight);
+	}
 }
 
 void ARoadBuildHUD::CrossMark(const FVector2D& At, const FVector2D& Along, EPreviewStyle Style)

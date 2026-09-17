@@ -67,6 +67,9 @@ namespace
 		 */
 		bool bSecondStand = false;
 
+		/** A depot whose plot holds a shed and a tank and NO PUMP. Set before Build. */
+		bool bDepotWithoutPump = false;
+
 		/**
 		 * Seconds of GAME time an aircraft dispatched by this fixture spends on stand, or 0
 		 * to leave FAirframe's authored default alone.
@@ -266,8 +269,27 @@ void FFuelFixture::Build(bool bWithRoad, bool bWithDepot)
 
 		// North of the road, facing +Y, so its pose ray leaves toward -Y and meets the road.
 		// Well east of the stand so the two lead-ins never fight over the same stretch.
-		Depot = Net->PlaceEntity(DepotDef, DepotDef->Anchors, FVector2D(12000.0, RoadY + 4000.0),
-			UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+		if (bDepotWithoutPump)
+		{
+			// A MODULAR depot whose plot holds a shed and a tank and no pump. Placed through
+			// FEntityPlacement because that is the only path that carries modules at all -
+			// the plotless signature above has none, and a depot with no modules is not a
+			// depot with no pump (see UFuelService::HasWorkingPump).
+			FEntityPlacement Placement;
+			Placement.Definition = DepotDef;
+			Placement.Anchors = DepotDef->Anchors;
+			Placement.Position = FVector2D(12000.0, RoadY + 4000.0);
+			Placement.Heading = UE_DOUBLE_PI * 0.5;
+			Placement.PoseRole = DepotDef->PoseRole;
+			Placement.Modules = { EDepotModule::Shed, EDepotModule::Tank };
+			Depot = Net->PlaceEntity(Placement);
+		}
+		else
+		{
+			Depot = Net->PlaceEntity(DepotDef, DepotDef->Anchors,
+				FVector2D(12000.0, RoadY + 4000.0),
+				UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole, DepotDef->Trucks);
+		}
 	}
 
 	RunAnchorLinks();
@@ -549,6 +571,27 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and the card says so"),
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
 			FString(TEXT("no fuel depot")));
+	}
+
+	// A DEPOT WITH NO PUMP. On a road, with a truck, and still unable to fuel - so the
+	// reason must name the PUMP. Before NoPump existed this fell through to NoRoute and
+	// said "no road from depot" about a depot sitting on a road, sending the player to look
+	// at the one thing that was already right. That is the same misdirection the busy-depot
+	// branch was added to stop, which is why this case is pinned here rather than trusted.
+	{
+		FFuelFixture Fixture;
+		Fixture.bDepotWithoutPump = true;
+		Fixture.Build(/*bWithRoad=*/true);
+		if (!TestTrue(TEXT("an aircraft parks"), Fixture.ParkAircraft() != 0)) { return false; }
+		Fixture.Advance(0.2);
+
+		if (!TestEqual(TEXT("one demand"), Fixture.Service->GetDemands().Num(), 1)) { return false; }
+		TestEqual(TEXT("because the depot has no pump"),
+			static_cast<int32>(Fixture.Service->GetDemands()[0].Why),
+			static_cast<int32>(EFuelRefusal::NoPump));
+		TestEqual(TEXT("and the card names the pump, not the road"),
+			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
+			FString(TEXT("depot has no pump")));
 	}
 
 	// DEPOT OFF ANY ROAD. The stand's hydrant is unjoined too, and NoRoad wins by the

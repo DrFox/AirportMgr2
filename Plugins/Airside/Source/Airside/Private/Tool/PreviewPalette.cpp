@@ -28,6 +28,13 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// The editor's old switch had no cases for these two at all and fell through to
 	// Pending's green for both - the exact bug this table exists to make impossible.
 	case EPreviewStyle::Hover:                       return FLinearColor(1.0f, 1.0f, 1.0f);
+
+	// WHITE, BOTH, and deliberately not the palette's greens. These say "decided" and "not
+	// yet", which is a statement about the GESTURE rather than about whether the thing under
+	// them is good or bad - Pending's green already carries that. Manor Lords draws its plot
+	// boundary white for the same reason: on grass it is the one colour that always reads.
+	case EPreviewStyle::Pinned:                      return FLinearColor(1.0f, 1.0f, 1.0f);
+	case EPreviewStyle::Provisional:                 return FLinearColor(1.0f, 1.0f, 1.0f);
 	// Warm, so it reads against the cyan route and grey nodes.
 	case EPreviewStyle::Selected:                    return FLinearColor(1.0f, 0.75f, 0.2f);
 
@@ -82,6 +89,17 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 		break;
 
 	case EPreviewStyle::Route:
+		Look.ThicknessScale = 2.0f;
+		break;
+
+	// THE SAME WEIGHT AS EACH OTHER, heavier than ordinary geometry so a plot boundary reads
+	// over grass. Equal on purpose: the DASH is what distinguishes them, and a difference in
+	// thickness as well would make the pair harder to compare rather than easier.
+	case EPreviewStyle::Pinned:
+		Look.ThicknessScale = 2.0f;
+		break;
+
+	case EPreviewStyle::Provisional:
 		Look.ThicknessScale = 2.0f;
 		break;
 

@@ -20,14 +20,23 @@ class AIRSIDE_API FStandPlaceTool : public IBuildTool
 {
 public:
 	/**
-	 * ONE TOOL, TWO REGISTRY ENTRIES - key 3 places a stand and key 0 places a fuel depot.
+	 * ONE REGISTRY ENTRY NOW - key 3, the stand. It used to be two: key 0 placed a fuel
+	 * depot with the same press-drag-release gesture, until a depot became a DRAWN plot and
+	 * moved to FPlotDrawTool.
 	 *
-	 * The gesture is identical: press to set the pose, drag to aim it, release, click to
-	 * commit; Ctrl+click removes whatever is under the cursor. Only the DEFINITION differs,
-	 * and that is resolved by the facade from a kind (see EPlaceableEntity), never named
-	 * here. A second class would be a copy of this one that must agree with it for ever -
-	 * the duplication CLAUDE.md's "lists that must agree are ONE list" exists to prevent,
-	 * applied to behaviour rather than to a table.
+	 * A STAND DID NOT FOLLOW IT, and that is a decision rather than work left undone: a
+	 * stand has no plot to draw. Its extent is its design aircraft's, so an outline round it
+	 * would be a second opinion about how big the thing is - the same reason
+	 * UEntityDefinition::FootprintExtent draws nothing for a stand.
+	 *
+	 * The gesture: press to set the pose, drag to aim it, release, click to commit;
+	 * Ctrl+click removes whatever is under the cursor. Only the DEFINITION differs by kind,
+	 * and that is resolved by the facade (see EPlaceableEntity), never named here.
+	 *
+	 * Kind remains a parameter even though only Stand is now registered, because the facade
+	 * still keys definition resolution on it and a second ploppable kind would want this
+	 * tool unchanged. Constructing it with FuelDepot still works and is still tested, but
+	 * nothing in the registry does so - see FuelDepotPlaceToolTest.
 	 */
 	explicit FStandPlaceTool(EPlaceableEntity InKind = EPlaceableEntity::Stand) : Kind(InKind) {}
 

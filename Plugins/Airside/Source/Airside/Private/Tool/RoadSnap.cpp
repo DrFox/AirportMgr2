@@ -2,6 +2,7 @@
 
 #include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
+#include "Profiles/RoadProfile.h"
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
 
@@ -84,7 +85,20 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 		return false;
 	}
 
-	double BestSquared = Settings.SegmentRadius * Settings.SegmentRadius;
+	// THE ROAD YOU CAN SEE IS THE ROAD YOU HIT. SegmentRadius alone is a flat band about the
+	// CENTRELINE - 1.5 m by default - so on a 6 m service road most of the pavement did not
+	// snap to the road it is painted on, and the plot tool refused to anchor while the cursor
+	// was plainly on the tarmac (PIE, 2026-09-16). The reach is per segment now: the
+	// authored radius, or the road's own half width, whichever is larger.
+	//
+	// SegmentRadius keeps its meaning as the margin for a NEAR miss - hovering just off a
+	// narrow road still finds it - which is why this is a floor rather than a replacement.
+	//
+	// EXACTLY THE FIX FRoadNodeSnapRule ALREADY MADE, one rule further down the chain: see
+	// its comment on why its radius is per node. A fixed radius left a band where the cursor
+	// was inside pavement and still resolved Free. This file had learned that for junctions
+	// and not for the segments between them.
+	double BestSquared = TNumericLimits<double>::Max();
 	int32 Best = INDEX_NONE;
 	double BestT = 0.0;
 	FVector2D BestPoint = FVector2D::ZeroVector;
@@ -123,7 +137,13 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 
 		const FVector2D Point = FMath::Lerp(EndA->Position, EndB->Position, T);
 		const double DistanceSquared = FVector2D::DistSquared(Point, Cursor);
-		if (DistanceSquared > BestSquared)
+
+		// Asked of the PROFILE, which is what actually decides how wide the ribbon is drawn -
+		// the same source URoadSurfacePresenter builds the mesh from, so "on the pavement"
+		// here and "on the pavement" on screen cannot mean two different things.
+		const double Reach = FMath::Max(Settings.SegmentRadius,
+			Segment.Profile != nullptr ? Segment.Profile->GetMaxHalfWidth() : 0.0);
+		if (DistanceSquared > Reach * Reach || DistanceSquared > BestSquared)
 		{
 			continue;
 		}

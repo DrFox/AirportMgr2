@@ -103,6 +103,16 @@ public:
 	 */
 	void AddApron(const FApronSurface& Apron);
 
+	/**
+	 * The same pavement from a bare polygon, for a surface that is not an FApronSurface.
+	 *
+	 * A PLOTTED INSTALLATION'S PAD IS PAVEMENT and goes through here, not through a second
+	 * triangulator: two evaluators of the same polygon would drift on exactly the concave
+	 * shapes a freeform gesture produces, and the pad would disagree with the plot the
+	 * player drew. The overload above forwards to this one.
+	 */
+	void AddApron(const TArray<FVector2D>& Outline);
+
 	void Emit(IRoadMeshSink& Sink) const;
 
 	const FRoadMeshBuffers& GetBuffers() const { return Buffers; }

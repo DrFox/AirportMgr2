@@ -2,10 +2,152 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "BuildActions.h"
 #include "RoadBuildHUD.h"
 #include "Tool/RoadBuildTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+/**
+ * THE PANEL'S CONTENT, with no Canvas and no PIE.
+ *
+ * The drawing cannot be tested headlessly; what CAN go wrong silently is what it says - a
+ * panel that never mentions Build, one that offers it before the shape is finished, or one
+ * that quietly drops the warning that would have changed the player's mind.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPanelShowsProgressAndBuildTest,
+	"AirportMgr.HUD.PlotPanelShowsProgressAndBuild",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPanelShowsProgressAndBuildTest::RunTest(const FString& Parameters)
+{
+	// NOTHING TO SAY, NOTHING DRAWN. A panel hanging over an idle cursor is clutter the
+	// player cannot dismiss.
+	TestEqual(TEXT("an empty readout draws no panel"),
+		ARoadBuildHUD::PanelLines(FToolReadout()).Num(), 0);
+
+	FToolReadout Mid;
+	Mid.Facts.Emplace(TEXT("Plot Points"), TEXT("2/4"));
+	Mid.Facts.Emplace(TEXT("Frontage"), TEXT("20 m"));
+	Mid.bCommittable = false;
+
+	const TArray<FString> MidLines = ARoadBuildHUD::PanelLines(Mid);
+	TestTrue(TEXT("the panel reports progress through the gesture"),
+		MidLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("2/4")); }));
+	TestFalse(TEXT("and does not offer Build before the shape is finished"),
+		MidLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Build")); }));
+
+	FToolReadout Ready = Mid;
+	Ready.bCommittable = true;
+	const TArray<FString> ReadyLines = ARoadBuildHUD::PanelLines(Ready);
+
+	TestTrue(TEXT("a committable gesture is offered Build, by name"),
+		ReadyLines.ContainsByPredicate([](const FString& L) { return L.Contains(TEXT("Build")); }));
+
+	// THE KEY COMES FROM THE REGISTRY, through CommitPromptText - so a rebound Build cannot
+	// leave the panel advertising a key that does nothing.
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (!TestNotNull(TEXT("a Build action"), Build)) { return false; }
+	TestTrue(TEXT("and the key it names is the one the registry bound"),
+		ReadyLines.ContainsByPredicate([Build](const FString& L)
+		{
+			return L.Contains(Build->Key.GetDisplayName().ToString());
+		}));
+
+	// WARNINGS SURVIVE. "No room to grow" is the one line that changes a decision, and a
+	// panel that dropped it would be a readout which only ever reports good news.
+	FToolReadout Warned = Ready;
+	Warned.Warnings.Add(TEXT("No room to grow"));
+	TestTrue(TEXT("a warning reaches the panel"),
+		ARoadBuildHUD::PanelLines(Warned).ContainsByPredicate(
+			[](const FString& L) { return L.Contains(TEXT("No room to grow")); }));
+
+	return true;
+}
+
+
+/**
+ * PINNED AND PROVISIONAL MUST READ APART, because that is their whole job: one edge of the
+ * plot has stopped moving and the other has not, and the player counts corners by the
+ * difference. Identical looks would leave a dashed boundary reading as decoration - which is
+ * the verdict the bay marks this replaces actually earned in PIE.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPinnedAndProvisionalReadApartTest,
+	"AirportMgr.HUD.PinnedAndProvisionalReadApart",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPinnedAndProvisionalReadApartTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Ctx.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
+
+	const FPreviewLook& Pinned = Hud->LookForTest(EPreviewStyle::Pinned);
+	const FPreviewLook& Provisional = Hud->LookForTest(EPreviewStyle::Provisional);
+
+	TestTrue(TEXT("pinned has a positive thickness"), Pinned.ThicknessScale > 0.0f);
+	TestTrue(TEXT("provisional has a positive thickness"), Provisional.ThicknessScale > 0.0f);
+
+	// SAME WEIGHT, so the DASH is what tells them apart rather than a thickness the player
+	// would have to compare against some other line elsewhere on screen.
+	TestEqual(TEXT("both are drawn at the same weight"),
+		Pinned.ThicknessScale, Provisional.ThicknessScale);
+
+	TestTrue(TEXT("and the hud dashes one of them and not the other"),
+		ARoadBuildHUD::IsDashed(EPreviewStyle::Provisional)
+			&& !ARoadBuildHUD::IsDashed(EPreviewStyle::Pinned));
+
+	return true;
+}
+
+
+/**
+ * THE COMMIT PROMPT'S ONE DECISION, with no Canvas and no PIE.
+ *
+ * The drawing itself cannot be tested headlessly, so the part that CAN go wrong silently is
+ * split out: whether the prompt appears at all, and whether it names the key the registry
+ * actually bound. A prompt reading "Build [Enter]" beside an unbound Enter is this project's
+ * most-repeated bug - see CLAUDE.md on the startup banner that advertised four routes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCommitPromptNamesTheBoundKeyTest,
+	"AirportMgr.HUD.CommitPromptNamesTheBoundKey",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FCommitPromptNamesTheBoundKeyTest::RunTest(const FString& Parameters)
+{
+	// NOTHING TO COMMIT, NOTHING OFFERED. bCommittable is false by default for every tool
+	// but one, so a prompt that ignored it would hang over every gesture in the game.
+	TestTrue(TEXT("an empty readout offers nothing"),
+		ARoadBuildHUD::CommitPromptText(FToolReadout()).IsEmpty());
+
+	FToolReadout Ready;
+	Ready.bCommittable = true;
+	const FString Prompt = ARoadBuildHUD::CommitPromptText(Ready);
+
+	TestFalse(TEXT("a committable readout offers something"), Prompt.IsEmpty());
+	TestTrue(TEXT("and it is the registry's own label"), Prompt.Contains(TEXT("Build")));
+
+	// THE KEY IS REAL, not decoration. FindAction(Key) is what SetupInputComponent binds
+	// from, so asking it back is asking whether the key in the prompt actually does anything.
+	const FBuildAction* Build = FindAction(FName(TEXT("edit.build")));
+	if (!TestNotNull(TEXT("a Build action"), Build)) { return false; }
+	if (!TestTrue(TEXT("Build has a key bound"), Build->Key.IsValid())) { return false; }
+
+	TestTrue(TEXT("the prompt names that key"),
+		Prompt.Contains(Build->Key.GetDisplayName().ToString()));
+	TestEqual(TEXT("and that key reaches the same action when pressed"),
+		FindAction(Build->Key, Build->bRequiresCtrl), Build);
+
+	return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRoadBuildHUDLooksTest,
@@ -27,9 +169,9 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
-	// EPreviewStyle is a plain 0-based enum ending at ServiceAnchor - iterated the same way
+	// EPreviewStyle is a plain 0-based enum ending at Provisional - iterated the same way
 	// FBuildActionsRegistryTest walks EActionSection, rather than by reflection.
-	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::ServiceAnchor); ++S)
+	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Provisional); ++S)
 	{
 		const EPreviewStyle Style = static_cast<EPreviewStyle>(S);
 		const FPreviewLook& Look = Hud->LookForTest(Style);
