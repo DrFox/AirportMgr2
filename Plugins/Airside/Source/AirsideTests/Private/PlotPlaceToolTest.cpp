@@ -637,7 +637,7 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
  * THE GHOST DRAWS THE MODULES, not marks about a grid that no longer exists.
  *
  * BuildPreview used to cross-mark "which way each bay faces" and ring "slots behind row 1",
- * both from PlotFit::BuildGrid - which nothing has built since the yard solver landed. The
+ * both from a bay grid nothing built any more, since deleted outright. The
  * player's verdict on marks describing a deleted structure: "I'm not actually sure what they
  * are supposed to be telling me" (PIE, 2026-09-16).
  */

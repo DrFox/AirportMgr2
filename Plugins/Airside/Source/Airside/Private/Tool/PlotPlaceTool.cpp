@@ -518,10 +518,10 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// THE MODULES THEMSELVES, where they will actually stand.
 	//
 	// This drew cross-marks for "which way each bay faces" and rings for "slots behind row 1"
-	// - both derived from PlotFit::BuildGrid, which NOTHING HAS BUILT since the yard solver
-	// landed. They were describing a structure that no longer exists, which is why they read
-	// as decoration: "I'm not actually sure what they are supposed to be telling me" (PIE,
-	// 2026-09-16). A mark whose meaning has been deleted is worse than no mark.
+	// - both derived from a bay grid that NOTHING BUILT any more, and which has since been
+	// deleted outright. They were describing a structure that no longer existed, which is
+	// why they read as decoration: "I'm not actually sure what they are supposed to be
+	// telling me" (PIE, 2026-09-16). A mark whose meaning has gone is worse than no mark.
 	//
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the

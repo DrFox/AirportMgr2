@@ -155,10 +155,10 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 
 		++Plots;
 
-		// THE YARD, NOT A GRID. PlotFit::BuildGrid still answers what the PLOT is - the
-		// gesture's preview uses it - but where each module stands is a different question
-		// with different inputs, and a row of identical boxes all facing one way is what
-		// made a built depot read as a placeholder. See the 2026-09-16 design doc.
+		// THE YARD, NOT A GRID. Where each module stands is a question about the plot's
+		// CONTENTS, with different inputs from the plot's own shape - and a row of identical
+		// boxes all facing one way is what made a built depot read as a placeholder. The bay
+		// grid that used to answer it is gone entirely; see the 2026-09-16 design docs.
 		TArray<PlotYard::FFootprint> Footprints;
 		Footprints.Reserve(Entity.Modules.Num());
 		for (const EDepotModule Module : Entity.Modules)

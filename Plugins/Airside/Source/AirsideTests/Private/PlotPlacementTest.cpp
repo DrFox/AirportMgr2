@@ -146,7 +146,7 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 	Actor->ClearNetwork();
 	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
 
-	// Clockwise: the same rectangle GridOutline makes, walked the other way round.
+	// Clockwise: the rectangle the gesture commits, walked the other way round.
 	const TArray<FVector2D> Clockwise = {
 		FVector2D(0.0, 0.0), FVector2D(0.0, 800.0),
 		FVector2D(1200.0, 800.0), FVector2D(1200.0, 0.0) };
