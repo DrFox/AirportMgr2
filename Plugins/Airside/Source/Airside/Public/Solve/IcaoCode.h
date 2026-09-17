@@ -72,4 +72,25 @@ namespace IcaoCode
 	 * placement, and returning "A" would admit an aircraft to a space it does not fit.
 	 */
 	AIRSIDE_API FString LetterForStandSize(double WidthUu, double DepthUu);
+
+	/**
+	 * How far AFT of the nose-gear stop mark the longest airframe this letter admits reaches,
+	 * uu. Positive - it is a distance, and the geometry that uses it negates it.
+	 *
+	 * THE ONE FIGURE A STAND'S GROUND GEOMETRY IS KEPT CLEAR OF, and it is per LETTER rather
+	 * than per named type on purpose. The stand's service geometry was sized from the A320's
+	 * tail at -3250 while DA_Aircraft_B738 parks on the same stand with its tail at -3430 -
+	 * 1.2 m of clearance where 3 m was intended. Sizing from a named aeroplane is what caused
+	 * that; sizing from the letter is the rule the taxiway widths and the service road fillet
+	 * already follow.
+	 *
+	 * Aft of the STOP MARK, not a length, because that is what a layout measured from the
+	 * nose-gear origin actually needs - a nose overhang differs by type and is not this
+	 * question. An airframe whose own origin is elsewhere (the Piper declares its main gear;
+	 * see FAirframe::SteerAxleX) is measured about that origin instead, and is far inside any
+	 * of these figures.
+	 *
+	 * Letter matched as StandWidthForLetter matches it.
+	 */
+	AIRSIDE_API double MaxTailAftForLetter(const FString& Letter);
 }

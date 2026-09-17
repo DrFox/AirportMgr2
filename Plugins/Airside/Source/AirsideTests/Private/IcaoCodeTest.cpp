@@ -113,6 +113,26 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// in the table, which is where a reader checks it against a real aerodrome.
 	TestEqual(TEXT("a Code C stand is 55 m deep"), IcaoCode::StandDepthForLetter(TEXT("C")), 5500.0, 0.5);
 
+	// AND HOW LONG AN AIRFRAME THE LETTER ADMITS, which is what a stand's ground geometry is
+	// kept clear of. Code C's figure is MEASURED - it is the 737-800's tail, the longest type
+	// this project ships - so it is pinned here against the same figure Build737 authors, and
+	// the two cannot drift without a test saying so. The letters with no shipped type are
+	// authored design values and are asserted only for their ORDER, which is the one thing
+	// that must hold however the figures are revised.
+	TestEqual(TEXT("Code C admits the 737-800's tail, and is measured from it"),
+		IcaoCode::MaxTailAftForLetter(TEXT("C")), 3430.0, 0.5);
+
+	double Previous = 0.0;
+	for (const TCHAR* Letter : { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E"), TEXT("F") })
+	{
+		const double Aft = IcaoCode::MaxTailAftForLetter(Letter);
+		TestTrue(
+			*FString::Printf(TEXT("%s admits a longer airframe than the letter below it (%.0f after %.0f)"),
+				Letter, Aft, Previous),
+			Aft > Previous);
+		Previous = Aft;
+	}
+
 	return true;
 }
 

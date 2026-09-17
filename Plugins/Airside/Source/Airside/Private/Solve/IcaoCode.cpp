@@ -33,16 +33,28 @@ namespace IcaoCode
 			 * check if a real layout looks wrong.
 			 */
 			double StandDepth;
+
+			/**
+			 * The longest airframe this letter admits, as uu AFT of the nose-gear stop mark.
+			 *
+			 * CODE C IS MEASURED and the rest are authored. C is the 737-800's tail at 3430,
+			 * which is the longest type this project ships, and IcaoCodeTest pins it against
+			 * Build737's own figure so the two cannot drift. No type is authored at any other
+			 * letter, so those are standard design values in the sense this file's header
+			 * gives for the rest of the table - revise one when a type arrives that exceeds
+			 * it, and the drift test in StandLayoutTest is what will say so.
+			 */
+			double MaxTailAft;
 		};
 
 		// D and E deliberately share RunwayWidth (45 m serves both) - see MaxWingspanForWidth.
 		static const FRow Rows[] = {
-			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0 },
-			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0 },
-			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0 },
-			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0 },
+			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0 },
+			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0 },
+			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0 },
+			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0 },
 		};
 
 		/** The stand width a row implies, uu. The ONE place the derivation is written. */
@@ -144,6 +156,15 @@ namespace IcaoCode
 			return Row->StandDepth;
 		}
 		return CodeC().StandDepth;
+	}
+
+	double MaxTailAftForLetter(const FString& Letter)
+	{
+		if (const FRow* Row = FindRow(Letter))
+		{
+			return Row->MaxTailAft;
+		}
+		return CodeC().MaxTailAft;
 	}
 
 	FString LetterForStandSize(double WidthUu, double DepthUu)
