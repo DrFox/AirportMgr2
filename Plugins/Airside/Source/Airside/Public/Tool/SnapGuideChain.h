@@ -4,6 +4,7 @@
 #include "Solve/GuideArbiter.h"
 
 class URoadNetwork;
+struct FEntityInstance;
 
 /**
  * A point worth lining up with, and what to call it in the label.
@@ -120,6 +121,84 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
  * It needs no network: the tool supplies the points, as it supplies the reference.
  */
 struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
+ * Source 5: the nearest road's direction, and its perpendicular.
+ *
+ * THE NEAREST ONE ONLY. Every road proposing would put the whole field in the race, and the
+ * winner would be decided by a road the player cannot see - see FTuning::SearchRadiusUu.
+ *
+ * Angular, through the drag's own origin: this answers "which way from here", the same
+ * question Extending answers, and it loses to Extending on a tie because the edge you are
+ * extending is what you are thinking about.
+ */
+struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
+ * Source 4: the line an existing segment already lies on.
+ *
+ * PERPENDICULAR, not angular, and that is the whole difference from Parallel above. Parallel
+ * says "point the same way as that taxiway"; this says "you are ON the line that taxiway lies
+ * along", which is a statement about where the cursor ENDED UP. Measuring it as an angle from
+ * an origin that is nowhere on the line would answer a different question - the same
+ * reasoning that gave PointAlign its fit kind.
+ *
+ * ONE CANDIDATE PER SEGMENT IN REACH, not just the nearest: a cursor can be on the extension
+ * of one segment while standing beside another, and that is exactly the case worth telling
+ * the player about.
+ */
+struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/**
+ * Source 6: every runway's heading, and its perpendicular.
+ *
+ * DELIBERATELY UNBOUNDED by SearchRadiusUu, unlike every other network source. An airport
+ * squares to its runways from anywhere on it - that is what makes a field read as one place
+ * rather than as a pile of unrelated pavement - and there are at most a handful of runways to
+ * walk. Design section 3 says "every runway's heading" and means it.
+ *
+ * Below the local sources and above the world axes, because an airport squares to its runways
+ * but not in preference to the taxiway the player is actually working on.
+ */
+struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+};
+
+/** What to call a placed entity where the player reads it. Falls back to the asset name. */
+namespace EntityNaming
+{
+	// DECLARED AT FILE SCOPE, not as `const struct FEntityInstance&` in the signature below:
+	// an elaborated type specifier inside a namespace declares a NEW type in THAT namespace,
+	// so the parameter became EntityNaming::FEntityInstance and nothing could be passed to it.
+	AIRSIDE_API FString Describe(const FEntityInstance& Entity);
+}
+
+/**
+ * Source 3: a placed entity's pose direction, and its perpendicular.
+ *
+ * Bounded by SearchRadiusUu like the other local sources. Angular, through the drag's own
+ * origin: "point the way that stand points" is a direction, not a line the cursor is on.
+ *
+ * THE WEAKEST OF THE FOUR NETWORK SOURCES, and worth saying why it is still here: a stand's
+ * pose is usually square to the taxiway it serves, so Parallel already offers the same
+ * direction most of the time. It earns its place on the apron, where a row of stands sets the
+ * local grain and the nearest road is a long way off.
+ */
+struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;

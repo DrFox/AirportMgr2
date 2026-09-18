@@ -265,7 +265,13 @@ plot.
 
 1. The chain, the arbiter, `FToolContext::Guide`, the `Guide` style and its drawing, with
    **World** and **Extending** only, consumed by the **plot corners**.
-2. The network sources: Parallel, Collinear, Aligned, Runway.
+2. ~~The network sources: Parallel, Collinear, Aligned, Runway.~~ **Done 2026-09-17.**
+   Collinear is the only one of the four that is `EFit::Perpendicular` - "in line with that
+   taxiway" is about where the cursor ended up, not which way it set off. Runway is
+   deliberately exempt from `SearchRadiusUu` (10000 uu); the other three are bounded by it,
+   because without a reach the nearest-wins race is decided by geometry off screen.
+   `RoadNaming::Describe` gave the runway/service-road/taxiway classification one home; it
+   had been living in `IsRunwaySegment` and in the plot tool's own `IsServiceRoad`.
 3. The toggles, the `Snap` section, and the Alt suspend.
 4. **Offset**, the distance family, which needs its own arbitration pass.
 5. **Road drawing** as the second consumer.

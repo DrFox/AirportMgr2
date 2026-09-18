@@ -1,6 +1,51 @@
 #include "Tool/SnapGuideChain.h"
 
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
+#include "Model/RoadNetwork.h"
+#include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
+#include "Tool/RoadNaming.h"
+
+namespace
+{
+	/**
+	 * A live segment's two ends. False when the segment or either node has gone.
+	 *
+	 * PREFIXED because FPlotPlaceTool.cpp has a SegmentEnds of its own in ITS anonymous
+	 * namespace, and this module is a UNITY build: two such helpers of one name compile
+	 * perfectly alone and collide the moment they land in the same blob. That is not
+	 * hypothetical - it is what this file did on the build that introduced it, and it is the
+	 * same trap AirsideTestFixtures.h was written to close for the test module.
+	 *
+	 * THE DUPLICATION IS REAL and left deliberately: merging the two means a shared header and
+	 * an edit to the plot tool, which is not this change's business. Noted for stage 3.
+	 */
+	bool GuideSegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
+		FVector2D& OutA, FVector2D& OutB)
+	{
+		const FRoadSegment* Segment = Network.GetSegment(Id);
+		if (Segment == nullptr || !Segment->bAlive)
+		{
+			return false;
+		}
+		const FRoadNode* A = Network.GetNode(Segment->A);
+		const FRoadNode* B = Network.GetNode(Segment->B);
+		if (A == nullptr || B == nullptr)
+		{
+			return false;
+		}
+		OutA = A->Position;
+		OutB = B->Position;
+		return true;
+	}
+
+	/** The point on segment A-B nearest P. Clamped to the segment, not to its infinite line. */
+	FVector2D ClosestOn(const FVector2D& A, const FVector2D& B, const FVector2D& P)
+	{
+		return FMath::Lerp(A, B, RoadGeom::ClosestPointOnSegment(A, B, P));
+	}
+}
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	TArray<SnapGuide::FCandidate>& Out) const
@@ -95,10 +140,217 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 	}
 }
 
+void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	FRoadSegmentId Nearest;
+	FVector2D NearestAt = FVector2D::ZeroVector;
+	FVector2D NearestDir = FVector2D::ZeroVector;
+	double BestSquared = Reach * Reach;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// MEASURED FROM THE ORIGIN, not from the cursor: the road the gesture STARTED beside
+		// is the one it is being drawn parallel to, and a search keyed to the cursor would
+		// hand the guide to a different road halfway through the drag.
+		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
+		if (Squared > BestSquared)
+		{
+			continue;
+		}
+
+		BestSquared = Squared;
+		Nearest = Id;
+		NearestAt = On;
+		NearestDir = Span.GetSafeNormal();
+	}
+
+	if (NearestDir.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FString Name = RoadNaming::Describe(Network, Nearest);
+
+	SnapGuide::FCandidate Along;
+	Along.Direction = NearestDir;
+	Along.Through = Anchor.Origin;
+	Along.Fit = SnapGuide::EFit::Angular;
+	Along.ReferenceAt = NearestAt;
+	Along.Source = SnapGuide::ESource::Parallel;
+	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
+	Out.Add(Along);
+
+	SnapGuide::FCandidate Square = Along;
+	Square.Direction = RoadGeom::PerpCCW(NearestDir);
+	Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+	Out.Add(Square);
+}
+
+void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		if (Span.IsNearlyZero()
+			|| FVector2D::DistSquared(On, Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		// THROUGH THE SEGMENT'S OWN END, which is what makes this the line the road LIES ON
+		// rather than one through the drag. The arbiter measures the cursor's distance from
+		// that line, so the candidate is eligible exactly when the cursor is on the road's
+		// extension - however far along it the drag has gone.
+		SnapGuide::FCandidate InLine;
+		InLine.Direction = Span.GetSafeNormal();
+		InLine.Through = A;
+		InLine.Fit = SnapGuide::EFit::Perpendicular;
+		InLine.Source = SnapGuide::ESource::Collinear;
+		InLine.Description = FString::Printf(TEXT("in line with %s"),
+			*RoadNaming::Describe(Network, Id));
+
+		// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
+		// cursor happens to be: the player needs to see WHICH road they are in line with, and
+		// the near end of it is the part they can recognise.
+		InLine.ReferenceAt = On;
+		Out.Add(InLine);
+	}
+}
+
+void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		if (!Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// NO REACH TEST, and that one absence is the only thing separating this source from
+		// Parallel - see the declaration for why it is deliberate.
+		const FString Name = RoadNaming::Describe(Network, Id);
+
+		SnapGuide::FCandidate Along;
+		Along.Direction = Span.GetSafeNormal();
+		Along.Through = Anchor.Origin;
+		Along.Fit = SnapGuide::EFit::Angular;
+		Along.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+		Along.Source = SnapGuide::ESource::Runway;
+		Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
+		Out.Add(Along);
+
+		SnapGuide::FCandidate Square = Along;
+		Square.Direction = RoadGeom::PerpCCW(Along.Direction);
+		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+		Out.Add(Square);
+	}
+}
+
+FString EntityNaming::Describe(const FEntityInstance& Entity)
+{
+	if (Entity.Definition == nullptr)
+	{
+		return TEXT("the installation");
+	}
+
+	// THE AUTHORED NAME WHEN THERE IS ONE, the asset's own when there is not. An unset
+	// DisplayName is a content task rather than a bug, so this must not read as one on screen.
+	const FString Authored = Entity.Definition->DisplayName.ToString();
+	return Authored.IsEmpty() ? Entity.Definition->GetName() : Authored;
+}
+
+void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	for (const FEntityInstance& Entity : Network.GetEntities())
+	{
+		if (!Entity.bAlive
+			|| FVector2D::DistSquared(Entity.Position, Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		// HEADING IS RADIANS - see FEntityInstance::Heading. A degrees/radians slip here would
+		// point the guide somewhere plausible and wrong, which is the worst kind.
+		const FVector2D Facing(FMath::Cos(Entity.Heading), FMath::Sin(Entity.Heading));
+		const FString Name = EntityNaming::Describe(Entity);
+
+		SnapGuide::FCandidate Along;
+		Along.Direction = Facing;
+		Along.Through = Anchor.Origin;
+		Along.Fit = SnapGuide::EFit::Angular;
+
+		// THE DASHED LINE GOES TO THE THING ITSELF, which for an entity is simply its pose.
+		Along.ReferenceAt = Entity.Position;
+		Along.Source = SnapGuide::ESource::Aligned;
+		Along.Description = FString::Printf(TEXT("aligned with %s"), *Name);
+		Out.Add(Along);
+
+		SnapGuide::FCandidate Square = Along;
+		Square.Direction = RoadGeom::PerpCCW(Facing);
+		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
+		Out.Add(Square);
+	}
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
 	AddSource(MakeUnique<FPointAlignGuideSource>());
+	AddSource(MakeUnique<FAlignedGuideSource>());
+	AddSource(MakeUnique<FCollinearGuideSource>());
+	AddSource(MakeUnique<FParallelGuideSource>());
+	AddSource(MakeUnique<FRunwayGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 }
 
