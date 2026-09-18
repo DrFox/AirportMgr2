@@ -666,3 +666,29 @@ def import_one(spec):
 
     say("%s: %s" % (spec.key, "ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED - see above"))
     return ok
+
+
+def rebuild_fleet_materials():
+    """Repoint every imported slot back onto the shared M_Fleet instances.
+
+    MUST RUN AFTER ANY IMPORT, and that is why it lives in the mechanism rather than in a
+    habit. Interchange regenerates a full UMaterial per glTF material on every import and
+    assigns it to the slot, so an import silently undoes build_fleet_materials.py: the model
+    still renders, just wearing ~48 KB of private uber-graph per flat colour again, not
+    driveable at runtime, and duplicated across every other asset that shares the look.
+    Nothing errors and nothing looks wrong, which is exactly why it has to be automatic.
+
+    MATERIAL GENERATION IS LEFT ON in the pipeline on purpose. The slot NAMES come from that
+    pass, and they are what the remap matches on; turning it off risks nameless slots and
+    costs the one thing that makes the remap possible. The generated materials are orphaned
+    the moment this runs, and clean_orphan_materials.py sweeps them.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "build_fleet_materials.py")
+    if not os.path.exists(path):
+        fail("no build_fleet_materials.py beside airside_import.py; slots left as imported")
+        return False
+    say("-" * 70)
+    say("rebuilding the shared fleet materials (an import regenerates per-asset ones)")
+    exec(compile(open(path).read(), path, "exec"), {"__name__": "__from_import__"})
+    return True
