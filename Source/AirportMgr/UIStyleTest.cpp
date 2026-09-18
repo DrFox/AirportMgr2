@@ -58,9 +58,18 @@ bool FUIStyleIconsTest::RunTest(const FString& Parameters)
 	// The three time controls are drawn as geometric glyphs and need no texture. Exempting
 	// them by SECTION rather than by name means adding a fourth time control does not need
 	// this test edited.
+	//
+	// THE SNAP TOGGLES ARE EXEMPT FOR THE SAME REASON, added with them in stage 3: they are
+	// WORD buttons - "Extending", "Parallel" - and UBuildBarWidget draws the label whenever
+	// IconFor returns null, which is exactly what the time controls rely on. Eight glyphs that
+	// each had to say "the line an existing segment lies on" would be worse than the words.
+	//
+	// IconsByActionId is authored CONTENT, so an action with no entry is not a code bug - it
+	// is a button that draws its label, and this test is the one place that decides which of
+	// those two a section is.
 	for (const FBuildAction& Action : BuildActions())
 	{
-		if (Action.Section == EActionSection::Time)
+		if (Action.Section == EActionSection::Time || Action.Section == EActionSection::Snap)
 		{
 			continue;
 		}

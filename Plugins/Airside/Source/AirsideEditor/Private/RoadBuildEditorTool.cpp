@@ -182,6 +182,12 @@ void URoadBuildEditorTool::Setup()
 	// are read by the shared tool, not by this adapter.
 	Drag->Modifiers.RegisterModifier(RemoveModifierId, FInputDeviceState::IsCtrlKeyDown);
 	Drag->Modifiers.RegisterModifier(InsertModifierId, FInputDeviceState::IsShiftKeyDown);
+
+	// REGISTERED ON BOTH BEHAVIOURS, here and on Hover below. The editor mode does not read
+	// keys - it is told about modifier ids it registered - and registering only on Drag would
+	// suspend while dragging but not while hovering, so the ghost would show a guide the click
+	// then ignored.
+	Drag->Modifiers.RegisterModifier(SuspendModifierId, FInputDeviceState::IsAltKeyDown);
 	AddInputBehavior(Drag);
 
 	// Hover exists only so the preview follows the cursor between clicks. Without it a
@@ -190,6 +196,7 @@ void URoadBuildEditorTool::Setup()
 	Hover->Initialize(this);
 	Hover->Modifiers.RegisterModifier(RemoveModifierId, FInputDeviceState::IsCtrlKeyDown);
 	Hover->Modifiers.RegisterModifier(InsertModifierId, FInputDeviceState::IsShiftKeyDown);
+	Hover->Modifiers.RegisterModifier(SuspendModifierId, FInputDeviceState::IsAltKeyDown);
 	AddInputBehavior(Hover);
 }
 
@@ -292,13 +299,14 @@ FToolContext URoadBuildEditorTool::MakeContextAt(const FVector2D& Plane) const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	return Sess().MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld);
+	return Sess().MakeContext(Target, Plane, Tunables, bRemoveHeld, bInsertHeld, bSuspendHeld);
 }
 
 void URoadBuildEditorTool::OnUpdateModifierState(int ModifierID, bool bIsOn)
 {
 	if (ModifierID == RemoveModifierId) { bRemoveHeld = bIsOn; }
 	if (ModifierID == InsertModifierId) { bInsertHeld = bIsOn; }
+	if (ModifierID == SuspendModifierId) { bSuspendHeld = bIsOn; }
 }
 
 FInputRayHit URoadBuildEditorTool::CanBeginClickDragSequence(const FInputDeviceRay& PressPos)

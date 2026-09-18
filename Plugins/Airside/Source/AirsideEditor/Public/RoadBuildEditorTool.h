@@ -107,6 +107,9 @@ public:
 
 	/** Modifier ids, so the behaviours can report ctrl and shift back to us. */
 	static const int32 RemoveModifierId = 1;
+
+	/** Alt: suspend every guide for this drag. Third, because Remove is 1 and Insert is 2. */
+	static const int32 SuspendModifierId = 3;
 	static const int32 InsertModifierId = 2;
 	virtual void OnUpdateModifierState(int ModifierID, bool bIsOn) override;
 
@@ -202,6 +205,7 @@ private:
 	TUniquePtr<FScopedRoadBuildTransaction> DragTransaction;
 
 	bool bRemoveHeld = false;
+	bool bSuspendHeld = false;
 	bool bInsertHeld = false;
 
 	/**

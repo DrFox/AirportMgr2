@@ -74,6 +74,7 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> AircraftSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> SelectionSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> GameSection;
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UPanelWidget> SnapSection;
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ClockText;
 
 	/**

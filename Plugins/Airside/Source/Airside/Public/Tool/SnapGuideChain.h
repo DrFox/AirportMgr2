@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Solve/GuideArbiter.h"
+#include "Tool/SnapGuideSettings.h"
 
 class URoadNetwork;
 struct FEntityInstance;
@@ -82,6 +83,15 @@ struct AIRSIDE_API IGuideSource
 	/** Appends this source's candidates. NEVER clears Out - the chain owns that array. */
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const = 0;
+
+	/**
+	 * Which ESource this link proposes. The toggle asks, and the chain skips it when off.
+	 *
+	 * PURE VIRTUAL rather than a field, so a source cannot be written without answering it.
+	 * Every source proposes candidates of exactly ONE ESource today; if one ever proposes two,
+	 * this is the assumption to revisit rather than quietly widen.
+	 */
+	virtual SnapGuide::ESource Kind() const = 0;
 };
 
 /**
@@ -95,6 +105,8 @@ struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Extending; }
 };
 
 /**
@@ -108,6 +120,8 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::World; }
 };
 
 /**
@@ -124,6 +138,8 @@ struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::PointAlign; }
 };
 
 /**
@@ -140,6 +156,8 @@ struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Parallel; }
 };
 
 /**
@@ -159,6 +177,8 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Collinear; }
 };
 
 /**
@@ -176,6 +196,8 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Runway; }
 };
 
 /** What to call a placed entity where the player reads it. Falls back to the asset name. */
@@ -202,6 +224,8 @@ struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Aligned; }
 };
 
 /**
@@ -239,6 +263,7 @@ public:
 	 */
 	SnapGuide::FResult Resolve(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, const SnapGuide::FResult& Previous,
+		const FSnapGuideSettings& Enabled = FSnapGuideSettings(),
 		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const;
 
 private:

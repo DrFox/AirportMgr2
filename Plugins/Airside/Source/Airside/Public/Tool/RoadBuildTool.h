@@ -99,6 +99,18 @@ struct FToolContext
 	bool bInsertModifier = false;
 
 	/**
+	 * Alt: the player wants NO guide for this drag.
+	 *
+	 * A HELD MODIFIER, not a registry action, and the distinction is mechanical rather than
+	 * stylistic: the action registry binds PRESSES, and this has to be true only while the key
+	 * is down. Snap-guides design section 7.
+	 *
+	 * Toggles are for "I never want this"; this is for "not for this one drag", and without it
+	 * the player fights the guide for a position it will not give them.
+	 */
+	bool bSuspendGuides = false;
+
+	/**
 	 * The agent under the cursor IN SCREEN SPACE, or 0. Filled by the driver, which owns the
 	 * camera: an aircraft on final is 2000 uu up and a road-plane cursor lands on the grass
 	 * beneath it, so the plane hit can never say "that aeroplane". The tool takes the id and

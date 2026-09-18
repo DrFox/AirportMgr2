@@ -234,7 +234,7 @@ One `FBuildAction` per source, in a new `EActionSection::Snap`:
 
 ```
 SNAP
-[Extending] [Aligned] [Collinear] [Parallel] [Runway] [World] [Offset]
+[Extending] [Point] [Aligned] [Collinear] [Parallel] [Runway] [World] [Offset]
 ```
 
 `IsActive` returns whether that source is enabled; `Execute` toggles it. Lit means on.
@@ -249,9 +249,18 @@ toggles dropped into `Edit` would swamp the five verbs already there.
 the same argument `FRoadSnapSettings` records for being per-airport rather than per-driver, so
 the editor mode and PIE agree about what is switched on.
 
-Defaults on: Extending, Parallel, World. Off: Aligned, Collinear, Runway, Offset. **A player
-meeting seven live guides at once learns nothing**; the three that fire most often teach the
-mechanism, and the rest are found when wanted.
+Defaults on: Extending, PointAlign, Parallel, World. Off: Aligned, Collinear, Runway, Offset.
+**A player meeting every guide at once learns nothing**; the ones that fire most often teach
+the mechanism, and the rest are found when wanted. PointAlign joins the on set because it is
+the gesture's own geometry, the same argument that puts Extending there - it was added after
+this section was first written, which is why the list says eight where it used to say seven.
+
+**The "four lists" count is out of date too.** `SectionSpecs` has since gained a
+`static_assert` of its own, so the enum, `SectionNames` and `SectionSpecs` all fail the BUILD;
+only the bar's `BindWidgetOptional` member is silent. And there is a FIFTH list nobody had
+written down: `AirportMgr.UI.EveryActionResolvesAnIcon` requires an authored icon per action,
+exempting the time controls by section. The Snap toggles are exempt the same way - they are
+word buttons, and the bar draws the label whenever `IconFor` returns null.
 
 **The suspend key is `Alt`, held.** Read in `MakeToolContext` beside the existing Ctrl and
 Shift handling, not as a registry action - the registry binds presses, and this is a hold.
@@ -272,7 +281,14 @@ plot.
    because without a reach the nearest-wins race is decided by geometry off screen.
    `RoadNaming::Describe` gave the runway/service-road/taxiway classification one home; it
    had been living in `IsRunwaySegment` and in the plot tool's own `IsServiceRoad`.
-3. The toggles, the `Snap` section, and the Alt suspend.
+3. ~~The toggles, the `Snap` section, and the Alt suspend.~~ **Done 2026-09-17.** Enabled
+   state is a USTRUCT of NAMED BOOLS rather than an array indexed by `ESource`: that enum is
+   plain (`Solve/` has no `.generated.h`), so an index-keyed array would serialise by position
+   and a reorder would silently repoint every saved toggle. The chain skips a disabled source
+   before it works rather than filtering its candidates afterwards, which needed
+   `IGuideSource::Kind()`. The Alt hold rides on `FToolContext` beside the Ctrl and Shift
+   modifiers; the editor mode had to REGISTER it on both its drag and hover behaviours, since
+   it is told about modifier ids rather than reading keys.
 4. **Offset**, the distance family, which needs its own arbitration pass.
 5. **Road drawing** as the second consumer.
 

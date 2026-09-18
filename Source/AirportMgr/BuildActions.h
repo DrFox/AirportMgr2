@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Solve/GuideArbiter.h"
 #include "InputCoreTypes.h"
 
 class ARoadBuildController;
@@ -16,6 +17,10 @@ enum class EActionSection : uint8
 	Aircraft,
 	Selection,
 	Game,
+
+	/** The guide sources: one lit toggle each. See the snap-guides design section 7. */
+	Snap,
+
 	Count
 };
 

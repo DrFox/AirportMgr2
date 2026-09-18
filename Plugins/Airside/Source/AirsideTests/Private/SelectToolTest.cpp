@@ -166,7 +166,7 @@ bool FSelectToolPickTest::RunTest(const FString& Parameters)
 	{
 		FBuildSession Session;
 		FBuildSessionTunables T;
-		FToolContext C = Session.MakeContext(F.Actor, F.StandAt, T, false, false, 0);
+		FToolContext C = Session.MakeContext(F.Actor, F.StandAt, T, false, false, false, 0);
 		Session.GetActiveTool()->OnClick(C);
 		TestTrue(TEXT("the session's selection is the stand"), Session.GetSelection().Kind == ESelectionKind::Stand);
 		Session.SelectTool(1, C);

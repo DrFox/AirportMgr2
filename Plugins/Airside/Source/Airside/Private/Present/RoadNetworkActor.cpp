@@ -507,6 +507,7 @@ FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 
 	FBuildSessionTunables Tunables;
 	Tunables.Snap = Snap;
+	Tunables.GuideSources = GuideSources;
 	Tunables.Limits = PlacementLimits;
 
 	// ViewWorldWidth > 0: the caller has no view-scale UPROPERTY of its own to read (the

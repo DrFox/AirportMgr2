@@ -9,6 +9,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadNaming.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -369,8 +370,16 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	const FSnapGuideChain Chain;
 	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
 
+	// EVERY SOURCE THIS TEST IS ABOUT, STATED RATHER THAN INHERITED. Since stage 3 the chain
+	// skips whatever is switched off, and Runway defaults OFF - a test about PRIORITY that took
+	// the defaults would silently be testing which sources happen to be on instead.
+	FSnapGuideSettings Live;
+	Live.bParallel = true;
+	Live.bRunway = true;
+	Live.bWorld = true;
+
 	const SnapGuide::FResult Result = Chain.Resolve(
-		*Actor->Network, Anchor, FVector2D(3000.0, 2100.0), SnapGuide::FResult());
+		*Actor->Network, Anchor, FVector2D(3000.0, 2100.0), SnapGuide::FResult(), Live);
 
 	if (!TestTrue(TEXT("something answers"), Result.bActive)) { return false; }
 
@@ -385,7 +394,7 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// exempt from SearchRadiusUu, since the drag is 80 m from it.
 	const FGuideAnchor FarFromTheRoad = BareAnchor(FVector2D(0.0, 30000.0));
 	const SnapGuide::FResult WithoutTheTaxiway = Chain.Resolve(
-		*Actor->Network, FarFromTheRoad, FVector2D(3000.0, 30100.0), SnapGuide::FResult());
+		*Actor->Network, FarFromTheRoad, FVector2D(3000.0, 30100.0), SnapGuide::FResult(), Live);
 	if (!TestTrue(TEXT("the runway still answers from across the field"),
 		WithoutTheTaxiway.bActive))
 	{
