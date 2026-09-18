@@ -214,8 +214,12 @@ int32 FPlotPlaceTool::PinnedCount() const
 	return 0;
 }
 
-bool FPlotPlaceTool::DescribeGuideAnchor(FGuideAnchor& Out) const
+bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
 {
+	// THE NETWORK IS UNUSED HERE, deliberately: this gesture's reference is its own frontage
+	// and its points are its own pinned corners, both of which live on the tool. FRoadDrawTool
+	// is the implementor that needs the graph - see IBuildTool::DescribeGuideAnchor.
+
 	// ONLY THE TWO BACK CORNERS. The anchor click is a search for a service road and the
 	// frontage runs ALONG one in quantised 5 m steps - both are already constrained, and an
 	// angular guide over them would be a second opinion about where they may go, which is how

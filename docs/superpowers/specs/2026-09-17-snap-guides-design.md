@@ -289,8 +289,25 @@ plot.
    `IGuideSource::Kind()`. The Alt hold rides on `FToolContext` beside the Ctrl and Shift
    modifiers; the editor mode had to REGISTER it on both its drag and hover behaviours, since
    it is told about modifier ids rather than reading keys.
-4. **Offset**, the distance family, which needs its own arbitration pass.
-5. **Road drawing** as the second consumer.
+4. ~~**Road drawing** as the second consumer.~~ **Done 2026-09-17, brought forward from
+   fifth.** Offset is "the gap a neighbouring parallel road keeps", so road drawing is its
+   only consumer: built in the original order, the Offset stage would have shipped arbitration
+   with nothing on screen, failing this section's own test that a stage stands on its own.
+
+   `DescribeGuideAnchor` gained a `const URoadNetwork*` so a tool can ask the graph what it is
+   extending - `FRoadChainingState` holds only the node it draws FROM, never the one before
+   it. A reference is offered only where exactly ONE segment is incident; at a junction none
+   of them is "the" incoming one, and picking whichever was stored first would change with an
+   unrelated edit.
+
+   **A SNAP BEATS A GUIDE.** A road click takes the guided point only when the snap is Free.
+   Closing a junction is a statement about the graph where an alignment is only an aid, and a
+   guide that overrode a node snap would make junctions impossible to close while one was
+   live. One helper returns the whole adjusted `FRoadSnapResult`, so the mesh ghost, all
+   THREE `RoadPlacement::Validate` calls and the click take one value - anything less and the
+   preview promises what the click does not do.
+5. **Offset**, the distance family, which needs its own arbitration pass. Now last, with road
+   drawing already in place to consume it.
 
 ## 9. Tests
 

@@ -180,7 +180,7 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// it to stop.
 	const IBuildTool* Tool = GetActiveTool();
 	if (!bSuspendGuides && Tool != nullptr && Network != nullptr
-		&& Tool->DescribeGuideAnchor(Anchor))
+		&& Tool->DescribeGuideAnchor(Network, Anchor))
 	{
 		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide, Tunables.GuideSources);
 	}

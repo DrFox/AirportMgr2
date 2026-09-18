@@ -6,12 +6,40 @@
 
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
 namespace
 {
+	/**
+	 * The snap as this tool should ACT on it: its position moved onto the guide when the chain
+	 * claimed nothing.
+	 *
+	 * A SNAP BEATS A GUIDE. When the chain claimed a node or a segment the player is attaching
+	 * to something REAL - closing a junction, splitting a run - and that is a statement about
+	 * the graph, where an alignment is only an aid. A guide allowed to override it would make a
+	 * junction impossible to close while any guide was live, which is far worse than a guide
+	 * occasionally not applying.
+	 *
+	 * RETURNS THE WHOLE RESULT so the ghost, all three placement judgements and the click take
+	 * the same value. Handing some of them a position and others the raw snap is how a preview
+	 * comes to promise what a click does not do.
+	 *
+	 * PREFIXED because this module is a unity build and "GuidedSnap" is exactly the name a
+	 * second tool would also choose - see the SegmentEnds collision in SnapGuideChain.cpp.
+	 */
+	FRoadSnapResult RoadGuidedSnap(const FToolContext& Context)
+	{
+		FRoadSnapResult Guided = Context.Snap;
+		if (Guided.Kind == ERoadSnapKind::Free)
+		{
+			Guided.Position = Context.GuidedCursor();
+		}
+		return Guided;
+	}
+
 	/** Position of a live node, or the cursor when there is not one. */
 	FVector2D NodePosition(const FToolContext& Context, int32 NodeIndex)
 	{
@@ -48,7 +76,7 @@ namespace
 
 		case ERoadSnapKind::Free:
 		default:
-			return Context.Target->PlaceNode(Context.Snap.Position);
+			return Context.Target->PlaceNode(RoadGuidedSnap(Context).Position);
 		}
 	}
 }
@@ -107,7 +135,7 @@ TUniquePtr<IRoadDrawState> FRoadChainingState::OnClick(const FToolContext& Conte
 			return MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 		}
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Network, FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Network, FromId, RoadGuidedSnap(Context), Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
 			return nullptr;
@@ -173,10 +201,12 @@ void FRoadChainingState::BuildPreview(const FToolContext& Context, IToolPreviewS
 	if (Context.Network() != nullptr && Context.Target->MakeLiveNodeId(From, FromId))
 	{
 		const ERoadPlacement Judgement =
-			RoadPlacement::Validate(*Context.Network(), FromId, Context.Snap, Context.Limits);
+			RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context),
+				Context.Limits);
 		if (Judgement != ERoadPlacement::Valid)
 		{
-			Sink.Label(Context.Snap.Position, RoadPlacement::Describe(Judgement), EPreviewStyle::Refused);
+			Sink.Label(RoadGuidedSnap(Context).Position, RoadPlacement::Describe(Judgement),
+				EPreviewStyle::Refused);
 		}
 		else if (const IBuildPurse* Purse = Context.Target->GetPurse())
 		{
@@ -220,6 +250,86 @@ FText FRoadDrawTool::GetDisplayName() const
 bool FRoadDrawTool::IsIdle() const
 {
 	return State.IsValid() && State->IsIdle();
+}
+
+bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+{
+	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
+	// speak of, and a guide offered there would be squaring to an edge that does not exist.
+	const int32 Pending = GetPendingNode();
+	if (Network == nullptr || Pending == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const FRoadNodeId FromId = Network->NodeIdAt(Pending);
+	const FRoadNode* From = Network->GetNode(FromId);
+	if (From == nullptr)
+	{
+		return false;
+	}
+
+	Out.Origin = From->Position;
+
+	// THE SEGMENT ALREADY ARRIVING AT THE PENDING NODE. With exactly one incident segment the
+	// answer is unambiguous - that is the road being extended. At a junction there are several
+	// and none of them is "the" incoming one, so no reference is offered rather than an
+	// arbitrary one: a guide that squared to whichever segment happened to be stored first
+	// would change with an edit nobody connected to guides at all.
+	int32 Incident = 0;
+	FVector2D Along = FVector2D::ZeroVector;
+	FVector2D OtherEnd = FVector2D::ZeroVector;
+
+	const TArray<FRoadSegment>& Segments = Network->GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegment& Segment = Segments[Index];
+		if (!Segment.bAlive || (Segment.A != FromId && Segment.B != FromId))
+		{
+			continue;
+		}
+
+		const FRoadNode* Far = Network->GetNode(Segment.A == FromId ? Segment.B : Segment.A);
+		if (Far == nullptr)
+		{
+			continue;
+		}
+
+		++Incident;
+		Along = (From->Position - Far->Position).GetSafeNormal();
+		OtherEnd = Far->Position;
+	}
+
+	if (Incident == 1 && !Along.IsNearlyZero())
+	{
+		Out.Reference = Along;
+		Out.ReferenceAt = OtherEnd;
+		Out.ReferenceName = TEXT("this road");
+	}
+
+	// EVERY LIVE NODE IN REACH IS SOMETHING TO LINE UP WITH - "level with that junction" is what
+	// a player squinting at a taxiway layout actually wants. A node has no name, so the label
+	// cannot say WHICH; the dashed line drawn to it is what does.
+	//
+	// A DELETED NODE KEEPS ITS SLOT, so bAlive is checked here as the segment loop above checks
+	// its own: offering one would draw a guide to a junction the player has removed.
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+	const TArray<FRoadNode>& Nodes = Network->GetNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		const FRoadNode& Node = Nodes[Index];
+
+		// NOT THE NODE BEING EXTENDED FROM: its own lines pass through the origin, so both would
+		// always be in tolerance and the guide would say "you are level with yourself".
+		if (Index == Pending || !Node.bAlive
+			|| FVector2D::DistSquared(Node.Position, Out.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+		Out.AlignTo.Add({ Node.Position, TEXT("that node") });
+	}
+
+	return true;
 }
 
 int32 FRoadDrawTool::GetPendingNode() const
@@ -429,8 +539,8 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 	// Shown even when illegal, coloured rather than withheld: hiding it would answer "why
 	// can I not build here" with nothing at all.
 	const ERoadPlacement Judgement =
-		RoadPlacement::Validate(*Context.Network(), FromId, Context.Snap, Context.Limits);
-	Context.Target->UpdateGhost(Pending, Context.Snap,
+		RoadPlacement::Validate(*Context.Network(), FromId, RoadGuidedSnap(Context), Context.Limits);
+	Context.Target->UpdateGhost(Pending, RoadGuidedSnap(Context),
 		Judgement == ERoadPlacement::Valid, Kind, WidthIndex);
 }
 
@@ -563,7 +673,27 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 
 	// Where the click lands on the PLANE, which under an angled view is not where the
 	// mouse pointer is drawn - and the shallower the view, the further apart they are.
-	Sink.Marker(Context.Snap.Position, EPreviewStyle::Pending);
+	Sink.Marker(RoadGuidedSnap(Context).Position, EPreviewStyle::Pending);
+
+	// THE DASHED LINE TO WHAT IT IS LINED UP WITH, one per winner - the same emission the plot
+	// gesture makes, and deliberately the same shape: two tools drawing one meaning two
+	// different ways would be presentation drifting apart inside the plugin.
+	//
+	// FROM THE POINT THE CLICK WOULD TAKE, so the line touches the marker above rather than
+	// floating beside it.
+	if (Context.Guide.bActive)
+	{
+		const FVector2D Moving = RoadGuidedSnap(Context).Position;
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// At the line's MIDPOINT: two labels at the moving point overprint, and the plugin
+			// has no camera to offset them by a readable number of pixels. Design section 6.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
+	}
 
 	if (Context.Snap.Kind == ERoadSnapKind::Segment && Context.Network() != nullptr)
 	{
