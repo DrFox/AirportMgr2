@@ -25,6 +25,15 @@ The request, verbatim:
   guides constrain how far. A drag resolves its direction first, then its distance along that
   direction. They are separate lists with separate arbitration, because a rule that picked one
   winner across both would have "parallel to that taxiway" losing to "30 m from the last one".
+
+  **AMENDED 2026-09-17, after stage 5.** The separate arbitration this asked for was never
+  built, because `EFit` - added in stage 1 for simultaneous alignments - already provides
+  exactly what the reasoning above demands: one winner per fit kind, so "parallel to that
+  taxiway" and "the same gap as its neighbour" both hold and never compete for one slot. And a
+  distance along the perpendicular IS a line, which is what a Perpendicular candidate already
+  means. A LENGTH guide - "the same 40 m as the last segment" - would still need the second
+  family, because a distance along the DRAG is a point on a ray rather than a line; no such
+  source is listed in section 3.
 - **THE DRIVER RESOLVES THE GUIDE, not the tool.** It arrives on `FToolContext` beside `Snap`,
   from the same place and for the same recorded reason: both drivers resolve the snap before a
   tool sees it, so the same gesture cannot behave differently in PIE and in the editor mode.
@@ -124,9 +133,6 @@ namespace SnapGuide
 
         EFit Fit = EFit::Angular;
 
-        /** For Offset: how far along the perpendicular, uu. Zero for direction guides. */
-        double Distance = 0.0;
-
         /**
          * The point the dashed line is drawn TO - the road it is parallel with, the stand it
          * squares to. NOT the guide's own geometry: the player needs to see WHICH thing they
@@ -157,6 +163,9 @@ namespace SnapGuide
     };
 }
 ```
+
+**`Distance` was removed in stage 5.** It was declared for Offset and never read: an offset is
+a LINE parallel to its reference, so the line's own `Through` point carries it.
 
 **`Description` is a string, exactly as `IToolReadoutSink`'s facts are, and for the same
 reason**: the alternative is an enum of description KINDS that the overlay switches on, which
@@ -306,8 +315,20 @@ plot.
    live. One helper returns the whole adjusted `FRoadSnapResult`, so the mesh ghost, all
    THREE `RoadPlacement::Validate` calls and the click take one value - anything less and the
    preview promises what the click does not do.
-5. **Offset**, the distance family, which needs its own arbitration pass. Now last, with road
-   drawing already in place to consume it.
+5. ~~**Offset**, the distance family, which needs its own arbitration pass.~~ **Done
+   2026-09-17 - and it needed no such pass.** See section 2's amendment. Offset proposes a
+   Perpendicular line parallel to the nearest road, at the gap a neighbouring parallel road
+   already keeps, on the side of the reference AWAY from that neighbour - so it can never
+   propose the line of a road that is already there. Its label carries the number, because
+   "matching the taxiway" alone cannot distinguish 40 m from 45 m.
+
+   The away-from-the-neighbour rule replaced "on the cursor's side" during execution: the two
+   agree only while the drag is outside the pair, and a drag BETWEEN two roads is nearer the
+   reference than the neighbour, so the cursor's side IS the neighbour's side and the guide
+   offered the neighbour's own line.
+
+**All five stages are done.** What section 10 still lists as out of scope remains so: curved
+roads, terrain contours, and numeric entry.
 
 ## 9. Tests
 

@@ -54,7 +54,7 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere)
 	bool bWorld = true;
 
-	/** The gap a neighbouring parallel road keeps. Nothing proposes this until stage 4. */
+	/** The gap a neighbouring parallel road keeps. Off by default: judged in PIE first. */
 	UPROPERTY(EditAnywhere)
 	bool bOffset = false;
 

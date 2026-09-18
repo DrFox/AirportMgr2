@@ -343,6 +343,116 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 	}
 }
 
+void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	// THE SAME REFERENCE FParallelGuideSource PICKS - the nearest road to the drag - so
+	// "parallel to the taxiway" and "the same gap as its neighbour" describe one road between
+	// them, and the two guides compose into an answer rather than two unrelated ones.
+	FRoadSegmentId Reference;
+	FVector2D ReferenceAt = FVector2D::ZeroVector;
+	FVector2D ReferenceDir = FVector2D::ZeroVector;
+	double BestSquared = Reach * Reach;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
+		if (Span.IsNearlyZero() || Squared > BestSquared)
+		{
+			continue;
+		}
+
+		BestSquared = Squared;
+		Reference = Id;
+		ReferenceAt = On;
+		ReferenceDir = Span.GetSafeNormal();
+	}
+
+	if (ReferenceDir.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector2D Across = RoadGeom::PerpCCW(ReferenceDir);
+	const FString ReferenceName = RoadNaming::Describe(Network, Reference);
+
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		if (Id == Reference)
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero()
+			|| FVector2D::DistSquared(ClosestOn(A, B, Anchor.Origin), Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		// A NEIGHBOUR IS A ROAD PARALLEL TO THE REFERENCE. One that crosses it has no single
+		// gap to copy - the distance between them depends where you measure, so there is no
+		// number to offer.
+		const FVector2D Dir = Span.GetSafeNormal();
+		if (!FMath::IsNearlyZero(Dir.X * ReferenceDir.Y - Dir.Y * ReferenceDir.X, 1.0e-3))
+		{
+			continue;
+		}
+
+		// THE GAP, measured perpendicular from the reference's line to the neighbour's near
+		// end. Near-zero means the two are the same road drawn twice, or a continuation of it:
+		// offering a zero gap would propose drawing on top of the reference.
+		const FVector2D ToNeighbour = ClosestOn(A, B, ReferenceAt) - ReferenceAt;
+		const double Signed = FVector2D::DotProduct(ToNeighbour, Across);
+		const double Gap = FMath::Abs(Signed);
+		if (Gap < 1.0)
+		{
+			continue;
+		}
+
+		SnapGuide::FCandidate Match;
+		Match.Direction = ReferenceDir;
+
+		// AWAY FROM THE NEIGHBOUR, never toward it: the whole offer is "another road, one gap
+		// further on", and a line laid on the neighbour's own side would propose drawing on top
+		// of the very road that suggested the number. Keyed to the neighbour rather than to the
+		// cursor because the two agree everywhere the guide can actually be seen - a drag
+		// BETWEEN the pair is nearer the reference than the neighbour, so the cursor's side is
+		// the neighbour's side, and "the cursor's side" would hand back the neighbour's line.
+		Match.Through = ReferenceAt - Across * FMath::Sign(Signed) * Gap;
+		Match.Fit = SnapGuide::EFit::Perpendicular;
+		Match.ReferenceAt = ReferenceAt;
+		Match.Source = SnapGuide::ESource::Offset;
+
+		// THE NUMBER IS IN THE LABEL. "matching the taxiway" alone would leave the player
+		// unable to tell 40 m from 45 m, which is the one thing they are trying to control.
+		Match.Description = FString::Printf(TEXT("%.0f m, matching %s"),
+			Gap / 100.0, *ReferenceName);
+		Out.Add(Match);
+	}
+}
+
 FSnapGuideChain::FSnapGuideChain()
 {
 	AddSource(MakeUnique<FExtendingGuideSource>());
@@ -352,6 +462,7 @@ FSnapGuideChain::FSnapGuideChain()
 	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FRunwayGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
+	AddSource(MakeUnique<FOffsetGuideSource>());
 }
 
 void FSnapGuideChain::AddSource(TUniquePtr<IGuideSource> Source)

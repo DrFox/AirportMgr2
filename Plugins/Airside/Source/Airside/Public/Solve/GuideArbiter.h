@@ -82,10 +82,6 @@ namespace SnapGuide
 		/** Which of the two tolerances judges this candidate. See EFit. */
 		EFit Fit = EFit::Angular;
 
-		/** For Offset: how far along the perpendicular, uu. Zero for direction guides, and
-		 *  unread until stage 4 - carried now so the type does not change under stage 2. */
-		double Distance = 0.0;
-
 		/**
 		 * The point the dashed line is drawn TO - the road it is parallel with, the edge it
 		 * is squared to. NOT the guide's own geometry: the player needs to see WHICH thing
