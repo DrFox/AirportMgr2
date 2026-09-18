@@ -120,6 +120,30 @@ public:
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
 
+	/**
+	 * The size the section row needs when it is only allowed to be AvailableWidth wide.
+	 *
+	 * A TEST SEAM, because the thing that goes wrong here cannot be seen any other way: the
+	 * buttons are all present in the widget tree whether or not they FIT, so counting them
+	 * says nothing - see AirportMgr.Actions.BarBuildsFromRegistry passing throughout the
+	 * stage-3 regression where the whole Snap section was off-screen.
+	 *
+	 * In the game the row takes its wrap width from the geometry it is given, which arrives
+	 * on Tick; there is no geometry and no tick headless, so the width is stated here. The
+	 * arithmetic under test - where a line breaks - is the same either way.
+	 */
+	FVector2D SectionRowSizeForTest(float AvailableWidth) const;
+
+	/**
+	 * The height the bar actually gets on the canvas, at this width.
+	 *
+	 * SEPARATE FROM SectionRowSizeForTest because wrapping the row is only half the job: a
+	 * row that wraps inside a bar pinned to one line's height has swapped clipping at the
+	 * right-hand edge for clipping at the bottom, and the row's own measurement cannot see
+	 * that. This reads what the CANVAS will give it.
+	 */
+	float BarReservedHeightForTest(float AvailableWidth) const;
+
 protected:
 	/** Builds the bar's chrome and buttons. See UAirportMgrPanelWidget::Initialize for why
 	 *  this runs from Initialize rather than NativeOnInitialized. */
@@ -128,6 +152,16 @@ protected:
 
 private:
 	UPROPERTY() TArray<TObjectPtr<UBuildBarEntry>> Entries;
+
+	/**
+	 * The row the section frames sit on.
+	 *
+	 * A UWrapBox, so a section that will not fit spills onto another line rather than off the
+	 * right-hand edge. HELD rather than local to EnsureSlots, which is where it used to live:
+	 * a row nothing can reach is a row nothing can measure, and whether the sections fit is
+	 * the one thing about this bar that has actually broken.
+	 */
+	UPROPERTY() TObjectPtr<UPanelWidget> SectionRow;
 
 	UPanelWidget* SectionPanel(EActionSection Section) const;
 	void EnsureSlots(const UUIStyle* Style);

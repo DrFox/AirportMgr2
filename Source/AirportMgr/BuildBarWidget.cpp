@@ -8,10 +8,13 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
+#include "Components/SizeBox.h"
 #include "Components/Spacer.h"
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Components/WrapBox.h"
+#include "Components/WrapBoxSlot.h"
 #include "Model/OpsEvents.h"
 #include "Model/SimClock.h"
 #include "Model/Ledger.h"
@@ -96,7 +99,6 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 	// now, and is a separate widget for exactly that reason. Python cannot author
 	// the Blueprint on this engine build (UWidgetBlueprint::WidgetTree is not a scriptable
 	// property), so this IS the default look, and a Blueprint is an optional restyle.
-	UHorizontalBox* ToolsRow = nullptr;
 	if (WidgetTree->RootWidget == nullptr)
 	{
 		UCanvasPanel* Root = WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass(), TEXT("FallbackRoot"));
@@ -115,10 +117,24 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		BarSlot->SetAlignment(FVector2D(0.0, 1.0));
 		BarSlot->SetOffsets(FMargin(0.0f, 0.0f, 0.0f, Height));
 
+		// THE HEIGHT IS NOW THE CONTENT'S, NOT A FIGURE. Anchored 0..1 horizontally the width
+		// still comes from the anchors (SConstraintCanvas takes the stretch branch first), so
+		// AutoSize only decides the height - and it has to, because the row below wraps. A bar
+		// pinned to one line's height would have turned clipping at the right-hand edge into
+		// clipping at the bottom, which is the same bug lying down.
+		BarSlot->SetAutoSize(true);
+
+		// THE FLOOR SURVIVES AS A MINIMUM. BarHeight and BarHeightFor stop being THE height
+		// and become the least it may be, which is what they were always for - see BarHeight's
+		// own comment about not cropping buttons when ButtonSize rises.
+		USizeBox* Floor = WidgetTree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("BarFloor"));
+		Floor->SetMinDesiredHeight(Height);
+		Border->SetContent(Floor);
+
 		// TWO ROWS. The status strip sits on the darker slot so it reads as a different
 		// SURFACE from the tools below it, not as the same bar with a gap in it.
 		UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("BarRows"));
-		Border->SetContent(Rows);
+		Floor->AddChild(Rows);
 
 		UBorder* StatusBorder = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("StatusBorder"));
 		StatusBorder->SetBrushColor(Style->PanelDark);
@@ -132,8 +148,15 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		ToolsBorder->SetBrushColor(Style->Panel);
 		ToolsBorder->SetPadding(FMargin(Style->SectionPadding, 6.0f));
 		Rows->AddChildToVerticalBox(ToolsBorder);
-		ToolsRow = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("ToolsRow"));
-		ToolsBorder->SetContent(ToolsRow);
+		// A WRAP BOX, NOT A HORIZONTAL BOX. A horizontal row has no answer for more buttons
+		// than fit: it lays them out past its own right edge and the overflow is simply not
+		// drawn. That is not hypothetical - snap guides stage 3 added eight toggles and the
+		// whole Snap section went off the end, silently, with every bar test still green.
+		// Left at bExplicitWrapSize=false so SWrapBox takes the wrap width from the geometry
+		// it is actually given; the bar is anchored to both screen edges, so that width is
+		// the window's.
+		SectionRow = WidgetTree->ConstructWidget<UWrapBox>(UWrapBox::StaticClass(), TEXT("ToolsRow"));
+		ToolsBorder->SetContent(SectionRow);
 
 		UE_LOG(LogBuildBar, Log, TEXT("No bar asset: building the code-only bar, %.0f uu tall"), Height);
 	}
@@ -149,7 +172,7 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 		// TIME IS THE ONLY SECTION ON THE STATUS ROW. It is not a tool - it does not change
 		// what a click does - so grouping it with the build tools is what made seventeen
 		// identically-weighted buttons read as one undifferentiated run.
-		UPanelWidget* Row = (Which == EActionSection::Time) ? StatusRow.Get() : static_cast<UPanelWidget*>(ToolsRow);
+		UPanelWidget* Row = (Which == EActionSection::Time) ? StatusRow.Get() : SectionRow.Get();
 		if (Row == nullptr)
 		{
 			if (UPanelWidget* Root = Cast<UPanelWidget>(WidgetTree->RootWidget))
@@ -198,7 +221,15 @@ void UBuildBarWidget::EnsureSlots(const UUIStyle* Style)
 
 		// Honour the cast: a Blueprint may supply any UPanelWidget as the row, and a blind
 		// AddChildToHorizontalBox on a Grid would be a null dereference on somebody's asset.
-		if (UHorizontalBox* RowBox = Cast<UHorizontalBox>(Row))
+		if (UWrapBox* WrapRow = Cast<UWrapBox>(Row))
+		{
+			// THE FRAME IS THE UNIT THAT WRAPS, not the button: a section broken across two
+			// lines would put half of "Tools" under a heading and half under nothing, which
+			// is worse than the clipping this replaces.
+			UWrapBoxSlot* FrameSlot = WrapRow->AddChildToWrapBox(Frame);
+			FrameSlot->SetPadding(FMargin(0.0f, 0.0f, Style->SectionPadding, 4.0f));
+		}
+		else if (UHorizontalBox* RowBox = Cast<UHorizontalBox>(Row))
 		{
 			UHorizontalBoxSlot* FrameSlot = RowBox->AddChildToHorizontalBox(Frame);
 			FrameSlot->SetPadding(FMargin(0.0f, 0.0f, Style->SectionPadding, 0.0f));
@@ -471,6 +502,50 @@ int32 UBuildBarWidget::ButtonCountForTest(EActionSection Section) const
 		}
 	}
 	return Count;
+}
+
+FVector2D UBuildBarWidget::SectionRowSizeForTest(float AvailableWidth) const
+{
+	if (SectionRow == nullptr)
+	{
+		return FVector2D::ZeroVector;
+	}
+
+	if (UWrapBox* Wrapping = Cast<UWrapBox>(SectionRow))
+	{
+		Wrapping->SetExplicitWrapSize(true);
+		Wrapping->SetWrapSize(AvailableWidth);
+	}
+
+	const TSharedRef<SWidget> Slate = SectionRow->TakeWidget();
+	Slate->MarkPrepassAsDirty();
+	Slate->SlatePrepass(1.0f);
+	return FVector2D(Slate->GetDesiredSize());
+}
+
+float UBuildBarWidget::BarReservedHeightForTest(float AvailableWidth) const
+{
+	// Force the wrap width first: the height being asked about is a CONSEQUENCE of how many
+	// lines that width produces.
+	SectionRowSizeForTest(AvailableWidth);
+
+	const UWidget* Bar = WidgetTree != nullptr ? WidgetTree->FindWidget(TEXT("BarBorder")) : nullptr;
+	const UCanvasPanelSlot* BarSlot = Bar != nullptr ? Cast<UCanvasPanelSlot>(Bar->Slot) : nullptr;
+	if (BarSlot == nullptr)
+	{
+		return 0.0f;
+	}
+
+	// AUTO-SIZED means the canvas hands over whatever the content asks for; otherwise the
+	// bottom offset IS the height, and content taller than it is simply cut off.
+	if (BarSlot->GetAutoSize())
+	{
+		const TSharedRef<SWidget> Slate = const_cast<UWidget*>(Bar)->TakeWidget();
+		Slate->MarkPrepassAsDirty();
+		Slate->SlatePrepass(1.0f);
+		return static_cast<float>(Slate->GetDesiredSize().Y);
+	}
+	return BarSlot->GetOffsets().Bottom;
 }
 
 bool UBuildBarWidget::HasRootWidgetForTest() const
