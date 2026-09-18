@@ -222,6 +222,10 @@ def main():
 
     say("plane2: %s" % ("ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED - see above"))
     say("=" * 78)
+    # A reimport regenerates plane2's materials and reassigns its slots; without this
+    # the shared M_Fleet set is silently undone for plane2 alone.
+    import airside_import
+    airside_import.rebuild_fleet_materials()
     say("DONE")
 
 

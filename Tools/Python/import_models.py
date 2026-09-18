@@ -34,7 +34,7 @@ import unreal
 # reads as "the commandlet did nothing" rather than as a missing path. Put it on first.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from airside_import import Spec, import_one, say  # noqa: E402
+from airside_import import Spec, import_one, rebuild_fleet_materials, say  # noqa: E402
 
 
 MODELS = r"C:\repos\AirportMgr2Models"
@@ -142,6 +142,9 @@ def main():
                          % (len(bad), len(results), ", ".join(bad)))
     else:
         say("all %d model(s) imported and passed every check" % len(results))
+    # An import regenerates per-asset materials and reassigns every slot, silently
+    # undoing the shared set. Rebuilt here so no import can leave it undone.
+    rebuild_fleet_materials()
     say("DONE")
 
 
