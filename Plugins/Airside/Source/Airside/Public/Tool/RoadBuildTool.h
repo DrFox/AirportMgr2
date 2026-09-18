@@ -4,6 +4,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/SnapGuideChain.h"
 #include "Tool/ToolReadout.h"
 #include "Tool/Selection.h"
 #include "RoadBuildTool.generated.h"
@@ -47,6 +48,30 @@ struct FToolContext
 
 	/** What the snap chain made of that position. Carried BESIDE Cursor, never into it. */
 	FRoadSnapResult Snap;
+
+	/**
+	 * What the cursor is lined up with - resolved by the DRIVER, exactly like Snap above and
+	 * for the same recorded reason.
+	 *
+	 * Both drivers build their context through FBuildSession::MakeContext, so one gesture
+	 * cannot guide differently in PIE and in the editor mode - the bug FRoadSnapSettings
+	 * records having shipped before the two were merged.
+	 *
+	 * IT IS ALSO THE ONLY PLACE HYSTERESIS CAN LIVE. BuildPreview and BuildReadout are both
+	 * const and neither may remember last frame's winner; the session holds it instead (see
+	 * FBuildSession::LastGuide) and the flicker rule in the snap-guides design depends on it.
+	 */
+	SnapGuide::FResult Guide;
+
+	/**
+	 * Where a MOVING point should go: the guide's answer when there is one, the raw cursor
+	 * when there is not.
+	 *
+	 * The ternary written once rather than at every consumer - the same argument Network()
+	 * below makes for its own null check. A tool that read Guide.Point unconditionally would
+	 * park its geometry at the origin on every frame no guide was active.
+	 */
+	FVector2D GuidedCursor() const { return Guide.bActive ? Guide.Point : Cursor; }
 
 	FRoadPlacementLimits Limits;
 
@@ -195,6 +220,18 @@ enum class EPreviewStyle : uint8
 
 	/** An edge that follows the cursor. Drawn dashed - see ARoadBuildHUD::IsDashed. */
 	Provisional,
+
+	/**
+	 * What the cursor is lined up with: the dashed line to the thing it is squared to.
+	 *
+	 * NOT Provisional, which already means "this edge is still moving" - and the two are
+	 * drawn in the same frame, touching the same corner. Two meanings, two styles; whether
+	 * the overlay dashes both is its business, not the plugin's (snap-guides design section 6).
+	 *
+	 * AT THE END, like Pinned and Provisional above and for the same reason: this is a UENUM
+	 * and renumbering it repoints any value already serialised against it.
+	 */
+	Guide,
 };
 
 /**
@@ -298,6 +335,22 @@ struct AIRSIDE_API IBuildTool
 	 * that does nothing keeps every other tool as it was.
 	 */
 	virtual void OnReselect(const FToolContext& Context) {}
+
+	/**
+	 * What this tool is dragging, and against what, for the guide chain. False means "no
+	 * gesture is in progress", and the driver then resolves no guide at all.
+	 *
+	 * CONST AND CONTEXT-FREE, read off what the tool has already pinned. It cannot take an
+	 * FToolContext because the driver calls it WHILE BUILDING ONE - and it should not want
+	 * to: where the cursor is now is the chain's input, not the anchor's.
+	 *
+	 * RETURNS BOOL rather than setting a flag inside FGuideAnchor, so a caller branches on
+	 * the return - CLAUDE.md's rule about honouring anything that fills an out-parameter.
+	 *
+	 * Silent by default, like BuildReadout below: eight tools implement this interface and
+	 * stage 1 of the snap-guides design gives an anchor to exactly one of them.
+	 */
+	virtual bool DescribeGuideAnchor(FGuideAnchor& Out) const { return false; }
 
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;
 

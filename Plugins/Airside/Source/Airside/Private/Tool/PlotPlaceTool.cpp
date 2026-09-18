@@ -214,6 +214,56 @@ int32 FPlotPlaceTool::PinnedCount() const
 	return 0;
 }
 
+bool FPlotPlaceTool::DescribeGuideAnchor(FGuideAnchor& Out) const
+{
+	// ONLY THE TWO BACK CORNERS. The anchor click is a search for a service road and the
+	// frontage runs ALONG one in quantised 5 m steps - both are already constrained, and an
+	// angular guide over them would be a second opinion about where they may go, which is how
+	// two rules about one number come to disagree (see QuantisedFrontage's own comment).
+	if (Stage != EPlotStage::CornerA && Stage != EPlotStage::CornerB)
+	{
+		return false;
+	}
+
+	const FVector2D Frontage = Corners[1] - Corners[0];
+	if (Frontage.IsNearlyZero())
+	{
+		return false;
+	}
+
+	// THE CORNER THE MOVING EDGE GROWS FROM: the far end of the frontage while corner 2 is
+	// being placed, the anchor while corner 3 is. Both measured against the SAME frontage
+	// direction, which is what makes the pair of clicks a rectangle rather than two unrelated
+	// right angles.
+	const bool bFarEnd = Stage == EPlotStage::CornerA;
+	Out.Origin      = bFarEnd ? Corners[1] : Corners[0];
+	Out.ReferenceAt = bFarEnd ? Corners[0] : Corners[1];
+	Out.Reference   = Frontage.GetSafeNormal();
+
+	// THE TOOL NAMES ITS OWN REFERENCE, so the source can say "square to the frontage"
+	// without knowing what a frontage is - the same split that keeps EPreviewStyle a meaning
+	// rather than a colour.
+	Out.ReferenceName = TEXT("the frontage");
+
+	// THE CORNERS ALREADY PINNED, so the moving one can line up with them - "0 degrees to
+	// corner 3" (the 2026-09-17 request). ONLY AS FAR AS PinnedCount: entries past it are
+	// stale, and offering one would align the player against the PREVIOUS gesture's geometry,
+	// which is the bug Quad's own comment records having shipped once.
+	//
+	// THE CORNER BEING DRAGGED IS NOT IN THE LIST. A point cannot line up with itself: its
+	// own two lines pass through wherever the cursor is, so both would always be in tolerance
+	// and the guide would say "you are level with yourself" on every frame.
+	const int32 Pinned = PinnedCount();
+	for (int32 Index = 0; Index < Pinned && Index < 4; ++Index)
+	{
+		// NUMBERED AS THE PLAYER COUNTS THEM - the readout says "Plot Points: 2/4", so corner
+		// 0 is "corner 1" on screen. A label naming a corner the bar does not is worse than
+		// no label.
+		Out.AlignTo.Add({ Corners[Index], FString::Printf(TEXT("corner %d"), Index + 1) });
+	}
+	return true;
+}
+
 void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQuad) const
 {
 	OutQuad.Reset();
@@ -259,7 +309,12 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 		return Depth >= 0.0 ? Point : Point - Inward * Depth;
 	};
 
-	const FVector2D Back = Pinned == 2 ? InFront(Context.Cursor) : Corners[2];
+	// THE GUIDED CURSOR, not the raw one. The driver resolved it (FToolContext::Guide) and
+	// InFront still has the last word: a corner guided square to the frontage but dragged
+	// behind it slides back onto the frontage line, because concrete on the carriageway is a
+	// harder rule than an alignment aid. That is also why BuildPreview draws its guide line
+	// from the corner SHOWN here rather than from Guide.Point.
+	const FVector2D Back = Pinned == 2 ? InFront(Context.GuidedCursor()) : Corners[2];
 	OutQuad.Add(Back);
 
 	// UNTIL IT IS REACHED, THE NEAR CORNER COMPLETES A PARALLELOGRAM. Two pinned corners then
@@ -273,7 +328,8 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 	FVector2D Near = Corners[0] + (Back - Far);
 	if (Pinned == 3)
 	{
-		Near = InFront(Context.Cursor);
+		// Guided like the corner before it, and against the same frontage - see Back above.
+		Near = InFront(Context.GuidedCursor());
 	}
 	else if (Pinned >= 4)
 	{
@@ -561,6 +617,33 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
 	Sink.Line(Shown[3], Shown[0],
 		Pinned >= 4 ? EPreviewStyle::Pinned : EPreviewStyle::Provisional);
+
+	// THE DASHED LINE TO WHAT IT IS LINED UP WITH, and the label saying which - snap-guides
+	// design section 6, and the whole of what the request asked for: a ray along the guide
+	// direction would say "you are at 90 degrees", and this says WHICH edge you are square to.
+	//
+	// DRAWN FROM THE CORNER THE QUAD SHOWS, not from Guide.Point, because the InFront clamp
+	// in Quad may have moved it - a guide line that did not touch the shape would be pointing
+	// at nothing.
+	//
+	// GATED ON THE MOVING CORNER, because Guide is only ever active while one of the two back
+	// corners is under the cursor (see DescribeGuideAnchor), and Shown[Pinned] IS that corner.
+	if (Context.Guide.bActive && (Pinned == 2 || Pinned == 3) && Shown.IsValidIndex(Pinned))
+	{
+		const FVector2D Moving = Shown[Pinned];
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// THE LABEL SITS AT ITS OWN LINE'S MIDPOINT, not at the corner. With one guide the
+			// corner was the obvious place - it is where the eye is - but two guides put both
+			// labels on the same point and the plugin has no camera to offset them by a
+			// readable number of pixels. The midpoint needs no measurement and puts each label
+			// on the line it describes.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
+	}
 
 	// CONTENTS AT THREE CORNERS, NOT TWO. With two pinned both back corners are unknown and
 	// the plot has no settled depth anywhere, so anything drawn inside it is a promise the

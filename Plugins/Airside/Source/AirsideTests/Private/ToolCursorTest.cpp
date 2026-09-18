@@ -36,6 +36,24 @@ bool FToolCursorTest::RunTest(const FString& Parameters)
 			Context.Snap.Position == FVector2D(1000.0, 0.0));
 	}
 
+	// 1b. GuidedCursor is the THIRD answer and must not fold into either of the other two.
+	//     A tool reading Guide.Point unconditionally parks its geometry at the origin on
+	//     every frame no guide is active, which looks exactly like a broken gesture.
+	{
+		FToolContext Context;
+		Context.SetCursor(FVector2D(700.0, 300.0), FRoadSnapResult());
+
+		TestTrue(TEXT("with no guide, the guided cursor IS the cursor"),
+			Context.GuidedCursor().Equals(FVector2D(700.0, 300.0), 1e-6));
+
+		Context.Guide.bActive = true;
+		Context.Guide.Point = FVector2D(700.0, 0.0);
+		TestTrue(TEXT("with a guide, it is the guide's constrained point"),
+			Context.GuidedCursor().Equals(FVector2D(700.0, 0.0), 1e-6));
+		TestTrue(TEXT("and the raw cursor is still there beside it, unchanged"),
+			Context.Cursor.Equals(FVector2D(700.0, 300.0), 1e-6));
+	}
+
 	// 2. THE REGRESSION. Hovering a guideline node beside a junction must highlight it,
 	//    even though the road snap claims that whole neighbourhood for the junction.
 	//
