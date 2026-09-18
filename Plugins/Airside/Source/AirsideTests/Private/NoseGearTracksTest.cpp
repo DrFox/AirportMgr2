@@ -58,6 +58,13 @@ namespace
 		Airframe.Ground = TestAirframes::Piper().Ground;
 		Airframe.Ground.MaxSteerDegrees = 60.0;
 		Airframe.Ground.MaxLateralAccelUu = 147.0;
+
+		// DECLARED SINCE 2026-09-15, and these four tests are the reason the declaration had
+		// to become explicit. They used to get the rolling-steer law for free by filling in
+		// the axles below, which is the same inference that silently turned a fuel truck into
+		// something that pivots on the spot. FAirframe defaults to Pivot now, so an airframe
+		// that means to steer says so.
+		Airframe.SteerLaw = ESteerLaw::RollingSteer;
 		Airframe.SteerAxleX = 0.0;
 		Airframe.FixedAxleX = -454.3;
 		return Airframe;
@@ -272,9 +279,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 {
 	// A corner tighter than R = L/sin(lock) cannot be followed AT ANY SPEED - the geometry
-	// refuses it, not the pace. The honest answer there is the crawl the model already
-	// specifies: "a turn that cannot be made at speed is made at a crawl, which is what a
-	// pilot riding the brakes against idle thrust actually does."
+	// refuses it, not the pace.
+	//
+	// WHAT CHANGED 2026-09-15, and why this test now pins a different number. The answer used
+	// to be MinTaxiSpeed, "the crawl a pilot riding the brakes against idle thrust actually
+	// does". That reasoning is sound about a takeable turn and WRONG here: slowing down does
+	// not make an impossible arc possible, and reporting the same 50 uu/s at an impossible
+	// corner, a merely tight one and a sharp vertex is what made "it crawls round that
+	// corner" undiagnosable from the log. Three rules, one number.
+	//
+	// The cap is now the lateral-accel speed for the radius actually asked for - the same
+	// rule as every other corner, so the number means something - and the DIAGNOSIS moved to
+	// a warning that names the radius and the lock that refused it. The speed here is not the
+	// interesting part; that a human is told is.
 	FAirframe Airframe = NoseGearTwinOtter();
 	Airframe.Ground.MaxSteerDegrees = 10.0;   // rudder-pedal range: L/sin(10) = 26 m
 
@@ -286,19 +303,48 @@ bool FCornerTighterThanLockCrawlsTest::RunTest(const FString& Parameters)
 	// and would have asked the profile about the wrong span entirely.
 	const double MidArc = 8000.0 + (HALF_PI * R) * 0.5;
 
+	// The new warning fires here by design. Declared with an occurrence count of ZERO, which
+	// in this API means "any number, including none" - so this TOLERATES the warning rather
+	// than asserting it. Deliberate: warnings are not captured as failures the way errors are,
+	// so a count of 1 would be asserting something this harness may not be able to see, and a
+	// test that claims more than it checks is worse than one that claims less. The warning is
+	// verified where it can be: a PIE run, against Saved/Logs/AirportMgr.log.
+	AddExpectedError(
+		TEXT("but the steering lock allows only"),
+		EAutomationExpectedErrorFlags::Contains, 0);
+
 	FSpeedProfile Profile;
 	Profile.Build(Tight, Airframe);
 	const double Limit = Profile.LimitAt(MidArc);
-	TestTrue(FString::Printf(TEXT("an impossible corner crawls (%.0f uu/s)"), Limit),
-		Limit <= Airframe.Ground.MinTaxiSpeed + 1.0);
 
-	// AND A FOLLOWABLE ONE DOES NOT, or the assertion above would pass on a profile that
-	// crawled everywhere. The same arc at a tiller's 60 degrees is well within the lock.
+	// The arithmetic restated rather than shared with FSpeedProfile - see
+	// FAirframe::TightestFollowableRadius on why a helper both sides called could be wrong in
+	// one place and agree with itself.
+	const double LateralAccelSpeed = FMath::Sqrt(Airframe.Ground.MaxLateralAccelUu * R);
+
+	TestTrue(
+		FString::Printf(
+			TEXT("an impossible corner is capped at the lateral-accel speed for the radius it "
+			     "actually asks for, %.0f uu/s (measured %.0f)"),
+			LateralAccelSpeed, Limit),
+		Limit <= LateralAccelSpeed + 1.0);
+
+	// AND IT IS NOT THE OLD CRAWL, which is the half of this the rename could have silently
+	// left behind: MinSteeringSpeed is 50 and sqrt(147 * 1000) is 383, so a profile still
+	// substituting the floor would fail here while passing the assertion above.
+	TestTrue(
+		FString::Printf(TEXT("and is well above the steering floor %.0f, not pinned to it"),
+			Airframe.Ground.MinSteeringSpeed),
+		Limit > Airframe.Ground.MinSteeringSpeed + 1.0);
+
+	// AND A FOLLOWABLE ONE IS FASTER STILL, or the assertions above would pass on a profile
+	// that capped everything at the same place. The same arc at a tiller's 60 degrees is well
+	// within the lock, so the lateral-accel rule applies without the lock ever binding.
 	FAirframe Tiller = NoseGearTwinOtter();
 	FSpeedProfile Roomy;
 	Roomy.Build(Tight, Tiller);
 	TestTrue(TEXT("the same corner at full tiller is not reduced to a crawl"),
-		Roomy.LimitAt(MidArc) > Tiller.Ground.MinTaxiSpeed + 1.0);
+		Roomy.LimitAt(MidArc) > Tiller.Ground.MinSteeringSpeed + 1.0);
 
 	return true;
 }

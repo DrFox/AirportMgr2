@@ -192,7 +192,7 @@ public:
 	/**
 	 * Splits Edge at curve parameter T (GuidelineGeom::Split), replacing it with two edges
 	 * that together trace the original curve. Both halves copy every field of the original
-	 * (AllowedTraffic, ServiceLoopOwner, DerivedFrom, ...) except A/B/Control, so provenance
+	 * (AllowedTraffic, StandGeometryOwner, DerivedFrom, ...) except A/B/Control, so provenance
 	 * survives the split exactly as it did at each of this method's five former call sites.
 	 *
 	 * Within WeldTolerance of an existing endpoint, no split happens: OutNode is that
@@ -213,14 +213,15 @@ public:
 
 	/**
 	 * THE graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach, GuidelineOverlay,
-	 * AnchorLink, AnchorLinkFinder and ServiceLoopBuild each used to fetch A/B themselves and
+	 * AnchorLink, AnchorLinkFinder and StandLaneBuild each used to fetch A/B themselves and
 	 * call it directly - a dozen near-identical bodies for "look up both ends, sample the
 	 * curve between them."
 	 *
-	 * ONE DOCUMENTED EXCEPTION remains (PR #137 review): FAnchorLink::Join samples a curve
-	 * captured BEFORE a lane split that may already have replaced its edge with two new
-	 * pieces, so there is no live FGuidelineEdgeId left for this to look up - see that call
-	 * site's own comment.
+	 * NO EXCEPTION REMAINS, since 2026-09-16. One did (PR #137 review): FAnchorLink::Join
+	 * sampled a curve captured BEFORE a lane split that had already replaced its edge with two
+	 * new pieces, so there was no live FGuidelineEdgeId left to look up. A stand declares its
+	 * entries now, so nothing is split before that point and Join calls this like everyone
+	 * else - see the comment at its own call.
 	 *
 	 * bFromB walks the curve from B to A instead of A to B by swapping the endpoints handed
 	 * to GuidelineGeom::Sample, not by sampling then reversing the array: a quadratic Bezier
@@ -324,9 +325,9 @@ public:
 	 * True when Node has line on it that leads OFF the service geometry it belongs to.
 	 *
 	 * "Does this anchor have an edge on it" used to be the same question, and stopped being
-	 * it the moment stands grew SERVICE LOOPS: a hydrant is always incident to its own spur,
+	 * it the moment stands grew SERVICE LANES: a hydrant is a waypoint ON its stand's lane,
 	 * so the count is true for a stand in the middle of a field. This walks only the edges
-	 * marked FGuidelineEdge::ServiceLoopOwner - the lane and its spurs - and reports whether
+	 * marked FGuidelineEdge::StandGeometryOwner - the stand's own lane - and reports whether
 	 * the component they reach touches anything that is not one of them.
 	 *
 	 * A node with no service geometry at all is answered by its own first edge, so a depot's

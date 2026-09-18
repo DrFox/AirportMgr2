@@ -232,4 +232,38 @@ bool FOfferGeneratorIntervalTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferCadenceAnswersTheFeeTest,
+	"AirportOps.Model.OfferCadenceAnswersTheFee",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferCadenceAnswersTheFeeTest::RunTest(const FString& Parameters)
+{
+	UAirlineDefinition* Airline = NewObject<UAirlineDefinition>();
+	Airline->OffersPerDay = 12.0;
+	TArray<UAirlineDefinition*> Airlines;
+	Airlines.Add(Airline);
+
+	const double AtPar = UOfferGenerator::OfferIntervalSeconds(Airlines, 1.0);
+	const double AtHalfDemand = UOfferGenerator::OfferIntervalSeconds(Airlines, 0.5);
+
+	TestEqual(TEXT("halving demand doubles the wait between offers - charging more means fewer "
+		"aeroplanes, which is the whole cost of the lever"), AtHalfDemand, AtPar * 2.0, 1e-6);
+
+	TestEqual(TEXT("a demand factor of zero is NEVER, exactly as no airline offering anything "
+		"is - not a divide by zero"),
+		UOfferGenerator::OfferIntervalSeconds(Airlines, 0.0), 0.0, 1e-9);
+
+	// A NEGATIVE FACTOR cannot come from UPricing::DemandFactor, which is a power of a clamped
+	// positive - but the parameter is public, and a negative sum would fall through the "never"
+	// branch looking exactly like an airport nobody flies to rather than like a bad argument.
+	TestEqual(TEXT("a negative demand factor is treated as never, not as a busy airport"),
+		UOfferGenerator::OfferIntervalSeconds(Airlines, -1.0), 0.0, 1e-9);
+
+	TestEqual(TEXT("and the default argument leaves the cadence exactly as it was before the "
+		"lever existed, so every existing caller is unaffected"),
+		UOfferGenerator::OfferIntervalSeconds(Airlines), AtPar, 1e-9);
+	return true;
+}
+
 #endif

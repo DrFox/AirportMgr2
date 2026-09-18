@@ -7,6 +7,9 @@
 
 #include "Present/RoadEditFacade.h"
 
+#include "Build/BuildCost.h"
+#include "Model/BuildPurse.h"
+
 #include "AirsideLog.h"
 #include "Algo/Reverse.h"
 #include "Build/AnchorLink.h"
@@ -46,12 +49,53 @@ bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoad
 
 bool URoadEditFacade::Undo()
 {
-	return Travel([](URoadEditHistory& History, URoadNetwork& Network) { return History.Undo(Network); });
+	// READ BEFORE TRAVELLING. Undo moves that snapshot onto the redo stack, so afterwards the
+	// entry this names is no longer the one on top - see PeekUndoChargeId.
+	URoadEditHistory* History = Actor().History;
+	const int32 ChargeId = History != nullptr ? History->PeekUndoChargeId() : INDEX_NONE;
+
+	if (!Travel([](URoadEditHistory& H, URoadNetwork& Network) { return H.Undo(Network); }))
+	{
+		return false;
+	}
+
+	// REVERSED BY ID, so the player gets back exactly what the build took rather than a figure
+	// recomputed from geometry that undo has just removed. Demolition is the other case and
+	// works the other way round - see IBuildPurse::Credit.
+	if (Purse != nullptr && ChargeId != INDEX_NONE)
+	{
+		Purse->Reverse(ChargeId);
+	}
+	return true;
 }
 
 bool URoadEditFacade::Redo()
 {
-	return Travel([](URoadEditHistory& History, URoadNetwork& Network) { return History.Redo(Network); });
+	URoadEditHistory* History = Actor().History;
+	const FBuildQuote Quote = History != nullptr ? History->PeekRedoQuote() : FBuildQuote();
+
+	// REFUSED WHEN THE MONEY HAS GONE SINCE, exactly as a fresh build would be. Redoing a
+	// taxiway the player can no longer afford would hand it to them for nothing, and undo
+	// refunding while redo rebuilt free is a loop that prints money.
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("Redo refused: cannot afford %s again"),
+			*Quote.What.ToString());
+		return false;
+	}
+
+	if (!Travel([](URoadEditHistory& H, URoadNetwork& Network) { return H.Redo(Network); }))
+	{
+		return false;
+	}
+
+	if (Purse != nullptr && !Quote.IsFree() && History != nullptr)
+	{
+		// A NEW id: the one the step used to carry names an entry the undo already reversed,
+		// and the ledger refuses a second reversal of it on purpose.
+		History->SetUndoTopCharge(Purse->Charge(Quote));
+	}
+	return true;
 }
 
 bool URoadEditFacade::CanUndo() const
@@ -99,6 +143,17 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 		Algo::Reverse(Surface.Outline);
 	}
 
+	// Priced on the CORRECTED outline, so a clockwise-drawn apron costs the same as the same
+	// shape drawn the other way - see BuildCost::PolygonAreaSquareMetres, which takes the
+	// absolute area for that reason. Refused before the scope: an abandoned scope drops the
+	// undo snapshot but does not roll the model back.
+	const FBuildQuote Quote = QuoteForApron(Surface.Outline);
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("AddApron refused: cannot afford %s"), *Quote.What.ToString());
+		return INDEX_NONE;
+	}
+
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net, TEXT("add apron"));
 
@@ -109,11 +164,12 @@ int32 URoadEditFacade::AddApron(const TArray<FVector2D>& Outline)
 		return INDEX_NONE;
 	}
 
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 	return Added.Index;
 }
 
-bool URoadEditFacade::DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove)
+bool URoadEditFacade::DeleteSlot(bool bDoomed, const TCHAR* Label,
+	TFunctionRef<bool(URoadNetwork&)> Remove, const FBuildQuote& Quote)
 {
 	URoadNetwork* Network = Actor().Network;
 	if (Network == nullptr || !bDoomed)
@@ -128,7 +184,10 @@ bool URoadEditFacade::DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<
 		return false;
 	}
 
-	CommitAndNotify(Edit);
+	// A DEFAULT-CONSTRUCTED QUOTE IS FREE, which is DisconnectGuideline's answer and the
+	// reason that caller needed no change: a guideline is not pavement, and unlinking one
+	// destroys no surface to be paid for.
+	CommitDisposal(Edit, Quote);
 	return true;
 }
 
@@ -136,8 +195,12 @@ bool URoadEditFacade::DeleteApron(int32 ApronIndex)
 {
 	const URoadNetwork* Network = Actor().Network;
 	const FApronId Doomed = Network != nullptr ? Network->ApronIdAt(ApronIndex) : FApronId();
+	// Quoted from the outline while the apron is still there to measure.
+	const FApronSurface* Surface = Doomed.IsSet() ? Network->GetApron(Doomed) : nullptr;
+	const FBuildQuote Quote = Surface != nullptr ? QuoteForApron(Surface->Outline) : FBuildQuote();
+
 	return DeleteSlot(Doomed.IsSet(), TEXT("delete apron"),
-		[Doomed](URoadNetwork& Net) { return Net.RemoveApron(Doomed); });
+		[Doomed](URoadNetwork& Net) { return Net.RemoveApron(Doomed); }, Quote);
 }
 
 int32 URoadEditFacade::FindApronAt(FVector2D Where) const
@@ -202,6 +265,16 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 			*Definition->GetName());
 	}
 
+	// Priced from the definition and refused before anything is placed - see ConnectNodes for
+	// why an abandoned scope is not a rollback.
+	const FBuildQuote Quote = BuildCost::ForEntity(*Definition);
+	if (!CanAfford(Quote))
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("PlaceEntity refused: cannot afford %s"),
+			*Quote.What.ToString());
+		return INDEX_NONE;
+	}
+
 	URoadNetwork& Net = EnsureNetwork();
 	FRoadEditScope Edit(HistoryForEdit(), &Net,
 		Kind == EPlaceableEntity::FuelDepot ? TEXT("place fuel depot") : TEXT("place stand"));
@@ -219,7 +292,7 @@ int32 URoadEditFacade::PlaceEntity(FVector2D Where, double Heading, EPlaceableEn
 		return INDEX_NONE;
 	}
 
-	CommitAndNotify(Edit);
+	CommitPurchase(Edit, Quote);
 	return Placed.Index;
 }
 
@@ -345,8 +418,13 @@ bool URoadEditFacade::DeleteEntity(int32 EntityIndex)
 	const TCHAR* Label = (Entity != nullptr && Entity->PoseRole == EServiceRole::Fuel)
 		? TEXT("delete fuel depot") : TEXT("delete stand");
 
+	// Quoted from the DEFINITION, which is what was paid for, while the instance still names
+	// it - after the removal there is nothing left to ask.
+	const FBuildQuote Quote = (Entity != nullptr && Entity->Definition != nullptr)
+		? BuildCost::ForEntity(*Entity->Definition) : FBuildQuote();
+
 	return DeleteSlot(Doomed.IsSet(), Label,
-		[Doomed](URoadNetwork& Net) { return Net.RemoveEntity(Doomed); });
+		[Doomed](URoadNetwork& Net) { return Net.RemoveEntity(Doomed); }, Quote);
 }
 
 int32 URoadEditFacade::FindEntityAt(FVector2D Where, double Radius) const

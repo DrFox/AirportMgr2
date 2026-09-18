@@ -532,7 +532,7 @@ bool URoadNetwork::SplitGuidelineEdge(FGuidelineEdgeId Edge, double T, double We
 
 	OutNode = AddGuidelineNode(Mid, /*bDerived=*/true);
 
-	// Both halves inherit every field of Original - identity (DerivedFrom, ServiceLoopOwner,
+	// Both halves inherit every field of Original - identity (DerivedFrom, StandGeometryOwner,
 	// ...) included - which is what keeps a split lane or taxiway recognisable as the same
 	// thing it was before. Only the endpoint and control that actually moved are overridden.
 	FGuidelineEdge Head = Original;
@@ -813,7 +813,7 @@ bool URoadNetwork::IsServiceNodeConnected(FGuidelineNodeId Node) const
 				continue;
 			}
 
-			if (!Edge->ServiceLoopOwner.IsSet())
+			if (!Edge->StandGeometryOwner.IsSet())
 			{
 				// Something that is not this stand's own lane. That is the whole question,
 				// and it is why the link from a lane to a road deliberately carries no owner.

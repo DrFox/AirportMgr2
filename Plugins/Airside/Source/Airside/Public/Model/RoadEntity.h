@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AirsideLog.h"
 #include "Model/RoadHandles.h"
 #include "Model/RoadTraffic.h"
 #include "Model/RunwayFacts.h"
@@ -56,6 +57,34 @@ struct AIRSIDE_API FEntityFootprint
 	/** Wingtip to wingtip. */
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
 
+	/**
+	 * Side to side, uu, so the fuselage is a BOX and not an axis. Zero keeps the old line.
+	 *
+	 * WHY IT DID NOT MATTER UNTIL NOW. Every route that had an opinion about an aeroplane ran
+	 * OUTSIDE it - the service ring was outboard of the wingtips - so "does this line cross the
+	 * centreline" was the whole of the question and a zero-width segment answered it. The stand
+	 * lane now runs INSIDE the wingtip, alongside the fuselage, where a zero-width line permits
+	 * a route straight down the aircraft's skin.
+	 *
+	 * WINGS AND TAILPLANE STAY PASSABLE, and that is unchanged rather than overlooked: driving
+	 * under a wing is normal, and HydrantPit is under the starboard wing root because that is
+	 * where a hydrant pit is.
+	 *
+	 * A BUILD-TIME ASSERTION, NOT A RUNTIME KEEP-OUT, and that is the whole of what it is
+	 * today. Nothing in RouteSearch, NodeReach or the follower reads this field: no route is
+	 * refused for entering the box and no agent steers round it. Its ONE consumer is
+	 * Airside.Entities.StandLaneClearsTheAircraft (StandLaneTest.cpp), which inflates it to a
+	 * rectangle and asserts no point of the laid lane falls inside - so what it actually buys
+	 * is that an AUTHORED lane cannot be laid down the aircraft's skin. Written down because a
+	 * field that reads as a rule invites a caller to rely on one that is not there; a keep-out
+	 * at route time would be a second evaluator of the same geometry, and wants a decision
+	 * rather than an assumption.
+	 *
+	 * ZERO IS THE DEFAULT so a definition authored before this field keeps its old meaning
+	 * rather than silently gaining a keep-out it was never laid out around.
+	 */
+	UPROPERTY(EditAnywhere) double FuselageWidth = 0.0;
+
 	/** Where the wing crosses the centreline. */
 	UPROPERTY(EditAnywhere) double WingX = 0.0;
 
@@ -65,6 +94,42 @@ struct AIRSIDE_API FEntityFootprint
 
 	/** False when nothing has been authored, so callers can skip drawing rather than draw a dot. */
 	bool IsSet() const { return Wingspan > 0.0 && NoseX > TailX; }
+};
+
+/**
+ * Which law moves an airframe on the ground.
+ *
+ * AN ENUM AND NOT A DERIVED BOOL, since 2026-09-15. It used to be inferred from
+ * FAirframe::HasAxles() - "has anyone measured the wheelbase?" - which meant forgetting to
+ * measure a vehicle silently changed its physics. That is not hypothetical: it is the
+ * 2026-09-14 report of a fuel truck driving up to a stand, stopping, swinging ninety degrees
+ * on the spot and driving off. CLAUDE.md's rule is that a phase is an enum and never a set
+ * of bools, for exactly this reason - an illegal state that cannot be represented cannot be
+ * shipped.
+ */
+UENUM()
+enum class ESteerLaw : uint8
+{
+	/**
+	 * A flat yaw rate - FGroundPerformance::MaxTurnRateDegPerSec - independent of speed.
+	 *
+	 * What a tug, a belt loader or a pushback tractor actually does: it turns about itself,
+	 * and it can do so from a standstill. THE DEFAULT, because it is the law that needs no
+	 * measurements, and an airframe nobody has measured is precisely the one that must not
+	 * claim to steer geometrically.
+	 */
+	Pivot,
+
+	/**
+	 * The kinematic bicycle model: yaw is v*sin(lock)/L about the steered axle.
+	 *
+	 * Two consequences the pivot law does not have, and both are load-bearing. Yaw VANISHES
+	 * at a standstill, so such a vehicle cannot snap its heading while stopped - which is why
+	 * a ground vehicle's MinSteeringSpeed can be zero. And a corner tighter than L/sin(lock)
+	 * cannot be followed at ANY speed, because speed cancels out of the requirement - see
+	 * FAirframe::TightestFollowableRadius.
+	 */
+	RollingSteer
 };
 
 /**
@@ -352,23 +417,38 @@ struct AIRSIDE_API FGroundPerformance
 	 * Decel is wheel braking with reverse or beta, which is harder than a rejected take-off
 	 * because there is no question of stopping and going again. Accel is small and real: an
 	 * aircraft that has slowed too far still has to keep rolling to steer, and the same
-	 * MinTaxiSpeed rule applies on a runway as anywhere else.
+	 * MinSteeringSpeed rule applies on a runway as anywhere else.
 	 */
 	UPROPERTY(EditAnywhere) FGroundRegime Landing;
 
 	/**
-	 * The slowest this type can be kept rolling WHILE STEERING - NOT zero, and that is the
-	 * point.
+	 * The slowest this type can be kept rolling WHILE STEERING - non-zero for an aircraft,
+	 * and ZERO for anything that can stop mid-turn.
 	 *
 	 * A wheeled aircraft cannot yaw without rolling: a prop or a fan produces thrust along
 	 * the airframe, and a nosewheel steers the direction that thrust is taken in. It has no
 	 * way to pivot on the spot. So a turn that cannot be made at speed is made at a crawl,
 	 * which is what a pilot riding the brakes against idle thrust actually does.
 	 *
+	 * A GROUND VEHICLE SETS THIS TO ZERO and means it. A truck's wheels are driven and
+	 * steered independently of any thrust line; it can stop with the wheel turned and pull
+	 * away again. The van was authored at 50 uu/s until 2026-09-15 for a reason that had
+	 * stopped being true - "a follower allowed to stop dead mid-turn would snap its heading
+	 * round" - which is a PIVOT-law artefact. Under the rolling-steer law MaxStep is
+	 * proportional to speed (FRouteFollower), so at zero the heading cannot move at all, let
+	 * alone snap.
+	 *
+	 * WAS CALLED MinSteeringSpeed, and was FOUR THINGS AT ONCE - FSpeedProfile's own comment said
+	 * as much: "THREE RULES ALL REPORT MinSteeringSpeed and the inspector panel cannot tell them
+	 * apart". This is the only one of the four that is a fact about an airframe. The others
+	 * now live where they belong: FRouteFollower::ProgressEpsilon guards the two loops that
+	 * divide by their own progress, and a corner too tight for the steering lock logs a
+	 * warning instead of quietly reporting this number.
+	 *
 	 * Not a floor on speed in general: an aircraft parked at its destination is stopped.
 	 * This bounds only what a TURN may slow it to.
 	 */
-	UPROPERTY(EditAnywhere) double MinTaxiSpeed = 50.0;
+	UPROPERTY(EditAnywhere) double MinSteeringSpeed = 50.0;
 
 	/**
 	 * How fast the nose can be swung, in DEGREES per second.
@@ -423,7 +503,14 @@ struct AIRSIDE_API FGroundPerformance
 		// Landing is NOT required here. This answers "can this thing move about an airport",
 		// which every agent needs; an arrival additionally checks Landing.IsSet() for itself,
 		// so an airframe with no landing figures declines to land rather than failing to taxi.
-		return Taxi.IsSet() && MinTaxiSpeed > 0.0 && MaxTurnRateDegPerSec > 0.0;
+		//
+		// MinSteeringSpeed IS NOT CHECKED, since 2026-09-15. Zero is a legitimate authored
+		// value - it is what every ground vehicle says, because a truck can stop with the
+		// wheel turned - and requiring it non-zero would have frozen the van outright, since
+		// ArrivalPlanner and FRoadAgent both branch on exactly this call. A van that never
+		// moves reads as a routing bug and would have been hunted as one. See
+		// Airside.Model.SteeringFloorZeroStillTaxis.
+		return Taxi.IsSet() && MaxTurnRateDegPerSec > 0.0;
 	}
 };
 
@@ -648,8 +735,99 @@ struct AIRSIDE_API FAirframe
 	 */
 	double Wheelbase() const { return FMath::Abs(SteerAxleX - FixedAxleX); }
 
-	/** True when this airframe steers on geometry rather than on a flat yaw rate. */
+	/**
+	 * Which law moves this airframe - DECLARED, not inferred from whether the axles happen
+	 * to have been filled in. See ESteerLaw for the bug that inference caused.
+	 */
+	UPROPERTY(EditAnywhere) ESteerLaw SteerLaw = ESteerLaw::Pivot;
+
+	/**
+	 * True when the axle figures can actually support the rolling-steer law.
+	 *
+	 * NO LONGER THE LAW SELECTOR, since 2026-09-15 - it is now the DATA CHECK that
+	 * EffectiveSteerLaw runs against the declared law. Kept rather than inlined because
+	 * "are these axles measured" and "how does this thing steer" are two questions, and
+	 * collapsing them into one predicate is what caused the pivoting truck.
+	 */
 	bool HasAxles() const { return Wheelbase() > KINDA_SMALL_NUMBER; }
+
+	/**
+	 * The law this airframe will actually be moved by: the declared one, UNLESS the data
+	 * cannot support it.
+	 *
+	 * TWO STATEMENTS THAT MUST AGREE, and UE gives no way to make them one - the law is a
+	 * UPROPERTY and the wheelbase is two more. So the consumer checks identity rather than
+	 * trusting either, which is CLAUDE.md's rule for the case where a second list is forced
+	 * on us. A RollingSteer airframe with no wheelbase would divide by zero in
+	 * TightestFollowableRadius and yaw without bound in FRouteFollower; falling back to Pivot
+	 * is wrong but survivable, and the log is what gets it fixed rather than lived with.
+	 *
+	 * THE ONLY LEGAL WAY TO ASK. Read SteerLaw directly and the check is bypassed.
+	 */
+	ESteerLaw EffectiveSteerLaw() const
+	{
+		if (SteerLaw == ESteerLaw::RollingSteer && !HasAxles())
+		{
+			UE_LOG(LogAirside, Error,
+				TEXT("Airframe '%s' declares RollingSteer with no wheelbase (steer axle %.1f, "
+				     "fixed axle %.1f). Falling back to the pivot law - it will turn about "
+				     "itself rather than steer."),
+				*TypeCode.ToString(), SteerAxleX, FixedAxleX);
+			return ESteerLaw::Pivot;
+		}
+		return SteerLaw;
+	}
+
+	/**
+	 * The tightest arc this airframe can follow AT ANY SPEED, uu. Zero when it pivots.
+	 *
+	 * Required yaw is v/R and available yaw is v*sin(lock)/L, so SPEED CANCELS: a corner is
+	 * followable at every speed or at none, and the threshold is L/sin(lock). FSpeedProfile
+	 * drops an agent to MinSteeringSpeed below it, and FStandLayoutBuild rounds a stand lane's corners
+	 * to it so it does not have to.
+	 *
+	 * ZERO for an airframe with no measured axles. That one steers on the flat
+	 * MaxTurnRateDegPerSec instead and has no such threshold - see HasAxles - so zero means
+	 * "nothing to clear", not "clears nothing".
+	 *
+	 * THE TESTS DELIBERATELY DO NOT CALL THIS. They restate the arithmetic, for the reason
+	 * Airside.Model.ServiceRoadFilletClearsTheTruckLock gives at its own copy: a helper that
+	 * both the production code and its test called could be wrong in one place and agree with
+	 * itself.
+	 */
+	double TightestFollowableRadius() const
+	{
+		const double Lock = FMath::Sin(FMath::DegreesToRadians(
+			FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
+		return (EffectiveSteerLaw() == ESteerLaw::RollingSteer && Lock > KINDA_SMALL_NUMBER)
+			? Wheelbase() / Lock : 0.0;
+	}
+
+	/**
+	 * The tightest arc this airframe can hold GOING BACKWARDS, uu. Zero when it does not steer
+	 * geometrically, exactly as TightestFollowableRadius reports zero.
+	 *
+	 * L/tan(lock), NOT L/sin(lock), and the difference is the whole reason a service bay is
+	 * affordable. Forwards, the body pivots about the STEERED axle and the arc the steered
+	 * wheels describe has radius L/sin(lock). Backwards it pivots about the FIXED axle, whose
+	 * arc is L/tan(lock) - strictly smaller for any lock under 90 degrees, since tan exceeds
+	 * sin there. For the 8.5 m dispenser that is 495 uu against 699, about 30% less room.
+	 *
+	 * WHY THAT MATTERS RATHER THAN BEING A CURIOSITY: a bay is a dead end, so a vehicle either
+	 * backs into it or the bay is a drive-through needing TWO forward corners. Backing in needs
+	 * less room than either, which is why real aprons do it and why the 2026-09-16 rethink
+	 * stopped trying to thread a drivable lane past the aeroplane.
+	 *
+	 * NOT A SPEED LIMIT. Like its forward sibling this is kinematic: an arc tighter than this
+	 * cannot be reversed along at any speed, because speed cancels out of the requirement.
+	 */
+	double TightestReversibleRadius() const
+	{
+		const double Lock = FMath::Tan(FMath::DegreesToRadians(
+			FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
+		return (EffectiveSteerLaw() == ESteerLaw::RollingSteer && Lock > KINDA_SMALL_NUMBER)
+			? Wheelbase() / Lock : 0.0;
+	}
 
 	/** What this aircraft needs of a runway - see FRunwayRequirements. */
 	UPROPERTY(EditAnywhere) FRunwayRequirements Requirements;

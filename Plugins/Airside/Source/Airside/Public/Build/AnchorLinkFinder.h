@@ -17,11 +17,19 @@ enum class ELinkKind : uint8
 	/** Aircraft: casts a ray along Dir; the first guideline it strictly meets wins. */
 	Ray,
 
-	/** A vehicle anchor or pose: nearest guideline of the link's class, any direction. */
+	/**
+	 * A vehicle anchor, a pose, or a stand's DECLARED ENTRY: nearest guideline of the link's
+	 * class, any direction.
+	 *
+	 * THE THIRD KIND IS GONE, 2026-09-16, and its absence is the point. There was a Lane kind
+	 * here - "nearest approach between the whole lane and a road" - because a ring DECLARED
+	 * nothing, so the pass had to search the lane for a point to join at as well as searching
+	 * the airport for something to join to. A stand now says where it may be entered
+	 * (UEntityDefinition::ServiceLane's Entry waypoints, reported as nodes by
+	 * FStandLayoutBuild::FResult::Entries), so the FROM end is a NODE like any other and one
+	 * question is left rather than two. FLaneLinkFinder went with it.
+	 */
 	Proximity,
-
-	/** A stand's service lane side: nearest approach between the lane and a road. */
-	Lane,
 };
 
 /** One anchor waiting to be joined, gathered before the graph is mutated. */
@@ -48,33 +56,21 @@ struct FPendingLink
 	double Reach = 0.0;
 
 	/**
-	 * Set when this link is a stand's whole service LANE rather than one node: the lane's
-	 * edges, to measure from.
+	 * Which stand's lane this link LEAVES. Unset for every ordinary anchor or pose link.
 	 *
-	 * A lane has no single point to link from - the road may come nearest anywhere along
-	 * any side - so Node and At are filled in only once the search has said where, by
-	 * splitting the lane there. Empty for every ordinary anchor or pose link.
+	 * Read THREE times. FAnchorLink::Build reads it twice - once to defer an unresolved entry
+	 * into StandsRefused, once to record a resolved one into StandsJoined - keyed on the owner
+	 * rather than on a list of the lane's edges, because joining retires handles and the
+	 * stand must still be identifiable by something else afterwards. FAnchorLink::Join reads
+	 * it a third time, as the one thing that says "this link leaves a lane": a lane is joined
+	 * ALONG itself, so the lead-in's control goes back along the entry's own straight instead
+	 * of on the midpoint. Set IF AND ONLY IF Node is a declared entry.
 	 *
-	 * ONE SIDE, since a lane gets a link per side. The array remains an array because the
-	 * splitting below is written against it and a side that has already been split by an
-	 * anchor spur IS several edges.
-	 */
-	TArray<FGuidelineEdgeId> Lane;
-
-	/**
-	 * Which stand's ring this side belongs to. Unset for every ordinary anchor link.
-	 *
-	 * Read TWICE by FAnchorLink::Build - once to defer an unresolved side into RingsRefused,
-	 * once to record a resolved one into RingsJoined - both keyed on the owner rather than
-	 * on a list of the ring's edges, because joining a side retires that edge's handle and
-	 * the ring must still be identifiable by something else afterwards.
-	 *
-	 * Failure is reported ONCE PER RING. A ring has four sides and a service road
-	 * along one of them; the other three failing to reach a road of their own is the
-	 * NORMAL case, not a fault, and warning per side would put three false lines in the
-	 * log for every stand on the airport. What is worth a warning is a ring where no side
-	 * joined anything - which is the same condition the one-link-per-stand rule reported,
-	 * and the reason the counters below are still per-ring for lanes.
+	 * Failure is reported ONCE PER STAND. A stand declares four entries and a service road
+	 * runs past one side of it; the entries that reach no road of their own are the NORMAL
+	 * case, not a fault, and warning per entry would put three false lines in the log for
+	 * every stand on the airport. What is worth a warning is a stand where NO entry joined
+	 * anything, which is a stand no truck can ever be sent to.
 	 */
 	FEntityInstanceId LaneOwner;
 };
@@ -85,22 +81,17 @@ struct FLinkHit
 	FGuidelineEdgeId Edge;
 	double Param = 0.0;
 
-	/** Lane kind only: which of the lane's own sides came nearest, and where on it. */
-	FGuidelineEdgeId LaneEdge;
-	double LaneParam = 0.0;
-
 	bool IsSet() const { return Edge.IsSet(); }
 };
 
 /**
  * One strategy for finding what a pending link should join.
  *
- * Replaces the three branches FAnchorLink::Build used to hide inline (lane->road nearest,
- * proximity point->polyline, ray cast) - see FAnchorLink's own doc comment for why the rule
- * splits on traversal class and lane-ness in the first place. Each finder owns its own
- * MEASUREMENT only; the shared eligibility test (alive, derived, not a self-loop, neither
- * end already anchored, allows the link's class) lives once in AnchorLinkFinder.cpp rather
- * than being copied into all three.
+ * Replaces the branches FAnchorLink::Build used to hide inline (proximity point->polyline,
+ * ray cast) - see FAnchorLink's own doc comment for why the rule splits on traversal class in
+ * the first place. Each finder owns its own MEASUREMENT only; the shared eligibility test
+ * (alive, derived, not a self-loop, neither end already anchored, allows the link's class)
+ * lives once in AnchorLinkFinder.cpp rather than being copied into both.
  *
  * Read-only by design: a finder only searches, it never mutates the graph. FAnchorLink::Join
  * is the only thing that splits an edge, so a failed search can never leave a half-applied
@@ -135,19 +126,16 @@ struct AIRSIDE_API FRayLinkFinder final : public ILinkFinder
 		const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const override;
 };
 
-/** A vehicle anchor or pose: the nearest guideline of the link's class, in any direction. */
-struct AIRSIDE_API FProximityLinkFinder final : public ILinkFinder
-{
-	virtual bool Find(const URoadNetwork& Network, const FPendingLink& Link,
-		const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const override;
-};
-
 /**
- * A stand's service lane side: nearest approach between the lane and a road, tried both
- * directions (see GuidelineGeom::NearestBetweenPolylines) so a road drawn PARALLEL to the
- * lane is measured side to side rather than corner to corner.
+ * A vehicle anchor, a pose or a declared entry: the nearest guideline of the link's class,
+ * in any direction.
+ *
+ * WHICH OF A STAND'S ENTRIES SHOULD HAVE A GIVEN ROAD is deliberately NOT asked here. A
+ * finder measures ONE link against the graph and knows nothing of the link's siblings; the
+ * choice between them - the nearer node of a rounded corner's pair, and the entry nearest
+ * each point of road - is made once in FAnchorLink::Gather, which can see all of them.
  */
-struct AIRSIDE_API FLaneLinkFinder final : public ILinkFinder
+struct AIRSIDE_API FProximityLinkFinder final : public ILinkFinder
 {
 	virtual bool Find(const URoadNetwork& Network, const FPendingLink& Link,
 		const TSet<FGuidelineNodeId>& AnchorNodes, FLinkHit& OutHit) const override;

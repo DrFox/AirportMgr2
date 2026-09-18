@@ -67,7 +67,7 @@ bool FTakeoffRunTest::RunTest(const FString& Parameters)
 		double WorstAccel = 0.0;
 
 		// Seeded from the ARMED speed, not from zero. A departure starts already creeping at
-		// MinTaxiSpeed - it taxied to the threshold - so measuring against zero reports the
+		// MinSteeringSpeed - it taxied to the threshold - so measuring against zero reports the
 		// arming itself as an 80 uu/s step and calls it a 4800 uu/s2 acceleration.
 		double Previous = Run.Speed;
 

@@ -64,7 +64,21 @@ public:
 	 */
 	void SetVehicleBody(UStaticMesh* Mesh, const FVector& BoxSizeUu);
 
-	/** True once SetVehicleBody has dressed this view. For Airside.Present.VehicleAgentView. */
+	/**
+	 * Dress this view as a RIGGED ground vehicle, so its wheels turn and steer. Null Mesh
+	 * leaves the box, exactly as SetVehicleBody does.
+	 *
+	 * SEPARATE FROM SetVehicleBody rather than an overload on it, because the two take
+	 * unrelated mesh types and an overload pair distinguished only by UStaticMesh* against
+	 * USkeletalMesh* resolves on whichever the caller happens to hold - including, for a
+	 * nullptr literal, ambiguously.
+	 *
+	 * BoxSizeUu means what it means on SetVehicleBody: the footprint the arbiter reserves,
+	 * kept so the fallback box is right if Mesh is null.
+	 */
+	void SetVehicleAirframe(USkeletalMesh* Mesh, UClass* AnimClass, const FVector& BoxSizeUu);
+
+	/** True once either vehicle path has dressed this view. For Airside.Present.VehicleAgentView. */
 	bool HasVehicleBodyForTest() const { return bIsVehicle; }
 
 	/** What the placeholder was sized to, uu. For the same test, which checks it against

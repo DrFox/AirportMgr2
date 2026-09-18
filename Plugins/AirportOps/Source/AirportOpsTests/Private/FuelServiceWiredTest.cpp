@@ -69,7 +69,10 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 
 	// The same geometry the world-free fixture uses - see AirportOps.Ops.FuelService for
 	// where each ray goes and why.
-	constexpr double RoadY = -6000.0;
+	// -4000 SINCE 2026-09-17, the same figure and the same reason as the world-free fixture's
+	// FFuelFixture::RoadY: a stand offers its aft-edge entries now, and the furthest of them
+	// was 8450 uu from a road at -6000 against a reach of 6500.
+	constexpr double RoadY = -4000.0;
 	FGuidelineNodeId TaxiSouth, TaxiNorth, RoadWest, RoadEast;
 	LayFuelLine(Net, FVector2D(-10000.0, -10000.0), FVector2D(-10000.0, 10000.0),
 		ETraversalClass::Aircraft, TaxiSouth, TaxiNorth);
@@ -108,7 +111,12 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	bool bSawTruckWithAView = false;
 	bool bSawFuelling = false;
 
-	for (int32 Tick = 0; Tick < 12000; ++Tick)
+	// 18000 TICKS AT A THIRTIETH IS 600 s, RAISED FROM 12000 ON 2026-09-17. The round trip got
+	// longer because the truck now BACKS OUT of the service point rather than turning round on
+	// the spot: 2529 uu of reverse leg at 100 uu/s is 25 s against a forward pass's 5, and the
+	// one-way cycle stops the route retracing the serve leg on the way home. A ceiling, not a
+	// wait - the loop breaks as soon as it has seen what it came for.
+	for (int32 Tick = 0; Tick < 18000; ++Tick)
 	{
 		Actor->Tick(Step);
 		Runtime->Tick(Step);

@@ -149,6 +149,116 @@ namespace GuidelineGeom
 		double& OutArriving, double& OutLeaving);
 
 	/**
+	 * The curve parameter Offset of ARC LENGTH away from Param, walked on the sampled
+	 * polyline. Negative walks backwards. Clamped to the curve's own ends.
+	 *
+	 * Walked on the SAMPLES rather than integrated in closed form, because the samples are
+	 * what every other consumer of this graph measures - the search costs them, the overlay
+	 * draws them, a follower walks them. An exact arc length here would be more accurate and
+	 * would disagree with all three.
+	 *
+	 * HERE RATHER THAN IN AnchorLink.cpp, where it was written, because two passes now slide
+	 * a point along a guideline by a distance - FAnchorLink trims an arm back for its lead-in
+	 * sweep, and a stand lane's road join slides along the lane - and "how far back
+	 * along this curve" has to be the same walk in both or the two disagree by a sample.
+	 */
+	AIRSIDE_API double ParamAtArcOffset(
+		const TArray<FVector2D>& Points, double Param, double Offset);
+
+	/**
+	 * The tightest radius anywhere on the quadratic A -> B with control Control.
+	 *
+	 * Curvature is |B'|^3 / |B' x B''| and the cross product is CONSTANT, so the tightest
+	 * point is wherever |B'| is least - and B'(t)/2 traces the straight segment from
+	 * (Control - A) to (B - Control). On a symmetric curve the nearest point of that segment
+	 * to the origin falls in the middle, which is the apex; on a lopsided one it falls OFF
+	 * THE END and the tightest point is an endpoint. Clamping the parameter is what makes
+	 * this right in both cases, and the closed-form apex expression wrong in the second.
+	 *
+	 * HERE rather than in a builder because several KINDS of curve ask it, not a fixed set of
+	 * call sites - naming a count is what went stale here twice, so this names the kinds
+	 * instead: a road junction's turn path (FRoadGuidelineBuilder), a stand lane's own corner
+	 * (StandLaneBuild.cpp), and a stand link's lead-in and both its entry sweeps
+	 * (FAnchorLink::Join) - plus the tests that hold a laid lane against a steering lock. One
+	 * evaluator, as with everything else in this namespace. The SPUR that used to be the first
+	 * of those is deleted - see FStandLayoutBuild.
+	 */
+	AIRSIDE_API double TightestRadius(
+		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
+
+	/**
+	 * How far back along each leg a corner must be cut so the quadratic laid across the cut
+	 * delivers Radius. Interior is the unsigned angle between the two leg directions, radians.
+	 *
+	 * ONE FORMULA, TWO SPECIALISATIONS. A quadratic with legs p and q meeting at angle theta has
+	 * apex radius:
+	 *
+	 *     R = 2 p^2 q^2 sin^2(theta) / (p^2 + q^2 + 2pq cos(theta))^(3/2)
+	 *
+	 * The ASYMMETRIC case - different cuts on the two legs - is what that general form is for,
+	 * and NOTHING INVERTS IT ANY MORE: the spur that did (FStandLayoutBuild::TangentRunFor, an
+	 * anchor's offset against a run along the lane) went with the anchors onto the lane on
+	 * 2026-09-16. It is kept written out because it is where the line below comes from. A
+	 * CORNER is the symmetric case, the same cut on both legs, where it collapses to:
+	 *
+	 *     R = T sin^2(theta/2) / cos(theta/2)
+	 *
+	 * THE EXACT INVERSE OF TightestRadius, which is why it lives beside it. A corner cut back
+	 * Run with its control ON the corner has delivered radius Run*sin^2(t/2)/cos(t/2); solve
+	 * for Run and this is what falls out. Airside.Solve.CornerRunRoundTripsToItsRadius measures
+	 * the two against each other rather than restating either.
+	 *
+	 * AT A RIGHT ANGLE THIS IS 1.414 R, NOT R. A circular fillet's tangent length at 90 degrees
+	 * equals its radius, and the 2026-09-16 stand spec costed every corner that way and lost
+	 * 40% of the run it needed - the same mistake 8be494c made one level up, in the same week,
+	 * about the same kind of curve. It was a file-static in the stand lane builder when that
+	 * happened - ServiceLoopBuild.cpp then, StandLaneBuild.cpp since - where nothing outside
+	 * the builder could find it. For a 750 uu corner (the lane radius that builder typed until
+	 * it started deriving one), this costs 1061 uu back along each side; a Code C stand's
+	 * shortest side is 4180 uu, so its two corners use half of it between them.
+	 *
+	 * A HAIRPIN RETURNS THE MAXIMUM rather than an infinity: no cut gives it this radius, and a
+	 * caller's proportional clamp asked for an infinity scales BOTH corners of a leg to nothing
+	 * instead of cutting this one down to what its legs allow.
+	 */
+	AIRSIDE_API double CornerRunFor(double Radius, double Interior);
+
+	/**
+	 * How far a line may DEFLECT, in radians, to reach another line Shift away across it, and
+	 * still deliver Radius everywhere. OutRun is the tangent length each of the two curves gets.
+	 *
+	 * THE SHAPE IS AN S, and it has to be: two parallel lines never meet, so a single fillet
+	 * cannot join them. The transition leaves the first line deflecting by the returned angle,
+	 * runs straight across, and deflects back onto the second - two quadratics, and the tighter
+	 * of them is what this sizes. A SERVICE ROAD BESIDE A STAND IS EXACTLY THAT CASE: the road
+	 * is drawn parallel to the lane because that is how a row of stands is served, and the
+	 * connector between them is a lane change, not a junction.
+	 *
+	 * ONE FORMULA, READ THE OTHER WAY ROUND, which is why it lives here beside CornerRunFor
+	 * rather than in the builder that wants it. With a deflection of b, each curve is the
+	 * SYMMETRIC case with tangent length s and interior angle (pi - b), and the two together
+	 * have to carry the whole shift, so 2 s sin(b) = Shift. Substituting one into the other:
+	 *
+	 *     R = Shift cos(b/2) / (4 sin^2(b/2))   =   CornerRunFor(Shift/4, b)
+	 *
+	 * so this is CornerRunFor solved for its SECOND argument, and the two round-trip. Inverting
+	 * it is closed form rather than a search: with x = b/2 and k = 4R/Shift, cos x = k sin^2 x
+	 * gives k^2 sin^4 x + sin^2 x - 1 = 0, so sin^2 x = (sqrt(1 + 4k^2) - 1) / (2k^2).
+	 *
+	 * CAPPED AT A RIGHT ANGLE, because past that the line is not shifting off its neighbour any
+	 * more, it is leaving. The cap binds whenever Shift is wider than 2.83 R - at a right angle
+	 * each curve gets Shift/2 of tangent and delivers 0.354 Shift - so a road a stand's width
+	 * away constrains nothing and only a CLOSE one has to be met at a slant.
+	 *
+	 * A SHIFT OF NOTHING RETURNS NOTHING, with OutRun zero: two lines already on top of one
+	 * another need no transition, and a caller that treated a zero run as a curve would lay a
+	 * degenerate one. A Radius of zero or less returns the right-angle cap - no constraint -
+	 * which is what an airframe with no measured axles asks for (see
+	 * FAirframe::TightestFollowableRadius, where zero means "nothing to clear").
+	 */
+	AIRSIDE_API double ShiftDeflectionFor(double Radius, double Shift, double& OutRun);
+
+	/**
 	 * Position and heading at Distance along a polyline, clamped to both ends.
 	 *
 	 * Heading is the direction of the segment being walked, in radians, and is held from

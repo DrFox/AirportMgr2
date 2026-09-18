@@ -91,9 +91,9 @@ bool FTakeoffRun::Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 	Heading = InHeading;
 
 	// Rolling, not stopped: it arrived under power and has to keep rolling to steer - the
-	// same rule the taxi model states in FGroundPerformance::MinTaxiSpeed. At the speed
+	// same rule the taxi model states in FGroundPerformance::MinSteeringSpeed. At the speed
 	// it arrived with, when the caller knows it, so the handover has no step.
-	Speed = FMath::Max(InSpeed, InGround.MinTaxiSpeed);
+	Speed = FMath::Max(InSpeed, InGround.MinSteeringSpeed);
 	Phase = ETakeoffPhase::LineUp;
 
 	UE_LOG(LogAirsideTraffic, Log,
@@ -130,7 +130,7 @@ bool FTakeoffRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 		// Creeping while it turns, and held at the threshold: the line-up happens on the
 		// spot as far as the runway is concerned, so Travelled stays at zero.
-		Speed = Ground.MinTaxiSpeed;
+		Speed = Ground.MinSteeringSpeed;
 
 		if (FMath::Abs(FMath::UnwindRadians(RunwayHeading - Heading)) <= LinedUpTolerance)
 		{

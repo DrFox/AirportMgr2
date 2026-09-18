@@ -169,36 +169,63 @@ struct AIRSIDE_API FGuidelineEdge
 	UPROPERTY() bool bDerived = true;
 
 	/**
-	 * The entity whose SERVICE LOOP or anchor spur this edge is. Unset for everything else,
-	 * which is almost every edge.
+	 * The entity whose SERVICE LANE this edge is part of. Unset for everything else, which is
+	 * almost every edge.
 	 *
 	 * Provenance, exactly as DerivedFrom is for a road's own guidelines, and needed for the
 	 * same reason turned inside out: a stand's lane is ITSELF a vehicle guideline, so a link
 	 * search that did not know which edges were the searcher's own would join a lane to
 	 * itself four metres away, report every stand connected, and route no truck anywhere.
 	 *
+	 * THE MARK IS WHAT ANSWERS "DOES THIS HYDRANT REACH A ROAD".
+	 * URoadNetwork::IsServiceNodeConnected walks the component this mark spans and reports
+	 * whether it touches anything that is NOT marked; FuelService.cpp:131 and :472 are its
+	 * callers. Delete the mark and every stand standing alone in an empty field reads as
+	 * connected, every fuel job is accepted, and no truck arrives.
+	 *
 	 * The LINK from a lane to a road deliberately does NOT carry this. It is a lead-in like
-	 * any other, and leaving it unowned is exactly what lets
-	 * URoadNetwork::IsServiceNodeConnected tell a lane that reaches a road from one that
-	 * only ever reaches itself.
+	 * any other, and leaving it unowned is exactly what makes that walk work.
 	 */
-	UPROPERTY() FEntityInstanceId ServiceLoopOwner;
+	UPROPERTY() FEntityInstanceId StandGeometryOwner;
 
 	/**
-	 * True for a SPUR - the stub from a service anchor to the ring - and false for a side of
-	 * the ring itself. Meaningless unless ServiceLoopOwner is set.
+	 * True on the edges of a service bay's REVERSE leg - the back-out the vehicle makes once it
+	 * has finished at a service point.
 	 *
-	 * STATED, not inferred. It was read off the endpoints - "a spur touches an anchor node" -
-	 * which is true of a spur nobody has split and false the moment a second anchor spurs
-	 * onto the first, leaving an inner piece with an anchor node at neither end. That piece
-	 * then read as a ring side, took a link of its own, and the truck drove from the road
-	 * across the aeroplane to reach it.
+	 * IT SAYS WHICH LIMIT JUDGES THE EDGE, and that is the whole of it. A reversing vehicle
+	 * pivots about its FIXED axle, so it holds L/tan(lock) where forward driving needs
+	 * L/sin(lock) - 494.5 uu against 699.3 for the shipping dispenser, about 30% tighter. A
+	 * reverse leg is therefore LEGITIMATELY tighter than the forward limit, and a test that
+	 * swept every laid edge past FSpeedProfile's forward rule would refuse the one manoeuvre
+	 * the layout was designed around.
 	 *
-	 * It has to live on the EDGE rather than in the builder's result, because the result is
-	 * re-gathered from the graph on every later pass - see FServiceLoopBuild::Build's opening
-	 * block - and a pass that did not lay the lane has nothing else to tell the two apart.
+	 * A FLAG ON THE EDGE rather than a lookup through StandGeometryOwner back to the bay,
+	 * because the consumer is a walk over edges that has an FGuidelineEdge and no idea which
+	 * of a stand's four legs it came from.
 	 */
-	UPROPERTY() bool bServiceSpur = false;
+	UPROPERTY() bool bReverseLeg = false;
+
+
+	// bStandApproach IS DELETED, 2026-09-16. It marked an edge that APPROACHED a stand's lane
+	// rather than being part of the cycle - the SPUR from a service anchor into the old ring -
+	// and was meaningless without StandGeometryOwner beside it, since it said which of an
+	// OWNED edge's two kinds this was.
+	//
+	// NOTHING CAN SET IT ANY MORE, which is why it goes rather than waiting for a writer. An
+	// anchor is a waypoint ON the lane now, so there is no stub; and the road link a declared
+	// entry casts deliberately carries no owner at all - see the paragraph above, where being
+	// unowned is what lets IsServiceNodeConnected tell a lane that reaches a road from one that
+	// only reaches itself. A UPROPERTY every reader gets false from is a false statement in the
+	// data model, and the next session would spend an hour looking for the code that was
+	// supposed to set it.
+	//
+	// WHAT IT PROTECTED IS NOT LOST, and that was the argument for keeping it: it was read off
+	// the ENDPOINTS once - "an approach touches an anchor node" - which was true of a spur
+	// nobody had split and false the moment a second anchor joined the first, leaving an inner
+	// piece with an anchor node at neither end; that piece read as part of the cycle, took a
+	// link of its own, and a truck drove from the road across the aeroplane to reach it. The
+	// same question is answered by StandGeometryOwner now, which IS written and load-bearing:
+	// everything the lane builder lays carries it and nothing else does.
 
 	/**
 	 * For a HAND-AUTHORED edge, what its two ends are - not where they currently sit.

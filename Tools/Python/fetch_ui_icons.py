@@ -80,6 +80,17 @@ ICONS = {
 
     "game.save":           ("delapouite", "save"),
     "game.load":           ("delapouite", "load"),
+
+    # The landing-fee lever. Money COMING IN for a higher fee and money going out for a
+    # lower one, which is the direction the player is moving the airport's income - not
+    # arrows, which would read as the multiplier's own up and down and say nothing about
+    # what it does.
+    "game.feeup":          ("delapouite", "receive-money"),
+    "game.feedown":        ("delapouite", "pay-money"),
+
+    # The ledger panel. An abacus rather than a scroll or a notebook: it reads as COUNTING
+    # at 24 pixels, where a scroll reads as a quest log and a notebook as notes.
+    "game.ledger":         ("delapouite", "abacus"),
 }
 
 # The notification icons, one per ENotificationSeverity. Keyed by the severity name rather

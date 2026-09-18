@@ -94,14 +94,80 @@ public:
 	 */
 	static constexpr double StandardTaxiwayWidth = 2300.0;
 
+	/**
+	 * What a metre of this profile costs to lay, and what a day of owning it costs.
+	 *
+	 * ON THE PROFILE rather than in a cost table beside it, so a new taxiway width cannot be
+	 * added without a price. A central table keyed by asset was the alternative and was
+	 * rejected: forget a row there and the profile builds free, with nothing anywhere to say
+	 * so - the "lists that must agree" failure this codebase has shipped three times.
+	 *
+	 * A FIGURE ONLY AirportOps EVER READS, and that is deliberate. Airside owns the geometry,
+	 * so Airside is the only layer that can say how much of it there is; putting the rate
+	 * anywhere else would mean something outside this plugin had to know what a profile is
+	 * made of. See FBuildQuote, and BuildCost, which is the only reader in this plugin.
+	 *
+	 * Zero by default, so a profile nobody has priced builds free rather than at some invented
+	 * figure - visible in the ghost as a build that costs nothing, which is the right way for
+	 * an un-authored asset to fail.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double CostPerMetre = 0.0;
+	UPROPERTY(EditAnywhere, Category = "Cost", meta = (ClampMin = "0.0")) double UpkeepPerMetrePerDay = 0.0;
+
 	UPROPERTY(EditAnywhere) TArray<FProfileBand> Bands;
 	UPROPERTY(EditAnywhere) TArray<FProfileGuideline> Guidelines;
 
 	/** Distance from the leftmost band edge to the centreline. Defaults to half the total width. */
 	UPROPERTY(EditAnywhere) double CentrelineOffset = -1.0;
 
-	/** Preferred corner radius in uu. Clamped by geometry at solve time. */
+	/**
+	 * Preferred corner radius in uu, clamped by geometry at solve time. ZERO MEANS DERIVE -
+	 * see ResolvedFilletRadius, and never read this field directly.
+	 *
+	 * 1500 is a TAXIWAY's, authored, and stays authored: a taxiway's corner is swept for the
+	 * largest AIRCRAFT admitted, and that figure comes from IcaoCode rather than any vehicle.
+	 */
 	UPROPERTY(EditAnywhere) double PreferredFilletRadius = 1500.0;
+
+	/**
+	 * How much wider than the bare steering limit a fillet must be asked for, because THE
+	 * VEHICLE DOES NOT DRIVE THE FILLET.
+	 *
+	 * This rounds the PAVEMENT. The guideline through the corner is a QUADRATIC whose control
+	 * point is the node and whose ends are the trimmed arm ends (FRoadGuidelineBuilder), and
+	 * the quadratic is the tighter of the two. For legs d meeting at a right angle its
+	 * midpoint curvature is sqrt(2)/d, so R = d/sqrt(2) = 0.707 d - and at a right angle a
+	 * circular fillet's tangent length IS its radius, so the turn path comes out at 0.707 of
+	 * the figure asked for here. Corners sharper than square come out tighter still.
+	 *
+	 * 1.6: the 1.414 that arithmetic demands, plus 13% for a corner sharper than square.
+	 *
+	 * WAS 1.25 UNTIL 2026-09-15, AND THAT WAS BELOW THE FLOOR - it could not have worked for
+	 * any vehicle. It survived because the truck was small: 750 * 0.707 = 530 still cleared a
+	 * 471 uu lock. An 8.5 m dispenser needs 699, the derived 874 delivered 618, and the route
+	 * log read "Route asks for R=580 uu, but the steering lock allows only R>=699". The old
+	 * comment here blamed RoadNetworkSolver for scaling the radius down; it does not -
+	 * RoadGeom::SolveFillet passes the radius through verbatim. The loss is the quadratic, and
+	 * naming the wrong mechanism is why the number was wrong.
+	 *
+	 * Airside.Solve.TurnPathIsTighterThanItsFillet pins the arithmetic and the delivery.
+	 */
+	static constexpr double JunctionScalingMargin = 1.6;
+
+	/**
+	 * The radius a junction on this profile actually turns on: the authored one, or - when
+	 * that is zero - one derived from the largest vehicle admitted.
+	 *
+	 * THE ONLY LEGAL READER OF PreferredFilletRadius. Read the field directly and a service
+	 * road turns on nothing at all.
+	 *
+	 * The sentinel exists so the ASSET CARRIES NO NUMBER. A stored radius is stale the moment
+	 * a larger vehicle joins the fleet, and the four places this figure used to be typed -
+	 * this header, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test holding
+	 * two of them together - are exactly the arrangement that shipped a ten-centimetre
+	 * shortfall nobody could see.
+	 */
+	double ResolvedFilletRadius() const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are
@@ -203,9 +269,19 @@ public:
 	/**
 	 * FillServiceRoad plus a NewObject, so there is one description of a service road.
 	 *
-	 * The defaults are a 6 m lane with 0.6 m kerbs on a 5 m corner: wide enough for two vans
-	 * to pass, tight enough that a road reads as a road beside a 23 m taxiway.
+	 * The defaults are a 6 m lane with 0.6 m kerbs: wide enough for two vans to pass, tight
+	 * enough that a road reads as a road beside a 23 m taxiway - whose own fillet is 15.3 m,
+	 * so this is still visibly the smaller junction.
+	 *
+	 * THE CORNER IS NOT A NUMBER ANY MORE. It was 500 uu, then 750, typed in four places -
+	 * here, build_road_profiles.py, DA_RoadProfile_ServiceRoad, and the test pinning two of
+	 * them together - and a rigid vehicle cannot follow an arc tighter than Wheelbase /
+	 * sin(lock) at any speed. In 2026-09-14 the authored 500 was ten centimetres under what
+	 * the truck's lock needed, and the fix went the WRONG WAY: the lock was widened to fit
+	 * the road. A zero here means "derive it from the largest vehicle admitted", which is the
+	 * rule aircraft geometry already follows, and leaves no second figure to drift.
+	 * See URoadProfile::ResolvedFilletRadius.
 	 */
 	static URoadProfile* MakeServiceRoadTransient(double LaneWidth = 600.0,
-		double KerbWidth = 60.0, double FilletRadius = 500.0);
+		double KerbWidth = 60.0, double FilletRadius = 0.0);
 };

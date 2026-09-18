@@ -5,6 +5,26 @@
 #include "SpeedProfile.generated.h"
 
 /**
+ * Which way round the vehicle is travelling along the line it is given.
+ *
+ * AN ENUM AND NOT A bool bReversing, per this codebase's standing rule - the two states are
+ * exclusive and naming them is what stops a caller writing !bReversing and meaning something
+ * slightly different from Forward.
+ *
+ * It exists because the two directions are judged by DIFFERENT LIMITS. Forwards a rigid
+ * vehicle pivots about its steered axle and cannot hold an arc under L/sin(lock); backwards it
+ * pivots about its fixed axle and the limit falls to L/tan(lock) - 495 uu against 699 for the
+ * 8.5 m dispenser. A reverse leg judged by the forward rule is refused for being legal.
+ */
+UENUM()
+enum class EDriveDirection : uint8
+{
+	Forward,
+	Reverse,
+};
+
+
+/**
  * How fast an aircraft MAY be at each point of a route. Built once, then read.
  *
  * Separate from FRouteFollower because it answers a different question. The follower knows
@@ -47,7 +67,30 @@ struct AIRSIDE_API FSpeedProfile
 	 * struct per thing" - the alternative was a second parameter that some caller would one
 	 * day forget to keep in step.
 	 */
-	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe);
+	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+		EDriveDirection Direction = EDriveDirection::Forward);
+
+	/**
+	 * The same, for a line the vehicle drives PARTLY FORWARDS AND PARTLY BACKWARDS - one
+	 * direction per span, so a route containing a service bay's reverse leg can be judged
+	 * honestly instead of twice wrongly.
+	 *
+	 * BECAUSE A MIXED ROUTE IS DRIVABLE AND THE UNIFORM BUILD SAYS IT IS NOT. Judged forwards
+	 * end to end, the reverse span is refused for being legal - measured in PIE at R=547 on a
+	 * span whose own limit is 495, warned about seven times in a row - and the place where the
+	 * vehicle stops and changes direction reads as a 178 degree instantaneous turn. Both are
+	 * artefacts of asking one question about two different manoeuvres.
+	 *
+	 * THIS MATTERS BECAUSE THIS CLASS IS THE AUTHORITY. Everything downstream - the follower's
+	 * caps, the tests, and the warning a human reads - takes its answer from here, so an
+	 * authority that cries wolf on correct geometry is worse than one that says nothing: it
+	 * teaches the next person to skip the warning that matters.
+	 *
+	 * SpanDirections is one entry per SPAN, so Points.Num() - 1 of them. An empty view means
+	 * the whole line is Forward, which is what the overload above passes.
+	 */
+	void Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+		TConstArrayView<EDriveDirection> SpanDirections);
 
 	/**
 	 * The fastest the aircraft may be Distance along the route.
@@ -71,6 +114,52 @@ struct AIRSIDE_API FSpeedProfile
 	 */
 	double GetFallback() const { return Fallback; }
 
+	/**
+	 * THE VERDICT THIS STRUCT ALREADY REACHES, kept instead of discarded.
+	 *
+	 * Build measures every span, decides whether the route asks for a radius the steering
+	 * lock cannot hold, logs that, and then threw the answer away - it lived in three locals.
+	 * So the one authority on "can this vehicle drive this line" could be READ only by a
+	 * human looking at a log, and every test that wanted to know RE-IMPLEMENTED the rule on
+	 * one edge at a time. Four attempts at the stand's routing passed a green suite and
+	 * produced a truck that crabbed, because no test ever asked THIS function about a WHOLE
+	 * ROUTE - and a route of individually-legal edges can still be illegal where two meet.
+	 * Grep for "the same expression FSpeedProfile::Build uses, written out rather than
+	 * shared": that comment appears at every site that should have called this instead.
+	 *
+	 * Restating arithmetic in a test is right, and FAirframe::TightestFollowableRadius argues
+	 * for it. Restating a JUDGEMENT is not the same thing: the judgement is what the game
+	 * acts on, and a copy of it can agree with itself while disagreeing with the original.
+	 */
+	bool WasTighterThanLock() const { return bTighterThanLock; }
+
+	/** The tightest radius any span asked for, uu. Zero for a route with no corner in it. */
+	double GetTightestRadius() const { return TightestRadiusUu; }
+
+	/** How far along the route that span began, uu - what the warning prints as "at". */
+	double GetTightestAt() const { return TightestRadiusAt; }
+
+	/**
+	 * THE SECOND RULE, and it is not the same question as the first.
+	 *
+	 * A span's radius asks "is this curve too tight to follow". A SHARP VERTEX asks "does the
+	 * heading change INSTANTLY here" - a corner with no curve in it at all, which no vehicle
+	 * takes at any speed, and which the radius rule cannot see because a zero-length turn has
+	 * no Length to divide by.
+	 *
+	 * SPLIT OUT BECAUSE EXPOSING ONLY THE FIRST REPEATED THE ORIGINAL MISTAKE. The verdict was
+	 * made readable on 2026-09-16 so tests could stop re-deriving it; the first test written
+	 * against it passed while its route contained a 175 degree instantaneous reversal, because
+	 * only the radius half had an accessor. Half an authority is still an authority nobody can
+	 * fully ask.
+	 */
+	bool HasSharpVertex() const { return SharpVertexCount > 0; }
+
+	/** How many, and the first one's turn in degrees and its distance along the route. */
+	int32 GetSharpVertexCount() const { return SharpVertexCount; }
+	double GetSharpestDegrees() const { return SharpestTurnDegrees; }
+	double GetSharpestAt() const { return SharpestTurnAt; }
+
 private:
 	/** Cumulative distance to each vertex. Distances[0] is 0. */
 	UPROPERTY() TArray<double> Distances;
@@ -79,7 +168,7 @@ private:
 	 * The cap AT each vertex, after the backward pass. Distances.Num() entries.
 	 *
 	 * The last is zero: an aircraft arriving at its destination stops there. That is also
-	 * why FGroundPerformance::MinTaxiSpeed is not applied here - it bounds what a TURN may
+	 * why FGroundPerformance::MinSteeringSpeed is not applied here - it bounds what a TURN may
 	 * slow the aircraft to, and an aeroplane parked on a stand is not turning.
 	 */
 	UPROPERTY() TArray<double> VertexLimits;
@@ -98,4 +187,14 @@ private:
 
 	/** What LimitAt reports when nothing was built. */
 	UPROPERTY() double Fallback = 1000.0;
+
+	/** See WasTighterThanLock. Filled by Build; meaningless before it has run. */
+	UPROPERTY() double TightestRadiusUu = 0.0;
+	UPROPERTY() double TightestRadiusAt = 0.0;
+	UPROPERTY() bool bTighterThanLock = false;
+
+	/** See HasSharpVertex. Filled by Build; meaningless before it has run. */
+	UPROPERTY() int32 SharpVertexCount = 0;
+	UPROPERTY() double SharpestTurnDegrees = 0.0;
+	UPROPERTY() double SharpestTurnAt = 0.0;
 };

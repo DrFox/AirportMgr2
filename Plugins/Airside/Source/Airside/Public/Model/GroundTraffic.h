@@ -26,7 +26,17 @@ struct AIRSIDE_API FTrafficRules
 
 	/** How much of the line an agent's body covers, uu. Half ahead of Travelled, half behind. */
 	UPROPERTY(EditAnywhere) double AircraftFootprint = 1000.0;
-	UPROPERTY(EditAnywhere) double VehicleFootprint = 500.0;
+
+	/**
+	 * 620, which is fueltruck1's own length: 6.200 m, the one dimension that model's README
+	 * fixes exactly. It was 500, chosen before there was a truck to measure.
+	 *
+	 * IT HAS TO MATCH THE MESH, because UAirsideContent::VehicleMesh says the placeholder box
+	 * is sized from this figure so that "what is on screen is the length the arbiter actually
+	 * keeps clear". A 6.2 m truck reserving 5 m is that promise broken in the direction that
+	 * hurts: the arbiter would let a second agent into road this one is occupying.
+	 */
+	UPROPERTY(EditAnywhere) double VehicleFootprint = 850.0;
 
 	/** Clear line kept ahead of the nose, beyond the braking distance, uu. */
 	UPROPERTY(EditAnywhere) double AircraftGap = 1500.0;
@@ -48,6 +58,16 @@ struct AIRSIDE_API FTrafficRules
 	UPROPERTY(EditAnywhere) double SelfManoeuvrePushSpeed = 200.0;  // 2.0 m/s, on the engine
 	UPROPERTY(EditAnywhere) double HandTugPushSpeed       = 80.0;   // 0.8 m/s, walking pace
 	UPROPERTY(EditAnywhere) double VehicleTugPushSpeed    = 150.0;  // 1.5 m/s
+
+	/**
+	 * How fast a ground vehicle backs out of a service point, uu/s.
+	 *
+	 * HERE RATHER THAN ON THE VEHICLE, with the push speeds, because it is the same kind of
+	 * figure and answers the same question: how fast a manoeuvre reads on screen. A crawl by
+	 * nature - nobody reverses beside an aeroplane at taxi speed - and EditAnywhere so it can be
+	 * tuned against what the player watches.
+	 */
+	UPROPERTY(EditAnywhere) double ServiceReverseSpeed    = 100.0;  // 1.0 m/s
 
 	/** Into and out of a push, uu/s^2. Gentle: a towbar does not snatch. */
 	UPROPERTY(EditAnywhere) double PushAccel              = 30.0;   // 0.3 m/s^2

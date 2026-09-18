@@ -4,6 +4,7 @@
 #include "BuildBarWidget.h"
 #include "GameFramework/PlayerController.h"
 #include "InspectorWidget.h"
+#include "LedgerPanelWidget.h"
 #include "OfferInboxWidget.h"
 #include "RoadBuildLog.h"
 #include "ToastStackWidget.h"
@@ -33,6 +34,8 @@ void UBuildHudLayer::CreateAll(APlayerController& Owner)
 		TEXT("Inspector"), TEXT("InspectorClass"));
 	OfferInbox = CreateConfiguredWidget<UOfferInboxWidget>(Owner, OfferInboxClass, 1,
 		TEXT("Offer inbox"), TEXT("OfferInboxClass"));
+	LedgerPanel = CreateConfiguredWidget<ULedgerPanelWidget>(Owner, LedgerPanelClass, 1,
+		TEXT("Ledger panel"), TEXT("LedgerPanelClass"));
 	ToastStack = CreateConfiguredWidget<UToastStackWidget>(Owner, ToastStackClass, 2,
 		TEXT("Toast stack"), TEXT("ToastStackClass"));
 }

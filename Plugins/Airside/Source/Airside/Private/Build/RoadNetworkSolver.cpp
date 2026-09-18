@@ -70,7 +70,7 @@ namespace
 			Arm.Tangent = Network.GetOutgoingTangent(SegmentId, NodeId);
 			Arm.HalfWidthLeft  = Profile ? Profile->GetHalfWidthLeft()  : 0.0;
 			Arm.HalfWidthRight = Profile ? Profile->GetHalfWidthRight() : 0.0;
-			Arm.FilletRadius   = Profile ? Profile->PreferredFilletRadius : 0.0;
+			Arm.FilletRadius   = Profile ? Profile->ResolvedFilletRadius() : 0.0;
 			// A runway passes through: never trimmed, never filleted. See FJunctionArm.
 			Arm.bContinuous    = Profile ? Profile->bContinuousThroughJunctions : false;
 			Arm.UserData = SegmentId.Index;

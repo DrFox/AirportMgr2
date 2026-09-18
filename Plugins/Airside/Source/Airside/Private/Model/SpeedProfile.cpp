@@ -1,6 +1,7 @@
 #include "Model/SpeedProfile.h"
 
 #include "AirsideLog.h"
+#include "Model/RouteFollower.h"
 #include "Solve/GuidelineGeom.h"
 
 namespace
@@ -16,13 +17,41 @@ namespace
 	constexpr double CornerEpsilon = 1.0e-6;
 }
 
-void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe)
+void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	EDriveDirection Direction)
+{
+	// ONE DIRECTION FOR THE WHOLE LINE, expressed as the general case rather than as a second
+	// implementation of it. Two builds that must agree are one build.
+	if (Direction == EDriveDirection::Forward)
+	{
+		Build(Points, Airframe, TConstArrayView<EDriveDirection>());
+		return;
+	}
+
+	TArray<EDriveDirection> Every;
+	Every.Init(Direction, FMath::Max(0, Points.Num() - 1));
+	Build(Points, Airframe, Every);
+}
+
+void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airframe,
+	TConstArrayView<EDriveDirection> SpanDirections)
 {
 	const FGroundPerformance& Ground = Airframe.Ground;
 
 	Distances.Reset();
 	VertexLimits.Reset();
 	SpanCaps.Reset();
+
+	// RESET WITH THE ARRAYS, ABOVE THE EARLY RETURN, because a profile is REBUILT on the same
+	// struct when a route is re-planned. Reset it further down and a rebuild that takes the
+	// degenerate path below keeps the LAST route's verdict - which is worse than not keeping
+	// one at all, since it reads as authoritative.
+	bTighterThanLock = false;
+	TightestRadiusUu = 0.0;
+	TightestRadiusAt = 0.0;
+	SharpVertexCount = 0;
+	SharpestTurnDegrees = 0.0;
+	SharpestTurnAt = 0.0;
 
 	Decel = Ground.Taxi.Decel;
 	Fallback = Ground.Taxi.SpeedCap;
@@ -67,18 +96,37 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// that threshold is 5.2 m, tighter than any taxiway bend. What remains is the physical
 	// limit the yaw-rate cap was always standing in for - lateral acceleration, sqrt(a*R),
 	// which is tyre side load and the cabin.
-	const double Lock = FMath::Sin(FMath::DegreesToRadians(
-		FMath::Clamp(Ground.MaxSteerDegrees, 0.0, 90.0)));
-	const double TightestFollowable = (Airframe.HasAxles() && Lock > KINDA_SMALL_NUMBER)
-		? Airframe.Wheelbase() / Lock
-		: 0.0;
+	// WHICH LIMIT, and it is not the same number either way. See EDriveDirection: backwards the
+	// vehicle pivots about its FIXED axle and can hold a tighter arc than it could drive.
+	// Judging a reverse leg by the forward figure refuses a manoeuvre that is perfectly legal.
+	const double ReversibleRadius = Airframe.TightestReversibleRadius();
+	const double FollowableRadius = Airframe.TightestFollowableRadius();
+
+	// PER SPAN, since 2026-09-17, because one route can be both. See the header overload.
+	const auto DirectionOf = [&SpanDirections](int32 Span)
+	{
+		return SpanDirections.IsValidIndex(Span) ? SpanDirections[Span] : EDriveDirection::Forward;
+	};
 
 	// WHY THIS ROUTE IS AS SLOW AS IT IS, gathered as the caps are built and logged once at
 	// the end - see the UE_LOG below for why it is worth carrying.
 	double TightestRadius = TNumericLimits<double>::Max();
 	double TightestAt = 0.0;
+
+	// WHICH LIMIT APPLIED WHERE IT WAS TIGHTEST, carried because a mixed route has no single
+	// one to print. The census below used to name the one figure the whole build was judged
+	// by; on a route that is partly forwards and partly backwards that number would be true of
+	// some spans and a lie about the rest, and it is the number a reader compares the radius
+	// against. So it reports the limit that actually judged the tightest corner.
+	double TightestLimit = Airframe.TightestFollowableRadius();
+	bool bMixed = false;
 	double TightestCap = Ground.Taxi.SpeedCap;
 	const TCHAR* TightestRule = TEXT("straight");
+
+	for (int32 Span = 0; Span + 1 < Count; ++Span)
+	{
+		bMixed = bMixed || DirectionOf(Span) != DirectionOf(0);
+	}
 
 	SpanCaps.SetNumUninitialized(Count - 1);
 	for (int32 Span = 0; Span + 1 < Count; ++Span)
@@ -91,17 +139,46 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		{
 			const double Radius = Length / Turn;
 			const TCHAR* Rule = TEXT("?");
-			if (!Airframe.HasAxles())
+			if (Airframe.EffectiveSteerLaw() != ESteerLaw::RollingSteer)
 			{
 				Cap = FMath::Min(Cap, MaxTurnRate * Radius);
 				Rule = TEXT("pivot yaw rate");
 			}
-			else if (Radius < TightestFollowable)
+			else if (Radius < (DirectionOf(Span) == EDriveDirection::Reverse
+				? ReversibleRadius : FollowableRadius))
 			{
-				// The lock cannot hold this line at any speed. Crawl and wear the crab -
-				// the same answer the vertex caps below give an instant corner.
-				Cap = Ground.MinTaxiSpeed;
+				// THE LOCK CANNOT HOLD THIS LINE AT ANY SPEED, so no speed is the right answer
+				// and slowing down does not make it one - the body crabs through regardless.
+				// This used to substitute MinTaxiSpeed, which is indistinguishable from an
+				// INTENDED crawl: the profile log reported the same 50 uu/s here, at a
+				// takeable-but-tight corner, and at a sharp vertex, and "it crawls round that
+				// corner" was diagnosed by reasoning about which of the three it was. That
+				// guesswork is what this project's notes say to instrument instead.
+				//
+				// So the cap is the lateral-accel speed for the radius ACTUALLY asked for -
+				// lower than the lock's own, and arrived at by the same rule as every other
+				// corner - and the warning carries the diagnosis. A corner this tight is a
+				// defect in whatever laid the line; the log is what finds it rather than
+				// leaving it to be lived with.
+				Cap = FMath::Min(Cap, FMath::Sqrt(
+					FMath::Max(0.0, Ground.MaxLateralAccelUu) * Radius));
 				Rule = TEXT("TIGHTER THAN THE STEERING LOCK");
+
+				// KEPT, not just logged. See FSpeedProfile::WasTighterThanLock for what
+				// discarding it cost: the only authority on whether a line is drivable could
+				// be read by a human and by nothing else, so every test wrote its own.
+				bTighterThanLock = true;
+
+				UE_LOG(LogAirsideTraffic, Warning,
+					TEXT("Route asks for R=%.0f uu at %.0f, but the steering lock allows only "
+					     "R>=%.0f going %s (wheelbase %.0f, lock %.0f deg). The body will crab "
+					     "through it. Widen the corner that laid this line."),
+					Radius, Distances[Span],
+					DirectionOf(Span) == EDriveDirection::Reverse
+						? ReversibleRadius : FollowableRadius,
+					DirectionOf(Span) == EDriveDirection::Reverse
+						? TEXT("backwards") : TEXT("forwards"),
+					Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 			}
 			else
 			{
@@ -113,16 +190,18 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 			if (Radius < TightestRadius)
 			{
 				TightestRadius = Radius;
+				TightestLimit = DirectionOf(Span) == EDriveDirection::Reverse
+					? ReversibleRadius : FollowableRadius;
 				TightestAt = Distances[Span];
-				TightestCap = FMath::Max(Cap, Ground.MinTaxiSpeed);
+				TightestCap = FMath::Max(Cap, Ground.MinSteeringSpeed);
 				TightestRule = Rule;
 			}
 		}
 
 		// Never below the creep speed. A span this tight is one the aircraft has to crab
 		// through, and crawling is the slowest an aeroplane may do that at - see
-		// FGroundPerformance::MinTaxiSpeed.
-		SpanCaps[Span] = FMath::Max(Cap, Ground.MinTaxiSpeed);
+		// FGroundPerformance::MinSteeringSpeed.
+		SpanCaps[Span] = FMath::Max(Cap, Ground.MinSteeringSpeed);
 	}
 
 	int32 SharpVertices = 0;
@@ -138,10 +217,29 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	{
 		double Limit = Ground.Taxi.SpeedCap;
 
+		// WHERE THE VEHICLE CHANGES DIRECTION, the heading flips through about 180 degrees and
+		// the body does not turn at all: it stops, and drives away the other way. Counting that
+		// as an instantaneous turn is how a correct four-leg stand cycle reported "1 sharp
+		// vertex, 178 deg" on a route nothing was wrong with - and HasSharpVertex is what
+		// several tests refuse a route on, so the false positive is expensive.
+		//
+		// STILL CAPPED TO A CRAWL by the branch below's own floor, because it IS a stop.
+		const bool bTurnsAround = At > 0 && At + 1 < Count
+			&& DirectionOf(At - 1) != DirectionOf(At);
+
 		const double Instant = FMath::Abs(FMath::UnwindRadians(Leaving[At] - Arriving[At]));
-		if (Instant > CornerEpsilon)
+		if (bTurnsAround)
 		{
-			Limit = Ground.MinTaxiSpeed;
+			Limit = FMath::Max(Ground.MinSteeringSpeed, FRouteFollower::ProgressEpsilon);
+		}
+		else if (Instant > CornerEpsilon)
+		{
+			// THE GREATER OF THE TWO, never the airframe's figure alone. MinSteeringSpeed is
+			// physics and may legitimately be zero - a truck stops with the wheel turned -
+			// and zero HERE is not a crawl, it is a permanent stop: the backward pass brakes
+			// the agent to rest at this vertex and LimitAt answers zero for ever after. See
+			// FRouteFollower::ProgressEpsilon, and Airside.Model.SteeringFloorSharpVertexStillCreeps.
+			Limit = FMath::Max(Ground.MinSteeringSpeed, FRouteFollower::ProgressEpsilon);
 
 			// The FIRST one only, and where it is. A route with a sharp vertex crawls
 			// through it whatever its curvature says, so this is the other answer the log
@@ -152,6 +250,13 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 				SharpestDegrees = FMath::RadiansToDegrees(Instant);
 			}
 			++SharpVertices;
+
+			// KEPT, for the reason FSpeedProfile::HasSharpVertex gives: exposing only the
+			// radius rule let a route with a 175 degree instantaneous reversal pass a test
+			// written specifically to catch undrivable routes.
+			SharpVertexCount = SharpVertices;
+			SharpestTurnDegrees = SharpestDegrees;
+			SharpestTurnAt = SharpestAt;
 		}
 
 		if (At > 0)          { Limit = FMath::Min(Limit, SpanCaps[At - 1]); }
@@ -160,7 +265,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		VertexLimits[At] = Limit;
 	}
 
-	// An aircraft arriving at its destination stops. Not floored at MinTaxiSpeed, because
+	// An aircraft arriving at its destination stops. Not floored at MinSteeringSpeed, because
 	// that floor is about steering and there is nothing left to steer.
 	VertexLimits[Count - 1] = 0.0;
 
@@ -182,7 +287,7 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// Build runs on Start and Replace, so this is one line per route rather than one per
 	// tick - cheap enough to leave in, and the only way to answer the question it answers.
 	//
-	// THREE RULES ALL REPORT MinTaxiSpeed and the inspector panel cannot tell them apart,
+	// THREE RULES ALL REPORT MinSteeringSpeed and the inspector panel cannot tell them apart,
 	// because it shows the speed and not the reason: a vertex too sharp to sample, a radius
 	// tighter than the steering lock can hold, and a curvature whose lateral-accel cap
 	// happens to land on the floor. "It crawls round that corner" was about to be diagnosed
@@ -192,10 +297,13 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 	// The lock threshold is printed even when nothing hit it, because knowing a corner was
 	// 6 m against a 5.2 m limit is what says whether to widen the taxiway or retune the
 	// aircraft - and that is the decision this log exists to inform.
+	TightestRadiusUu = TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius;
+	TightestRadiusAt = TightestAt;
+
 	UE_LOG(LogAirsideTraffic, Log,
 		TEXT("Speed profile: %.0f uu, %d point(s). Tightest R=%.0f uu at %.0f -> %.0f uu/s "
-		     "(%s). %d sharp vertex/vertices%s. Floor %.0f, taxi cap %.0f, lock allows "
-		     "R>=%.0f (wheelbase %.0f, lock %.0f deg)."),
+		     "(%s). %d sharp vertex/vertices%s. Steering floor %.0f, taxi cap %.0f, lock allows "
+		     "R>=%.0f there%s (wheelbase %.0f, lock %.0f deg)."),
 		Distances.Last(), Count,
 		TightestRadius == TNumericLimits<double>::Max() ? 0.0 : TightestRadius,
 		TightestAt, TightestCap, TightestRule,
@@ -203,7 +311,9 @@ void FSpeedProfile::Build(const TArray<FVector2D>& Points, const FAirframe& Airf
 		SharpVertices > 0
 			? *FString::Printf(TEXT(", first %.0f deg at %.0f"), SharpestDegrees, SharpestAt)
 			: TEXT(""),
-		Ground.MinTaxiSpeed, Ground.Taxi.SpeedCap, TightestFollowable,
+		Ground.MinSteeringSpeed, Ground.Taxi.SpeedCap, TightestLimit,
+		bMixed ? TEXT(" (this route is driven partly backwards, so the limit is per span)")
+		       : TEXT(""),
 		Airframe.Wheelbase(), Ground.MaxSteerDegrees);
 }
 

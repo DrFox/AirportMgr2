@@ -41,6 +41,19 @@ public:
 	virtual void OnBeforeRestore() {}
 
 	/**
+	 * Called after THIS object's blob has been deserialised, with the snapshot's version.
+	 *
+	 * EXISTS SO Restore CAN BE A PLAIN LOOP. The pre-v3 ApproachFocus migration used to live in
+	 * Restore itself, wrapped around the flight board's blob specifically - which meant Restore
+	 * had to name the board as a parameter and call it in one particular position. Moving the
+	 * migration to the object that needs it lets every persistent object be restored
+	 * identically, which is what finally stopped Capture/Restore growing a parameter per system
+	 * (#105 item 8, and see FOpsSnapshot::Version). A system that needs to know how old the
+	 * snapshot was overrides this; everything else ignores it.
+	 */
+	virtual void OnAfterRestore(int32 SnapshotVersion) {}
+
+	/**
 	 * This object as a UObject, for OpsSave's (de)serialisation. A plain interface is not
 	 * itself a UObject and Cast<> cannot reach one without the UINTERFACE reflection this
 	 * class deliberately does not carry (see the class comment) - implementers hand back
@@ -151,12 +164,25 @@ namespace OpsSave
 	 *  interface method's own comment for why that matters. */
 	AIRPORTOPS_API void RestoreBlob(const FOpsSnapshot& In, IOpsPersistent& Persistent);
 
-	AIRPORTOPS_API void Capture(const USimClock& Clock, const URoadNetwork& Network,
-		const UFlightBoard& Board, const UFuelService& Fuel, FOpsSnapshot& Out);
+	/**
+	 * Every persistent object's blob, plus the network's.
+	 *
+	 * A LIST AND NOT A PARAMETER PER SYSTEM. These two took four model objects by name until
+	 * the ledger and the pricing would have made six - exactly the growth IOpsPersistent and
+	 * FOpsSnapshot::Blobs were introduced to stop (#105 item 8), as that comment already said.
+	 * Adding a system to the save is now adding it to UOpsRuntime::Persistents and nothing else.
+	 *
+	 * THE NETWORK IS STILL NAMED, and is the one documented exception: it lives in Airside,
+	 * which may not depend on AirportOps (Check-Architecture.ps1), so it cannot implement
+	 * IOpsPersistent and its blob is keyed by a literal name here instead.
+	 */
+	AIRPORTOPS_API void Capture(TArrayView<IOpsPersistent* const> Persistents,
+		const URoadNetwork& Network, FOpsSnapshot& Out);
 
-	/** False only when a blob is present and fails to deserialise. Missing blobs leave the target untouched. */
-	AIRPORTOPS_API bool Restore(const FOpsSnapshot& In, USimClock& Clock, URoadNetwork& Network,
-		UFlightBoard& Board, UFuelService& Fuel);
+	/** False only when a blob is present and fails to deserialise. Missing blobs leave their
+	 *  target untouched, which is what lets a save from before a system existed still open. */
+	AIRPORTOPS_API bool Restore(const FOpsSnapshot& In,
+		TArrayView<IOpsPersistent* const> Persistents, URoadNetwork& Network);
 
 	AIRPORTOPS_API bool WriteSlot(const FString& SlotName, const FOpsSnapshot& Snapshot);
 	AIRPORTOPS_API bool ReadSlot(const FString& SlotName, FOpsSnapshot& Out);

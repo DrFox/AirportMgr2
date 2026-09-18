@@ -198,6 +198,12 @@ namespace
 				Step.Edge = EdgeId;
 				Step.To = Next;
 				Step.bReversed = bReversed;
+
+				// CARRIED INTO THE PLAN, because FRoadAgent is world-free and has no network to
+				// ask. Without this the follower cannot tell a span meant to be driven
+				// backwards from any other, and drives it forwards - which is the 180 degree
+				// flip this whole change exists to delete.
+				Step.bReverseLeg = Edge->bReverseLeg;
 				Arrived.Add(Next, Step);
 
 				const FGuidelineNode* NextNode = Network.GetGuidelineNode(Next);
@@ -421,5 +427,69 @@ namespace RouteSearch
 		}
 
 		return Nearest;
+	}
+}
+
+FRoutePlan RouteSearch::Section(const FRoutePlan& Plan, int32 First, int32 Last)
+{
+	FRoutePlan Out;
+	if (!Plan.Steps.IsValidIndex(First) || !Plan.Steps.IsValidIndex(Last) || Last < First)
+	{
+		return Out;
+	}
+
+	const int32 FromVertex = First == 0 ? 0 : Plan.Steps[First - 1].EndVertex;
+	const int32 ToVertex = Plan.Steps[Last].EndVertex;
+	if (!Plan.Polyline.IsValidIndex(FromVertex) || !Plan.Polyline.IsValidIndex(ToVertex)
+		|| ToVertex <= FromVertex)
+	{
+		return Out;
+	}
+
+	const double FromDistance = First == 0 ? 0.0 : Plan.Steps[First - 1].EndDistance;
+
+	Out.Result = ERouteResult::Found;
+	Out.Start = First == 0 ? Plan.Start : Plan.Steps[First - 1].To;
+	Out.Length = Plan.Steps[Last].EndDistance - FromDistance;
+
+	Out.Polyline.Reserve(ToVertex - FromVertex + 1);
+	for (int32 At = FromVertex; At <= ToVertex; ++At)
+	{
+		Out.Polyline.Add(Plan.Polyline[At]);
+	}
+
+	Out.Steps.Reserve(Last - First + 1);
+	for (int32 At = First; At <= Last; ++At)
+	{
+		FRouteStep Step = Plan.Steps[At];
+		Step.EndDistance -= FromDistance;
+		Step.EndVertex -= FromVertex;
+		Out.Steps.Add(Step);
+	}
+	return Out;
+}
+
+void FRoutePlan::DescribeSpanDirections(TArray<EDriveDirection>& Out) const
+{
+	Out.Reset();
+	if (Polyline.Num() < 2)
+	{
+		return;
+	}
+
+	Out.Init(EDriveDirection::Forward, Polyline.Num() - 1);
+
+	int32 From = 0;
+	for (const FRouteStep& Step : Steps)
+	{
+		const int32 To = FMath::Clamp(Step.EndVertex, From, Polyline.Num() - 1);
+		if (Step.bReverseLeg)
+		{
+			for (int32 Span = From; Span < To; ++Span)
+			{
+				Out[Span] = EDriveDirection::Reverse;
+			}
+		}
+		From = To;
 	}
 }

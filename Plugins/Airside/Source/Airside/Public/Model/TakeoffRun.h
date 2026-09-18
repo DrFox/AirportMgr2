@@ -37,7 +37,7 @@ enum class ETakeoffPhase : uint8
  * World-free like the follower. It is a runway end and two structs of numbers, so a whole
  * departure can be flown in a loop with no world - see Airside.Model.TakeoffRun.
  *
- * IT USES THE SAME MinTaxiSpeed RULE while lining up, because the reason has not changed: a
+ * IT USES THE SAME MinSteeringSpeed RULE while lining up, because the reason has not changed: a
  * wheeled aircraft cannot yaw without rolling, and an aircraft turning onto a runway is still
  * a wheeled aircraft.
  */
@@ -78,7 +78,7 @@ struct AIRSIDE_API FTakeoffRun
 	 *
 	 * InEntryOffset is how far past the threshold the aircraft joins (an intersection
 	 * departure rolls from there and is judged on the runway REMAINING); InSpeed is the
-	 * speed it arrives at, floored at MinTaxiSpeed. Both default to the backtrack case.
+	 * speed it arrives at, floored at MinSteeringSpeed. Both default to the backtrack case.
 	 */
 	bool Start(const FRunwayEnd& InEnd, const FAirframe& InAirframe, double InHeading,
 		double InEntryOffset = 0.0, double InSpeed = 0.0);

@@ -184,7 +184,7 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 			Arm.Tangent = FVector2D(FMath::Cos(Bearing), FMath::Sin(Bearing));
 			Arm.HalfWidthLeft = Profile->GetHalfWidthLeft();
 			Arm.HalfWidthRight = Profile->GetHalfWidthRight();
-			Arm.FilletRadius = Profile->PreferredFilletRadius;
+			Arm.FilletRadius = Profile->ResolvedFilletRadius();
 			Input.Arms.Add(Arm);
 		}
 

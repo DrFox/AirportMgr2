@@ -234,7 +234,7 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 
 		// Braking. Not below the taxi cap: at that point it has vacated, and continuing to
 		// brake would stop it dead on the runway.
-		const double Floor = FMath::Max(Ground.Taxi.SpeedCap, Ground.MinTaxiSpeed);
+		const double Floor = FMath::Max(Ground.Taxi.SpeedCap, Ground.MinSteeringSpeed);
 		Speed = FMath::Max(Speed - Ground.Landing.Decel * DeltaSeconds, Floor);
 		Travelled += Speed * DeltaSeconds;
 

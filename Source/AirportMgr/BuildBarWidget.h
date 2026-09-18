@@ -78,6 +78,15 @@ public:
 	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> ClockText;
 
 	/**
+	 * The money, on the right of the status strip.
+	 *
+	 * REPLACES THE RESERVED SPACER that stood here holding the space open - see the slot's own
+	 * comment, which said a readout would wait until something consumed
+	 * UScenario::StartingBalance. The ledger does now.
+	 */
+	UPROPERTY(meta = (BindWidgetOptional)) TObjectPtr<UTextBlock> BalanceText;
+
+	/**
 	 * The upper row: clock, the time controls, and the reserved ledger slot.
 	 *
 	 * A SECOND ROW IS THE WHOLE POINT. The six sections in EActionSection already existed
@@ -125,5 +134,8 @@ private:
 	void BuildButtons(const UUIStyle* Style);
 	void RefreshState();
 	void RefreshClock();
+
+	/** The balance, and the landing-fee multiplier beside it. Called from the same tick. */
+	void RefreshBalance();
 
 };

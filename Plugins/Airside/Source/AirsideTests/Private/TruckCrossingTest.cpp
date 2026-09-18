@@ -152,12 +152,25 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 			Closest = FMath::Min(Closest,
 				FVector2D::Distance(Plane->LastMotion.Position, Van->LastMotion.Position));
 
-			// A YIELD IS THE TRUCK STOPPED WITH ROAD STILL LEFT, not the truck having
-			// finished. WaitingOn names who refused it, so this cannot be satisfied by the
-			// truck stopping for any other reason.
+			// A YIELD IS A SPEED DROP WHILE REFUSED, NOT A DEAD STOP - the same correction
+			// Airside.Model.Traffic.NodeYield already carries, and for the same arithmetic.
+			// The yielder is refused at its own braking distance and told to stop at
+			// End - Gap, so it reaches a standstill only if
+			// Gap + Footprint_blocker/2 >= v^2/(2 Decel). Here that is 300 + 500 = 800 uu
+			// against 2500, so it cannot.
+			//
+			// IT USED TO REACH ZERO, and that was a BUG WEARING A PASS. The truck arrived at
+			// the crossing crawling at MinTaxiSpeed, because FSpeedProfile dropped it there
+			// at every corner tighter than the steering lock - at 50 uu/s the braking
+			// distance is 6 uu and anything stops dead. Fixing that on 2026-09-15 let the
+			// truck arrive at speed, and this assertion started failing on a truck behaving
+			// better than before. Measured after: refused, slowed, 512 uu clear of the node.
+			//
+			// WaitingOn names who refused it, so this still cannot be satisfied by the truck
+			// slowing for any other reason - a corner, or its own destination.
 			bTruckWaited |= Van->Phase == EAgentPhase::Taxiing
-				&& Van->LastMotion.GroundSpeed <= 0.0
-				&& Van->WaitingOn == Aircraft;
+				&& Van->WaitingOn == Aircraft
+				&& Van->LastMotion.GroundSpeed < 0.5 * Van->Airframe.Ground.Taxi.SpeedCap;
 		}
 	}
 
