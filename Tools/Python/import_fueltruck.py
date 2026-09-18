@@ -28,6 +28,7 @@ a second time.
 import json
 import os
 import struct
+import sys
 
 import unreal
 
@@ -444,6 +445,24 @@ def main():
     say("materials: %d slot(s)" % len(mesh.materials))
     report_bounds(mesh, doc)
     report_rig(mesh, doc)
+
+    # THE SKELETAL USAGE FLAG, WITHOUT WHICH EVERY ONE OF THESE RENDERS AS GREY CLAY.
+    #
+    # THIS SCRIPT DID NOT DO IT UNTIL 2026-09-18, and the truck's fourteen materials shipped
+    # without the flag as a result. A UMaterial with bUsedWithSkeletalMesh false cannot
+    # compile for the skeletal vertex factory, so the renderer silently substitutes the
+    # DEFAULT material - the component holds correct materials, logs correct names, and draws
+    # a grey truck. It is the same defect plane2 was reported for on 2026-09-12 ("when the
+    # twotter spawned none of its materials were set"); import_plane2.py learned it and this
+    # script, written afterwards, did not.
+    #
+    # Shared with airside_import.py rather than copied, so the next importer cannot miss it
+    # the way this one did. fix_fueltruck_materials.py repairs an ALREADY-imported truck
+    # without the re-import this function's clear_previous() would force.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from airside_import import flag_for_skeletal
+    flag_for_skeletal(MESH_DIR)
+
     unreal.EditorAssetLibrary.save_directory(MESH_DIR, only_if_is_dirty=False, recursive=True)
     say("saved %s" % MESH_DIR)
     say("=" * 70)
