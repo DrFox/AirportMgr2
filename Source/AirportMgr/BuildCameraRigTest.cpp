@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "BuildCameraComponent.h"
 #include "BuildCameraRig.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -150,6 +151,62 @@ bool FBuildCameraRigLimitsTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("an out-of-range StartDistance is clamped to MinDistance"), Rig.Distance, 1000.0, 1e-9);
 	}
 
+	return true;
+}
+
+/**
+ * THE HORIZON IS IN SHOT AT FULL ZOOM-IN, which is the entire reason MinPitch is 12.
+ *
+ * A test on the NUMBER would be worthless - it would just restate the default and would be
+ * "fixed" by copying whatever the code said. What is actually required is geometric: the
+ * pitch at the closest zoom has to be smaller than the angle from screen centre to the top
+ * of the frame, or the horizon is above the window and the player sees no sky at all. That
+ * is what broke at MinPitch 30, at every aspect ratio the game will meet.
+ *
+ * The FOV is READ FROM THE COMPONENT rather than retyped, because it is the other half of
+ * the same fact: widen the lens and a steeper pitch becomes acceptable; narrow it and 12
+ * would stop being enough. A copy here would let the two drift apart silently.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildCameraRigHorizonTest,
+	"Airside.View.BuildCameraRig.HorizonIsInShotWhenZoomedIn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildCameraRigHorizonTest::RunTest(const FString& Parameters)
+{
+	FBuildCameraRig Rig;
+	Rig.ApplyLimits(FCameraRigLimits());
+	Rig.Distance = Rig.MinDistance;
+	TestEqual(TEXT("at MinDistance the pitch is the floor"), Rig.PitchDegrees(), Rig.MinPitch, 1.0e-9);
+
+	const double FovHorizontal = GetDefault<UBuildCameraComponent>()->FieldOfView;
+	TestTrue(TEXT("the component declares a field of view to reason about"), FovHorizontal > 0.0);
+
+	// Half the VERTICAL field of view: how far above screen centre the top edge sits.
+	const auto TopOfFrameDegrees = [FovHorizontal](double Aspect)
+	{
+		return FMath::RadiansToDegrees(
+			FMath::Atan(FMath::Tan(FMath::DegreesToRadians(FovHorizontal * 0.5)) / Aspect));
+	};
+
+	// 21:9 as well as 16:9, and it is the one that matters: a wider monitor is a SHORTER
+	// frame in degrees, so the horizon leaves the screen there first. A test that checked
+	// only 16:9 would pass on a pitch that ultrawide players could not use.
+	const double Wide = TopOfFrameDegrees(16.0 / 9.0);
+	const double UltraWide = TopOfFrameDegrees(21.0 / 9.0);
+	TestTrue(TEXT("ultrawide is the tighter constraint"), UltraWide < Wide);
+	TestTrue(FString::Printf(TEXT("horizon in shot at 16:9 (pitch %.1f < %.1f)"), Rig.PitchDegrees(), Wide),
+		Rig.PitchDegrees() < Wide);
+	TestTrue(FString::Printf(TEXT("and at 21:9 (pitch %.1f < %.1f)"), Rig.PitchDegrees(), UltraWide),
+		Rig.PitchDegrees() < UltraWide);
+
+	// AND THE PROPERTY THE OLD FLOOR EXISTED TO PROTECT, which this must not cost: pulled
+	// all the way back the view is still a near-plan one for laying an airport out. The
+	// floor only ever applied at the closest zoom.
+	Rig.Distance = Rig.MaxDistance;
+	TestEqual(TEXT("at MaxDistance the pitch is the ceiling"), Rig.PitchDegrees(), Rig.MaxPitch, 1.0e-9);
+	TestTrue(TEXT("which is far too steep to show a horizon, as a layout view should be"),
+		Rig.PitchDegrees() > Wide);
 	return true;
 }
 

@@ -64,7 +64,7 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, const AR
 		CurrentView.Distance, CurrentView.PitchDegrees(), ViewLimits.MinPitch, ViewLimits.MaxPitch);
 }
 
-void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double Forward, double Turn,
+void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double Forward, double Turn, double TurnPixels,
 	ARoadNetworkActor* Target)
 {
 	if (BuildCamera == nullptr || Target == nullptr)
@@ -82,7 +82,9 @@ void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double For
 			WatchTarget.ApplyLimits(WatchLimits);
 			WatchTarget.Pan(Right, Forward, PanRate, DeltaTime);
 			WatchTarget.Focus = WatchTarget.Focus.GetClampedToMaxSize(WatchMaxFocusOffset);
-			WatchTarget.Rotate(Turn * RotateRate * DeltaTime);
+			// Keys are a rate and need DeltaTime; the mouse delta is already a per-frame
+			// distance and must NOT have it - see UpdateView's own comment.
+			WatchTarget.Rotate(Turn * RotateRate * DeltaTime + TurnPixels * MouseRotateRate);
 
 			// Eased in the AIRCRAFT'S frame, then projected: the aircraft's own motion
 			// reaches the camera rigidly and only the player's inputs are smoothed. Easing a
@@ -102,7 +104,7 @@ void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double For
 
 	TargetView.ApplyLimits(ViewLimits);
 	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
-	TargetView.Rotate(Turn * RotateRate * DeltaTime);
+	TargetView.Rotate(Turn * RotateRate * DeltaTime + TurnPixels * MouseRotateRate);
 	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
 
 	BuildCamera->SetActorLocationAndRotation(

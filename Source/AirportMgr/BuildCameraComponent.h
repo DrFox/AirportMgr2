@@ -63,6 +63,17 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
 	double RotateRate = 90.0;
 
+	/**
+	 * Degrees of yaw per pixel of mouse movement while the drag button is held.
+	 *
+	 * 0.25 puts a full 360 at about 1440 px - a bit over one screen width on a 1080p
+	 * monitor, which is the sweep a mouse hand makes comfortably in one go. The rate the
+	 * keys use is in degrees per SECOND and this one is per PIXEL; they are different units
+	 * for different devices and there is no sensible single number for both.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
+	double MouseRotateRate = 0.25;
+
 	/** Seconds the view takes to settle after an input. Zero snaps. Shared with the watch rig. */
 	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "0.0"))
 	double CameraLag = 0.12;
@@ -130,11 +141,22 @@ public:
 
 	/**
 	 * Reads WASD/QE (Right/Forward/Turn, each already resolved to [-1,1] by the caller, which
-	 * owns input) into whichever rig is active, eases it towards its target and applies the
-	 * result to the spawned camera actor. Hands the watch rig back to the build view the
-	 * moment Target has nothing left to watch, logging that it did.
+	 * owns input) and a mouse drag into whichever rig is active, eases it towards its target
+	 * and applies the result to the spawned camera actor. Hands the watch rig back to the
+	 * build view the moment Target has nothing left to watch, logging that it did.
+	 *
+	 * TurnPixels is a MOUSE DELTA in screen pixels, already accumulated for this frame, and
+	 * it is deliberately a separate argument from Turn rather than folded into it.
+	 *
+	 * Turn is an AXIS: a held key contributes a constant -1/0/+1, so it has to be multiplied
+	 * by DeltaTime to be frame-rate independent. A mouse delta is the opposite - it is a
+	 * distance already travelled this frame, so a fast frame rate reports many small deltas
+	 * and a slow one reports few large ones, and it is frame-rate independent ALREADY.
+	 * Multiplying it by DeltaTime as well would make a 120 fps drag rotate half as far as a
+	 * 60 fps one, which is the bug this split exists to make unrepresentable.
 	 */
-	void UpdateView(float DeltaTime, double Right, double Forward, double Turn, ARoadNetworkActor* Target);
+	void UpdateView(float DeltaTime, double Right, double Forward, double Turn, double TurnPixels,
+		ARoadNetworkActor* Target);
 
 	/** Mouse wheel: moves whichever rig is active in or out; the pitch follows the distance. */
 	void ZoomBy(double Notches);

@@ -95,7 +95,7 @@ void ARoadBuildController::BeginPlay()
 
 	UE_LOG(LogRoadBuild, Log,
 		TEXT("Road building ready on %s. Click an aircraft or stand to inspect it; pick a tool to build; right click puts a tool down. ")
-		TEXT("Keys: %s. WASD pans, Q/E rotate, wheel zooms - while building or watching. ")
+		TEXT("Keys: %s. WASD pans, Q/E or middle-mouse drag rotate, wheel zooms - while building or watching. ")
 		TEXT("Every key is also a button on the bar."),
 		*Target->GetName(), *Keys);
 }
@@ -108,7 +108,35 @@ void ARoadBuildController::UpdateView(float DeltaTime)
 	const double Right = (IsInputKeyDown(EKeys::D) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::A) ? 1.0 : 0.0);
 	const double Forward = (IsInputKeyDown(EKeys::W) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::S) ? 1.0 : 0.0);
 	const double Turn = (IsInputKeyDown(EKeys::E) ? 1.0 : 0.0) - (IsInputKeyDown(EKeys::Q) ? 1.0 : 0.0);
-	BuildCameraComp->UpdateView(DeltaTime, Right, Forward, Turn, Target);
+	BuildCameraComp->UpdateView(DeltaTime, Right, Forward, Turn, ReadMouseTurnPixels(), Target);
+}
+
+double ARoadBuildController::ReadMouseTurnPixels()
+{
+	// THE MIDDLE BUTTON, not the right one. Right-click puts a tool down - it is in the
+	// startup banner and it is how every gesture is cancelled - so a right-drag that also
+	// rotated would cancel whatever was being built every time the player turned the view.
+	if (!IsInputKeyDown(EKeys::MiddleMouseButton))
+	{
+		bRotatingWithMouse = false;
+		return 0.0;
+	}
+
+	float X = 0.0f;
+	float Y = 0.0f;
+	if (!GetMousePosition(X, Y))
+	{
+		// Cursor off the viewport. Drop the drag rather than carrying a stale position
+		// across the gap, which would fling the view when it came back.
+		bRotatingWithMouse = false;
+		return 0.0;
+	}
+
+	const FVector2D Now(X, Y);
+	const double Pixels = bRotatingWithMouse ? Now.X - LastMousePosition.X : 0.0;
+	bRotatingWithMouse = true;
+	LastMousePosition = Now;
+	return Pixels;
 }
 
 bool ARoadBuildController::IsWatchingAgent() const

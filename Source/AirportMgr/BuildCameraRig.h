@@ -33,9 +33,29 @@ struct FCameraRigLimits
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0"))
 	double MaxDistance = 60000.0;
 
-	/** Pitch at MinDistance, in degrees below horizontal. Near eye level. */
+	/**
+	 * Pitch at MinDistance, in degrees below horizontal. Near eye level.
+	 *
+	 * 12, NOT 30, AND THE HORIZON IS THE REASON. At UBuildCameraComponent's FieldOfView of
+	 * 75 degrees horizontal, a 16:9 frame is 46.7 degrees tall, so the top of the screen is
+	 * 23.3 degrees above centre - and 21:9 is 18.2. A pitch of 30 therefore put the horizon
+	 * SIX AND A HALF DEGREES OFF THE TOP OF THE SCREEN at every aspect ratio the game will
+	 * see: fully zoomed in, there was no sky at all. 12 sits it about halfway up the top
+	 * half at 16:9 and keeps it on screen at 21:9.
+	 *
+	 * This reverses the floor's old justification, which was that it "keeps the road plane
+	 * readable". That reasoning holds for LAYING AN AIRPORT OUT, and it is untouched: pitch
+	 * is a function of distance, so the moment the view pulls back at all it climbs toward
+	 * MaxPitch again. The floor only applies at the very closest zoom, and at the closest
+	 * zoom the player is looking at one aircraft or one building rather than reading the
+	 * plan - which is exactly when a horizon is worth more than a plan view.
+	 *
+	 * Sanity check on the height it implies: at MinDistance 600 the camera sits
+	 * 600 * sin(12) = 125 uu above the plane, which is 1.25 m. Eye level, as the summary
+	 * line says, rather than the 3 m that 30 degrees gave.
+	 */
 	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0", ClampMax = "89.0"))
-	double MinPitch = 30.0;
+	double MinPitch = 12.0;
 
 	/**
 	 * Pitch at MaxDistance. 90 would be straight down, and is deliberately not offered:
@@ -94,8 +114,11 @@ struct FBuildCameraRig
 
 	double MaxDistance = 60000.0;
 
-	/** Pitch at MinDistance, in degrees below horizontal. Near eye level. */
-	double MinPitch = 30.0;
+	/** Pitch at MinDistance, in degrees below horizontal. Near eye level.
+	 *  MIRRORS FCameraRigLimits::MinPitch and must keep agreeing with it - ApplyLimits
+	 *  overwrites this on any rig that has been given limits, so a disagreement shows only
+	 *  on one that has not, which is the hardest kind to notice. See that field for why 12. */
+	double MinPitch = 12.0;
 
 	/** Pitch at MaxDistance. 90 would be straight down. */
 	double MaxPitch = 70.0;

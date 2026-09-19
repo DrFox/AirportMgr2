@@ -393,9 +393,35 @@ private:
 	/** The agent whose projected position is nearest the cursor within AgentPickPixels, or 0. */
 	int32 HoverAgentUnderCursor() const;
 
-	/** Read WASD/QE/wheel into axes and hand them to the camera component; owns the raw key
-	 *  reads because that is host input, not camera geometry. */
+	/** Read WASD/QE/wheel/mouse-drag into axes and hand them to the camera component; owns
+	 *  the raw reads because that is host input, not camera geometry. */
 	void UpdateView(float DeltaTime);
+
+	/**
+	 * Horizontal pixels the cursor has moved since last frame WHILE THE DRAG BUTTON IS
+	 * HELD, and zero otherwise. Advances the drag state as a side effect, so it is called
+	 * exactly once per frame, from UpdateView.
+	 *
+	 * Differencing the cursor POSITION rather than reading GetInputMouseDelta: that reports
+	 * the delta of a CAPTURED mouse, and a builder runs with a visible, uncaptured cursor
+	 * because the player has to be able to click a bar button. Differencing the position
+	 * works either way, and it is what the tools already use to hit-test the world.
+	 *
+	 * HORIZONTAL ONLY. Vertical drag does nothing on purpose - pitch is not stored on the
+	 * rig, it is a function of distance (see FBuildCameraRig), so there is no pitch for a
+	 * drag to change. Tilting would have to become a second, independent axis and would put
+	 * the camera in poses the zoom could not reproduce.
+	 */
+	double ReadMouseTurnPixels();
+
+	/** Cursor position last frame, for ReadMouseTurnPixels. Meaningless unless
+	 *  bRotatingWithMouse. */
+	FVector2D LastMousePosition = FVector2D::ZeroVector;
+
+	/** Was the drag button held LAST frame? The first frame of a drag has nothing to
+	 *  difference against and must contribute nothing - without this the view jumps by
+	 *  however far the cursor moved since the button was last released. */
+	bool bRotatingWithMouse = false;
 
 	/**
 	 * The camera: both rigs, the spawned ACameraActor, CreateBuildCamera/UpdateView/ZoomBy
