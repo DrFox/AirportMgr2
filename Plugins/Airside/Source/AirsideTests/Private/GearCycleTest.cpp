@@ -3,6 +3,7 @@
 #include "Entities/AircraftType.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
+#include "Present/AirsideAgentAnim.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -310,6 +311,44 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 	UAircraftType::BuildPiperMeridian(Piper);
 	TestFalse(TEXT("the Meridian declares no gear cycle, because its rig cannot show one"),
 		Piper->Airframe().Gear.IsSet());
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGearAnglesFollowTheFractionsTest,
+	"Airside.Present.GearAnglesFollowTheFractions",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGearAnglesFollowTheFractionsTest::RunTest(const FString& Parameters)
+{
+	// STATIC AND FREE OF THE INSTANCE, the same construction PropStepDegrees and
+	// WheelStepDegrees use, so the arithmetic can be tested with no actor and no skeleton.
+	float GearAngle = -1.0f;
+	float DoorAngle = -1.0f;
+
+	// plane4's measured rig angles: gear folds 90 degrees, the nose doors sweep 81 - "found
+	// by sweeping: the two free edges meet on the centreline to 0.0 mm", per its
+	// build_export.py. Not invented here and not typed into a Blueprint.
+	const float Retracted = 90.0f;
+	const float Door = 81.0f;
+
+	// DOWN AND LOCKED IS ZERO ROTATION. The bind pose IS the gear-down pose, so a bone driven
+	// to anything but zero here would sit an aeroplane on a leg it has already folded.
+	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, Door, GearAngle, DoorAngle);
+	TestEqual(TEXT("gear down is no rotation at all"), GearAngle, 0.0f);
+	TestEqual(TEXT("and a shut door is no rotation either"), DoorAngle, 0.0f);
+
+	// FULLY STOWED IS THE WHOLE TRAVEL.
+	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, Door, GearAngle, DoorAngle);
+	TestEqual(TEXT("gear up is the full fold"), GearAngle, 90.0f);
+	TestEqual(TEXT("and an open bay is the full sweep"), DoorAngle, 81.0f);
+
+	// AND IT IS A TRAVEL, NOT A SWITCH - the mid-cycle value, which is the only one a
+	// two-pose implementation could not produce.
+	UAirsideAgentAnim::GearAnglesFrom(0.5f, 0.5f, Retracted, Door, GearAngle, DoorAngle);
+	TestEqual(TEXT("half retracted is half the fold"), GearAngle, 45.0f);
+	TestEqual(TEXT("half open is half the sweep"), DoorAngle, 40.5f);
 
 	return true;
 }

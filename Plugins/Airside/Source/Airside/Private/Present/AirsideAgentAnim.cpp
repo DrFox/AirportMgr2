@@ -27,6 +27,13 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	GroundSpeed = static_cast<float>(Motion.GroundSpeed);
 	bAirborne = Motion.bAirborne;
 
+	// THE GEAR, COPIED AND NOT DERIVED - the model ran the cycle, doors and all, and this is
+	// where it got to. See FRoadAgent::AdvanceGear.
+	GearDownFraction = static_cast<float>(Motion.GearDownFraction);
+	BayDoorOpenFraction = static_cast<float>(Motion.BayDoorOpenFraction);
+	GearAnglesFrom(GearDownFraction, BayDoorOpenFraction, GearRetractedAngleDegrees,
+		BayDoorOpenAngleDegrees, GearAngleDegrees, BayDoorAngleDegrees);
+
 	// COPIED, NOT DERIVED. The model steered with this exact angle - see
 	// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
 	// the aeroplane rather than a second opinion about it.
@@ -128,4 +135,14 @@ float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 Bl
 	const float Repeat = 360.0f / static_cast<float>(FMath::Max(BladeCount, 1));
 	const float Largest = Repeat * FMath::Clamp(MaxStepPerRepeat, 0.01f, 0.5f);
 	return FMath::Min(FMath::Max(Wanted, 0.0f), Largest);
+}
+
+void UAirsideAgentAnim::GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
+	float RetractedAngle, float DoorAngle, float& OutGearAngle, float& OutDoorAngle)
+{
+	// ONE MINUS THE FRACTION, because the fraction counts DOWNNESS and the angle counts
+	// travel away from the bind pose. Getting this the other way round parks an aeroplane on
+	// a folded leg, which is a state the mesh can express perfectly happily.
+	OutGearAngle = (1.0f - GearDownFraction) * RetractedAngle;
+	OutDoorAngle = DoorOpenFraction * DoorAngle;
 }
