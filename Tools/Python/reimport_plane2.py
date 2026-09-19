@@ -39,6 +39,8 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import airside_import  # noqa: E402
+
 MESH = "/Game/Aircraft/Plane2/SK_Plane2"
 SOURCE = r"C:\repos\AirportMgr2Models\plane2\export\plane2.glb"
 
@@ -56,6 +58,28 @@ DEPENDENTS = [
 EXPECTED_SPAN_UU = 1975.0
 EXPECTED_HEIGHT_UU = 594.0
 TOLERANCE_UU = 20.0
+
+# The pipeline this script authors, uses and deletes - see reference_pose_pipeline().
+PIPELINE_PATH = "/Game/Aircraft/Plane2/PL_Plane2_Reimport"
+
+# WHERE THE BONES MUST LAND, uu, read off plane2.glb's own joints rather than believed.
+#
+# THE SKELETON IS A SEPARATE ASSET FROM THE MESH and does not follow it. Interchange's
+# bUpdateSkeletonReferencePose defaults to FALSE - "the reference pose of the mesh is always
+# updated", says the engine's own tooltip, and the SKELETON's is not - so every reimport this
+# project has run updated the geometry and left the joints where they were. That is why
+# SK_Plane2 carried a main-gear hub at Z 68.60 against a tyre measuring 39.05 in radius, and
+# why nothing caught it: the mesh looked right, the old check measured the mesh's height, and
+# the height had already been correct for a day.
+EXPECTED_BONES = {
+    "wheel_L": (-454.28, 186.00, 39.00),
+    "wheel_R": (-454.28, -186.00, 39.00),
+    "prop_L": (-103.94, 305.00, 274.89),
+    "prop_R": (-103.94, -305.00, 274.89),
+    "nosewheel": (0.00, 0.00, 26.50),
+    "nosewheel_steer": (-1.29, 0.00, 26.50),
+}
+BONE_TOLERANCE_UU = 1.0
 
 
 def say(msg):
@@ -82,6 +106,82 @@ def measure(mesh, when):
     return size, low
 
 
+def bones_of(mesh):
+    """Every bone's WORLD position in the SKELETON's reference pose, uu.
+
+    OFF THE SKELETON, not off the mesh, because they are two assets and this script exists to
+    keep them in step. UAirsideAgentAnim rotates bones by name and ARoadAgentActor pitches
+    about the main gear, so the skeleton's idea of where the gear is IS the aeroplane as far
+    as the game is concerned - a mesh that has been updated under a stale skeleton draws in
+    the right place and animates about the wrong one.
+    """
+    skeleton = mesh.get_editor_property("skeleton")
+    if skeleton is None:
+        return {}
+    pose = skeleton.get_reference_pose()
+    out = {}
+    for name in unreal.AnimPose.get_bone_names(pose):
+        t = unreal.AnimPose.get_bone_pose(pose, name, unreal.AnimPoseSpaces.WORLD).translation
+        out[str(name)] = (t.x, t.y, t.z)
+    return out
+
+
+def reference_pose_pipeline():
+    """The shared reimport pipeline, at this script's own path.
+
+    ITS OWN ASSET rather than import_plane2.py's PL_Plane2_Combine, which that script deletes
+    at the end of every run as "tooling, not content". Depending on a package another script
+    exists to remove would work until the day somebody ran it.
+    """
+    return airside_import.reimport_pipeline(PIPELINE_PATH)
+
+
+def drop_pipeline():
+    airside_import.drop_reimport_pipeline(PIPELINE_PATH)
+
+
+def check_bones(mesh, before):
+    """The joints landed where the .glb puts them, and they MOVED to get there.
+
+    BOTH HALVES MATTER. "They are where they should be" passes on an asset nothing touched if
+    it was already right, and "they moved" passes on a reimport that moved them somewhere
+    else. Asserting the pair is what makes this the no-op guard the height check used to be -
+    and the height check is no longer one, because the height has been correct since the
+    geometry was last reimported while the joints were not.
+    """
+    after = bones_of(mesh)
+    if not after:
+        fail("the reimported mesh has no skeleton to read a reference pose from")
+        return False
+
+    ok = True
+    moved = 0
+    for name, want in sorted(EXPECTED_BONES.items()):
+        got = after.get(name)
+        if got is None:
+            fail("the skeleton has no %s bone - ABP_Plane2 drives it by name" % name)
+            ok = False
+            continue
+        off = max(abs(got[i] - want[i]) for i in range(3))
+        was = before.get(name)
+        if was is not None and max(abs(got[i] - was[i]) for i in range(3)) > BONE_TOLERANCE_UU:
+            moved += 1
+        if off > BONE_TOLERANCE_UU:
+            fail("bone %s is at (%.2f, %.2f, %.2f), expected (%.2f, %.2f, %.2f) from the "
+                 ".glb - the skeleton's reference pose did not follow the mesh"
+                 % ((name,) + got + want))
+            ok = False
+        else:
+            say("PASS bone %-16s (%9.2f, %9.2f, %8.2f)" % ((name,) + got))
+
+    if ok and moved == 0 and before:
+        say("NOTE no bone moved - the skeleton already matched the .glb, so this run "
+            "confirmed it rather than fixing it")
+    elif moved:
+        say("PASS %d bone(s) moved onto the .glb's joints" % moved)
+    return ok
+
+
 def main():
     say("=" * 78)
     if not os.path.isfile(SOURCE):
@@ -100,6 +200,14 @@ def main():
         return
 
     before, _ = measure(mesh, "before")
+    bones_before = bones_of(mesh)
+    for name in sorted(bones_before):
+        say("  before: bone %-16s (%9.2f, %9.2f, %8.2f)" % ((name,) + bones_before[name]))
+
+    pipeline_path = reference_pose_pipeline()
+    if pipeline_path is None:
+        say("DONE")
+        return
 
     manager = unreal.InterchangeManager.get_interchange_manager_scripted()
     params = unreal.ImportAssetParameters()
@@ -111,15 +219,22 @@ def main():
     # deliberately DELETES at the end of every run as "tooling, not content". A reimport that
     # tried to resolve it would be chasing a package that is not there.
     source_data = unreal.InterchangeManager.create_source_data(SOURCE)
-    params.override_pipelines = []
+
+    # AND THE PIPELINE IS OVERRIDDEN, which it was not before. Left to the default stack this
+    # reimports the geometry and leaves the SKELETON's reference pose alone - see
+    # reference_pose_pipeline and EXPECTED_BONES for what that cost.
+    params.override_pipelines = [unreal.SoftObjectPath(pipeline_path)]
     try:
         manager.reimport_asset(mesh, params)
     except Exception as exc:
+        drop_pipeline()
         fail("reimport_asset raised %s - falling back is NOT automatic here, because the "
              "alternative (delete and re-import) would take ABP_Plane2 with it. Re-run "
              "import_plane2.py by hand only after moving the Blueprint out." % exc)
         say("DONE")
         return
+
+    drop_pipeline()
 
     # RELOAD BEFORE MEASURING. The in-memory object may be the pre-reimport one; reading the
     # package back is the only way to know what a fresh editor would see.
@@ -135,15 +250,15 @@ def main():
 
     # DID IT ACTUALLY CHANGE. A reimport that quietly no-ops is this script's real risk: the
     # asset is untouched, every reference still resolves, nothing errors, and the aeroplane in
-    # the game is the old fat one. Measured on the HEIGHT, which is the axis the
-    # re-proportion moved; the span is expected to be identical and proves nothing here.
-    if abs(after[2] - before[2]) < 1.0:
-        fail("the height is unchanged at %.1f uu - the reimport did nothing. The asset's "
-             "source path may point somewhere other than %s." % (after[2], SOURCE))
-        say("DONE")
-        return
-
-    ok = True
+    # the game is the old fat one.
+    #
+    # MEASURED ON THE BONES SINCE 2026-09-19, not on the height. The height was the right
+    # probe exactly once - on the run that re-proportioned the airframe - and it has been a
+    # green light that measures nothing ever since: it compares this run's mesh against the
+    # last run's mesh, so the second time you reimport the same .glb it reports "the reimport
+    # did nothing" whether or not anything needed doing. check_bones asks a question with a
+    # right answer instead: the joints are where plane2.glb puts them.
+    ok = check_bones(mesh, bones_before)
     if abs(span_uu - EXPECTED_SPAN_UU) > TOLERANCE_UU:
         fail("span is %.1f uu, expected %.1f - every clearance figure in the sim is measured "
              "against this" % (span_uu, EXPECTED_SPAN_UU))
@@ -224,7 +339,6 @@ def main():
     say("=" * 78)
     # A reimport regenerates plane2's materials and reassigns its slots; without this
     # the shared M_Fleet set is silently undone for plane2 alone.
-    import airside_import
     airside_import.rebuild_fleet_materials()
     say("DONE")
 
