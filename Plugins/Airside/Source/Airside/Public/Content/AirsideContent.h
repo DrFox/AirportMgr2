@@ -53,6 +53,31 @@ public:
 	TSoftObjectPtr<UMaterialInterface> GhostMaterial;
 
 	/**
+	 * The tyre rubber in a runway's touchdown zone - Tools/Python/build_rubber_material.py.
+	 *
+	 * TRANSLUCENT, and that is what makes it one material rather than one per runway
+	 * surface. A rubber patch darkens whatever pavement it lies on, so it never has to know
+	 * whether that is tarmac or concrete; an opaque patch would have to REPRODUCE the
+	 * surface underneath it, and one component covering runways of two different surfaces
+	 * cannot reproduce both.
+	 *
+	 * Null leaves the rubber undrawn. That is a supported state, not a defect: rubber is
+	 * decoration, and an airport with no rubber material is an airport whose runways look
+	 * newly laid.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> RubberMaterial;
+
+	/**
+	 * The puff of tyre smoke at touchdown - Tools/Python/build_puff_material.py.
+	 *
+	 * Null leaves the puffs undrawn, and that is a supported state rather than a defect: an
+	 * airport with no smoke material is one where aircraft land quietly.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> TyreSmokeMaterial;
+
+	/**
 	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts. Indexed by
 	 * RunwayMaterialSlot(Surface), which is the ONE place Reinforced aliases to Concrete's
 	 * slot - replacing the switch that used to live in ResolveRunwayMaterial AND the

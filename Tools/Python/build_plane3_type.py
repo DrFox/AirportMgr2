@@ -105,7 +105,8 @@ def measure():
 
 
 def axles_and_radius(leg_height):
-    """(steer axle X, fixed axle X, main wheel radius) in uu, off SK_Plane3's reference pose.
+    """(steer axle X, fixed axle X, main wheel radius, main gear track) in uu, off
+    SK_Plane3's reference pose.
 
     THE BONE, NOT THE TYRE'S BOUNDING BOX, for the two reasons the header gives: the bone is
     a STATEMENT about where the axle is - build_export.py places each wheel's origin on its
@@ -134,6 +135,17 @@ def axles_and_radius(leg_height):
     mains_x = (at["wheel_L"].x + at["wheel_R"].x) * 0.5
     radius = (at["wheel_L"].z + at["wheel_R"].z) * 0.5
 
+    # THE TRACK, MEASURED, for the same reason the axles are: it is a fact about the model
+    # that is drawn, not about the aeroplane in the datasheet. Anything hung off it - tyre
+    # smoke at touchdown, a tug lining up, wheel spray - lands under the wheels the player
+    # can actually see, and stays there if the model is ever re-rigged. A published figure
+    # would be right about the Q400 and wrong about SK_Plane3 the moment the two differ.
+    track = abs(at["wheel_L"].y - at["wheel_R"].y)
+    if track <= radius:
+        raise ValueError("wheel_L and wheel_R are %.1f uu apart, which is inside one wheel's "
+                         "%.1f uu radius - the two main gear bones are on top of each other"
+                         % (track, radius))
+
     # A RADIUS MAY NOT EXCEED THE LEG THAT CARRIES IT, and it may not be nothing. The two
     # bounds catch the same failure from opposite sides: a rig whose wheel bones were left at
     # the root rather than put on the axle reads as radius 0, and one exported in metres
@@ -144,7 +156,7 @@ def axles_and_radius(leg_height):
                          "is not on the axle, or the model is not on the ground plane"
                          % (radius, leg_height))
 
-    return at["nosewheel"].x, mains_x, radius
+    return at["nosewheel"].x, mains_x, radius, track
 
 
 _MEASURED = None
@@ -160,9 +172,9 @@ def measured():
     global _MEASURED
     if _MEASURED is None:
         footprint, prop, leg = measure()
-        steer_x, fixed_x, radius = axles_and_radius(leg)
+        steer_x, fixed_x, radius, track = axles_and_radius(leg)
         _MEASURED = dict(footprint=footprint, prop_diameter=prop, wheel_radius=radius,
-                         steer_axle_x=steer_x, fixed_axle_x=fixed_x)
+                         steer_axle_x=steer_x, fixed_axle_x=fixed_x, main_gear_track=track)
     return _MEASURED
 
 
@@ -301,6 +313,7 @@ def author_type():
 
     asset.set_editor_property("steer_axle_x", m["steer_axle_x"])
     asset.set_editor_property("fixed_axle_x", m["fixed_axle_x"])
+    asset.set_editor_property("main_gear_track", m["main_gear_track"])
     asset.set_editor_property("main_wheel_radius", m["wheel_radius"])
     asset.set_editor_property("propeller_diameter", m["prop_diameter"])
     asset.set_editor_property("turnaround_seconds", TURNAROUND_SECONDS)
@@ -383,6 +396,7 @@ def verify(path):
         ("main_wheel_radius", asset.get_editor_property("main_wheel_radius"),
          m["wheel_radius"]),
         ("fixed_axle_x", asset.get_editor_property("fixed_axle_x"), m["fixed_axle_x"]),
+        ("main_gear_track", asset.get_editor_property("main_gear_track"), m["main_gear_track"]),
         ("turnaround_seconds", asset.get_editor_property("turnaround_seconds"),
          TURNAROUND_SECONDS),
     ]

@@ -1,5 +1,7 @@
 #include "Present/RoadNetworkActor.h"
 
+#include "Present/TyreSmoke.h"
+
 #include "AirsideLog.h"
 #include "Containers/StaticArray.h"
 #include "Components/BillboardComponent.h"
@@ -88,6 +90,13 @@ ARoadNetworkActor::ARoadNetworkActor()
 	RunwayMarkingComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	RunwayMarkingComponent->SetCastShadow(false);
 
+	RunwayRubberComponent = MakeSurfaceComponent(TEXT("RunwayRubber"));
+	RunwayRubberComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// No shadow, for a stronger reason than the paint's. A translucent surface lying a
+	// quarter of a unit above the pavement would cast a shadow onto the pavement it is
+	// darkening - the stain would acquire a second, offset copy of itself.
+	RunwayRubberComponent->SetCastShadow(false);
+
 	// The three objects issue #32 split this actor into - see each class's own header for
 	// its pattern, and each field's comment above for why CreateDefaultSubobject rather
 	// than UPROPERTY(Instanced).
@@ -98,13 +107,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// separately named UPROPERTYs (unchanged, since a saved level's Details panel and
 	// ApronDrawToolTest.cpp already know them by those names), and this is just how they are
 	// handed across the Present-internal boundary in one indexed call instead of five.
-	TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)> SurfaceComponents;
-	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Road)] = MeshComponent;
-	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Ghost)] = GhostComponent;
-	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Apron)] = ApronComponent;
-	SurfaceComponents[static_cast<int32>(ESurfaceLayer::HoldingPaint)] = MarkingComponent;
-	SurfaceComponents[static_cast<int32>(ESurfaceLayer::RunwayPaint)] = RunwayMarkingComponent;
-	Presenter->Initialize(SurfaceComponents);
+	InitialisePresenterLayers();
 
 	// The plot boxes: one instanced component, every module and fence panel an instance in
 	// it. The ENGINE'S OWN primitive, not an authored asset, for the reason
@@ -138,6 +141,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
 
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
+	Smoke = CreateDefaultSubobject<UTyreSmoke>(TEXT("Smoke"));
 
 	// Same idiom as OnChanged above: the facade must not reach past Network/History for
 	// anything else (#104), so FindRoute's vehicle-occupancy lookup asks this provider
@@ -181,6 +185,7 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	// comment for why a resolver that FILLED a null property changed a level.
 	Settings.SurfaceMaterial = ResolveSurfaceMaterial();
 	Settings.ApronMaterial = ResolveApronMaterial();
+	Settings.RubberMaterial = ResolveRubberMaterial();
 	Settings.GhostMaterial = ResolveGhostMaterial();
 	Settings.MaterialSet = ResolveMaterialSet();
 	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
@@ -223,6 +228,24 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	return Settings;
 }
 
+void ARoadNetworkActor::InitialisePresenterLayers()
+{
+	if (Presenter == nullptr)
+	{
+		return;
+	}
+	// ONE list, called from the constructor AND from PostInitProperties, because two copies
+	// of it would be two things that have to agree about which component is which layer.
+	TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)> SurfaceComponents;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Road)] = MeshComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Ghost)] = GhostComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::Apron)] = ApronComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::HoldingPaint)] = MarkingComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::RunwayPaint)] = RunwayMarkingComponent;
+	SurfaceComponents[static_cast<int32>(ESurfaceLayer::RunwayRubber)] = RunwayRubberComponent;
+	Presenter->Initialize(SurfaceComponents);
+}
+
 void ARoadNetworkActor::PostInitProperties()
 {
 	Super::PostInitProperties();
@@ -235,6 +258,7 @@ void ARoadNetworkActor::PostInitProperties()
 	Presenter = Cast<URoadSurfacePresenter>(GetDefaultSubobjectByName(TEXT("Presenter")));
 	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
 	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
+	Smoke = Cast<UTyreSmoke>(GetDefaultSubobjectByName(TEXT("Smoke")));
 	Plots = Cast<UPlotPresenter>(GetDefaultSubobjectByName(TEXT("Plots")));
 
 	// The component travels the same way, and the presenter must be re-pointed AT IT: a
@@ -246,6 +270,7 @@ void ARoadNetworkActor::PostInitProperties()
 	{
 		Plots->Initialise(PlotBoxes);
 	}
+
 }
 
 UObject* ARoadNetworkActor::FacadeOuterForTest() const
@@ -270,6 +295,38 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 	// the solver over one would be work done to produce nothing.
 	if (!HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
 	{
+		// THE SURFACE LAYERS, RE-POINTED HERE AND NOT IN PostInitProperties, which is where
+		// this was tried first and silently did nothing.
+		//
+		// URoadSurfacePresenter::LayerComponents is a plain UPROPERTY, so it SERIALISES: an
+		// actor saved into a level before a layer existed carries an array sized to the
+		// layer count of that day, and loading it overwrites whatever the constructor just
+		// built. The added layer is then permanently null on that actor, its Rebuild does
+		// nothing at all, and the only symptom is a log line that never appears.
+		//
+		// PostInitProperties is too EARLY to repair it. On a loaded object it runs before
+		// the archive is read, so the stale array lands afterwards and wins; the re-point
+		// above survives there only because component pointers are separately fixed up by
+		// name. This hook runs after serialisation and after registration, for both a load
+		// and a PIE duplicate.
+		//
+		// Marking the array Transient looks like the fix and is not: duplication does not
+		// copy Transient properties, so every surface would be unbuilt in play.
+		InitialisePresenterLayers();
+
+		// THE SMOKE POOL, here for the same ordering reason as the layers above: its puffs
+		// are components, and a component registered before the actor's own are is a
+		// component with nothing to attach to. Re-entrant by design - a PIE duplicate runs
+		// this too, and Initialise keeps an existing pool rather than leaking it.
+		if (Smoke != nullptr)
+		{
+			Smoke->Initialise(this, ResolveTyreSmokeMaterial());
+			if (Traffic != nullptr)
+			{
+				Traffic->SetSmoke(Smoke);
+			}
+		}
+
 		// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
 		// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
 		// FResolvedAnchor grew LocalHeading and Role restores those UPROPERTYs at their
@@ -348,6 +405,20 @@ UMaterialInterface* ARoadNetworkActor::ResolveApronMaterial() const
 	if (ApronMaterial != nullptr) { return ApronMaterial; }
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	return Content != nullptr ? Content->ApronMaterial.LoadSynchronous() : nullptr;
+}
+
+UMaterialInterface* ARoadNetworkActor::ResolveRubberMaterial() const
+{
+	if (RubberMaterial != nullptr) { return RubberMaterial; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->RubberMaterial.LoadSynchronous() : nullptr;
+}
+
+UMaterialInterface* ARoadNetworkActor::ResolveTyreSmokeMaterial() const
+{
+	if (TyreSmokeMaterial != nullptr) { return TyreSmokeMaterial; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->TyreSmokeMaterial.LoadSynchronous() : nullptr;
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
@@ -652,6 +723,15 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	// a spurious extra substep on the plainest settings in the game (30 Hz x1, 60 Hz x4).
 	const double Evened = Traffic->EvenDelta(DeltaSeconds, DeltaSmoothingRate, MaxOwedSeconds);
 	Traffic->Advance(Evened * SimTimeScale, SurfaceZ, Network, TrafficRules);
+
+	// SMOKE AGES ON THE REAL CLOCK, not the scaled one. A puff is a piece of presentation
+	// rather than a piece of the simulation: at x8 the world runs eight times faster and a
+	// puff that aged with it would be gone before the eye caught it, which is the opposite
+	// of what a fast-forwarded airport needs.
+	if (Smoke != nullptr)
+	{
+		Smoke->Advance(Evened);
+	}
 }
 
 void ARoadNetworkActor::SetDeltaSmoothingForTest(double Rate)

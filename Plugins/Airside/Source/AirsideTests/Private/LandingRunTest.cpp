@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Build/RunwayMarkingBuilder.h"
 #include "Model/LandingRun.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -283,6 +284,82 @@ bool FLandingRunTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and its altitude"), Altitude, 999.0);
 	}
 
+	return true;
+}
+
+/**
+ * THE TOUCHDOWN EDGE, AND WHERE IT LANDS - which is the same question the tyre rubber
+ * already answered, asked from the other side.
+ *
+ * FRunwayMarkingBuilder paints rubber from RubberStart to RubberEnd because that is where
+ * aircraft are MEANT to touch down. Nothing until now checked that it is where they
+ * ACTUALLY do. If the flare puts the wheels down outside that window then one of the two is
+ * wrong, and the stain would be sitting on pavement no aircraft ever lands on.
+ *
+ * NOT NAMED "Airside.Model.LandingRun.Something". The suite above is called
+ * Airside.Model.LandingRun with no dot in it, and UE's automation tree DROPS a bare-named
+ * node the moment a dotted child appears under it - the parent silently stops running and
+ * only the run count shows it. Its own root instead.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLandingTouchdownEdgeTest,
+	"Airside.Model.TouchdownEdge",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLandingTouchdownEdgeTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe;
+	const FAirframe Piper = TestAirframes::Piper();
+	Airframe.Ground = Piper.Ground;
+	Airframe.Climb = Piper.Climb;
+	Airframe.Approach = Piper.Approach;
+
+	FLandingRun Run;
+	if (!TestTrue(TEXT("the arrival arms"), Run.Start(LandingEndOfLength(150000.0), Airframe)))
+	{
+		return false;
+	}
+
+	TestFalse(TEXT("nothing has touched down before the first frame"), Run.bTouchedDown);
+
+	int32 Edges = 0;
+	double EdgeAt = 0.0;
+	bool bWasOnGround = false;
+	int32 EdgesWhileAlreadyDown = 0;
+
+	FVector2D Position = FVector2D::ZeroVector;
+	double Heading = 0.0, Altitude = 0.0, Pitch = 0.0;
+	for (int32 Frame = 0; Frame < 60 * 600; ++Frame)
+	{
+		if (!Run.Advance(1.0 / 60.0, Airframe, Position, Heading, Altitude, Pitch))
+		{
+			break;
+		}
+		if (Run.bTouchedDown)
+		{
+			++Edges;
+			EdgeAt = Run.TouchdownAt;
+			if (bWasOnGround) { ++EdgesWhileAlreadyDown; }
+		}
+		bWasOnGround = Run.IsOnGround();
+	}
+
+	// AN EDGE, NOT A STATE. A flag that is only ever set stays true for the whole rollout,
+	// and anything hung off it would fire every frame for half a minute.
+	TestEqual(TEXT("the wheels go down exactly once"), Edges, 1);
+	TestEqual(TEXT("and never again while already rolling"), EdgesWhileAlreadyDown, 0);
+	TestFalse(TEXT("and the edge is clear again once the arrival is over"), Run.bTouchedDown);
+
+	// TouchdownAt is kept because Travelled does not stand still.
+	TestTrue(TEXT("TouchdownAt was recorded"), EdgeAt > 0.0);
+	TestTrue(TEXT("and the aircraft has run on past it by the time it stops"), Run.Travelled > EdgeAt);
+
+	// THE AGREEMENT WITH THE PAINT.
+	using B = FRunwayMarkingBuilder;
+	TestTrue(FString::Printf(
+		TEXT("touchdown at %.0f uu is inside the rubber, which runs %.0f to %.0f"),
+		EdgeAt, B::RubberStart, B::RubberEnd),
+		EdgeAt >= B::RubberStart && EdgeAt <= B::RubberEnd);
 	return true;
 }
 

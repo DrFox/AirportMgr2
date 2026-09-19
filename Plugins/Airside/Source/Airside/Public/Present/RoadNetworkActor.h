@@ -25,6 +25,7 @@ class URoadMaterialSet;
 class URoadEditHistory;
 class URoadEditFacade;
 class UAirsideTraffic;
+class UTyreSmoke;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
 
@@ -134,6 +135,15 @@ public:
 	 * hides the reason in a specifier. See Airside.Present.DuplicatedActorOwnsItsSubobjects.
 	 */
 	virtual void PostInitProperties() override;
+
+	/**
+	 * Hand the presenter this actor's six surface components, indexed by ESurfaceLayer.
+	 *
+	 * Called from the constructor and AGAIN from PostRegisterAllComponents - see the comment
+	 * there for why a saved level can otherwise leave a newly added layer null forever, and
+	 * why PostInitProperties is too early to repair it.
+	 */
+	void InitialisePresenterLayers();
 
 	// --- Agents ----------------------------------------------------------------------
 	//
@@ -653,6 +663,14 @@ public:
 	TObjectPtr<UDynamicMeshComponent> RunwayMarkingComponent;
 
 	/**
+	 * The tyre rubber: a sixth surface, a quarter unit up - under the paint, over the
+	 * pavement. Its own component because it is TRANSLUCENT and the other two are opaque,
+	 * and blend mode is a property of the material, not of the draw.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UDynamicMeshComponent> RunwayRubberComponent;
+
+	/**
 	 * Name -> material for the road surface's profile bands. Null renders exactly as
 	 * before: one material, every triangle id 0.
 	 *
@@ -675,6 +693,25 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	TObjectPtr<UMaterialInterface> ApronMaterial;
+
+	/**
+	 * The tyre rubber's material. Left null it falls back to UAirsideContent::RubberMaterial,
+	 * and if THAT is null the rubber is simply not drawn - which, unlike the apron's
+	 * fallback, is a fine outcome: a runway with no rubber looks newly laid, where an apron
+	 * with no material looks like a bug.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UMaterialInterface> RubberMaterial;
+
+	/** The touchdown puff's material. Null falls back to UAirsideContent::TyreSmokeMaterial,
+	 *  and null there means aircraft land without smoking. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UMaterialInterface> TyreSmokeMaterial;
+
+	/** The touchdown puffs - see UTyreSmoke. A subobject like Traffic and Plots, because it
+	 *  owns components and a lifetime, and the actor only forwards to it. */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UTyreSmoke> Smoke;
 
 	/**
 	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
@@ -937,6 +974,12 @@ public:
 	 */
 	UMaterialInterface* ResolveSurfaceMaterial() const;
 	UMaterialInterface* ResolveApronMaterial() const;
+
+	/** RubberMaterial, else the content default. Null is supported - see the property. */
+	UMaterialInterface* ResolveRubberMaterial() const;
+
+	/** TyreSmokeMaterial, else the content default. Null is supported: no smoke. */
+	UMaterialInterface* ResolveTyreSmokeMaterial() const;
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;

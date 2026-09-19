@@ -2,12 +2,51 @@
 
 2026-09-12. Supersedes the one-line "Visual style: realism" in the GDD.
 
+**Amended 2026-09-19** - the direction is named *living airport diorama*, hard edges are
+replaced by bevels, the palette grows the hard-surface rows the concept sheet never gave,
+night lighting is recorded as an identity commitment and a restrained tilt-shift joins the
+post-process list as a tunable. Each amendment is marked at its section. Per-model craft
+rules moved out to `docs/superpowers/specs/2026-09-19-modelling-conventions-design.md`;
+this document keeps the palette, the lighting and the ground.
+
 Concept sheet: `C:\repos\AirportMgr2Models\concepts\concept.png` ("1A Grass Airfield").
 
 ## 1. Direction
 
-**Stylised but grounded, not cartoon.** Low-poly hard-edged forms and simplified,
-largely untextured materials, but believable proportions and soft realistic lighting.
+**"Living airport diorama."** A highly detailed architectural model that has come alive:
+slightly chunky geometry with soft bevels catching the light, clean largely untextured
+materials, miniature-looking vehicles, real proportions and physically plausible layouts,
+lovely shadows and - eventually - very strong night lighting. Not cartoon, not photoreal.
+
+The name earns its place. "Stylised but grounded" described what the look is *not*;
+*diorama* says what it is, and it settles arguments on its own - a diorama has real
+proportions, so the model SPECs stay on real datasheets; a diorama is lit like a museum
+case, so section 4's soft penumbra and locked exposure follow; a diorama is a made object,
+so bevels are right and razor edges are wrong.
+
+It is also a claim about identity. The alternative on offer is another Unreal project
+assembled from Quixel scans, which is why section 12 rejects two Fab packs on look alone.
+This direction is one we can actually build ourselves.
+
+**2026-09-19: bevels replace hard edges.** The original wording here read *"low-poly
+hard-edged forms"*, and section 12 argued *"the hard edges come from silhouettes, not from
+light"*. That is reversed. Almost everything now gets a small bevel: a hangar is still
+essentially a box, but its corners are generously chamfered. The reason is that flat faces
+meeting at a sharp 90 degrees is precisely what reads as *obviously low-poly* - the
+cheap-asset look - whereas a bevel gives every edge a highlight and separates form from
+form under exactly the soft light section 4 buys. The formula is
+
+> simple geometry + bevel + good silhouette + excellent lighting
+
+and not
+
+> simple geometry + completely flat faces.
+
+Silhouette still does the heavy lifting; the bevel is what stops the silhouette being the
+*only* thing working. The rule, its widths and its exemptions live in
+`2026-09-19-modelling-conventions-design.md`. **Existing models are not retrofitted** -
+each gets bevels the next time it is opened for another reason, because re-exporting eight
+rigged `.blend`s to chase an edge highlight buys less than the next model does.
 
 The brief that opened this discussion said "almost cartoony, bright saturated colours".
 The concept sheet says the opposite in its own palette note - *"A clean, vibrant but
@@ -19,16 +58,50 @@ Saturating the grass would put the field in competition with the gameplay object
 
 ### 1.1 Palette
 
-Sampled from the concept sheet's swatch panel, not chosen by eye. These are the source of
-truth for every material authored from here.
+**Sampled** rows come from the concept sheet's swatch panel, measured rather than chosen by
+eye. These are the source of truth for every material authored from here.
 
-| Row | Colours |
-|---|---|
-| Terrain & Ground | `#7D8E47` olive · `#748546` deep olive · `#C6B283` tan · `#7B7977` grey · `#575660` dark slate |
-| Buildings | `#E4E0D9` cream · `#CDC7BF` warm grey · `#918A76` khaki · `#4F5E6A` slate blue |
-| Vehicles | `#F4BA38` yellow · `#DE743E` orange · `#D4443F` red · white · `#6C98BC` pale blue |
-| Markings | `#F6D857` yellow · `#222121` near-black · `#C53033` red · `#1C5FA0` blue |
-| Nature | `#5E7065` sage · `#745137` brown |
+| Row | Colours | Source |
+|---|---|---|
+| Terrain & Ground | `#7D8E47` olive · `#748546` deep olive · `#C6B283` tan · `#7B7977` grey · `#575660` dark slate | sampled |
+| Buildings | `#E4E0D9` cream · `#CDC7BF` warm grey · `#918A76` khaki · `#4F5E6A` slate blue | sampled |
+| Vehicles | `#F4BA38` yellow · `#DE743E` orange · `#D4443F` red · white · `#6C98BC` pale blue | sampled |
+| Markings | `#F6D857` yellow · `#222121` near-black · `#C53033` red · `#1C5FA0` blue | sampled |
+| Nature | `#5E7065` sage · `#745137` brown | sampled |
+| Hard surface | `#343B40` runway asphalt (blue charcoal) · `#454D50` taxiway asphalt · `#9C9B91` apron concrete (warm) · `#B8B7AC` pale concrete highlight | **2026-09-19, chosen** |
+| Glazing & signage | `#5B9EB1` airport-blue glass · `#316A8A` sign blue | **2026-09-19, chosen** |
+| Dry ground | `#B6A66A` straw | **2026-09-19, chosen** |
+
+**Why the table grew, 2026-09-19.** The concept sheet is a *grass airfield*: it has no
+runway, no taxiway and no apron in it, so it could not give a swatch for the three surfaces
+the player spends the whole game drawing. Those colours have nevertheless existed since
+Slice 2b - as untracked literals at their own call sites (`build_runway_materials.py:33-35`
+tints, `build_kerb_material.py:120` grey, `build_road_material.py:216` marking yellow).
+That is the *second source of truth* failure CLAUDE.md warns about, and it is how the
+Piper's numbers ended up typed at seven sites. Naming them here is the fix; moving each
+literal onto the named colour is the follow-up, and until it happens this table describes
+intent rather than what renders.
+
+**Runway darker than taxiway, both cooler than the apron.** Runway asphalt is laid and
+maintained differently from taxiway asphalt and genuinely reads darker, and an apron is
+usually concrete, not asphalt - warm and pale against the two greys. That contrast is
+functional in a top-down builder: it tells the player which surface an aircraft is on
+without a marking being legible at that zoom.
+
+**Considered and rejected: re-picking the sampled rows.** The 2026-09-19 proposal also
+offered its own grass (`#6F9B58`, a true green at hue 97 degrees), building and equipment
+colours. Those are **not** adopted where a sampled row already covers them. The sampled
+values were measured off the sheet; the proposal's were picked by eye, and swapping a
+measured value for an eyeballed one loses the only provenance the palette has. The two
+agree on the thing that actually matters anyway - muted ground, colour reserved for
+vehicles, markings and signage - so the disagreement is a hue preference, not a direction.
+If the olive is ever judged wrong on screen, it is re-judged against a screenshot at the
+camera's real height, not against a hex code in a table.
+
+**A handful of colours are near-sacred.** Yellow for airside markings and equipment, red
+for warnings and restrictions, blue/green/amber for lighting. Those carry meaning, so no
+building, roof or livery may take them decoratively. Liveries supply the rest of the
+colour in the frame for free - which is exactly why the world underneath them stays calm.
 
 ## 2. World scale
 
@@ -100,7 +173,7 @@ Z = 0 is safe: `RoadNetworkActor.h:819` sets `SurfaceZ = 10.0`, so road plates s
 proud of the landscape. No z-fighting, and the 10 cm lip reads as the kerb that already
 exists.
 
-## 3. Scope: seven slices, three in this spec
+## 3. Scope: eight slices, three in this spec
 
 | | Slice | This spec |
 |---|---|---|
@@ -111,6 +184,7 @@ exists.
 | D | The surround - farmland, hedgerows, trees past the fence | no |
 | E | Field-length compression (section 2.2) | no - own spec |
 | F | Camera `MaxViewDistance` 600 m -> ~1.5 km | no - own change |
+| H | Night lighting - runway/taxiway lights, apron floods, lit windows, beacons | no - own spec, 2026-09-19 |
 
 **C and D wait** because the camera lives between 6 m and 600 m
 (`BuildCameraRig.h:40-49`) and above ~100 m grass blades are sub-pixel. A+B is what makes
@@ -159,6 +233,25 @@ Unbounded (`bUnbound = true`). **The highest-value change in this spec.**
   sky bounce and is what stops the olive greens reading muddy.
 - Ambient occlusion left modest - Lumen already provides occlusion, and screen-space AO on
   top double-darkens contacts.
+- **Depth of field: a tunable, and OFF by default. Added 2026-09-19.** Section 1's diorama
+  reading is helped by *a tiny* miniature quality - the near and far edges of the frame
+  going slightly soft, the way a photograph of a model does. What is wanted is a hint; an
+  aggressive tilt-shift is a filter, and a filter is the sort of thing that looks clever in
+  a trailer and unplayable in hour three, because the player is reading labels and vehicle
+  states across the whole frame.
+
+  Starting point when it is tried: `DepthOfFieldFocalDistance` tracking the camera's ground
+  intersection, `DepthOfFieldFstop` high enough that the blur is barely perceptible at the
+  150 m camera, and blur clamped so nothing on the apron is ever unreadable. Every one of
+  those is a guess. **Judged against a screenshot at 20 m, 150 m and 600 m, never argued** -
+  the effect is either invisible at 600 m or it has eaten the airport, and only the image
+  says which.
+
+  Off by default because the *existing* miniature cue is free and already shipped: section
+  2.2 compresses field lengths to 0.6x, which puts hangar, apron and threshold within a few
+  hundred metres of one another exactly as a display model would. That was adopted as a
+  sim-time argument; it pays a second time here. DOF is the garnish on a dish already
+  seasoned, so it goes in last and comes out first if it fights.
 
 `Config/DefaultEngine.ini` already sets local exposure highlight/shadow contrast to 0.8.
 Those stay.
@@ -249,6 +342,29 @@ screenshot** rather than pre-emptively changed.
 
 Lands **after** A and B are on screen. A and B must stand on their own with a fixed sun,
 because the editor viewport and PIE-before-the-clock-ticks both have no time of day.
+
+### Night is a commitment, not a leftover - 2026-09-19
+
+Section 1 names *very strong night lighting* as part of the identity, alongside the bevels
+and the soft shadows. Nothing below changes: the sun still floors at dusk, and for the same
+reason. What changes is the standing of the thing being waited for.
+
+A floodlit apron at night is the single frame this art direction flatters most - a dark
+calm field, a lit terminal, blue taxiway edge lights, amber floods pooling on concrete,
+every vehicle picked out against black. That is a diorama in a display case, and it is
+worth more to the game's look than any daylight improvement left on the list.
+
+So the deferral is honest about what it is waiting on, and the list is short and nameable:
+
+- runway edge, threshold and centreline lights
+- taxiway edge / centreline lights (the blue and green that make an airfield legible)
+- apron floods, on the lighting mast the concept sheet already draws
+- lit windows on the terminal and tower
+- vehicle headlights and beacons
+
+**The floor lifts when those exist, not before**, and each one is an asset rather than a
+tuning value - which is precisely why the floor is a floor and not a bug. When they land,
+`MinElevationDegrees` drops to a genuine negative elevation and the sun sets properly.
 
 ### Why floored, and not a real day/night cycle
 
@@ -341,8 +457,24 @@ A `Landscape Layer Blend` node over three layers:
 | `GrassRough` | `#748546` blended toward `#C6B283` | unmaintained edges, past the fence |
 | `Dirt` | `#C6B283` | worn ground at hangar doors and parking |
 
-Each layer is a flat base colour multiplied by two octaves of noise for macro variation.
-Roughness constant per layer, metallic zero.
+**Amended 2026-09-19 - macro COLOUR regions, not a brightness wobble.** This section used
+to read: *"Each layer is a flat base colour multiplied by two octaves of noise for macro
+variation."* It was built exactly as written and it did not work. Measured on screen, the
+field held a hue standard deviation of **0.74 degrees** - one colour, which is what the
+feedback that reopened this said in words. A multiply scales value and cannot move hue, so
+no amount of tuning that multiply could have produced a second tone.
+
+GrassMown's colour is now three palette tones blended by two octaves of low-frequency
+gradient noise, through an explicit contrast window that turns a smooth gradient into
+patches hundreds of metres across. After: **hue stdev 6.8 degrees at 60 m, 6.85 at 600 m,
+6.98 top-down** - the spread holds at every camera distance rather than only close up.
+GrassRough and Dirt keep flat colours, because they are painted intent and a deliberate
+mark should not wander.
+
+Every tone and size is a **parameter on `MI_Ground`**, a material instance that the
+Landscape is now assigned instead of `M_Ground` itself, so tones are judged and changed in
+the editor without a headless rebuild. The defaults are the 2026-09-19 proposal's greens,
+on trial against the sampled olives - see 1.1. Roughness constant per layer, metallic zero.
 
 **No normal maps.** At 6-600 m a grass normal map reads as mush; the stylised look comes
 from colour, and the surface detail comes from the grass clumps in Slice C. Adding normals
@@ -405,6 +537,10 @@ Specific things the screenshots must answer, because reasoning cannot:
 replaced by a reference to this document. Design decisions in this project are revisable
 with reasons recorded; this is the record.
 
+**2026-09-19:** the GDD paragraph is rewritten again, because it repeated this spec's
+"low-poly hard-edged forms" wording verbatim and section 1 has reversed it. It now names
+the direction *living airport diorama* and points here and at the modelling conventions.
+
 ## 10. Out of scope, named so it is not forgotten
 
 - **Slice C**, grass scatter: `LandscapeGrassType` assets driven from an
@@ -425,6 +561,13 @@ with reasons recorded; this is the record.
   (`FieldLengthTest.cpp:26-32`) keeps passing rather than being weakened. The `Taxi`
   regime is untouched, so aircraft still taxi at real speed. Visible cost: a take-off roll
   runs 0.6x its real duration - an A320 rotates in ~21 s rather than ~35 s.
+- **Slice H**, night lighting. Added 2026-09-19, and section 5 says why it is now a named
+  slice rather than an unspecified "later": the identity in section 1 asks for a strong
+  night, and the sun floor stays only until Slice H's assets exist. It is content plus a
+  lighting budget - hundreds of small emissive markers and a handful of real lights - so it
+  wants its own spec, particularly on how many of them can be actual `ULightComponent`s
+  before the frame cost bites. Nothing in A-G depends on it.
+
 - **Slice F**, camera range. `MaxViewDistance = 60000.0` is `EditAnywhere`
   (`RoadBuildController.h:199`), so the constructor default may already be overridden by
   `BP_RoadBuildGameMode` or a level instance. Read the instance before changing the
@@ -553,9 +696,14 @@ of Slice A, not adding to it. And the concept sheet has no banded terminators an
 the clubhouse and hangar are shaded with smooth gradients and corner occlusion.
 
 **The stylisation is already here, it just is not in the shading.** It lives in the
-geometry and the materials - hard-edged low-poly forms, flat base colours, no normal maps
-(section 6.2), restrained bloom, zero grain (section 4.1). The hard edges come from
-silhouettes, not from light.
+geometry and the materials - chunky bevelled forms, flat base colours, no normal maps
+(section 6.2), restrained bloom, zero grain (section 4.1).
+
+*(2026-09-19: this paragraph used to end "the hard edges come from silhouettes, not from
+light", which section 1 has now reversed. The argument against cel shading survives the
+reversal intact and in fact strengthens - a bevel is a feature you can only see BECAUSE of
+light, so quantising the light to three bands throws it away along with everything else
+listed above. Silhouette still carries the read; it no longer carries it alone.)*
 
 If this is ever revisited, **decide it before Slice A rather than after**: the engine-fork
 question is far cheaper to answer before a level is tuned against Lumen.
@@ -566,3 +714,11 @@ top-down builder it is arguably functional - it separates a building from the ap
 stands on. Risk: at 600 m every grass clump and road edge gets a line too, so the depth
 threshold needs tuning by eye and it may simply read as noise. Worth trying once Slice C
 exists and there is something worth outlining.
+
+**2026-09-19: outlines and bevels are answers to the same question, so do not fit both
+blind.** Both exist to separate one form from the next - the bevel by giving each edge its
+own highlight, the outline by drawing a line along it. With bevels now mandated (section
+1), the problem the outline was proposed to solve is already half solved, and a dark line
+laid over a bright bevel highlight on every crease is more likely to read as dirt than as
+style. The question stays open, but it is now asked in the right order: bevel the models
+first, look, and only then decide whether anything still needs outlining.

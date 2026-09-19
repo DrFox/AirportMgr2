@@ -163,6 +163,19 @@ namespace
 			for (int32 Stripe = 0; Stripe <= Pair; ++Stripe)
 			{
 				const double Inner = B::AimingPointGap * 0.5 + Stripe * (B::TouchdownStripeWidth + B::TouchdownStripeGap);
+				// PAINT WHAT FITS ACROSS, TOO. The check above is lengthwise only, and this
+				// one was missing: on a 30 m strip the third pair's outermost stripe runs
+				// from 15.6 m to 17.4 m off the centreline against a 15 m half width, so it
+				// was painted 2.4 m OUT ON THE GRASS, on both sides at both ends. Present on
+				// tarmac for as long as touchdown zones have existed, and found only when a
+				// test finally measured a marking ACROSS the strip rather than along it.
+				//
+				// Break rather than continue: the stripes step outward, so once one is past
+				// the edge every stripe after it is further past.
+				if (Inner + B::TouchdownStripeWidth > Frame.HalfWidth)
+				{
+					break;
+				}
 				Rect(Out, Z, Frame, At, At + B::TouchdownStripeLength, -Inner - B::TouchdownStripeWidth, -Inner);
 				Rect(Out, Z, Frame, At, At + B::TouchdownStripeLength, Inner, Inner + B::TouchdownStripeWidth);
 				Painted += 2;
@@ -234,13 +247,49 @@ double FRunwayMarkingBuilder::CentrelineWidth(double TotalWidth)
 	return TotalWidth >= WideRunway ? CentrelineWidthWide : CentrelineWidthNarrow;
 }
 
-int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
-	FRunwayMarkingCensus* Census)
+namespace
 {
-	FRunwayMarkingCensus Local;
-	FRunwayMarkingCensus& C = Census != nullptr ? *Census : Local;
-	C = FRunwayMarkingCensus();
+	/**
+	 * The two rubber bands of ONE end, either side of the centreline. Returns how many were
+	 * laid, which is 2 or 0.
+	 *
+	 * In here rather than in BuildRubber because `Rect` is only unambiguous inside this
+	 * namespace: at global scope it collides with the Windows `Rect`, and the compiler says
+	 * so as "ambiguous symbol" followed by "use of undefined type", which reads like a
+	 * missing include rather than a name clash.
+	 */
+	int32 RubberBands(FRoadMeshBuffers& Out, double Z, const FRunwayFrame& End)
+	{
+		using B = FRunwayMarkingBuilder;
+		// CUT at the midpoint, not dropped - see the header for why rubber differs from the
+		// markings beside it here.
+		const double Far0 = FMath::Min(B::RubberEnd, End.Length * 0.5);
+		const double Reach = End.HalfWidth * B::RubberAcrossFraction;
+		if (Far0 <= B::RubberStart || Reach <= 0.0)
+		{
+			return 0;
+		}
+		// Two bands MEETING at the centreline, not crossing it, and with no modelled gap
+		// between them: the clean strip a real runway has down its middle is made by the
+		// material fading each band out at its own edge. Putting the gap in the geometry as
+		// well would double it, and the width of that strip is a look to be tuned on an
+		// instance rather than a number frozen into a mesh.
+		Rect(Out, Z, End, B::RubberStart, Far0, -Reach, 0.0);
+		Rect(Out, Z, End, B::RubberStart, Far0, 0.0, Reach);
+		return 2;
+	}
 
+	/**
+	 * Every runway in the network, once, as a near frame, a far frame and its facts.
+	 *
+	 * Extracted from Build when BuildRubber needed the same walk. It is not a long body,
+	 * but it is a SUBTLE one - the visited set, the chain query, the extent query asked
+	 * from the seed's own A node, and the three ways a runway can be skipped - and two
+	 * copies of it would be two things that have to agree about which segments are runways.
+	 */
+	void ForEachRunway(const URoadNetwork& Network,
+		TFunctionRef<void(const FRunwayFrame&, const FRunwayFrame&, const FRunwayFacts&)> Visit)
+	{
 	// Each runway ONCE however many segments its exits have cut it into: the first live
 	// runway segment met seeds the chain, and every member of the chain is then done.
 	TSet<int32> Visited;
@@ -285,16 +334,43 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 		{
 			continue;
 		}
-		const FRunwayFrame Far = Reversed(Frame);
-		const FRunwayFacts Facts = Network.RunwayFactsFor(Seed);
+		Visit(Frame, Reversed(Frame), Network.RunwayFactsFor(Seed));
+	}
+	}
+}
+
+
+int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadMeshBuffers& Out,
+	FRunwayMarkingCensus* Census)
+{
+	FRunwayMarkingCensus Local;
+	FRunwayMarkingCensus& C = Census != nullptr ? *Census : Local;
+	// RESETS THE WHOLE CENSUS, RubberPatches included, so call this BEFORE BuildRubber if
+	// both are to report into one census. BuildRubber deliberately does not reset.
+	C = FRunwayMarkingCensus();
+
+	ForEachRunway(Network, [&](const FRunwayFrame& Frame, const FRunwayFrame& Far, const FRunwayFacts& Facts)
+	{
 		++C.Runways;
 
-		if (Facts.Surface == ERunwaySurface::Grass)
+		// GRASS IS PAINTED TOO, and this REVERSES what this builder did until 2026-09-19.
+		// It used to return here, on the reasoning "no pavement, no pavement markings: a
+		// grass strip carries edge markers only, and its designator lives on a board".
+		//
+		// White grass paint exists and grass airfields do carry painted thresholds and
+		// designators, so the markings are plausible - and plausible is the bar, because a
+		// player has to be able to read a grass strip as a RUNWAY at the build camera. An
+		// unpainted strip with a dotted edge is a mown field; the numbers are most of what
+		// says otherwise.
+		//
+		// The one marking grass does NOT take is the side stripe. A 0.9 m continuous painted
+		// line is the marking you cannot actually lay on turf, and it is also the one the
+		// edge markers already do the job of - so the rule is that an edge is marked by
+		// MARKERS on grass and by a STRIPE on pavement, never by both.
+		const bool bGrass = Facts.Surface == ERunwaySurface::Grass;
+		if (bGrass)
 		{
-			// No pavement, no pavement markings: a grass strip carries edge markers only,
-			// and its designator lives on a board, not on the ground.
 			C.GrassMarkers += GrassMarkers(Out, Z, Frame);
-			continue;
 		}
 
 		const int32 Stripes = ThresholdStripeCount(Frame.HalfWidth * 2.0);
@@ -315,10 +391,38 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 			}
 		}
 		C.CentrelineDashes += Centreline(Out, Z, Frame);
-		if (Facts.Approach == ERunwayApproach::Precision)
+		if (!bGrass && Facts.Approach == ERunwayApproach::Precision)
 		{
 			C.SideStripes += SideStripes(Out, Z, Frame);
 		}
-	}
+	});
 	return C.Runways;
 }
+
+int32 FRunwayMarkingBuilder::BuildRubber(const URoadNetwork& Network, double Z,
+	FRoadMeshBuffers& Out, FRunwayMarkingCensus* Census)
+{
+	FRunwayMarkingCensus Local;
+	FRunwayMarkingCensus& C = Census != nullptr ? *Census : Local;
+	// Only this field, and NOT the whole census: Build owns the rest and is meant to be
+	// callable with the same one.
+	C.RubberPatches = 0;
+
+	int32 Runways = 0;
+	ForEachRunway(Network, [&](const FRunwayFrame& Frame, const FRunwayFrame& Far, const FRunwayFacts& Facts)
+	{
+		++Runways;
+		if (Facts.Surface == ERunwaySurface::Grass)
+		{
+			return;
+		}
+
+		// NOT gated on the approach class, unlike the aiming point and the touchdown zone.
+		// Those are paint, and paint is specified per class; rubber is deposited by whatever
+		// lands, and a visual runway is landed on exactly as hard as a precision one.
+		C.RubberPatches += RubberBands(Out, Z, Frame);
+		C.RubberPatches += RubberBands(Out, Z, Far);
+	});
+	return Runways;
+}
+

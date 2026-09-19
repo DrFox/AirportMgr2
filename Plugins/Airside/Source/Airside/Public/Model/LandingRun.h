@@ -87,6 +87,26 @@ struct AIRSIDE_API FLandingRun
 	UPROPERTY() double Pitch = 0.0;
 
 	/**
+	 * Distance from the threshold where the wheels touched, uu. Meaningless before Rollout.
+	 *
+	 * Kept because Travelled does not stand still: by the time anything outside this struct
+	 * looks, the aircraft has run on. An arrival at Vref covers 36-44 m in the first second
+	 * after touchdown, so "where did it land" and "where is it" stop being the same question
+	 * immediately.
+	 */
+	UPROPERTY() double TouchdownAt = 0.0;
+
+	/**
+	 * True for the ONE Advance that put the wheels down, false on every other.
+	 *
+	 * DELIBERATELY NOT A UPROPERTY, so it does not survive a save. A one-frame edge that
+	 * serialised as true would fire again the instant a game was loaded, and whatever is
+	 * hung off it - a puff of tyre smoke, a sound, a fee - would happen a second time under
+	 * an aircraft already halfway down the runway.
+	 */
+	bool bTouchedDown = false;
+
+	/**
 	 * Arms an arrival. False, and logs, when this runway cannot take this aircraft.
 	 *
 	 * THE REFUSAL IS THE POINT, exactly as it is for a departure: a strip shorter than the

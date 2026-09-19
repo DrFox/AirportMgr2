@@ -137,6 +137,10 @@ bool FLandingRun::Begin(const FRunwayEnd& InEnd, const FAirframe& InAirframe, do
 bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVector2D& OutPosition,
 	double& OutHeading, double& OutAltitude, double& OutPitch)
 {
+	// Cleared FIRST, every frame. bTouchedDown is an EDGE, not a state - IsOnGround() is the
+	// state - and an edge that is only ever set is one that stays true for the whole rollout.
+	bTouchedDown = false;
+
 	if (Phase == ELandingPhase::Vacated)
 	{
 		return false;
@@ -220,6 +224,8 @@ bool FLandingRun::Advance(double DeltaSeconds, const FAirframe& InAirframe, FVec
 			// integrated rather than solved.
 			Altitude = 0.0;
 			Phase = ELandingPhase::Rollout;
+			TouchdownAt = Travelled;
+			bTouchedDown = true;
 
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Touchdown %.0f uu past the threshold at %.0f uu/s, %.1f deg nose-up."),

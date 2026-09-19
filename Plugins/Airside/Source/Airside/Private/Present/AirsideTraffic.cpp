@@ -1,5 +1,7 @@
 #include "Present/AirsideTraffic.h"
 
+#include "Present/TyreSmoke.h"
+
 #include "AirsideLog.h"
 #include "Content/AirsideSettings.h"
 #include "Model/DeparturePlanner.h"
@@ -260,6 +262,47 @@ void UAirsideTraffic::Advance(double DeltaSeconds, double InSurfaceZ, const URoa
 			{
 				(*View)->SetMotion(Agent.LastMotion, SurfaceZ);
 			}
+		}
+
+		// TOUCHDOWN. An EDGE, true for one Advance only, so this fires once per landing -
+		// see FLandingRun::bTouchedDown, which is cleared at the top of every Advance for
+		// exactly this reason.
+		if (Agent.Arrival.bTouchedDown && Smoke != nullptr)
+		{
+			const FVector2D Along(FMath::Cos(Agent.LastMotion.Heading), FMath::Sin(Agent.LastMotion.Heading));
+			// Same convention as FRunwayMarkingBuilder's runway frame: across is the along
+			// vector turned a quarter turn. Two copies of a rotation that disagreed would
+			// put the puffs on the wrong side of an aircraft landing the other way.
+			const FVector2D Across(-Along.Y, Along.X);
+
+			// The MAINS, not the origin. FAirframe's origin is the nose gear, so the main
+			// gear is FixedAxleX along the fuselage from it - a negative number, 14 m on the
+			// Q400. Smoking at the origin would put the puffs under the nose, which touches
+			// down seconds later and somewhere else.
+			const FVector2D Mains = Agent.LastMotion.Position + Along * Agent.Airframe.FixedAxleX;
+			const double HalfTrack = Agent.Airframe.MainGearTrack * 0.5;
+
+			// UNMEASURED TRACK MEANS ONE PUFF, on the centreline, rather than a fabricated
+			// pair - the same discipline FAirframe::HasAxles applies to the steering law. A
+			// made-up track puts smoke where the aeroplane has no wheels.
+			if (Agent.Airframe.HasMainGearTrack())
+			{
+				Smoke->Puff(FVector(Mains - Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
+				Smoke->Puff(FVector(Mains + Across * HalfTrack, SurfaceZ), Agent.Airframe.Wingspan);
+			}
+			else
+			{
+				Smoke->Puff(FVector(Mains, SurfaceZ), Agent.Airframe.Wingspan);
+			}
+
+			// INSTRUMENTED AT THE BOUNDARY, because the alternative is asking for another
+			// PIE session. This says the touchdown was seen, where the wheels were, and
+			// whether the track was measured - the three things that would have to be
+			// guessed at otherwise if no smoke appeared.
+			UE_LOG(LogAirside, Log,
+				TEXT("Touchdown smoke: agent %d, %d puff(s) at (%.0f, %.0f), track %.0f uu, span %.0f uu."),
+				Agent.Id, Agent.Airframe.HasMainGearTrack() ? 2 : 1, Mains.X, Mains.Y,
+				Agent.Airframe.MainGearTrack, Agent.Airframe.Wingspan);
 		}
 	}
 }

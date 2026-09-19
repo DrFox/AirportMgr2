@@ -1,135 +1,171 @@
-"""Imports the asphalt PBR set and authors M_RoadSurface. Run headless:
+"""Authors M_RoadSurface, the parent of every paved surface. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
 Every result line is prefixed MARKER: so it can be grepped out of the log, because
 print() goes to the log rather than stdout under the commandlet.
+
+RESTYLED 2026-09-19 - THE PHOTOREAL ASPHALT SET IS GONE.
+
+This script used to import a four-map PBR set (`pebbled_asphalt` albedo, normal, roughness
+and ambient occlusion) from a vendor directory outside the repository, and fed all four
+straight into the material. That made the runway the most photoreal surface in the game, sitting
+underneath the most stylised markings in it, and it is the single biggest thing the player
+looks at. It contradicted the art direction's own words - "flat base colours, no normal
+maps" - and the identity claim behind them, which is that this should not look like another
+Unreal project assembled from scan libraries.
+
+The normal map was doing most of that work. At the 6 m camera it gave every square metre a
+pebble; at 600 m all four maps are mush and cost bandwidth to be mush.
+
+What replaces them is the structure proved on the ground the same day: a flat palette
+colour, a second tone in low-frequency patches for wear, and a fine value-only grain for
+near-camera break-up. Dialled much further down than the grass - pavement should read as
+ONE material with wear in it, not as patches - and at a far smaller size, because a runway
+is a 45 m ribbon and its variation has to show several cycles across that width.
+
+The import machinery went with it. Two hard-won facts from it are kept because they apply
+to any texture this material ever samples:
+
+  - Sampler type MUST agree with the texture's compression setting. GetSamplerTypeForTexture
+    maps TC_Masks to SAMPLERTYPE_Masks and TC_Grayscale-without-sRGB to
+    SAMPLERTYPE_LinearGrayscale, and VerifySamplerType rejects any mismatch OUTRIGHT: the
+    whole material fails to compile and every surface using it falls back to the engine
+    default, while parameter names still enumerate perfectly.
+  - A vendor OpenGL-convention normal map needs flip_green_channel, or everything reads as
+    lit from the opposite side - wrong in a way that looks entirely plausible.
+
+The textures themselves stay in /Game/Textures, unreferenced. Headless asset deletion
+reports success while leaving the asset on disk in this engine, so removing them is a
+separate step that has to be verified against the filesystem.
+
+THE INSTANCES ARE WHAT MAKE A SURFACE. M_RunwayTarmac, M_RunwayConcrete and M_RunwayGrass
+are instances of this material (build_runway_materials.py), and the band table points slot
+0 straight at it (build_road_material_set.py). They set BaseColour, which REPLACED the old
+SurfaceTint - a tint multiplied a photo texture, and with no texture underneath there is
+nothing for a multiplier to multiply. Both scripts have to be re-run after this one.
 """
 import os
+import sys
 import unreal
 
-SOURCE = r"C:\repos\models\materials\concrete-bl\pebbled-asphalt1-bl"
-# Build only albedo -> BaseColor, nothing else. A baseline that must render before any
-# of the rest is worth debugging: ColorOverrideMode was forcing the engine's
-# vertex-colour debug material over ours, so M_RoadSurface had never actually been
-# drawn and no part of this graph had ever been exercised.
-MINIMAL = False
+# The authoring scripts share a palette and a set of graph recipes. __file__ IS defined
+# under -run=pythonscript (verified 2026-09-19), so the sibling directory is reachable.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import airside_palette as palette
+import airside_matnodes as nodes
 
 TEX_DIR = "/Game/Textures"
 MAT_DIR = "/Game/Materials"
 
-# name -> (file, is_srgb, compression)
-MAPS = {
-    "T_Asphalt_Albedo": (
-        "pebbled_asphalt_albedo.png", True, unreal.TextureCompressionSettings.TC_DEFAULT),
-    "T_Asphalt_Normal": (
-        "pebbled_asphalt_Normal-ogl.png", False, unreal.TextureCompressionSettings.TC_NORMALMAP),
-    # TC_GRAYSCALE with sRGB off, NOT TC_MASKS. GetSamplerTypeForTexture maps TC_Masks to
-    # SAMPLERTYPE_Masks and TC_Grayscale-without-sRGB to SAMPLERTYPE_LinearGrayscale, and
-    # VerifySamplerType rejects any mismatch outright: the whole material then fails to
-    # compile and every surface using it silently falls back to the engine default. These
-    # are single-channel maps, so grayscale is also what they actually are.
-    "T_Asphalt_Roughness": (
-        "pebbled_asphalt_Roughness.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
-    "T_Asphalt_AO": (
-        "pebbled_asphalt_ao.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
-}
+# The same tiling noise the ground uses, for the same reason: it is an engine asset, so
+# there is no external source directory to go missing, and ground and pavement then break
+# up on one shared pattern. NOT T_Default_MacroVariation, which ships on disk but is absent
+# from the asset registry, so does_asset_exist and load_asset both deny it.
+NOISE_TEXTURE = "/Engine/EngineMaterials/Good64x64TilingNoiseHighFreq"
+
+# --- Tunables, all of them parameters on the material -----------------------------------
+#
+# Defaults describe TAXIWAY asphalt, because M_RoadSurface is used directly for slot 0 of
+# the band table - roads and taxiways - while the runway surfaces are instances that
+# override BaseColour. Palette hexes, not floats: see airside_palette.
+BASE_COLOUR = palette.TAXIWAY_ASPHALT
+# Wear is the SAME family as the base, one step lighter, never a different hue. Asphalt
+# weathers paler as the binder oxidises and the aggregate shows through; it does not turn
+# brown or green, and a wear tone that shifts hue reads as dirt rather than as age.
+# WEAR IS ALMOST INVISIBLE, AND THAT IS THE SETTING. It was 1.49 : 1 against the base in
+# linear luminance and read as WET PATCHES - dark blotches on pavement are what damp looks
+# like, and the eye names them before it names anything else. A surface that appears to be
+# drying in patches is a weather effect nobody asked for, and it is worse than a flat one.
+#
+# 1.09 : 1 is roughly the threshold of perception across a soft gradient. The wear is meant
+# to stop the eye deciding the pavement is a solid fill, NOT to be seen as an area. If it
+# can be pointed at, it is too strong.
+#
+# The window widens with it: a narrow window makes patches WITH EDGES, and an edge is what
+# turns a tonal drift into a stain. Four octaves rather than three for the same reason the
+# grass needed them - broken-up shapes read as surface, smooth blobs read as objects.
+WEAR_COLOUR = "#5D6569"
+
+# 40 m, two orders below the grass's 800 m. A runway is a 45 m ribbon: variation sized for
+# the field would put a single tone across the whole width and read as a flat stripe again.
+WEAR_SIZE = 40.0
+WEAR_LEVELS = 4
+# A WIDE window, unlike the grass's 0.46-0.54. Pavement wants a gradient between fresh and
+# worn, not patches with edges - a hard edge on tarmac reads as a repair, and a runway
+# covered in repairs is a story we are not telling.
+WEAR_CONTRAST_LO = 0.18
+WEAR_CONTRAST_HI = 0.82
+
+# Grain: metres, and small. This is the octave that replaces the pebble normal map. It is
+# value-only, so it costs nothing in hue and cannot fight the markings.
+GRAIN_SIZE = 2.5
+GRAIN_AMOUNT = 0.10
+
+# Roughness constant per surface, wobbled by the grain. High: asphalt is not glossy, and
+# high-and-varying roughness - not geometry detail - is what stops a flat plane showing a
+# broad specular sheen band under a soft sun with Lumen.
+ROUGHNESS_BASE = 0.82
 
 
-def import_textures():
+def fail(msg):
+    unreal.log_error("MARKER: FAIL " + str(msg))
+
+
+def build_material():
     tools = unreal.AssetToolsHelpers.get_asset_tools()
-    imported = {}
-    for name, (filename, srgb, compression) in MAPS.items():
-        path = os.path.join(SOURCE, filename)
-        if not os.path.isfile(path):
-            unreal.log_error("MARKER: missing source texture %s" % path)
-            continue
-
-        task = unreal.AssetImportTask()
-        task.filename = path
-        task.destination_path = TEX_DIR
-        task.destination_name = name
-        task.automated = True
-        task.replace_existing = True
-        task.save = True
-        tools.import_asset_tasks([task])
-
-        asset = unreal.load_asset("%s/%s" % (TEX_DIR, name))
-        if asset is None:
-            unreal.log_error("MARKER: import failed for %s" % name)
-            continue
-
-        asset.set_editor_property("srgb", srgb)
-        asset.set_editor_property("compression_settings", compression)
-        if name == "T_Asphalt_Normal":
-            # The vendor ships an OpenGL-convention normal map. UE expects DirectX, so the
-            # green channel has to be inverted or every lit surface reads as though it is
-            # lit from the opposite side - wrong in a way that looks entirely plausible.
-            asset.set_editor_property("flip_green_channel", True)
-        unreal.EditorAssetLibrary.save_asset("%s/%s" % (TEX_DIR, name))
-        imported[name] = asset
-        unreal.log("MARKER: imported %s srgb=%s" % (name, srgb))
-    return imported
-
-
-def build_material(textures):
-    tools = unreal.AssetToolsHelpers.get_asset_tools()
-
-    # create_asset returns None rather than raising when the asset already exists, and
-    # the very next call then fails with an unrelated AttributeError on NoneType. This
-    # script has to be re-runnable - it is the authoring step, and authoring gets
-    # iterated - so delete first and rebuild from scratch.
-    path = "%s/M_RoadSurface" % MAT_DIR
-    if unreal.EditorAssetLibrary.does_asset_exist(path):
-        unreal.EditorAssetLibrary.delete_asset(path)
-        unreal.log("MARKER: replaced existing %s" % path)
-
-    material = tools.create_asset(
-        "M_RoadSurface", MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
-    if material is None:
-        unreal.log_error("MARKER: create_asset returned None for %s" % path)
-        return None
-
     lib = unreal.MaterialEditingLibrary
 
-    # --- UV0: world-aligned asphalt -------------------------------------------------
-    uv0 = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureCoordinate, -1200, 0)
-    uv0.set_editor_property("coordinate_index", 0)
+    # REBUILT IN PLACE. This script used to delete M_RoadSurface and create a new one,
+    # which was survivable only because build_runway_materials.py recreated its three
+    # instances afterwards - a pipeline ordering constraint standing in for correctness.
+    # A material instance holds a pointer to the parent OBJECT, so deleting it strands
+    # every child at the destroyed object rather than repointing them at the new one.
+    # nodes.clear_graph empties the graph while the asset keeps its identity; see its
+    # docstring for why delete_all_material_expressions is not used to do it.
+    path = "%s/M_RoadSurface" % MAT_DIR
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        material = unreal.EditorAssetLibrary.load_asset(path)
+        nodes.clear_graph(lib, material, fail)
+        unreal.log("MARKER: rebuilding %s in place" % path)
+    else:
+        material = tools.create_asset(
+            "M_RoadSurface", MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
+    if material is None:
+        unreal.log_error("MARKER: no material at %s" % path)
+        return None
 
-    albedo = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureSample, -900, -200)
-    albedo.set_editor_property("texture", textures["T_Asphalt_Albedo"])
-    lib.connect_material_expressions(uv0, "", albedo, "UVs")
+    noise_texture = unreal.EditorAssetLibrary.load_asset(NOISE_TEXTURE)
+    if noise_texture is None:
+        fail("grain texture missing: %s" % NOISE_TEXTURE)
+        return None
 
-    normal = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureSample, -900, 150)
-    normal.set_editor_property("texture", textures["T_Asphalt_Normal"])
-    normal.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
-    lib.connect_material_expressions(uv0, "", normal, "UVs")
+    # --- The pavement itself: colour, wear, grain. No maps. --------------------------
+    base_colour = nodes.vector(lib, material, "BaseColour", BASE_COLOUR, -2000, -700)
+    wear_colour = nodes.vector(lib, material, "WearColour", WEAR_COLOUR, -2000, -560)
 
-    rough = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureSample, -900, 500)
-    rough.set_editor_property("texture", textures["T_Asphalt_Roughness"])
-    rough.set_editor_property(
-        "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
-    lib.connect_material_expressions(uv0, "", rough, "UVs")
+    wear_size = nodes.scalar(lib, material, "WearSize", WEAR_SIZE, -3000, -400)
+    wear_lo = nodes.scalar(lib, material, "WearContrastLo", WEAR_CONTRAST_LO, -2000, -420)
+    wear_hi = nodes.scalar(lib, material, "WearContrastHi", WEAR_CONTRAST_HI, -2000, -340)
 
-    ao = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureSample, -900, 850)
-    ao.set_editor_property("texture", textures["T_Asphalt_AO"])
-    ao.set_editor_property(
-        "sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
-    lib.connect_material_expressions(uv0, "", ao, "UVs")
+    wear_noise = nodes.gradient_noise(lib, material, wear_size, WEAR_LEVELS, -2900, -400, fail)
+    wear = nodes.contrast_window(lib, material, wear_noise, "", wear_lo, wear_hi, -1750, -400)
 
-    if MINIMAL:
-        # Albedo straight into base colour. No UV1, no masks, no parameters - if even
-        # this does not render, the fault is not in the marking maths.
-        lib.connect_material_property(albedo, "RGB", unreal.MaterialProperty.MP_BASE_COLOR)
-        lib.recompile_material(material)
-        unreal.EditorAssetLibrary.save_asset("%s/M_RoadSurface" % MAT_DIR)
-        unreal.log("MARKER: MINIMAL material saved - albedo -> BaseColor only")
-        return material
+    weathered = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -1500, -600)
+    lib.connect_material_expressions(base_colour, "", weathered, "A")
+    lib.connect_material_expressions(wear_colour, "", weathered, "B")
+    lib.connect_material_expressions(wear, "", weathered, "Alpha")
+
+    grain_size = nodes.scalar(lib, material, "GrainSize", GRAIN_SIZE, -3000, -100)
+    grain_amount = nodes.scalar(lib, material, "GrainAmount", GRAIN_AMOUNT, -3000, -20)
+    grain = nodes.value_grain(
+        lib, material, noise_texture, grain_size, grain_amount, -2900, -100)
+
+    surface = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -1300, -500)
+    lib.connect_material_expressions(weathered, "", surface, "A")
+    lib.connect_material_expressions(grain, "", surface, "B")
 
     # --- UV1: markings ---------------------------------------------------------------
     # UV1.X is lateral offset in uu, UV1.Y is distance along the centreline in uu.
@@ -159,29 +195,52 @@ def build_material(textures):
     sharpness.set_editor_property("parameter_name", "MarkingSharpness")
     sharpness.set_editor_property("default_value", 0.5)
 
-    # mask = 1 - saturate((|lateral| - CentrelineWidth) * MarkingSharpness)
+    # mask = saturate((CentrelineWidth - |lateral|) * MarkingSharpness)
     #
-    # Deliberately not a MaterialExpressionIf: in 5.8 that node's ConstAGreaterThanB and
-    # ConstALessThanB are deprecated and its branches are input pins, so a hard threshold
-    # would cost three more constant nodes. This form is fewer nodes AND better, because
-    # the edge ramps over 1/MarkingSharpness uu instead of aliasing along the road.
-    over = lib.create_material_expression(
+    # "INSIDE THE LINE", not "not far outside it". The form here until 2026-09-19 was
+    #
+    #     mask = 1 - saturate((|lateral| - CentrelineWidth) * MarkingSharpness)
+    #
+    # and it had a bug that build_runway_materials.py then documented as a feature. That
+    # script sets CentrelineWidth = 0 on the three runway instances to remove the yellow
+    # taxiway line, and its comment claimed zero width gives "a line of zero width". It does
+    # not. At lateral == 0 the old expression is 1 - saturate(0) = 1 - EXACTLY as painted as
+    # a taxiway centreline - and only ramps away over 1/MarkingSharpness uu. Every runway in
+    # the game therefore carried a 4 cm yellow hairline down its exact centre, in the
+    # inherited taxiway yellow, faint enough to survive a year of screenshots unnoticed and
+    # perfectly visible once someone looked closely in PIE.
+    #
+    # Subtracting the other way makes the width mean what its name says: the mask is
+    # positive only where |lateral| is INSIDE CentrelineWidth, so a width of zero paints
+    # nothing at all, at any lateral, including zero.
+    #
+    # The ramp survives the change and still runs 1/MarkingSharpness uu - it now ramps
+    # INWARD from the edge rather than outward, so the line is about 2 uu narrower than
+    # before. That is the whole visual difference on a taxiway.
+    #
+    # Still deliberately not a MaterialExpressionIf: in 5.8 that node's ConstAGreaterThanB
+    # and ConstALessThanB are deprecated and its branches are input pins, so a hard
+    # threshold would cost three more constant nodes and alias along the road.
+    #
+    # MARKING QUADS ARE UNAFFECTED, and it is worth saying why, because this looks like it
+    # should break them. FRunwayMarkingBuilder and FHoldingPositionMarkingBuilder paint a
+    # quad solid by setting UV1 = 0, which is lateral = 0 - the one place the old expression
+    # was wrong. They are drawn through instances of the PARENT, which keeps CentrelineWidth
+    # at its default 15, so the new mask is saturate(15 * 0.5) = 1 there and they still
+    # paint. Only an instance that asked for zero width now actually gets zero.
+    inside = lib.create_material_expression(
         material, unreal.MaterialExpressionSubtract, -800, 800)
-    lib.connect_material_expressions(abs_lateral, "", over, "A")
-    lib.connect_material_expressions(centre_width, "", over, "B")
+    lib.connect_material_expressions(centre_width, "", inside, "A")
+    lib.connect_material_expressions(abs_lateral, "", inside, "B")
 
     scaled = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -650, 800)
-    lib.connect_material_expressions(over, "", scaled, "A")
+    lib.connect_material_expressions(inside, "", scaled, "A")
     lib.connect_material_expressions(sharpness, "", scaled, "B")
 
-    clamped = lib.create_material_expression(
-        material, unreal.MaterialExpressionSaturate, -520, 800)
-    lib.connect_material_expressions(scaled, "", clamped, "")
-
     centre_mask = lib.create_material_expression(
-        material, unreal.MaterialExpressionOneMinus, -400, 800)
-    lib.connect_material_expressions(clamped, "", centre_mask, "")
+        material, unreal.MaterialExpressionSaturate, -520, 800)
+    lib.connect_material_expressions(scaled, "", centre_mask, "")
 
     # --- junction blend fades the markings out ---------------------------------------
     # From UV2.X, NOT vertex colour. A UDynamicMeshComponent only ignores its colour
@@ -215,27 +274,47 @@ def build_material(textures):
     marking_colour.set_editor_property("parameter_name", "MarkingColor")
     marking_colour.set_editor_property("default_value", unreal.LinearColor(0.85, 0.72, 0.05, 1.0))
 
-    # --- SurfaceTint: what makes a runway's pavement read as grass or concrete -----------
-    # A vector parameter multiplied into the albedo BEFORE the marking lerp, so the tint
-    # colours the pavement and never the paint. White by default, so M_RoadSurface itself
-    # renders exactly as it did; Tools/Python/build_runway_materials.py makes the three
-    # instances that set it. A parameter rather than three copies of this graph, because a
-    # graph typed three times is a graph that drifts.
-    surface_tint = lib.create_material_expression(
-        material, unreal.MaterialExpressionVectorParameter, -650, -350)
-    surface_tint.set_editor_property("parameter_name", "SurfaceTint")
-    surface_tint.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
-
-    tinted = lib.create_material_expression(
-        material, unreal.MaterialExpressionMultiply, -400, -200)
-    lib.connect_material_expressions(albedo, "RGB", tinted, "A")
-    lib.connect_material_expressions(surface_tint, "", tinted, "B")
-
-    base_colour = lib.create_material_expression(
+    # --- BaseColour REPLACES SurfaceTint -----------------------------------------------
+    #
+    # SurfaceTint was a multiplier on a photo albedo: white left the asphalt alone, 1.9
+    # lifted it to concrete, 0.55/0.80/0.35 pushed it toward grass. With the albedo gone
+    # there is nothing to multiply, so the surfaces state their colour outright instead -
+    # which is also the only form in which a palette entry can be diffed against the table
+    # it came from.
+    #
+    # The parameter is consumed ABOVE, before the wear lerp, so wear and grain apply to
+    # whatever colour an instance chose. The marking lerp stays LAST: paint is never
+    # tinted, weathered or grained, because paint is a different material lying on top and
+    # the markings have to stay legible at every camera distance.
+    #
+    # NOTE FOR ANYONE RE-RUNNING THIS: build_runway_materials.py sets this name. Renaming
+    # the parameter without renaming it there leaves three instances overriding a parameter
+    # that no longer exists, which is silent - they simply render the default.
+    painted = lib.create_material_expression(
         material, unreal.MaterialExpressionLinearInterpolate, -150, 0)
-    lib.connect_material_expressions(tinted, "", base_colour, "A")
-    lib.connect_material_expressions(marking_colour, "", base_colour, "B")
-    lib.connect_material_expressions(marking_amount, "", base_colour, "Alpha")
+    lib.connect_material_expressions(surface, "", painted, "A")
+    lib.connect_material_expressions(marking_colour, "", painted, "B")
+    lib.connect_material_expressions(marking_amount, "", painted, "Alpha")
+
+    # --- Roughness: a constant per surface, wobbled by the same grain -------------------
+    # The SAME signal that breaks up the colour breaks up the sheen, so they agree rather
+    # than forming two independent patterns. (grain - 1) is +/- GrainAmount/2; a third of
+    # that is the wobble that stops the specular band forming.
+    rough_base = nodes.scalar(lib, material, "RoughnessBase", ROUGHNESS_BASE, -650, 300)
+    grain_offset = lib.create_material_expression(
+        material, unreal.MaterialExpressionSubtract, -500, 380)
+    grain_offset.set_editor_property("const_b", 1.0)
+    lib.connect_material_expressions(grain, "", grain_offset, "A")
+
+    grain_scaled = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -350, 380)
+    grain_scaled.set_editor_property("const_b", 0.35)
+    lib.connect_material_expressions(grain_offset, "", grain_scaled, "A")
+
+    roughness = lib.create_material_expression(
+        material, unreal.MaterialExpressionAdd, -200, 340)
+    lib.connect_material_expressions(rough_base, "", roughness, "A")
+    lib.connect_material_expressions(grain_scaled, "", roughness, "B")
 
     # --- parameters declared for later slices ----------------------------------------
     # The world-aligned UVs already carry the texel scale, but a material instance is how
@@ -257,10 +336,17 @@ def build_material(textures):
     # lines - concrete slab, asphalt run-off, grass - and a road's edge is a kerb, so the
     # fade solved a problem this game does not have and cost a masked material to do it.
     # Edge treatment becomes a per-band material choice; this material covers one band.
-    lib.connect_material_property(base_colour, "", unreal.MaterialProperty.MP_BASE_COLOR)
-    lib.connect_material_property(normal, "RGB", unreal.MaterialProperty.MP_NORMAL)
-    lib.connect_material_property(rough, "R", unreal.MaterialProperty.MP_ROUGHNESS)
-    lib.connect_material_property(ao, "R", unreal.MaterialProperty.MP_AMBIENT_OCCLUSION)
+    # NO NORMAL AND NO AMBIENT OCCLUSION, and both omissions are deliberate.
+    #
+    # The normal map was the single biggest contributor to the photoreal read, and at this
+    # game's camera range - 6 m to 600 m, looking down - a pebble normal is invisible past
+    # about 30 m and mush in between. Roughness, not geometry detail, is what an untextured
+    # plane actually needs.
+    #
+    # AO is left to Lumen, which already occludes contacts. A baked AO map on top of it
+    # double-darkens every crevice, and on a flat plane there are no crevices to darken.
+    lib.connect_material_property(painted, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    lib.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
 
     lib.recompile_material(material)
     unreal.EditorAssetLibrary.save_asset("%s/M_RoadSurface" % MAT_DIR)
@@ -298,10 +384,5 @@ def build_material(textures):
     return material
 
 
-TEXTURES = import_textures()
-if len(TEXTURES) == len(MAPS):
-    build_material(TEXTURES)
-    unreal.log("MARKER: done")
-else:
-    unreal.log_error(
-        "MARKER: aborted, %d of %d textures imported" % (len(TEXTURES), len(MAPS)))
+build_material()
+unreal.log("MARKER: done")
