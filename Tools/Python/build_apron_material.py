@@ -18,9 +18,9 @@ grey tarmac, visibly from another game. A surface does not get to opt out of the
 direction because it has its own graph.
 
 It is now the same three-part structure as the road: a flat palette colour, a paler second
-tone in low-frequency patches, and a fine value-only grain. Warm concrete `#9C9B91` against
-the taxiway's `#454D50`, which is the contrast that does the work the old brown was doing
-badly.
+tone in low-frequency patches, and a fine value-only grain. Warm concrete against the
+taxiway's cool asphalt grey - see airside_palette for the hexes and for the luminance ratios
+between the surfaces, which are the thing actually being specified there.
 
 ONE DELIBERATE DEPARTURE FROM M_RoadSurface SURVIVES: NO UV1. That material reads UV1 for
 its centreline, and an apron's UV1 is zero at every vertex because lateral offset and
@@ -58,19 +58,35 @@ MAT_NAME = "M_ApronConcrete"
 
 NOISE_TEXTURE = "/Engine/EngineMaterials/Good64x64TilingNoiseHighFreq"
 
-# Warm concrete against the taxiway's cool asphalt grey. The pale tone is the palette's
-# concrete highlight, so wear on an apron reads as sun-bleached slab rather than as dirt -
-# concrete weathers LIGHTER, which is the opposite of what asphalt does and the reason the
-# two surfaces do not share a wear colour.
+# Warm concrete against the taxiway's cool asphalt grey. Wear goes LIGHTER here, unlike
+# asphalt: concrete bleaches as it ages where asphalt darkens, which is why the two surfaces
+# do not share a wear direction even though they now share a structure.
 BASE_COLOUR = palette.APRON_CONCRETE
-WEAR_COLOUR = palette.CONCRETE_HIGHLIGHT
+# WEAR IS ALMOST INVISIBLE, AND THAT IS THE SETTING. It was 1.49 : 1 against the base in
+# linear luminance and read as WET PATCHES - dark blotches on pavement are what damp looks
+# like, and the eye names them before it names anything else. A surface that appears to be
+# drying in patches is a weather effect nobody asked for, and it is worse than a flat one.
+#
+# 1.09 : 1 is roughly the threshold of perception across a soft gradient. The wear is meant
+# to stop the eye deciding the pavement is a solid fill, NOT to be seen as an area. If it
+# can be pointed at, it is too strong.
+#
+# The window widens with it: a narrow window makes patches WITH EDGES, and an edge is what
+# turns a tonal drift into a stain. Four octaves rather than three for the same reason the
+# grass needed them - broken-up shapes read as surface, smooth blobs read as objects.
+#
+# The apron does NOT use palette.CONCRETE_HIGHLIGHT for this. That entry is a real colour
+# for a real pale slab, and at 1.39 : 1 against the base it was the worst offender in the
+# frame. It stays in the palette for anything that wants an actual highlight; wear is not
+# that thing.
+WEAR_COLOUR = "#939289"
 
 # Larger than the road's 40 m: an apron is a wide open pad rather than a ribbon, so its
 # variation can afford to be read across, and slab-scale patches would read as damage.
 WEAR_SIZE = 70.0
-WEAR_LEVELS = 3
-WEAR_CONTRAST_LO = 0.32
-WEAR_CONTRAST_HI = 0.68
+WEAR_LEVELS = 4
+WEAR_CONTRAST_LO = 0.18
+WEAR_CONTRAST_HI = 0.82
 
 GRAIN_SIZE = 2.0
 GRAIN_AMOUNT = 0.07

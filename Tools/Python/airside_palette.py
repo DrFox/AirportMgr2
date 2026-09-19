@@ -30,14 +30,28 @@ def linear_color(hexcode):
     return unreal.LinearColor(r, g, b, 1.0)
 
 
-# --- Hard surface (spec 1.1, added 2026-09-19) ------------------------------------------
+# --- Hard surface (spec 1.1, added 2026-09-19, rebalanced the same day) ------------------
+#
 # Runway asphalt is darker than taxiway asphalt on purpose: it is laid and maintained
 # differently and genuinely reads darker, and the contrast is functional from the build
 # camera - it says which surface an aircraft is on before any marking is legible.
-RUNWAY_ASPHALT = "#343B40"
-TAXIWAY_ASPHALT = "#454D50"
-APRON_CONCRETE = "#9C9B91"
-CONCRETE_HIGHLIGHT = "#B8B7AC"
+#
+# REBALANCED because the first values put too much of it between the surfaces. Measured in
+# linear luminance, apron against runway was 7.70 : 1 and apron against taxiway 4.55 : 1 -
+# near-black ribbons on a pale pad, which is not what an airfield looks like and not what
+# this palette meant. Real weathered asphalt reflects about 0.10-0.15 and concrete about
+# 0.25-0.35, so reality is nearer 2.5 : 1; the asphalt was too DARK rather than the concrete
+# too light, and both moved to close the gap from each side.
+#
+# Now 3.05 : 1 and 2.27 : 1, with runway still 1.34 : 1 against taxiway - enough to tell
+# them apart at the build camera, which was the point of separating them at all.
+#
+# The ratios are the specification here, not the hexes. If a colour changes, re-measure:
+#   lum = 0.2126*r + 0.7152*g + 0.0722*b  on the LINEAR values, never the hex.
+RUNWAY_ASPHALT = "#4E5459"
+TAXIWAY_ASPHALT = "#5A6165"
+APRON_CONCRETE = "#8E8D84"
+CONCRETE_HIGHLIGHT = "#A5A49A"
 
 # --- Terrain & ground (sampled from the concept sheet) -----------------------------------
 GRASS_MOWN = "#7D8E47"

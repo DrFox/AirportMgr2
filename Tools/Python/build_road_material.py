@@ -73,17 +73,29 @@ BASE_COLOUR = palette.TAXIWAY_ASPHALT
 # Wear is the SAME family as the base, one step lighter, never a different hue. Asphalt
 # weathers paler as the binder oxidises and the aggregate shows through; it does not turn
 # brown or green, and a wear tone that shifts hue reads as dirt rather than as age.
-WEAR_COLOUR = "#5A6265"
+# WEAR IS ALMOST INVISIBLE, AND THAT IS THE SETTING. It was 1.49 : 1 against the base in
+# linear luminance and read as WET PATCHES - dark blotches on pavement are what damp looks
+# like, and the eye names them before it names anything else. A surface that appears to be
+# drying in patches is a weather effect nobody asked for, and it is worse than a flat one.
+#
+# 1.09 : 1 is roughly the threshold of perception across a soft gradient. The wear is meant
+# to stop the eye deciding the pavement is a solid fill, NOT to be seen as an area. If it
+# can be pointed at, it is too strong.
+#
+# The window widens with it: a narrow window makes patches WITH EDGES, and an edge is what
+# turns a tonal drift into a stain. Four octaves rather than three for the same reason the
+# grass needed them - broken-up shapes read as surface, smooth blobs read as objects.
+WEAR_COLOUR = "#5D6569"
 
 # 40 m, two orders below the grass's 800 m. A runway is a 45 m ribbon: variation sized for
 # the field would put a single tone across the whole width and read as a flat stripe again.
 WEAR_SIZE = 40.0
-WEAR_LEVELS = 3
+WEAR_LEVELS = 4
 # A WIDE window, unlike the grass's 0.46-0.54. Pavement wants a gradient between fresh and
 # worn, not patches with edges - a hard edge on tarmac reads as a repair, and a runway
 # covered in repairs is a story we are not telling.
-WEAR_CONTRAST_LO = 0.30
-WEAR_CONTRAST_HI = 0.70
+WEAR_CONTRAST_LO = 0.18
+WEAR_CONTRAST_HI = 0.82
 
 # Grain: metres, and small. This is the octave that replaces the pebble normal map. It is
 # value-only, so it costs nothing in hue and cannot fight the markings.
