@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Entities/AircraftType.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 
@@ -269,6 +270,46 @@ bool FGearReachesTheMotionDescriptionTest::RunTest(const FString& Parameters)
 		Climbing.GearDownFraction > 0.4 && Climbing.GearDownFraction < 0.6);
 	TestEqual(TEXT("with the bay held fully open around it"),
 		Climbing.BayDoorOpenFraction, 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGear737IsAuthoredAndTravelsTest,
+	"Airside.Model.Gear737IsAuthoredAndTravels",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
+{
+	// THE ONLY AIRFRAME AUTHORED. plane4's rig is the only one in the fleet with gear_* and
+	// door_nose_* bones - plane2's and plane3's are root, nosewheel_steer, nosewheel, prop_L,
+	// prop_R, wheel_L, wheel_R and nothing else - so data on any other type would be data
+	// nothing can consume, which reads as working.
+	UAircraftType* Type = NewObject<UAircraftType>();
+	UAircraftType::Build737(Type);
+
+	const FAirframe Frame = Type->Airframe();
+
+	TestTrue(TEXT("the 737 has retractable gear"), Frame.Gear.IsSet());
+	TestEqual(TEXT("with the real transit time"), Frame.Gear.TravelSeconds, 7.0);
+	TestEqual(TEXT("and a second of nose bay door each side"), Frame.Gear.DoorSeconds, 1.0);
+	TestEqual(TEXT("making a nine second cycle"), Frame.Gear.CycleSeconds(), 9.0);
+
+	// THE CUE HEIGHTS TRAVEL WITH IT, and their ORDER is the thing worth pinning: the extend
+	// height sits ABOVE the retract height, which is exactly what makes altitude alone an
+	// unsafe discriminator. See Airside.Model.GearDescendingArrivalDoesNotRetract.
+	TestEqual(TEXT("gear up passing 9000 uu"), Frame.Gear.RetractAboveHeight, 9000.0);
+	TestEqual(TEXT("gear down below 15000 uu"), Frame.Gear.ExtendBelowHeight, 15000.0);
+	TestTrue(TEXT("and the extend height is the higher of the two"),
+		Frame.Gear.ExtendBelowHeight > Frame.Gear.RetractAboveHeight);
+
+	// A PIPER IS NOT AUTHORED, which is the other half of the claim. Its rig cannot show a
+	// retraction, so it declares none - and this is what catches a later edit that copies
+	// gear figures onto every type "for completeness".
+	UAircraftType* Piper = NewObject<UAircraftType>();
+	UAircraftType::BuildPiperMeridian(Piper);
+	TestFalse(TEXT("the Meridian declares no gear cycle, because its rig cannot show one"),
+		Piper->Airframe().Gear.IsSet());
 
 	return true;
 }

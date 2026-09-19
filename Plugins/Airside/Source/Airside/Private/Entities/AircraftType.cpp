@@ -168,6 +168,28 @@ void UAircraftType::Build737(UAircraftType* Type)
 	Type->Ground.Taxi.SpeedCap = 800.0;
 	Type->Ground.MinSteeringSpeed = 50.0;
 	Type->Ground.MaxTurnRateDegPerSec = 8.0;
+
+	// THE ONLY TYPE IN THE FLEET WITH GEAR FIGURES, because plane4 is the only mesh with the
+	// bones to show them - gear_nose, gear_L, gear_R retract and door_nose_L/_R hinge. The
+	// mains have no doors and want none: a 737's main wheels sit in a well behind a fixed
+	// fairing, which is why the rig has no door_main_* pair to drive.
+	//
+	// 7 seconds is the real 737-800 transit. 1 second of door each side of it, so a full
+	// cycle is 9 - long enough to be watched, and comfortably inside a climb that does not
+	// reach ClearAltitude for the better part of a minute.
+	Type->Gear.TravelSeconds = 7.0;
+	Type->Gear.DoorSeconds = 1.0;
+
+	// A FEW HUNDRED FEET, which is when the command is actually given - 9000 uu is about 295
+	// ft. NOT lift-off: FAgentMotion::bAirborne is the precondition and this is the cue, and
+	// the two were conflated in bAirborne's own comment until this landed.
+	Type->Gear.RetractAboveHeight = 9000.0;
+
+	// ABOVE FApproachPerformance::FinalAltitude (2000 uu), so an arrival is born down and
+	// locked and this never fires at today's figures. Authored at an honest ~500 ft anyway,
+	// so the extension is correct the day the approach is joined higher rather than being
+	// discovered missing.
+	Type->Gear.ExtendBelowHeight = 15000.0;
 }
 
 void UAircraftType::BuildPiperMeridian(UAircraftType* Type)

@@ -146,6 +146,16 @@ public:
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
 
 	/**
+	 * How this type's landing gear retracts, and whether it does at all.
+	 *
+	 * UNSET ON EVERY TYPE BUT THE 737, and that is a statement about the RIGS rather than
+	 * about the aeroplanes. A Dash 8 and a Meridian both retract in reality; neither mesh has
+	 * a bone that could show it, and authored data nothing can consume reads as working. Each
+	 * gets figures the same day its rig gets gear_* bones, and not before.
+	 */
+	UPROPERTY(EditAnywhere) FGearPerformance Gear;
+
+	/**
 	 * What this type needs of a runway: surface, approach aids, published field lengths.
 	 *
 	 * Beside the performance structs and copied into the airframe with them, because the
@@ -183,6 +193,7 @@ public:
 		Out.Climb = Climb;
 		Out.Approach = Approach;
 		Out.Engine = Engine;
+		Out.Gear = Gear;
 		Out.Wingspan = Footprint.Wingspan;
 		Out.SteerLaw = SteerLaw;
 		Out.SteerAxleX = SteerAxleX;
