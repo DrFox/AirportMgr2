@@ -40,11 +40,17 @@ from airside_import import Spec, import_one, rebuild_fleet_materials, say  # noq
 MODELS = r"C:\repos\AirportMgr2Models"
 
 
-# THE WHEEL NODES ARE MESH NAMES, NOT JOINT NAMES, and plane3 is why the distinction is
-# spelled out in Spec: its rig declares joints called nosewheel/wheel_L/wheel_R exactly like
-# plane2's, while the geometry those joints drive is called gearFront/gearRear_L/gearRear_R
-# with Blender's duplicate suffix on the end. Matching on joint names would find nothing and
-# report "cannot tell which way it faces" for a model that is perfectly correct.
+# THE WHEEL NODES ARE MESH NAMES, NOT JOINT NAMES, and Spec spells the distinction out
+# because the two namespaces are independent - a .glb may hold a joint and a mesh node of the
+# same name, and for plane2 and plane3 it does. Matching on joints would find no geometry at
+# all and report "cannot tell which way it faces" for a model that is perfectly correct.
+#
+# plane3 USED TO BE THE AWKWARD CASE: joints nosewheel/wheel_L/wheel_R against geometry called
+# gearFront/gearRear_L/gearRear_R, because each leg was ONE mesh holding both a rolling wheel
+# and a static strut. On 2026-09-19 the gear was separated into three wheels and three legs -
+# the leg halves kept gearFront/gearRear_* and the WHEELS took their bones' names - because
+# skinning a combined mesh per vertex was rotating the legs in engine. So these rows now name
+# the wheels, which is what an AXLE measurement wants: a leg's centre is not an axle.
 VEHICLE_FRONT = ["wheel_FL", "wheel_FR"]
 VEHICLE_REAR = ["wheel_RL", "wheel_RR"]
 
@@ -55,8 +61,8 @@ SPECS = [
         source=MODELS + r"\plane3\export\plane3.glb",
         mesh_dir="/Game/Aircraft/Plane3",
         skel_name="SK_Plane3",
-        front_nodes=["gearFront"],
-        rear_nodes=["gearRear_L", "gearRear_R"],
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
         front_label="nose gear",
         rear_label="main gear",
         # NOSE GEAR, which is UAircraftType's documented local space and what plane2 follows.

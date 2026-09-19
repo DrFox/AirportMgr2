@@ -112,38 +112,62 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 {
-	// THE HALF-RUN PIPELINE, pinned. build_plane2_type.py measures the export and writes the
-	// DA; re-import the mesh without re-running it and the figures describe an aeroplane
+	// THE HALF-RUN PIPELINE, pinned. build_plane<N>_type.py measures the export and writes
+	// the DA; re-import the mesh without re-running it and the figures describe an aeroplane
 	// that no longer exists. Nothing on screen shows that - the model looks right and its
 	// clearance envelope is somewhere else - so it has to be a test.
-	UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
-		UAircraftType::StaticClass(), nullptr, TEXT("/Game/Entities/DA_Aircraft_Plane2")));
-	if (!TestNotNull(TEXT("DA_Aircraft_Plane2 loads"), Type))
+	//
+	// EVERY MEASURED TYPE, not just plane2. The half-run is a property of the PIPELINE, so
+	// the second aeroplane to go through it inherits the same exposure the moment it exists,
+	// and a test naming one asset would have gone on passing while the other drifted.
+	const TCHAR* const Measured[] = {
+		TEXT("/Game/Entities/DA_Aircraft_Plane2"),
+		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
+	};
+
+	for (const TCHAR* Path : Measured)
 	{
-		return false;
+		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
+			UAircraftType::StaticClass(), nullptr, Path));
+		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Path), Type))
+		{
+			continue;
+		}
+
+		USkeletalMesh* Mesh = Type->Mesh.LoadSynchronous();
+		if (!TestNotNull(*FString::Printf(TEXT("%s: the mesh it names loads"), Path), Mesh))
+		{
+			continue;
+		}
+
+		const FBoxSphereBounds Bounds = Mesh->GetBounds();
+		const double MeshNoseX = Bounds.Origin.X + Bounds.BoxExtent.X;
+		const double MeshTailX = Bounds.Origin.X - Bounds.BoxExtent.X;
+
+		// A centimetre either way: both come from the same measurement, so anything larger is
+		// a pipeline that was not re-run rather than a rounding difference.
+		TestEqual(*FString::Printf(TEXT("%s: the authored nose matches the mesh"), Path),
+			Type->Footprint.NoseX, MeshNoseX, 1.0);
+		TestEqual(*FString::Printf(TEXT("%s: the authored tail matches the mesh"), Path),
+			Type->Footprint.TailX, MeshTailX, 1.0);
+
+		// AND THE ORIGIN IS THE NOSE GEAR, which is what makes the steered axle zero. A mesh
+		// re-exported about some other point would pass both checks above and still steer
+		// from the wrong end of the aeroplane.
+		TestEqual(*FString::Printf(TEXT("%s: the steered axle is the origin, per the class "
+			"convention"), Path), Type->SteerAxleX, 0.0, 1.0);
+		TestTrue(*FString::Printf(TEXT("%s: its mains are measured, aft of that origin"), Path),
+			Type->FixedAxleX < -100.0);
+
+		// AND THE WHEEL THE ANIMATION SPINS IS THE WHEEL THE MODEL CARRIES. The radius is
+		// measured by the authoring script and copied into the Anim Blueprint's defaults, so
+		// it is the one figure in this pipeline that lives in two assets - and a type left on
+		// UAircraftType's 21 uu default turns its wheels at whatever rate that implies. 21 is
+		// the Meridian's, and no measured type has shared it yet.
+		TestTrue(*FString::Printf(TEXT("%s: the main wheel radius was measured, not left at "
+			"the Meridian's default"), Path),
+			FMath::Abs(Type->MainWheelRadius - 21.0) > 1.0);
 	}
-
-	USkeletalMesh* Mesh = Type->Mesh.LoadSynchronous();
-	if (!TestNotNull(TEXT("and the mesh it names loads"), Mesh))
-	{
-		return false;
-	}
-
-	const FBoxSphereBounds Bounds = Mesh->GetBounds();
-	const double MeshNoseX = Bounds.Origin.X + Bounds.BoxExtent.X;
-	const double MeshTailX = Bounds.Origin.X - Bounds.BoxExtent.X;
-
-	// A centimetre either way: both come from the same measurement, so anything larger is a
-	// pipeline that was not re-run rather than a rounding difference.
-	TestEqual(TEXT("the authored nose matches the mesh"), Type->Footprint.NoseX, MeshNoseX, 1.0);
-	TestEqual(TEXT("the authored tail matches the mesh"), Type->Footprint.TailX, MeshTailX, 1.0);
-
-	// AND THE ORIGIN IS THE NOSE GEAR, which is what makes the steered axle zero. A mesh
-	// re-exported about some other point would pass both checks above and still steer from
-	// the wrong end of the aeroplane.
-	TestEqual(TEXT("plane2's steered axle is its origin, per the class convention"),
-		Type->SteerAxleX, 0.0, 1.0);
-	TestTrue(TEXT("and its mains are measured, aft of that origin"), Type->FixedAxleX < -100.0);
 
 	return true;
 }
@@ -176,6 +200,8 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Twin Otter beta-ranges off a stand") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
 		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
 		  TEXT("an A320 is what forces the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,

@@ -155,6 +155,49 @@ def axle_centres_uu(doc, front_nodes, rear_nodes):
     return sum(front) / float(len(front)), sum(rear) / float(len(rear))
 
 
+def part_bounds_uu(doc):
+    """Every named mesh node's extent in UE uu: {stem: (min, max)} over X, Y, Z.
+
+    glTF is Y-up with the span on z for these exports; UE takes x->X, z->Y, y->Z, and a
+    glTF metre is 100 uu. Written out rather than hidden in a matrix because getting it
+    wrong produces a plausible-looking aeroplane with its wings where its fuselage should be.
+
+    PER-PART, which is the whole reason this exists beside source_extents_m: the wing's
+    mid-chord and the stabiliser's span are questions about ONE object, and a USkeletalMesh
+    gives only the bounds of everything at once. Keyed by STEM so Blender's '.001' suffixes -
+    which the exporter adds and removes as objects are duplicated - do not decide whether a
+    part is found.
+
+    HERE RATHER THAN IN EACH build_*_type.py, since 2026-09-18: build_plane2_type.py carried
+    this as a private copy, and plane3 authoring would have made a second one. Two readers of
+    the same file format that disagree about the axis swap is a bug nobody would see until an
+    aircraft's envelope pointed the wrong way.
+    """
+    accessors = doc.get("accessors", [])
+    meshes = doc.get("meshes", [])
+    out = {}
+    for node in doc.get("nodes", []):
+        index = node.get("mesh")
+        if index is None or index >= len(meshes):
+            continue
+        low = None
+        high = None
+        for primitive in meshes[index].get("primitives", []):
+            at = primitive.get("attributes", {}).get("POSITION")
+            if at is None or at >= len(accessors):
+                continue
+            lo = accessors[at]["min"]
+            hi = accessors[at]["max"]
+            low = lo if low is None else [min(low[k], lo[k]) for k in range(3)]
+            high = hi if high is None else [max(high[k], hi[k]) for k in range(3)]
+        if low is None:
+            continue
+        out[_stem(node.get("name", "?"))] = (
+            [low[0] * 100.0, low[2] * 100.0, low[1] * 100.0],
+            [high[0] * 100.0, high[2] * 100.0, high[1] * 100.0])
+    return out
+
+
 def source_extents_m(doc):
     """(size, min) in glTF metres, from the POSITION accessors alone.
 
@@ -286,6 +329,72 @@ def build_pipeline_asset(spec):
     unreal.EditorAssetLibrary.save_asset(spec.pipeline_path, only_if_is_dirty=False)
     say("pipeline ready at %s" % spec.pipeline_path)
     return spec.pipeline_path
+
+
+def reimport_pipeline(path):
+    """A pipeline asset ON DISK with bUpdateSkeletonReferencePose on. Returns `path`, or None.
+
+    THE SKELETON IS A SEPARATE ASSET FROM THE MESH AND DOES NOT FOLLOW IT. Interchange's
+    bUpdateSkeletonReferencePose defaults to FALSE - "the reference pose of the mesh is always
+    updated", says the engine's own tooltip, and the Skeleton's is not. Every reimport this
+    project ran before 2026-09-19 therefore updated the geometry and left the joints where
+    they were: SK_Plane2 carried a main-gear hub at Z 68.60 against a tyre measuring 39.05 in
+    radius, through a re-proportion, an export and three reimports, and nothing said so.
+
+    ON DISK because Interchange takes pipelines only through OverridePipelines, an array of
+    SOFT OBJECT PATHS - a live pipeline object handed to the task is accepted and then
+    ignored. build_pipeline_asset records that trap at length; this is the same trap.
+
+    HERE RATHER THAN IN EACH reimport_*.py. Two scripts needed it within an hour of each
+    other, and a flag that defaults to the wrong thing is exactly the kind that gets fixed in
+    one copy and left in the other.
+
+    The combine and subfolder settings MATCH build_pipeline_asset's, deliberately: a reimport
+    that disagreed with the original import about how the skinned meshes are gathered would
+    split the asset into one per part and take every reference with it.
+    """
+    directory, name = path.rsplit("/", 1)
+    pipeline = None
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        pipeline = unreal.EditorAssetLibrary.load_asset(path)
+    if pipeline is None:
+        pipeline = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
+            name, directory, unreal.InterchangeGenericAssetsPipeline, None)
+    if pipeline is None:
+        fail("could not create the reimport pipeline at %s" % path)
+        return None
+
+    mesh_pipeline = pipeline.get_editor_property("mesh_pipeline")
+    mesh_pipeline.set_editor_property(
+        "combine_skeletal_meshes_behavior",
+        unreal.InterchangeCombineSkeletalMeshesBehavior.BY_SKELETON)
+    mesh_pipeline.set_editor_property("import_static_meshes", False)
+    mesh_pipeline.set_editor_property("import_skeletal_meshes", True)
+
+    # THE WHOLE REASON THIS PIPELINE EXISTS. Off by default, and off is why the joints were
+    # stale through every reimport before this.
+    mesh_pipeline.set_editor_property("update_skeleton_reference_pose", True)
+
+    # READ BACK BEFORE USING IT. A property name that does not exist raises, but one that
+    # exists and is ignored would not - and this codebase has been bitten by exactly that.
+    if not mesh_pipeline.get_editor_property("update_skeleton_reference_pose"):
+        fail("update_skeleton_reference_pose would not stay set; the joints would not move")
+        return None
+
+    pipeline.set_editor_property("use_source_name_for_asset", False)
+    pipeline.set_editor_property("scene_name_sub_folder", False)
+    pipeline.set_editor_property("asset_type_sub_folders", True)
+    pipeline.set_editor_property("import_offset_rotation", unreal.Rotator(0.0, 0.0, 0.0))
+
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    say("pipeline ready at %s (update_skeleton_reference_pose = True)" % path)
+    return path
+
+
+def drop_reimport_pipeline(path):
+    """Tooling, not content - import_plane2.py's phrase and its habit."""
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        unreal.EditorAssetLibrary.delete_asset(path)
 
 
 def import_mesh(spec, pipeline_path):

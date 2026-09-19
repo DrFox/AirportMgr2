@@ -41,6 +41,11 @@ LOOKS = {
         "/Game/Aircraft/Plane2/ABP_Plane2",
         "DHC6",
     ),
+    "/Game/Entities/DA_Aircraft_Plane3": (
+        "/Game/Aircraft/Plane3/SK_Plane3",
+        "/Game/Aircraft/Plane3/ABP_Plane3",
+        "DH8D",
+    ),
 }
 
 

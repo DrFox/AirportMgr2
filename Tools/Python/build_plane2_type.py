@@ -18,10 +18,16 @@ Meridian's 21 uu. A Twin Otter wheel measures 68.6 uu, so an unset ABP spins the
 over three times the right rate against ground speed - which reads as an aircraft skating
 rather than rolling. Both are set here, from the one measurement.
 """
-import json
-import struct
+import os
+import sys
 
 import unreal
+
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py
+# for the full note. Put it on before importing the shared reader.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_import import part_bounds_uu, read_gltf  # noqa: E402
 
 TYPE_PATH = "/Game/Entities"
 TYPE_NAME = "DA_Aircraft_Plane2"
@@ -49,58 +55,20 @@ MESH = "/Game/Aircraft/Plane2/SK_Plane2"
 SOURCE = r"C:\repos\AirportMgr2Models\plane2\export\plane2.glb"
 
 
-def part_bounds():
-    """Every named mesh node's extent in UE uu: {name: (min, max)} over X, Y, Z.
-
-    glTF is Y-up with the span on z for this export; UE takes x->X, z->Y, y->Z. A glTF metre
-    is 100 uu. Written out rather than hidden in a matrix because getting it wrong produces a
-    plausible-looking aeroplane with its wings where its fuselage should be.
-    """
-    with open(SOURCE, "rb") as handle:
-        handle.read(12)
-        length = struct.unpack("<I4s", handle.read(8))[0]
-        doc = json.loads(handle.read(length).decode("utf-8"))
-
-    accessors = doc.get("accessors", [])
-    meshes = doc.get("meshes", [])
-    out = {}
-    for node in doc.get("nodes", []):
-        index = node.get("mesh")
-        if index is None or index >= len(meshes):
-            continue
-        low = None
-        high = None
-        for primitive in meshes[index].get("primitives", []):
-            at = primitive.get("attributes", {}).get("POSITION")
-            if at is None or at >= len(accessors):
-                continue
-            lo = accessors[at]["min"]
-            hi = accessors[at]["max"]
-            low = lo if low is None else [min(low[k], lo[k]) for k in range(3)]
-            high = hi if high is None else [max(high[k], hi[k]) for k in range(3)]
-        if low is None:
-            continue
-        # x->X, z->Y, y->Z, metres to uu.
-        out[node.get("name", "?")] = (
-            [low[0] * 100.0, low[2] * 100.0, low[1] * 100.0],
-            [high[0] * 100.0, high[2] * 100.0, high[1] * 100.0])
-    return out
-
-
 def measure():
     """The footprint and the two scalars, off the export's own parts.
 
     Raises rather than guessing: a renamed part is a change to look at, not a figure to
-    silently default. The stem match tolerates Blender's '.001' suffixes, which the exporter
-    adds and removes as objects are duplicated.
+    silently default. part_bounds_uu keys by stem, so Blender's '.001' suffixes - which the
+    exporter adds and removes as objects are duplicated - do not decide whether a part is
+    found.
     """
-    parts = part_bounds()
+    parts = part_bounds_uu(read_gltf(SOURCE))
 
     def find(stem):
-        for name, extent in parts.items():
-            if name.split(".")[0] == stem:
-                return extent
-        raise KeyError("no part named %s in %s - the rig was renamed" % (stem, SOURCE))
+        if stem not in parts:
+            raise KeyError("no part named %s in %s - the rig was renamed" % (stem, SOURCE))
+        return parts[stem]
 
     every = list(parts.values())
     nose_x = max(high[0] for _, high in every)
