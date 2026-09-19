@@ -37,6 +37,7 @@ ROWS = [
         ("/Game/Aircraft/PiperMeridian/SK_PiperMeridian", "Piper Meridian"),
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
+        ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
     ]),
     ("Ground equipment", 500.0, [
         ("/Game/Vehicles/GPU1/SK_GPU1", "GPU1 (towed)"),

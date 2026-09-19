@@ -7,6 +7,10 @@ fails with a sharing violation, and some of the calls here report success while 
 nothing. Every result line is prefixed MARKER: so it can be grepped out of
 Saved/Logs/AirportMgr.log, because print() goes to the log rather than stdout.
 
+A MODEL ALREADY IN CONTENT IS SKIPPED, which is what the first line above has always
+claimed and what nothing enforced until 2026-09-19. See already_imported() for what a
+re-run used to do instead.
+
 THIS FILE IS THE TABLE AND NOTHING ELSE. The mechanism - the Interchange pipeline-on-disk
 dance, the rename-and-move-up, the bounds/rig/material checks - is in airside_import.py, so
 that adding a fifth model is a Spec and not a fourth copy of a 450-line script. Read that
@@ -83,6 +87,34 @@ SPECS = [
              "figures. Origin on the NOSE gear, 14.045 m forward of the mains.",
     ),
     Spec(
+        key="plane4",
+        source=MODELS + r"\plane4\export\plane4.glb",
+        mesh_dir="/Game/Aircraft/Plane4",
+        skel_name="SK_Plane4",
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # THE SAME THREE NODE NAMES AS plane3 AND THAT IS NOT A COINCIDENCE.
+        # plane4/scripts/build_export.py records renaming mainwheel_L/R -> wheel_L/wheel_R on
+        # 2026-09-19 "to match their bones, which is plane2's and plane3's convention"; the
+        # LEGS keep nosegear/maingear_L/maingear_R, because a leg's centre is not an axle and
+        # these two lists want the WHEEL meshes. On THIS export the two happen to agree to
+        # the millimetre - both boxes centre on x 0.000 and -15.600 - so naming the legs
+        # would measure correctly today and silently stop the day a strut is raked or a
+        # fairing joins the leg mesh. Measured off the thing the number is about.
+        origin_on="front",
+        # NOSE GEAR, the convention UAircraftType documents and plane3's export was changed
+        # to meet. build_export.py's UE_ORIGIN is (0, -15.66, 0) in Blender space - the
+        # nosewheel_steer head, i.e. the nose-gear contact patch - so this is declared at the
+        # source rather than corrected here.
+        note="Boeing 737-800W. 39.3 m long, 35.8 m span over the winglets, 12.6 m to the fin "
+             "tip - the real aircraft's own figures. Origin on the NOSE gear; the main axle "
+             "is at -1560.0 uu, which is the figure FAirframe::FixedAxleX wants when this "
+             "type is authored. Twelve joints: the gear retracts and the nose bay doors "
+             "hinge, but nothing in the engine drives either yet.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",
@@ -130,9 +162,51 @@ SPECS = [
 ]
 
 
+def content_file(package):
+    """The .uasset a /Game/ package path names, as an absolute file on disk."""
+    root = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_content_dir())
+    return os.path.join(root, package[len("/Game/"):].replace("/", os.sep) + ".uasset")
+
+
+def already_imported(spec):
+    """True when this model's mesh is already in Content, so this run must leave it alone.
+
+    THE FIRST LINE OF THIS FILE HAS ALWAYS SAID "a current export AND NO ASSETS YET", and
+    until now nothing enforced it. import_one() begins by CLEARING its target folder, and
+    clear_previous() cannot clear a folder that anything outside it references - M_ModelYard
+    places every one of these meshes. So on 2026-09-18 a re-run half-imported all four rows
+    at once: the delete failed, the registry cheerfully reported "cleared 3 asset(s)" while
+    the .uasset sat on disk, the rename then collided, and what was left was the OLD mesh
+    under the real name plus a stray under SkeletalMeshes/ with the Skeleton and PhysicsAsset
+    renamed over the originals. Nothing about that reads as a failed delete.
+
+    Re-importing is therefore the separate, deliberate act reimport_plane2.py and
+    reimport_plane3.py exist for: UInterchangeManager.reimport_asset updates the UObject in
+    place, so the package path, GUID and every reference survive by construction.
+
+    ASKED OF THE FILE AS WELL AS THE REGISTRY, and in that order of trust. The registry is
+    the thing that lied about the delete; answering this question from it alone would consult
+    the same source that got the last one wrong.
+    """
+    package = "%s/%s" % (spec.mesh_dir, spec.skel_name)
+    if os.path.isfile(content_file(package)):
+        return True
+    return unreal.EditorAssetLibrary.does_asset_exist(package)
+
+
 def main():
     results = []
     for spec in SPECS:
+        if already_imported(spec):
+            # A SKIP IS NOT A PASS AND NOT A FAIL, and the roll-up says so in its own word.
+            # Folding it into PASS would make "all 5 model(s) imported" true of a run that
+            # imported one.
+            say("%s: SKIP - %s/%s is already in Content. Re-import through a reimport_*.py, "
+                "which updates the asset in place; a clear-and-import from here would strand "
+                "every reference M_ModelYard holds."
+                % (spec.key, spec.mesh_dir, spec.skel_name))
+            results.append((spec.key, None))
+            continue
         results.append((spec.key, import_one(spec)))
 
     # A ROLL-UP, because four imports produce several hundred log lines and "did it work" is
@@ -141,13 +215,17 @@ def main():
     # made before Run-AirsideTests.ps1 started diffing started against completed.
     say("=" * 78)
     for key, ok in results:
-        say("%-10s %s" % (key, "PASS" if ok else "FAIL"))
-    bad = [key for key, ok in results if not ok]
+        say("%-10s %s" % (key, "SKIP" if ok is None else "PASS" if ok else "FAIL"))
+    bad = [key for key, ok in results if ok is False]
+    ran = [key for key, ok in results if ok is not None]
     if bad:
         unreal.log_error("MARKER: FAIL %d of %d model(s) had failing checks: %s"
-                         % (len(bad), len(results), ", ".join(bad)))
+                         % (len(bad), len(ran), ", ".join(bad)))
+    elif ran:
+        say("all %d model(s) imported and passed every check (%d already in Content)"
+            % (len(ran), len(results) - len(ran)))
     else:
-        say("all %d model(s) imported and passed every check" % len(results))
+        say("nothing to do - every model in the table is already in Content")
     # An import regenerates per-asset materials and reassigns every slot, silently
     # undoing the shared set. Rebuilt here so no import can leave it undone.
     rebuild_fleet_materials()

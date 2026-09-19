@@ -75,3 +75,6 @@ UpgradeLog*.htm
 samples/
 
 .superpowers/
+
+# Bytecode from the editor's Python importing airside_import.py - build detritus
+Tools/Python/__pycache__/
