@@ -68,6 +68,87 @@ void FRoadAgent::AdvanceEngine(double DeltaSeconds)
 	EngineRPM = FMath::FInterpConstantTo(EngineRPM, Target, DeltaSeconds, Rate);
 }
 
+void FRoadAgent::AdvanceGear(double DeltaSeconds)
+{
+	if (!Airframe.Gear.IsSet())
+	{
+		// FIXED GEAR, permanently - see FGearPerformance, where zero travel means a fact
+		// about the aeroplane rather than a missing measurement. Asserted rather than left
+		// alone because an FRoadAgent is reused across dispatches and could otherwise carry
+		// a retracted phase into an airframe that has no way of lowering it again.
+		GearPhase = EGearPhase::Down;
+		GearCycleSeconds = 0.0;
+		return;
+	}
+
+	// THE COMMAND - what the pilot has called for, not where the gear has got to. The two are
+	// separate for the same reason FAgentMotion::bEngineRunning and EngineRPM are: between a
+	// command and its completion there are nine seconds in which they disagree.
+	//
+	// READ BY PHASE, NOT BY ALTITUDE ALONE. ExtendBelowHeight sits ABOVE RetractAboveHeight,
+	// so an arrival descending through the retract height satisfies "airborne and above it"
+	// word for word and would raise its gear on short final. The model already knows which
+	// way the aeroplane is going; asking the altitude to tell us would re-derive it.
+	bool bWantUp = false;
+	if (Phase == EAgentPhase::Departing)
+	{
+		// bAirborne IS THE PRECONDITION AND HEIGHT IS THE CUE. Airside.Present.AgentMotion
+		// case 4 guards the half that matters most - a rotation is not airborne - so nothing
+		// here can start moving while the mains are still carrying the aeroplane.
+		bWantUp = LastMotion.bAirborne
+			&& LastMotion.Altitude >= Airframe.Gear.RetractAboveHeight;
+	}
+	else if (Phase == EAgentPhase::Arriving)
+	{
+		// LATENT AT TODAY'S FIGURES: an arrival joins final at FinalAltitude, 2000 uu, well
+		// below ExtendBelowHeight, so this is false from the first frame and every arrival is
+		// born down and locked. It starts mattering the day the approach is joined higher.
+		bWantUp = LastMotion.Altitude > Airframe.Gear.ExtendBelowHeight;
+	}
+	// Every other phase is on the ground, where the gear is down by definition.
+
+	const bool bMoving = GearPhase == EGearPhase::Raising || GearPhase == EGearPhase::Lowering;
+
+	// A CYCLE IN PROGRESS IS NOT INTERRUPTED. Real gear can be reversed mid-travel; nothing
+	// in this game commands that, and honouring it would mean carrying the position across a
+	// direction change rather than restarting a timer at zero. Left out deliberately.
+	if (!bMoving && bWantUp != (GearPhase == EGearPhase::Up))
+	{
+		GearPhase = bWantUp ? EGearPhase::Raising : EGearPhase::Lowering;
+		GearCycleSeconds = 0.0;
+		return;
+	}
+
+	if (!bMoving)
+	{
+		return;
+	}
+
+	GearCycleSeconds += DeltaSeconds;
+	if (GearCycleSeconds >= Airframe.Gear.CycleSeconds())
+	{
+		// THE PHASE SAYS WHERE IT IS AT REST, not the timer. A timer left running past the
+		// end would answer correctly right up until anything reset it.
+		GearPhase = GearPhase == EGearPhase::Raising ? EGearPhase::Up : EGearPhase::Down;
+		GearCycleSeconds = 0.0;
+	}
+}
+
+void FRoadAgent::GearFractions(double& OutGearDown, double& OutDoorOpen) const
+{
+	// THE RESTING POSES ARE ANSWERED HERE AND NOT BY THE EVALUATOR, because a resting pose is
+	// not a point in a cycle - a fixed-gear airframe has no cycle to sample at all.
+	switch (GearPhase)
+	{
+	case EGearPhase::Down: OutGearDown = 1.0; OutDoorOpen = 0.0; return;
+	case EGearPhase::Up:   OutGearDown = 0.0; OutDoorOpen = 0.0; return;
+	default: break;
+	}
+
+	Airframe.Gear.FractionsAt(GearCycleSeconds, GearPhase == EGearPhase::Raising,
+		OutGearDown, OutDoorOpen);
+}
+
 FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	double Altitude, double PitchDegrees) const
 {
@@ -253,6 +334,10 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 	// FIRST, AND WHATEVER PHASE IS DRIVING. An engine spooled only inside one phase's branch
 	// would freeze whenever the aircraft was doing something else - which is most of the time.
 	AdvanceEngine(DeltaSeconds);
+
+	// AND THE GEAR, for the same reason and on the same terms - see AdvanceGear. A cycle that
+	// only ran inside one phase's branch would freeze the doors half open at a handover.
+	AdvanceGear(DeltaSeconds);
 
 	FVector2D At = LastMotion.Position;
 	double Heading = LastMotion.Heading;

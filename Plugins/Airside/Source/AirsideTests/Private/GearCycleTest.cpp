@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadAgent.h"
 #include "Model/RoadEntity.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -120,6 +121,121 @@ bool FGearWithoutDoorsStillTravelsTest::RunTest(const FString& Parameters)
 	// makes the whole aeroplane vanish.
 	Gear.FractionsAt(0.0, true, GearDown, DoorOpen);
 	TestEqual(TEXT("and the first frame is a number, not a NaN"), GearDown, 1.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGearRetractsAtHeightNotLiftOffTest,
+	"Airside.Model.GearRetractsAtHeightNotLiftOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGearRetractsAtHeightNotLiftOffTest::RunTest(const FString& Parameters)
+{
+	// THE CORRECTION THIS WHOLE FEATURE TURNS ON. Retraction is a pilot command given a few
+	// hundred feet up, not something that happens when the wheels leave the tarmac -
+	// FAgentMotion::bAirborne's own comment ("Stage 2's gear retraction hangs on this")
+	// predicted otherwise and is what this test exists to contradict.
+	FRoadAgent Agent;
+	Agent.Airframe.Gear.TravelSeconds = 7.0;
+	Agent.Airframe.Gear.DoorSeconds = 1.0;
+	Agent.Airframe.Gear.RetractAboveHeight = 9000.0;
+	Agent.Phase = EAgentPhase::Departing;
+
+	// AIRBORNE BUT LOW. The rotation is already guarded by Airside.Present.AgentMotion case
+	// 4, which asserts a rotating aircraft is not airborne at all; this is the next question
+	// along - airborne, climbing, and still below the height the gear comes up at.
+	Agent.LastMotion.bAirborne = true;
+	Agent.LastMotion.Altitude = 3000.0;
+	Agent.AdvanceGear(0.5);
+	TestEqual(TEXT("airborne at 30 m the gear has not started up"),
+		Agent.GearPhase, EGearPhase::Down);
+
+	// PAST THE CUE. Nothing about the aircraft has changed except its height.
+	Agent.LastMotion.Altitude = 9500.0;
+	Agent.AdvanceGear(0.5);
+	TestEqual(TEXT("past the retract height the cycle begins"),
+		Agent.GearPhase, EGearPhase::Raising);
+
+	// AND IT ARRIVES. Flown out over the whole 9 s cycle in 0.5 s steps, with one spare.
+	for (int32 Step = 0; Step < 20; ++Step)
+	{
+		Agent.AdvanceGear(0.5);
+	}
+	TestEqual(TEXT("and the gear ends up stowed"), Agent.GearPhase, EGearPhase::Up);
+
+	double GearDown = -1.0;
+	double DoorOpen = -1.0;
+	Agent.GearFractions(GearDown, DoorOpen);
+	TestEqual(TEXT("reporting nothing left down"), GearDown, 0.0);
+	TestEqual(TEXT("behind a shut bay"), DoorOpen, 0.0);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGearDescendingArrivalDoesNotRetractTest,
+	"Airside.Model.GearDescendingArrivalDoesNotRetract",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGearDescendingArrivalDoesNotRetractTest::RunTest(const FString& Parameters)
+{
+	// THE DEFECT THE TWO HEIGHTS INVITE. ExtendBelowHeight (15000) sits ABOVE
+	// RetractAboveHeight (9000), so an arrival descending through 9000 uu satisfies
+	// "airborne and above the retract height" word for word. If altitude alone decided, a
+	// landing aeroplane would raise its gear on short final.
+	FRoadAgent Agent;
+	Agent.Airframe.Gear.TravelSeconds = 7.0;
+	Agent.Airframe.Gear.DoorSeconds = 1.0;
+	Agent.Airframe.Gear.RetractAboveHeight = 9000.0;
+	Agent.Airframe.Gear.ExtendBelowHeight = 15000.0;
+
+	Agent.Phase = EAgentPhase::Arriving;
+	Agent.LastMotion.bAirborne = true;
+	Agent.LastMotion.Altitude = 9500.0;
+
+	Agent.AdvanceGear(0.5);
+	TestEqual(TEXT("an arrival descending through the retract height keeps its gear down"),
+		Agent.GearPhase, EGearPhase::Down);
+
+	// AND THE SAME HEIGHT ON A DEPARTURE DOES RETRACT, which is what proves the phase is
+	// what discriminates rather than something incidental about the arrival.
+	Agent.Phase = EAgentPhase::Departing;
+	Agent.AdvanceGear(0.5);
+	TestEqual(TEXT("while a departure at that exact height raises it"),
+		Agent.GearPhase, EGearPhase::Raising);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGearFixedWhenUnauthoredTest,
+	"Airside.Model.GearFixedWhenUnauthored",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGearFixedWhenUnauthoredTest::RunTest(const FString& Parameters)
+{
+	// plane2's Twin Otter, and every ground vehicle. An unauthored FGearPerformance is a
+	// statement that the gear is FIXED, not that nobody has measured it - so it must stay
+	// down through a whole climb rather than snapping up at the cue height.
+	FRoadAgent Agent;
+	Agent.Phase = EAgentPhase::Departing;
+	Agent.LastMotion.bAirborne = true;
+
+	for (int32 Step = 0; Step < 60; ++Step)
+	{
+		// Climbing steadily past every height in the spec, including ClearAltitude.
+		Agent.LastMotion.Altitude = Step * 500.0;
+		Agent.AdvanceGear(0.5);
+	}
+
+	TestEqual(TEXT("fixed gear never leaves the down phase"), Agent.GearPhase, EGearPhase::Down);
+
+	double GearDown = -1.0;
+	double DoorOpen = -1.0;
+	Agent.GearFractions(GearDown, DoorOpen);
+	TestEqual(TEXT("and reports itself fully down for the whole flight"), GearDown, 1.0);
+	TestEqual(TEXT("with no door it does not have"), DoorOpen, 0.0);
 
 	return true;
 }
