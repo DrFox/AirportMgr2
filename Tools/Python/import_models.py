@@ -92,8 +92,8 @@ SPECS = [
         # the same day added the livery and the flat base colours - see reimport_plane1.py,
         # which is what applies that one, because by then the asset existed and this script
         # is a FIRST-import tool.
-        note="Cessna 172S Skyhawk. 8.233 m long, 11.00 m span, 2.72 m to the fin tip - the "
-             "real aircraft's own figures to within 5 cm. Origin on the NOSE gear; the main "
+        note="Cessna 172S Skyhawk. 8.233 m long, 11.00 m span, 2.659 m to the fin tip - the "
+             "real aircraft's own figures to within 6 cm. Origin on the NOSE gear; the main "
              "axle is at -163.0 uu, which is the figure FAirframe::FixedAxleX wants when "
              "this type is authored. Six joints, and the gear is FIXED - a 172 has nothing "
              "to retract, so this is the first modelled type since plane2 with no gear "

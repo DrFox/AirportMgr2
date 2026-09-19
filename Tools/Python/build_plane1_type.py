@@ -33,10 +33,17 @@ rather than assume will stay true. Cessna 172S Skyhawk SP against this export:
 
     length     8.28 m      measured 8.233
     span      11.00 m      measured 11.000
-    height     2.72 m      measured 2.720
+    height     2.72 m      measured 2.659   (see below)
     wheelbase  1.63 m      measured 1.630
     track      2.51 m      measured 2.540
     propeller  1.905 m     measured 1.919   (76 in McCauley, 2 blades)
+
+HEIGHT READ 2.720 UNTIL 2026-09-19 AND THE CHANGE IS NOT A REGRESSION. The highest vertex in
+the export was the tail beacon, at 272.0 uu; the FIN tip is at 265.9. The beacon and the two
+other light meshes were removed from the export, so the figure now measures the aeroplane
+rather than a lamp on top of it - which makes the 2.72 m agreement it used to show a
+coincidence worth not having trusted. Nothing reads height: the footprint carries nose_x,
+tail_x and the two spans, and the aerodrome code letter is decided by span and gear track.
 
 The two wheel RADII are the loose ones - 0.198 m measured against a 6.00-6's 0.222, and
 0.169 against a 5.00-5's 0.180 - and they are left alone. They are the figures the animation
