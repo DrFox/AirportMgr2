@@ -1,4 +1,4 @@
-"""Imports the degraded-concrete PBR set and authors M_ApronConcrete. Run headless:
+"""Authors M_ApronConcrete. Run headless:
 
   UnrealEditor-Cmd.exe <project> -run=pythonscript -script=<this file> -unattended -nosplash -nopause
 
@@ -10,214 +10,180 @@ aprons borrowed M_RoadSurface a new one was very hard to tell from the taxiway l
 and from the ground under it, and "hard to tell from the ground" is indistinguishable from
 not rendering at all.
 
-One deliberate departure from M_RoadSurface: NO UV1. That material reads UV1 for its
-centreline, and an apron's UV1 is zero at every vertex because lateral offset and distance
-along a centreline mean nothing for a polygon. Sampling it would paint the whole apron as
-one enormous centre marking - not a marking, a bug that happens to be visible.
+RESTYLED 2026-09-19, THE SAME ROUND AS M_RoadSurface AND FOR THE SAME REASON. This script
+used to import a four-map `degraded-concrete` PBR set from a vendor directory outside the
+repository. Once the taxiway beside it went flat and stylised, the apron stopped merely
+being photoreal and started being WRONG - a brown pebbled gravel pad butted against clean
+grey tarmac, visibly from another game. A surface does not get to opt out of the art
+direction because it has its own graph.
+
+It is now the same three-part structure as the road: a flat palette colour, a paler second
+tone in low-frequency patches, and a fine value-only grain. Warm concrete `#9C9B91` against
+the taxiway's `#454D50`, which is the contrast that does the work the old brown was doing
+badly.
+
+ONE DELIBERATE DEPARTURE FROM M_RoadSurface SURVIVES: NO UV1. That material reads UV1 for
+its centreline, and an apron's UV1 is zero at every vertex because lateral offset and
+distance along a centreline mean nothing for a polygon. Sampling it would paint the whole
+apron as one enormous centre marking - not a marking, a bug that happens to be visible.
+
+TWO FACTS KEPT FROM THE IMPORT MACHINERY, because they apply to any texture this material
+samples:
+
+  - Sampler type MUST agree with the texture's compression setting. GetSamplerTypeForTexture
+    maps TC_Masks to SAMPLERTYPE_Masks and TC_Grayscale-without-sRGB to
+    SAMPLERTYPE_LinearGrayscale, and VerifySamplerType rejects any mismatch outright: the
+    material fails to compile and every surface using it falls back to the engine default.
+  - The normal map is gone, so the tangent-frame hazard it carried is gone with it. For the
+    record, because it will come up again if anything here ever samples one: the component
+    leaves tangents ExternallyProvided and falls back to a frame derived from the normal
+    alone, which on a flat +Z surface is a valid constant basis. Under AutoCalculated it
+    would instead derive the frame from the UV layers, hit this mesh's degenerate UV1, and
+    produce NaN tangents the GPU silently discards.
+
+The old concrete textures stay in /Game/Textures, unreferenced. Headless deletion reports
+success while leaving the asset on disk, so removing them is a separate, verified step.
 """
 import os
+import sys
+
 import unreal
 
-SOURCE = r"C:\repos\models\materials\concrete-bl\degraded-concrete-bl"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import airside_palette as palette
+import airside_matnodes as nodes
 
-TEX_DIR = "/Game/Textures"
 MAT_DIR = "/Game/Materials"
 MAT_NAME = "M_ApronConcrete"
 
-# name -> (file, is_srgb, compression)
-#
-# Height and metallic are deliberately not imported. The surface is flat and viewed from
-# above so there is no parallax worth paying for, and concrete is a dielectric - a metallic
-# map of solid black is a texture sample that can only ever return the constant below it.
-MAPS = {
-    "T_Concrete_Albedo": (
-        "degraded-concrete_albedo.png", True, unreal.TextureCompressionSettings.TC_DEFAULT),
-    "T_Concrete_Normal": (
-        "degraded-concrete_normal-ogl.png", False, unreal.TextureCompressionSettings.TC_NORMALMAP),
-    # TC_GRAYSCALE with sRGB off, NOT TC_MASKS. GetSamplerTypeForTexture maps TC_Masks to
-    # SAMPLERTYPE_Masks and TC_Grayscale-without-sRGB to SAMPLERTYPE_LinearGrayscale, and
-    # VerifySamplerType rejects any mismatch outright: the material then fails to compile
-    # and every surface using it silently falls back to the engine default.
-    "T_Concrete_Roughness": (
-        "degraded-concrete_roughness.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
-    "T_Concrete_AO": (
-        "degraded-concrete_ao.png", False, unreal.TextureCompressionSettings.TC_GRAYSCALE),
-}
+NOISE_TEXTURE = "/Engine/EngineMaterials/Good64x64TilingNoiseHighFreq"
+
+# Warm concrete against the taxiway's cool asphalt grey. The pale tone is the palette's
+# concrete highlight, so wear on an apron reads as sun-bleached slab rather than as dirt -
+# concrete weathers LIGHTER, which is the opposite of what asphalt does and the reason the
+# two surfaces do not share a wear colour.
+BASE_COLOUR = palette.APRON_CONCRETE
+WEAR_COLOUR = palette.CONCRETE_HIGHLIGHT
+
+# Larger than the road's 40 m: an apron is a wide open pad rather than a ribbon, so its
+# variation can afford to be read across, and slab-scale patches would read as damage.
+WEAR_SIZE = 70.0
+WEAR_LEVELS = 3
+WEAR_CONTRAST_LO = 0.32
+WEAR_CONTRAST_HI = 0.68
+
+GRAIN_SIZE = 2.0
+GRAIN_AMOUNT = 0.07
+
+# Slightly smoother than asphalt. Concrete is a closed surface where asphalt is an open
+# aggregate one, and the difference is visible as a broader, softer sheen.
+ROUGHNESS_BASE = 0.74
 
 
-def import_textures():
+def say(msg):
+    unreal.log("MARKER: " + str(msg))
+
+
+def fail(msg):
+    unreal.log_error("MARKER: FAIL " + str(msg))
+
+
+def build_apron_material():
     tools = unreal.AssetToolsHelpers.get_asset_tools()
-    imported = {}
-    for name, (filename, srgb, compression) in MAPS.items():
-        path = os.path.join(SOURCE, filename)
-        if not os.path.isfile(path):
-            unreal.log_error("MARKER: missing source texture %s" % path)
-            continue
-
-        task = unreal.AssetImportTask()
-        task.filename = path
-        task.destination_path = TEX_DIR
-        task.destination_name = name
-        task.automated = True
-        task.replace_existing = True
-        task.save = True
-        tools.import_asset_tasks([task])
-
-        asset = unreal.load_asset("%s/%s" % (TEX_DIR, name))
-        if asset is None:
-            unreal.log_error("MARKER: import failed for %s" % name)
-            continue
-
-        asset.set_editor_property("srgb", srgb)
-        asset.set_editor_property("compression_settings", compression)
-        if name == "T_Concrete_Normal":
-            # The vendor ships an OpenGL-convention normal map. UE expects DirectX, so the
-            # green channel has to be inverted or every lit surface reads as though it is
-            # lit from the opposite side - wrong in a way that looks entirely plausible.
-            asset.set_editor_property("flip_green_channel", True)
-
-        unreal.EditorAssetLibrary.save_asset("%s/%s" % (TEX_DIR, name))
-        imported[name] = asset
-        unreal.log("MARKER: imported %s srgb=%s" % (name, srgb))
-    return imported
-
-
-def build_apron_material(textures):
-    tools = unreal.AssetToolsHelpers.get_asset_tools()
-
     lib = unreal.MaterialEditingLibrary
     path = "%s/%s" % (MAT_DIR, MAT_NAME)
 
-    # Rebuilt IN PLACE rather than deleted and re-created.
+    # REBUILT IN PLACE, and this material is the reason the helper exists.
     #
-    # ARoadNetworkActor resolves this material by path in its constructor, so it is loaded
-    # before this script runs. delete_asset then reports success while the package stays in
-    # memory, and create_asset refuses with "already exists ... cannot ask the user as the
-    # application is running unattended" - failing the whole script after the textures have
-    # already been imported.
+    # ARoadNetworkActor resolves it by path in its constructor, so it is already in memory
+    # when this script runs. delete_asset then reports success while the package stays
+    # loaded, and create_asset refuses with "already exists ... cannot ask the user as the
+    # application is running unattended" - failing the whole script. Re-creating would be
+    # wrong even when it works: a new asset is a new object, and DA_RoadMaterials slot 1
+    # plus the actor itself would be left pointing at a deleted package.
     #
-    # Re-creating it would be wrong even if it worked: a new asset is a new object, and
-    # every reference to the old one - the actor's included - would be left pointing at a
-    # deleted package.
-    # Deleted through delete_loaded_asset, not delete_asset.
-    #
-    # ARoadNetworkActor resolves this material by path in its constructor, so it is already
-    # in memory when this script runs. delete_asset then reports success while the package
-    # stays loaded and create_asset refuses with "already exists ... cannot ask the user as
-    # the application is running unattended". Clearing the graph in place is not the answer
-    # either: delete_all_material_expressions asserts !IsRooted() on a material the CDO is
-    # holding, and takes the whole commandlet down with it.
+    # An earlier note here claimed clearing in place was impossible, because
+    # delete_all_material_expressions "asserts !IsRooted() on a material the CDO is
+    # holding". Checked against the engine on 2026-09-19 and that is not what the code
+    # does: DeleteMaterialExpression (MaterialEditingLibrary.cpp:590-612) calls
+    # MarkAsGarbage on the EXPRESSION, never on the material, and expressions are not
+    # rooted. What that function IS guilty of is deleting half a graph when called through
+    # delete_all_material_expressions - see nodes.clear_graph, which is why this goes
+    # through the helper rather than the library call.
     if unreal.EditorAssetLibrary.does_asset_exist(path):
-        existing = unreal.EditorAssetLibrary.load_asset(path)
-        if existing is not None:
-            unreal.EditorAssetLibrary.delete_loaded_asset(existing)
-        else:
-            unreal.EditorAssetLibrary.delete_asset(path)
-        unreal.log("MARKER: replaced existing %s" % path)
-
-    material = tools.create_asset(
-        MAT_NAME, MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
+        material = unreal.EditorAssetLibrary.load_asset(path)
+        nodes.clear_graph(lib, material, fail)
+        say("rebuilding %s in place" % path)
+    else:
+        material = tools.create_asset(
+            MAT_NAME, MAT_DIR, unreal.Material, unreal.MaterialFactoryNew())
     if material is None:
-        unreal.log_error(
-            "MARKER: create_asset returned None for %s - the asset is still loaded. "
-            "Delete the .uasset from disk and re-run." % path)
+        fail("no material at %s" % path)
         return None
 
-    # UV0 is world-aligned XY over the texel scale - a pure function of position - so the
-    # concrete is continuous across the join where a taxiway runs onto the apron, for the
-    # same reason the asphalt is. Design spec 6.3.
-    uv0 = lib.create_material_expression(
-        material, unreal.MaterialExpressionTextureCoordinate, -1300, 0)
-    uv0.set_editor_property("coordinate_index", 0)
+    noise_texture = unreal.EditorAssetLibrary.load_asset(NOISE_TEXTURE)
+    if noise_texture is None:
+        fail("grain texture missing: %s" % NOISE_TEXTURE)
+        return None
 
-    # A parameter, so the tiling can be tuned in a material instance without re-running
-    # this script or rebuilding a single triangle. Below one means larger slabs.
-    tiling = lib.create_material_expression(
-        material, unreal.MaterialExpressionScalarParameter, -1300, 200)
-    tiling.set_editor_property("parameter_name", "TileScale")
-    tiling.set_editor_property("default_value", 0.5)
+    # --- Colour and wear ---------------------------------------------------------------
+    base_colour = nodes.vector(lib, material, "BaseColour", BASE_COLOUR, -2000, -700)
+    wear_colour = nodes.vector(lib, material, "WearColour", WEAR_COLOUR, -2000, -560)
 
-    scaled = lib.create_material_expression(
-        material, unreal.MaterialExpressionMultiply, -1120, 60)
-    lib.connect_material_expressions(uv0, "", scaled, "A")
-    lib.connect_material_expressions(tiling, "", scaled, "B")
+    wear_size = nodes.scalar(lib, material, "WearSize", WEAR_SIZE, -3000, -400)
+    wear_lo = nodes.scalar(lib, material, "WearContrastLo", WEAR_CONTRAST_LO, -2000, -420)
+    wear_hi = nodes.scalar(lib, material, "WearContrastHi", WEAR_CONTRAST_HI, -2000, -340)
 
-    def sample(name, y, sampler=None):
-        texture = textures.get(name)
-        if texture is None:
-            return None
-        node = lib.create_material_expression(
-            material, unreal.MaterialExpressionTextureSample, -900, y)
-        node.set_editor_property("texture", texture)
-        if sampler is not None:
-            node.set_editor_property("sampler_type", sampler)
-        lib.connect_material_expressions(scaled, "", node, "UVs")
-        return node
+    wear_noise = nodes.gradient_noise(lib, material, wear_size, WEAR_LEVELS, -2900, -400, fail)
+    wear = nodes.contrast_window(lib, material, wear_noise, "", wear_lo, wear_hi, -1750, -400)
 
-    albedo = sample("T_Concrete_Albedo", -300)
-    normal = sample("T_Concrete_Normal", 0, unreal.MaterialSamplerType.SAMPLERTYPE_NORMAL)
-    rough = sample("T_Concrete_Roughness", 320,
-                   unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
-    ao = sample("T_Concrete_AO", 640, unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_GRAYSCALE)
+    weathered = lib.create_material_expression(
+        material, unreal.MaterialExpressionLinearInterpolate, -1500, -600)
+    lib.connect_material_expressions(base_colour, "", weathered, "A")
+    lib.connect_material_expressions(wear_colour, "", weathered, "B")
+    lib.connect_material_expressions(wear, "", weathered, "Alpha")
 
-    # --- Base colour -----------------------------------------------------------------
-    tint = lib.create_material_expression(
-        material, unreal.MaterialExpressionVectorParameter, -600, -560)
-    tint.set_editor_property("parameter_name", "ConcreteTint")
-    tint.set_editor_property("default_value", unreal.LinearColor(1.0, 1.0, 1.0, 1.0))
+    grain_size = nodes.scalar(lib, material, "GrainSize", GRAIN_SIZE, -3000, -100)
+    grain_amount = nodes.scalar(lib, material, "GrainAmount", GRAIN_AMOUNT, -3000, -20)
+    grain = nodes.value_grain(
+        lib, material, noise_texture, grain_size, grain_amount, -2900, -100)
 
-    tinted = lib.create_material_expression(
-        material, unreal.MaterialExpressionMultiply, -380, -420)
-    lib.connect_material_expressions(tint, "", tinted, "A")
-    if albedo is not None:
-        lib.connect_material_expressions(albedo, "RGB", tinted, "B")
-    else:
-        # The grain is a nicety; the colour is not. A missing texture must still leave a
-        # material that renders, or a missing asset becomes an invisible apron - the exact
-        # failure this material exists to rule out.
-        unreal.log_warning("MARKER: no concrete albedo, falling back to flat colour")
-        tinted.set_editor_property("const_b", 0.62)
+    surface = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -1300, -500)
+    lib.connect_material_expressions(weathered, "", surface, "A")
+    lib.connect_material_expressions(grain, "", surface, "B")
 
-    base = tinted
-    if ao is not None:
-        occluded = lib.create_material_expression(
-            material, unreal.MaterialExpressionMultiply, -180, -380)
-        lib.connect_material_expressions(tinted, "", occluded, "A")
-        lib.connect_material_expressions(ao, "R", occluded, "B")
-        base = occluded
+    lib.connect_material_property(surface, "", unreal.MaterialProperty.MP_BASE_COLOR)
 
-    lib.connect_material_property(base, "", unreal.MaterialProperty.MP_BASE_COLOR)
+    # --- Roughness ---------------------------------------------------------------------
+    # The same grain drives the sheen, so surface and shine agree rather than forming two
+    # independent patterns.
+    rough_base = nodes.scalar(lib, material, "RoughnessBase", ROUGHNESS_BASE, -650, 300)
+    grain_offset = lib.create_material_expression(
+        material, unreal.MaterialExpressionSubtract, -500, 380)
+    grain_offset.set_editor_property("const_b", 1.0)
+    lib.connect_material_expressions(grain, "", grain_offset, "A")
 
-    # --- Roughness --------------------------------------------------------------------
-    roughness_scale = lib.create_material_expression(
-        material, unreal.MaterialExpressionScalarParameter, -600, 460)
-    roughness_scale.set_editor_property("parameter_name", "RoughnessScale")
-    roughness_scale.set_editor_property("default_value", 1.0)
+    grain_scaled = lib.create_material_expression(
+        material, unreal.MaterialExpressionMultiply, -350, 380)
+    grain_scaled.set_editor_property("const_b", 0.35)
+    lib.connect_material_expressions(grain_offset, "", grain_scaled, "A")
 
-    if rough is not None:
-        rough_mix = lib.create_material_expression(
-            material, unreal.MaterialExpressionMultiply, -300, 380)
-        lib.connect_material_expressions(rough, "R", rough_mix, "A")
-        lib.connect_material_expressions(roughness_scale, "", rough_mix, "B")
-        lib.connect_material_property(rough_mix, "", unreal.MaterialProperty.MP_ROUGHNESS)
-    else:
-        lib.connect_material_property(
-            roughness_scale, "", unreal.MaterialProperty.MP_ROUGHNESS)
+    roughness = lib.create_material_expression(
+        material, unreal.MaterialExpressionAdd, -200, 340)
+    lib.connect_material_expressions(rough_base, "", roughness, "A")
+    lib.connect_material_expressions(grain_scaled, "", roughness, "B")
 
-    # --- Normal -----------------------------------------------------------------------
-    #
-    # Safe on this mesh for the same reason it is on the road: the component leaves tangents
-    # ExternallyProvided, finds no tangent space, and falls back to a frame derived from the
-    # normal alone - which on a flat +Z surface is a constant, valid basis. It would NOT be
-    # safe under AutoCalculated, which derives the frame from the UV layers and hits this
-    # mesh's degenerate UV1, producing NaN tangents the GPU silently discards.
-    if normal is not None:
-        lib.connect_material_property(normal, "", unreal.MaterialProperty.MP_NORMAL)
+    lib.connect_material_property(roughness, "", unreal.MaterialProperty.MP_ROUGHNESS)
 
     lib.recompile_material(material)
-    unreal.EditorAssetLibrary.save_asset(path)
-    unreal.log("MARKER: %s built and saved" % path)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    say("%s built and saved" % path)
+
+    for info in lib.get_vector_parameter_names(material):
+        say("vector parameter %s" % info)
     return material
 
 
-build_apron_material(import_textures())
+build_apron_material()
+say("done")
