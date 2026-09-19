@@ -62,15 +62,14 @@ SPECS = [
         source=MODELS + r"\plane1\export\plane1.glb",
         mesh_dir="/Game/Aircraft/Plane1",
         skel_name="SK_Plane1",
-        # THE NOSE TYRE IS CALLED wheel_front_1, WHICH IS THE ONE NAME THAT BREAKS RANKS.
-        # plane2, plane3 and plane4 all export a nose wheel mesh called `nosewheel`, matching
-        # its bone. This model keeps Tripo's original part name, and it is left alone because
-        # it measures CORRECTLY - the mesh box centres on x 0.000, which is where the
-        # nosewheel bone is - and because renaming it is a re-export whose only product is
-        # tidiness. `wheel_front` is the FORK, not the tyre: its box spans -66.8..50.5 uu and
-        # its centre is 8 cm behind the axle, so naming it here would report a wheelbase of
-        # 1.71 m for an aircraft whose wheelbase is 1.63 m.
-        front_nodes=["wheel_front_1"],
+        # THE MESH NAMES MATCH THE FLEET SINCE 2026-09-19, and this row used to be the
+        # exception. The nose tyre was `wheel_front_1` where plane2, plane3 and plane4 all
+        # call it `nosewheel` after its bone, and the FORK was `wheel_front` - a name in the
+        # tyre's namespace for a part that is not a tyre, whose box centre sits 8 cm behind
+        # the axle. Naming that one here would have published a 1.71 m wheelbase for an
+        # aircraft whose wheelbase is 1.63 m. The export now says nosewheel / nosegear /
+        # maingear, so no reader has to know the difference.
+        front_nodes=["nosewheel"],
         rear_nodes=["wheel_L", "wheel_R"],
         front_label="nose gear",
         rear_label="main gear",
@@ -89,7 +88,10 @@ SPECS = [
         #     footprint's wingspan and tailplane_span to measure. Now separate `wing`,
         #     `stabiliser` and `fin` objects.
         #
-        # Same call plane3's origin got: change the export, not the reader.
+        # Same call plane3's origin got: change the export, not the reader. A fourth round
+        # the same day added the livery and the flat base colours - see reimport_plane1.py,
+        # which is what applies that one, because by then the asset existed and this script
+        # is a FIRST-import tool.
         note="Cessna 172S Skyhawk. 8.233 m long, 11.00 m span, 2.72 m to the fin tip - the "
              "real aircraft's own figures to within 5 cm. Origin on the NOSE gear; the main "
              "axle is at -163.0 uu, which is the figure FAirframe::FixedAxleX wants when "

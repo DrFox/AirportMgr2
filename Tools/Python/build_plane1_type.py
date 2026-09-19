@@ -71,18 +71,19 @@ MESH = "/Game/Aircraft/Plane1/SK_Plane1"
 SOURCE = r"C:\repos\AirportMgr2Models\plane1\export\plane1.glb"
 
 # The parts this type is measured from. NAMED HERE rather than assumed equal to plane3's or
-# plane4's, because two of the four are not: this airframe's gear leg is `wheelstrut` where
-# plane3 has `gearRear_L` and plane4 `maingear_L`, and its propeller is the singular `prop`
-# where every other aeroplane in the fleet is a twin with `prop_L`. A wrong stem raises
-# rather than defaulting.
+# plane4's, because two of the four are not: this airframe's propeller is the singular `prop`
+# where every other aeroplane in the fleet is a twin with `prop_L`, and its main gear is one
+# `maingear` where plane4 has `maingear_L` and `maingear_R`. A wrong stem raises rather than
+# defaulting.
 #
-# `wheelstrut` IS BOTH LEGS IN ONE OBJECT, unlike plane3's and plane4's, and that is fine
-# here: the only thing taken from it is its HEIGHT, as the sanity bound on the wheel radius
-# below. A one-object leg would be wrong for an AXLE - a leg's centre is not an axle - and
-# nothing here asks it for one.
+# `maingear` IS BOTH LEGS IN ONE OBJECT, and that is fine here: the only thing taken from it
+# is its HEIGHT, as the sanity bound on the wheel radius below. A one-object leg would be
+# wrong for an AXLE - a leg's centre is not an axle - and nothing here asks it for one. It
+# was called `wheelstrut` until 2026-09-19, a name in the tyre namespace for a part that is
+# not a tyre.
 WING = "wing"
 STABILISER = "stabiliser"
-GEAR_LEG = "wheelstrut"
+GEAR_LEG = "maingear"
 PROP = "prop"
 
 
