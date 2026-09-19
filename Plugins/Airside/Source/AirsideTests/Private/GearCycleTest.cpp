@@ -282,12 +282,19 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 {
-	// THE ONLY AIRFRAME AUTHORED. plane4's rig is the only one in the fleet with gear_* and
-	// door_nose_* bones - plane2's and plane3's are root, nosewheel_steer, nosewheel, prop_L,
-	// prop_R, wheel_L, wheel_R and nothing else - so data on any other type would be data
-	// nothing can consume, which reads as working.
-	UAircraftType* Type = NewObject<UAircraftType>();
-	UAircraftType::Build737(Type);
+	// THE ASSET, NOT THE C++ BUILDER, and the difference is the whole point of this test.
+	// UAircraftType::Build737 is called from tests and from nowhere else - it builds the
+	// PAPER 737, which carries no mesh and never flies. Figures authored there would have
+	// been pinned by a green test and still absent from every aeroplane on the runway.
+	//
+	// DA_Aircraft_Plane4 is the one that flies, authored by Tools/Python/build_plane4_type.py
+	// against SK_Plane4 - the only rig in the fleet with gear_* and door_nose_* bones.
+	UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
+		UAircraftType::StaticClass(), nullptr, TEXT("/Game/Entities/DA_Aircraft_Plane4")));
+	if (!TestNotNull(TEXT("DA_Aircraft_Plane4 loads - run build_plane4_type.py if not"), Type))
+	{
+		return false;
+	}
 
 	const FAirframe Frame = Type->Airframe();
 
@@ -304,9 +311,17 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and the extend height is the higher of the two"),
 		Frame.Gear.ExtendBelowHeight > Frame.Gear.RetractAboveHeight);
 
-	// A PIPER IS NOT AUTHORED, which is the other half of the claim. Its rig cannot show a
-	// retraction, so it declares none - and this is what catches a later edit that copies
-	// gear figures onto every type "for completeness".
+	// THE BOUNDARY, PINNED FROM THE OTHER SIDE. One aeroplane's figures live in one place, so
+	// the paper 737 must declare NO cycle - otherwise the two copies drift and the one nobody
+	// is watching wins. A later edit that "completes" Build737 by copying the figures back in
+	// fails here rather than shipping a second source of truth.
+	UAircraftType* Paper = NewObject<UAircraftType>();
+	UAircraftType::Build737(Paper);
+	TestFalse(TEXT("the paper 737 declares no gear cycle - nothing ever flies it"),
+		Paper->Airframe().Gear.IsSet());
+
+	// A PIPER IS NOT AUTHORED EITHER. Its rig cannot show a retraction, so it declares none -
+	// which catches an edit that sprays gear figures across every type for completeness.
 	UAircraftType* Piper = NewObject<UAircraftType>();
 	UAircraftType::BuildPiperMeridian(Piper);
 	TestFalse(TEXT("the Meridian declares no gear cycle, because its rig cannot show one"),

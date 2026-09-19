@@ -169,27 +169,24 @@ void UAircraftType::Build737(UAircraftType* Type)
 	Type->Ground.MinSteeringSpeed = 50.0;
 	Type->Ground.MaxTurnRateDegPerSec = 8.0;
 
-	// THE ONLY TYPE IN THE FLEET WITH GEAR FIGURES, because plane4 is the only mesh with the
-	// bones to show them - gear_nose, gear_L, gear_R retract and door_nose_L/_R hinge. The
-	// mains have no doors and want none: a 737's main wheels sit in a well behind a fixed
-	// fairing, which is why the rig has no door_main_* pair to drive.
+	// NO GEAR FIGURES HERE, AND THAT IS THE DECISION RATHER THAN AN OMISSION. This is the
+	// PAPER 737: it carries no mesh, nothing ever flies it, and it exists so stand layout and
+	// Solve/IcaoCode.cpp can reason about a 737's size without one being modelled. Landing
+	// gear is invisible to every one of those callers.
 	//
-	// 7 seconds is the real 737-800 transit. 1 second of door each side of it, so a full
-	// cycle is 9 - long enough to be watched, and comfortably inside a climb that does not
-	// reach ClearAltitude for the better part of a minute.
-	Type->Gear.TravelSeconds = 7.0;
-	Type->Gear.DoorSeconds = 1.0;
-
-	// A FEW HUNDRED FEET, which is when the command is actually given - 9000 uu is about 295
-	// ft. NOT lift-off: FAgentMotion::bAirborne is the precondition and this is the cue, and
-	// the two were conflated in bAirborne's own comment until this landed.
-	Type->Gear.RetractAboveHeight = 9000.0;
-
-	// ABOVE FApproachPerformance::FinalAltitude (2000 uu), so an arrival is born down and
-	// locked and this never fires at today's figures. Authored at an honest ~500 ft anyway,
-	// so the extension is correct the day the approach is joined higher rather than being
-	// discovered missing.
-	Type->Gear.ExtendBelowHeight = 15000.0;
+	// The aeroplane that actually flies is DA_Aircraft_Plane4, authored by
+	// Tools/Python/build_plane4_type.py against SK_Plane4, and its FGearPerformance lives
+	// there - the measured pipeline, one source of truth. Figures in both places would be two
+	// copies of one aeroplane's numbers, which is the drift this codebase keeps paying for:
+	// see build_fleet_materials.py, where `metal` meant chrome on one model and dull steel on
+	// another because two authors had each typed it.
+	//
+	// They WERE here, briefly, on 2026-09-19 - the gear spec said to author them on this
+	// function, which was written before anyone noticed nothing calls it outside tests.
+	//
+	// Airside.Model.Gear737IsAuthoredAndTravels pins the boundary IN BOTH DIRECTIONS - the
+	// asset declares a cycle, this function does not - so a later edit that "completes" this
+	// one by copying the figures back goes red.
 }
 
 void UAircraftType::BuildPiperMeridian(UAircraftType* Type)

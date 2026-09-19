@@ -123,6 +123,7 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 	const TCHAR* const Measured[] = {
 		TEXT("/Game/Entities/DA_Aircraft_Plane2"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
+		TEXT("/Game/Entities/DA_Aircraft_Plane4"),
 	};
 
 	for (const TCHAR* Path : Measured)
