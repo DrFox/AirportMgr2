@@ -209,6 +209,11 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	Motion.bAirborne = (Phase == EAgentPhase::Departing && Departure.Phase == ETakeoffPhase::Climb)
 		|| (Phase == EAgentPhase::Arriving && !Arrival.IsOnGround());
 
+	// THE GEAR, BOTH NUMBERS FROM THE ONE EVALUATOR - see FGearPerformance::FractionsAt. The
+	// view applies these to bones and derives neither of them; a second evaluator would let
+	// the doors the player sees disagree with the doors the model thinks it opened.
+	GearFractions(Motion.GearDownFraction, Motion.BayDoorOpenFraction);
+
 	return Motion;
 }
 

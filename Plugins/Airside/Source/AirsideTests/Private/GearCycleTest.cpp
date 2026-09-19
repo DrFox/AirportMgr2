@@ -240,4 +240,37 @@ bool FGearFixedWhenUnauthoredTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGearReachesTheMotionDescriptionTest,
+	"Airside.Model.GearReachesTheMotionDescription",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGearReachesTheMotionDescriptionTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM. FAgentMotion is everything the view is told, so a fraction the model computes
+	// and does not publish here is a fraction no Animation Blueprint can ever read.
+	FRoadAgent Agent;
+	Agent.Airframe.Gear.TravelSeconds = 7.0;
+	Agent.Airframe.Gear.DoorSeconds = 1.0;
+
+	// AT REST FIRST, because "down and locked" is what every taxiing aeroplane reports and it
+	// is the value a broken default would most plausibly be mistaken for.
+	const FAgentMotion Parked = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
+	TestEqual(TEXT("a parked aircraft reports its gear down"), Parked.GearDownFraction, 1.0);
+	TestEqual(TEXT("and its bay shut"), Parked.BayDoorOpenFraction, 0.0);
+
+	// MID-CYCLE, where the two disagree with both resting poses - which is the only place a
+	// forwarder that returned a constant would be caught.
+	Agent.GearPhase = EGearPhase::Raising;
+	Agent.GearCycleSeconds = 4.5;
+
+	const FAgentMotion Climbing = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
+	TestTrue(TEXT("half way up the gear is part way retracted"),
+		Climbing.GearDownFraction > 0.4 && Climbing.GearDownFraction < 0.6);
+	TestEqual(TEXT("with the bay held fully open around it"),
+		Climbing.BayDoorOpenFraction, 1.0);
+
+	return true;
+}
+
 #endif

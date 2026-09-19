@@ -255,6 +255,22 @@ struct AIRSIDE_API FAgentMotion
 	 * Zero on a pivot-steered vehicle, which has no steered wheel to draw.
 	 */
 	UPROPERTY() double SteerAngleDegrees = 0.0;
+
+	/**
+	 * Where the landing gear is: 1 down and locked, 0 stowed. See FGearPerformance.
+	 *
+	 * A FRACTION AND NOT AN ANGLE, because the travel angle is a fact about one RIG - 90
+	 * degrees on plane4, measured in its build_export.py - and the model has no business
+	 * knowing it. UAirsideAgentAnim multiplies by its own measured figure, the same split
+	 * MainWheelRadius already makes.
+	 *
+	 * ONE DEFAULTS TO DOWN, deliberately: an airframe with no gear data, a vehicle, and every
+	 * aircraft on the ground all want the same answer, and it is this one.
+	 */
+	UPROPERTY() double GearDownFraction = 1.0;
+
+	/** The gear bay doors: 0 shut, 1 fully open. Zero for an airframe with no doors. */
+	UPROPERTY() double BayDoorOpenFraction = 0.0;
 };
 
 /**
