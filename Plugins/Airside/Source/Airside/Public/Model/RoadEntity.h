@@ -714,6 +714,24 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) double FixedAxleX = 0.0;
 
 	/**
+	 * Distance BETWEEN the two main wheels, uu - the gear track, measured across.
+	 *
+	 * Zero means UNMEASURED, exactly as Wheelbase() being zero does, and HasMainGearTrack()
+	 * below is the same question HasAxles() asks. Nothing is derived from a guess: an
+	 * unmeasured airframe falls back to one contact point on the centreline rather than to
+	 * a fabricated track, because a made-up track puts wheels where the aeroplane has none
+	 * and everything downstream inherits the fiction.
+	 *
+	 * Across, not half-across. A datasheet quotes the track as the full figure between the
+	 * wheels and this is the number that gets typed in from one, so halving it here would
+	 * be an invitation to type the half.
+	 */
+	UPROPERTY(EditAnywhere) double MainGearTrack = 0.0;
+
+	/** "Has anyone measured the gear track?" - the sibling of HasAxles. */
+	bool HasMainGearTrack() const { return MainGearTrack > KINDA_SMALL_NUMBER; }
+
+	/**
 	 * The body's plan centre, uu along local +X. Derived from the footprint in Airframe().
 	 *
 	 * NOT THE ORIGIN, and that is why it exists. The traffic model's claim windows are

@@ -98,6 +98,17 @@ public:
 	/** The main-gear axle in local X, uu. Negative on a conforming airframe. */
 	UPROPERTY(EditAnywhere) double FixedAxleX = 0.0;
 
+	/**
+	 * Distance between the two main wheels, uu. Zero means unmeasured - see
+	 * FAirframe::MainGearTrack, which this is carried into by Airframe() below.
+	 *
+	 * MEASURED FROM THE RIG by the build script, not typed from a datasheet, for the same
+	 * reason the axles are: it is a fact about the model that is DRAWN. Tyre smoke hung off
+	 * a published figure would sit beside the wheels rather than under them whenever the two
+	 * disagreed, and would stay wrong silently after a re-rig.
+	 */
+	UPROPERTY(EditAnywhere) double MainGearTrack = 0.0;
+
 	/** Propeller diameter, uu. Measured at 1.814 m on the model; published is 2.03. */
 	UPROPERTY(EditAnywhere) double PropellerDiameter = 181.4;
 
@@ -175,6 +186,7 @@ public:
 		Out.Wingspan = Footprint.Wingspan;
 		Out.SteerLaw = SteerLaw;
 		Out.SteerAxleX = SteerAxleX;
+		Out.MainGearTrack = MainGearTrack;
 		Out.FixedAxleX = FixedAxleX;
 
 		// DERIVED, not authored: two numbers that must agree are one number. The footprint
