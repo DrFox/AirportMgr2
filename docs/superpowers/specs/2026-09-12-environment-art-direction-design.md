@@ -457,8 +457,24 @@ A `Landscape Layer Blend` node over three layers:
 | `GrassRough` | `#748546` blended toward `#C6B283` | unmaintained edges, past the fence |
 | `Dirt` | `#C6B283` | worn ground at hangar doors and parking |
 
-Each layer is a flat base colour multiplied by two octaves of noise for macro variation.
-Roughness constant per layer, metallic zero.
+**Amended 2026-09-19 - macro COLOUR regions, not a brightness wobble.** This section used
+to read: *"Each layer is a flat base colour multiplied by two octaves of noise for macro
+variation."* It was built exactly as written and it did not work. Measured on screen, the
+field held a hue standard deviation of **0.74 degrees** - one colour, which is what the
+feedback that reopened this said in words. A multiply scales value and cannot move hue, so
+no amount of tuning that multiply could have produced a second tone.
+
+GrassMown's colour is now three palette tones blended by two octaves of low-frequency
+gradient noise, through an explicit contrast window that turns a smooth gradient into
+patches hundreds of metres across. After: **hue stdev 6.8 degrees at 60 m, 6.85 at 600 m,
+6.98 top-down** - the spread holds at every camera distance rather than only close up.
+GrassRough and Dirt keep flat colours, because they are painted intent and a deliberate
+mark should not wander.
+
+Every tone and size is a **parameter on `MI_Ground`**, a material instance that the
+Landscape is now assigned instead of `M_Ground` itself, so tones are judged and changed in
+the editor without a headless rebuild. The defaults are the 2026-09-19 proposal's greens,
+on trial against the sampled olives - see 1.1. Roughness constant per layer, metallic zero.
 
 **No normal maps.** At 6-600 m a grass normal map reads as mush; the stylised look comes
 from colour, and the surface detail comes from the grass clumps in Slice C. Adding normals

@@ -11,9 +11,26 @@ glance. Saturating the grass would put the field in competition with the gamepla
 
 FOUR THINGS HERE ARE DELIBERATE AND EASY TO "FIX" WRONGLY:
 
-1. MACRO VARIATION IS VALUE-ONLY AND MULTIPLIED IN, never a lerp between two colours. A
-   colour lerp drifts hue and saturation as it varies, which is precisely the painterly
-   look section 1 rejects. A multiply moves V and leaves S alone.
+1. MACRO VARIATION IS A LERP BETWEEN THREE TONES. This REVERSES what this file said until
+   2026-09-19, which was: "value-only and multiplied in, never a lerp between two colours.
+   A colour lerp drifts hue and saturation as it varies, which is precisely the painterly
+   look section 1 rejects."
+
+   That reasoning was sound and the result was still wrong, which is worth keeping rather
+   than deleting. A multiply DOES leave hue alone - so completely that the field measured
+   at hue stdev 0.55 degrees, total spread 3.8 degrees, across the entire visible plot. One
+   hue times a brightness wobble is one colour, and that is what the screen showed: a flat
+   olive sheet. The guard against painterly drift had been set so tight that it forbade the
+   variation it was guarding.
+
+   What replaces it is a BOUNDED lerp, which is not the same thing as the painterly ramp
+   that was rejected. Three named tones straight out of the palette, a smoothstep with an
+   explicit contrast window, and patches sized in hundreds of metres. Drift is prevented by
+   the endpoints being palette entries - you cannot land between them and arrive somewhere
+   unsanctioned - not by refusing to move at all.
+
+   The value-only wobble SURVIVES on top, because it was never the problem. It breaks up
+   the near-camera surface; it just cannot make a region.
 
 2. THE VARIATION IS APPLIED AFTER THE LAYER BLEND, not to each layer's colour. Same
    result, one multiply instead of three.
@@ -28,9 +45,22 @@ FOUR THINGS HERE ARE DELIBERATE AND EASY TO "FIX" WRONGLY:
    would repeat every 2 metres. World position also survives a landscape resize and gives
    the SAME breakup on the apron and taxiway meshes, so ground and pavement agree.
 
-The Noise node is deliberately not used: its defaults are Levels 6, which is expensive
-evaluated full-screen over a 3 km landscape. One tiling texture sampled twice is cheaper
-and is what the engine's own macro-variation material does.
+THE NOISE NODE IS USED FOR THE REGIONS AND THE TEXTURE FOR THE FINE DETAIL, and the split
+is the point. This file used to say: "The Noise node is deliberately not used: its defaults
+are Levels 6, which is expensive evaluated full-screen over a 3 km landscape. One tiling
+texture sampled twice is cheaper." The cost argument was about the DEFAULT, not the node,
+and Levels is a property we set - the regions use 2.
+
+What forced the split is a measurement, 2026-09-19. Good64x64TilingNoiseHighFreq is
+TMGS_NO_MIPMAPS, in TEXTUREGROUP_UI, TC_GRAYSCALE - it has exactly ONE mip. It is a
+high-frequency noise with no low-frequency content in it anywhere, and stretching its tile
+to 350 m does not create any: it draws the same busy speckle larger. Sampling a coarse mip
+to low-pass it was tried and is a silent no-op, because there is no coarse mip to sample.
+So a macro REGION cannot be made from this texture by any scaling, blurring or gain.
+
+The texture keeps the job it is good at - the 17 m value break-up near the camera. The two
+region octaves come from Noise nodes, which have genuine low-frequency content and a full
+0-1 range without gain.
 
 The docstring header said "the three landscape layer infos" once; it does not author them
 - see below.
@@ -60,7 +90,18 @@ import unreal
 
 OUT_DIR = "/Game/Environment"
 MAT_NAME = "M_Ground"
+MI_NAME = "MI_Ground"
 LEVEL = "/Game/Maps/M_Starter"
+
+# THE LANDSCAPE IS ASSIGNED MI_Ground, NOT M_Ground, and that is the whole point of this
+# revision. A Material is compiled shader code: changing a constant in it costs a recompile,
+# which here means closing the editor and re-running this script. A MaterialInstanceConstant
+# holds parameter OVERRIDES against a parent and costs nothing to change - the tones can be
+# dragged in the editor with the level open and judged on screen immediately.
+#
+# The ruling on 2026-09-19 was "build it tunable, decide on screen", so the defaults below
+# are a STARTING POINT, not a finding. When the values are settled in the editor, bake them
+# back into this file so a rebuild does not silently undo them.
 
 # Good64x64TilingNoiseHighFreq, not T_Default_MacroVariation. The latter ships on disk but
 # is NOT in the asset registry - does_asset_exist and load_asset both say no - so depending
@@ -68,27 +109,90 @@ LEVEL = "/Game/Maps/M_Starter"
 # loads cleanly; the repeat distance comes from the UV scale below, not from the texture.
 MACRO_TEXTURE = "/Engine/EngineMaterials/Good64x64TilingNoiseHighFreq"
 
-# sRGB hex from spec 1.1, converted to linear.
-#   GrassMown  #7D8E47   GrassRough #748546   Dirt #C6B283
+def srgb(hexcode):
+    """sRGB hex -> linear FLinearColor. The hex stays visible so it can be diffed against
+    the palette table in spec 1.1; converting by hand is how a swatch drifts from its
+    source."""
+    h = hexcode.lstrip("#")
+    out = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255.0
+        out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    return unreal.LinearColor(out[0], out[1], out[2], 1.0)
+
+
 # name -> (linear colour, roughness)
 #
 # Roughness is high and differs per layer: bare earth scatters more than leaf. The numbers
 # matter because they, not normals, are what stop the flat plane showing a sheen band.
+#
+# GrassMown's COLOUR is no longer used for the ground - the region lerp below supplies it -
+# but the entry stays, because the layer still needs a roughness and the blend still needs
+# a pin per layer. GrassRough and Dirt keep flat colours on purpose: they are PAINTED
+# intent, and a painted patch that also wandered through three tones would stop reading as
+# a deliberate mark.
 LAYERS = [
-    ("GrassMown",  unreal.LinearColor(0.213, 0.280, 0.070, 1.0), 0.88),
-    ("GrassRough", unreal.LinearColor(0.180, 0.245, 0.068, 1.0), 0.90),
-    ("Dirt",       unreal.LinearColor(0.573, 0.448, 0.226, 1.0), 0.95),
+    ("GrassMown",  srgb("#7D8E47"), 0.88),
+    ("GrassRough", srgb("#748546"), 0.90),
+    ("Dirt",       srgb("#C6B283"), 0.95),
 ]
 
-# Two octaves of value-only variation, both off absolute world position.
+# --- Region tones -----------------------------------------------------------------------
 #
-# 0.00008 repeats about every 125 m and carries most of the amplitude, because it is the
-# one that still RESOLVES at the 600 m camera; 0.0006 repeats about every 17 m and gives
-# the near-camera break-up. Each is remapped to 0.93-1.07 and the two multiply, so the net
-# is about 0.87-1.15 - roughly a third of the contrast a painterly tutorial would use.
-MACRO_FAR_SCALE = 0.00008
-MACRO_NEAR_SCALE = 0.0006
-MACRO_HALF_RANGE = 0.07
+# Defaults are the 2026-09-19 proposal (a true green at hue 97 deg), NOT the concept sheet's
+# sampled olives (hue 74 deg), so that the greens under discussion are what appears on the
+# first screenshot and can be judged rather than imagined. The sampled olives are one drag
+# away on the instance, and are kept here so the comparison costs nothing:
+#
+#   sampled alternative:  ToneA #7D8E47   ToneB #748546   ToneC #C6B283
+#
+# Whichever wins gets baked in and the palette table in spec 1.1 is amended to match.
+TONE_A = srgb("#6F9B58")   # main grass
+TONE_B = srgb("#547C49")   # darker areas
+TONE_C = srgb("#B6A66A")   # dry / straw patches
+
+# Region sizes in METRES, converted to a UV scale in the graph. Exposed in metres because a
+# parameter reading 0.00008 is unjudgeable in the editor, and this has to be judged there.
+REGION_SIZE_FAR = 350.0    # the big tonal areas the feedback asked for
+REGION_SIZE_NEAR = 110.0   # the sparser dry patches
+VALUE_NOISE_SIZE = 17.0    # near-camera break-up, the octave that already worked
+
+# Octaves per region noise. Two, not the node's default of six: at these sizes the third
+# octave and beyond are smaller than the value texture already covers, so they cost
+# instructions to add detail that is then drowned. This IS the cost objection the header
+# used to raise against the node, answered rather than avoided.
+REGION_LEVELS = 2
+
+# GradientALU, not GradientTex, and this one was also settled by looking.
+#
+# GradientTex is the cheaper function - it reads the engine's noise lookup texture instead
+# of computing the gradients - and it was the first choice for exactly that reason. At the
+# 60 m camera it laid a net of thin dark DOTTED CONTOUR LINES across the whole field: the
+# lookup table is 8-bit, and stretching 256 quantised levels across a region hundreds of
+# metres wide puts a visible step at every iso-value. Magnified, the field looked crazed.
+#
+# The computational variant has no table to quantise, so the artefact cannot occur. It costs
+# more ALU and no texture fetch, which on a 3 km landscape evaluated at 2 levels is a trade
+# worth making - and the alternative, raising Quality, only buys more samples of the same
+# quantised table.
+REGION_FUNCTION = unreal.NoiseFunction.NOISEFUNCTION_GRADIENT_ALU
+
+# The contrast window that turns a smooth noise into REGIONS. Without it a lerp driven by
+# noise is a soft wash everywhere and still reads as one colour with a bruise on it. Widen
+# the window for a gentle gradient, narrow it for distinct patches with defined edges.
+REGION_CONTRAST_LO = 0.40
+REGION_CONTRAST_HI = 0.60
+
+# How much of the frame the dry tone is allowed to claim. Kept low: straw patches are an
+# accent, and a field that is a third straw stops looking maintained.
+PATCH_AMOUNT = 0.35
+
+# The surviving value-only wobble, as a full width: 0.20 means roughly 1 +/- 0.10.
+VALUE_VARIATION = 0.20
+
+# All three octaves ride absolute world position - see point 4 in the header for why that
+# beats LandscapeLayerCoords, and note it also means the apron and taxiway meshes break up
+# on the SAME pattern as the ground rather than on one of their own.
 
 
 def say(msg):
@@ -99,55 +203,217 @@ def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
 
 
-def macro_octave(lib, mat, texture, scale, y):
-    """One octave: world XY * scale -> texture -> remapped to 1 +/- MACRO_HALF_RANGE."""
-    world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -1900, y)
-    mask = lib.create_material_expression(mat, unreal.MaterialExpressionComponentMask, -1700, y)
+def clear_graph(lib, mat):
+    """Empty a material's node graph, one expression at a time.
+
+    DO NOT USE delete_all_material_expressions HERE. It is broken in 5.8 and deletes
+    roughly HALF the graph. MaterialEditingLibrary.cpp:559-568:
+
+        for (UMaterialExpression* Expression : Material->GetExpressions())
+        {
+            DeleteMaterialExpression(Material, Expression);
+        }
+
+    - it range-iterates the live array while DeleteMaterialExpression removes entries from
+    that same array, so every second element is stepped over. Measured here on 2026-09-19:
+    of three LandscapeLayerBlends at y = 400, 900 and 1500 it removed only the middle one,
+    and the rebuild finished with five blends and two orphaned texture samplers in an asset
+    that still compiled and still rendered.
+
+    That is the dangerous part: the material was VALID, just wrong, and only a node count in
+    verify() caught it. get_material_expressions returns a copied list, so iterating that
+    and deleting individually is safe."""
+    for expression in list(lib.get_material_expressions(mat)):
+        lib.delete_material_expression(mat, expression)
+    left = len(lib.get_material_expressions(mat))
+    if left:
+        fail("graph not empty after clear: %d expressions remain" % left)
+    return left == 0
+
+
+def scalar(lib, mat, name, default, x, y):
+    """A named ScalarParameter. Named, because the whole point of this revision is that the
+    value can be changed on MI_Ground without recompiling M_Ground."""
+    node = lib.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, x, y)
+    node.set_editor_property("parameter_name", name)
+    node.set_editor_property("default_value", default)
+    return node
+
+
+def vector(lib, mat, name, default, x, y):
+    """A named VectorParameter, same reasoning as scalar()."""
+    node = lib.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, x, y)
+    node.set_editor_property("parameter_name", name)
+    node.set_editor_property("default_value", default)
+    return node
+
+
+def region_noise(lib, mat, size_param, y):
+    """Low-frequency gradient noise for one region octave, 0..1, in METRES.
+
+    GradientTex rather than a computational variant: it is a lookup into the engine's own
+    noise texture and is the cheapest of the six functions, which matters because this is
+    evaluated per pixel over a 3 km landscape.
+
+    Scale stays 1 and the SIZE is applied by dividing the position instead, because Scale is
+    a plain UPROPERTY and cannot be a material parameter - dividing the Position input is
+    what keeps the size tunable on MI_Ground, which is the whole point of the instance.
+
+    The full 3D world position is fed, not a masked XY. The landscape is dead flat at Z=0
+    and road plates sit 10 cm above it, so the Z contribution is 0.001 of one noise unit at
+    these sizes - below anything that could show."""
+    world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -2400, y)
+
+    cm = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -2200, y + 120)
+    cm.set_editor_property("const_b", 100.0)
+    lib.connect_material_expressions(size_param, "", cm, "A")
+
+    pos = lib.create_material_expression(mat, unreal.MaterialExpressionDivide, -2000, y)
+    lib.connect_material_expressions(world, "", pos, "A")
+    lib.connect_material_expressions(cm, "", pos, "B")
+
+    noise = lib.create_material_expression(mat, unreal.MaterialExpressionNoise, -1750, y)
+    noise.set_editor_property("noise_function", REGION_FUNCTION)
+    noise.set_editor_property("scale", 1.0)
+    noise.set_editor_property("quality", 2)
+    noise.set_editor_property("levels", REGION_LEVELS)
+    noise.set_editor_property("output_min", 0.0)
+    noise.set_editor_property("output_max", 1.0)
+    noise.set_editor_property("turbulence", False)
+    # "" - THE EMPTY STRING - NOT "Position", although the UPROPERTY is called Position.
+    # MaterialEditingLibrary.cpp:46-70 resolves an input name by comparing against
+    # UMaterialExpression::GetInputName(index), and UMaterialExpressionNoise does not
+    # override it, so its inputs are nameless and "Position" matches nothing. The same
+    # function short-circuits on an empty name and returns GetInput(0), which IS Position -
+    # it is declared first in the header. Passing the obvious string returns false and
+    # leaves the node reading a constant zero position, which renders as FLAT GROUND, not
+    # as an error. It is only caught because this call site checks the return.
+    if not lib.connect_material_expressions(pos, "", noise, ""):
+        fail("could not wire Position on the region noise at y=%d" % y)
+    return noise
+
+
+def noise_octave(lib, mat, texture, size_param, y):
+    """One octave of tiling noise off world XY, at a repeat distance given in METRES by
+    size_param. Returns the TextureSample node - read its "R" output.
+
+    The division rather than a multiply by a tiny constant is deliberate: it is what lets
+    the parameter read 350 instead of 0.0000286, and a number a human cannot judge is a
+    number that never gets tuned."""
+    world = lib.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -2400, y)
+    mask = lib.create_material_expression(mat, unreal.MaterialExpressionComponentMask, -2200, y)
     mask.set_editor_property("r", True)
     mask.set_editor_property("g", True)
     mask.set_editor_property("b", False)
     mask.set_editor_property("a", False)
     lib.connect_material_expressions(world, "", mask, "")
 
-    scaled = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -1500, y)
-    scaled.set_editor_property("const_b", scale)
-    lib.connect_material_expressions(mask, "", scaled, "A")
+    # metres -> centimetres, because world position is in uu and 1 uu is 1 cm.
+    cm = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -2000, y + 120)
+    cm.set_editor_property("const_b", 100.0)
+    lib.connect_material_expressions(size_param, "", cm, "A")
 
-    sample = lib.create_material_expression(mat, unreal.MaterialExpressionTextureSample, -1300, y)
+    uv = lib.create_material_expression(mat, unreal.MaterialExpressionDivide, -1800, y)
+    lib.connect_material_expressions(mask, "", uv, "A")
+    lib.connect_material_expressions(cm, "", uv, "B")
+
+    sample = lib.create_material_expression(mat, unreal.MaterialExpressionTextureSample, -1600, y)
     sample.set_editor_property("texture", texture)
-    # Shared: Wrap, so sampling this texture twice does not burn two sampler slots.
+    # Shared: Wrap, so sampling this texture three times does not burn three sampler slots.
     sample.set_editor_property("sampler_source", unreal.SamplerSourceMode.SSM_WRAP_WORLD_GROUP_SETTINGS)
-    lib.connect_material_expressions(scaled, "", sample, "UVs")
+    lib.connect_material_expressions(uv, "", sample, "UVs")
 
-    # 0..1 -> (1 - half) .. (1 + half)
-    span = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -1050, y)
-    span.set_editor_property("const_b", MACRO_HALF_RANGE * 2.0)
-    lib.connect_material_expressions(sample, "R", span, "A")
-
-    out = lib.create_material_expression(mat, unreal.MaterialExpressionAdd, -900, y)
-    out.set_editor_property("const_b", 1.0 - MACRO_HALF_RANGE)
-    lib.connect_material_expressions(span, "", out, "A")
-    return out
+    return sample
 
 
 def build_material():
     lib = unreal.MaterialEditingLibrary
     tools = unreal.AssetToolsHelpers.get_asset_tools()
     path = "%s/%s" % (OUT_DIR, MAT_NAME)
+    # REBUILD IN PLACE - do not delete and recreate. This file used to delete M_Ground and
+    # make a new one, which was harmless while nothing referenced it. MI_Ground now does,
+    # and a delete-and-recreate strands that reference: the instance keeps pointing at the
+    # object that was destroyed, not at the one with the same path. DeleteAllMaterialExpressions
+    # empties the graph while the asset keeps its identity, so both the instance's parent
+    # pointer and the Landscape's assignment survive a rebuild untouched.
     if unreal.EditorAssetLibrary.does_asset_exist(path):
-        unreal.EditorAssetLibrary.delete_asset(path)
-    mat = tools.create_asset(MAT_NAME, OUT_DIR, unreal.Material, unreal.MaterialFactoryNew())
+        mat = unreal.EditorAssetLibrary.load_asset(path)
+        clear_graph(lib, mat)
+        say("rebuilding %s in place" % MAT_NAME)
+    else:
+        mat = tools.create_asset(MAT_NAME, OUT_DIR, unreal.Material, unreal.MaterialFactoryNew())
 
     texture = unreal.EditorAssetLibrary.load_asset(MACRO_TEXTURE)
     if texture is None:
         fail("macro variation texture missing: %s" % MACRO_TEXTURE)
         return None
 
-    far = macro_octave(lib, mat, texture, MACRO_FAR_SCALE, -600)
-    near = macro_octave(lib, mat, texture, MACRO_NEAR_SCALE, 0)
-    variation = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -700, -300)
-    lib.connect_material_expressions(far, "", variation, "A")
-    lib.connect_material_expressions(near, "", variation, "B")
+    # --- Macro colour regions ---------------------------------------------------------
+    #
+    # This is the answer to "the grass is one colour". Three tones, two noise octaves, and
+    # a contrast window - NOT a brightness wobble, which is what was here before and which
+    # measured at 0.55 degrees of hue spread across the whole plot.
+    size_far = scalar(lib, mat, "RegionSizeFar", REGION_SIZE_FAR, -2600, -1400)
+    size_near = scalar(lib, mat, "RegionSizeNear", REGION_SIZE_NEAR, -2600, -800)
+    size_val = scalar(lib, mat, "ValueNoiseSize", VALUE_NOISE_SIZE, -2600, -200)
+
+    n_far = region_noise(lib, mat, size_far, -1400)
+    n_near = region_noise(lib, mat, size_near, -800)
+    n_val = noise_octave(lib, mat, texture, size_val, -200)
+
+    # SmoothStep is what makes a REGION rather than a wash. A raw noise lerped between two
+    # colours puts every intermediate tone everywhere and averages back to one colour at any
+    # distance; remapping it through a narrow window pushes most of the field to one end or
+    # the other, which is what "patches tens or hundreds of metres across" actually means.
+    lo = scalar(lib, mat, "RegionContrastLo", REGION_CONTRAST_LO, -1350, -1600)
+    hi = scalar(lib, mat, "RegionContrastHi", REGION_CONTRAST_HI, -1350, -1500)
+    region = lib.create_material_expression(mat, unreal.MaterialExpressionSmoothStep, -1150, -1400)
+    lib.connect_material_expressions(lo, "", region, "Min")
+    lib.connect_material_expressions(hi, "", region, "Max")
+    lib.connect_material_expressions(n_far, "", region, "Value")
+
+    tone_a = vector(lib, mat, "ToneA", TONE_A, -1350, -1150)
+    tone_b = vector(lib, mat, "ToneB", TONE_B, -1350, -1000)
+    tone_c = vector(lib, mat, "ToneC", TONE_C, -1350, -850)
+
+    two_tone = lib.create_material_expression(
+        mat, unreal.MaterialExpressionLinearInterpolate, -950, -1100)
+    lib.connect_material_expressions(tone_a, "", two_tone, "A")
+    lib.connect_material_expressions(tone_b, "", two_tone, "B")
+    lib.connect_material_expressions(region, "", two_tone, "Alpha")
+
+    # The dry tone rides its own octave at a different size, so straw patches do not line up
+    # with the boundaries between the two greens. Two patterns agreeing is how procedural
+    # ground starts looking like a tiled texture.
+    patch_amt = scalar(lib, mat, "PatchAmount", PATCH_AMOUNT, -1350, -700)
+    patch = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -1150, -750)
+    lib.connect_material_expressions(n_near, "", patch, "A")
+    lib.connect_material_expressions(patch_amt, "", patch, "B")
+
+    regions = lib.create_material_expression(
+        mat, unreal.MaterialExpressionLinearInterpolate, -800, -950)
+    lib.connect_material_expressions(two_tone, "", regions, "A")
+    lib.connect_material_expressions(tone_c, "", regions, "B")
+    lib.connect_material_expressions(patch, "", regions, "Alpha")
+
+    # --- The value wobble, kept -------------------------------------------------------
+    #
+    # It was never the problem - it just could not make a region. On top of three tones it
+    # does the job it was always doing: breaking up the near-camera surface and stopping the
+    # specular sheen band forming. One octave now instead of two, because the far octave's
+    # work is done by the regions above.
+    amount = scalar(lib, mat, "ValueVariation", VALUE_VARIATION, -1350, -300)
+    dev = lib.create_material_expression(mat, unreal.MaterialExpressionSubtract, -1350, -150)
+    dev.set_editor_property("const_b", 0.5)
+    lib.connect_material_expressions(n_val, "R", dev, "A")
+
+    scaled_dev = lib.create_material_expression(mat, unreal.MaterialExpressionMultiply, -1150, -150)
+    lib.connect_material_expressions(dev, "", scaled_dev, "A")
+    lib.connect_material_expressions(amount, "", scaled_dev, "B")
+
+    variation = lib.create_material_expression(mat, unreal.MaterialExpressionAdd, -950, -150)
+    variation.set_editor_property("const_b", 1.0)
+    lib.connect_material_expressions(scaled_dev, "", variation, "A")
 
     # --- Base colour ------------------------------------------------------------------
     colour_blend = lib.create_material_expression(
@@ -171,9 +437,18 @@ def build_material():
     rough_blend.set_editor_property("layers", entries())
 
     for index, (name, colour, roughness) in enumerate(LAYERS):
-        node = lib.create_material_expression(
-            mat, unreal.MaterialExpressionConstant3Vector, -900, 300 + index * 150)
-        node.set_editor_property("constant", colour)
+        # GRASSMOWN TAKES THE REGION CHAIN, NOT A FLAT COLOUR, and getting this wrong is
+        # how the whole feature ships invisible. The coverage lerp further down only shows
+        # its A input where NOTHING is painted; the first landscape pass painted GrassMown
+        # across the entire plot, so coverage is 1 everywhere and the layer blend wins
+        # everywhere. Feeding the regions only to the coverage fallback would therefore have
+        # produced a graph that is correct, compiles, verifies - and renders flat olive.
+        if name == "GrassMown":
+            node = regions
+        else:
+            node = lib.create_material_expression(
+                mat, unreal.MaterialExpressionConstant3Vector, -900, 300 + index * 150)
+            node.set_editor_property("constant", colour)
         # The per-layer pin is named "Layer <LayerName>" - not the bare name, not an index.
         if not lib.connect_material_expressions(node, "", colour_blend, "Layer %s" % name):
             fail("could not wire colour layer %s" % name)
@@ -203,12 +478,10 @@ def build_material():
         if not lib.connect_material_expressions(one, "", coverage, "Layer %s" % name):
             fail("could not wire coverage layer %s" % name)
 
-    base_colour = lib.create_material_expression(
-        mat, unreal.MaterialExpressionConstant3Vector, -500, 200)
-    base_colour.set_editor_property("constant", LAYERS[0][1])
-
+    # The unpainted fallback is the SAME region chain, so painted-everywhere and
+    # painted-nowhere land on identical ground and no seam appears at the coverage edge.
     covered = lib.create_material_expression(mat, unreal.MaterialExpressionLinearInterpolate, -300, 400)
-    lib.connect_material_expressions(base_colour, "", covered, "A")
+    lib.connect_material_expressions(regions, "", covered, "A")
     lib.connect_material_expressions(colour_blend, "", covered, "B")
     lib.connect_material_expressions(coverage, "", covered, "Alpha")
 
@@ -219,9 +492,11 @@ def build_material():
 
     # --- Roughness --------------------------------------------------------------------
     #
-    # The SAME variation drives roughness, so the sheen breaks up wherever the colour does
-    # rather than on an independent pattern. (variation - 1) is about -0.13..+0.15; a third
-    # of that is the +/-0.05 wobble that keeps the specular band from forming.
+    # The SAME variation drives roughness, so the sheen breaks up wherever the surface does
+    # rather than on an independent pattern. (variation - 1) is now +/- VALUE_VARIATION/2,
+    # so +/-0.10 at the default; a third of that is the +/-0.035 wobble that keeps the
+    # specular band from forming. Note it rides the VALUE octave, not the region noise -
+    # the regions are a colour statement and should not also change how the ground shines.
     offset = lib.create_material_expression(mat, unreal.MaterialExpressionSubtract, -400, 1250)
     offset.set_editor_property("const_b", 1.0)
     lib.connect_material_expressions(variation, "", offset, "A")
@@ -252,7 +527,31 @@ def build_material():
     return mat
 
 
-def assign(mat):
+def build_instance(mat):
+    """MI_Ground, the thing the Landscape actually uses.
+
+    Created ONLY if absent. On a rebuild the existing instance is left exactly as it is,
+    overrides and all - which is the entire point. Tones tuned in the editor must survive
+    re-running this script, or "decide on screen" becomes "decide on screen and lose it"."""
+    lib = unreal.MaterialEditingLibrary
+    tools = unreal.AssetToolsHelpers.get_asset_tools()
+    path = "%s/%s" % (OUT_DIR, MI_NAME)
+    if unreal.EditorAssetLibrary.does_asset_exist(path):
+        mi = unreal.EditorAssetLibrary.load_asset(path)
+        say("%s exists - leaving its overrides alone" % MI_NAME)
+    else:
+        mi = tools.create_asset(
+            MI_NAME, OUT_DIR, unreal.MaterialInstanceConstant,
+            unreal.MaterialInstanceConstantFactoryNew())
+        say("created %s" % MI_NAME)
+    # Asserted every run rather than only on creation: an instance whose parent silently
+    # became None renders the default checker and looks like a material bug.
+    lib.set_material_instance_parent(mi, mat)
+    unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
+    return mi
+
+
+def assign(mi):
     levels = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
     levels.load_level(LEVEL)
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
@@ -260,9 +559,9 @@ def assign(mat):
     if len(found) != 1:
         fail("expected exactly 1 Landscape, found %d" % len(found))
         return
-    found[0].set_editor_property("landscape_material", mat)
+    found[0].set_editor_property("landscape_material", mi)
     levels.save_current_level()
-    say("assigned %s to the landscape" % MAT_NAME)
+    say("assigned %s to the landscape" % MI_NAME)
 
 
 def verify():
@@ -286,12 +585,70 @@ def verify():
             else:
                 say("PASS layer %s is wired" % name)
 
+    # The region chain, checked by its OUTCOME rather than by counting nodes. A node count
+    # passes on a graph whose wires all go to the wrong pins; what actually has to be true
+    # is that the parameters exist by the names the instance overrides them by, and that
+    # GrassMown's colour pin is fed by something that is NOT a constant.
+    names = set()
+    for e in unreal.MaterialEditingLibrary.get_material_expressions(mat):
+        if isinstance(e, (unreal.MaterialExpressionScalarParameter,
+                          unreal.MaterialExpressionVectorParameter)):
+            names.add(str(e.get_editor_property("parameter_name")))
+    expected = {"ToneA", "ToneB", "ToneC", "RegionSizeFar", "RegionSizeNear",
+                "ValueNoiseSize", "RegionContrastLo", "RegionContrastHi",
+                "PatchAmount", "ValueVariation"}
+    missing = expected - names
+    if missing:
+        fail("parameters missing from %s: %s" % (MAT_NAME, ", ".join(sorted(missing))))
+        ok = False
+    else:
+        say("PASS all %d tunable parameters present" % len(expected))
+
+    # GrassMown must be fed the region chain, not a Constant3Vector - see the comment at
+    # the wiring site for why a flat colour there renders the whole feature invisible.
+    for blend in blends:
+        for item in blend.get_editor_property("layers"):
+            if str(item.get_editor_property("layer_name")) != "GrassMown":
+                continue
+            wired = item.export_text().split("HeightInput")[0]
+            if "Constant3Vector" in wired:
+                fail("GrassMown colour is a flat constant - the regions will not render")
+                ok = False
+
+    # Both region noises must exist. Their POSITION INPUT CANNOT BE CHECKED HERE and this
+    # comment is here so nobody later assumes it is: UMaterialExpressionNoise::Position is
+    # a protected UPROPERTY, so get_editor_property refuses it with "is protected and cannot
+    # be read", and export_text() is a struct method that expressions do not have. Same
+    # family as FLayerBlendInput::layer_input in spec section 11.1.
+    #
+    # What guards it instead is the RETURN VALUE of connect_material_expressions at the
+    # wiring site, which fails loudly - and it has already earned its keep once, catching a
+    # connection to "Position" that silently did nothing. The count below is a real check;
+    # it is not a check of the wiring, and a screenshot remains the only proof of that.
+    noises = [e for e in unreal.MaterialEditingLibrary.get_material_expressions(mat)
+              if isinstance(e, unreal.MaterialExpressionNoise)]
+    if len(noises) != 2:
+        fail("expected 2 region noise nodes, found %d" % len(noises))
+        ok = False
+    else:
+        say("PASS 2 region noise nodes present (their Position is unverifiable - see comment)")
+
+    mi = unreal.EditorAssetLibrary.load_asset("%s/%s" % (OUT_DIR, MI_NAME))
+    if mi is None:
+        fail("%s does not exist" % MI_NAME)
+        return False
+    if mi.get_editor_property("parent") == mat:
+        say("PASS %s is parented to %s" % (MI_NAME, MAT_NAME))
+    else:
+        fail("%s is not parented to %s" % (MI_NAME, MAT_NAME))
+        ok = False
+
     actors = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
     found = [a for a in actors.get_all_level_actors() if isinstance(a, unreal.Landscape)]
-    if found and found[0].get_editor_property("landscape_material") == mat:
-        say("PASS landscape material is %s" % MAT_NAME)
+    if found and found[0].get_editor_property("landscape_material") == mi:
+        say("PASS landscape material is %s" % MI_NAME)
     else:
-        fail("landscape material is not %s" % MAT_NAME)
+        fail("landscape material is not %s" % MI_NAME)
         ok = False
     return ok
 
@@ -301,7 +658,8 @@ def run():
     if mat is None:
         say("DONE")
         return
-    assign(mat)
+    mi = build_instance(mat)
+    assign(mi)
     say("ALL VERIFIED" if verify() else "VERIFY FAILED")
     say("DONE")
 
