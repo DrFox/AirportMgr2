@@ -296,7 +296,15 @@ bool FRunwayMarkingsByApproachTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-/** Grass: edge markers every 60 m and a corner square at each corner, and nothing else. */
+/**
+ * GRASS IS PAINTED LIKE PAVEMENT, plus edge markers, minus the side stripe.
+ *
+ * Measured AGAINST AN IDENTICAL TARMAC RUNWAY rather than against a list of expected
+ * counts. The rule being tested is "grass paints what pavement paints", and the honest way
+ * to state that is to build both and compare - a hand-written count would pass a builder
+ * that painted the right number of the wrong things, and would have to be retyped every
+ * time an unrelated marking figure moved.
+ */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FRunwayMarkingsGrassTest,
 	"Airside.Build.RunwayMarkings.Grass",
@@ -305,22 +313,48 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FRunwayMarkingsGrassTest::RunTest(const FString& Parameters)
 {
 	constexpr double Length = 200000.0;
-	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(ERunwaySurface::Grass, ERunwayApproach::Precision));
-	FRoadMeshBuffers Buffers;
-	FRunwayMarkingCensus Census;
-	TestEqual(TEXT("one runway painted"), B::Build(*Net, 0.0, Buffers, &Census), 1);
-	const TArray<FQuadBox> Boxes = Quads(Buffers);
+	constexpr double Width = 3000.0;
+
+	URoadNetwork* Turf = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Grass, ERunwayApproach::Precision));
+	FRoadMeshBuffers GrassBuffers;
+	FRunwayMarkingCensus Grass;
+	TestEqual(TEXT("one grass runway painted"), B::Build(*Turf, 0.0, GrassBuffers, &Grass), 1);
+
+	// THE CONTROL: the same strip, paved.
+	URoadNetwork* Paved = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	FRoadMeshBuffers PavedBuffers;
+	FRunwayMarkingCensus Tarmac;
+	TestEqual(TEXT("one tarmac runway painted"), B::Build(*Paved, 0.0, PavedBuffers, &Tarmac), 1);
+
+	// Everything a runway is READ by, identical on both.
+	TestEqual(TEXT("grass takes the threshold stripes"), Grass.ThresholdStripes, Tarmac.ThresholdStripes);
+	TestEqual(TEXT("and the designator on the ground"), Grass.DesignatorStrokes, Tarmac.DesignatorStrokes);
+	TestEqual(TEXT("and the centreline"), Grass.CentrelineDashes, Tarmac.CentrelineDashes);
+	TestEqual(TEXT("and the aiming point"), Grass.AimingPointBars, Tarmac.AimingPointBars);
+	TestEqual(TEXT("and the touchdown zone"), Grass.TouchdownStripes, Tarmac.TouchdownStripes);
+	// 20, not 24: this strip is 30 m wide, and the third pair's outermost stripe would sit
+	// 17.4 m off a 15 m half width. It is omitted at both ends on both sides - see
+	// TouchdownZone, which paints what fits across as well as along.
+	TestEqual(TEXT("the pairs that fit across a 30 m strip"), Tarmac.TouchdownStripes, 20);
+	TestTrue(TEXT("and those are real counts, not two zeroes agreeing"), Tarmac.ThresholdStripes > 0
+		&& Tarmac.DesignatorStrokes > 0 && Tarmac.CentrelineDashes > 0);
+
+	// THE TWO DIFFERENCES, and only these two. An edge is marked by markers on grass and by
+	// a stripe on pavement, never by both.
+	TestEqual(TEXT("pavement gets side stripes"), Tarmac.SideStripes, 2);
+	TestEqual(TEXT("grass does not - a painted continuous line is what turf cannot hold"), Grass.SideStripes, 0);
+	TestEqual(TEXT("pavement gets no edge markers"), Tarmac.GrassMarkers, 0);
+
 	const int32 Expected = 2 * (FMath::FloorToInt32(Length / B::GrassMarkerSpacing) + 1) + 4;
-	TestEqual(FString::Printf(TEXT("%d markers: two per 60 m plus four corners"), Expected), Census.GrassMarkers, Expected);
-	TestEqual(TEXT("and every quad is a marker"), Boxes.Num(), Expected);
+	TestEqual(FString::Printf(TEXT("%d markers: two per 60 m plus four corners"), Expected), Grass.GrassMarkers, Expected);
+
+	const TArray<FQuadBox> Boxes = Quads(GrassBuffers);
 	TestEqual(TEXT("0.6 m markers"), CountOf(Boxes, B::GrassMarker, B::GrassMarker), Expected - 4);
 	TestEqual(TEXT("3 m corners"), CountOf(Boxes, B::GrassCorner, B::GrassCorner), 4);
-	TestEqual(TEXT("grass has no threshold stripes even at precision"), Census.ThresholdStripes, 0);
-	TestEqual(TEXT("and no centreline"), Census.CentrelineDashes, 0);
-	TestEqual(TEXT("and no designation on the ground"), Census.DesignatorStrokes, 0);
 	for (const FQuadBox& Box : Boxes)
 	{
-		TestEqual(TEXT("a marker's outer edge is the strip's edge"), FMath::Max(FMath::Abs(Box.Across0), FMath::Abs(Box.Across1)), 1500.0, 1.0e-6);
+		const double Outer = FMath::Max(FMath::Abs(Box.Across0), FMath::Abs(Box.Across1));
+		TestTrue(TEXT("nothing painted reaches past the strip's edge"), Outer <= Width * 0.5 + 1.0e-6);
 	}
 	return true;
 }

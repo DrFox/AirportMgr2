@@ -163,6 +163,19 @@ namespace
 			for (int32 Stripe = 0; Stripe <= Pair; ++Stripe)
 			{
 				const double Inner = B::AimingPointGap * 0.5 + Stripe * (B::TouchdownStripeWidth + B::TouchdownStripeGap);
+				// PAINT WHAT FITS ACROSS, TOO. The check above is lengthwise only, and this
+				// one was missing: on a 30 m strip the third pair's outermost stripe runs
+				// from 15.6 m to 17.4 m off the centreline against a 15 m half width, so it
+				// was painted 2.4 m OUT ON THE GRASS, on both sides at both ends. Present on
+				// tarmac for as long as touchdown zones have existed, and found only when a
+				// test finally measured a marking ACROSS the strip rather than along it.
+				//
+				// Break rather than continue: the stripes step outward, so once one is past
+				// the edge every stripe after it is further past.
+				if (Inner + B::TouchdownStripeWidth > Frame.HalfWidth)
+				{
+					break;
+				}
 				Rect(Out, Z, Frame, At, At + B::TouchdownStripeLength, -Inner - B::TouchdownStripeWidth, -Inner);
 				Rect(Out, Z, Frame, At, At + B::TouchdownStripeLength, Inner, Inner + B::TouchdownStripeWidth);
 				Painted += 2;
@@ -340,12 +353,24 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 	{
 		++C.Runways;
 
-		if (Facts.Surface == ERunwaySurface::Grass)
+		// GRASS IS PAINTED TOO, and this REVERSES what this builder did until 2026-09-19.
+		// It used to return here, on the reasoning "no pavement, no pavement markings: a
+		// grass strip carries edge markers only, and its designator lives on a board".
+		//
+		// White grass paint exists and grass airfields do carry painted thresholds and
+		// designators, so the markings are plausible - and plausible is the bar, because a
+		// player has to be able to read a grass strip as a RUNWAY at the build camera. An
+		// unpainted strip with a dotted edge is a mown field; the numbers are most of what
+		// says otherwise.
+		//
+		// The one marking grass does NOT take is the side stripe. A 0.9 m continuous painted
+		// line is the marking you cannot actually lay on turf, and it is also the one the
+		// edge markers already do the job of - so the rule is that an edge is marked by
+		// MARKERS on grass and by a STRIPE on pavement, never by both.
+		const bool bGrass = Facts.Surface == ERunwaySurface::Grass;
+		if (bGrass)
 		{
-			// No pavement, no pavement markings: a grass strip carries edge markers only,
-			// and its designator lives on a board, not on the ground.
 			C.GrassMarkers += GrassMarkers(Out, Z, Frame);
-			return;
 		}
 
 		const int32 Stripes = ThresholdStripeCount(Frame.HalfWidth * 2.0);
@@ -366,7 +391,7 @@ int32 FRunwayMarkingBuilder::Build(const URoadNetwork& Network, double Z, FRoadM
 			}
 		}
 		C.CentrelineDashes += Centreline(Out, Z, Frame);
-		if (Facts.Approach == ERunwayApproach::Precision)
+		if (!bGrass && Facts.Approach == ERunwayApproach::Precision)
 		{
 			C.SideStripes += SideStripes(Out, Z, Frame);
 		}
