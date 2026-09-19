@@ -1,5 +1,7 @@
 #include "Present/RoadNetworkActor.h"
 
+#include "Present/TyreSmoke.h"
+
 #include "AirsideLog.h"
 #include "Containers/StaticArray.h"
 #include "Components/BillboardComponent.h"
@@ -139,6 +141,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
 
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
+	Smoke = CreateDefaultSubobject<UTyreSmoke>(TEXT("Smoke"));
 
 	// Same idiom as OnChanged above: the facade must not reach past Network/History for
 	// anything else (#104), so FindRoute's vehicle-occupancy lookup asks this provider
@@ -255,6 +258,7 @@ void ARoadNetworkActor::PostInitProperties()
 	Presenter = Cast<URoadSurfacePresenter>(GetDefaultSubobjectByName(TEXT("Presenter")));
 	Facade = Cast<URoadEditFacade>(GetDefaultSubobjectByName(TEXT("Facade")));
 	Traffic = Cast<UAirsideTraffic>(GetDefaultSubobjectByName(TEXT("Traffic")));
+	Smoke = Cast<UTyreSmoke>(GetDefaultSubobjectByName(TEXT("Smoke")));
 	Plots = Cast<UPlotPresenter>(GetDefaultSubobjectByName(TEXT("Plots")));
 
 	// The component travels the same way, and the presenter must be re-pointed AT IT: a
@@ -309,6 +313,19 @@ void ARoadNetworkActor::PostRegisterAllComponents()
 		// Marking the array Transient looks like the fix and is not: duplication does not
 		// copy Transient properties, so every surface would be unbuilt in play.
 		InitialisePresenterLayers();
+
+		// THE SMOKE POOL, here for the same ordering reason as the layers above: its puffs
+		// are components, and a component registered before the actor's own are is a
+		// component with nothing to attach to. Re-entrant by design - a PIE duplicate runs
+		// this too, and Initialise keeps an existing pool rather than leaking it.
+		if (Smoke != nullptr)
+		{
+			Smoke->Initialise(this, ResolveTyreSmokeMaterial());
+			if (Traffic != nullptr)
+			{
+				Traffic->SetSmoke(Smoke);
+			}
+		}
 
 		// Before RebuildMesh, which is what calls FAnchorLink::Build - the very consumer of
 		// GetAnchorWorldHeading this exists to keep correct. Loading a level saved before
@@ -395,6 +412,13 @@ UMaterialInterface* ARoadNetworkActor::ResolveRubberMaterial() const
 	if (RubberMaterial != nullptr) { return RubberMaterial; }
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	return Content != nullptr ? Content->RubberMaterial.LoadSynchronous() : nullptr;
+}
+
+UMaterialInterface* ARoadNetworkActor::ResolveTyreSmokeMaterial() const
+{
+	if (TyreSmokeMaterial != nullptr) { return TyreSmokeMaterial; }
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return Content != nullptr ? Content->TyreSmokeMaterial.LoadSynchronous() : nullptr;
 }
 
 UMaterialInterface* ARoadNetworkActor::ResolveGhostMaterial() const
@@ -699,6 +723,15 @@ void ARoadNetworkActor::Tick(float DeltaSeconds)
 	// a spurious extra substep on the plainest settings in the game (30 Hz x1, 60 Hz x4).
 	const double Evened = Traffic->EvenDelta(DeltaSeconds, DeltaSmoothingRate, MaxOwedSeconds);
 	Traffic->Advance(Evened * SimTimeScale, SurfaceZ, Network, TrafficRules);
+
+	// SMOKE AGES ON THE REAL CLOCK, not the scaled one. A puff is a piece of presentation
+	// rather than a piece of the simulation: at x8 the world runs eight times faster and a
+	// puff that aged with it would be gone before the eye caught it, which is the opposite
+	// of what a fast-forwarded airport needs.
+	if (Smoke != nullptr)
+	{
+		Smoke->Advance(Evened);
+	}
 }
 
 void ARoadNetworkActor::SetDeltaSmoothingForTest(double Rate)

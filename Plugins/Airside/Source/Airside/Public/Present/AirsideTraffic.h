@@ -11,6 +11,7 @@
 
 class URoadNetwork;
 class ARoadAgentActor;
+class UTyreSmoke;
 enum class EDepartureRefusal : uint8;
 
 /**
@@ -38,6 +39,14 @@ class AIRSIDE_API UAirsideTraffic : public UObject
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Where touchdown puffs go. Null means none, which is supported.
+	 *
+	 * Set by the actor rather than resolved here: this class already refuses to hold a
+	 * pointer back to the actor, and the smoke is a sibling subobject the actor composes -
+	 * see ARoadNetworkActor's own comment on growing by forwarding.
+	 */
+	void SetSmoke(UTyreSmoke* InSmoke) { Smoke = InSmoke; }
 	UAirsideTraffic();
 
 	/**
@@ -227,6 +236,9 @@ public:
 	void ResetFrameDeltaSmoothingForTest() { DeltaSmoother = FFrameDeltaSmoother(); }
 
 private:
+	/** See SetSmoke. Transient and non-owning: the actor owns it. */
+	UPROPERTY(Transient) TObjectPtr<UTyreSmoke> Smoke;
+
 	/** The Mediator. CreateDefaultSubobject in the constructor, re-pointed by name in
 	 *  PostInitProperties - the duplication rule ARoadNetworkActor already follows. */
 	UPROPERTY(Transient) TObjectPtr<UGroundTraffic> Model;

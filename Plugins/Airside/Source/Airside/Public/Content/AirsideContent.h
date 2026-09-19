@@ -69,6 +69,15 @@ public:
 	TSoftObjectPtr<UMaterialInterface> RubberMaterial;
 
 	/**
+	 * The puff of tyre smoke at touchdown - Tools/Python/build_puff_material.py.
+	 *
+	 * Null leaves the puffs undrawn, and that is a supported state rather than a defect: an
+	 * airport with no smoke material is one where aircraft land quietly.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Materials")
+	TSoftObjectPtr<UMaterialInterface> TyreSmokeMaterial;
+
+	/**
 	 * What a runway's pavement looks like, by its surface fact - see FRunwayFacts. Indexed by
 	 * RunwayMaterialSlot(Surface), which is the ONE place Reinforced aliases to Concrete's
 	 * slot - replacing the switch that used to live in ResolveRunwayMaterial AND the

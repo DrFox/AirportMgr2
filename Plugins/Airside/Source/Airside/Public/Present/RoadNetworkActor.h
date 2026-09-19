@@ -25,6 +25,7 @@ class URoadMaterialSet;
 class URoadEditHistory;
 class URoadEditFacade;
 class UAirsideTraffic;
+class UTyreSmoke;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
 
@@ -702,6 +703,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
 	TObjectPtr<UMaterialInterface> RubberMaterial;
 
+	/** The touchdown puff's material. Null falls back to UAirsideContent::TyreSmokeMaterial,
+	 *  and null there means aircraft land without smoking. */
+	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UMaterialInterface> TyreSmokeMaterial;
+
+	/** The touchdown puffs - see UTyreSmoke. A subobject like Traffic and Plots, because it
+	 *  owns components and a lifetime, and the actor only forwards to it. */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UTyreSmoke> Smoke;
+
 	/**
 	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
 	 * effect nobody would guess, stop ApronMaterial rendering at all.
@@ -966,6 +977,9 @@ public:
 
 	/** RubberMaterial, else the content default. Null is supported - see the property. */
 	UMaterialInterface* ResolveRubberMaterial() const;
+
+	/** TyreSmokeMaterial, else the content default. Null is supported: no smoke. */
+	UMaterialInterface* ResolveTyreSmokeMaterial() const;
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;
