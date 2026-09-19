@@ -68,6 +68,14 @@ instances, so deleting either strands live references rather than updating them.
 import json
 import os
 import struct
+import sys
+
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py
+# for the full note. __file__ is present both when run as -script= and when airside_import's
+# rebuild_fleet_materials() exec's this file, because that exec passes one in.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_import import FLEET, MERGE_TOL, PRETTY  # noqa: E402
 
 import unreal
 
@@ -81,22 +89,9 @@ OLD_DIR = "/Game/Aircraft/Materials"
 OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 
 MODELS = r"C:\repos\AirportMgr2Models"
-FLEET = {
-    "plane1":     ("plane1",     "/Game/Aircraft/Plane1/SK_Plane1"),
-    "plane2":     ("plane2",     "/Game/Aircraft/Plane2/SK_Plane2"),
-    "plane3":     ("plane3",     "/Game/Aircraft/Plane3/SK_Plane3"),
-    "plane4":     ("plane4",     "/Game/Aircraft/Plane4/SK_Plane4"),
-    "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
-    "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
-    "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
-    "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
-}
-# Asset folder name -> the name Content uses, for instance naming only.
-PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
-          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1",
-          "utility1": "Utility1"}
-
-MERGE_TOL = 0.005      # below this two looks are the same colour written twice
+# FLEET, PRETTY and MERGE_TOL now come from airside_import - see the note there. They lived
+# here, with a second copy in verify_fleet_materials.py, until plane1 was added to one and
+# not the other.
 EXACT_TOL = 1e-6
 
 # Slot names in Content that a LATER export renamed. Interchange names a slot after the
