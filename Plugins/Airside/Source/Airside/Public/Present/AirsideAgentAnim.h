@@ -77,7 +77,7 @@ public:
 	 * the same reason PropStepDegrees and WheelStepDegrees are.
 	 */
 	static void GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
-		float RetractedAngle, float DoorAngle, float& OutGearAngle, float& OutDoorAngle);
+		float RetractedAngle, float DoorClosedAngle, float& OutGearAngle, float& OutDoorAngle);
 
 	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
@@ -157,7 +157,19 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float GearAngleDegrees = 0.0f;
 
-	/** Bay door rotation, degrees. Apply to door_nose_L and door_nose_R. Zero is shut. */
+	/**
+	 * Bay door rotation, degrees. Apply to door_nose_L and door_nose_R.
+	 *
+	 * ZERO IS FULLY OPEN, WHICH IS THE OPPOSITE OF THE GEAR ABOVE, and it is a fact about the
+	 * RIG rather than a choice made here: plane4's bind pose has the nose bay hanging open,
+	 * and build_export.py's +81 is the angle at which "the two free edges meet on the
+	 * centreline to 0.0 mm" - which is the door SHUT. So the resting value of this property
+	 * is BayDoorClosedAngleDegrees, not zero.
+	 *
+	 * Getting it the other way round is not subtle on screen and was shipped once: the doors
+	 * shut as the cycle began, the gear retracted through them, and they opened again as it
+	 * finished. A parked aeroplane also sat with its bay hanging open.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float BayDoorAngleDegrees = 0.0f;
 
@@ -199,12 +211,21 @@ public:
 	float GearRetractedAngleDegrees = 90.0f;
 
 	/**
-	 * How far this rig's bay doors sweep, degrees. plane4's is 81 - "found by sweeping: the
-	 * two free edges meet on the centreline to 0.0 mm", which is a measurement and not a
-	 * round number, and is why it is not simply 90.
+	 * The angle at which this rig's bay doors are SHUT, degrees. plane4's is 81.
+	 *
+	 * NAMED FOR THE CLOSED END BECAUSE THAT IS THE ONE THE RIG PUTS WORK INTO. It is a
+	 * measurement, not a round number - build_export.py found it "by sweeping: the two free
+	 * edges meet on the centreline to 0.0 mm", which is why it is 81 and not 90 - and the
+	 * OPEN end is simply the bind pose, at zero.
+	 *
+	 * It was called BayDoorOpenAngleDegrees until 2026-09-19, which had the door travelling
+	 * to 81 to open rather than to shut, and inverted the whole cycle on screen.
+	 *
+	 * A rig that modelled its doors SHUT would want zero here and the open angle named
+	 * instead; that is a second property the day a second such rig exists, and not before.
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
-	float BayDoorOpenAngleDegrees = 81.0f;
+	float BayDoorClosedAngleDegrees = 81.0f;
 
 	/**
 	 * How long the wheels take to spin down to a stop once airborne, seconds (#107 item 8).

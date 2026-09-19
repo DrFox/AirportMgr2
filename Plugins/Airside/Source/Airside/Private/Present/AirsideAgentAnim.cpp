@@ -32,7 +32,7 @@ void UAirsideAgentAnim::NativeUpdateAnimation(float DeltaSeconds)
 	GearDownFraction = static_cast<float>(Motion.GearDownFraction);
 	BayDoorOpenFraction = static_cast<float>(Motion.BayDoorOpenFraction);
 	GearAnglesFrom(GearDownFraction, BayDoorOpenFraction, GearRetractedAngleDegrees,
-		BayDoorOpenAngleDegrees, GearAngleDegrees, BayDoorAngleDegrees);
+		BayDoorClosedAngleDegrees, GearAngleDegrees, BayDoorAngleDegrees);
 
 	// COPIED, NOT DERIVED. The model steered with this exact angle - see
 	// FRouteFollower::SteerDegrees - so the wheel the player watches is the one that turned
@@ -138,11 +138,22 @@ float UAirsideAgentAnim::PropStepDegrees(float RPM, float DeltaSeconds, int32 Bl
 }
 
 void UAirsideAgentAnim::GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
-	float RetractedAngle, float DoorAngle, float& OutGearAngle, float& OutDoorAngle)
+	float RetractedAngle, float DoorClosedAngle, float& OutGearAngle, float& OutDoorAngle)
 {
 	// ONE MINUS THE FRACTION, because the fraction counts DOWNNESS and the angle counts
 	// travel away from the bind pose. Getting this the other way round parks an aeroplane on
 	// a folded leg, which is a state the mesh can express perfectly happily.
 	OutGearAngle = (1.0f - GearDownFraction) * RetractedAngle;
-	OutDoorAngle = DoorOpenFraction * DoorAngle;
+
+	// AND ONE MINUS IT AGAIN FOR THE DOORS, BUT FOR THE OPPOSITE REASON - which is why this
+	// is two lines that look alike and are not. The gear's bind pose is DOWN, so zero travel
+	// means down. The doors' bind pose is OPEN, so zero travel means open, and the door has
+	// to travel to be SHUT. Both fractions are therefore inverted, and only one of them is
+	// inverted because of what the fraction counts.
+	//
+	// THIS SHIPPED AS DoorOpenFraction * DoorAngle and was wrong on screen in a way that read
+	// as a sequencing bug rather than a sign one: the doors shut at the start of the cycle,
+	// the gear retracted through them, and they opened again at the end. The model, the
+	// evaluator and the animgraph were all correct; the two ends of one lerp were swapped.
+	OutDoorAngle = (1.0f - DoorOpenFraction) * DoorClosedAngle;
 }

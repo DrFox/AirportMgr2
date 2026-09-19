@@ -342,28 +342,44 @@ bool FGearAnglesFollowTheFractionsTest::RunTest(const FString& Parameters)
 	float GearAngle = -1.0f;
 	float DoorAngle = -1.0f;
 
-	// plane4's measured rig angles: gear folds 90 degrees, the nose doors sweep 81 - "found
-	// by sweeping: the two free edges meet on the centreline to 0.0 mm", per its
-	// build_export.py. Not invented here and not typed into a Blueprint.
+	// plane4's measured rig angles: the gear folds 90 degrees from a bind pose that is DOWN,
+	// and the doors are SHUT at 81 from a bind pose that is OPEN - "found by sweeping: the two
+	// free edges meet on the centreline to 0.0 mm", per its build_export.py. The two bind
+	// poses are opposite, which is the whole reason this test exists.
 	const float Retracted = 90.0f;
-	const float Door = 81.0f;
+	const float DoorClosed = 81.0f;
 
-	// DOWN AND LOCKED IS ZERO ROTATION. The bind pose IS the gear-down pose, so a bone driven
-	// to anything but zero here would sit an aeroplane on a leg it has already folded.
-	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, Door, GearAngle, DoorAngle);
-	TestEqual(TEXT("gear down is no rotation at all"), GearAngle, 0.0f);
-	TestEqual(TEXT("and a shut door is no rotation either"), DoorAngle, 0.0f);
+	// THE RESTING POSE OF A PARKED AEROPLANE, and it is asserted FIRST because it is what the
+	// player looks at for all but nine seconds of a flight. Gear down and bay SHUT.
+	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
+	TestEqual(TEXT("gear down is no rotation at all - the bind pose is the gear-down pose"),
+		GearAngle, 0.0f);
+	TestEqual(TEXT("while a shut door is the FULL sweep, because its bind pose is open"),
+		DoorAngle, 81.0f);
 
-	// FULLY STOWED IS THE WHOLE TRAVEL.
-	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, Door, GearAngle, DoorAngle);
+	// MID-CYCLE: gear stowed, bay held open around it.
+	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
 	TestEqual(TEXT("gear up is the full fold"), GearAngle, 90.0f);
-	TestEqual(TEXT("and an open bay is the full sweep"), DoorAngle, 81.0f);
+	TestEqual(TEXT("and a fully open bay is no rotation at all"), DoorAngle, 0.0f);
 
-	// AND IT IS A TRAVEL, NOT A SWITCH - the mid-cycle value, which is the only one a
-	// two-pose implementation could not produce.
-	UAirsideAgentAnim::GearAnglesFrom(0.5f, 0.5f, Retracted, Door, GearAngle, DoorAngle);
+	// THE TWO MOVE IN OPPOSITE SENSES, which is the defect this pins. Shipped once as
+	// DoorOpenFraction * angle, the doors SHUT as the cycle began, the gear retracted through
+	// them, and they opened again at the end - and a parked aeroplane sat with its bay hanging
+	// open. Asserting the endpoints separately is what catches a swapped lerp; asserting only
+	// the midpoint would not, because 40.5 is the same either way round.
+	UAirsideAgentAnim::GearAnglesFrom(0.5f, 0.5f, Retracted, DoorClosed, GearAngle, DoorAngle);
 	TestEqual(TEXT("half retracted is half the fold"), GearAngle, 45.0f);
 	TestEqual(TEXT("half open is half the sweep"), DoorAngle, 40.5f);
+
+	// AND THE SENSES ARE OPPOSITE, said as its own assertion rather than left to be inferred
+	// from the three above: as the gear travels AWAY from its bind pose the doors travel
+	// TOWARD theirs.
+	float ShutGear = -1.0f, ShutDoor = -1.0f;
+	float OpenGear = -1.0f, OpenDoor = -1.0f;
+	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, DoorClosed, ShutGear, ShutDoor);
+	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, DoorClosed, OpenGear, OpenDoor);
+	TestTrue(TEXT("retracting winds the gear up and the doors down, never both the same way"),
+		OpenGear > ShutGear && OpenDoor < ShutDoor);
 
 	return true;
 }
