@@ -3,6 +3,7 @@
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Misc/AutomationTest.h"
+#include "AnimationRuntime.h"
 #include "Engine/SkeletalMesh.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
@@ -121,6 +122,7 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 	// the second aeroplane to go through it inherits the same exposure the moment it exists,
 	// and a test naming one asset would have gone on passing while the other drifted.
 	const TCHAR* const Measured[] = {
+		TEXT("/Game/Entities/DA_Aircraft_Plane1"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane2"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane4"),
@@ -163,11 +165,28 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		// AND THE WHEEL THE ANIMATION SPINS IS THE WHEEL THE MODEL CARRIES. The radius is
 		// measured by the authoring script and copied into the Anim Blueprint's defaults, so
 		// it is the one figure in this pipeline that lives in two assets - and a type left on
-		// UAircraftType's 21 uu default turns its wheels at whatever rate that implies. 21 is
-		// the Meridian's, and no measured type has shared it yet.
-		TestTrue(*FString::Printf(TEXT("%s: the main wheel radius was measured, not left at "
-			"the Meridian's default"), Path),
-			FMath::Abs(Type->MainWheelRadius - 21.0) > 1.0);
+		// UAircraftType's 21 uu default turns its wheels at whatever rate that implies.
+		//
+		// MEASURED AGAINST THE RIG, WHICH IT DID NOT USED TO BE. This check read
+		// "FMath::Abs(MainWheelRadius - 21.0) > 1.0" - not the Meridian's default, therefore
+		// measured - and that is a proxy rather than the thing. plane1 is what exposed it: a
+		// Cessna 172's hub sits at 19.8 uu, so a correctly measured type passed by 1.2 uu
+		// against a tolerance of 1.0, and the next model to carry a 20 uu wheel would have
+		// failed for being right. The hub's HEIGHT in the reference pose IS the radius -
+		// z = 0 is the contact plane, which airside_import.report_bounds refuses an import
+		// for missing by more than 10 uu - so the rig can be asked directly, and a stale
+		// figure now fails whatever value it happens to hold.
+		const FReferenceSkeleton& Rig = Mesh->GetRefSkeleton();
+		const int32 LeftWheel = Rig.FindBoneIndex(TEXT("wheel_L"));
+		if (TestTrue(*FString::Printf(TEXT("%s: its rig has a wheel_L bone to measure "
+			"against"), Path), LeftWheel != INDEX_NONE))
+		{
+			const double HubHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(
+				Rig, LeftWheel).GetTranslation().Z;
+			TestEqual(*FString::Printf(TEXT("%s: the authored main wheel radius is the "
+				"height of the hub the rig carries"), Path),
+				Type->MainWheelRadius, HubHeight, 0.5);
+		}
 	}
 
 	return true;
@@ -197,6 +216,10 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 	};
 
 	const FExpected Expected[] = {
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane1"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("a 172 is pushed off a stand by one person leaning on the strut - and the "
+			   "class default is VehicleTug, so this row is the only thing standing between "
+			   "the smallest aeroplane in the game and the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Piper"),  EPushbackNeed::SelfManoeuvre,
 		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,

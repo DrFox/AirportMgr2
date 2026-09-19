@@ -44,9 +44,15 @@ any merge that was not exact is reported, because the drift is worth fixing upst
 though it is invisible on screen.
 
 NOT THE PIPER, which ships real texture maps and hand-authored M_PiperMeridian/M_PiperGlass -
-a master of three constants has nothing to offer it. NOT plane1 either: it is superseded by
-plane3 and is not in Content. Both are excluded by absence from FLEET rather than by a rule,
-so adding a textured asset stays a decision rather than an accident.
+a master of three constants has nothing to offer it. It is excluded by absence from FLEET
+rather than by a rule, so adding a textured asset stays a decision rather than an accident.
+
+PLANE1 USED TO BE EXCLUDED HERE TOO, "superseded by plane3 and not in Content", and the
+entry stood for a week after all three of its claims stopped being true. It was re-exported
+on 2026-09-19 with a skin, ten named plane1_* materials and a Cessna 172's own dimensions,
+and it is not superseded by anything - a 172 and a Dash 8 are not the same aeroplane at
+different sizes. An exclusion note is a claim about the world, and this one aged badly
+because nothing re-reads it when the world changes.
 
 THE SKELETAL FLAG, ONCE. build_aircraft_looks.py documents the trap where a material without
 bUsedWithSkeletalMesh makes the renderer substitute the default and the model draws grey clay,
@@ -76,6 +82,7 @@ OLD_MASTER = "%s/M_Aircraft" % OLD_DIR
 
 MODELS = r"C:\repos\AirportMgr2Models"
 FLEET = {
+    "plane1":     ("plane1",     "/Game/Aircraft/Plane1/SK_Plane1"),
     "plane2":     ("plane2",     "/Game/Aircraft/Plane2/SK_Plane2"),
     "plane3":     ("plane3",     "/Game/Aircraft/Plane3/SK_Plane3"),
     "plane4":     ("plane4",     "/Game/Aircraft/Plane4/SK_Plane4"),
@@ -85,7 +92,7 @@ FLEET = {
     "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
 }
 # Asset folder name -> the name Content uses, for instance naming only.
-PRETTY = {"plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
+PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
           "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1",
           "utility1": "Utility1"}
 
