@@ -14,51 +14,62 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGearCycleSequencesDoorsTest::RunTest(const FString& Parameters)
 {
-	// 1 s of door travel either side of 7 s of gear travel - the 737 figures, so the numbers
-	// below are the ones that will actually be flown rather than a convenient round set.
+	// 1 s of door travel and 7 s of gear travel - the 737 figures, so the numbers below are
+	// the ones that will actually be flown rather than a convenient round set.
 	FGearPerformance Gear;
 	Gear.TravelSeconds = 7.0;
 	Gear.DoorSeconds = 1.0;
 
-	TestEqual(TEXT("the cycle is the gear travel bracketed by a door movement each side"),
-		Gear.CycleSeconds(), 9.0);
+	// ONE DOOR MOVEMENT, NOT TWO. The doors are linked to the strut: open with the gear down,
+	// shut only once it is stowed - so there is no door stage at the gear-down end at all.
+	TestEqual(TEXT("the cycle is one gear travel plus one door movement"),
+		Gear.CycleSeconds(), 8.0);
 
 	double GearDown = -1.0;
 	double DoorOpen = -1.0;
 
-	// THE GEAR DOES NOT MOVE UNTIL THE DOORS ARE OPEN. This is the whole sequencing decision
-	// and it is asserted at the last instant before the gear is allowed to travel, not in the
-	// middle of the door stage where a partly-working implementation would also pass.
-	Gear.FractionsAt(0.99, /*bRaising*/ true, GearDown, DoorOpen);
-	TestEqual(TEXT("at 0.99 s the gear is still fully down and locked"), GearDown, 1.0);
-	TestTrue(TEXT("while the doors are nearly but not quite open"),
-		DoorOpen > 0.9 && DoorOpen < 1.0);
+	// RETRACTING: THE GEAR GOES FIRST. The doors are already open, so nothing has to happen
+	// before the leg can move - which is the opposite of extension below.
+	Gear.FractionsAt(0.0, /*bRaising*/ true, GearDown, DoorOpen);
+	TestEqual(TEXT("a retraction starts from gear down"), GearDown, 1.0);
+	TestEqual(TEXT("with the bay ALREADY open - no stage opens it"), DoorOpen, 1.0);
 
-	// AND IT HAS MOVED BY THE MIDDLE. Without this the assertion above passes perfectly on a
-	// gear that never moves at all - which is the failure a-green-test-may-measure-nothing
-	// records, and the reason every case in this file pins a value that must CHANGE.
-	Gear.FractionsAt(4.5, true, GearDown, DoorOpen);
+	Gear.FractionsAt(3.5, true, GearDown, DoorOpen);
 	TestTrue(TEXT("half way through the travel the gear is part way up"),
 		GearDown > 0.4 && GearDown < 0.6);
-	TestEqual(TEXT("and the doors are held fully open across the whole travel"), DoorOpen, 1.0);
+	TestEqual(TEXT("and the doors are held open across the whole travel"), DoorOpen, 1.0);
 
-	// THE DOORS DO NOT CLOSE UNTIL THE GEAR IS STOWED. The other half of the sequencing, at
-	// the instant the gear arrives.
+	// THE DOORS DO NOT SHUT UNTIL THE GEAR IS STOWED, asserted at the instant it arrives.
+	Gear.FractionsAt(7.0, true, GearDown, DoorOpen);
+	TestEqual(TEXT("at 7 s the gear is fully up"), GearDown, 0.0);
+	TestEqual(TEXT("and only now may the doors begin to shut"), DoorOpen, 1.0);
+
 	Gear.FractionsAt(8.0, true, GearDown, DoorOpen);
-	TestEqual(TEXT("at 8 s the gear is fully up"), GearDown, 0.0);
-	TestEqual(TEXT("and only now may the doors begin to close"), DoorOpen, 1.0);
-
-	// AT REST. Doors shut over a stowed wheel, which is what a 737 does and why plane4 has
-	// door_nose_L/_R at all.
-	Gear.FractionsAt(9.0, true, GearDown, DoorOpen);
 	TestEqual(TEXT("the cycle ends with the gear up"), GearDown, 0.0);
 	TestEqual(TEXT("and the bay shut over it"), DoorOpen, 0.0);
 
-	// PAST THE END IS STILL THE END. A timer that overran used to be a source of flicker in
-	// this project's other integrators; clamped rather than wrapped.
+	// EXTENDING: THE DOORS LEAD, because they are shut over the stowed wheel and it cannot
+	// come down through them. This is the asymmetry a trapezoid could not express.
+	Gear.FractionsAt(0.0, /*bRaising*/ false, GearDown, DoorOpen);
+	TestEqual(TEXT("an extension starts from gear up"), GearDown, 0.0);
+	TestEqual(TEXT("behind a shut bay"), DoorOpen, 0.0);
+
+	Gear.FractionsAt(0.99, false, GearDown, DoorOpen);
+	TestEqual(TEXT("at 0.99 s the gear has not begun to come down"), GearDown, 0.0);
+	TestTrue(TEXT("while the doors are nearly but not quite open"),
+		DoorOpen > 0.9 && DoorOpen < 1.0);
+
+	Gear.FractionsAt(8.0, false, GearDown, DoorOpen);
+	TestEqual(TEXT("and it ends gear down"), GearDown, 1.0);
+	TestEqual(TEXT("with the bay STILL open, which is where it stays"), DoorOpen, 1.0);
+
+	// PAST THE END IS STILL THE END, in both directions.
 	Gear.FractionsAt(100.0, true, GearDown, DoorOpen);
-	TestEqual(TEXT("an overrun timer holds the resting pose"), GearDown, 0.0);
+	TestEqual(TEXT("an overrun retraction holds gear up"), GearDown, 0.0);
 	TestEqual(TEXT("and does not reopen the doors"), DoorOpen, 0.0);
+	Gear.FractionsAt(100.0, false, GearDown, DoorOpen);
+	TestEqual(TEXT("an overrun extension holds gear down"), GearDown, 1.0);
+	TestEqual(TEXT("and does not shut the doors on it"), DoorOpen, 1.0);
 
 	return true;
 }
@@ -73,24 +84,32 @@ bool FGearExtendMirrorsRetractTest::RunTest(const FString& Parameters)
 	// THE SYMMETRY IS THE ARGUMENT FOR BUILDING THE EXTEND HALF AT ALL. Nothing can currently
 	// see it - an arrival joins final at FApproachPerformance::FinalAltitude, 2000 uu, about
 	// 66 ft, already configured - so this test is what stops it rotting unnoticed.
+	//
+	// A TIME-REVERSAL, NOT A COMPLEMENT. The two directions are no longer one curve with the
+	// gear flipped: the door movement sits at the gear-up end of BOTH, so extension is
+	// retraction played backwards. The complement this used to assert was a property of the
+	// trapezoid, and asserting it now would be pinning the shape that was wrong.
 	FGearPerformance Gear;
 	Gear.TravelSeconds = 7.0;
 	Gear.DoorSeconds = 1.0;
+
+	const double Cycle = Gear.CycleSeconds();
 
 	double UpGearDown = -1.0;
 	double UpDoorOpen = -1.0;
 	double DownGearDown = -1.0;
 	double DownDoorOpen = -1.0;
 
-	for (const double At : {0.0, 0.5, 1.0, 4.5, 8.0, 8.5, 9.0})
+	for (const double At : {0.0, 0.5, 1.0, 3.5, 7.0, 7.5, 8.0})
 	{
-		Gear.FractionsAt(At, /*bRaising*/ true, UpGearDown, UpDoorOpen);
+		Gear.FractionsAt(Cycle - At, /*bRaising*/ true, UpGearDown, UpDoorOpen);
 		Gear.FractionsAt(At, /*bRaising*/ false, DownGearDown, DownDoorOpen);
 
-		TestEqual(FString::Printf(TEXT("the doors do the same thing either way at %.1f s"), At),
-			DownDoorOpen, UpDoorOpen);
-		TestEqual(FString::Printf(TEXT("and the gear is the exact complement at %.1f s"), At),
-			DownGearDown, 1.0 - UpGearDown);
+		TestEqual(FString::Printf(
+			TEXT("lowering at %.1f s is raising at %.1f s, for the gear"), At, Cycle - At),
+			DownGearDown, UpGearDown);
+		TestEqual(FString::Printf(
+			TEXT("and for the doors at %.1f s"), At), DownDoorOpen, UpDoorOpen);
 	}
 
 	return true;
@@ -116,7 +135,9 @@ bool FGearWithoutDoorsStillTravelsTest::RunTest(const FString& Parameters)
 
 	Gear.FractionsAt(2.0, true, GearDown, DoorOpen);
 	TestEqual(TEXT("the gear is half way up at the half way point"), GearDown, 0.5);
-	TestEqual(TEXT("and no door ever opens, rather than one snapping open"), DoorOpen, 0.0);
+	// OPEN, WHICH IS THE BIND POSE. An airframe with no bay doors has no door bones either,
+	// so the only safe value is the one that asks the animgraph to rotate nothing.
+	TestEqual(TEXT("and the door fraction never leaves its bind-pose value"), DoorOpen, 1.0);
 
 	// DIVISION BY DoorSeconds IS THE HAZARD HERE and this is what proves it is guarded: a
 	// NaN fraction does not show up as a stuck door, it shows up as a bone transform that
@@ -237,7 +258,7 @@ bool FGearFixedWhenUnauthoredTest::RunTest(const FString& Parameters)
 	double DoorOpen = -1.0;
 	Agent.GearFractions(GearDown, DoorOpen);
 	TestEqual(TEXT("and reports itself fully down for the whole flight"), GearDown, 1.0);
-	TestEqual(TEXT("with no door it does not have"), DoorOpen, 0.0);
+	TestEqual(TEXT("with its bay at the bind pose, since it has no doors"), DoorOpen, 1.0);
 
 	return true;
 }
@@ -259,12 +280,13 @@ bool FGearReachesTheMotionDescriptionTest::RunTest(const FString& Parameters)
 	// is the value a broken default would most plausibly be mistaken for.
 	const FAgentMotion Parked = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
 	TestEqual(TEXT("a parked aircraft reports its gear down"), Parked.GearDownFraction, 1.0);
-	TestEqual(TEXT("and its bay shut"), Parked.BayDoorOpenFraction, 0.0);
+	TestEqual(TEXT("and its bay OPEN - a 737's nose doors are linked to the strut"),
+		Parked.BayDoorOpenFraction, 1.0);
 
 	// MID-CYCLE, where the two disagree with both resting poses - which is the only place a
 	// forwarder that returned a constant would be caught.
 	Agent.GearPhase = EGearPhase::Raising;
-	Agent.GearCycleSeconds = 4.5;
+	Agent.GearCycleSeconds = 3.5;
 
 	const FAgentMotion Climbing = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
 	TestTrue(TEXT("half way up the gear is part way retracted"),
@@ -301,7 +323,8 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the 737 has retractable gear"), Frame.Gear.IsSet());
 	TestEqual(TEXT("with the real transit time"), Frame.Gear.TravelSeconds, 7.0);
 	TestEqual(TEXT("and a second of nose bay door each side"), Frame.Gear.DoorSeconds, 1.0);
-	TestEqual(TEXT("making a nine second cycle"), Frame.Gear.CycleSeconds(), 9.0);
+	TestEqual(TEXT("making an eight second cycle - one travel, one door movement"),
+		Frame.Gear.CycleSeconds(), 8.0);
 
 	// THE CUE HEIGHTS TRAVEL WITH IT, and their ORDER is the thing worth pinning: the extend
 	// height sits ABOVE the retract height, which is exactly what makes altitude alone an
@@ -344,42 +367,36 @@ bool FGearAnglesFollowTheFractionsTest::RunTest(const FString& Parameters)
 
 	// plane4's measured rig angles: the gear folds 90 degrees from a bind pose that is DOWN,
 	// and the doors are SHUT at 81 from a bind pose that is OPEN - "found by sweeping: the two
-	// free edges meet on the centreline to 0.0 mm", per its build_export.py. The two bind
-	// poses are opposite, which is the whole reason this test exists.
+	// free edges meet on the centreline to 0.0 mm", per its build_export.py.
 	const float Retracted = 90.0f;
 	const float DoorClosed = 81.0f;
 
-	// THE RESTING POSE OF A PARKED AEROPLANE, and it is asserted FIRST because it is what the
-	// player looks at for all but nine seconds of a flight. Gear down and bay SHUT.
-	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
-	TestEqual(TEXT("gear down is no rotation at all - the bind pose is the gear-down pose"),
-		GearAngle, 0.0f);
-	TestEqual(TEXT("while a shut door is the FULL sweep, because its bind pose is open"),
+	// A PARKED AEROPLANE ROTATES NEITHER BONE, and that is the single most useful fact in this
+	// file: the bind pose IS the parked pose - gear down, bay hanging open, because a 737's
+	// nose doors are linked to the strut. It is asserted first because it is what the player
+	// looks at for all but eight seconds of a flight.
+	UAirsideAgentAnim::GearAnglesFrom(1.0f, 1.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
+	TestEqual(TEXT("gear down is no rotation at all"), GearAngle, 0.0f);
+	TestEqual(TEXT("and an open bay is no rotation either - a parked 737 is the bind pose"),
+		DoorAngle, 0.0f);
+
+	// STOWED ROTATES BOTH. The other rest state, and the one a trapezoid could never reach
+	// because it returned the doors to whatever value they started at.
+	UAirsideAgentAnim::GearAnglesFrom(0.0f, 0.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
+	TestEqual(TEXT("gear up is the full fold"), GearAngle, 90.0f);
+	TestEqual(TEXT("and a shut bay is the full sweep, because its bind pose is open"),
 		DoorAngle, 81.0f);
 
-	// MID-CYCLE: gear stowed, bay held open around it.
-	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
-	TestEqual(TEXT("gear up is the full fold"), GearAngle, 90.0f);
-	TestEqual(TEXT("and a fully open bay is no rotation at all"), DoorAngle, 0.0f);
-
-	// THE TWO MOVE IN OPPOSITE SENSES, which is the defect this pins. Shipped once as
-	// DoorOpenFraction * angle, the doors SHUT as the cycle began, the gear retracted through
-	// them, and they opened again at the end - and a parked aeroplane sat with its bay hanging
-	// open. Asserting the endpoints separately is what catches a swapped lerp; asserting only
-	// the midpoint would not, because 40.5 is the same either way round.
-	UAirsideAgentAnim::GearAnglesFrom(0.5f, 0.5f, Retracted, DoorClosed, GearAngle, DoorAngle);
+	// MID-RETRACTION: the leg part way up with the bay still held open around it. BOTH shipped
+	// versions of the trapezoid got this frame wrong - the first shut the doors on the way in,
+	// the second shut them while parked - and both looked like sequencing bugs.
+	UAirsideAgentAnim::GearAnglesFrom(0.5f, 1.0f, Retracted, DoorClosed, GearAngle, DoorAngle);
 	TestEqual(TEXT("half retracted is half the fold"), GearAngle, 45.0f);
-	TestEqual(TEXT("half open is half the sweep"), DoorAngle, 40.5f);
+	TestEqual(TEXT("with the bay open around it, rotating nothing"), DoorAngle, 0.0f);
 
-	// AND THE SENSES ARE OPPOSITE, said as its own assertion rather than left to be inferred
-	// from the three above: as the gear travels AWAY from its bind pose the doors travel
-	// TOWARD theirs.
-	float ShutGear = -1.0f, ShutDoor = -1.0f;
-	float OpenGear = -1.0f, OpenDoor = -1.0f;
-	UAirsideAgentAnim::GearAnglesFrom(1.0f, 0.0f, Retracted, DoorClosed, ShutGear, ShutDoor);
-	UAirsideAgentAnim::GearAnglesFrom(0.0f, 1.0f, Retracted, DoorClosed, OpenGear, OpenDoor);
-	TestTrue(TEXT("retracting winds the gear up and the doors down, never both the same way"),
-		OpenGear > ShutGear && OpenDoor < ShutDoor);
+	// AND THE DOOR IS A TRAVEL, NOT A SWITCH.
+	UAirsideAgentAnim::GearAnglesFrom(0.0f, 0.5f, Retracted, DoorClosed, GearAngle, DoorAngle);
+	TestEqual(TEXT("half shut is half the sweep"), DoorAngle, 40.5f);
 
 	return true;
 }

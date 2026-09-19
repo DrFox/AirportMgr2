@@ -138,9 +138,13 @@ void FRoadAgent::GearFractions(double& OutGearDown, double& OutDoorOpen) const
 {
 	// THE RESTING POSES ARE ANSWERED HERE AND NOT BY THE EVALUATOR, because a resting pose is
 	// not a point in a cycle - a fixed-gear airframe has no cycle to sample at all.
+	// THE TWO RESTING POSES ARE DIFFERENT, and that is the point: on a 737 the nose bay doors
+	// are linked to the strut, so they hang OPEN with the gear down and shut only once it is
+	// stowed. A parked or approaching aeroplane therefore sits gear-down, doors-open - which
+	// is also SK_Plane4's bind pose, so the animgraph applies no rotation at all there.
 	switch (GearPhase)
 	{
-	case EGearPhase::Down: OutGearDown = 1.0; OutDoorOpen = 0.0; return;
+	case EGearPhase::Down: OutGearDown = 1.0; OutDoorOpen = 1.0; return;
 	case EGearPhase::Up:   OutGearDown = 0.0; OutDoorOpen = 0.0; return;
 	default: break;
 	}

@@ -13,9 +13,11 @@ hinge. plane2 and plane3 have no such bones - both rigs are
 ## 1. What is being modelled
 
 An aircraft raises its gear on climb-out and lowers it on approach. On a 737 the nose bay
-doors close over the stowed wheel, so a cycle is three stages: doors open, gear travels,
-doors close. The mains have no doors - they sit in a wheel well behind a fixed fairing -
-which is why plane4's rig has nose doors only and not a `door_main_*` pair.
+doors are **linked to the strut**: they hang open whenever the gear is down and shut only
+over the stowed wheel. So a cycle is TWO stages, not three, and which stage comes first
+depends on the direction - see section 2, which this paragraph originally got wrong. The
+mains have no doors at all - they sit in a wheel well behind a fixed fairing - which is why
+plane4's rig has nose doors only and not a `door_main_*` pair.
 
 **RETRACTION IS NOT TRIGGERED BY LIFT-OFF.** It is a pilot command, given a few hundred
 feet above the ground, not at the moment the wheels leave the tarmac. `bAirborne` is the
@@ -54,19 +56,47 @@ document.
 
     EGearPhase { Down, Raising, Up, Lowering }
 
-plus an elapsed-seconds double. Both fractions are pure functions of that one timer:
+plus an elapsed-seconds double. Both fractions are pure functions of that one timer.
 
-               0s        DoorSeconds        +TravelSeconds      +DoorSeconds
-               |             |                    |                  |
-    doors      closed --[ OPENING ]------- open -------[ CLOSING ]--- closed
-    gear       down ------------------[ RETRACTING ]--------------- up
+**Amended 2026-09-19, from play.** This section originally specified a trapezoid - doors
+open, gear travels, doors close - and it was wrong about the aeroplane. A 737's nose gear
+doors are **linked to the strut**: they hang OPEN with the gear down and shut only once it is
+stowed. The two rest states therefore DIFFER, and the door movement sits at the **gear-up end
+of the cycle in both directions**:
 
-The door fraction is a trapezoid; the gear fraction is a ramp across its flat top. **The
-sequencing falls out of the shape, not out of extra states** - there is no `DoorsOpening`
-phase distinct from a `DoorsClosing` one, because the timer already says which it is. Eight
-states were considered and rejected on those grounds.
+    retracting   0s                     TravelSeconds      +DoorSeconds
+                 |                            |                  |
+      gear       down --[ RETRACTING ]------- up --------------- up
+      doors      open ------------------- open --[ SHUTTING ]--- shut
 
-`Lowering` is the same curve read backwards, which is what makes the extend half nearly free.
+    extending    0s       DoorSeconds                      +TravelSeconds
+                 |             |                                 |
+      gear       up ---------- up --------[ EXTENDING ]-------- down
+      doors      shut --[ OPENING ]--- open ------------------- open
+
+A trapezoid cannot express this, because it returns the doors to the same value at both ends,
+so one of the two rest states is always wrong - and no sign convention fixes that. It was
+reported from play twice before the shape itself was questioned: first as a parked aeroplane
+with its bay hanging open, then, after the sign was flipped, as one with the bay shut around
+its own extended gear. **The bug was in the curve, not in its direction.**
+
+On extension the doors LEAD, because they are shut over the stowed wheel and it cannot come
+down through them. On retraction they TRAIL, because they are already open. There is no door
+stage at the gear-down end at all, so a cycle is `TravelSeconds + DoorSeconds` - **8 s for the
+737, not 9**.
+
+**The sequencing still falls out of the shape, not out of extra states** - there is no
+`DoorsOpening` phase distinct from a `DoorsClosing` one, because the timer and the direction
+already say which it is. Eight states were considered and rejected on those grounds.
+
+`Lowering` is the exact **time-reverse** of `Raising` - `FractionsAt(t, false)` equals
+`FractionsAt(CycleSeconds() - t, true)` in both outputs - which is what makes the extend half
+nearly free, and what `Airside.Model.GearExtendMirrorsRetract` now pins. (It formerly
+asserted a *complement*, which was a property of the trapezoid rather than of the aeroplane.)
+
+**The parked pose is the bind pose.** Gear down and bay open is what `SK_Plane4` was modelled
+in, so a stationary 737 asks the animgraph to rotate no bone at all. That is the most useful
+single fact for anyone wiring or debugging this.
 
 **A PHASE IS AN ENUM, NEVER A SET OF BOOLS** - CLAUDE.md's rule, and it applies with force
 here: `bGearUp` plus `bDoorsOpen` plus `bInTransit` can express "up, in transit, doors shut",
@@ -190,10 +220,12 @@ list, the anim instance's properties are another, and they have to agree by NAME
 World-free, in `Model/`, which is where CLAUDE.md sends anything that can be tested without a
 repro.
 
-1. **The gear does not move until the doors are open.** At `DoorSeconds` minus one frame,
-   `GearDownFraction` is still exactly 1.0 and `BayDoorOpenFraction` is short of 1.0.
-2. **The doors do not close until the gear is stowed.** At `DoorSeconds + TravelSeconds`,
+1. **On EXTENSION the gear does not move until the doors are open.** At `DoorSeconds` minus
+   one frame, `GearDownFraction` is still 0.0 and `BayDoorOpenFraction` is short of 1.0.
+2. **On RETRACTION the doors do not shut until the gear is stowed.** At `TravelSeconds`,
    `GearDownFraction` is 0.0 and `BayDoorOpenFraction` is still 1.0.
+2b. **And a parked aeroplane has BOTH at 1.0** - gear down, bay open, the bind pose. This is
+   the assertion that would have caught the trapezoid on the first run.
 3. **Retraction fires at the height, not at lift-off.** Airborne and below
    `RetractAboveHeight`, the gear is down; carried past it, the cycle starts. The sibling of
    `AgentMotionTest` case 4, which guards the rotation.

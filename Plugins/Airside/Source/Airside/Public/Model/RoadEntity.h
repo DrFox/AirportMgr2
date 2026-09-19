@@ -269,8 +269,16 @@ struct AIRSIDE_API FAgentMotion
 	 */
 	UPROPERTY() double GearDownFraction = 1.0;
 
-	/** The gear bay doors: 0 shut, 1 fully open. Zero for an airframe with no doors. */
-	UPROPERTY() double BayDoorOpenFraction = 0.0;
+	/**
+	 * The gear bay doors: 1 fully open, 0 shut.
+	 *
+	 * ONE DEFAULTS TO OPEN, which pairs with GearDownFraction's 1: together they are a parked
+	 * aeroplane, gear down and bay hanging open, which is what a 737's linked nose doors
+	 * actually do and what SK_Plane4's bind pose already is. An airframe with no doors, and
+	 * every ground vehicle, also want this value - it is the one that asks the animgraph to
+	 * rotate nothing.
+	 */
+	UPROPERTY() double BayDoorOpenFraction = 1.0;
 };
 
 /**
@@ -476,15 +484,38 @@ struct AIRSIDE_API FGearPerformance
 	/** Has anyone declared retractable gear for this airframe? */
 	bool IsSet() const { return TravelSeconds > 0.0; }
 
-	/** Doors out, gear across, doors back. Seconds. */
+	/** One gear travel plus ONE door movement. Seconds. */
 	double CycleSeconds() const
 	{
-		return FMath::Max(DoorSeconds, 0.0) * 2.0 + FMath::Max(TravelSeconds, 0.0);
+		return FMath::Max(DoorSeconds, 0.0) + FMath::Max(TravelSeconds, 0.0);
 	}
 
 	/**
 	 * Both fractions at a point in a cycle. OutGearDown is 1 down-and-locked, 0 stowed;
-	 * OutDoorOpen is 0 shut, 1 fully open.
+	 * OutDoorOpen is 1 fully open, 0 shut.
+	 *
+	 * THE DOORS ARE OPEN WHENEVER THE GEAR IS NOT STOWED, which is how a 737's nose bay
+	 * actually works: the doors are linked to the strut, so they hang open with the gear down
+	 * and shut only once it is up. The two rest states are therefore DIFFERENT - gear down
+	 * means doors open, gear up means doors shut - and the door movement sits at the GEAR-UP
+	 * END of the cycle in both directions:
+	 *
+	 *     raising    [ gear travels, doors open ][ doors shut ]
+	 *     lowering   [ doors open ][ gear travels, doors open ]
+	 *
+	 * THIS WAS A TRAPEZOID UNTIL 2026-09-19 - doors open, gear travels, doors shut - which
+	 * returned them to the SAME value at both ends. That is unfixable by any sign convention,
+	 * because one of the two rest states is then always wrong, and it was reported from play
+	 * twice: once as a parked aeroplane with its bay hanging open, and once, after the sign
+	 * was flipped, as one with the bay shut around its own extended gear.
+	 *
+	 * So there is no door stage on the gear-down end at all. On extension the doors lead,
+	 * because they are shut over the stowed wheel and it cannot come through them; on
+	 * retraction they trail, because they are already open and only shut behind it.
+	 *
+	 * Lowering is the exact time-reverse of raising - FractionsAt(t, false) equals
+	 * FractionsAt(CycleSeconds() - t, true) in both outputs - which is what
+	 * Airside.Model.GearExtendMirrorsRetract pins.
 	 *
 	 * THE ONE EVALUATOR. The model stores what this returns and the view draws it; nothing
 	 * re-derives either number. That is the guideline graph's invariant applied to a second

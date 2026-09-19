@@ -142,9 +142,15 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float GearDownFraction = 1.0f;
 
-	/** The gear bay doors: 0 shut, 1 fully open. Copied from the model. */
+	/**
+	 * The gear bay doors: 1 fully open, 0 shut. Copied from the model.
+	 *
+	 * DEFAULTS TO OPEN to pair with GearDownFraction's 1 - a parked aeroplane, which is also
+	 * the bind pose, so an Animation Blueprint previewing with no agent shows the aeroplane
+	 * as it sits on a stand rather than in a state it is never in.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
-	float BayDoorOpenFraction = 0.0f;
+	float BayDoorOpenFraction = 1.0f;
 
 	/**
 	 * Gear rotation, degrees. Apply to gear_nose, gear_L and gear_R - the RETRACT bones, not
