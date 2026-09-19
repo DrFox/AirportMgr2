@@ -24,7 +24,7 @@ check that survives the script is the automation test
 Airside.Content.PushbackNeedsAuthored, which loads each asset in a fresh editor and asserts
 the same table this file writes. If the two ever disagree, believe the test.
 
-THE FOUR ENTRIES ARE THE WHOLE LIST. A type absent from here loads with FAirframe's own
+THE FIVE ENTRIES ARE THE WHOLE LIST. A type absent from here loads with FAirframe's own
 default, which is VehicleTug - the conservative answer, because "needs a tug" of something
 that does not is a missing fee, while "reverses itself" of an A320 is an airport that never
 needs the depot.
@@ -43,6 +43,10 @@ NEEDS = {
     "/Game/Entities/DA_Aircraft_Plane2": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "a Twin Otter beta-ranges off a stand",
+    ),
+    "/Game/Entities/DA_Aircraft_Plane3": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a Q400 turns out of a regional stand on its own props; the depot is the jets' tax",
     ),
     "/Game/Entities/DA_Aircraft_A320": (
         unreal.PushbackNeed.VEHICLE_TUG,
