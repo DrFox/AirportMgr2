@@ -153,15 +153,39 @@ TONE_C = srgb("#B6A66A")   # dry / straw patches
 
 # Region sizes in METRES, converted to a UV scale in the graph. Exposed in metres because a
 # parameter reading 0.00008 is unjudgeable in the editor, and this has to be judged there.
-REGION_SIZE_FAR = 350.0    # the big tonal areas the feedback asked for
-REGION_SIZE_NEAR = 110.0   # the sparser dry patches
+# Sizes are the BASE octave; with REGION_LEVELS = 4 the visible patches are smaller than
+# this - 800 m gives structure at 800, 400, 200 and 100 m, and it is the 100-400 m bands the
+# eye actually reads as patches.
+#
+# Raised from 350/110 on 2026-09-19 after looking at both ends. At 350 m the field was right
+# at the 60 m camera and read as CAMOUFLAGE at 600 m, because a zoomed-out frame held about
+# twenty cycles of the pattern and twenty cycles of anything is a texture, not terrain. The
+# count in frame is what matters, not the size in metres, and the far camera is the one that
+# sets it: at 800 m a 600 m view holds three or four regions.
+REGION_SIZE_FAR = 800.0    # the big tonal areas the feedback asked for
+REGION_SIZE_NEAR = 260.0   # the sparser dry patches
 VALUE_NOISE_SIZE = 17.0    # near-camera break-up, the octave that already worked
 
-# Octaves per region noise. Two, not the node's default of six: at these sizes the third
-# octave and beyond are smaller than the value texture already covers, so they cost
-# instructions to add detail that is then drowned. This IS the cost objection the header
-# used to raise against the node, answered rather than avoided.
-REGION_LEVELS = 2
+# Octaves per region noise. FOUR, and the reason is the second failure this file has
+# recorded rather than a preference.
+#
+# Two octaves was tried first, on the argument that finer ones "are smaller than the value
+# texture already covers, so they cost instructions to add detail that is then drowned".
+# That was wrong in one specific way: the value texture is BRIGHTNESS-ONLY and it is
+# 17 m, so past about 100 m it mips to its own average and contributes nothing. With two
+# octaves the frame at 600 m therefore contained slow colour gradients and NOTHING ELSE,
+# which is precisely what an out-of-focus photograph contains. The user's words for it were
+# "blurry splodges that look out of focus when zoomed out", and that is the correct reading
+# of the image.
+#
+# Blur is the absence of detail at the scale you are looking at, so the cure is detail at
+# more scales. At LevelScale 2 and a 350 m base, four levels put structure at 350, 175, 87
+# and 44 m - the last two are what give a region an irregular, crinkled EDGE instead of the
+# smooth oval a two-octave field produces, and an edge is what stops it reading as defocus.
+#
+# NOT a material parameter: Levels is a plain UPROPERTY on the node, so changing it needs
+# this script re-run. The contrast window below does the same job continuously and IS live.
+REGION_LEVELS = 4
 
 # GradientALU, not GradientTex, and this one was also settled by looking.
 #
@@ -180,12 +204,20 @@ REGION_FUNCTION = unreal.NoiseFunction.NOISEFUNCTION_GRADIENT_ALU
 # The contrast window that turns a smooth noise into REGIONS. Without it a lerp driven by
 # noise is a soft wash everywhere and still reads as one colour with a bruise on it. Widen
 # the window for a gentle gradient, narrow it for distinct patches with defined edges.
-REGION_CONTRAST_LO = 0.40
-REGION_CONTRAST_HI = 0.60
+# Narrowed from 0.40/0.60 on 2026-09-19, same round as the octaves above. A fractal sum
+# concentrates toward its midpoint - the more octaves, the tighter - so a window that was
+# already generous for a 2-level noise spanned nearly the whole distribution of a 4-level
+# one, putting most of the field mid-lerp and averaging the tones back together. Narrow
+# these further for hard-edged patches, widen them for a gentle wash; this is the knob to
+# reach for FIRST, because it is live on MI_Ground and needs no rebuild.
+REGION_CONTRAST_LO = 0.46
+REGION_CONTRAST_HI = 0.54
 
 # How much of the frame the dry tone is allowed to claim. Kept low: straw patches are an
-# accent, and a field that is a third straw stops looking maintained.
-PATCH_AMOUNT = 0.35
+# accent, and a field that is a third straw stops looking maintained. Lowered from 0.35 with
+# the sizes above - the tan is the highest-contrast tone against the greens, so it is what
+# tipped the zoomed-out frame into reading as a pattern rather than as a field.
+PATCH_AMOUNT = 0.25
 
 # The surviving value-only wobble, as a full width: 0.20 means roughly 1 +/- 0.10.
 VALUE_VARIATION = 0.20
