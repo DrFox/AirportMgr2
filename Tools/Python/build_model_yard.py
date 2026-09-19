@@ -89,12 +89,26 @@ LOCK_EXPOSURE_EV100 = None
 # camera looking down: a billboard facing one horizontal direction is edge-on from most of
 # the angles the game is ever viewed from. Flat text reads from every one of them.
 #
-# THE ROTATION IS A PREDICTION, not a measurement. A TextRenderComponent's glyphs face its
-# local +X with the baseline running along -Y, so pitching -90 lays the normal along +Z and
-# yawing 180 turns the reading direction back to +Y. A commandlet cannot render, so this
-# cannot be checked from here - look at the map and flip the yaw if the labels read
-# backwards.
-LABEL_ROTATION = unreal.Rotator(0.0, -90.0, 180.0)
+# THE ROTATION IS MEASURED, and the measurement corrected the sign this line shipped with.
+# UTextRenderComponent lays its glyphs in the component's LOCAL X = 0 PLANE:
+# TextRenderComponent.cpp:1373 builds the bounds as
+# FBox(FVector(0, -Size.X - LeftTop.X, -Size.Y), FVector(0, -LeftTop.X, 0)), so the string
+# advances along local -Y with the text's own up on local +Z, and the READABLE FACE IS
+# LOCAL +X. Pitch +90 is therefore what lays that face along world +Z, where a camera
+# looking down can see its front. Yaw 180 then puts the reading direction on world +Y and
+# the text's up on world +X - screen-right and screen-up for a top-down view with +X up the
+# screen.
+#
+# PITCH -90 WAS THE BUG and it shipped under a comment predicting the opposite, calling
+# itself a prediction and inviting the wrong remedy. It sent the readable face to world -Z,
+# so every label in the yard was read through its own back and came out MIRRORED - which is
+# what "backwards" looked like in the viewport on 2026-09-19.
+#
+# FLIPPING THE YAW, which that comment advised, WOULD NOT HAVE FIXED IT. A yaw is a rotation
+# about Z, and no amount of it turns a normal already lying along -Z back to +Z: it slides
+# the text around the ground and leaves it mirrored. The axis that is wrong is not always
+# the axis whose symptom you can see.
+LABEL_ROTATION = unreal.Rotator(0.0, 90.0, 180.0)
 LABEL_SIZE_UU = 150.0
 LABEL_GAP_UU = 400.0
 
