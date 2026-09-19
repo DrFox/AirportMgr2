@@ -139,11 +139,16 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// AND HOW LONG AN AIRFRAME THE LETTER ADMITS, which is what a stand's ground geometry is
 	// kept clear of. Code C's figure is MEASURED - it is the 737-800's tail, the longest type
 	// this project ships - so it is pinned here against the same figure Build737 authors, and
-	// the two cannot drift without a test saying so. The letters with no shipped type are
+	// the two cannot drift without a test saying so. It was 3430 until 2026-09-19, when
+	// Build737 was found to be carrying the A320's nose overhang; correcting the nose to
+	// Boeing's 13 FT 5 IN moved the tail with it, because the tail is the nose less the
+	// published length. A test that pins a figure is only as good as the figure's source -
+	// this one held the two in step faithfully for months while both were wrong.
+	// The letters with no shipped type are
 	// authored design values and are asserted only for their ORDER, which is the one thing
 	// that must hold however the figures are revised.
 	TestEqual(TEXT("Code C admits the 737-800's tail, and is measured from it"),
-		IcaoCode::MaxTailAftForLetter(TEXT("C")), 3430.0, 0.5);
+		IcaoCode::MaxTailAftForLetter(TEXT("C")), 3538.0, 0.5);
 
 	double Previous = 0.0;
 	for (const TCHAR* Letter : { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E"), TEXT("F") })

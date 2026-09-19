@@ -142,10 +142,28 @@ void UAircraftType::Build737(UAircraftType* Type)
 	Type->DisplayName = LOCTEXT("B738", "737-800");
 	Type->ServicePoints.Reset();
 
-	// 39.5 m long - LONGER than the A320 despite sharing its code letter - 35.8 m span with
-	// winglets, nose gear about 5.2 m aft of the nose.
-	Type->Footprint.NoseX = 520.0;
-	Type->Footprint.TailX = -3430.0;
+	// Boeing D6-58325-7 Rev C section 2.2.6, the 737-800W side view, which is in the repo at
+	// AirportMgr2Models/plane4/concept/737NG_REV_C.pdf page 2-14:
+	//
+	//   129 FT 6 IN (39.47 M)   overall length
+	//    13 FT 5 IN  (4.09 M)   nose tip to the NOSE GEAR
+	//    51 FT 2 IN (15.60 M)   nose gear to the mains
+	//   117 FT 5 IN (35.79 M)   span over the winglets
+	//
+	// The origin is the nose gear, so the nose is +409 and the tail is that less the length.
+	//
+	// IT WAS 520 AND -3430 UNTIL 2026-09-19, AND BOTH WERE THE A320'S SHAPE. BuildA320 above
+	// carries 507 of nose overhang and is correct; somebody rounded it up for this type rather
+	// than reading the 737's own drawing. The two aeroplanes differ by about a metre here and
+	// in the opposite direction to the copy: a 737-800 has a SHORTER nose overhang and a
+	// LONGER wheelbase than an A320, which is most of what makes them different on a stand.
+	// Copying one to the other erased exactly the distinction this type exists to express.
+	//
+	// SK_Plane4 is what caught it, measuring 4.090 and 15.600 to the centimetre. The model was
+	// accused of being wrong first, and for a whole session; the drawing settled it the other
+	// way round. Measure the aeroplane, not the neighbouring row of the table.
+	Type->Footprint.NoseX = 409.0;
+	Type->Footprint.TailX = -3538.0;
 	Type->Footprint.Wingspan = 3580.0;
 	Type->Footprint.WingX = -1250.0;
 	Type->Footprint.TailplaneSpan = 1400.0;
@@ -168,6 +186,25 @@ void UAircraftType::Build737(UAircraftType* Type)
 	Type->Ground.Taxi.SpeedCap = 800.0;
 	Type->Ground.MinSteeringSpeed = 50.0;
 	Type->Ground.MaxTurnRateDegPerSec = 8.0;
+
+	// NO GEAR FIGURES HERE, AND THAT IS THE DECISION RATHER THAN AN OMISSION. This is the
+	// PAPER 737: it carries no mesh, nothing ever flies it, and it exists so stand layout and
+	// Solve/IcaoCode.cpp can reason about a 737's size without one being modelled. Landing
+	// gear is invisible to every one of those callers.
+	//
+	// The aeroplane that actually flies is DA_Aircraft_Plane4, authored by
+	// Tools/Python/build_plane4_type.py against SK_Plane4, and its FGearPerformance lives
+	// there - the measured pipeline, one source of truth. Figures in both places would be two
+	// copies of one aeroplane's numbers, which is the drift this codebase keeps paying for:
+	// see build_fleet_materials.py, where `metal` meant chrome on one model and dull steel on
+	// another because two authors had each typed it.
+	//
+	// They WERE here, briefly, on 2026-09-19 - the gear spec said to author them on this
+	// function, which was written before anyone noticed nothing calls it outside tests.
+	//
+	// Airside.Model.Gear737IsAuthoredAndTravels pins the boundary IN BOTH DIRECTIONS - the
+	// asset declares a cycle, this function does not - so a later edit that "completes" this
+	// one by copying the figures back goes red.
 }
 
 void UAircraftType::BuildPiperMeridian(UAircraftType* Type)

@@ -63,6 +63,11 @@ def bone_plan():
     The NAMES come from the .glb; the MAPPING is the decision this script owns. A joint that
     matches neither rule is reported rather than skipped silently - an unrecognised bone is
     either a rig the sim does not know how to drive yet, or a typo, and both want saying.
+
+    THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
+    check it - see CLAUDE.md, "check where a list is CONSUMED". gear/door were added on
+    2026-09-19 with the retraction work; before that plane4's five retract and hinge bones
+    were correctly reported UNRECOGNISED, which its own build_export.py predicted in writing.
     """
     plan = []
     for name in joint_names():
@@ -76,14 +81,26 @@ def bone_plan():
             # rule would tell someone to wire a STEERING bone to the ROLL angle - which
             # spins the nose gear about the strut and looks like a broken castor.
             #
-            # The variable does not exist yet: SteerAngleDegrees arrives with the nose-gear
-            # steering work (docs/superpowers/specs/2026-09-13-nose-gear-steering-design.md).
-            # Named here anyway so the plan says what the bone is FOR rather than calling a
-            # correctly-rigged joint unrecognised.
-            plan.append((name, "SteerAngleDegrees  (NOT YET IN UAirsideAgentAnim - see the "
-                               "nose-gear steering spec; leave this bone unwired until it is)"))
+            # THE PARENTHETICAL THAT USED TO BE HERE IS GONE, and its removal is the point.
+            # It read "(NOT YET IN UAirsideAgentAnim - see the nose-gear steering spec; leave
+            # this bone unwired until it is)", written when the variable was still planned.
+            # The nose-gear steering work landed and SteerAngleDegrees has been a property on
+            # UAirsideAgentAnim ever since, so the instruction was telling whoever read this
+            # plan to leave a working bone unwired. Caught on 2026-09-19 while adding the gear
+            # rules below - a stale note in a list nobody re-reads is exactly how a feature
+            # ships switched off.
+            plan.append((name, "SteerAngleDegrees"))
         elif "wheel" in lowered:
             plan.append((name, "WheelAngleDegrees"))
+        elif "gear" in lowered:
+            # AFTER the wheel rule, and the ordering is the discipline rather than a
+            # necessity today: no bone in plane4's rig matches two of these five. The steer
+            # rule above records what happens when one does - 'nosewheel_steer' matches both
+            # 'steer' and 'wheel', and the wrong winner spins the nose gear like a castor.
+            # Most-specific-first is what keeps the next rig from discovering that again.
+            plan.append((name, "GearAngleDegrees"))
+        elif "door" in lowered:
+            plan.append((name, "BayDoorAngleDegrees"))
         else:
             plan.append((name, "?  UNRECOGNISED - nothing in UAirsideAgentAnim drives it"))
     return plan

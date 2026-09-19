@@ -255,6 +255,30 @@ struct AIRSIDE_API FAgentMotion
 	 * Zero on a pivot-steered vehicle, which has no steered wheel to draw.
 	 */
 	UPROPERTY() double SteerAngleDegrees = 0.0;
+
+	/**
+	 * Where the landing gear is: 1 down and locked, 0 stowed. See FGearPerformance.
+	 *
+	 * A FRACTION AND NOT AN ANGLE, because the travel angle is a fact about one RIG - 90
+	 * degrees on plane4, measured in its build_export.py - and the model has no business
+	 * knowing it. UAirsideAgentAnim multiplies by its own measured figure, the same split
+	 * MainWheelRadius already makes.
+	 *
+	 * ONE DEFAULTS TO DOWN, deliberately: an airframe with no gear data, a vehicle, and every
+	 * aircraft on the ground all want the same answer, and it is this one.
+	 */
+	UPROPERTY() double GearDownFraction = 1.0;
+
+	/**
+	 * The gear bay doors: 1 fully open, 0 shut.
+	 *
+	 * ONE DEFAULTS TO OPEN, which pairs with GearDownFraction's 1: together they are a parked
+	 * aeroplane, gear down and bay hanging open, which is what a 737's linked nose doors
+	 * actually do and what SK_Plane4's bind pose already is. An airframe with no doors, and
+	 * every ground vehicle, also want this value - it is the one that asks the animgraph to
+	 * rotate nothing.
+	 */
+	UPROPERTY() double BayDoorOpenFraction = 1.0;
 };
 
 /**
@@ -374,6 +398,134 @@ struct AIRSIDE_API FEnginePerformance
 	{
 		return MaxRPM > 0.0 && SpoolUpSeconds > 0.0 && SpoolDownSeconds > 0.0;
 	}
+};
+
+/**
+ * Where the landing gear has got to.
+ *
+ * A PHASE IS AN ENUM, NEVER A SET OF BOOLS - CLAUDE.md's rule, and it bites hard here.
+ * bGearUp plus bDoorsOpen plus bInTransit can express "up, in transit, doors shut", which is
+ * the state where an aeroplane's wheels are passing through its own bay doors.
+ *
+ * FOUR STATES AND NOT EIGHT. A sequenced cycle is doors-open, gear-travel, doors-close, and
+ * the obvious encoding gives each stage its own phase in each direction. The timer already
+ * says which stage it is in - see FGearPerformance::FractionsAt - so the extra four would be
+ * a second answer to a question one double already answers.
+ */
+UENUM()
+enum class EGearPhase : uint8
+{
+	/** Down and locked. Every phase on the ground, and every airframe with fixed gear. */
+	Down,
+
+	/** In transit upward: doors opening, gear travelling, doors closing. */
+	Raising,
+
+	/** Up and stowed, bay doors shut over it. */
+	Up,
+
+	/** In transit downward. The same timeline as Raising, read the other way. */
+	Lowering
+};
+
+/**
+ * How an airframe's landing gear retracts, and how long its bay doors take.
+ *
+ * Shaped like FEnginePerformance above it, including the IsSet() idiom, and for the same
+ * reason: this is authored per type and read by the model, and an airframe that has not
+ * declared it must behave rather than crash.
+ *
+ * ZERO TravelSeconds MEANS FIXED GEAR - a fact about the aeroplane - and NOT "unmeasured",
+ * which is what zero means on FAirframe::MainGearTrack. The difference is that there is no
+ * third possibility to confuse it with: an aeroplane either retracts its gear or it does
+ * not, and a DHC-6 Twin Otter does not. plane2 is correct by construction and permanently.
+ *
+ * RETRACTION IS A PILOT COMMAND, NOT A CONSEQUENCE OF LIFT-OFF. It is called for a few
+ * hundred feet above the ground, which is why RetractAboveHeight exists and why
+ * FAgentMotion::bAirborne is the PRECONDITION rather than the cue - contradicting that
+ * flag's own comment, which predicted the cycle would simply hang off it.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FGearPerformance
+{
+	GENERATED_BODY()
+
+	/** Gear travel, seconds. ZERO MEANS FIXED GEAR - see the struct comment. */
+	UPROPERTY(EditAnywhere) double TravelSeconds = 0.0;
+
+	/**
+	 * One bay door movement, seconds. Zero means the airframe has no doors to move.
+	 *
+	 * COUNTED ONCE BUT SPENT TWICE - the doors open before the gear travels and close after
+	 * it, so CycleSeconds() is this plus the travel plus this again. Authored as one figure
+	 * because a door takes the same time to open as to shut.
+	 */
+	UPROPERTY(EditAnywhere) double DoorSeconds = 0.0;
+
+	/**
+	 * Height above the surface at which a departure raises its gear, uu.
+	 *
+	 * READ ONLY WHILE DEPARTING - see FRoadAgent::AdvanceGear. ExtendBelowHeight sits ABOVE
+	 * this figure, so an arrival descending through it is "airborne and above the retract
+	 * height" and would raise its gear on short final if altitude alone decided.
+	 */
+	UPROPERTY(EditAnywhere) double RetractAboveHeight = 9000.0;
+
+	/**
+	 * Height below which an arrival lowers its gear, uu.
+	 *
+	 * LATENT AT TODAY'S FIGURES. An arrival joins final at FApproachPerformance::
+	 * FinalAltitude, 2000 uu, which is below this - so every arrival is born down and locked
+	 * and the extension is never on screen. It becomes visible the day the approach is joined
+	 * higher, which is the whole argument for building the half nobody can see.
+	 */
+	UPROPERTY(EditAnywhere) double ExtendBelowHeight = 15000.0;
+
+	/** Has anyone declared retractable gear for this airframe? */
+	bool IsSet() const { return TravelSeconds > 0.0; }
+
+	/** One gear travel plus ONE door movement. Seconds. */
+	double CycleSeconds() const
+	{
+		return FMath::Max(DoorSeconds, 0.0) + FMath::Max(TravelSeconds, 0.0);
+	}
+
+	/**
+	 * Both fractions at a point in a cycle. OutGearDown is 1 down-and-locked, 0 stowed;
+	 * OutDoorOpen is 1 fully open, 0 shut.
+	 *
+	 * THE DOORS ARE OPEN WHENEVER THE GEAR IS NOT STOWED, which is how a 737's nose bay
+	 * actually works: the doors are linked to the strut, so they hang open with the gear down
+	 * and shut only once it is up. The two rest states are therefore DIFFERENT - gear down
+	 * means doors open, gear up means doors shut - and the door movement sits at the GEAR-UP
+	 * END of the cycle in both directions:
+	 *
+	 *     raising    [ gear travels, doors open ][ doors shut ]
+	 *     lowering   [ doors open ][ gear travels, doors open ]
+	 *
+	 * THIS WAS A TRAPEZOID UNTIL 2026-09-19 - doors open, gear travels, doors shut - which
+	 * returned them to the SAME value at both ends. That is unfixable by any sign convention,
+	 * because one of the two rest states is then always wrong, and it was reported from play
+	 * twice: once as a parked aeroplane with its bay hanging open, and once, after the sign
+	 * was flipped, as one with the bay shut around its own extended gear.
+	 *
+	 * So there is no door stage on the gear-down end at all. On extension the doors lead,
+	 * because they are shut over the stowed wheel and it cannot come through them; on
+	 * retraction they trail, because they are already open and only shut behind it.
+	 *
+	 * Lowering is the exact time-reverse of raising - FractionsAt(t, false) equals
+	 * FractionsAt(CycleSeconds() - t, true) in both outputs - which is what
+	 * Airside.Model.GearExtendMirrorsRetract pins.
+	 *
+	 * THE ONE EVALUATOR. The model stores what this returns and the view draws it; nothing
+	 * re-derives either number. That is the guideline graph's invariant applied to a second
+	 * place - a second evaluator lets the doors the player sees disagree with the doors the
+	 * model thinks it opened, visibly and only mid-cycle.
+	 *
+	 * Const and free of any agent, so a whole cycle can be sampled in a loop with no world,
+	 * no actor and no skeleton.
+	 */
+	void FractionsAt(double Elapsed, bool bRaising, double& OutGearDown, double& OutDoorOpen) const;
 };
 
 /**
@@ -691,6 +843,10 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FClimbPerformance Climb;
 	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
+
+	/** How this airframe's gear retracts, and whether it does at all. See FGearPerformance. */
+	UPROPERTY(EditAnywhere) FGearPerformance Gear;
+
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
 
 	/**

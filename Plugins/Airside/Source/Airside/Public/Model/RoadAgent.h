@@ -320,6 +320,18 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() double EngineRPM = 0.0;
 
 	/**
+	 * Where the gear has got to. Advanced by AdvanceGear every frame, whichever phase is
+	 * driving - the same arrangement as EngineRPM above and for the same reason.
+	 */
+	UPROPERTY() EGearPhase GearPhase = EGearPhase::Down;
+
+	/**
+	 * How far into a raise or a lower, seconds. Meaningless in Down and Up, and reset to
+	 * zero on arrival at either so it cannot be read as a stale position.
+	 */
+	UPROPERTY() double GearCycleSeconds = 0.0;
+
+	/**
 	 * Seconds still to run on the post-arrival pause before the engine is shut down.
 	 *
 	 * Counted down only once Phase == Parked. Zero means nothing is pending - either it has
@@ -526,6 +538,23 @@ public:
 	 * the moment an aircraft changed phase.
 	 */
 	void AdvanceEngine(double DeltaSeconds);
+
+	/**
+	 * Moves the gear one frame, and starts or finishes a cycle when the aircraft passes a
+	 * cue height.
+	 *
+	 * Beside AdvanceEngine and called next to it for the same reason: it happens in ALL
+	 * phases. A cycle that only advanced inside the Departing branch would freeze the doors
+	 * half open the moment a departure handed over.
+	 *
+	 * READS LastMotion.Altitude, which is LAST frame's height. A frame of lag on a cue that
+	 * is crossed once per flight is not worth restructuring Advance for - the alternative is
+	 * moving this call below a switch that returns early in four of its branches.
+	 */
+	void AdvanceGear(double DeltaSeconds);
+
+	/** Both gear fractions - see FGearPerformance::FractionsAt, which produces them. */
+	void GearFractions(double& OutGearDown, double& OutDoorOpen) const;
 
 	/**
 	 * The engine is running and already at speed, as it is for an aeroplane that has spent a

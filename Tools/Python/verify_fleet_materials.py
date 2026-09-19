@@ -39,6 +39,7 @@ MODELS = r"C:\repos\AirportMgr2Models"
 FLEET = {
     "plane2": "/Game/Aircraft/Plane2/SK_Plane2",
     "plane3": "/Game/Aircraft/Plane3/SK_Plane3",
+    "plane4": "/Game/Aircraft/Plane4/SK_Plane4",
     "fueltruck1": "/Game/Vehicles/FuelTruck1/SK_FuelTruck1",
     "gpu1": "/Game/Vehicles/GPU1/SK_GPU1",
     "tug1": "/Game/Vehicles/Tug1/SK_Tug1",

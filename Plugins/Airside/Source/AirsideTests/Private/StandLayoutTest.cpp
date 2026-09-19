@@ -253,7 +253,7 @@ bool FStandExtentClearsTheLargestAirframeAdmittedTest::RunTest(const FString& Pa
 	using namespace StandLayoutFixture;
 
 	// A LIVE DEFECT THIS FIXES. The old geometry was sized from the A320's tail at -3250, but
-	// DA_Aircraft_B738 is authored at -3430 and already parks on the same stand - 1.2 m of tail
+	// DA_Aircraft_B738 is authored at -3538 and already parks on the same stand - 0.1 m of tail
 	// clearance where 3 was intended. Sizing from the largest airframe the LETTER admits, never
 	// from a named one, is the rule the taxiway widths and the service road fillet already
 	// follow.

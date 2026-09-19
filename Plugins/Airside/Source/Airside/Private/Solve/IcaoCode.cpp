@@ -37,19 +37,35 @@ namespace IcaoCode
 			/**
 			 * The longest airframe this letter admits, as uu AFT of the nose-gear stop mark.
 			 *
-			 * CODE C IS MEASURED and the rest are authored. C is the 737-800's tail at 3430,
+			 * CODE C IS MEASURED and the rest are authored. C is the 737-800's tail at 3538,
 			 * which is the longest type this project ships, and IcaoCodeTest pins it against
 			 * Build737's own figure so the two cannot drift. No type is authored at any other
 			 * letter, so those are standard design values in the sense this file's header
 			 * gives for the rest of the table - revise one when a type arrives that exceeds
 			 * it, and the drift test in StandLayoutTest is what will say so.
+			 *
+			 * WAS 3430 UNTIL 2026-09-19, when Build737's footprint was found to be carrying
+			 * the A320's nose overhang - see that function. Correcting the nose moved the
+			 * tail with it, because the tail is the nose less the published overall length.
 			 */
 			double MaxTailAft;
 
 			/**
-			 * The same airframe's nose, as uu FORWARD of the stop mark. Code C is the
-			 * 737-800's 520, measured from Build737 like its tail; the rest are authored
-			 * with it. See MaxNoseFwdForLetter for why the pair is not one length.
+			 * The GREATEST NOSE OVERHANG this letter admits, as uu FORWARD of the stop mark.
+			 *
+			 * NOT NECESSARILY THE SAME AEROPLANE AS MaxTailAft, and Code C is the case that
+			 * proves it: the longest type is the 737-800, whose nose reaches only 409 forward
+			 * of its gear, while the A320 is shorter overall and reaches 507. A stand sized
+			 * from one aeroplane's pair would leave the other's nose outside the cleared area,
+			 * which is the same defect MaxTailAftForLetter's header describes from the other
+			 * end. So this is a MAXIMUM over the admitted types, not a second field of one
+			 * type's footprint.
+			 *
+			 * It read "the same airframe's nose... the 737-800's 520" until 2026-09-19, and
+			 * that 520 was the A320's figure rounded up and mislabelled. Correcting Build737
+			 * to its real 409 made the A320 the binding type here - which is why the number
+			 * barely moved while its REASON changed completely.
+			 * Airside.Entities.EveryAirframeFitsItsLettersRow is what enforces the maximum.
 			 */
 			double MaxNoseFwd;
 
@@ -89,7 +105,7 @@ namespace IcaoCode
 		static const FRow Rows[] = {
 			{ TEXT("A"), 1500.0, 1800.0, 1500.0,  300.0,  2000.0,  1000.0,  300.0,   -50.0,  -700.0, 600.0 },
 			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0, 600.0 },
-			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3430.0,  520.0,  -950.0, -2150.0, 600.0 },
+			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  507.0,  -950.0, -2150.0, 600.0 },
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
 			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0, -1600.0, -3700.0, 600.0 },
 			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0, 600.0 },

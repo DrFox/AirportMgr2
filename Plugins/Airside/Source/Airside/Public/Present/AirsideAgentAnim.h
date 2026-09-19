@@ -71,6 +71,15 @@ public:
 		float SpinDownSeconds, float& InOutRateDegPerSec);
 
 	/**
+	 * Both bone angles from both fractions. Zero is the bind pose for each.
+	 *
+	 * Static and free of the instance so it can be tested without an actor or a skeleton -
+	 * the same reason PropStepDegrees and WheelStepDegrees are.
+	 */
+	static void GearAnglesFrom(float GearDownFraction, float DoorOpenFraction,
+		float RetractedAngle, float DoorClosedAngle, float& OutGearAngle, float& OutDoorAngle);
+
+	/**
 	 * Accumulated propeller rotation, degrees. Apply to the 'prop' bone.
 	 *
 	 * WRAPPED to 0..360 rather than allowed to run on: at 2000 RPM this gains 12,000 degrees
@@ -109,9 +118,66 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float WheelRateDegPerSec = 0.0f;
 
-	/** Off the wheels. Stage 2's gear retraction hangs on this. */
+	/**
+	 * Off the wheels.
+	 *
+	 * THE PRECONDITION FOR GEAR RETRACTION AND NOT ITS CUE, which this comment used to get
+	 * wrong: it said "Stage 2's gear retraction hangs on this", and Stage 2 arrived on
+	 * 2026-09-19 hanging on a HEIGHT instead. Raising the gear is a pilot command given a few
+	 * hundred feet up - see FGearPerformance::RetractAboveHeight - and this flag only says
+	 * the wheels are no longer carrying the aeroplane.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	bool bAirborne = false;
+
+	/**
+	 * Where the gear is: 1 down and locked, 0 stowed. Copied from the model, not derived.
+	 *
+	 * THE MODEL OWNS THE CYCLE - see FGearPerformance and FRoadAgent::AdvanceGear. This class
+	 * once derived the propeller's speed from a running flag, "which made the propeller a
+	 * switch", and that was moved into the model for exactly the reason that applies here
+	 * with more force: a gear cycle run from an anim instance is a switch between two poses
+	 * instead of a travel.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float GearDownFraction = 1.0f;
+
+	/**
+	 * The gear bay doors: 1 fully open, 0 shut. Copied from the model.
+	 *
+	 * DEFAULTS TO OPEN to pair with GearDownFraction's 1 - a parked aeroplane, which is also
+	 * the bind pose, so an Animation Blueprint previewing with no agent shows the aeroplane
+	 * as it sits on a stand rather than in a state it is never in.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float BayDoorOpenFraction = 1.0f;
+
+	/**
+	 * Gear rotation, degrees. Apply to gear_nose, gear_L and gear_R - the RETRACT bones, not
+	 * the rolling ones, which take WheelAngleDegrees.
+	 *
+	 * ZERO IS DOWN AND LOCKED, because the bind pose is the gear-down pose. Every bone in
+	 * this rig rotates about its own LENGTH, so the graph applies this in Bone Space and
+	 * never argues about world axes.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float GearAngleDegrees = 0.0f;
+
+	/**
+	 * Bay door rotation, degrees. Apply to door_nose_L and door_nose_R.
+	 *
+	 * ZERO IS FULLY OPEN, WHICH IS THE OPPOSITE OF THE GEAR ABOVE, and it is a fact about the
+	 * RIG rather than a choice made here: plane4's bind pose has the nose bay hanging open,
+	 * and build_export.py's +81 is the angle at which "the two free edges meet on the
+	 * centreline to 0.0 mm" - which is the door SHUT. So the resting value of this property
+	 * is BayDoorClosedAngleDegrees, not zero.
+	 *
+	 * Getting it the other way round is not subtle on screen and was shipped once: the doors
+	 * shut as the cycle began, the gear retracted through them, and they opened again as it
+	 * finished. A parked aeroplane also sat with its bay hanging open.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Airside")
+	float BayDoorAngleDegrees = 0.0f;
 
 	/** Speed over the ground, uu per second. Exposed so the graph can blend on it if wanted. */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
@@ -140,11 +206,44 @@ public:
 	float MainWheelRadius = 21.0f;
 
 	/**
+	 * How far this rig's gear folds, degrees. plane4's is 90.
+	 *
+	 * ON THE ANIM INSTANCE BECAUSE IT IS A FACT ABOUT ONE RIG, exactly as MainWheelRadius is,
+	 * and MEASURED rather than chosen - plane4/scripts/build_export.py poses the leg to find
+	 * it. The model publishes a fraction and knows nothing about this number; a travel angle
+	 * in Model/ would be a rig detail in a layer that has no rigs.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside")
+	float GearRetractedAngleDegrees = 90.0f;
+
+	/**
+	 * The angle at which this rig's bay doors are SHUT, degrees. plane4's is 81.
+	 *
+	 * NAMED FOR THE CLOSED END BECAUSE THAT IS THE ONE THE RIG PUTS WORK INTO. It is a
+	 * measurement, not a round number - build_export.py found it "by sweeping: the two free
+	 * edges meet on the centreline to 0.0 mm", which is why it is 81 and not 90 - and the
+	 * OPEN end is simply the bind pose, at zero.
+	 *
+	 * It was called BayDoorOpenAngleDegrees until 2026-09-19, which had the door travelling
+	 * to 81 to open rather than to shut, and inverted the whole cycle on screen.
+	 *
+	 * A rig that modelled its doors SHUT would want zero here and the open angle named
+	 * instead; that is a second property the day a second such rig exists, and not before.
+	 */
+	UPROPERTY(EditDefaultsOnly, Category = "Airside")
+	float BayDoorClosedAngleDegrees = 81.0f;
+
+	/**
 	 * How long the wheels take to spin down to a stop once airborne, seconds (#107 item 8).
 	 *
-	 * NOT ZERO: the gear stays out (Stage 2's retraction is separate work - see bAirborne),
-	 * and a wheel that stopped the instant the aircraft left the ground would snap from
+	 * NOT ZERO: a wheel that stopped the instant the aircraft left the ground would snap from
 	 * spinning to still in one frame, contradicting FAgentMotion::GroundSpeed's own header.
+	 *
+	 * THIS USED TO SAY "the gear stays out (Stage 2's retraction is separate work)" and that
+	 * stopped being true on 2026-09-19. It does not weaken the argument: retraction begins at
+	 * FGearPerformance::RetractAboveHeight, ~295 ft, which a climb reaches long after these 2
+	 * seconds have run out - so the wheels are in plain sight, and stopped, before the legs
+	 * start folding. The figure is unchanged; only the reason it was safe has been re-checked.
 	 * 2 seconds is long enough to read as inertia rather than another snap, short enough that
 	 * the wheels have visibly stopped well before a climbing aircraft is far from the camera.
 	 * See WheelStepDegrees for the decay law.
