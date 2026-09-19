@@ -125,8 +125,8 @@ namespace IcaoCode
 	 *
 	 * THE ONE FIGURE A STAND'S GROUND GEOMETRY IS KEPT CLEAR OF, and it is per LETTER rather
 	 * than per named type on purpose. The stand's service geometry was sized from the A320's
-	 * tail at -3250 while DA_Aircraft_B738 parks on the same stand with its tail at -3430 -
-	 * 1.2 m of clearance where 3 m was intended. Sizing from a named aeroplane is what caused
+	 * tail at -3250 while DA_Aircraft_B738 parks on the same stand with its tail at -3538 -
+	 * 0.1 m of clearance where 3 m was intended. Sizing from a named aeroplane is what caused
 	 * that; sizing from the letter is the rule the taxiway widths and the service road fillet
 	 * already follow.
 	 *

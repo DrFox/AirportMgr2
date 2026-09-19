@@ -21,17 +21,27 @@ its figures are hand-typed from the datasheet in UAircraftType::Build737, it car
 and Solve/IcaoCode.cpp pins its nose and tail against the same constants. It exists so stand
 layout and aerodrome-code classification can reason about a 737 without one being modelled.
 This type is the aeroplane that actually flies, and its figures are MEASURED off SK_Plane4 -
-which is why the two are separate assets rather than one asset with two authors. Compare the
-two and they disagree by about a metre; see the note at NOSE OVERHANG.
+which is why the two are separate assets rather than one asset with two authors. Since
+2026-09-19 the two AGREE on the nose and the gear, because the disagreement turned out to be
+Build737's mistake rather than the model's; see NOSE OVERHANG below.
 
-NOSE OVERHANG, a known discrepancy rather than a measurement error. Build737 puts the nose
-5.20 m ahead of the nose gear; this export measures 4.09 m. The WHEELBASE is exactly right
-(15.600 m against the real aircraft's 15.60) and the overall length is within 0.21 m, so it
-is the gear ASSEMBLY that sits about 1.11 m too far forward relative to the fuselage, not one
-leg out of place. ARoadAgentActor::SetPose puts the origin on the guideline, so until the
-model is re-exported this type parks about a metre forward of every stand mark. Nothing here
-compensates for it: this script measures what the export says, and a fudge factor would be a
-lie that survived the fix.
+NOSE OVERHANG, AND THE ACCUSATION THAT WAS WITHDRAWN. This paragraph used to report that
+the export's gear assembly sat 1.11 m too far forward, on the strength of
+UAircraftType::Build737's NoseX = 520. It was wrong, and it was wrong in the most expensive
+direction: it accused a correct model and sent its author to Blender to break it.
+
+Boeing D6-58325-7 Rev C section 2.2.6 - the drawing is in this model's own concept folder,
+plane4/concept/737NG_REV_C.pdf page 2-14 - gives the 737-800W side view as 13 FT 5 IN
+(4.09 M) from the nose to the nose gear and 51 FT 2 IN (15.60 M) from there to the mains.
+The export measures 4.090 and 15.600. Both exact.
+
+Build737 was carrying the A320's 5.07 m overhang rounded to 5.2, which is a metre of
+aeroplane that does not exist on a 737. It has been corrected to 409, and its tail with it.
+
+THE LESSON IS ABOUT PROVENANCE, not about arithmetic. A measured figure was checked against
+a TYPED one and the typed one won, because it was in C++ and looked authoritative. The
+primary source was on disk the whole time, sitting beside the .blend.
+
 """
 import math
 import os
@@ -346,17 +356,17 @@ def author_type():
         % (m["steer_axle_x"], m["fixed_axle_x"],
            abs(m["fixed_axle_x"] - m["steer_axle_x"])))
 
-    # THE NOSE OVERHANG, said out loud every run because it is a known defect in the model
-    # rather than in this script - see the header. 520 uu is Build737's datasheet figure and
-    # Solve/IcaoCode.cpp pins it, so the two are directly comparable.
+    # THE NOSE OVERHANG, checked every run against the DRAWING rather than against another
+    # piece of code - see the header for what happened when it was the other way round.
+    # Boeing D6-58325-7 Rev C section 2.2.6: 13 FT 5 IN, 409 uu.
     overhang = m["footprint"]["nose_x"] - m["steer_axle_x"]
-    if abs(overhang - 520.0) > 25.0:
-        say("NOTE nose sits %.0f uu ahead of the nose gear against Build737's datasheet 520 "
-            "- the gear assembly is about %.2f m too far forward, so this type parks that "
-            "far ahead of every stand mark until the model is re-exported"
-            % (overhang, (520.0 - overhang) / 100.0))
+    if abs(overhang - 409.0) > 25.0:
+        say("NOTE nose sits %.0f uu ahead of the nose gear against Boeing's 409 (13 FT 5 IN, "
+            "D6-58325-7 section 2.2.6) - %.2f m out. Check the export before anything else; "
+            "this figure has been exact since the model was built."
+            % (overhang, (overhang - 409.0) / 100.0))
     else:
-        say("PASS nose overhang %.0f uu, within 25 uu of Build737's datasheet 520" % overhang)
+        say("PASS nose overhang %.0f uu, within 25 uu of Boeing's 409 (13 FT 5 IN)" % overhang)
 
     # THE FIGURE THAT DECIDES WHETHER THIS TYPE CAN USE THE PLAYER'S TAXIWAYS, said out loud
     # because it is not otherwise visible anywhere: the rolling-steer law refuses a corner
