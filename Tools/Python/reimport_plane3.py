@@ -39,8 +39,31 @@ import unreal
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import airside_import  # noqa: E402
+
 MESH = "/Game/Aircraft/Plane3/SK_Plane3"
 SOURCE = r"C:\repos\AirportMgr2Models\plane3\export\plane3.glb"
+
+# The pipeline this script authors, uses and deletes.
+PIPELINE_PATH = "/Game/Aircraft/Plane3/PL_Plane3_Reimport"
+
+# Which bone each gear part must ride, checked against the SOURCE .glb.
+#
+# THE POINT OF THE 2026-09-19 REIMPORT. The gear used to be three meshes skinned PER VERTEX by
+# a heuristic in plane3/scripts/build_export.py - tyre material, plus anything within 0.45 m of
+# the axle - and a main leg runs from z 0.346 to 2.372 with its axle at 0.431, so the bottom
+# half-metre of every strut went into the wheel group and the legs rotated with the wheels in
+# engine. The .blend now holds six separate objects, three wheels and three legs, and the
+# export skins one bone per object.
+#
+# CHECKED AGAINST THE .glb RATHER THAN THE ASSET, because that is the artefact Unreal reads and
+# the one a stale export would betray. "The legs stopped spinning" is invisible in any count,
+# extent or material slot the rest of this script measures - it is a statement about WEIGHTS,
+# so it takes a check that reads weights.
+EXPECTED_SKIN = {
+    "wheel_L": "wheel_L", "wheel_R": "wheel_R", "nosewheel": "nosewheel",
+    "gearRear_L": "root", "gearRear_R": "root", "gearFront": "nosewheel_steer",
+}
 
 # Stray meshes the failed rename left behind, each with the real mesh it duplicates.
 #
@@ -118,6 +141,91 @@ def slot_report(mesh, when):
     return len(slots), empty
 
 
+def check_source_skin():
+    """Every gear part in the .glb rides exactly one bone, and it is the right one.
+
+    READ STRAIGHT OUT OF THE FILE - the JSON chunk for the layout and the BIN chunk for the
+    JOINTS_0/WEIGHTS_0 accessors - because a skin weight is not visible anywhere else. The
+    export script prints what it INTENDED to skin; this reads what it wrote. That distinction
+    is the whole of CLAUDE.md's "a log line is not evidence the thing it describes exists",
+    and the per-vertex heuristic this replaces printed a confident, correct-looking report
+    every single time it put half a leg on the wheel bone.
+
+    ONE bone per part, not "mostly one": a part with any vertex on a second bone is a part
+    that deforms, and none of these should - each is a rigid body bolted to one joint.
+    """
+    import json
+    import struct
+
+    data = open(SOURCE, "rb").read()
+    _, _, total = struct.unpack("<III", data[:12])
+    off, chunks = 12, {}
+    while off < total:
+        length, kind = struct.unpack("<I4s", data[off:off + 8])
+        chunks[kind.strip(b"\x00").decode()] = data[off + 8:off + 8 + length]
+        off += 8 + length
+    doc = json.loads(chunks["JSON"].decode("utf-8"))
+    blob = chunks.get("BIN", b"")
+
+    fmt_of = {5120: ("b", 1), 5121: ("B", 1), 5122: ("h", 2),
+              5123: ("H", 2), 5125: ("I", 4), 5126: ("f", 4)}
+    count_of = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
+
+    def read(index):
+        acc = doc["accessors"][index]
+        fmt, size = fmt_of[acc["componentType"]]
+        n = count_of[acc["type"]]
+        view = doc["bufferViews"][acc["bufferView"]]
+        base = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        stride = view.get("byteStride") or size * n
+        return [struct.unpack_from("<" + fmt * n, blob, base + i * stride)
+                for i in range(acc["count"])]
+
+    if not doc.get("skins"):
+        fail("%s declares no skin - nothing in it would animate" % SOURCE)
+        return False
+    joints = [doc["nodes"][j].get("name") for j in doc["skins"][0]["joints"]]
+
+    # Node names carry Blender's duplicate suffix (wheel_L.001), since the modelling objects
+    # already own the clean names. Match on the stem, as airside_import does.
+    def stem(name):
+        return name.rsplit(".", 1)[0] if name and name[-3:].isdigit() else name
+
+    seen, ok = {}, True
+    for node in doc.get("nodes", []):
+        index = node.get("mesh")
+        if index is None:
+            continue
+        key = stem(node.get("name", ""))
+        if key not in EXPECTED_SKIN:
+            continue
+        tally = {}
+        for prim in doc["meshes"][index]["primitives"]:
+            attrs = prim["attributes"]
+            if "JOINTS_0" not in attrs:
+                tally["(unskinned)"] = tally.get("(unskinned)", 0) + 1
+                continue
+            for jj, ww in zip(read(attrs["JOINTS_0"]), read(attrs["WEIGHTS_0"])):
+                best = max(range(len(ww)), key=lambda k: ww[k])
+                name = joints[jj[best]] if ww[best] > 0.0 else "(zero weight)"
+                tally[name] = tally.get(name, 0) + 1
+        seen[key] = tally
+        want = EXPECTED_SKIN[key]
+        if list(tally) != [want]:
+            fail("%s rides %s in the .glb, expected every vertex on %s - the export is stale "
+                 "or the object is skinned to more than one bone"
+                 % (key, ", ".join("%s=%d" % kv for kv in sorted(tally.items())), want))
+            ok = False
+        else:
+            say("PASS %-12s %d vert(s), all on %s" % (key, tally[want], want))
+
+    for key in EXPECTED_SKIN:
+        if key not in seen:
+            fail("%s is not in %s - re-run plane3/scripts/build_export.py" % (key, SOURCE))
+            ok = False
+    return ok
+
+
 def main():
     say("=" * 78)
     clear_strays()
@@ -126,6 +234,15 @@ def main():
         fail("missing %s" % SOURCE)
         say("DONE")
         return
+
+    # THE SOURCE IS CHECKED BEFORE THE ASSET IS TOUCHED. Importing a stale .glb and then
+    # discovering it was stale costs a second reimport and leaves the asset wrong in between;
+    # reading the file first costs nothing and refuses the run outright.
+    if not check_source_skin():
+        fail("the export is not what the reimport expects - nothing was imported")
+        say("DONE")
+        return
+
     mesh = unreal.EditorAssetLibrary.load_asset(MESH)
     if not isinstance(mesh, unreal.SkeletalMesh):
         fail("%s is not a SkeletalMesh" % MESH)
@@ -138,14 +255,22 @@ def main():
     params = unreal.ImportAssetParameters()
     params.is_automated = True
     params.replace_existing = True
-    params.override_pipelines = []
+    # OVERRIDDEN, not left to the default stack - see airside_import.reimport_pipeline for
+    # what bUpdateSkeletonReferencePose defaulting to False cost plane2.
+    pipeline_path = airside_import.reimport_pipeline(PIPELINE_PATH)
+    if pipeline_path is None:
+        say("DONE")
+        return
+    params.override_pipelines = [unreal.SoftObjectPath(pipeline_path)]
     try:
         manager.reimport_asset(mesh, params)
     except Exception as exc:
+        airside_import.drop_reimport_pipeline(PIPELINE_PATH)
         fail("reimport_asset raised %s - do NOT fall back to deleting, M_ModelYard places "
              "this mesh" % exc)
         say("DONE")
         return
+    airside_import.drop_reimport_pipeline(PIPELINE_PATH)
 
     mesh = unreal.EditorAssetLibrary.load_asset(MESH)      # read the package back
     after_count, after_empty = slot_report(mesh, "after")
@@ -169,7 +294,10 @@ def main():
 
     # A reimport regenerates plane3's materials and reassigns its slots, so the shared set
     # has to be rebuilt or the wing comes back wearing a private uber-graph.
-    import airside_import
+    #
+    # The import is at module scope now. Leaving a second one HERE made `airside_import` a
+    # local of this whole function, so the call at the top of it raised UnboundLocalError -
+    # the reimport never ran and the log's last line was a slot report that looked healthy.
     airside_import.rebuild_fleet_materials()
 
     say("plane3: %s" % ("ALL CHECKS PASSED" if ok else "SOME CHECKS FAILED - see above"))
