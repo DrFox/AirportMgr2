@@ -27,12 +27,17 @@ Cities: Skylines. PC only, Steam, Windows 10+. Mouse and keyboard; no controller
 spline-drawn at any angle with real junctions and curves, not cells on a grid. Grid snapping
 is an optional toggle, never a constraint.
 
-**Visual style:** stylised but grounded - low-poly hard-edged forms and simplified
-materials, but believable proportions and soft realistic lighting. A muted ground palette
-with focused colour on vehicles, markings and signage, so colour reads as function. Not
-cartoon, and no longer realism: see
-`docs/superpowers/specs/2026-09-12-environment-art-direction-design.md` for the palette,
-the lighting, and why. **Audio:** undecided.
+**Visual style:** a **living airport diorama** - a highly detailed architectural model
+that has come alive. Slightly chunky bevelled geometry catching soft light, clean matte
+materials, miniature-looking vehicles, real proportions, physically plausible layouts,
+lovely shadows and strong night lighting. A muted ground palette with focused colour on
+vehicles, markings and signage, so colour reads as function. Not cartoon, not
+photorealism, and no longer realism. The point is an identity of its own rather than
+another Unreal project assembled from scan libraries - and it is a look we can build
+ourselves. See `docs/superpowers/specs/2026-09-12-environment-art-direction-design.md` for
+the palette, the lighting and why, and
+`docs/superpowers/specs/2026-09-19-modelling-conventions-design.md` for the shape language
+every model is built to. **Audio:** undecided.
 
 ---
 
