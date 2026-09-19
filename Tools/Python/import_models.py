@@ -18,9 +18,6 @@ file's header for why the three existing import_*.py scripts are left as they ar
 
 WHAT IS DELIBERATELY NOT HERE:
 
-- plane1. Raw Tripo output: no skin, two materials, one of them still called
-  tripo_mat_badc5a69. It would import, and would look like what it is beside plane2 and
-  plane3. Superseded rather than pending.
 - accessories/chainlink. Two fence POSTS are exported and no panel, so nothing here can
   assemble a fence line. Worth importing when the panel lands.
 - baggageCart1, FuelDepot1, concepts. Concept art only; no export exists.
@@ -60,6 +57,48 @@ VEHICLE_REAR = ["wheel_RL", "wheel_RR"]
 
 
 SPECS = [
+    Spec(
+        key="plane1",
+        source=MODELS + r"\plane1\export\plane1.glb",
+        mesh_dir="/Game/Aircraft/Plane1",
+        skel_name="SK_Plane1",
+        # THE MESH NAMES MATCH THE FLEET SINCE 2026-09-19, and this row used to be the
+        # exception. The nose tyre was `wheel_front_1` where plane2, plane3 and plane4 all
+        # call it `nosewheel` after its bone, and the FORK was `wheel_front` - a name in the
+        # tyre's namespace for a part that is not a tyre, whose box centre sits 8 cm behind
+        # the axle. Naming that one here would have published a 1.71 m wheelbase for an
+        # aircraft whose wheelbase is 1.63 m. The export now says nosewheel / nosegear /
+        # maingear, so no reader has to know the difference.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        origin_on="front",
+        # THE RIG WAS FIXED AT THE EXPORT, THREE TIMES, ON 2026-09-19, and the alternative
+        # each time was a special case in this project that would have outlived the model:
+        #
+        #   * ONE `wheel` bone drove BOTH mains, and it sat at y +137.0 - the right wheel's
+        #     outer FACE, not either axle. Rolling it would have swung the left wheel through
+        #     a 2.54 m arc. Split into wheel_L/wheel_R on the axles at y -+127.0, which is
+        #     what plane2, plane3 and plane4 have and what build_plane1_type.py reads to get
+        #     the track. With one bone there is no track to measure.
+        #   * `nosewheel` sat at y +12.0 against a tyre centred on y 0.0 and only -+7.4 wide,
+        #     so the steering axis was outside the wheel it steers.
+        #   * The wing and the tailplane were inside `fuselage`, leaving nothing for the
+        #     footprint's wingspan and tailplane_span to measure. Now separate `wing`,
+        #     `stabiliser` and `fin` objects.
+        #
+        # Same call plane3's origin got: change the export, not the reader. A fourth round
+        # the same day added the livery and the flat base colours - see reimport_plane1.py,
+        # which is what applies that one, because by then the asset existed and this script
+        # is a FIRST-import tool.
+        note="Cessna 172S Skyhawk. 8.233 m long, 11.00 m span, 2.659 m to the fin tip - the "
+             "real aircraft's own figures to within 6 cm. Origin on the NOSE gear; the main "
+             "axle is at -163.0 uu, which is the figure FAirframe::FixedAxleX wants when "
+             "this type is authored. Six joints, and the gear is FIXED - a 172 has nothing "
+             "to retract, so this is the first modelled type since plane2 with no gear "
+             "cycle at all.",
+    ),
     Spec(
         key="plane3",
         source=MODELS + r"\plane3\export\plane3.glb",

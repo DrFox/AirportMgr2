@@ -57,6 +57,16 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 	// airliner and is expected not to - which is why it carries no ceiling rather than a
 	// generous one. A ceiling nobody could fail is a test that measures nothing.
 	const FPublished Published[] = {
+		// plane1 CARRIES THE SAME CEILING AS plane2 FOR A DIFFERENT REASON. It is not a STOL
+		// aeroplane - a Twin Otter out-STOLs a 172 and the fleet's short-field floor stays
+		// plane2's - but the LIGHTEST aeroplane in the game needing more runway than a
+		// 500 hp turboprop single would be wrong on its face. Its 49,700 clears the
+		// Meridian's 51,000 by 1,300 uu, which is thin; that is the claim, and a thin one
+		// is still a claim. Both figures are published constants rather than computed, so
+		// this only moves when somebody edits a table on purpose.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane1.DA_Aircraft_Plane1"), TEXT("plane1"), 51000.0,
+		  TEXT("a Cessna 172 that needed more runway than the Meridian would have the "
+			   "lightest aeroplane in the game asking more of a field than a turboprop") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"), TEXT("plane2"), 51000.0,
 		  TEXT("a Twin Otter that needed more runway than the Meridian would be a STOL "
 			   "aeroplane in name only") },

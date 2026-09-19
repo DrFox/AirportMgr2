@@ -34,6 +34,10 @@ LEVEL = "/Game/Maps/M_ModelYard"
 # about both than either says alone.
 ROWS = [
     ("Aircraft", 1200.0, [
+        # SMALLEST FIRST, so the row reads as the progression the header claims. plane1 goes
+        # ahead of the Meridian because it is 2.1 m shorter and 2.1 m narrower - the first
+        # entry that makes "small to large" true of the whole row rather than of most of it.
+        ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
         ("/Game/Aircraft/PiperMeridian/SK_PiperMeridian", "Piper Meridian"),
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),

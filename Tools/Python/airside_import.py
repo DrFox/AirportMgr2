@@ -35,6 +35,45 @@ import unreal
 _DUP_SUFFIX = re.compile(r"\.\d+$")
 
 
+# THE ONE LIST OF WHICH MODELS WEAR M_Fleet.
+#
+# THIS USED TO BE TWO LISTS, in build_fleet_materials.py and verify_fleet_materials.py, and
+# they drifted on the first opportunity: plane1 was added to the builder on 2026-09-19 and
+# not to the verifier, so its eight slots were built and then NOT CHECKED - which is how its
+# orphaned Interchange materials survived a green verify run and reached a commit. That is
+# the failure CLAUDE.md names under "check where a list is CONSUMED", for the fourth time.
+#
+# Both scripts now read these. verify_fleet_materials.py's TOLERANCE came from the same
+# drift - it carried "0.005 + 1e-6  # must equal build_fleet_materials.MERGE_TOL", a comment
+# asking a human to keep two numbers equal - so MERGE_TOL is here too.
+#
+# key -> (the .glb's stem under each script's own MODELS root, the skeletal mesh that wears
+# the instances). The key is the folder name in the models repo and the stem is normally the
+# same; they are separate fields so a model whose export is named differently needs no
+# special case. The MODELS root itself stays in each script: it is a path, not a list, and
+# nothing has drifted between those copies.
+
+FLEET = {
+    "plane1":     ("plane1",     "/Game/Aircraft/Plane1/SK_Plane1"),
+    "plane2":     ("plane2",     "/Game/Aircraft/Plane2/SK_Plane2"),
+    "plane3":     ("plane3",     "/Game/Aircraft/Plane3/SK_Plane3"),
+    "plane4":     ("plane4",     "/Game/Aircraft/Plane4/SK_Plane4"),
+    "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
+    "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
+    "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
+    "utility1":   ("utility1",   "/Game/Vehicles/Utility1/SK_Utility1"),
+}
+
+# Asset folder name -> the name Content uses, for instance naming only.
+PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
+          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1",
+          "utility1": "Utility1"}
+
+# Below this two looks are the same colour written twice. The verifier may not check tighter
+# than the builder merges, or every merged look fails.
+MERGE_TOL = 0.005
+
+
 def say(msg):
     unreal.log("MARKER: " + str(msg))
 
@@ -799,5 +838,10 @@ def rebuild_fleet_materials():
         return False
     say("-" * 70)
     say("rebuilding the shared fleet materials (an import regenerates per-asset ones)")
-    exec(compile(open(path).read(), path, "exec"), {"__name__": "__from_import__"})
+    # __file__ IS PASSED IN because the exec'd script needs it: build_fleet_materials.py puts
+    # its own directory on sys.path so it can import this module's FLEET, and an exec with a
+    # bare globals dict has no __file__ to take a dirname of. Without this the script raises
+    # NameError on its first line and the import reports slots left as Interchange made them.
+    exec(compile(open(path).read(), path, "exec"),
+         {"__name__": "__from_import__", "__file__": path})
     return True

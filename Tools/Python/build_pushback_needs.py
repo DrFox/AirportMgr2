@@ -36,6 +36,12 @@ import unreal
 # The why is not decoration: it is the gameplay reason the value is what it is, and the
 # automation test asserts the same table with the same reasons as its failure messages.
 NEEDS = {
+    "/Game/Entities/DA_Aircraft_Plane1": (
+        unreal.PushbackNeed.SELF_MANOEUVRE,
+        "a 172 is pushed off a stand by one person leaning on the strut, and the class "
+        "default of VehicleTug would gate the smallest aeroplane in the game behind the "
+        "depot",
+    ),
     "/Game/Entities/DA_Aircraft_Piper": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "the starter aeroplane reverses itself, so a new airport needs no depot",

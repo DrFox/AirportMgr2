@@ -23,6 +23,7 @@ ENTITY_DIR = "/Game/Entities"
 A320 = "/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320"
 B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
 PIPER = "/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"
+PLANE1 = "/Game/Entities/DA_Aircraft_Plane1.DA_Aircraft_Plane1"
 PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
 
 # name -> (display name, fleet asset paths, offers per game day)
@@ -63,10 +64,22 @@ AIRLINES = {
     # than the Meridian (366 m against 510) while needing more WIDTH, which is the first
     # time those two requirements pull in opposite directions - and the clearest thing in
     # the game so far that says the two are separate decisions.
-    # With the jets grounded this is the whole of the game's traffic, and the pair still
+    # With the jets grounded this is the whole of the game's traffic, and the set still
     # carries the capability lesson: the Meridian's 13.11 m span fits an 18 m strip and the
     # Twin Otter's 19.75 m needs 23 m, so widening a runway still changes what arrives.
-    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE2], 4.0),
+    #
+    # 2026-09-19: THE CESSNA 172 JOINS, AND IT IS NOT A THIRD CAPABILITY TIER. Its 497 m
+    # field length sits within 3% of the Meridian's 510, so anywhere one offers the other
+    # does; what it adds is 11.00 m of span against 13.11, and variety in the inbox. That was
+    # a deliberate choice over making it the new floor - the honest POH figure is the
+    # 50 ft-obstacle distance, the same thing every other type publishes, and reading its
+    # 293 m ground roll instead would have bought a new tier by measuring a different
+    # quantity in a shared field.
+    #
+    # NOTE THAT THE 172 DOES NOT OUT-STOL THE TWIN OTTER, which is the intuition to resist:
+    # plane2 needs 366 m to this type's 497. A DHC-6 is a STOL aeroplane and a 172 is a
+    # trainer, so the short-field floor stays where it was.
+    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2], 4.0),
 }
 
 

@@ -29,6 +29,13 @@ stays visible rather than being hidden by the tolerance that permits it.
 import json
 import os
 import struct
+import sys
+
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py
+# for the full note.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_import import FLEET, MERGE_TOL  # noqa: E402
 
 import unreal
 
@@ -36,16 +43,19 @@ MAT_DIR = "/Game/Materials/Fleet"
 MASTER_PATH = "%s/M_Fleet" % MAT_DIR
 OLD_DIR = "/Game/Aircraft/Materials"
 MODELS = r"C:\repos\AirportMgr2Models"
-FLEET = {
-    "plane2": "/Game/Aircraft/Plane2/SK_Plane2",
-    "plane3": "/Game/Aircraft/Plane3/SK_Plane3",
-    "plane4": "/Game/Aircraft/Plane4/SK_Plane4",
-    "fueltruck1": "/Game/Vehicles/FuelTruck1/SK_FuelTruck1",
-    "gpu1": "/Game/Vehicles/GPU1/SK_GPU1",
-    "tug1": "/Game/Vehicles/Tug1/SK_Tug1",
-    "utility1": "/Game/Vehicles/Utility1/SK_Utility1",
-}
-TOL = 0.005 + 1e-6      # must equal build_fleet_materials.MERGE_TOL
+# FLEET AND THE TOLERANCE COME FROM airside_import, and both used to be typed here.
+#
+# THE COPY WAS NOT HARMLESS. This file's FLEET listed plane2 onwards; when plane1 joined the
+# BUILDER on 2026-09-19 it was not added here, so this script checked seven assets, printed
+# seven PASS lines and reported "DONE with 0 problem(s)" while the eighth went unexamined. A
+# verifier that silently skips what it does not know about is worse than no verifier, because
+# the green line is read as coverage. It now iterates whatever the builder built.
+#
+# The tolerance was the same shape - "0.005 + 1e-6  # must equal build_fleet_materials.
+# MERGE_TOL", a comment asking a human to keep two numbers equal. The 1e-6 stays here,
+# because it is this file's own concern: a slot merged at exactly MERGE_TOL must not fail for
+# a floating-point last bit.
+TOL = MERGE_TOL + 1e-6
 
 
 def say(msg):
@@ -94,8 +104,8 @@ def run():
         fail("M_Fleet lacks bUsedWithSkeletalMesh - the fleet draws grey clay")
         problems += 1
 
-    for asset, mesh_path in sorted(FLEET.items()):
-        source = gltf_materials(asset)
+    for asset, (stem, mesh_path) in sorted(FLEET.items()):
+        source = gltf_materials(stem)
         mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
         if mesh is None:
             say("%s absent; skipped" % mesh_path)
