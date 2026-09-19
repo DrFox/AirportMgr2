@@ -195,29 +195,52 @@ def build_material():
     sharpness.set_editor_property("parameter_name", "MarkingSharpness")
     sharpness.set_editor_property("default_value", 0.5)
 
-    # mask = 1 - saturate((|lateral| - CentrelineWidth) * MarkingSharpness)
+    # mask = saturate((CentrelineWidth - |lateral|) * MarkingSharpness)
     #
-    # Deliberately not a MaterialExpressionIf: in 5.8 that node's ConstAGreaterThanB and
-    # ConstALessThanB are deprecated and its branches are input pins, so a hard threshold
-    # would cost three more constant nodes. This form is fewer nodes AND better, because
-    # the edge ramps over 1/MarkingSharpness uu instead of aliasing along the road.
-    over = lib.create_material_expression(
+    # "INSIDE THE LINE", not "not far outside it". The form here until 2026-09-19 was
+    #
+    #     mask = 1 - saturate((|lateral| - CentrelineWidth) * MarkingSharpness)
+    #
+    # and it had a bug that build_runway_materials.py then documented as a feature. That
+    # script sets CentrelineWidth = 0 on the three runway instances to remove the yellow
+    # taxiway line, and its comment claimed zero width gives "a line of zero width". It does
+    # not. At lateral == 0 the old expression is 1 - saturate(0) = 1 - EXACTLY as painted as
+    # a taxiway centreline - and only ramps away over 1/MarkingSharpness uu. Every runway in
+    # the game therefore carried a 4 cm yellow hairline down its exact centre, in the
+    # inherited taxiway yellow, faint enough to survive a year of screenshots unnoticed and
+    # perfectly visible once someone looked closely in PIE.
+    #
+    # Subtracting the other way makes the width mean what its name says: the mask is
+    # positive only where |lateral| is INSIDE CentrelineWidth, so a width of zero paints
+    # nothing at all, at any lateral, including zero.
+    #
+    # The ramp survives the change and still runs 1/MarkingSharpness uu - it now ramps
+    # INWARD from the edge rather than outward, so the line is about 2 uu narrower than
+    # before. That is the whole visual difference on a taxiway.
+    #
+    # Still deliberately not a MaterialExpressionIf: in 5.8 that node's ConstAGreaterThanB
+    # and ConstALessThanB are deprecated and its branches are input pins, so a hard
+    # threshold would cost three more constant nodes and alias along the road.
+    #
+    # MARKING QUADS ARE UNAFFECTED, and it is worth saying why, because this looks like it
+    # should break them. FRunwayMarkingBuilder and FHoldingPositionMarkingBuilder paint a
+    # quad solid by setting UV1 = 0, which is lateral = 0 - the one place the old expression
+    # was wrong. They are drawn through instances of the PARENT, which keeps CentrelineWidth
+    # at its default 15, so the new mask is saturate(15 * 0.5) = 1 there and they still
+    # paint. Only an instance that asked for zero width now actually gets zero.
+    inside = lib.create_material_expression(
         material, unreal.MaterialExpressionSubtract, -800, 800)
-    lib.connect_material_expressions(abs_lateral, "", over, "A")
-    lib.connect_material_expressions(centre_width, "", over, "B")
+    lib.connect_material_expressions(centre_width, "", inside, "A")
+    lib.connect_material_expressions(abs_lateral, "", inside, "B")
 
     scaled = lib.create_material_expression(
         material, unreal.MaterialExpressionMultiply, -650, 800)
-    lib.connect_material_expressions(over, "", scaled, "A")
+    lib.connect_material_expressions(inside, "", scaled, "A")
     lib.connect_material_expressions(sharpness, "", scaled, "B")
 
-    clamped = lib.create_material_expression(
-        material, unreal.MaterialExpressionSaturate, -520, 800)
-    lib.connect_material_expressions(scaled, "", clamped, "")
-
     centre_mask = lib.create_material_expression(
-        material, unreal.MaterialExpressionOneMinus, -400, 800)
-    lib.connect_material_expressions(clamped, "", centre_mask, "")
+        material, unreal.MaterialExpressionSaturate, -520, 800)
+    lib.connect_material_expressions(scaled, "", centre_mask, "")
 
     # --- junction blend fades the markings out ---------------------------------------
     # From UV2.X, NOT vertex colour. A UDynamicMeshComponent only ignores its colour

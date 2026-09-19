@@ -14,10 +14,18 @@ surface. Both are parameters of the parent, so an instance says all there is to 
 designer can retune either in the details panel without a script. Reinforced has no
 material: it LOOKS like concrete, the difference is a rating (spec §8).
 
-CentrelineWidth = 0 is what removes the yellow line (§4.2): M_RoadSurface's centreline mask
-is 1 - saturate((|lateral| - CentrelineWidth) * MarkingSharpness), and with the width at
-zero only lateral == 0 exactly is painted - a line of zero width. The white markings are
-a separate mesh (FRunwayMarkingBuilder) and do not go through this mask.
+CentrelineWidth = 0 is what removes the yellow line (§4.2). THIS COMMENT USED TO BE WRONG
+AND THE BUG IT DESCRIBED SHIPPED. It read: "with the width at zero only lateral == 0 exactly
+is painted - a line of zero width". Painted at lateral == 0 is not a line of zero width, it
+is a line one ramp wide: the old mask was 1 - saturate((|lateral| - CentrelineWidth) *
+MarkingSharpness), which is 1 at lateral == 0 whatever the width, so every runway carried a
+faint 4 cm yellow hairline down its centre. build_road_material.py now computes
+saturate((CentrelineWidth - |lateral|) * MarkingSharpness) instead, where a zero width
+really does paint nothing. Re-run that script before this one or the hairline comes back.
+
+The white markings are a separate mesh (FRunwayMarkingBuilder) and do not go through this
+mask - they are painted through an instance of the PARENT, whose CentrelineWidth is still
+the default, which is why they are unaffected by any of the above.
 """
 import os
 import sys
