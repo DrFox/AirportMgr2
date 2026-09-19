@@ -377,6 +377,111 @@ struct AIRSIDE_API FEnginePerformance
 };
 
 /**
+ * Where the landing gear has got to.
+ *
+ * A PHASE IS AN ENUM, NEVER A SET OF BOOLS - CLAUDE.md's rule, and it bites hard here.
+ * bGearUp plus bDoorsOpen plus bInTransit can express "up, in transit, doors shut", which is
+ * the state where an aeroplane's wheels are passing through its own bay doors.
+ *
+ * FOUR STATES AND NOT EIGHT. A sequenced cycle is doors-open, gear-travel, doors-close, and
+ * the obvious encoding gives each stage its own phase in each direction. The timer already
+ * says which stage it is in - see FGearPerformance::FractionsAt - so the extra four would be
+ * a second answer to a question one double already answers.
+ */
+UENUM()
+enum class EGearPhase : uint8
+{
+	/** Down and locked. Every phase on the ground, and every airframe with fixed gear. */
+	Down,
+
+	/** In transit upward: doors opening, gear travelling, doors closing. */
+	Raising,
+
+	/** Up and stowed, bay doors shut over it. */
+	Up,
+
+	/** In transit downward. The same timeline as Raising, read the other way. */
+	Lowering
+};
+
+/**
+ * How an airframe's landing gear retracts, and how long its bay doors take.
+ *
+ * Shaped like FEnginePerformance above it, including the IsSet() idiom, and for the same
+ * reason: this is authored per type and read by the model, and an airframe that has not
+ * declared it must behave rather than crash.
+ *
+ * ZERO TravelSeconds MEANS FIXED GEAR - a fact about the aeroplane - and NOT "unmeasured",
+ * which is what zero means on FAirframe::MainGearTrack. The difference is that there is no
+ * third possibility to confuse it with: an aeroplane either retracts its gear or it does
+ * not, and a DHC-6 Twin Otter does not. plane2 is correct by construction and permanently.
+ *
+ * RETRACTION IS A PILOT COMMAND, NOT A CONSEQUENCE OF LIFT-OFF. It is called for a few
+ * hundred feet above the ground, which is why RetractAboveHeight exists and why
+ * FAgentMotion::bAirborne is the PRECONDITION rather than the cue - contradicting that
+ * flag's own comment, which predicted the cycle would simply hang off it.
+ */
+USTRUCT(BlueprintType)
+struct AIRSIDE_API FGearPerformance
+{
+	GENERATED_BODY()
+
+	/** Gear travel, seconds. ZERO MEANS FIXED GEAR - see the struct comment. */
+	UPROPERTY(EditAnywhere) double TravelSeconds = 0.0;
+
+	/**
+	 * One bay door movement, seconds. Zero means the airframe has no doors to move.
+	 *
+	 * COUNTED ONCE BUT SPENT TWICE - the doors open before the gear travels and close after
+	 * it, so CycleSeconds() is this plus the travel plus this again. Authored as one figure
+	 * because a door takes the same time to open as to shut.
+	 */
+	UPROPERTY(EditAnywhere) double DoorSeconds = 0.0;
+
+	/**
+	 * Height above the surface at which a departure raises its gear, uu.
+	 *
+	 * READ ONLY WHILE DEPARTING - see FRoadAgent::AdvanceGear. ExtendBelowHeight sits ABOVE
+	 * this figure, so an arrival descending through it is "airborne and above the retract
+	 * height" and would raise its gear on short final if altitude alone decided.
+	 */
+	UPROPERTY(EditAnywhere) double RetractAboveHeight = 9000.0;
+
+	/**
+	 * Height below which an arrival lowers its gear, uu.
+	 *
+	 * LATENT AT TODAY'S FIGURES. An arrival joins final at FApproachPerformance::
+	 * FinalAltitude, 2000 uu, which is below this - so every arrival is born down and locked
+	 * and the extension is never on screen. It becomes visible the day the approach is joined
+	 * higher, which is the whole argument for building the half nobody can see.
+	 */
+	UPROPERTY(EditAnywhere) double ExtendBelowHeight = 15000.0;
+
+	/** Has anyone declared retractable gear for this airframe? */
+	bool IsSet() const { return TravelSeconds > 0.0; }
+
+	/** Doors out, gear across, doors back. Seconds. */
+	double CycleSeconds() const
+	{
+		return FMath::Max(DoorSeconds, 0.0) * 2.0 + FMath::Max(TravelSeconds, 0.0);
+	}
+
+	/**
+	 * Both fractions at a point in a cycle. OutGearDown is 1 down-and-locked, 0 stowed;
+	 * OutDoorOpen is 0 shut, 1 fully open.
+	 *
+	 * THE ONE EVALUATOR. The model stores what this returns and the view draws it; nothing
+	 * re-derives either number. That is the guideline graph's invariant applied to a second
+	 * place - a second evaluator lets the doors the player sees disagree with the doors the
+	 * model thinks it opened, visibly and only mid-cycle.
+	 *
+	 * Const and free of any agent, so a whole cycle can be sampled in a loop with no world,
+	 * no actor and no skeleton.
+	 */
+	void FractionsAt(double Elapsed, bool bRaising, double& OutGearDown, double& OutDoorOpen) const;
+};
+
+/**
  * How an airframe MOVES on the ground. A property of the aircraft, never of the pavement.
  *
  * The distinction matters and this project has already had to make it once, the other way
@@ -691,6 +796,10 @@ struct AIRSIDE_API FAirframe
 	UPROPERTY(EditAnywhere) FClimbPerformance Climb;
 	UPROPERTY(EditAnywhere) FApproachPerformance Approach;
 	UPROPERTY(EditAnywhere) FEnginePerformance Engine;
+
+	/** How this airframe's gear retracts, and whether it does at all. See FGearPerformance. */
+	UPROPERTY(EditAnywhere) FGearPerformance Gear;
+
 	UPROPERTY(EditAnywhere) double Wingspan = 0.0;
 
 	/**
