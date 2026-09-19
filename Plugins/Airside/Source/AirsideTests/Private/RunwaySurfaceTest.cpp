@@ -4,6 +4,7 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Build/RoadProfileBands.h"
 #include "Engine/Engine.h"
+#include "Materials/Material.h"
 #include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
@@ -176,6 +177,63 @@ bool FRunwayMarkingsDrawnTest::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("and the grass slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Grass)), (int32)INDEX_NONE);
 	TestNotEqual(TEXT("and the concrete slot"), Effective->IndexOf(URoadMaterialSet::RunwaySlotName(ERunwaySurface::Concrete)), (int32)INDEX_NONE);
 	TestTrue(TEXT("with the surface slot first, so a band's id 0 means what it always did"), Effective->Slots.Num() >= 4);
+	return true;
+}
+
+/**
+ * THE RUBBER SEAM. BuildRubber is unit-tested on its own; this is the test that fails if
+ * the presenter never calls it, the actor never makes the component, or the layer index is
+ * wrong - none of which the builder's own tests can see.
+ *
+ * It asserts a MATERIAL too, because the rubber layer is the one that is skipped entirely
+ * when its material is null. A version of this test that only counted triangles would pass
+ * on a build where the content default had been lost and nothing was drawn.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayRubberDrawnTest,
+	"Airside.Present.RunwayRubberDrawn",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayRubberDrawnTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to register components in"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+
+	TestEqual(TEXT("no runway, no rubber"), Actor->GetPresenter()->RunwayRubberTriangleCountForTest(), 0);
+
+	// A material the layer can be drawn with, assigned on the actor rather than relying on
+	// the content default - so this test says what it means whether or not a headless run
+	// has that asset loaded.
+	Actor->RubberMaterial = UMaterial::GetDefaultMaterial(MD_Surface);
+
+	Actor->PlaceNode(FVector2D(0.0, 60000.0));
+	URoadProfile* Runway = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Runway->bContinuousThroughJunctions = true;
+	if (!TestTrue(TEXT("a runway is placed through the actor"),
+		Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(150000.0, 0.0), Runway))) { return false; }
+
+	// Four patches, two triangles each: the builder's promise, arriving intact at a
+	// component. A count that is merely > 0 would pass on one band at one end.
+	TestEqual(TEXT("four rubber patches reach the component, as eight triangles"),
+		Actor->GetPresenter()->RunwayRubberTriangleCountForTest(), 8);
+
+	// AND THE CONTROL, which is the runway going away rather than the material.
+	//
+	// The obvious control - null the material and expect nothing drawn - is WRONG, and it
+	// failed here for the right reason: ResolveRubberMaterial falls back to
+	// UAirsideContent::RubberMaterial, so clearing the actor's own property does not
+	// disable rubber, it just hands the job to the content default. That is the intended
+	// behaviour, and a test asserting otherwise would have to be "fixed" by breaking it.
+	//
+	// Undoing the runway leaves the material entirely alone and takes away the thing rubber
+	// is derived FROM. It also exercises the path that actually had a bug: RebuildLayer must
+	// sink an EMPTY buffer and hide the layer, because an early return here left the last
+	// build's rubber sitting on pavement that no longer had a runway on it.
+	if (!TestTrue(TEXT("the runway is undone"), Actor->Undo())) { return false; }
+	TestEqual(TEXT("with the runway gone, the rubber is cleared rather than left behind"),
+		Actor->GetPresenter()->RunwayRubberTriangleCountForTest(), 0);
 	return true;
 }
 

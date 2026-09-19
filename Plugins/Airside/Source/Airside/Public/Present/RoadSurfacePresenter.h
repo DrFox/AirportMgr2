@@ -41,6 +41,7 @@ enum class ESurfaceLayer : uint8
 	Apron,
 	HoldingPaint,
 	RunwayPaint,
+	RunwayRubber,
 	Count
 };
 
@@ -113,6 +114,8 @@ public:
 		UMaterialInterface* SurfaceMaterial = nullptr;
 		UMaterialInterface* ApronMaterial = nullptr;
 		UMaterialInterface* GhostMaterial = nullptr;
+		/** Null is supported and means no rubber - see UAirsideContent::RubberMaterial. */
+		UMaterialInterface* RubberMaterial = nullptr;
 		URoadMaterialSet* MaterialSet = nullptr;
 
 		/**
@@ -240,6 +243,9 @@ public:
 	/** Triangles currently in the runway paint, for Airside.Present.RunwayMarkingsDrawn. */
 	int32 RunwayMarkingTriangleCountForTest() const;
 
+	/** Triangles currently in the tyre rubber, for Airside.Present.RunwayRubberDrawn. */
+	int32 RunwayRubberTriangleCountForTest() const;
+
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
 
@@ -282,6 +288,16 @@ private:
 	static double GetMarkingZ(double SurfaceZ) { return SurfaceZ + 0.5; }
 
 	/**
+	 * A QUARTER unit above the road: above the pavement, BELOW the paint at half a unit.
+	 *
+	 * Backwards physically - rubber is deposited on top of the paint, which is exactly why
+	 * touchdown-zone markings are the ones that get repainted - and right for the game. The
+	 * designator and the threshold stripes are how a player reads a runway at a glance, and
+	 * burying them under a stain to be correct about tyre chemistry is a poor trade.
+	 */
+	static double GetRubberZ(double SurfaceZ) { return SurfaceZ + 0.25; }
+
+	/**
 	 * Every triangle in Buffers, as debug lines - the same ground truth RebuildAprons and
 	 * Rebuild both give their surface: these are the buffers the component was actually
 	 * handed, reaching the screen by a completely separate route. Was copied at both call
@@ -305,6 +321,18 @@ private:
 	 * material asset either way.
 	 */
 	void RebuildRunwayMarkings(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
+	 * The tyre rubber - FRunwayMarkingBuilder::BuildRubber's bands on their own component.
+	 *
+	 * A THIRD paint-like component, and the reason is not the colour this time. Rubber is
+	 * translucent where both marking layers are opaque, so it cannot share a component with
+	 * either whatever colour it is drawn: blend mode is a property of the material, and a
+	 * component has one material per slot.
+	 *
+	 * Does nothing when Settings.RubberMaterial is null, which is supported.
+	 */
+	void RebuildRunwayRubber(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/**
 	 * The material set the mesh is actually built and skinned with: the authored set's

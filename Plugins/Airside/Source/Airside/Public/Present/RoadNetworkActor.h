@@ -135,6 +135,15 @@ public:
 	 */
 	virtual void PostInitProperties() override;
 
+	/**
+	 * Hand the presenter this actor's six surface components, indexed by ESurfaceLayer.
+	 *
+	 * Called from the constructor and AGAIN from PostRegisterAllComponents - see the comment
+	 * there for why a saved level can otherwise leave a newly added layer null forever, and
+	 * why PostInitProperties is too early to repair it.
+	 */
+	void InitialisePresenterLayers();
+
 	// --- Agents ----------------------------------------------------------------------
 	//
 	// Runtime only, and owned by Traffic rather than by this actor or by URoadNetwork - see
@@ -653,6 +662,14 @@ public:
 	TObjectPtr<UDynamicMeshComponent> RunwayMarkingComponent;
 
 	/**
+	 * The tyre rubber: a sixth surface, a quarter unit up - under the paint, over the
+	 * pavement. Its own component because it is TRANSLUCENT and the other two are opaque,
+	 * and blend mode is a property of the material, not of the draw.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UDynamicMeshComponent> RunwayRubberComponent;
+
+	/**
 	 * Name -> material for the road surface's profile bands. Null renders exactly as
 	 * before: one material, every triangle id 0.
 	 *
@@ -675,6 +692,15 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Apron")
 	TObjectPtr<UMaterialInterface> ApronMaterial;
+
+	/**
+	 * The tyre rubber's material. Left null it falls back to UAirsideContent::RubberMaterial,
+	 * and if THAT is null the rubber is simply not drawn - which, unlike the apron's
+	 * fallback, is a fine outcome: a runway with no rubber looks newly laid, where an apron
+	 * with no material looks like a bug.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Markings")
+	TObjectPtr<UMaterialInterface> RubberMaterial;
 
 	/**
 	 * DIAGNOSTIC ONLY. Hold the aprons' vertex colours at a constant - and, as a side
@@ -937,6 +963,9 @@ public:
 	 */
 	UMaterialInterface* ResolveSurfaceMaterial() const;
 	UMaterialInterface* ResolveApronMaterial() const;
+
+	/** RubberMaterial, else the content default. Null is supported - see the property. */
+	UMaterialInterface* ResolveRubberMaterial() const;
 	UMaterialInterface* ResolveGhostMaterial() const;
 	URoadMaterialSet*   ResolveMaterialSet() const;
 	UEntityDefinition*  ResolveStandDefinition() const;

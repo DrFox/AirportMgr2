@@ -99,6 +99,16 @@ int32 URoadSurfacePresenter::RunwayMarkingTriangleCountForTest() const
 	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
 }
 
+int32 URoadSurfacePresenter::RunwayRubberTriangleCountForTest() const
+{
+	UDynamicMeshComponent* Component = GetLayerComponent(ESurfaceLayer::RunwayRubber);
+	if (Component == nullptr || Component->GetDynamicMesh() == nullptr)
+	{
+		return 0;
+	}
+	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
+}
+
 const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfaceSettings& Settings)
 {
 	if (EffectiveSet == nullptr)
@@ -195,6 +205,50 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 		TEXT("%d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
 		Painted, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
 		Census.CentrelineDashes, Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
+}
+
+void URoadSurfacePresenter::RebuildRunwayRubber(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	// Only the COMPONENT is an early return, never the material - and the difference is one
+	// the seam test caught.
+	//
+	// A null component is fixed for the life of the actor. A null material is not: it can be
+	// cleared at runtime, and a runway can be deleted, and in both cases this function still
+	// has to run so that RebuildLayer sinks an EMPTY buffer and hides the layer. Returning
+	// early on a null material instead left the last build's rubber sitting on the pavement
+	// after the material that drew it had gone.
+	if (GetLayerComponent(ESurfaceLayer::RunwayRubber) == nullptr)
+	{
+		return;
+	}
+	const bool bHasMaterial = Settings.RubberMaterial != nullptr;
+
+	const double RubberZ = GetRubberZ(Settings.SurfaceZ);
+	FRunwayMarkingCensus Census;
+
+	// The material ASSET, not a dynamic instance. Unlike the two paint layers, nothing about
+	// this one varies per actor - there is no equivalent of MarkingColor to override, because
+	// rubber is one colour on every runway. A MID here would be an allocation whose only
+	// effect is to make the asset harder to find from the component.
+	FRoadMeshBuffers Buffers;
+	const int32 Runways = RebuildLayer(ESurfaceLayer::RunwayRubber,
+		[&Network, RubberZ, &Census, bHasMaterial](FRoadMeshBuffers& OutBuffers)
+		{
+			// Left empty when there is nothing to draw it with, which clears the component
+			// rather than leaving the previous build on screen.
+			return bHasMaterial ? FRunwayMarkingBuilder::BuildRubber(Network, RubberZ, OutBuffers, &Census) : 0;
+		},
+		Settings.RubberMaterial, Settings.bUseConstantVertexColour, Buffers);
+	if (Runways == INDEX_NONE)
+	{
+		return;
+	}
+
+	// Patches, not triangles, because the patch count is what the builder promises and what
+	// a wrong one would show: four per paved runway, two per usable end.
+	UE_LOG(LogRoadMesh, Log,
+		TEXT("Runway rubber: %d runway(s), %d patch(es), %d triangle(s) at Z=%.2f"),
+		Runways, Census.RubberPatches, Buffers.Indices.Num() / 3, RubberZ);
 }
 
 double URoadSurfacePresenter::GetApronSurfaceZ(double SurfaceZ, double ApronZOffset) const
@@ -379,6 +433,8 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	RebuildMarkings(Network, Settings);
 	// And the runways' own paint, from their facts.
 	RebuildRunwayMarkings(Network, Settings);
+	// And the rubber under it, which is not paint at all - see RebuildRunwayRubber.
+	RebuildRunwayRubber(Network, Settings);
 
 	if (Settings.bDebugDrawMesh)
 	{
