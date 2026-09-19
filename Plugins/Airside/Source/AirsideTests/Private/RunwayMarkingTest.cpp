@@ -354,4 +354,160 @@ bool FRunwayMarkingsShortPrecisionTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * TYRE RUBBER. Not a marking - paint is applied to a plan, rubber is deposited by use -
+ * so what is measured here is that it lands where aircraft actually touch down, in its own
+ * buffer, in two bands with a clean strip between them.
+ *
+ * The separate buffer is asserted rather than assumed: the tests above identify glyph
+ * strokes BY EXCLUSION, so a rubber quad appearing in Build's buffer would be counted as a
+ * designator stroke and this suite would go green on a mesh with rubber smeared through the
+ * runway numbers.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayRubberTest,
+	"Airside.Build.RunwayRubber.Touchdown",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayRubberTest::RunTest(const FString& Parameters)
+{
+	constexpr double Length = 200000.0;
+	constexpr double Width = 4500.0;
+	constexpr double Z = 10.25;
+	URoadNetwork* Net = MakeRunwayNetwork(Length, Width, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+
+	FRoadMeshBuffers Rubber;
+	FRunwayMarkingCensus Census;
+	TestEqual(TEXT("one runway"), B::BuildRubber(*Net, Z, Rubber, &Census), 1);
+	TestEqual(TEXT("two bands at each of two ends"), Census.RubberPatches, 4);
+	TestEqual(TEXT("four vertices per quad, whole quads only"), Rubber.Positions.Num() % 4, 0);
+	TestEqual(TEXT("one material id per triangle"), Rubber.MaterialIDs.Num(), Rubber.Indices.Num() / 3);
+
+	const TArray<FQuadBox> Boxes = Quads(Rubber);
+	TestEqual(TEXT("four quads and nothing else"), Boxes.Num(), 4);
+
+	const double Reach = Width * 0.5 * B::RubberAcrossFraction;
+	int32 NearBands = 0, FarBands = 0, LeftBands = 0, RightBands = 0;
+	for (const FQuadBox& Box : Boxes)
+	{
+		TestEqual(TEXT("a band is as long as the touchdown zone"),
+			Box.AlongExtent(), B::RubberEnd - B::RubberStart, 1.0e-6);
+		TestEqual(TEXT("and reaches RubberAcrossFraction of the half width"),
+			Box.AcrossExtent(), Reach, 1.0e-6);
+
+		if (FMath::IsNearlyEqual(Box.Along0, B::RubberStart, 1.0e-6)) { ++NearBands; }
+		else if (FMath::IsNearlyEqual(Box.Along1, Length - B::RubberStart, 1.0e-6)) { ++FarBands; }
+		else { AddError(FString::Printf(TEXT("a band at neither threshold: along %.1f"), Box.Along0)); }
+
+		// THE CLEAN STRIP DOWN THE MIDDLE. Each band is wholly one side of the centreline;
+		// a band spanning it would be the thing every stylised airport gets wrong.
+		if (Box.Across1 <= 1.0e-6) { ++LeftBands; }
+		else if (Box.Across0 >= -1.0e-6) { ++RightBands; }
+		else { AddError(TEXT("a band crosses the centreline")); }
+	}
+	TestEqual(TEXT("two bands at the near threshold"), NearBands, 2);
+	TestEqual(TEXT("two at the far threshold"), FarBands, 2);
+	TestEqual(TEXT("one either side of the centreline, at each end"), LeftBands, 2);
+	TestEqual(TEXT("and the mirror of it"), RightBands, 2);
+
+	for (const FVector3d& P : Rubber.Positions)
+	{
+		TestEqual(TEXT("laid in the road plane at the Z asked for"), P.Z, Z, 1.0e-9);
+	}
+
+	// FACING UP, measured the way Unreal measures it rather than by inspecting the corner
+	// order - the check the holding-position paint once failed 112 times over.
+	UE::Geometry::FDynamicMesh3 Mesh;
+	for (const FVector3d& P : Rubber.Positions) { Mesh.AppendVertex(P); }
+	for (int32 I = 0; I + 2 < Rubber.Indices.Num(); I += 3)
+	{
+		Mesh.AppendTriangle(Rubber.Indices[I], Rubber.Indices[I + 1], Rubber.Indices[I + 2]);
+	}
+	int32 Down = 0;
+	for (const int32 Tid : Mesh.TriangleIndicesItr())
+	{
+		if (Mesh.GetTriNormal(Tid).Z < 0.0) { ++Down; }
+	}
+	TestEqual(TEXT("no rubber triangle faces down"), Down, 0);
+
+	// Build's buffer must not have gained any of this.
+	FRoadMeshBuffers Paint;
+	FRunwayMarkingCensus PaintCensus;
+	B::Build(*Net, Z, Paint, &PaintCensus);
+	TestEqual(TEXT("Build lays no rubber"), PaintCensus.RubberPatches, 0);
+	return true;
+}
+
+/**
+ * A grass strip has no rubber: rubber on grass is a rut, which is a different feature.
+ *
+ * WITH A CONTROL, because the obvious form of this test passes on a builder that lays no
+ * rubber at all - it did exactly that against the stub this was written before. Asserting
+ * an absence proves nothing unless the same call is shown to produce a presence when the
+ * one thing under test changes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayRubberGrassTest,
+	"Airside.Build.RunwayRubber.NotOnGrass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayRubberGrassTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Grass = MakeRunwayNetwork(200000.0, 4500.0, Facts(ERunwaySurface::Grass, ERunwayApproach::Visual));
+	FRoadMeshBuffers Rubber;
+	FRunwayMarkingCensus Census;
+	B::BuildRubber(*Grass, 0.0, Rubber, &Census);
+	TestEqual(TEXT("no rubber on a grass strip"), Census.RubberPatches, 0);
+	TestEqual(TEXT("and no geometry at all"), Rubber.Positions.Num(), 0);
+
+	// THE CONTROL. Identical runway, tarmac instead of grass.
+	URoadNetwork* Paved = MakeRunwayNetwork(200000.0, 4500.0, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Visual));
+	FRoadMeshBuffers PavedRubber;
+	FRunwayMarkingCensus PavedCensus;
+	B::BuildRubber(*Paved, 0.0, PavedRubber, &PavedCensus);
+	TestTrue(TEXT("the same runway paved DOES get rubber, so the surface is what suppressed it"),
+		PavedCensus.RubberPatches > 0);
+	return true;
+}
+
+/**
+ * CLAMPED, NOT OMITTED, and this is where rubber parts company with the markings beside it.
+ *
+ * A touchdown pair that will not fit is dropped, because a marking is specified and half a
+ * marking is not the marking. Rubber has no standard and no specified length: it is a
+ * stain, and a short runway does not have LESS of it, it has a shorter one that stops at
+ * the middle. So the band is cut at the midpoint rather than skipped.
+ *
+ * The assertions below are the ones that would have passed vacuously on an empty buffer,
+ * so each is paired with a count.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayRubberShortTest,
+	"Airside.Build.RunwayRubber.ShortRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayRubberShortTest::RunTest(const FString& Parameters)
+{
+	// 600 m: RubberEnd is 472.5 m, so a full-length band would run well past the 300 m
+	// midpoint and into the far end's.
+	constexpr double Length = 60000.0;
+	URoadNetwork* Net = MakeRunwayNetwork(Length, 3000.0, Facts(ERunwaySurface::Tarmac, ERunwayApproach::Precision));
+	FRoadMeshBuffers Rubber;
+	FRunwayMarkingCensus Census;
+	B::BuildRubber(*Net, 0.0, Rubber, &Census);
+
+	const TArray<FQuadBox> Boxes = Quads(Rubber);
+	TestEqual(TEXT("a short runway still gets all four bands"), Census.RubberPatches, 4);
+	TestEqual(TEXT("and four quads to go with them"), Boxes.Num(), 4);
+	for (const FQuadBox& Box : Boxes)
+	{
+		TestTrue(TEXT("a band stays in its own half"),
+			Box.Along1 <= Length * 0.5 + 1.0e-6 || Box.Along0 >= Length * 0.5 - 1.0e-6);
+		TestTrue(TEXT("and is shorter than a full-length band, so it was cut not skipped"),
+			Box.AlongExtent() < B::RubberEnd - B::RubberStart - 1.0e-6);
+		TestTrue(TEXT("but is still long enough to be worth drawing"), Box.AlongExtent() > 0.0);
+	}
+	return true;
+}
+
 #endif
