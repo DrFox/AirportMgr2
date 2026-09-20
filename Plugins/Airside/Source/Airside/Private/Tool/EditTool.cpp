@@ -140,7 +140,23 @@ void FEditTool::OnDragEnd(const FToolContext& Context)
 		return;
 	}
 
+	const int32 Dropped = DragNode;
 	DragNode = INDEX_NONE;
+
+	// DROPPING ON A NODE IS THE MERGE. There is no separate verb and no confirmation, for
+	// the reason ERoadSnapKind::Node already gives about a click: "clicking reuses it, which
+	// is how a junction is closed". This is that, for a node that already exists.
+	//
+	// KEEP IS THE NODE THE PLAYER AIMED AT, absorb the one in their hand - so the thing they
+	// were pointing to survives. The other way round would move the target instead, which is
+	// the opposite of what the gesture says.
+	//
+	// BEFORE EndInteractiveEdit, so the merge joins the drag's undo step rather than opening
+	// one of its own: a drop is one action to the player and must be one press of undo.
+	if (Context.Snap.Kind == ERoadSnapKind::Node && Context.Snap.Node.Index != Dropped)
+	{
+		Context.Target->MergeNodes(Context.Snap.Node.Index, Dropped);
+	}
 
 	// EndInteractiveEdit only closes the undo step - it moves nothing, the last OnDrag
 	// having already placed the node and notified for it (#77).
@@ -240,6 +256,31 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 	if (Context.Snap.Kind == ERoadSnapKind::Node && Handles.Contains(Context.Snap.Node.Index))
 	{
 		Sink.Marker(Context.Snap.Position, EPreviewStyle::Hover);
+	}
+
+	// WHAT A DROP WOULD MERGE INTO, and what it would cost. Snap already means "the gesture
+	// would attach to this"; the label is what says the attachment DESTROYS a node, which is
+	// the one thing a ring cannot convey on its own.
+	if (DragNode != INDEX_NONE && Context.Snap.Kind == ERoadSnapKind::Node
+		&& Context.Snap.Node.Index != DragNode)
+	{
+		Sink.Marker(Context.Snap.Position, EPreviewStyle::Snap);
+		Sink.Label(Context.Snap.Position, TEXT("merge"), EPreviewStyle::Snap);
+
+		// THE ARM BETWEEN THEM IS DOOMED - it collapses, because once the two nodes are one
+		// it has no length and no direction. Drawn so the player sees which road disappears
+		// BEFORE they let go, rather than afterwards.
+		if (const FRoadNode* Held = Network->GetNodes().IsValidIndex(DragNode)
+				? &Network->GetNodes()[DragNode] : nullptr)
+		{
+			for (const FRoadSegmentId Arm : Held->Incident)
+			{
+				if (Network->GetOtherEnd(Arm, Network->NodeIdAt(DragNode)) == Context.Snap.Node)
+				{
+					Sink.Line(Held->Position, Context.Snap.Position, EPreviewStyle::Doomed);
+				}
+			}
+		}
 	}
 
 	// SAYING YES TO A GUIDE IS HALF THE WORK. IBuildTool::WantsFreeStartGuides records a tool

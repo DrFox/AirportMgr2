@@ -118,6 +118,7 @@ public:
 	virtual bool DeleteNode(int32 NodeIndex) override;
 	virtual bool DeleteSegment(int32 SegmentIndex) override;
 	virtual bool MoveNode(int32 NodeIndex, FVector2D To) override;
+	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) override;
 	virtual void BeginInteractiveEdit(const FString& Label) override;
 	virtual void EndInteractiveEdit(bool bKeep) override;
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;

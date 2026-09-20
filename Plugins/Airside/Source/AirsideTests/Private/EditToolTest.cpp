@@ -458,6 +458,70 @@ bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeDropOnNodeMergesTest,
+	"Airside.Tool.EditModeDropOnNodeMerges",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeDropOnNodeMergesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// Two roads that do not touch. Dragging B onto C is the gesture that joins them, and the
+	// one the report asked for: there was no way to merge two close points at all.
+	const int32 A = Actor->PlaceNode(FVector2D(-9000.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	const int32 C = Actor->PlaceNode(FVector2D(600.0, 0.0));
+	const int32 D = Actor->PlaceNode(FVector2D(9600.0, 0.0));
+	Actor->ConnectNodes(C, D);
+
+	const FVector2D CPosition = Actor->GetNetwork()->GetNodes()[C].Position;
+
+	auto LiveNodes = [Actor]()
+	{
+		int32 Count = 0;
+		for (const FRoadNode& Node : Actor->GetNetwork()->GetNodes())
+		{
+			Count += Node.bAlive ? 1 : 0;
+		}
+		return Count;
+	};
+	TestEqual(TEXT("four nodes to begin with"), LiveNodes(), 4);
+
+	FBuildSession Session;
+	Session.SelectTool(1);
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	IBuildTool* Tool = Session.GetActiveTool();
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+
+	const FVector2D OnC = CPosition - FVector2D(40.0, 0.0);
+	Tool->OnDrag(Session.MakeContext(Actor, OnC, Tunables, false, false));
+	Tool->OnDragEnd(Session.MakeContext(Actor, OnC, Tunables, false, false));
+
+	TestEqual(TEXT("dropping one node on another leaves one node where there were two"),
+		LiveNodes(), 3);
+	TestNull(TEXT("the node in hand is the one absorbed"), Actor->GetNetwork()->GetNode(
+		Actor->GetNetwork()->NodeIdAt(B)));
+
+	const FRoadNode* Survivor = Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(C));
+	if (!TestNotNull(TEXT("the node aimed AT is the one that survives"), Survivor)) { return false; }
+	TestEqual(TEXT("and it carries both roads, so the two runs are now one"),
+		Survivor->Incident.Num(), 2);
+
+	// ONE UNDO STEP FOR THE WHOLE DROP. The move and the merge are one action to the player,
+	// so they must be one press - which is why MergeNodes runs INSIDE the drag's interactive
+	// edit rather than opening an edit of its own.
+	Actor->Undo();
+	TestEqual(TEXT("a single undo puts both nodes back - the drag and its merge are one step"),
+		LiveNodes(), 4);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FEditModeNamesItselfTest,
 	"Airside.Tool.EditModeNamesItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

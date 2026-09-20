@@ -376,6 +376,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool MoveNode(int32 NodeIndex, FVector2D To) override;
 
+	/** Folds the node in hand into the node it was dropped on. Forwards to the facade. */
+	UFUNCTION(BlueprintCallable, Category = "Airside|Road")
+	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) override;
+
 	/** Open an edit that spans frames, for a drag. */
 	virtual void BeginInteractiveEdit(const FString& Label) override;
 

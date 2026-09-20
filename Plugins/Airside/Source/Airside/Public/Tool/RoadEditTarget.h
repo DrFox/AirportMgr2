@@ -204,6 +204,19 @@ public:
 	virtual bool DeleteNode(int32 NodeIndex) = 0;
 	virtual bool DeleteSegment(int32 SegmentIndex) = 0;
 	virtual bool MoveNode(int32 NodeIndex, FVector2D To) = 0;
+
+	/**
+	 * Fold AbsorbIndex into KeepIndex - the merge a drop-on-node performs.
+	 *
+	 * KEEP IS THE NODE THE PLAYER AIMED AT and Absorb the one in their hand, so the thing
+	 * they were pointing to is the thing that survives. A merge that kept the dragged node
+	 * instead would move the target, which is the opposite of what the gesture says.
+	 *
+	 * REFUSES AND REVERTS rather than leaving two nodes at one position: see
+	 * URoadEditFacade::MergeNodes, and URoadEditHistory::RevertEdit on why refusing after
+	 * the fact needs undoing rather than abandoning.
+	 */
+	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) = 0;
 	virtual void BeginInteractiveEdit(const FString& Label) = 0;
 	virtual void EndInteractiveEdit(bool bKeep) = 0;
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const = 0;

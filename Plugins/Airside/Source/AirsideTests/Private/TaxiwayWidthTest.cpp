@@ -50,6 +50,7 @@ namespace
 		virtual bool DeleteNode(int32) override { return false; }
 		virtual bool DeleteSegment(int32) override { return false; }
 		virtual bool MoveNode(int32, FVector2D) override { return false; }
+		virtual bool MergeNodes(int32, int32) override { return false; }
 		virtual void BeginInteractiveEdit(const FString&) override {}
 		virtual void EndInteractiveEdit(bool) override {}
 		virtual FRoadDeletionPlan PlanNodeDeletion(int32) const override { return FRoadDeletionPlan(); }

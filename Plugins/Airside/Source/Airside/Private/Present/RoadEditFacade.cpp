@@ -783,6 +783,84 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	History->CommitEdit();
 }
 
+bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
+{
+	FRoadNodeId Keep;
+	FRoadNodeId Absorb;
+	if (!MakeLiveNodeId(KeepIndex, Keep) || !MakeLiveNodeId(AbsorbIndex, Absorb))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("MergeNodes refused: %d or %d is not a live node"), KeepIndex, AbsorbIndex);
+		return false;
+	}
+	if (Keep == Absorb)
+	{
+		return false;
+	}
+
+	ARoadNetworkActor& Owner = Actor();
+
+	// JOINS A DRAG ALREADY IN PROGRESS, so drop-to-merge is ONE undo step with the move that
+	// carried the node there - the arrangement MoveNode already uses, and the reason
+	// IsEditing is what tells the two apart. On its own it is one edit of its own.
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
+	if (bOwnsEdit)
+	{
+		Use->BeginEdit(*Owner.Network, TEXT("merge nodes"));
+	}
+
+	if (!Owner.Network->MergeNodes(Keep, Absorb))
+	{
+		if (bOwnsEdit && Use != nullptr)
+		{
+			// Nothing was touched, so ABANDON is right here and Revert would be wrong - see
+			// URoadEditHistory::RevertEdit on the distinction.
+			Use->AbandonEdit();
+		}
+		return false;
+	}
+
+	// JUDGED AFTER, AND ONLY AFTER. RoadPlacement::NodeCornersFit reads a node's CURRENT arms
+	// and judges them at a proposed position; it has no way to be asked about an arm set that
+	// does not exist yet. So unlike MoveNode - which can and does judge before moving - a
+	// merge has to happen before its corners can be measured at all.
+	//
+	// WHICH IS WHY THIS REVERTS RATHER THAN REFUSING. AbandonEdit drops the snapshot and
+	// leaves the model as the edit left it, which here would be a merged junction the solver
+	// cannot surface. RevertEdit hands back the state the edit started from, exactly as
+	// EndInteractiveEdit does for a drag nobody can pay for.
+	const FRoadNode* Merged = Owner.Network->GetNode(Keep);
+	if (Merged != nullptr && !RoadPlacement::NodeCornersFit(*Owner.Network, Keep, Merged->Position))
+	{
+		if (Use != nullptr)
+		{
+			if (URoadNetwork* Reverted = Use->RevertEdit())
+			{
+				Owner.Network = Reverted;
+				HideGhost();
+				NotifyChanged();
+			}
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Merge refused: node %d folded into %d makes a corner the solver cannot "
+				 "trim, so the whole edit is reverted."), AbsorbIndex, KeepIndex);
+		return false;
+	}
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Merged node %d into %d"), AbsorbIndex, KeepIndex);
+
+	if (bOwnsEdit && Use != nullptr)
+	{
+		Use->CommitEdit();
+	}
+
+	// Pavement changed, so this notifies - unlike SetIntermediateHoldingPosition, which
+	// changes neither pavement nor mesh and deliberately does not.
+	NotifyChanged();
+	return true;
+}
+
 bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 {
 	FRoadNodeId Node;
