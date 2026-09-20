@@ -949,6 +949,87 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		return false;
 	}
 
+	// A RUNWAY CHAIN IS STRAIGHT, and this is where that becomes true rather than merely
+	// assumed. FRunwayMarkingBuilder paints every marking along ONE frame - an origin, a
+	// direction and a length from RunwayExtentAt, which reports only the two ENDS - so a
+	// chain bent at an interior node draws a straight centreline down a crooked strip.
+	// Reported from play, 2026-09-20: "it bends the runway, but keeps the centre line
+	// straight".
+	//
+	// TWO EVALUATORS IS THE ACTUAL DEFECT. The surface follows the nodes and the markings
+	// follow the ends, and nothing made them agree - the same shape as the guideline
+	// invariant in CLAUDE.md. Rather than teach the markings to bend, which would be a
+	// second crooked-runway feature nobody asked for, the graph stops representing one.
+	//
+	// IN MoveNode, NOT IN THE EDIT TOOL. It is an invariant of the model, so it holds for
+	// every caller rather than for the one gesture that happened to expose it.
+	{
+		TArray<FRoadNodeId> RunwayNeighbours;
+		FRoadSegmentId AnyRunwayArm;
+		for (const FRoadSegmentId& Incident : Live->Incident)
+		{
+			if (Owner.Network->IsRunwaySegment(Incident))
+			{
+				RunwayNeighbours.Add(Owner.Network->GetOtherEnd(Incident, Node));
+				AnyRunwayArm = Incident;
+			}
+		}
+
+		// THE LINE THE NODE MAY NOT LEAVE, or two unset points when it is free to go
+		// anywhere. Two cases, one rule:
+		//
+		//   - AN INTERIOR NODE (a taxiway exit, runway on both sides) is pinned between its
+		//     two runway neighbours, and their line is the strip's.
+		//
+		//   - A THRESHOLD with exits behind it may still slide, and its line runs through
+		//     its one neighbour and where it currently stands - which IS the strip's line,
+		//     because the chain is straight, which is the invariant being kept.
+		//
+		// A THRESHOLD ON A STRIP WITH NO EXITS IS FREE, and that is not an exception: with
+		// nothing between the ends there is no interior node to leave behind, so no move can
+		// bend anything. It is the drag the runway tool's own handle offers.
+		const FRoadNode* LineFrom = nullptr;
+		FVector2D LineThrough = FVector2D::ZeroVector;
+
+		if (RunwayNeighbours.Num() >= 2)
+		{
+			LineFrom = Owner.Network->GetNode(RunwayNeighbours[0]);
+			if (const FRoadNode* Second = Owner.Network->GetNode(RunwayNeighbours[1]))
+			{
+				LineThrough = Second->Position;
+			}
+			else
+			{
+				LineFrom = nullptr;
+			}
+		}
+		else if (RunwayNeighbours.Num() == 1 && AnyRunwayArm.IsSet()
+			&& Owner.Network->RunwayChainOrSeed(AnyRunwayArm).Num() > 1)
+		{
+			LineFrom = Owner.Network->GetNode(RunwayNeighbours[0]);
+			LineThrough = Live->Position;
+		}
+
+		if (LineFrom != nullptr)
+		{
+			const FVector2D Line = LineThrough - LineFrom->Position;
+			const double LengthSquared = Line.SizeSquared();
+			if (LengthSquared > UE_DOUBLE_SMALL_NUMBER)
+			{
+				// The foot of the perpendicular, UNCLAMPED: the length, corner and
+				// minimum-runway checks below decide how far along is legal, so the node
+				// stops at the last legal spot rather than at some other one chosen here.
+				//
+				// PROJECTED RATHER THAN REFUSED. Refusing was the first cut and its own test
+				// caught it: it also refuses extending a threshold straight along its own
+				// line, which bends nothing and is the most ordinary runway edit there is.
+				// Sliding costs no more machinery and leaves nothing to explain.
+				const double T = FVector2D::DotProduct(To - LineFrom->Position, Line) / LengthSquared;
+				To = LineFrom->Position + Line * T;
+			}
+		}
+	}
+
 	// Judged before moving. Every road this node holds gets longer or shorter as it goes,
 	// and one pulled under the minimum is one the solver cannot trim back from both ends.
 	for (const FRoadSegmentId& Incident : Live->Incident)

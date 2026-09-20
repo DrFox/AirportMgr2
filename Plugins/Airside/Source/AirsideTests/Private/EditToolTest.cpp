@@ -986,4 +986,190 @@ bool FRoadNodesStandDownOutsideTheRoadToolsTest::RunTest(const FString& Paramete
 	return true;
 }
 
+namespace
+{
+	/** A straight runway with one taxiway exit partway along it, which is the shape the
+	 *  bend was reported on. Returns the exit node's slot index, or INDEX_NONE. */
+	int32 LayRunwayWithAnExit(ARoadNetworkActor* Actor, double Length, double ExitAt)
+	{
+		// A node first, purely to bring the network into being - see LayRunway in the
+		// fixtures for the crash that taught this.
+		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+		Actor->MinimumRunwayLength = 10000.0;
+
+		URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+		Profile->bContinuousThroughJunctions = true;
+		if (!Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Length, 0.0), Profile))
+		{
+			return INDEX_NONE;
+		}
+
+		// Split the strip where the exit joins, then run a taxiway off it - the same two
+		// steps a click with the taxiway tool performs.
+		const URoadNetwork* Network = Actor->GetNetwork();
+		int32 Strip = INDEX_NONE;
+		for (int32 Index = 0; Index < Network->GetSegments().Num(); ++Index)
+		{
+			if (Network->GetSegments()[Index].bAlive
+				&& Network->IsRunwaySegment(Network->SegmentIdAt(Index)))
+			{
+				Strip = Index;
+				break;
+			}
+		}
+		if (Strip == INDEX_NONE)
+		{
+			return INDEX_NONE;
+		}
+
+		const int32 Exit = Actor->SplitSegment(Strip, FVector2D(ExitAt, 0.0));
+		if (Exit == INDEX_NONE)
+		{
+			return INDEX_NONE;
+		}
+		const int32 Away = Actor->PlaceNode(FVector2D(ExitAt, 9000.0));
+		Actor->ConnectNodes(Exit, Away, ERoadKind::Taxiway);
+		return Exit;
+	}
+
+	/** The largest perpendicular departure of any runway node from the line through the
+	 *  strip's two ends. Zero on a straight runway. */
+	double RunwayBend(const URoadNetwork& Network)
+	{
+		TArray<FVector2D> OnStrip;
+		for (int32 Index = 0; Index < Network.GetSegments().Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+			if (!Network.GetSegments()[Index].bAlive || !Network.IsRunwaySegment(Id))
+			{
+				continue;
+			}
+			const FRoadSegment& Segment = Network.GetSegments()[Index];
+			for (const FRoadNodeId End : { Segment.A, Segment.B })
+			{
+				if (const FRoadNode* Node = Network.GetNode(End))
+				{
+					OnStrip.AddUnique(Node->Position);
+				}
+			}
+		}
+		if (OnStrip.Num() < 3)
+		{
+			return 0.0;
+		}
+
+		// The two ends are the extremes along the strip's own direction.
+		FVector2D Lo = OnStrip[0];
+		FVector2D Hi = OnStrip[0];
+		for (const FVector2D& P : OnStrip)
+		{
+			if (P.X < Lo.X || (P.X == Lo.X && P.Y < Lo.Y)) { Lo = P; }
+			if (P.X > Hi.X || (P.X == Hi.X && P.Y > Hi.Y)) { Hi = P; }
+		}
+		const FVector2D Line = Hi - Lo;
+		if (Line.IsNearlyZero())
+		{
+			return 0.0;
+		}
+		const FVector2D Normal = FVector2D(-Line.Y, Line.X).GetSafeNormal();
+
+		double Worst = 0.0;
+		for (const FVector2D& P : OnStrip)
+		{
+			Worst = FMath::Max(Worst, FMath::Abs(FVector2D::DotProduct(P - Lo, Normal)));
+		}
+		return Worst;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayExitSlidesAlongButNeverOffTest,
+	"Airside.Model.RunwayExitSlidesAlongButNeverOff",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayExitSlidesAlongButNeverOffTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 Exit = LayRunwayWithAnExit(Actor, 40000.0, 20000.0);
+	if (!TestTrue(TEXT("a runway with an exit was laid"), Exit != INDEX_NONE)) { return false; }
+
+	TestTrue(TEXT("the runway starts straight"),
+		RunwayBend(*Actor->GetNetwork()) < 1.0);
+
+	// DRAGGED SIDEWAYS AND ALONG AT ONCE. The along part must take, the sideways part must
+	// not - which is what makes this a slide rather than a refusal or a free move.
+	TestTrue(TEXT("the exit moves"), Actor->MoveNode(Exit, FVector2D(26000.0, 7000.0)));
+
+	const FRoadNode* Moved = Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(Exit));
+	if (!TestNotNull(TEXT("the exit survives"), Moved)) { return false; }
+
+	TestTrue(TEXT("it slid ALONG the strip, taking the component the runway permits"),
+		FMath::Abs(Moved->Position.X - 26000.0) < 1.0);
+	TestTrue(TEXT("and not across it, so the strip is still straight"),
+		FMath::Abs(Moved->Position.Y) < 1.0);
+
+	// MEASURED, not inferred from the node's own coordinates: the bend is a property of the
+	// whole chain, and this is the thing the markings assume. A runway that passed the two
+	// assertions above and still bent somewhere else would be the same defect in a new place.
+	TestTrue(TEXT("the chain has no perpendicular departure at all - which is what "
+				  "FRunwayMarkingBuilder's single straight frame assumes"),
+		RunwayBend(*Actor->GetNetwork()) < 1.0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRunwayThresholdWithExitsWillNotMoveTest,
+	"Airside.Model.RunwayThresholdWithExitsWillNotMove",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRunwayThresholdWithExitsWillNotMoveTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 Exit = LayRunwayWithAnExit(Actor, 40000.0, 20000.0);
+	if (!TestTrue(TEXT("a runway with an exit was laid"), Exit != INDEX_NONE)) { return false; }
+
+	// The far threshold: the end node, which has exactly one runway arm.
+	const URoadNetwork* Network = Actor->GetNetwork();
+	int32 Far = INDEX_NONE;
+	for (int32 Index = 0; Index < Network->GetNodes().Num(); ++Index)
+	{
+		const FRoadNode& Node = Network->GetNodes()[Index];
+		if (Node.bAlive && Node.Position.Equals(FVector2D(40000.0, 0.0), 1.0))
+		{
+			Far = Index;
+			break;
+		}
+	}
+	if (!TestTrue(TEXT("the far threshold exists"), Far != INDEX_NONE)) { return false; }
+
+	// SWINGING IT WOULD LEAVE THE EXIT BEHIND and bend the strip, so the sideways component
+	// is dropped and the along-strip one taken - the same slide an interior exit gets, for
+	// the same reason.
+	TestTrue(TEXT("a threshold with exits behind it still moves"),
+		Actor->MoveNode(Far, FVector2D(38000.0, 12000.0)));
+
+	const FRoadNode* Moved = Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(Far));
+	if (!TestNotNull(TEXT("the threshold survives"), Moved)) { return false; }
+	TestTrue(TEXT("it shortened along its own line"),
+		FMath::Abs(Moved->Position.X - 38000.0) < 1.0);
+	TestTrue(TEXT("and did not swing off it, so the exit is not left behind"),
+		FMath::Abs(Moved->Position.Y) < 1.0);
+	TestTrue(TEXT("the runway is still straight"), RunwayBend(*Actor->GetNetwork()) < 1.0);
+
+	// EXTENDING ALONG THE LINE IS UNTOUCHED - the control. Without it this test would pass
+	// on a threshold that had been pinned in place altogether.
+	TestTrue(TEXT("and it still extends along its own line"),
+		Actor->MoveNode(Far, FVector2D(46000.0, 0.0)));
+	TestTrue(TEXT("still straight after that"), RunwayBend(*Actor->GetNetwork()) < 1.0);
+	TestTrue(TEXT("and the extension really took"),
+		FMath::Abs(Actor->GetNetwork()->GetNodes()[Far].Position.X - 46000.0) < 1.0);
+	return true;
+}
+
 #endif
