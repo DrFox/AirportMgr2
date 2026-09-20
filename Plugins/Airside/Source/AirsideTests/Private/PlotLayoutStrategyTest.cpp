@@ -1,5 +1,6 @@
 #include "Build/PlotLayoutStrategy.h"
 #include "CoreMinimal.h"
+#include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Solve/PlotYard.h"
 
@@ -89,6 +90,55 @@ bool FScatterStrategyIsTheScatterTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("same centre, exactly"),
 			Mine.Stands[I].Centre.Equals(Theirs.Stands[I].Centre, 0.0));
 		TestEqual(TEXT("same heading"), Mine.Stands[I].Heading, Theirs.Stands[I].Heading);
+	}
+
+	return true;
+}
+
+/**
+ * Every layout resolves to a strategy.
+ *
+ * WALKED, NOT LISTED, which is the lesson AircraftLookTest paid for: a test that names its
+ * subjects catches only the subjects somebody remembered. A layout added to the enum with no
+ * strategy behind it fails here rather than drawing an empty depot in a shipped build.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEveryPlotLayoutResolvesTest,
+	"Airside.Build.EveryPlotLayoutResolves",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEveryPlotLayoutResolvesTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = StrategyRect(3200.0, 2400.0);
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+	const FPlotSite Site = StrategySite(Outline, 3200.0);
+
+	for (int32 Raw = 0; Raw <= static_cast<int32>(EPlotLayout::FuelYardBands); ++Raw)
+	{
+		const EPlotLayout Layout = static_cast<EPlotLayout>(Raw);
+		const UPlotLayoutStrategy* Strategy = PlotLayoutFor(Layout);
+
+		if (!TestNotNull(*FString::Printf(TEXT("layout %d has a strategy"), Raw), Strategy))
+		{
+			continue;
+		}
+
+		// AND IT ANSWERS. A strategy that resolved but returned nothing would pass a null
+		// check and draw an empty plot, which is the failure this walk is for.
+		const PlotYard::FReservation R = Strategy->Solve(Site, Specs);
+		TestTrue(*FString::Printf(TEXT("layout %d reserves something on a 32 x 24 m plot"),
+			Raw), R.Stands.Num() > 0);
+	}
+
+	// AND THE FUEL DEPOT ASKS FOR THE BAND LAYOUT rather than defaulting into it - the
+	// default is the scatter, so a definition that never stated a layout keeps the old
+	// behaviour instead of silently changing shape.
+	const UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (TestNotNull(TEXT("a depot definition"), Depot))
+	{
+		TestEqual(TEXT("a fuel depot lays out in bands"),
+			static_cast<int32>(Depot->Layout),
+			static_cast<int32>(EPlotLayout::FuelYardBands));
 	}
 
 	return true;

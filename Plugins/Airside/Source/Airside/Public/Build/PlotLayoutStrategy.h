@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Entities/EntityDefinition.h"
 #include "Solve/PlotYard.h"
 #include "UObject/Object.h"
 #include "PlotLayoutStrategy.generated.h"
@@ -71,3 +72,35 @@ public:
 	virtual PlotYard::FReservation Solve(
 		const FPlotSite& Site, TArrayView<const PlotYard::FKitSpec> Kits) const override;
 };
+
+/**
+ * Sheds across the back, tanks down the left, pumps down the right.
+ *
+ * THIS IS SCAFFOLDING. It exists to make a fuel depot usable now, not to be the fuel depot's
+ * final arrangement, and it wastes ground on purpose - the middle of the plot is left empty
+ * because that is what a real yard has and what the sampler never left. Nothing here is a
+ * capacity rule: how many fit is whatever fitted.
+ *
+ * IT REPLACES A SAMPLED YARD THAT WAS PREFERRED ON 2026-09-16, and that preference was right
+ * about this: every fuel depot built this way will share its bones. The evidence changed -
+ * the sampled yard reached 65% coverage and 44 buildings wall to wall on a 45 m plot - and a
+ * usable yard that repeats beats a varied one that does not.
+ */
+UCLASS()
+class AIRSIDE_API UFuelYardBandsStrategy : public UPlotLayoutStrategy
+{
+	GENERATED_BODY()
+
+public:
+	virtual PlotYard::FReservation Solve(
+		const FPlotSite& Site, TArrayView<const PlotYard::FKitSpec> Kits) const override;
+};
+
+/**
+ * The strategy for a layout. Never null for a declared value.
+ *
+ * ONE INSTANCE PER LAYOUT, held for the life of the process. A strategy is a pure function
+ * wearing a UObject - it holds no state between calls and takes its whole world as
+ * arguments - so allocating one per plot per rebuild would be churn for nothing.
+ */
+AIRSIDE_API const UPlotLayoutStrategy* PlotLayoutFor(EPlotLayout Layout);
