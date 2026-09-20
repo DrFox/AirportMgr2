@@ -197,12 +197,13 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	// STARTED ONE TRUCK-CORRIDOR IN FROM THE GATE so a column never grows across the way out,
 	// and stepping INTO the plot so the yard fills from the road backwards.
 
-	// The window still free for the shed band, in ACROSS COORDINATES - signed distance from
-	// the gate along Across, so High is the left edge and Low the right. Measured in that one
-	// frame throughout: mixing it with world X is how the first version had the tank column
-	// narrowing the wrong side of the plot.
-	double WindowHigh = HalfSpan;
-	double WindowLow = -HalfSpan;
+	// The window still free for the shed band is computed AFTER the columns, at the shed
+	// band's OWN depth - see below. Deriving it here from the columns' lateral extents was the
+	// same measure-at-the-wrong-depth bug that put the columns outside a skewed plot, left in
+	// the one place it had not yet been fixed: the columns stand near the gate and the sheds
+	// stand at the back, so on an angled plot the width at one is not the width at the other.
+	// A shed band placed against a window measured at the frontage was refused outright, and a
+	// 65 m plot south of a road drew 0 sheds, 1 tank and 16 pumps.
 
 	for (int32 Kit = 1; Kit < Kits.Num(); ++Kit)
 	{
@@ -278,16 +279,8 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 			Taken = Offset + Claimed.WidthUu + PlotYard::ClearanceUu;
 		}
 
-		// A COLUMN THAT PLACED NOTHING COSTS THE SHEDS NOTHING. Narrowing the window for a
-		// tank that was never reserved would be paying for ground nobody took.
-		if (Reservation.Stands.Num() > Before)
-		{
-			// FROM THE GROUND THE FILES ACTUALLY TOOK, not from the plot's widest point: on a
-			// tapering plot those differ, and narrowing by the wrong one would either overlap
-			// the column or waste the gap beside it.
-			const double Inner = EdgeAt - Taken;
-			if (bLeft) { WindowHigh = Inner; } else { WindowLow = -Inner; }
-		}
+		(void)Before;
+		(void)Taken;
 	}
 
 	// --- Sheds, across the back, between the columns ----------------------------------
@@ -297,6 +290,44 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	// centred on the gate would reach into one of them and be refused outright.
 	{
 		const int32 Kit = 0;
+
+		// THE WINDOW, MEASURED AT THE SHED BAND'S OWN DEPTH. Both ends of the band's ground
+		// are taken and the tighter edge wins, exactly as a column measures its own.
+		const double ShedNear = Deepest - ShedGround.LengthUu;
+		double NearLow = -HalfSpan, NearHigh = HalfSpan;
+		double FarLow = -HalfSpan, FarHigh = HalfSpan;
+		LateralSpanAt(Site.Outline, Site.Gate, Inward, Across, ShedNear, NearLow, NearHigh);
+		LateralSpanAt(Site.Outline, Site.Gate, Inward, Across, Deepest - 1.0, FarLow, FarHigh);
+
+		double WindowLow = FMath::Max(NearLow, FarLow);
+		double WindowHigh = FMath::Min(NearHigh, FarHigh);
+
+		// NARROWED ONLY BY WHAT ACTUALLY REACHES BACK HERE. A column stops short of the shed
+		// band, so most of it is nowhere near this depth and narrowing for all of it would
+		// hand the sheds a sliver of the plot. What does reach is each file's FIRST stand,
+		// which is allowed beside the sheds because it is reached straight from the gate.
+		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+		{
+			const PlotYard::FFootprint Claimed =
+				ClaimedBy(Kits[Stand.KitIndex], Stand.RunLength);
+			const double Depth = FVector2D::DotProduct(Stand.Centre - Site.Gate, Inward);
+			if (Depth + Claimed.LengthUu * 0.5 <= ShedNear)
+			{
+				continue;
+			}
+
+			const double Lateral = FVector2D::DotProduct(Stand.Centre - Site.Gate, Across);
+			const double Half = Claimed.WidthUu * 0.5 + PlotYard::ClearanceUu;
+			if (Lateral > 0.0)
+			{
+				WindowHigh = FMath::Min(WindowHigh, Lateral - Half);
+			}
+			else
+			{
+				WindowLow = FMath::Max(WindowLow, Lateral + Half);
+			}
+		}
+
 		const double Middle = (WindowLow + WindowHigh) * 0.5;
 
 		// AS LONG A RUN AS THE WINDOW TAKES, THEN SHORTER - the same shrink Reserve does. A

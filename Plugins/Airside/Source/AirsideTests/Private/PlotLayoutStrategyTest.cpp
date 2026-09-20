@@ -507,6 +507,95 @@ bool FFuelYardFillsASkewedPlotTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * A plot south of the road, and skewed, still gets its sheds.
+ *
+ * PIE: "I can get 0 sheds, 1 tank, 16 pumps if i build a 65m plot south of a road with a
+ * slightly off angle shape." No sheds at all, and the pump band left to eat the yard.
+ *
+ * THE SHED BAND'S WINDOW WAS MEASURED AT THE COLUMNS' DEPTH - near the gate - while the band
+ * itself stands at the BACK. On an angled plot those two widths differ, so the band was
+ * offered ground that was not there, refused, shrunk, and refused again. It is the same
+ * measure-at-the-wrong-depth fault that put the columns outside a flared plot, surviving in
+ * the one place that fix did not reach.
+ *
+ * SOUTH OF THE ROAD MATTERS, and no other fixture here tries it: every one of them has the
+ * frontage on y = 0 with the plot above, so Inward is +Y and Across is -X throughout. South
+ * flips both. A sign that is right for one and wrong for the other passes every test in this
+ * file and fails the moment somebody builds on the other side of a road.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardFillsASouthernPlotTest,
+	"Airside.Build.FuelYardFillsASouthernPlot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardFillsASouthernPlotTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+
+	// Frontage on y = 0 running the other way, so the interior is BELOW it. Wound to match:
+	// the outline is read for its own winding, and a plot stored backwards aims every module
+	// across the road.
+	auto SouthernPlot = [](double FrontWidth, double BackWidth, double Depth)
+	{
+		const double Flare = (BackWidth - FrontWidth) * 0.5;
+		return TArray<FVector2D>{
+			FVector2D(FrontWidth, 0.0), FVector2D(0.0, 0.0),
+			FVector2D(-Flare, -Depth), FVector2D(FrontWidth + Flare, -Depth) };
+	};
+
+	struct FCase { const TCHAR* What; double Front; double Back; double Depth; };
+	const FCase Cases[] = {
+		{ TEXT("square"),  6500.0, 6500.0, 3000.0 },
+		{ TEXT("flared"),  6500.0, 7500.0, 3000.0 },
+		{ TEXT("pinched"), 6500.0, 5500.0, 3000.0 },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		const TArray<FVector2D> Outline =
+			SouthernPlot(Case.Front, Case.Back, Case.Depth);
+
+		FPlotSite Site;
+		Site.Outline = Outline;
+		Site.FrontageA = FVector2D(Case.Front, 0.0);
+		Site.FrontageB = FVector2D(0.0, 0.0);
+		Site.Gate = FVector2D(Case.Front * 0.5, 0.0);
+		Site.Seed = 1234;
+
+		const PlotYard::FReservation R =
+			PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
+
+		for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+		{
+			TestTrue(*FString::Printf(
+				TEXT("a %s 65 m plot south of the road holds kit %d, got %d"),
+				Case.What, Kit, R.CeilingFor(Kit)), R.CeilingFor(Kit) >= 1);
+		}
+
+		// AND NOTHING HANGS OUT OF THE PLOT, which is what a sign error looks like from
+		// above: the yard reads correctly and half of it is across the road.
+		TArray<FVector2D> Corners;
+		for (const PlotYard::FReservedStand& Stand : R.Stands)
+		{
+			const PlotYard::FKitSpec& Kit = Specs[Stand.KitIndex];
+			PlotYard::FFootprint Claimed;
+			Claimed.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
+			Claimed.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+
+			PlotYard::StandCorners(Stand, Claimed, Corners);
+			for (const FVector2D& Corner : Corners)
+			{
+				TestTrue(*FString::Printf(TEXT("a %s southern plot keeps kit %d inside"),
+					Case.What, Stand.KitIndex),
+					RoadGeom::PointInPolygon(Outline, Corner));
+			}
+		}
+	}
+
+	return true;
+}
+
+/**
  * Growing a plot never costs it capacity.
  *
  * ASSERTED FOR THIS STRATEGY ONLY, and that limit is the point. The scatter is not monotonic
