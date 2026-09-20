@@ -398,3 +398,78 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 
 	return Yard;
 }
+
+PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
+	FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
+	TArrayView<const FKitSpec> Kits, int32 Seed)
+{
+	FReservation Reservation;
+
+	FYardSpace Space;
+	if (!MakeYardSpace(Outline, FrontageA, FrontageB, Gate, Seed, Space))
+	{
+		return Reservation;
+	}
+
+	// THE CYCLE, EXPANDED ONCE. Weight 3 means three offers per turn round the kits, and
+	// building the order up front keeps the loop below a plain walk rather than three nested
+	// counters that have to agree with each other.
+	//
+	// LARGEST FIRST WITHIN A CYCLE, which is LayOut's lesson kept rather than re-learnt: a
+	// tank offered the yard after four pumps have taken the middle has nowhere left to go,
+	// and the player loses the big object rather than the small one. Ties hold their kit
+	// order so the cycle stays deterministic.
+	TArray<int32> Cycle;
+	for (int32 Kit = 0; Kit < Kits.Num(); ++Kit)
+	{
+		for (int32 N = 0; N < FMath::Max(Kits[Kit].ReserveWeight, 0); ++N)
+		{
+			Cycle.Add(Kit);
+		}
+	}
+	Cycle.StableSort([&Kits](int32 A, int32 B)
+	{
+		return Kits[A].Footprint.LengthUu * Kits[A].Footprint.WidthUu
+			> Kits[B].Footprint.LengthUu * Kits[B].Footprint.WidthUu;
+	});
+
+	if (Cycle.Num() == 0)
+	{
+		return Reservation;
+	}
+
+	// A WHOLE CYCLE THAT PLACES NOTHING MEANS FULL, rather than one failure meaning full: a
+	// plot with no room left for a shed may still take three pumps, and stopping at the shed
+	// would waste the corner the player paid for.
+	//
+	// The cap is a backstop against a zero-area footprint looping forever, not an expected
+	// limit - the same role the cap plays in LayOut's RoomForMore loop.
+	bool bPlacedAny = true;
+	while (bPlacedAny && Reservation.Stands.Num() < 256)
+	{
+		bPlacedAny = false;
+		for (const int32 Kit : Cycle)
+		{
+			FReservedStand Stand;
+			Stand.KitIndex = Kit;
+			Stand.RunLength = 1;
+
+			// ONLY THE FIRST STAND OF A BACK-FENCE KIT TAKES THE RAY. The back-fence pass
+			// walks depths along one line out of the gate, so a second stand offered that
+			// line either lands on the first or is refused outright. The rest are sampled
+			// like anything else.
+			const bool bPlaced = Kits[Kit].Footprint.bAgainstTheBackFence
+					&& Reservation.CeilingFor(Kit) == 0
+				? Space.PlaceAgainstTheBackFence(Kits[Kit].Footprint, Stand)
+				: Space.TryPlace(Kits[Kit].Footprint, Stand);
+
+			if (bPlaced)
+			{
+				Reservation.Stands.Add(Stand);
+				bPlacedAny = true;
+			}
+		}
+	}
+
+	return Reservation;
+}
