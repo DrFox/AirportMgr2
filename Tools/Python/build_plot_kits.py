@@ -36,15 +36,10 @@ CONTENT_ASSET = "/Game/DA_AirsideContent"
 # ONLY THE SHED HAS AN APRON. A truck stands in front of a shed and drives out of it, so the
 # ground there is not somewhere another module may go. A tank is plumbed and a pump is walked
 # up to; neither needs more than the clearance every module already gets.
-#
-# MaxPerPlot SAYS WHAT A DEPOT IS, and it is authored HERE rather than left at the class
-# default of 0. Zero means no cap, and an unset asset therefore OVERRODE the sensible figure
-# DepotKitSpecs falls back to - which is how a 45 m plot shipped 9 sheds and 8 pumps in PIE
-# while every test passed. AirportMgr.Content.EveryDepotModuleHasItsOwnKit now refuses a zero.
 KITS = [
-    ("DA_Kit_FuelShed", "Vehicle shed", 800.0, 400.0, 400.0, True, 3, 3, 400.0, 6),
-    ("DA_Kit_FuelTank", "Fuel tank", 500.0, 500.0, 250.0, False, 2, 1, 0.0, 4),
-    ("DA_Kit_FuelPump", "Fuel pump", 300.0, 200.0, 150.0, False, 1, 1, 0.0, 2),
+    ("DA_Kit_FuelShed", "Vehicle shed", 800.0, 400.0, 400.0, True, 3, 3, 400.0),
+    ("DA_Kit_FuelTank", "Fuel tank", 500.0, 500.0, 250.0, False, 2, 1, 0.0),
+    ("DA_Kit_FuelPump", "Fuel pump", 300.0, 200.0, 150.0, False, 1, 1, 0.0),
 ]
 
 # EDepotModule, in the enum's own order - the index into KITS above IS the enum value, the
@@ -69,8 +64,7 @@ def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
 
 
-def author_kit(name, display, length, width, height, back_fence, weight, run_cap, apron_x,
-               max_per_plot):
+def author_kit(name, display, length, width, height, back_fence, weight, run_cap, apron_x):
     path = "%s/%s" % (KIT_PATH, name)
     asset = unreal.EditorAssetLibrary.load_asset(path)
     if asset is None:
@@ -97,11 +91,10 @@ def author_kit(name, display, length, width, height, back_fence, weight, run_cap
     # X ONLY. The apron reaches towards the gate; nothing yet needs ground kept clear to its
     # sides, and a Y an author could not explain is a number the layout would silently obey.
     asset.set_editor_property("apron_uu", unreal.Vector2D(apron_x, 0.0))
-    asset.set_editor_property("max_per_plot", max_per_plot)
 
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-    log("%s: %.0f x %.0f uu, apron %.0f, weight %d, run cap %d, max %d"
-        % (name, length, width, apron_x, weight, run_cap, max_per_plot))
+    log("%s: %.0f x %.0f uu, apron %.0f, weight %d, run cap %d"
+        % (name, length, width, apron_x, weight, run_cap))
     return asset
 
 

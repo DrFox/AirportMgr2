@@ -153,16 +153,6 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 				}
 			}
 
-			// THE CAP IS WHAT A DEPOT IS, and it is checked against what this kit already
-			// holds rather than against this band's own count: a shed kit fills two bands,
-			// one either side of the centre, and capping each separately would give twice
-			// the sheds asked for.
-			const int32 Cap = Kits[Kit].MaxPerPlot;
-			if (Cap > 0 && Reservation.CeilingFor(Kit) + RunLength > Cap)
-			{
-				return;
-			}
-
 			PlotYard::FReservedStand Stand;
 			Stand.KitIndex = Kit;
 			Stand.RunLength = RunLength;
@@ -239,22 +229,63 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 			? FMath::Min(NearHigh, FarHigh)
 			: -FMath::Max(NearLow, FarLow);
 
-		const double Side = EdgeAt - Claimed.WidthUu * 0.5;
+		// FILES, NOT A FILE. A column that has run out of DEPTH starts another one inward, so
+		// a wide shallow plot buys tanks and pumps the way it already buys sheds. Before this,
+		// frontage bought nothing but sheds: a 100 m plot and a 15 m one held the same one
+		// tank, because tanks only ever ran into the plot.
+		//
+		// A TRUCK AISLE BETWEEN FILES, not a clearance. Two files a clearance apart are a
+		// four-metre-thick wall with a metre of air in it, and everything in the outer file is
+		// behind the inner one. GateCorridorUu is the width a truck already needs to get in at
+		// the gate, and it is the width it needs to get between two rows of tanks.
+		//
+		// HALF THE HALF-SPAN, at most. Files march inward until they meet the middle, and the
+		// middle is where the sheds go and where a truck turns. This is a composition rule -
+		// how much of the yard one band may claim - and not a count: it says nothing about how
+		// many tanks that ground holds.
+		const double Pitch = Claimed.WidthUu + PlotYard::GateCorridorUu;
+		const double MostOneBandMayTake = FMath::Abs(EdgeAt) * 0.5;
 
-		const FVector2D Centre = Site.Gate + Edge * Side
-			+ Inward * (Near + Claimed.LengthUu * 0.5);
+		double Taken = 0.0;
+		for (int32 File = 0; File < 16; ++File)
+		{
+			// THE FIRST FILE IS NEVER REFUSED BY THE PROPORTION. A tank is 5 m wide and half
+			// the half-span of a 15 m plot is 3.75, so the rule that stops a band eating the
+			// yard would otherwise deny the narrow plot its only tank - and it did, until
+			// FuelYardFitsTheConceptSheet said so. The rule governs how far a band GROWS, not
+			// whether it exists.
+			const double Offset = File * Pitch;
+			if (File > 0 && Offset + Claimed.WidthUu > MostOneBandMayTake)
+			{
+				break;
+			}
 
-		FillBand(Kit, Centre, Inward, 1, Claimed.LengthUu + PlotYard::ClearanceUu,
-			ColumnLimit);
+			const int32 BeforeFile = Reservation.Stands.Num();
+			const double Side = EdgeAt - Offset - Claimed.WidthUu * 0.5;
+
+			const FVector2D Centre = Site.Gate + Edge * Side
+				+ Inward * (Near + Claimed.LengthUu * 0.5);
+
+			FillBand(Kit, Centre, Inward, 1, Claimed.LengthUu + PlotYard::ClearanceUu,
+				ColumnLimit);
+
+			// A FILE THAT PLACED NOTHING ENDS THE BAND. Skipping to the next one would jump a
+			// gap the plot's taper put there, and the band would read as scattered.
+			if (Reservation.Stands.Num() == BeforeFile)
+			{
+				break;
+			}
+			Taken = Offset + Claimed.WidthUu + PlotYard::ClearanceUu;
+		}
 
 		// A COLUMN THAT PLACED NOTHING COSTS THE SHEDS NOTHING. Narrowing the window for a
 		// tank that was never reserved would be paying for ground nobody took.
 		if (Reservation.Stands.Num() > Before)
 		{
-			// FROM THE EDGE THE COLUMN ACTUALLY TOOK, not from the plot's widest point: on a
+			// FROM THE GROUND THE FILES ACTUALLY TOOK, not from the plot's widest point: on a
 			// tapering plot those differ, and narrowing by the wrong one would either overlap
 			// the column or waste the gap beside it.
-			const double Inner = EdgeAt - Claimed.WidthUu - PlotYard::ClearanceUu;
+			const double Inner = EdgeAt - Taken;
 			if (bLeft) { WindowHigh = Inner; } else { WindowLow = -Inner; }
 		}
 	}

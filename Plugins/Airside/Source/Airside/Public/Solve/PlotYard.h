@@ -156,15 +156,6 @@ namespace PlotYard
 
 		/** Modules of this kit grouped into one stand at one heading. 1 = never grouped. */
 		int32 RunCap = 1;
-
-		/**
-		 * The most of this kit one plot may hold. 0 means no cap.
-		 *
-		 * WHAT A DEPOT IS, handed down rather than worked out: six sheds and two pumps is a
-		 * fuel depot and twelve pumps is not, and no arrangement of them changes that. A
-		 * strategy obeys this; it does not compute one of its own.
-		 */
-		int32 MaxPerPlot = 0;
 	};
 
 	struct FReservedStand : FStand

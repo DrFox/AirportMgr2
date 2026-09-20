@@ -27,19 +27,16 @@ namespace
 		Shed.ApronUu = FVector2D(400.0, 0.0);
 		Shed.ReserveWeight = 3;
 		Shed.RunCap = 3;
-		Shed.MaxPerPlot = 6;
 
 		PlotYard::FKitSpec Tank;
 		Tank.Footprint.LengthUu = 500.0;
 		Tank.Footprint.WidthUu = 500.0;
 		Tank.ReserveWeight = 2;
-		Tank.MaxPerPlot = 4;
 
 		PlotYard::FKitSpec Pump;
 		Pump.Footprint.LengthUu = 300.0;
 		Pump.Footprint.WidthUu = 200.0;
 		Pump.ReserveWeight = 1;
-		Pump.MaxPerPlot = 2;
 
 		return { Shed, Tank, Pump };
 	}
@@ -205,11 +202,17 @@ bool FFuelYardLeavesRoomTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(TEXT("coverage is under 30 percent, got %.0f"),
 		Coverage * 100.0), Coverage < 0.30);
 
-	// AND THE COUNTS ARE A DEPOT. Twelve pumps serving nine tanks is not one at any tier.
-	TestTrue(*FString::Printf(TEXT("a sane shed count, got %d"), R.CeilingFor(0)),
-		R.CeilingFor(0) >= 2 && R.CeilingFor(0) <= 12);
-	TestTrue(*FString::Printf(TEXT("a sane pump count, got %d"), R.CeilingFor(2)),
-		R.CeilingFor(2) >= 1 && R.CeilingFor(2) <= 6);
+	// AND EVERY KIT IS REPRESENTED. A floor, not a ceiling.
+	//
+	// THE CEILING WAS REMOVED ON PURPOSE. It used to assert at most twelve sheds and six
+	// pumps, which were numbers I picked - and picking them is the thing this design does not
+	// do. Coverage above IS the statement about what a yard looks like; a hand-set count
+	// beside it would be a second opinion, and the first one to move when the layout changed.
+	for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+	{
+		TestTrue(*FString::Printf(TEXT("a 45 x 35 m plot holds kit %d, got %d"),
+			Kit, R.CeilingFor(Kit)), R.CeilingFor(Kit) >= 1);
+	}
 
 	return true;
 }
@@ -396,11 +399,19 @@ bool FFuelYardKeepsColumnsClearOfTheShedsTest::RunTest(const FString& Parameters
 				continue;  // No sheds on this plot, so nothing to be walled in by.
 			}
 
-			// AT MOST ONE PER COLUMN may stand beside the sheds: the first, which is reached
-			// straight from the gate. A second one there is behind the first, with the fence
-			// on one side and the shed row on the other.
-			TArray<int32> Beside;
-			Beside.SetNumZeroed(Specs.Num());
+			// AT MOST ONE PER FILE may stand beside the sheds: the first, which is reached
+			// straight from the gate. A second one there is behind the first, with a
+			// neighbour on one side and the shed row on the other.
+			//
+			// PER FILE, NOT PER KIT. A band grows sideways when it runs out of depth, and
+			// every file's own first stand is reachable the same way - so a kit with three
+			// files may legitimately have three stands at that depth, one per file. Counting
+			// per kit called two a failure when it was the feature working.
+			//
+			// KEYED ON THE LATERAL OFFSET, rounded to 10 cm, because that is what a file IS:
+			// stands sharing a lateral position and marching into the plot. Inward is +Y in
+			// these fixtures, so the lateral offset is simply the centre's X.
+			TMap<TPair<int32, int32>, int32> BesidePerFile;
 
 			for (const PlotYard::FReservedStand& Stand : R.Stands)
 			{
@@ -409,15 +420,18 @@ bool FFuelYardKeepsColumnsClearOfTheShedsTest::RunTest(const FString& Parameters
 					Specs[Stand.KitIndex].Footprint.LengthUu + Specs[Stand.KitIndex].ApronUu.X;
 				if (Stand.Centre.Y + Claimed * 0.5 > ShedFront + 1.0)
 				{
-					++Beside[Stand.KitIndex];
+					const TPair<int32, int32> File(
+						Stand.KitIndex, FMath::RoundToInt(Stand.Centre.X / 10.0));
+					BesidePerFile.FindOrAdd(File) += 1;
 				}
 			}
 
-			for (int32 Kit = 1; Kit < Specs.Num(); ++Kit)
+			for (const TPair<TPair<int32, int32>, int32>& File : BesidePerFile)
 			{
 				TestTrue(*FString::Printf(
-					TEXT("%.0f x %.0f: kit %d has at most one stand beside the sheds, got %d"),
-					WidthUu, DepthUu, Kit, Beside[Kit]), Beside[Kit] <= 1);
+					TEXT("%.0f x %.0f: kit %d file at x=%d has one beside the sheds, got %d"),
+					WidthUu, DepthUu, File.Key.Key, File.Key.Value * 10, File.Value),
+					File.Value <= 1);
 			}
 		}
 	}
