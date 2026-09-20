@@ -18,6 +18,38 @@
  */
 AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module);
 
+class UAirsideContent;
+
+/**
+ * What a module occupies, preferring its authored kit and falling back to the grey-box table.
+ *
+ * CONTENT IS OPTIONAL AND THAT IS LOAD-BEARING. Every solver and presenter change in this
+ * slice is testable with no content at all, so the runtime half of the work and the meshes
+ * proceed independently rather than blocking each other. A caller passing nullptr is
+ * exercising the shipped path, not a stub.
+ */
+AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module,
+	const UAirsideContent* Content);
+
+/**
+ * Every module kind a depot can hold, as specs the yard solver understands.
+ *
+ * IN ENUM ORDER, so a spec's index IS its EDepotModule and the presenter needs no second map
+ * to get back. Built by WALKING the enum rather than from a list written here: a list would
+ * answer only for the modules somebody remembered to add, which is the failure
+ * AircraftLookTest exists for.
+ */
+AIRSIDE_API TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content);
+
+/**
+ * What to call a module on the readout. Plural, because it labels a count.
+ *
+ * HERE RATHER THAN IN THE TOOL, for the reason DepotFootprint is here: the readout names
+ * them and the inspector will too, and two spellings of "Sheds" is the sort of thing nobody
+ * notices until a screenshot.
+ */
+AIRSIDE_API FString DepotKitLabel(EDepotModule Module);
+
 /**
  * The seed that lays out the yard of a depot posed at Where.
  *

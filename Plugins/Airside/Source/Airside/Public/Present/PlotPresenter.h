@@ -28,8 +28,15 @@ class AIRSIDE_API UPlotPresenter : public UObject
 	GENERATED_BODY()
 
 public:
-	/** The component to fill. The actor owns it, as it owns every other draw target. */
-	void Initialise(UInstancedStaticMeshComponent* InBoxes);
+	/**
+	 * The components to fill. The actor owns them, as it owns every other draw target.
+	 *
+	 * TWO OF THEM, because an instance carries a transform and not a material: a ghosted slot
+	 * cannot differ from a built one inside a single component. InGhosts may be null, and
+	 * then a plot simply draws nothing for the room it has left.
+	 */
+	void Initialise(UInstancedStaticMeshComponent* InBoxes,
+		UInstancedStaticMeshComponent* InGhosts = nullptr);
 
 	/**
 	 * Clear and re-add an instance per module standing where the yard solver put it, plus a
@@ -50,11 +57,33 @@ public:
 	 */
 	int32 GetRoomForMore() const { return RoomForMore; }
 
-	/** Module boxes standing across every plot. The first instances each plot adds. */
+	/**
+	 * Module BAYS built across every plot - what the player owns and can see.
+	 *
+	 * BAYS, NOT INSTANCES, and the two parted company when runs arrived: a three-bay shed run
+	 * is three modules drawn as one box. This answers "how much depot is there", which is the
+	 * question every caller was really asking even while the two numbers agreed.
+	 */
 	int32 GetModuleCount() const { return ModuleBoxes; }
 
-	/** Modules that had nowhere to stand. Reported, never hidden. */
+	/**
+	 * Modules that had nowhere to stand. Reported, never hidden.
+	 *
+	 * ZERO NOW, AND KEPT ANYWAY. Reserve returns only what it placed, so a drop is a bug
+	 * rather than a refusal - and an invariant with no accessor is an invariant nobody can
+	 * assert. See Airside.Present.PlotPresenterGhostsUnboughtSlots.
+	 */
 	int32 GetDroppedCount() const { return Dropped; }
+
+	/**
+	 * Reserved bays nobody has bought yet, drawn ghosted.
+	 *
+	 * NOT A GRID OF SLOT MARKERS. Those were removed on 2026-09-16 because a uniform grid
+	 * claimed a structure the scattered yard did not have. A ghost here is a SOLVED STAND -
+	 * its own footprint, its own sampled heading, from the code path that will place the
+	 * module when it is bought. It does not claim the yard has a structure; it shows the yard.
+	 */
+	int32 GetGhostCount() const { return Ghosts; }
 
 	/**
 	 * For tests: one instance's transform, false if there is no such instance.
@@ -76,6 +105,20 @@ public:
 private:
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> Boxes;
 
+	/** Reserved-but-unbought slots. Wears the ghost material; see Initialise. */
+	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> GhostBoxes;
+
+	/**
+	 * Every transform added during the last rebuild, in the order it was added.
+	 *
+	 * BECAUSE THE INSTANCE INDEX IS ABOUT TO STOP MEANING ANYTHING. One component held every
+	 * box, so "instance 3" was a fact about the PLOT; a second component for the ghosts - and
+	 * later one per authored mesh - makes it a fact about which component happened to take
+	 * it. The tests ask about the plot, so the order they rely on lives here rather than in a
+	 * component they do not own.
+	 */
+	TArray<FTransform> Placed;
+
 	/** Counted during the last RebuildFrom. See GetGateGapCount. */
 	int32 GateGaps = 0;
 
@@ -87,4 +130,7 @@ private:
 
 	/** Counted during the last RebuildFrom. See GetDroppedCount. */
 	int32 Dropped = 0;
+
+	/** Counted during the last RebuildFrom. See GetGhostCount. */
+	int32 Ghosts = 0;
 };

@@ -890,10 +890,15 @@ private:
 	 *  Same CreateDefaultSubobject and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<UPlotPresenter> Plots;
 
-	/** The one component every plot box and fence panel is an instance in. A UPROPERTY and
-	 *  NOT Transient, unlike the presenter that fills it: it is a scene component this actor
-	 *  owns, exactly as the five dynamic mesh components are. */
+	/** The one component every built plot box and fence panel is an instance in. A UPROPERTY
+	 *  and NOT Transient, unlike the presenter that fills it: it is a scene component this
+	 *  actor owns, exactly as the five dynamic mesh components are. */
 	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotBoxes;
+
+	/** The same again for reserved bays nobody has bought, wearing the ghost material.
+	 *  A SECOND COMPONENT because an instance carries a transform and not a material, so a
+	 *  ghosted slot cannot differ from a built one inside PlotBoxes. */
+	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> PlotGhostBoxes;
 
 	/** Every graph mutator, query and undo step - see URoadEditFacade's own header. Same
 	 *  CreateDefaultSubobject and Transient reasoning as Presenter. */

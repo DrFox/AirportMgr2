@@ -647,6 +647,11 @@ void UEntityDefinition::BuildFuelDepot(UEntityDefinition* Definition)
 	// player placing one would have followed.
 	Definition->PoseRole = EServiceRole::Fuel;
 
+	// BANDS, NOT SCATTER. The sampled yard put 23 sheds, 9 tanks and 12 pumps wall to wall
+	// across a 45 m plot - 65% coverage, with no ground left for a truck to reach any of it.
+	// See the 2026-09-20 layout-strategies design.
+	Definition->Layout = EPlotLayout::FuelYardBands;
+
 	// HALF-extents of ONE BAY: 4 m by 8 m. It used to be the whole site - 12 m by 8 m, "a
 	// tank, a pump, and room to turn a bowser round" - but a depot is DRAWN now, so the site
 	// is whatever the player outlined and the only fixed extent left is the module that

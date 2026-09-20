@@ -2,6 +2,10 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+// INCLUDED RATHER THAN FORWARD DECLARED: EDepotModule keys DepotKits below, and UHT needs
+// an enum's definition to reflect a TMap key. Content/ carries no include-direction rule -
+// Check-Architecture constrains Model/, Solve/, Tool/ and Build/ only.
+#include "Model/RoadEntity.h"
 #include "AirsideContent.generated.h"
 
 class UEntityDefinition;
@@ -11,6 +15,7 @@ class UAnimInstance;
 class USkeletalMesh;
 class UStaticMesh;
 class UAircraftType;
+class UPlotModuleKit;
 
 /**
  * The content this plugin reaches for when nothing has been assigned by hand.
@@ -211,6 +216,21 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<USkeletalMesh> AgentMesh;
+
+	/**
+	 * What stands in a plot, by module.
+	 *
+	 * A MAP RATHER THAN A FIELD PER MODULE, because the consumer walks EDepotModule and a
+	 * field per value could only be kept in step by someone remembering to add one - the
+	 * failure AircraftLookTest exists for, where a hand-written pair passed while the A320
+	 * and the 737 both still wore the default mesh.
+	 *
+	 * AN UNMAPPED MODULE FALLS BACK to DepotKit.cpp's grey-box table rather than failing.
+	 * That is what lets the solver and presenter work land and be tested before a single
+	 * mesh exists; a zero footprint instead would stack every module on the same spot.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	TMap<EDepotModule, TObjectPtr<UPlotModuleKit>> DepotKits;
 
 	/**
 	 * What a GROUND VEHICLE agent looks like when there is no rigged one. Null leaves the

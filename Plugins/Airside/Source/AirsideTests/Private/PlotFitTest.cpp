@@ -40,7 +40,7 @@ bool FPlotFitBaysTest::RunTest(const FString& Parameters)
 	// this by coin flip, and would do so differently on another machine.
 	{
 		SouthEdge(1200.0, A, B);
-		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1200.0, 800.0), A, B);
+		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1200.0, 1200.0), A, B);
 		TestTrue(TEXT("12 m of frontage fits"), Fit.bFits);
 		TestEqual(TEXT("and gives exactly three bays"), Fit.Bays.Num(), 3);
 	}
@@ -49,14 +49,14 @@ bool FPlotFitBaysTest::RunTest(const FString& Parameters)
 	// solver that rounded up would silently give the player a bay they did not draw.
 	{
 		SouthEdge(1100.0, A, B);
-		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1100.0, 800.0), A, B);
+		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1100.0, 1200.0), A, B);
 		TestEqual(TEXT("11 m floors to two bays, never rounds up"), Fit.Bays.Num(), 2);
 	}
 
 	// Under one bay is a refusal WITH A REASON, because the tool has to say which.
 	{
 		SouthEdge(300.0, A, B);
-		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(300.0, 800.0), A, B);
+		const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(300.0, 1200.0), A, B);
 		TestFalse(TEXT("3 m of frontage does not fit"), Fit.bFits);
 		TestEqual(TEXT("and says why, so the tool can tell the player"),
 			static_cast<int32>(Fit.Why), static_cast<int32>(PlotFit::EPlotRefusal::TooSmall));
@@ -80,10 +80,10 @@ bool FPlotFitBaysTest::RunTest(const FString& Parameters)
 		SouthEdge(1200.0, A, B);
 		const TArray<FVector2D> Notched = {
 			FVector2D(0.0, 0.0),   FVector2D(1200.0, 0.0),
-			FVector2D(1200.0, 800.0),
-			FVector2D(800.0, 800.0), FVector2D(800.0, 300.0),  // the notch, biting down
-			FVector2D(400.0, 300.0), FVector2D(400.0, 800.0),
-			FVector2D(0.0, 800.0) };
+			FVector2D(1200.0, 1200.0),
+			FVector2D(800.0, 1200.0), FVector2D(800.0, 300.0),  // the notch, biting down
+			FVector2D(400.0, 300.0), FVector2D(400.0, 1200.0),
+			FVector2D(0.0, 1200.0) };
 		const PlotFit::FPlotFit Fit = PlotFit::FitBays(Notched, A, B);
 		TestEqual(TEXT("the bay under the notch is dropped, the outer two stand"),
 			Fit.Bays.Num(), 2);
@@ -107,7 +107,7 @@ bool FPlotFitFacesAwayFromRoadTest::RunTest(const FString& Parameters)
 	FVector2D B = FVector2D::ZeroVector;
 	SouthEdge(1200.0, A, B);
 
-	const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1200.0, 800.0), A, B);
+	const PlotFit::FPlotFit Fit = PlotFit::FitBays(PlotRect(1200.0, 1200.0), A, B);
 	if (!TestTrue(TEXT("the plot fits"), Fit.bFits)) { return false; }
 
 	for (const PlotFit::FPlotBay& Bay : Fit.Bays)
@@ -116,14 +116,14 @@ bool FPlotFitFacesAwayFromRoadTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("the bay's +X points away from the frontage, not at it"),
 			Forward.Y > 0.9);
 		TestTrue(TEXT("and the bay sits inside the plot, not on its boundary"),
-			Bay.Centre.Y > 0.0 && Bay.Centre.Y < 800.0);
+			Bay.Centre.Y > 0.0 && Bay.Centre.Y < 1200.0);
 	}
 
 	// THE SAME PLOT WOUND THE OTHER WAY ROUND. The inward normal is derived from the
 	// outline's winding, so a plot whose points happen to run clockwise must still aim its
 	// bays into the plot - not out of it, which would put every shed across the road.
 	{
-		TArray<FVector2D> Clockwise = PlotRect(1200.0, 800.0);
+		TArray<FVector2D> Clockwise = PlotRect(1200.0, 1200.0);
 		Algo::Reverse(Clockwise);
 		// The south edge, traversed as this winding traverses it.
 		const PlotFit::FPlotFit Flipped = PlotFit::FitBays(
@@ -133,7 +133,7 @@ bool FPlotFitFacesAwayFromRoadTest::RunTest(const FString& Parameters)
 			for (const PlotFit::FPlotBay& Bay : Flipped.Bays)
 			{
 				TestTrue(TEXT("and its bays are still inside the plot, not across the road"),
-					Bay.Centre.Y > 0.0 && Bay.Centre.Y < 800.0);
+					Bay.Centre.Y > 0.0 && Bay.Centre.Y < 1200.0);
 			}
 		}
 	}

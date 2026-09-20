@@ -32,6 +32,22 @@ enum class EPlaceableEntity : uint8
 };
 
 /**
+ * How a plot's modules are arranged. Build/PlotLayoutStrategy.h holds the strategies.
+ *
+ * HERE RATHER THAN BESIDE THEM, because a definition owns this field: declaring it in Build/
+ * would make Entities/ depend on Build/ to state its own property, and the dependency runs
+ * the other way round.
+ */
+UENUM()
+enum class EPlotLayout : uint8
+{
+	/** Sampled, jittered, unplanned. The default - see PlotLayoutFor. */
+	Scatter,
+	/** Sheds across the back, tanks left, pumps right. Scaffolding; see the class. */
+	FuelYardBands
+};
+
+/**
  * One piece of a stand's authored geometry: a chain of quadratic segments.
  *
  * POINTS AND CONTROLS, NOT A POLYLINE, because that is what a guideline edge IS - two
@@ -252,6 +268,15 @@ public:
 	 * meant, and is why the Code C stand needs no edit.
 	 */
 	UPROPERTY(EditAnywhere) EServiceRole PoseRole = EServiceRole::Aircraft;
+
+	/**
+	 * How this plot's modules are arranged. See Build/PlotLayoutStrategy.h.
+	 *
+	 * SCATTER IS THE DEFAULT so an un-migrated definition keeps the behaviour it had. A
+	 * default of FuelYardBands would silently re-shape every plot ever saved, which is the
+	 * same reason PoseRole above defaults to Aircraft.
+	 */
+	UPROPERTY(EditAnywhere) EPlotLayout Layout = EPlotLayout::Scatter;
 
 	/**
 	 * This stand has pavement on BOTH sides: an aeroplane enters nose-first and leaves

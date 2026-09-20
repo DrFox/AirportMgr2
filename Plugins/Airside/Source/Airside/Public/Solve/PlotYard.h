@@ -125,6 +125,80 @@ namespace PlotYard
 	};
 
 	/**
+	 * One kind of thing a plot can reserve room for.
+	 *
+	 * STILL NOT EDepotModule. A spec is a footprint and two integers, and mapping a kit to
+	 * one stays UPlotPresenter's job on the other side of the seam - the same split FitBays
+	 * makes by taking an outline rather than an entity, and what keeps these tests free of a
+	 * world, an actor and NewObject.
+	 */
+	struct FKitSpec
+	{
+		/** ONE module's, never a run's. Reserve multiplies it by the run length itself. */
+		FFootprint Footprint;
+
+		/**
+		 * Clear ground beyond the footprint, uu. X towards the gate, Y to either side.
+		 *
+		 * STILL NO KIT IN Solve/. A spec is rectangles and integers; which asset they came
+		 * from stays on the other side of the seam.
+		 */
+		FVector2D ApronUu = FVector2D::ZeroVector;
+
+		/**
+		 * How often this kit comes up in the fill cycle.
+		 *
+		 * IT SETS A CEILING, NOT THE PLAYER'S STRATEGY. They buy in whatever order they like
+		 * up to the ceiling, so a generous weight costs nothing and a mean one silently
+		 * forbids a build the player wanted.
+		 */
+		int32 ReserveWeight = 1;
+
+		/** Modules of this kit grouped into one stand at one heading. 1 = never grouped. */
+		int32 RunCap = 1;
+	};
+
+	struct FReservedStand : FStand
+	{
+		/** Into the Kits array Reserve was given. */
+		int32 KitIndex = INDEX_NONE;
+
+		/** Modules this stand holds. 1 unless the kit groups into runs. */
+		int32 RunLength = 1;
+	};
+
+	/**
+	 * Everything a plot has room for, decided once.
+	 *
+	 * ONLY WHAT IT PLACED. Unlike FYard, which reports a module it could not fit, a
+	 * reservation has nothing to refuse - it chose the list. A stand here is a promise that
+	 * the module fits, which is what lets the player be shown ghosted slots and charged for
+	 * filling them.
+	 */
+	struct FReservation
+	{
+		/** In placement order, which is the fill cycle's order. */
+		TArray<FReservedStand> Stands;
+
+		/**
+		 * How many modules of one kit this plot can hold.
+		 *
+		 * DERIVED, never stored beside Stands: a second count is a second thing to keep in
+		 * agreement, for the same reason FYard::DroppedCount is derived. Sums RunLength
+		 * rather than counting stands, because a three-bay run IS three modules.
+		 */
+		int32 CeilingFor(int32 KitIndex) const
+		{
+			int32 Count = 0;
+			for (const FReservedStand& Stand : Stands)
+			{
+				if (Stand.KitIndex == KitIndex) { Count += Stand.RunLength; }
+			}
+			return Count;
+		}
+	};
+
+	/**
 	 * The four corners of a stand, in order, inset by PlotFit::CornerInsetUu.
 	 *
 	 * PUBLIC because the tests assert containment and non-overlap with it, and a test that
@@ -133,6 +207,29 @@ namespace PlotYard
 	 */
 	AIRSIDE_API void StandCorners(const FStand& Stand, const FFootprint& Footprint,
 		TArray<FVector2D>& OutCorners);
+
+	/**
+	 * The inward normal of the frontage: which way is INTO the plot.
+	 *
+	 * PUBLIC because a prescriptive layout needs the plot's own frame before it can place
+	 * anything, and deriving it a second time in Build/ would be a second opinion about which
+	 * way a depot faces - the failure BuildFuelDepot's comment records having already made.
+	 *
+	 * Read off the polygon's winding rather than assumed counter-clockwise: a plot stored the
+	 * other way round would otherwise aim every module out across the road.
+	 */
+	AIRSIDE_API FVector2D InwardOf(TArrayView<const FVector2D> Outline,
+		FVector2D FrontageA, FVector2D FrontageB);
+
+	/**
+	 * Do these two stands' rectangles intersect? Separating axis.
+	 *
+	 * PUBLIC for the same reason StandCorners is: a caller that computed overlap its own way
+	 * would be checking its own arithmetic rather than the solver's. One derivation, now
+	 * three consumers - the sampler, the band layout and the tests.
+	 */
+	AIRSIDE_API bool StandsOverlap(const FStand& A, const FFootprint& FootprintA,
+		const FStand& B, const FFootprint& FootprintB);
 
 	/**
 	 * Lay the footprints out in the plot.
@@ -145,4 +242,26 @@ namespace PlotYard
 		FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
 		TArrayView<const FFootprint> Footprints, int32 Seed,
 		const FFootprint& RoomForFootprint);
+
+	/**
+	 * Fill the plot, and report what fits.
+	 *
+	 * THE PLOT'S CAPACITY IS WHAT THIS PLACED, not a number derived beside it. A budget in
+	 * bays or square metres would assert that a packing exists without ever proving one -
+	 * against a sampler that keeps a gate corridor clear, holds ClearanceUu between modules
+	 * and jitters headings, packing into a quad the player drew freehand. It would be right
+	 * nearly always, and the occasional wrong is the expensive kind: the player spent money
+	 * and got a module that could not be placed.
+	 *
+	 * THE SAME SAMPLER LayOut USES. The layout shown while the outline is dragged IS the
+	 * layout that gets built, because there is one piece of code that decides where a thing
+	 * stands. A second evaluator would be a preview quietly describing a different depot.
+	 *
+	 * Gate is where the fence is left open, as LayOut has it. Seed makes the result
+	 * repeatable, which here is load-bearing rather than merely nice: nothing about a
+	 * reservation is saved, so the same plot must solve the same way every rebuild.
+	 */
+	AIRSIDE_API FReservation Reserve(TArrayView<const FVector2D> Outline,
+		FVector2D FrontageA, FVector2D FrontageB, FVector2D Gate,
+		TArrayView<const FKitSpec> Kits, int32 Seed);
 }
