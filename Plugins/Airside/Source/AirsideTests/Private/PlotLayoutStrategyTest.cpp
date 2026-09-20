@@ -596,6 +596,143 @@ bool FFuelYardFillsASouthernPlotTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * Every shape a player can actually draw gets a working depot.
+ *
+ * FOUR PIE-ONLY FAILURES CAME BEFORE THIS TEST, and every one of them was the same shape of
+ * mistake: the layout asked the outline for a GLOBAL extreme and then stood something
+ * somewhere else. HalfSpan put both columns outside a flared plot. HalfSpan again gave the
+ * shed band a window measured at the columns' depth. Deepest stood the shed row at the
+ * deepest corner's depth clean across the plot, so a back edge one degree off square lost
+ * every shed.
+ *
+ * EACH ONE WAS FOUND BY A HUMAN IN THE EDITOR, because every fixture in this file was a
+ * rectangle with its frontage on y = 0. The gesture pins four corners freely: square, facing
+ * north, is the special case and it was the only case tested.
+ *
+ * SO THIS SWEEPS THE SPACE rather than adding the shape that bit us last. Both sides of the
+ * road, flared and pinched, slanted backs, skewed frontages, shallow and deep. It asserts
+ * only what must be true of any of them - something of each kit, nothing outside the fence,
+ * nothing overlapping - because the numbers are the layout's business and the invariants are
+ * not.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardHandlesAnyDrawablePlotTest,
+	"Airside.Build.FuelYardHandlesAnyDrawablePlot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardHandlesAnyDrawablePlotTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+
+	int32 Cases = 0;
+
+	// Frontage width, back width, depth, and how far the back edge is SHIFTED sideways - a
+	// parallelogram rather than a trapezoid, which is what "off angle" usually produces.
+	const double Fronts[] = { 1500.0, 3000.0, 4500.0, 6500.0 };
+	const double Depths[] = { 1200.0, 2000.0, 3500.0 };
+	const double BackScales[] = { 0.7, 1.0, 1.4 };
+	const double Skews[] = { -600.0, 0.0, 600.0 };
+
+	for (double Front : Fronts)
+	for (double Depth : Depths)
+	for (double BackScale : BackScales)
+	for (double Skew : Skews)
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const double Back = Front * BackScale;
+		const double Flare = (Back - Front) * 0.5;
+		const double Sign = (Side == 0) ? 1.0 : -1.0;
+
+		// Wound so the frontage is edge 0->1 and the interior is on the Sign side of it.
+		TArray<FVector2D> Outline;
+		if (Side == 0)
+		{
+			Outline = { FVector2D(0.0, 0.0), FVector2D(Front, 0.0),
+			            FVector2D(Front + Flare + Skew, Depth),
+			            FVector2D(-Flare + Skew, Depth) };
+		}
+		else
+		{
+			Outline = { FVector2D(Front, 0.0), FVector2D(0.0, 0.0),
+			            FVector2D(-Flare + Skew, -Depth),
+			            FVector2D(Front + Flare + Skew, -Depth) };
+		}
+
+		FPlotSite Site;
+		Site.Outline = Outline;
+		Site.FrontageA = Outline[0];
+		Site.FrontageB = Outline[1];
+		Site.Gate = (Outline[0] + Outline[1]) * 0.5;
+		Site.Seed = 1234;
+
+		const PlotYard::FReservation R =
+			PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
+
+		const FString What = FString::Printf(
+			TEXT("%.0f x %.0f m, back %.0f%%, skew %.0f, %s"),
+			Front / 100.0, Depth / 100.0, BackScale * 100.0, Skew / 100.0,
+			Side == 0 ? TEXT("north") : TEXT("south"));
+
+		++Cases;
+
+		// EVERY PLOT HOLDS SOMETHING. A shape the gesture will accept is never a reason to
+		// draw an empty yard.
+		TestTrue(*FString::Printf(TEXT("%s holds something"), *What), R.Stands.Num() > 0);
+
+		// AND A PLOT WITH ROOM HOLDS ONE OF EACH. Not every plot: 15 m of frontage pinched to
+		// 10.5 m at the back and skewed 6 m sideways is a sliver, and a shed plus a tank
+		// column plus a pump column need 13 m at the shed's depth - it genuinely cannot hold
+		// a full depot, and asserting it could would be this test lying rather than the
+		// layout failing.
+		//
+		// 30 x 20 m IS THE THRESHOLD, well under the 65 m plot that drew zero sheds in PIE,
+		// so the failure this sweep was written for is still caught either side of it.
+		if (Front >= 3000.0 && Depth >= 2000.0)
+		{
+			for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+			{
+				TestTrue(*FString::Printf(TEXT("%s holds kit %d"), *What, Kit),
+					R.CeilingFor(Kit) >= 1);
+			}
+		}
+
+		auto ClaimedOf = [&Specs](const PlotYard::FReservedStand& Stand)
+		{
+			const PlotYard::FKitSpec& Kit = Specs[Stand.KitIndex];
+			PlotYard::FFootprint Out;
+			Out.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
+			Out.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+			return Out;
+		};
+
+		TArray<FVector2D> Corners;
+		for (int32 A = 0; A < R.Stands.Num(); ++A)
+		{
+			PlotYard::StandCorners(R.Stands[A], ClaimedOf(R.Stands[A]), Corners);
+			for (const FVector2D& Corner : Corners)
+			{
+				TestTrue(*FString::Printf(TEXT("%s keeps kit %d inside the fence"),
+					*What, R.Stands[A].KitIndex),
+					RoadGeom::PointInPolygon(Outline, Corner));
+			}
+
+			for (int32 B = A + 1; B < R.Stands.Num(); ++B)
+			{
+				TestFalse(*FString::Printf(TEXT("%s keeps stands %d and %d apart"),
+					*What, A, B),
+					PlotYard::StandsOverlap(R.Stands[A], ClaimedOf(R.Stands[A]),
+						R.Stands[B], ClaimedOf(R.Stands[B])));
+			}
+		}
+	}
+
+	// NOT VACUOUS. A loop that swept nothing would pass every assertion above.
+	TestEqual(TEXT("the sweep covered every shape"), Cases, 216);
+
+	return true;
+}
+
+/**
  * Growing a plot never costs it capacity.
  *
  * ASSERTED FOR THIS STRATEGY ONLY, and that limit is the point. The scatter is not monotonic

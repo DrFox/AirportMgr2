@@ -61,6 +61,54 @@ namespace
 		return OutHigh > OutLow;
 	}
 
+	/**
+	 * How deep the plot runs at one lateral offset. False if the plot is not there at all.
+	 *
+	 * THE TRANSPOSE OF LateralSpanAt, and it exists for the same reason. Deepest is the depth
+	 * of the deepest CORNER of the whole outline; a back band placed at that depth stands
+	 * there across its entire width, and the moment the back edge is not square to the gate
+	 * most of that width is beyond the fence. Every stand is refused and the plot draws no
+	 * sheds at all - PIE, 2026-09-20: "as soon as the back is no longer square you lose all of
+	 * the sheds".
+	 *
+	 * A GLOBAL EXTREME IS NOT A LOCAL MEASUREMENT. That sentence covers every layout fault
+	 * found in this file so far: HalfSpan put the columns outside a flared plot, HalfSpan
+	 * again gave the shed band a window measured at the wrong depth, and Deepest does this.
+	 * Ask the outline where IT is, at the place you are about to stand something.
+	 */
+	bool DepthSpanAt(TArrayView<const FVector2D> Outline, const FVector2D& Gate,
+		const FVector2D& Inward, const FVector2D& Across, double Lateral,
+		double& OutNear, double& OutFar)
+	{
+		OutNear = TNumericLimits<double>::Max();
+		OutFar = -TNumericLimits<double>::Max();
+
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			const FVector2D& A = Outline[I];
+			const FVector2D& B = Outline[(I + 1) % Outline.Num()];
+
+			const double LateralA = FVector2D::DotProduct(A - Gate, Across);
+			const double LateralB = FVector2D::DotProduct(B - Gate, Across);
+
+			if ((LateralA < Lateral && LateralB < Lateral)
+				|| (LateralA > Lateral && LateralB > Lateral))
+			{
+				continue;
+			}
+
+			const double Span = LateralB - LateralA;
+			const double T = FMath::IsNearlyZero(Span) ? 0.0 : (Lateral - LateralA) / Span;
+			const FVector2D At = A + (B - A) * FMath::Clamp(T, 0.0, 1.0);
+			const double Depth = FVector2D::DotProduct(At - Gate, Inward);
+
+			OutNear = FMath::Min(OutNear, Depth);
+			OutFar = FMath::Max(OutFar, Depth);
+		}
+
+		return OutFar > OutNear;
+	}
+
 	/** Is this stand wholly inside the outline, and clear of everything already placed? */
 	bool IsLegal(const PlotYard::FStand& Stand, const PlotYard::FFootprint& Claimed,
 		TArrayView<const FVector2D> Outline,
@@ -333,22 +381,59 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		// AS LONG A RUN AS THE WINDOW TAKES, THEN SHORTER - the same shrink Reserve does. A
 		// band that only ever tried RunCap gave a narrow plot no sheds at all rather than a
 		// one-bay one.
+		// EACH STAND AT THE DEPTH ITS OWN LATERAL POSITION HAS, so the row follows a slanted
+		// back edge instead of standing at the deepest corner's depth all the way across. The
+		// SHALLOWER of the stand's two lateral edges wins - a stand is only as deep as its
+		// shallowest corner allows, and taking the middle would hang one end over the fence.
+		auto BackBand = [&](int32 RunLength, double From, double Direction, double Pitch)
+		{
+			const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
+
+			for (int32 Index = 0; Index < 64; ++Index)
+			{
+				const double Lateral = From + Direction * Pitch * Index;
+				const double HalfWidth = Claimed.WidthUu * 0.5;
+
+				double NearA = 0.0, FarA = 0.0, NearB = 0.0, FarB = 0.0;
+				if (!DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+						Lateral - HalfWidth, NearA, FarA)
+					|| !DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+						Lateral + HalfWidth, NearB, FarB))
+				{
+					return;
+				}
+
+				const double BackHere = FMath::Min(FarA, FarB);
+
+				PlotYard::FReservedStand Stand;
+				Stand.KitIndex = Kit;
+				Stand.RunLength = RunLength;
+				Stand.Heading = InwardBearing;
+				Stand.Centre = Site.Gate + Across * Lateral
+					+ Inward * (BackHere - Claimed.LengthUu * 0.5);
+				Stand.bPlaced = true;
+
+				if (!IsLegal(Stand, Claimed, Site.Outline, Reservation.Stands, Kits))
+				{
+					return;
+				}
+				Reservation.Stands.Add(Stand);
+			}
+		};
+
+		// AS LONG A RUN AS THE WINDOW TAKES, THEN SHORTER - the same shrink Reserve does. A
+		// band that only ever tried RunCap gave a narrow plot no sheds at all rather than a
+		// one-bay one.
 		for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
 			--RunLength)
 		{
 			const int32 Before = Reservation.Stands.Num();
 
 			const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
-			const FVector2D Centre = Site.Gate + Across * Middle
-				+ Inward * (Deepest - Claimed.LengthUu * 0.5);
 			const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
 
-			// THE BACK BAND IS NOT DEPTH-LIMITED: it IS the deep end, and containment is
-			// what stops it. TNumericLimits rather than Deepest so the intent reads as "no
-			// limit" rather than as a bound someone might later tighten.
-			const double NoLimit = TNumericLimits<double>::Max();
-			FillBand(Kit, Centre, Across, RunLength, Pitch, NoLimit);
-			FillBand(Kit, Centre - Across * Pitch, -Across, RunLength, Pitch, NoLimit);
+			BackBand(RunLength, Middle, +1.0, Pitch);
+			BackBand(RunLength, Middle - Pitch, -1.0, Pitch);
 
 			if (Reservation.Stands.Num() > Before)
 			{
