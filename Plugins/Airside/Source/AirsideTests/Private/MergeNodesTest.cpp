@@ -3,6 +3,9 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Profiles/RoadProfile.h"
+#include "AirsideTestFixtures.h"
+#include "Model/RoadTraffic.h"
+#include "Model/SpeedProfile.h"
 #include "Solve/RoadGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -239,6 +242,101 @@ bool FMergeSortsIncidentByBearingTest::RunTest(const FString& Parameters)
 			Bearing >= Previous);
 		Previous = Bearing;
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMergingClosePointsRemovesTheSpuriousSlowdownTest,
+	"Airside.Model.MergingClosePointsRemovesTheSpuriousSlowdown",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMergingClosePointsRemovesTheSpuriousSlowdownTest::RunTest(const FString& Parameters)
+{
+	// THE REPORTED DEFECT, AND THE REASON THIS FEATURE EXISTS: "we had issues where vehicles
+	// were slowing or stopping unnecessarily because of close points, and there was no way to
+	// merge them."
+	//
+	// A pair of nodes a couple of metres apart is not a straight road with a blemish - it is
+	// TWO corners in quick succession, and FSpeedProfile is right to refuse them at speed.
+	// The layout was the bug; the merge is the fix. This measures the fix at the level the
+	// complaint was made at - what the vehicle may actually do along the route.
+	FMergeFixture Fix;
+	const FRoadNodeId Start = Fix.Network->AddNode(FVector2D(0.0, 0.0));
+	const FRoadNodeId Kink0 = Fix.Network->AddNode(FVector2D(10000.0, 0.0));
+	const FRoadNodeId Kink1 = Fix.Network->AddNode(FVector2D(10200.0, 150.0));
+	const FRoadNodeId End = Fix.Network->AddNode(FVector2D(20000.0, 150.0));
+	Fix.Network->AddStraightSegment(Start, Kink0, nullptr);
+	Fix.Network->AddStraightSegment(Kink0, Kink1, nullptr);
+	Fix.Network->AddStraightSegment(Kink1, End, nullptr);
+
+	const FAirframe Airframe = TestAirframes::Piper();
+
+	// OVER THE WHOLE ROUTE, not edge by edge. Four attempts at drivability rules in this
+	// project shipped green by re-implementing FSpeedProfile's rule one edge at a time and
+	// the aircraft crabbed anyway - see FSpeedProfile's own header on being THE authority.
+	// The route is handed to Build entire, and the answer read back the way the follower
+	// reads it.
+	auto SlowestAlong = [&Airframe](const TArray<FVector2D>& Route)
+	{
+		FSpeedProfile Profile;
+		Profile.Build(Route, Airframe);
+
+		double Total = 0.0;
+		for (int32 Index = 1; Index < Route.Num(); ++Index)
+		{
+			Total += FVector2D::Distance(Route[Index - 1], Route[Index]);
+		}
+
+		// THE INTERIOR ONLY. A route ENDS at a stop, so the limit at the last vertex is zero
+		// by design and a sample there would make every route's minimum zero - the whole
+		// measurement lost to the one point that carries no information about the corner.
+		// The first tenth and the last tenth are the approach to and from those stops.
+		double Slowest = TNumericLimits<double>::Max();
+		constexpr int32 Samples = 200;
+		for (int32 Step = Samples / 10; Step <= Samples - Samples / 10; ++Step)
+		{
+			Slowest = FMath::Min(Slowest, Profile.LimitAt(Total * Step / Samples));
+		}
+		return Slowest;
+	};
+
+	auto RouteNow = [&Fix](std::initializer_list<FRoadNodeId> Ids)
+	{
+		TArray<FVector2D> Points;
+		for (const FRoadNodeId Id : Ids)
+		{
+			if (const FRoadNode* Node = Fix.Network->GetNode(Id))
+			{
+				Points.Add(Node->Position);
+			}
+		}
+		return Points;
+	};
+
+	const double Before = SlowestAlong(RouteNow({ Start, Kink0, Kink1, End }));
+
+	// THE CONTROL. If the close pair did not slow anything down, the assertion below would
+	// pass on a profile that was never impeded and this test would measure nothing.
+	if (!TestTrue(TEXT("the close pair really does slow the route down - otherwise this test "
+					   "is measuring nothing"),
+			Before < Airframe.Ground.Taxi.SpeedCap - 1.0))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("the close pair merges"), Fix.Network->MergeNodes(Kink1, Kink0));
+
+	const double After = SlowestAlong(RouteNow({ Start, Kink1, End }));
+
+	// The figures in the log, so a reader can see the size of the effect rather than only
+	// that there was one. Taxi cap is %.0f.
+	AddInfo(FString::Printf(TEXT("slowest on route: %.0f uu/s before the merge, %.0f after; "
+		"taxi cap is %.0f"), Before, After, Airframe.Ground.Taxi.SpeedCap));
+
+	TestTrue(*FString::Printf(
+		TEXT("merging the close pair raises the slowest speed on the route, from %.0f to "
+			 "%.0f uu/s - two corners a couple of metres apart became one gentle one"),
+		Before, After), After > Before);
 	return true;
 }
 
