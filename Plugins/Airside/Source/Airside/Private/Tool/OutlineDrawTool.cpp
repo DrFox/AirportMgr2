@@ -4,6 +4,52 @@
 
 #define LOCTEXT_NAMESPACE "Airside"
 
+namespace
+{
+	/**
+	 * Where a click would put the next corner: the guide's point when one holds, else the cursor.
+	 *
+	 * PREFIXED for the unity build, like FRoadDrawTool's RoadGuidedSnap - "GuidedCursor" is the
+	 * name a second tool would also pick, and two of them collide only once they share a blob.
+	 *
+	 * CLOSING BEATS THE GUIDE, which is why the caller tests bClosing FIRST and never asks this
+	 * when it is true. Same precedence FRoadDrawTool sets between a snap and a guide: a guide
+	 * proposes where a free point lands, and never overrides a point the player aimed AT.
+	 */
+	FVector2D OutlineGuidedCursor(const FToolContext& Context)
+	{
+		return Context.GuidedCursor();
+	}
+
+	/**
+	 * The dashed line to each thing the corner is lined up with, and its label.
+	 *
+	 * IT LIVES IN THE TOOL, and that is what caught this out. FBuildSession resolves the guide
+	 * onto the context, but NOTHING DRAWS IT until a tool asks - so a tool that describes an
+	 * anchor and stops has a guide computed and thrown away, showing the player nothing. That is
+	 * exactly what this tool did between gaining its anchor and gaining this, and the anchor's
+	 * own test passed throughout: it measured the producer and never the consumer.
+	 */
+	void OutlineDrawGuide(const FToolContext& Context, const FVector2D& Moving,
+		IToolPreviewSink& Sink)
+	{
+		if (!Context.Guide.bActive)
+		{
+			return;
+		}
+
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// At the line's MIDPOINT, like every other tool: two labels at the moving point
+			// overprint, and the plugin has no camera to offset them by readable pixels.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
+	}
+}
+
 // --- Idle -----------------------------------------------------------------------------
 
 TUniquePtr<IOutlineDrawState> FOutlineIdleState::OnClick(
@@ -23,7 +69,10 @@ TUniquePtr<IOutlineDrawState> FOutlineIdleState::OnClick(
 		return nullptr;
 	}
 
-	return MakeUnique<FOutlineDrawingState>(Context.Cursor);
+	// THE GUIDED CURSOR, not the raw one: the FIRST corner is guided too since 2026-09-20 -
+	// FOutlineDrawTool::WantsFreeStartGuides. A dashed line drawn under the cursor and then not
+	// obeyed by the click is a mark whose meaning has gone.
+	return MakeUnique<FOutlineDrawingState>(OutlineGuidedCursor(Context));
 }
 
 TUniquePtr<IOutlineDrawState> FOutlineIdleState::OnCancel(
@@ -47,7 +96,16 @@ void FOutlineIdleState::BuildPreview(const FToolContext& Context, const IOutline
 		return;
 	}
 
-	Sink.Marker(Context.Cursor, EPreviewStyle::Pending);
+	// WHERE THE FIRST CORNER WOULD LAND, which is the guided point and not the raw cursor -
+	// otherwise the marker sits where the mouse is while the click lands somewhere else.
+	const FVector2D First = OutlineGuidedCursor(Context);
+	Sink.Marker(First, EPreviewStyle::Pending);
+
+	// AND WHAT IT IS LINED UP WITH. THE CONSUMER of the free start: the session resolves a
+	// guide here and nothing would ever show it without this call. See
+	// IBuildTool::WantsFreeStartGuides on why describing an anchor and stopping is half a
+	// feature - it is the shape of the bug that shipped on 2026-09-20.
+	OutlineDrawGuide(Context, First, Sink);
 }
 
 // --- Drawing --------------------------------------------------------------------------
@@ -104,12 +162,12 @@ TUniquePtr<IOutlineDrawState> FOutlineDrawingState::OnClick(
 
 	// Refused rather than placed, so a tangled outline cannot be built up in the first
 	// place and then rejected at the very end after eight corners of work.
-	if (WouldCross(Context.Cursor))
+	if (WouldCross(OutlineGuidedCursor(Context)))
 	{
 		return nullptr;
 	}
 
-	Corners.Add(Context.Cursor);
+	Corners.Add(OutlineGuidedCursor(Context));
 	return nullptr;
 }
 
@@ -137,7 +195,7 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 	}
 
 	const bool bClosing = WouldClose(Context);
-	const bool bCrosses = !bClosing && WouldCross(Context.Cursor);
+	const bool bCrosses = !bClosing && WouldCross(OutlineGuidedCursor(Context));
 
 	// The first corner lights up when the cursor is near enough to close on it, which is
 	// the only way to know the gesture is finishable without trying it.
@@ -147,12 +205,20 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 	}
 
 	const EPreviewStyle Style = bCrosses ? EPreviewStyle::Refused : EPreviewStyle::Pending;
-	const FVector2D Ahead = bClosing ? Corners[0] : Context.Cursor;
+	const FVector2D Ahead = bClosing ? Corners[0] : OutlineGuidedCursor(Context);
 	Sink.Line(Corners.Last(), Ahead, Style);
+
+	// AND WHAT IT IS LINED UP WITH. Not drawn while closing: the corner is going to the first
+	// one, so a guide line to somewhere else would be describing a constraint that is not
+	// being applied.
+	if (!bClosing)
+	{
+		OutlineDrawGuide(Context, Ahead, Sink);
+	}
 
 	if (bCrosses)
 	{
-		Sink.Label(Context.Cursor, TEXT("crosses the outline"), EPreviewStyle::Refused);
+		Sink.Label(OutlineGuidedCursor(Context), TEXT("crosses the outline"), EPreviewStyle::Refused);
 	}
 
 	// The closing edge, so the SHAPE is visible rather than just the path walked so far.
@@ -172,6 +238,64 @@ FOutlineDrawTool::FOutlineDrawTool()
 bool FOutlineDrawTool::IsIdle() const
 {
 	return State.IsValid() && State->IsIdle();
+}
+
+bool FOutlineDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
+{
+	const TArrayView<const FVector2D> Corners = GetCorners();
+
+	// A BOUNDARY DRAG WHETHER OR NOT THERE IS AN EDGE YET, so this is set before either decline
+	// below: the FIRST corner of an outline is as much a point on the shape's own limit as the
+	// fifth, and FApronLineGuideSource reads exactly this to decide whether to displace by a
+	// half-width. A free start that forgot it would offer to lay an apron corner half a road's
+	// width off the edge it was being lined up with.
+	Out.Point = EDragPoint::Boundary;
+
+	// TWO CORNERS BEFORE THERE IS AN EDGE. One corner is a point with no direction, so there is
+	// nothing for Extending to extend - the same reason FRoadDrawTool declines its first click.
+	//
+	// AND WITH NO CORNERS AT ALL the base answers a FREE START: starting an outline flush with
+	// a road edge, or in line with an apron already down, is what that buys. Note the middle
+	// case falls between the two - ONE corner down is neither an edge nor a free start, and the
+	// base declines it on IsIdle() without this function having to say so twice.
+	if (Corners.Num() < 2)
+	{
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
+	}
+
+	const FVector2D Last = Corners[Corners.Num() - 1];
+	const FVector2D Previous = Corners[Corners.Num() - 2];
+	const FVector2D Edge = Last - Previous;
+	if (Edge.IsNearlyZero())
+	{
+		// TWO CORNERS IN THE SAME PLACE. The gesture has begun, so IsIdle() is false and the
+		// base declines too; routed through it anyway so the exits cannot come to disagree.
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
+	}
+
+	Out.Origin = Last;
+	Out.Reference = Edge.GetSafeNormal();
+	Out.ReferenceAt = Previous;
+	Out.ReferenceName = TEXT("this edge");
+
+	// EVERY CORNER BUT THE LAST. The one being dragged from is the origin, and a point cannot
+	// line up with itself: its own two lines pass through wherever the cursor is, so both would
+	// always be in tolerance - the trap FPlotPlaceTool's anchor records.
+	//
+	// NUMBERED AS THE PLAYER COUNTS THEM, from one.
+	for (int32 Index = 0; Index < Corners.Num() - 1; ++Index)
+	{
+		FGuidePoint Point;
+		Point.At = Corners[Index];
+		Point.Name = FString::Printf(TEXT("corner %d"), Index + 1);
+
+		// THE GESTURE'S OWN, so the Road and Apron buttons do not govern them - a corner you
+		// placed ten seconds ago is not a thing on the map yet.
+		Point.Reference = SnapGuide::EReference::ThisGesture;
+		Out.AlignTo.Add(Point);
+	}
+	return true;
 }
 
 TArrayView<const FVector2D> FOutlineDrawTool::GetCorners() const

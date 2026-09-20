@@ -66,11 +66,24 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 			PlaneHitSession.LastPlaneHit().Equals(FVector2D(1234.0, -500.0), 1e-6));
 	}
 
-	// 5. EVERY TOOL DECLINES AN ANCHOR WHEN IDLE. The registry walk, not a list of tools
-	// written here - the same check items 2 and 3 above make, applied to the guide hook.
-	// A tool that offered an anchor from its idle state would guide a gesture that has not
-	// started, and the player would see a dashed line hanging off nothing.
+	// 5. WHICH TOOLS GUIDE A GESTURE THAT HAS NOT STARTED, and it is FIVE of the nine - ruled
+	// 2026-09-20: "a lot of the tools would benefit from snapping to guides before the first
+	// place of the road. It doesnt make sense for all of them, but some it does."
+	//
+	// THE LIST IS WRITTEN HERE, BY ID, AND NOT ASKED OF THE TOOLS. Walking the registry and
+	// comparing each tool's WantsFreeStartGuides() against itself would pass however the
+	// virtual was answered - the vacuous shape this file's item 2 exists to avoid. Naming the
+	// five is what makes a sixth tool opting in, or one of these quietly dropping out, a
+	// failure rather than a change nobody notices.
 	{
+		const TSet<FName> FreeStarts = {
+			FName(TEXT("Taxiway")),   // in line with an existing one, or a gap from a pair
+			FName(TEXT("Apron")),     // an outline started flush with a road edge
+			FName(TEXT("Stand")),     // level with a row of stands - see FStandPlaceTool
+			FName(TEXT("Runway")),    // a threshold in line with another runway
+			FName(TEXT("Road")),      // the same argument as Taxiway; one class, two entries
+		};
+
 		FBuildSession IdleSession;
 		for (int32 Index = 0; Index < Registry.Num(); ++Index)
 		{
@@ -78,12 +91,32 @@ bool FBuildSessionTest::RunTest(const FString& Parameters)
 			const IBuildTool* Active = IdleSession.GetActiveTool();
 			if (Active == nullptr) { continue; }
 
+			const bool bExpected = FreeStarts.Contains(Registry[Index].Id);
+			TestEqual(
+				*FString::Printf(TEXT("'%s' answers the free-start question as ruled"),
+					*Registry[Index].Id.ToString()),
+				Active->WantsFreeStartGuides(), bExpected);
+
+			// AND THE ANSWER REACHES THE ANCHOR. The virtual is a declaration; this is the
+			// behaviour, and the two are only connected because every opted-in override
+			// DELEGATES to the base instead of returning false. An override that forgot lands
+			// exactly here - see IBuildTool::DescribeGuideAnchor.
+			//
+			// NULL NETWORK AND NULL TARGET ON PURPOSE: the first click of a session has
+			// neither, and a tool must answer this without looking at either.
 			FGuideAnchor Anchor;
-			TestFalse(
-				FString::Printf(TEXT("tool %d offers no guide anchor while it is idle"), Index),
-				// NULL NETWORK ON PURPOSE: an idle tool must decline before it looks at the
-				// graph at all, which is also the first-click-of-a-session case.
-				Active->DescribeGuideAnchor(nullptr, Anchor));
+			const bool bOffered = Active->DescribeGuideAnchor(nullptr, nullptr, Anchor);
+			TestEqual(
+				*FString::Printf(TEXT("'%s' offers an idle anchor exactly when it opted in"),
+					*Registry[Index].Id.ToString()),
+				bOffered, bExpected);
+
+			// FLAGGED, because the flag is what FBuildSession::MakeContext branches on to put
+			// the cursor in Origin. An anchor offered without it would swing around (0,0).
+			TestEqual(
+				*FString::Printf(TEXT("'%s' marks that idle anchor as a free start"),
+					*Registry[Index].Id.ToString()),
+				Anchor.bFreeStart, bExpected);
 		}
 	}
 

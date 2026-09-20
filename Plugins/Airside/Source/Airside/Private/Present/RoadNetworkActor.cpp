@@ -215,16 +215,11 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeGhostSurfaceSetti
 	// THE WIDTH THE CLICK WILL ACTUALLY LAY, cycled or default - the same resolution
 	// URoadEditFacade::ConnectNodes does, because a ghost that disagreed with it would be
 	// the lie IRoadEditTarget::UpdateGhost's own comment warns about.
-	URoadProfile* Ghost = nullptr;
-	if (Kind == ERoadKind::ServiceRoad)
-	{
-		Ghost = ResolveServiceRoadProfile();
-	}
-	else if (WidthIndex != INDEX_NONE)
-	{
-		Ghost = ResolveTaxiwayProfile(WidthIndex);
-	}
-	Settings.Profile = Ghost != nullptr || Kind == ERoadKind::ServiceRoad ? Ghost : ResolveProfile();
+	//
+	// THROUGH THE ONE RESOLVER SINCE 2026-09-20. This block used to repeat the facade's choice
+	// line for line, under a comment saying the two had to agree - which is a promise a reader
+	// keeps, not the compiler. Now they cannot disagree.
+	Settings.Profile = ResolveProfileFor(Kind, WidthIndex);
 	return Settings;
 }
 
@@ -828,6 +823,39 @@ FBuildQuote ARoadNetworkActor::QuoteForConnect(int32 FromIndex, FVector2D To, ER
 int32 ARoadNetworkActor::PlaceNode(FVector2D Where)
 {
 	return Facade->PlaceNode(Where);
+}
+
+URoadProfile* ARoadNetworkActor::ResolveProfileFor(ERoadKind Kind, int32 WidthIndex)
+{
+	// EXTRACTED FROM ConnectNodes SO THE GHOST AND THE CLICK CANNOT DISAGREE. The preview has
+	// to price what a click would actually lay, and a tool resolving the profile for itself
+	// would be a second answer to "which profile is this?" - the exact shape of bug the
+	// registry and the action table exist to prevent elsewhere.
+	//
+	// A CHOSEN WIDTH WINS OVER THE DEFAULT, and only for a taxiway: WidthIndex names one of
+	// the content set's standard widths (the tool cycles it on key-again), INDEX_NONE means
+	// "whatever this kind defaults to". The default for a taxiway is the ACTOR's own profile,
+	// which ResolveProfile keeps the content set out of on purpose - so a player who never
+	// touches the cycle lays exactly the road this level was tuned for.
+	//
+	// A service road ignores the index outright: it has one authored cross-section, and an
+	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	URoadProfile* Chosen = nullptr;
+	if (Kind == ERoadKind::ServiceRoad)
+	{
+		Chosen = ResolveServiceRoadProfile();
+	}
+	else if (WidthIndex != INDEX_NONE)
+	{
+		Chosen = ResolveTaxiwayProfile(WidthIndex);
+	}
+	if (Chosen == nullptr && Kind != ERoadKind::ServiceRoad)
+	{
+		// No index, or an index the content set cannot answer. Either way the level's own
+		// tuning is the honest fallback here - unlike the service road, a taxiway always has one.
+		Chosen = ResolveProfile();
+	}
+	return Chosen;
 }
 
 bool ARoadNetworkActor::ConnectNodes(int32 FromIndex, int32 ToIndex, ERoadKind Kind,

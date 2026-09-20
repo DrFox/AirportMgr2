@@ -7,7 +7,9 @@
 #include "Tool/BuildSession.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -67,10 +69,33 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
 
 	// NOTHING PENDING YET: the first click has no segment behind it to extend, and the network
-	// does not exist until something is placed - which is the null case the hook must decline.
+	// may not exist until something is placed - the null case the hook must answer without
+	// dereferencing. Since 2026-09-20 the answer is a FREE START rather than a decline: with no
+	// reference nothing ANGULAR can be offered, but the road may still begin in line with
+	// another or a matching gap away from a pair.
 	FGuideAnchor Idle;
-	TestFalse(TEXT("an idle road tool offers no anchor"),
-		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Idle));
+	if (!TestTrue(TEXT("an idle road tool offers a free start"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Idle)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("flagged as one, so the driver fills Origin with the cursor"), Idle.bFreeStart);
+	TestTrue(TEXT("with no reference, so every angular candidate sits out"),
+		Idle.Reference.IsNearlyZero());
+
+	// AND IT ALREADY CARRIES THE WIDTH THIS CLICK WOULD LAY, which is what lets a road's EDGE
+	// go flush against an apron on the very first click - see FApronLineGuideSource. Filled
+	// BEFORE the tool declines its own anchor, which is the ordering this asserts.
+	//
+	// HONOURED, NOT ASSUMED, the same way Airside.Tool.RoadAnchorCarriesItsHalfWidth does it:
+	// a content set with no taxiway would leave the widths legitimately zero.
+	if (const URoadProfile* Armed = Gesture.TestWorld.Actor->ResolveProfileFor(
+		ERoadKind::Taxiway, Gesture.Road()->GetWidthIndex()))
+	{
+		TestEqual(TEXT("carrying the half-width the first click would lay"),
+			Idle.HalfWidthLeft, Armed->GetHalfWidthLeft());
+		TestTrue(TEXT("which is a real width, not a default zero"), Idle.HalfWidthLeft > 0.0);
+	}
 
 	// Two clicks, west to east: one segment, and the chain now pends at its east end.
 	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
@@ -83,7 +108,7 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 
 	FGuideAnchor Anchor;
 	if (!TestTrue(TEXT("with a segment behind it, the tool offers an anchor"),
-		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Anchor)))
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Anchor)))
 	{
 		return false;
 	}
@@ -199,6 +224,136 @@ bool FRoadSnapBeatsTheGuideTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the existing node survives the click"), Reused)) { return false; }
 	TestTrue(TEXT("and stayed exactly where it was put"),
 		Reused->Position.Equals(FVector2D(6080.0, 2000.0), 1.0e-6));
+
+	return true;
+}
+
+/**
+ * THE ANCHOR KNOWS HOW WIDE THE DRAG IS, and that its point is a CENTRELINE.
+ *
+ * A road's centreline lined up with an apron's EDGE is not what anybody means - you want the
+ * road's edge flush with the apron's, which needs the half-width at the point the guide is
+ * proposed. See the 2026-09-20 guide-grid design section 6.
+ *
+ * THROUGH ResolveProfileFor, which is the one answer to "what would this gesture lay" - a guide
+ * resolving a width of its own would be the third copy that function was made to prevent.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAnchorCarriesItsHalfWidthTest,
+	"Airside.Tool.RoadAnchorCarriesItsHalfWidth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAnchorCarriesItsHalfWidthTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	IRoadEditTarget* Target = Gesture.TestWorld.Actor;
+	FGuideAnchor Anchor;
+	if (!TestTrue(TEXT("the tool describes an anchor"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Target, Anchor)))
+	{
+		return false;
+	}
+
+	// A ROAD'S MOVING POINT IS ITS CENTRELINE. The plot and apron tools drag a corner of the
+	// shape itself, and the displacement rule turns on exactly that difference.
+	TestEqual(TEXT("a road drags a centreline"),
+		static_cast<int32>(Anchor.Point), static_cast<int32>(EDragPoint::Centreline));
+
+	// HONOURED, NOT ASSUMED: the profile has to resolve for the widths to mean anything, and a
+	// content set with no taxiway would leave them legitimately zero.
+	const URoadProfile* Profile = Target->ResolveProfileFor(ERoadKind::Taxiway,
+		Gesture.Road()->GetWidthIndex());
+	if (Profile == nullptr)
+	{
+		AddInfo(TEXT("No taxiway profile resolves; half-widths not checked"));
+		return true;
+	}
+
+	// THE TWO ARE ASKED SEPARATELY because URoadProfile's are separate: a cross-section may be
+	// off-centre, and a mirrored pair would be wrong on every such road.
+	TestEqual(TEXT("the anchor carries the profile's own left half-width"),
+		Anchor.HalfWidthLeft, Profile->GetHalfWidthLeft());
+	TestEqual(TEXT("and its right, separately"),
+		Anchor.HalfWidthRight, Profile->GetHalfWidthRight());
+	TestTrue(TEXT("and they are a real width, not a default zero"),
+		Anchor.HalfWidthLeft > 0.0);
+
+	return true;
+}
+
+/**
+ * A NETWORK NODE IS THE ROAD COLUMN'S, NOT THE GESTURE'S.
+ *
+ * FGuideAnchor::AlignTo is one flat array and two tools fill it: FPlotPlaceTool with its own
+ * pinned corners, FRoadDrawTool with every live node in reach. Those are different COLUMNS, and
+ * until a point carried its own the LevelWith row could not be gated by one - switching Road off
+ * still offered you a line through a junction.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLevelWithIsGatedPerPointTest,
+	"Airside.Tool.LevelWithIsGatedPerPoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLevelWithIsGatedPerPointTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	// Two clicks west to east. The chain pends at the east end, and the WEST node is then a
+	// live node in reach - the only thing AlignTo can hold.
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	FGuideAnchor Anchor;
+	if (!TestTrue(TEXT("the tool describes an anchor"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Anchor)))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("and offers the west node to line up with"), Anchor.AlignTo.Num() > 0))
+	{
+		return false;
+	}
+
+	// ONLY LevelWith, and the cursor square above the west node - on the line LevelWith draws
+	// ACROSS the reference through that point, which is x = 0.
+	FSnapGuideSettings Settings;
+	Settings.bExtending = false;
+	Settings.bLevelWith = true;
+	Settings.bParallel = false;
+	Settings.bCollinear = false;
+	Settings.bAngledFrom = false;
+	Settings.bMatchingGap = false;
+	Settings.bTaxiway = false;
+	Settings.bServiceRoad = false;
+	Settings.bRunway = false;
+	Settings.bApron = false;
+	Settings.bStand = false;
+	Settings.bWorld = false;
+
+	const FSnapGuideChain Chain;
+	const FVector2D Cursor(30.0, 4000.0);
+
+	const SnapGuide::FResult Off = Chain.Resolve(
+		*Gesture.Network(), Anchor, Cursor, SnapGuide::FResult(), Settings);
+	TestFalse(TEXT("with the Road column off, a network node offers nothing"), Off.bActive);
+
+	// CONTROL LEG: the drag was fine - switch the column on and the same node answers.
+	Settings.bTaxiway = true;
+	const SnapGuide::FResult On = Chain.Resolve(
+		*Gesture.Network(), Anchor, Cursor, SnapGuide::FResult(), Settings);
+	if (!TestTrue(TEXT("with it on, the node offers a line"), On.bActive)) { return false; }
+	TestEqual(TEXT("as a LevelWith guide"),
+		static_cast<int32>(On.Winners[0].Relation),
+		static_cast<int32>(SnapGuide::ERelation::LevelWith));
+	TestEqual(TEXT("against the Taxiway column, because a node belongs to whatever meets it"),
+		static_cast<int32>(On.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	return true;
 }

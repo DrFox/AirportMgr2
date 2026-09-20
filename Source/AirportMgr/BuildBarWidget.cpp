@@ -51,6 +51,7 @@ namespace
 		{ EActionSection::Selection, &UBuildBarWidget::SelectionSection },
 		{ EActionSection::Game,      &UBuildBarWidget::GameSection },
 		{ EActionSection::Snap,      &UBuildBarWidget::SnapSection },
+		{ EActionSection::SnapTo,    &UBuildBarWidget::SnapToSection },
 	};
 	static_assert(UE_ARRAY_COUNT(SectionSpecs) == static_cast<int32>(EActionSection::Count),
 		"Every EActionSection needs a slot here - see BuildBarWidget.h's UPROPERTY list");

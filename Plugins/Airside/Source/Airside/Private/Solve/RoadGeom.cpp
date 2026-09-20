@@ -367,12 +367,33 @@ bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, dou
 	// arm, (other half-width + own half-width * cos Theta) / sin Theta - which reduces to the
 	// familiar w / tan(Theta / 2) when both widths are equal.
 	const double SinTheta = FMath::Sin(Theta);
+	const double CosTheta = FMath::Cos(Theta);
+
+	// SIN IS SYMMETRIC, AND THE TWO ENDS IT COLLAPSES ARE OPPOSITES. `sin(Theta) < 1e-9` is
+	// true at BOTH Theta = 0 and Theta = pi, and only one of them is a problem:
+	//
+	//   Theta -> 0    the arms double back on each other. The inner edges converge to the
+	//                 same ray and the corner's reach runs away to infinity - there is no
+	//                 finite cut, and a caller must refuse.
+	//   Theta -> pi   the arms are STRAIGHT THROUGH. There is no corner at all: the inner
+	//                 edges are parallel lines a width-step apart, so nothing needs cutting
+	//                 back and the reach is zero.
+	//
+	// Cosine tells them apart where sine cannot. Until 2026-09-20 both returned false, so
+	// RoadPlacement refused every dead-straight continuation with "too short to hold the
+	// corner" - a corner that is not there. Reported from PIE, samples/issue1.png, and only
+	// because the Extending guide had started landing the click at exactly 180 degrees; a
+	// fraction off, the formula returns about a thousandth of a half-width and always passed.
+	//
+	// THE SOLVER WAS NEVER THE PROBLEM: every chained road makes a node with two arms at pi,
+	// and those have always drawn. It was this validator alone that would not allow one.
 	if (SinTheta < 1e-9)
 	{
-		OutAlongA = OutAlongB = TNumericLimits<double>::Max();
-		return false;
+		const bool bStraightThrough = CosTheta < 0.0;
+		OutAlongA = OutAlongB = bStraightThrough ? 0.0 : TNumericLimits<double>::Max();
+		return bStraightThrough;
 	}
-	const double CosTheta = FMath::Cos(Theta);
+
 	OutAlongA = FMath::Max(0.0, (HalfWidthB + HalfWidthA * CosTheta) / SinTheta);
 	OutAlongB = FMath::Max(0.0, (HalfWidthA + HalfWidthB * CosTheta) / SinTheta);
 	return true;

@@ -180,8 +180,22 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// it to stop.
 	const IBuildTool* Tool = GetActiveTool();
 	if (!bSuspendGuides && Tool != nullptr && Network != nullptr
-		&& Tool->DescribeGuideAnchor(Network, Anchor))
+		&& Tool->DescribeGuideAnchor(Network, Target, Anchor))
 	{
+		// A FREE START SWINGS AROUND THE CURSOR, and this is the only place that can say so: the
+		// tool is handed the target and never the half-built context, so it declares that it
+		// wants the cursor rather than fetching one. See FGuideAnchor::bFreeStart - with the
+		// origin ON the cursor every angular candidate sits out inside Arbitrate, which is what
+		// leaves exactly the positional guides without a special case anywhere in the chain.
+		//
+		// THE RAW PLANE HIT, not the snap, for the reason SetCursor draws the same distinction
+		// eight lines up: a guide resolved from a snapped position would answer about a point
+		// the player did not aim at.
+		if (Anchor.bFreeStart)
+		{
+			Anchor.Origin = PlaneHit;
+		}
+
 		Guide = GuideChain.Resolve(*Network, Anchor, PlaneHit, LastGuide, Tunables.GuideSources);
 	}
 

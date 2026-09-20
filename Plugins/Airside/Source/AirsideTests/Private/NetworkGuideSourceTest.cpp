@@ -6,6 +6,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuideArbiter.h"
+#include "Solve/RunwayDesignator.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadNaming.h"
 #include "Tool/SnapGuideChain.h"
@@ -24,49 +25,188 @@ namespace
 		Target->ConnectNodes(A, B, Kind, INDEX_NONE);
 	}
 
-	/** An anchor with no reference and no points, so ONLY the network sources answer. */
-	FGuideAnchor BareAnchor(const FVector2D& Origin)
+}
+
+/**
+ * EVERY REFERENCE OFFERS THE SAME FOUR DIRECTIONS: along it, 45, square, 135.
+ *
+ * ASKED FOR FROM PIE, 2026-09-20: "it should have more options than square and parallel... the
+ * 45 degree increments should be consistent for direction." They were not. The World column
+ * had offered 0/45/90/135 since stage 1 while every other column in that row offered 0 and 90
+ * only - so one button meant a different thing depending on which column it was crossed with,
+ * and there was no way to point a road at 45 degrees to the one beside it.
+ *
+ * THE CONSISTENCY IS THE POINT, so this walks the sources rather than testing one. A fifth
+ * reference that quietly shipped with two of the four is exactly what it is here to catch -
+ * and AddDirections exists so that cannot happen by accident, which makes this the test that
+ * says the one list is actually one.
+ *
+ * MEASURED AS ROTATIONS OF THE FIRST CANDIDATE, not against hard-coded compass angles: these
+ * references point wherever the fixture put them, and the claim is about the SPACING.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDirectionOffersFourAnglesEverywhereTest,
+	"Airside.Tool.DirectionOffersFourAnglesEverywhere",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDirectionOffersFourAnglesEverywhereTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// DELIBERATELY NOT AXIS-ALIGNED. A road along +X would make the road's diagonals the same
+	// lines as the world's, and a source that had quietly copied the world grid instead of
+	// rotating from its own reference would pass. This one runs at about 26 degrees.
+	Lay(Actor, FVector2D(-10000.0, -5000.0), FVector2D(10000.0, 5000.0), ERoadKind::Taxiway);
+	if (!TestTrue(TEXT("a runway is laid"),
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 20000.0), FVector2D(40000.0, 26000.0))))
 	{
-		FGuideAnchor Anchor;
-		Anchor.Origin = Origin;
-		return Anchor;
+		return false;
+	}
+	IRoadEditTarget* Target = Actor;
+	Target->AddApron({ FVector2D(3000.0, 6000.0), FVector2D(9000.0, 7000.0),
+		FVector2D(8000.0, 12000.0), FVector2D(2000.0, 11000.0) });
+
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
+
+	const FParallelGuideSource Road;
+	const FRunwayGuideSource Runway;
+	const FApronGuideSource Apron;
+	const FWorldGuideSource World;
+
+	// APRON IS LAST because ForEachApronEdge visits every edge in reach, so its count is four
+	// PER EDGE - the per-source count below is checked against its own first four.
+	const TArray<TPair<const TCHAR*, const IGuideSource*>> Sources = {
+		{ TEXT("Taxiway"), &Road    },
+		{ TEXT("Runway"),  &Runway  },
+		{ TEXT("World"),   &World   },
+		{ TEXT("Apron"),   &Apron   },
+	};
+
+	for (const TPair<const TCHAR*, const IGuideSource*>& Entry : Sources)
+	{
+		const TArray<SnapGuide::FCandidate> Candidates =
+			TestGuide::ProposedBy(*Entry.Value, *Actor->Network, Anchor);
+
+		if (!TestTrue(*FString::Printf(TEXT("%s proposes at least four directions"), Entry.Key),
+			Candidates.Num() >= 4))
+		{
+			continue;
+		}
+
+		// A MULTIPLE OF FOUR, so a reference that offered three or five is caught rather than
+		// hidden by the ">= 4" above - the apron's several edges each contribute a full set.
+		TestEqual(*FString::Printf(TEXT("%s offers them in complete sets of four"), Entry.Key),
+			Candidates.Num() % 4, 0);
+
+		const FVector2D Base = Candidates[0].Direction.GetSafeNormal();
+		for (const int32 Degrees : { 0, 45, 90, 135 })
+		{
+			const double Radians = FMath::DegreesToRadians(static_cast<double>(Degrees));
+			const FVector2D Wanted(
+				Base.X * FMath::Cos(Radians) - Base.Y * FMath::Sin(Radians),
+				Base.X * FMath::Sin(Radians) + Base.Y * FMath::Cos(Radians));
+
+			// AS A LINE, so |dot| rather than dot: a guide and its opposite are one guide, which
+			// is why there are four of these and not eight.
+			const bool bFound = Candidates.ContainsByPredicate(
+				[&Wanted](const SnapGuide::FCandidate& C)
+				{
+					return FMath::IsNearlyEqual(
+						FMath::Abs(FVector2D::DotProduct(C.Direction.GetSafeNormal(), Wanted)), 1.0, 1.0e-6);
+				});
+
+			TestTrue(*FString::Printf(TEXT("%s offers the %d degree line off its own reference"),
+				Entry.Key, Degrees), bFound);
+		}
+
+		// ANGULAR, EVERY ONE. Direction answers "which way from here"; a Perpendicular candidate
+		// in this row would be answering where the cursor landed, which is Collinear's question.
+		for (const SnapGuide::FCandidate& Candidate : Candidates)
+		{
+			TestEqual(*FString::Printf(TEXT("%s's '%s' is judged on the drag's own direction"),
+					Entry.Key, *Candidate.Description),
+				static_cast<int32>(Candidate.Fit), static_cast<int32>(SnapGuide::EFit::Angular));
+		}
 	}
 
-	/**
-	 * A runway strip. NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a
-	 * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
-	 * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
-	 *
-	 * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
-	 * anything under it, so a test strip either lowers the bar or is half a kilometre long.
-	 * MeshFreshnessTest does exactly this, for exactly this reason.
-	 */
-	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
+	return true;
+}
+
+/**
+ * THE WORLD AXES ARE NAMED BY THE COMPASS - AND BY THE SAME COMPASS RUNWAYS ARE.
+ *
+ * TWO NAMESPACES, ONE CONVENTION. RunwayDesignator declares north to be +X and east +Y, and
+ * FWorldGuideSource builds each axis as (cos bearing, sin bearing) - which is (northing,
+ * easting) only BECAUSE of that declaration. Nothing but this test connects them, and the
+ * failure if they ever part is silent and total: every world guide would be named ninety
+ * degrees from where it actually points, and a player comparing "east-west" against runway
+ * 09/27 would be the one to find out.
+ *
+ * MEASURED ONE AGAINST THE OTHER, not restated. Asking RunwayDesignator what the candidate's
+ * own direction is called is what makes this a measurement; a test listing four names beside
+ * four bearings would agree with itself however the axes were actually built.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FWorldAxesAreNamedByTheCompassTest,
+	"Airside.Tool.WorldAxesAreNamedByTheCompass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWorldAxesAreNamedByTheCompassTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// NO NETWORK IS NEEDED - the world source reads none - but one is passed because every
+	// source answers through the one interface.
+	const FWorldGuideSource Source;
+	const TArray<SnapGuide::FCandidate> Axes =
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D::ZeroVector));
+
+	// FOUR, NOT EIGHT: 180 degrees away is the same line and the arbiter measures the acute
+	// angle. Asserted first, so a doubled-up set is caught before the names are.
+	if (!TestEqual(TEXT("four world axes"), Axes.Num(), 4)) { return false; }
+
+	// THE DESIGNATOR PAIR EACH DIRECTION EARNS, against the word the label uses. Both ends,
+	// low first, exactly as a runway is spoken of - which is the point: these are the same
+	// four bearings, so a taxiway on the northeast-southwest axis is parallel to runway 05/23.
+	//
+	// THE DIAGONALS ROUND, and the figures below are the rounded ones rather than the tidy
+	// ones: a designator is the bearing in TENS of degrees, so 045 is 4.5 tens and becomes 05,
+	// and 135 is 13.5 and becomes 14. Written out after this test caught 13/31 - which is what
+	// the two diagonals look like if you assume symmetry instead of asking RunwayDesignator.
+	const TMap<FString, FString> Expected = {
+		{ TEXT("north-south"),         TEXT("18/36") },
+		{ TEXT("northeast-southwest"), TEXT("05/23") },
+		{ TEXT("east-west"),           TEXT("09/27") },
+		{ TEXT("northwest-southeast"), TEXT("14/32") },
+	};
+
+	for (const SnapGuide::FCandidate& Axis : Axes)
 	{
-		// A NODE FIRST, PURELY TO BRING THE NETWORK INTO BEING. The facade creates URoadNetwork
-		// lazily inside PlaceNode and PlaceRunway does NOT - so a test whose first call is
-		// PlaceRunway leaves Actor->Network null, and dereferencing it reads offset 0x60 off a
-		// null pointer. That is not hypothetical: it crashed this very test, and a crash hides
-		// its cause where a failure would have named it. MeshFreshnessTest places a node first
-		// for the same reason and says so.
-		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+		const FString* Pair = Expected.Find(Axis.Description);
+		if (!TestNotNull(*FString::Printf(TEXT("'%s' is one of the four named axes"),
+			*Axis.Description), Pair))
+		{
+			continue;
+		}
 
-		URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Profile->bContinuousThroughJunctions = true;
-
-		// Defaults to 50000 uu, and PlaceRunway refuses anything under it.
-		Actor->MinimumRunwayLength = 100.0;
-		return Actor->PlaceRunway(From, To, Profile);
+		TestEqual(
+			*FString::Printf(TEXT("'%s' points where the compass says it does"), *Axis.Description),
+			RunwayDesignator::ToPairText(Axis.Direction), *Pair);
 	}
 
-	/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
-	TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
-		const URoadNetwork& Network, const FGuideAnchor& Anchor)
-	{
-		TArray<SnapGuide::FCandidate> Out;
-		Source.Propose(Network, Anchor, Out);
-		return Out;
-	}
+	// AND EVERY NAME IS USED ONCE. Without this, four candidates all labelled "east-west"
+	// would satisfy every assertion above - the shape of green that measures nothing.
+	TSet<FString> Seen;
+	for (const SnapGuide::FCandidate& Axis : Axes) { Seen.Add(Axis.Description); }
+	TestEqual(TEXT("and no two axes share a name"), Seen.Num(), 4);
+
+	return true;
 }
 
 /**
@@ -91,12 +231,14 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 	Lay(Actor, FVector2D(50000.0, -10000.0), FVector2D(50000.0, 10000.0), ERoadKind::Taxiway);
 
 	const FParallelGuideSource Source;
-	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, Anchor);
+		TestGuide::ProposedBy(Source, *Actor->Network, Anchor);
 
-	if (!TestEqual(TEXT("the nearest road proposes its direction and its perpendicular"),
-		Candidates.Num(), 2))
+	// FOUR SINCE 2026-09-20, not two: the Direction row offers 45 degree increments against
+	// every reference, as it always did against the world grid.
+	if (!TestEqual(TEXT("the nearest road proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}
@@ -116,13 +258,28 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 		Candidates[0].Through.Equals(Anchor.Origin, 1.0e-6));
 	TestEqual(TEXT("and named by what the road admits"),
 		Candidates[0].Description, FString(TEXT("parallel to the taxiway")));
-	TestEqual(TEXT("with the perpendicular named too"),
-		Candidates[1].Description, FString(TEXT("square to the taxiway")));
+
+	// THE WHOLE SET, not Candidates[1]. This used to read the square off index 1, which was
+	// true only while there were two; the 45 took that slot on 2026-09-20 and the assertion
+	// would have gone on passing had the diagonals landed in the wrong order. A set says the
+	// rule - four increments, each named once - and does not care how they are ordered.
+	//
+	// THE TWO NAMED ANGLES KEEP THEIR WORDS and only the diagonals carry a number: "parallel"
+	// and "square" are plainer than "0 degrees" and "90 degrees" to anyone but a surveyor.
+	TSet<FString> Labels;
+	for (const SnapGuide::FCandidate& Candidate : Candidates) { Labels.Add(Candidate.Description); }
+	for (const TCHAR* Wanted : { TEXT("parallel to the taxiway"), TEXT("45 degrees to the taxiway"),
+		TEXT("square to the taxiway"), TEXT("135 degrees to the taxiway") })
+	{
+		TestTrue(*FString::Printf(TEXT("'%s' is one of the four offered"), Wanted),
+			Labels.Contains(FString(Wanted)));
+	}
+	TestEqual(TEXT("and no two of the four share a name"), Labels.Num(), 4);
 
 	// CONTROL LEG: the reach is real. Drag beyond it and the near road stops answering, so
 	// the assertions above are measuring the search and not merely the first segment laid.
 	const TArray<SnapGuide::FCandidate> FarAway =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 30000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 30000.0)));
 	TestEqual(TEXT("a drag beyond the search reach gets nothing from this source"),
 		FarAway.Num(), 0);
 
@@ -180,7 +337,7 @@ bool FCollinearGuideIsNotParallelTest::RunTest(const FString& Parameters)
 
 	const FCollinearGuideSource Source;
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(7000.0, 0.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(7000.0, 0.0)));
 
 	if (!TestEqual(TEXT("the one road in reach proposes its own line"), Candidates.Num(), 1))
 	{
@@ -233,7 +390,7 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	// own header comment), so this strip is 18/36 and NOT 09/27 - the first draft of this test
 	// asserted 09/27 and would have failed against a correct source.
 	if (!TestTrue(TEXT("the runway is placed"),
-		LayRunway(Actor, FVector2D(-40000.0, 0.0), FVector2D(40000.0, 0.0))))
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 0.0), FVector2D(40000.0, 0.0))))
 	{
 		return false;
 	}
@@ -249,10 +406,10 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 
 	// FAR BEYOND SearchRadiusUu - 500 m out, where every other network source has given up.
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
 
-	if (!TestEqual(TEXT("the runway proposes its heading and its perpendicular"),
-		Candidates.Num(), 2))
+	if (!TestEqual(TEXT("the runway proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}
@@ -272,8 +429,10 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	// or this test would pass on a source that proposed every segment on the field.
 	Lay(Actor, FVector2D(-10000.0, 20000.0), FVector2D(10000.0, 20000.0), ERoadKind::Taxiway);
 	const TArray<SnapGuide::FCandidate> Again =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
-	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 2);
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
+	// STILL THE RUNWAY'S FOUR, not eight: the count is what says the taxiway was skipped, and
+	// it went from two to four on 2026-09-20 when Direction gained its 45 degree increments.
+	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 4);
 
 	return true;
 }
@@ -306,10 +465,10 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 
 	const FAlignedGuideSource Source;
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(2000.0, 2000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(2000.0, 2000.0)));
 
-	if (!TestEqual(TEXT("the stand proposes its facing and its perpendicular"),
-		Candidates.Num(), 2))
+	if (!TestEqual(TEXT("the stand proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}
@@ -335,7 +494,7 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 
 	// CONTROL LEG: the reach applies here too, so this source cannot quietly become global.
 	const TArray<SnapGuide::FCandidate> FarAway =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 40000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 40000.0)));
 	TestEqual(TEXT("a stand beyond the search reach proposes nothing"), FarAway.Num(), 0);
 
 	return true;
@@ -362,13 +521,13 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// offering one direction, every one of them in tolerance at once.
 	Lay(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
 	if (!TestTrue(TEXT("the runway is placed"),
-		LayRunway(Actor, FVector2D(-40000.0, 8000.0), FVector2D(40000.0, 8000.0))))
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 8000.0), FVector2D(40000.0, 8000.0))))
 	{
 		return false;
 	}
 
 	const FSnapGuideChain Chain;
-	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
 
 	// EVERY SOURCE THIS TEST IS ABOUT, STATED RATHER THAN INHERITED. Since stage 3 the chain
 	// skips whatever is switched off, and Runway defaults OFF - a test about PRIORITY that took
@@ -386,13 +545,13 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// PARALLEL BEATS RUNWAY BEATS WORLD. An airport squares to its runways, but not in
 	// preference to the taxiway the player is actually working beside.
 	TestEqual(TEXT("the nearest road wins over the runway and the world grid"),
-		static_cast<int32>(Result.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::Parallel));
+		static_cast<int32>(Result.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// CONTROL LEG: the runway was a live competitor, not one the reach quietly excluded. Take
 	// the taxiway out of range and the runway takes the slot - which also pins that Runway is
 	// exempt from SearchRadiusUu, since the drag is 80 m from it.
-	const FGuideAnchor FarFromTheRoad = BareAnchor(FVector2D(0.0, 30000.0));
+	const FGuideAnchor FarFromTheRoad = TestGuide::BareAnchor(FVector2D(0.0, 30000.0));
 	const SnapGuide::FResult WithoutTheTaxiway = Chain.Resolve(
 		*Actor->Network, FarFromTheRoad, FVector2D(3000.0, 30100.0), SnapGuide::FResult(), Live);
 	if (!TestTrue(TEXT("the runway still answers from across the field"),
@@ -401,8 +560,8 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 		return false;
 	}
 	TestEqual(TEXT("and takes the slot once no road is in reach"),
-		static_cast<int32>(WithoutTheTaxiway.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::Runway));
+		static_cast<int32>(WithoutTheTaxiway.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Runway));
 
 	return true;
 }

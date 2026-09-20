@@ -53,6 +53,37 @@ public:
 	/** Nothing is ever part-placed: a stand exists after one gesture or not at all. */
 	virtual bool IsIdle() const override { return !bAiming; }
 
+	/**
+	 * YES - "positioning a stand level with a row of stands is what the Stand column is for."
+	 * Ruled 2026-09-20.
+	 *
+	 * THE ONLY OPTED-IN TOOL WITH NO SECOND CLICK, so its guides are free-start guides or none
+	 * at all: a stand is one gesture, and once the aim begins there is no position left to
+	 * constrain - the press point is down and the cursor means heading. IsIdle() is false while
+	 * aiming, so the base declines there without this tool saying it twice.
+	 */
+	virtual bool WantsFreeStartGuides() const override { return true; }
+
+	/**
+	 * Every stand in reach as a point to be level with, along the heading this one will take.
+	 *
+	 * THE HEADING IS THE REFERENCE, and it is what makes the Stand column mean anything here.
+	 * FPointAlignGuideSource declines outright on a zero Anchor::Reference - its lines need a
+	 * direction to run along - so a free-start anchor naming no direction would offer Collinear
+	 * and AngledFrom and silently NOT the "level with that stand" the opt-in was argued for. A
+	 * row of stands on a pier all face one way, and LastHeading is that way.
+	 *
+	 * ONLY THE POSITIONAL HALF SURVIVES IT: Extending's two candidates off that same reference
+	 * are Angular, and on a free start the cursor sits on the origin, so they sit out of their
+	 * own accord - see FGuideAnchor::bFreeStart.
+	 *
+	 * NO WIDTHS. A stand's stop position is a point on the ground, not a cross-section, and its
+	 * extent is its design aircraft's rather than a pavement either side of a line - the same
+	 * reason this tool draws no plot. Zero is a MEANING here, not an omission.
+	 */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
+
 private:
 	/** Heading from the press point to the cursor, or LastHeading when they coincide. */
 	double AimedHeading(const FToolContext& Context) const;

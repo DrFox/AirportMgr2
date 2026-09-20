@@ -12,7 +12,7 @@ namespace
 	constexpr const TCHAR* SectionNames[] =
 	{
 		TEXT("Time"), TEXT("Tools"), TEXT("Edit"), TEXT("Aircraft"), TEXT("Selection"), TEXT("Game"),
-		TEXT("Snap"),
+		TEXT("Snap"), TEXT("Snap to"),
 	};
 	static_assert(UE_ARRAY_COUNT(SectionNames) == static_cast<int32>(EActionSection::Count),
 		"Every EActionSection needs a name here");
@@ -148,55 +148,90 @@ namespace
 			[](ARoadBuildController& C) { C.ToggleLedger(); },
 			[](const ARoadBuildController& C) { return C.IsLedgerShowing(); }, HasRuntime));
 
-		// ONE PER ESource, and AirportMgr.Actions.SnapTogglesAreInTheRegistry walks the enum
-		// against this list rather than counting it - a source added without a toggle is a
-		// guide the player cannot switch off, and nothing else would say so.
+		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
+		// enums against them rather than counting: a row or column added without a button is a
+		// guide the player cannot switch, and nothing else would say so.
 		//
-		// NO KEYS. Eight more bindings would crowd a keyboard already spending 0-9 on tools,
-		// and a toggle is set once rather than reached for mid-drag. What mid-drag needs is the
-		// Alt hold, which is not a registry action - see FToolContext::bSuspendGuides.
+		// NO KEYS. Ten more bindings would crowd a keyboard already spending 0-9 on tools, and a
+		// toggle is set once rather than reached for mid-drag. What mid-drag needs is the Alt
+		// hold, which is not a registry action - see FToolContext::bSuspendGuides.
 		Out.Add(Make(TEXT("snap.extending"), EActionSection::Snap, LOCTEXT("SnapExtending", "Extending"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Extending); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Extending); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Extending); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Extending); },
 			Always));
-		Out.Add(Make(TEXT("snap.pointalign"), EActionSection::Snap, LOCTEXT("SnapPointAlign", "Point"),
+		Out.Add(Make(TEXT("snap.levelwith"), EActionSection::Snap, LOCTEXT("SnapLevelWith", "Level with"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::PointAlign); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::PointAlign); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::LevelWith); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::LevelWith); },
 			Always));
-		Out.Add(Make(TEXT("snap.aligned"), EActionSection::Snap, LOCTEXT("SnapAligned", "Aligned"),
+		// "DIRECTION", NOT "PARALLEL", although the relation behind it is ERelation::Parallel -
+		// renamed 2026-09-20 after a player switched on Angled from and World, got nothing, and
+		// pointed out that the row does three things and the button claimed one of them. It
+		// offers a direction AND its perpendicular ("square to the taxiway" is not parallel to
+		// anything), and for the World column an absolute compass axis, which is parallel to no
+		// thing at all. The design doc's own grid already called the row "Parallel / square";
+		// the button had taken the first word and dropped the rest.
+		//
+		// The enum keeps its name - see SnapGuide::ERelation::Parallel, which records this.
+		Out.Add(Make(TEXT("snap.direction"), EActionSection::Snap, LOCTEXT("SnapDirection", "Direction"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Aligned); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Aligned); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Parallel); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Parallel); },
 			Always));
 		Out.Add(Make(TEXT("snap.collinear"), EActionSection::Snap, LOCTEXT("SnapCollinear", "Collinear"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Collinear); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Collinear); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Collinear); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Collinear); },
 			Always));
-		Out.Add(Make(TEXT("snap.parallel"), EActionSection::Snap, LOCTEXT("SnapParallel", "Parallel"),
+		Out.Add(Make(TEXT("snap.angledfrom"), EActionSection::Snap, LOCTEXT("SnapAngledFrom", "Angled from"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Parallel); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Parallel); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::AngledFrom); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::AngledFrom); },
 			Always));
-		Out.Add(Make(TEXT("snap.runway"), EActionSection::Snap, LOCTEXT("SnapRunway", "Runway"),
+		Out.Add(Make(TEXT("snap.matchinggap"), EActionSection::Snap, LOCTEXT("SnapMatchingGap", "Matching gap"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Runway); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Runway); },
-			Always));
-		Out.Add(Make(TEXT("snap.world"), EActionSection::Snap, LOCTEXT("SnapWorld", "World"),
-			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::World); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::World); },
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::MatchingGap); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::MatchingGap); },
 			Always));
 
-		// LIVE SINCE STAGE 5: FOffsetGuideSource proposes for it, so the button is no longer a
-		// promise. It was greyed rather than absent precisely so this change is one word.
-		Out.Add(Make(TEXT("snap.offset"), EActionSection::Snap, LOCTEXT("SnapOffset", "Offset"),
+		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
+		// is why "Runway" read as a source you could switch off for every relation and was not -
+		// see SnapGuide::EReference.
+		// TWO BUTTONS WHERE "Road" WAS ONE, since 2026-09-20. Everywhere else in this codebase
+		// these are different tools under different keys, different cross-sections and
+		// different traversal classes, and the guide LABEL already said which - "parallel to
+		// the service road" appearing under a button marked Road was the whole complaint. See
+		// SnapGuide::EReference.
+		Out.Add(Make(TEXT("snapto.taxiway"), EActionSection::SnapTo, LOCTEXT("SnapToTaxiway", "Taxiway"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideSource(SnapGuide::ESource::Offset); },
-			[](const ARoadBuildController& C) { return C.IsGuideSourceOn(SnapGuide::ESource::Offset); },
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Taxiway); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Taxiway); },
+			Always));
+		Out.Add(Make(TEXT("snapto.serviceroad"), EActionSection::SnapTo, LOCTEXT("SnapToServiceRoad", "Service road"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::ServiceRoad); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::ServiceRoad); },
+			Always));
+		Out.Add(Make(TEXT("snapto.runway"), EActionSection::SnapTo, LOCTEXT("SnapToRunway", "Runway"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Runway); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Runway); },
+			Always));
+		Out.Add(Make(TEXT("snapto.apron"), EActionSection::SnapTo, LOCTEXT("SnapToApron", "Apron"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Apron); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Apron); },
+			Always));
+		Out.Add(Make(TEXT("snapto.stand"), EActionSection::SnapTo, LOCTEXT("SnapToStand", "Stand"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Stand); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Stand); },
+			Always));
+		Out.Add(Make(TEXT("snapto.world"), EActionSection::SnapTo, LOCTEXT("SnapToWorld", "World"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::World); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::World); },
 			Always));
 		return Out;
 	}

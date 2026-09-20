@@ -19,6 +19,39 @@ struct FGuidePoint
 
 	/** "corner 3". The source composes "0 degrees to corner 3" from it. */
 	FString Name;
+
+	/**
+	 * Which COLUMN this point belongs to - ThisGesture for the gesture's own corners, Road for
+	 * a live network node, Apron for an apron's corner.
+	 *
+	 * THE TOOL TAGS IT, for the same reason the tool supplies the point at all: only the tool
+	 * knows where its own points came from, and a source that went looking would be a second
+	 * opinion about the gesture. Without it the LevelWith row could not be gated by column -
+	 * ONE flat array serves both the plot's pinned corners and the road's network nodes, and
+	 * those are different columns of the grid.
+	 *
+	 * DEFAULTS TO ThisGesture because the gesture's own points are the case that needs no
+	 * switch: EReference::ThisGesture is the one column with no button.
+	 */
+	SnapGuide::EReference Reference = SnapGuide::EReference::ThisGesture;
+};
+
+/**
+ * What the point the player is moving REPRESENTS.
+ *
+ * A positional guide aligns LIKE WITH LIKE: centreline to centreline, boundary to boundary, and
+ * a centreline against a boundary is displaced by the drag's half-width. A road's cursor is its
+ * CENTRELINE; a plot's or an apron's is a corner of the shape itself, which is a BOUNDARY.
+ * Lining a road's centre up with an apron's edge would put half its pavement over the apron.
+ * See the 2026-09-20 guide-grid design section 6.
+ *
+ * AN ENUM, NOT A BOOL, per CLAUDE.md: the two cannot both be true, so the illegal state is not
+ * representable - and a third kind is easy to imagine, a kerb line or a painted edge.
+ */
+enum class EDragPoint : uint8
+{
+	Centreline,
+	Boundary
 };
 
 /**
@@ -66,6 +99,40 @@ struct FGuideAnchor
 	 * Stage 2's Aligned source feeds network points into the SAME source without changing it.
 	 */
 	TArray<FGuidePoint> AlignTo;
+
+	/**
+	 * See EDragPoint. Centreline unless the tool says otherwise, because a road is the common
+	 * case and a tool that forgot to answer should not silently change how it aligns.
+	 */
+	EDragPoint Point = EDragPoint::Centreline;
+
+	/**
+	 * This gesture has not started yet: Origin is to be filled with the CURSOR, by the driver.
+	 *
+	 * A FLAG RATHER THAN THE POINT ITSELF, because IBuildTool::DescribeGuideAnchor is not handed
+	 * the cursor and deliberately is not - see that declaration on why it takes the target and
+	 * never the half-built context. FBuildSession::MakeContext has the plane hit two lines above
+	 * the call, so it is the one place that can answer; the tool says only that it wants it.
+	 *
+	 * ONLY THE POSITIONAL GUIDES SURVIVE IT, and that falls out rather than being enforced: with
+	 * Origin ON the cursor, SnapGuide::Arbitrate can measure no direction from one to the other
+	 * and every EFit::Angular candidate sits out of its own accord. So a free start offers
+	 * Collinear, AngledFrom and MatchingGap - and LevelWith only where the tool ALSO names a
+	 * Reference direction for those lines to run along, which is why FStandPlaceTool names its
+	 * heading and FRunwayTool, having none, does not.
+	 */
+	bool bFreeStart = false;
+
+	/**
+	 * How far the drag's pavement reaches either side of its point, uu. Zero when the gesture
+	 * has no width - a plot corner, a guideline - and zero is then a MEANING, not an omission.
+	 *
+	 * TWO FIELDS, NOT ONE: URoadProfile::GetHalfWidthLeft and GetHalfWidthRight are separate
+	 * because a cross-section may be off-centre, so a flush-left candidate and a flush-right
+	 * one are not a mirrored pair and must not be computed as one.
+	 */
+	double HalfWidthLeft = 0.0;
+	double HalfWidthRight = 0.0;
 };
 
 /**
@@ -80,18 +147,41 @@ struct AIRSIDE_API IGuideSource
 {
 	virtual ~IGuideSource() = default;
 
-	/** Appends this source's candidates. NEVER clears Out - the chain owns that array. */
+	/**
+	 * Appends this source's candidates. NEVER clears Out - the chain owns that array.
+	 *
+	 * TAKES THE CURSOR AS WELL AS THE ANCHOR, since 2026-09-20, and the two are NOT
+	 * interchangeable: they are the fixed end of the gesture and the moving end. A source picks
+	 * whichever its reach should be measured from, and the choice is per source, not per chain.
+	 *
+	 * ORIGIN for the sources that answer "WHICH WAY from here" - Extending and Parallel. Their
+	 * reference must not change halfway through a drag, which is what FParallelGuideSource's own
+	 * comment records: "a search keyed to the cursor would hand the guide to a different road
+	 * halfway through the drag".
+	 *
+	 * CURSOR for the sources that answer "WHERE did the far end land" - Collinear, MatchingGap,
+	 * AngledFrom and the apron family. Reported from PIE with a diagram: a long road starts far
+	 * from the pair it is being matched against, so an origin-keyed search found nothing and the
+	 * matching-gap guide never appeared. The player was aiming with the cursor all along, and
+	 * this signature is what lets a source see it. See
+	 * Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear.
+	 */
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const = 0;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const = 0;
 
 	/**
-	 * Which ESource this link proposes. The toggle asks, and the chain skips it when off.
+	 * Which ERelation this link proposes. The toggle asks, and the chain skips it when off.
 	 *
 	 * PURE VIRTUAL rather than a field, so a source cannot be written without answering it.
-	 * Every source proposes candidates of exactly ONE ESource today; if one ever proposes two,
-	 * this is the assumption to revisit rather than quietly widen.
+	 *
+	 * A RELATION, NOT A CELL - the assumption the old comment here invited a reader to revisit,
+	 * revisited on 2026-09-20. Several sources share one relation: Parallel is proposed by the
+	 * road, runway, stand and world sources alike. And one source may span several REFERENCES -
+	 * the segment walkers tag Road or Runway per segment - which is why the reference is tagged
+	 * per candidate rather than declared here. The chain skips a source whose relation is off;
+	 * a candidate whose reference is off is dropped as it is gathered.
 	 */
-	virtual SnapGuide::ESource Kind() const = 0;
+	virtual SnapGuide::ERelation Relation() const = 0;
 };
 
 /**
@@ -104,24 +194,30 @@ struct AIRSIDE_API IGuideSource
 struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Extending; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Extending; }
 };
 
 /**
- * Source 6: 0, 45, 90 and 135 degrees.
+ * Source 6: the four world axes - north-south, northeast-southwest, east-west and
+ * northwest-southeast.
  *
  * FOUR, NOT EIGHT. 180 degrees away is the same LINE and SnapGuide::Arbitrate measures the
  * acute angle, so eight would put two identical candidates into every tie the source-order
- * rule then has to break for no reason.
+ * rule then has to break for no reason. Naming each by BOTH its ends says so on screen.
+ *
+ * COMPASS, NOT A MATHS ANGLE, and it always was - RunwayDesignator declares north to be +X, so
+ * the bearings these are built from are the same numbers a runway is named after. A guide on
+ * the northeast-southwest axis is parallel to runway 05/23. See FWorldAxis in the .cpp for why
+ * the labels stopped being those numbers.
  */
 struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::World; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -137,9 +233,9 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::PointAlign; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
 };
 
 /**
@@ -155,9 +251,9 @@ struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Parallel; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -176,9 +272,9 @@ struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Collinear; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
 };
 
 /**
@@ -195,9 +291,138 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
 struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Runway; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
+};
+
+/**
+ * The line a runway lies on, extended - its Collinear half.
+ *
+ * A SECOND SOURCE RATHER THAN A THIRD CANDIDATE ON FRunwayGuideSource, and the reason is the
+ * gate: FSnapGuideChain::Resolve skips a source by its declared Relation() BEFORE it walks
+ * anything, so a source proposing two relations would have both silenced by whichever one it
+ * happened to declare. Switching the Parallel row off would have taken this line with it.
+ * One relation per source is what makes that skip safe.
+ *
+ * WHY IT IS NOT IN FCollinearGuideSource: that source is bounded by SearchRadiusUu and this
+ * must not be. A runway's extended centreline is the approach path - it is meaningful from
+ * anywhere on the field, which is the same argument FRunwayGuideSource makes for its heading.
+ * Before 2026-09-20 Collinear DID offer it, by accident, because it walked every segment and
+ * a runway is just a segment; the line therefore existed but answered to the wrong toggle.
+ */
+struct AIRSIDE_API FRunwayLineGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+};
+
+/**
+ * A line out of a ROAD's end, at 45, 90 or 135 degrees to that road.
+ *
+ * THE SKETCHED REQUEST, 2026-09-20 (samples/suggestion.png): "45 degrees to other road", drawn
+ * from the drag to the far road's near END. Nothing offered it - FParallelGuideSource squares
+ * to a road through the DRAG'S origin, never through the road's own end, and FCollinearGuideSource
+ * offers only the 0 degree member.
+ *
+ * BOTH ENDS OF EVERY SEGMENT IN REACH. A spoke off one end and a spoke off the other are
+ * parallel lines a segment-length apart, so proposing one end would be picking for the player.
+ * At a junction the shared node throws a spoke per incident segment, which is right: each is
+ * "45 degrees to THAT road".
+ *
+ * RUNWAYS ARE NOT WALKED HERE - FAngledRunwayGuideSource owns them, unbounded, exactly as the
+ * partition has FParallelGuideSource leave them to FRunwayGuideSource.
+ */
+struct AIRSIDE_API FAngledRoadGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
+ * The same spokes off a RUNWAY's threshold, and unbounded like the rest of the Runway column.
+ *
+ * A TAXIWAY LEAVING A THRESHOLD AT 45 DEGREES is the case that earns it - a rapid-exit is
+ * exactly this line, and it is laid from anywhere on the field. See FRunwayLineGuideSource for
+ * why a second source rather than a filter inside the road one: the chain skips a source by its
+ * declared Relation(), so the reach policy is the only thing that can vary per source.
+ */
+struct AIRSIDE_API FAngledRunwayGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
+ * An apron's EDGES, as a direction to point along and its perpendicular.
+ *
+ * AN APRON IS A BOUNDARY, NOT A CENTRELINE, and that is what separates this whole family from
+ * the road sources. A road is a line with pavement either side; an apron edge IS the pavement's
+ * limit. FApronLineGuideSource is where that difference bites - see the displacement there.
+ *
+ * FOUR SOURCES, ONE PER RELATION - Parallel here, Collinear, AngledFrom and LevelWith below.
+ * FSnapGuideChain::Resolve skips a source by its declared Relation() BEFORE it walks anything,
+ * so one source proposing four relations would have all four silenced by whichever it happened
+ * to declare. That is not hypothetical: it is what FRunwayGuideSource did on 2026-09-20 until
+ * FRunwayLineGuideSource split off it.
+ *
+ * NO NAME OF ITS OWN. FApronSurface carries a material slot and nothing a player would read, so
+ * the label is "the apron edge" and the dashed line says WHICH - exactly as FRoadDrawTool labels
+ * an unnamed node "that node" and lets the drawn line carry the rest.
+ */
+struct AIRSIDE_API FApronGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
+};
+
+/**
+ * The line an apron edge lies on, extended - and the one source that displaces by the drag's
+ * half-width.
+ *
+ * FLUSH, NOT CENTRED. Lining a road's centreline up with an apron's edge would put half the
+ * pavement over the apron; the player means the road's EDGE to sit on it. See EDragPoint and the
+ * 2026-09-20 design section 6 - this is the only cell where a centreline meets an extended
+ * boundary, so it is the only place the rule applies.
+ */
+struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+};
+
+/** Spokes at 45, 90 and 135 degrees out of an apron's corners - see FAngledRoadGuideSource. */
+struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
+ * An apron's corners, as points to be level with.
+ *
+ * NOT DISPLACED, unlike FApronLineGuideSource. A corner is a POINT, not an extended edge - there
+ * is nothing for a road's flank to run flush along, so centre-to-corner is what "level with" can
+ * mean here.
+ */
+struct AIRSIDE_API FApronCornerGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
 };
 
 /**
@@ -217,9 +442,9 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 struct AIRSIDE_API FOffsetGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Offset; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::MatchingGap; }
 };
 
 /** What to call a placed entity where the player reads it. Falls back to the asset name. */
@@ -245,9 +470,9 @@ namespace EntityNaming
 struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Aligned; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -257,8 +482,9 @@ struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
  * in stage 2 is a new link, not an edit to a widening conditional. It differs in the one way
  * that matters - see IGuideSource on why nothing claims.
  *
- * THE ORDER SOURCES ARE ADDED IN DOES NOT DECIDE TIES. SnapGuide::ESource does, inside the
- * arbiter. This chain's order is only the order they are asked, which is unobservable.
+ * THE ORDER SOURCES ARE ADDED IN DOES NOT DECIDE TIES. The (ERelation, EReference) pair does,
+ * inside the arbiter. This chain's order is only the order they are asked, which is
+ * unobservable.
  */
 class AIRSIDE_API FSnapGuideChain
 {
@@ -276,6 +502,18 @@ public:
 	void AddSource(TUniquePtr<IGuideSource> Source);
 
 	int32 NumSources() const { return Sources.Num(); }
+
+	/**
+	 * Every enabled source's candidates, gathered and gated but NOT arbitrated.
+	 *
+	 * FOR THE GRID TEST, and said plainly rather than hidden behind a friend declaration:
+	 * Resolve returns at most two winners, so a source proposing into a hole would be invisible
+	 * the moment it lost its race - which is exactly the shape of the 2026-09-20 report.
+	 * Production callers want Resolve.
+	 */
+	void ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, const FSnapGuideSettings& Enabled,
+		TArray<SnapGuide::FCandidate>& Out) const;
 
 	/**
 	 * Every source's candidates, arbitrated, with Previous carrying the flicker rule.

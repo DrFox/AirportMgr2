@@ -13,36 +13,101 @@
 namespace SnapGuide
 {
 	/**
-	 * The sources, in priority order - most specific to what the player is doing, first.
+	 * WHAT a guide means. Declaration order is the tiebreak WITHIN a fit kind - see Arbitrate.
 	 *
-	 * THE ORDER IS THE TIEBREAK AND NOTHING ELSE: a lower source still wins outright when it
-	 * is the only one in tolerance. What you are extending is what you are thinking about;
-	 * the world grid is what you fall back on when nothing else applies.
+	 * A PLAIN ENUM, not a UENUM, for the reason ESource carried before it: UHT cannot see an
+	 * enum without a .generated.h, and a Solve/ header may not have one. FSnapGuideSettings
+	 * wraps it in named bools rather than a reflected array for the same reason.
 	 *
-	 * ALL SEVEN ARE LISTED although stage 1 fills only Extending and World, because the
-	 * ORDER is the contract - adding Parallel in stage 2 must not renumber what Runway means.
-	 *
-	 * A PLAIN ENUM, not a UENUM: UHT cannot see an enum without a .generated.h, and a Solve/
-	 * header may not have one. Stage 3's toggles need reflection and will wrap it there.
+	 * ORDER IS MOST-SPECIFIC-FIRST: what you are extending is what you are thinking about;
+	 * matching a neighbour's gap is the most incidental thing on the list.
 	 */
-	enum class ESource : uint8
+	enum class ERelation : uint8
 	{
 		Extending,
+		LevelWith,
 
 		/**
-		 * "You are level with THAT." Added 2026-09-17; ranks second because a point in the
-		 * gesture being drawn right now is as specific as the edge being extended, and both
-		 * beat anything the network offers.
+		 * A direction, AND ITS PERPENDICULAR - "parallel to the taxiway" and "square to the
+		 * taxiway" are one fact about one road, so one toggle governs both. For the World
+		 * column it is neither: the four compass axes are parallel to no thing at all.
+		 *
+		 * THE BAR CALLS THIS "Direction", and the names differ deliberately. A player switched
+		 * on Angled from and World on 2026-09-20, got nothing, and observed that a button
+		 * marked "Parallel" also showed them "square" - which is not parallel - while the thing
+		 * they wanted, the world grid, was neither. The design's own grid had always called the
+		 * row "Parallel / square"; the button had kept the first word and dropped the rest.
+		 *
+		 * THE ENUM WAS LEFT ALONE rather than renamed with it. "Parallel" is 34 sites across 11
+		 * files, plus FParallelGuideSource and eighteen uses of bParallel - and a good number of
+		 * those are comments that REASON about Parallel by name, which a substitution would
+		 * flatten. A name only developers read did not justify that; this paragraph is the tie
+		 * between the two instead. See BuildActions.cpp's snap.direction.
 		 */
-		PointAlign,
-
-		Aligned,
-		Collinear,
 		Parallel,
-		Runway,
-		World,
-		Offset
+
+		Collinear,
+
+		/**
+		 * "45 degrees to that taxiway" - a line radiating out of a reference's END, at an angle
+		 * to the reference itself. Added 2026-09-20 on a sketch (samples/suggestion.png).
+		 *
+		 * COLLINEAR IS THE 0 DEGREE MEMBER OF THIS FAMILY, which is what fixes its shape: both
+		 * are a line through a reference's end at some angle to it, and both are judged by where
+		 * the cursor ENDED UP. It ranks just below Collinear for the same reason - the line a
+		 * road lies on is more specific than a line merely angled off it.
+		 */
+		AngledFrom,
+
+		MatchingGap
 	};
+
+	/**
+	 * WHAT a guide is measured against. Declaration order breaks ties within one relation.
+	 *
+	 * SPLIT OUT OF ESource ON 2026-09-20. ESource mixed these two axes: Extending, PointAlign,
+	 * Collinear, Parallel and Offset named relationships, while Runway, World and Aligned named
+	 * references - and Parallel and Collinear carried an unnamed, unswitchable reference, "a
+	 * road". A player switching Runway off still saw "parallel to runway 18/36", because there
+	 * was no axis for the toggle to act along. See the 2026-09-20 guide-grid design section 1.
+	 *
+	 * ThisGesture RANKS FIRST because the shape under the cursor is more specific than anything
+	 * already on the field; World ranks last because it is what you fall back on.
+	 */
+	enum class EReference : uint8
+	{
+		ThisGesture,
+
+		/**
+		 * TWO COLUMNS, NOT ONE "Road" - split on 2026-09-20, the day after the axes were.
+		 *
+		 * Nothing else in this codebase has ever called these one thing: two registry entries
+		 * under two keys (1 and 9), two cross-sections, two traversal classes, and
+		 * RoadNaming::Describe already put "the taxiway" or "the service road" in the LABEL.
+		 * Only the grid collapsed them - so a line reading "parallel to the service road"
+		 * appeared under a button marked Road, and no toggle could reach one without the other.
+		 *
+		 * TAXIWAY FIRST, matching ERoadKind and the keys. Declaration order breaks ties, and an
+		 * aircraft lane is the more central thing on an airfield than the van road beside it.
+		 */
+		Taxiway,
+		ServiceRoad,
+
+		Runway,
+		Apron,
+		Stand,
+		World
+	};
+
+	/**
+	 * Whether this pair of axes names a guide that exists. Design section 3's grid.
+	 *
+	 * THE ONE PLACE THE GRID IS WRITTEN DOWN. FSnapGuideSettings::IsEnabled consults it, the
+	 * registry test walks it, and Airside.Tool.GuideGridHasNoCellOutsideTheList asserts no
+	 * source can propose a pair it rejects. Twenty-five of the forty-two pairs are legal; the
+	 * holes are reasoned about one by one at each row below, not merely left out.
+	 */
+	AIRSIDE_API bool IsLegalCell(ERelation Relation, EReference Reference);
 
 	/**
 	 * How a candidate is judged near.
@@ -92,7 +157,17 @@ namespace SnapGuide
 		/** "square to the frontage", "45 degrees". Shown beside the line. */
 		FString Description;
 
-		ESource Source = ESource::World;
+		/**
+		 * WHAT this guide means, and WHAT it is measured against. Two fields since 2026-09-20;
+		 * one `ESource` before, which is why a player could switch Runway off and still be told
+		 * their taxiway was parallel to one - see EReference's own comment.
+		 *
+		 * THE DEFAULT IS THE WORLD GRID, exactly as `ESource::World` was: a candidate built
+		 * without saying what it is should be the least specific thing on the list, never the
+		 * most.
+		 */
+		ERelation Relation = ERelation::Parallel;
+		EReference Reference = EReference::World;
 	};
 
 	/**

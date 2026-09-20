@@ -169,6 +169,26 @@ public:
 	 */
 	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const = 0;
 
+	/**
+	 * The cross-section a click with this Kind and WidthIndex would actually lay.
+	 *
+	 * THE ONE PLACE THIS RULE LIVES, as of 2026-09-20. It was written twice - in
+	 * URoadEditFacade::ChooseProfile and in ARoadNetworkActor::UpdateGhost, whose comment
+	 * already said the two must agree - and a third copy was about to be added for the guide
+	 * anchor's half-width. Both existing sites now forward here, so the agreement is structural
+	 * rather than maintained by hand.
+	 *
+	 * NOT A REPLACEMENT for ResolveTaxiwayProfile and its siblings: those answer "what is width
+	 * 2", which is a content question. This answers "what would this GESTURE lay", which folds in
+	 * the service road's exemption and the taxiway's fallback.
+	 *
+	 * NOT CONST, unlike its siblings above, and the reason is ARoadNetworkActor::ResolveProfile:
+	 * a taxiway with no index falls back to the actor's own profile, which builds a RuntimeProfile
+	 * from FallbackWidth the first time it is asked. A const signature here would be a promise
+	 * this cannot keep.
+	 */
+	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) = 0;
+
 	virtual bool DisconnectGuideline(int32 EdgeIndex) = 0;
 
 	/**

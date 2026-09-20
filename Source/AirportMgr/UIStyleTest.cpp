@@ -64,12 +64,17 @@ bool FUIStyleIconsTest::RunTest(const FString& Parameters)
 	// IconFor returns null, which is exactly what the time controls rely on. Eight glyphs that
 	// each had to say "the line an existing segment lies on" would be worse than the words.
 	//
+	// BOTH GUIDE SECTIONS, since 2026-09-20: the toggles split into a relation row and a
+	// reference row, and "Snap to" is word buttons for the same reason "Snap" is.
+	//
 	// IconsByActionId is authored CONTENT, so an action with no entry is not a code bug - it
 	// is a button that draws its label, and this test is the one place that decides which of
 	// those two a section is.
 	for (const FBuildAction& Action : BuildActions())
 	{
-		if (Action.Section == EActionSection::Time || Action.Section == EActionSection::Snap)
+		if (Action.Section == EActionSection::Time
+			|| Action.Section == EActionSection::Snap
+			|| Action.Section == EActionSection::SnapTo)
 		{
 			continue;
 		}

@@ -45,7 +45,13 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	// source written, declared and never installed in the constructor would be invisible
 	// otherwise - its candidates simply never appear, and every other test of the chain still
 	// passes. Stage 2 takes this from 3 to 7, one at a time, and stage 5 to 8.
-	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 8);
+	//
+	// FIFTEEN SINCE 2026-09-20, and the number climbs in GROUPS because the chain skips a source
+	// by its declared Relation() before it walks anything - so a column needs one source per
+	// relation it serves, not one source that declares several. FRunwayLineGuideSource split off
+	// FRunwayGuideSource for exactly that reason; AngledFrom then arrived as road and runway
+	// separately; and the Apron column arrived as four at once.
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 15);
 
 	const FGuideAnchor Anchor = Frontage();
 
@@ -62,7 +68,7 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	}
 
 	TestEqual(TEXT("the perpendicular of the tool's own reference is what wins"),
-		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 	TestEqual(TEXT("and it is described by the name the TOOL gave its reference"),
 		Result.Winners[0].Description, FString(TEXT("square to the frontage")));
 
@@ -107,7 +113,7 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 	const SnapGuide::FResult Result = Chain.Resolve(
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestEqual(TEXT("a tie between the frontage and a world axis goes to the frontage"),
-		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 
 	// CONTROL LEG: World was a live competitor, not an absent one. With no reference the
 	// Extending source proposes nothing and the same cursor gets the world axis instead - so
@@ -117,9 +123,13 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestTrue(TEXT("with no reference the world grid still answers"), WorldOnly.bActive);
 	TestEqual(TEXT("and it is the world axis that does"),
-		static_cast<int32>(WorldOnly.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
-	TestEqual(TEXT("named as an angle, since the grid has no thing to point at"),
-		WorldOnly.Winners[0].Description, FString(TEXT("90 degrees")));
+		static_cast<int32>(WorldOnly.Winners[0].Reference), static_cast<int32>(SnapGuide::EReference::World));
+	// NAMED AS AN AXIS, BOTH ENDS, since the grid has nothing on the map to point at. It read
+	// "90 degrees" until 2026-09-20 - a number that was already east's compass bearing, but
+	// said so nowhere, and sat beside "45 degrees to the taxiway", which is measured from that
+	// road rather than from north.
+	TestEqual(TEXT("named by the axis it lies on, since the grid has nothing to point at"),
+		WorldOnly.Winners[0].Description, FString(TEXT("east-west")));
 	TestTrue(TEXT("and its line points back at the corner it swings around"),
 		WorldOnly.Winners[0].ReferenceAt.Equals(Anchor.Origin, 1.0e-6));
 

@@ -104,6 +104,11 @@ namespace
 		virtual int32 GetTaxiwayProfileCount() const override { return 0; }
 		virtual URoadProfile* ResolveTaxiwayProfile(int32) const override { return nullptr; }
 
+		// A FAKE RESOLVES NOTHING COMPOSITE. The real rule lives on ARoadNetworkActor and is
+		// pinned by Airside.Present.ProfileResolutionIsOneRule; these fakes exist to watch what
+		// a tool ASKS FOR, not to re-implement what the actor answers.
+		virtual URoadProfile* ResolveProfileFor(ERoadKind, int32) override { return nullptr; }
+
 		virtual int32 GetRunwayProfileCount() const override { return Profiles.Num(); }
 		virtual URoadProfile* ResolveRunwayProfile(int32 Index) const override
 		{

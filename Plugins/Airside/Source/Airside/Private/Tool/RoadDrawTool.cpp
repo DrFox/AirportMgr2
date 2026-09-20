@@ -8,6 +8,7 @@
 #include "Model/RoadNode.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
+#include "Tool/RoadNaming.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -252,21 +253,46 @@ bool FRoadDrawTool::IsIdle() const
 	return State.IsValid() && State->IsIdle();
 }
 
-bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
 {
+	// THE WIDTH THIS GESTURE WOULD LAY - the same question the ghost asks, through the same one
+	// resolver, so a guide cannot disagree with the pavement it is guiding. A null Target is a
+	// supported state and leaves the widths at zero, which means "no width" rather than "unknown".
+	//
+	// FILLED BEFORE THE DECLINE BELOW, because a FREE START has a width too: the first click of
+	// a road laid flush against an apron edge is displaced by exactly this figure, and the base
+	// that answers the free start knows nothing about profiles.
+	Out.Point = EDragPoint::Centreline;
+	if (Target != nullptr)
+	{
+		if (const URoadProfile* Profile = Target->ResolveProfileFor(Kind, WidthIndex))
+		{
+			Out.HalfWidthLeft = Profile->GetHalfWidthLeft();
+			Out.HalfWidthRight = Profile->GetHalfWidthRight();
+		}
+	}
+
 	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
-	// speak of, and a guide offered there would be squaring to an edge that does not exist.
+	// speak of, and an ANGULAR guide offered there would be squaring to an edge that does not
+	// exist - which is why the base's answer here is a FREE START and not this function's own
+	// anchor: it puts the cursor in Origin and lets the arbiter drop every angular candidate.
+	// Delegating rather than returning false is what opts this tool in; see
+	// IBuildTool::DescribeGuideAnchor.
 	const int32 Pending = GetPendingNode();
 	if (Network == nullptr || Pending == INDEX_NONE)
 	{
-		return false;
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
 	}
 
 	const FRoadNodeId FromId = Network->NodeIdAt(Pending);
 	const FRoadNode* From = Network->GetNode(FromId);
 	if (From == nullptr)
 	{
-		return false;
+		// A PENDING NODE THE GRAPH CANNOT SEE is not a free start - the gesture HAS begun, and
+		// IsIdle() says so, so the base declines too. Routed through it anyway rather than a
+		// bare false, so the two exits cannot come to disagree about what "no anchor" means.
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
 	}
 
 	Out.Origin = From->Position;
@@ -326,7 +352,50 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAncho
 		{
 			continue;
 		}
-		Out.AlignTo.Add({ Node.Position, TEXT("that node") });
+		// A NODE BELONGS TO EVERY COLUMN THAT MEETS IT - ruled 2026-09-20, when Road became
+		// Taxiway and ServiceRoad. A node is a place where segments end, and where a taxiway
+		// meets a service road it is honestly both; picking a winner would make one of the two
+		// buttons lie about a junction the player can see. So: one FGuidePoint per DISTINCT
+		// kind of incident segment, and the node's position repeated under each.
+		//
+		// AND A BARE NODE OFFERS NOTHING. With no live segment on it there is no kind to tag,
+		// and the tool's own Kind would be a guess about what the player will attach to it -
+		// which is exactly the second opinion about the gesture that FGuidePoint::Reference
+		// exists to avoid. In practice the only bare node is the one being extended from, and
+		// that is excluded above.
+		SnapGuide::EReference Columns[] = {
+			SnapGuide::EReference::Taxiway,
+			SnapGuide::EReference::ServiceRoad,
+			SnapGuide::EReference::Runway };
+
+		for (const SnapGuide::EReference Column : Columns)
+		{
+			bool bIncident = false;
+			for (const FRoadSegmentId Meeting : Node.Incident)
+			{
+				SnapGuide::EReference Of = SnapGuide::EReference::Taxiway;
+				if (RoadNaming::ReferenceOf(*Network, Meeting, Of) && Of == Column)
+				{
+					bIncident = true;
+					break;
+				}
+			}
+			if (!bIncident)
+			{
+				continue;
+			}
+
+			// SPELT OUT, not braced: a third member arrived on FGuidePoint in 2026-09-20 and a
+			// braced initialiser would have taken the default for it in silence.
+			FGuidePoint Point;
+			Point.At = Node.Position;
+			Point.Name = TEXT("that node");
+
+			// THE ONE PLACE A NETWORK FACT REACHES A TOOL-FED SOURCE, and the tag is what lets
+			// the matching button switch it off.
+			Point.Reference = Column;
+			Out.AlignTo.Add(Point);
+		}
 	}
 
 	return true;

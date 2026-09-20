@@ -7,6 +7,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/RoadSnap.h"
 #include "Profiles/RoadProfile.h"
 
@@ -452,6 +453,55 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			Actor->Network->GetNodes()[Centre].Position == Before);
 		TestEqual(TEXT("and the step beneath it is the one from before the drag"),
 			Actor->PeekUndoLabel(), LabelBefore);
+	}
+
+	return true;
+}
+
+/**
+ * ONE RESOLUTION, ASKED BY EVERYONE. Kind plus WidthIndex names a cross-section, and before
+ * 2026-09-20 that rule was written twice - URoadEditFacade::ChooseProfile and
+ * ARoadNetworkActor::UpdateGhost, the second carrying a comment saying it must agree with the
+ * first. A third copy was about to go into FRoadDrawTool::DescribeGuideAnchor for its
+ * half-width, which is what forced the collapse.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FProfileResolutionIsOneRuleTest,
+	"Airside.Present.ProfileResolutionIsOneRule",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FProfileResolutionIsOneRuleTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	IRoadEditTarget* Target = Actor;
+
+	// A SERVICE ROAD IGNORES THE INDEX OUTRIGHT - it has one authored cross-section, and an
+	// index reaching it would lay a taxiway's width on a lane meant for vans.
+	TestEqual(TEXT("a service road answers the same whatever index is passed"),
+		Target->ResolveProfileFor(ERoadKind::ServiceRoad, 0),
+		Target->ResolveProfileFor(ERoadKind::ServiceRoad, INDEX_NONE));
+
+	// A TAXIWAY WITH NO INDEX FALLS BACK TO THE LEVEL'S OWN TUNING, which is the honest answer
+	// where the service road has none.
+	TestNotNull(TEXT("a taxiway always resolves something"),
+		Target->ResolveProfileFor(ERoadKind::Taxiway, INDEX_NONE));
+
+	// AND AN INDEX THE CONTENT SET CAN ANSWER GIVES THAT ONE, not the fallback. Reported rather
+	// than failed when the content set is empty: this is a rule about resolution, not about what
+	// a particular project happens to ship.
+	if (Target->GetTaxiwayProfileCount() > 0)
+	{
+		TestEqual(TEXT("an index resolves to that width"),
+			Target->ResolveProfileFor(ERoadKind::Taxiway, 0),
+			Target->ResolveTaxiwayProfile(0));
+	}
+	else
+	{
+		AddInfo(TEXT("No taxiway widths in the content set; index resolution not checked"));
 	}
 
 	return true;

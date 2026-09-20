@@ -17,6 +17,18 @@ namespace
 		return FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(Aligned, 0.0, 1.0)));
 	}
 
+	/**
+	 * Whether A outranks B - relation first, then reference. Design section 4.
+	 *
+	 * LEXICOGRAPHIC, NOT A COMBINED INDEX. `Relation * 6 + Reference` would work today and
+	 * would break silently the first time a sixth reference is added, which is exactly the
+	 * class of bug the grid exists to make impossible.
+	 */
+	bool OutranksOnTie(const SnapGuide::FCandidate& A, const SnapGuide::FCandidate& B)
+	{
+		return A.Relation != B.Relation ? A.Relation < B.Relation : A.Reference < B.Reference;
+	}
+
 	/** Perpendicular distance from Point to the line through Through along Direction, uu. */
 	double ErrorUu(const FVector2D& Through, const FVector2D& Direction, const FVector2D& Point)
 	{
@@ -147,7 +159,7 @@ SnapGuide::FResult SnapGuide::Arbitrate(TConstArrayView<FCandidate> Candidates,
 			const bool bClearlyBetter = Best == nullptr || Error < BestError - TieEpsilon;
 			const bool bTiedAndHigherPriority = Best != nullptr
 				&& Error <= BestError + TieEpsilon
-				&& Candidate.Source < Best->Source;
+				&& OutranksOnTie(Candidate, *Best);
 
 			if (bClearlyBetter || bTiedAndHigherPriority)
 			{

@@ -477,18 +477,35 @@ FToolContext ARoadBuildController::MakeToolContext() const
 		HoverAgentUnderCursor());
 }
 
-void ARoadBuildController::ToggleGuideSource(SnapGuide::ESource Source)
+void ARoadBuildController::ToggleGuideRelation(SnapGuide::ERelation Relation)
 {
 	if (ARoadNetworkActor* Actor = GetTarget())
 	{
-		Actor->GuideSources.Toggle(Source);
+		Actor->GuideSources.ToggleRelation(Relation);
 	}
 }
 
-bool ARoadBuildController::IsGuideSourceOn(SnapGuide::ESource Source) const
+bool ARoadBuildController::IsGuideRelationOn(SnapGuide::ERelation Relation) const
 {
 	const ARoadNetworkActor* Actor = GetTarget();
-	return Actor != nullptr && Actor->GuideSources.IsEnabled(Source);
+	return Actor != nullptr && Actor->GuideSources.IsRelationOn(Relation);
+}
+
+void ARoadBuildController::ToggleGuideReference(SnapGuide::EReference Reference)
+{
+	if (ARoadNetworkActor* Actor = GetTarget())
+	{
+		Actor->GuideSources.ToggleReference(Reference);
+	}
+}
+
+// THE ROW FLAG ALONE, not IsEnabled: a button is lit when its own axis is on, and a cell that
+// happens to be a hole must not make the column look switched off. The AND belongs in the
+// chain, where a candidate is judged - not in what the bar draws.
+bool ARoadBuildController::IsGuideReferenceOn(SnapGuide::EReference Reference) const
+{
+	const ARoadNetworkActor* Actor = GetTarget();
+	return Actor != nullptr && Actor->GuideSources.IsReferenceOn(Reference);
 }
 
 int32 ARoadBuildController::HoverAgentUnderCursor() const

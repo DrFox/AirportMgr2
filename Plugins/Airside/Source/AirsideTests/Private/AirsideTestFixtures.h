@@ -17,6 +17,7 @@
 #include "Model/RoadNetwork.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadSnap.h"
+#include "Tool/SnapGuideChain.h"
 
 class ARoadNetworkActor;
 class UWorld;
@@ -56,6 +57,42 @@ namespace TestTool
 	 */
 	FToolContext ContextAt(IRoadEditTarget& Target, const FVector2D& Where,
 		ERoadSnapKind Kind = ERoadSnapKind::Free, double SnapRadius = 150.0);
+}
+
+/**
+ * Guide-source builders shared by every guide test.
+ *
+ * MOVED OUT OF NetworkGuideSourceTest.cpp's anonymous namespace on 2026-09-20, when a second
+ * and third file needed LayRunway. The tests module is a UNITY build: two helpers of one name
+ * in two anonymous namespaces compile alone and collide together, which is the whole reason
+ * this header exists - see its own top comment.
+ */
+namespace TestGuide
+{
+	/** An anchor with no reference and no points, so ONLY the network sources answer. */
+	FGuideAnchor BareAnchor(const FVector2D& Origin);
+
+	/**
+	 * A runway strip. NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a
+	 * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
+	 * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
+	 *
+	 * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
+	 * anything under it, so a test strip either lowers the bar or is half a kilometre long.
+	 * MeshFreshnessTest does exactly this, for exactly this reason.
+	 */
+	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To);
+
+	/**
+	 * Every candidate ONE source proposes, with the rest of the chain kept out of it.
+	 *
+	 * CURSOR DEFAULTS TO THE ANCHOR'S ORIGIN, which is what every caller written before
+	 * IGuideSource::Propose took one meant: the drag had not moved. A test about where the FAR
+	 * END lands passes its own - see Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear.
+	 */
+	TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
+		const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const TOptional<FVector2D>& Cursor = TOptional<FVector2D>());
 }
 
 /**

@@ -332,6 +332,9 @@ public:
 	virtual int32 GetTaxiwayProfileCount() const override;
 	virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override;
 
+	/** See IRoadEditTarget::ResolveProfileFor - the one place this rule lives. */
+	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
+
 	/** Remove a HAND-AUTHORED guideline edge. Refuses a derived one. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;

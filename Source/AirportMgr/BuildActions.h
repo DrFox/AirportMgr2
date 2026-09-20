@@ -18,8 +18,11 @@ enum class EActionSection : uint8
 	Selection,
 	Game,
 
-	/** The guide sources: one lit toggle each. See the snap-guides design section 7. */
+	/** The guide RELATIONS - what a guide means. See the 2026-09-20 guide-grid design §7. */
 	Snap,
+
+	/** The guide REFERENCES - what it is measured against. The second axis, same design §7. */
+	SnapTo,
 
 	Count
 };

@@ -138,7 +138,19 @@ public:
 	 * the one before it. See IBuildTool::DescribeGuideAnchor on why the network is a parameter
 	 * where the context deliberately is not.
 	 */
-	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const override;
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
+
+	/**
+	 * YES - start a road in line with an existing one, or a matching gap from a pair of them.
+	 *
+	 * BOTH REGISTRY ENTRIES, taxiway and service road: the argument is about the gesture and
+	 * one class serves both. Already consumed, as it happens - a free click goes down at
+	 * RoadGuidedSnap(Context).Position through ResolveToNode, and BuildPreview draws the dashed
+	 * line whatever state the tool is in. See IBuildTool::WantsFreeStartGuides on why saying
+	 * yes is only half the work.
+	 */
+	virtual bool WantsFreeStartGuides() const override { return true; }
 
 private:
 	/** Ctrl+click: remove whatever the snap chain resolved. */
