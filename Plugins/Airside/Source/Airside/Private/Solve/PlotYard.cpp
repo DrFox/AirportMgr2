@@ -67,6 +67,251 @@ namespace
 		}
 		return true;
 	}
+
+	/**
+	 * The ground a plot has, and what has been stood on it so far.
+	 *
+	 * EXTRACTED FROM LayOut RATHER THAN COPIED, because Reserve needs the identical sampler.
+	 * Two samplers would be two answers to "does this fit", and the preview would stop being
+	 * the thing that gets built - which is the one property the reservation design rests on.
+	 */
+	struct FYardSpace
+	{
+		TArrayView<const FVector2D> Outline;
+		FVector2D Gate = FVector2D::ZeroVector;
+		FVector2D Inward = FVector2D::ZeroVector;
+		FVector2D Across = FVector2D::ZeroVector;
+		double InwardBearing = 0.0;
+		double Deepest = 0.0;
+		FVector2D Min = FVector2D::ZeroVector;
+		FVector2D Max = FVector2D::ZeroVector;
+
+		/** Corner rectangles of every stand already placed. Grows as we go. */
+		TArray<TArray<FVector2D>> Taken;
+
+		FRandomStream Stream;
+
+		/**
+		 * Grown by ClearanceUu on every side, so the gap between two modules is enforced by
+		 * the same test that stops them intersecting. Two modules that merely touch read as
+		 * one building, which is the stamped look this file exists to remove.
+		 */
+		static PlotYard::FFootprint Padded(const PlotYard::FFootprint& Footprint)
+		{
+			PlotYard::FFootprint Out = Footprint;
+			Out.LengthUu += PlotYard::ClearanceUu;
+			Out.WidthUu += PlotYard::ClearanceUu;
+			return Out;
+		}
+
+		/**
+		 * Stand it on the gate's ray, as deep as its whole footprint fits.
+		 *
+		 * AGAINST THE BACK FENCE, not in the gateway. It stood at Gate + Inward * HalfLength
+		 * until 2026-09-17, which put the shed squarely in the entrance - a depot whose only
+		 * way in is blocked by the building you drive out of.
+		 *
+		 * AS DEEP AS ITS WHOLE FOOTPRINT FITS, not as deep as the plot's deepest POINT. The
+		 * first version measured the deepest vertex and put the centre a half-length in
+		 * front of it, which is right only when the back edge is square to the gate ray. The
+		 * four-point gesture makes slanted backs the ordinary case, and PIE on 2026-09-17
+		 * showed the shed "quite often sticks out of the back boundary of the plot".
+		 *
+		 * EVERY CORNER TESTED, the same question FitBays and the sampler ask, and inset by
+		 * the same CornerInsetUu for the same reason: a corner exactly on the boundary
+		 * answers a containment test by floating-point coin flip.
+		 */
+		bool PlaceAgainstTheBackFence(const PlotYard::FFootprint& Footprint,
+			PlotYard::FStand& OutStand)
+		{
+			const double HalfLength = Footprint.LengthUu * 0.5;
+
+			// WRITTEN AS WE PROBE, not held in a local and copied out on success. A shed that
+			// fits nowhere keeps its LAST CLAMPED pose rather than falling back to the origin,
+			// and Airside.Solve.PlotYardStandsTheShedAtTheBack asserts exactly that on a plot
+			// too shallow to hold it: "a shallow plot keeps the shed off the road". Writing
+			// only on success moved a dropped shed to (0,0), which is out across the road.
+			OutStand.Heading = InwardBearing;
+
+			TArray<FVector2D> Corners;
+			for (int32 Probe = 0; Probe < PlotYard::BackFenceProbes; ++Probe)
+			{
+				const double Alpha =
+					static_cast<double>(Probe) / (PlotYard::BackFenceProbes - 1);
+				const double Depth = FMath::Lerp(Deepest - HalfLength, HalfLength, Alpha);
+				if (Depth < HalfLength)
+				{
+					continue;
+				}
+
+				OutStand.Centre = Gate + Inward * Depth;
+				PlotYard::StandCorners(OutStand, Footprint, Corners);
+
+				bool bInside = true;
+				for (const FVector2D& Corner : Corners)
+				{
+					if (!RoadGeom::PointInPolygon(Outline, Corner))
+					{
+						bInside = false;
+						break;
+					}
+				}
+				if (bInside)
+				{
+					// TAKEN HERE, not by a second pass afterwards. LayOut used to collect
+					// placed stands into Taken in a loop of its own; folding it in is what
+					// lets Reserve interleave back-fence and sampled placement in one walk
+					// without the two disagreeing about what ground is spoken for.
+					OutStand.bPlaced = true;
+					Taken.Add(Corners);
+					return true;
+				}
+			}
+
+			// NOT PLACED IS A REAL ANSWER. A plot with no room for the shed anywhere on the
+			// gate's ray reports it dropped, exactly as a sampled module would. Forcing it in
+			// would put a building through the fence.
+			return false;
+		}
+
+		/** Sample up to MaxTries poses. False means dropped, which is a real answer. */
+		bool TryPlace(const PlotYard::FFootprint& Footprint, PlotYard::FStand& OutStand)
+		{
+			const PlotYard::FFootprint Grown = Padded(Footprint);
+
+			const double HalfLength = Grown.LengthUu * 0.5;
+			const double HalfWidth = Grown.WidthUu * 0.5;
+
+			TArray<FVector2D> Corners;
+			for (int32 Try = 0; Try < PlotYard::MaxTries; ++Try)
+			{
+				PlotYard::FStand Candidate;
+
+				// THE HEADING IS CHOSEN FIRST, so the centre can be drawn from the band that
+				// heading can actually occupy. Sampling the centre across the whole bounding
+				// box and rejecting afterwards put most candidates half through the fence
+				// before any other test ran - on a narrow plot that is most of the draw
+				// wasted.
+				//
+				// A QUARTER TURN PLUS A FEW DEGREES. Uniform over a circle reads as debris
+				// after an explosion; this reads as something parked in a hurry.
+				Candidate.Heading = InwardBearing
+					+ Stream.RandRange(0, 3) * UE_DOUBLE_HALF_PI
+					+ Stream.FRandRange(-PlotYard::HeadingJitterRadians,
+						PlotYard::HeadingJitterRadians);
+
+				// This heading's own axis-aligned reach - EXACT, not the half-diagonal. The
+				// diagonal holds for every rotation and so refuses poses a 12 degree turn
+				// allows, which quietly costs the yard modules it had room for.
+				const double Cos = FMath::Abs(FMath::Cos(Candidate.Heading));
+				const double Sin = FMath::Abs(FMath::Sin(Candidate.Heading));
+				const double ReachX = HalfLength * Cos + HalfWidth * Sin;
+				const double ReachY = HalfLength * Sin + HalfWidth * Cos;
+
+				if (Min.X + ReachX > Max.X - ReachX || Min.Y + ReachY > Max.Y - ReachY)
+				{
+					// No centre exists for this heading. Another turn may still fit, so this
+					// costs a try rather than abandoning the module.
+					continue;
+				}
+
+				Candidate.Centre = FVector2D(
+					Stream.FRandRange(Min.X + ReachX, Max.X - ReachX),
+					Stream.FRandRange(Min.Y + ReachY, Max.Y - ReachY));
+
+				PlotYard::StandCorners(Candidate, Grown, Corners);
+
+				bool bLegal = true;
+				for (const FVector2D& Corner : Corners)
+				{
+					if (!RoadGeom::PointInPolygon(Outline, Corner))
+					{
+						bLegal = false;
+						break;
+					}
+
+					// The corridor from the gate into the plot: a BOX at the gate mouth, one
+					// truck length deep, not a lane running the full depth of the yard.
+					//
+					// THE DEPTH BOUND IS LOAD-BEARING, not tidiness. Unbounded, the lane cuts
+					// the plot in two and forbids anything crossing the middle - which took
+					// acceptance to roughly 8% a try, so 24 tries dropped a module about one
+					// time in eight and Airside.Solve.PlotYardLeavesTheGateClear caught it on
+					// seed 3. It is also simply the wrong rule: the truck needs room to get
+					// off the pad and turn, and once it is clear of the fence it can weave.
+					const FVector2D FromGate = Corner - Gate;
+					const double Into = FVector2D::DotProduct(FromGate, Inward);
+					if (Into >= 0.0 && Into <= PlotYard::GateCorridorUu
+						&& FMath::Abs(FVector2D::DotProduct(FromGate, Across))
+							< PlotYard::GateCorridorUu * 0.5)
+					{
+						bLegal = false;
+						break;
+					}
+				}
+				if (!bLegal)
+				{
+					continue;
+				}
+
+				for (const TArray<FVector2D>& Other : Taken)
+				{
+					if (QuadsIntersect(Corners, Other))
+					{
+						bLegal = false;
+						break;
+					}
+				}
+				if (!bLegal)
+				{
+					continue;
+				}
+
+				Candidate.bPlaced = true;
+				OutStand = Candidate;
+				Taken.Add(Corners);
+				return true;
+			}
+
+			// DROPPED, not forced. A module shoved in anyway would intersect something, and a
+			// mesh through a mesh is the one failure no camera angle hides. The caller
+			// reports it - "Modules 2 of 3" is already the readout's habit.
+			return false;
+		}
+	};
+
+	/** Build the space from a plot. False for a degenerate outline. */
+	bool MakeYardSpace(TArrayView<const FVector2D> Outline, FVector2D FrontageA,
+		FVector2D FrontageB, FVector2D Gate, int32 Seed, FYardSpace& Out)
+	{
+		if (Outline.Num() < 3)
+		{
+			return false;
+		}
+
+		Out.Outline = Outline;
+		Out.Gate = Gate;
+		Out.Inward = InwardOf(Outline, FrontageA, FrontageB);
+		Out.Across = RoadGeom::PerpCCW(Out.Inward);
+		Out.InwardBearing = RoadGeom::Bearing(Out.Inward);
+
+		// HOW DEEP THE PLOT RUNS on the gate's own ray, so a back-standing module can be
+		// pushed as far from the road as the outline allows.
+		Out.Deepest = 0.0;
+		for (const FVector2D& Point : Outline)
+		{
+			Out.Deepest =
+				FMath::Max(Out.Deepest, FVector2D::DotProduct(Point - Gate, Out.Inward));
+		}
+
+		BoundsOf(Outline, Out.Min, Out.Max);
+
+		// SEEDED BEFORE ANY PLACEMENT, and nothing draws from it until the first TryPlace -
+		// the back-fence pass decides its pose rather than sampling. So the draw sequence is
+		// the one LayOut had when it built its stream after that pass.
+		Out.Stream = FRandomStream(Seed);
+		return true;
+	}
 }
 
 void PlotYard::StandCorners(const FStand& Stand, const FFootprint& Footprint,
@@ -97,216 +342,24 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	FYard Yard;
 	Yard.Stands.SetNum(Footprints.Num());
 
-	if (Outline.Num() < 3)
+	FYardSpace Space;
+	if (!MakeYardSpace(Outline, FrontageA, FrontageB, Gate, Seed, Space))
 	{
 		return Yard;
 	}
 
-	const FVector2D Inward = InwardOf(Outline, FrontageA, FrontageB);
-	const double InwardBearing = RoadGeom::Bearing(Inward);
-
-	TArray<FVector2D> Corners;
-
-	// HOW DEEP THE PLOT RUNS on the gate's own ray, so a back-standing module can be pushed
-	// as far from the road as the outline allows.
-	double Deepest = 0.0;
-	for (const FVector2D& Point : Outline)
-	{
-		Deepest = FMath::Max(Deepest, FVector2D::DotProduct(Point - Gate, Inward));
-	}
-
 	// The back-standing modules first: their pose is decided, not sampled, so they take their
-	// ground before anything is allowed to sample into it.
+	// ground before anything is allowed to sample into it. PlaceAgainstTheBackFence adds each
+	// one to Taken itself, which is why the separate collect-the-placed loop that used to sit
+	// here is gone.
 	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
 	{
 		if (!Footprints[Index].bAgainstTheBackFence)
 		{
 			continue;
 		}
-
-		const double HalfLength = Footprints[Index].LengthUu * 0.5;
-
-		// AGAINST THE BACK FENCE, not in the gateway. It stood at Gate + Inward * HalfLength
-		// until 2026-09-17, which put the shed squarely in the entrance - a depot whose only
-		// way in is blocked by the building you drive out of.
-		//
-		// AS DEEP AS ITS WHOLE FOOTPRINT FITS, not as deep as the plot's deepest POINT. The
-		// first version measured the deepest vertex and put the centre a half-length in front
-		// of it, which is right only when the back edge is square to the gate ray. The
-		// four-point gesture makes slanted backs the ordinary case, and PIE on 2026-09-17
-		// showed the shed "quite often sticks out of the back boundary of the plot" - three
-		// corners through the fence on the wedge its test now uses.
-		//
-		// EVERY CORNER TESTED, the same question FitBays and the sampler ask, and inset by the
-		// same CornerInsetUu for the same reason: a corner exactly on the boundary answers a
-		// containment test by floating-point coin flip.
-		FStand& Stand = Yard.Stands[Index];
-		Stand.Heading = InwardBearing;
-
-		for (int32 Probe = 0; Probe < BackFenceProbes; ++Probe)
-		{
-			const double Alpha = static_cast<double>(Probe) / (BackFenceProbes - 1);
-			const double Depth = FMath::Lerp(Deepest - HalfLength, HalfLength, Alpha);
-			if (Depth < HalfLength)
-			{
-				continue;
-			}
-
-			Stand.Centre = Gate + Inward * Depth;
-			StandCorners(Stand, Footprints[Index], Corners);
-
-			bool bInside = true;
-			for (const FVector2D& Corner : Corners)
-			{
-				if (!RoadGeom::PointInPolygon(Outline, Corner))
-				{
-					bInside = false;
-					break;
-				}
-			}
-			if (bInside)
-			{
-				Stand.bPlaced = true;
-				break;
-			}
-		}
-
-		// NOT PLACED IS A REAL ANSWER. A plot with no room for the shed anywhere on the gate's
-		// ray reports it dropped, exactly as a sampled module would - the readout already says
-		// "Modules 2 of 3" and the depot is warned as inert. Forcing it in would put a
-		// building through the fence, which is what this whole change is fixing.
+		Space.PlaceAgainstTheBackFence(Footprints[Index], Yard.Stands[Index]);
 	}
-
-	// PLACED FOOTPRINTS GROW AS WE GO, and a candidate is tested against every one already
-	// standing - including the shed, which took its ground first for exactly this reason.
-	TArray<TArray<FVector2D>> Taken;
-	for (int32 Index = 0; Index < Footprints.Num(); ++Index)
-	{
-		if (Yard.Stands[Index].bPlaced)
-		{
-			StandCorners(Yard.Stands[Index], Footprints[Index], Corners);
-			Taken.Add(Corners);
-		}
-	}
-
-	FVector2D Min = FVector2D::ZeroVector;
-	FVector2D Max = FVector2D::ZeroVector;
-	BoundsOf(Outline, Min, Max);
-
-	FRandomStream Stream(Seed);
-
-	// Grown by ClearanceUu on every side, so the gap between two modules is enforced by the
-	// same test that stops them intersecting. Two modules that merely touch read as one
-	// building, which is the stamped look this file exists to remove.
-	auto Padded = [](const FFootprint& Footprint)
-	{
-		FFootprint Out = Footprint;
-		Out.LengthUu += ClearanceUu;
-		Out.WidthUu += ClearanceUu;
-		return Out;
-	};
-
-	const FVector2D Across = RoadGeom::PerpCCW(Inward);
-
-	auto TryPlace = [&](const FFootprint& Footprint, FStand& OutStand) -> bool
-	{
-		const FFootprint Grown = Padded(Footprint);
-
-		const double HalfLength = Grown.LengthUu * 0.5;
-		const double HalfWidth = Grown.WidthUu * 0.5;
-
-		for (int32 Try = 0; Try < MaxTries; ++Try)
-		{
-			FStand Candidate;
-
-			// THE HEADING IS CHOSEN FIRST, so the centre can be drawn from the band that
-			// heading can actually occupy. Sampling the centre across the whole bounding box
-			// and rejecting afterwards put most candidates half through the fence before any
-			// other test ran - on a narrow plot that is most of the draw wasted.
-			//
-			// A QUARTER TURN PLUS A FEW DEGREES. Uniform over a circle reads as debris after
-			// an explosion; this reads as something parked in a hurry.
-			Candidate.Heading = InwardBearing
-				+ Stream.RandRange(0, 3) * UE_DOUBLE_HALF_PI
-				+ Stream.FRandRange(-HeadingJitterRadians, HeadingJitterRadians);
-
-			// This heading's own axis-aligned reach - EXACT, not the half-diagonal. The
-			// diagonal holds for every rotation and so refuses poses a 12 degree turn allows,
-			// which quietly costs the yard modules it had room for.
-			const double Cos = FMath::Abs(FMath::Cos(Candidate.Heading));
-			const double Sin = FMath::Abs(FMath::Sin(Candidate.Heading));
-			const double ReachX = HalfLength * Cos + HalfWidth * Sin;
-			const double ReachY = HalfLength * Sin + HalfWidth * Cos;
-
-			if (Min.X + ReachX > Max.X - ReachX || Min.Y + ReachY > Max.Y - ReachY)
-			{
-				// No centre exists for this heading. Another turn may still fit, so this
-				// costs a try rather than abandoning the module.
-				continue;
-			}
-
-			Candidate.Centre = FVector2D(
-				Stream.FRandRange(Min.X + ReachX, Max.X - ReachX),
-				Stream.FRandRange(Min.Y + ReachY, Max.Y - ReachY));
-
-			StandCorners(Candidate, Grown, Corners);
-
-			bool bLegal = true;
-			for (const FVector2D& Corner : Corners)
-			{
-				if (!RoadGeom::PointInPolygon(Outline, Corner))
-				{
-					bLegal = false;
-					break;
-				}
-
-				// The corridor from the gate into the plot: a BOX at the gate mouth, one
-				// truck length deep, not a lane running the full depth of the yard.
-				//
-				// THE DEPTH BOUND IS LOAD-BEARING, not tidiness. Unbounded, the lane cuts
-				// the plot in two and forbids anything crossing the middle - which took
-				// acceptance to roughly 8% a try, so 24 tries dropped a module about one
-				// time in eight and Airside.Solve.PlotYardLeavesTheGateClear caught it on
-				// seed 3. It is also simply the wrong rule: the truck needs room to get off
-				// the pad and turn, and once it is clear of the fence it can weave.
-				const FVector2D FromGate = Corner - Gate;
-				const double Into = FVector2D::DotProduct(FromGate, Inward);
-				if (Into >= 0.0 && Into <= GateCorridorUu
-					&& FMath::Abs(FVector2D::DotProduct(FromGate, Across)) < GateCorridorUu * 0.5)
-				{
-					bLegal = false;
-					break;
-				}
-			}
-			if (!bLegal)
-			{
-				continue;
-			}
-
-			for (const TArray<FVector2D>& Other : Taken)
-			{
-				if (QuadsIntersect(Corners, Other))
-				{
-					bLegal = false;
-					break;
-				}
-			}
-			if (!bLegal)
-			{
-				continue;
-			}
-
-			Candidate.bPlaced = true;
-			OutStand = Candidate;
-			Taken.Add(Corners);
-			return true;
-		}
-
-		// DROPPED, not forced. A module shoved in anyway would intersect something, and a
-		// mesh through a mesh is the one failure no camera angle hides. The caller reports
-		// it - "Modules 2 of 3" is already the readout's habit.
-		return false;
-	};
 
 	// LARGEST FIRST, through an index order rather than by sorting Yard.Stands, whose order
 	// is the caller's contract. A tank placed after four pumps have taken the middle has
@@ -327,7 +380,7 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 
 	for (const int32 Index : Order)
 	{
-		TryPlace(Footprints[Index], Yard.Stands[Index]);
+		Space.TryPlace(Footprints[Index], Yard.Stands[Index]);
 	}
 
 	// HOW MANY MORE WOULD FIT, from the same pass that places things - so the number the
@@ -338,7 +391,7 @@ PlotYard::FYard PlotYard::LayOut(TArrayView<const FVector2D> Outline,
 	// occupies ground the next one cannot use. The cap is a backstop against a zero-area
 	// footprint looping forever, not an expected limit.
 	FStand Phantom;
-	while (Yard.RoomForMore < 64 && TryPlace(RoomForFootprint, Phantom))
+	while (Yard.RoomForMore < 64 && Space.TryPlace(RoomForFootprint, Phantom))
 	{
 		++Yard.RoomForMore;
 	}
