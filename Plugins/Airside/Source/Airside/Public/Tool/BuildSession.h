@@ -199,8 +199,22 @@ public:
 	 * two drivers used to call this as, and so a future rule that CAN refuse - an edit lock,
 	 * say - has somewhere to return false from without changing every call site.
 	 */
-	bool ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+	bool ResolveSnap(const URoadNetwork* Network, const FRoadSnapQuery& Query,
 		const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const;
+
+	/**
+	 * No exclusion - what a CLICK always means, and what both drivers call directly.
+	 *
+	 * Kept at its old signature so `ARoadBuildController::ResolveSnap` needed no change:
+	 * CLAUDE.md's rule that every reachable entry point stays reachable at its old name.
+	 */
+	bool ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+		const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const
+	{
+		FRoadSnapQuery Query;
+		Query.Cursor = PlaneHit;
+		return ResolveSnap(Network, Query, Snap, Out);
+	}
 
 	/**
 	 * Everything a tool needs to judge PlaneHit, with the snap chain already run over it.

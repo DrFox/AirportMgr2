@@ -425,6 +425,24 @@ struct AIRSIDE_API IBuildTool
 	virtual bool WantsFreeStartGuides() const { return false; }
 
 	/**
+	 * A node this tool's gesture is MOVING, which the snap chain must not offer it.
+	 *
+	 * INDEX_NONE by default: only a drag has one, and every tool that draws rather than
+	 * moves should keep snapping to everything. See FRoadSnapQuery::ExcludeNode for what
+	 * goes wrong without it - the dragged node claims its own cursor and cannot move.
+	 *
+	 * TAKES NO CONTEXT, like DescribeGuideAnchor and for the identical reason: it is read
+	 * from inside FBuildSession::MakeContext WHILE the context is being built, so there is
+	 * none to pass. The snap it would help resolve is the very field being filled.
+	 *
+	 * A SLOT INDEX, like every other index a tool passes across the IRoadEditTarget seam.
+	 * A tool has picked one out of GetNodes() and has no business constructing a
+	 * generation-checked handle; MakeContext turns it into one, in the one place that can
+	 * refuse a dead slot.
+	 */
+	virtual int32 GetSnapExclusion() const { return INDEX_NONE; }
+
+	/**
 	 * What this tool is dragging, and against what, for the guide chain. False means "no
 	 * gesture is in progress", and the driver then resolves no guide at all.
 	 *

@@ -1,6 +1,7 @@
 #include "Tool/BuildSession.h"
 
 #include "AirsideLog.h"
+#include "Model/RoadNetwork.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
@@ -166,15 +167,15 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	}
 }
 
-bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const
 {
 	Out = FRoadSnapResult();
-	Out.Position = PlaneHit;
+	Out.Position = Query.Cursor;
 
 	if (Network != nullptr)
 	{
-		Out = SnapChain.Resolve(*Network, PlaneHit, Snap);
+		Out = SnapChain.Resolve(*Network, Query, Snap);
 	}
 	return true;
 }
@@ -210,7 +211,24 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	// from two searches that merely tend to agree.
 	FRoadSnapResult Snapped;
 	const URoadNetwork* Network = Target != nullptr ? Target->GetNetwork() : nullptr;
-	ResolveSnap(Network, PlaneHit, Tunables.Snap, Snapped);
+
+	FRoadSnapQuery Query;
+	Query.Cursor = PlaneHit;
+
+	// WHAT THE ACTIVE TOOL IS MOVING, so a drag stops snapping to the node in its own hand.
+	// Asked here rather than inside the chain because only the tool knows, and only this
+	// function holds both the tool and the query. The tool hands over a slot INDEX and this
+	// makes the generation-checked handle - the one place a dead slot is refused.
+	if (const IBuildTool* Snapping = GetActiveTool(); Snapping != nullptr && Network != nullptr)
+	{
+		const int32 Exclude = Snapping->GetSnapExclusion();
+		if (Exclude != INDEX_NONE)
+		{
+			Query.ExcludeNode = Network->NodeIdAt(Exclude);
+		}
+	}
+
+	ResolveSnap(Network, Query, Tunables.Snap, Snapped);
 
 	Context.SetCursor(PlaneHit, Snapped);
 

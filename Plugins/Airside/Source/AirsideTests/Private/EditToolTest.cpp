@@ -180,6 +180,74 @@ bool FEditHandlesReachTheContextTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSnapChainExcludesTheDraggedNodeTest,
+	"Airside.Tool.SnapChainExcludesTheDraggedNode",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSnapChainExcludesTheDraggedNodeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(12000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+
+	const URoadNetwork* Network = Actor->GetNetwork();
+	if (!TestNotNull(TEXT("a network"), Network)) { return false; }
+
+	FRoadSnapChain Chain;
+	FRoadSnapSettings Settings;
+
+	// WITHOUT the exclusion a cursor on A resolves to A. Correct for a click, and fatal for
+	// a drag: the node being moved claims its own cursor and is pinned where it already is.
+	{
+		const FRoadSnapResult Hit = Chain.Resolve(*Network, FVector2D(0.0, 0.0), Settings);
+		TestTrue(TEXT("a cursor on a node resolves to that node, which is what a click needs"),
+			Hit.Kind == ERoadSnapKind::Node && Hit.Node.Index == A);
+	}
+
+	// WITH it, the same cursor falls through: A is excluded, its one arm is excluded with
+	// it, and B is 120 m away.
+	{
+		FRoadSnapQuery Query;
+		Query.Cursor = FVector2D(0.0, 0.0);
+		Query.ExcludeNode = Network->NodeIdAt(A);
+
+		const FRoadSnapResult Hit = Chain.Resolve(*Network, Query, Settings);
+		TestTrue(TEXT("the excluded node does not claim its own cursor, which is what lets a "
+					  "dragged node move at all"),
+			Hit.Kind != ERoadSnapKind::Node);
+	}
+
+	// AND IT IS NOT A BLANKET REFUSAL. Another node is still found while one is excluded -
+	// the merge-target case, and the reason ExcludeNode is a node rather than a bool.
+	{
+		FRoadSnapQuery Query;
+		Query.Cursor = FVector2D(12000.0, 0.0);
+		Query.ExcludeNode = Network->NodeIdAt(A);
+
+		const FRoadSnapResult Hit = Chain.Resolve(*Network, Query, Settings);
+		TestTrue(TEXT("a different node is still found while one is excluded"),
+			Hit.Kind == ERoadSnapKind::Node && Hit.Node.Index == B);
+	}
+
+	// AN ARM OF THE EXCLUDED NODE IS NOT SPLITTABLE EITHER. Mid-arm, the segment rule would
+	// otherwise offer to split the very road being dragged.
+	{
+		FRoadSnapQuery Query;
+		Query.Cursor = FVector2D(6000.0, 0.0);
+		Query.ExcludeNode = Network->NodeIdAt(A);
+
+		const FRoadSnapResult Hit = Chain.Resolve(*Network, Query, Settings);
+		TestTrue(TEXT("the dragged node's own arm offers no split"),
+			Hit.Kind != ERoadSnapKind::Segment);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FEditModeNamesItselfTest,
 	"Airside.Tool.EditModeNamesItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
