@@ -157,34 +157,47 @@ bool FFeeLeverIsInTheOneListTest::RunTest(const FString& Parameters)
 }
 
 /**
- * ONE TOGGLE PER SOURCE, WALKED FROM THE ENUM. Spec section 9's
- * AirportMgr.Actions.SnapTogglesAreInTheRegistry: a source added in a later stage without a
- * button is a guide the player cannot switch off, and nothing else would say so.
+ * ONE BUTTON PER ROW AND PER COLUMN, WALKED FROM BOTH ENUMS. A row or column with no button is
+ * a guide the player cannot switch, and nothing else would say so.
+ *
+ * REPLACES SnapTogglesAreInTheRegistry, which walked ESource - an enum that no longer exists,
+ * and whose single axis is the defect the grid was built to remove. That test could never have
+ * caught the 2026-09-20 report: it checked that every SOURCE had a button, and the bug was that
+ * a source referenced a runway no button governed.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FSnapTogglesAreInTheRegistryTest,
-	"AirportMgr.Actions.SnapTogglesAreInTheRegistry",
+	FGuideGridIsInTheRegistryTest,
+	"AirportMgr.Actions.GuideGridIsInTheRegistry",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FSnapTogglesAreInTheRegistryTest::RunTest(const FString& Parameters)
+bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 {
-	const TArray<TPair<SnapGuide::ESource, const TCHAR*>> Expected = {
-		{ SnapGuide::ESource::Extending,  TEXT("snap.extending")  },
-		{ SnapGuide::ESource::PointAlign, TEXT("snap.pointalign") },
-		{ SnapGuide::ESource::Aligned,    TEXT("snap.aligned")    },
-		{ SnapGuide::ESource::Collinear,  TEXT("snap.collinear")  },
-		{ SnapGuide::ESource::Parallel,   TEXT("snap.parallel")   },
-		{ SnapGuide::ESource::Runway,     TEXT("snap.runway")     },
-		{ SnapGuide::ESource::World,      TEXT("snap.world")      },
-		{ SnapGuide::ESource::Offset,     TEXT("snap.offset")     } };
+	const TArray<TPair<SnapGuide::ERelation, const TCHAR*>> Relations = {
+		{ SnapGuide::ERelation::Extending,   TEXT("snap.extending")   },
+		{ SnapGuide::ERelation::LevelWith,   TEXT("snap.levelwith")   },
+		{ SnapGuide::ERelation::Parallel,    TEXT("snap.parallel")    },
+		{ SnapGuide::ERelation::Collinear,   TEXT("snap.collinear")   },
+		{ SnapGuide::ERelation::MatchingGap, TEXT("snap.matchinggap") } };
 
-	// THE TABLE ABOVE IS ITSELF A SECOND LIST, so it is checked against the enum's own size
-	// first - otherwise a source added to ESource could be missed by this test as easily as by
-	// the registry, which is the failure the test exists to prevent.
-	TestEqual(TEXT("every ESource value is covered by this test's own table"),
-		Expected.Num(), static_cast<int32>(SnapGuide::ESource::Offset) + 1);
+	// THISGESTURE IS ABSENT ON PURPOSE, and the count below is what keeps that deliberate: it
+	// is checked against the enum MINUS ONE, so a sixth reference added without a button still
+	// fails here. See the 2026-09-20 guide-grid design section 7 for why that one has no switch.
+	const TArray<TPair<SnapGuide::EReference, const TCHAR*>> References = {
+		{ SnapGuide::EReference::Road,   TEXT("snapto.road")   },
+		{ SnapGuide::EReference::Runway, TEXT("snapto.runway") },
+		{ SnapGuide::EReference::Apron,  TEXT("snapto.apron")  },
+		{ SnapGuide::EReference::Stand,  TEXT("snapto.stand")  },
+		{ SnapGuide::EReference::World,  TEXT("snapto.world")  } };
 
-	for (const TPair<SnapGuide::ESource, const TCHAR*>& Pair : Expected)
+	// THE TABLES ABOVE ARE THEMSELVES SECOND LISTS, so each is checked against its enum's own
+	// size first - otherwise a row added to ERelation could be missed by this test as easily as
+	// by the registry, which is the failure the test exists to prevent.
+	TestEqual(TEXT("every ERelation value is covered by this test's own table"),
+		Relations.Num(), static_cast<int32>(SnapGuide::ERelation::MatchingGap) + 1);
+	TestEqual(TEXT("every EReference but ThisGesture is covered"),
+		References.Num(), static_cast<int32>(SnapGuide::EReference::World));
+
+	for (const TPair<SnapGuide::ERelation, const TCHAR*>& Pair : Relations)
 	{
 		const FBuildAction* Action = FindAction(FName(Pair.Value));
 		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Pair.Value), Action))
@@ -199,11 +212,28 @@ bool FSnapTogglesAreInTheRegistryTest::RunTest(const FString& Parameters)
 			static_cast<bool>(Action->IsActive));
 	}
 
-	// AND THE SECTION HAS A NAME. ActionSectionName indexes SectionNames by the enum, so a row
-	// added in the wrong slot renames two sections at once and the static_assert cannot see it.
-	// SENTENCE CASE, like every other row - "Time", "Tools", "Game".
+	for (const TPair<SnapGuide::EReference, const TCHAR*>& Pair : References)
+	{
+		const FBuildAction* Action = FindAction(FName(Pair.Value));
+		if (!TestNotNull(*FString::Printf(TEXT("%s is registered"), Pair.Value), Action))
+		{
+			continue;
+		}
+		TestEqual(*FString::Printf(TEXT("%s sits in the Snap to section"), Pair.Value),
+			Action->Section, EActionSection::SnapTo);
+		TestTrue(*FString::Printf(TEXT("%s can be executed"), Pair.Value),
+			static_cast<bool>(Action->Execute));
+		TestTrue(*FString::Printf(TEXT("%s reports whether it is lit"), Pair.Value),
+			static_cast<bool>(Action->IsActive));
+	}
+
+	// AND BOTH SECTIONS HAVE A NAME. ActionSectionName indexes SectionNames by the enum, so a
+	// row added in the wrong slot renames two sections at once and the static_assert cannot see
+	// it. SENTENCE CASE, like every other row - "Time", "Tools", "Game".
 	TestEqual(TEXT("the Snap section is named"),
 		FString(ActionSectionName(EActionSection::Snap)), FString(TEXT("Snap")));
+	TestEqual(TEXT("the Snap to section is named"),
+		FString(ActionSectionName(EActionSection::SnapTo)), FString(TEXT("Snap to")));
 
 	return true;
 }

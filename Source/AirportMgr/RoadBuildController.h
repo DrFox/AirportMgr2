@@ -187,10 +187,16 @@ public:
 	 * FSnapGuideSettings. A copy here would be a second place for them to drift, which is the
 	 * failure FRoadSnapSettings already records.
 	 */
-	void ToggleGuideSource(SnapGuide::ESource Source);
+	void ToggleGuideRelation(SnapGuide::ERelation Relation);
 
-	/** Whether that source is live. What lights the button. */
-	bool IsGuideSourceOn(SnapGuide::ESource Source) const;
+	/** Whether that row is lit. */
+	bool IsGuideRelationOn(SnapGuide::ERelation Relation) const;
+
+	/** Flips one COLUMN of the guide grid - what a SNAP TO button does. Same ownership rule. */
+	void ToggleGuideReference(SnapGuide::EReference Reference);
+
+	/** Whether that column is lit. */
+	bool IsGuideReferenceOn(SnapGuide::EReference Reference) const;
 
 	/** The tool the number keys selected, or null before BeginPlay has built them. */
 	IBuildTool* GetActiveTool() const;

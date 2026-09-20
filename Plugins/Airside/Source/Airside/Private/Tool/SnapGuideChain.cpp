@@ -513,12 +513,29 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 	// iterating the settings struct.
 	for (const TUniquePtr<IGuideSource>& Source : Sources)
 	{
-		// SKIPPED BEFORE IT WORKS, not filtered after. Collinear walks every segment in reach;
-		// doing that and discarding the result is waste, and filtering the candidates afterwards
-		// would lose which source had done the work.
-		if (Enabled.IsEnabled(Source->Kind()))
+		// THE RELATION IS SKIPPED BEFORE IT WORKS, not filtered after. Collinear walks every
+		// segment in reach; doing that and discarding the result is waste.
+		if (!Enabled.IsRelationOn(Source->Relation()))
 		{
-			Source->Propose(Network, Anchor, Candidates);
+			continue;
+		}
+
+		const int32 Before = Candidates.Num();
+		Source->Propose(Network, Anchor, Candidates);
+
+		// THE REFERENCE IS FILTERED AFTER, and only over what this source just added. A source
+		// may span columns - the segment walkers tag Road or Runway per segment, which is not
+		// known until the segment is in hand - so there is no single column to skip up front.
+		// Walking only the newly-added range keeps this linear however many sources answered.
+		//
+		// BACKWARDS, because RemoveAtSwap moves the last element into the hole: forwards, the
+		// element swapped in would never be examined.
+		for (int32 Index = Candidates.Num() - 1; Index >= Before; --Index)
+		{
+			if (!Enabled.IsEnabled(Candidates[Index].Relation, Candidates[Index].Reference))
+			{
+				Candidates.RemoveAtSwap(Index, 1, EAllowShrinking::No);
+			}
 		}
 	}
 

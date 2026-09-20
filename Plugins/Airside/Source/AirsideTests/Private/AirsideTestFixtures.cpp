@@ -12,6 +12,7 @@
 #include "Model/RunwayFacts.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/SnapGuideChain.h"
 
 FAirsideTestWorld::FAirsideTestWorld()
 {
@@ -336,4 +337,51 @@ const FGuidelineEdge* ExitArcTurnBetween(const URoadNetwork& Net, FGuidelineNode
 		}
 	}
 	return nullptr;
+}
+
+namespace TestGuide
+{
+/** An anchor with no reference and no points, so ONLY the network sources answer. */
+FGuideAnchor BareAnchor(const FVector2D& Origin)
+{
+	FGuideAnchor Anchor;
+	Anchor.Origin = Origin;
+	return Anchor;
+}
+
+/**
+ * A runway strip. NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a
+ * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
+ * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
+ *
+ * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
+ * anything under it, so a test strip either lowers the bar or is half a kilometre long.
+ * MeshFreshnessTest does exactly this, for exactly this reason.
+ */
+bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
+{
+	// A NODE FIRST, PURELY TO BRING THE NETWORK INTO BEING. The facade creates URoadNetwork
+	// lazily inside PlaceNode and PlaceRunway does NOT - so a test whose first call is
+	// PlaceRunway leaves Actor->Network null, and dereferencing it reads offset 0x60 off a
+	// null pointer. That is not hypothetical: it crashed this very test, and a crash hides
+	// its cause where a failure would have named it. MeshFreshnessTest places a node first
+	// for the same reason and says so.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+
+	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Profile->bContinuousThroughJunctions = true;
+
+	// Defaults to 50000 uu, and PlaceRunway refuses anything under it.
+	Actor->MinimumRunwayLength = 100.0;
+	return Actor->PlaceRunway(From, To, Profile);
+}
+
+/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
+TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
+	const URoadNetwork& Network, const FGuideAnchor& Anchor)
+{
+	TArray<SnapGuide::FCandidate> Out;
+	Source.Propose(Network, Anchor, Out);
+	return Out;
+}
 }

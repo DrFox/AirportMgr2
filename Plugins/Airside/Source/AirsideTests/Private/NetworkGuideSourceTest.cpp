@@ -24,49 +24,6 @@ namespace
 		Target->ConnectNodes(A, B, Kind, INDEX_NONE);
 	}
 
-	/** An anchor with no reference and no points, so ONLY the network sources answer. */
-	FGuideAnchor BareAnchor(const FVector2D& Origin)
-	{
-		FGuideAnchor Anchor;
-		Anchor.Origin = Origin;
-		return Anchor;
-	}
-
-	/**
-	 * A runway strip. NOT ConnectNodes: ERoadKind has only Taxiway and ServiceRoad, because a
-	 * runway is not a road kind - it is a segment placed through PlaceRunway with a runway
-	 * profile, which is what URoadNetwork::IsRunwaySegment then recognises.
-	 *
-	 * MinimumRunwayLength is dropped first: it defaults to 50000 uu and PlaceRunway refuses
-	 * anything under it, so a test strip either lowers the bar or is half a kilometre long.
-	 * MeshFreshnessTest does exactly this, for exactly this reason.
-	 */
-	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To)
-	{
-		// A NODE FIRST, PURELY TO BRING THE NETWORK INTO BEING. The facade creates URoadNetwork
-		// lazily inside PlaceNode and PlaceRunway does NOT - so a test whose first call is
-		// PlaceRunway leaves Actor->Network null, and dereferencing it reads offset 0x60 off a
-		// null pointer. That is not hypothetical: it crashed this very test, and a crash hides
-		// its cause where a failure would have named it. MeshFreshnessTest places a node first
-		// for the same reason and says so.
-		Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
-
-		URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
-		Profile->bContinuousThroughJunctions = true;
-
-		// Defaults to 50000 uu, and PlaceRunway refuses anything under it.
-		Actor->MinimumRunwayLength = 100.0;
-		return Actor->PlaceRunway(From, To, Profile);
-	}
-
-	/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
-	TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
-		const URoadNetwork& Network, const FGuideAnchor& Anchor)
-	{
-		TArray<SnapGuide::FCandidate> Out;
-		Source.Propose(Network, Anchor, Out);
-		return Out;
-	}
 }
 
 /**
@@ -91,9 +48,9 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 	Lay(Actor, FVector2D(50000.0, -10000.0), FVector2D(50000.0, 10000.0), ERoadKind::Taxiway);
 
 	const FParallelGuideSource Source;
-	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, Anchor);
+		TestGuide::ProposedBy(Source, *Actor->Network, Anchor);
 
 	if (!TestEqual(TEXT("the nearest road proposes its direction and its perpendicular"),
 		Candidates.Num(), 2))
@@ -122,7 +79,7 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 	// CONTROL LEG: the reach is real. Drag beyond it and the near road stops answering, so
 	// the assertions above are measuring the search and not merely the first segment laid.
 	const TArray<SnapGuide::FCandidate> FarAway =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 30000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 30000.0)));
 	TestEqual(TEXT("a drag beyond the search reach gets nothing from this source"),
 		FarAway.Num(), 0);
 
@@ -180,7 +137,7 @@ bool FCollinearGuideIsNotParallelTest::RunTest(const FString& Parameters)
 
 	const FCollinearGuideSource Source;
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(7000.0, 0.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(7000.0, 0.0)));
 
 	if (!TestEqual(TEXT("the one road in reach proposes its own line"), Candidates.Num(), 1))
 	{
@@ -233,7 +190,7 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	// own header comment), so this strip is 18/36 and NOT 09/27 - the first draft of this test
 	// asserted 09/27 and would have failed against a correct source.
 	if (!TestTrue(TEXT("the runway is placed"),
-		LayRunway(Actor, FVector2D(-40000.0, 0.0), FVector2D(40000.0, 0.0))))
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 0.0), FVector2D(40000.0, 0.0))))
 	{
 		return false;
 	}
@@ -249,7 +206,7 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 
 	// FAR BEYOND SearchRadiusUu - 500 m out, where every other network source has given up.
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
 
 	if (!TestEqual(TEXT("the runway proposes its heading and its perpendicular"),
 		Candidates.Num(), 2))
@@ -272,7 +229,7 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	// or this test would pass on a source that proposed every segment on the field.
 	Lay(Actor, FVector2D(-10000.0, 20000.0), FVector2D(10000.0, 20000.0), ERoadKind::Taxiway);
 	const TArray<SnapGuide::FCandidate> Again =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 50000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
 	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 2);
 
 	return true;
@@ -306,7 +263,7 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 
 	const FAlignedGuideSource Source;
 	const TArray<SnapGuide::FCandidate> Candidates =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(2000.0, 2000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(2000.0, 2000.0)));
 
 	if (!TestEqual(TEXT("the stand proposes its facing and its perpendicular"),
 		Candidates.Num(), 2))
@@ -335,7 +292,7 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 
 	// CONTROL LEG: the reach applies here too, so this source cannot quietly become global.
 	const TArray<SnapGuide::FCandidate> FarAway =
-		ProposedBy(Source, *Actor->Network, BareAnchor(FVector2D(0.0, 40000.0)));
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 40000.0)));
 	TestEqual(TEXT("a stand beyond the search reach proposes nothing"), FarAway.Num(), 0);
 
 	return true;
@@ -362,13 +319,13 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// offering one direction, every one of them in tolerance at once.
 	Lay(Actor, FVector2D(-10000.0, 0.0), FVector2D(10000.0, 0.0), ERoadKind::Taxiway);
 	if (!TestTrue(TEXT("the runway is placed"),
-		LayRunway(Actor, FVector2D(-40000.0, 8000.0), FVector2D(40000.0, 8000.0))))
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 8000.0), FVector2D(40000.0, 8000.0))))
 	{
 		return false;
 	}
 
 	const FSnapGuideChain Chain;
-	const FGuideAnchor Anchor = BareAnchor(FVector2D(0.0, 2000.0));
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
 
 	// EVERY SOURCE THIS TEST IS ABOUT, STATED RATHER THAN INHERITED. Since stage 3 the chain
 	// skips whatever is switched off, and Runway defaults OFF - a test about PRIORITY that took
@@ -392,7 +349,7 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// CONTROL LEG: the runway was a live competitor, not one the reach quietly excluded. Take
 	// the taxiway out of range and the runway takes the slot - which also pins that Runway is
 	// exempt from SearchRadiusUu, since the drag is 80 m from it.
-	const FGuideAnchor FarFromTheRoad = BareAnchor(FVector2D(0.0, 30000.0));
+	const FGuideAnchor FarFromTheRoad = TestGuide::BareAnchor(FVector2D(0.0, 30000.0));
 	const SnapGuide::FResult WithoutTheTaxiway = Chain.Resolve(
 		*Actor->Network, FarFromTheRoad, FVector2D(3000.0, 30100.0), SnapGuide::FResult(), Live);
 	if (!TestTrue(TEXT("the runway still answers from across the field"),

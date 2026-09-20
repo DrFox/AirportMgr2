@@ -85,13 +85,18 @@ struct AIRSIDE_API IGuideSource
 		TArray<SnapGuide::FCandidate>& Out) const = 0;
 
 	/**
-	 * Which ESource this link proposes. The toggle asks, and the chain skips it when off.
+	 * Which ERelation this link proposes. The toggle asks, and the chain skips it when off.
 	 *
 	 * PURE VIRTUAL rather than a field, so a source cannot be written without answering it.
-	 * Every source proposes candidates of exactly ONE ESource today; if one ever proposes two,
-	 * this is the assumption to revisit rather than quietly widen.
+	 *
+	 * A RELATION, NOT A CELL - the assumption the old comment here invited a reader to revisit,
+	 * revisited on 2026-09-20. Several sources share one relation: Parallel is proposed by the
+	 * road, runway, stand and world sources alike. And one source may span several REFERENCES -
+	 * the segment walkers tag Road or Runway per segment - which is why the reference is tagged
+	 * per candidate rather than declared here. The chain skips a source whose relation is off;
+	 * a candidate whose reference is off is dropped as it is gathered.
 	 */
-	virtual SnapGuide::ESource Kind() const = 0;
+	virtual SnapGuide::ERelation Relation() const = 0;
 };
 
 /**
@@ -106,7 +111,7 @@ struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Extending; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Extending; }
 };
 
 /**
@@ -121,7 +126,7 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::World; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -139,7 +144,7 @@ struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::PointAlign; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
 };
 
 /**
@@ -157,7 +162,7 @@ struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Parallel; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -178,7 +183,7 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Collinear; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
 };
 
 /**
@@ -197,7 +202,7 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Runway; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -219,7 +224,7 @@ struct AIRSIDE_API FOffsetGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Offset; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::MatchingGap; }
 };
 
 /** What to call a placed entity where the player reads it. Falls back to the asset name. */
@@ -247,7 +252,7 @@ struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		TArray<SnapGuide::FCandidate>& Out) const override;
 
-	virtual SnapGuide::ESource Kind() const override { return SnapGuide::ESource::Aligned; }
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
 
 /**
@@ -257,8 +262,9 @@ struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
  * in stage 2 is a new link, not an edit to a widening conditional. It differs in the one way
  * that matters - see IGuideSource on why nothing claims.
  *
- * THE ORDER SOURCES ARE ADDED IN DOES NOT DECIDE TIES. SnapGuide::ESource does, inside the
- * arbiter. This chain's order is only the order they are asked, which is unobservable.
+ * THE ORDER SOURCES ARE ADDED IN DOES NOT DECIDE TIES. The (ERelation, EReference) pair does,
+ * inside the arbiter. This chain's order is only the order they are asked, which is
+ * unobservable.
  */
 class AIRSIDE_API FSnapGuideChain
 {

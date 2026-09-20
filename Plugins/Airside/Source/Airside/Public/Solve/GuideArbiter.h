@@ -13,38 +13,6 @@
 namespace SnapGuide
 {
 	/**
-	 * The sources, in priority order - most specific to what the player is doing, first.
-	 *
-	 * THE ORDER IS THE TIEBREAK AND NOTHING ELSE: a lower source still wins outright when it
-	 * is the only one in tolerance. What you are extending is what you are thinking about;
-	 * the world grid is what you fall back on when nothing else applies.
-	 *
-	 * ALL SEVEN ARE LISTED although stage 1 fills only Extending and World, because the
-	 * ORDER is the contract - adding Parallel in stage 2 must not renumber what Runway means.
-	 *
-	 * A PLAIN ENUM, not a UENUM: UHT cannot see an enum without a .generated.h, and a Solve/
-	 * header may not have one. Stage 3's toggles need reflection and will wrap it there.
-	 */
-	enum class ESource : uint8
-	{
-		Extending,
-
-		/**
-		 * "You are level with THAT." Added 2026-09-17; ranks second because a point in the
-		 * gesture being drawn right now is as specific as the edge being extended, and both
-		 * beat anything the network offers.
-		 */
-		PointAlign,
-
-		Aligned,
-		Collinear,
-		Parallel,
-		Runway,
-		World,
-		Offset
-	};
-
-	/**
 	 * WHAT a guide means. Declaration order is the tiebreak WITHIN a fit kind - see Arbitrate.
 	 *
 	 * A PLAIN ENUM, not a UENUM, for the reason ESource carried before it: UHT cannot see an
