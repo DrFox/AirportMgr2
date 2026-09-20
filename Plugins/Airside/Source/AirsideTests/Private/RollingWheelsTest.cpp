@@ -114,4 +114,58 @@ bool FRollingWheelsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A PHASE THAT MOVES BACKWARDS REPORTS A NEGATIVE GROUND SPEED.
+ *
+ * REPORTED FROM PLAY, 2026-09-20: "in reverse the wheels animate as if the vehicle is still
+ * going forward". The fuel truck is where it shows, because it reverses in plain view on
+ * every service cycle, but a pushback has the same defect and always did - DescribeMotion's
+ * own comment on the Manoeuvring case admitted it in writing: "the wheels turn under it -
+ * backwards, but the view has no signed wheel rate and a tyre rolling the other way at
+ * 1.5 m/s reads the same".
+ *
+ * IT IS THE VIEW'S ONLY SOURCE OF DIRECTION. UAirsideAgentAnim::WheelStepDegrees is
+ * RadiansToDegrees(GroundSpeed / Radius) and reads nothing else, so an unsigned speed can
+ * only ever spin a wheel forwards. Making the figure signed is what the sibling test in
+ * Airside.Present.WheelsRollBackwardsAtNegativeSpeed then relies on.
+ *
+ * THE SIGN LIVES HERE, in the one place that knows the phase, rather than in FReverseRun and
+ * FPushbackRun separately. Both of those keep a magnitude, as FRouteFollower does, so there
+ * is one answer to "which way is this going" and not three that must agree.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBackwardsPhasesReportNegativeSpeedTest,
+	"Airside.Model.BackwardsPhasesReportNegativeGroundSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBackwardsPhasesReportNegativeSpeedTest::RunTest(const FString& Parameters)
+{
+	// DescribeMotion is a pure function of the agent's own state, so the phase and the one
+	// field that phase reads are the whole fixture - no route, no world, no plan.
+	FRoadAgent Agent;
+	Agent.Id = 1;
+
+	Agent.Phase = EAgentPhase::Reversing;
+	Agent.Reverse.Speed = 100.0;
+	const FAgentMotion Backing = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
+	TestEqual(TEXT("a reversing vehicle reports its speed as negative, so its wheels roll back"),
+		Backing.GroundSpeed, -100.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	Agent.Phase = EAgentPhase::Manoeuvring;
+	Agent.Pushback.Speed = 150.0;
+	const FAgentMotion Pushed = Agent.DescribeMotion(FVector2D::ZeroVector, 0.0);
+	TestEqual(TEXT("and so does an aircraft being pushed back off a stand"),
+		Pushed.GroundSpeed, -150.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	// FORWARD IS UNTOUCHED, which is the half that stops this being a sign flip rather than a
+	// fix: every other phase still reports a positive figure and the inspector still reads it.
+	Agent.Phase = EAgentPhase::Taxiing;
+	Agent.Follower.Speed = 400.0;
+	TestEqual(TEXT("a taxiing vehicle is still positive"),
+		Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).GroundSpeed, 400.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+	return true;
+}
+
 #endif

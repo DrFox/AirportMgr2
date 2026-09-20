@@ -249,4 +249,89 @@ bool FEveryGroundVehicleBacksIntoItsBayWithoutCrabbingTest::RunTest(const FStrin
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * FReverseRun REPORTS WHAT IT TRAVELLED, NOT WHAT IT WAS ASKED FOR.
+ *
+ * REPORTED FROM PLAY, 2026-09-20: the fuel truck's wheels "seem to rotate independent of
+ * speed, they just spin". They did. FRoadAgent::DescribeMotion set GroundSpeed from
+ * ReverseSpeed, which Start writes once from FGroundTrafficRules::ServiceReverseSpeed and
+ * nothing rewrites - so the view was handed the AUTHORED CAP every frame, including frames
+ * where arbitration held the vehicle at a standstill and it moved nothing at all.
+ *
+ * THE DISTINCTION IS ALREADY DRAWN, one struct over. FRouteFollower::Speed's header says
+ * "Advance rewrites this every frame ... What it was ASKED for is Ground.Taxi.SpeedCap, which
+ * does not change", and FPushbackRun::Speed says "uu/s right now". Reversing was the one
+ * moving phase reporting the ask, so this adds the state beside the cap rather than making
+ * the cap mutable: Start still needs the figure it was given, and a held vehicle must not
+ * forget how fast it intends to back up once arbitration lets it go.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReverseSpeedIsWhatItAchievedTest,
+	"Airside.Model.ReverseSpeedIsWhatItAchieved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
+{
+	using namespace ReverseFixture;
+
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	const double Limit = Truck.TightestReversibleRadius();
+
+	FReverseRun Run;
+	if (!TestTrue(TEXT("the manoeuvre arms on an arc this vehicle can hold"),
+		Run.Start(ArcPlan(Limit * 1.5), Truck, /*InReverseSpeed=*/100.0)))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("it starts from rest, having travelled nothing yet"), Run.Speed, 0.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	FVector2D Position = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	constexpr double Dt = 1.0 / 60.0;
+
+	// RUNNING FREELY: StopWithin is generous, so the step is ReverseSpeed * Dt and the
+	// realised speed is the authored one. This half would pass on the old code too.
+	Run.Advance(Dt, /*StopWithin=*/1.0e6, Position, Heading);
+	TestTrue(*FString::Printf(TEXT("running freely it achieves its reverse speed (%.2f uu/s)"),
+		Run.Speed), FMath::IsNearlyEqual(Run.Speed, 100.0, 0.01));
+
+	// HELD BY ARBITRATION: StopWithin is zero, so Advance takes no step at all. THE ASSERTION
+	// THE BUG WOULD FAIL - the old figure was ReverseSpeed, a constant, and a truck standing
+	// still reported a full 1 m/s with its wheels spinning to match.
+	const double WasTravelled = Run.Travelled;
+	Run.Advance(Dt, /*StopWithin=*/0.0, Position, Heading);
+	TestEqual(TEXT("held by arbitration it travels nothing"), Run.Travelled, WasTravelled,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+	TestEqual(TEXT("and reports no speed, so its wheels stand still with it"), Run.Speed, 0.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	// AND THE CAP SURVIVES THE HOLD, which is why Speed is a second field and not a mutable
+	// ReverseSpeed: released, the vehicle backs up at the speed it was armed with.
+	TestTrue(TEXT("the authored reverse speed is unchanged by the hold"),
+		FMath::IsNearlyEqual(Run.ReverseSpeed, 100.0, UE_DOUBLE_KINDA_SMALL_NUMBER));
+	Run.Advance(Dt, /*StopWithin=*/1.0e6, Position, Heading);
+	TestTrue(TEXT("and it resumes at that speed"),
+		FMath::IsNearlyEqual(Run.Speed, 100.0, 0.01));
+
+	// THE LAST PARTIAL STEP. Travelled is clamped to Plan.Length, so the frame that arrives
+	// covers less ground than a full one - and must say so rather than claiming full speed
+	// into a vehicle that has stopped.
+	FReverseRun Ending;
+	TestTrue(TEXT("a second run arms"),
+		Ending.Start(ArcPlan(Limit * 1.5), Truck, /*InReverseSpeed=*/100.0));
+	int32 Frames = 0;
+	while (Frames < 100000 && Ending.Advance(Dt, 1.0e6, Position, Heading))
+	{
+		++Frames;
+	}
+	TestTrue(TEXT("the manoeuvre finished within the frame budget"), Frames < 100000);
+	TestTrue(*FString::Printf(
+		TEXT("the arriving frame reports the part-step it actually took (%.3f uu/s)"),
+		Ending.Speed), Ending.Speed >= 0.0 && Ending.Speed <= 100.0 + 0.01);
+	return true;
+}
+
 #endif

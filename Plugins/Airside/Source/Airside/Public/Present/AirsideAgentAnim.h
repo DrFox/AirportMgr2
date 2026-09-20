@@ -89,7 +89,14 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float PropAngleDegrees = 0.0f;
 
-	/** Accumulated wheel rotation, degrees. Apply to all three wheel bones. */
+	/**
+	 * Accumulated wheel rotation, degrees. Apply to all three wheel bones.
+	 *
+	 * -360..360, NOT 0..360, and that is deliberate rather than sloppy. The step went signed
+	 * on 2026-09-20 so a reversing vehicle rolls its wheels backwards, and Fmod keeps the sign
+	 * of what it is given - so an aeroplane that has only ever been pushed back sits at a
+	 * negative angle. A rotator does not care: -10 and 350 are the same bone.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Airside")
 	float WheelAngleDegrees = 0.0f;
 

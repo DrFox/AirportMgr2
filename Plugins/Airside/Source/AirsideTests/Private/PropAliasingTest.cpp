@@ -222,4 +222,75 @@ bool FWheelSpinDownTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * A WHEEL ROLLS BACKWARDS WHEN THE GROUND SPEED IS NEGATIVE.
+ *
+ * REPORTED FROM PLAY, 2026-09-20: "in reverse the wheels animate as if the vehicle is still
+ * going forward". The model half is Airside.Model.BackwardsPhasesReportNegativeGroundSpeed -
+ * a reversing agent now reports a negative figure. This is the view half, and it is a
+ * separate test because the two were separately capable of being wrong: the arithmetic here
+ * (v = wr) carried the sign through on the ground all along, and the SPIN-DOWN did not.
+ *
+ * THE DECAY WAS THE TRAP. It read FMath::Max(Rate - Rate/tau * dt, 0), which for a negative
+ * rate is not a decay at all - Max against zero returns zero on the first airborne frame, so
+ * the very snap the spin-down exists to prevent came back for anything rolling backwards.
+ * An aircraft does not reverse into the air, so nothing in play would have shown it; it would
+ * have waited for the first vehicle that did.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FWheelsRollBackwardsTest,
+	"Airside.Present.WheelsRollBackwardsAtNegativeSpeed",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWheelsRollBackwardsTest::RunTest(const FString& Parameters)
+{
+	const float Radius = 21.0f;
+	const float SpinDown = 2.0f;
+	const float Dt = 1.0f / 60.0f;
+
+	// ON THE GROUND, BACKING UP: v = wr with the sign kept, so the step is negative and the
+	// bone turns the other way. THE ASSERTION THE BUG WOULD FAIL is upstream of here - this
+	// pins that the view does not quietly discard a sign the model took trouble to send.
+	float Rate = 0.0f;
+	const float Step = UAirsideAgentAnim::WheelStepDegrees(-100.0f, Radius, false, Dt, SpinDown, Rate);
+	TestTrue(*FString::Printf(TEXT("a backing vehicle turns its wheels backwards (%.3f deg)"), Step),
+		Step < 0.0f);
+	TestTrue(*FString::Printf(TEXT("at v/r in the other direction (%.1f deg/s)"), Rate),
+		FMath::IsNearlyEqual(Rate, FMath::RadiansToDegrees(-100.0f / Radius), 0.1f));
+
+	// AND IT IS SYMMETRIC: the same speed forwards turns the same amount the other way. A fix
+	// that clamped instead of signing would pass the test above and fail this one.
+	float Forward = 0.0f;
+	const float ForwardStep =
+		UAirsideAgentAnim::WheelStepDegrees(100.0f, Radius, false, Dt, SpinDown, Forward);
+	TestTrue(TEXT("and forwards at the same speed is the same step mirrored"),
+		FMath::IsNearlyEqual(ForwardStep, -Step, KINDA_SMALL_NUMBER));
+
+	// THE SPIN-DOWN, FROM A NEGATIVE RATE. It must ease toward zero in MAGNITUDE and keep its
+	// sign on the way - not jump to zero, and not cross through and start rolling forwards.
+	float Decaying = FMath::RadiansToDegrees(-100.0f / Radius);
+	const float Started = Decaying;
+	const float FirstAirborne =
+		UAirsideAgentAnim::WheelStepDegrees(0.0f, Radius, true, Dt, SpinDown, Decaying);
+	TestTrue(*FString::Printf(
+		TEXT("the first airborne frame still turns it backwards rather than stopping dead (%.4f deg)"),
+		FirstAirborne), FirstAirborne < 0.0f);
+	TestTrue(*FString::Printf(TEXT("and eases toward zero (%.2f from %.2f)"), Decaying, Started),
+		Decaying > Started && Decaying < 0.0f);
+
+	for (int32 At = 0; At < 600; ++At)   // 10 s at 60 fps, five time constants
+	{
+		UAirsideAgentAnim::WheelStepDegrees(0.0f, Radius, true, Dt, SpinDown, Decaying);
+		if (!TestTrue(TEXT("it never crosses zero and starts rolling the wrong way"),
+			Decaying <= 0.0f))
+		{
+			return false;
+		}
+	}
+	TestTrue(*FString::Printf(TEXT("and essentially stops (%.4f, was %.2f)"), Decaying, Started),
+		FMath::Abs(Decaying) < FMath::Abs(Started) * 0.05f);
+	return true;
+}
+
 #endif

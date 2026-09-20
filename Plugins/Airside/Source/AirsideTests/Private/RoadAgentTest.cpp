@@ -524,7 +524,12 @@ bool FAgentPushbackHandoverTest::RunTest(const FString& Parameters)
 		// THE WHEELS TURN UNDER A PUSH. Recorded rather than asserted per frame so the
 		// failure names a number: a zero here is DescribeMotion missing the Manoeuvring arm,
 		// which is the "stopped wheels" defect its own comment warns about.
-		SpeedDuringPush = FMath::Max(SpeedDuringPush, Motion.GroundSpeed);
+		//
+		// ABS, because a push reports a NEGATIVE ground speed since 2026-09-20 - it goes
+		// backwards, and the view needs the sign to roll the wheels the right way. What this
+		// asks is "did they turn at all", not "which way", and Airside.Model.
+		// BackwardsPhasesReportNegativeGroundSpeed is what pins the direction.
+		SpeedDuringPush = FMath::Max(SpeedDuringPush, FMath::Abs(Motion.GroundSpeed));
 
 		bEverAtOrigin = bEverAtOrigin || Motion.Position.SizeSquared() < 1.0;
 
