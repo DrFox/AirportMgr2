@@ -348,7 +348,7 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 }
 
 PlotYard::FReservation FPlotPlaceTool::ReservationFor(
-	TArrayView<const FVector2D> Outline) const
+	const FToolContext& Context, TArrayView<const FVector2D> Outline) const
 {
 	if (Outline.Num() < 4)
 	{
@@ -371,11 +371,20 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	Site.Gate = Pose;
 	Site.Seed = DepotYardSeed(Pose);
 
-	// THE TOOL KNOWS WHAT IT IS PLACING, not which asset will be placed, so it maps its own
-	// kind. One line, and the alternative - reaching into the facade for the definition
-	// mid-drag - would make the preview depend on state the player has not committed to.
-	const EPlotLayout Layout = Kind == EPlaceableEntity::FuelDepot
-		? EPlotLayout::FuelYardBands : EPlotLayout::Scatter;
+	// FROM THE DEFINITION THIS TOOL IS ABOUT TO PLACE, which is the same object the presenter
+	// reads off the built entity.
+	//
+	// IT USED TO MAP ITS OWN Kind, and that second source of truth shipped: DA_FuelDepot was
+	// authored before EPlotLayout existed, so it carried the Scatter default while this line
+	// said FuelYardBands. The player dragged out a banded ghost and got a scattered depot -
+	// the exact preview-versus-built split the reservation design exists to prevent.
+	//
+	// A DEFINITION THE TARGET CANNOT RESOLVE falls back to the scatter, which is what an
+	// unauthored plot type would have drawn anyway.
+	const UEntityDefinition* Definition =
+		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
+	const EPlotLayout Layout =
+		Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
 
 	return PlotLayoutFor(Layout)->Solve(Site, Specs);
 }
@@ -686,7 +695,7 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the
 	// boxes Build puts down, not an impression of them.
-	const PlotYard::FReservation Reservation = ReservationFor(Shown);
+	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
 	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
 	TArray<FVector2D> StandOutline;
@@ -748,7 +757,7 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
 	// the boxes on screen and the counts on the bar are one computation, not two that agree.
-	const PlotYard::FReservation Reservation = ReservationFor(Shown);
+	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
 	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
 	// A LINE PER KIT, because "Room for 4" could only ever mean "4 of the sample footprint" -

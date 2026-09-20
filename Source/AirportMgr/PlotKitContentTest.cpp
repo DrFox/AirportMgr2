@@ -3,11 +3,58 @@
 #include "Content/AirsideContent.h"
 #include "CoreMinimal.h"
 #include "Engine/StaticMesh.h"
+#include "Entities/EntityDefinition.h"
 #include "Entities/PlotModuleKit.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
+
+/**
+ * The shipped fuel depot matches the code that is supposed to author it.
+ *
+ * DA_FuelDepot IS BUILT BY BuildFuelDepot, through the commandlet, so the asset on disk and
+ * MakeFuelDepotTransient should be the same object twice. They drift the moment somebody adds
+ * a field to the definition and does not re-run the authoring script - and the asset keeps
+ * whatever the property DEFAULTS to, silently.
+ *
+ * THAT IS NOT HYPOTHETICAL. EPlotLayout arrived on 2026-09-20 defaulting to Scatter so an
+ * un-migrated definition would keep its old behaviour. DA_FuelDepot was never re-authored, so
+ * the tool previewed a banded yard from its own hardcoded kind while the BUILT depot read
+ * Scatter off the asset and scattered - the exact preview-versus-built split the whole
+ * reservation design exists to prevent, shipped by the very default meant to be safe.
+ *
+ * IT COMPARES THE WHOLE FIELD, not just the layout: a test that named the field that bit us
+ * would catch that field and no other, which is the failure AircraftLookTest exists for.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelDepotAssetMatchesItsBuilderTest,
+	"AirportMgr.Content.FuelDepotAssetMatchesItsBuilder",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelDepotAssetMatchesItsBuilderTest::RunTest(const FString& Parameters)
+{
+	const UEntityDefinition* Shipped = Cast<UEntityDefinition>(
+		StaticLoadObject(UEntityDefinition::StaticClass(), nullptr,
+			TEXT("/Game/Entities/DA_FuelDepot")));
+	if (!TestNotNull(TEXT("DA_FuelDepot is on disk"), Shipped)) { return false; }
+
+	const UEntityDefinition* Fresh = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("and BuildFuelDepot still builds one"), Fresh)) { return false; }
+
+	TestEqual(TEXT("the shipped depot lays out the way BuildFuelDepot says"),
+		static_cast<int32>(Shipped->Layout), static_cast<int32>(Fresh->Layout));
+	TestEqual(TEXT("and takes the same pose role"),
+		static_cast<int32>(Shipped->PoseRole), static_cast<int32>(Fresh->PoseRole));
+	TestEqual(TEXT("and the same footprint"),
+		Shipped->FootprintExtent, Fresh->FootprintExtent);
+	TestEqual(TEXT("and the same anchor count"),
+		Shipped->Anchors.Num(), Fresh->Anchors.Num());
+	TestEqual(TEXT("and the same service bay count"),
+		Shipped->ServiceBays.Num(), Fresh->ServiceBays.Num());
+
+	return true;
+}
 
 /**
  * Every module has a kit, no two kits share a mesh, and a baked kit's variants are dense.

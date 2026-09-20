@@ -131,7 +131,8 @@ private:
 	 * and because DepotYardSeed keys off the pose the facade will store, they are also the
 	 * boxes Build actually puts down rather than an impression of them.
 	 */
-	PlotYard::FReservation ReservationFor(TArrayView<const FVector2D> Outline) const;
+	PlotYard::FReservation ReservationFor(const FToolContext& Context,
+		TArrayView<const FVector2D> Outline) const;
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
