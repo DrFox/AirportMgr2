@@ -1432,6 +1432,8 @@ The plan's tests prove the arithmetic. They cannot prove the aeroplane looks rig
 
 The nose wheel will not YET turn: the AnimGraph node for `nosewheel_steer` is hand-authored work that UE exposes no Python for. After Task 6 lands, `build_plane2_anim.py` prints the row for it, and the node is Rotation = **ADD TO EXISTING**, Bone Space, Translation and Scale on **IGNORE**.
 
+> **Corrected 2026-09-20.** "UE exposes no Python for" it was wrong. MCP's `BlueprintTools` creates the node and `ObjectTools` sets the bone and all four modes; verified end to end that day. See `docs/2026-09-20-animgraph-authoring.md`. The node's settings above still stand - they are what to write, not what to click.
+
 ## What this plan does NOT do
 
 - **Swept-path claims.** The mains cutting inside a corner is now visible and nothing reserves pavement for it. Task 5 restores the claim window's documented meaning; it does not make the window follow the curve.

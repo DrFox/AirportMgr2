@@ -8,13 +8,23 @@ land in Saved/Logs/AirportMgr.log, not on stdout - the commandlet's stdout carri
 LogInit and errors, so a run that looks silent has usually worked.
 
 THIS CREATES THE ASSET AND NOT ITS ANIMGRAPH, the same wall build_plane2_anim.py and
-build_fueltruck_anim.py both hit: UE 5.8 exposes no Python API for creating a node in a
-Blueprint graph or connecting two pins. BlueprintEditorLibrary can list graphs, find pins,
-add function graphs and add overrides, and there it stops. So the parts that are easy to get
-WRONG and tedious to redo are done here - the parent class, on which an Anim Blueprint
-compiles happily while exposing none of the values the graph needs, and the target skeleton
-- and the Transform (Modify) Bone nodes are a few minutes in the editor against the bone
-names this script prints.
+build_fueltruck_anim.py both hit: the `unreal` Python module exposes no API for creating a
+node in a Blueprint graph or connecting two pins. BlueprintEditorLibrary can list graphs,
+find pins, add function graphs and add overrides, and there it stops. So the parts that are
+easy to get WRONG and tedious to redo are done here - the parent class, on which an Anim
+Blueprint compiles happily while exposing none of the values the graph needs, and the target
+skeleton - and the Transform (Modify) Bone nodes are a few minutes in the editor against the
+bone names this script prints.
+
+CORRECTED 2026-09-20: "no Python API" was true of this script's `unreal` module and FALSE of
+the editor as a whole. 5.8's UBlueprintGraphEditor drives AnimGraph nodes, and Epic's MCP
+EditorToolset exposes it - create_node, connect_pins, ObjectTools.set_properties for
+BoneToModify and the four modes, compile_blueprint, all verified against an AnimGraph on
+2026-09-20. A whole graph wires in one ProgrammaticToolset call. That path needs the editor
+RUNNING and this one needs it closed, which is a RESTART between them and not a wall - the
+whole pipeline ran unattended on 2026-09-20 and its graph diffed IDENTICAL to this asset's
+hand-wired one. State machines remain hand work; see docs/2026-09-20-animgraph-authoring.md
+for what is and is not reachable, and for the wiring script.
 
 THIS IS THE THIRD COPY OF THAT MECHANISM AND THE SECOND COPY OF THE BONE PLAN, which is
 worth saying plainly rather than discovering. build_plane2_anim.py has it, and
@@ -149,13 +159,20 @@ def fail(msg):
 def report_plan():
     """The editor work this script cannot do, as a list rather than a memory of one."""
     say("")
-    say("STILL TO DO BY HAND - UE 5.8 exposes no Python API for graph nodes:")
+    say("STILL TO DO - this commandlet's `unreal` module cannot make graph nodes.")
+    say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
+    say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
     for bone, variable in bone_plan():
         say("    %-16s  Rotation driven by %s" % (bone, variable))
     say("")
-    say("  WIRE nosewheel_steer BEFORE nosewheel, never the two onto one bone: the steer")
-    say("  bone is the nose wheel's PARENT, so the roll axis has to turn with the steering.")
+    say("  TWO BONES, NEVER BOTH ONTO ONE: the steer bone is the nose wheel's PARENT.")
+    say("  ORDER IS DISPUTED AND THE ASSETS WIN. This line read 'wire nosewheel_steer")
+    say("  BEFORE nosewheel' until 2026-09-20, when a graph authored to it diffed against")
+    say("  ABP_Plane1 and ABP_Plane2 and found BOTH ship the reverse - steer LAST. The")
+    say("  engine backs the assets: FCSPose::SafeSetCSBoneTransforms refreshes children")
+    say("  already in component space, so steering the parent last carries the rolled")
+    say("  wheel with it. Wire steer AFTER nosewheel unless someone rules otherwise.")
     say("")
     say("  ON EVERY ONE OF THOSE NODES:")
     say("    Translation Mode = IGNORE            <- leave it alone")

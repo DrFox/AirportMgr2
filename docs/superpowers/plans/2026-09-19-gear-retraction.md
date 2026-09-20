@@ -1254,7 +1254,7 @@ The models repo is separate; commit `build_export.py` there with the same messag
 
 ## Out of scope, and deliberately
 
-- **`ABP_Plane4` and its animgraph.** UE 5.8 exposes no Python for creating or connecting Blueprint graph nodes, so the Transform (Modify) Bone nodes are a manual editor job against the bone names Task 6 prints. Nothing in this plan needs them to be tested.
+- **`ABP_Plane4` and its animgraph.** UE 5.8 exposes no Python for creating or connecting Blueprint graph nodes, so the Transform (Modify) Bone nodes are a manual editor job against the bone names Task 6 prints. Nothing in this plan needs them to be tested. **Corrected 2026-09-20:** the engine does expose it, through `UBlueprintGraphEditor` and MCP - so this is now scriptable work, not a manual job. `docs/2026-09-20-animgraph-authoring.md`.
 - **`DA_Aircraft_Plane4`.** `Build737` and `DA_Aircraft_B738` already exist and are where the 737's figures live; wiring plane4's mesh to that type is separate work.
 - **Gear as drag.** Nothing in the climb or approach reads `GearDownFraction`.
 - **Reversing a cycle mid-travel.** Commented at the site in Task 2.
