@@ -14,7 +14,7 @@ namespace
 {
 	/** Only AngledFrom, and only the column named. Everything else is silenced so a winner can
 	 *  have come from nowhere but the source under test. */
-	FSnapGuideSettings OnlyAngled(bool bRoad, bool bRunway)
+	FSnapGuideSettings OnlyAngled(bool bRoads, bool bRunway)
 	{
 		FSnapGuideSettings Settings;
 		Settings.bExtending = false;
@@ -23,7 +23,11 @@ namespace
 		Settings.bCollinear = false;
 		Settings.bAngledFrom = true;
 		Settings.bMatchingGap = false;
-		Settings.bRoad = bRoad;
+		// BOTH ROAD COLUMNS TOGETHER. The split on 2026-09-20 made "the road column" two;
+		// this helper still means "roads, or not", and a caller that wanted one without the
+		// other would be testing the toggle rather than the source.
+		Settings.bTaxiway = bRoads;
+		Settings.bServiceRoad = bRoads;
 		Settings.bRunway = bRunway;
 		Settings.bApron = false;
 		Settings.bStand = false;
@@ -79,7 +83,7 @@ bool FAngledGuideRadiatesFromEachEndTest::RunTest(const FString& Parameters)
 		static_cast<int32>(SnapGuide::ERelation::AngledFrom));
 	TestEqual(TEXT("against the road"),
 		static_cast<int32>(East45.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// PERPENDICULAR, NOT ANGULAR, and that is the whole of what "through the node" means: the
 	// guide is judged on where the cursor ended up, not on which way the drag set off.

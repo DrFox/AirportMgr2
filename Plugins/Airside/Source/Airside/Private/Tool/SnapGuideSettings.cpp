@@ -27,7 +27,8 @@ bool FSnapGuideSettings::IsReferenceOn(SnapGuide::EReference Reference) const
 	// button and an Extending button would switch off exactly the same behaviour - two
 	// controls for one thing. The Alt hold covers "not for this drag". See design section 7.
 	case SnapGuide::EReference::ThisGesture: return true;
-	case SnapGuide::EReference::Road:        return bRoad;
+	case SnapGuide::EReference::Taxiway:     return bTaxiway;
+	case SnapGuide::EReference::ServiceRoad: return bServiceRoad;
 	case SnapGuide::EReference::Runway:      return bRunway;
 	case SnapGuide::EReference::Apron:       return bApron;
 	case SnapGuide::EReference::Stand:       return bStand;
@@ -64,10 +65,11 @@ void FSnapGuideSettings::ToggleReference(SnapGuide::EReference Reference)
 	{
 	// ThisGesture has no flag and so cannot be toggled - see IsReferenceOn.
 	case SnapGuide::EReference::ThisGesture: return;
-	case SnapGuide::EReference::Road:        bRoad   = !bRoad;   return;
-	case SnapGuide::EReference::Runway:      bRunway = !bRunway; return;
-	case SnapGuide::EReference::Apron:       bApron  = !bApron;  return;
-	case SnapGuide::EReference::Stand:       bStand  = !bStand;  return;
-	case SnapGuide::EReference::World:       bWorld  = !bWorld;  return;
+	case SnapGuide::EReference::Taxiway:     bTaxiway     = !bTaxiway;     return;
+	case SnapGuide::EReference::ServiceRoad: bServiceRoad = !bServiceRoad; return;
+	case SnapGuide::EReference::Runway:      bRunway      = !bRunway;      return;
+	case SnapGuide::EReference::Apron:       bApron       = !bApron;       return;
+	case SnapGuide::EReference::Stand:       bStand       = !bStand;       return;
+	case SnapGuide::EReference::World:       bWorld       = !bWorld;       return;
 	}
 }

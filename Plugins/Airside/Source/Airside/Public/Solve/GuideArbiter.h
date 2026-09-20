@@ -58,7 +58,22 @@ namespace SnapGuide
 	enum class EReference : uint8
 	{
 		ThisGesture,
-		Road,
+
+		/**
+		 * TWO COLUMNS, NOT ONE "Road" - split on 2026-09-20, the day after the axes were.
+		 *
+		 * Nothing else in this codebase has ever called these one thing: two registry entries
+		 * under two keys (1 and 9), two cross-sections, two traversal classes, and
+		 * RoadNaming::Describe already put "the taxiway" or "the service road" in the LABEL.
+		 * Only the grid collapsed them - so a line reading "parallel to the service road"
+		 * appeared under a button marked Road, and no toggle could reach one without the other.
+		 *
+		 * TAXIWAY FIRST, matching ERoadKind and the keys. Declaration order breaks ties, and an
+		 * aircraft lane is the more central thing on an airfield than the van road beside it.
+		 */
+		Taxiway,
+		ServiceRoad,
+
 		Runway,
 		Apron,
 		Stand,
@@ -70,8 +85,8 @@ namespace SnapGuide
 	 *
 	 * THE ONE PLACE THE GRID IS WRITTEN DOWN. FSnapGuideSettings::IsEnabled consults it, the
 	 * registry test walks it, and Airside.Tool.GuideGridHasNoCellOutsideTheList asserts no
-	 * source can propose a pair it rejects. Sixteen of the thirty pairs are legal; the holes
-	 * are reasoned about one by one in the design, not merely left out.
+	 * source can propose a pair it rejects. Twenty-five of the forty-two pairs are legal; the
+	 * holes are reasoned about one by one at each row below, not merely left out.
 	 */
 	AIRSIDE_API bool IsLegalCell(ERelation Relation, EReference Reference);
 

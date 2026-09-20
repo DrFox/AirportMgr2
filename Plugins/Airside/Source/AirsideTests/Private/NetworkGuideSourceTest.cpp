@@ -344,7 +344,7 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// preference to the taxiway the player is actually working beside.
 	TestEqual(TEXT("the nearest road wins over the runway and the world grid"),
 		static_cast<int32>(Result.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// CONTROL LEG: the runway was a live competitor, not one the reach quietly excluded. Take
 	// the taxiway out of range and the runway takes the slot - which also pins that Runway is

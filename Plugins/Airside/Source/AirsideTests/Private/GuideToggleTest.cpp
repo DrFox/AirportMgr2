@@ -28,9 +28,9 @@ namespace
 	const TArray<SnapGuide::EReference>& EverySwitchableReference()
 	{
 		static const TArray<SnapGuide::EReference> All = {
-			SnapGuide::EReference::Road,  SnapGuide::EReference::Runway,
-			SnapGuide::EReference::Apron, SnapGuide::EReference::Stand,
-			SnapGuide::EReference::World };
+			SnapGuide::EReference::Taxiway, SnapGuide::EReference::ServiceRoad,
+			SnapGuide::EReference::Runway,  SnapGuide::EReference::Apron,
+			SnapGuide::EReference::Stand,   SnapGuide::EReference::World };
 		return All;
 	}
 }
@@ -137,8 +137,12 @@ bool FGuideSettingsGiveEveryAxisItsOwnFlagTest::RunTest(const FString& Parameter
 	TestFalse(TEXT("and MatchingGap is off, being the least familiar"),
 		Defaults.IsRelationOn(SnapGuide::ERelation::MatchingGap));
 
-	TestTrue(TEXT("Road is on: it is what a taxiway is usually drawn against"),
-		Defaults.IsReferenceOn(SnapGuide::EReference::Road));
+	// BOTH ROAD COLUMNS ARE ON, because the one they were split out of was. Splitting a switch
+	// on 2026-09-20 was not a reason to change what a new airport had it set to.
+	TestTrue(TEXT("Taxiway is on: it is what a taxiway is usually drawn against"),
+		Defaults.IsReferenceOn(SnapGuide::EReference::Taxiway));
+	TestTrue(TEXT("and ServiceRoad with it, as the one 'Road' flag had them both"),
+		Defaults.IsReferenceOn(SnapGuide::EReference::ServiceRoad));
 	TestTrue(TEXT("World is on"), Defaults.IsReferenceOn(SnapGuide::EReference::World));
 	TestFalse(TEXT("Runway is off"), Defaults.IsReferenceOn(SnapGuide::EReference::Runway));
 	TestFalse(TEXT("Apron is off"), Defaults.IsReferenceOn(SnapGuide::EReference::Apron));
@@ -184,10 +188,13 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 	Settings.bExtending = false;
 	Settings.bLevelWith = false;
 
-	// THE ROAD COLUMN STAYS ON. Since 2026-09-20 a relation alone does not offer anything -
+	// THE TAXIWAY COLUMN STAYS ON. Since 2026-09-20 a relation alone does not offer anything -
 	// without this the road is gated off by its column and the test would pass for the wrong
 	// reason, proving only that two switches beat one.
-	Settings.bRoad = true;
+	//
+	// AND SERVICEROAD IS LEFT WHEREVER IT DEFAULTS, because the field has no service road on
+	// it: naming it here would suggest this test depended on it.
+	Settings.bTaxiway = true;
 
 	const SnapGuide::FResult On = Chain.Resolve(
 		*Actor->Network, Anchor, Cursor, SnapGuide::FResult(), Settings);
@@ -198,9 +205,9 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and it is Parallel that offered it"),
 		static_cast<int32>(On.Winners[0].Relation),
 		static_cast<int32>(SnapGuide::ERelation::Parallel));
-	TestEqual(TEXT("against the road, which is the only column with anything in it"),
+	TestEqual(TEXT("against the taxiway, which is the only column with anything in it"),
 		static_cast<int32>(On.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// THE ROW OFF: nothing else is on, so nothing answers at all.
 	Settings.bParallel = false;
@@ -213,10 +220,10 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 	// before 2026-09-20. The road is still the nearest thing to the drag and Parallel is still
 	// switched on - what stops it is that the player asked not to be lined up with roads.
 	Settings.bParallel = true;
-	Settings.bRoad = false;
+	Settings.bTaxiway = false;
 	const SnapGuide::FResult NoColumn = Chain.Resolve(
 		*Actor->Network, Anchor, Cursor, SnapGuide::FResult(), Settings);
-	TestFalse(TEXT("with the Road column off, the road offers nothing either"),
+	TestFalse(TEXT("with the Taxiway column off, the road offers nothing either"),
 		NoColumn.bActive);
 
 	// CONTROL LEG: the drag itself was fine - switch a different COLUMN on and a guide
@@ -353,13 +360,14 @@ bool FRunwayColumnOffSilencesEveryRelationTest::RunTest(const FString& Parameter
 	const FVector2D Cursor(4000.0, 3100.0);
 	const FSnapGuideChain Chain;
 
-	// EVERY RELATION ON, THE RUNWAY COLUMN OFF. Road stays on so the test cannot pass merely
-	// by everything being switched off.
+	// EVERY RELATION ON, THE RUNWAY COLUMN OFF. Both road columns stay on so the test cannot
+	// pass merely by everything being switched off.
 	FSnapGuideSettings Settings;
 	Settings.bParallel = true;
 	Settings.bCollinear = true;
 	Settings.bMatchingGap = true;
-	Settings.bRoad = true;
+	Settings.bTaxiway = true;
+	Settings.bServiceRoad = true;
 	Settings.bRunway = false;
 	Settings.bWorld = false;
 

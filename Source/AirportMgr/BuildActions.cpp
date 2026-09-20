@@ -189,10 +189,20 @@ namespace
 		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
 		// is why "Runway" read as a source you could switch off for every relation and was not -
 		// see SnapGuide::EReference.
-		Out.Add(Make(TEXT("snapto.road"), EActionSection::SnapTo, LOCTEXT("SnapToRoad", "Road"),
+		// TWO BUTTONS WHERE "Road" WAS ONE, since 2026-09-20. Everywhere else in this codebase
+		// these are different tools under different keys, different cross-sections and
+		// different traversal classes, and the guide LABEL already said which - "parallel to
+		// the service road" appearing under a button marked Road was the whole complaint. See
+		// SnapGuide::EReference.
+		Out.Add(Make(TEXT("snapto.taxiway"), EActionSection::SnapTo, LOCTEXT("SnapToTaxiway", "Taxiway"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Road); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Road); },
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Taxiway); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Taxiway); },
+			Always));
+		Out.Add(Make(TEXT("snapto.serviceroad"), EActionSection::SnapTo, LOCTEXT("SnapToServiceRoad", "Service road"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::ServiceRoad); },
+			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::ServiceRoad); },
 			Always));
 		Out.Add(Make(TEXT("snapto.runway"), EActionSection::SnapTo, LOCTEXT("SnapToRunway", "Runway"),
 			EKeys::Invalid, false,

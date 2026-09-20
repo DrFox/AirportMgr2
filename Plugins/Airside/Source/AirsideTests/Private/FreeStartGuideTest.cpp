@@ -118,7 +118,7 @@ namespace
 		if (!bShippedDefaults)
 		{
 			Out.Tunables.GuideSources.bCollinear = true;
-			Out.Tunables.GuideSources.bRoad = true;
+			Out.Tunables.GuideSources.bTaxiway = true;
 		}
 
 		Out.Session.SelectTool(Index);

@@ -54,7 +54,8 @@ bool FRunwayGuideOffersItsOwnLineTest::RunTest(const FString& Parameters)
 	Settings.bParallel = false;
 	Settings.bCollinear = true;
 	Settings.bMatchingGap = false;
-	Settings.bRoad = false;
+	Settings.bTaxiway = false;
+	Settings.bServiceRoad = false;
 	Settings.bRunway = true;
 	Settings.bApron = false;
 	Settings.bStand = false;
@@ -147,7 +148,8 @@ bool FOffsetAndParallelNameOneRoadTest::RunTest(const FString& Parameters)
 	Settings.bExtending = false;
 	Settings.bLevelWith = false;
 	Settings.bCollinear = false;
-	Settings.bRoad = true;
+	Settings.bTaxiway = true;
+	Settings.bServiceRoad = true;
 
 	// THE RUNWAY COLUMN IS ON THROUGHOUT, so a source that had not been partitioned is free to
 	// name it - a runway is a segment like any other until IsRunwaySegment is asked.
@@ -168,7 +170,7 @@ bool FOffsetAndParallelNameOneRoadTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("and it is the taxiway, not the runway"),
 		static_cast<int32>(Along.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// MATCHING GAP: the cursor is on the line one gap NORTH of the reference - away from the
 	// neighbour, which is the only side this source ever proposes.
@@ -182,7 +184,7 @@ bool FOffsetAndParallelNameOneRoadTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("named as the taxiway too, so the two describe one road between them"),
 		static_cast<int32>(Gap.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	return true;
 }

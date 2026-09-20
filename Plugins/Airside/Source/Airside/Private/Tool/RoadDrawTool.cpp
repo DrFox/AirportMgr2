@@ -8,6 +8,7 @@
 #include "Model/RoadNode.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadHeal.h"
+#include "Tool/RoadNaming.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
 
@@ -351,16 +352,50 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTa
 		{
 			continue;
 		}
-		// SPELT OUT, not braced: a third member arrived on FGuidePoint in 2026-09-20 and a
-		// braced initialiser would have taken the default for it in silence.
-		FGuidePoint Point;
-		Point.At = Node.Position;
-		Point.Name = TEXT("that node");
+		// A NODE BELONGS TO EVERY COLUMN THAT MEETS IT - ruled 2026-09-20, when Road became
+		// Taxiway and ServiceRoad. A node is a place where segments end, and where a taxiway
+		// meets a service road it is honestly both; picking a winner would make one of the two
+		// buttons lie about a junction the player can see. So: one FGuidePoint per DISTINCT
+		// kind of incident segment, and the node's position repeated under each.
+		//
+		// AND A BARE NODE OFFERS NOTHING. With no live segment on it there is no kind to tag,
+		// and the tool's own Kind would be a guess about what the player will attach to it -
+		// which is exactly the second opinion about the gesture that FGuidePoint::Reference
+		// exists to avoid. In practice the only bare node is the one being extended from, and
+		// that is excluded above.
+		SnapGuide::EReference Columns[] = {
+			SnapGuide::EReference::Taxiway,
+			SnapGuide::EReference::ServiceRoad,
+			SnapGuide::EReference::Runway };
 
-		// A LIVE NODE IS THE ROAD COLUMN'S. It is the one place a network fact reaches a
-		// tool-fed source, and the tag is what lets the Road button switch it off.
-		Point.Reference = SnapGuide::EReference::Road;
-		Out.AlignTo.Add(Point);
+		for (const SnapGuide::EReference Column : Columns)
+		{
+			bool bIncident = false;
+			for (const FRoadSegmentId Meeting : Node.Incident)
+			{
+				SnapGuide::EReference Of = SnapGuide::EReference::Taxiway;
+				if (RoadNaming::ReferenceOf(*Network, Meeting, Of) && Of == Column)
+				{
+					bIncident = true;
+					break;
+				}
+			}
+			if (!bIncident)
+			{
+				continue;
+			}
+
+			// SPELT OUT, not braced: a third member arrived on FGuidePoint in 2026-09-20 and a
+			// braced initialiser would have taken the default for it in silence.
+			FGuidePoint Point;
+			Point.At = Node.Position;
+			Point.Name = TEXT("that node");
+
+			// THE ONE PLACE A NETWORK FACT REACHES A TOOL-FED SOURCE, and the tag is what lets
+			// the matching button switch it off.
+			Point.Reference = Column;
+			Out.AlignTo.Add(Point);
+		}
 	}
 
 	return true;

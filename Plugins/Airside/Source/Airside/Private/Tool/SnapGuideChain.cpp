@@ -145,6 +145,32 @@ namespace
 	/** What a player reads for an apron. FApronSurface carries no name - see FApronGuideSource. */
 	const TCHAR* ApronEdgeName() { return TEXT("the apron edge"); }
 
+	/**
+	 * Which ROAD column a segment belongs to - Taxiway or ServiceRoad. False for a runway, and
+	 * false for a segment that is not live.
+	 *
+	 * ONE CALL ANSWERS BOTH QUESTIONS the road sources used to ask separately: "is this a
+	 * runway, which another source owns" and "what is it, for the label". They were
+	 * IsRunwaySegment at the top of each loop and RoadNaming::Describe at the bottom, and the
+	 * column between them was a hard-coded EReference::Road that no longer exists.
+	 *
+	 * THE RUNWAY ANSWER IS A REFUSAL HERE, NOT A VALUE, because that is what every caller does
+	 * with it: `continue`. FRunwayGuideSource and FRunwayLineGuideSource own runways and own
+	 * them with a different reach - unbounded, since an airport squares to its runways from
+	 * anywhere on it - so a road source that walked one would put two near-identical candidates
+	 * in the same race and let a runway answer while the Runway column was switched off. That
+	 * is the 2026-09-20 report, and this is where it stays fixed.
+	 *
+	 * PREFIXED like GuideSegmentEnds above: the tests module and this one are unity builds, and
+	 * "RoadColumnOf" is a name a second file would also pick.
+	 */
+	bool GuideRoadColumn(const URoadNetwork& Network, FRoadSegmentId Id,
+		SnapGuide::EReference& Out)
+	{
+		return RoadNaming::ReferenceOf(Network, Id, Out)
+			&& Out != SnapGuide::EReference::Runway;
+	}
+
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -255,18 +281,17 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	FRoadSegmentId Nearest;
 	FVector2D NearestAt = FVector2D::ZeroVector;
 	FVector2D NearestDir = FVector2D::ZeroVector;
+	SnapGuide::EReference NearestColumn = SnapGuide::EReference::Taxiway;
 	double BestSquared = Reach * Reach;
 
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them with a different search: every runway
-		// proposes, from anywhere on the field, where this source takes the nearest one within
-		// reach. Walking them here too would put two near-identical candidates into the same
-		// race, and would let a runway answer while the Runway column was switched off - which
-		// is the 2026-09-20 report. See FRunwayGuideSource.
-		if (Network.IsRunwaySegment(Id))
+
+		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question - see GuideRoadColumn.
+		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
+		if (!GuideRoadColumn(Network, Id, Column))
 		{
 			continue;
 		}
@@ -298,6 +323,11 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 		Nearest = Id;
 		NearestAt = On;
 		NearestDir = Span.GetSafeNormal();
+
+		// CARRIED FROM THE WINNER, not asked again at the bottom. The nearest road is picked
+		// once and its column is a fact about THAT segment; a second classification call after
+		// the loop would be a second chance to pick a different one.
+		NearestColumn = Column;
 	}
 
 	if (NearestDir.IsNearlyZero())
@@ -313,10 +343,11 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	Along.Fit = SnapGuide::EFit::Angular;
 	Along.ReferenceAt = NearestAt;
 	Along.Relation = SnapGuide::ERelation::Parallel;
-	// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
-	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
-	// branch that cannot be taken invites a reader to rely on a rule that is not there.
-	Along.Reference = SnapGuide::EReference::Road;
+
+	// THE COLUMN AND THE LABEL COME FROM ONE CLASSIFICATION, which is the whole of the
+	// 2026-09-20 split: this used to hard-code EReference::Road while Describe said "the
+	// service road", so the line appeared under a button marked Road. RoadNaming answers both.
+	Along.Reference = NearestColumn;
 	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
 	Out.Add(Along);
 
@@ -335,12 +366,10 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them with a different search: every runway
-		// proposes, from anywhere on the field, where this source takes the nearest one within
-		// reach. Walking them here too would put two near-identical candidates into the same
-		// race, and would let a runway answer while the Runway column was switched off - which
-		// is the 2026-09-20 report. See FRunwayGuideSource.
-		if (Network.IsRunwaySegment(Id))
+
+		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question - see GuideRoadColumn.
+		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
+		if (!GuideRoadColumn(Network, Id, Column))
 		{
 			continue;
 		}
@@ -372,10 +401,10 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		InLine.Through = A;
 		InLine.Fit = SnapGuide::EFit::Perpendicular;
 		InLine.Relation = SnapGuide::ERelation::Collinear;
-		// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
-	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
-	// branch that cannot be taken invites a reader to rely on a rule that is not there.
-	InLine.Reference = SnapGuide::EReference::Road;
+
+		// PER SEGMENT, not per source. One walk of the graph passes a taxiway and a service
+		// road in the same pass, and the two answer to different buttons since 2026-09-20.
+		InLine.Reference = Column;
 		InLine.Description = FString::Printf(TEXT("in line with %s"),
 			*RoadNaming::Describe(Network, Id));
 
@@ -490,10 +519,12 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
 
-		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them without a reach - see
-		// FAngledRunwayGuideSource. Walking them here would let one answer while that column was
-		// switched off, which is the 2026-09-20 report in a new place.
-		if (Network.IsRunwaySegment(Id))
+		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question. They are owned by
+		// FAngledRunwayGuideSource and owned WITHOUT a reach; walking one here would let it
+		// answer while the Runway column was switched off - the 2026-09-20 report in a new
+		// place. See GuideRoadColumn.
+		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
+		if (!GuideRoadColumn(Network, Id, Column))
 		{
 			continue;
 		}
@@ -517,9 +548,11 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		const FVector2D Along = Span.GetSafeNormal();
 		const FString Name = RoadNaming::Describe(Network, Id);
 
-		// BOTH ENDS - see this source's own header for why neither may be picked for the player.
-		AddSpokes(A, Along, SnapGuide::EReference::Road, Name, Out);
-		AddSpokes(B, Along, SnapGuide::EReference::Road, Name, Out);
+		// BOTH ENDS - see this source's own header for why neither may be picked for the
+		// player - and both under the SEGMENT'S OWN column, so "45 degrees to the service
+		// road" answers to the ServiceRoad button and not to the Taxiway one.
+		AddSpokes(A, Along, Column, Name, Out);
+		AddSpokes(B, Along, Column, Name, Out);
 	}
 }
 
@@ -743,17 +776,20 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	FRoadSegmentId Reference;
 	FVector2D ReferenceAt = FVector2D::ZeroVector;
 	FVector2D ReferenceDir = FVector2D::ZeroVector;
+	SnapGuide::EReference ReferenceColumn = SnapGuide::EReference::Taxiway;
 	double BestSquared = Reach * Reach;
 
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		// ITS REFERENCE MUST BE THE ONE FParallelGuideSource PICKS, which now excludes runways.
-		// A reference the two sources disagree about breaks the composition this source's own
-		// header promises: "parallel to the taxiway" and "the same gap as its neighbour"
-		// describing ONE road between them.
-		if (Network.IsRunwaySegment(Id))
+
+		// RUNWAYS REFUSED, because the reference must be the one FParallelGuideSource picks and
+		// that source excludes them. A reference the two disagree about breaks the composition
+		// this source's own header promises: "parallel to the taxiway" and "the same gap as its
+		// neighbour" describing ONE road between them. See GuideRoadColumn.
+		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
+		if (!GuideRoadColumn(Network, Id, Column))
 		{
 			continue;
 		}
@@ -781,6 +817,7 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Reference = Id;
 		ReferenceAt = On;
 		ReferenceDir = Span.GetSafeNormal();
+		ReferenceColumn = Column;
 	}
 
 	if (ReferenceDir.IsNearlyZero())
@@ -794,11 +831,20 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		// ITS REFERENCE MUST BE THE ONE FParallelGuideSource PICKS, which now excludes runways.
-		// A reference the two sources disagree about breaks the composition this source's own
-		// header promises: "parallel to the taxiway" and "the same gap as its neighbour"
-		// describing ONE road between them.
-		if (Network.IsRunwaySegment(Id))
+
+		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
+		if (!GuideRoadColumn(Network, Id, Column))
+		{
+			continue;
+		}
+
+		// THE NEIGHBOUR MUST BE THE SAME KIND AS THE REFERENCE - new with the 2026-09-20 split,
+		// and a narrowing rather than a relabelling. ICAO separates taxiways by the wingspan
+		// admitted; what a service road keeps from the next one is a question of what has to
+		// drive between them. A pair of one of each keeps a gap that is neither standard, so
+		// offering it as "40 m, matching the taxiway" would put a number under a button that
+		// does not govern where it came from. See SnapGuide::IsLegalCell's MatchingGap row.
+		if (Column != ReferenceColumn)
 		{
 			continue;
 		}
@@ -855,10 +901,11 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Match.Fit = SnapGuide::EFit::Perpendicular;
 		Match.ReferenceAt = ReferenceAt;
 		Match.Relation = SnapGuide::ERelation::MatchingGap;
-		// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
-	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
-	// branch that cannot be taken invites a reader to rely on a rule that is not there.
-	Match.Reference = SnapGuide::EReference::Road;
+
+		// THE REFERENCE'S COLUMN, which the filter above has just made the neighbour's too, so
+		// there is one answer rather than a choice between two. That is what "taxiway
+		// separation and service-road separation are different standards" comes to in code.
+		Match.Reference = ReferenceColumn;
 
 		// THE NUMBER IS IN THE LABEL. "matching the taxiway" alone would leave the player
 		// unable to tell 40 m from 45 m, which is the one thing they are trying to control.

@@ -181,14 +181,16 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 		{ SnapGuide::ERelation::MatchingGap, TEXT("snap.matchinggap") } };
 
 	// THISGESTURE IS ABSENT ON PURPOSE, and the count below is what keeps that deliberate: it
-	// is checked against the enum MINUS ONE, so a sixth reference added without a button still
-	// fails here. See the 2026-09-20 guide-grid design section 7 for why that one has no switch.
+	// is checked against the enum MINUS ONE, so a seventh reference added without a button
+	// still fails here. See the 2026-09-20 guide-grid design section 7 for why that one has no
+	// switch. Six buttons since the Road column became Taxiway and ServiceRoad that same day.
 	const TArray<TPair<SnapGuide::EReference, const TCHAR*>> References = {
-		{ SnapGuide::EReference::Road,   TEXT("snapto.road")   },
-		{ SnapGuide::EReference::Runway, TEXT("snapto.runway") },
-		{ SnapGuide::EReference::Apron,  TEXT("snapto.apron")  },
-		{ SnapGuide::EReference::Stand,  TEXT("snapto.stand")  },
-		{ SnapGuide::EReference::World,  TEXT("snapto.world")  } };
+		{ SnapGuide::EReference::Taxiway,     TEXT("snapto.taxiway")     },
+		{ SnapGuide::EReference::ServiceRoad, TEXT("snapto.serviceroad") },
+		{ SnapGuide::EReference::Runway,      TEXT("snapto.runway")      },
+		{ SnapGuide::EReference::Apron,       TEXT("snapto.apron")       },
+		{ SnapGuide::EReference::Stand,       TEXT("snapto.stand")       },
+		{ SnapGuide::EReference::World,       TEXT("snapto.world")       } };
 
 	// THE TABLES ABOVE ARE THEMSELVES SECOND LISTS, so each is checked against its enum's own
 	// size first - otherwise a row added to ERelation could be missed by this test as easily as

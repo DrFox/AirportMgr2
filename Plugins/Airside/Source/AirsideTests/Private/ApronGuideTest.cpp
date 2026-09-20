@@ -44,7 +44,8 @@ namespace
 		Settings.bCollinear = Relation == SnapGuide::ERelation::Collinear;
 		Settings.bAngledFrom = Relation == SnapGuide::ERelation::AngledFrom;
 		Settings.bMatchingGap = false;
-		Settings.bRoad = false;
+		Settings.bTaxiway = false;
+		Settings.bServiceRoad = false;
 		Settings.bRunway = false;
 		Settings.bApron = true;
 		Settings.bStand = false;
@@ -223,7 +224,8 @@ bool FApronColumnOffSilencesEveryRelationTest::RunTest(const FString& Parameters
 	Settings.bCollinear = true;
 	Settings.bAngledFrom = true;
 	Settings.bMatchingGap = true;
-	Settings.bRoad = false;
+	Settings.bTaxiway = false;
+	Settings.bServiceRoad = false;
 	Settings.bRunway = false;
 	Settings.bApron = false;
 	Settings.bStand = false;

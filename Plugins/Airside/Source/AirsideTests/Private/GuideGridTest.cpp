@@ -11,9 +11,14 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Nineteen of the thirty-six pairs are
+ * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Twenty-five of the forty-two pairs are
  * legal; a hole is a statement, not an omission, so the count is asserted rather than the shape.
  * See the 2026-09-20 guide-grid design section 3 for each hole's reason.
+ *
+ * IT WAS NINETEEN OF THIRTY-SIX until the Road column became Taxiway and ServiceRoad later that
+ * same day. Five cells arrived by that doubling and one by argument: LevelWith x Runway, whose
+ * hole had rested on a runway's thresholds being "ordinary nodes already served by Road" - a
+ * sentence the split made false. See SnapGuide::IsLegalCell's LevelWith row.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FGuideGridDeclaresItsCellsTest,
@@ -25,7 +30,7 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 	const int32 Relations = static_cast<int32>(SnapGuide::ERelation::MatchingGap) + 1;
 	const int32 References = static_cast<int32>(SnapGuide::EReference::World) + 1;
 	TestEqual(TEXT("six relations"), Relations, 6);
-	TestEqual(TEXT("six references"), References, 6);
+	TestEqual(TEXT("seven references"), References, 7);
 
 	int32 Legal = 0;
 	for (int32 R = 0; R < Relations; ++R)
@@ -39,7 +44,21 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	TestEqual(TEXT("nineteen of the thirty-six pairs are legal"), Legal, 19);
+	TestEqual(TEXT("twenty-five of the forty-two pairs are legal"), Legal, 25);
+
+	// THE TWO ROAD COLUMNS AGREE, ROW BY ROW. A taxiway and a service road are the same SHAPE
+	// on the field - a centreline with pavement either side and ends to radiate from - so
+	// every geometric argument that admits one admits the other, and a row that took only one
+	// would be a rule about the toggle rather than about the geometry. Walked rather than
+	// listed, because the point is that no row may differ.
+	for (int32 R = 0; R < Relations; ++R)
+	{
+		const SnapGuide::ERelation Relation = static_cast<SnapGuide::ERelation>(R);
+		TestEqual(
+			*FString::Printf(TEXT("relation %d admits a service road exactly as it admits a taxiway"), R),
+			SnapGuide::IsLegalCell(Relation, SnapGuide::EReference::ServiceRoad),
+			SnapGuide::IsLegalCell(Relation, SnapGuide::EReference::Taxiway));
+	}
 
 	// THREE NAMED CELLS, not a re-listing of the table: a test that restated the whole grid
 	// would be a second copy of it, and the two would drift. These three are the ones whose
@@ -47,9 +66,15 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Extending is about the shape being drawn"),
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::Extending, SnapGuide::EReference::ThisGesture));
 	TestFalse(TEXT("and Extending means nothing against a road"),
-		SnapGuide::IsLegalCell(SnapGuide::ERelation::Extending, SnapGuide::EReference::Road));
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::Extending, SnapGuide::EReference::Taxiway));
 	TestFalse(TEXT("a world axis has no position, so nothing can be in line with it"),
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::Collinear, SnapGuide::EReference::World));
+
+	// A RUNWAY'S THRESHOLD IS A POINT TO BE LEVEL WITH, since 2026-09-20. Pinned by name
+	// because it is the one cell the Road split OPENED rather than doubled, and the one a
+	// later reader would be most tempted to close again on the old reasoning.
+	TestTrue(TEXT("a runway threshold is something to be level with"),
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::LevelWith, SnapGuide::EReference::Runway));
 
 	// THE ONE HOLE THAT IS NOT ABOUT GEOMETRY, and so the one most likely to be "fixed" by a
 	// later reader: LevelWith x ThisGesture already proposes the 0 and 90 degree lines through
@@ -58,7 +83,7 @@ bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("your own corners are LevelWith's, not AngledFrom's"),
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::ThisGesture));
 	TestTrue(TEXT("but another road's end does throw spokes"),
-		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::Road));
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::Taxiway));
 
 	return true;
 }
@@ -82,7 +107,7 @@ bool FGuideGridBreaksTiesByRelationThenReferenceTest::RunTest(const FString& Par
 	Road.Through = FVector2D::ZeroVector;
 	Road.Fit = SnapGuide::EFit::Angular;
 	Road.Relation = SnapGuide::ERelation::Parallel;
-	Road.Reference = SnapGuide::EReference::Road;
+	Road.Reference = SnapGuide::EReference::Taxiway;
 
 	// THE SAME DIRECTION, so the two are exactly tied on error and only the rank can separate
 	// them. Listed AFTER the stand, so a first-wins bug shows up as the stand winning.
@@ -96,7 +121,7 @@ bool FGuideGridBreaksTiesByRelationThenReferenceTest::RunTest(const FString& Par
 	if (!TestTrue(TEXT("a guide holds"), Result.bActive)) { return false; }
 	TestEqual(TEXT("the nearest road beats a stand's pose on a tie"),
 		static_cast<int32>(Result.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	// AND RELATION OUTRANKS REFERENCE. Extending x ThisGesture is a worse reference rank than
 	// Parallel x Road, and must still win - otherwise the pair is being compared the wrong way
@@ -161,6 +186,13 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	const int32 SouthWest = Target->PlaceNode(FVector2D(-10000.0, -6000.0));
 	const int32 SouthEast = Target->PlaceNode(FVector2D(10000.0, -6000.0));
 	Target->ConnectNodes(SouthWest, SouthEast, ERoadKind::Taxiway, INDEX_NONE);
+
+	// A SERVICE ROAD TOO, since 2026-09-20: with only taxiways on the field the ServiceRoad
+	// column could propose nothing, and a source tagging it with a cell the grid rejects would
+	// go unseen - the exact shape of failure this test exists to catch, in the newest column.
+	const int32 VanWest = Target->PlaceNode(FVector2D(-10000.0, -3000.0));
+	const int32 VanEast = Target->PlaceNode(FVector2D(10000.0, -3000.0));
+	Target->ConnectNodes(VanWest, VanEast, ERoadKind::ServiceRoad, INDEX_NONE);
 	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
 
 	FGuideAnchor Anchor;
@@ -178,8 +210,13 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	Settings.bLevelWith = true;
 	Settings.bParallel = true;
 	Settings.bCollinear = true;
+	// ANGLEDFROM WAS MISSING FROM THIS LIST until 2026-09-20, so the spoke sources proposed
+	// nothing and this test never saw the cells they tag. It says "every row and every column
+	// on"; a row left out is exactly the coverage gap its own comment warns about.
+	Settings.bAngledFrom = true;
 	Settings.bMatchingGap = true;
-	Settings.bRoad = true;
+	Settings.bTaxiway = true;
+	Settings.bServiceRoad = true;
 	Settings.bRunway = true;
 	Settings.bApron = true;
 	Settings.bStand = true;

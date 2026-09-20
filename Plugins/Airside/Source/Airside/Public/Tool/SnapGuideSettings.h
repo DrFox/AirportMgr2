@@ -64,14 +64,24 @@ struct AIRSIDE_API FSnapGuideSettings
 	// --- What it is measured AGAINST --------------------------------------------------
 
 	/**
-	 * Taxiways and service roads.
+	 * Taxiways - the lanes aircraft use.
 	 *
-	 * NEW ON 2026-09-20, and it is the column that had no switch: Parallel and Collinear each
-	 * carried "a road" as an unnamed reference, which is half of why Runway could not mean what
-	 * it was read to mean. ThisGesture is the only column with NO flag - see the design §7.
+	 * TWO FLAGS SINCE 2026-09-20, where one said "Road". That single column was itself new
+	 * that day - Parallel and Collinear had each carried "a road" as an unnamed, unswitchable
+	 * reference, which is half of why Runway could not mean what it was read to mean - and it
+	 * was collapsing two things nothing else in the codebase joins: two registry entries under
+	 * two keys, two cross-sections, two traversal classes, and two different words already
+	 * appearing in the label. See SnapGuide::EReference.
+	 *
+	 * BOTH START ON, because "Road" did: splitting a switch is not a reason to change what it
+	 * was set to. ThisGesture remains the only column with NO flag - see the design §7.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Snap to")
-	bool bRoad = true;
+	bool bTaxiway = true;
+
+	/** Service roads - what the vans and tugs drive on. See bTaxiway on why these are two. */
+	UPROPERTY(EditAnywhere, Category = "Snap to")
+	bool bServiceRoad = true;
 
 	/** Runways - any segment whose profile is continuous through junctions. */
 	UPROPERTY(EditAnywhere, Category = "Snap to")

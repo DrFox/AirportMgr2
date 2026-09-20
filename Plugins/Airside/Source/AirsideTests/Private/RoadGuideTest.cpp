@@ -329,7 +329,8 @@ bool FLevelWithIsGatedPerPointTest::RunTest(const FString& Parameters)
 	Settings.bCollinear = false;
 	Settings.bAngledFrom = false;
 	Settings.bMatchingGap = false;
-	Settings.bRoad = false;
+	Settings.bTaxiway = false;
+	Settings.bServiceRoad = false;
 	Settings.bRunway = false;
 	Settings.bApron = false;
 	Settings.bStand = false;
@@ -343,16 +344,16 @@ bool FLevelWithIsGatedPerPointTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("with the Road column off, a network node offers nothing"), Off.bActive);
 
 	// CONTROL LEG: the drag was fine - switch the column on and the same node answers.
-	Settings.bRoad = true;
+	Settings.bTaxiway = true;
 	const SnapGuide::FResult On = Chain.Resolve(
 		*Gesture.Network(), Anchor, Cursor, SnapGuide::FResult(), Settings);
 	if (!TestTrue(TEXT("with it on, the node offers a line"), On.bActive)) { return false; }
 	TestEqual(TEXT("as a LevelWith guide"),
 		static_cast<int32>(On.Winners[0].Relation),
 		static_cast<int32>(SnapGuide::ERelation::LevelWith));
-	TestEqual(TEXT("against the Road column, because that is where a node lives"),
+	TestEqual(TEXT("against the Taxiway column, because a node belongs to whatever meets it"),
 		static_cast<int32>(On.Winners[0].Reference),
-		static_cast<int32>(SnapGuide::EReference::Road));
+		static_cast<int32>(SnapGuide::EReference::Taxiway));
 
 	return true;
 }
