@@ -1,18 +1,21 @@
 # Handover: the guide grid
 
-Written 2026-09-20, twice. The first version handed items 2 to 4 over; this one records that
-all four are **built and green, and that NONE of 2, 3 or 4 has been seen in PIE**.
+Written 2026-09-20, three times. The first handed items 2 to 4 over; the second recorded them
+built but unseen. This one records all four **confirmed in PIE by the user** - *"yes i think
+this is working much nicer now"* - and the five commits that confirmation cost.
 
 ## Where the work is
 
-- **Worktree `C:\repos\airportmgr2_snapping`, branch `feature/guide-grid`.** Seventeen commits
-  ahead of `origin/main`, nothing pushed, no PR open. The user asked for all four items on one
-  branch and one PR.
+- **Worktree `C:\repos\airportmgr2_snapping`, branch `feature/guide-grid`.** Twenty-three
+  commits ahead of `origin/main`, nothing pushed, no PR open. The user asked for all four items
+  on one branch and one PR, and then for the five PIE fixes on the same one.
 - **THERE ARE THREE WORKTREES.** `airportmgr2_snapping` is this work; `airportmgr2_plotwork` is
   something else (the user's screenshots land there); the main checkout `C:\repos\AirportMgr2`
   has a binary with NONE of this in it. Build and test the right one, and if the user reports
   "I see nothing", check which editor they ran before believing a code fault.
-- **488 tests, 0 failed, 0 crashed.** 480 at the previous handover; the eight are named below.
+- **492 tests, 0 failed, 0 crashed.** 480 when items 2 to 4 began, 488 when they finished, and
+  four more from the PIE pass. Every new test on this branch was watched to FAIL first, by
+  breaking the rule it protects - fourteen breakages in six batches.
 
 ## The four items, and what landed
 
@@ -23,32 +26,67 @@ all four are **built and green, and that NONE of 2, 3 or 4 has been seen in PIE*
 2. **A free start: guides before the first click.** One virtual, `WantsFreeStartGuides`, with
    the base answering it through a `bFreeStart` anchor whose Origin the driver fills from the
    plane hit. Taxiway, Road, Runway, Apron and Stand opt in; each also CONSUMES it.
-   Not seen in PIE.
+   **Confirmed in PIE.**
 3. **`Collinear` on by default.** One line, and without it item 2 is dead on a new airport:
    every angular row sits out on a free start, so Collinear is the only row that can offer
-   anything at all. Not seen in PIE.
+   anything at all. **Confirmed in PIE.**
 4. **`EReference::Road` split into `Taxiway` and `ServiceRoad`.** `RoadNaming` gained
    `ReferenceOf` and `Describe` was rebuilt on it; four sources tag per segment; a node is
    tagged by every kind that meets it; `MatchingGap` requires one kind. Twenty-five cells,
-   twelve bar buttons. Not seen in PIE.
+   twelve bar buttons. **Confirmed in PIE.**
 
-## What to ask the user to look at FIRST
+## What PIE then found, and what it cost
 
-Nothing in 2, 3 or 4 has been in front of a player. In rough order of what is most likely to
-be wrong on screen:
+Nothing in 2, 3 or 4 turned out to be WRONG. Five commits still came straight out of watching
+someone use them, and every one began as a sentence from the player rather than a test:
 
-- **A free start on the taxiway tool (key 1), cursor near the extension of an existing road.**
-  A dashed teal line and a label should appear BEFORE the first click, and the click should
-  land on the line. If nothing appears, check whether `Collinear` is lit on the bar - and if it
-  is not, item 3 did not reach the level's `GuideSources`, which is a UPROPERTY on
-  `ARoadNetworkActor` and may carry an authored value that predates the new default. See
-  CLAUDE.md on an editor-set UPROPERTY overriding a constructor: this is the FIRST thing to
-  suspect, not the last.
+1. **The world grid's numbers were already compass bearings, and said so nowhere.** "0
+   degrees" WAS north, agreeing with the runway designators - but it sat on screen beside "45
+   degrees to the taxiway", which is measured from that road. One frame absolute, one
+   relative, same words. Now named as axes: north-south, east-west.
+   `Airside.Tool.WorldAxesAreNamedByTheCompass` asks RunwayDesignator what each candidate's
+   own direction is called, rather than restating a table beside one.
+2. **`Angled from` + `World` gives nothing, correctly, and unguessably.** It is a declared
+   hole AND the world grid answers to the Direction row, not its own. The player reached for
+   the two buttons whose words most exactly described what they wanted and got silence.
+3. **The row called "Parallel" did three things.** It offers a direction AND its perpendicular
+   - "square to the taxiway" is not parallel to anything - and for World an absolute bearing.
+   Renamed **Direction** on the bar. `ERelation::Parallel` kept: 34 sites plus
+   `FParallelGuideSource` and eighteen `bParallel`, many of them comments reasoning about
+   Parallel by name. The enum's own comment carries the tie.
+4. **Direction offered 45s against World and nothing else.** Now 0/45/90/135 against every
+   reference, through one `AddDirections` so a sixth cannot get two of the four. `AngledFrom`
+   relabelled to "45 degrees from the end of X" - different fit kinds, so both can win at
+   once, and they would have drawn two lines to two places under identical words.
+5. **A road could not be extended dead straight** - `samples/issue1.png`, refused as "too
+   short to hold the corner" where there is no corner.
+
+**THE LESSON WORTH CARRYING, from that last one.** `RoadGeom::CornerReachAtZeroRadius` guarded
+on `sin(Theta) < 1e-9`, which is true at BOTH ends: a hairpin, where the reach genuinely
+diverges and a refusal is right, and straight-through, where there is no corner and the reach
+is zero. Cosine tells them apart. A fraction off straight it had always computed fine - so
+**the guides did not cause the bug, they exposed it, by landing the click at exactly 180
+degrees where before that took luck.** A feature that puts a point EXACTLY on a line makes
+every degenerate-value branch in the codebase reachable for the first time.
+
+One more of that shape is noted and NOT fixed: `GuidelineGeom::TightestRadius` takes `Abs` of
+its cross product, so a doubled-back control point reads as collinear and returns an infinite
+radius where a cusp's is zero - sailing through any minimum-radius check. Traced, not
+measured: no authoring path has been shown to produce one. `GuideArbiter::Intersect` was
+checked too and is genuinely fine, parallel and antiparallel having no unique crossing either
+way.
+
+## What is still unseen
+
+In rough order of what is most likely to be wrong on screen:
+
 - **The bar's SNAP TO row.** It should read Taxiway, Service road, Runway, Apron, Stand, World.
   Two new ids, `snapto.taxiway` and `snapto.serviceroad`, replace `snapto.road`, so
   `UUIStyle::IconFor` has no mapping written for either.
-  `AirportMgr.UI.EveryActionResolvesAnIcon` passes, so something is resolving; whether it LOOKS
-  right is a screen question and only a screenshot answers it.
+  `AirportMgr.UI.EveryActionResolvesAnIcon` passes, so something is resolving - it exempts both
+  guide sections, which are WORD buttons drawing their label when `IconFor` returns null, and
+  the same now goes for `snap.direction`. Whether the row LOOKS right at twelve buttons is a
+  screen question and only a screenshot answers it.
 - **The stand tool (key 3) beside an existing stand.** The one opt-in whose guides had to be
   built rather than wired: the stand names its heading as the anchor's reference so
   `Level with x Stand` can propose at all. Needs the Stand column switched on - it is off by
