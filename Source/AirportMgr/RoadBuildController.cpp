@@ -629,6 +629,29 @@ void ARoadBuildController::ToggleClickModifier(EClickModifier Mode)
 	UE_LOG(LogRoadBuild, Log, TEXT("Click modifier: %s"), *UEnum::GetValueAsString(ClickModifier));
 }
 
+void ARoadBuildController::ToggleGestureMode()
+{
+	const EGestureMode Next = Session.GetGestureMode() == EGestureMode::Edit
+		? EGestureMode::Build
+		: EGestureMode::Edit;
+
+	// The caller's context, so the outgoing tool can abandon a part-drawn chain against a
+	// real target rather than a default-constructed one.
+	Session.SetGestureMode(Next, MakeToolContext());
+}
+
+EGestureMode ARoadBuildController::GetGestureMode() const
+{
+	return Session.GetGestureMode();
+}
+
+bool ARoadBuildController::ActiveToolHasEditHandles() const
+{
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	const int32 Index = Session.GetActiveToolIndex();
+	return Registry.IsValidIndex(Index) && Registry[Index].EditHandles != EEditHandleKind::None;
+}
+
 bool ARoadBuildController::CanUndo() const { return Target != nullptr && Target->CanUndo(); }
 bool ARoadBuildController::CanRedo() const { return Target != nullptr && Target->CanRedo(); }
 

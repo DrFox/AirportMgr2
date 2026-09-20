@@ -230,6 +230,22 @@ public:
 	void ToggleClickModifier(EClickModifier Mode);
 	EClickModifier GetClickModifier() const { return ClickModifier; }
 
+	/**
+	 * Build <-> Edit. Forwards to the session, which owns the mode so PIE and the editor
+	 * mode cannot disagree about it.
+	 *
+	 * A TOGGLE AND NOT A HELD KEY, ruled from play: a gesture that reshapes placed geometry
+	 * has to be entered on purpose. Before this, any press-and-travel over a node under the
+	 * road tool moved it, with no way to decline.
+	 */
+	void ToggleGestureMode();
+	EGestureMode GetGestureMode() const;
+
+	/** Whether the LIT tool exposes anything to edit - what greys the Edit button out, so
+	 *  the bar answers "why can I not edit this" rather than lighting over a mode that would
+	 *  do nothing. Reads FToolRegistration::EditHandles, the one list. */
+	bool ActiveToolHasEditHandles() const;
+
 	/** Forwards to the camera component - see UBuildCameraComponent::IsWatchingAgent. */
 	bool IsWatchingAgent() const;
 	bool IsGuidelineOverlayOn() const { return bShowGuidelines; }

@@ -85,6 +85,21 @@ namespace
 		Out.Add(Make(TEXT("edit.build"), EActionSection::Edit, LOCTEXT("Build", "Build"), EKeys::Enter, false,
 			[](ARoadBuildController& C) { C.OnBuild(); }, Never,
 			[](const ARoadBuildController& C) { return C.GetToolReadout().bCommittable; }));
+		// EDIT MODE: the second axis, and the reason it is here rather than in the Tools
+		// section is that it is not a tool - it changes what EVERY tool's gesture means. A
+		// tenth entry on the tool row would put it in the row whose whole meaning is "which
+		// one of these am I holding".
+		//
+		// M, NOT E. Q/E is camera turn, polled every frame in UpdateView, so Edit on E would
+		// rotate the view while toggling. M is free, and it is the key a Cities player already
+		// has in their fingers from Move It - as well as being mnemonic for move and merge.
+		//
+		// GREYED when the lit tool exposes no handles, so the bar answers "why can I not edit
+		// this" instead of lighting over a mode that would do nothing at all.
+		Out.Add(Make(TEXT("edit.editmode"), EActionSection::Edit, LOCTEXT("EditMode", "Edit"), EKeys::M, false,
+			[](ARoadBuildController& C) { C.ToggleGestureMode(); },
+			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Edit; },
+			[](const ARoadBuildController& C) { return C.ActiveToolHasEditHandles(); }));
 		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
 			[](ARoadBuildController& C) { C.ToggleClickModifier(EClickModifier::Remove); },
 			[](const ARoadBuildController& C) { return C.GetClickModifier() == EClickModifier::Remove; }, Always));
