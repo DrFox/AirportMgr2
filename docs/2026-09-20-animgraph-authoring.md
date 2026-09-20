@@ -82,6 +82,14 @@ decision, not a documentation one.
 That is the argument for authoring rather than clicking in one line: the click cannot be
 diffed.
 
+## The worked example in the repo
+
+`Tools/wire_fueltruck_anim.py` is this whole document as a runnable script: it authors
+`ABP_FuelTruck1`'s six bones, compiles, saves, and then reads the graph back and fails bone
+by bone if anything disagrees. `--verify` runs the check alone and changes nothing. It lives
+in `Tools/` and not `Tools/Python/` deliberately - everything in there is a commandlet that
+needs the editor CLOSED, and this needs it UP. Copy it for the next model.
+
 ## The calls, in the form that works
 
 Short tool names via `Tools/Mcp.py call`, fully qualified inside `execute_tool_script`.
