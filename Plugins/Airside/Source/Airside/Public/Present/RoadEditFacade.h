@@ -80,6 +80,16 @@ class AIRSIDE_API URoadEditFacade : public UObject, public IRoadEditTarget
 	GENERATED_BODY()
 
 public:
+	/**
+	 * See IRoadEditTarget::ResolveProfileFor. Forwards to the actor, which owns the Resolve*
+	 * family this composes - the facade is a mutator, and a resolution living here as well
+	 * would be the second copy the move on 2026-09-20 existed to remove.
+	 *
+	 * WAS THE PRIVATE ResolveProfileForKind. Same question, now asked through the interface so
+	 * a tool can ask it too; the callers inside this class are unchanged.
+	 */
+	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
+
 	/** Fired wherever this class's mutators used to call ARoadNetworkActor::RebuildMesh(). */
 	DECLARE_MULTICAST_DELEGATE(FOnNetworkChanged);
 	FOnNetworkChanged OnChanged;
@@ -191,7 +201,7 @@ public:
 
 	/**
 	 * What connecting FromIndex to a point would cost, at the profile a click would ACTUALLY
-	 * lay - see ResolveProfileForKind. The ghost's price, and the reason the tool does not
+	 * lay - see ResolveProfileFor. The ghost's price, and the reason the tool does not
 	 * resolve the profile for itself.
 	 */
 	virtual FBuildQuote QuoteForConnect(int32 FromIndex, FVector2D To, ERoadKind Kind,
@@ -219,9 +229,6 @@ public:
 	URoadEditHistory* HistoryForEdit();
 
 private:
-	/** The profile a connection of this kind and width would use. One answer, two callers. */
-	URoadProfile* ResolveProfileForKind(ERoadKind Kind, int32 WidthIndex) const;
-
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
 

@@ -93,6 +93,11 @@ namespace
 			// clamp would let a test pass against behaviour a real target refuses.
 			return TaxiwayProfiles[FMath::Clamp(Index, 0, TaxiwayProfiles.Num() - 1)];
 		}
+
+		// A FAKE RESOLVES NOTHING COMPOSITE. The real rule lives on ARoadNetworkActor and is
+		// pinned by Airside.Present.ProfileResolutionIsOneRule; these fakes exist to watch what
+		// a tool ASKS FOR, not to re-implement what the actor answers.
+		virtual URoadProfile* ResolveProfileFor(ERoadKind, int32) override { return nullptr; }
 	};
 
 }
