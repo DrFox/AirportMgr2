@@ -78,20 +78,26 @@ a repro, not a re-derivation of this paragraph.
 
 ## 3. The grid
 
-Six relations by six references. Nineteen legal cells; the rest are holes, and a hole is a
-statement, not an omission.
+Six relations by SEVEN references. Twenty-five legal cells; the rest are holes, and a hole is
+a statement, not an omission.
 
 ```
-                  This drawing   Road    Runway   Apron   Stand   World
-Extending              #           -       -        -       -       -
-Level with             #           #       -        +       +       -
-Parallel / square      -           #       #        +       #       #
-Collinear              +           #       +        +       +       -
-Angled from            -           +       +        +       -       -
-Matching gap           -           #       -        -       -       -
+                  This drawing  Taxiway  Service rd  Runway   Apron   Stand   World
+Extending              #           -          -        -        -       -       -
+Level with             #           #          #        +        +       +       -
+Parallel / square      -           #          #        #        +       #       #
+Collinear              +           #          #        +        +       +       -
+Angled from            -           +          +        +        +       -       -
+Matching gap           -           #          #        -        -       -       -
 ```
 
 `#` exists today, `+` is new, `-` is a hole.
+
+**THE ROAD COLUMN BECAME TWO, later on 2026-09-20** - see section 4. Every cell that said
+"Road" doubled, and `Level with x Runway` opened as a consequence rather than by doubling: its
+hole had rested on a runway's thresholds being "ordinary nodes already served by Road", and
+that sentence stopped being true the moment one column became two. Closing it instead would
+have taken away a line that works today, which is not what a refactor may do.
 
 **ANGLED FROM WAS ADDED 2026-09-20**, after the rest of this document, on a sketch
 (`samples/suggestion.png`) labelled *"45 degrees to other road"* with the line drawn to that
@@ -110,14 +116,13 @@ road's end.
 | Hole | Why |
 |---|---|
 | Extending x anything but This drawing | Extending means "the edge this gesture is already growing". There is no other edge it could mean. |
-| Level with x Runway | A runway's alignable points are its thresholds, which are ordinary nodes and already served by Level with x Road. Splitting nodes by whether an incident segment is a runway buys a distinction nobody asked for. |
 | Level with x World | A world axis has no position, so there is no point to be level with. |
 | Collinear x World | The same: a direction with no position is not a line to be on. That is Parallel x World. |
 | Parallel x This drawing | This IS Extending. A second name for one behaviour is what this whole document exists to remove. |
 | Angled from x This drawing | `Level with x This drawing` already proposes lines through every pinned corner ALONG the anchor's reference and ACROSS it - the 0 and 90 degree members of this family off the same direction. The 90 degree spoke would be that identical line under a second name. The one hole here that is not about geometry. |
 | Angled from x Stand | A pose is a point and a direction. There is no end to radiate from. |
 | Angled from x World | A world axis has no position, so it has no end either - the same hole as `Collinear x World`. |
-| Matching gap x everything but Road | Its reference must agree with Parallel x Road's choice of nearest road, or the two stop describing one road between them - see section 5. Runway-to-taxiway separation is a real standard and a legitimate future cell, but it needs its own search, not a free ride. |
+| Matching gap x everything but the two road columns | Its reference must agree with Parallel's choice of nearest road, or the two stop describing one road between them - see section 5. Runway separation is a real standard and a legitimate future cell, but it needs its own search, not a free ride. **And the pair it measures between must be of ONE kind**: ICAO separates taxiways by the wingspan admitted, while what a service road keeps from the next one is a question of what has to drive between them, so a mixed pair keeps a gap that is neither standard. |
 
 ## 4. The types
 
@@ -130,7 +135,8 @@ namespace SnapGuide
     enum class ERelation : uint8 { Extending, LevelWith, Parallel, Collinear, MatchingGap };
 
     /** WHAT it is measured against. Declaration order breaks ties within a relation. */
-    enum class EReference : uint8 { ThisGesture, Road, Runway, Apron, Stand, World };
+    enum class EReference : uint8
+    { ThisGesture, Taxiway, ServiceRoad, Runway, Apron, Stand, World };
 
     /** The legal pairs - section 3's grid, as the one list everything reads. */
     AIRSIDE_API bool IsLegalCell(ERelation Relation, EReference Reference);
@@ -247,12 +253,17 @@ Two sections. `EActionSection` gains one value; `BuildBarWidget.cpp:55`'s `stati
 that list already agrees by construction.
 
 ```
-ALIGN BY   [Extending] [Level with] [Parallel] [Collinear] [Matching gap]
-SNAP TO    [Road] [Runway] [Apron] [Stand] [World]
+ALIGN BY   [Extending] [Level with] [Parallel] [Collinear] [Angled from] [Matching gap]
+SNAP TO    [Taxiway] [Service road] [Runway] [Apron] [Stand] [World]
 ```
 
-Ten buttons, up from eight. **Sixteen legal cells, ten buttons** - the AND is what keeps a
-toggle per cell off the bar, and is the whole reason two lists beat one.
+Twelve buttons, up from eight. **Twenty-five legal cells, twelve buttons** - the AND is what
+keeps a toggle per cell off the bar, and is the whole reason two lists beat one.
+
+**ON BY DEFAULT: Extending, Level with, Parallel, Collinear, Taxiway, Service road, World.**
+Collinear joined them on 2026-09-20 (see section 10): every ANGULAR row sits out on a free
+start, so with Collinear off the first click of every gesture was unguided until the player
+found a button nothing told them about - which is what one did.
 
 **`ThisGesture` is a column with no button, permanently on.** Extending is the ONLY cell in its
 row, so an Extending button and a This-drawing button would switch off exactly the same
@@ -281,10 +292,15 @@ little if the apron tool itself is unguided.
   placed so far, tagged `ThisGesture`. Identical in shape to `FPlotPlaceTool`'s anchor. The drag
   point is a **boundary**.
 
-Still unguided, and named so the absence stays deliberate: Select, Guidelines, Holding point,
-and **Stand placement**. Stand placement has the strongest case of the four - its drag IS a
-heading, so an angular guide would square a stand to the taxiway it serves or to the apron edge
-it sits on - and is the obvious next one. Nothing built so far needs it.
+- **`FStandPlaceTool`** - guided on its FREE START only, and it names its LastHeading as the
+  anchor's reference. Without a reference `FPointAlignGuideSource` declines outright, so the
+  "level with a row of stands" the Stand column exists for would never have been proposed. Once
+  aiming it is not idle, and there is no position left to constrain.
+
+Still unguided, and named so the absence stays deliberate: Select, Guidelines and Holding
+point. The first is not a placement; the other two click EXISTING nodes, where the snap chain
+has already decided. Fuel depot has an anchor but no free start: its first click must land on a
+service road, so a second rule about where that anchor may go would be a second opinion.
 
 **The apron tool's anchor lives on `FOutlineDrawTool`**, not on `FApronDrawTool`: what makes an
 anchor there is the OUTLINE gesture, which is the base class's whole job, and it names "this
@@ -358,3 +374,54 @@ worth restructuring rather than patching.
 - **Level with x Apron corner** is listed as a legal cell but has the weakest case on the grid;
   if it proves noisy in PIE it is the first cell to cut, and cutting it is a one-line edit to
   `IsLegalCell` plus its row in this table.
+
+## 12. The free start
+
+**Added 2026-09-20 from PIE**, after sections 1 to 11 were written and built:
+*"I think a lot of the tools would benefit from snapping to guides before the first place of
+the road. It doesnt make sense for all of them, but some it does."*
+
+**One virtual, not per-tool boilerplate.** `IBuildTool::WantsFreeStartGuides()` answers false by
+default; the base `DescribeGuideAnchor` returns an anchor with `bFreeStart` set when it is true
+and the tool is idle, and `FBuildSession::MakeContext` fills that anchor's `Origin` from the
+plane hit. An override that declines must DELEGATE to the base rather than `return false` -
+that is the one line each opted-in tool pays, and `Airside.Tool.BuildSession` names the five so
+an override that forgot is a failure rather than a silence.
+
+**It costs nothing to keep it honest, because the arbiter already does.** With the origin ON
+the cursor, `SnapGuide::Arbitrate` can measure no direction from one to the other, so every
+`EFit::Angular` candidate sits out of its own accord. A free start therefore offers exactly the
+POSITIONAL rows - and `Level with` only where the tool also names a `Reference` direction for
+those lines to run along, which is why `FStandPlaceTool` names its heading.
+
+| Tool | | Why |
+|---|---|---|
+| Taxiway (1), Road (9) | yes | start a road in line with an existing one, or a matching gap from a pair |
+| Runway (6) | yes | place a threshold in line with another runway, or a standard separation off it |
+| Apron (2) | yes | start an outline flush with a road edge, or level with a corner |
+| Stand (3) | yes | positioning a stand level with a row of stands is what the Stand column is for |
+| Fuel depot (0) | no | its first click MUST land on a service road - already snap-constrained, and a second rule about where its anchor may go would be a second opinion |
+| Guidelines (5), Holding point (8) | no | both click EXISTING nodes; the snap chain has already decided |
+| Select (4) | no | not a placement |
+
+**A TOOL MUST ALSO CONSUME IT.** Describing an anchor and stopping is what shipped earlier on
+2026-09-20 and showed the player nothing: `FBuildSession` resolves the guide onto the context
+and NOTHING draws it until a tool asks. Each opted-in tool's first click takes
+`FToolContext::GuidedCursor()` and its preview emits the dashed line.
+`Airside.Tool.FreeStartToolsDrawTheirGuide` and `Airside.Tool.FreeStartClickLandsOnTheGuide`
+measure the drawing and the click, never the anchor, for exactly that reason.
+
+**And `Collinear` is on by default because of it.** Section 7 states the default; the reason
+lives here. With every angular row sitting out by construction, Collinear is the only row a
+free start can offer anything from, so with it off the whole of this section was dead on a new
+airport. `Airside.Tool.FreeStartWorksOnTheShippedDefaults` takes the shipped settings
+deliberately - the one test in its file that does.
+
+### Still open
+
+- **`Level with x Stand` needs a tool to feed it.** `FStandPlaceTool` now supplies every live
+  entity as a `FGuidePoint` tagged `Stand`, UNBOUNDED by `SearchRadiusUu` because this function
+  is handed no cursor to measure a reach from. There are tens of entities on a field and not
+  thousands, so nothing breaks; it is the second number after the candidate reserve that will
+  want a PIE pass.
+- **`Collinear x Stand` is a declared cell with no source.** It was one before this work too.
