@@ -81,12 +81,19 @@ TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content)
 		// unauthored game still reserves a sensible depot instead of one of everything. A
 		// shed comes up three times a cycle and runs three bays; a pump comes up once and
 		// never groups. These are the figures the design doc names.
+		// MaxPerPlot SAYS WHAT A DEPOT IS. Six sheds and two pumps is a fuel depot; seven
+		// pumps is what a band running to the plot edge produces, and twelve is what the
+		// sampler produced. The number is handed down, not worked out from a layout.
 		switch (Module)
 		{
-		case EDepotModule::Shed: Spec.ReserveWeight = 3; Spec.RunCap = 3; break;
-		case EDepotModule::Tank: Spec.ReserveWeight = 2; Spec.RunCap = 1; break;
-		case EDepotModule::Pump: Spec.ReserveWeight = 1; Spec.RunCap = 1; break;
-		default:                 Spec.ReserveWeight = 1; Spec.RunCap = 1; break;
+		case EDepotModule::Shed:
+			Spec.ReserveWeight = 3; Spec.RunCap = 3; Spec.MaxPerPlot = 6; break;
+		case EDepotModule::Tank:
+			Spec.ReserveWeight = 2; Spec.RunCap = 1; Spec.MaxPerPlot = 4; break;
+		case EDepotModule::Pump:
+			Spec.ReserveWeight = 1; Spec.RunCap = 1; Spec.MaxPerPlot = 2; break;
+		default:
+			Spec.ReserveWeight = 1; Spec.RunCap = 1; Spec.MaxPerPlot = 2; break;
 		}
 
 		// AN AUTHORED KIT OVERRIDES BOTH. Tuning the mix is then one number on an asset
@@ -100,6 +107,7 @@ TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content)
 					Spec.ReserveWeight = FMath::Max(Kit->ReserveWeight, 0);
 					Spec.RunCap = FMath::Max(Kit->RunCap, 1);
 					Spec.ApronUu = Kit->ApronUu;
+					Spec.MaxPerPlot = FMath::Max(Kit->MaxPerPlot, 0);
 				}
 			}
 		}

@@ -5,18 +5,6 @@
 
 namespace
 {
-	/** The inward normal of the frontage: which way is INTO the plot. */
-	FVector2D InwardOf(TArrayView<const FVector2D> Outline, const FVector2D& A, const FVector2D& B)
-	{
-		const FVector2D Along = (B - A).GetSafeNormal();
-		const FVector2D Left = RoadGeom::PerpCCW(Along);
-
-		// Read off the polygon's winding rather than assumed counter-clockwise, exactly as
-		// FitBays does: a plot stored the other way round would otherwise aim every module
-		// out of the plot and across the road.
-		return RoadGeom::PolygonArea(Outline) > 0.0 ? Left : -Left;
-	}
-
 	/** The outline's axis-aligned bounds, which is where candidate points are drawn from. */
 	void BoundsOf(TArrayView<const FVector2D> Outline, FVector2D& OutMin, FVector2D& OutMax)
 	{
@@ -291,7 +279,7 @@ namespace
 
 		Out.Outline = Outline;
 		Out.Gate = Gate;
-		Out.Inward = InwardOf(Outline, FrontageA, FrontageB);
+		Out.Inward = PlotYard::InwardOf(Outline, FrontageA, FrontageB);
 		Out.Across = RoadGeom::PerpCCW(Out.Inward);
 		Out.InwardBearing = RoadGeom::Bearing(Out.Inward);
 
@@ -312,6 +300,28 @@ namespace
 		Out.Stream = FRandomStream(Seed);
 		return true;
 	}
+}
+
+FVector2D PlotYard::InwardOf(TArrayView<const FVector2D> Outline,
+	FVector2D FrontageA, FVector2D FrontageB)
+{
+	const FVector2D Along = (FrontageB - FrontageA).GetSafeNormal();
+	const FVector2D Left = RoadGeom::PerpCCW(Along);
+
+	// Read off the polygon's winding rather than assumed counter-clockwise, exactly as
+	// FitBays does: a plot stored the other way round would otherwise aim every module out of
+	// the plot and across the road.
+	return RoadGeom::PolygonArea(Outline) > 0.0 ? Left : -Left;
+}
+
+bool PlotYard::StandsOverlap(const FStand& A, const FFootprint& FootprintA,
+	const FStand& B, const FFootprint& FootprintB)
+{
+	TArray<FVector2D> CornersA;
+	TArray<FVector2D> CornersB;
+	StandCorners(A, FootprintA, CornersA);
+	StandCorners(B, FootprintB, CornersB);
+	return QuadsIntersect(CornersA, CornersB);
 }
 
 void PlotYard::StandCorners(const FStand& Stand, const FFootprint& Footprint,

@@ -15,7 +15,7 @@ namespace
 	TArray<FVector2D> ThreeBayPlot(double X)
 	{
 		return { FVector2D(X, 0.0), FVector2D(X + 1200.0, 0.0),
-		         FVector2D(X + 1200.0, 800.0), FVector2D(X, 800.0) };
+		         FVector2D(X + 1200.0, 1200.0), FVector2D(X, 1200.0) };
 	}
 }
 
@@ -148,8 +148,8 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 
 	// Clockwise: the rectangle the gesture commits, walked the other way round.
 	const TArray<FVector2D> Clockwise = {
-		FVector2D(0.0, 0.0), FVector2D(0.0, 800.0),
-		FVector2D(1200.0, 800.0), FVector2D(1200.0, 0.0) };
+		FVector2D(0.0, 0.0), FVector2D(0.0, 1200.0),
+		FVector2D(1200.0, 1200.0), FVector2D(1200.0, 0.0) };
 
 	// The frontage in THAT winding order: the y = 0 edge runs from (1200,0) to (0,0).
 	IRoadEditTarget* Target = Actor;

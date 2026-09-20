@@ -96,6 +96,20 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Kit") int32 RunCap = 1;
 
+	/**
+	 * The most of this kit any one plot may hold. 0 means no cap.
+	 *
+	 * A PROPERTY OF THE KIT, NOT A CAPACITY FORMULA. It says what a fuel depot IS - six sheds
+	 * and two pumps is a depot, twelve pumps is not - and every strategy reads the same
+	 * number and arranges them however it likes. Deriving a count from a layout's own
+	 * arithmetic is the thing the design doc forbids; stating one on the asset is not.
+	 *
+	 * WITHOUT IT A BAND RUNS TO THE PLOT EDGE, which is the screenshot's failure in rows
+	 * rather than scattered: a 45 m plot gave seven pumps because seven is how many fit
+	 * between the gate corridor and the shed band.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Kit") int32 MaxPerPlot = 0;
+
 	UPROPERTY(EditAnywhere, Category = "Kit") EKitAssembly Assembly = EKitAssembly::Baked;
 
 	/**

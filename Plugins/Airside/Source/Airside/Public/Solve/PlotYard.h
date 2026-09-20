@@ -156,6 +156,15 @@ namespace PlotYard
 
 		/** Modules of this kit grouped into one stand at one heading. 1 = never grouped. */
 		int32 RunCap = 1;
+
+		/**
+		 * The most of this kit one plot may hold. 0 means no cap.
+		 *
+		 * WHAT A DEPOT IS, handed down rather than worked out: six sheds and two pumps is a
+		 * fuel depot and twelve pumps is not, and no arrangement of them changes that. A
+		 * strategy obeys this; it does not compute one of its own.
+		 */
+		int32 MaxPerPlot = 0;
 	};
 
 	struct FReservedStand : FStand
@@ -207,6 +216,29 @@ namespace PlotYard
 	 */
 	AIRSIDE_API void StandCorners(const FStand& Stand, const FFootprint& Footprint,
 		TArray<FVector2D>& OutCorners);
+
+	/**
+	 * The inward normal of the frontage: which way is INTO the plot.
+	 *
+	 * PUBLIC because a prescriptive layout needs the plot's own frame before it can place
+	 * anything, and deriving it a second time in Build/ would be a second opinion about which
+	 * way a depot faces - the failure BuildFuelDepot's comment records having already made.
+	 *
+	 * Read off the polygon's winding rather than assumed counter-clockwise: a plot stored the
+	 * other way round would otherwise aim every module out across the road.
+	 */
+	AIRSIDE_API FVector2D InwardOf(TArrayView<const FVector2D> Outline,
+		FVector2D FrontageA, FVector2D FrontageB);
+
+	/**
+	 * Do these two stands' rectangles intersect? Separating axis.
+	 *
+	 * PUBLIC for the same reason StandCorners is: a caller that computed overlap its own way
+	 * would be checking its own arithmetic rather than the solver's. One derivation, now
+	 * three consumers - the sampler, the band layout and the tests.
+	 */
+	AIRSIDE_API bool StandsOverlap(const FStand& A, const FFootprint& FootprintA,
+		const FStand& B, const FFootprint& FootprintB);
 
 	/**
 	 * Lay the footprints out in the plot.

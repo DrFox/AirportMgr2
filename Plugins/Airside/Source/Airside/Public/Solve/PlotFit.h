@@ -24,9 +24,20 @@ namespace PlotFit
 	 */
 	inline constexpr double BayWidthUu = 400.0;
 
-	/** 8 m, the concept sheet's site depth. ONE ROW ONLY: a plot drawn deeper is yard, not
-	 *  a second rank of bays. That keeps the fit arithmetic instead of a packing solver. */
-	inline constexpr double BayDepthUu = 800.0;
+	/**
+	 * 12 m. ONE ROW ONLY: a plot drawn deeper is yard, not a second rank of bays. That keeps
+	 * the fit arithmetic instead of a packing solver.
+	 *
+	 * WAS 8 m, THE CONCEPT SHEET'S SITE DEPTH, and that number could not survive an apron. A
+	 * shed is 8 m deep - exactly the whole site - so even before anything needed clear ground
+	 * the smallest legal plot had none in front of the door. The moment the shed got its 4 m
+	 * apron the Tier 1 depot stopped fitting in its own site: 12 m of claimed depth in an 8 m
+	 * plot, reserving nothing at all. Airside.Build.FuelYardFitsTheConceptSheet caught it.
+	 *
+	 * THE SHEET AND THE GAME NOW DISAGREE BY 4 m, deliberately. The sheet's plan view says
+	 * 8.0 m and it was drawn before a truck needed somewhere to stand.
+	 */
+	inline constexpr double BayDepthUu = 1200.0;
 
 	/**
 	 * How far a corner probe is pulled in from the bay's own corner before asking whether

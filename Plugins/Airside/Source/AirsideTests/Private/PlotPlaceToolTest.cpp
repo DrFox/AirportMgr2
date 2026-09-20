@@ -576,8 +576,8 @@ bool FPlotAnchorsSnapToTheFrontageStepTest::RunTest(const FString& Parameters)
 	// sit flush - which is what the snap dots promise the player.
 	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
 	DrawPlot(Tool, Actor, FVector2D(517.0, 200.0), FVector2D(1717.0, 200.0),
-		FVector2D(1100.0, 1600.0));
-	Tool.OnCommit(PlotAt(Actor, FVector2D(1100.0, 1600.0)));
+		FVector2D(1100.0, 2200.0));
+	Tool.OnCommit(PlotAt(Actor, FVector2D(1100.0, 2200.0)));
 
 	if (!TestEqual(TEXT("a depot is built"), LiveEntities(Actor), 1)) { return false; }
 
@@ -709,8 +709,8 @@ bool FPlotClearsTheCarriagewayTest::RunTest(const FString& Parameters)
 	LayServiceRoad(Actor, 0.0);
 	FPlotPlaceTool South(EPlaceableEntity::FuelDepot);
 	DrawPlot(South, Actor, FVector2D(0.0, -200.0), FVector2D(1200.0, -200.0),
-		FVector2D(600.0, -1600.0));
-	South.OnCommit(PlotAt(Actor, FVector2D(600.0, -1600.0)));
+		FVector2D(600.0, -2200.0));
+	South.OnCommit(PlotAt(Actor, FVector2D(600.0, -2200.0)));
 
 	const FEntityInstance* Below = nullptr;
 	for (const FEntityInstance& Entity : Actor->Network->GetEntities())

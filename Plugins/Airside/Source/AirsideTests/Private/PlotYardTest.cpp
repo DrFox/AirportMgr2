@@ -55,48 +55,10 @@ namespace
 		return F;
 	}
 
-	/** True when two stands' corner rectangles intersect, by separating axis. */
-	bool StandsOverlap(const PlotYard::FStand& A, const PlotYard::FFootprint& FA,
-		const PlotYard::FStand& B, const PlotYard::FFootprint& FB)
-	{
-		TArray<FVector2D> CornersA;
-		TArray<FVector2D> CornersB;
-		PlotYard::StandCorners(A, FA, CornersA);
-		PlotYard::StandCorners(B, FB, CornersB);
-
-		// Four candidate axes - two per rectangle. Two convex shapes miss each other if and
-		// only if some axis separates them, so finding one is proof of no overlap.
-		const TArray<FVector2D> Axes = {
-			(CornersA[1] - CornersA[0]).GetSafeNormal(),
-			(CornersA[3] - CornersA[0]).GetSafeNormal(),
-			(CornersB[1] - CornersB[0]).GetSafeNormal(),
-			(CornersB[3] - CornersB[0]).GetSafeNormal() };
-
-		for (const FVector2D& Axis : Axes)
-		{
-			double MinA = TNumericLimits<double>::Max();
-			double MaxA = -TNumericLimits<double>::Max();
-			double MinB = TNumericLimits<double>::Max();
-			double MaxB = -TNumericLimits<double>::Max();
-			for (const FVector2D& P : CornersA)
-			{
-				const double D = FVector2D::DotProduct(P, Axis);
-				MinA = FMath::Min(MinA, D);
-				MaxA = FMath::Max(MaxA, D);
-			}
-			for (const FVector2D& P : CornersB)
-			{
-				const double D = FVector2D::DotProduct(P, Axis);
-				MinB = FMath::Min(MinB, D);
-				MaxB = FMath::Max(MaxB, D);
-			}
-			if (MaxA < MinB || MaxB < MinA)
-			{
-				return false;
-			}
-		}
-		return true;
-	}
+	// StandsOverlap USED TO BE DEFINED HERE, by separating axis, as a private copy.
+	// PlotYard::StandsOverlap is now public and this file calls that: one derivation, and a
+	// test that computed overlap its own way would be checking its own arithmetic rather than
+	// the solver's - the same reason StandCorners is public.
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -284,7 +246,8 @@ bool FPlotYardDoesNotOverlapModulesTest::RunTest(const FString& Parameters)
 				// styling - it is a mesh through a mesh, and no camera angle hides it.
 				TestFalse(*FString::Printf(TEXT("seed %d: module %d and %d do not intersect"),
 					Seed, A, B),
-					StandsOverlap(Yard.Stands[A], Footprints[A], Yard.Stands[B], Footprints[B]));
+					PlotYard::StandsOverlap(Yard.Stands[A], Footprints[A],
+						Yard.Stands[B], Footprints[B]));
 			}
 		}
 	}
