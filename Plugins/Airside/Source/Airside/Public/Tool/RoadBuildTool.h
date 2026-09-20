@@ -299,6 +299,20 @@ enum class EPreviewStyle : uint8
 	 * and renumbering it repoints any value already serialised against it.
 	 */
 	Guide,
+
+	/**
+	 * A point the Edit mode can grab. Drawn for EVERY handle the lit tool exposes, so "what
+	 * can I move here" is answered by looking rather than by trying - which is the whole
+	 * reason the mode is discoverable at all.
+	 *
+	 * NOT Hover, which already means "what a click would select right now" and is drawn for
+	 * exactly ONE thing, the pickable under the cursor. These two are on screen in the same
+	 * frame and touching the same point, so they are two meanings and two styles.
+	 *
+	 * AT THE END, like Pinned, Provisional and Guide above and for the same reason: this is
+	 * a UENUM and renumbering it repoints any value already serialised against it.
+	 */
+	Handle,
 };
 
 /**

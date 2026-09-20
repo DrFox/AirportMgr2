@@ -86,13 +86,13 @@ private:
 };
 
 /**
- * Drawing and editing roads: place, chain, split, delete, and drag a node about.
+ * Drawing roads: place, chain, split and delete.
  *
- * Dragging is deliberately NOT a state. The states model the DRAWING PROGRESSION - what a
- * click means next - and a drag advances none of it: it edits geometry that already exists
- * and leaves the chain exactly as it found it. Making it a state would give every other
- * state a back-pointer to return to, which is a transition graph invented to fit a pattern
- * rather than to describe the tool.
+ * IT NO LONGER DRAGS A NODE. It did, and any press-and-travel over one reshaped the road
+ * with no way to decline - mid-chain, a slightly-moved click on a junction moved the
+ * junction instead of continuing from it. Editing placed geometry is a deliberate act now
+ * and lives in FEditTool, behind the Edit mode. The argument for why a drag was not one of
+ * the states below travelled with the code, to FEditTool::DragNode.
  */
 class AIRSIDE_API FRoadDrawTool : public IBuildTool
 {
@@ -112,9 +112,6 @@ public:
 
 	virtual void OnClick(const FToolContext& Context) override;
 	virtual void OnCancel(const FToolContext& Context) override;
-	virtual void OnDragBegin(const FToolContext& Context) override;
-	virtual void OnDrag(const FToolContext& Context) override;
-	virtual void OnDragEnd(const FToolContext& Context) override;
 	virtual void Tick(const FToolContext& Context) override;
 	virtual void OnDeactivate(const FToolContext& Context) override;
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
@@ -160,9 +157,6 @@ private:
 	void PreviewRemoval(const FToolContext& Context, IToolPreviewSink& Sink) const;
 
 	TUniquePtr<IRoadDrawState> State;
-
-	/** Node held by an in-progress drag, or INDEX_NONE. A gesture, not a drawing step. */
-	int32 DragNode = INDEX_NONE;
 
 	/** Which cross-section this tool lays. Fixed at construction by the registry entry that
 	 *  made it - a tool is picked, never transitioned into, so this never changes. */

@@ -248,6 +248,161 @@ bool FSnapChainExcludesTheDraggedNodeTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeDragSnapsExactlyToANodeTest,
+	"Airside.Tool.EditModeDragSnapsExactlyToANode",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeDragSnapsExactlyToANodeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A road A-B to grab the end of, and a separate road C-D far enough away that only C
+	// can claim the drop. C needs an arm of its own or it is not an AirsideNode handle.
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(12000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	const int32 C = Actor->PlaceNode(FVector2D(0.0, 20000.0));
+	const int32 D = Actor->PlaceNode(FVector2D(12000.0, 20000.0));
+	Actor->ConnectNodes(C, D);
+
+	const FVector2D CPosition = Actor->GetNetwork()->GetNodes()[C].Position;
+
+	FBuildSession Session;
+	Session.SelectTool(1);                       // Taxiway: lights AirsideNode handles
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	IBuildTool* Tool = Session.GetActiveTool();
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+
+	// Just SHORT of C - inside its snap reach but not on it. A CLICK here would land on C
+	// exactly; the whole point of this feature is that the drag now does the same.
+	const FVector2D NearC = CPosition - FVector2D(0.0, 90.0);
+	Tool->OnDrag(Session.MakeContext(Actor, NearC, Tunables, false, false));
+
+	const FVector2D Landed = Actor->GetNetwork()->GetNodes()[A].Position;
+
+	// BITWISE, not within a tolerance. FRoadSnapResult's contract is that a Node snap
+	// carries the node's stored position copied verbatim - "not the cursor, and not a
+	// recomputed value" - and a near miss here is a drag that merely LOOKS snapped, which
+	// is the thing a merge cannot be built on.
+	TestTrue(TEXT("the dragged node lands on exactly the coordinates the graph holds for the "
+				  "node it snapped to, as a click would"),
+		Landed.X == CPosition.X && Landed.Y == CPosition.Y);
+
+	// AND IT REALLY TRAVELLED. Without the control, a drag that silently did nothing would
+	// pass the assertion above the moment the node happened to start there.
+	TestTrue(TEXT("and it is not simply where it started"), Landed.Y != 0.0);
+
+	Tool->OnDragEnd(Session.MakeContext(Actor, NearC, Tunables, false, false));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadDrawToolNoLongerDragsNodesTest,
+	"Airside.Tool.RoadDrawToolNoLongerDragsNodes",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadDrawToolNoLongerDragsNodesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(12000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	const FVector2D Was = Actor->GetNetwork()->GetNodes()[A].Position;
+
+	FBuildSession Session;
+	Session.SelectTool(1);                       // Taxiway, in BUILD mode
+	FBuildSessionTunables Tunables;
+
+	IBuildTool* Tool = Session.GetActiveTool();
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+
+	// THE MISCLICK, PINNED. Any press that travelled over a node used to reshape the road,
+	// with no way to decline it. Editing is deliberate now, so a drag under a build tool
+	// must move nothing at all.
+	const FVector2D Now = Actor->GetNetwork()->GetNodes()[A].Position;
+	TestTrue(TEXT("a drag under the road tool moves nothing - editing needs the Edit mode"),
+		Now.X == Was.X && Now.Y == Was.Y);
+
+	// AND THE CONTROL: the identical drag in Edit does move it, so this is measuring the
+	// mode rather than a drag that is broken everywhere.
+	Session.SetGestureMode(EGestureMode::Edit);
+	IBuildTool* Editing = Session.GetActiveTool();
+	Editing->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	Editing->OnDrag(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+	Editing->OnDragEnd(Session.MakeContext(Actor, FVector2D(3000.0, 3000.0), Tunables, false, false));
+
+	const FVector2D Moved = Actor->GetNetwork()->GetNodes()[A].Position;
+	TestTrue(TEXT("the same drag in Edit does move it"),
+		Moved.X != Was.X || Moved.Y != Was.Y);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditHandlesAreDrawnForTheLitToolTest,
+	"Airside.Tool.EditHandlesAreDrawnForTheLitTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// One taxiway and one service road, so the filter has something to get wrong.
+	const int32 T0 = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 T1 = Actor->PlaceNode(FVector2D(12000.0, 0.0));
+	Actor->ConnectNodes(T0, T1, ERoadKind::Taxiway);
+	const int32 R0 = Actor->PlaceNode(FVector2D(0.0, 30000.0));
+	const int32 R1 = Actor->PlaceNode(FVector2D(12000.0, 30000.0));
+	Actor->ConnectNodes(R0, R1, ERoadKind::ServiceRoad);
+
+	FBuildSession Session;
+	FBuildSessionTunables Tunables;
+	Session.SetGestureMode(EGestureMode::Edit);
+
+	// DRAWING IS THE HALF THAT MATTERS. A filter that computed the right set and drew
+	// nothing would leave the mode looking identical to having no handles at all - the
+	// failure IBuildTool::WantsFreeStartGuides records for guides.
+	Session.SelectTool(1);                       // Taxiway
+	{
+		FEditToolSink Sink;
+		Session.GetActiveTool()->BuildPreview(
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+		TestEqual(TEXT("the taxiway's two nodes are drawn as handles, and the service road's "
+					   "are not"), Sink.CountMarkers(EPreviewStyle::Handle), 2);
+	}
+
+	Session.SelectTool(7);                       // Road (service road) - registry index 7
+	{
+		FEditToolSink Sink;
+		Session.GetActiveTool()->BuildPreview(
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+		TestEqual(TEXT("switching the lit tool switches which nodes are grabbable"),
+			Sink.CountMarkers(EPreviewStyle::Handle), 2);
+	}
+
+	// AND NOTHING AT ALL OUTSIDE EDIT, so the handles cannot litter the build modes.
+	Session.SetGestureMode(EGestureMode::Build);
+	{
+		FEditToolSink Sink;
+		Session.GetActiveTool()->BuildPreview(
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+		TestEqual(TEXT("no handles are drawn while the mode is Build"),
+			Sink.CountMarkers(EPreviewStyle::Handle), 0);
+	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FEditModeNamesItselfTest,
 	"Airside.Tool.EditModeNamesItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

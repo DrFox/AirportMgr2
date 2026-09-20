@@ -538,48 +538,6 @@ void FRoadDrawTool::OnCancel(const FToolContext& Context)
 	}
 }
 
-void FRoadDrawTool::OnDragBegin(const FToolContext& Context)
-{
-	// Only a node can be dragged, and never while aiming a deletion - dragging something
-	// about to be removed would be nonsense.
-	if (Context.Target == nullptr || Context.bRemoveModifier
-		|| Context.Snap.Kind != ERoadSnapKind::Node)
-	{
-		return;
-	}
-
-	DragNode = Context.Snap.Node.Index;
-
-	// One undo step for the whole drag, not one per frame.
-	Context.Target->BeginInteractiveEdit(TEXT("move node"));
-}
-
-void FRoadDrawTool::OnDrag(const FToolContext& Context)
-{
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
-	{
-		return;
-	}
-
-	// A refused move simply does not happen, so the node stops following the cursor rather
-	// than dragging a road shorter than the solver can trim. No RebuildMesh() here any more -
-	// MoveNode notifies every successful call, drag frame included (issue #77).
-	Context.Target->MoveNode(DragNode, Context.Cursor);
-}
-
-void FRoadDrawTool::OnDragEnd(const FToolContext& Context)
-{
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
-	{
-		return;
-	}
-
-	DragNode = INDEX_NONE;
-	Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-	// No RebuildMesh() here any more - the last OnDrag's MoveNode already notified for the
-	// final position; EndInteractiveEdit only closes the undo step, it moves nothing (#77).
-}
-
 void FRoadDrawTool::Tick(const FToolContext& Context)
 {
 	if (Context.Target == nullptr)
@@ -589,10 +547,9 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 
 	const int32 Pending = GetPendingNode();
 
-	// No ghost while a deletion is being aimed or a node is being dragged: in one the
-	// preview would offer to build the thing about to be removed, and in the other the
-	// road being reshaped is already on screen.
-	if (Pending == INDEX_NONE || Context.bRemoveModifier || DragNode != INDEX_NONE)
+	// No ghost while a deletion is being aimed: the preview would otherwise offer to build
+	// the very thing that is about to be removed.
+	if (Pending == INDEX_NONE || Context.bRemoveModifier)
 	{
 		Context.Target->HideGhost();
 		return;
@@ -618,12 +575,6 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 	// Abandon the part-drawn chain rather than leaving it to reappear when this tool is
 	// picked again - a click landing on a road started minutes ago and forgotten.
 	OnCancel(Context);
-
-	if (DragNode != INDEX_NONE && Context.Target != nullptr)
-	{
-		Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-		DragNode = INDEX_NONE;
-	}
 
 	if (Context.Target != nullptr)
 	{

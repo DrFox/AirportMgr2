@@ -37,7 +37,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			EEditHandleKind::None },
 
 		{ EKeys::One,   TEXT("Taxiway"),  LOCTEXT("Taxiway",   "Taxiway"),
-			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node, drag a node to move it. The taxiway key pressed again cycles the width."),
+			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node. The taxiway key pressed again cycles the width. Press M to edit placed nodes."),
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); },
 			EEditHandleKind::AirsideNode },
 		{ EKeys::Two,   TEXT("Apron"),    LOCTEXT("Apron",     "Apron"),
@@ -69,7 +69,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
 		// for why this is not a second class.
 		{ EKeys::Nine,  TEXT("Road"),     LOCTEXT("Road",      "Road"),
-			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node."),
+			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node. Press M to edit placed nodes."),
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); },
 			EEditHandleKind::ServiceRoadNode },
 

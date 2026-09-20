@@ -33,19 +33,54 @@ public:
 	/** Nothing. Edit does not build - see the class comment. */
 	virtual void OnClick(const FToolContext& Context) override {}
 
-	/** Nothing yet. A drag is ended by releasing it, not by cancelling; once a selection
-	 *  exists this is where it clears. */
+	/** Nothing yet. A drag ends by being released, not cancelled; once a selection exists
+	 *  this is where it clears. */
 	virtual void OnCancel(const FToolContext& Context) override {}
+
+	virtual void OnDragBegin(const FToolContext& Context) override;
+	virtual void OnDrag(const FToolContext& Context) override;
+	virtual void OnDragEnd(const FToolContext& Context) override;
+	virtual void OnDeactivate(const FToolContext& Context) override;
 
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
 
 	/**
-	 * Always idle for now: nothing is part-drawn because nothing is drawn.
+	 * Idle unless a drag is live.
 	 *
-	 * It matters that this is true rather than merely unused - FBuildSession::
-	 * CancelActiveGesture reads it, and an edit tool that claimed to be mid-gesture would
-	 * swallow the first cancel and leave the player pressing escape twice to put the mode
-	 * down. A drag makes this answer conditional; a drag is a gesture, not a drawing step.
+	 * It matters that this is honest rather than merely unused - FBuildSession::
+	 * CancelActiveGesture reads it, and a tool that claimed to be mid-gesture with nothing
+	 * in hand would swallow the first cancel and leave the player pressing escape twice.
 	 */
-	virtual bool IsIdle() const override { return true; }
+	virtual bool IsIdle() const override { return DragNode == INDEX_NONE; }
+
+	/** The node in hand, so MakeContext can keep the snap chain off it. */
+	virtual int32 GetSnapExclusion() const override { return DragNode; }
+
+	/** The node a live drag is moving, or INDEX_NONE. For tests and the overlay. */
+	int32 GetDragNode() const { return DragNode; }
+
+	/**
+	 * Every node slot the lit tool exposes, in index order.
+	 *
+	 * STATIC, so the preview and the drag cannot disagree about what is grabbable: the one
+	 * answer, asked twice. A test can call it directly for the same reason.
+	 *
+	 * NODES ONLY. An apron corner is not a node and gets its own path rather than being
+	 * squeezed into a node index - a wrong index reaching MoveNode is a silent move of the
+	 * wrong thing.
+	 */
+	static void GatherNodeHandles(const FToolContext& Context, TArray<int32>& Out);
+
+private:
+	/**
+	 * The node held by a live drag, or INDEX_NONE.
+	 *
+	 * A GESTURE, NOT A DRAWING STEP - the distinction FRoadDrawTool's header used to draw
+	 * about its own drag, and which travelled here with the code. A drag advances no
+	 * progression: it edits geometry that already exists and leaves everything else exactly
+	 * as it found it. Modelling it as a state would give every other state a back-pointer
+	 * to return to, which is a transition graph invented to fit a pattern rather than to
+	 * describe the tool.
+	 */
+	int32 DragNode = INDEX_NONE;
 };
