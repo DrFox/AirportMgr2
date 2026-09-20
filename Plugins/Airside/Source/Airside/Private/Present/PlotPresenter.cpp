@@ -2,9 +2,11 @@
 
 #include "AirsideLog.h"
 #include "Build/DepotKit.h"
+#include "Build/PlotLayoutStrategy.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/PlotYard.h"
@@ -193,8 +195,22 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 		// RE-DERIVED, NEVER SAVED. Every input is already on the entity and DepotYardSeed
 		// keys off the pose, so the same plot solves the same way on every rebuild and the
 		// save keeps only what the player bought.
-		const PlotYard::FReservation Reservation = PlotYard::Reserve(Entity.Outline,
-			FrontageA, FrontageB, Entity.Position, Specs, DepotYardSeed(Entity.Position));
+		//
+		// THE PLOT TYPE DECIDES ITS OWN ARRANGEMENT. A fuel depot bands; something meant to
+		// look unplanned still scatters. A null definition keeps the scatter, which is what
+		// an un-migrated save has.
+		FPlotSite PlotSite;
+		PlotSite.Outline = Entity.Outline;
+		PlotSite.FrontageA = FrontageA;
+		PlotSite.FrontageB = FrontageB;
+		PlotSite.Gate = Entity.Position;
+		PlotSite.Seed = DepotYardSeed(Entity.Position);
+
+		const EPlotLayout Layout = Entity.Definition != nullptr
+			? Entity.Definition->Layout : EPlotLayout::Scatter;
+
+		const PlotYard::FReservation Reservation =
+			PlotLayoutFor(Layout)->Solve(PlotSite, Specs);
 
 		// HOW MANY OF EACH THE PLAYER HAS BOUGHT. Entity.Modules is still the owned list and
 		// still this depot's only record in the save.
@@ -237,11 +253,18 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			const FVector2D Across = RoadGeom::PerpCCW(Forward);
 			const double FullWidth = One.WidthUu * Stand.RunLength;
 
+			// FLUSH TO THE BACK OF WHAT IT CLAIMED. A stand's centre is the centre of its
+			// footprint PLUS its apron, and the apron reaches towards the gate - so the
+			// object sits half an apron further back, leaving that ground clear in front of
+			// its door where a truck can use it. Draw at the stand's own centre and the
+			// building sits in the middle of its own apron.
+			const FVector2D ToBack = Forward * (Specs[Stand.KitIndex].ApronUu.X * 0.5);
+
 			if (Lit > 0)
 			{
 				const double LitWidth = One.WidthUu * Lit;
 				const FVector2D Centre =
-					Stand.Centre + Across * ((LitWidth - FullWidth) * 0.5);
+					Stand.Centre + ToBack + Across * ((LitWidth - FullWidth) * 0.5);
 				const FTransform ModuleAt =
 					BoxAt(Centre, Stand.Heading, One.LengthUu, LitWidth, HeightUu);
 				Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
@@ -254,7 +277,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			{
 				const double DarkWidth = One.WidthUu * Dark;
 				const FVector2D Centre =
-					Stand.Centre + Across * ((FullWidth - DarkWidth) * 0.5);
+					Stand.Centre + ToBack + Across * ((FullWidth - DarkWidth) * 0.5);
 				GhostBoxes->AddInstance(
 					BoxAt(Centre, Stand.Heading, One.LengthUu, DarkWidth, HeightUu),
 					/*bWorldSpace=*/true);

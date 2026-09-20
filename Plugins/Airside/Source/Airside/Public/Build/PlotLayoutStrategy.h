@@ -15,6 +15,12 @@
  */
 struct FPlotSite
 {
+	/**
+	 * THE OUTLINE IS A VIEW, AND IT MUST OUTLIVE THE SOLVE. Assigning a function's returned
+	 * TArray straight into it binds the view to a temporary that dies at the semicolon, and
+	 * the strategy then reads freed memory - which does not crash, it returns a plausible
+	 * number. Bind a named local first. (Cost one debugging session on 2026-09-20.)
+	 */
 	TArrayView<const FVector2D> Outline;
 	FVector2D FrontageA = FVector2D::ZeroVector;
 	FVector2D FrontageB = FVector2D::ZeroVector;

@@ -3,6 +3,7 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Build/DepotKit.h"
+#include "Build/PlotLayoutStrategy.h"
 // The kit weights the reservation uses. Content/, not Present/ - the lint forbids Tool/ the
 // latter, and this is the same accessor UPlotPresenter resolves its specs through, so the
 // preview and the built depot read one set of figures.
@@ -363,8 +364,20 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	// gets BUILT rather than one that merely resembles it - see Build/DepotKit.h.
 	const FVector2D Pose = (Outline[0] + Outline[1]) * 0.5;
 
-	return PlotYard::Reserve(Outline, Outline[0], Outline[1], Pose, Specs,
-		DepotYardSeed(Pose));
+	FPlotSite Site;
+	Site.Outline = Outline;
+	Site.FrontageA = Outline[0];
+	Site.FrontageB = Outline[1];
+	Site.Gate = Pose;
+	Site.Seed = DepotYardSeed(Pose);
+
+	// THE TOOL KNOWS WHAT IT IS PLACING, not which asset will be placed, so it maps its own
+	// kind. One line, and the alternative - reaching into the facade for the definition
+	// mid-drag - would make the preview depend on state the player has not committed to.
+	const EPlotLayout Layout = Kind == EPlaceableEntity::FuelDepot
+		? EPlotLayout::FuelYardBands : EPlotLayout::Scatter;
+
+	return PlotLayoutFor(Layout)->Solve(Site, Specs);
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -684,11 +697,13 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 			continue;
 		}
 
-		// THE RUN'S GROUND, not one module's: a three-bay shed run is one building three bays
-		// wide, and outlining a single bay would promise the player two bays of ground that
-		// is already spoken for.
-		PlotYard::FFootprint Run = Specs[Stand.KitIndex].Footprint;
-		Run.WidthUu *= Stand.RunLength;
+		// THE GROUND THE STAND CLAIMS, which is the run's footprint PLUS its apron. Outlining
+		// a single bay would promise the player two bays that are already spoken for, and
+		// outlining the buildings alone would promise the apron as somewhere to build.
+		const PlotYard::FKitSpec& Kit = Specs[Stand.KitIndex];
+		PlotYard::FFootprint Run;
+		Run.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
+		Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
 
 		PlotYard::StandCorners(Stand, Run, StandOutline);
 		Sink.Polygon(StandOutline, EPreviewStyle::Pending);

@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Build/DepotKit.h"
+#include "Build/PlotLayoutStrategy.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
@@ -920,9 +921,18 @@ bool FPlotGhostDrawsTheModulesTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+	// THROUGH THE SEAM, because the tool goes through it. Calling PlotYard::Reserve here would
+	// measure the ghost of a band yard against the stand count of a scattered one.
 	const FVector2D Pose = (Shown[0] + Shown[1]) * 0.5;
-	const PlotYard::FReservation Reservation = PlotYard::Reserve(
-		Shown, Shown[0], Shown[1], Pose, Specs, DepotYardSeed(Pose));
+	FPlotSite Site;
+	Site.Outline = Shown;
+	Site.FrontageA = Shown[0];
+	Site.FrontageB = Shown[1];
+	Site.Gate = Pose;
+	Site.Seed = DepotYardSeed(Pose);
+
+	const PlotYard::FReservation Reservation =
+		PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
 
 	if (!TestTrue(TEXT("a plot this size reserves something"),
 		Reservation.Stands.Num() > 0))
@@ -1160,12 +1170,14 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("idle is not committable"), Collector.Readout.bCommittable);
 	}
 
-	// Three bays wide, ONE row deep.
+	// Three bays wide, and DEEP ENOUGH TO HOLD SOMETHING. It was 6 m deep and held nothing
+	// once PlotFit::BayDepthUu went to 12 m - a plot that holds nothing warns, which is what
+	// the warning assertion below is about.
 	DrawPlot(Tool, Actor, FVector2D(0.0, 200.0), FVector2D(1200.0, 200.0),
-		FVector2D(600.0, 800.0));
+		FVector2D(600.0, 2000.0));
 
 	FToolReadoutCollector Collector;
-	Tool.BuildReadout(PlotAt(Actor, FVector2D(600.0, 800.0)), Collector);
+	Tool.BuildReadout(PlotAt(Actor, FVector2D(600.0, 2000.0)), Collector);
 
 	TestTrue(TEXT("confirm is committable"), Collector.Readout.bCommittable);
 
