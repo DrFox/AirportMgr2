@@ -31,11 +31,15 @@ import unreal
 KIT_PATH = "/Game/Entities"
 CONTENT_ASSET = "/Game/DA_AirsideContent"
 
-# name, display, length uu, width uu, height uu, back fence, weight, run cap
+# name, display, length uu, width uu, height uu, back fence, weight, run cap, apron x uu
+#
+# ONLY THE SHED HAS AN APRON. A truck stands in front of a shed and drives out of it, so the
+# ground there is not somewhere another module may go. A tank is plumbed and a pump is walked
+# up to; neither needs more than the clearance every module already gets.
 KITS = [
-    ("DA_Kit_FuelShed", "Vehicle shed", 800.0, 400.0, 400.0, True, 3, 3),
-    ("DA_Kit_FuelTank", "Fuel tank", 500.0, 500.0, 250.0, False, 2, 1),
-    ("DA_Kit_FuelPump", "Fuel pump", 300.0, 200.0, 150.0, False, 1, 1),
+    ("DA_Kit_FuelShed", "Vehicle shed", 800.0, 400.0, 400.0, True, 3, 3, 400.0),
+    ("DA_Kit_FuelTank", "Fuel tank", 500.0, 500.0, 250.0, False, 2, 1, 0.0),
+    ("DA_Kit_FuelPump", "Fuel pump", 300.0, 200.0, 150.0, False, 1, 1, 0.0),
 ]
 
 # EDepotModule, in the enum's own order - the index into KITS above IS the enum value, the
@@ -47,7 +51,11 @@ _failed = False
 
 
 def log(msg):
-    unreal.log("MARKER: " + str(msg))
+    # WARNING, NOT Display, and not for emphasis: a Display-level LogPython line does not
+    # reach the commandlet's stdout under -run=pythonscript, so a MARKER written with
+    # unreal.log is invisible to whoever is grepping for it - which makes "script executed
+    # successfully" the only evidence, and that is not evidence the asset was written.
+    unreal.log_warning("MARKER: " + str(msg))
 
 
 def fail(msg):
@@ -56,7 +64,7 @@ def fail(msg):
     unreal.log_error("MARKER: FAIL " + str(msg))
 
 
-def author_kit(name, display, length, width, height, back_fence, weight, run_cap):
+def author_kit(name, display, length, width, height, back_fence, weight, run_cap, apron_x):
     path = "%s/%s" % (KIT_PATH, name)
     asset = unreal.EditorAssetLibrary.load_asset(path)
     if asset is None:
@@ -80,8 +88,13 @@ def author_kit(name, display, length, width, height, back_fence, weight, run_cap
     asset.set_editor_property("run_cap", run_cap)
     asset.set_editor_property("assembly", unreal.KitAssembly.BAKED)
 
+    # X ONLY. The apron reaches towards the gate; nothing yet needs ground kept clear to its
+    # sides, and a Y an author could not explain is a number the layout would silently obey.
+    asset.set_editor_property("apron_uu", unreal.Vector2D(apron_x, 0.0))
+
     unreal.EditorAssetLibrary.save_asset(path, only_if_is_dirty=False)
-    log("%s: %.0f x %.0f uu, weight %d, cap %d" % (name, length, width, weight, run_cap))
+    log("%s: %.0f x %.0f uu, apron %.0f, weight %d, cap %d"
+        % (name, length, width, apron_x, weight, run_cap))
     return asset
 
 

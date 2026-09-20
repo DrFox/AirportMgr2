@@ -138,6 +138,14 @@ namespace PlotYard
 		FFootprint Footprint;
 
 		/**
+		 * Clear ground beyond the footprint, uu. X towards the gate, Y to either side.
+		 *
+		 * STILL NO KIT IN Solve/. A spec is rectangles and integers; which asset they came
+		 * from stays on the other side of the seam.
+		 */
+		FVector2D ApronUu = FVector2D::ZeroVector;
+
+		/**
 		 * How often this kit comes up in the fill cycle.
 		 *
 		 * IT SETS A CEILING, NOT THE PLAYER'S STRATEGY. They buy in whatever order they like

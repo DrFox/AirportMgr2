@@ -50,6 +50,21 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Kit") FVector2D Footprint = FVector2D::ZeroVector;
 
+	/**
+	 * Clear ground this module needs BEYOND its own footprint, uu. X reaches towards the
+	 * gate - the apron a truck stands on - and Y is kept clear to either side.
+	 *
+	 * SEPARATE FROM Footprint, WHICH STAYS THE OBJECT. Folding the apron in would make a
+	 * shed 4 x 10 m: the grey box would draw ten metres deep today, and when the real
+	 * six-metre mesh arrives the footprint-versus-bounds test would have to be told to
+	 * ignore the difference - which is the test giving up on the thing it exists for.
+	 *
+	 * ZERO IS THE DEFAULT AND MEANS NONE. Every module already gets PlotYard::ClearanceUu
+	 * between it and its neighbours; an apron is for a module that needs a vehicle to stand
+	 * in front of it, and most do not.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Kit") FVector2D ApronUu = FVector2D::ZeroVector;
+
 	/** Grey-box height, uu. Retired once BakedMeshes is set. */
 	UPROPERTY(EditAnywhere, Category = "Kit") double HeightUu = 0.0;
 

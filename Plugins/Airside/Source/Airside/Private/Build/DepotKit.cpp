@@ -99,6 +99,7 @@ TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content)
 				{
 					Spec.ReserveWeight = FMath::Max(Kit->ReserveWeight, 0);
 					Spec.RunCap = FMath::Max(Kit->RunCap, 1);
+					Spec.ApronUu = Kit->ApronUu;
 				}
 			}
 		}

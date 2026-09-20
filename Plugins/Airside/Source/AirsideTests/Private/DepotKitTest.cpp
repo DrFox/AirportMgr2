@@ -52,4 +52,51 @@ bool FDepotKitFallsBackTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A kit's apron reaches the solver, and is NOT folded into the footprint.
+ *
+ * TWO RECTANGLES, NOT ONE. The footprint is the object - what the mesh is and what the
+ * presenter draws - and the apron is the working room in front of it. Inflating the shed to
+ * 4 x 10 m to buy its apron would draw a ten-metre shed today and disagree with a six-metre
+ * mesh tomorrow, which is exactly what the footprint-versus-bounds test exists to catch.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotKitCarriesItsApronTest,
+	"Airside.Build.DepotKitCarriesItsApron",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotKitCarriesItsApronTest::RunTest(const FString& Parameters)
+{
+	UAirsideContent* Content = NewObject<UAirsideContent>();
+	UPlotModuleKit* Kit = NewObject<UPlotModuleKit>();
+	Kit->Footprint = FVector2D(600.0, 400.0);
+	Kit->ApronUu = FVector2D(400.0, 0.0);
+	Content->DepotKits.Add(EDepotModule::Shed, Kit);
+
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(Content);
+	if (!TestTrue(TEXT("a spec per module"),
+		Specs.Num() > static_cast<int32>(EDepotModule::Shed)))
+	{
+		return false;
+	}
+
+	const PlotYard::FKitSpec& Shed = Specs[static_cast<int32>(EDepotModule::Shed)];
+
+	// THE FOOTPRINT IS UNTOUCHED BY THE APRON. If these ever merge, the presenter draws the
+	// apron as building.
+	TestEqual(TEXT("the footprint is the object"), Shed.Footprint.LengthUu, 600.0);
+	TestEqual(TEXT("and its width too"), Shed.Footprint.WidthUu, 400.0);
+
+	TestEqual(TEXT("the apron reaches the spec"), Shed.ApronUu.X, 400.0);
+	TestEqual(TEXT("and its lateral half"), Shed.ApronUu.Y, 0.0);
+
+	// AN UNAUTHORED KIT HAS NO APRON rather than a default one: a module that needs clear
+	// ground says so, and one that does not keeps the clearance every module already gets.
+	const TArray<PlotYard::FKitSpec> Bare = DepotKitSpecs(nullptr);
+	TestEqual(TEXT("an unauthored tank has no apron"),
+		Bare[static_cast<int32>(EDepotModule::Tank)].ApronUu.X, 0.0);
+
+	return true;
+}
+
 #endif
