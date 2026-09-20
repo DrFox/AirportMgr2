@@ -13,6 +13,7 @@ bool FSnapGuideSettings::IsRelationOn(SnapGuide::ERelation Relation) const
 	case SnapGuide::ERelation::LevelWith:   return bLevelWith;
 	case SnapGuide::ERelation::Parallel:    return bParallel;
 	case SnapGuide::ERelation::Collinear:   return bCollinear;
+	case SnapGuide::ERelation::AngledFrom:  return bAngledFrom;
 	case SnapGuide::ERelation::MatchingGap: return bMatchingGap;
 	}
 	return false;
@@ -52,6 +53,7 @@ void FSnapGuideSettings::ToggleRelation(SnapGuide::ERelation Relation)
 	case SnapGuide::ERelation::LevelWith:   bLevelWith   = !bLevelWith;   return;
 	case SnapGuide::ERelation::Parallel:    bParallel    = !bParallel;    return;
 	case SnapGuide::ERelation::Collinear:   bCollinear   = !bCollinear;   return;
+	case SnapGuide::ERelation::AngledFrom:  bAngledFrom  = !bAngledFrom;  return;
 	case SnapGuide::ERelation::MatchingGap: bMatchingGap = !bMatchingGap; return;
 	}
 }

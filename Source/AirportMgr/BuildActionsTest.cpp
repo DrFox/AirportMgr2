@@ -177,6 +177,7 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 		{ SnapGuide::ERelation::LevelWith,   TEXT("snap.levelwith")   },
 		{ SnapGuide::ERelation::Parallel,    TEXT("snap.parallel")    },
 		{ SnapGuide::ERelation::Collinear,   TEXT("snap.collinear")   },
+		{ SnapGuide::ERelation::AngledFrom,  TEXT("snap.angledfrom")  },
 		{ SnapGuide::ERelation::MatchingGap, TEXT("snap.matchinggap") } };
 
 	// THISGESTURE IS ABSENT ON PURPOSE, and the count below is what keeps that deliberate: it

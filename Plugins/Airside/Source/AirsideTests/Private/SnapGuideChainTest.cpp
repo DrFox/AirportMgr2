@@ -49,8 +49,8 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	// NINE SINCE 2026-09-20: FRunwayLineGuideSource split off FRunwayGuideSource, because the
 	// chain skips a source by its declared Relation() and one source cannot declare two. See
 	// that source's own header - the split is what stops the Parallel row silencing a runway's
-	// extended centreline.
-	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 9);
+	// extended centreline. ELEVEN once AngledFrom arrived, road and runway again separately.
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 11);
 
 	const FGuideAnchor Anchor = Frontage();
 

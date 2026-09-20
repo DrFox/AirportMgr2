@@ -46,6 +46,47 @@ namespace
 		return FMath::Lerp(A, B, RoadGeom::ClosestPointOnSegment(A, B, P));
 	}
 
+	/**
+	 * The three spokes a reference's END throws off: 45, 90 and 135 degrees to it.
+	 *
+	 * NOT 0, which is the line the reference itself lies on - that is Collinear, and offering it
+	 * here as well would be two relations naming one line. NOT the reflections either: a guide is
+	 * a LINE and SnapGuide::Arbitrate measures the ACUTE angle, so 225 degrees is the same line
+	 * as 45 - the same reason FWorldGuideSource proposes four directions rather than eight.
+	 */
+	void AddSpokes(const FVector2D& End, const FVector2D& Along, SnapGuide::EReference Reference,
+		const FString& Name, TArray<SnapGuide::FCandidate>& Out)
+	{
+		for (const int32 Degrees : { 45, 90, 135 })
+		{
+			const double Radians = FMath::DegreesToRadians(static_cast<double>(Degrees));
+			const double Cos = FMath::Cos(Radians);
+			const double Sin = FMath::Sin(Radians);
+
+			SnapGuide::FCandidate Spoke;
+
+			// ROTATED FROM THE REFERENCE'S OWN DIRECTION, not from the world: "45 degrees to the
+			// taxiway" is a fact about that taxiway, and a world-relative angle would read the
+			// same on screen while pointing somewhere else on any road that is not axis-aligned.
+			Spoke.Direction = FVector2D(Along.X * Cos - Along.Y * Sin, Along.X * Sin + Along.Y * Cos);
+
+			// THROUGH THE END ITSELF, which is the whole of what this relation means. The drag's
+			// own origin is nowhere on it, so the fit is Perpendicular: it answers where the
+			// cursor ENDED UP, not which way it set off - the same split PointAlign made.
+			Spoke.Through = End;
+
+			// AND THE DASHED LINE GOES TO THAT SAME END, so the player can see WHICH one it
+			// radiates from. Spokes off the two ends are parallel lines a segment apart and the
+			// label cannot tell them apart; only the drawn line can.
+			Spoke.ReferenceAt = End;
+			Spoke.Fit = SnapGuide::EFit::Perpendicular;
+			Spoke.Relation = SnapGuide::ERelation::AngledFrom;
+			Spoke.Reference = Reference;
+			Spoke.Description = FString::Printf(TEXT("%d degrees to %s"), Degrees, *Name);
+			Out.Add(Spoke);
+		}
+	}
+
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -374,6 +415,81 @@ void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 	}
 }
 
+void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+
+		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them without a reach - see
+		// FAngledRunwayGuideSource. Walking them here would let one answer while that column was
+		// switched off, which is the 2026-09-20 report in a new place.
+		if (Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero()
+			|| FVector2D::DistSquared(ClosestOn(A, B, Anchor.Origin), Anchor.Origin) > Reach * Reach)
+		{
+			continue;
+		}
+
+		const FVector2D Along = Span.GetSafeNormal();
+		const FString Name = RoadNaming::Describe(Network, Id);
+
+		// BOTH ENDS - see this source's own header for why neither may be picked for the player.
+		AddSpokes(A, Along, SnapGuide::EReference::Road, Name, Out);
+		AddSpokes(B, Along, SnapGuide::EReference::Road, Name, Out);
+	}
+}
+
+void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		if (!Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// NO REACH TEST, like every other source in the Runway column: a rapid-exit taxiway is
+		// laid from wherever the player is standing, not only from beside the threshold.
+		const FVector2D Along = Span.GetSafeNormal();
+		const FString Name = RoadNaming::Describe(Network, Id);
+		AddSpokes(A, Along, SnapGuide::EReference::Runway, Name, Out);
+		AddSpokes(B, Along, SnapGuide::EReference::Runway, Name, Out);
+	}
+}
+
 FString EntityNaming::Describe(const FEntityInstance& Entity)
 {
 	if (Entity.Definition == nullptr)
@@ -565,6 +681,8 @@ FSnapGuideChain::FSnapGuideChain()
 	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FRunwayGuideSource>());
 	AddSource(MakeUnique<FRunwayLineGuideSource>());
+	AddSource(MakeUnique<FAngledRoadGuideSource>());
+	AddSource(MakeUnique<FAngledRunwayGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 	AddSource(MakeUnique<FOffsetGuideSource>());
 }

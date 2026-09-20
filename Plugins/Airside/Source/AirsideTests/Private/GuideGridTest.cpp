@@ -11,20 +11,20 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 /**
- * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Sixteen of the thirty pairs are legal;
- * a hole is a statement, not an omission, so the count is asserted rather than the shape.
+ * THE GRID IS A LIST, AND THIS IS ITS FIRST CONSUMER. Nineteen of the thirty-six pairs are
+ * legal; a hole is a statement, not an omission, so the count is asserted rather than the shape.
  * See the 2026-09-20 guide-grid design section 3 for each hole's reason.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FGuideGridDeclaresSixteenCellsTest,
-	"Airside.Solve.GuideGridDeclaresSixteenCells",
+	FGuideGridDeclaresItsCellsTest,
+	"Airside.Solve.GuideGridDeclaresItsCells",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FGuideGridDeclaresSixteenCellsTest::RunTest(const FString& Parameters)
+bool FGuideGridDeclaresItsCellsTest::RunTest(const FString& Parameters)
 {
 	const int32 Relations = static_cast<int32>(SnapGuide::ERelation::MatchingGap) + 1;
 	const int32 References = static_cast<int32>(SnapGuide::EReference::World) + 1;
-	TestEqual(TEXT("five relations"), Relations, 5);
+	TestEqual(TEXT("six relations"), Relations, 6);
 	TestEqual(TEXT("six references"), References, 6);
 
 	int32 Legal = 0;
@@ -39,7 +39,7 @@ bool FGuideGridDeclaresSixteenCellsTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	TestEqual(TEXT("sixteen of the thirty pairs are legal"), Legal, 16);
+	TestEqual(TEXT("nineteen of the thirty-six pairs are legal"), Legal, 19);
 
 	// THREE NAMED CELLS, not a re-listing of the table: a test that restated the whole grid
 	// would be a second copy of it, and the two would drift. These three are the ones whose
@@ -50,6 +50,15 @@ bool FGuideGridDeclaresSixteenCellsTest::RunTest(const FString& Parameters)
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::Extending, SnapGuide::EReference::Road));
 	TestFalse(TEXT("a world axis has no position, so nothing can be in line with it"),
 		SnapGuide::IsLegalCell(SnapGuide::ERelation::Collinear, SnapGuide::EReference::World));
+
+	// THE ONE HOLE THAT IS NOT ABOUT GEOMETRY, and so the one most likely to be "fixed" by a
+	// later reader: LevelWith x ThisGesture already proposes the 0 and 90 degree lines through
+	// every pinned corner, off the same reference direction. AngledFrom's 90 degree spoke would
+	// be that identical line under a second name.
+	TestFalse(TEXT("your own corners are LevelWith's, not AngledFrom's"),
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::ThisGesture));
+	TestTrue(TEXT("but another road's end does throw spokes"),
+		SnapGuide::IsLegalCell(SnapGuide::ERelation::AngledFrom, SnapGuide::EReference::Road));
 
 	return true;
 }

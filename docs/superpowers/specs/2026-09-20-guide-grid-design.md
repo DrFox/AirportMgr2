@@ -78,7 +78,7 @@ a repro, not a re-derivation of this paragraph.
 
 ## 3. The grid
 
-Five relations by six references. Sixteen legal cells; the rest are holes, and a hole is a
+Six relations by six references. Nineteen legal cells; the rest are holes, and a hole is a
 statement, not an omission.
 
 ```
@@ -87,10 +87,23 @@ Extending              #           -       -        -       -       -
 Level with             #           #       -        +       +       -
 Parallel / square      -           #       #        +       #       #
 Collinear              +           #       +        +       +       -
+Angled from            -           +       +        +       -       -
 Matching gap           -           #       -        -       -       -
 ```
 
 `#` exists today, `+` is new, `-` is a hole.
+
+**ANGLED FROM WAS ADDED 2026-09-20**, after the rest of this document, on a sketch
+(`samples/suggestion.png`) labelled *"45 degrees to other road"* with the line drawn to that
+road's near END. Nothing offered it: `Parallel` squares to a road through the DRAG's origin,
+never through the road's own end, and `Collinear` offers only the 0 degree member. It proposes
+the other three of the four the world grid offers - 45, 90 and 135 degrees - measured from that
+reference and passing through each of its ends. **Collinear is the 0 degree member of the same
+family**, which is what fixes the shape of both.
+
+90 degrees earns its place separately: a stub leaving a threshold at right angles had no guide
+at all, because the only square-to-a-road candidate passes through the drag rather than the
+road's end.
 
 **The holes, each with its reason** - a hole nobody can justify is a cell somebody forgot:
 
@@ -101,6 +114,9 @@ Matching gap           -           #       -        -       -       -
 | Level with x World | A world axis has no position, so there is no point to be level with. |
 | Collinear x World | The same: a direction with no position is not a line to be on. That is Parallel x World. |
 | Parallel x This drawing | This IS Extending. A second name for one behaviour is what this whole document exists to remove. |
+| Angled from x This drawing | `Level with x This drawing` already proposes lines through every pinned corner ALONG the anchor's reference and ACROSS it - the 0 and 90 degree members of this family off the same direction. The 90 degree spoke would be that identical line under a second name. The one hole here that is not about geometry. |
+| Angled from x Stand | A pose is a point and a direction. There is no end to radiate from. |
+| Angled from x World | A world axis has no position, so it has no end either - the same hole as `Collinear x World`. |
 | Matching gap x everything but Road | Its reference must agree with Parallel x Road's choice of nearest road, or the two stop describing one road between them - see section 5. Runway-to-taxiway separation is a real standard and a legitimate future cell, but it needs its own search, not a free ride. |
 
 ## 4. The types

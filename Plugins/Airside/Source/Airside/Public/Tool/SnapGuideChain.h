@@ -229,6 +229,46 @@ struct AIRSIDE_API FRunwayLineGuideSource final : public IGuideSource
 };
 
 /**
+ * A line out of a ROAD's end, at 45, 90 or 135 degrees to that road.
+ *
+ * THE SKETCHED REQUEST, 2026-09-20 (samples/suggestion.png): "45 degrees to other road", drawn
+ * from the drag to the far road's near END. Nothing offered it - FParallelGuideSource squares
+ * to a road through the DRAG'S origin, never through the road's own end, and FCollinearGuideSource
+ * offers only the 0 degree member.
+ *
+ * BOTH ENDS OF EVERY SEGMENT IN REACH. A spoke off one end and a spoke off the other are
+ * parallel lines a segment-length apart, so proposing one end would be picking for the player.
+ * At a junction the shared node throws a spoke per incident segment, which is right: each is
+ * "45 degrees to THAT road".
+ *
+ * RUNWAYS ARE NOT WALKED HERE - FAngledRunwayGuideSource owns them, unbounded, exactly as the
+ * partition has FParallelGuideSource leave them to FRunwayGuideSource.
+ */
+struct AIRSIDE_API FAngledRoadGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
+ * The same spokes off a RUNWAY's threshold, and unbounded like the rest of the Runway column.
+ *
+ * A TAXIWAY LEAVING A THRESHOLD AT 45 DEGREES is the case that earns it - a rapid-exit is
+ * exactly this line, and it is laid from anywhere on the field. See FRunwayLineGuideSource for
+ * why a second source rather than a filter inside the road one: the chain skips a source by its
+ * declared Relation(), so the reach policy is the only thing that can vary per source.
+ */
+struct AIRSIDE_API FAngledRunwayGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
  * Source 8: the gap a neighbouring parallel road already keeps.
  *
  * PERPENDICULAR, NOT A NEW "DISTANCE FAMILY". Design §2 asked for direction and distance to be

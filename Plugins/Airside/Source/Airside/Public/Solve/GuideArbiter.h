@@ -28,6 +28,18 @@ namespace SnapGuide
 		LevelWith,
 		Parallel,
 		Collinear,
+
+		/**
+		 * "45 degrees to that taxiway" - a line radiating out of a reference's END, at an angle
+		 * to the reference itself. Added 2026-09-20 on a sketch (samples/suggestion.png).
+		 *
+		 * COLLINEAR IS THE 0 DEGREE MEMBER OF THIS FAMILY, which is what fixes its shape: both
+		 * are a line through a reference's end at some angle to it, and both are judged by where
+		 * the cursor ENDED UP. It ranks just below Collinear for the same reason - the line a
+		 * road lies on is more specific than a line merely angled off it.
+		 */
+		AngledFrom,
+
 		MatchingGap
 	};
 

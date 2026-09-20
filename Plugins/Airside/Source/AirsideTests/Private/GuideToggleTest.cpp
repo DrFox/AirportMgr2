@@ -20,7 +20,7 @@ namespace
 		static const TArray<SnapGuide::ERelation> All = {
 			SnapGuide::ERelation::Extending, SnapGuide::ERelation::LevelWith,
 			SnapGuide::ERelation::Parallel,  SnapGuide::ERelation::Collinear,
-			SnapGuide::ERelation::MatchingGap };
+			SnapGuide::ERelation::AngledFrom, SnapGuide::ERelation::MatchingGap };
 		return All;
 	}
 
@@ -125,6 +125,8 @@ bool FGuideSettingsGiveEveryAxisItsOwnFlagTest::RunTest(const FString& Parameter
 		Defaults.IsRelationOn(SnapGuide::ERelation::LevelWith));
 	TestTrue(TEXT("Parallel is on"), Defaults.IsRelationOn(SnapGuide::ERelation::Parallel));
 	TestFalse(TEXT("Collinear is off"), Defaults.IsRelationOn(SnapGuide::ERelation::Collinear));
+	TestFalse(TEXT("AngledFrom is off: three spokes off every end is a lot to meet unasked"),
+		Defaults.IsRelationOn(SnapGuide::ERelation::AngledFrom));
 	TestFalse(TEXT("and MatchingGap is off, being the least familiar"),
 		Defaults.IsRelationOn(SnapGuide::ERelation::MatchingGap));
 

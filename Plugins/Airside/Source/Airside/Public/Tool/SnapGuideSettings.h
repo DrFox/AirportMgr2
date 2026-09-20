@@ -44,6 +44,10 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere, Category = "Align by")
 	bool bCollinear = false;
 
+	/** A line out of a reference's end, at 45, 90 or 135 degrees to it. */
+	UPROPERTY(EditAnywhere, Category = "Align by")
+	bool bAngledFrom = false;
+
 	/** The gap a neighbouring parallel road already keeps. Judged in PIE first. */
 	UPROPERTY(EditAnywhere, Category = "Align by")
 	bool bMatchingGap = false;

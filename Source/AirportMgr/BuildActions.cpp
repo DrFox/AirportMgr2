@@ -175,6 +175,11 @@ namespace
 			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Collinear); },
 			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Collinear); },
 			Always));
+		Out.Add(Make(TEXT("snap.angledfrom"), EActionSection::Snap, LOCTEXT("SnapAngledFrom", "Angled from"),
+			EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::AngledFrom); },
+			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::AngledFrom); },
+			Always));
 		Out.Add(Make(TEXT("snap.matchinggap"), EActionSection::Snap, LOCTEXT("SnapMatchingGap", "Matching gap"),
 			EKeys::Invalid, false,
 			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::MatchingGap); },
