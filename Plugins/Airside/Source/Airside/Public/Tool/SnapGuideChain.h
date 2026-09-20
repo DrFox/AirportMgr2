@@ -200,11 +200,17 @@ struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 };
 
 /**
- * Source 6: 0, 45, 90 and 135 degrees.
+ * Source 6: the four world axes - north-south, northeast-southwest, east-west and
+ * northwest-southeast.
  *
  * FOUR, NOT EIGHT. 180 degrees away is the same LINE and SnapGuide::Arbitrate measures the
  * acute angle, so eight would put two identical candidates into every tie the source-order
- * rule then has to break for no reason.
+ * rule then has to break for no reason. Naming each by BOTH its ends says so on screen.
+ *
+ * COMPASS, NOT A MATHS ANGLE, and it always was - RunwayDesignator declares north to be +X, so
+ * the bearings these are built from are the same numbers a runway is named after. A guide on
+ * the northeast-southwest axis is parallel to runway 05/23. See FWorldAxis in the .cpp for why
+ * the labels stopped being those numbers.
  */
 struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 {

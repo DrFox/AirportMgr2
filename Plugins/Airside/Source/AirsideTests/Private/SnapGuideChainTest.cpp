@@ -124,8 +124,12 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 	TestTrue(TEXT("with no reference the world grid still answers"), WorldOnly.bActive);
 	TestEqual(TEXT("and it is the world axis that does"),
 		static_cast<int32>(WorldOnly.Winners[0].Reference), static_cast<int32>(SnapGuide::EReference::World));
-	TestEqual(TEXT("named as an angle, since the grid has no thing to point at"),
-		WorldOnly.Winners[0].Description, FString(TEXT("90 degrees")));
+	// NAMED AS AN AXIS, BOTH ENDS, since the grid has nothing on the map to point at. It read
+	// "90 degrees" until 2026-09-20 - a number that was already east's compass bearing, but
+	// said so nowhere, and sat beside "45 degrees to the taxiway", which is measured from that
+	// road rather than from north.
+	TestEqual(TEXT("named by the axis it lies on, since the grid has nothing to point at"),
+		WorldOnly.Winners[0].Description, FString(TEXT("east-west")));
 	TestTrue(TEXT("and its line points back at the corner it swings around"),
 		WorldOnly.Winners[0].ReferenceAt.Equals(Anchor.Origin, 1.0e-6));
 

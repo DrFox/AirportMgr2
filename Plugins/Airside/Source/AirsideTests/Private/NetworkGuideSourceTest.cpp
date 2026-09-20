@@ -6,6 +6,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuideArbiter.h"
+#include "Solve/RunwayDesignator.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadNaming.h"
 #include "Tool/SnapGuideChain.h"
@@ -24,6 +25,80 @@ namespace
 		Target->ConnectNodes(A, B, Kind, INDEX_NONE);
 	}
 
+}
+
+/**
+ * THE WORLD AXES ARE NAMED BY THE COMPASS - AND BY THE SAME COMPASS RUNWAYS ARE.
+ *
+ * TWO NAMESPACES, ONE CONVENTION. RunwayDesignator declares north to be +X and east +Y, and
+ * FWorldGuideSource builds each axis as (cos bearing, sin bearing) - which is (northing,
+ * easting) only BECAUSE of that declaration. Nothing but this test connects them, and the
+ * failure if they ever part is silent and total: every world guide would be named ninety
+ * degrees from where it actually points, and a player comparing "east-west" against runway
+ * 09/27 would be the one to find out.
+ *
+ * MEASURED ONE AGAINST THE OTHER, not restated. Asking RunwayDesignator what the candidate's
+ * own direction is called is what makes this a measurement; a test listing four names beside
+ * four bearings would agree with itself however the axes were actually built.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FWorldAxesAreNamedByTheCompassTest,
+	"Airside.Tool.WorldAxesAreNamedByTheCompass",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FWorldAxesAreNamedByTheCompassTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// NO NETWORK IS NEEDED - the world source reads none - but one is passed because every
+	// source answers through the one interface.
+	const FWorldGuideSource Source;
+	const TArray<SnapGuide::FCandidate> Axes =
+		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D::ZeroVector));
+
+	// FOUR, NOT EIGHT: 180 degrees away is the same line and the arbiter measures the acute
+	// angle. Asserted first, so a doubled-up set is caught before the names are.
+	if (!TestEqual(TEXT("four world axes"), Axes.Num(), 4)) { return false; }
+
+	// THE DESIGNATOR PAIR EACH DIRECTION EARNS, against the word the label uses. Both ends,
+	// low first, exactly as a runway is spoken of - which is the point: these are the same
+	// four bearings, so a taxiway on the northeast-southwest axis is parallel to runway 05/23.
+	//
+	// THE DIAGONALS ROUND, and the figures below are the rounded ones rather than the tidy
+	// ones: a designator is the bearing in TENS of degrees, so 045 is 4.5 tens and becomes 05,
+	// and 135 is 13.5 and becomes 14. Written out after this test caught 13/31 - which is what
+	// the two diagonals look like if you assume symmetry instead of asking RunwayDesignator.
+	const TMap<FString, FString> Expected = {
+		{ TEXT("north-south"),         TEXT("18/36") },
+		{ TEXT("northeast-southwest"), TEXT("05/23") },
+		{ TEXT("east-west"),           TEXT("09/27") },
+		{ TEXT("northwest-southeast"), TEXT("14/32") },
+	};
+
+	for (const SnapGuide::FCandidate& Axis : Axes)
+	{
+		const FString* Pair = Expected.Find(Axis.Description);
+		if (!TestNotNull(*FString::Printf(TEXT("'%s' is one of the four named axes"),
+			*Axis.Description), Pair))
+		{
+			continue;
+		}
+
+		TestEqual(
+			*FString::Printf(TEXT("'%s' points where the compass says it does"), *Axis.Description),
+			RunwayDesignator::ToPairText(Axis.Direction), *Pair);
+	}
+
+	// AND EVERY NAME IS USED ONCE. Without this, four candidates all labelled "east-west"
+	// would satisfy every assertion above - the shape of green that measures nothing.
+	TSet<FString> Seen;
+	for (const SnapGuide::FCandidate& Axis : Axes) { Seen.Add(Axis.Description); }
+	TestEqual(TEXT("and no two axes share a name"), Seen.Num(), 4);
+
+	return true;
 }
 
 /**

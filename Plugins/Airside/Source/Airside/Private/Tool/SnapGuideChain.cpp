@@ -146,6 +146,39 @@ namespace
 	const TCHAR* ApronEdgeName() { return TEXT("the apron edge"); }
 
 	/**
+	 * One of the four world axes: the compass bearing it lies on, and what a player reads.
+	 *
+	 * ONE TABLE, NOT A LOOP OVER ANGLES BESIDE A SWITCH THAT NAMES THEM. The number and the
+	 * word are one fact about one axis, and two lists are two things to keep in step - see
+	 * CLAUDE.md on lists that must agree being one list.
+	 *
+	 * NAMED AS AN AXIS, BOTH ENDS. A guide is a LINE: SnapGuide::Arbitrate measures the ACUTE
+	 * angle, so a candidate and its opposite are one guide, and "north" would name a ray the
+	 * player may equally well drag the other way along. "north-south" names what is actually
+	 * being offered.
+	 *
+	 * WORDS RATHER THAN THE NUMBER, changed 2026-09-20 on the question "should angled from on
+	 * world give a cardinal direction". The numbers were ALREADY cardinal - "0 degrees" was
+	 * north and "90" was east, agreeing with the runway designators - but nothing said so, and
+	 * they sat on screen beside "45 degrees to the taxiway", which is an angle measured from
+	 * THAT ROAD. One frame absolute, one relative, in the same words. The bearing stays here
+	 * because the direction is computed from it, and because it is the tie to RunwayDesignator.
+	 */
+	struct FWorldAxis
+	{
+		/** Compass: clockwise from north, which is +X. See FWorldGuideSource::Propose. */
+		int32 Bearing;
+		const TCHAR* Name;
+	};
+
+	const FWorldAxis WorldAxes[] = {
+		{ 0,   TEXT("north-south") },
+		{ 45,  TEXT("northeast-southwest") },
+		{ 90,  TEXT("east-west") },
+		{ 135, TEXT("northwest-southeast") },
+	};
+
+	/**
 	 * Which ROAD column a segment belongs to - Taxiway or ServiceRoad. False for a runway, and
 	 * false for a segment that is not live.
 	 *
@@ -212,10 +245,16 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
-	for (const int32 Degrees : { 0, 45, 90, 135 })
+	for (const FWorldAxis& Axis : WorldAxes)
 	{
 		SnapGuide::FCandidate Candidate;
-		const double Radians = FMath::DegreesToRadians(static_cast<double>(Degrees));
+		const double Radians = FMath::DegreesToRadians(static_cast<double>(Axis.Bearing));
+
+		// (NORTH, EAST), NOT (X-FROM-A-MATHS-ANGLE, Y). RunwayDesignator declares north to be
+		// +X and east +Y, so cos of a COMPASS bearing is its northing and sin its easting -
+		// which is why Bearing below is the same number a runway is named from, and why the
+		// two namespaces cannot drift apart. Airside.Tool.WorldAxesAreNamedByTheCompass holds
+		// them together by measuring one against the other.
 		Candidate.Direction = FVector2D(FMath::Cos(Radians), FMath::Sin(Radians));
 
 		// Through the origin, like Extending: a world axis is still "which way from here".
@@ -226,7 +265,7 @@ void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 		// the map to point at, and a dashed line shot off to nowhere would say less than one
 		// that says "this is the corner you are square from". The label carries the rest.
 		Candidate.ReferenceAt = Anchor.Origin;
-		Candidate.Description = FString::Printf(TEXT("%d degrees"), Degrees);
+		Candidate.Description = Axis.Name;
 		Candidate.Relation = SnapGuide::ERelation::Parallel;
 		Candidate.Reference = SnapGuide::EReference::World;
 		Out.Add(Candidate);
