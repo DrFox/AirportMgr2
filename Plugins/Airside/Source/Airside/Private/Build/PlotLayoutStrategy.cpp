@@ -80,12 +80,33 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	// claimed WIDTH; a side band steps INTO the plot and its pitch is the claimed LENGTH.
 	// Deriving it here would space the tanks by their width and overlap them.
 	auto FillBand = [&](int32 Kit, const FVector2D& Origin, const FVector2D& Step,
-		int32 RunLength, double Pitch)
+		int32 RunLength, double Pitch, double DepthLimit)
 	{
 		const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
 
 		for (int32 Index = 0; Index < 64; ++Index)
 		{
+			// STOPPED SHORT OF THE SHEDS - FROM THE SECOND ONE ON.
+			//
+			// THE FIRST IN A COLUMN IS REACHED STRAIGHT FROM THE GATE, so it may stand beside
+			// the sheds; on the smallest legal plot the shed band takes the whole depth and
+			// beside is the only place a tank can go at all. Every later one is approached
+			// across the middle of the yard instead, and at the shed band's depth the middle
+			// IS sheds - which is what walled in the back of both columns in PIE.
+			//
+			// A back band passes the plot's own depth as the limit and is bounded by
+			// containment alone.
+			if (Index > 0)
+			{
+				const FVector2D At = Origin + Step * (Pitch * Index);
+				const double Far = FVector2D::DotProduct(At - Site.Gate, Inward)
+					+ Claimed.LengthUu * 0.5;
+				if (Far > DepthLimit)
+				{
+					return;
+				}
+			}
+
 			// THE CAP IS WHAT A DEPOT IS, and it is checked against what this kit already
 			// holds rather than against this band's own count: a shed kit fills two bands,
 			// one either side of the centre, and capping each separately would give twice
@@ -114,6 +135,21 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		}
 	};
 
+	// WHERE THE SHED BAND'S GROUND BEGINS, computed BEFORE the columns are laid so they can
+	// stop short of it.
+	//
+	// A COLUMN THAT RUNS PAST THIS IS A COLUMN NOBODY CAN REACH. The columns sit against the
+	// plot edges, so a module is approached from the middle of the yard - and at the shed
+	// band's depth the middle IS sheds. PIE on 2026-09-20 drew five tanks up the left edge
+	// with the back ones walled in between the fence and the shed row: "some of the pumps and
+	// the tanks are inaccessible as they are down the side of the sheds".
+	//
+	// THIS IS NOT A CIRCULATION SOLVER. Nothing here proves a route exists; it refuses the one
+	// arrangement that provably has none. See the design doc section 3.
+	const PlotYard::FFootprint ShedGround =
+		ClaimedBy(Kits[0], FMath::Clamp(Kits[0].RunCap, 1, 64));
+	const double ColumnLimit = Deepest - ShedGround.LengthUu - PlotYard::ClearanceUu;
+
 	// --- Tanks down the left, pumps down the right -----------------------------------
 	//
 	// THE COLUMNS FIRST, and the order is load-bearing rather than tidy. They are anchored to
@@ -124,6 +160,7 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	//
 	// STARTED ONE TRUCK-CORRIDOR IN FROM THE GATE so a column never grows across the way out,
 	// and stepping INTO the plot so the yard fills from the road backwards.
+
 	// The window still free for the shed band, in ACROSS COORDINATES - signed distance from
 	// the gate along Across, so High is the left edge and Low the right. Measured in that one
 	// frame throughout: mixing it with world X is how the first version had the tank column
@@ -143,7 +180,8 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		const FVector2D Centre = Site.Gate + Edge * Side
 			+ Inward * (PlotYard::GateCorridorUu + Claimed.LengthUu * 0.5);
 
-		FillBand(Kit, Centre, Inward, 1, Claimed.LengthUu + PlotYard::ClearanceUu);
+		FillBand(Kit, Centre, Inward, 1, Claimed.LengthUu + PlotYard::ClearanceUu,
+			ColumnLimit);
 
 		// A COLUMN THAT PLACED NOTHING COSTS THE SHEDS NOTHING. Narrowing the window for a
 		// tank that was never reserved would be paying for ground nobody took.
@@ -176,8 +214,12 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 				+ Inward * (Deepest - Claimed.LengthUu * 0.5);
 			const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
 
-			FillBand(Kit, Centre, Across, RunLength, Pitch);
-			FillBand(Kit, Centre - Across * Pitch, -Across, RunLength, Pitch);
+			// THE BACK BAND IS NOT DEPTH-LIMITED: it IS the deep end, and containment is
+			// what stops it. TNumericLimits rather than Deepest so the intent reads as "no
+			// limit" rather than as a bound someone might later tighten.
+			const double NoLimit = TNumericLimits<double>::Max();
+			FillBand(Kit, Centre, Across, RunLength, Pitch, NoLimit);
+			FillBand(Kit, Centre - Across * Pitch, -Across, RunLength, Pitch, NoLimit);
 
 			if (Reservation.Stands.Num() > Before)
 			{

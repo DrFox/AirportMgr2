@@ -82,6 +82,15 @@ bool FPlotKitContentTest::RunTest(const FString& Parameters)
 			TestTrue(*FString::Printf(TEXT("module %d's weight is at least one"), Raw),
 				Kit->ReserveWeight >= 1);
 
+			// A CAP OF ZERO MEANS NO CAP, and an unset asset therefore OVERRIDES the sensible
+			// figure DepotKitSpecs falls back to. That is not a theory: it shipped, and a
+			// 45 m plot drew 9 sheds and 8 pumps in PIE while every other test passed,
+			// because the tests either build specs by hand or resolve against no content at
+			// all. An authored kit must state what a depot is.
+			TestTrue(*FString::Printf(
+				TEXT("module %d's MaxPerPlot is authored, got %d"), Raw, Kit->MaxPerPlot),
+				Kit->MaxPerPlot >= 1);
+
 			if (Kit->Assembly != EKitAssembly::Baked)
 			{
 				continue;

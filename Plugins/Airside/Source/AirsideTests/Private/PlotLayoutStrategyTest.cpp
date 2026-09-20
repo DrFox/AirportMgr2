@@ -331,6 +331,85 @@ bool FFuelYardStandsShedsAtTheBackTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * No column runs up the side of the sheds.
+ *
+ * A COLUMN SITS AGAINST THE PLOT EDGE, so the only way to a tank is across the middle of the
+ * yard - and at the shed band's depth the middle IS sheds. A column that runs past them walls
+ * its far end in between the fence and the shed row.
+ *
+ * PIE ON 2026-09-20 DID EXACTLY THAT: five tanks up the left edge and eight pumps up the
+ * right, with the back of each column unreachable. "Some of the pumps and the tanks are
+ * inaccessible as they are down the side of the sheds."
+ *
+ * THIS IS NOT A REACHABILITY PROOF, and the difference matters. Nothing here traces a route;
+ * it refuses the one arrangement that provably has none. Circulation is out of scope - design
+ * doc section 3 - and this test is the floor under that decision, not a substitute for it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardKeepsColumnsClearOfTheShedsTest,
+	"Airside.Build.FuelYardKeepsColumnsClearOfTheSheds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardKeepsColumnsClearOfTheShedsTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+
+	// SEVERAL PLOT SIZES, because the failure showed up on a big one: a small plot has no
+	// room for a column long enough to reach the sheds, and would pass while proving nothing.
+	for (double WidthUu = 1500.0; WidthUu <= 6000.0; WidthUu += 500.0)
+	{
+		for (double DepthUu = 1200.0; DepthUu <= 4000.0; DepthUu += 400.0)
+		{
+			const TArray<FVector2D> Outline = StrategyRect(WidthUu, DepthUu);
+			const FPlotSite Site = StrategySite(Outline, WidthUu);
+			const PlotYard::FReservation R =
+				PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
+
+			// Inward is +Y here and the gate is on y = 0, so depth is simply Centre.Y.
+			double ShedFront = TNumericLimits<double>::Max();
+			for (const PlotYard::FReservedStand& Stand : R.Stands)
+			{
+				if (Stand.KitIndex != 0) { continue; }
+				const double Claimed =
+					Specs[0].Footprint.LengthUu + Specs[0].ApronUu.X;
+				ShedFront = FMath::Min(ShedFront, Stand.Centre.Y - Claimed * 0.5);
+			}
+
+			if (ShedFront == TNumericLimits<double>::Max())
+			{
+				continue;  // No sheds on this plot, so nothing to be walled in by.
+			}
+
+			// AT MOST ONE PER COLUMN may stand beside the sheds: the first, which is reached
+			// straight from the gate. A second one there is behind the first, with the fence
+			// on one side and the shed row on the other.
+			TArray<int32> Beside;
+			Beside.SetNumZeroed(Specs.Num());
+
+			for (const PlotYard::FReservedStand& Stand : R.Stands)
+			{
+				if (Stand.KitIndex == 0) { continue; }
+				const double Claimed =
+					Specs[Stand.KitIndex].Footprint.LengthUu + Specs[Stand.KitIndex].ApronUu.X;
+				if (Stand.Centre.Y + Claimed * 0.5 > ShedFront + 1.0)
+				{
+					++Beside[Stand.KitIndex];
+				}
+			}
+
+			for (int32 Kit = 1; Kit < Specs.Num(); ++Kit)
+			{
+				TestTrue(*FString::Printf(
+					TEXT("%.0f x %.0f: kit %d has at most one stand beside the sheds, got %d"),
+					WidthUu, DepthUu, Kit, Beside[Kit]), Beside[Kit] <= 1);
+			}
+		}
+	}
+
+	return true;
+}
+
+/**
  * Growing a plot never costs it capacity.
  *
  * ASSERTED FOR THIS STRATEGY ONLY, and that limit is the point. The scatter is not monotonic
