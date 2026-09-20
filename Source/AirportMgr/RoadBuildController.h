@@ -23,19 +23,6 @@ struct FStandFacts;
 class UBuildCameraComponent;
 class UBuildHudLayer;
 
-/**
- * What a plain click means right now. ONE ENUM: Remove and Insert can never both be lit,
- * so the state that would need a rule to resolve is not representable (CLAUDE.md, "a phase
- * is an enum, never a set of bools"). Ctrl and Shift held on the keyboard OR with this in
- * MakeToolContext, so the keys keep working and light the same button.
- */
-UENUM()
-enum class EClickModifier : uint8
-{
-	None,
-	Remove,
-	Insert
-};
 
 /**
  * Lets the player build the road graph while the game runs: click to drop a node,
@@ -222,23 +209,21 @@ public:
 	// Everything below is what BuildActions() calls. The registry, not this class, decides
 	// which key and which button each maps to; these are the verbs and the state queries.
 
-	/** Selects a tool by registry index and clears the click modifier - see EClickModifier. */
+	/** Selects a tool by registry index. The session drops a sticky build modifier with
+	 *  it - see FBuildSession::SelectTool. */
 	void SelectTool(int32 Index);
 	int32 GetActiveToolIndex() const;
 
-	/** Lights Mode, or clears it if it was already lit. */
-	void ToggleClickModifier(EClickModifier Mode);
-	EClickModifier GetClickModifier() const { return ClickModifier; }
-
 	/**
-	 * Build <-> Edit. Forwards to the session, which owns the mode so PIE and the editor
-	 * mode cannot disagree about it.
+	 * Light Mode, or go back to Build if it was already lit. Forwards to the session, which
+	 * owns the one mode so PIE and the editor mode cannot disagree about it - and so Remove,
+	 * Insert and Edit cannot be lit at once, which they could while Edit was a second field
+	 * on this class (reported from play, 2026-09-20; see EGestureMode).
 	 *
-	 * A TOGGLE AND NOT A HELD KEY, ruled from play: a gesture that reshapes placed geometry
-	 * has to be entered on purpose. Before this, any press-and-travel over a node under the
-	 * road tool moved it, with no way to decline.
+	 * A TOGGLE AND NOT A HELD KEY for Edit specifically, ruled from play: a gesture that
+	 * reshapes placed geometry has to be entered on purpose.
 	 */
-	void ToggleGestureMode();
+	void ToggleGestureMode(EGestureMode Mode);
 	EGestureMode GetGestureMode() const;
 
 	/** Whether the LIT tool exposes anything to edit - what greys the Edit button out, so
@@ -407,7 +392,6 @@ private:
 	/** Chord bindings carry no key, so Ctrl actions share this and ask which key was just pressed. */
 	void OnCtrlActionKey();
 
-	UPROPERTY(Transient) EClickModifier ClickModifier = EClickModifier::None;
 
 	/** True while Ctrl is held: the gesture means remove rather than build. */
 	bool IsRemoveHeld() const;

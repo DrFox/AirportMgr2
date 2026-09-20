@@ -129,8 +129,15 @@ void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& Deac
 	}
 
 	Mode = InMode;
-	UE_LOG(LogAirside, Log, TEXT("Gesture mode -> %s"),
-		Mode == EGestureMode::Edit ? TEXT("Edit") : TEXT("Build"));
+
+	// NAMED, not a number: this line is how "which mode am I actually in" gets answered from
+	// the log rather than guessed at, which is the failure the report that prompted the merge
+	// took the long way round.
+	const TCHAR* Named =
+		Mode == EGestureMode::Edit   ? TEXT("Edit")   :
+		Mode == EGestureMode::Remove ? TEXT("Remove") :
+		Mode == EGestureMode::Insert ? TEXT("Insert") : TEXT("Build");
+	UE_LOG(LogAirside, Log, TEXT("Gesture mode -> %s"), Named);
 }
 
 void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContext)
@@ -158,6 +165,20 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	}
 
 	ActiveTool = Index;
+
+	// A STICKY BUILD MODIFIER WAS CHOSEN FOR THE TOOL IT WAS LIT UNDER, so picking another
+	// drops it - what stops a Remove left on from the road tool deleting the first stand the
+	// player clicks. Moved here from ARoadBuildController::SelectTool with the modes.
+	//
+	// EDIT SURVIVES, and the difference is not an exception grudgingly carved out: Remove and
+	// Insert modify what a BUILD gesture does, and choosing a new build tool is choosing a new
+	// gesture, so the modifier belonged to the old one. Edit is not a build gesture at all -
+	// the lit tool only says which handles it exposes, so switching tools WHILE editing is the
+	// ordinary way to go from moving taxiway nodes to moving apron corners.
+	if (Mode == EGestureMode::Remove || Mode == EGestureMode::Insert)
+	{
+		Mode = EGestureMode::Build;
+	}
 
 	// A build tool is modal over the airport, not over a thing in it: the selection closes
 	// with the panel when one opens, and does not come back when it is cancelled.
@@ -190,8 +211,12 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	Context.Selection = &Selection;
 	Context.Limits = Tunables.Limits;
 	Context.SnapRadius = Tunables.ToolPickRadius;
-	Context.bRemoveModifier = bRemoveModifier;
-	Context.bInsertModifier = bInsertModifier;
+	// THE STICKY MODE ORS WITH THE HELD KEY. The bar's Remove button and a held Ctrl mean
+	// the same thing to a tool, and either lights the same button - the arrangement
+	// ARoadBuildController::MakeToolContext used to make with its own EClickModifier, moved
+	// here when the modes became one enum so the editor mode gets it too.
+	Context.bRemoveModifier = bRemoveModifier || Mode == EGestureMode::Remove;
+	Context.bInsertModifier = bInsertModifier || Mode == EGestureMode::Insert;
 	Context.bSuspendGuides = bSuspendGuides;
 
 	// WHERE FToolRegistration::EditHandles IS CONSUMED - the one reader, so the tool table

@@ -85,27 +85,30 @@ namespace
 		Out.Add(Make(TEXT("edit.build"), EActionSection::Edit, LOCTEXT("Build", "Build"), EKeys::Enter, false,
 			[](ARoadBuildController& C) { C.OnBuild(); }, Never,
 			[](const ARoadBuildController& C) { return C.GetToolReadout().bCommittable; }));
-		// EDIT MODE: the second axis, and the reason it is here rather than in the Tools
-		// section is that it is not a tool - it changes what EVERY tool's gesture means. A
-		// tenth entry on the tool row would put it in the row whose whole meaning is "which
-		// one of these am I holding".
+		// THE THREE MODES, one row each and one toggle behind all three. They are mutually
+		// exclusive because they are one enum on the session, not because these three rows
+		// agree to be - see EGestureMode, and the report that made that necessary: Remove and
+		// Edit could both be lit, the bar drew both, and Edit silently won.
 		//
-		// M, NOT E. Q/E is camera turn, polled every frame in UpdateView, so Edit on E would
-		// rotate the view while toggling. M is free, and it is the key a Cities player already
-		// has in their fingers from Move It - as well as being mnemonic for move and merge.
+		// REMOVE AND INSERT HAVE NO KEY because Ctrl and Shift already mean them while HELD.
+		// These rows are the sticky form, for work that outlasts a comfortable reach.
+		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Remove); },
+			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Remove; }, Always));
+		Out.Add(Make(TEXT("edit.insert"), EActionSection::Edit, LOCTEXT("Insert", "Insert"), EKeys::Invalid, false,
+			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Insert); },
+			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Insert; }, Always));
+
+		// EDIT IS THE ONE WITH A KEY, because it is the one you enter deliberately and stay
+		// in. M, not E: Q/E is camera turn, polled every frame in UpdateView. M is also the
+		// key a Cities player already has from Move It, and mnemonic for move and merge.
 		//
 		// GREYED when the lit tool exposes no handles, so the bar answers "why can I not edit
 		// this" instead of lighting over a mode that would do nothing at all.
 		Out.Add(Make(TEXT("edit.editmode"), EActionSection::Edit, LOCTEXT("EditMode", "Edit"), EKeys::M, false,
-			[](ARoadBuildController& C) { C.ToggleGestureMode(); },
+			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Edit); },
 			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Edit; },
 			[](const ARoadBuildController& C) { return C.ActiveToolHasEditHandles(); }));
-		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleClickModifier(EClickModifier::Remove); },
-			[](const ARoadBuildController& C) { return C.GetClickModifier() == EClickModifier::Remove; }, Always));
-		Out.Add(Make(TEXT("edit.insert"), EActionSection::Edit, LOCTEXT("Insert", "Insert"), EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleClickModifier(EClickModifier::Insert); },
-			[](const ARoadBuildController& C) { return C.GetClickModifier() == EClickModifier::Insert; }, Always));
 		Out.Add(Make(TEXT("edit.undo"), EActionSection::Edit, LOCTEXT("Undo", "Undo"), EKeys::Z, true,
 			[](ARoadBuildController& C) { C.OnUndo(); }, Never,
 			[](const ARoadBuildController& C) { return C.CanUndo(); }));

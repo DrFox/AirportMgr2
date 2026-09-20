@@ -9,29 +9,52 @@
 #include "Tool/Selection.h"
 #include "Tool/SnapGuideChain.h"
 #include "Tool/SnapGuideSettings.h"
+#include "BuildSession.generated.h"
 
 class URoadNetwork;
 class IRoadEditTarget;
 
 /**
- * Build or Edit - what a gesture MEANS, across every tool.
+ * What a gesture MEANS right now, across every tool. Exactly one of these is true.
  *
- * AN ENUM AND NOT A bool (CLAUDE.md: a phase is an enum, never a set of bools). Two values
- * today; it leaves room for the third this design deliberately did not build - Upgrade,
- * repainting an existing road to the current width - without a second flag that could be
- * true at the same time as this one.
+ * ONE ENUM, NOT A SET OF FLAGS (CLAUDE.md: a phase is an enum, never a set of bools), and
+ * this enum has already been split once and had to be put back. Remove and Insert lived
+ * here as EClickModifier - whose own test says "ONE ENUM, NOT TWO BOOLS: the illegal
+ * 'remove and insert at once' is unrepresentable" - and Edit arrived beside it as a
+ * SECOND field on a different object. Remove and Edit could then both be lit, the bar drew
+ * both, and Edit silently won because it decides which tool runs at all. Reported from
+ * play, 2026-09-20. Merging them is what makes "one mode at a time" a fact about the type
+ * rather than a rule two setters have to remember about each other.
  *
  * ON THE SESSION, not on either driver, so PIE and URoadBuildEdMode cannot disagree about
- * it. FRoadSnapSettings' own header records what the two drivers holding private copies of
- * a shared decision cost the last time: the same click snapped differently depending only
- * on which one was open.
+ * it - FRoadSnapSettings' header records what private per-driver copies of a shared
+ * decision cost the last time. Remove and Insert moved here from ARoadBuildController for
+ * that reason as well as this one: the editor mode had no sticky modifier at all, and now
+ * gets one for free.
+ *
+ * STICKY, and the held keys are separate. Ctrl and Shift still mean Remove and Insert while
+ * held - MakeContext ORs the two - because a modifier you hold and a mode you enter are
+ * different gestures for different lengths of work.
+ *
+ * A UENUM PURELY SO THE COVERAGE TEST CAN COUNT IT. Nothing here needs Blueprint or
+ * serialisation; what it needs is for AirportMgr.Actions.EveryGestureModeIsHandled to walk
+ * the members through reflection rather than up to a hand-written bound. FRoadBuildHUDLooksTest
+ * has that hand-written bound and says so - "THIS BOUND IS THE FIFTH LIST a new style has to
+ * appear in, and the only one nothing else would have caught". This enum does not repeat it.
  */
+UENUM()
 enum class EGestureMode : uint8
 {
 	/** Tools lay things. The mode every session opens in. */
 	Build,
 
-	/** Tools lay nothing; FEditTool moves what is already placed. */
+	/** Ctrl, made sticky: a gesture removes rather than builds. */
+	Remove,
+
+	/** Shift, made sticky: a gesture inserts without starting anything. */
+	Insert,
+
+	/** Tools lay NOTHING; FEditTool moves what is already placed. */
 	Edit
 };
 
@@ -155,18 +178,30 @@ public:
 	 *  bar keeps showing Taxiway lit while Edit is held over it. */
 	int32 GetActiveToolIndex() const { return ActiveTool; }
 
-	/** Build or Edit. A session opens in Build: a mode that survived construction would be
-	 *  a drag the player never asked to be able to make. */
+	/** The one sticky mode. A session opens in Build: a mode that survived construction
+	 *  would be a gesture the player never asked to be able to make. */
 	EGestureMode GetGestureMode() const { return Mode; }
 
 	/**
-	 * Switch between building and editing, deactivating the outgoing tool first so nothing
-	 * is left part-drawn to reappear - the same argument SelectTool makes for the same call.
+	 * Enter InMode, deactivating the outgoing tool first so nothing is left part-drawn to
+	 * reappear - the same argument SelectTool makes for the same call.
 	 *
 	 * DeactivateContext is the CALLER's, for the reason SelectTool's own comment gives: the
 	 * session holds no IRoadEditTarget and has nothing to build one from.
 	 */
 	void SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext = FToolContext());
+
+	/**
+	 * Light InMode, or go back to Build if it was already lit - what every one of the three
+	 * mode buttons on the bar does.
+	 *
+	 * ONE TOGGLE FOR ALL THREE, which is the point: mutual exclusion is not a rule anyone
+	 * has to apply here, it is what assigning to a single field already means.
+	 */
+	void ToggleGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext = FToolContext())
+	{
+		SetGestureMode(Mode == InMode ? EGestureMode::Build : InMode, DeactivateContext);
+	}
 
 	/** How many tools this session holds. For tests: must equal ToolRegistry().Num(). */
 	int32 NumTools() const { return Tools.Num(); }
