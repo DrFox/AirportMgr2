@@ -22,6 +22,24 @@ struct FGuidePoint
 };
 
 /**
+ * What the point the player is moving REPRESENTS.
+ *
+ * A positional guide aligns LIKE WITH LIKE: centreline to centreline, boundary to boundary, and
+ * a centreline against a boundary is displaced by the drag's half-width. A road's cursor is its
+ * CENTRELINE; a plot's or an apron's is a corner of the shape itself, which is a BOUNDARY.
+ * Lining a road's centre up with an apron's edge would put half its pavement over the apron.
+ * See the 2026-09-20 guide-grid design section 6.
+ *
+ * AN ENUM, NOT A BOOL, per CLAUDE.md: the two cannot both be true, so the illegal state is not
+ * representable - and a third kind is easy to imagine, a kerb line or a painted edge.
+ */
+enum class EDragPoint : uint8
+{
+	Centreline,
+	Boundary
+};
+
+/**
  * What the tool is dragging, and what it is dragging it against.
  *
  * THE TOOL SUPPLIES IT, THE DRIVER RESOLVES FROM IT - see IBuildTool::DescribeGuideAnchor.
@@ -66,6 +84,23 @@ struct FGuideAnchor
 	 * Stage 2's Aligned source feeds network points into the SAME source without changing it.
 	 */
 	TArray<FGuidePoint> AlignTo;
+
+	/**
+	 * See EDragPoint. Centreline unless the tool says otherwise, because a road is the common
+	 * case and a tool that forgot to answer should not silently change how it aligns.
+	 */
+	EDragPoint Point = EDragPoint::Centreline;
+
+	/**
+	 * How far the drag's pavement reaches either side of its point, uu. Zero when the gesture
+	 * has no width - a plot corner, a guideline - and zero is then a MEANING, not an omission.
+	 *
+	 * TWO FIELDS, NOT ONE: URoadProfile::GetHalfWidthLeft and GetHalfWidthRight are separate
+	 * because a cross-section may be off-centre, so a flush-left candidate and a flush-right
+	 * one are not a mirrored pair and must not be computed as one.
+	 */
+	double HalfWidthLeft = 0.0;
+	double HalfWidthRight = 0.0;
 };
 
 /**

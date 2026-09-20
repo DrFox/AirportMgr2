@@ -95,7 +95,8 @@ public:
 	 * left alone. This is what tells the driver's guide chain which point is moving and which
 	 * edge it grew from; the tool resolves nothing itself and remembers no frame.
 	 */
-	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const override;
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
 
 	/** For tests. */
 	EPlotStage GetStage() const { return Stage; }

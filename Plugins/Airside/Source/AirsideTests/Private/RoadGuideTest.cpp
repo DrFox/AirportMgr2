@@ -7,6 +7,7 @@
 #include "Tool/BuildSession.h"
 #include "Tool/RoadDrawTool.h"
 #include "Tool/RoadEditTarget.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/SnapGuideChain.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -70,7 +71,7 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	// does not exist until something is placed - which is the null case the hook must decline.
 	FGuideAnchor Idle;
 	TestFalse(TEXT("an idle road tool offers no anchor"),
-		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Idle));
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Idle));
 
 	// Two clicks, west to east: one segment, and the chain now pends at its east end.
 	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
@@ -83,7 +84,7 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 
 	FGuideAnchor Anchor;
 	if (!TestTrue(TEXT("with a segment behind it, the tool offers an anchor"),
-		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Anchor)))
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Anchor)))
 	{
 		return false;
 	}
@@ -199,6 +200,64 @@ bool FRoadSnapBeatsTheGuideTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the existing node survives the click"), Reused)) { return false; }
 	TestTrue(TEXT("and stayed exactly where it was put"),
 		Reused->Position.Equals(FVector2D(6080.0, 2000.0), 1.0e-6));
+
+	return true;
+}
+
+/**
+ * THE ANCHOR KNOWS HOW WIDE THE DRAG IS, and that its point is a CENTRELINE.
+ *
+ * A road's centreline lined up with an apron's EDGE is not what anybody means - you want the
+ * road's edge flush with the apron's, which needs the half-width at the point the guide is
+ * proposed. See the 2026-09-20 guide-grid design section 6.
+ *
+ * THROUGH ResolveProfileFor, which is the one answer to "what would this gesture lay" - a guide
+ * resolving a width of its own would be the third copy that function was made to prevent.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadAnchorCarriesItsHalfWidthTest,
+	"Airside.Tool.RoadAnchorCarriesItsHalfWidth",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadAnchorCarriesItsHalfWidthTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	IRoadEditTarget* Target = Gesture.TestWorld.Actor;
+	FGuideAnchor Anchor;
+	if (!TestTrue(TEXT("the tool describes an anchor"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Target, Anchor)))
+	{
+		return false;
+	}
+
+	// A ROAD'S MOVING POINT IS ITS CENTRELINE. The plot and apron tools drag a corner of the
+	// shape itself, and the displacement rule turns on exactly that difference.
+	TestEqual(TEXT("a road drags a centreline"),
+		static_cast<int32>(Anchor.Point), static_cast<int32>(EDragPoint::Centreline));
+
+	// HONOURED, NOT ASSUMED: the profile has to resolve for the widths to mean anything, and a
+	// content set with no taxiway would leave them legitimately zero.
+	const URoadProfile* Profile = Target->ResolveProfileFor(ERoadKind::Taxiway,
+		Gesture.Road()->GetWidthIndex());
+	if (Profile == nullptr)
+	{
+		AddInfo(TEXT("No taxiway profile resolves; half-widths not checked"));
+		return true;
+	}
+
+	// THE TWO ARE ASKED SEPARATELY because URoadProfile's are separate: a cross-section may be
+	// off-centre, and a mirrored pair would be wrong on every such road.
+	TestEqual(TEXT("the anchor carries the profile's own left half-width"),
+		Anchor.HalfWidthLeft, Profile->GetHalfWidthLeft());
+	TestEqual(TEXT("and its right, separately"),
+		Anchor.HalfWidthRight, Profile->GetHalfWidthRight());
+	TestTrue(TEXT("and they are a real width, not a default zero"),
+		Anchor.HalfWidthLeft > 0.0);
 
 	return true;
 }

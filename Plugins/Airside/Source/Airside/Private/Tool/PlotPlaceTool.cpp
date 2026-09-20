@@ -214,7 +214,8 @@ int32 FPlotPlaceTool::PinnedCount() const
 	return 0;
 }
 
-bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
 {
 	// THE NETWORK IS UNUSED HERE, deliberately: this gesture's reference is its own frontage
 	// and its points are its own pinned corners, both of which live on the tool. FRoadDrawTool
@@ -248,6 +249,11 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnch
 	// without knowing what a frontage is - the same split that keeps EPreviewStyle a meaning
 	// rather than a colour.
 	Out.ReferenceName = TEXT("the frontage");
+
+	// A PLOT DRAGS A CORNER OF THE SHAPE ITSELF, which is a BOUNDARY, and the half-widths stay
+	// zero because there is no pavement either side of a corner. The zero is the answer, not a
+	// gap: see EDragPoint on why a centreline against a boundary is the case that displaces.
+	Out.Point = EDragPoint::Boundary;
 
 	// THE CORNERS ALREADY PINNED, so the moving one can line up with them - "0 degrees to
 	// corner 3" (the 2026-09-17 request). ONLY AS FAR AS PinnedCount: entries past it are

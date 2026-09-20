@@ -138,7 +138,8 @@ public:
 	 * the one before it. See IBuildTool::DescribeGuideAnchor on why the network is a parameter
 	 * where the context deliberately is not.
 	 */
-	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const override;
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
 
 private:
 	/** Ctrl+click: remove whatever the snap chain resolved. */

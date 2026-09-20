@@ -366,9 +366,16 @@ struct AIRSIDE_API IBuildTool
 	 * the return - CLAUDE.md's rule about honouring anything that fills an out-parameter.
 	 *
 	 * Silent by default, like BuildReadout below: eight tools implement this interface and
-	 * stage 1 of the snap-guides design gives an anchor to exactly one of them.
+	 * stage 1 of the snap-guides design gave an anchor to exactly one of them.
+	 *
+	 * TAKES THE TARGET, NOT THE CONTEXT. The call sits INSIDE FBuildSession::MakeContext while
+	 * that context is being built, so a context passed here would be half-filled - its own Guide
+	 * field is the very thing being computed. The target is what resolves a width index to a
+	 * profile (IRoadEditTarget::ResolveProfileFor), which is how a tool answers with the
+	 * half-width its pavement will actually have. Null is a supported state, like Network.
 	 */
-	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const
 	{
 		return false;
 	}

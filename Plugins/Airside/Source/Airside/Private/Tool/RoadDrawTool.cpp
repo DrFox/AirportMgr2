@@ -252,7 +252,8 @@ bool FRoadDrawTool::IsIdle() const
 	return State.IsValid() && State->IsIdle();
 }
 
-bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAnchor& Out) const
+bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
 {
 	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
 	// speak of, and a guide offered there would be squaring to an edge that does not exist.
@@ -270,6 +271,19 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, FGuideAncho
 	}
 
 	Out.Origin = From->Position;
+
+	// THE WIDTH THIS GESTURE WOULD LAY - the same question the ghost asks, through the same one
+	// resolver, so a guide cannot disagree with the pavement it is guiding. A null Target is a
+	// supported state and leaves the widths at zero, which means "no width" rather than "unknown".
+	Out.Point = EDragPoint::Centreline;
+	if (Target != nullptr)
+	{
+		if (const URoadProfile* Profile = Target->ResolveProfileFor(Kind, WidthIndex))
+		{
+			Out.HalfWidthLeft = Profile->GetHalfWidthLeft();
+			Out.HalfWidthRight = Profile->GetHalfWidthRight();
+		}
+	}
 
 	// THE SEGMENT ALREADY ARRIVING AT THE PENDING NODE. With exactly one incident segment the
 	// answer is unambiguous - that is the road being extended. At a junction there are several

@@ -147,6 +147,21 @@ bool FPlotCornerFollowsTheGuideTest::RunTest(const FString& Parameters)
 	const FVector2D FarEnd = Gesture.Frontage[1];
 	const FToolContext Guided = Gesture.At(FarEnd + FVector2D(60.0, 2000.0));
 
+	// A PLOT DRAGS A BOUNDARY, not a centreline, and its half-widths are zero because there is
+	// no pavement either side of a corner. Asserted here rather than left implied: the
+	// displacement rule in FApronLineGuideSource turns on exactly this, and a tool that answered
+	// Centreline by omission would push every apron guide out by a half-width it does not have.
+	FGuideAnchor Shape;
+	if (TestTrue(TEXT("the plot tool describes an anchor"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.TestWorld.Actor->Network,
+			Gesture.TestWorld.Actor, Shape)))
+	{
+		TestEqual(TEXT("and says it is dragging a boundary"),
+			static_cast<int32>(Shape.Point), static_cast<int32>(EDragPoint::Boundary));
+		TestEqual(TEXT("with no width to either side of it"), Shape.HalfWidthLeft, 0.0);
+		TestEqual(TEXT("on either side"), Shape.HalfWidthRight, 0.0);
+	}
+
 	if (!TestTrue(TEXT("the driver resolved a guide for a corner dragged near square"),
 		Guided.Guide.bActive))
 	{
