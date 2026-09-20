@@ -175,7 +175,11 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		Level.ReferenceAt = Point.At;
 		Level.Description = FString::Printf(TEXT("0 degrees to %s"), *Point.Name);
 		Level.Relation = SnapGuide::ERelation::LevelWith;
-		Level.Reference = SnapGuide::EReference::ThisGesture;
+
+		// THE POINT'S OWN COLUMN, not this source's. One source serves both the gesture's
+		// corners and the network's nodes, and the tool is the only thing that knows which is
+		// which - see FGuidePoint::Reference.
+		Level.Reference = Point.Reference;
 		Out.Add(Level);
 
 		SnapGuide::FCandidate Square = Level;

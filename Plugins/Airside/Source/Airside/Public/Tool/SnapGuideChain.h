@@ -19,6 +19,21 @@ struct FGuidePoint
 
 	/** "corner 3". The source composes "0 degrees to corner 3" from it. */
 	FString Name;
+
+	/**
+	 * Which COLUMN this point belongs to - ThisGesture for the gesture's own corners, Road for
+	 * a live network node, Apron for an apron's corner.
+	 *
+	 * THE TOOL TAGS IT, for the same reason the tool supplies the point at all: only the tool
+	 * knows where its own points came from, and a source that went looking would be a second
+	 * opinion about the gesture. Without it the LevelWith row could not be gated by column -
+	 * ONE flat array serves both the plot's pinned corners and the road's network nodes, and
+	 * those are different columns of the grid.
+	 *
+	 * DEFAULTS TO ThisGesture because the gesture's own points are the case that needs no
+	 * switch: EReference::ThisGesture is the one column with no button.
+	 */
+	SnapGuide::EReference Reference = SnapGuide::EReference::ThisGesture;
 };
 
 /**

@@ -9,6 +9,7 @@
 #include "Tool/RoadEditTarget.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -258,6 +259,77 @@ bool FRoadAnchorCarriesItsHalfWidthTest::RunTest(const FString& Parameters)
 		Anchor.HalfWidthRight, Profile->GetHalfWidthRight());
 	TestTrue(TEXT("and they are a real width, not a default zero"),
 		Anchor.HalfWidthLeft > 0.0);
+
+	return true;
+}
+
+/**
+ * A NETWORK NODE IS THE ROAD COLUMN'S, NOT THE GESTURE'S.
+ *
+ * FGuideAnchor::AlignTo is one flat array and two tools fill it: FPlotPlaceTool with its own
+ * pinned corners, FRoadDrawTool with every live node in reach. Those are different COLUMNS, and
+ * until a point carried its own the LevelWith row could not be gated by one - switching Road off
+ * still offered you a line through a junction.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FLevelWithIsGatedPerPointTest,
+	"Airside.Tool.LevelWithIsGatedPerPoint",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FLevelWithIsGatedPerPointTest::RunTest(const FString& Parameters)
+{
+	FRoadGesture Gesture;
+	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
+
+	// Two clicks west to east. The chain pends at the east end, and the WEST node is then a
+	// live node in reach - the only thing AlignTo can hold.
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));
+	Gesture.Tool->OnClick(Gesture.At(FVector2D(6000.0, 0.0)));
+
+	FGuideAnchor Anchor;
+	if (!TestTrue(TEXT("the tool describes an anchor"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Anchor)))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("and offers the west node to line up with"), Anchor.AlignTo.Num() > 0))
+	{
+		return false;
+	}
+
+	// ONLY LevelWith, and the cursor square above the west node - on the line LevelWith draws
+	// ACROSS the reference through that point, which is x = 0.
+	FSnapGuideSettings Settings;
+	Settings.bExtending = false;
+	Settings.bLevelWith = true;
+	Settings.bParallel = false;
+	Settings.bCollinear = false;
+	Settings.bAngledFrom = false;
+	Settings.bMatchingGap = false;
+	Settings.bRoad = false;
+	Settings.bRunway = false;
+	Settings.bApron = false;
+	Settings.bStand = false;
+	Settings.bWorld = false;
+
+	const FSnapGuideChain Chain;
+	const FVector2D Cursor(30.0, 4000.0);
+
+	const SnapGuide::FResult Off = Chain.Resolve(
+		*Gesture.Network(), Anchor, Cursor, SnapGuide::FResult(), Settings);
+	TestFalse(TEXT("with the Road column off, a network node offers nothing"), Off.bActive);
+
+	// CONTROL LEG: the drag was fine - switch the column on and the same node answers.
+	Settings.bRoad = true;
+	const SnapGuide::FResult On = Chain.Resolve(
+		*Gesture.Network(), Anchor, Cursor, SnapGuide::FResult(), Settings);
+	if (!TestTrue(TEXT("with it on, the node offers a line"), On.bActive)) { return false; }
+	TestEqual(TEXT("as a LevelWith guide"),
+		static_cast<int32>(On.Winners[0].Relation),
+		static_cast<int32>(SnapGuide::ERelation::LevelWith));
+	TestEqual(TEXT("against the Road column, because that is where a node lives"),
+		static_cast<int32>(On.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Road));
 
 	return true;
 }

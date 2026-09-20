@@ -340,7 +340,16 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTa
 		{
 			continue;
 		}
-		Out.AlignTo.Add({ Node.Position, TEXT("that node") });
+		// SPELT OUT, not braced: a third member arrived on FGuidePoint in 2026-09-20 and a
+		// braced initialiser would have taken the default for it in silence.
+		FGuidePoint Point;
+		Point.At = Node.Position;
+		Point.Name = TEXT("that node");
+
+		// A LIVE NODE IS THE ROAD COLUMN'S. It is the one place a network fact reaches a
+		// tool-fed source, and the tag is what lets the Road button switch it off.
+		Point.Reference = SnapGuide::EReference::Road;
+		Out.AlignTo.Add(Point);
 	}
 
 	return true;
