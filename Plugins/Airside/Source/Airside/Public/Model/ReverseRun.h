@@ -49,8 +49,27 @@ struct AIRSIDE_API FReverseRun
 	 *  about going backwards. FRouteFollower measures the steered axle; this does not. */
 	UPROPERTY() double Travelled = 0.0;
 
-	/** How fast a vehicle backs up, uu/s. A crawl by nature - nobody reverses at taxi speed. */
+	/** How fast a vehicle backs up, uu/s. A crawl by nature - nobody reverses at taxi speed.
+	 *  THE ASK, not the state: Start writes it once and nothing else touches it. Speed below
+	 *  is what the vehicle actually managed. */
 	UPROPERTY() double ReverseSpeed = 0.0;
+
+	/**
+	 * uu/s right now, as a MAGNITUDE - what the last Advance actually covered, over its own
+	 * delta. Zero while arbitration holds the vehicle, and less than ReverseSpeed on the frame
+	 * that arrives.
+	 *
+	 * SEPARATE FROM ReverseSpeed rather than replacing it, and the distinction is the one
+	 * FRouteFollower::Speed draws in its own header - "what it was ASKED for is
+	 * Ground.Taxi.SpeedCap, which does not change". FRoadAgent::DescribeMotion used to report
+	 * the ask, so a truck held at a standstill told the view it was doing a full metre a
+	 * second and its wheels spun on the spot. A held vehicle must still remember what it
+	 * intends to back up at once it is released, which is why the cap survives.
+	 *
+	 * UNSIGNED, like FPushbackRun::Speed. Which way a phase points is DescribeMotion's to say,
+	 * once, rather than a fact repeated in every run struct for the phases that go backwards.
+	 */
+	UPROPERTY() double Speed = 0.0;
 
 	/**
 	 * Arms the manoeuvre, and REFUSES it if this airframe cannot back along that curve.

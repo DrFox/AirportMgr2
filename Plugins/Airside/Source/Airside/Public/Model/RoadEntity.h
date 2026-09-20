@@ -216,7 +216,17 @@ struct AIRSIDE_API FAgentMotion
 	UPROPERTY() double PitchPivotX = 0.0;
 
 	/**
-	 * Speed over the ground, uu per second.
+	 * Speed over the ground, uu per second. SIGNED: negative means going backwards.
+	 *
+	 * THE SIGN IS THE VIEW'S ONLY SOURCE OF DIRECTION. UAirsideAgentAnim::WheelStepDegrees is
+	 * RadiansToDegrees(GroundSpeed / Radius) and reads nothing else, so while this was a
+	 * magnitude a reversing vehicle rolled its wheels forwards - reported from play on
+	 * 2026-09-20 against the fuel truck, and true of every aircraft pushback before it.
+	 * FRoadAgent::DescribeMotion negates the two phases that go backwards; the run structs
+	 * themselves keep magnitudes, so the direction is decided once.
+	 *
+	 * ANYTHING ASKING "IS IT STOPPED" MUST COMPARE THE MAGNITUDE. `<= 0.0` was that question
+	 * once and is now also true of a truck backing into a bay at full crawl.
 	 *
 	 * DRIVES THE WHEELS ON THE GROUND ONLY (#107 item 8). It stays meaningful once airborne -
 	 * a departure keeps climbing, not stopping - but UAirsideAgentAnim no longer reads it

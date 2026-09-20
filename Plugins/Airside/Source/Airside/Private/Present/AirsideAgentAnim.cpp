@@ -103,8 +103,17 @@ float UAirsideAgentAnim::WheelStepDegrees(float GroundSpeed, float Radius, bool 
 		// instead of a height: proportional to what is left, so it eases toward zero rather
 		// than running at a fixed rate until it arrives and then holding. Bounded in time by
 		// SpinDownSeconds the same way the flare is bounded by FlareTimeConstantSeconds.
-		InOutRateDegPerSec = FMath::Max(
-			InOutRateDegPerSec - (InOutRateDegPerSec / SpinDownSeconds) * DeltaSeconds, 0.0f);
+		//
+		// TOWARD ZERO, NOT Max AGAINST IT. This was FMath::Max(Decayed, 0), which is only a
+		// decay for a wheel turning forwards: GroundSpeed became signed on 2026-09-20 so a
+		// reversing vehicle rolls its wheels back, and Max against zero would return zero on
+		// the first airborne frame - reinstating, for anything backing up, the exact snap this
+		// spin-down exists to prevent. Clamping on the SIDE IT STARTED also stops the decay
+		// overshooting through zero on a long frame and driving the wheel the other way.
+		const float Decayed =
+			InOutRateDegPerSec - (InOutRateDegPerSec / SpinDownSeconds) * DeltaSeconds;
+		InOutRateDegPerSec = InOutRateDegPerSec >= 0.0f ? FMath::Max(Decayed, 0.0f)
+		                                                : FMath::Min(Decayed, 0.0f);
 	}
 	else
 	{

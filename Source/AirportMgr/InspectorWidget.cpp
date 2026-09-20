@@ -171,8 +171,14 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		bAircraft = true;
 		Title = FString::Printf(TEXT("%s  #%d"), *F.TypeName, F.Id);
 		// m/s and knots side by side: the sim's unit and the one a pilot reads.
+		//
+		// MAGNITUDE. FAgentMotion::GroundSpeed became signed on 2026-09-20 so the view could
+		// roll a reversing vehicle's wheels backwards, and a readout is not that view: an
+		// aircraft on a pushback would otherwise report "-1.5 m/s (-3 kt)", which reads as a
+		// fault rather than as a direction. Which way it is going is the Status line's job.
+		const double Shown = FMath::Abs(F.GroundSpeed);
 		Facts = FString::Printf(TEXT("Heading %03.0f\nSpeed %.1f m/s (%.0f kt)\nAltitude %.0f m\nTo %s\nEngine %s"),
-			F.HeadingDegrees, F.GroundSpeed / 100.0, F.GroundSpeed / 100.0 * 1.94384, F.Altitude / 100.0,
+			F.HeadingDegrees, Shown / 100.0, Shown / 100.0 * 1.94384, F.Altitude / 100.0,
 			*F.Destination, F.bEngineRunning ? TEXT("running") : TEXT("off"));
 		Status = F.Status;
 		bDepartEnabled = F.bCanDepart;

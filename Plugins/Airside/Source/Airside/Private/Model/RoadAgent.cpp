@@ -175,12 +175,26 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	{
 	case EAgentPhase::Arriving:    Motion.GroundSpeed = Arrival.Speed;   break;
 	case EAgentPhase::Departing:   Motion.GroundSpeed = Departure.Speed; break;
-	// A PUSH IS MOTION TOO, and the wheels turn under it - backwards, but the view has no
-	// signed wheel rate and a tyre rolling the other way at 1.5 m/s reads the same. Omitting
-	// this line is the "stopped wheels" defect above, in the one phase where the aeroplane is
-	// closest to the camera.
-	case EAgentPhase::Manoeuvring: Motion.GroundSpeed = Pushback.Speed;  break;
-	case EAgentPhase::Reversing:   Motion.GroundSpeed = Reverse.ReverseSpeed; break;
+	// A PUSH IS MOTION TOO, and the wheels turn under it - BACKWARDS, which this line used to
+	// discard. It read `= Pushback.Speed` and said so in its own comment: "the view has no
+	// signed wheel rate and a tyre rolling the other way at 1.5 m/s reads the same". It does
+	// not read the same, it reads as a tyre rolling the wrong way, and it was reported from
+	// play on 2026-09-20 - on the fuel truck, which reverses in front of the camera on every
+	// service cycle, but the defect was always here too. Omitting the line entirely is the
+	// "stopped wheels" defect above, in the one phase where the aeroplane is closest to the
+	// camera.
+	//
+	// THE SIGN IS APPLIED HERE AND NOWHERE ELSE. FPushbackRun::Speed and FReverseRun::Speed
+	// both stay magnitudes, as FRouteFollower::Speed is, because which way a phase points is
+	// a fact about the PHASE - and this switch is the one place that knows it. Signing them
+	// at the source would be the same fact written in three structs that must agree.
+	case EAgentPhase::Manoeuvring: Motion.GroundSpeed = -Pushback.Speed; break;
+	// REVERSE.SPEED, NOT REVERSE.REVERSESPEED, and the difference is a whole defect. The
+	// latter is the AUTHORED CAP, written once by FReverseRun::Start and never again, so a
+	// truck held at a standstill by arbitration went on reporting a full metre a second and
+	// its wheels spun on the spot - "they seem to rotate independent of speed, they just
+	// spin". Speed is what the last Advance actually covered. See FReverseRun::Speed.
+	case EAgentPhase::Reversing:   Motion.GroundSpeed = -Reverse.Speed;  break;
 	default:                       Motion.GroundSpeed = Follower.Speed;  break;
 	}
 

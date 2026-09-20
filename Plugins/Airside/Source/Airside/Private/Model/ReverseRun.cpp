@@ -50,6 +50,10 @@ bool FReverseRun::Start(const FRoutePlan& InPlan, const FAirframe& Airframe, dou
 	Plan = InPlan;
 	Travelled = 0.0;
 	ReverseSpeed = FMath::Max(0.0, InReverseSpeed);
+
+	// FROM REST, like FRouteFollower::Speed and FPushbackRun::Speed. A manoeuvre that armed
+	// reporting its cap would spin the wheels on the frame before it had moved at all.
+	Speed = 0.0;
 	return true;
 }
 
@@ -58,6 +62,7 @@ bool FReverseRun::Advance(double DeltaSeconds, double StopWithin,
 {
 	if (!Plan.IsValid() || Plan.Polyline.Num() < 2)
 	{
+		Speed = 0.0;
 		return false;
 	}
 
@@ -67,7 +72,15 @@ bool FReverseRun::Advance(double DeltaSeconds, double StopWithin,
 	const double Room = FMath::Max(0.0, StopWithin);
 	const double Step = FMath::Min(ReverseSpeed * DeltaSeconds, Room);
 
+	// MEASURED AFTER THE CLAMP, NOT BEFORE IT, and that is the whole point of the field. Step
+	// is what this frame WANTED; Travelled is clamped to Plan.Length on the frame that
+	// arrives, and Room is zero for every frame arbitration holds the vehicle. Reporting Step
+	// - or worse ReverseSpeed, which is what DescribeMotion used to read - tells the view a
+	// stationary truck is doing a metre a second, and its wheels spin on the spot. Reported
+	// from play, 2026-09-20.
+	const double Before = Travelled;
 	Travelled = FMath::Min(Travelled + Step, Plan.Length);
+	Speed = DeltaSeconds > UE_DOUBLE_SMALL_NUMBER ? (Travelled - Before) / DeltaSeconds : 0.0;
 
 	double LineHeading = 0.0;
 	if (!GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, OutPosition, LineHeading))
