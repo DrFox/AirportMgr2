@@ -635,6 +635,11 @@ EGestureMode ARoadBuildController::GetGestureMode() const
 	return Session.GetGestureMode();
 }
 
+bool ARoadBuildController::WantsRoadNodesDrawn() const
+{
+	return Session.WantsRoadNodesDrawn();
+}
+
 bool ARoadBuildController::ActiveToolHasEditHandles() const
 {
 	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();

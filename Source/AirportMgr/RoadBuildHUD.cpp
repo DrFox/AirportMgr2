@@ -62,7 +62,13 @@ void ARoadBuildHUD::DrawHUD()
 	// GraphOverlay::Describe would force them to rise and fall together. See GraphOverlay.h
 	// for why the split exists and why RoadBuildEditorTool::DrawPersistentState - which has
 	// no such toggle - calls Describe instead.
-	if (bDrawNodes && Target->Network != nullptr)
+	// AND THE SESSION'S ANSWER, not instead of bDrawNodes: that flag is the level author's
+	// master switch and stays one. This is the per-gesture question - the rings are
+	// scaffolding, and an airport being looked at rather than built should read as an
+	// airport. See FToolRegistration::bShowsRoadNodes.
+	const bool bNodesWanted = bDrawNodes && Controller->WantsRoadNodesDrawn();
+
+	if (bNodesWanted && Target->Network != nullptr)
 	{
 		GraphOverlay::DescribeNodes(*Target->Network, *this);
 	}
@@ -77,7 +83,7 @@ void ARoadBuildHUD::DrawHUD()
 	// shared fact both the runtime and the editor draw, and index/id text is a HUD-only
 	// debugging aid the editor viewport has no use for (PrimitiveDrawInterface draws no text
 	// at all - see FViewportPreviewSink::Label).
-	if (bDrawNodes && bDrawNodeIndices && Target->Network != nullptr)
+	if (bNodesWanted && bDrawNodeIndices && Target->Network != nullptr)
 	{
 		DrawNodeIndices(*Target);
 	}

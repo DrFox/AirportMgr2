@@ -101,6 +101,26 @@ struct FToolRegistration
 	 * Airside.Tool.EditHandlesAreDeclaredForEveryRegistryEntry.
 	 */
 	EEditHandleKind EditHandles = EEditHandleKind::None;
+
+	/**
+	 * Whether the committed graph's NODE RINGS are drawn while this tool is lit.
+	 *
+	 * OFF BY DEFAULT, because they are scaffolding: reported from play as "when a road is
+	 * not on edit or create mode we should not see the white circle junction nodes". An
+	 * airport you are looking at rather than building should read as an airport.
+	 *
+	 * TRUE ONLY WHERE A TOOL READS ROAD NODES, which is FRoadDrawTool's two entries and
+	 * nothing else - they snap to a node to chain from it or close a junction, so the ring
+	 * is the target you are aiming at. The tools that look like counterexamples are not:
+	 * the holding-point and guideline tools pick GUIDELINE nodes, which GuidelineOverlay
+	 * draws under its own G toggle, and the runway tool reads no snap at all.
+	 *
+	 * A SECOND FIELD BESIDE EditHandles rather than derived from it, because the two
+	 * genuinely differ: Runway exposes an edit handle and needs no rings while building.
+	 * Deriving one from the other would need an exception list, which is the second list
+	 * this field exists to avoid.
+	 */
+	bool bShowsRoadNodes = false;
 };
 
 /**
@@ -177,6 +197,26 @@ public:
 	 *  UNAFFECTED BY THE MODE: the lit tool still says which handles Edit exposes, so the
 	 *  bar keeps showing Taxiway lit while Edit is held over it. */
 	int32 GetActiveToolIndex() const { return ActiveTool; }
+
+	/**
+	 * Whether the committed graph's node rings belong on screen right now.
+	 *
+	 * ON THE SESSION so both drivers agree - the HUD and the editor viewport drew this from
+	 * their own unconditional flags before, which is how the editor came to show rings the
+	 * runtime had learned to hide. See FToolRegistration::bShowsRoadNodes.
+	 *
+	 * EDIT ALWAYS WANTS THEM, whatever is lit: the mode is ABOUT the points, and the tool
+	 * only says which of them are grabbable.
+	 */
+	bool WantsRoadNodesDrawn() const
+	{
+		if (Mode == EGestureMode::Edit)
+		{
+			return true;
+		}
+		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+		return Registry.IsValidIndex(ActiveTool) && Registry[ActiveTool].bShowsRoadNodes;
+	}
 
 	/** The one sticky mode. A session opens in Build: a mode that survived construction
 	 *  would be a gesture the player never asked to be able to make. */

@@ -39,7 +39,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::One,   TEXT("Taxiway"),  LOCTEXT("Taxiway",   "Taxiway"),
 			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node. The taxiway key pressed again cycles the width. Press M to edit placed nodes."),
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); },
-			EEditHandleKind::AirsideNode },
+			EEditHandleKind::AirsideNode, /*bShowsRoadNodes*/ true },
 		{ EKeys::Two,   TEXT("Apron"),    LOCTEXT("Apron",     "Apron"),
 			LOCTEXT("ApronTooltip", "Draw a polygon of pavement; click the first corner again to close it."),
 			[] { return MakeUnique<FApronDrawTool>(); },
@@ -71,7 +71,7 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		{ EKeys::Nine,  TEXT("Road"),     LOCTEXT("Road",      "Road"),
 			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node. Press M to edit placed nodes."),
 			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); },
-			EEditHandleKind::ServiceRoadNode },
+			EEditHandleKind::ServiceRoadNode, /*bShowsRoadNodes*/ true },
 
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for.

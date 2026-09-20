@@ -904,4 +904,86 @@ bool FEditModeDrawsTheRemovalItWouldMakeTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNodeVisibilityIsDeclaredForEveryRegistryEntryTest,
+	"Airside.Tool.RoadNodeVisibilityIsDeclaredForEveryRegistryEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNodeVisibilityIsDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
+{
+	// NAMES, NOT COUNTS, like the EditHandles check beside it: a count passes on a table
+	// where two entries have swapped answers.
+	//
+	// THE FALSE ROWS ARE THE INTERESTING ONES. Holding-point and guideline LOOK like they
+	// need road nodes - both talk about clicking nodes - but they pick GUIDELINE nodes,
+	// which GuidelineOverlay draws under its own G toggle. The runway tool reads no snap at
+	// all. Getting any of those wrong puts the scaffolding back on screen for a tool that
+	// never wanted it.
+	const TMap<FName, bool> Expected = {
+		{ TEXT("Select"),          false },
+		{ TEXT("Taxiway"),         true  },   // snaps to nodes to chain and close junctions
+		{ TEXT("Apron"),           false },
+		{ TEXT("Stand"),           false },
+		{ TEXT("Guideline"),       false },   // guideline nodes, not road nodes
+		{ TEXT("Runway"),          false },   // reads no snap
+		{ TEXT("HoldingPosition"), false },   // guideline nodes, not road nodes
+		{ TEXT("Road"),            true  },   // the same FRoadDrawTool as Taxiway
+		{ TEXT("FuelDepot"),       false },
+	};
+
+	for (const FToolRegistration& Entry : ToolRegistry())
+	{
+		const bool* Want = Expected.Find(Entry.Id);
+		if (Want == nullptr)
+		{
+			AddError(FString::Printf(
+				TEXT("registry entry '%s' is not named in this test - a new tool must say "
+					 "whether the node rings belong on screen under it"), *Entry.Id.ToString()));
+			continue;
+		}
+		TestEqual(*FString::Printf(TEXT("'%s' declares the node visibility this test expects"),
+			*Entry.Id.ToString()), Entry.bShowsRoadNodes, *Want);
+	}
+	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
+		ToolRegistry().Num(), Expected.Num());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNodesStandDownOutsideTheRoadToolsTest,
+	"Airside.Tool.RoadNodesStandDownOutsideTheRoadTools",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNodesStandDownOutsideTheRoadToolsTest::RunTest(const FString& Parameters)
+{
+	// THE REPORTED DEFECT: "when a road is not on edit or create mode we should not see the
+	// white circle junction nodes". The rings are scaffolding, and an airport being looked
+	// at rather than built should read as an airport.
+	FBuildSession Session;
+
+	Session.SelectTool(0);                       // Select
+	TestFalse(TEXT("looking at the airport draws no node rings"),
+		Session.WantsRoadNodesDrawn());
+
+	Session.SelectTool(1);                       // Taxiway
+	TestTrue(TEXT("but drawing a taxiway does - the ring is the junction you are aiming at"),
+		Session.WantsRoadNodesDrawn());
+
+	Session.SelectTool(3);                       // Stand
+	TestFalse(TEXT("placing a stand does not"), Session.WantsRoadNodesDrawn());
+
+	Session.SelectTool(7);                       // Road
+	TestTrue(TEXT("drawing a service road does"), Session.WantsRoadNodesDrawn());
+
+	// EDIT WANTS THEM WHATEVER IS LIT, because the mode is ABOUT the points and the tool
+	// only says which of them are grabbable.
+	Session.SelectTool(0);                       // Select - which on its own draws none
+	Session.SetGestureMode(EGestureMode::Edit);
+	TestTrue(TEXT("Edit draws them whatever tool is lit"), Session.WantsRoadNodesDrawn());
+
+	Session.SetGestureMode(EGestureMode::Build);
+	TestFalse(TEXT("and leaving Edit puts them away again"), Session.WantsRoadNodesDrawn());
+	return true;
+}
+
 #endif

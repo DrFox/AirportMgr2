@@ -226,6 +226,10 @@ public:
 	void ToggleGestureMode(EGestureMode Mode);
 	EGestureMode GetGestureMode() const;
 
+	/** Whether the committed graph's node rings belong on screen - see
+	 *  FBuildSession::WantsRoadNodesDrawn. Read by ARoadBuildHUD every frame. */
+	bool WantsRoadNodesDrawn() const;
+
 	/** Whether the LIT tool exposes anything to edit - what greys the Edit button out, so
 	 *  the bar answers "why can I not edit this" rather than lighting over a mode that would
 	 *  do nothing. Reads FToolRegistration::EditHandles, the one list. */

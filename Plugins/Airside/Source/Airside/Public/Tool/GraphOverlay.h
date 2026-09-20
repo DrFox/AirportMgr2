@@ -16,9 +16,11 @@ struct IToolPreviewSink;
  * Split into DescribeNodes/DescribeStands rather than one unconditional call like
  * GuidelineOverlay::Draw's: ARoadBuildHUD keeps bDrawNodes and bDrawStands as INDEPENDENT
  * toggles, and a single combined function would force them to rise and fall together the
- * first time either one drew something the other flag was meant to hide. Describe() calls
- * both, for the one caller that has no such toggle at all - RoadBuildEditorTool's viewport,
- * which always draws everything.
+ * first time either one drew something the other flag was meant to hide.
+ *
+ * BOTH DRIVERS NOW SPLIT THEM. RoadBuildEditorTool's viewport used to be the one caller
+ * with no toggle at all; since 2026-09-20 the node rings stand down outside the road tools
+ * and Edit, in both, and the entities do not. See FToolRegistration::bShowsRoadNodes.
  *
  * Written to replace THREE independent renderings of the same two facts that had drifted:
  * ARoadBuildHUD::DrawNodes/DrawStands (its own StubColour/EndColour/JunctionColour degree
@@ -52,6 +54,15 @@ namespace GraphOverlay
 	 */
 	AIRSIDE_API void DescribeStands(const URoadNetwork& Network, IToolPreviewSink& Sink);
 
-	/** DescribeNodes then DescribeStands - what a caller with no per-feature toggle wants. */
+	/**
+	 * DescribeNodes then DescribeStands.
+	 *
+	 * NO PRODUCTION CALLER SINCE 2026-09-20, and that is worth saying rather than leaving a
+	 * reader to find out: the editor viewport was the one caller with no per-feature toggle,
+	 * and it now has one - the node rings are scaffolding and stand down outside the road
+	 * tools and Edit (see FToolRegistration::bShowsRoadNodes). Kept because it is still the
+	 * honest answer for a caller that genuinely wants everything, and the tests use it; a
+	 * third such caller should ask whether it really has no toggle before reaching for it.
+	 */
 	AIRSIDE_API void Describe(const URoadNetwork& Network, IToolPreviewSink& Sink);
 }

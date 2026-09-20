@@ -480,10 +480,18 @@ void URoadBuildEditorTool::DrawPersistentState(IToolPreviewSink& Sink) const
 	// visibility change is not the place to take that on.
 	GuidelineOverlay::Draw(*Target->Network, Sink);
 
-	// The road graph and every placed entity - the SAME call ARoadBuildHUD::DrawHUD makes
-	// for the runtime view, so the two cannot draw this differently again. See
-	// GraphOverlay.h for the three independent renderings this replaced.
-	GraphOverlay::Describe(*Target->Network, Sink);
+	// Placed entities are always drawn - they are the airport, not scaffolding.
+	GraphOverlay::DescribeStands(*Target->Network, Sink);
+
+	// THE NODE RINGS ARE CONDITIONAL, and asked of the SESSION so this viewport and
+	// ARoadBuildHUD cannot answer it differently - which is exactly how the three
+	// renderings GraphOverlay.h describes came to drift. Describe() is no longer called
+	// here: its whole rationale was "the one caller with no toggle", and this caller now
+	// has one.
+	if (Sess().WantsRoadNodesDrawn())
+	{
+		GraphOverlay::DescribeNodes(*Target->Network, Sink);
+	}
 }
 
 void URoadBuildEditorTool::CancelGesture()
