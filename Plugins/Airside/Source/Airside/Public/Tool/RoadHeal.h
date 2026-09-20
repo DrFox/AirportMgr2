@@ -31,8 +31,29 @@ struct FRoadDeletionPlan
 	/** Neighbours to connect to Anchor, in a deterministic order. */
 	TArray<FRoadNodeId> Rejoin;
 
-	/** Segments the deletion removes. */
+	/**
+	 * Segments the deletion removes.
+	 *
+	 * NOT ALWAYS EVERY ARM OF THE TARGET. A node carrying a runway loses only its
+	 * non-runway arms - see bKeepTarget.
+	 */
 	TArray<FRoadSegmentId> Doomed;
+
+	/**
+	 * True when the node itself stays and only Doomed goes.
+	 *
+	 * THE RUNWAY IS NEVER TOUCHED BY DELETING SOMETHING ATTACHED TO IT. Reported from play
+	 * with a picture: a taxiway joined the runway AT ITS THRESHOLD, and deleting that node
+	 * healed "degree 2" by running the runway's far end straight to the taxiway's next
+	 * corner - bending the runway to reach it. What is wanted, and what this expresses, is
+	 * that the runway stays exactly where it is and the taxiway goes.
+	 *
+	 * So a threshold with a taxiway on it keeps its node: the node is the threshold, and
+	 * the runway still ends there. An INTERIOR runway junction is the one case where the
+	 * target still disappears, because its two runway arms rejoin each other - collinear,
+	 * so nothing moves - and the node was only ever there to carry the branch.
+	 */
+	bool bKeepTarget = false;
 
 	/** Neighbours left holding no road at all, which go with it. */
 	TArray<FRoadNodeId> Swept;

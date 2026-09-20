@@ -56,6 +56,45 @@ namespace
 				&& Actor->ConnectNodes(Junction, TaxiwayEnd, ERoadKind::Taxiway);
 		}
 
+		/** A taxiway joined AT the runway's far threshold, rather than partway along it -
+		 *  the shape in samples/runwayDelete.png, where node A IS the threshold. */
+		bool BuildAtThreshold(ARoadNetworkActor* In)
+		{
+			Actor = In;
+			Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+			Actor->MinimumRunwayLength = 10000.0;
+
+			URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+			Profile->bContinuousThroughJunctions = true;
+			if (!Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(40000.0, 0.0), Profile))
+			{
+				return false;
+			}
+
+			// The threshold node at the far end, which the taxiway will hang off.
+			const URoadNetwork* Network = Actor->GetNetwork();
+			for (int32 Index = 0; Index < Network->GetNodes().Num(); ++Index)
+			{
+				if (Network->GetNodes()[Index].bAlive
+					&& Network->GetNodes()[Index].Position.Equals(FVector2D(40000.0, 0.0), 1.0))
+				{
+					Junction = Index;
+					break;
+				}
+			}
+			if (Junction == INDEX_NONE)
+			{
+				return false;
+			}
+
+			// B, and a taxiway continuing past it - as in the picture, where B is a corner
+			// rather than a dead end.
+			TaxiwayEnd = Actor->PlaceNode(FVector2D(52000.0, 12000.0));
+			const int32 Beyond = Actor->PlaceNode(FVector2D(52000.0, 30000.0));
+			return Actor->ConnectNodes(Junction, TaxiwayEnd, ERoadKind::Taxiway)
+				&& Actor->ConnectNodes(TaxiwayEnd, Beyond, ERoadKind::Taxiway);
+		}
+
 		/** Runway metres still on the ground, end to end along the strip. */
 		double RunwayLength() const
 		{
@@ -183,6 +222,108 @@ bool FDeletingAPlainJunctionIsUnchangedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("and still rejoins its stranded arms rather than letting them go - the "
 				  "runway rule must not have leaked into every junction"),
 		Plan.Rejoin.Num() > 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeletingATaxiwayAtAThresholdLeavesTheRunwayPutTest,
+	"Airside.Model.DeletingATaxiwayAtAThresholdLeavesTheRunwayPut",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeletingATaxiwayAtAThresholdLeavesTheRunwayPutTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	FDisconnectFixture Fix;
+	if (!TestTrue(TEXT("a runway with a taxiway on its threshold was laid"),
+			Fix.BuildAtThreshold(Actor)))
+	{
+		return false;
+	}
+
+	const FVector2D ThresholdWas =
+		Actor->GetNetwork()->GetNodes()[Fix.Junction].Position;
+	TestTrue(TEXT("the runway is 400 m to begin with"),
+		FMath::Abs(Fix.RunwayLength() - 40000.0) < 1.0);
+
+	// THE REPORTED DEFECT, from samples/runwayDelete.png. Node A has ONE runway arm, so
+	// the generic "degree 2 always heals" rule fired and ran the runway's far end straight
+	// to the taxiway's next corner - bending the runway to reach B.
+	TestTrue(TEXT("deleting the taxiway at the threshold is allowed"),
+		Actor->DeleteNode(Fix.Junction));
+
+	// THE RUNWAY HAS NOT MOVED. Both halves of that matter and they fail differently: a
+	// bend keeps the length and moves the threshold, a shortening keeps the threshold and
+	// loses length.
+	TestTrue(*FString::Printf(TEXT("the runway is still 400 m (measured %.0f)"),
+		Fix.RunwayLength()), FMath::Abs(Fix.RunwayLength() - 40000.0) < 1.0);
+
+	const FRoadNode* Threshold =
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(Fix.Junction));
+	if (!TestNotNull(TEXT("the threshold node is still there - it IS the runway's end"),
+			Threshold))
+	{
+		return false;
+	}
+	TestTrue(TEXT("and has not moved a millimetre"),
+		Threshold->Position.Equals(ThresholdWas, 0.001));
+
+	// AND THE TAXIWAY BETWEEN A AND B IS GONE, which is what was asked for. The taxiway
+	// BEYOND B stays: nothing was said about deleting the rest of it.
+	const URoadNetwork* Network = Actor->GetNetwork();
+	int32 TaxiwaySegments = 0;
+	for (int32 Index = 0; Index < Network->GetSegments().Num(); ++Index)
+	{
+		TaxiwaySegments += (Network->GetSegments()[Index].bAlive
+			&& !Network->IsRunwaySegment(Network->SegmentIdAt(Index))) ? 1 : 0;
+	}
+	TestEqual(TEXT("the A-B taxiway is gone and the one beyond B is not"), TaxiwaySegments, 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDeletingABareRunwayThresholdStillShortensItTest,
+	"Airside.Model.DeletingABareRunwayThresholdStillShortensIt",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDeletingABareRunwayThresholdStillShortensItTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	Actor->MinimumRunwayLength = 10000.0;
+	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Profile->bContinuousThroughJunctions = true;
+	if (!TestTrue(TEXT("a plain runway was laid"),
+			Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(40000.0, 0.0), Profile)))
+	{
+		return false;
+	}
+
+	int32 Threshold = INDEX_NONE;
+	const URoadNetwork* Network = Actor->GetNetwork();
+	for (int32 Index = 0; Index < Network->GetNodes().Num(); ++Index)
+	{
+		if (Network->GetNodes()[Index].bAlive
+			&& Network->GetNodes()[Index].Position.Equals(FVector2D(40000.0, 0.0), 1.0))
+		{
+			Threshold = Index;
+			break;
+		}
+	}
+	if (!TestTrue(TEXT("the threshold exists"), Threshold != INDEX_NONE)) { return false; }
+
+	// THE CONTROL FOR THE RULE ABOVE, and the edge it nearly broke. A node whose every arm
+	// is runway has nothing ATTACHED to it, so "the runway is not taken by deleting
+	// something attached" does not apply - the player clicking it is clicking the runway.
+	// Without that clause Doomed would be empty and this click would do nothing at all.
+	TestTrue(TEXT("a bare runway threshold still deletes"), Actor->DeleteNode(Threshold));
+	TestNull(TEXT("and the node really goes"),
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(Threshold)));
 	return true;
 }
 

@@ -66,8 +66,42 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 	// rather than pretending to decide. Invisible while one profile is in use.
 	URoadProfile* HealProfile = nullptr;
 
+	// A RUNWAY ARM IS NEVER TAKEN BY DELETING SOMETHING ATTACHED TO IT. Counted before the
+	// loop because it decides what that loop may doom - see FRoadDeletionPlan::bKeepTarget.
+	//
+	// TWO RUNWAY ARMS is an interior junction: the strip passes THROUGH, so its two arms
+	// rejoin each other - collinear, so nothing moves - and the node goes with the branch it
+	// was only ever there to carry.
+	//
+	// ONE is a threshold with something attached, and there is no through-route to close.
+	// The runway simply stays where it is and the branch is cut, which is the case reported
+	// from play with a picture: deleting a taxiway at the threshold healed "degree 2" by
+	// running the runway's far end to the taxiway's next corner, bending the runway to reach
+	// it.
+	int32 RunwayArms = 0;
 	for (const FRoadSegmentId& Incident : Node->Incident)
 	{
+		RunwayArms += Network.IsRunwaySegment(Incident) ? 1 : 0;
+	}
+	const bool bRunwayThrough = RunwayArms == 2;
+
+	// AND ONLY WHEN THERE IS A BRANCH TO TAKE. A node whose every arm is runway - a bare
+	// threshold - has nothing attached, so the rule above does not apply to it: the player
+	// clicking it is clicking the RUNWAY, and deleting it shortens the strip as it always
+	// did. Without this clause that click would silently do nothing at all, Doomed being
+	// empty, which is a worse answer than either.
+	Plan.bKeepTarget = RunwayArms > 0 && !bRunwayThrough
+		&& Node->Incident.Num() > RunwayArms;
+
+	for (const FRoadSegmentId& Incident : Node->Incident)
+	{
+		if (Plan.bKeepTarget && Network.IsRunwaySegment(Incident))
+		{
+			// The runway this node carries. Not doomed, not measured for a heal, not a
+			// neighbour to rejoin - left alone entirely.
+			continue;
+		}
+
 		Plan.Doomed.Add(Incident);
 
 		if (HealProfile == nullptr)
@@ -85,18 +119,36 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 		}
 	}
 
-	// Nothing to rejoin to. Whatever is left holding no road goes with it.
-	// A RUNWAY IS A THROUGH-ROUTE, and its junctions are branches off it. Reported from
-	// play as "once you have connected a runway to a taxiway there is no way to disconnect
-	// it": the generic rule below picks the anchor by "keeps the most roads, then nearest",
-	// and at a runway junction every neighbour keeps zero - so it grafted the TAXIWAY onto
-	// a runway THRESHOLD and refused the whole deletion when that turn came out too sharp.
-	// Nothing ever rejoined the runway to itself, so a deletion that did succeed severed it.
+	// A KEPT TARGET HEALS NOTHING, and this is the whole of that case. Its branches were
+	// cut; there is no hole in a road to close, because the road running through the node -
+	// the runway - was never touched. The node stays because it IS the threshold.
 	//
-	// Both are the same mistake: treating three arms as interchangeable when two of them
-	// are one road passing through. So the runway is named as the through-route here, and
-	// the branch is simply let go - which IS "delete the taxiway, keep the runway", from
-	// the gesture the player already makes.
+	// RETURNED BEFORE THE ANCHOR IS EVEN CHOSEN, so none of the rejoin machinery below can
+	// reach a runway. That machinery is what bent the strip.
+	if (Plan.bKeepTarget)
+	{
+		for (const FRoadNodeId& Branch : Neighbours)
+		{
+			if (DegreeWithout(Network, Branch, Target) == 0)
+			{
+				Plan.Swept.Add(Branch);
+			}
+		}
+		Plan.bValid = true;
+		return Plan;
+	}
+
+	// Nothing to rejoin to. Whatever is left holding no road goes with it.
+	// A RUNWAY IS A THROUGH-ROUTE at an interior junction, and the branch hanging off it is
+	// not. Reported from play as "once you have connected a runway to a taxiway there is no
+	// way to disconnect it": the generic rule below picks the anchor by "keeps the most
+	// roads, then nearest", and at a runway junction every neighbour keeps zero - so it
+	// grafted the TAXIWAY onto a runway THRESHOLD and refused the whole deletion when that
+	// turn came out too sharp. Nothing ever rejoined the runway to itself, so a deletion
+	// that did succeed severed it.
+	//
+	// The same mistake as the threshold case above: treating three arms as interchangeable
+	// when two of them are one road passing through.
 	//
 	// EXACTLY TWO RUNWAY ARMS is what makes a node an interior junction of a strip. One arm
 	// is a threshold with something attached, and it has no through-route to preserve; more
@@ -122,7 +174,9 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 			}
 		}
 	}
-	const bool bRunwayThrough = RunwayNeighbours.Num() == 2;
+	// bRunwayThrough was decided above, from the same count. Asserted rather than recomputed
+	// so the two readings of "is this an interior runway junction" cannot come apart.
+	check(bRunwayThrough == (RunwayNeighbours.Num() == 2));
 
 	if (bRunwayThrough)
 	{

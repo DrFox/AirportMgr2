@@ -1169,9 +1169,14 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// the roads meeting it - SegmentsIncidentTo is what the deletion plan already shows the
 	// player - so crediting only the node would pay back nothing for the pavement that
 	// actually disappears.
+	// WHAT THE PLAN ACTUALLY TAKES, not every arm of the node: a runway arm is not doomed
+	// by deleting something attached to it (FRoadDeletionPlan::bKeepTarget), and crediting
+	// the player for a runway still on the ground would be paying them to disconnect a
+	// taxiway.
 	FBuildQuote Quote;
-	for (const int32 Incident : SegmentsIncidentTo(NodeIndex))
+	for (const FRoadSegmentId& DoomedArm : Plan.Doomed)
 	{
+		const int32 Incident = DoomedArm.Index;
 		const FBuildQuote Each = QuoteForSegment(Incident);
 		Quote.BaseAmount += Each.BaseAmount;
 		if (!Quote.Source.IsValid())
@@ -1185,8 +1190,22 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
+	if (Plan.bKeepTarget)
+	{
+		// THE ARMS, NOT THE NODE. RemoveNode cascades every incident segment, which is
+		// exactly what must not happen here - the runway this node carries is staying. So
+		// the doomed arms are removed one by one and the node is left standing, because it
+		// is the runway's threshold.
+		for (const FRoadSegmentId& DoomedArm : Plan.Doomed)
+		{
+			Owner.Network->RemoveSegment(DoomedArm);
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Deleted %d arm(s) at node %d; its runway is left where it is."),
+			Plan.Doomed.Num(), NodeIndex);
+	}
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
-	if (!Owner.Network->RemoveNode(Node))
+	else if (!Owner.Network->RemoveNode(Node))
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
 		return false;
