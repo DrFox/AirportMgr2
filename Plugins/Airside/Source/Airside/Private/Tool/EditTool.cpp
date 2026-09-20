@@ -5,6 +5,7 @@
 #include "Model/RoadApron.h"
 #include "Model/RoadNode.h"
 #include "Profiles/RoadProfile.h"
+#include "Tool/RemoveGesture.h"
 #include "Tool/RoadGuideAnchor.h"
 #include "Tool/RoadNaming.h"
 
@@ -186,6 +187,48 @@ static FEditHandle NearestHandle(const FToolContext& Context, const URoadNetwork
 	return Best;
 }
 
+/**
+ * Whether the thing the snap chain found is one THIS mode offered.
+ *
+ * The chain answers "where would a road node go" and knows nothing of the lit tool, so it
+ * will happily name a service-road node while the Taxiway button is lit. Every gesture in
+ * this tool asks the filter before acting, or the handles drawn on screen would not be the
+ * things that respond.
+ */
+static bool IsOfferedHandle(const FToolContext& Context)
+{
+	if (Context.Snap.Kind != ERoadSnapKind::Node)
+	{
+		return false;
+	}
+	TArray<int32> Handles;
+	FEditTool::GatherNodeHandles(Context, Handles);
+	return Handles.Contains(Context.Snap.Node.Index);
+}
+
+void FEditTool::OnClick(const FToolContext& Context)
+{
+	// A PLAIN CLICK BUILDS NOTHING AND SELECTS NOTHING - see the class comment. Only the
+	// held Ctrl means anything here yet.
+	if (!Context.bRemoveModifier || Context.Target == nullptr)
+	{
+		return;
+	}
+
+	// HANDLES ONLY, which is also why a segment is not removable from this mode: Edit is
+	// about the POINTS the lit tool exposes, they are the things drawn, and the build tools
+	// keep segment removal. A Ctrl+click on open pavement here does nothing, deliberately.
+	if (!IsOfferedHandle(Context))
+	{
+		return;
+	}
+
+	if (RemoveGesture::Apply(Context))
+	{
+		UE_LOG(LogAirside, Log, TEXT("Edit: removed node %d"), Context.Snap.Node.Index);
+	}
+}
+
 void FEditTool::OnDragBegin(const FToolContext& Context)
 {
 	const URoadNetwork* Network = Context.Network();
@@ -217,13 +260,10 @@ void FEditTool::OnDragBegin(const FToolContext& Context)
 		return;
 	}
 
-	// ONLY A HANDLE THIS TOOL OFFERED. The snap chain finds every live node; the lit tool
-	// decides which of them this mode may touch. A drag that ignored the filter would move
-	// a taxiway node while the player had the Runway button lit and was looking only at
-	// thresholds - the handles drawn on screen would not be the things that move.
-	TArray<int32> Handles;
-	GatherNodeHandles(Context, Handles);
-	if (!Handles.Contains(Context.Snap.Node.Index))
+	// ONLY A HANDLE THIS TOOL OFFERED - see IsOfferedHandle. A drag that ignored the filter
+	// would move a taxiway node while the player had the Runway button lit and was looking
+	// only at thresholds.
+	if (!IsOfferedHandle(Context))
 	{
 		return;
 	}
@@ -382,6 +422,22 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 	const URoadNetwork* Network = Context.Network();
 	if (Network == nullptr)
 	{
+		return;
+	}
+
+	// WHAT A CTRL+CLICK WOULD TAKE, through the one shared answer - see RemoveGesture.
+	//
+	// FIRST AND ALONE. Everything below describes something CONSTRUCTIVE - points you may
+	// grab, a node you would merge into, a line you are squaring to - and none of it is the
+	// gesture the player is making while Ctrl is down. FRoadDrawTool hides its ghost under
+	// Ctrl for the same reason its comment gives: a preview that offers to build the thing
+	// about to be removed is two futures at once.
+	if (Context.bRemoveModifier)
+	{
+		if (IsOfferedHandle(Context))
+		{
+			RemoveGesture::Describe(Context, Sink);
+		}
 		return;
 	}
 

@@ -62,8 +62,16 @@ class AIRSIDE_API FEditTool : public IBuildTool
 public:
 	virtual FText GetDisplayName() const override;
 
-	/** Nothing. Edit does not build - see the class comment. */
-	virtual void OnClick(const FToolContext& Context) override {}
+	/**
+	 * Ctrl+click removes the handle under the cursor, healing as the build tools do. A plain
+	 * click does nothing: Edit does not build, and it has no selection to make yet.
+	 *
+	 * CTRL STILL WORKS HERE THOUGH REMOVE IS A MODE THIS ONE EXCLUDES, and the two are not
+	 * in conflict: EGestureMode is the STICKY choice, and a HELD key is a different gesture
+	 * for a shorter piece of work. MakeContext ORs them, so holding Ctrl inside Edit sets
+	 * bRemoveModifier without Edit ceasing to be the mode.
+	 */
+	virtual void OnClick(const FToolContext& Context) override;
 
 	/** Nothing yet. A drag ends by being released, not cancelled; once a selection exists
 	 *  this is where it clears. */

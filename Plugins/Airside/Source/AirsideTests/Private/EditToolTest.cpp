@@ -775,4 +775,133 @@ bool FEditModeDragsAnApronCornerTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeCtrlClickRemovesANodeTest,
+	"Airside.Tool.EditModeCtrlClickRemovesANode",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeCtrlClickRemovesANodeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A-B-C in a line. Removing B must HEAL - A and C rejoin - rather than leaving two
+	// stubs, which is what "as now" meant when the gesture was approved.
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(9000.0, 0.0));
+	const int32 C = Actor->PlaceNode(FVector2D(18000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	Actor->ConnectNodes(B, C);
+
+	FBuildSession Session;
+	Session.SelectTool(1);                       // Taxiway
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	// A PLAIN CLICK DOES NOTHING - the control. Without it, a removal that fired on every
+	// click would pass the assertion below and destroy the mode's whole premise.
+	Session.GetActiveTool()->OnClick(
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ false, false));
+	TestNotNull(TEXT("a plain click in Edit removes nothing"),
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(B)));
+
+	// CTRL+CLICK TAKES IT. The held key still means Remove inside Edit, though Remove is a
+	// sticky mode Edit excludes - the two are different gestures, and MakeContext ORs them.
+	Session.GetActiveTool()->OnClick(
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ true, false));
+
+	TestNull(TEXT("ctrl+click removes the node under the cursor"),
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(B)));
+
+	// AND IT HEALED. A deletion that merely subtracted would leave A and C stranded, which
+	// is the behaviour PlanNodeDeletion exists to avoid.
+	const FRoadNode* Left = Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(A));
+	if (!TestNotNull(TEXT("the near end survives"), Left)) { return false; }
+	TestEqual(TEXT("and is rejoined to the far end rather than left a stub"),
+		Left->Incident.Num(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeRemovalRespectsTheHandleFilterTest,
+	"Airside.Tool.EditModeRemovalRespectsTheHandleFilter",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeRemovalRespectsTheHandleFilterTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 S0 = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 S1 = Actor->PlaceNode(FVector2D(9000.0, 0.0));
+	Actor->ConnectNodes(S0, S1, ERoadKind::ServiceRoad);
+
+	FBuildSession Session;
+	FBuildSessionTunables Tunables;
+	Session.SetGestureMode(EGestureMode::Edit);
+
+	// TAXIWAY LIT, SERVICE-ROAD NODE UNDER THE CURSOR. The snap chain will name it happily -
+	// it knows nothing of the lit tool - so without the filter the removal would take a node
+	// this mode never drew a handle on.
+	Session.SelectTool(1);                       // Taxiway
+	Session.GetActiveTool()->OnClick(
+		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
+	TestNotNull(TEXT("a node the lit tool exposes no handle for is not removable"),
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(S0)));
+
+	// AND THE CONTROL: with Road lit it IS a handle, and the same click takes it. Without
+	// this, a removal broken everywhere would pass the assertion above.
+	Session.SelectTool(7);                       // Road
+	Session.GetActiveTool()->OnClick(
+		Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, /*bRemove*/ true, false));
+	TestNull(TEXT("but the tool that does expose it can remove it"),
+		Actor->GetNetwork()->GetNode(Actor->GetNetwork()->NodeIdAt(S0)));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeDrawsTheRemovalItWouldMakeTest,
+	"Airside.Tool.EditModeDrawsTheRemovalItWouldMake",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeDrawsTheRemovalItWouldMakeTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(9000.0, 0.0));
+	const int32 C = Actor->PlaceNode(FVector2D(18000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	Actor->ConnectNodes(B, C);
+
+	FBuildSession Session;
+	Session.SelectTool(1);
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	// DRAWING IS HALF THE WORK, the lesson WantsFreeStartGuides records. A removal the
+	// player cannot see coming is the misclick this whole mode exists to remove, in a new
+	// place.
+	FEditToolSink Sink;
+	Session.GetActiveTool()->BuildPreview(
+		Session.MakeContext(Actor, FVector2D(9000.0, 0.0), Tunables, /*bRemove*/ true, false), Sink);
+
+	TestTrue(TEXT("what the ctrl+click would take is drawn as doomed"),
+		Sink.CountMarkers(EPreviewStyle::Doomed) > 0);
+	TestTrue(TEXT("and so are the roads that go with it"),
+		Sink.CountLines(EPreviewStyle::Doomed) > 0);
+	TestTrue(TEXT("and the rejoin it would make, because deleting is not purely subtractive"),
+		Sink.CountLines(EPreviewStyle::Heal) > 0);
+
+	// THE HANDLES ARE NOT DRAWN WHILE CTRL IS HELD. Offering "you may grab these" beside
+	// "these are about to go" is two futures at once.
+	TestEqual(TEXT("the grab handles stand down while a removal is being aimed"),
+		Sink.CountMarkers(EPreviewStyle::Handle), 0);
+	return true;
+}
+
 #endif
