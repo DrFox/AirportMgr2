@@ -86,6 +86,53 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 	}
 
 	// Nothing to rejoin to. Whatever is left holding no road goes with it.
+	// A RUNWAY IS A THROUGH-ROUTE, and its junctions are branches off it. Reported from
+	// play as "once you have connected a runway to a taxiway there is no way to disconnect
+	// it": the generic rule below picks the anchor by "keeps the most roads, then nearest",
+	// and at a runway junction every neighbour keeps zero - so it grafted the TAXIWAY onto
+	// a runway THRESHOLD and refused the whole deletion when that turn came out too sharp.
+	// Nothing ever rejoined the runway to itself, so a deletion that did succeed severed it.
+	//
+	// Both are the same mistake: treating three arms as interchangeable when two of them
+	// are one road passing through. So the runway is named as the through-route here, and
+	// the branch is simply let go - which IS "delete the taxiway, keep the runway", from
+	// the gesture the player already makes.
+	//
+	// EXACTLY TWO RUNWAY ARMS is what makes a node an interior junction of a strip. One arm
+	// is a threshold with something attached, and it has no through-route to preserve; more
+	// than two cannot happen on a chain that URoadEditFacade::MoveNode keeps straight.
+	TArray<FRoadNodeId> RunwayNeighbours;
+	URoadProfile* RunwayProfile = nullptr;
+	for (const FRoadSegmentId& Incident : Node->Incident)
+	{
+		if (!Network.IsRunwaySegment(Incident))
+		{
+			continue;
+		}
+		const FRoadNodeId Other = Network.GetOtherEnd(Incident, Target);
+		if (Other.IsSet())
+		{
+			RunwayNeighbours.AddUnique(Other);
+			if (RunwayProfile == nullptr)
+			{
+				if (const FRoadSegment* Arm = Network.GetSegment(Incident))
+				{
+					RunwayProfile = Arm->Profile;
+				}
+			}
+		}
+	}
+	const bool bRunwayThrough = RunwayNeighbours.Num() == 2;
+
+	if (bRunwayThrough)
+	{
+		// THE RUNWAY'S OWN PROFILE, not whichever arm was stored first. HealProfile above
+		// takes the first incident segment, which at this junction may well be the taxiway -
+		// and relaying a runway with a taxiway's cross-section would quietly stop it being a
+		// runway at all, since URoadNetwork::IsRunwaySegment reads exactly that.
+		HealProfile = RunwayProfile;
+	}
+
 	if (Neighbours.Num() <= 1)
 	{
 		for (const FRoadNodeId& Lone : Neighbours)
@@ -102,9 +149,16 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 	// Who keeps the most roads, nearest winning ties. At degree 2 this is just "the better
 	// connected end", and the other end rejoins it whether or not it was going to be
 	// stranded - see the header for why that case is not restricted to orphans.
+	// THE RUNWAY PICKS ITS OWN ANCHOR: one end of the strip, so the other rejoins to it and
+	// the strip is whole again. Left to the generic rule below, the anchor would be whichever
+	// neighbour happened to be nearest - the taxiway, as often as not.
 	int32 BestKept = -1;
 	double BestDistanceSquared = 0.0;
-	for (const FRoadNodeId& Candidate : Neighbours)
+	if (bRunwayThrough)
+	{
+		Plan.Anchor = RunwayNeighbours[0];
+	}
+	for (const FRoadNodeId& Candidate : bRunwayThrough ? TArray<FRoadNodeId>() : Neighbours)
 	{
 		const FRoadNode* Live = Network.GetNode(Candidate);
 		if (Live == nullptr)
@@ -128,6 +182,9 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 		return Plan;
 	}
 
+	// CARRIED OUT WITH THE PLAN, so the segment the facade lays is the one this validated.
+	Plan.HealProfile = HealProfile;
+
 	const bool bAlwaysHeal = Neighbours.Num() == 2;
 
 	// The graph as it will be. Every judgement below is made against this, never against
@@ -150,6 +207,14 @@ FRoadDeletionPlan RoadHeal::PlanNodeDeletion(const URoadNetwork& Network,
 		// At degree 3 or more, a neighbour that keeps roads of its own is not stranded and
 		// wants no new road inventing for it.
 		if (!bAlwaysHeal && DegreeWithout(Network, Neighbour, Target) > 0)
+		{
+			continue;
+		}
+
+		// ONLY THE FAR END OF THE RUNWAY REJOINS. Every other arm is a branch off the strip
+		// and is let go - grafting one onto a threshold is the nonsense this case exists to
+		// stop. A branch left holding nothing is swept by the loop below, exactly as before.
+		if (bRunwayThrough && Neighbour != RunwayNeighbours[1])
 		{
 			continue;
 		}

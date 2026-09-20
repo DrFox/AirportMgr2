@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/RoadPlacement.h"
 
 class URoadNetwork;
@@ -35,6 +36,27 @@ struct FRoadDeletionPlan
 
 	/** Neighbours left holding no road at all, which go with it. */
 	TArray<FRoadNodeId> Swept;
+
+	/**
+	 * The cross-section the rejoins are laid with - the road being healed, not the level's
+	 * default.
+	 *
+	 * ON THE PLAN BECAUSE THE PLAN IS JUDGED WITH IT. It was computed inside
+	 * PlanNodeDeletion, used to validate each rejoin against a scratch graph, and then
+	 * thrown away: URoadEditFacade::DeleteNode laid the real segment with
+	 * ARoadNetworkActor::ResolveProfile() instead - the level's default taxiway. So a heal
+	 * was approved for one cross-section and performed with another, which is the same
+	 * two-answers shape URoadNetwork::SplitSegment's comment records about the ghost.
+	 *
+	 * Visible on any road that is not the default width; FATAL on a runway, whose relaid
+	 * strip simply stopped being a runway - URoadNetwork::IsRunwaySegment reads the profile
+	 * and nothing else. Found while fixing "no way to disconnect a taxiway from a runway",
+	 * not by that report.
+	 *
+	 * Null when there is nothing to rejoin, and the facade falls back to its own default
+	 * as before.
+	 */
+	TObjectPtr<URoadProfile> HealProfile;
 };
 
 /**

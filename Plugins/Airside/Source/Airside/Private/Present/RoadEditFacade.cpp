@@ -1196,7 +1196,14 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// being applied to exactly the state it was approved for.
 	for (const FRoadNodeId& Stranded : Plan.Rejoin)
 	{
-		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Owner.ResolveProfile()).IsSet())
+		// THE PLAN'S PROFILE, not the level's default: the road being healed keeps its own
+		// cross-section. See FRoadDeletionPlan::HealProfile for what laying the default
+		// instead used to do to a runway.
+		URoadProfile* Relay = Plan.HealProfile != nullptr
+			? Plan.HealProfile.Get()
+			: Owner.ResolveProfile();
+
+		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Relay).IsSet())
 		{
 			UE_LOG(LogRoadMesh, Error,
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),
