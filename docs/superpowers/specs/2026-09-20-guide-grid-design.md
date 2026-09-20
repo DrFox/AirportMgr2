@@ -267,6 +267,20 @@ direction AND its perpendicular ("square to the taxiway" is not parallel to anyt
 the World column an absolute compass axis, which is parallel to no thing at all. Section 3's
 grid had called this row "Parallel / square" all along; the button kept the first word.
 
+**AND IT OFFERS FOUR ANGLES AGAINST EVERY REFERENCE**, not two - 2026-09-20, from the same
+PIE session: "it should have more options than square and parallel... the 45 degree increments
+should be consistent for direction." They were not. World had offered 0/45/90/135 since stage
+1 while every other column in the row offered 0 and 90 only, so one button meant a different
+thing depending on which column it crossed, and there was no way to point a road at 45 degrees
+to the one beside it. `AddDirections` is the one loop all four network sources now call, so a
+fifth reference cannot quietly be given two of the four.
+
+The two named angles keep their words - "parallel to the taxiway", "square to the taxiway",
+"aligned with stand 3" - and only the diagonals carry a number. `AngledFrom`'s labels changed
+with them, to "45 degrees FROM THE END OF the taxiway": the two relations are different fit
+kinds, so both can hold at once, and until this they would have drawn two lines to two places
+under identical words.
+
 The ENUM was not renamed with it - 34 sites across 11 files, plus `FParallelGuideSource` and
 eighteen `bParallel`, and a good number of those are comments that reason about Parallel BY
 NAME. A name only developers read did not justify flattening that prose; `ERelation::Parallel`

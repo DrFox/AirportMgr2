@@ -28,6 +28,114 @@ namespace
 }
 
 /**
+ * EVERY REFERENCE OFFERS THE SAME FOUR DIRECTIONS: along it, 45, square, 135.
+ *
+ * ASKED FOR FROM PIE, 2026-09-20: "it should have more options than square and parallel... the
+ * 45 degree increments should be consistent for direction." They were not. The World column
+ * had offered 0/45/90/135 since stage 1 while every other column in that row offered 0 and 90
+ * only - so one button meant a different thing depending on which column it was crossed with,
+ * and there was no way to point a road at 45 degrees to the one beside it.
+ *
+ * THE CONSISTENCY IS THE POINT, so this walks the sources rather than testing one. A fifth
+ * reference that quietly shipped with two of the four is exactly what it is here to catch -
+ * and AddDirections exists so that cannot happen by accident, which makes this the test that
+ * says the one list is actually one.
+ *
+ * MEASURED AS ROTATIONS OF THE FIRST CANDIDATE, not against hard-coded compass angles: these
+ * references point wherever the fixture put them, and the claim is about the SPACING.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDirectionOffersFourAnglesEverywhereTest,
+	"Airside.Tool.DirectionOffersFourAnglesEverywhere",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDirectionOffersFourAnglesEverywhereTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// DELIBERATELY NOT AXIS-ALIGNED. A road along +X would make the road's diagonals the same
+	// lines as the world's, and a source that had quietly copied the world grid instead of
+	// rotating from its own reference would pass. This one runs at about 26 degrees.
+	Lay(Actor, FVector2D(-10000.0, -5000.0), FVector2D(10000.0, 5000.0), ERoadKind::Taxiway);
+	if (!TestTrue(TEXT("a runway is laid"),
+		TestGuide::LayRunway(Actor, FVector2D(-40000.0, 20000.0), FVector2D(40000.0, 26000.0))))
+	{
+		return false;
+	}
+	IRoadEditTarget* Target = Actor;
+	Target->AddApron({ FVector2D(3000.0, 6000.0), FVector2D(9000.0, 7000.0),
+		FVector2D(8000.0, 12000.0), FVector2D(2000.0, 11000.0) });
+
+	const FGuideAnchor Anchor = TestGuide::BareAnchor(FVector2D(0.0, 2000.0));
+
+	const FParallelGuideSource Road;
+	const FRunwayGuideSource Runway;
+	const FApronGuideSource Apron;
+	const FWorldGuideSource World;
+
+	// APRON IS LAST because ForEachApronEdge visits every edge in reach, so its count is four
+	// PER EDGE - the per-source count below is checked against its own first four.
+	const TArray<TPair<const TCHAR*, const IGuideSource*>> Sources = {
+		{ TEXT("Taxiway"), &Road    },
+		{ TEXT("Runway"),  &Runway  },
+		{ TEXT("World"),   &World   },
+		{ TEXT("Apron"),   &Apron   },
+	};
+
+	for (const TPair<const TCHAR*, const IGuideSource*>& Entry : Sources)
+	{
+		const TArray<SnapGuide::FCandidate> Candidates =
+			TestGuide::ProposedBy(*Entry.Value, *Actor->Network, Anchor);
+
+		if (!TestTrue(*FString::Printf(TEXT("%s proposes at least four directions"), Entry.Key),
+			Candidates.Num() >= 4))
+		{
+			continue;
+		}
+
+		// A MULTIPLE OF FOUR, so a reference that offered three or five is caught rather than
+		// hidden by the ">= 4" above - the apron's several edges each contribute a full set.
+		TestEqual(*FString::Printf(TEXT("%s offers them in complete sets of four"), Entry.Key),
+			Candidates.Num() % 4, 0);
+
+		const FVector2D Base = Candidates[0].Direction.GetSafeNormal();
+		for (const int32 Degrees : { 0, 45, 90, 135 })
+		{
+			const double Radians = FMath::DegreesToRadians(static_cast<double>(Degrees));
+			const FVector2D Wanted(
+				Base.X * FMath::Cos(Radians) - Base.Y * FMath::Sin(Radians),
+				Base.X * FMath::Sin(Radians) + Base.Y * FMath::Cos(Radians));
+
+			// AS A LINE, so |dot| rather than dot: a guide and its opposite are one guide, which
+			// is why there are four of these and not eight.
+			const bool bFound = Candidates.ContainsByPredicate(
+				[&Wanted](const SnapGuide::FCandidate& C)
+				{
+					return FMath::IsNearlyEqual(
+						FMath::Abs(FVector2D::DotProduct(C.Direction.GetSafeNormal(), Wanted)), 1.0, 1.0e-6);
+				});
+
+			TestTrue(*FString::Printf(TEXT("%s offers the %d degree line off its own reference"),
+				Entry.Key, Degrees), bFound);
+		}
+
+		// ANGULAR, EVERY ONE. Direction answers "which way from here"; a Perpendicular candidate
+		// in this row would be answering where the cursor landed, which is Collinear's question.
+		for (const SnapGuide::FCandidate& Candidate : Candidates)
+		{
+			TestEqual(*FString::Printf(TEXT("%s's '%s' is judged on the drag's own direction"),
+					Entry.Key, *Candidate.Description),
+				static_cast<int32>(Candidate.Fit), static_cast<int32>(SnapGuide::EFit::Angular));
+		}
+	}
+
+	return true;
+}
+
+/**
  * THE WORLD AXES ARE NAMED BY THE COMPASS - AND BY THE SAME COMPASS RUNWAYS ARE.
  *
  * TWO NAMESPACES, ONE CONVENTION. RunwayDesignator declares north to be +X and east +Y, and
@@ -127,8 +235,10 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 	const TArray<SnapGuide::FCandidate> Candidates =
 		TestGuide::ProposedBy(Source, *Actor->Network, Anchor);
 
-	if (!TestEqual(TEXT("the nearest road proposes its direction and its perpendicular"),
-		Candidates.Num(), 2))
+	// FOUR SINCE 2026-09-20, not two: the Direction row offers 45 degree increments against
+	// every reference, as it always did against the world grid.
+	if (!TestEqual(TEXT("the nearest road proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}
@@ -148,8 +258,23 @@ bool FParallelGuideFollowsTheNearestRoadTest::RunTest(const FString& Parameters)
 		Candidates[0].Through.Equals(Anchor.Origin, 1.0e-6));
 	TestEqual(TEXT("and named by what the road admits"),
 		Candidates[0].Description, FString(TEXT("parallel to the taxiway")));
-	TestEqual(TEXT("with the perpendicular named too"),
-		Candidates[1].Description, FString(TEXT("square to the taxiway")));
+
+	// THE WHOLE SET, not Candidates[1]. This used to read the square off index 1, which was
+	// true only while there were two; the 45 took that slot on 2026-09-20 and the assertion
+	// would have gone on passing had the diagonals landed in the wrong order. A set says the
+	// rule - four increments, each named once - and does not care how they are ordered.
+	//
+	// THE TWO NAMED ANGLES KEEP THEIR WORDS and only the diagonals carry a number: "parallel"
+	// and "square" are plainer than "0 degrees" and "90 degrees" to anyone but a surveyor.
+	TSet<FString> Labels;
+	for (const SnapGuide::FCandidate& Candidate : Candidates) { Labels.Add(Candidate.Description); }
+	for (const TCHAR* Wanted : { TEXT("parallel to the taxiway"), TEXT("45 degrees to the taxiway"),
+		TEXT("square to the taxiway"), TEXT("135 degrees to the taxiway") })
+	{
+		TestTrue(*FString::Printf(TEXT("'%s' is one of the four offered"), Wanted),
+			Labels.Contains(FString(Wanted)));
+	}
+	TestEqual(TEXT("and no two of the four share a name"), Labels.Num(), 4);
 
 	// CONTROL LEG: the reach is real. Drag beyond it and the near road stops answering, so
 	// the assertions above are measuring the search and not merely the first segment laid.
@@ -283,8 +408,8 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	const TArray<SnapGuide::FCandidate> Candidates =
 		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
 
-	if (!TestEqual(TEXT("the runway proposes its heading and its perpendicular"),
-		Candidates.Num(), 2))
+	if (!TestEqual(TEXT("the runway proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}
@@ -305,7 +430,9 @@ bool FRunwayGuideReachesTheWholeFieldTest::RunTest(const FString& Parameters)
 	Lay(Actor, FVector2D(-10000.0, 20000.0), FVector2D(10000.0, 20000.0), ERoadKind::Taxiway);
 	const TArray<SnapGuide::FCandidate> Again =
 		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(0.0, 50000.0)));
-	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 2);
+	// STILL THE RUNWAY'S FOUR, not eight: the count is what says the taxiway was skipped, and
+	// it went from two to four on 2026-09-20 when Direction gained its 45 degree increments.
+	TestEqual(TEXT("and a taxiway is not mistaken for a runway"), Again.Num(), 4);
 
 	return true;
 }
@@ -340,8 +467,8 @@ bool FAlignedGuideTakesThePoseDirectionTest::RunTest(const FString& Parameters)
 	const TArray<SnapGuide::FCandidate> Candidates =
 		TestGuide::ProposedBy(Source, *Actor->Network, TestGuide::BareAnchor(FVector2D(2000.0, 2000.0)));
 
-	if (!TestEqual(TEXT("the stand proposes its facing and its perpendicular"),
-		Candidates.Num(), 2))
+	if (!TestEqual(TEXT("the stand proposes four directions, 45 degrees apart"),
+		Candidates.Num(), 4))
 	{
 		return false;
 	}

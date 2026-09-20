@@ -83,8 +83,81 @@ namespace
 			Spoke.Fit = SnapGuide::EFit::Perpendicular;
 			Spoke.Relation = SnapGuide::ERelation::AngledFrom;
 			Spoke.Reference = Reference;
-			Spoke.Description = FString::Printf(TEXT("%d degrees to %s"), Degrees, *Name);
+			// "FROM THE END OF", not "to", and the wording is load-bearing since 2026-09-20.
+			// The Direction row gained its own 45 and 135 that day, so "45 degrees to the
+			// taxiway" would have named two different guides - and BOTH can hold at once,
+			// because they are different fit kinds and the arbiter takes one winner of each.
+			// Two identical labels on two lines pointing at two places is the mark whose
+			// meaning has gone. This one says the thing that makes it itself: it comes out of
+			// the reference's END.
+			Spoke.Description = FString::Printf(TEXT("%d degrees from the end of %s"), Degrees, *Name);
 			Out.Add(Spoke);
+		}
+	}
+
+	/**
+	 * The four directions a reference offers: along it, square to it, and the two diagonals.
+	 *
+	 * 45 DEGREE INCREMENTS, LIKE THE WORLD GRID - added 2026-09-20 from PIE: "it should have
+	 * more options than square and parallel... the 45 degree increments should be consistent
+	 * for direction." They were not. World offered 0/45/90/135 while every other column in
+	 * the row offered 0 and 90 only, so one button meant two different things depending on
+	 * which column it was crossed with. ONE HELPER now, so a fifth reference cannot quietly
+	 * be given two of the four.
+	 *
+	 * THROUGH THE DRAG'S OWN ORIGIN, AND ANGULAR, which is what makes this the Direction row
+	 * and not AngledFrom. That distinction is why both exist: this answers "which way am I
+	 * heading", judged on the direction the drag set off; AngledFrom answers "am I standing on
+	 * the line out of THAT road's end", judged on where the cursor landed.
+	 *
+	 * ALONGVERB, because a stand does not read like a road: "aligned with stand 3" and
+	 * "parallel to the taxiway" are one relation in two sets of words, and the caller is the
+	 * only thing that knows which its own reference wants.
+	 */
+	void AddDirections(const FVector2D& Along, const FVector2D& Origin,
+		const FVector2D& ReferenceAt, SnapGuide::EReference Reference, const TCHAR* AlongVerb,
+		const FString& Name, TArray<SnapGuide::FCandidate>& Out)
+	{
+		for (const int32 Degrees : { 0, 45, 90, 135 })
+		{
+			const double Radians = FMath::DegreesToRadians(static_cast<double>(Degrees));
+			const double Cos = FMath::Cos(Radians);
+			const double Sin = FMath::Sin(Radians);
+
+			SnapGuide::FCandidate Candidate;
+
+			// ROTATED FROM THE REFERENCE'S OWN DIRECTION, not from the world - the same
+			// arithmetic AddSpokes uses and for the same reason: "45 degrees to the taxiway"
+			// is a fact about that taxiway, and a world-relative angle would read identically
+			// on screen while pointing somewhere else on any road that is not axis-aligned.
+			//
+			// AT 90 THIS IS EXACTLY RoadGeom::PerpCCW, which is what each caller used before
+			// the four were folded into one loop - so the square they already offered is the
+			// same line, not a second way of computing it.
+			Candidate.Direction = FVector2D(Along.X * Cos - Along.Y * Sin, Along.X * Sin + Along.Y * Cos);
+			Candidate.Through = Origin;
+			Candidate.Fit = SnapGuide::EFit::Angular;
+			Candidate.ReferenceAt = ReferenceAt;
+			Candidate.Relation = SnapGuide::ERelation::Parallel;
+			Candidate.Reference = Reference;
+
+			// THE TWO NAMED ANGLES KEEP THEIR WORDS. "parallel to the taxiway" and "square to
+			// the taxiway" are what a player has read since stage 1, and are plainer than "0
+			// degrees" and "90 degrees" would be. Only the diagonals, which have no such word,
+			// fall back to a number.
+			if (Degrees == 0)
+			{
+				Candidate.Description = FString::Printf(TEXT("%s %s"), AlongVerb, *Name);
+			}
+			else if (Degrees == 90)
+			{
+				Candidate.Description = FString::Printf(TEXT("square to %s"), *Name);
+			}
+			else
+			{
+				Candidate.Description = FString::Printf(TEXT("%d degrees to %s"), Degrees, *Name);
+			}
+			Out.Add(Candidate);
 		}
 	}
 
@@ -374,26 +447,11 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 		return;
 	}
 
-	const FString Name = RoadNaming::Describe(Network, Nearest);
-
-	SnapGuide::FCandidate Along;
-	Along.Direction = NearestDir;
-	Along.Through = Anchor.Origin;
-	Along.Fit = SnapGuide::EFit::Angular;
-	Along.ReferenceAt = NearestAt;
-	Along.Relation = SnapGuide::ERelation::Parallel;
-
 	// THE COLUMN AND THE LABEL COME FROM ONE CLASSIFICATION, which is the whole of the
 	// 2026-09-20 split: this used to hard-code EReference::Road while Describe said "the
 	// service road", so the line appeared under a button marked Road. RoadNaming answers both.
-	Along.Reference = NearestColumn;
-	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
-	Out.Add(Along);
-
-	SnapGuide::FCandidate Square = Along;
-	Square.Direction = RoadGeom::PerpCCW(NearestDir);
-	Square.Description = FString::Printf(TEXT("square to %s"), *Name);
-	Out.Add(Square);
+	AddDirections(NearestDir, Anchor.Origin, NearestAt, NearestColumn, TEXT("parallel to"),
+		RoadNaming::Describe(Network, Nearest), Out);
 }
 
 void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -482,22 +540,9 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		// NO REACH TEST, and that one absence is the only thing separating this source from
 		// Parallel - see the declaration for why it is deliberate.
-		const FString Name = RoadNaming::Describe(Network, Id);
-
-		SnapGuide::FCandidate Along;
-		Along.Direction = Span.GetSafeNormal();
-		Along.Through = Anchor.Origin;
-		Along.Fit = SnapGuide::EFit::Angular;
-		Along.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
-		Along.Relation = SnapGuide::ERelation::Parallel;
-		Along.Reference = SnapGuide::EReference::Runway;
-		Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
-		Out.Add(Along);
-
-		SnapGuide::FCandidate Square = Along;
-		Square.Direction = RoadGeom::PerpCCW(Along.Direction);
-		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
-		Out.Add(Square);
+		AddDirections(Span.GetSafeNormal(), Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
+			SnapGuide::EReference::Runway, TEXT("parallel to"),
+			RoadNaming::Describe(Network, Id), Out);
 	}
 }
 
@@ -637,20 +682,8 @@ void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 		{
 			// ANGULAR, THROUGH THE DRAG'S OWN ORIGIN - this answers "which way from here", so
 			// there is no position to be flush with and the half-width never applies.
-			SnapGuide::FCandidate Parallel;
-			Parallel.Direction = Along;
-			Parallel.Through = Anchor.Origin;
-			Parallel.Fit = SnapGuide::EFit::Angular;
-			Parallel.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
-			Parallel.Relation = SnapGuide::ERelation::Parallel;
-			Parallel.Reference = SnapGuide::EReference::Apron;
-			Parallel.Description = FString::Printf(TEXT("parallel to %s"), ApronEdgeName());
-			Out.Add(Parallel);
-
-			SnapGuide::FCandidate Square = Parallel;
-			Square.Direction = RoadGeom::PerpCCW(Along);
-			Square.Description = FString::Printf(TEXT("square to %s"), ApronEdgeName());
-			Out.Add(Square);
+			AddDirections(Along, Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
+				SnapGuide::EReference::Apron, TEXT("parallel to"), ApronEdgeName(), Out);
 		});
 }
 
@@ -783,24 +816,12 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 		// HEADING IS RADIANS - see FEntityInstance::Heading. A degrees/radians slip here would
 		// point the guide somewhere plausible and wrong, which is the worst kind.
 		const FVector2D Facing(FMath::Cos(Entity.Heading), FMath::Sin(Entity.Heading));
-		const FString Name = EntityNaming::Describe(Entity);
 
-		SnapGuide::FCandidate Along;
-		Along.Direction = Facing;
-		Along.Through = Anchor.Origin;
-		Along.Fit = SnapGuide::EFit::Angular;
-
-		// THE DASHED LINE GOES TO THE THING ITSELF, which for an entity is simply its pose.
-		Along.ReferenceAt = Entity.Position;
-		Along.Relation = SnapGuide::ERelation::Parallel;
-		Along.Reference = SnapGuide::EReference::Stand;
-		Along.Description = FString::Printf(TEXT("aligned with %s"), *Name);
-		Out.Add(Along);
-
-		SnapGuide::FCandidate Square = Along;
-		Square.Direction = RoadGeom::PerpCCW(Facing);
-		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
-		Out.Add(Square);
+		// "ALIGNED WITH", not "parallel to": a stand is a thing that FACES, and a road is a
+		// thing that runs. The dashed line goes to the thing itself, which for an entity is
+		// simply its pose.
+		AddDirections(Facing, Anchor.Origin, Entity.Position, SnapGuide::EReference::Stand,
+			TEXT("aligned with"), EntityNaming::Describe(Entity), Out);
 	}
 }
 
