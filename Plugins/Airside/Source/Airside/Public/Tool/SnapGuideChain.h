@@ -319,6 +319,72 @@ struct AIRSIDE_API FAngledRunwayGuideSource final : public IGuideSource
 };
 
 /**
+ * An apron's EDGES, as a direction to point along and its perpendicular.
+ *
+ * AN APRON IS A BOUNDARY, NOT A CENTRELINE, and that is what separates this whole family from
+ * the road sources. A road is a line with pavement either side; an apron edge IS the pavement's
+ * limit. FApronLineGuideSource is where that difference bites - see the displacement there.
+ *
+ * FOUR SOURCES, ONE PER RELATION - Parallel here, Collinear, AngledFrom and LevelWith below.
+ * FSnapGuideChain::Resolve skips a source by its declared Relation() BEFORE it walks anything,
+ * so one source proposing four relations would have all four silenced by whichever it happened
+ * to declare. That is not hypothetical: it is what FRunwayGuideSource did on 2026-09-20 until
+ * FRunwayLineGuideSource split off it.
+ *
+ * NO NAME OF ITS OWN. FApronSurface carries a material slot and nothing a player would read, so
+ * the label is "the apron edge" and the dashed line says WHICH - exactly as FRoadDrawTool labels
+ * an unnamed node "that node" and lets the drawn line carry the rest.
+ */
+struct AIRSIDE_API FApronGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
+};
+
+/**
+ * The line an apron edge lies on, extended - and the one source that displaces by the drag's
+ * half-width.
+ *
+ * FLUSH, NOT CENTRED. Lining a road's centreline up with an apron's edge would put half the
+ * pavement over the apron; the player means the road's EDGE to sit on it. See EDragPoint and the
+ * 2026-09-20 design section 6 - this is the only cell where a centreline meets an extended
+ * boundary, so it is the only place the rule applies.
+ */
+struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+};
+
+/** Spokes at 45, 90 and 135 degrees out of an apron's corners - see FAngledRoadGuideSource. */
+struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+};
+
+/**
+ * An apron's corners, as points to be level with.
+ *
+ * NOT DISPLACED, unlike FApronLineGuideSource. A corner is a POINT, not an extended edge - there
+ * is nothing for a road's flank to run flush along, so centre-to-corner is what "level with" can
+ * mean here.
+ */
+struct AIRSIDE_API FApronCornerGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
+};
+
+/**
  * Source 8: the gap a neighbouring parallel road already keeps.
  *
  * PERPENDICULAR, NOT A NEW "DISTANCE FAMILY". Design §2 asked for direction and distance to be

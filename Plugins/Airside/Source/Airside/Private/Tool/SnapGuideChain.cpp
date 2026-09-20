@@ -2,6 +2,7 @@
 
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
+#include "Model/RoadApron.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
@@ -86,6 +87,46 @@ namespace
 			Out.Add(Spoke);
 		}
 	}
+
+	/**
+	 * Every live apron edge in reach of the drag, as (A, B, Along).
+	 *
+	 * ONE WALK, FOUR SOURCES. The apron column needs a source per relation - see
+	 * FApronGuideSource - and four copies of this loop is four places for the wrap-around from
+	 * the last corner back to the first to be got wrong.
+	 */
+	void ForEachApronEdge(const URoadNetwork& Network, const FVector2D& Origin,
+		TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&)> Visit)
+	{
+		const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+
+		for (const FApronSurface& Apron : Network.GetAprons())
+		{
+			if (!Apron.bAlive || Apron.Outline.Num() < 3)
+			{
+				continue;
+			}
+
+			for (int32 Index = 0; Index < Apron.Outline.Num(); ++Index)
+			{
+				// WRAPPING, so the last corner joins the first: an outline is a closed polygon,
+				// and the edge that closes it is as real as any other.
+				const FVector2D& A = Apron.Outline[Index];
+				const FVector2D& B = Apron.Outline[(Index + 1) % Apron.Outline.Num()];
+
+				const FVector2D Span = B - A;
+				if (Span.IsNearlyZero()
+					|| FVector2D::DistSquared(ClosestOn(A, B, Origin), Origin) > Reach * Reach)
+				{
+					continue;
+				}
+				Visit(A, B, Span.GetSafeNormal());
+			}
+		}
+	}
+
+	/** What a player reads for an apron. FApronSurface carries no name - see FApronGuideSource. */
+	const TCHAR* ApronEdgeName() { return TEXT("the apron edge"); }
 
 }
 
@@ -494,6 +535,131 @@ void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuide
 	}
 }
 
+void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	ForEachApronEdge(Network, Anchor.Origin,
+		[&Anchor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+		{
+			// ANGULAR, THROUGH THE DRAG'S OWN ORIGIN - this answers "which way from here", so
+			// there is no position to be flush with and the half-width never applies.
+			SnapGuide::FCandidate Parallel;
+			Parallel.Direction = Along;
+			Parallel.Through = Anchor.Origin;
+			Parallel.Fit = SnapGuide::EFit::Angular;
+			Parallel.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+			Parallel.Relation = SnapGuide::ERelation::Parallel;
+			Parallel.Reference = SnapGuide::EReference::Apron;
+			Parallel.Description = FString::Printf(TEXT("parallel to %s"), ApronEdgeName());
+			Out.Add(Parallel);
+
+			SnapGuide::FCandidate Square = Parallel;
+			Square.Direction = RoadGeom::PerpCCW(Along);
+			Square.Description = FString::Printf(TEXT("square to %s"), ApronEdgeName());
+			Out.Add(Square);
+		});
+}
+
+void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	ForEachApronEdge(Network, Anchor.Origin,
+		[&Anchor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+		{
+			SnapGuide::FCandidate InLine;
+			InLine.Direction = Along;
+			InLine.Fit = SnapGuide::EFit::Perpendicular;
+			InLine.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+			InLine.Relation = SnapGuide::ERelation::Collinear;
+			InLine.Reference = SnapGuide::EReference::Apron;
+
+			// FLUSH, NOT CENTRED. An apron edge is a BOUNDARY and a road's cursor is its
+			// CENTRELINE, so lining the two up directly would put half the road's pavement over
+			// the apron. Displacing by the half-width puts the road's EDGE on it, which is what
+			// "in line with the apron" means to a player. Design section 6.
+			//
+			// A BOUNDARY DRAG IS NOT DISPLACED: an apron corner against another apron's edge is
+			// boundary against boundary, and those already mean the same thing.
+			const FVector2D Across = RoadGeom::PerpCCW(Along);
+			const bool bCentreline = Anchor.Point == EDragPoint::Centreline;
+			const double Left = bCentreline ? Anchor.HalfWidthLeft : 0.0;
+			const double Right = bCentreline ? Anchor.HalfWidthRight : 0.0;
+
+			if (FMath::IsNearlyZero(Left) && FMath::IsNearlyZero(Right))
+			{
+				// ONE LINE, NOT TWO COINCIDENT ONES. Identical candidates would tie and make the
+				// source-order rule arbitrate a choice that does not exist.
+				InLine.Through = A;
+				InLine.Description = FString::Printf(TEXT("in line with %s"), ApronEdgeName());
+				Out.Add(InLine);
+				return;
+			}
+
+			// BOTH SIDES, and NOT a mirrored pair: GetHalfWidthLeft and GetHalfWidthRight are
+			// separate because a cross-section may be off-centre. Flush-inside and flush-outside
+			// are both real intents - a taxiway running along the apron, or one abutting it - so
+			// neither may be chosen for the player.
+			SnapGuide::FCandidate Near = InLine;
+			Near.Through = A + Across * Left;
+			Near.Description = FString::Printf(TEXT("edge flush with %s"), ApronEdgeName());
+			Out.Add(Near);
+
+			SnapGuide::FCandidate Far = InLine;
+			Far.Through = A - Across * Right;
+			Far.Description = Near.Description;
+			Out.Add(Far);
+		});
+}
+
+void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	// ONE END PER EDGE, not both: an outline is closed, so every corner is the A end of exactly
+	// one edge. Visiting B as well would propose each corner's spokes twice - once per edge
+	// meeting there - and a duplicate candidate is a tie the source order then has to break.
+	ForEachApronEdge(Network, Anchor.Origin,
+		[&Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+		{
+			AddSpokes(A, Along, SnapGuide::EReference::Apron, ApronEdgeName(), Out);
+		});
+}
+
+void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	// NEEDS THE GESTURE'S OWN AXES, like FPointAlignGuideSource: "level with that corner" means
+	// level ALONG the edge you are extending, so with no reference there is no axis to measure
+	// against and nothing to propose rather than an invented one.
+	if (Anchor.Reference.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector2D Along = Anchor.Reference.GetSafeNormal();
+	const FVector2D Across = RoadGeom::PerpCCW(Along);
+
+	ForEachApronEdge(Network, Anchor.Origin,
+		[&Along, &Across, &Out](const FVector2D& A, const FVector2D& B, const FVector2D&)
+		{
+			// THE CORNER IS A POINT, so it is not displaced by the drag's half-width - there is
+			// no extended edge for a road's flank to run flush along. See this source's header.
+			SnapGuide::FCandidate Level;
+			Level.Direction = Along;
+			Level.Through = A;
+			Level.Fit = SnapGuide::EFit::Perpendicular;
+			Level.ReferenceAt = A;
+			Level.Relation = SnapGuide::ERelation::LevelWith;
+			Level.Reference = SnapGuide::EReference::Apron;
+			Level.Description = TEXT("0 degrees to the apron corner");
+			Out.Add(Level);
+
+			SnapGuide::FCandidate Square = Level;
+			Square.Direction = Across;
+			Square.Description = TEXT("square to the apron corner");
+			Out.Add(Square);
+		});
+}
+
 FString EntityNaming::Describe(const FEntityInstance& Entity)
 {
 	if (Entity.Definition == nullptr)
@@ -687,6 +853,10 @@ FSnapGuideChain::FSnapGuideChain()
 	AddSource(MakeUnique<FRunwayLineGuideSource>());
 	AddSource(MakeUnique<FAngledRoadGuideSource>());
 	AddSource(MakeUnique<FAngledRunwayGuideSource>());
+	AddSource(MakeUnique<FApronGuideSource>());
+	AddSource(MakeUnique<FApronLineGuideSource>());
+	AddSource(MakeUnique<FApronAngledGuideSource>());
+	AddSource(MakeUnique<FApronCornerGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 	AddSource(MakeUnique<FOffsetGuideSource>());
 }

@@ -141,17 +141,20 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	// has something to answer with. A field holding only a taxiway would let a source proposing
 	// into a hole pass simply for having nothing to propose about.
 	//
-	// NO APRON AND NO STAND YET. FApronGuideSource is the second plan, and placing an entity
-	// needs a UEntityDefinition this fixture has no business authoring - so the Apron and Stand
-	// columns are unexercised here, and this test gets stronger when that plan lands. Said out
-	// loud because a test whose coverage is narrower than its name is how a green run comes to
-	// mean nothing.
+	// AN APRON TOO, since 2026-09-20 - four sources answer for that column now, and this test is
+	// the only thing standing between them and a cell the grid does not declare.
+	//
+	// NO STAND: placing an entity needs a UEntityDefinition this fixture has no business
+	// authoring, so the Stand column stays unexercised here. Said out loud because a test whose
+	// coverage is narrower than its name is how a green run comes to mean nothing.
 	if (!TestTrue(TEXT("the runway is laid"),
 		TestGuide::LayRunway(Actor, FVector2D(-30000.0, 9000.0), FVector2D(30000.0, 9000.0))))
 	{
 		return false;
 	}
 	IRoadEditTarget* Target = Actor;
+	Target->AddApron({ FVector2D(2000.0, 4000.0), FVector2D(8000.0, 4000.0),
+		FVector2D(8000.0, 8000.0), FVector2D(2000.0, 8000.0) });
 	const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
 	const int32 East = Target->PlaceNode(FVector2D(10000.0, 0.0));
 	Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);

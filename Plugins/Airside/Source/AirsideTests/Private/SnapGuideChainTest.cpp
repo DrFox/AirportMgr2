@@ -46,11 +46,12 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	// otherwise - its candidates simply never appear, and every other test of the chain still
 	// passes. Stage 2 takes this from 3 to 7, one at a time, and stage 5 to 8.
 	//
-	// NINE SINCE 2026-09-20: FRunwayLineGuideSource split off FRunwayGuideSource, because the
-	// chain skips a source by its declared Relation() and one source cannot declare two. See
-	// that source's own header - the split is what stops the Parallel row silencing a runway's
-	// extended centreline. ELEVEN once AngledFrom arrived, road and runway again separately.
-	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 11);
+	// FIFTEEN SINCE 2026-09-20, and the number climbs in GROUPS because the chain skips a source
+	// by its declared Relation() before it walks anything - so a column needs one source per
+	// relation it serves, not one source that declares several. FRunwayLineGuideSource split off
+	// FRunwayGuideSource for exactly that reason; AngledFrom then arrived as road and runway
+	// separately; and the Apron column arrived as four at once.
+	TestEqual(TEXT("the chain installs every source it declares"), Chain.NumSources(), 15);
 
 	const FGuideAnchor Anchor = Frontage();
 
