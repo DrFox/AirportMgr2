@@ -233,15 +233,39 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	{
 		const int32 Kit = 0;
 
-		// AT MOST HALF THE PLOT'S WIDTH, so precedence is not a monopoly. Without it a 15 m
-		// plot takes a three-bay run across 12 of its 15 metres and leaves the tank and pump
-		// two slivers - which is how the sheds came to be placed last in the first place.
-		const double ShedBudget = (LateralMax - LateralMin) * 0.5;
+		// AT MOST HALF THE WIDTH, so precedence is not a monopoly. Without it a 15 m plot
+		// takes a three-bay run across 12 of its 15 metres and leaves the tank and pump two
+		// slivers - which is how the sheds came to be placed last in the first place.
+		//
+		// HALF OF THE WIDTH WHERE THE SHEDS STAND, measured at the back, and not half of
+		// LateralMax - LateralMin. That span is the plot's width at its WIDEST depth, and on
+		// a plot that tapers towards the back it is ground the shed row does not have: the
+		// budget would then permit a run the fence refuses, and the row would come up short
+		// with no explanation. The two agree on a rectangle and on a plot that flares, which
+		// is why this change moves no numbers - it is the fifth guard in this file against a
+		// global extreme standing in for a local measurement, not a fix for a symptom.
+		double ShedLow = LateralMin;
+		double ShedHigh = LateralMax;
+		{
+			const double ShedLength = Kits[Kit].Footprint.LengthUu + Kits[Kit].ApronUu.X;
+			const double Middle = (LateralMin + LateralMax) * 0.5;
 
-		// CENTRED ON THE PLOT, not started at one edge. Scanning from LateralMin would spend
+			double Near = 0.0, Far = 0.0, Low = 0.0, High = 0.0;
+			if (DepthSpanAt(Site.Outline, Site.Gate, Inward, Across, Middle, Near, Far)
+				&& LateralSpanAt(Site.Outline, Site.Gate, Inward, Across,
+					FMath::Max(Far - ShedLength * 0.5, Near), Low, High))
+			{
+				ShedLow = Low;
+				ShedHigh = High;
+			}
+		}
+
+		const double ShedBudget = (ShedHigh - ShedLow) * 0.5;
+
+		// CENTRED ON THAT SPAN, not started at one edge. Scanning from its low end would spend
 		// the whole budget on the left half and leave the sheds sitting on top of whichever
 		// column takes that side, while the far half of the back fence stood empty.
-		const double ShedFrom = (LateralMin + LateralMax) * 0.5 - ShedBudget * 0.5;
+		const double ShedFrom = (ShedLow + ShedHigh) * 0.5 - ShedBudget * 0.5;
 
 		for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
 			--RunLength)
