@@ -405,6 +405,34 @@ worth restructuring rather than patching.
 - **Level with x Apron corner** is listed as a legal cell but has the weakest case on the grid;
   if it proves noisy in PIE it is the first cell to cut, and cutting it is a one-line edit to
   `IsLegalCell` plus its row in this table.
+- **`GuidelineGeom::TightestRadius` has the shape of the bug this work exposed**, and is left
+  alone. It takes `Abs` of its cross product, so a control point DOUBLED BACK reads as
+  collinear and returns an infinite radius - "bends nowhere" - where a cusp's tightest radius
+  is zero, sailing through any minimum-radius check. Traced, not measured: no authoring path
+  has been shown to produce one. `GuideArbiter::Intersect` was checked at the same time and is
+  genuinely fine, parallel and antiparallel having no unique crossing either way.
+
+## 13. The lesson this work paid for
+
+**A FEATURE THAT LANDS A POINT *EXACTLY* ON A LINE MAKES EVERY DEGENERATE-VALUE BRANCH IN THE
+CODEBASE REACHABLE FOR THE FIRST TIME.**
+
+`RoadGeom::CornerReachAtZeroRadius` had refused dead-straight road extensions since the
+corner-fit rule was written, and nobody had met it. Its guard was `sin(Theta) < 1e-9`, which is
+true at BOTH ends of the range: a hairpin, where the corner's reach genuinely diverges and a
+refusal is right, and straight-through, where there is no corner at all and the reach is zero.
+Cosine tells them apart; `sin` alone cannot.
+
+It went unnoticed because a fraction off straight the formula returns about a thousandth of a
+half-width and passes. Landing on exactly 180.000 degrees took luck - until `Extending` started
+putting the click precisely on the line every time, at which point it became the normal case
+and the ghost turned orange on the most ordinary gesture in the game.
+
+Snapping, guides, grid alignment and anything else that produces exact values are not only
+features. They are a sweep of every epsilon guard, every `IsNearlyZero`, and every formula with
+a removable singularity - and the ones written defensively with a magnitude test are exactly
+the ones that collapse two opposite cases into one answer. When adding another, expect to find
+one of these, and look for the symmetric guard first.
 
 ## 12. The free start
 
