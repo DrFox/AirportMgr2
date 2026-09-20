@@ -46,20 +46,6 @@ namespace
 		return FMath::Lerp(A, B, RoadGeom::ClosestPointOnSegment(A, B, P));
 	}
 
-	/**
-	 * Which column a segment belongs to. A runway is not a type in the model - it is any
-	 * segment whose profile is continuous through junctions - so the ONE test that decides it
-	 * lives in URoadNetwork and is asked here rather than re-derived.
-	 *
-	 * TAGGING RATHER THAN SKIPPING, at this stage: the three segment sources still propose for
-	 * runways exactly as they did before, so this change is behaviour-preserving. The gating in
-	 * FSnapGuideChain::Resolve acts on the tag, and the partition follows it.
-	 */
-	SnapGuide::EReference ReferenceFor(const URoadNetwork& Network, FRoadSegmentId Segment)
-	{
-		return Network.IsRunwaySegment(Segment)
-			? SnapGuide::EReference::Runway : SnapGuide::EReference::Road;
-	}
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -172,6 +158,16 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them with a different search: every runway
+		// proposes, from anywhere on the field, where this source takes the nearest one within
+		// reach. Walking them here too would put two near-identical candidates into the same
+		// race, and would let a runway answer while the Runway column was switched off - which
+		// is the 2026-09-20 report. See FRunwayGuideSource.
+		if (Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
 		if (!GuideSegmentEnds(Network, Id, A, B))
@@ -214,7 +210,10 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	Along.Fit = SnapGuide::EFit::Angular;
 	Along.ReferenceAt = NearestAt;
 	Along.Relation = SnapGuide::ERelation::Parallel;
-	Along.Reference = ReferenceFor(Network, Nearest);
+	// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
+	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
+	// branch that cannot be taken invites a reader to rely on a rule that is not there.
+	Along.Reference = SnapGuide::EReference::Road;
 	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
 	Out.Add(Along);
 
@@ -233,6 +232,16 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		// THE RUNWAY COLUMN OWNS RUNWAYS, and owns them with a different search: every runway
+		// proposes, from anywhere on the field, where this source takes the nearest one within
+		// reach. Walking them here too would put two near-identical candidates into the same
+		// race, and would let a runway answer while the Runway column was switched off - which
+		// is the 2026-09-20 report. See FRunwayGuideSource.
+		if (Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
 		if (!GuideSegmentEnds(Network, Id, A, B))
@@ -257,7 +266,10 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		InLine.Through = A;
 		InLine.Fit = SnapGuide::EFit::Perpendicular;
 		InLine.Relation = SnapGuide::ERelation::Collinear;
-		InLine.Reference = ReferenceFor(Network, Id);
+		// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
+	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
+	// branch that cannot be taken invites a reader to rely on a rule that is not there.
+	InLine.Reference = SnapGuide::EReference::Road;
 		InLine.Description = FString::Printf(TEXT("in line with %s"),
 			*RoadNaming::Describe(Network, Id));
 
@@ -312,6 +324,53 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Square.Direction = RoadGeom::PerpCCW(Along.Direction);
 		Square.Description = FString::Printf(TEXT("square to %s"), *Name);
 		Out.Add(Square);
+	}
+}
+
+void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	TArray<SnapGuide::FCandidate>& Out) const
+{
+	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+	for (int32 Index = 0; Index < Segments.Num(); ++Index)
+	{
+		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		if (!Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
+		FVector2D A = FVector2D::ZeroVector;
+		FVector2D B = FVector2D::ZeroVector;
+		if (!GuideSegmentEnds(Network, Id, A, B))
+		{
+			continue;
+		}
+
+		const FVector2D Span = B - A;
+		if (Span.IsNearlyZero())
+		{
+			continue;
+		}
+
+		// NO REACH TEST, like FRunwayGuideSource and unlike FCollinearGuideSource: a runway's
+		// extended centreline is the approach path, and it is meaningful from anywhere.
+		//
+		// THROUGH THE RUNWAY'S OWN END, not through the drag - that is what makes this the line
+		// the runway LIES ON rather than one out of the cursor, and why it is Perpendicular
+		// where FRunwayGuideSource's two are Angular.
+		SnapGuide::FCandidate InLine;
+		InLine.Direction = Span.GetSafeNormal();
+		InLine.Through = A;
+		InLine.Fit = SnapGuide::EFit::Perpendicular;
+
+		// THE DASHED LINE GOES TO THE RUNWAY ITSELF, not to the point on its extension where
+		// the cursor happens to be: the player needs to see WHICH runway they are in line with.
+		InLine.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+		InLine.Relation = SnapGuide::ERelation::Collinear;
+		InLine.Reference = SnapGuide::EReference::Runway;
+		InLine.Description = FString::Printf(TEXT("in line with %s"),
+			*RoadNaming::Describe(Network, Id));
+		Out.Add(InLine);
 	}
 }
 
@@ -382,6 +441,15 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		// ITS REFERENCE MUST BE THE ONE FParallelGuideSource PICKS, which now excludes runways.
+		// A reference the two sources disagree about breaks the composition this source's own
+		// header promises: "parallel to the taxiway" and "the same gap as its neighbour"
+		// describing ONE road between them.
+		if (Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
 		if (!GuideSegmentEnds(Network, Id, A, B))
@@ -414,6 +482,15 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+		// ITS REFERENCE MUST BE THE ONE FParallelGuideSource PICKS, which now excludes runways.
+		// A reference the two sources disagree about breaks the composition this source's own
+		// header promises: "parallel to the taxiway" and "the same gap as its neighbour"
+		// describing ONE road between them.
+		if (Network.IsRunwaySegment(Id))
+		{
+			continue;
+		}
+
 		if (Id == Reference)
 		{
 			continue;
@@ -466,7 +543,10 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Match.Fit = SnapGuide::EFit::Perpendicular;
 		Match.ReferenceAt = ReferenceAt;
 		Match.Relation = SnapGuide::ERelation::MatchingGap;
-		Match.Reference = ReferenceFor(Network, Reference);
+		// ROAD, NOT A CLASSIFICATION CALL. Every runway was skipped at the top of this loop, so a
+	// helper asking IsRunwaySegment again here could only ever answer Road - and a live-looking
+	// branch that cannot be taken invites a reader to rely on a rule that is not there.
+	Match.Reference = SnapGuide::EReference::Road;
 
 		// THE NUMBER IS IN THE LABEL. "matching the taxiway" alone would leave the player
 		// unable to tell 40 m from 45 m, which is the one thing they are trying to control.
@@ -484,6 +564,7 @@ FSnapGuideChain::FSnapGuideChain()
 	AddSource(MakeUnique<FCollinearGuideSource>());
 	AddSource(MakeUnique<FParallelGuideSource>());
 	AddSource(MakeUnique<FRunwayGuideSource>());
+	AddSource(MakeUnique<FRunwayLineGuideSource>());
 	AddSource(MakeUnique<FWorldGuideSource>());
 	AddSource(MakeUnique<FOffsetGuideSource>());
 }

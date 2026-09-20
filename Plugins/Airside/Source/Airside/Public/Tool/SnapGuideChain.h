@@ -206,6 +206,29 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
 };
 
 /**
+ * The line a runway lies on, extended - its Collinear half.
+ *
+ * A SECOND SOURCE RATHER THAN A THIRD CANDIDATE ON FRunwayGuideSource, and the reason is the
+ * gate: FSnapGuideChain::Resolve skips a source by its declared Relation() BEFORE it walks
+ * anything, so a source proposing two relations would have both silenced by whichever one it
+ * happened to declare. Switching the Parallel row off would have taken this line with it.
+ * One relation per source is what makes that skip safe.
+ *
+ * WHY IT IS NOT IN FCollinearGuideSource: that source is bounded by SearchRadiusUu and this
+ * must not be. A runway's extended centreline is the approach path - it is meaningful from
+ * anywhere on the field, which is the same argument FRunwayGuideSource makes for its heading.
+ * Before 2026-09-20 Collinear DID offer it, by accident, because it walked every segment and
+ * a runway is just a segment; the line therefore existed but answered to the wrong toggle.
+ */
+struct AIRSIDE_API FRunwayLineGuideSource final : public IGuideSource
+{
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
+
+	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+};
+
+/**
  * Source 8: the gap a neighbouring parallel road already keeps.
  *
  * PERPENDICULAR, NOT A NEW "DISTANCE FAMILY". Design §2 asked for direction and distance to be
