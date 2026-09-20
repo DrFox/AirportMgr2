@@ -127,6 +127,20 @@ public:
 	/** Corners placed so far. For tests. */
 	TArrayView<const FVector2D> GetCorners() const;
 
+	/**
+	 * The last corner placed, and the edge it grew from. See IBuildTool::DescribeGuideAnchor.
+	 *
+	 * ON THE BASE, not on FApronDrawTool: what makes an anchor here is the OUTLINE gesture, which
+	 * is this class's whole job, and a second outline tool would want the same answer. The
+	 * anchor names "this edge" rather than "the apron" for the same reason - the base does not
+	 * know what its outline will become.
+	 *
+	 * A BOUNDARY DRAG. Every corner is on the shape's own limit, so there is no pavement either
+	 * side of it and the half-widths stay zero - see EDragPoint.
+	 */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
+
 protected:
 	virtual const IOutlineTarget& GetOutlineTarget() const = 0;
 

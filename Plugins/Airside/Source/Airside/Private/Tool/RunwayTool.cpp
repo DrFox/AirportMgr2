@@ -82,6 +82,35 @@ FRunwayFacts FRunwayTool::Facts() const
 	return Out;
 }
 
+bool FRunwayTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
+{
+	// NOTHING PENDING MEANS NOTHING TO GUIDE, exactly as FRoadDrawTool has it: before the first
+	// threshold there is no point for a line to swing around.
+	if (!bHasThreshold)
+	{
+		return false;
+	}
+
+	Out.Origin = Threshold;
+
+	// A RUNWAY'S CURSOR IS ITS CENTRELINE, like a road's - the strip is laid either side of the
+	// line between the two thresholds. So an apron edge guide displaces by its half-width.
+	Out.Point = EDragPoint::Centreline;
+
+	// THE WIDTH THIS CLICK WOULD LAY. Clamped by the target, which owns the standard set - the
+	// tool holds an INDEX into it and nothing more (see WidthIndex).
+	if (Target != nullptr)
+	{
+		if (const URoadProfile* Profile = Target->ResolveRunwayProfile(WidthIndex))
+		{
+			Out.HalfWidthLeft = Profile->GetHalfWidthLeft();
+			Out.HalfWidthRight = Profile->GetHalfWidthRight();
+		}
+	}
+	return true;
+}
+
 void FRunwayTool::OnReselect(const FToolContext& Context)
 {
 	// AT THE BOUNDARY, because "pressing the key again does nothing" has two causes that

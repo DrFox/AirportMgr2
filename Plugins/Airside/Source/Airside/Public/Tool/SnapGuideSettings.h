@@ -68,7 +68,7 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere, Category = "Snap to")
 	bool bRunway = false;
 
-	/** Apron edges and corners. */
+	/** Apron edges and corners. Four sources answer for it - see FApronGuideSource. */
 	UPROPERTY(EditAnywhere, Category = "Snap to")
 	bool bApron = false;
 

@@ -1493,6 +1493,6 @@ git commit -m "test(airside): no source may propose a cell the grid does not dec
 Named so the absence is deliberate, not an oversight. These are the second plan, against spec §6 and §8:
 
 - Half-widths on `FGuideAnchor`, `DescribeGuideAnchor` taking an `IRoadEditTarget*`, and the flush-by-half-width rule for a centreline against a boundary.
-- `FApronGuideSource` and the Apron column's three cells. Until it exists, `bApron` is a switch with nothing behind it — the same state `bOffset` was deliberately left in during the first snap-guides stage, and for the same reason: the button is registered so the wiring is proved, and the source arrives behind it.
+- `FApronGuideSource` and the Apron column's cells. Until it exists, `bApron` is a switch with nothing behind it — the same state `bOffset` was deliberately left in during the first snap-guides stage, and for the same reason: the button is registered so the wiring is proved, and the source arrives behind it. **DONE 2026-09-20** by `2026-09-20-guide-widths-and-aprons.md`, as four sources.
 - `FGuidePoint` carrying its own reference, needed before LevelWith can span columns.
 - Guide anchors for `FRunwayTool` and `FApronDrawTool`.

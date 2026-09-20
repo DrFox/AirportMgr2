@@ -52,6 +52,17 @@ public:
 	virtual void OnReselect(const FToolContext& Context) override;
 
 	/**
+	 * The first threshold, once one is down. See IBuildTool::DescribeGuideAnchor.
+	 *
+	 * NO REFERENCE, DELIBERATELY. A runway is two clicks and no chaining - there is no incoming
+	 * edge to extend - so FExtendingGuideSource and FPointAlignGuideSource both correctly propose
+	 * nothing, and every network column answers instead. Leaving Reference zero is how a tool
+	 * says that; inventing an axis here would square the strip to something arbitrary.
+	 */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
+
+	/**
 	 * Which standard width, as an index into the target's runway profiles
 	 * (IRoadEditTarget::GetRunwayProfileCount/ResolveRunwayProfile).
 	 *

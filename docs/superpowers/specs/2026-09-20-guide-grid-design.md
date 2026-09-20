@@ -201,6 +201,18 @@ an apron's EDGE is not what anybody means. You want the road's edge flush with t
 | boundary | boundary | none - an apron corner against another apron's edge |
 | centreline | **boundary** | the drag's half-width, **one candidate per side** |
 
+**BUILT 2026-09-20, and it applies to exactly one cell.** `Collinear x Apron` is the only place on
+the grid where a centreline drag meets an extended BOUNDARY, so `FApronLineGuideSource` is the
+only source that displaces. Stated as a table so a later reader does not generalise it:
+
+| Cell | Displaced? |
+|---|---|
+| `Collinear x Apron` | **yes** - the road's edge is what you want flush with the apron's |
+| `LevelWith x Apron` | no - a corner is a point, with no extended edge to run flush along |
+| `AngledFrom x Apron` | no - same; it radiates from a corner |
+| `Parallel x Apron` | no - angular, through the origin: it constrains direction, never position |
+| anything x Road / Runway / Stand | no - those references are centrelines, and centre-to-centre is what a junction solve wants |
+
 **Both sides, not the cursor's side.** Flush inside the apron (a taxiway running along it) and
 flush outside (one abutting it) are both real intents, and neither is nonsense - unlike
 `FOffsetGuideSource`'s side rule, which exists because the wrong side proposed drawing on top of
@@ -257,8 +269,9 @@ extended; two net new glyphs are needed. Content work, and the suite is red unti
 ## 8. The tools that have no guides
 
 Guides exist only where a tool implements `DescribeGuideAnchor`; the base returns false. Three
-registrations answer today - Taxiway (1), Road (9), Fuel depot (0). Six do not. Two of those are
-in scope here, because an Apron column is worth little if the apron tool itself is unguided:
+registrations answered when this was written - Taxiway (1), Road (9), Fuel depot (0). **Five do
+now**: the runway and apron tools were built on 2026-09-20, because an Apron column is worth
+little if the apron tool itself is unguided.
 
 - **`FRunwayTool`** - origin is the first threshold; NO reference, because a runway has no
   incoming edge. Every network column and World fire; Extending correctly proposes nothing. The
@@ -268,9 +281,14 @@ in scope here, because an Apron column is worth little if the apron tool itself 
   placed so far, tagged `ThisGesture`. Identical in shape to `FPlotPlaceTool`'s anchor. The drag
   point is a **boundary**.
 
-Out of scope, and named so the absence is deliberate: Select, Guidelines, Holding point, and
-Stand placement. Stand placement has the strongest case of the four - its drag IS a heading -
-and is the obvious next one, but it is not needed by anything here.
+Still unguided, and named so the absence stays deliberate: Select, Guidelines, Holding point,
+and **Stand placement**. Stand placement has the strongest case of the four - its drag IS a
+heading, so an angular guide would square a stand to the taxiway it serves or to the apron edge
+it sits on - and is the obvious next one. Nothing built so far needs it.
+
+**The apron tool's anchor lives on `FOutlineDrawTool`**, not on `FApronDrawTool`: what makes an
+anchor there is the OUTLINE gesture, which is the base class's whole job, and it names "this
+edge" rather than "the apron" because the base does not know what its outline will become.
 
 ## 9. Tests
 

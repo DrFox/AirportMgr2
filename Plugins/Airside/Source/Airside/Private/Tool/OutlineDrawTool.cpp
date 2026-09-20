@@ -174,6 +174,51 @@ bool FOutlineDrawTool::IsIdle() const
 	return State.IsValid() && State->IsIdle();
 }
 
+bool FOutlineDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
+{
+	const TArrayView<const FVector2D> Corners = GetCorners();
+
+	// TWO CORNERS BEFORE THERE IS AN EDGE. One corner is a point with no direction, so there is
+	// nothing for Extending to extend - the same reason FRoadDrawTool declines its first click.
+	if (Corners.Num() < 2)
+	{
+		return false;
+	}
+
+	const FVector2D Last = Corners[Corners.Num() - 1];
+	const FVector2D Previous = Corners[Corners.Num() - 2];
+	const FVector2D Edge = Last - Previous;
+	if (Edge.IsNearlyZero())
+	{
+		return false;
+	}
+
+	Out.Origin = Last;
+	Out.Reference = Edge.GetSafeNormal();
+	Out.ReferenceAt = Previous;
+	Out.ReferenceName = TEXT("this edge");
+	Out.Point = EDragPoint::Boundary;
+
+	// EVERY CORNER BUT THE LAST. The one being dragged from is the origin, and a point cannot
+	// line up with itself: its own two lines pass through wherever the cursor is, so both would
+	// always be in tolerance - the trap FPlotPlaceTool's anchor records.
+	//
+	// NUMBERED AS THE PLAYER COUNTS THEM, from one.
+	for (int32 Index = 0; Index < Corners.Num() - 1; ++Index)
+	{
+		FGuidePoint Point;
+		Point.At = Corners[Index];
+		Point.Name = FString::Printf(TEXT("corner %d"), Index + 1);
+
+		// THE GESTURE'S OWN, so the Road and Apron buttons do not govern them - a corner you
+		// placed ten seconds ago is not a thing on the map yet.
+		Point.Reference = SnapGuide::EReference::ThisGesture;
+		Out.AlignTo.Add(Point);
+	}
+	return true;
+}
+
 TArrayView<const FVector2D> FOutlineDrawTool::GetCorners() const
 {
 	return State.IsValid() ? State->GetCorners() : TArrayView<const FVector2D>();
