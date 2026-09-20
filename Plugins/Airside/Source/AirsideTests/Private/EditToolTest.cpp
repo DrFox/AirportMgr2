@@ -403,6 +403,61 @@ bool FEditHandlesAreDrawnForTheLitToolTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeDragOffersGuidesTest,
+	"Airside.Tool.EditModeDragOffersGuides",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeDragOffersGuidesTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A road to drag the end of, and a second road off to one side whose nodes are something
+	// to line up WITH.
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(9000.0, 0.0));
+	Actor->ConnectNodes(A, B);
+	const int32 L0 = Actor->PlaceNode(FVector2D(3000.0, 15000.0));
+	const int32 L1 = Actor->PlaceNode(FVector2D(9000.0, 15000.0));
+	Actor->ConnectNodes(L0, L1);
+
+	FBuildSession Session;
+	Session.SelectTool(1);
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	IBuildTool* Tool = Session.GetActiveTool();
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(0.0, 0.0), Tunables, false, false));
+	if (!TestTrue(TEXT("the drag started"), !Tool->IsIdle())) { return false; }
+
+	// Drag A to very nearly level with the landmark row, and far enough from every node that
+	// no snap claims it - a guide, not a snap, is what is under test.
+	const FVector2D NearRow(0.0, 15000.0 - 60.0);
+	const FToolContext Context = Session.MakeContext(Actor, NearRow, Tunables, false, false);
+
+	TestTrue(TEXT("a guide resolves for a drag, which it never did while the drag described "
+				  "no anchor at all"),
+		Context.Guide.bActive);
+
+	// MEASURES THE DRAWING, NOT THE DESCRIBING. IBuildTool::WantsFreeStartGuides records a
+	// tool that described an anchor, had a guide computed for it and drew nothing - which
+	// showed the player exactly what having no guide shows them.
+	FEditToolSink Sink;
+	Tool->BuildPreview(Context, Sink);
+	TestTrue(TEXT("and the dashed line to whatever it lined up with is actually drawn"),
+		Sink.CountLines(EPreviewStyle::Guide) > 0);
+
+	Tool->OnDragEnd(Context);
+
+	// AND THE GUIDE DIES WITH THE GESTURE. A winner left behind would be inherited by the
+	// next drag and then held through the hysteresis rule itself.
+	const FToolContext After = Session.MakeContext(Actor, NearRow, Tunables, false, false);
+	TestFalse(TEXT("no guide is offered once nothing is in hand"), After.Guide.bActive);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FEditModeNamesItselfTest,
 	"Airside.Tool.EditModeNamesItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

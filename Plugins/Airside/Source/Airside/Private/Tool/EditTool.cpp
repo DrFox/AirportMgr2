@@ -3,6 +3,8 @@
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
+#include "Profiles/RoadProfile.h"
+#include "Tool/RoadGuideAnchor.h"
 #include "Tool/RoadNaming.h"
 
 #define LOCTEXT_NAMESPACE "Airside"
@@ -154,6 +156,66 @@ void FEditTool::OnDeactivate(const FToolContext& Context)
 	}
 }
 
+bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+	FGuideAnchor& Out) const
+{
+	if (Network == nullptr || DragNode == INDEX_NONE || !Network->GetNodes().IsValidIndex(DragNode))
+	{
+		return false;
+	}
+
+	const FRoadNode& Dragged = Network->GetNodes()[DragNode];
+
+	Out.bFreeStart = true;
+	Out.Point = EDragPoint::Centreline;
+
+	// THE WIDEST ARM'S PROFILE. A node's arms may differ, and a guide has to be displaced by
+	// the pavement that will actually be drawn - through ResolveProfileFor, the one resolver,
+	// so a guide cannot disagree with the thing it is guiding. Widest because that is the
+	// edge the player is lining up: a narrow arm tucked inside a wide one displaces nothing
+	// the eye can see.
+	if (Target != nullptr)
+	{
+		double Widest = 0.0;
+		for (const FRoadSegmentId Arm : Dragged.Incident)
+		{
+			const FRoadSegment* Segment = Network->GetSegment(Arm);
+			const URoadProfile* Profile = Segment != nullptr ? Segment->Profile : nullptr;
+			if (Profile != nullptr && Profile->GetTotalWidth() > Widest)
+			{
+				Widest = Profile->GetTotalWidth();
+				Out.HalfWidthLeft = Profile->GetHalfWidthLeft();
+				Out.HalfWidthRight = Profile->GetHalfWidthRight();
+			}
+		}
+	}
+
+	// EXACTLY ONE ARM GIVES A DIRECTION TO HOLD - the road this node ends. With two or more
+	// no arm is "the" one, and picking whichever is stored first would make the guide change
+	// with an edit nobody connected to guides at all: the same rule, and the same reason,
+	// FRoadDrawTool's own anchor gives about a junction.
+	if (Dragged.Incident.Num() == 1)
+	{
+		const FRoadNodeId Self = Network->NodeIdAt(DragNode);
+		const FRoadNodeId Far = Network->GetOtherEnd(Dragged.Incident[0], Self);
+		if (const FRoadNode* Other = Network->GetNode(Far))
+		{
+			const FVector2D Along = (Dragged.Position - Other->Position).GetSafeNormal();
+			if (!Along.IsNearlyZero())
+			{
+				Out.Reference = Along;
+				Out.ReferenceAt = Other->Position;
+				Out.ReferenceName = TEXT("this road");
+			}
+		}
+	}
+
+	// THE SHARED CANDIDATE LOOP, excluding the node in hand for the identical reason the
+	// chain excludes the one it extends from - see RoadGuideAnchor.
+	RoadGuideAnchor::AddNodeCandidates(*Network, Dragged.Position, DragNode, Out);
+	return true;
+}
+
 void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
 	const URoadNetwork* Network = Context.Network();
@@ -178,6 +240,26 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 	if (Context.Snap.Kind == ERoadSnapKind::Node && Handles.Contains(Context.Snap.Node.Index))
 	{
 		Sink.Marker(Context.Snap.Position, EPreviewStyle::Hover);
+	}
+
+	// SAYING YES TO A GUIDE IS HALF THE WORK. IBuildTool::WantsFreeStartGuides records a tool
+	// that described an anchor, had a guide computed for it and drew nothing - which showed
+	// the player precisely what having no guide shows them. Airside.Tool.EditModeDragOffersGuides
+	// measures this drawing rather than the describing, for that reason.
+	if (DragNode != INDEX_NONE && Context.Guide.bActive)
+	{
+		const FVector2D Moving = Context.Guide.Point;
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// The label at its own line's midpoint, not at the node: two guides put both
+			// labels on one point otherwise, and the plugin has no camera to offset them by
+			// a readable number of pixels. FPlotPlaceTool made the same choice for the same
+			// reason.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
 	}
 }
 

@@ -45,6 +45,22 @@ public:
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
 
 	/**
+	 * The DRAG's anchor - what the node in hand may line up with.
+	 *
+	 * FREE-START SHAPED, and for the real reason rather than by analogy: the thing moving IS
+	 * the node, so there is no fixed origin the way a chain has one. The driver puts the
+	 * cursor in Origin, and SnapGuide::Arbitrate then measures no direction from a point to
+	 * itself, so every angular candidate sits out unaided and exactly the positional ones
+	 * remain. See FGuideAnchor::bFreeStart.
+	 *
+	 * DECLINES WHEN NOTHING IS IN HAND, rather than delegating to the base's free start. With
+	 * no drag there is no gesture, and guiding the cursor that is about to GRAB something
+	 * would offer to reposition a click that never moves anything.
+	 */
+	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
+		FGuideAnchor& Out) const override;
+
+	/**
 	 * Idle unless a drag is live.
 	 *
 	 * It matters that this is honest rather than merely unused - FBuildSession::
