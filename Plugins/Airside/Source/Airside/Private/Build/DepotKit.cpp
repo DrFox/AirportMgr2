@@ -1,5 +1,33 @@
 #include "Build/DepotKit.h"
 
+#include "Content/AirsideContent.h"
+#include "Entities/PlotModuleKit.h"
+
+PlotYard::FFootprint DepotFootprint(EDepotModule Module, const UAirsideContent* Content)
+{
+	// THE AUTHORED KIT WINS WHOLE. Taking the footprint from the kit and the back-fence flag
+	// from the table below would be two sources for one module's behaviour, and they would
+	// disagree the first time a kit was authored for something that does not front the gate.
+	if (Content != nullptr)
+	{
+		if (const TObjectPtr<UPlotModuleKit>* Found = Content->DepotKits.Find(Module))
+		{
+			if (const UPlotModuleKit* Kit = *Found)
+			{
+				PlotYard::FFootprint Out;
+				Out.LengthUu = Kit->Footprint.X;
+				Out.WidthUu = Kit->Footprint.Y;
+				Out.bAgainstTheBackFence = Kit->bAgainstTheBackFence;
+				return Out;
+			}
+		}
+	}
+
+	// NO KIT IS A LEGAL ANSWER, not an error: the grey-box table below is what every caller
+	// used before kits existed and what they still get until one is authored.
+	return DepotFootprint(Module);
+}
+
 PlotYard::FFootprint DepotFootprint(EDepotModule Module)
 {
 	// THEY DIFFER, and that is the point. All three were one bay and drew at bay size, so

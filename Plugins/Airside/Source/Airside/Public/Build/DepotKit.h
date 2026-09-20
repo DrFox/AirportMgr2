@@ -18,6 +18,19 @@
  */
 AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module);
 
+class UAirsideContent;
+
+/**
+ * What a module occupies, preferring its authored kit and falling back to the grey-box table.
+ *
+ * CONTENT IS OPTIONAL AND THAT IS LOAD-BEARING. Every solver and presenter change in this
+ * slice is testable with no content at all, so the runtime half of the work and the meshes
+ * proceed independently rather than blocking each other. A caller passing nullptr is
+ * exercising the shipped path, not a stub.
+ */
+AIRSIDE_API PlotYard::FFootprint DepotFootprint(EDepotModule Module,
+	const UAirsideContent* Content);
+
 /**
  * The seed that lays out the yard of a depot posed at Where.
  *
