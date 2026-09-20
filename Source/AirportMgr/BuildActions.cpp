@@ -165,7 +165,16 @@ namespace
 			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::LevelWith); },
 			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::LevelWith); },
 			Always));
-		Out.Add(Make(TEXT("snap.parallel"), EActionSection::Snap, LOCTEXT("SnapParallel", "Parallel"),
+		// "DIRECTION", NOT "PARALLEL", although the relation behind it is ERelation::Parallel -
+		// renamed 2026-09-20 after a player switched on Angled from and World, got nothing, and
+		// pointed out that the row does three things and the button claimed one of them. It
+		// offers a direction AND its perpendicular ("square to the taxiway" is not parallel to
+		// anything), and for the World column an absolute compass axis, which is parallel to no
+		// thing at all. The design doc's own grid already called the row "Parallel / square";
+		// the button had taken the first word and dropped the rest.
+		//
+		// The enum keeps its name - see SnapGuide::ERelation::Parallel, which records this.
+		Out.Add(Make(TEXT("snap.direction"), EActionSection::Snap, LOCTEXT("SnapDirection", "Direction"),
 			EKeys::Invalid, false,
 			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Parallel); },
 			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Parallel); },

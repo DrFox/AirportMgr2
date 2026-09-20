@@ -253,17 +253,34 @@ Two sections. `EActionSection` gains one value; `BuildBarWidget.cpp:55`'s `stati
 that list already agrees by construction.
 
 ```
-ALIGN BY   [Extending] [Level with] [Parallel] [Collinear] [Angled from] [Matching gap]
+ALIGN BY   [Extending] [Level with] [Direction] [Collinear] [Angled from] [Matching gap]
 SNAP TO    [Taxiway] [Service road] [Runway] [Apron] [Stand] [World]
 ```
 
 Twelve buttons, up from eight. **Twenty-five legal cells, twelve buttons** - the AND is what
 keeps a toggle per cell off the bar, and is the whole reason two lists beat one.
 
-**ON BY DEFAULT: Extending, Level with, Parallel, Collinear, Taxiway, Service road, World.**
-Collinear joined them on 2026-09-20 (see section 10): every ANGULAR row sits out on a free
+**"DIRECTION" IS `ERelation::Parallel`**, and the two names differ deliberately - renamed on
+the bar 2026-09-20, from PIE. A player switched on `Angled from` and `World`, saw nothing, and
+observed that the row does three things while the button claimed one of them: it offers a
+direction AND its perpendicular ("square to the taxiway" is not parallel to anything), and for
+the World column an absolute compass axis, which is parallel to no thing at all. Section 3's
+grid had called this row "Parallel / square" all along; the button kept the first word.
+
+The ENUM was not renamed with it - 34 sites across 11 files, plus `FParallelGuideSource` and
+eighteen `bParallel`, and a good number of those are comments that reason about Parallel BY
+NAME. A name only developers read did not justify flattening that prose; `ERelation::Parallel`
+carries the tie between the two names in its own comment instead.
+
+**ON BY DEFAULT: Extending, Level with, Direction, Collinear, Taxiway, Service road, World.**
+Collinear joined them on 2026-09-20 (see section 12): every ANGULAR row sits out on a free
 start, so with Collinear off the first click of every gesture was unguided until the player
 found a button nothing told them about - which is what one did.
+
+**AND `Angled from x World` STAYS A HOLE**, which is the other half of that same report. A
+world axis has no end to radiate from, so such a line would have to pass through the drag's
+OWN origin - which is the identical line `Direction x World` already offers. Two buttons for
+one guide is what the two axes were split apart to stop.
 
 **`ThisGesture` is a column with no button, permanently on.** Extending is the ONLY cell in its
 row, so an Extending button and a This-drawing button would switch off exactly the same

@@ -26,7 +26,26 @@ namespace SnapGuide
 	{
 		Extending,
 		LevelWith,
+
+		/**
+		 * A direction, AND ITS PERPENDICULAR - "parallel to the taxiway" and "square to the
+		 * taxiway" are one fact about one road, so one toggle governs both. For the World
+		 * column it is neither: the four compass axes are parallel to no thing at all.
+		 *
+		 * THE BAR CALLS THIS "Direction", and the names differ deliberately. A player switched
+		 * on Angled from and World on 2026-09-20, got nothing, and observed that a button
+		 * marked "Parallel" also showed them "square" - which is not parallel - while the thing
+		 * they wanted, the world grid, was neither. The design's own grid had always called the
+		 * row "Parallel / square"; the button had kept the first word and dropped the rest.
+		 *
+		 * THE ENUM WAS LEFT ALONE rather than renamed with it. "Parallel" is 34 sites across 11
+		 * files, plus FParallelGuideSource and eighteen uses of bParallel - and a good number of
+		 * those are comments that REASON about Parallel by name, which a substitution would
+		 * flatten. A name only developers read did not justify that; this paragraph is the tie
+		 * between the two instead. See BuildActions.cpp's snap.direction.
+		 */
 		Parallel,
+
 		Collinear,
 
 		/**

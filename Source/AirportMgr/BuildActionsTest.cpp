@@ -175,7 +175,10 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 	const TArray<TPair<SnapGuide::ERelation, const TCHAR*>> Relations = {
 		{ SnapGuide::ERelation::Extending,   TEXT("snap.extending")   },
 		{ SnapGuide::ERelation::LevelWith,   TEXT("snap.levelwith")   },
-		{ SnapGuide::ERelation::Parallel,    TEXT("snap.parallel")    },
+		// THE ID IS NOT THE ENUM'S NAME, and this is the one row where they differ: the button
+		// reads "Direction" because the row offers a direction AND its perpendicular AND the
+		// world axes. See BuildActions.cpp, and ERelation::Parallel's own comment.
+		{ SnapGuide::ERelation::Parallel,    TEXT("snap.direction")   },
 		{ SnapGuide::ERelation::Collinear,   TEXT("snap.collinear")   },
 		{ SnapGuide::ERelation::AngledFrom,  TEXT("snap.angledfrom")  },
 		{ SnapGuide::ERelation::MatchingGap, TEXT("snap.matchinggap") } };
