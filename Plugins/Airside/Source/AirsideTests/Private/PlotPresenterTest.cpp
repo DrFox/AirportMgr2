@@ -8,7 +8,9 @@
 #include "Model/RoadNetwork.h"
 #include "Present/PlotPresenter.h"
 #include "Present/RoadNetworkActor.h"
+#include "Build/DepotKit.h"
 #include "Solve/PlotFit.h"
+#include "Solve/PlotYard.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -325,6 +327,80 @@ bool FPlotPresenterSurvivesDuplicationTest::RunTest(const FString& Parameters)
 	// which they cannot if it is still filling the CDO's component.
 	TestTrue(TEXT("the duplicate's own boxes stand up"),
 		Dup->GetPlotPresenter()->GetInstanceCount() > 3);
+
+	return true;
+}
+
+/**
+ * A plot draws every reserved stand: the bought ones solid, the rest ghosted.
+ *
+ * THE GHOST IS NOT A MARKER. The 2026-09-16 spec removed a GRID of slot markers because a
+ * uniform grid claimed a structure the scattered yard did not have. A ghost here is a solved
+ * stand - its own footprint, its own sampled heading, from the code path that will place the
+ * module when it is bought. It does not claim the yard has a structure; it shows the yard.
+ *
+ * COMPOSITION LEVEL, per CLAUDE.md and the two tests above it: every Airside.Solve test
+ * would still pass if the presenter called Reserve and then drew the owned modules anyway,
+ * which is the "declared but never consumed" shape this project has shipped three times.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterGhostsUnboughtSlotsTest,
+	"Airside.Present.PlotPresenterGhostsUnboughtSlots",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+
+	Actor->ClearNetwork();
+
+	// THE DEEP PLOT, not ThreeBayPlotAt: 20 x 24 m has room to reserve more than the starter
+	// one-of-each, and a plot that reserved exactly three would pass this test while proving
+	// nothing about ghosts.
+	PlaceDeepDepot(Actor, Depot, /*X=*/0.0);
+	Actor->RebuildMesh();
+
+	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+
+	// WHAT WAS BOUGHT IS DRAWN SOLID. PlaceDeepDepot owns one of each, so three bays are lit
+	// however the reservation grouped them.
+	TestEqual(TEXT("the three owned modules are drawn solid"), Plots->GetModuleCount(), 3);
+
+	// AND THE SPARE ROOM IS DRAWN. This is the claim the whole design rests on: the player
+	// can see what the plot would hold before spending anything on it.
+	TestTrue(TEXT("a 20 x 24 m plot has spare capacity to ghost"),
+		Plots->GetGhostCount() > 0);
+
+	// A RESERVATION CANNOT DROP. Unlike LayOut, Reserve chose the list, so a drop is a bug
+	// rather than a refusal - and keeping the counter is how that stays assertable.
+	TestEqual(TEXT("nothing was dropped"), Plots->GetDroppedCount(), 0);
+
+	// SOLID PLUS GHOSTED IS THE WHOLE RESERVATION, so no bay is drawn twice and none is
+	// silently skipped. Recomputed here rather than remembered: the presenter derives it the
+	// same way, and a second stored copy is the drift this project names most often.
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		DeepPlotAt(0.0), FVector2D(0.0, 0.0), FVector2D(2000.0, 0.0),
+		FVector2D(1000.0, 0.0), Specs, DepotYardSeed(FVector2D(1000.0, 0.0)));
+
+	int32 Bays = 0;
+	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+	{
+		Bays += Stand.RunLength;
+	}
+	TestEqual(TEXT("every reserved bay is drawn, once"),
+		Plots->GetModuleCount() + Plots->GetGhostCount(), Bays);
+
+	// AND THE ROOM READOUT IS THOSE GHOSTS, not a separate sampling pass. One evaluator.
+	TestEqual(TEXT("room to grow is the count of unlit bays"),
+		Plots->GetRoomForMore(), Plots->GetGhostCount());
 
 	return true;
 }

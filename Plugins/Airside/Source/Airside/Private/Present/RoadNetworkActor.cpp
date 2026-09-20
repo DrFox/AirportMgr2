@@ -129,8 +129,24 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// something the build tools could trace against by accident.
 	PlotBoxes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
+	// THE GHOSTS GET THEIR OWN COMPONENT, sharing the cube and differing only in material.
+	// An instance carries a transform and not a material, so reserved-but-unbought bays
+	// cannot be told apart from built ones inside PlotBoxes.
+	PlotGhostBoxes =
+		CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotGhostBoxes"));
+	PlotGhostBoxes->SetupAttachment(RootComponent);
+	{
+		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(
+			TEXT("/Engine/BasicShapes/Cube.Cube"));
+		if (Cube.Succeeded())
+		{
+			PlotGhostBoxes->SetStaticMesh(Cube.Object);
+		}
+	}
+	PlotGhostBoxes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
 	Plots = CreateDefaultSubobject<UPlotPresenter>(TEXT("Plots"));
-	Plots->Initialise(PlotBoxes);
+	Plots->Initialise(PlotBoxes, PlotGhostBoxes);
 
 	Facade = CreateDefaultSubobject<URoadEditFacade>(TEXT("Facade"));
 
@@ -266,9 +282,11 @@ void ARoadNetworkActor::PostInitProperties()
 	// boxes would be added to an object no level ever renders.
 	PlotBoxes = Cast<UInstancedStaticMeshComponent>(
 		GetDefaultSubobjectByName(TEXT("PlotBoxes")));
+	PlotGhostBoxes = Cast<UInstancedStaticMeshComponent>(
+		GetDefaultSubobjectByName(TEXT("PlotGhostBoxes")));
 	if (Plots != nullptr)
 	{
-		Plots->Initialise(PlotBoxes);
+		Plots->Initialise(PlotBoxes, PlotGhostBoxes);
 	}
 
 }
@@ -634,6 +652,14 @@ void ARoadNetworkActor::RebuildMesh()
 	// its pad underneath it before its sheds go up.
 	if (Plots != nullptr)
 	{
+		// THROUGH THE RESOLVER, never the raw property, and here rather than in the
+		// constructor: a CDO cannot LoadSynchronous, and the material a level authored is
+		// only known once the actor exists. Null leaves the cube's default, which reads as
+		// a built bay - wrong, but visible, which is the failure mode to prefer.
+		if (PlotGhostBoxes != nullptr)
+		{
+			PlotGhostBoxes->SetMaterial(0, ResolveGhostMaterial());
+		}
 		Plots->RebuildFrom(*Network);
 	}
 

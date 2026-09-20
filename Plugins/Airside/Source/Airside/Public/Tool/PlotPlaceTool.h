@@ -100,7 +100,13 @@ public:
 	/** For tests. */
 	EPlotStage GetStage() const { return Stage; }
 
-	/** What fills the yard. For tests, and for the mix UI when buying arrives. */
+	/**
+	 * What the depot STARTS with. No longer what the plot can hold.
+	 *
+	 * IT NO LONGER STEERS THE PREVIEW. Under reservation the ghost and the readout come from
+	 * the ground the player is dragging out, not from a mix handed in here, so this decides
+	 * only which bays are lit the moment the depot is built.
+	 */
 	void SetModules(const TArray<EDepotModule>& InModules) { Modules = InModules; }
 
 	/** How many corners the player has placed, 0 to 4. What the readout reports as "N/4". */
@@ -118,14 +124,14 @@ public:
 
 private:
 	/**
-	 * The yard this plot would get, laid out by the same solver the presenter runs.
+	 * What this plot would hold, solved by the same code the presenter runs.
 	 *
-	 * SHARED BY THE GHOST AND THE READOUT. The ghost draws these footprints and the readout
+	 * SHARED BY THE GHOST AND THE READOUT. The ghost draws these stands and the readout
 	 * counts them, so the boxes on screen and the numbers beside them are ONE computation -
 	 * and because DepotYardSeed keys off the pose the facade will store, they are also the
 	 * boxes Build actually puts down rather than an impression of them.
 	 */
-	PlotYard::FYard YardFor(TArrayView<const FVector2D> Outline) const;
+	PlotYard::FReservation ReservationFor(TArrayView<const FVector2D> Outline) const;
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 

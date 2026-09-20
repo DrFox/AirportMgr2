@@ -219,33 +219,42 @@ bool FPlotReserveHonoursWeightsTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(TEXT("and at least one pump, got %d"),
 		Reservation.CeilingFor(2)), Reservation.CeilingFor(2) >= 1);
 
-	// A HEAVIER KIT IS OFFERED THE YARD MORE OFTEN. Sheds are weight 3 and pumps weight 1,
-	// so the first cycle offers three sheds before it offers a pump - and while the plot has
-	// room for both, that is what the first stands must show.
-	int32 FirstPump = INDEX_NONE;
-	int32 SecondShed = INDEX_NONE;
-	int32 ShedsSeen = 0;
-	for (int32 I = 0; I < Reservation.Stands.Num(); ++I)
+	// EVERY KIT GETS A FOOTHOLD FIRST, one bay each, largest first - so the opening stands are
+	// shed, tank, pump whatever the weights say. Without that pass a weight-3 shed took three
+	// bays before the pump was offered the yard at all, and on the concept sheet's 12 x 8 m
+	// plot that shed run WAS the whole plot: the Tier 1 depot stopped fitting in its own site.
+	const int32 Footholds = Specs.Num();
+	if (!TestTrue(TEXT("the plot is big enough to reserve past its footholds"),
+		Reservation.Stands.Num() > Footholds))
 	{
-		if (Reservation.Stands[I].KitIndex == 0)
-		{
-			++ShedsSeen;
-			if (ShedsSeen == 2 && SecondShed == INDEX_NONE) { SecondShed = I; }
-		}
-		if (Reservation.Stands[I].KitIndex == 2 && FirstPump == INDEX_NONE)
-		{
-			FirstPump = I;
-		}
+		return false;
+	}
+	for (int32 I = 0; I < Footholds; ++I)
+	{
+		TestEqual(TEXT("a foothold is one bay"), Reservation.Stands[I].RunLength, 1);
+	}
+	TestEqual(TEXT("the first foothold is the biggest kit"),
+		Reservation.Stands[0].KitIndex, 0);
+
+	// A HEAVIER KIT IS OFFERED THE YARD MORE OFTEN - AFTER the footholds, which is where the
+	// weights actually apply. Sheds are weight 3 and pumps weight 1, so the cycle offers
+	// three sheds before it offers a pump.
+	int32 NextShed = INDEX_NONE;
+	int32 NextPump = INDEX_NONE;
+	for (int32 I = Footholds; I < Reservation.Stands.Num(); ++I)
+	{
+		if (Reservation.Stands[I].KitIndex == 0 && NextShed == INDEX_NONE) { NextShed = I; }
+		if (Reservation.Stands[I].KitIndex == 2 && NextPump == INDEX_NONE) { NextPump = I; }
 	}
 
-	if (!TestTrue(TEXT("a second shed and a first pump were both reserved"),
-		SecondShed != INDEX_NONE && FirstPump != INDEX_NONE))
+	if (!TestTrue(TEXT("a further shed and a further pump were both reserved"),
+		NextShed != INDEX_NONE && NextPump != INDEX_NONE))
 	{
 		return false;
 	}
 	TestTrue(*FString::Printf(
-		TEXT("a second shed is reserved before the first pump: %d then %d"),
-		SecondShed, FirstPump), SecondShed < FirstPump);
+		TEXT("past the footholds a shed is reserved before a pump: %d then %d"),
+		NextShed, NextPump), NextShed < NextPump);
 
 	return true;
 }

@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "Build/DepotKit.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
@@ -8,6 +10,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/PlotFit.h"
+#include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/PlotPlaceTool.h"
 #include "Tool/RoadEditTarget.h"
@@ -903,23 +906,31 @@ bool FPlotGhostDrawsTheModulesTest::RunTest(const FString& Parameters)
 	// leaving them would be drawing a claim about the plot that is no longer true.
 	TestEqual(TEXT("no bay cross-marks survive"), Sink.CrossMarks, 0);
 
-	// FOUR LINES FOR THE PLOT, FOUR FOR EACH MODULE. A rectangle is four Line calls through
+	// FOUR LINES FOR THE PLOT, FOUR FOR EACH STAND. A rectangle is four Line calls through
 	// IToolPreviewSink::Polygon, so the count says exactly how many footprints were drawn -
 	// and it would not move at all if BuildPreview stopped drawing modules entirely.
-	FToolReadoutCollector Collector;
-	Tool.BuildReadout(Confirming, Collector);
-	const TPair<FString, FString>* Mix = Collector.Readout.Facts.FindByPredicate(
-		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Modules"); });
-	if (!TestNotNull(TEXT("a Modules fact"), Mix)) { return false; }
-
-	// "N of M" - N is what stands, and N footprints are what the ghost must draw.
-	const int32 Standing = FCString::Atoi(*Mix->Value);
-	if (!TestTrue(TEXT("at least one module stands on a plot this size"), Standing > 0))
+	//
+	// STANDS, NOT BAYS, and the two parted company when runs arrived: a three-bay shed run is
+	// ONE outline. Summing the readout's ceilings here would expect three rectangles where
+	// the ghost honestly draws one, so the count comes from the reservation itself.
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	TArray<FVector2D> Shown;
+	Tool.Quad(Confirming, Shown);
+	if (!TestEqual(TEXT("a confirmed plot has four corners"), Shown.Num(), 4))
 	{
 		return false;
 	}
-	TestEqual(TEXT("the ghost outlines the plot and every module standing in it"),
-		Sink.Lines, 4 + 4 * Standing);
+	const FVector2D Pose = (Shown[0] + Shown[1]) * 0.5;
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		Shown, Shown[0], Shown[1], Pose, Specs, DepotYardSeed(Pose));
+
+	if (!TestTrue(TEXT("a plot this size reserves something"),
+		Reservation.Stands.Num() > 0))
+	{
+		return false;
+	}
+	TestEqual(TEXT("the ghost outlines the plot and every stand reserved in it"),
+		Sink.Lines, 4 + 4 * Reservation.Stands.Num());
 
 	return true;
 }
@@ -1082,21 +1093,43 @@ bool FPlotReadoutCountsRoomNotSlotsTest::RunTest(const FString& Parameters)
 		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Expansion slots"); });
 	TestNull(TEXT("the bay-slot fact is gone"), Slots);
 
+	// "ROOM FOR N" IS GONE TOO, and for the same reason the slot fact went. It could only
+	// ever mean "N of the sample footprint" - a number about a phantom tank rather than
+	// about anything the player can buy. A line per kit says what the plot will HOLD.
 	const TPair<FString, FString>* Room = Collector.Readout.Facts.FindByPredicate(
 		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Room for"); });
-	if (!TestNotNull(TEXT("a Room for fact"), Room)) { return false; }
+	TestNull(TEXT("the sampled room fact is gone"), Room);
 
-	const int32 Promised = FCString::Atoi(*Room->Value);
-	TestTrue(TEXT("a plot this size reports room to grow"), Promised > 0);
+	const TPair<FString, FString>* Sheds = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Sheds"); });
+	if (!TestNotNull(TEXT("a Sheds fact"), Sheds)) { return false; }
+
+	int32 Promised = 0;
+	for (const TCHAR* Label : { TEXT("Sheds"), TEXT("Tanks"), TEXT("Pumps") })
+	{
+		const FString Wanted(Label);
+		const TPair<FString, FString>* Fact = Collector.Readout.Facts.FindByPredicate(
+			[&Wanted](const TPair<FString, FString>& F) { return F.Key == Wanted; });
+		if (TestNotNull(*FString::Printf(TEXT("a %s fact"), Label), Fact))
+		{
+			Promised += FCString::Atoi(*Fact->Value);
+		}
+	}
+	TestTrue(TEXT("a plot this size holds something"), Promised > 0);
 
 	// THE AGREEMENT. Commit the very gesture that was read out, then ask the presenter what
 	// the built depot actually has. A preview seeded differently from the placement would
 	// pass every other assertion here and quietly promise a yard the player never gets.
+	//
+	// BUILT PLUS GHOSTED, because the ceilings count every bay the plot holds and the depot
+	// arrives with its starter mix already lit. Comparing against the ghosts alone would be
+	// comparing capacity with capacity-minus-what-was-bought.
 	Tool.OnCommit(Confirming);
 	Actor->RebuildMesh();
 
-	TestEqual(TEXT("the room promised is the room the built depot has"),
-		Actor->GetPlotPresenter()->GetRoomForMore(), Promised);
+	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+	TestEqual(TEXT("the bays promised are the bays the built depot has"),
+		Plots->GetModuleCount() + Plots->GetGhostCount(), Promised);
 
 	return true;
 }
@@ -1146,11 +1179,21 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("three bays, the width that was dragged"),
 		Bays->Value, FString(TEXT("15 m")));
 
-	// ONE ROW DEEP WARNS, and does not refuse - a one-row depot works perfectly well and
-	// may be exactly what the player wants. The analogue of Manor Lords' "Plots without
-	// Extension Space".
-	TestEqual(TEXT("and it warns there is no room to grow"),
-		Collector.Readout.Warnings.Num(), 1);
+	// A FULL PLOT NO LONGER WARNS. "No room to grow" fired whenever a depot had no spare bay,
+	// which under reservation is the NORMAL end state of a well-drawn plot - the warning
+	// would cry wolf on every one of them. A plot that holds NOTHING is the case worth
+	// naming, and 12 x 6 m is not that.
+	//
+	// The analogue of Manor Lords' "Plots without Extension Space" is now the ghost itself:
+	// the player sees the empty slots rather than reading that they exist.
+	TestEqual(TEXT("a plot that holds something does not warn"),
+		Collector.Readout.Warnings.Num(), 0);
+
+	// AND THE READOUT NAMES WHAT IT HOLDS, per kit. This is the fact that replaced both
+	// "Modules N of M" and "Room for N".
+	const TPair<FString, FString>* Sheds = Collector.Readout.Facts.FindByPredicate(
+		[](const TPair<FString, FString>& F) { return F.Key == TEXT("Sheds"); });
+	TestNotNull(TEXT("a Sheds fact"), Sheds);
 
 	return true;
 }

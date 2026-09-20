@@ -438,6 +438,73 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 		return Reservation;
 	}
 
+	// ONE BAY EACH BEFORE ANY KIT GROWS.
+	//
+	// THE FIRST VERSION OFFERED EVERY KIT ITS FULL RUN STRAIGHT AWAY, and on a small plot the
+	// first kit ate the lot: the concept sheet's 12 x 8 m depot reserved a three-bay shed run
+	// - 12 m wide by 8 m deep, the whole plot - and left nothing for the tank or the pump.
+	// The depot the sheet draws is one shed, one tank, one pump, and it stopped fitting in
+	// its own plot.
+	//
+	// DISTINCT KITS, NOT THE WEIGHTED CYCLE: a foothold pass that walked the cycle would give
+	// a weight-3 shed three bays before the pump saw the yard at all, which is the same bug
+	// one step smaller. Largest first within the pass, for the reason the cycle sorts.
+	auto PlaceOne = [&](int32 Kit, int32 MaxRun) -> bool
+	{
+		FReservedStand Stand;
+		Stand.KitIndex = Kit;
+
+		// ONLY THE FIRST STAND OF A BACK-FENCE KIT TAKES THE RAY. The back-fence pass walks
+		// depths along one line out of the gate, so a second stand offered that line either
+		// lands on the first or is refused outright. The rest are sampled like anything else.
+		const bool bTakesTheRay = Kits[Kit].Footprint.bAgainstTheBackFence
+			&& Reservation.CeilingFor(Kit) == 0;
+
+		// AS LONG AS IT CAN, THEN SHORTER. A plot with room for two bays should get a two-bay
+		// run rather than nothing: refusing the whole run because the third bay does not fit
+		// would leave ground empty that the player drew and paid for.
+		const int32 Cap = FMath::Clamp(FMath::Min(Kits[Kit].RunCap, MaxRun), 1, 64);
+		for (int32 Length = Cap; Length >= 1; --Length)
+		{
+			// THE RUN'S FOOTPRINT, not the module's. Bays share walls, so a run is N times as
+			// wide and exactly as deep - no clearance between bays, because they are one
+			// building. FKitSpec::Footprint stays one module's so that this multiplication
+			// happens in exactly one place.
+			FFootprint Run = Kits[Kit].Footprint;
+			Run.WidthUu *= Length;
+
+			Stand.RunLength = Length;
+			const bool bPlaced = bTakesTheRay
+				? Space.PlaceAgainstTheBackFence(Run, Stand)
+				: Space.TryPlace(Run, Stand);
+
+			if (bPlaced)
+			{
+				Reservation.Stands.Add(Stand);
+				return true;
+			}
+		}
+		return false;
+	};
+
+	TArray<int32> Footholds;
+	for (int32 Kit = 0; Kit < Kits.Num(); ++Kit)
+	{
+		if (Kits[Kit].ReserveWeight > 0)
+		{
+			Footholds.Add(Kit);
+		}
+	}
+	Footholds.StableSort([&Kits](int32 A, int32 B)
+	{
+		return Kits[A].Footprint.LengthUu * Kits[A].Footprint.WidthUu
+			> Kits[B].Footprint.LengthUu * Kits[B].Footprint.WidthUu;
+	});
+	for (const int32 Kit : Footholds)
+	{
+		PlaceOne(Kit, /*MaxRun=*/1);
+	}
+
 	// A WHOLE CYCLE THAT PLACES NOTHING MEANS FULL, rather than one failure meaning full: a
 	// plot with no room left for a shed may still take three pumps, and stopping at the shed
 	// would waste the corner the player paid for.
@@ -450,39 +517,10 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 		bPlacedAny = false;
 		for (const int32 Kit : Cycle)
 		{
-			FReservedStand Stand;
-			Stand.KitIndex = Kit;
-
-			// ONLY THE FIRST STAND OF A BACK-FENCE KIT TAKES THE RAY. The back-fence pass
-			// walks depths along one line out of the gate, so a second stand offered that
-			// line either lands on the first or is refused outright. The rest are sampled
-			// like anything else.
-			const bool bTakesTheRay = Kits[Kit].Footprint.bAgainstTheBackFence
-				&& Reservation.CeilingFor(Kit) == 0;
-
-			// AS LONG AS IT CAN, THEN SHORTER. A plot with room for two bays should get a
-			// two-bay run rather than nothing: refusing the whole run because the third bay
-			// does not fit would leave ground empty that the player drew and paid for.
-			const int32 Cap = FMath::Clamp(Kits[Kit].RunCap, 1, 64);
-			bool bPlaced = false;
-			for (int32 Length = Cap; Length >= 1 && !bPlaced; --Length)
+			// FULL RUNS FROM HERE ON. Every kit already has its foothold, so a shed taking
+			// three bays now costs the tank nothing it was owed.
+			if (PlaceOne(Kit, Kits[Kit].RunCap))
 			{
-				// THE RUN'S FOOTPRINT, not the module's. Bays share walls, so a run is N
-				// times as wide and exactly as deep - no clearance between bays, because they
-				// are one building. FKitSpec::Footprint stays one module's so that this
-				// multiplication happens in exactly one place.
-				FFootprint Run = Kits[Kit].Footprint;
-				Run.WidthUu *= Length;
-
-				Stand.RunLength = Length;
-				bPlaced = bTakesTheRay
-					? Space.PlaceAgainstTheBackFence(Run, Stand)
-					: Space.TryPlace(Run, Stand);
-			}
-
-			if (bPlaced)
-			{
-				Reservation.Stands.Add(Stand);
 				bPlacedAny = true;
 			}
 		}

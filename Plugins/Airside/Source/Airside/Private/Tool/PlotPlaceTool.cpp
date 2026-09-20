@@ -3,6 +3,10 @@
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
 #include "Build/DepotKit.h"
+// The kit weights the reservation uses. Content/, not Present/ - the lint forbids Tool/ the
+// latter, and this is the same accessor UPlotPresenter resolves its specs through, so the
+// preview and the built depot read one set of figures.
+#include "Content/AirsideSettings.h"
 #include "Solve/PlotFit.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
@@ -342,26 +346,25 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 	OutQuad.Add(Near);
 }
 
-PlotYard::FYard FPlotPlaceTool::YardFor(TArrayView<const FVector2D> Outline) const
+PlotYard::FReservation FPlotPlaceTool::ReservationFor(
+	TArrayView<const FVector2D> Outline) const
 {
 	if (Outline.Num() < 4)
 	{
-		return PlotYard::FYard();
+		return PlotYard::FReservation();
 	}
 
-	TArray<PlotYard::FFootprint> Footprints;
-	Footprints.Reserve(Modules.Num());
-	for (const EDepotModule Module : Modules)
-	{
-		Footprints.Add(DepotFootprint(Module));
-	}
+	// WHAT THE PLOT WILL HOLD, rather than where this tool's module list would stand.
+	// Capacity is a property of the ground being dragged out, decided once - so the ghost is
+	// the depot the player gets, and the counts beside it are that same solve counted.
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
 	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
 	// gets BUILT rather than one that merely resembles it - see Build/DepotKit.h.
 	const FVector2D Pose = (Outline[0] + Outline[1]) * 0.5;
 
-	return PlotYard::LayOut(Outline, Outline[0], Outline[1], Pose, Footprints,
-		DepotYardSeed(Pose), DepotFootprint(EDepotModule::Tank));
+	return PlotYard::Reserve(Outline, Outline[0], Outline[1], Pose, Specs,
+		DepotYardSeed(Pose));
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -670,16 +673,24 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the
 	// boxes Build puts down, not an impression of them.
-	const PlotYard::FYard Yard = YardFor(Shown);
+	const PlotYard::FReservation Reservation = ReservationFor(Shown);
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
 	TArray<FVector2D> StandOutline;
-	for (int32 I = 0; I < Yard.Stands.Num() && I < Modules.Num(); ++I)
+	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 	{
-		if (!Yard.Stands[I].bPlaced)
+		if (!Specs.IsValidIndex(Stand.KitIndex))
 		{
 			continue;
 		}
-		PlotYard::StandCorners(Yard.Stands[I], DepotFootprint(Modules[I]), StandOutline);
+
+		// THE RUN'S GROUND, not one module's: a three-bay shed run is one building three bays
+		// wide, and outlining a single bay would promise the player two bays of ground that
+		// is already spoken for.
+		PlotYard::FFootprint Run = Specs[Stand.KitIndex].Footprint;
+		Run.WidthUu *= Stand.RunLength;
+
+		PlotYard::StandCorners(Stand, Run, StandOutline);
 		Sink.Polygon(StandOutline, EPreviewStyle::Pending);
 	}
 }
@@ -722,20 +733,28 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
 	// the boxes on screen and the counts on the bar are one computation, not two that agree.
-	const PlotYard::FYard Yard = YardFor(Shown);
+	const PlotYard::FReservation Reservation = ReservationFor(Shown);
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
 
-	// WHAT YOU GET against what you asked for. A plot too tight silently dropping the pump
-	// is exactly the kind of thing a player discovers after paying for it.
-	Sink.Fact(TEXT("Modules"), FString::Printf(TEXT("%d of %d"),
-		Modules.Num() - Yard.DroppedCount(), Modules.Num()));
-	Sink.Fact(TEXT("Room for"), FString::FromInt(Yard.RoomForMore));
-
-	if (Stage == EPlotStage::Confirm && Yard.RoomForMore == 0)
+	// A LINE PER KIT, because "Room for 4" could only ever mean "4 of the sample footprint" -
+	// a number about a phantom tank rather than about anything the player can buy. These are
+	// CEILINGS: what the plot will hold once they have paid for it, in whatever order they
+	// like. Nothing here is a refusal.
+	int32 Total = 0;
+	for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
 	{
-		// The direct analogue of Manor Lords' "Plots without Extension Space". A warning and
-		// never a refusal: a one-row depot works perfectly well and may be exactly what the
-		// player wants.
-		Sink.Warning(TEXT("No room to grow"));
+		const int32 Ceiling = Reservation.CeilingFor(Kit);
+		Total += Ceiling;
+		Sink.Fact(DepotKitLabel(static_cast<EDepotModule>(Kit)), FString::FromInt(Ceiling));
+	}
+
+	if (Stage == EPlotStage::Confirm && Total == 0)
+	{
+		// WAS "No room to grow", fired when a full depot had no spare bay. Under reservation
+		// a full plot is the normal end state and warning about it would cry wolf on every
+		// well-drawn depot; a plot that holds NOTHING is the case worth naming. The direct
+		// analogue of Manor Lords' "Plots without Extension Space" is now the ghost itself.
+		Sink.Warning(TEXT("This plot holds nothing"));
 	}
 
 	Sink.Committable(Stage == EPlotStage::Confirm);

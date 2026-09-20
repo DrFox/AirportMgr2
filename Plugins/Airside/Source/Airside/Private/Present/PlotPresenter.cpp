@@ -3,6 +3,8 @@
 #include "AirsideLog.h"
 #include "Build/DepotKit.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Content/AirsideContent.h"
+#include "Content/AirsideSettings.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/PlotYard.h"
@@ -99,9 +101,11 @@ namespace
 
 }
 
-void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes)
+void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
+	UInstancedStaticMeshComponent* InGhosts)
 {
 	Boxes = InBoxes;
+	GhostBoxes = InGhosts;
 }
 
 int32 UPlotPresenter::GetInstanceCount() const
@@ -132,13 +136,32 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	// incremental update would need to know which instance belonged to which entity, which
 	// is a second index that must agree with the model - and the counts here are tens.
 	Boxes->ClearInstances();
+	if (GhostBoxes != nullptr)
+	{
+		GhostBoxes->ClearInstances();
+	}
 	Placed.Reset();
 	GateGaps = 0;
 	RoomForMore = 0;
 	ModuleBoxes = 0;
 	Dropped = 0;
+	Ghosts = 0;
+
+	// HOISTED OUT OF THE LOOP: the specs are the same for every plot, and resolving the same
+	// three kits once per depot would do the work once per building on the airport.
+	//
+	// NULL IS A LEGAL ANSWER and the tests rely on it - with no content every kit falls back
+	// to the grey-box table, which is what lets all of this be tested without authoring an
+	// asset. Same accessor ARoadNetworkActor uses at every other content call site.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(Content);
 
 	int32 Plots = 0;
+
+	// INSTANCES, NOT BAYS, and the two parted company when runs arrived: a three-bay shed run
+	// is three modules drawn as ONE box. ModuleBoxes counts what the player owns; this counts
+	// what was handed to the component, which is the only thing the fence tally can subtract.
+	int32 ModuleInstances = 0;
 
 	for (const FEntityInstance& Entity : Network.GetEntities())
 	{
@@ -163,38 +186,80 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 		// CONTENTS, with different inputs from the plot's own shape - and a row of identical
 		// boxes all facing one way is what made a built depot read as a placeholder. The bay
 		// grid that used to answer it is gone entirely; see the 2026-09-16 design docs.
-		TArray<PlotYard::FFootprint> Footprints;
-		Footprints.Reserve(Entity.Modules.Num());
+		// THE PLOT'S WHOLE CAPACITY, decided once. The gate is where the fence is left open,
+		// which is the entity's own pose - see the fence loop below, which skips the bay
+		// nearest exactly this point.
+		//
+		// RE-DERIVED, NEVER SAVED. Every input is already on the entity and DepotYardSeed
+		// keys off the pose, so the same plot solves the same way on every rebuild and the
+		// save keeps only what the player bought.
+		const PlotYard::FReservation Reservation = PlotYard::Reserve(Entity.Outline,
+			FrontageA, FrontageB, Entity.Position, Specs, DepotYardSeed(Entity.Position));
+
+		// HOW MANY OF EACH THE PLAYER HAS BOUGHT. Entity.Modules is still the owned list and
+		// still this depot's only record in the save.
+		TArray<int32> Owned;
+		Owned.SetNumZeroed(Specs.Num());
 		for (const EDepotModule Module : Entity.Modules)
 		{
-			Footprints.Add(DepotFootprint(Module));
+			const int32 Kit = static_cast<int32>(Module);
+			if (Owned.IsValidIndex(Kit))
+			{
+				++Owned[Kit];
+			}
 		}
-
-		// The gate is where the fence is left open, which is the entity's own pose - see the
-		// fence loop below, which skips the bay nearest exactly this point.
-		const PlotYard::FYard Yard = PlotYard::LayOut(Entity.Outline, FrontageA, FrontageB,
-			Entity.Position, Footprints, DepotYardSeed(Entity.Position), DepotFootprint(EDepotModule::Tank));
-
-		RoomForMore += Yard.RoomForMore;
 
 		// MODULES BEFORE THE FENCE, always: Airside.Present.PlotPresenterScattersModules
 		// names the first ModuleBoxes instances of a plot as its modules, and reordering
-		// these two loops would silently make it measure fence panels instead.
-		for (int32 I = 0; I < Yard.Stands.Num() && I < Entity.Modules.Num(); ++I)
+		// these two loops would silently make it measure fence panels instead. The ghosts go
+		// in their own component, so they never enter that count at all.
+		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
 		{
-			const PlotYard::FStand& Stand = Yard.Stands[I];
-			if (!Stand.bPlaced)
+			if (!Specs.IsValidIndex(Stand.KitIndex))
 			{
-				// REPORTED, not hidden. A module shoved in anyway would intersect something,
-				// and a mesh through a mesh is the one failure no camera angle hides.
-				++Dropped;
 				continue;
 			}
-			const FTransform ModuleAt = BoxAt(Stand.Centre, Stand.Heading,
-				Footprints[I].LengthUu, Footprints[I].WidthUu, HeightFor(Entity.Modules[I]));
-			Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
-			Placed.Add(ModuleAt);
-			++ModuleBoxes;
+			const PlotYard::FFootprint& One = Specs[Stand.KitIndex].Footprint;
+			const double HeightUu = HeightFor(static_cast<EDepotModule>(Stand.KitIndex));
+
+			// A RUN FILLS FROM ONE END. Bays the player owns are drawn solid at that end and
+			// the rest ghosted, so a run visibly GROWS along its length rather than appearing
+			// whole. While these are boxes it is two boxes; with meshes it becomes
+			// BakedMeshes[lit - 1] plus a ghost for the remainder.
+			const int32 Lit = FMath::Clamp(Owned[Stand.KitIndex], 0, Stand.RunLength);
+			Owned[Stand.KitIndex] -= Lit;
+			const int32 Dark = Stand.RunLength - Lit;
+
+			// Along the run's own width axis, which is the stand's LEFT - StandCorners builds
+			// its corners from Forward and PerpCCW(Forward), so the same perpendicular here
+			// keeps the two halves inside the ground the solver actually reserved.
+			const FVector2D Forward(FMath::Cos(Stand.Heading), FMath::Sin(Stand.Heading));
+			const FVector2D Across = RoadGeom::PerpCCW(Forward);
+			const double FullWidth = One.WidthUu * Stand.RunLength;
+
+			if (Lit > 0)
+			{
+				const double LitWidth = One.WidthUu * Lit;
+				const FVector2D Centre =
+					Stand.Centre + Across * ((LitWidth - FullWidth) * 0.5);
+				const FTransform ModuleAt =
+					BoxAt(Centre, Stand.Heading, One.LengthUu, LitWidth, HeightUu);
+				Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
+				Placed.Add(ModuleAt);
+				++ModuleInstances;
+				ModuleBoxes += Lit;
+			}
+
+			if (Dark > 0 && GhostBoxes != nullptr)
+			{
+				const double DarkWidth = One.WidthUu * Dark;
+				const FVector2D Centre =
+					Stand.Centre + Across * ((FullWidth - DarkWidth) * 0.5);
+				GhostBoxes->AddInstance(
+					BoxAt(Centre, Stand.Heading, One.LengthUu, DarkWidth, HeightUu),
+					/*bWorldSpace=*/true);
+			}
+			Ghosts += Dark;
 		}
 
 		// --- The fence -----------------------------------------------------------------
@@ -240,6 +305,14 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 		}
 	}
 
+	// WHAT IS LEFT TO GROW INTO: a count of unlit bays, not a sampled estimate. It used to
+	// continue the placement loop with a phantom tank until it failed; the reservation
+	// already knows, so asking again would be a second opinion about one question.
+	//
+	// ASSIGNED ONCE, AFTER THE LOOP, because Ghosts accumulates across every plot - adding it
+	// per entity counted the first depot's spare room again for the second.
+	RoomForMore = Ghosts;
+
 	// ONE CENSUS LINE PER REBUILD, beside the surface builder's own. Zero plots is the
 	// common idle rebuild and stays quiet.
 	//
@@ -248,10 +321,13 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	// from every angle on screen.
 	if (Plots > 0)
 	{
+		// IT NAMES THE GHOSTS, because a depot drawn entirely in ghosts is a depot nobody has
+		// bought anything for - which looks identical to a broken presenter from a box count
+		// alone.
 		UE_LOG(LogAirside, Log,
-			TEXT("Plots: %d plot(s), %d module box(es), %d dropped, room for %d more, "
+			TEXT("Plots: %d plot(s), %d module bay(s) built, %d ghosted, %d dropped, "
 				 "%d fence panel(s), %d gate gap(s)"),
-			Plots, ModuleBoxes, Dropped, RoomForMore,
-			Placed.Num() - ModuleBoxes, GateGaps);
+			Plots, ModuleBoxes, Ghosts, Dropped,
+			Placed.Num() - ModuleInstances, GateGaps);
 	}
 }
