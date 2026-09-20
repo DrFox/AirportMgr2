@@ -203,11 +203,24 @@ FAgentMotion FRoadAgent::DescribeMotion(const FVector2D& At, double Heading,
 	// has no airframe to ask. See FAgentMotion::PitchPivotX.
 	Motion.PitchPivotX = Airframe.FixedAxleX;
 
-	// THE STEERING, from the follower WHATEVER THE PHASE - unlike GroundSpeed above. A
-	// landing rollout and a take-off roll are steered on the rudder with the nosewheel
-	// trailing straight, so the follower's zero is the right answer there rather than a
-	// missing one.
-	Motion.SteerAngleDegrees = Follower.SteerDegrees;
+	// THE STEERING, from whichever phase is doing it - which for every phase but one is the
+	// follower. A landing rollout and a take-off roll are steered on the rudder with the
+	// nosewheel trailing straight, so the follower's zero is the right answer there rather
+	// than a missing one, and a pushback goes straight out of the stand.
+	//
+	// REVERSING IS THE EXCEPTION, and this line read `= Follower.SteerDegrees` unconditionally
+	// until 2026-09-20 - its own comment said "from the follower WHATEVER THE PHASE". The
+	// follower does not run during a reverse, so SteerDegrees held whatever it last computed
+	// before the manoeuvre armed; a truck parks its steered axle on the service point with the
+	// wheels near straight, so the whole reverse inherited that. Reported from play as a truck
+	// that "straightened its wheels while still turning and then slid around the last part".
+	//
+	// THE THIRD FIELD IN THIS FUNCTION WITH THE SAME SHAPE - see GroundSpeed above, which was
+	// missing the Arriving phase once and reporting a cap rather than a state for Reversing.
+	// Each time, the struct that was moving the agent was not the struct being read. A fourth
+	// field added here should be asked which phase owns it before it is wired to the follower.
+	Motion.SteerAngleDegrees = Phase == EAgentPhase::Reversing
+		? Reverse.SteerDegrees : Follower.SteerDegrees;
 
 	// STATE, NOT SPEED. A stationary aircraft with its engine running is an aircraft with a
 	// turning propeller, which is what this used to get wrong.
@@ -575,7 +588,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 						// showed up as exactly that the first time this ran.
 						FVector2D BackAt = At;
 						double BackHeading = Heading;
-						Reverse.Advance(0.0, StopWithin, BackAt, BackHeading);
+						Reverse.Advance(0.0, Airframe, StopWithin, BackAt, BackHeading);
 						LastMotion = DescribeMotion(BackAt, BackHeading);
 						OutMotion = LastMotion;
 						UE_LOG(LogAirsideTraffic, Log,
@@ -680,7 +693,7 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// and walked rather than steered: a heading error going backwards GROWS.
 		FVector2D BackAt = At;
 		double BackHeading = Heading;
-		if (Reverse.Advance(DeltaSeconds, StopWithin, BackAt, BackHeading))
+		if (Reverse.Advance(DeltaSeconds, Airframe, StopWithin, BackAt, BackHeading))
 		{
 			LastMotion = DescribeMotion(BackAt, BackHeading);
 			OutMotion = LastMotion;

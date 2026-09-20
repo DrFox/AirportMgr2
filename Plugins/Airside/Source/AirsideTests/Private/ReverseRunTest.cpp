@@ -230,7 +230,7 @@ bool FEveryGroundVehicleBacksIntoItsBayWithoutCrabbingTest::RunTest(const FStrin
 		FVector2D Position = FVector2D::ZeroVector;
 		double Heading = 0.0;
 		int32 Frames = 0;
-		while (Run.Advance(1.0 / 30.0, /*StopWithin=*/1000.0, Position, Heading) && Frames < 10000)
+		while (Run.Advance(1.0 / 30.0, Airframe, /*StopWithin=*/1000.0, Position, Heading) && Frames < 10000)
 		{
 			++Frames;
 		}
@@ -294,7 +294,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 
 	// RUNNING FREELY: StopWithin is generous, so the step is ReverseSpeed * Dt and the
 	// realised speed is the authored one. This half would pass on the old code too.
-	Run.Advance(Dt, /*StopWithin=*/1.0e6, Position, Heading);
+	Run.Advance(Dt, Truck, /*StopWithin=*/1.0e6, Position, Heading);
 	TestTrue(*FString::Printf(TEXT("running freely it achieves its reverse speed (%.2f uu/s)"),
 		Run.Speed), FMath::IsNearlyEqual(Run.Speed, 100.0, 0.01));
 
@@ -302,7 +302,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 	// THE BUG WOULD FAIL - the old figure was ReverseSpeed, a constant, and a truck standing
 	// still reported a full 1 m/s with its wheels spinning to match.
 	const double WasTravelled = Run.Travelled;
-	Run.Advance(Dt, /*StopWithin=*/0.0, Position, Heading);
+	Run.Advance(Dt, Truck, /*StopWithin=*/0.0, Position, Heading);
 	TestEqual(TEXT("held by arbitration it travels nothing"), Run.Travelled, WasTravelled,
 		UE_DOUBLE_KINDA_SMALL_NUMBER);
 	TestEqual(TEXT("and reports no speed, so its wheels stand still with it"), Run.Speed, 0.0,
@@ -312,7 +312,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 	// ReverseSpeed: released, the vehicle backs up at the speed it was armed with.
 	TestTrue(TEXT("the authored reverse speed is unchanged by the hold"),
 		FMath::IsNearlyEqual(Run.ReverseSpeed, 100.0, UE_DOUBLE_KINDA_SMALL_NUMBER));
-	Run.Advance(Dt, /*StopWithin=*/1.0e6, Position, Heading);
+	Run.Advance(Dt, Truck, /*StopWithin=*/1.0e6, Position, Heading);
 	TestTrue(TEXT("and it resumes at that speed"),
 		FMath::IsNearlyEqual(Run.Speed, 100.0, 0.01));
 
@@ -323,7 +323,7 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a second run arms"),
 		Ending.Start(ArcPlan(Limit * 1.5), Truck, /*InReverseSpeed=*/100.0));
 	int32 Frames = 0;
-	while (Frames < 100000 && Ending.Advance(Dt, 1.0e6, Position, Heading))
+	while (Frames < 100000 && Ending.Advance(Dt, Truck, 1.0e6, Position, Heading))
 	{
 		++Frames;
 	}
@@ -331,6 +331,160 @@ bool FReverseSpeedIsWhatItAchievedTest::RunTest(const FString& Parameters)
 	TestTrue(*FString::Printf(
 		TEXT("the arriving frame reports the part-step it actually took (%.3f uu/s)"),
 		Ending.Speed), Ending.Speed >= 0.0 && Ending.Speed <= 100.0 + 0.01);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+/**
+ * A REVERSING VEHICLE STEERS ROUND ITS ARC RATHER THAN SLIDING ROUND IT.
+ *
+ * REPORTED FROM PLAY, 2026-09-20: the fuel truck "straightened its wheels while still turning
+ * and then slid around the last part of the reverse". It did, and there was nothing to make
+ * it do otherwise - FReverseRun produced a heading and no steer angle at all, so
+ * FRoadAgent::DescribeMotion went on reading FRouteFollower::SteerDegrees, which is frozen at
+ * whatever the follower last computed before the manoeuvre armed. The truck parks its steered
+ * axle on the service point with the wheels near straight, so that is the value the whole
+ * reverse inherited.
+ *
+ * THE ANGLE IS NOT A CHOICE. Backing along an arc, a rigid vehicle pivots about its FIXED
+ * axle, so tan(steer) = Wheelbase / Radius - which is the exact inverse of
+ * FAirframe::TightestReversibleRadius, Wheelbase / tan(lock), the rule
+ * Airside.Model.ReverseTurnsTighterThanForward already pins. That is why this asserts against
+ * the accessor rather than a typed-in number: an arc at exactly the vehicle's limit must ask
+ * for exactly its lock, and if the two ever disagree one of them is wrong.
+ *
+ * AND IT IS OPPOSITE THE YAW, which is the half that is easy to "fix" into a bug later.
+ * Reversing counter-steers: to swing the back of the vehicle to the left you turn the front
+ * wheels to the right. FRouteFollower::SteerDegrees is documented "signed the way Heading
+ * turns" because going forwards those coincide. Going backwards they do not, and they must
+ * not.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReverseSteersRatherThanSlidingTest,
+	"Airside.Model.ReverseSteersRatherThanSliding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReverseSteersRatherThanSlidingTest::RunTest(const FString& Parameters)
+{
+	using namespace ReverseFixture;
+
+	const FAirframe Truck = UAirsideSettings::ResolveLargestServiceVehicle();
+	if (!TestTrue(TEXT("the service vehicle steers on measured axles"), Truck.HasAxles()))
+	{
+		return false;
+	}
+
+	// A SHADE INSIDE THE VEHICLE'S OWN LIMIT, so the answer is a shade inside its own lock and
+	// no angle has to be typed in. Not AT the limit: ArcPlan is an inscribed polygon and
+	// FSpeedProfile measures each span's radius as its length over its turn, so a curve drawn
+	// at exactly the limit reads a hair tight and Start refuses it - which the sibling test
+	// above already knew, arming at Limit * 1.01.
+	const double Radius = Truck.TightestReversibleRadius() * 1.05;
+
+	FReverseRun Run;
+	if (!TestTrue(TEXT("a manoeuvre just inside the vehicle's reverse limit arms"),
+		Run.Start(ArcPlan(Radius), Truck, /*InReverseSpeed=*/100.0)))
+	{
+		return false;
+	}
+
+	FVector2D Position = FVector2D::ZeroVector;
+	double Heading = 0.0;
+	constexpr double Dt = 1.0 / 60.0;
+
+	// THE ARMING FRAME POSES WITHOUT MOVING - FRoadAgent advances this by zero seconds so the
+	// view has a pose before the phase changes. The steer angle is a fact about WHERE the
+	// vehicle is on the curve, not about how far it moved, so it must already be right here.
+	// Straightening for one frame at the handover is half of what was reported.
+	Run.Advance(0.0, Truck, /*StopWithin=*/1.0e6, Position, Heading);
+	const double Armed = Run.SteerDegrees;
+	TestTrue(*FString::Printf(
+		TEXT("the wheels are already turned on the arming frame (%.2f deg)"), Armed),
+		FMath::Abs(Armed) > 1.0);
+
+	double Steered = 0.0;
+	double TurnedTotal = 0.0;
+	double Previous = Heading;
+	int32 Frames = 0;
+	int32 SampledFrames = 0;
+	double SumSteer = 0.0;
+
+	while (Frames < 100000 && Run.Advance(Dt, Truck, 1.0e6, Position, Heading))
+	{
+		++Frames;
+		TurnedTotal += FMath::UnwindRadians(Heading - Previous);
+		Previous = Heading;
+		Steered = FMath::Max(Steered, FMath::Abs(Run.SteerDegrees));
+		SumSteer += Run.SteerDegrees;
+		++SampledFrames;
+
+		// NEVER PAST THE LOCK, on any frame. Start refuses a curve tighter than the vehicle
+		// can hold, so this should be unreachable - which is exactly why it is asserted: a
+		// curvature estimate that spikes at a polyline vertex would show up here and nowhere
+		// else until a wheel visibly snapped past its stop in play.
+		if (!TestTrue(*FString::Printf(
+			TEXT("the steer angle never exceeds the lock (%.2f deg, lock %.2f)"),
+			Run.SteerDegrees, Truck.Ground.MaxSteerDegrees),
+			FMath::Abs(Run.SteerDegrees) <= Truck.Ground.MaxSteerDegrees + 0.01))
+		{
+			return false;
+		}
+	}
+
+	if (!TestTrue(TEXT("the manoeuvre finished within the frame budget"), Frames < 100000)
+		|| !TestTrue(TEXT("and it sampled some frames"), SampledFrames > 0))
+	{
+		return false;
+	}
+
+	// THE ASSERTION THE BUG WOULD FAIL. Before the fix FReverseRun had no steer angle at all,
+	// so this was zero for the whole manoeuvre and the body swung round with straight wheels.
+	const double Wanted = FMath::RadiansToDegrees(FMath::Atan(Truck.Wheelbase() / Radius));
+	AddInfo(FString::Printf(
+		TEXT("wheelbase %.0f, radius %.0f: wants %.2f deg of lock, peaked at %.2f, lock is %.1f"),
+		Truck.Wheelbase(), Radius, Wanted, Steered, Truck.Ground.MaxSteerDegrees));
+
+	TestTrue(*FString::Printf(TEXT("it steers round the arc rather than sliding (%.2f deg)"),
+		Steered), Steered > 1.0);
+
+	// atan(Wheelbase/Radius) AT THE LIMIT IS THE LOCK ITSELF, and this arc is 5% outside the
+	// limit, so the angle must land just inside the lock. That is the cross-check which makes
+	// this more than a snapshot of whatever the code happens to produce: the same two figures,
+	// FAirframe::Wheelbase and Ground.MaxSteerDegrees, have to satisfy both the accessor and
+	// the steering, and a sign or a factor wrong in either shows up as a gap here.
+	TestTrue(*FString::Printf(
+		TEXT("and it lands just inside the lock, never on or past it (%.2f vs %.2f)"),
+		Steered, Truck.Ground.MaxSteerDegrees),
+		Steered < Truck.Ground.MaxSteerDegrees
+			&& Steered > Truck.Ground.MaxSteerDegrees * 0.9);
+	TestTrue(*FString::Printf(TEXT("which is what tan(steer) = Wheelbase/Radius asks for (%.2f)"),
+		Wanted), FMath::IsNearlyEqual(Steered, Wanted, 2.0));
+
+	// COUNTER-STEER. The arc turns one way for its whole length, so the mean steer angle is a
+	// fair reading of its sign, and it must be the opposite of the yaw.
+	const double MeanSteer = SumSteer / SampledFrames;
+	AddInfo(FString::Printf(TEXT("body yawed %.1f deg over the run; mean steer %.2f deg"),
+		FMath::RadiansToDegrees(TurnedTotal), MeanSteer));
+	TestTrue(TEXT("the body actually turned, so there is a sign to check against"),
+		FMath::Abs(TurnedTotal) > FMath::DegreesToRadians(10.0));
+	TestTrue(*FString::Printf(
+		TEXT("a reversing vehicle counter-steers: yaw %.1f deg, steer %.2f deg"),
+		FMath::RadiansToDegrees(TurnedTotal), MeanSteer),
+		MeanSteer * TurnedTotal < 0.0);
+
+	// A PIVOT-LAW VEHICLE HAS NO STEERED WHEEL TO DRAW, the same rule FRouteFollower states
+	// where it sets SteerDegrees to zero for one. Without this a van would sprout a steering
+	// angle it has no bone for.
+	FAirframe Pivoting = Truck;
+	Pivoting.SteerLaw = ESteerLaw::Pivot;
+	FReverseRun Van;
+	if (TestTrue(TEXT("a pivot-law vehicle still arms"),
+		Van.Start(ArcPlan(Radius), Pivoting, /*InReverseSpeed=*/100.0)))
+	{
+		Van.Advance(Dt, Pivoting, 1.0e6, Position, Heading);
+		TestEqual(TEXT("but reports no steering, having no steered wheel"),
+			Van.SteerDegrees, 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
+	}
 	return true;
 }
 
