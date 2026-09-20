@@ -15,6 +15,52 @@ namespace
 		return Out;
 	}
 
+	/**
+	 * The outline's lateral span at one depth, in ACROSS coordinates. False if the plot does
+	 * not reach that deep.
+	 *
+	 * BECAUSE A PLOT IS NOT A RECTANGLE. The four-point gesture makes a skewed quad the
+	 * ordinary case, and a single HalfSpan taken over the whole outline is the width at the
+	 * plot's WIDEST depth - which for a plot that fans out towards the back is nowhere near
+	 * the frontage. Placing a column at that offset put it outside the plot near the gate, so
+	 * it failed containment on its first stand and the whole column vanished: PIE on
+	 * 2026-09-20 drew a slightly off-square 45 m plot as 6 sheds, 0 tanks and 0 pumps.
+	 */
+	bool LateralSpanAt(TArrayView<const FVector2D> Outline, const FVector2D& Gate,
+		const FVector2D& Inward, const FVector2D& Across, double Depth,
+		double& OutLow, double& OutHigh)
+	{
+		OutLow = TNumericLimits<double>::Max();
+		OutHigh = -TNumericLimits<double>::Max();
+
+		for (int32 I = 0; I < Outline.Num(); ++I)
+		{
+			const FVector2D& A = Outline[I];
+			const FVector2D& B = Outline[(I + 1) % Outline.Num()];
+
+			const double DepthA = FVector2D::DotProduct(A - Gate, Inward);
+			const double DepthB = FVector2D::DotProduct(B - Gate, Inward);
+
+			// The edge has to STRADDLE this depth to contribute a crossing. An edge lying
+			// exactly along it contributes both its ends, which the endpoint test below picks
+			// up anyway.
+			if ((DepthA < Depth && DepthB < Depth) || (DepthA > Depth && DepthB > Depth))
+			{
+				continue;
+			}
+
+			const double Span = DepthB - DepthA;
+			const double T = FMath::IsNearlyZero(Span) ? 0.0 : (Depth - DepthA) / Span;
+			const FVector2D At = A + (B - A) * FMath::Clamp(T, 0.0, 1.0);
+			const double Lateral = FVector2D::DotProduct(At - Gate, Across);
+
+			OutLow = FMath::Min(OutLow, Lateral);
+			OutHigh = FMath::Max(OutHigh, Lateral);
+		}
+
+		return OutHigh > OutLow;
+	}
+
 	/** Is this stand wholly inside the outline, and clear of everything already placed? */
 	bool IsLegal(const PlotYard::FStand& Stand, const PlotYard::FFootprint& Claimed,
 		TArrayView<const FVector2D> Outline,
@@ -173,12 +219,30 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], 1);
 		const bool bLeft = (Kit == 1);
 		const FVector2D Edge = bLeft ? Across : -Across;
-		const double Side = HalfSpan - Claimed.WidthUu * 0.5;
 
 		const int32 Before = Reservation.Stands.Num();
 
+		// AT THE COLUMN'S OWN DEPTH, not at the plot's widest. Both ends of the first stand
+		// are measured and the TIGHTER edge wins, so a tapering plot cannot leave a corner of
+		// the stand hanging outside - which on a convex quad is the whole of the problem.
+		const double Near = PlotYard::GateCorridorUu;
+		const double Far = Near + Claimed.LengthUu;
+
+		double NearLow = 0.0, NearHigh = 0.0, FarLow = 0.0, FarHigh = 0.0;
+		if (!LateralSpanAt(Site.Outline, Site.Gate, Inward, Across, Near, NearLow, NearHigh)
+			|| !LateralSpanAt(Site.Outline, Site.Gate, Inward, Across, Far, FarLow, FarHigh))
+		{
+			continue;
+		}
+
+		const double EdgeAt = bLeft
+			? FMath::Min(NearHigh, FarHigh)
+			: -FMath::Max(NearLow, FarLow);
+
+		const double Side = EdgeAt - Claimed.WidthUu * 0.5;
+
 		const FVector2D Centre = Site.Gate + Edge * Side
-			+ Inward * (PlotYard::GateCorridorUu + Claimed.LengthUu * 0.5);
+			+ Inward * (Near + Claimed.LengthUu * 0.5);
 
 		FillBand(Kit, Centre, Inward, 1, Claimed.LengthUu + PlotYard::ClearanceUu,
 			ColumnLimit);
@@ -187,7 +251,10 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		// tank that was never reserved would be paying for ground nobody took.
 		if (Reservation.Stands.Num() > Before)
 		{
-			const double Inner = HalfSpan - Claimed.WidthUu - PlotYard::ClearanceUu;
+			// FROM THE EDGE THE COLUMN ACTUALLY TOOK, not from the plot's widest point: on a
+			// tapering plot those differ, and narrowing by the wrong one would either overlap
+			// the column or waste the gap beside it.
+			const double Inner = EdgeAt - Claimed.WidthUu - PlotYard::ClearanceUu;
 			if (bLeft) { WindowHigh = Inner; } else { WindowLow = -Inner; }
 		}
 	}

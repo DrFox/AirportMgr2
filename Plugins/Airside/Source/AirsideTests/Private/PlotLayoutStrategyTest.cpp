@@ -3,6 +3,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Solve/PlotYard.h"
+#include "Solve/RoadGeom.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -41,6 +42,21 @@ namespace
 		Pump.MaxPerPlot = 2;
 
 		return { Shed, Tank, Pump };
+	}
+
+	/**
+	 * A plot that is NOT a rectangle: the back edge is wider than the frontage.
+	 *
+	 * THE ORDINARY CASE, not an edge case. The gesture pins four corners freely, so a slightly
+	 * off-square plot is what a player actually draws - and every other fixture here is a
+	 * rectangle, which is why a column placed at the plot's WIDEST lateral extent looked
+	 * correct in tests and put both columns outside the plot in PIE.
+	 */
+	TArray<FVector2D> FlaredRect(double FrontWidth, double BackWidth, double Depth)
+	{
+		const double Flare = (BackWidth - FrontWidth) * 0.5;
+		return { FVector2D(0.0, 0.0), FVector2D(FrontWidth, 0.0),
+		         FVector2D(FrontWidth + Flare, Depth), FVector2D(-Flare, Depth) };
 	}
 
 	FPlotSite StrategySite(const TArray<FVector2D>& Outline, double Width)
@@ -402,6 +418,73 @@ bool FFuelYardKeepsColumnsClearOfTheShedsTest::RunTest(const FString& Parameters
 				TestTrue(*FString::Printf(
 					TEXT("%.0f x %.0f: kit %d has at most one stand beside the sheds, got %d"),
 					WidthUu, DepthUu, Kit, Beside[Kit]), Beside[Kit] <= 1);
+			}
+		}
+	}
+
+	return true;
+}
+
+/**
+ * A plot that is not square still gets its tanks and pumps.
+ *
+ * PIE ON 2026-09-20: "I can get a 45 meter plot to show 6 sheds and 0 tanks and 0 pumps if it
+ * is slightly off square." Six is the shed cap, so the sheds were fine and BOTH COLUMNS HAD
+ * VANISHED - placed at the plot's widest lateral extent, which on a flared quad is at the
+ * back, and therefore outside the outline down at the frontage where the column starts. The
+ * first stand failed containment and the band returned having placed nothing.
+ *
+ * EVERY OTHER FIXTURE IN THIS FILE IS A RECTANGLE, which is exactly why this passed the
+ * tests and failed the moment somebody drew a real plot. The gesture pins four corners
+ * freely; square is the special case.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardFillsASkewedPlotTest,
+	"Airside.Build.FuelYardFillsASkewedPlot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardFillsASkewedPlotTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+
+	// Flared, pinched, and square, at the 45 m frontage that showed the failure. A pinched
+	// plot is the mirror case: widest at the FRONT, so a naive HalfSpan is wrong at the back.
+	struct FCase { const TCHAR* What; TArray<FVector2D> Outline; double Frontage; };
+	const TArray<FCase> Cases = {
+		{ TEXT("flared"),  FlaredRect(4500.0, 5500.0, 3000.0), 4500.0 },
+		{ TEXT("pinched"), FlaredRect(4500.0, 3500.0, 3000.0), 4500.0 },
+		{ TEXT("square"),  StrategyRect(4500.0, 3000.0),       4500.0 },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		const PlotYard::FReservation R =
+			PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(
+				StrategySite(Case.Outline, Case.Frontage), Specs);
+
+		for (int32 Kit = 0; Kit < Specs.Num(); ++Kit)
+		{
+			TestTrue(*FString::Printf(TEXT("a %s 45 m plot holds kit %d, got %d"),
+				Case.What, Kit, R.CeilingFor(Kit)), R.CeilingFor(Kit) >= 1);
+		}
+
+		// AND NOTHING HANGS OUT OF THE PLOT. A column shoved against an edge it measured at
+		// the wrong depth is the failure this test exists for, and a stand half outside the
+		// fence looks correct from directly above.
+		TArray<FVector2D> Corners;
+		for (const PlotYard::FReservedStand& Stand : R.Stands)
+		{
+			const PlotYard::FKitSpec& Kit = Specs[Stand.KitIndex];
+			PlotYard::FFootprint Claimed;
+			Claimed.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
+			Claimed.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+
+			PlotYard::StandCorners(Stand, Claimed, Corners);
+			for (const FVector2D& Corner : Corners)
+			{
+				TestTrue(*FString::Printf(TEXT("a %s plot keeps kit %d inside the fence"),
+					Case.What, Stand.KitIndex),
+					RoadGeom::PointInPolygon(Case.Outline, Corner));
 			}
 		}
 	}
