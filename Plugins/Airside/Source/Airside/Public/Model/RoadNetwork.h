@@ -383,6 +383,18 @@ public:
 	FApronId AddApron(FApronSurface&& Apron);
 	bool RemoveApron(FApronId Apron);
 	const FApronSurface* GetApron(FApronId Apron) const;
+
+	/**
+	 * Move one corner of a live apron's outline. False for a dead apron or an index off the
+	 * end; the outline is otherwise written as given.
+	 *
+	 * NO VALIDITY JUDGEMENT HERE, deliberately - this is graph surgery, like RemoveApron
+	 * beside it. Whether the resulting polygon is SIMPLE is a placement question and the
+	 * facade's, which refuses before calling this at all: see URoadEditFacade::MoveApronCorner
+	 * and the note in SetIntermediateHoldingPosition on why a guard inside a scope that
+	 * cannot roll back is the wrong place for one.
+	 */
+	bool SetApronCorner(FApronId Apron, int32 CornerIndex, const FVector2D& To);
 	const TArray<FApronSurface>& GetAprons() const { return Aprons; }
 
 	/** The handle for a live slot index, for callers walking GetAprons() by index. Unset if dead. */

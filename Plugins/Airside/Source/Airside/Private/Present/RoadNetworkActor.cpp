@@ -934,6 +934,11 @@ bool ARoadNetworkActor::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
 	return Facade->MergeNodes(KeepIndex, AbsorbIndex);
 }
 
+bool ARoadNetworkActor::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)
+{
+	return Facade->MoveApronCorner(ApronIndex, CornerIndex, To);
+}
+
 void ARoadNetworkActor::BeginInteractiveEdit(const FString& Label)
 {
 	Facade->BeginInteractiveEdit(Label);

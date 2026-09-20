@@ -2,6 +2,7 @@
 
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoadApron.h"
 #include "Model/RoadNode.h"
 #include "Profiles/RoadProfile.h"
 #include "Tool/RoadGuideAnchor.h"
@@ -83,9 +84,135 @@ void FEditTool::GatherNodeHandles(const FToolContext& Context, TArray<int32>& Ou
 	}
 }
 
+bool FEditHandle::PositionIn(const URoadNetwork& Network, FVector2D& Out) const
+{
+	switch (Kind)
+	{
+	case EKind::Node:
+		if (Network.GetNodes().IsValidIndex(Owner) && Network.GetNodes()[Owner].bAlive)
+		{
+			Out = Network.GetNodes()[Owner].Position;
+			return true;
+		}
+		return false;
+
+	case EKind::ApronCorner:
+	{
+		const FApronSurface* Apron = Network.GetApron(Network.ApronIdAt(Owner));
+		if (Apron != nullptr && Apron->Outline.IsValidIndex(Corner))
+		{
+			Out = Apron->Outline[Corner];
+			return true;
+		}
+		return false;
+	}
+
+	default:
+		return false;
+	}
+}
+
+void FEditTool::GatherHandles(const FToolContext& Context, TArray<FEditHandle>& Out)
+{
+	Out.Reset();
+
+	const URoadNetwork* Network = Context.Network();
+	if (Network == nullptr)
+	{
+		return;
+	}
+
+	if (Context.EditHandles == EEditHandleKind::ApronCorner)
+	{
+		const TArray<FApronSurface>& Aprons = Network->GetAprons();
+		for (int32 Index = 0; Index < Aprons.Num(); ++Index)
+		{
+			if (!Aprons[Index].bAlive)
+			{
+				continue;
+			}
+			for (int32 Corner = 0; Corner < Aprons[Index].Outline.Num(); ++Corner)
+			{
+				FEditHandle Handle;
+				Handle.Kind = FEditHandle::EKind::ApronCorner;
+				Handle.Owner = Index;
+				Handle.Corner = Corner;
+				Out.Add(Handle);
+			}
+		}
+		return;
+	}
+
+	TArray<int32> Nodes;
+	GatherNodeHandles(Context, Nodes);
+	for (const int32 Index : Nodes)
+	{
+		FEditHandle Handle;
+		Handle.Kind = FEditHandle::EKind::Node;
+		Handle.Owner = Index;
+		Out.Add(Handle);
+	}
+}
+
+/**
+ * The handle nearest the cursor within Radius, or an unset one.
+ *
+ * BY DISTANCE, not through the snap chain: the chain answers "where would a ROAD NODE go",
+ * which is the wrong question for an apron corner and would never mention one. The node
+ * path still consults the chain, in OnDragBegin, because there the two agree and the
+ * chain's answer is the one the drop must later match bitwise.
+ */
+static FEditHandle NearestHandle(const FToolContext& Context, const URoadNetwork& Network)
+{
+	TArray<FEditHandle> Handles;
+	FEditTool::GatherHandles(Context, Handles);
+
+	FEditHandle Best;
+	double BestSquared = Context.SnapRadius * Context.SnapRadius;
+	for (const FEditHandle& Handle : Handles)
+	{
+		FVector2D At;
+		if (!Handle.PositionIn(Network, At))
+		{
+			continue;
+		}
+		const double Squared = FVector2D::DistSquared(At, Context.Cursor);
+		if (Squared <= BestSquared)
+		{
+			BestSquared = Squared;
+			Best = Handle;
+		}
+	}
+	return Best;
+}
+
 void FEditTool::OnDragBegin(const FToolContext& Context)
 {
-	if (Context.Target == nullptr || Context.Snap.Kind != ERoadSnapKind::Node)
+	const URoadNetwork* Network = Context.Network();
+	if (Context.Target == nullptr || Network == nullptr)
+	{
+		return;
+	}
+
+	// AN APRON CORNER IS NOT IN THE ROAD GRAPH, so the snap chain will never mention one -
+	// it answers "where would a road node go". Picked by distance instead, against the same
+	// ToolPickRadius every other non-road pick uses.
+	if (Context.EditHandles == EEditHandleKind::ApronCorner)
+	{
+		Drag = NearestHandle(Context, *Network);
+		if (!Drag.IsSet())
+		{
+			return;
+		}
+		Context.Target->BeginInteractiveEdit(TEXT("move apron corner"));
+		UE_LOG(LogAirside, Log, TEXT("Edit: grabbed apron %d corner %d"), Drag.Owner, Drag.Corner);
+		return;
+	}
+
+	// A NODE COMES THROUGH THE SNAP CHAIN, not by distance, and the difference matters: the
+	// chain's Node result carries the graph's stored coordinates verbatim, and the drop has
+	// to match them bitwise for a merge to be exact.
+	if (Context.Snap.Kind != ERoadSnapKind::Node)
 	{
 		return;
 	}
@@ -101,17 +228,26 @@ void FEditTool::OnDragBegin(const FToolContext& Context)
 		return;
 	}
 
-	DragNode = Context.Snap.Node.Index;
+	Drag.Kind = FEditHandle::EKind::Node;
+	Drag.Owner = Context.Snap.Node.Index;
 
 	// One undo step for the whole drag, not one per frame.
 	Context.Target->BeginInteractiveEdit(TEXT("move node"));
-	UE_LOG(LogAirside, Log, TEXT("Edit: grabbed node %d"), DragNode);
+	UE_LOG(LogAirside, Log, TEXT("Edit: grabbed node %d"), Drag.Owner);
 }
 
 void FEditTool::OnDrag(const FToolContext& Context)
 {
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
+	if (!Drag.IsSet() || Context.Target == nullptr)
 	{
+		return;
+	}
+
+	if (Drag.Kind == FEditHandle::EKind::ApronCorner)
+	{
+		// The guided cursor, but never a road snap: an apron corner landing exactly on a road
+		// node is not a merge and has no meaning - the two live in different structures.
+		Context.Target->MoveApronCorner(Drag.Owner, Drag.Corner, Context.GuidedCursor());
 		return;
 	}
 
@@ -130,18 +266,18 @@ void FEditTool::OnDrag(const FToolContext& Context)
 	// A refused move simply does not happen, so the node stops following the cursor rather
 	// than dragging a road shorter than the solver can trim. MoveNode notifies on every
 	// successful call, drag frame included (issue #77), so no RebuildMesh here.
-	Context.Target->MoveNode(DragNode, To);
+	Context.Target->MoveNode(Drag.Owner, To);
 }
 
 void FEditTool::OnDragEnd(const FToolContext& Context)
 {
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
+	if (!Drag.IsSet() || Context.Target == nullptr)
 	{
 		return;
 	}
 
-	const int32 Dropped = DragNode;
-	DragNode = INDEX_NONE;
+	const FEditHandle Dropped = Drag;
+	Drag.Clear();
 
 	// DROPPING ON A NODE IS THE MERGE. There is no separate verb and no confirmation, for
 	// the reason ERoadSnapKind::Node already gives about a click: "clicking reuses it, which
@@ -153,34 +289,43 @@ void FEditTool::OnDragEnd(const FToolContext& Context)
 	//
 	// BEFORE EndInteractiveEdit, so the merge joins the drag's undo step rather than opening
 	// one of its own: a drop is one action to the player and must be one press of undo.
-	if (Context.Snap.Kind == ERoadSnapKind::Node && Context.Snap.Node.Index != Dropped)
+	//
+	// NODES ONLY. An apron corner dropped on a road node is two unrelated structures meeting
+	// at a coordinate, not a thing to fold together.
+	if (Dropped.Kind == FEditHandle::EKind::Node
+		&& Context.Snap.Kind == ERoadSnapKind::Node
+		&& Context.Snap.Node.Index != Dropped.Owner)
 	{
-		Context.Target->MergeNodes(Context.Snap.Node.Index, Dropped);
+		Context.Target->MergeNodes(Context.Snap.Node.Index, Dropped.Owner);
 	}
 
 	// EndInteractiveEdit only closes the undo step - it moves nothing, the last OnDrag
-	// having already placed the node and notified for it (#77).
+	// having already placed the handle and notified for it (#77).
 	Context.Target->EndInteractiveEdit(/*bKeep*/ true);
 }
 
 void FEditTool::OnDeactivate(const FToolContext& Context)
 {
-	if (DragNode != INDEX_NONE && Context.Target != nullptr)
+	if (Drag.IsSet() && Context.Target != nullptr)
 	{
 		Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-		DragNode = INDEX_NONE;
+		Drag.Clear();
 	}
 }
 
 bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
-	if (Network == nullptr || DragNode == INDEX_NONE || !Network->GetNodes().IsValidIndex(DragNode))
+	// NODES ONLY. An apron corner's neighbours are its own outline rather than road arms, so
+	// the anchor below - built from incident segments and road-node candidates - would be
+	// describing something it is not holding.
+	if (Network == nullptr || Drag.Kind != FEditHandle::EKind::Node
+		|| !Network->GetNodes().IsValidIndex(Drag.Owner))
 	{
 		return false;
 	}
 
-	const FRoadNode& Dragged = Network->GetNodes()[DragNode];
+	const FRoadNode& Dragged = Network->GetNodes()[Drag.Owner];
 
 	Out.bFreeStart = true;
 	Out.Point = EDragPoint::Centreline;
@@ -212,7 +357,7 @@ bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget
 	// FRoadDrawTool's own anchor gives about a junction.
 	if (Dragged.Incident.Num() == 1)
 	{
-		const FRoadNodeId Self = Network->NodeIdAt(DragNode);
+		const FRoadNodeId Self = Network->NodeIdAt(Drag.Owner);
 		const FRoadNodeId Far = Network->GetOtherEnd(Dragged.Incident[0], Self);
 		if (const FRoadNode* Other = Network->GetNode(Far))
 		{
@@ -228,7 +373,7 @@ bool FEditTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget
 
 	// THE SHARED CANDIDATE LOOP, excluding the node in hand for the identical reason the
 	// chain excludes the one it extends from - see RoadGuideAnchor.
-	RoadGuideAnchor::AddNodeCandidates(*Network, Dragged.Position, DragNode, Out);
+	RoadGuideAnchor::AddNodeCandidates(*Network, Dragged.Position, Drag.Owner, Out);
 	return true;
 }
 
@@ -240,29 +385,35 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 		return;
 	}
 
-	TArray<int32> Handles;
-	GatherNodeHandles(Context, Handles);
+	TArray<FEditHandle> Handles;
+	GatherHandles(Context, Handles);
 
 	// EVERY GRABBABLE POINT, not only the one under the cursor: "what can I move here" has
 	// to be answerable by looking, or the mode is as undiscoverable as the drag it replaces.
-	for (const int32 Index : Handles)
+	for (const FEditHandle& Handle : Handles)
 	{
-		Sink.Marker(Network->GetNodes()[Index].Position, EPreviewStyle::Handle);
+		FVector2D At;
+		if (Handle.PositionIn(*Network, At))
+		{
+			Sink.Marker(At, EPreviewStyle::Handle);
+		}
 	}
 
 	// AND THE ONE UNDER THE CURSOR AGAIN, as Hover. Two meanings - "grabbable" and "this
 	// one" - so two styles; the overlay draws them at different radii so neither simply
 	// overdraws the other, the same arrangement StandPose and Pending already have.
-	if (Context.Snap.Kind == ERoadSnapKind::Node && Handles.Contains(Context.Snap.Node.Index))
+	const FEditHandle Under = NearestHandle(Context, *Network);
+	FVector2D HoverAt;
+	if (Under.IsSet() && Under.PositionIn(*Network, HoverAt))
 	{
-		Sink.Marker(Context.Snap.Position, EPreviewStyle::Hover);
+		Sink.Marker(HoverAt, EPreviewStyle::Hover);
 	}
 
-	// WHAT A DROP WOULD MERGE INTO, and what it would cost. Snap already means "the gesture
-	// would attach to this"; the label is what says the attachment DESTROYS a node, which is
-	// the one thing a ring cannot convey on its own.
-	if (DragNode != INDEX_NONE && Context.Snap.Kind == ERoadSnapKind::Node
-		&& Context.Snap.Node.Index != DragNode)
+	// WHAT A DROP WOULD MERGE INTO, and what it would destroy. Snap already means "the
+	// gesture would attach to this"; the label is what says the attachment REMOVES a node,
+	// which is the one thing a ring cannot convey on its own.
+	if (Drag.Kind == FEditHandle::EKind::Node && Context.Snap.Kind == ERoadSnapKind::Node
+		&& Context.Snap.Node.Index != Drag.Owner)
 	{
 		Sink.Marker(Context.Snap.Position, EPreviewStyle::Snap);
 		Sink.Label(Context.Snap.Position, TEXT("merge"), EPreviewStyle::Snap);
@@ -270,14 +421,14 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 		// THE ARM BETWEEN THEM IS DOOMED - it collapses, because once the two nodes are one
 		// it has no length and no direction. Drawn so the player sees which road disappears
 		// BEFORE they let go, rather than afterwards.
-		if (const FRoadNode* Held = Network->GetNodes().IsValidIndex(DragNode)
-				? &Network->GetNodes()[DragNode] : nullptr)
+		if (Network->GetNodes().IsValidIndex(Drag.Owner))
 		{
-			for (const FRoadSegmentId Arm : Held->Incident)
+			const FRoadNode& Held = Network->GetNodes()[Drag.Owner];
+			for (const FRoadSegmentId Arm : Held.Incident)
 			{
-				if (Network->GetOtherEnd(Arm, Network->NodeIdAt(DragNode)) == Context.Snap.Node)
+				if (Network->GetOtherEnd(Arm, Network->NodeIdAt(Drag.Owner)) == Context.Snap.Node)
 				{
-					Sink.Line(Held->Position, Context.Snap.Position, EPreviewStyle::Doomed);
+					Sink.Line(Held.Position, Context.Snap.Position, EPreviewStyle::Doomed);
 				}
 			}
 		}
@@ -287,14 +438,14 @@ void FEditTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink
 	// that described an anchor, had a guide computed for it and drew nothing - which showed
 	// the player precisely what having no guide shows them. Airside.Tool.EditModeDragOffersGuides
 	// measures this drawing rather than the describing, for that reason.
-	if (DragNode != INDEX_NONE && Context.Guide.bActive)
+	if (Drag.IsSet() && Context.Guide.bActive)
 	{
 		const FVector2D Moving = Context.Guide.Point;
 		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
 		{
 			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
 
-			// The label at its own line's midpoint, not at the node: two guides put both
+			// The label at its own line's midpoint, not at the handle: two guides put both
 			// labels on one point otherwise, and the plugin has no camera to offset them by
 			// a readable number of pixels. FPlotPlaceTool made the same choice for the same
 			// reason.

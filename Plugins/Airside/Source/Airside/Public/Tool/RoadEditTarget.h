@@ -227,6 +227,16 @@ public:
 	virtual bool DeleteApron(int32 ApronIndex) = 0;
 	virtual int32 FindApronAt(FVector2D Where) const = 0;
 
+	/**
+	 * Move one corner of an apron outline - the Edit mode's apron handle.
+	 *
+	 * REFUSES A MOVE THAT CROSSES THE OUTLINE, because a self-intersecting polygon has no
+	 * inside and the surface builder has no answer for one. Judged through
+	 * RoadGeom::IsSimplePolygon, the same test FApronDrawTool already closes an outline
+	 * against, rather than a second opinion about what a valid apron is.
+	 */
+	virtual bool MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To) = 0;
+
 	// --- Entities ------------------------------------------------------------------------
 
 	/** Drops one installation of Kind at a pose. See EPlaceableEntity for why the KIND

@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadApron.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/BuildSession.h"
@@ -666,6 +667,111 @@ bool FDraggingAThresholdRedesignatesTheRunwayTest::RunTest(const FString& Parame
 	const FString After = RoadNaming::Describe(*Actor->GetNetwork(), Strip);
 	TestNotEqual(TEXT("dragging a threshold re-derives the runway's designator, with no "
 					  "stored value to go stale"), After, Before);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMoveApronCornerRefusesSelfIntersectionTest,
+	"Airside.Model.MoveApronCornerRefusesSelfIntersection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMoveApronCornerRefusesSelfIntersectionTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A square, counter-clockwise.
+	const TArray<FVector2D> Square = {
+		FVector2D(0.0, 0.0), FVector2D(10000.0, 0.0),
+		FVector2D(10000.0, 10000.0), FVector2D(0.0, 10000.0) };
+	const int32 Apron = Actor->AddApron(Square);
+	if (!TestTrue(TEXT("the apron was laid"), Apron != INDEX_NONE)) { return false; }
+
+	// A MOVE THAT KEEPS THE OUTLINE SIMPLE IS ACCEPTED - the control, without which the
+	// refusal below would pass on a mutator that had simply stopped working.
+	TestTrue(TEXT("a corner may be moved while the outline stays simple"),
+		Actor->MoveApronCorner(Apron, 2, FVector2D(14000.0, 12000.0)));
+
+	const FApronSurface* Live = Actor->GetNetwork()->GetApron(Actor->GetNetwork()->ApronIdAt(Apron));
+	if (!TestNotNull(TEXT("the apron lives"), Live)) { return false; }
+	TestTrue(TEXT("and the corner really moved"),
+		Live->Outline[2].Equals(FVector2D(14000.0, 12000.0), 1e-6));
+
+	// DRAGGED ACROSS THE POLYGON, making a bow-tie. A self-intersecting outline has no
+	// inside, and the surface builder has no answer for one.
+	//
+	// (-5000, 5000) AND NOT (-5000, -5000), which was the first case tried and is simple: a
+	// non-convex quad still has an inside. This one puts the corner past the far EDGE, so
+	// the arm reaching it crosses the outline's left side at (0, 3333) - worked through on
+	// paper rather than guessed, because a refusal test whose case is legal passes by
+	// accident the day the rule is deleted.
+	TestFalse(TEXT("but not across its own outline"),
+		Actor->MoveApronCorner(Apron, 2, FVector2D(-5000.0, 5000.0)));
+
+	Live = Actor->GetNetwork()->GetApron(Actor->GetNetwork()->ApronIdAt(Apron));
+	if (!TestNotNull(TEXT("the apron still lives"), Live)) { return false; }
+	TestTrue(TEXT("and the refused move left the corner exactly where it was - a refusal "
+				  "inside an edit scope would have left a changed graph with no undo"),
+		Live->Outline[2].Equals(FVector2D(14000.0, 12000.0), 1e-6));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditModeDragsAnApronCornerTest,
+	"Airside.Tool.EditModeDragsAnApronCorner",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditModeDragsAnApronCornerTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	const TArray<FVector2D> Square = {
+		FVector2D(0.0, 0.0), FVector2D(10000.0, 0.0),
+		FVector2D(10000.0, 10000.0), FVector2D(0.0, 10000.0) };
+	const int32 Apron = Actor->AddApron(Square);
+	if (!TestTrue(TEXT("the apron was laid"), Apron != INDEX_NONE)) { return false; }
+
+	// A road too, so a filter that confused the two kinds would be caught: the Apron tool
+	// must offer FOUR handles, not four corners plus two nodes.
+	const int32 N0 = Actor->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 N1 = Actor->PlaceNode(FVector2D(-20000.0, 9000.0));
+	Actor->ConnectNodes(N0, N1);
+
+	FBuildSession Session;
+	Session.SelectTool(2);                       // Apron
+	Session.SetGestureMode(EGestureMode::Edit);
+	FBuildSessionTunables Tunables;
+
+	{
+		FEditToolSink Sink;
+		Session.GetActiveTool()->BuildPreview(
+			Session.MakeContext(Actor, FVector2D(50000.0, 50000.0), Tunables, false, false), Sink);
+		TestEqual(TEXT("the Apron tool offers the outline's four corners and none of the "
+					   "road's nodes"), Sink.CountMarkers(EPreviewStyle::Handle), 4);
+	}
+
+	// AN APRON CORNER IS NOT IN THE ROAD GRAPH, so the snap chain would never mention it -
+	// the pick is by distance. Grabbing one and dragging it must still move it.
+	IBuildTool* Tool = Session.GetActiveTool();
+	Tool->OnDragBegin(Session.MakeContext(Actor, FVector2D(10000.0, 10000.0), Tunables, false, false));
+	if (!TestFalse(TEXT("a corner really was grabbed"), Tool->IsIdle())) { return false; }
+
+	Tool->OnDrag(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables, false, false));
+	Tool->OnDragEnd(Session.MakeContext(Actor, FVector2D(13000.0, 11000.0), Tunables, false, false));
+
+	const FApronSurface* Live = Actor->GetNetwork()->GetApron(Actor->GetNetwork()->ApronIdAt(Apron));
+	if (!TestNotNull(TEXT("the apron lives"), Live)) { return false; }
+	TestTrue(TEXT("the dragged corner moved"),
+		!Live->Outline[2].Equals(FVector2D(10000.0, 10000.0), 1.0));
+
+	// AND THE ROAD DID NOT. A handle kind squeezed into a node index is how a wrong index
+	// reaches MoveNode and silently moves something else.
+	TestTrue(TEXT("and the road's nodes are untouched"),
+		Actor->GetNetwork()->GetNodes()[N0].Position.Equals(FVector2D(-20000.0, 0.0), 1e-6)
+		&& Actor->GetNetwork()->GetNodes()[N1].Position.Equals(FVector2D(-20000.0, 9000.0), 1e-6));
 	return true;
 }
 

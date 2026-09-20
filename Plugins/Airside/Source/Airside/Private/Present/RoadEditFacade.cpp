@@ -15,6 +15,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RoadGeom.h"
 #include "Tool/RoadPlacement.h"
 #include "Solve/RunwayDesignator.h"
 #include "Tool/GuidelineDrawTool.h"
@@ -781,6 +782,78 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	}
 
 	History->CommitEdit();
+}
+
+bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)
+{
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr)
+	{
+		return false;
+	}
+
+	const FApronId Apron = Owner.Network->ApronIdAt(ApronIndex);
+	const FApronSurface* Live = Owner.Network->GetApron(Apron);
+	if (Live == nullptr || !Live->Outline.IsValidIndex(CornerIndex))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("MoveApronCorner refused: apron %d has no corner %d"), ApronIndex, CornerIndex);
+		return false;
+	}
+
+	// JUDGED ON A COPY, BEFORE ANYTHING IS WRITTEN. A self-intersecting outline has no
+	// inside, and the surface builder has no answer for one - so a corner dragged across
+	// its own polygon has to be refused rather than fixed up afterwards.
+	//
+	// AND REFUSED OUT HERE, ABOVE THE SCOPE, for the reason SetIntermediateHoldingPosition
+	// records at length: ~FRoadEditScope abandons the snapshot and restores nothing, so a
+	// mutation followed by a `return false` inside a scope leaves a changed graph with no
+	// undo entry to reach it.
+	//
+	// THROUGH RoadGeom::IsSimplePolygon, the same test FApronDrawTool closes an outline
+	// against - one answer to "is this a valid apron", not a second opinion.
+	TArray<FVector2D> Proposed = Live->Outline;
+	Proposed[CornerIndex] = To;
+	if (!RoadGeom::IsSimplePolygon(Proposed))
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("MoveApronCorner refused: corner %d of apron %d would cross its own outline"),
+			CornerIndex, ApronIndex);
+		return false;
+	}
+
+	// JOINS A DRAG ALREADY IN PROGRESS, so the whole drag is one undo step; on its own it is
+	// one edit of its own. IsEditing is what tells the two apart - the arrangement MoveNode
+	// uses, and NOT an FRoadEditScope: a scope calls BeginEdit unconditionally, which
+	// ensure-fails on the pending snapshot an interactive edit has already taken.
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
+	if (bOwnsEdit)
+	{
+		Use->BeginEdit(*Owner.Network, TEXT("move apron corner"));
+	}
+
+	const bool bMoved = Owner.Network->SetApronCorner(Apron, CornerIndex, To);
+
+	if (bOwnsEdit)
+	{
+		if (bMoved)
+		{
+			Use->CommitEdit();
+		}
+		else
+		{
+			Use->AbandonEdit();
+		}
+	}
+
+	if (bMoved)
+	{
+		// Every frame of a drag, like MoveNode and for the same reason: the pavement has
+		// changed and the mesh is stale until something rebuilds it.
+		NotifyChanged();
+	}
+	return bMoved;
 }
 
 bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)

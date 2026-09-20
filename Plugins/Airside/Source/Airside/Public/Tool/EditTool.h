@@ -4,6 +4,38 @@
 #include "Tool/RoadBuildTool.h"
 
 /**
+ * One grabbable point, and what it belongs to.
+ *
+ * A CORNER IS NOT A NODE, and squeezing one into a node index is how a wrong index reaches
+ * MoveNode and silently moves something else. Two owners and two mutators, so the type
+ * carries which - CLAUDE.md's "a phase is an enum, never a set of bools", applied to a
+ * handle that would otherwise be an int and a second int that is only sometimes meaningful.
+ */
+struct FEditHandle
+{
+	enum class EKind : uint8
+	{
+		None,
+
+		/** Owner is a road node slot index. Corner is unused. */
+		Node,
+
+		/** Owner is an apron slot index; Corner is the index into its outline. */
+		ApronCorner,
+	};
+
+	EKind Kind = EKind::None;
+	int32 Owner = INDEX_NONE;
+	int32 Corner = INDEX_NONE;
+
+	bool IsSet() const { return Kind != EKind::None; }
+	void Clear() { Kind = EKind::None; Owner = INDEX_NONE; Corner = INDEX_NONE; }
+
+	/** Where it sits on the road plane, or false when whatever owned it has gone. */
+	bool PositionIn(const URoadNetwork& Network, FVector2D& Out) const;
+};
+
+/**
  * The one tool that runs while the session's mode is Edit - Strategy, like every other
  * IBuildTool, and reached the same way: through FBuildSession::GetActiveTool.
  *
@@ -67,13 +99,28 @@ public:
 	 * CancelActiveGesture reads it, and a tool that claimed to be mid-gesture with nothing
 	 * in hand would swallow the first cancel and leave the player pressing escape twice.
 	 */
-	virtual bool IsIdle() const override { return DragNode == INDEX_NONE; }
+	virtual bool IsIdle() const override { return !Drag.IsSet(); }
 
-	/** The node in hand, so MakeContext can keep the snap chain off it. */
-	virtual int32 GetSnapExclusion() const override { return DragNode; }
+	/**
+	 * The node in hand, so MakeContext can keep the snap chain off it.
+	 *
+	 * ONLY FOR A NODE DRAG. An apron corner is not in the road graph and the snap chain has
+	 * nothing to exclude for it - answering with its owner index here would exclude an
+	 * unrelated NODE that happened to share the number.
+	 */
+	virtual int32 GetSnapExclusion() const override
+	{
+		return Drag.Kind == FEditHandle::EKind::Node ? Drag.Owner : INDEX_NONE;
+	}
 
 	/** The node a live drag is moving, or INDEX_NONE. For tests and the overlay. */
-	int32 GetDragNode() const { return DragNode; }
+	int32 GetDragNode() const
+	{
+		return Drag.Kind == FEditHandle::EKind::Node ? Drag.Owner : INDEX_NONE;
+	}
+
+	/** What a live drag is holding. */
+	const FEditHandle& GetDragHandle() const { return Drag; }
 
 	/**
 	 * Every node slot the lit tool exposes, in index order.
@@ -87,9 +134,19 @@ public:
 	 */
 	static void GatherNodeHandles(const FToolContext& Context, TArray<int32>& Out);
 
+	/**
+	 * Every handle the lit tool exposes, of whatever kind - what the preview draws and what
+	 * a press may grab.
+	 *
+	 * ONE GATHERER, so those two cannot come to disagree about what is grabbable. The node
+	 * accessor above remains because the guide anchor and the snap exclusion are node
+	 * questions specifically.
+	 */
+	static void GatherHandles(const FToolContext& Context, TArray<FEditHandle>& Out);
+
 private:
 	/**
-	 * The node held by a live drag, or INDEX_NONE.
+	 * What a live drag is holding, or an unset handle.
 	 *
 	 * A GESTURE, NOT A DRAWING STEP - the distinction FRoadDrawTool's header used to draw
 	 * about its own drag, and which travelled here with the code. A drag advances no
@@ -98,5 +155,5 @@ private:
 	 * to return to, which is a transition graph invented to fit a pattern rather than to
 	 * describe the tool.
 	 */
-	int32 DragNode = INDEX_NONE;
+	FEditHandle Drag;
 };

@@ -207,6 +207,18 @@ bool URoadNetwork::SetNodePosition(FRoadNodeId Node, const FVector2D& To)
 	return true;
 }
 
+bool URoadNetwork::SetApronCorner(FApronId Apron, int32 CornerIndex, const FVector2D& To)
+{
+	FApronSurface* Live = RoadSlot::Get<FApronId>(Aprons, Apron);
+	if (Live == nullptr || !Live->Outline.IsValidIndex(CornerIndex))
+	{
+		return false;
+	}
+
+	Live->Outline[CornerIndex] = To;
+	return true;
+}
+
 bool URoadNetwork::MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb)
 {
 	if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Nodes, Keep)
