@@ -62,6 +62,38 @@ public:
 	 */
 	bool SetNodePosition(FRoadNodeId Node, const FVector2D& To);
 
+	/**
+	 * Fold Absorb into Keep: every arm of Absorb becomes an arm of Keep, and Absorb dies.
+	 *
+	 * THE MERGE HAS NO VERB IN THE UI. Dropping one node onto another is the whole gesture,
+	 * exactly as drawing within the snap radius reuses a node rather than making a second
+	 * one - see ERoadSnapKind::Node, "clicking reuses it, which is how a junction is
+	 * closed". This is that same idea for a node that already exists, and it is what fixes
+	 * the close pairs that made vehicles crawl: a pair a few metres apart is a corner
+	 * FSpeedProfile rightly refuses to take at speed, and there was no way to remove it.
+	 *
+	 * THREE CASES PER ARM, and the middle one is the interesting one:
+	 *   - the arm's far end IS Keep      -> it collapses; the arm is removed
+	 *   - Keep already reaches that end  -> the WIDER profile survives, the other is removed
+	 *   - otherwise                      -> the Absorb end is repointed to Keep
+	 *
+	 * WIDEST WINS by URoadProfile::GetTotalWidth, the same measure the width cycle reports.
+	 * On an exact tie the arm already on Keep survives, being the edit that touches less.
+	 * Ground geometry is sized for the largest aircraft admitted, so collapsing a stub must
+	 * never silently narrow a route something was cleared for.
+	 *
+	 * CONTROL POINTS COME WITH THE ENDPOINT, shifted by half its displacement - the rule
+	 * SetNodePosition above already applies, and for the reason its comment gives: direction
+	 * is derived from Control, so an arm repointed without it keeps aiming at where its end
+	 * used to be. Half the displacement is how far the chord's midpoint travels, which
+	 * leaves a straight segment exactly straight.
+	 *
+	 * NO LEGALITY JUDGEMENT HERE. This is graph surgery, like RemoveNode and SplitSegment
+	 * beside it; whether the resulting corners FIT is a placement question and belongs to
+	 * the facade, which owns FRoadPlacementLimits - see URoadEditFacade::MergeNodes.
+	 */
+	bool MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb);
+
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
 	FRoadSegment*       GetSegmentMutable(FRoadSegmentId Segment);
