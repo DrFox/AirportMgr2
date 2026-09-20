@@ -255,26 +255,13 @@ bool FRoadDrawTool::IsIdle() const
 bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
-	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
-	// speak of, and a guide offered there would be squaring to an edge that does not exist.
-	const int32 Pending = GetPendingNode();
-	if (Network == nullptr || Pending == INDEX_NONE)
-	{
-		return false;
-	}
-
-	const FRoadNodeId FromId = Network->NodeIdAt(Pending);
-	const FRoadNode* From = Network->GetNode(FromId);
-	if (From == nullptr)
-	{
-		return false;
-	}
-
-	Out.Origin = From->Position;
-
 	// THE WIDTH THIS GESTURE WOULD LAY - the same question the ghost asks, through the same one
 	// resolver, so a guide cannot disagree with the pavement it is guiding. A null Target is a
 	// supported state and leaves the widths at zero, which means "no width" rather than "unknown".
+	//
+	// FILLED BEFORE THE DECLINE BELOW, because a FREE START has a width too: the first click of
+	// a road laid flush against an apron edge is displaced by exactly this figure, and the base
+	// that answers the free start knows nothing about profiles.
 	Out.Point = EDragPoint::Centreline;
 	if (Target != nullptr)
 	{
@@ -284,6 +271,30 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTa
 			Out.HalfWidthRight = Profile->GetHalfWidthRight();
 		}
 	}
+
+	// NOTHING PENDING MEANS NOTHING TO EXTEND. The first click of a chain has no direction to
+	// speak of, and an ANGULAR guide offered there would be squaring to an edge that does not
+	// exist - which is why the base's answer here is a FREE START and not this function's own
+	// anchor: it puts the cursor in Origin and lets the arbiter drop every angular candidate.
+	// Delegating rather than returning false is what opts this tool in; see
+	// IBuildTool::DescribeGuideAnchor.
+	const int32 Pending = GetPendingNode();
+	if (Network == nullptr || Pending == INDEX_NONE)
+	{
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
+	}
+
+	const FRoadNodeId FromId = Network->NodeIdAt(Pending);
+	const FRoadNode* From = Network->GetNode(FromId);
+	if (From == nullptr)
+	{
+		// A PENDING NODE THE GRAPH CANNOT SEE is not a free start - the gesture HAS begun, and
+		// IsIdle() says so, so the base declines too. Routed through it anyway rather than a
+		// bare false, so the two exits cannot come to disagree about what "no anchor" means.
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
+	}
+
+	Out.Origin = From->Position;
 
 	// THE SEGMENT ALREADY ARRIVING AT THE PENDING NODE. With exactly one incident segment the
 	// answer is unambiguous - that is the road being extended. At a junction there are several

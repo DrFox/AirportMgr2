@@ -69,10 +69,33 @@ bool FRoadAnchorExtendsTheSegmentBehindItTest::RunTest(const FString& Parameters
 	if (!TestTrue(TEXT("a taxiway gesture"), StartRoadGesture(Gesture))) { return false; }
 
 	// NOTHING PENDING YET: the first click has no segment behind it to extend, and the network
-	// does not exist until something is placed - which is the null case the hook must decline.
+	// may not exist until something is placed - the null case the hook must answer without
+	// dereferencing. Since 2026-09-20 the answer is a FREE START rather than a decline: with no
+	// reference nothing ANGULAR can be offered, but the road may still begin in line with
+	// another or a matching gap away from a pair.
 	FGuideAnchor Idle;
-	TestFalse(TEXT("an idle road tool offers no anchor"),
-		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Idle));
+	if (!TestTrue(TEXT("an idle road tool offers a free start"),
+		Gesture.Tool->DescribeGuideAnchor(Gesture.Network(), Gesture.TestWorld.Actor, Idle)))
+	{
+		return false;
+	}
+	TestTrue(TEXT("flagged as one, so the driver fills Origin with the cursor"), Idle.bFreeStart);
+	TestTrue(TEXT("with no reference, so every angular candidate sits out"),
+		Idle.Reference.IsNearlyZero());
+
+	// AND IT ALREADY CARRIES THE WIDTH THIS CLICK WOULD LAY, which is what lets a road's EDGE
+	// go flush against an apron on the very first click - see FApronLineGuideSource. Filled
+	// BEFORE the tool declines its own anchor, which is the ordering this asserts.
+	//
+	// HONOURED, NOT ASSUMED, the same way Airside.Tool.RoadAnchorCarriesItsHalfWidth does it:
+	// a content set with no taxiway would leave the widths legitimately zero.
+	if (const URoadProfile* Armed = Gesture.TestWorld.Actor->ResolveProfileFor(
+		ERoadKind::Taxiway, Gesture.Road()->GetWidthIndex()))
+	{
+		TestEqual(TEXT("carrying the half-width the first click would lay"),
+			Idle.HalfWidthLeft, Armed->GetHalfWidthLeft());
+		TestTrue(TEXT("which is a real width, not a default zero"), Idle.HalfWidthLeft > 0.0);
+	}
 
 	// Two clicks, west to east: one segment, and the chain now pends at its east end.
 	Gesture.Tool->OnClick(Gesture.At(FVector2D(0.0, 0.0)));

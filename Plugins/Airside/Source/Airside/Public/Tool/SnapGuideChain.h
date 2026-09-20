@@ -107,6 +107,23 @@ struct FGuideAnchor
 	EDragPoint Point = EDragPoint::Centreline;
 
 	/**
+	 * This gesture has not started yet: Origin is to be filled with the CURSOR, by the driver.
+	 *
+	 * A FLAG RATHER THAN THE POINT ITSELF, because IBuildTool::DescribeGuideAnchor is not handed
+	 * the cursor and deliberately is not - see that declaration on why it takes the target and
+	 * never the half-built context. FBuildSession::MakeContext has the plane hit two lines above
+	 * the call, so it is the one place that can answer; the tool says only that it wants it.
+	 *
+	 * ONLY THE POSITIONAL GUIDES SURVIVE IT, and that falls out rather than being enforced: with
+	 * Origin ON the cursor, SnapGuide::Arbitrate can measure no direction from one to the other
+	 * and every EFit::Angular candidate sits out of its own accord. So a free start offers
+	 * Collinear, AngledFrom and MatchingGap - and LevelWith only where the tool ALSO names a
+	 * Reference direction for those lines to run along, which is why FStandPlaceTool names its
+	 * heading and FRunwayTool, having none, does not.
+	 */
+	bool bFreeStart = false;
+
+	/**
 	 * How far the drag's pavement reaches either side of its point, uu. Zero when the gesture
 	 * has no width - a plot corner, a guideline - and zero is then a MEANING, not an omission.
 	 *

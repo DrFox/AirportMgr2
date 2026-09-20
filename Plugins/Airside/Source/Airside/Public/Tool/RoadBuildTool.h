@@ -349,8 +349,35 @@ struct AIRSIDE_API IBuildTool
 	virtual void OnReselect(const FToolContext& Context) {}
 
 	/**
+	 * Whether a guide may position this gesture's FIRST click.
+	 *
+	 * ONE VIRTUAL, NOT PER-TOOL BOILERPLATE. Ruled 2026-09-20 from PIE: "a lot of the tools
+	 * would benefit from snapping to guides before the first place of the road. It doesnt make
+	 * sense for all of them, but some it does." A tool answers yes or says nothing.
+	 *
+	 * POSITIONAL GUIDES ONLY, and that falls out rather than being enforced: the base fills the
+	 * anchor's bFreeStart, the driver puts the CURSOR in Origin, and SnapGuide::Arbitrate then
+	 * measures no direction from a point to itself - so every angular candidate sits out on its
+	 * own and nothing meaningless is offered. See FGuideAnchor::bFreeStart.
+	 *
+	 * SAYING YES IS HALF THE WORK. The other half is CONSUMING it: the tool's first click must
+	 * take FToolContext::GuidedCursor() and its preview must draw the dashed line. A tool that
+	 * describes an anchor and stops has a guide computed and thrown away, which is exactly what
+	 * shipped on 2026-09-20 and showed the player nothing - see the comment in
+	 * FOutlineDrawTool's OutlineDrawGuide. Airside.Tool.FreeStartToolsDrawTheirGuide measures
+	 * the drawing rather than the describing, for that reason.
+	 */
+	virtual bool WantsFreeStartGuides() const { return false; }
+
+	/**
 	 * What this tool is dragging, and against what, for the guide chain. False means "no
 	 * gesture is in progress", and the driver then resolves no guide at all.
+	 *
+	 * THE BASE IS NO LONGER ALWAYS SILENT: it answers the FREE START, so the one virtual above
+	 * decides it for every tool rather than five tools each growing a branch. An override that
+	 * declines must therefore DELEGATE HERE rather than `return false`, and each of the five
+	 * opted-in tools does - a `return false` left in place is a tool that opted in and then
+	 * silently did not, which Airside.Tool.FreeStartToolsOfferAnAnchorWhenIdle catches.
 	 *
 	 * CONST AND STATELESS, read off what the tool has already pinned.
 	 *
@@ -365,9 +392,6 @@ struct AIRSIDE_API IBuildTool
 	 * RETURNS BOOL rather than setting a flag inside FGuideAnchor, so a caller branches on
 	 * the return - CLAUDE.md's rule about honouring anything that fills an out-parameter.
 	 *
-	 * Silent by default, like BuildReadout below: eight tools implement this interface and
-	 * stage 1 of the snap-guides design gave an anchor to exactly one of them.
-	 *
 	 * TAKES THE TARGET, NOT THE CONTEXT. The call sits INSIDE FBuildSession::MakeContext while
 	 * that context is being built, so a context passed here would be half-filled - its own Guide
 	 * field is the very thing being computed. The target is what resolves a width index to a
@@ -377,7 +401,21 @@ struct AIRSIDE_API IBuildTool
 	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 		FGuideAnchor& Out) const
 	{
-		return false;
+		// IDLE IS THE WHOLE TEST. A free start is the state BEFORE the gesture has a point of
+		// its own; once one is down the tool's own override owns the anchor and never reaches
+		// here. IsIdle() is the question every tool already answers for the cancel gesture, so
+		// there is no second notion of "not started" to keep in step with it.
+		if (!WantsFreeStartGuides() || !IsIdle())
+		{
+			return false;
+		}
+
+		// ORIGIN IS LEFT AT ZERO ON PURPOSE - the driver fills it from the plane hit, which is
+		// the only thing that has it. Whatever an override already wrote into Out (its widths,
+		// its drag point, the points it will line up with) stands: this adds the flag and says
+		// yes, it does not rebuild the anchor.
+		Out.bFreeStart = true;
+		return true;
 	}
 
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const = 0;

@@ -52,15 +52,29 @@ public:
 	virtual void OnReselect(const FToolContext& Context) override;
 
 	/**
-	 * The first threshold, once one is down. See IBuildTool::DescribeGuideAnchor.
+	 * The first threshold, once one is down - and a FREE START before that. See
+	 * IBuildTool::DescribeGuideAnchor.
 	 *
-	 * NO REFERENCE, DELIBERATELY. A runway is two clicks and no chaining - there is no incoming
-	 * edge to extend - so FExtendingGuideSource and FPointAlignGuideSource both correctly propose
-	 * nothing, and every network column answers instead. Leaving Reference zero is how a tool
-	 * says that; inventing an axis here would square the strip to something arbitrary.
+	 * NO REFERENCE, DELIBERATELY, in either state. A runway is two clicks and no chaining -
+	 * there is no incoming edge to extend - so FExtendingGuideSource and FPointAlignGuideSource
+	 * both correctly propose nothing, and every network column answers instead. Leaving
+	 * Reference zero is how a tool says that; inventing an axis here would square the strip to
+	 * something arbitrary.
+	 *
+	 * THE WIDTH IS CARRIED IN BOTH STATES, which is what lets the strip's EDGE sit flush along
+	 * an apron on the very first click as readily as on the second.
 	 */
 	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 		FGuideAnchor& Out) const override;
+
+	/**
+	 * YES - a threshold placed in line with another runway, or a standard separation off one.
+	 *
+	 * Ruled 2026-09-20. Already consumed: OnClick has taken Context.GuidedCursor() for BOTH
+	 * clicks since the guide-and-snap split, and the idle branch of BuildPreview already calls
+	 * RunwayDrawGuide, which was a no-op until this. See IBuildTool::WantsFreeStartGuides.
+	 */
+	virtual bool WantsFreeStartGuides() const override { return true; }
 
 	/**
 	 * Which standard width, as an index into the target's runway profiles

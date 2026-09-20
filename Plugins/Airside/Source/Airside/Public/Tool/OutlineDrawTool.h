@@ -141,6 +141,18 @@ public:
 	virtual bool DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 		FGuideAnchor& Out) const override;
 
+	/**
+	 * YES - start an outline flush with a road edge, or in line with an apron already down.
+	 *
+	 * ON THE BASE for the reason DescribeGuideAnchor is: the argument is about the OUTLINE
+	 * gesture, which is this class's whole job, and a second outline tool would want the same
+	 * answer. Ruled 2026-09-20 for the apron, which is the only subclass there is.
+	 *
+	 * CONSUMED IN FOutlineIdleState: its click takes the guided cursor and its preview draws
+	 * the dashed line. See IBuildTool::WantsFreeStartGuides on why that half is not optional.
+	 */
+	virtual bool WantsFreeStartGuides() const override { return true; }
+
 protected:
 	virtual const IOutlineTarget& GetOutlineTarget() const = 0;
 

@@ -69,7 +69,10 @@ TUniquePtr<IOutlineDrawState> FOutlineIdleState::OnClick(
 		return nullptr;
 	}
 
-	return MakeUnique<FOutlineDrawingState>(Context.Cursor);
+	// THE GUIDED CURSOR, not the raw one: the FIRST corner is guided too since 2026-09-20 -
+	// FOutlineDrawTool::WantsFreeStartGuides. A dashed line drawn under the cursor and then not
+	// obeyed by the click is a mark whose meaning has gone.
+	return MakeUnique<FOutlineDrawingState>(OutlineGuidedCursor(Context));
 }
 
 TUniquePtr<IOutlineDrawState> FOutlineIdleState::OnCancel(
@@ -93,7 +96,16 @@ void FOutlineIdleState::BuildPreview(const FToolContext& Context, const IOutline
 		return;
 	}
 
-	Sink.Marker(Context.Cursor, EPreviewStyle::Pending);
+	// WHERE THE FIRST CORNER WOULD LAND, which is the guided point and not the raw cursor -
+	// otherwise the marker sits where the mouse is while the click lands somewhere else.
+	const FVector2D First = OutlineGuidedCursor(Context);
+	Sink.Marker(First, EPreviewStyle::Pending);
+
+	// AND WHAT IT IS LINED UP WITH. THE CONSUMER of the free start: the session resolves a
+	// guide here and nothing would ever show it without this call. See
+	// IBuildTool::WantsFreeStartGuides on why describing an anchor and stopping is half a
+	// feature - it is the shape of the bug that shipped on 2026-09-20.
+	OutlineDrawGuide(Context, First, Sink);
 }
 
 // --- Drawing --------------------------------------------------------------------------
@@ -233,11 +245,23 @@ bool FOutlineDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEdi
 {
 	const TArrayView<const FVector2D> Corners = GetCorners();
 
+	// A BOUNDARY DRAG WHETHER OR NOT THERE IS AN EDGE YET, so this is set before either decline
+	// below: the FIRST corner of an outline is as much a point on the shape's own limit as the
+	// fifth, and FApronLineGuideSource reads exactly this to decide whether to displace by a
+	// half-width. A free start that forgot it would offer to lay an apron corner half a road's
+	// width off the edge it was being lined up with.
+	Out.Point = EDragPoint::Boundary;
+
 	// TWO CORNERS BEFORE THERE IS AN EDGE. One corner is a point with no direction, so there is
 	// nothing for Extending to extend - the same reason FRoadDrawTool declines its first click.
+	//
+	// AND WITH NO CORNERS AT ALL the base answers a FREE START: starting an outline flush with
+	// a road edge, or in line with an apron already down, is what that buys. Note the middle
+	// case falls between the two - ONE corner down is neither an edge nor a free start, and the
+	// base declines it on IsIdle() without this function having to say so twice.
 	if (Corners.Num() < 2)
 	{
-		return false;
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
 	}
 
 	const FVector2D Last = Corners[Corners.Num() - 1];
@@ -245,14 +269,15 @@ bool FOutlineDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEdi
 	const FVector2D Edge = Last - Previous;
 	if (Edge.IsNearlyZero())
 	{
-		return false;
+		// TWO CORNERS IN THE SAME PLACE. The gesture has begun, so IsIdle() is false and the
+		// base declines too; routed through it anyway so the exits cannot come to disagree.
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
 	}
 
 	Out.Origin = Last;
 	Out.Reference = Edge.GetSafeNormal();
 	Out.ReferenceAt = Previous;
 	Out.ReferenceName = TEXT("this edge");
-	Out.Point = EDragPoint::Boundary;
 
 	// EVERY CORNER BUT THE LAST. The one being dragged from is the origin, and a point cannot
 	// line up with itself: its own two lines pass through wherever the cursor is, so both would

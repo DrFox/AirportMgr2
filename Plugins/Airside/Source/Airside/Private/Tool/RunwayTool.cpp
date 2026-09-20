@@ -122,21 +122,16 @@ namespace
 bool FRunwayTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
-	// NOTHING PENDING MEANS NOTHING TO GUIDE, exactly as FRoadDrawTool has it: before the first
-	// threshold there is no point for a line to swing around.
-	if (!bHasThreshold)
-	{
-		return false;
-	}
-
-	Out.Origin = Threshold;
-
 	// A RUNWAY'S CURSOR IS ITS CENTRELINE, like a road's - the strip is laid either side of the
 	// line between the two thresholds. So an apron edge guide displaces by its half-width.
 	Out.Point = EDragPoint::Centreline;
 
 	// THE WIDTH THIS CLICK WOULD LAY. Clamped by the target, which owns the standard set - the
 	// tool holds an INDEX into it and nothing more (see WidthIndex).
+	//
+	// FILLED BEFORE THE DECLINE BELOW: the FIRST threshold has a width too, and a strip laid
+	// flush along an apron edge is displaced by exactly this figure on the free start as much
+	// as on the second click.
 	if (Target != nullptr)
 	{
 		if (const URoadProfile* Profile = Target->ResolveRunwayProfile(WidthIndex))
@@ -145,6 +140,18 @@ bool FRunwayTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarg
 			Out.HalfWidthRight = Profile->GetHalfWidthRight();
 		}
 	}
+
+	// NO THRESHOLD YET MEANS NO POINT FOR A LINE TO SWING AROUND - so the base answers with a
+	// FREE START instead, putting the cursor there and leaving exactly the positional guides.
+	// Placing a threshold in line with another runway, or a standard separation off it, is what
+	// that buys; ruled 2026-09-20. DELEGATING rather than returning false is what opts this
+	// tool in - see IBuildTool::DescribeGuideAnchor.
+	if (!bHasThreshold)
+	{
+		return IBuildTool::DescribeGuideAnchor(Network, Target, Out);
+	}
+
+	Out.Origin = Threshold;
 	return true;
 }
 
@@ -223,9 +230,11 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		// the choice is visible before it is committed rather than after.
 		Sink.Marker(Context.GuidedCursor(), EPreviewStyle::Pending);
 
-		// NOTHING TO DRAW YET, and the call is here anyway: DescribeGuideAnchor declines before
-		// the first threshold, so Guide is inactive and this is a no-op. Keeping it means the
-		// two branches of this preview cannot drift into disagreeing about whether guides show.
+		// AND WHAT THE THRESHOLD IS LINED UP WITH. This was a deliberate no-op until 2026-09-20 -
+		// DescribeGuideAnchor declined before the first threshold, and the call was kept only so
+		// the two branches could not drift. It DRAWS now: the free start gives the first click
+		// its own guides, and this is the consumer that makes them visible. A call kept honest
+		// for months turned out to be the whole of the second half of that feature.
 		RunwayDrawGuide(Context, Context.GuidedCursor(), Sink);
 		if (Profile != nullptr)
 		{
