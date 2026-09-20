@@ -155,6 +155,20 @@ namespace
 		return false;
 	}
 
+	/**
+	 * Which flank of the yard a column kit runs down. Kit 1 takes the high side, everything
+	 * after it the low one.
+	 *
+	 * ONE ANSWER, ASKED TWICE. The shed row has to keep a lane free at each end for these
+	 * columns, and the columns have to anchor in those same lanes; the two computing the side
+	 * independently is how a sheds-take-the-left, tanks-take-the-left layout would arrive,
+	 * with the tanks then refused for overlapping and nobody able to see why.
+	 */
+	bool UsesTheHighSide(int32 KitIndex)
+	{
+		return KitIndex == 1;
+	}
+
 	/** Is this stand wholly inside the outline, and clear of everything already placed? */
 	bool IsLegal(const PlotYard::FStand& Stand, const PlotYard::FFootprint& Claimed,
 		TArrayView<const FVector2D> Outline,
@@ -233,95 +247,134 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	{
 		const int32 Kit = 0;
 
-		// AT MOST HALF THE WIDTH, so precedence is not a monopoly. Without it a 15 m plot
-		// takes a three-bay run across 12 of its 15 metres and leaves the tank and pump two
-		// slivers - which is how the sheds came to be placed last in the first place.
-		//
-		// HALF OF THE WIDTH WHERE THE SHEDS STAND, measured at the back, and not half of
-		// LateralMax - LateralMin. That span is the plot's width at its WIDEST depth, and on
-		// a plot that tapers towards the back it is ground the shed row does not have: the
-		// budget would then permit a run the fence refuses, and the row would come up short
-		// with no explanation. The two agree on a rectangle and on a plot that flares, which
-		// is why this change moves no numbers - it is the fifth guard in this file against a
-		// global extreme standing in for a local measurement, not a fix for a symptom.
-		double ShedLow = LateralMin;
-		double ShedHigh = LateralMax;
-		{
-			const double ShedLength = Kits[Kit].Footprint.LengthUu + Kits[Kit].ApronUu.X;
-			const double Middle = (LateralMin + LateralMax) * 0.5;
+		// THE WHOLE BACK FENCE IS THEIRS. Half of it was reserved for them until 2026-09-20,
+		// on the grounds that precedence should not be a monopoly - and the other half went
+		// to pumps: PIE, a 50 m plot, "all of that space along the back wall taken by pumps
+		// that could be used by sheds". The yard that keeps this honest is not a strip of
+		// back fence held back from the sheds; it is the open ground in FRONT of them, which
+		// the mix below is what protects.
+		const double ShedLength = Kits[Kit].Footprint.LengthUu + Kits[Kit].ApronUu.X;
 
-			double Near = 0.0, Far = 0.0, Low = 0.0, High = 0.0;
-			if (DepthSpanAt(Site.Outline, Site.Gate, Inward, Across, Middle, Near, Far)
-				&& LateralSpanAt(Site.Outline, Site.Gate, Inward, Across,
-					FMath::Max(Far - ShedLength * 0.5, Near), Low, High))
-			{
-				ShedLow = Low;
-				ShedHigh = High;
-			}
+		// A LANE AT EACH END, KEPT BACK FOR THE COLUMNS, and it is measured from the kits
+		// that will stand in it rather than being a fraction of anything. Half the width was
+		// held back before and it was wrong at both ends of the range: it gave away half a
+		// 50 m back fence, and on the 15 x 12 m plot of the concept sheet it was still the
+		// only reason a tank and a pump had anywhere to go. A lane wide enough for the kit
+		// that needs it is the smallest thing that is true on both plots.
+		double MarginHigh = 0.0;
+		double MarginLow = 0.0;
+		for (int32 Other = 1; Other < Kits.Num(); ++Other)
+		{
+			const double Need = Kits[Other].Footprint.WidthUu + PlotYard::ClearanceUu;
+			double& Margin = UsesTheHighSide(Other) ? MarginHigh : MarginLow;
+			Margin = FMath::Max(Margin, Need);
 		}
 
-		const double ShedBudget = (ShedHigh - ShedLow) * 0.5;
-
-		// CENTRED ON THAT SPAN, not started at one edge. Scanning from its low end would spend
-		// the whole budget on the left half and leave the sheds sitting on top of whichever
-		// column takes that side, while the far half of the back fence stood empty.
-		const double ShedFrom = (ShedLow + ShedHigh) * 0.5 - ShedBudget * 0.5;
-
-		for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
-			--RunLength)
+		// ONE ROW, AND ONLY ONE. Two rows with an aisle between them was tried first and it
+		// is the trap in another costume: on a 45 x 35 m plot the second row reached to
+		// within 4 m of the gate, took 43% of the ground, and left the tanks and pumps
+		// nowhere to stand at all. The back fence is the sheds'; the rest of the plot is the
+		// yard, and a yard with nothing in it is the point.
+		//
+		// SO DEPTH BUYS NO SHEDS - frontage does. That is a property of THIS strategy and a
+		// first-iteration one; the design doc declines to make it a rule, and a layout that
+		// wants rows is a layout that has solved where its aisles go.
+		for (int32 Row = 0; Row < 1; ++Row)
 		{
-			const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
-			const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
-			const double HalfWidth = Claimed.WidthUu * 0.5;
+			const double RowBack = Row * (ShedLength + PlotYard::GateCorridorUu
+				+ PlotYard::ClearanceUu);
 
-			double Spent = 0.0;
+			const int32 BeforeRow = Reservation.Stands.Num();
 
-			// SCANNED ACROSS THE PLOT, and an illegal position is SKIPPED rather than ending
-			// the band. A row locked to the back edge cannot read as scattered - it is a row
-			// with a gap where the plot is too shallow to stand in, which is what the ground
-			// actually looks like. Ending at the first refusal was right when every stand sat
-			// at one depth; it stops being right the moment the row follows the fence.
-			for (double Lateral = ShedFrom + HalfWidth; Lateral <= LateralMax - HalfWidth;
-				Lateral += Pitch)
+			for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
+				--RunLength)
 			{
-				if (Spent + Claimed.WidthUu > ShedBudget)
+				const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
+				const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
+				const double HalfWidth = Claimed.WidthUu * 0.5;
+
+				// SCANNED ACROSS THE PLOT, and an illegal position is SKIPPED rather than
+				// ending the row. A row locked to the back edge cannot read as scattered - it
+				// is a row with a gap where the plot is too shallow to stand in, which is what
+				// the ground actually looks like. Ending at the first refusal was right when
+				// every stand sat at one depth; it stops being right the moment the row
+				// follows the fence.
+				for (double Lateral = LateralMin + MarginLow + HalfWidth;
+					Lateral <= LateralMax - MarginHigh - HalfWidth; Lateral += Pitch)
+				{
+					// EACH STAND AT THE DEPTH ITS OWN POSITION HAS. The SHALLOWER of its two
+					// lateral edges wins: a stand is only as deep as its shallowest corner
+					// allows, and taking the middle would hang one end over the fence.
+					double NearA = 0.0, FarA = 0.0, NearB = 0.0, FarB = 0.0;
+					if (!DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+							Lateral - HalfWidth, NearA, FarA)
+						|| !DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+							Lateral + HalfWidth, NearB, FarB))
+					{
+						continue;
+					}
+
+					PlotYard::FReservedStand Stand;
+					Stand.KitIndex = Kit;
+					Stand.RunLength = RunLength;
+					Stand.Heading = InwardBearing;
+					Stand.Centre = Site.Gate + Across * Lateral
+						+ Inward * (FMath::Min(FarA, FarB) - RowBack
+							- Claimed.LengthUu * 0.5);
+					Stand.bPlaced = true;
+
+					if (!IsLegal(Stand, Claimed, Site.Outline, Reservation.Stands, Kits)
+						|| BlocksAWayIn(Stand, Claimed, Reservation.Stands, Kits))
+					{
+						continue;
+					}
+
+					Reservation.Stands.Add(Stand);
+				}
+
+				if (Reservation.Stands.Num() > BeforeRow)
 				{
 					break;
 				}
-
-				// EACH STAND AT THE DEPTH ITS OWN POSITION HAS. The SHALLOWER of its two
-				// lateral edges wins: a stand is only as deep as its shallowest corner allows,
-				// and taking the middle would hang one end over the fence.
-				double NearA = 0.0, FarA = 0.0, NearB = 0.0, FarB = 0.0;
-				if (!DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
-						Lateral - HalfWidth, NearA, FarA)
-					|| !DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
-						Lateral + HalfWidth, NearB, FarB))
-				{
-					continue;
-				}
-
-				PlotYard::FReservedStand Stand;
-				Stand.KitIndex = Kit;
-				Stand.RunLength = RunLength;
-				Stand.Heading = InwardBearing;
-				Stand.Centre = Site.Gate + Across * Lateral
-					+ Inward * (FMath::Min(FarA, FarB) - Claimed.LengthUu * 0.5);
-				Stand.bPlaced = true;
-
-				if (!IsLegal(Stand, Claimed, Site.Outline, Reservation.Stands, Kits))
-				{
-					continue;
-				}
-
-				Reservation.Stands.Add(Stand);
-				Spent += Pitch;
 			}
 
-			if (Reservation.Stands.Num() > 0)
+			// A ROW THAT PLACED NOTHING ENDS THE ROWS. The next one inward is shallower
+			// ground still, so there is nothing further back to find.
+			if (Reservation.Stands.Num() == BeforeRow)
 			{
 				break;
 			}
+		}
+	}
+
+	// HOW MANY TANKS AND PUMPS SIX SHEDS ARE WORTH.
+	//
+	// THE YARD IS SIZED BY ITS TRUCKS, not by its leftover ground. A 50 m plot drew 6 sheds,
+	// 15 tanks and 28 pumps - "28 pumps for 6 vehicles, nearly 5 pumps per vehicle" - because
+	// the columns simply ran until they hit the fence. Ground being free is not a reason to
+	// put a pump on it.
+	//
+	// THE RATIO IS THE KIT'S OWN WEIGHT, which is the field the design doc gave them and
+	// which nothing has read until now. Shed 3, tank 2, pump 1 makes six sheds worth four
+	// tanks and two pumps. Tuning the depot's character is then one number on a data asset,
+	// not a recompile - and a strategy that wants a different rule is a different strategy.
+	TArray<int32> Ceiling;
+	Ceiling.SetNumZeroed(Kits.Num());
+	{
+		int32 ShedBays = 0;
+		for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+		{
+			ShedBays += Stand.RunLength;
+		}
+
+		const int32 ShedWeight = FMath::Max(Kits[0].ReserveWeight, 1);
+		for (int32 Kit = 1; Kit < Kits.Num(); ++Kit)
+		{
+			// ONE OF EACH EVEN WITH NO SHEDS. A plot too shallow to stand a shed in is still
+			// a fuel depot, and a depot that reserves nothing at all reads as a broken tool
+			// rather than as a plot drawn too small.
+			Ceiling[Kit] = FMath::Max(1, FMath::DivideAndRoundUp(
+				ShedBays * FMath::Max(Kits[Kit].ReserveWeight, 0), ShedWeight));
 		}
 	}
 
@@ -334,7 +387,7 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	for (int32 Kit = 1; Kit < Kits.Num(); ++Kit)
 	{
 		const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], 1);
-		const bool bLeft = (Kit == 1);
+		const bool bLeft = UsesTheHighSide(Kit);
 		const double Direction = bLeft ? -1.0 : 1.0;
 
 		// THE PLOT'S EDGE AT THE COLUMN'S OWN DEPTH, both ends of the first stand measured and
@@ -362,8 +415,10 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		const double FilePitch = Claimed.WidthUu + PlotYard::GateCorridorUu;
 		const double MostOneBandMayTake = (LateralMax - LateralMin) * 0.25;
 
+		int32 Placed = 0;
+
 		double Taken = 0.0;
-		for (int32 File = 0; File < 16; ++File)
+		for (int32 File = 0; File < 16 && Placed < Ceiling[Kit]; ++File)
 		{
 			// THE FIRST FILE IS NEVER REFUSED BY THE PROPORTION. A tank is 5 m wide and a
 			// quarter of a 15 m plot is 3.75, so the rule that stops a band eating the yard
@@ -379,7 +434,7 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 			const int32 BeforeFile = Reservation.Stands.Num();
 
 			// INTO THE PLOT FROM THE GATE, one truck-corridor in so the way out stays clear.
-			for (int32 Index = 0; Index < 64; ++Index)
+			for (int32 Index = 0; Index < 64 && Placed < Ceiling[Kit]; ++Index)
 			{
 				const double Depth = PlotYard::GateCorridorUu
 					+ Claimed.LengthUu * 0.5
@@ -402,6 +457,7 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 					break;
 				}
 				Reservation.Stands.Add(Stand);
+				++Placed;
 			}
 
 			// A FILE THAT PLACED NOTHING ENDS THE BAND. Skipping to the next would jump a gap

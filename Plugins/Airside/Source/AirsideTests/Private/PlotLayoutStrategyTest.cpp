@@ -502,4 +502,52 @@ bool FFuelYardIsMonotonicTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A depot is sized by its trucks, not by its spare ground.
+ *
+ * THE NUMBER THAT PROMPTED THIS: a 50 m plot reserved 6 sheds, 15 tanks and 28 pumps, because
+ * the tank and pump columns ran until they met the fence. "28 pumps for 6 vehicles, nearly 5
+ * pumps per vehicle." Free ground is not a reason to put a pump on it.
+ *
+ * THE RATIO IS THE KIT'S WEIGHT, the field the design doc gave them and which the band layout
+ * ignored until 2026-09-20. This asserts the layout reads it - not that any particular mix is
+ * correct, which is an authoring question and settled on the data asset.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardIsSizedByItsShedsTest,
+	"Airside.Build.FuelYardIsSizedByItsSheds",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardIsSizedByItsShedsTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+	const UPlotLayoutStrategy* Strategy = PlotLayoutFor(EPlotLayout::FuelYardBands);
+
+	for (double WidthUu = 1500.0; WidthUu <= 8000.0; WidthUu += 500.0)
+	{
+		for (double DepthUu = 1200.0; DepthUu <= 6000.0; DepthUu += 400.0)
+		{
+			const TArray<FVector2D> Outline = StrategyRect(WidthUu, DepthUu);
+			const PlotYard::FReservation R =
+				Strategy->Solve(StrategySite(Outline, WidthUu), Specs);
+
+			const int32 Sheds = R.CeilingFor(0);
+			for (int32 Kit = 1; Kit < Specs.Num(); ++Kit)
+			{
+				// ONE OF EACH IS ALWAYS ALLOWED: a plot too shallow for a shed is still a
+				// depot, and the layout says so deliberately.
+				const int32 Allowed = FMath::Max(1, FMath::DivideAndRoundUp(
+					Sheds * Specs[Kit].ReserveWeight, Specs[0].ReserveWeight));
+
+				TestTrue(*FString::Printf(
+					TEXT("%.0f x %.0f: %d sheds allow %d of kit %d, got %d"),
+					WidthUu, DepthUu, Sheds, Allowed, Kit, R.CeilingFor(Kit)),
+					R.CeilingFor(Kit) <= Allowed);
+			}
+		}
+	}
+
+	return true;
+}
+
 #endif
