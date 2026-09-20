@@ -101,7 +101,12 @@ namespace
 		Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
 	}
 
-	bool Begin(FFreeStart& Out, const TCHAR* ToolId)
+	/**
+	 * bShippedDefaults leaves FSnapGuideSettings exactly as a new airport gets it. Every other
+	 * test here forces the two toggles it depends on, so it keeps measuring the tool when a
+	 * default moves; the one test that is ABOUT the defaults passes true.
+	 */
+	bool Begin(FFreeStart& Out, const TCHAR* ToolId, bool bShippedDefaults = false)
 	{
 		if (Out.TestWorld.World == nullptr || Out.TestWorld.Actor == nullptr) { return false; }
 		LayEastWestTaxiway(Out.TestWorld.Actor);
@@ -110,8 +115,11 @@ namespace
 		if (Index == INDEX_NONE) { return false; }
 
 		Out.Tunables = Out.TestWorld.Actor->MakeTunables(10000.0);
-		Out.Tunables.GuideSources.bCollinear = true;
-		Out.Tunables.GuideSources.bRoad = true;
+		if (!bShippedDefaults)
+		{
+			Out.Tunables.GuideSources.bCollinear = true;
+			Out.Tunables.GuideSources.bRoad = true;
+		}
 
 		Out.Session.SelectTool(Index);
 		Out.Tool = Out.Session.GetActiveTool();
@@ -351,6 +359,45 @@ bool FFreeStartClickLandsOnTheGuideTest::RunTest(const FString& Parameters)
 			});
 		TestTrue(TEXT("a runway's first threshold sits where the guide put it"), bFromThreshold);
 	}
+
+	return true;
+}
+
+/**
+ * AND IT WORKS OUT OF THE BOX, WITH NOTHING SWITCHED ON BY HAND.
+ *
+ * THE POINT OF TURNING Collinear ON BY DEFAULT (2026-09-20). Every ANGULAR row sits out on a
+ * free start by construction, so with Collinear off a brand new airport offers a first click
+ * NO guide at all - the whole of the item above would be dead until the player found a button
+ * nothing told them about. That is not hypothetical: a player met exactly that in PIE, and
+ * "switch Collinear on" was the undocumented step between "no edge alignment" and "works".
+ *
+ * IT TAKES THE SHIPPED DEFAULTS DELIBERATELY, which is the one place in this file that does.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFreeStartWorksOnTheShippedDefaultsTest,
+	"Airside.Tool.FreeStartWorksOnTheShippedDefaults",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFreeStartWorksOnTheShippedDefaultsTest::RunTest(const FString& Parameters)
+{
+	FFreeStart Start;
+	if (!TestTrue(TEXT("an idle taxiway tool on a new airport's settings"),
+		Begin(Start, TEXT("Taxiway"), /*bShippedDefaults*/ true)))
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("whose Collinear row is on without anyone touching it"),
+		Start.Tunables.GuideSources.IsRelationOn(SnapGuide::ERelation::Collinear));
+
+	const FToolContext Context = Start.At(OffTheLine);
+	if (!TestTrue(TEXT("so a first click is guided with no button pressed"), Context.Guide.bActive))
+	{
+		return false;
+	}
+	TestTrue(TEXT("onto the line the taxiway already lies along"),
+		FMath::IsNearlyEqual(Context.GuidedCursor().Y, 0.0, 1.0));
 
 	return true;
 }

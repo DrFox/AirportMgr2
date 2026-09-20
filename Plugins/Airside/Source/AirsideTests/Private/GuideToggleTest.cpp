@@ -124,7 +124,14 @@ bool FGuideSettingsGiveEveryAxisItsOwnFlagTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("LevelWith is on, being the gesture's own geometry"),
 		Defaults.IsRelationOn(SnapGuide::ERelation::LevelWith));
 	TestTrue(TEXT("Parallel is on"), Defaults.IsRelationOn(SnapGuide::ERelation::Parallel));
-	TestFalse(TEXT("Collinear is off"), Defaults.IsRelationOn(SnapGuide::ERelation::Collinear));
+
+	// COLLINEAR IS ON SINCE 2026-09-20, having been off while it meant only "one candidate per
+	// road in reach". It is now the only row a FREE START can offer anything from - every
+	// angular row sits out while the cursor is on the origin - so with it off the first click
+	// of every gesture was unguided until the player found a button nothing told them about.
+	// A player met exactly that in PIE.
+	TestTrue(TEXT("Collinear is on: with it off a free start can offer nothing at all"),
+		Defaults.IsRelationOn(SnapGuide::ERelation::Collinear));
 	TestFalse(TEXT("AngledFrom is off: three spokes off every end is a lot to meet unasked"),
 		Defaults.IsRelationOn(SnapGuide::ERelation::AngledFrom));
 	TestFalse(TEXT("and MatchingGap is off, being the least familiar"),

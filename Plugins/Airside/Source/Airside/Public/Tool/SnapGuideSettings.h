@@ -40,9 +40,18 @@ struct AIRSIDE_API FSnapGuideSettings
 	UPROPERTY(EditAnywhere, Category = "Align by")
 	bool bParallel = true;
 
-	/** The line an existing thing already lies on. */
+	/**
+	 * The line an existing thing already lies on.
+	 *
+	 * ON SINCE 2026-09-20, and it was off for a reason that stopped being true. It meant one
+	 * thing when it was written - "one candidate per road in reach", a nicety beside Parallel -
+	 * and it now gates the apron's FLUSH guide, the runway's extended centreline, and every
+	 * guide a FREE START can offer, since the positional rows are the only ones a gesture with
+	 * no direction yet can propose. A player met that in PIE: switching this on was the
+	 * undocumented step between "no edge alignment" and "works".
+	 */
 	UPROPERTY(EditAnywhere, Category = "Align by")
-	bool bCollinear = false;
+	bool bCollinear = true;
 
 	/** A line out of a reference's end, at 45, 90 or 135 degrees to it. */
 	UPROPERTY(EditAnywhere, Category = "Align by")
