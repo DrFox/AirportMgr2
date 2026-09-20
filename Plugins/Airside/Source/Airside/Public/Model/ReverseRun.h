@@ -72,6 +72,28 @@ struct AIRSIDE_API FReverseRun
 	UPROPERTY() double Speed = 0.0;
 
 	/**
+	 * Where the steered wheels are pointing, degrees. Zero on a pivot-law airframe, which has
+	 * no steered wheel to draw - the rule FRouteFollower states at its own SteerDegrees.
+	 *
+	 * IT IS GEOMETRY, NOT AN INPUT. Playback has no error term to steer on, so this is derived
+	 * from the curve the fixed axle is on: backing along an arc, a rigid vehicle pivots about
+	 * that axle, so tan(steer) = Wheelbase / Radius - the exact inverse of
+	 * FAirframe::TightestReversibleRadius. At the vehicle's own limit it comes out as its own
+	 * lock, which is what Airside.Model.ReverseSteersRatherThanSliding checks it against.
+	 *
+	 * OPPOSITE THE YAW, and that is not a sign slip. Reversing counter-steers: the front wheels
+	 * go right to swing the back of the vehicle left. FRouteFollower::SteerDegrees is
+	 * documented "signed the way Heading turns" because going forwards the two coincide; going
+	 * backwards they cannot.
+	 *
+	 * WHY IT EXISTS AT ALL: FRoadAgent::DescribeMotion used to read the FOLLOWER's steering in
+	 * every phase, and the follower does not run during a reverse - so the wheels held the
+	 * angle they had when the manoeuvre armed. Reported from play on 2026-09-20 as a truck
+	 * that "straightened its wheels while still turning and then slid around".
+	 */
+	UPROPERTY() double SteerDegrees = 0.0;
+
+	/**
 	 * Arms the manoeuvre, and REFUSES it if this airframe cannot back along that curve.
 	 *
 	 * Returns false and touches nothing when the plan is invalid, too short to have a
@@ -93,8 +115,13 @@ struct AIRSIDE_API FReverseRun
 	 * faces AWAY from the direction of travel, which is what backing in means. No swing phase
 	 * and no target heading, for the reason FPushbackRun's header gives about walking the
 	 * right line in the first place.
+	 *
+	 * THE AIRFRAME IS TAKEN PER FRAME, as FLandingRun::Advance and FTakeoffRun::Advance take
+	 * it, rather than having Start copy a wheelbase and a steering lock in. Two struct fields
+	 * that must agree with an FAirframe somewhere else are two chances to disagree with it;
+	 * see CLAUDE.md, "one struct per thing". SteerDegrees is what needs it.
 	 */
-	bool Advance(double DeltaSeconds, double StopWithin,
+	bool Advance(double DeltaSeconds, const FAirframe& Airframe, double StopWithin,
 		FVector2D& OutPosition, double& OutHeading);
 
 	/** True once the vehicle has backed the length of its manoeuvre. */

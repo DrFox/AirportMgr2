@@ -168,4 +168,60 @@ bool FBackwardsPhasesReportNegativeSpeedTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+/**
+ * THE STEERING COMES FROM THE PHASE THAT IS DRIVING, LIKE THE SPEED ABOVE.
+ *
+ * REPORTED FROM PLAY, 2026-09-20: the fuel truck "straightened its wheels while still turning
+ * and then slid around the last part of the reverse".
+ *
+ * DescribeMotion took SteerAngleDegrees from FRouteFollower "WHATEVER THE PHASE", and said so
+ * in its own comment - the argument being that a landing rollout and a take-off roll steer on
+ * the rudder, so the follower's zero is the right answer there rather than a missing one. It
+ * is the right answer for those two. It is not an answer at all for Reversing, where the
+ * follower is not running: SteerDegrees simply holds whatever it last computed before the
+ * manoeuvre armed, which for a truck that has just parked its steered axle on a service point
+ * is near enough straight.
+ *
+ * THIS IS THE THIRD FIELD IN ONE FUNCTION WITH THE SAME DEFECT. GroundSpeed was missing the
+ * Arriving phase once (Airside.Model.GroundSpeedFollowsTheDrivingPhase) and reporting a cap
+ * rather than a state for Reversing (Airside.Model.ReverseSpeedIsWhatItAchieved). The shape is
+ * always "the struct that is actually moving the agent is not the struct being read", so the
+ * test is always at this seam and never inside one of the run structs.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSteeringFollowsTheDrivingPhaseTest,
+	"Airside.Model.SteeringFollowsTheDrivingPhase",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSteeringFollowsTheDrivingPhaseTest::RunTest(const FString& Parameters)
+{
+	FRoadAgent Agent;
+	Agent.Id = 1;
+
+	// A VALUE THE FOLLOWER COULD NOT HAVE MEANT, so a pass cannot come from the two agreeing
+	// by accident: 33 degrees is the stale taxi steering, -12 is what the reverse is asking
+	// for right now.
+	Agent.Follower.SteerDegrees = 33.0;
+	Agent.Reverse.SteerDegrees = -12.0;
+
+	Agent.Phase = EAgentPhase::Reversing;
+	TestEqual(TEXT("a reversing vehicle steers by its reverse manoeuvre, not the parked taxi"),
+		Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).SteerAngleDegrees, -12.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	// AND EVERY OTHER PHASE IS UNCHANGED, which is the half that keeps this from being a
+	// rewrite: the follower's answer is still the right one for a taxi, a rollout and a roll.
+	Agent.Phase = EAgentPhase::Taxiing;
+	TestEqual(TEXT("a taxiing vehicle still steers by its follower"),
+		Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).SteerAngleDegrees, 33.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	Agent.Phase = EAgentPhase::Arriving;
+	TestEqual(TEXT("and so does a landing rollout, which steers on the rudder"),
+		Agent.DescribeMotion(FVector2D::ZeroVector, 0.0).SteerAngleDegrees, 33.0,
+		UE_DOUBLE_KINDA_SMALL_NUMBER);
+	return true;
+}
+
 #endif
