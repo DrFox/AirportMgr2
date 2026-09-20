@@ -1,5 +1,6 @@
 #include "Tool/BuildSession.h"
 
+#include "AirsideLog.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
@@ -90,7 +91,36 @@ FBuildSession::FBuildSession()
 
 IBuildTool* FBuildSession::GetActiveTool() const
 {
+	// THE ONE PLACE THE MODE IS HONOURED, and what makes "Edit suppresses the build tool"
+	// structural rather than a rule nine tools each have to remember. Both drivers reach
+	// every tool through this function - nine call sites in ARoadBuildController, eight in
+	// URoadBuildEditorTool - so returning the edit tool here is the whole switch, and
+	// neither driver needed a line changed for it.
+	if (Mode == EGestureMode::Edit)
+	{
+		return &EditTool;
+	}
 	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
+}
+
+void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext)
+{
+	if (InMode == Mode)
+	{
+		return;
+	}
+
+	// The outgoing tool abandons whatever it had part-drawn, exactly as SelectTool does and
+	// for the same reason: switching to Edit mid-chain and back would otherwise resume a
+	// road the player stopped drawing in order to go and fix something else.
+	if (IBuildTool* Outgoing = GetActiveTool())
+	{
+		Outgoing->OnDeactivate(DeactivateContext);
+	}
+
+	Mode = InMode;
+	UE_LOG(LogAirside, Log, TEXT("Gesture mode -> %s"),
+		Mode == EGestureMode::Edit ? TEXT("Edit") : TEXT("Build"));
 }
 
 void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContext)

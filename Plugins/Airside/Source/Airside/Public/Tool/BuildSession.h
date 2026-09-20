@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "InputCoreTypes.h"
+#include "Tool/EditTool.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadPlacement.h"
 #include "Tool/RoadSnap.h"
@@ -11,6 +12,28 @@
 
 class URoadNetwork;
 class IRoadEditTarget;
+
+/**
+ * Build or Edit - what a gesture MEANS, across every tool.
+ *
+ * AN ENUM AND NOT A bool (CLAUDE.md: a phase is an enum, never a set of bools). Two values
+ * today; it leaves room for the third this design deliberately did not build - Upgrade,
+ * repainting an existing road to the current width - without a second flag that could be
+ * true at the same time as this one.
+ *
+ * ON THE SESSION, not on either driver, so PIE and URoadBuildEdMode cannot disagree about
+ * it. FRoadSnapSettings' own header records what the two drivers holding private copies of
+ * a shared decision cost the last time: the same click snapped differently depending only
+ * on which one was open.
+ */
+enum class EGestureMode : uint8
+{
+	/** Tools lay things. The mode every session opens in. */
+	Build,
+
+	/** Tools lay nothing; FEditTool moves what is already placed. */
+	Edit
+};
 
 /**
  * One selectable tool: the key that picks it, its display name, its tooltip, and how to
@@ -116,8 +139,23 @@ public:
 	/** The tool the number keys selected, or null before any tool has been made. */
 	IBuildTool* GetActiveTool() const;
 
-	/** Registry index of the active tool. What the bar lights; what SelectTool takes. */
+	/** Registry index of the active tool. What the bar lights; what SelectTool takes.
+	 *  UNAFFECTED BY THE MODE: the lit tool still says which handles Edit exposes, so the
+	 *  bar keeps showing Taxiway lit while Edit is held over it. */
 	int32 GetActiveToolIndex() const { return ActiveTool; }
+
+	/** Build or Edit. A session opens in Build: a mode that survived construction would be
+	 *  a drag the player never asked to be able to make. */
+	EGestureMode GetGestureMode() const { return Mode; }
+
+	/**
+	 * Switch between building and editing, deactivating the outgoing tool first so nothing
+	 * is left part-drawn to reappear - the same argument SelectTool makes for the same call.
+	 *
+	 * DeactivateContext is the CALLER's, for the reason SelectTool's own comment gives: the
+	 * session holds no IRoadEditTarget and has nothing to build one from.
+	 */
+	void SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext = FToolContext());
 
 	/** How many tools this session holds. For tests: must equal ToolRegistry().Num(). */
 	int32 NumTools() const { return Tools.Num(); }
@@ -203,6 +241,21 @@ private:
 	TArray<TUniquePtr<IBuildTool>> Tools;
 
 	int32 ActiveTool = 0;
+
+	EGestureMode Mode = EGestureMode::Build;
+
+	/**
+	 * The tool that runs while Mode is Edit.
+	 *
+	 * A MEMBER rather than an entry in Tools: it is not selected by a number key and must
+	 * not appear on the tool row - see FEditTool's own header. Held by value because it is
+	 * exactly one tool with no alternative to swap in, so the TUniquePtr the registry needs
+	 * would buy nothing here.
+	 *
+	 * mutable for the reason Selection is: GetActiveTool is const and must hand out a
+	 * pointer the driver drives.
+	 */
+	mutable FEditTool EditTool;
 
 	/**
 	 * mutable: MakeContext is const (see FBuildSessionTunables for why that was fought for)
