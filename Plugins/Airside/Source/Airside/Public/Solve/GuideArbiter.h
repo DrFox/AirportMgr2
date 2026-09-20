@@ -143,7 +143,17 @@ namespace SnapGuide
 		/** "square to the frontage", "45 degrees". Shown beside the line. */
 		FString Description;
 
-		ESource Source = ESource::World;
+		/**
+		 * WHAT this guide means, and WHAT it is measured against. Two fields since 2026-09-20;
+		 * one `ESource` before, which is why a player could switch Runway off and still be told
+		 * their taxiway was parallel to one - see EReference's own comment.
+		 *
+		 * THE DEFAULT IS THE WORLD GRID, exactly as `ESource::World` was: a candidate built
+		 * without saying what it is should be the least specific thing on the list, never the
+		 * most.
+		 */
+		ERelation Relation = ERelation::Parallel;
+		EReference Reference = EReference::World;
 	};
 
 	/**

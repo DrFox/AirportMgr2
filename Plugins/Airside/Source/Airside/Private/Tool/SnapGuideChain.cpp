@@ -45,6 +45,21 @@ namespace
 	{
 		return FMath::Lerp(A, B, RoadGeom::ClosestPointOnSegment(A, B, P));
 	}
+
+	/**
+	 * Which column a segment belongs to. A runway is not a type in the model - it is any
+	 * segment whose profile is continuous through junctions - so the ONE test that decides it
+	 * lives in URoadNetwork and is asked here rather than re-derived.
+	 *
+	 * TAGGING RATHER THAN SKIPPING, at this stage: the three segment sources still propose for
+	 * runways exactly as they did before, so this change is behaviour-preserving. The gating in
+	 * FSnapGuideChain::Resolve acts on the tag, and the partition follows it.
+	 */
+	SnapGuide::EReference ReferenceFor(const URoadNetwork& Network, FRoadSegmentId Segment)
+	{
+		return Network.IsRunwaySegment(Segment)
+			? SnapGuide::EReference::Runway : SnapGuide::EReference::Road;
+	}
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -68,7 +83,8 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	Parallel.Fit = SnapGuide::EFit::Angular;
 	Parallel.ReferenceAt = Anchor.ReferenceAt;
 	Parallel.Description = FString::Printf(TEXT("along %s"), *Anchor.ReferenceName);
-	Parallel.Source = SnapGuide::ESource::Extending;
+	Parallel.Relation = SnapGuide::ERelation::Extending;
+	Parallel.Reference = SnapGuide::EReference::ThisGesture;
 	Out.Add(Parallel);
 
 	// THE PERPENDICULAR IS THE ONE THAT SQUARES A PLOT, and it is proposed from the same
@@ -100,7 +116,8 @@ void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 		// that says "this is the corner you are square from". The label carries the rest.
 		Candidate.ReferenceAt = Anchor.Origin;
 		Candidate.Description = FString::Printf(TEXT("%d degrees"), Degrees);
-		Candidate.Source = SnapGuide::ESource::World;
+		Candidate.Relation = SnapGuide::ERelation::Parallel;
+		Candidate.Reference = SnapGuide::EReference::World;
 		Out.Add(Candidate);
 	}
 }
@@ -130,7 +147,8 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		Level.Fit = SnapGuide::EFit::Perpendicular;
 		Level.ReferenceAt = Point.At;
 		Level.Description = FString::Printf(TEXT("0 degrees to %s"), *Point.Name);
-		Level.Source = SnapGuide::ESource::PointAlign;
+		Level.Relation = SnapGuide::ERelation::LevelWith;
+		Level.Reference = SnapGuide::EReference::ThisGesture;
 		Out.Add(Level);
 
 		SnapGuide::FCandidate Square = Level;
@@ -195,7 +213,8 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	Along.Through = Anchor.Origin;
 	Along.Fit = SnapGuide::EFit::Angular;
 	Along.ReferenceAt = NearestAt;
-	Along.Source = SnapGuide::ESource::Parallel;
+	Along.Relation = SnapGuide::ERelation::Parallel;
+	Along.Reference = ReferenceFor(Network, Nearest);
 	Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
 	Out.Add(Along);
 
@@ -237,7 +256,8 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		InLine.Direction = Span.GetSafeNormal();
 		InLine.Through = A;
 		InLine.Fit = SnapGuide::EFit::Perpendicular;
-		InLine.Source = SnapGuide::ESource::Collinear;
+		InLine.Relation = SnapGuide::ERelation::Collinear;
+		InLine.Reference = ReferenceFor(Network, Id);
 		InLine.Description = FString::Printf(TEXT("in line with %s"),
 			*RoadNaming::Describe(Network, Id));
 
@@ -283,7 +303,8 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Along.Through = Anchor.Origin;
 		Along.Fit = SnapGuide::EFit::Angular;
 		Along.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
-		Along.Source = SnapGuide::ESource::Runway;
+		Along.Relation = SnapGuide::ERelation::Parallel;
+		Along.Reference = SnapGuide::EReference::Runway;
 		Along.Description = FString::Printf(TEXT("parallel to %s"), *Name);
 		Out.Add(Along);
 
@@ -332,7 +353,8 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 
 		// THE DASHED LINE GOES TO THE THING ITSELF, which for an entity is simply its pose.
 		Along.ReferenceAt = Entity.Position;
-		Along.Source = SnapGuide::ESource::Aligned;
+		Along.Relation = SnapGuide::ERelation::Parallel;
+		Along.Reference = SnapGuide::EReference::Stand;
 		Along.Description = FString::Printf(TEXT("aligned with %s"), *Name);
 		Out.Add(Along);
 
@@ -443,7 +465,8 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Match.Through = ReferenceAt - Across * FMath::Sign(Signed) * Gap;
 		Match.Fit = SnapGuide::EFit::Perpendicular;
 		Match.ReferenceAt = ReferenceAt;
-		Match.Source = SnapGuide::ESource::Offset;
+		Match.Relation = SnapGuide::ERelation::MatchingGap;
+		Match.Reference = ReferenceFor(Network, Reference);
 
 		// THE NUMBER IS IN THE LABEL. "matching the taxiway" alone would leave the player
 		// unable to tell 40 m from 45 m, which is the one thing they are trying to control.

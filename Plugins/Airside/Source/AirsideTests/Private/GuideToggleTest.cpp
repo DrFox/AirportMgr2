@@ -129,8 +129,11 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestEqual(TEXT("and it is Parallel that offered it"),
-		static_cast<int32>(On.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::Parallel));
+		static_cast<int32>(On.Winners[0].Relation),
+		static_cast<int32>(SnapGuide::ERelation::Parallel));
+	TestEqual(TEXT("against the road, which is the only column with anything in it"),
+		static_cast<int32>(On.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Road));
 
 	// PARALLEL OFF: nothing else is on, so nothing answers at all. That is the assertion the
 	// whole toggle exists for.
@@ -146,8 +149,8 @@ bool FGuideChainSkipsADisabledSourceTest::RunTest(const FString& Parameters)
 		*Actor->Network, Anchor, Cursor, SnapGuide::FResult(), Settings);
 	TestTrue(TEXT("and another source switched on still answers"), World.bActive);
 	TestEqual(TEXT("from the world grid this time"),
-		static_cast<int32>(World.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(World.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::World));
 
 	return true;
 }

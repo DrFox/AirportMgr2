@@ -386,8 +386,8 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 	// PARALLEL BEATS RUNWAY BEATS WORLD. An airport squares to its runways, but not in
 	// preference to the taxiway the player is actually working beside.
 	TestEqual(TEXT("the nearest road wins over the runway and the world grid"),
-		static_cast<int32>(Result.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::Parallel));
+		static_cast<int32>(Result.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Road));
 
 	// CONTROL LEG: the runway was a live competitor, not one the reach quietly excluded. Take
 	// the taxiway out of range and the runway takes the slot - which also pins that Runway is
@@ -401,8 +401,8 @@ bool FGuideChainPrefersTheLocalOverTheGlobalTest::RunTest(const FString& Paramet
 		return false;
 	}
 	TestEqual(TEXT("and takes the slot once no road is in reach"),
-		static_cast<int32>(WithoutTheTaxiway.Winners[0].Source),
-		static_cast<int32>(SnapGuide::ESource::Runway));
+		static_cast<int32>(WithoutTheTaxiway.Winners[0].Reference),
+		static_cast<int32>(SnapGuide::EReference::Runway));
 
 	return true;
 }

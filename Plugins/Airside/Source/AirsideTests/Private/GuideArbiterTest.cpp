@@ -8,13 +8,15 @@ namespace
 {
 	/** A candidate pointing Degrees off +X, named after its own angle so a failure says
 	 *  which one won rather than which index did. */
-	SnapGuide::FCandidate GuideAt(double Degrees, SnapGuide::ESource Source)
+	SnapGuide::FCandidate GuideAt(double Degrees, SnapGuide::ERelation Relation,
+		SnapGuide::EReference Reference = SnapGuide::EReference::World)
 	{
 		SnapGuide::FCandidate Candidate;
 		const double Radians = FMath::DegreesToRadians(Degrees);
 		Candidate.Direction = FVector2D(FMath::Cos(Radians), FMath::Sin(Radians));
 		Candidate.Description = FString::Printf(TEXT("%.1f degrees"), Degrees);
-		Candidate.Source = Source;
+		Candidate.Relation = Relation;
+		Candidate.Reference = Reference;
 		return Candidate;
 	}
 
@@ -34,8 +36,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FGuideArbiterPicksTheNearestTest::RunTest(const FString& Parameters)
 {
 	const TArray<SnapGuide::FCandidate> Candidates = {
-		GuideAt(0.0, SnapGuide::ESource::World),
-		GuideAt(45.0, SnapGuide::ESource::World) };
+		GuideAt(0.0, SnapGuide::ERelation::Parallel),
+		GuideAt(45.0, SnapGuide::ERelation::Parallel) };
 
 	const SnapGuide::FResult Result = SnapGuide::Arbitrate(
 		Candidates, FVector2D::ZeroVector, CursorAt(4.0), SnapGuide::FResult());
@@ -70,16 +72,16 @@ bool FGuideArbiterPicksTheNearestTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FGuideArbiterBreaksTiesBySourceTest,
-	"Airside.Solve.GuideArbiterBreaksTiesBySource",
+	FGuideArbiterBreaksTiesByRankTest,
+	"Airside.Solve.GuideArbiterBreaksTiesByRank",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FGuideArbiterBreaksTiesBySourceTest::RunTest(const FString& Parameters)
+bool FGuideArbiterBreaksTiesByRankTest::RunTest(const FString& Parameters)
 {
 	// THE SAME ANGLE FROM TWO SOURCES: a frontage that happens to lie on a world axis. This
 	// is not contrived - a plot drawn off an east-west service road produces it every time.
-	const SnapGuide::FCandidate Extending = GuideAt(45.0, SnapGuide::ESource::Extending);
-	const SnapGuide::FCandidate World = GuideAt(45.0, SnapGuide::ESource::World);
+	const SnapGuide::FCandidate Extending = GuideAt(45.0, SnapGuide::ERelation::Extending);
+	const SnapGuide::FCandidate World = GuideAt(45.0, SnapGuide::ERelation::Parallel);
 
 	const TArray<SnapGuide::FCandidate> ExtendingFirst = { Extending, World };
 	const TArray<SnapGuide::FCandidate> WorldFirst = { World, Extending };
@@ -93,20 +95,20 @@ bool FGuideArbiterBreaksTiesBySourceTest::RunTest(const FString& Parameters)
 	// gathered in would be a guide that changed with the network's iteration order - i.e.
 	// with an edit nobody connected to guides at all.
 	TestEqual(TEXT("a tie goes to the higher-priority source"),
-		static_cast<int32>(A.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(A.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 	TestEqual(TEXT("and does so whichever order the candidates arrived in"),
-		static_cast<int32>(B.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(B.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 
 	// CONTROL LEG: source order is the TIEBREAK and nothing else. A World candidate that is
 	// genuinely nearer must still win, or the test above would pass on an arbiter that
 	// simply always preferred Extending.
 	const TArray<SnapGuide::FCandidate> NearerWorld = {
-		GuideAt(45.0, SnapGuide::ESource::Extending),
-		GuideAt(47.0, SnapGuide::ESource::World) };
+		GuideAt(45.0, SnapGuide::ERelation::Extending),
+		GuideAt(47.0, SnapGuide::ERelation::Parallel) };
 	const SnapGuide::FResult C = SnapGuide::Arbitrate(
 		NearerWorld, FVector2D::ZeroVector, CursorAt(48.0), SnapGuide::FResult());
 	TestEqual(TEXT("but a nearer low-priority source still wins outright"),
-		static_cast<int32>(C.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(C.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Parallel));
 
 	return true;
 }
@@ -121,12 +123,12 @@ bool FGuideArbiterHoldsItsWinnerTest::RunTest(const FString& Parameters)
 	// THE FLICKER RULE, and the reason the arbiter is a separate unit at all. Two candidates
 	// four degrees apart: the incumbent on the axis, the challenger just off it.
 	const TArray<SnapGuide::FCandidate> Candidates = {
-		GuideAt(0.0, SnapGuide::ESource::Extending),
-		GuideAt(4.0, SnapGuide::ESource::World) };
+		GuideAt(0.0, SnapGuide::ERelation::Extending),
+		GuideAt(4.0, SnapGuide::ERelation::Parallel) };
 
 	SnapGuide::FResult Previous;
 	Previous.bActive = true;
-	Previous.Winners.Add(GuideAt(0.0, SnapGuide::ESource::Extending));
+	Previous.Winners.Add(GuideAt(0.0, SnapGuide::ERelation::Extending));
 
 	const SnapGuide::FTuning Tuning;   // 7 degrees tolerance, 2 degrees stickiness
 
@@ -138,7 +140,7 @@ bool FGuideArbiterHoldsItsWinnerTest::RunTest(const FString& Parameters)
 		Candidates, FVector2D::ZeroVector, CursorAt(2.5), Previous, Tuning);
 	TestTrue(TEXT("a guide the cursor is still near stays active"), Held.bActive);
 	TestEqual(TEXT("a challenger better by less than the stickiness does not take the guide"),
-		static_cast<int32>(Held.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Held.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 
 	// EXACTLY THE STICKINESS: incumbent 3 off, challenger 1 off. A slow drag passes through
 	// this every time, and the bare comparison decided it on floating-point noise - this
@@ -147,7 +149,7 @@ bool FGuideArbiterHoldsItsWinnerTest::RunTest(const FString& Parameters)
 	const SnapGuide::FResult Boundary = SnapGuide::Arbitrate(
 		Candidates, FVector2D::ZeroVector, CursorAt(3.0), Previous, Tuning);
 	TestEqual(TEXT("a challenger better by exactly the stickiness still does not take it"),
-		static_cast<int32>(Boundary.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Boundary.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 
 	// Cursor at 3.9 degrees: incumbent 3.9 off, challenger 0.1 off - better by 3.8, and the
 	// handover happens. One guide holding then handing over is the feel being protected;
@@ -155,7 +157,7 @@ bool FGuideArbiterHoldsItsWinnerTest::RunTest(const FString& Parameters)
 	const SnapGuide::FResult Taken = SnapGuide::Arbitrate(
 		Candidates, FVector2D::ZeroVector, CursorAt(3.9), Previous, Tuning);
 	TestEqual(TEXT("a challenger better by more than the stickiness does take it"),
-		static_cast<int32>(Taken.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(Taken.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Parallel));
 
 	// AND AN INCUMBENT OUT OF TOLERANCE IS DROPPED however sticky it is: at 8.5 degrees the
 	// held axis is past the 7-degree tolerance, so stickiness must not resurrect it.
@@ -163,7 +165,7 @@ bool FGuideArbiterHoldsItsWinnerTest::RunTest(const FString& Parameters)
 		Candidates, FVector2D::ZeroVector, CursorAt(8.5), Previous, Tuning);
 	TestTrue(TEXT("an incumbent out of tolerance is still dropped"), Dropped.bActive);
 	TestEqual(TEXT("and the eligible challenger takes over"),
-		static_cast<int32>(Dropped.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(Dropped.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Parallel));
 
 	return true;
 }
@@ -175,7 +177,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGuideArbiterRefusesOutsideToleranceTest::RunTest(const FString& Parameters)
 {
-	const TArray<SnapGuide::FCandidate> Candidates = { GuideAt(0.0, SnapGuide::ESource::World) };
+	const TArray<SnapGuide::FCandidate> Candidates = { GuideAt(0.0, SnapGuide::ERelation::Parallel) };
 
 	const SnapGuide::FResult Far = SnapGuide::Arbitrate(
 		Candidates, FVector2D::ZeroVector, CursorAt(20.0), SnapGuide::FResult());
@@ -210,14 +212,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FGuideArbiterCrossesTwoWinnersTest::RunTest(const FString& Parameters)
 {
 	// The angular guide: straight up from the origin. The cursor heads 2 degrees off it.
-	SnapGuide::FCandidate Square = GuideAt(90.0, SnapGuide::ESource::Extending);
+	SnapGuide::FCandidate Square = GuideAt(90.0, SnapGuide::ERelation::Extending);
 	Square.Through = FVector2D::ZeroVector;
 	Square.Fit = SnapGuide::EFit::Angular;
 
 	// The alignment: a HORIZONTAL line through a point 1000 up and well off to the side. Its
 	// line passes nowhere near the origin, which is the whole reason FCandidate carries
 	// Through - measured from the origin this candidate would be meaningless.
-	SnapGuide::FCandidate Level = GuideAt(0.0, SnapGuide::ESource::PointAlign);
+	SnapGuide::FCandidate Level = GuideAt(0.0, SnapGuide::ERelation::LevelWith);
 	Level.Through = FVector2D(9000.0, 1000.0);
 	Level.Fit = SnapGuide::EFit::Perpendicular;
 	Level.Description = TEXT("0 degrees to corner 3");
@@ -282,11 +284,11 @@ bool FGuideArbiterWillNotBePulledFarTest::RunTest(const FString& Parameters)
 	// THE NUMBERS ARE LOAD-BEARING: at 1 degree these same lines cross 437 uu from the cursor,
 	// the guard correctly does NOT fire, and the first version of this test failed for that
 	// reason rather than finding a bug.
-	SnapGuide::FCandidate Shallow = GuideAt(0.2, SnapGuide::ESource::Extending);
+	SnapGuide::FCandidate Shallow = GuideAt(0.2, SnapGuide::ERelation::Extending);
 	Shallow.Through = FVector2D::ZeroVector;
 	Shallow.Fit = SnapGuide::EFit::Angular;
 
-	SnapGuide::FCandidate Level = GuideAt(0.0, SnapGuide::ESource::PointAlign);
+	SnapGuide::FCandidate Level = GuideAt(0.0, SnapGuide::ERelation::LevelWith);
 	Level.Through = FVector2D(0.0, 60.0);
 	Level.Fit = SnapGuide::EFit::Perpendicular;
 
@@ -339,8 +341,8 @@ bool FGuideArbiterIsStableUnderRepetitionTest::RunTest(const FString& Parameters
 	// Previous. So "last frame's winner" is really "last call's", and a rule that drifted on
 	// repetition would drift WITHIN one frame, which no amount of PIE would make legible.
 	const TArray<SnapGuide::FCandidate> Candidates = {
-		GuideAt(0.0, SnapGuide::ESource::Extending),
-		GuideAt(4.0, SnapGuide::ESource::World) };
+		GuideAt(0.0, SnapGuide::ERelation::Extending),
+		GuideAt(4.0, SnapGuide::ERelation::Parallel) };
 
 	const FVector2D Cursor = CursorAt(3.0);
 
@@ -348,7 +350,7 @@ bool FGuideArbiterIsStableUnderRepetitionTest::RunTest(const FString& Parameters
 		Candidates, FVector2D::ZeroVector, Cursor, SnapGuide::FResult());
 	if (!TestTrue(TEXT("the first resolution answers"), Carried.bActive)) { return false; }
 
-	const int32 FirstSource = static_cast<int32>(Carried.Winners[0].Source);
+	const int32 FirstSource = static_cast<int32>(Carried.Winners[0].Relation);
 	const FVector2D FirstPoint = Carried.Point;
 
 	for (int32 Repeat = 0; Repeat < 5; ++Repeat)
@@ -356,7 +358,7 @@ bool FGuideArbiterIsStableUnderRepetitionTest::RunTest(const FString& Parameters
 		Carried = SnapGuide::Arbitrate(Candidates, FVector2D::ZeroVector, Cursor, Carried);
 		TestEqual(FString::Printf(
 			TEXT("resolving again at one cursor keeps the same winner (repeat %d)"), Repeat),
-			static_cast<int32>(Carried.Winners[0].Source), FirstSource);
+			static_cast<int32>(Carried.Winners[0].Relation), FirstSource);
 		TestTrue(FString::Printf(
 			TEXT("and the same constrained point (repeat %d)"), Repeat),
 			Carried.Point.Equals(FirstPoint, 1.0e-9));

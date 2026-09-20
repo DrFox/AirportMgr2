@@ -62,7 +62,7 @@ bool FGuideChainProposesTheFrontageAndItsPerpendicularTest::RunTest(const FStrin
 	}
 
 	TestEqual(TEXT("the perpendicular of the tool's own reference is what wins"),
-		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 	TestEqual(TEXT("and it is described by the name the TOOL gave its reference"),
 		Result.Winners[0].Description, FString(TEXT("square to the frontage")));
 
@@ -107,7 +107,7 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 	const SnapGuide::FResult Result = Chain.Resolve(
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestEqual(TEXT("a tie between the frontage and a world axis goes to the frontage"),
-		static_cast<int32>(Result.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::Extending));
+		static_cast<int32>(Result.Winners[0].Relation), static_cast<int32>(SnapGuide::ERelation::Extending));
 
 	// CONTROL LEG: World was a live competitor, not an absent one. With no reference the
 	// Extending source proposes nothing and the same cursor gets the world axis instead - so
@@ -117,7 +117,7 @@ bool FGuideChainPrefersTheFrontageOverTheWorldGridTest::RunTest(const FString& P
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestTrue(TEXT("with no reference the world grid still answers"), WorldOnly.bActive);
 	TestEqual(TEXT("and it is the world axis that does"),
-		static_cast<int32>(WorldOnly.Winners[0].Source), static_cast<int32>(SnapGuide::ESource::World));
+		static_cast<int32>(WorldOnly.Winners[0].Reference), static_cast<int32>(SnapGuide::EReference::World));
 	TestEqual(TEXT("named as an angle, since the grid has no thing to point at"),
 		WorldOnly.Winners[0].Description, FString(TEXT("90 degrees")));
 	TestTrue(TEXT("and its line points back at the corner it swings around"),
