@@ -45,6 +45,57 @@ namespace SnapGuide
 	};
 
 	/**
+	 * WHAT a guide means. Declaration order is the tiebreak WITHIN a fit kind - see Arbitrate.
+	 *
+	 * A PLAIN ENUM, not a UENUM, for the reason ESource carried before it: UHT cannot see an
+	 * enum without a .generated.h, and a Solve/ header may not have one. FSnapGuideSettings
+	 * wraps it in named bools rather than a reflected array for the same reason.
+	 *
+	 * ORDER IS MOST-SPECIFIC-FIRST: what you are extending is what you are thinking about;
+	 * matching a neighbour's gap is the most incidental thing on the list.
+	 */
+	enum class ERelation : uint8
+	{
+		Extending,
+		LevelWith,
+		Parallel,
+		Collinear,
+		MatchingGap
+	};
+
+	/**
+	 * WHAT a guide is measured against. Declaration order breaks ties within one relation.
+	 *
+	 * SPLIT OUT OF ESource ON 2026-09-20. ESource mixed these two axes: Extending, PointAlign,
+	 * Collinear, Parallel and Offset named relationships, while Runway, World and Aligned named
+	 * references - and Parallel and Collinear carried an unnamed, unswitchable reference, "a
+	 * road". A player switching Runway off still saw "parallel to runway 18/36", because there
+	 * was no axis for the toggle to act along. See the 2026-09-20 guide-grid design section 1.
+	 *
+	 * ThisGesture RANKS FIRST because the shape under the cursor is more specific than anything
+	 * already on the field; World ranks last because it is what you fall back on.
+	 */
+	enum class EReference : uint8
+	{
+		ThisGesture,
+		Road,
+		Runway,
+		Apron,
+		Stand,
+		World
+	};
+
+	/**
+	 * Whether this pair of axes names a guide that exists. Design section 3's grid.
+	 *
+	 * THE ONE PLACE THE GRID IS WRITTEN DOWN. FSnapGuideSettings::IsEnabled consults it, the
+	 * registry test walks it, and Airside.Tool.GuideGridHasNoCellOutsideTheList asserts no
+	 * source can propose a pair it rejects. Sixteen of the thirty pairs are legal; the holes
+	 * are reasoned about one by one in the design, not merely left out.
+	 */
+	AIRSIDE_API bool IsLegalCell(ERelation Relation, EReference Reference);
+
+	/**
 	 * How a candidate is judged near.
 	 *
 	 * TWO KINDS, because two genuinely different questions are being asked. "Square to the
