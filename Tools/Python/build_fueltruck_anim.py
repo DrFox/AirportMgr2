@@ -8,10 +8,17 @@ land in Saved/Logs/AirportMgr.log, not on stdout - the commandlet's stdout carri
 LogInit and errors, so a run that looks silent has usually worked.
 
 THIS CREATES THE ASSET AND NOT ITS ANIMGRAPH, the same wall build_plane2_anim.py hit and for
-the same reason: UE 5.8 exposes no Python API for creating a node in a Blueprint graph or
-connecting two pins. So the parts that are easy to get WRONG and tedious to redo are done
-here - the parent class and the target skeleton - and the Transform (Modify) Bone nodes are
-a few minutes in the editor against the bone names this script prints.
+the same reason: the `unreal` Python module exposes no API for creating a node in a Blueprint
+graph or connecting two pins. So the parts that are easy to get WRONG and tedious to redo are
+done here - the parent class and the target skeleton - and the Transform (Modify) Bone nodes
+are a few minutes in the editor against the bone names this script prints.
+
+CORRECTED 2026-09-20: the three copies of that sentence all said "UE 5.8 exposes no Python
+API", which is a claim about the engine and is wrong. 5.8's UBlueprintGraphEditor authors
+AnimGraph nodes and Epic's MCP EditorToolset exposes it; verified end to end on 2026-09-20.
+It needs the editor RUNNING, which this commandlet needs closed - one restart between the
+halves, run unattended end to end on 2026-09-20 against a graph that came out IDENTICAL to a
+hand-wired one. docs/2026-09-20-animgraph-authoring.md has the reachable set.
 
 THE BONE PLAN IS READ FROM THE .glb, not listed here, for the reason build_plane2_anim.py
 records: a hand-kept list of bones had already been wrong once, in a script whose whole job
@@ -101,7 +108,9 @@ def bone_plan():
 def report_plan():
     """The editor work this script cannot do, as a list rather than a memory of one."""
     say("")
-    say("STILL TO DO BY HAND - UE 5.8 exposes no Python API for graph nodes:")
+    say("STILL TO DO - this commandlet's `unreal` module cannot make graph nodes.")
+    say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
+    say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
     for bone, variable in bone_plan():
         say("    %-12s  Rotation driven by %s" % (bone, variable))
@@ -121,10 +130,13 @@ def report_plan():
     say("     where the rig left it - which matters here, as the wheels carry 1.23 deg of")
     say("     camber that Replace would flatten.")
     say("")
-    say("  ORDER MATTERS ON THE FRONT AXLE: steer_FL carries wheel_FL, so put the steer")
-    say("  node BEFORE the wheel node in the chain. Both on one bone cannot work - a single")
-    say("  Transform (Modify) Bone applies its rotations in a fixed order and the wheel")
-    say("  would wobble instead of steering.")
+    say("  ORDER MATTERS ON THE FRONT AXLE: steer_FL carries wheel_FL. Both on one bone")
+    say("  cannot work - a single Transform (Modify) Bone applies its rotations in a fixed")
+    say("  order and the wheel would wobble instead of steering.")
+    say("  WHICH WAY ROUND IS DISPUTED. This line said steer BEFORE wheel; ABP_Plane1 and")
+    say("  ABP_Plane2 both ship the reverse, and FCSPose::SafeSetCSBoneTransforms backs")
+    say("  them - it refreshes children already in component space, so the parent steering")
+    say("  last carries the rolled wheel. Follow the aeroplanes: steer AFTER the wheel.")
     say("")
     say("  chain them into Output Pose, then Compile and Save.")
 

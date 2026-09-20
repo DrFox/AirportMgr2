@@ -153,6 +153,16 @@ goes through a `UE_LOG` and `log`, not a console command.
   spawns a whole cold editor. Use the script for the authoritative pre-commit run, since
   it is what catches a CRASHED test.
 - `EditorToolset` before asking the user what they are looking at.
+- `BlueprintTools` + `ObjectTools` instead of asking the user to wire an AnimGraph. UE 5.8's
+  `UBlueprintGraphEditor` creates nodes, connects pins and sets BoneToModify and the four
+  modes; a whole graph goes in one `ProgrammaticToolset.execute_tool_script` call. STATE
+  MACHINES are the exception and are still hand work. Verified end to end 2026-09-20 -
+  `docs/2026-09-20-animgraph-authoring.md` has the calls, the traps and the engine lines that
+  make the state machine impossible. Three `Tools/Python/build_*_anim.py` headers claimed the
+  opposite for months; when a header says a thing cannot be done, date it and check it.
+- `ProgrammaticToolset.execute_tool_script` when a job is more than about three MCP calls.
+  It is a sandboxed Python that can call any registered tool - one round trip, one result.
+  It cannot `import unreal`; a job needing that is still a headless commandlet.
 
 `Plugins/McpAutomationBridge` (third-party, port 3000/8090) is present but DISABLED in the
 .uproject - the fallback if the experimental one misbehaves. Do not run both.

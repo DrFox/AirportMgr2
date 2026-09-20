@@ -6,10 +6,20 @@ Run headless:
 Every result line is prefixed MARKER: so it can be grepped out of the log.
 
 THIS CREATES THE ASSET AND NOT ITS ANIMGRAPH, and the split is forced rather than chosen.
-UE 5.8 exposes no Python API for creating a node in a Blueprint graph or connecting two pins:
-BlueprintEditorLibrary can list graphs, find pins, add function graphs and add overrides, and
-there it stops. That is the same wall UBuildBarWidget's header records for Widget Blueprints -
-"UWidgetBlueprint::WidgetTree is not a scriptable property" - in a second place.
+The `unreal` Python module exposes no API for creating a node in a Blueprint graph or
+connecting two pins: BlueprintEditorLibrary can list graphs, find pins, add function graphs
+and add overrides, and there it stops. That is the same wall UBuildBarWidget's header records
+for Widget Blueprints - "UWidgetBlueprint::WidgetTree is not a scriptable property" - in a
+second place.
+
+CORRECTED 2026-09-20: that sentence said "UE 5.8 exposes no Python API", and UE 5.8 does.
+UBlueprintGraphEditor, new in 5.8, creates and connects AnimGraph nodes, and Epic's MCP
+EditorToolset exposes it to an agent - verified end to end on 2026-09-20, including
+BoneToModify and the four modes via ObjectTools.set_properties. It needs the editor RUNNING and
+this commandlet needs it closed, which is one restart between the halves, not a wall: the
+pipeline ran unattended on 2026-09-20 and produced a graph that diffed IDENTICAL to a
+hand-wired one. docs/2026-09-20-animgraph-authoring.md has the reachable set, the wiring
+script, and what a state machine costs.
 
 So the parts that are easy to get WRONG and tedious to redo are done here: the parent class
 (an Anim Blueprint on the wrong parent compiles happily and exposes none of the values the
@@ -141,7 +151,9 @@ def fail(msg):
 def report_plan():
     """The editor work this script cannot do, as a list rather than a memory of one."""
     say("")
-    say("STILL TO DO BY HAND - UE 5.8 exposes no Python API for graph nodes:")
+    say("STILL TO DO - this commandlet's `unreal` module cannot make graph nodes.")
+    say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
+    say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
     for bone, variable in bone_plan():
         say("    %-12s  Rotation driven by %s" % (bone, variable))

@@ -76,5 +76,7 @@ samples/
 
 .superpowers/
 
-# Bytecode from the editor's Python importing airside_import.py - build detritus
+# Bytecode from the editor's Python importing airside_import.py, and from an MCP driver
+# importing Tools/Mcp.py - build detritus
 Tools/Python/__pycache__/
+Tools/__pycache__/
