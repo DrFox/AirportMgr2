@@ -96,6 +96,90 @@ bool FEditModeSuppressesTheBuildToolTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditHandlesAreDeclaredForEveryRegistryEntryTest,
+	"Airside.Tool.EditHandlesAreDeclaredForEveryRegistryEntry",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditHandlesAreDeclaredForEveryRegistryEntryTest::RunTest(const FString& Parameters)
+{
+	// NAMES, NOT COUNTS. CLAUDE.md: where UE forces two lists to agree the consumer checks
+	// IDENTITY and logs both on mismatch. A count would pass on a table where two entries
+	// had swapped their handle kinds, which is precisely the drift this field exists to
+	// make impossible.
+	const TMap<FName, EEditHandleKind> Expected = {
+		{ TEXT("Select"),          EEditHandleKind::None            },
+		{ TEXT("Taxiway"),         EEditHandleKind::AirsideNode     },
+		{ TEXT("Apron"),           EEditHandleKind::ApronCorner     },
+		{ TEXT("Stand"),           EEditHandleKind::None            },
+		{ TEXT("Guideline"),       EEditHandleKind::None            },
+		{ TEXT("Runway"),          EEditHandleKind::RunwayThreshold },
+		{ TEXT("HoldingPosition"), EEditHandleKind::None            },
+		{ TEXT("Road"),            EEditHandleKind::ServiceRoadNode },
+		{ TEXT("FuelDepot"),       EEditHandleKind::None            },
+	};
+
+	for (const FToolRegistration& Entry : ToolRegistry())
+	{
+		const EEditHandleKind* Want = Expected.Find(Entry.Id);
+		if (Want == nullptr)
+		{
+			// A NEW TOOL MUST DECLARE WHAT EDIT MEANS FOR IT, even when the answer is None.
+			// Failing rather than defaulting is the point: the default is silent, and a tool
+			// that should have been editable would simply never light a handle.
+			AddError(FString::Printf(
+				TEXT("registry entry '%s' is not named in this test - a new tool must say "
+					 "what Edit exposes for it, even if that is None"), *Entry.Id.ToString()));
+			continue;
+		}
+		TestTrue(*FString::Printf(
+			TEXT("'%s' declares the edit handles this test expects"), *Entry.Id.ToString()),
+			Entry.EditHandles == *Want);
+	}
+
+	TestEqual(TEXT("and the table holds no entry beyond the ones named here"),
+		ToolRegistry().Num(), Expected.Num());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FEditHandlesReachTheContextTest,
+	"Airside.Tool.EditHandlesReachTheContext",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FEditHandlesReachTheContextTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	FBuildSession Session;
+	FBuildSessionTunables Tunables;
+
+	// DECLARING IS HALF THE WORK - the other half is the value reaching the tool. A field
+	// filled in the registry and never read is the dead-list bug this codebase has shipped
+	// three times (ToolCommandList, GetModeCommands, ARoadBuildController::Tools).
+	Session.SelectTool(1);                       // Taxiway
+	Session.SetGestureMode(EGestureMode::Edit);
+	TestTrue(TEXT("the lit tool's handle kind reaches the context"),
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+			== EEditHandleKind::AirsideNode);
+
+	// THE LIT TOOL FILTERS, so switching it changes what is grabbable without leaving Edit.
+	Session.SelectTool(2);                       // Apron
+	TestTrue(TEXT("switching the lit tool switches the handle kind, with Edit still held"),
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+			== EEditHandleKind::ApronCorner);
+
+	// AND NONE OUTSIDE EDIT, so nothing downstream can act on a handle kind while the build
+	// tool is the one running.
+	Session.SetGestureMode(EGestureMode::Build);
+	TestTrue(TEXT("no handles are offered while the mode is Build"),
+		Session.MakeContext(Actor, FVector2D::ZeroVector, Tunables, false, false).EditHandles
+			== EEditHandleKind::None);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FEditModeNamesItselfTest,
 	"Airside.Tool.EditModeNamesItself",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

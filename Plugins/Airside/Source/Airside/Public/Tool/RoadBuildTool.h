@@ -10,6 +10,49 @@
 #include "RoadBuildTool.generated.h"
 
 /**
+ * What a tool exposes for editing while the session's mode is Edit.
+ *
+ * DECLARED ON FToolRegistration, not in a switch beside it - see that struct's field. This
+ * is a list that must agree with the tool table, and CLAUDE.md's answer to that is to make
+ * it ONE list. A map from tool id to handle kind living inside FEditTool is exactly the
+ * shape this codebase has shipped three times and regretted: a second list nothing checks
+ * against the first.
+ *
+ * IT LIVES IN THIS HEADER rather than in BuildSession.h, where FToolRegistration is,
+ * because FToolContext below carries it too and BuildSession.h already includes this file.
+ * The reverse include would close a cycle Check-Architecture.ps1 fails.
+ *
+ * A NODE CARRIES NO KIND - kind lives on the segment's Profile (see FRoadNode). So
+ * AirsideNode and ServiceRoadNode are questions about a node's ARMS, answered through
+ * RoadNaming::ReferenceOf, the one home for that classification. A node where a service
+ * road meets a taxiway answers yes to both, correctly, because it is both.
+ */
+UENUM()
+enum class EEditHandleKind : uint8
+{
+	/** This tool has nothing to edit. The bar greys the Edit toggle and says so. */
+	None,
+
+	/** A node with an incident taxiway-or-runway segment. */
+	AirsideNode,
+
+	/** A node with an incident service-road segment. */
+	ServiceRoadNode,
+
+	/**
+	 * The END node of a runway chain - not its interior nodes.
+	 *
+	 * A split runway has interior nodes, and dragging one of those sideways would kink the
+	 * strip rather than reposition it. A threshold is where the runway STOPS, which is one
+	 * incident runway arm and no more.
+	 */
+	RunwayThreshold,
+
+	/** A corner of an apron outline. Not a node: see FEditTool's handle type. */
+	ApronCorner,
+};
+
+/**
  * Everything a tool needs to decide what an input means.
  *
  * Target is IRoadEditTarget, not the concrete ARoadNetworkActor - see that header's
@@ -83,6 +126,18 @@ struct FToolContext
 	 * else does, rather than inventing a second notion of near.
 	 */
 	double SnapRadius = 150.0;
+
+	/**
+	 * What the LIT tool exposes for editing, from its registry entry. None at every moment
+	 * the session's mode is not Edit.
+	 *
+	 * ON THE CONTEXT rather than on FEditTool, for the reason this struct's own header
+	 * gives about holding no state: a context is built fresh each frame, so the edit tool
+	 * cannot keep a stale view of which tool is lit. Switching from Taxiway to Apron with
+	 * Edit held would otherwise leave road nodes grabbable until something remembered to
+	 * push the change across.
+	 */
+	EEditHandleKind EditHandles = EEditHandleKind::None;
 
 	/**
 	 * Target's network, null-safe. A Ctrl-remove preview always needs Target non-null AND

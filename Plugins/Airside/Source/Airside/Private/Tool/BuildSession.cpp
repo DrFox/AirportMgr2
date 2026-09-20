@@ -32,37 +32,45 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// tool's, whose slot this fills; the printed keys 1-3 keep their meaning.
 		{ EKeys::Four,  TEXT("Select"),   LOCTEXT("Select",    "Select"),
 			LOCTEXT("SelectTooltip", "Click an aircraft or a stand to inspect it. Escape deselects."),
-			[] { return MakeUnique<FSelectTool>(); } },
+			[] { return MakeUnique<FSelectTool>(); },
+			EEditHandleKind::None },
 
 		{ EKeys::One,   TEXT("Taxiway"),  LOCTEXT("Taxiway",   "Taxiway"),
 			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node, drag a node to move it. The taxiway key pressed again cycles the width."),
-			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); },
+			EEditHandleKind::AirsideNode },
 		{ EKeys::Two,   TEXT("Apron"),    LOCTEXT("Apron",     "Apron"),
 			LOCTEXT("ApronTooltip", "Draw a polygon of pavement; click the first corner again to close it."),
-			[] { return MakeUnique<FApronDrawTool>(); } },
+			[] { return MakeUnique<FApronDrawTool>(); },
+			EEditHandleKind::ApronCorner },
 		{ EKeys::Three, TEXT("Stand"),    LOCTEXT("Stand",     "Stand"),
 			LOCTEXT("StandTooltip", "Place an aircraft stand: press to position, drag to aim, release."),
-			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); } },
+			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); },
+			EEditHandleKind::None },
 		{ EKeys::Five,  TEXT("Guideline"), LOCTEXT("Guideline", "Guidelines"),
 			LOCTEXT("GuidelineTooltip", "Draw a routing link the derivation never made: click a node, click another."),
-			[] { return MakeUnique<FGuidelineDrawTool>(); } },
+			[] { return MakeUnique<FGuidelineDrawTool>(); },
+			EEditHandleKind::None },
 		{ EKeys::Six,   TEXT("Runway"),   LOCTEXT("Runway",    "Runway"),
 			LOCTEXT("RunwayTooltip", "Click one threshold, then the other. In play the runway key pressed again cycles the width, with Shift the surface, with Ctrl the approach."),
-			[] { return MakeUnique<FRunwayTool>(); } },
+			[] { return MakeUnique<FRunwayTool>(); },
+			EEditHandleKind::RunwayThreshold },
 
 		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
 		// this table - see ARoadBuildController::LandAircraftNearViewFocus. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
 		{ EKeys::Eight, TEXT("HoldingPosition"), LOCTEXT("HoldingPosition", "Holding point"),
 			LOCTEXT("HoldingPositionTooltip", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway."),
-			[] { return MakeUnique<FHoldingPointTool>(); } },
+			[] { return MakeUnique<FHoldingPointTool>(); },
+			EEditHandleKind::None },
 
 		// NINE: the SAME FRoadDrawTool, laying the service road cross-section instead of the
 		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
 		// for why this is not a second class.
 		{ EKeys::Nine,  TEXT("Road"),     LOCTEXT("Road",      "Road"),
 			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node."),
-			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); },
+			EEditHandleKind::ServiceRoadNode },
 
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for.
@@ -76,7 +84,8 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// was cheap and PIE showed what it cost - see the plot gesture design doc.
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
 			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: click a service road to anchor it, drag along the road for width, away from it for depth, then press Build."),
-			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); } },
+			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); },
+			EEditHandleKind::None },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
@@ -183,6 +192,18 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	Context.bRemoveModifier = bRemoveModifier;
 	Context.bInsertModifier = bInsertModifier;
 	Context.bSuspendGuides = bSuspendGuides;
+
+	// WHERE FToolRegistration::EditHandles IS CONSUMED - the one reader, so the tool table
+	// stays the one place that mapping is written. The LIT tool decides, not the edit tool:
+	// that is what makes Taxiway light taxiway nodes and Apron light apron corners while a
+	// single FEditTool serves both.
+	//
+	// None outside Edit, so nothing can act on a handle kind while FEditTool is not even
+	// the tool running.
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	Context.EditHandles = (Mode == EGestureMode::Edit && Registry.IsValidIndex(ActiveTool))
+		? Registry[ActiveTool].EditHandles
+		: EEditHandleKind::None;
 
 	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
 	// this and the overlay draws it, so what is highlighted and what happens cannot come

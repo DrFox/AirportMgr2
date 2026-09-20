@@ -67,6 +67,17 @@ struct FToolRegistration
 	FText Name;
 	FText Tooltip;
 	TFunction<TUniquePtr<IBuildTool>()> Make;
+
+	/**
+	 * What this tool exposes while the session's mode is Edit. None greys the toggle out.
+	 *
+	 * HERE rather than in a table inside FEditTool, because a tool and what it lets you
+	 * edit are one fact about that tool - CLAUDE.md's "lists that must agree are ONE list",
+	 * applied before the second list exists rather than after it has drifted. Read in
+	 * exactly one place, FBuildSession::MakeContext, and asserted entry-by-entry by name in
+	 * Airside.Tool.EditHandlesAreDeclaredForEveryRegistryEntry.
+	 */
+	EEditHandleKind EditHandles = EEditHandleKind::None;
 };
 
 /**
