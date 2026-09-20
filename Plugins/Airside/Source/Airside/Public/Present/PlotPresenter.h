@@ -76,6 +76,17 @@ public:
 private:
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> Boxes;
 
+	/**
+	 * Every transform added during the last rebuild, in the order it was added.
+	 *
+	 * BECAUSE THE INSTANCE INDEX IS ABOUT TO STOP MEANING ANYTHING. One component held every
+	 * box, so "instance 3" was a fact about the PLOT; a second component for the ghosts - and
+	 * later one per authored mesh - makes it a fact about which component happened to take
+	 * it. The tests ask about the plot, so the order they rely on lives here rather than in a
+	 * component they do not own.
+	 */
+	TArray<FTransform> Placed;
+
 	/** Counted during the last RebuildFrom. See GetGateGapCount. */
 	int32 GateGaps = 0;
 

@@ -106,16 +106,19 @@ void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes)
 
 int32 UPlotPresenter::GetInstanceCount() const
 {
-	return Boxes != nullptr ? Boxes->GetInstanceCount() : 0;
+	// FROM Placed, NOT THE COMPONENT, so this and GetInstanceTransformForTest agree by
+	// construction rather than by both happening to read the same place today.
+	return Placed.Num();
 }
 
 bool UPlotPresenter::GetInstanceTransformForTest(int32 Index, FTransform& OutTransform) const
 {
-	if (Boxes == nullptr || Index < 0 || Index >= Boxes->GetInstanceCount())
+	if (!Placed.IsValidIndex(Index))
 	{
 		return false;
 	}
-	return Boxes->GetInstanceTransform(Index, OutTransform, /*bWorldSpace=*/true);
+	OutTransform = Placed[Index];
+	return true;
 }
 
 void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
@@ -129,6 +132,7 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	// incremental update would need to know which instance belonged to which entity, which
 	// is a second index that must agree with the model - and the counts here are tens.
 	Boxes->ClearInstances();
+	Placed.Reset();
 	GateGaps = 0;
 	RoomForMore = 0;
 	ModuleBoxes = 0;
@@ -186,9 +190,10 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 				++Dropped;
 				continue;
 			}
-			Boxes->AddInstance(BoxAt(Stand.Centre, Stand.Heading,
-				Footprints[I].LengthUu, Footprints[I].WidthUu, HeightFor(Entity.Modules[I])),
-				/*bWorldSpace=*/true);
+			const FTransform ModuleAt = BoxAt(Stand.Centre, Stand.Heading,
+				Footprints[I].LengthUu, Footprints[I].WidthUu, HeightFor(Entity.Modules[I]));
+			Boxes->AddInstance(ModuleAt, /*bWorldSpace=*/true);
+			Placed.Add(ModuleAt);
 			++ModuleBoxes;
 		}
 
@@ -227,8 +232,10 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 					continue;
 				}
 
-				Boxes->AddInstance(BoxAt(Centre, Heading,
-					FenceBayUu, FenceThicknessUu, FenceHeightUu), /*bWorldSpace=*/true);
+				const FTransform PanelAt = BoxAt(Centre, Heading,
+					FenceBayUu, FenceThicknessUu, FenceHeightUu);
+				Boxes->AddInstance(PanelAt, /*bWorldSpace=*/true);
+				Placed.Add(PanelAt);
 			}
 		}
 	}
@@ -245,6 +252,6 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			TEXT("Plots: %d plot(s), %d module box(es), %d dropped, room for %d more, "
 				 "%d fence panel(s), %d gate gap(s)"),
 			Plots, ModuleBoxes, Dropped, RoomForMore,
-			Boxes->GetInstanceCount() - ModuleBoxes, GateGaps);
+			Placed.Num() - ModuleBoxes, GateGaps);
 	}
 }

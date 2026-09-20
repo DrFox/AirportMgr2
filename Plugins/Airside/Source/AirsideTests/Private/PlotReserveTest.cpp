@@ -7,8 +7,10 @@
 
 namespace
 {
-	/** Same rectangle PlotYardTest and PlotFitTest use, so all three describe one world. */
-	TArray<FVector2D> YardRect(double Width, double Depth)
+	/** Same rectangle PlotYardTest's YardRect makes. NAMED APART because AirsideTests is a
+	 *  UNITY build: two files' anonymous namespaces land in one translation unit, so a second
+	 *  YardRect is a redefinition rather than a private copy. */
+	TArray<FVector2D> ReserveRect(double Width, double Depth)
 	{
 		return { FVector2D(0.0, 0.0), FVector2D(Width, 0.0),
 		         FVector2D(Width, Depth), FVector2D(0.0, Depth) };
@@ -67,7 +69,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveNeverDropsTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
 	const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -121,7 +123,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveNeverOverlapsTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
 	for (int32 Seed = 0; Seed < 8; ++Seed)
@@ -200,7 +202,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveHonoursWeightsTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
 	const PlotYard::FReservation Reservation = PlotYard::Reserve(
@@ -262,7 +264,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveIsDeterministicTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 
 	const PlotYard::FReservation A = PlotYard::Reserve(Outline, FVector2D(0.0, 0.0),
@@ -301,7 +303,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 	const TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 	const FVector2D Gate(1600.0, 0.0);
 	const FVector2D Inward(0.0, 1.0);
@@ -360,7 +362,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlotReserveGroupsShedsIntoRunsTest::RunTest(const FString& Parameters)
 {
-	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+	const TArray<FVector2D> Outline = ReserveRect(3200.0, 2400.0);
 
 	TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 	Specs[0].RunCap = 3;
@@ -419,7 +421,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FPlotReserveBacksOneRunOnlyTest::RunTest(const FString& Parameters)
 {
 	// Deep and wide enough that more than one shed run fits.
-	const TArray<FVector2D> Outline = YardRect(6000.0, 3000.0);
+	const TArray<FVector2D> Outline = ReserveRect(6000.0, 3000.0);
 
 	TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
 	Specs[0].RunCap = 3;
