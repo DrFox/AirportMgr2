@@ -83,9 +83,16 @@ namespace TestGuide
 	 */
 	bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D& To);
 
-	/** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
+	/**
+	 * Every candidate ONE source proposes, with the rest of the chain kept out of it.
+	 *
+	 * CURSOR DEFAULTS TO THE ANCHOR'S ORIGIN, which is what every caller written before
+	 * IGuideSource::Propose took one meant: the drag had not moved. A test about where the FAR
+	 * END lands passes its own - see Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear.
+	 */
 	TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
-		const URoadNetwork& Network, const FGuideAnchor& Anchor);
+		const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const TOptional<FVector2D>& Cursor = TOptional<FVector2D>());
 }
 
 /**

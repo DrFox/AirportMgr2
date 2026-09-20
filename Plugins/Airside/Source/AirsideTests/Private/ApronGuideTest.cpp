@@ -142,7 +142,7 @@ bool FCollinearAgainstAnApronIsFlushByHalfWidthTest::RunTest(const FString& Para
 	// fit kind, and the whole claim here is that TWO candidates exist for one edge.
 	const FApronLineGuideSource Source;
 	TArray<SnapGuide::FCandidate> Candidates;
-	Source.Propose(*Actor->Network, Anchor, Candidates);
+	Source.Propose(*Actor->Network, Anchor, Anchor.Origin, Candidates);
 
 	// The apron's south edge runs along +X through y = 0. Its two flush lines sit at y = +900
 	// and y = -500 - the road's own half-widths, which are NOT equal.
@@ -179,7 +179,7 @@ bool FCollinearAgainstAnApronIsFlushByHalfWidthTest::RunTest(const FString& Para
 	Corner.HalfWidthRight = 0.0;
 
 	TArray<SnapGuide::FCandidate> Undisplaced;
-	Source.Propose(*Actor->Network, Corner, Undisplaced);
+	Source.Propose(*Actor->Network, Corner, Corner.Origin, Undisplaced);
 
 	int32 OnTheEdge = 0;
 	for (const SnapGuide::FCandidate& Candidate : Undisplaced)

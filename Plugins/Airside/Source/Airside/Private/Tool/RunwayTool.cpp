@@ -82,6 +82,43 @@ FRunwayFacts FRunwayTool::Facts() const
 	return Out;
 }
 
+namespace
+{
+	/**
+	 * The dashed line to each thing the drag is lined up with, and its label.
+	 *
+	 * THE SAME EMISSION FRoadDrawTool AND FPlotPlaceTool MAKE, deliberately: three tools drawing
+	 * one meaning three different ways would be presentation drifting apart inside the plugin.
+	 *
+	 * IT LIVES IN THE TOOL, and that is what caught this out. FBuildSession resolves the guide
+	 * onto the context, but NOTHING DRAWS IT until a tool asks - so a tool that describes an
+	 * anchor and stops has a guide computed and thrown away, showing the player nothing at all.
+	 * That is exactly what this tool did between gaining its anchor and gaining this, and the
+	 * anchor's own test passed throughout: it measured the producer and never the consumer.
+	 *
+	 * PREFIXED because this module is a UNITY build and "DrawGuide" is the name any second tool
+	 * would also pick - see the SegmentEnds collision recorded in SnapGuideChain.cpp.
+	 */
+	void RunwayDrawGuide(const FToolContext& Context, const FVector2D& Moving,
+		IToolPreviewSink& Sink)
+	{
+		if (!Context.Guide.bActive)
+		{
+			return;
+		}
+
+		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
+		{
+			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+
+			// At the line's MIDPOINT: two labels at the moving point overprint, and the plugin
+			// has no camera to offset them by a readable number of pixels.
+			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
+				EPreviewStyle::Guide);
+		}
+	}
+}
+
 bool FRunwayTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
@@ -142,20 +179,25 @@ void FRunwayTool::OnClick(const FToolContext& Context)
 		return;
 	}
 
-	// The RAW cursor, not the snap. A runway threshold is a place on the ground, not a point
-	// on the road graph - snapping it to an existing node would drag a threshold onto a
-	// taxiway junction, which is the one place a runway must never start. See FToolContext,
-	// where the same distinction is drawn for the stand and route tools.
+	// NOT THE SNAP. A runway threshold is a place on the ground, not a point on the road graph -
+	// snapping it to an existing node would drag a threshold onto a taxiway junction, which is
+	// the one place a runway must never start. See FToolContext, where the same distinction is
+	// drawn for the stand and route tools.
+	//
+	// THE GUIDE IS NOT THE SNAP, and this used to read Context.Cursor for both. GuidedCursor
+	// returns a point on the PLANE, constrained to a line the player can see - never a node off
+	// the graph - so it keeps the rule above while letting a runway be squared to an existing
+	// one. A guide drawn and then not obeyed is a mark whose meaning has gone.
 	if (!bHasThreshold)
 	{
-		Threshold = Context.Cursor;
+		Threshold = Context.GuidedCursor();
 		bHasThreshold = true;
 		return;
 	}
 
 	// Cleared BEFORE the placement, so a refusal - too short, no profile - leaves the tool
 	// idle rather than holding a threshold the player can no longer see the preview for.
-	const FVector2D Far = Context.Cursor;
+	const FVector2D Far = Context.GuidedCursor();
 	bHasThreshold = false;
 
 	Context.Target->PlaceRunway(Threshold, Far, ProfileForWidth(Context), Facts());
@@ -179,24 +221,31 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	{
 		// Nothing placed yet: show where the threshold would go, and which width is armed, so
 		// the choice is visible before it is committed rather than after.
-		Sink.Marker(Context.Cursor, EPreviewStyle::Pending);
+		Sink.Marker(Context.GuidedCursor(), EPreviewStyle::Pending);
+
+		// NOTHING TO DRAW YET, and the call is here anyway: DescribeGuideAnchor declines before
+		// the first threshold, so Guide is inactive and this is a no-op. Keeping it means the
+		// two branches of this preview cannot drift into disagreeing about whether guides show.
+		RunwayDrawGuide(Context, Context.GuidedCursor(), Sink);
 		if (Profile != nullptr)
 		{
 			// All three choices, so what the next click commits to is readable before it is
 			// committed - "45 m, concrete, precision".
-			Sink.Label(Context.Cursor,
+			Sink.Label(Context.GuidedCursor(),
 				FString::Printf(TEXT("%.0f m, %s, %s"), Profile->GetTotalWidth() / 100.0,
 					RunwaySurfaceName(Surface), RunwayApproachName(Approach)),
 				EPreviewStyle::Pending);
 		}
 		else
 		{
-			Sink.Label(Context.Cursor, TEXT("no runway profile"), EPreviewStyle::Refused);
+			Sink.Label(Context.GuidedCursor(), TEXT("no runway profile"), EPreviewStyle::Refused);
 		}
 		return;
 	}
 
-	const FVector2D Far = Context.Cursor;
+	const FVector2D Far = Context.GuidedCursor();
+	RunwayDrawGuide(Context, Far, Sink);
+
 	const FVector2D Along = Far - Threshold;
 	const double Length = Along.Size();
 

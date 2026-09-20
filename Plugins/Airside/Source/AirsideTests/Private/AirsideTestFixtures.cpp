@@ -378,10 +378,11 @@ bool LayRunway(ARoadNetworkActor* Actor, const FVector2D& From, const FVector2D&
 
 /** Every candidate ONE source proposes, with the rest of the chain kept out of it. */
 TArray<SnapGuide::FCandidate> ProposedBy(const IGuideSource& Source,
-	const URoadNetwork& Network, const FGuideAnchor& Anchor)
+	const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	const TOptional<FVector2D>& Cursor)
 {
 	TArray<SnapGuide::FCandidate> Out;
-	Source.Propose(Network, Anchor, Out);
+	Source.Propose(Network, Anchor, Cursor.Get(Anchor.Origin), Out);
 	return Out;
 }
 }

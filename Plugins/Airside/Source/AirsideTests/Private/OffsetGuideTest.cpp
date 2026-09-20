@@ -53,7 +53,8 @@ bool FOffsetGuideMatchesTheExistingGapTest::RunTest(const FString& Parameters)
 	// neighbour 4000 below it is the gap to copy.
 	const FOffsetGuideSource Source;
 	TArray<SnapGuide::FCandidate> Candidates;
-	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 5000.0)), Candidates);
+	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 5000.0)),
+		FVector2D(0.0, 5000.0), Candidates);
 
 	if (!TestEqual(TEXT("the one neighbouring road offers its gap"), Candidates.Num(), 1))
 	{
@@ -117,7 +118,8 @@ bool FOffsetGuideIgnoresACrossingRoadTest::RunTest(const FString& Parameters)
 
 	const FOffsetGuideSource Source;
 	TArray<SnapGuide::FCandidate> Crossing;
-	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 1500.0)), Crossing);
+	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 1500.0)),
+		FVector2D(0.0, 1500.0), Crossing);
 	TestEqual(TEXT("a crossing road offers no gap"), Crossing.Num(), 0);
 
 	// CONTROL LEG: add a PARALLEL neighbour and a drag beside the pair does get an offer - so
@@ -129,7 +131,8 @@ bool FOffsetGuideIgnoresACrossingRoadTest::RunTest(const FString& Parameters)
 	// accident. At 3500 the reference is the road at 3000 and there is one answer.
 	LayTaxiway(Actor, FVector2D(-10000.0, 3000.0), FVector2D(10000.0, 3000.0));
 	TArray<SnapGuide::FCandidate> WithNeighbour;
-	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 3500.0)), WithNeighbour);
+	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 3500.0)),
+		FVector2D(0.0, 3500.0), WithNeighbour);
 	if (!TestEqual(TEXT("but a parallel one does"), WithNeighbour.Num(), 1))
 	{
 		return false;
@@ -168,7 +171,8 @@ bool FOffsetGuideNeverProposesTheNeighboursLineTest::RunTest(const FString& Para
 	// neighbour lies on the same side as the drag.
 	const FOffsetGuideSource Source;
 	TArray<SnapGuide::FCandidate> Candidates;
-	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 2000.0)), Candidates);
+	Source.Propose(*Actor->Network, AnchorAt(FVector2D(0.0, 2000.0)),
+		FVector2D(0.0, 2000.0), Candidates);
 
 	for (const SnapGuide::FCandidate& Candidate : Candidates)
 	{
@@ -184,6 +188,74 @@ bool FOffsetGuideNeverProposesTheNeighboursLineTest::RunTest(const FString& Para
 	const SnapGuide::FResult Result = SnapGuide::Arbitrate(
 		Candidates, FVector2D(0.0, 2000.0), FVector2D(2000.0, 2050.0), SnapGuide::FResult());
 	TestFalse(TEXT("a drag between two roads is offered no gap to match"), Result.bActive);
+
+	return true;
+}
+
+/**
+ * A LONG ROAD STARTS FAR AWAY, AND THE GAP IT IS AIMING AT IS UNDER THE CURSOR.
+ *
+ * Reported from PIE 2026-09-20 with a diagram (samples/matching1.png): "if you build a road that
+ * had a matching gap suggestion, the next road you try to build has to have a SHORTER segment
+ * than the previous one otherwise it wont get the suggestion".
+ *
+ * LENGTH IS THE SYMPTOM, NOT THE CAUSE. FOffsetGuideSource picks its reference as the nearest
+ * segment to the ANCHOR'S ORIGIN - the player's FIRST click - and applies SearchRadiusUu from
+ * there. A longer road starts further from the pair it is being matched against, so the search
+ * finds nothing and the source returns before proposing anything at all. The cursor, which is
+ * right beside the roads in question, is never consulted: Propose is not given it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOffsetGuideReachesWhatTheCursorIsNearTest,
+	"Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOffsetGuideReachesWhatTheCursorIsNearTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// The pair to match: two east-west taxiways 4000 uu apart, the reference at y = 0.
+	IRoadEditTarget* Target = Actor;
+	const int32 NearWest = Target->PlaceNode(FVector2D(-20000.0, 0.0));
+	const int32 NearEast = Target->PlaceNode(FVector2D(20000.0, 0.0));
+	Target->ConnectNodes(NearWest, NearEast, ERoadKind::Taxiway, INDEX_NONE);
+	const int32 FarWest = Target->PlaceNode(FVector2D(-20000.0, -4000.0));
+	const int32 FarEast = Target->PlaceNode(FVector2D(20000.0, -4000.0));
+	Target->ConnectNodes(FarWest, FarEast, ERoadKind::Taxiway, INDEX_NONE);
+	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
+
+	const FOffsetGuideSource Source;
+
+	// THE SHORT ROAD - road C in the diagram. Its first click is 2000 uu from the reference,
+	// well inside the 100 m reach, and it gets the suggestion today.
+	FGuideAnchor Close;
+	Close.Origin = FVector2D(0.0, 2000.0);
+
+	TArray<SnapGuide::FCandidate> FromClose;
+	Source.Propose(*Actor->Network, Close, Close.Origin, FromClose);
+	if (!TestTrue(TEXT("a road starting beside the pair is offered their gap"),
+		FromClose.Num() > 0))
+	{
+		return false;
+	}
+
+	// THE LONG ROAD - road B. Its first click is 300 m away, outside SearchRadiusUu, but the
+	// player is dragging its far end down to exactly the same place road C ended: one gap north
+	// of the reference, which is the line they are trying to land on.
+	//
+	// THE CURSOR IS WHAT THEY ARE AIMING WITH, and the source never sees it.
+	FGuideAnchor Far;
+	Far.Origin = FVector2D(-30000.0, 30000.0);
+
+	TArray<SnapGuide::FCandidate> FromFar;
+	// THE FAR END, one gap north of the reference - the line road C landed on, and the place
+	// this drag is being aimed at. The origin is 300 m away and irrelevant to what it is near.
+	Source.Propose(*Actor->Network, Far, FVector2D(0.0, 4000.0), FromFar);
+	TestTrue(TEXT("and so is a road whose FAR END reaches them, however far off it began"),
+		FromFar.Num() > 0);
 
 	return true;
 }

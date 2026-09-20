@@ -125,13 +125,30 @@ namespace
 		}
 	}
 
+	/**
+	 * Which end of the gesture a source's reach is measured from.
+	 *
+	 * NAMED RATHER THAN INLINE so each call site SAYS which it wants: passing Anchor.Origin or
+	 * Cursor directly reads identically at a glance, and the difference is the whole of the
+	 * 2026-09-20 matching-gap report. See IGuideSource::Propose.
+	 */
+	const FVector2D& WhichWayFromHere(const FGuideAnchor& Anchor, const FVector2D&)
+	{
+		return Anchor.Origin;
+	}
+
+	const FVector2D& WhereTheFarEndLanded(const FGuideAnchor&, const FVector2D& Cursor)
+	{
+		return Cursor;
+	}
+
 	/** What a player reads for an apron. FApronSurface carries no name - see FApronGuideSource. */
 	const TCHAR* ApronEdgeName() { return TEXT("the apron edge"); }
 
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	if (Anchor.Reference.IsNearlyZero())
 	{
@@ -167,7 +184,7 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 }
 
 void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	for (const int32 Degrees : { 0, 45, 90, 135 })
 	{
@@ -191,7 +208,7 @@ void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 }
 
 void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	if (Anchor.Reference.IsNearlyZero())
 	{
@@ -231,7 +248,7 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 }
 
 void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
@@ -310,7 +327,7 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 }
 
 void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
@@ -336,9 +353,12 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		}
 
 		const FVector2D Span = B - A;
-		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+		// FROM THE CURSOR, not the origin. This source answers where the far end LANDED, and
+		// the far end is under the cursor - a drag that began 300 m away is still being aimed
+		// at the road beneath it. See IGuideSource::Propose.
+		const FVector2D On = ClosestOn(A, B, Cursor);
 		if (Span.IsNearlyZero()
-			|| FVector2D::DistSquared(On, Anchor.Origin) > Reach * Reach)
+			|| FVector2D::DistSquared(On, Cursor) > Reach * Reach)
 		{
 			continue;
 		}
@@ -368,7 +388,7 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 }
 
 void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
@@ -414,7 +434,7 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 }
 
 void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
@@ -451,7 +471,7 @@ void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 
 		// THE DASHED LINE GOES TO THE RUNWAY ITSELF, not to the point on its extension where
 		// the cursor happens to be: the player needs to see WHICH runway they are in line with.
-		InLine.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+		InLine.ReferenceAt = ClosestOn(A, B, Cursor);
 		InLine.Relation = SnapGuide::ERelation::Collinear;
 		InLine.Reference = SnapGuide::EReference::Runway;
 		InLine.Description = FString::Printf(TEXT("in line with %s"),
@@ -461,7 +481,7 @@ void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 }
 
 void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
@@ -487,7 +507,9 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 
 		const FVector2D Span = B - A;
 		if (Span.IsNearlyZero()
-			|| FVector2D::DistSquared(ClosestOn(A, B, Anchor.Origin), Anchor.Origin) > Reach * Reach)
+			// FROM THE CURSOR - a spoke is a line to LAND on, so the reach follows the end
+			// being placed rather than the one already pinned. See IGuideSource::Propose.
+			|| FVector2D::DistSquared(ClosestOn(A, B, Cursor), Cursor) > Reach * Reach)
 		{
 			continue;
 		}
@@ -502,7 +524,7 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 }
 
 void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
@@ -536,7 +558,7 @@ void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuide
 }
 
 void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	ForEachApronEdge(Network, Anchor.Origin,
 		[&Anchor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
@@ -561,15 +583,15 @@ void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 }
 
 void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
-	ForEachApronEdge(Network, Anchor.Origin,
-		[&Anchor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+	ForEachApronEdge(Network, Cursor,
+		[&Anchor, &Cursor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			SnapGuide::FCandidate InLine;
 			InLine.Direction = Along;
 			InLine.Fit = SnapGuide::EFit::Perpendicular;
-			InLine.ReferenceAt = ClosestOn(A, B, Anchor.Origin);
+			InLine.ReferenceAt = ClosestOn(A, B, Cursor);
 			InLine.Relation = SnapGuide::ERelation::Collinear;
 			InLine.Reference = SnapGuide::EReference::Apron;
 
@@ -612,12 +634,12 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 }
 
 void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	// ONE END PER EDGE, not both: an outline is closed, so every corner is the A end of exactly
 	// one edge. Visiting B as well would propose each corner's spokes twice - once per edge
 	// meeting there - and a duplicate candidate is a tie the source order then has to break.
-	ForEachApronEdge(Network, Anchor.Origin,
+	ForEachApronEdge(Network, Cursor,
 		[&Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			AddSpokes(A, Along, SnapGuide::EReference::Apron, ApronEdgeName(), Out);
@@ -625,7 +647,7 @@ void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 }
 
 void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	// NEEDS THE GESTURE'S OWN AXES, like FPointAlignGuideSource: "level with that corner" means
 	// level ALONG the edge you are extending, so with no reference there is no axis to measure
@@ -638,7 +660,7 @@ void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 	const FVector2D Along = Anchor.Reference.GetSafeNormal();
 	const FVector2D Across = RoadGeom::PerpCCW(Along);
 
-	ForEachApronEdge(Network, Anchor.Origin,
+	ForEachApronEdge(Network, Cursor,
 		[&Along, &Across, &Out](const FVector2D& A, const FVector2D& B, const FVector2D&)
 		{
 			// THE CORNER IS A POINT, so it is not displaced by the drag's half-width - there is
@@ -674,7 +696,7 @@ FString EntityNaming::Describe(const FEntityInstance& Entity)
 }
 
 void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
@@ -711,7 +733,7 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 }
 
 void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
@@ -744,8 +766,12 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		}
 
 		const FVector2D Span = B - A;
-		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
-		const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
+		// FROM THE CURSOR, and this is the 2026-09-20 report: a long road starts far from the
+		// pair it is being matched against, so an origin-keyed search found nothing and the
+		// matching-gap guide never appeared. Reported as "the next road has to have a shorter
+		// segment"; length was the symptom. See Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear.
+		const FVector2D On = ClosestOn(A, B, Cursor);
+		const double Squared = FVector2D::DistSquared(On, Cursor);
 		if (Span.IsNearlyZero() || Squared > BestSquared)
 		{
 			continue;
@@ -791,7 +817,7 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		const FVector2D Span = B - A;
 		if (Span.IsNearlyZero()
-			|| FVector2D::DistSquared(ClosestOn(A, B, Anchor.Origin), Anchor.Origin) > Reach * Reach)
+			|| FVector2D::DistSquared(ClosestOn(A, B, Cursor), Cursor) > Reach * Reach)
 		{
 			continue;
 		}
@@ -870,7 +896,8 @@ void FSnapGuideChain::AddSource(TUniquePtr<IGuideSource> Source)
 }
 
 void FSnapGuideChain::ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FSnapGuideSettings& Enabled, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, const FSnapGuideSettings& Enabled,
+	TArray<SnapGuide::FCandidate>& Out) const
 {
 	// Stage 1 gathered at most six. Reserved for more because Parallel and Collinear propose
 	// per segment, and the array is rebuilt on every context - about three times a frame, per
@@ -890,7 +917,7 @@ void FSnapGuideChain::ProposeAll(const URoadNetwork& Network, const FGuideAnchor
 		}
 
 		const int32 Before = Out.Num();
-		Source->Propose(Network, Anchor, Out);
+		Source->Propose(Network, Anchor, Cursor, Out);
 
 		// THE REFERENCE IS FILTERED AFTER, and only over what this source just added. A source
 		// may span columns - FRunwayGuideSource is Runway while FParallelGuideSource is Road,
@@ -926,6 +953,6 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 	const SnapGuide::FTuning& Tuning) const
 {
 	TArray<SnapGuide::FCandidate> Candidates;
-	ProposeAll(Network, Anchor, Enabled, Candidates);
+	ProposeAll(Network, Anchor, Cursor, Enabled, Candidates);
 	return SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
 }

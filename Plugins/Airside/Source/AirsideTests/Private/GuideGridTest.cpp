@@ -189,7 +189,7 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 	// winner is at most two candidates - an illegal cell that lost its race would never be seen.
 	const FSnapGuideChain Chain;
 	TArray<SnapGuide::FCandidate> Everything;
-	Chain.ProposeAll(*Actor->Network, Anchor, Settings, Everything);
+	Chain.ProposeAll(*Actor->Network, Anchor, Anchor.Origin, Settings, Everything);
 
 	if (!TestTrue(TEXT("the sources proposed something to check"), Everything.Num() > 0))
 	{
