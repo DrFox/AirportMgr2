@@ -307,6 +307,17 @@ public:
 	int32 NumSources() const { return Sources.Num(); }
 
 	/**
+	 * Every enabled source's candidates, gathered and gated but NOT arbitrated.
+	 *
+	 * FOR THE GRID TEST, and said plainly rather than hidden behind a friend declaration:
+	 * Resolve returns at most two winners, so a source proposing into a hole would be invisible
+	 * the moment it lost its race - which is exactly the shape of the 2026-09-20 report.
+	 * Production callers want Resolve.
+	 */
+	void ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FSnapGuideSettings& Enabled, TArray<SnapGuide::FCandidate>& Out) const;
+
+	/**
 	 * Every source's candidates, arbitrated, with Previous carrying the flicker rule.
 	 *
 	 * Previous is the caller's business to store: FBuildSession holds it, because

@@ -577,17 +577,13 @@ void FSnapGuideChain::AddSource(TUniquePtr<IGuideSource> Source)
 	}
 }
 
-SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
-	const FGuideAnchor& Anchor, const FVector2D& Cursor,
-	const SnapGuide::FResult& Previous, const FSnapGuideSettings& Enabled,
-	const SnapGuide::FTuning& Tuning) const
+void FSnapGuideChain::ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	const FSnapGuideSettings& Enabled, TArray<SnapGuide::FCandidate>& Out) const
 {
-	TArray<SnapGuide::FCandidate> Candidates;
-
 	// Stage 1 gathered at most six. Reserved for more because Parallel and Collinear propose
 	// per segment, and the array is rebuilt on every context - about three times a frame, per
 	// FBuildSession::MakeContext.
-	Candidates.Reserve(16);
+	Out.Reserve(16);
 
 	// THE PARAMETER IS `Enabled`, NOT `Sources`: the member holding the links is already called
 	// Sources, and a parameter of that name would shadow it - the loop below would then be
@@ -601,24 +597,43 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 			continue;
 		}
 
-		const int32 Before = Candidates.Num();
-		Source->Propose(Network, Anchor, Candidates);
+		const int32 Before = Out.Num();
+		Source->Propose(Network, Anchor, Out);
 
 		// THE REFERENCE IS FILTERED AFTER, and only over what this source just added. A source
-		// may span columns - the segment walkers tag Road or Runway per segment, which is not
-		// known until the segment is in hand - so there is no single column to skip up front.
+		// may span columns - FRunwayGuideSource is Runway while FParallelGuideSource is Road,
+		// and a source is not obliged to declare one - so there is no single column to skip up
+		// front the way the relation is.
 		// Walking only the newly-added range keeps this linear however many sources answered.
 		//
 		// BACKWARDS, because RemoveAtSwap moves the last element into the hole: forwards, the
 		// element swapped in would never be examined.
-		for (int32 Index = Candidates.Num() - 1; Index >= Before; --Index)
+		for (int32 Index = Out.Num() - 1; Index >= Before; --Index)
 		{
-			if (!Enabled.IsEnabled(Candidates[Index].Relation, Candidates[Index].Reference))
+			// THE TWO FLAGS ONLY, NOT IsEnabled. IsEnabled also asks IsLegalCell, and filtering
+			// on that here would SILENTLY DISCARD a source proposing into a hole - hiding the
+			// one fault Airside.Tool.GuideGridHasNoCellOutsideTheList exists to find. That test
+			// was written against IsEnabled first and passed with a source deliberately pointed
+			// at Collinear x World, which is how this was found: the gate was covering for it.
+			//
+			// A hole is unreachable because no source proposes into one, and the test is what
+			// holds that true - not a filter that quietly tidies it away.
+			if (!Enabled.IsRelationOn(Out[Index].Relation)
+				|| !Enabled.IsReferenceOn(Out[Index].Reference))
 			{
-				Candidates.RemoveAtSwap(Index, 1, EAllowShrinking::No);
+				Out.RemoveAtSwap(Index, 1, EAllowShrinking::No);
 			}
 		}
 	}
 
+}
+
+SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
+	const FGuideAnchor& Anchor, const FVector2D& Cursor,
+	const SnapGuide::FResult& Previous, const FSnapGuideSettings& Enabled,
+	const SnapGuide::FTuning& Tuning) const
+{
+	TArray<SnapGuide::FCandidate> Candidates;
+	ProposeAll(Network, Anchor, Enabled, Candidates);
 	return SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
 }

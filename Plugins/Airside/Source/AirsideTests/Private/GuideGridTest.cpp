@@ -1,5 +1,12 @@
+#include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
 #include "Solve/GuideArbiter.h"
+#include "Tool/RoadEditTarget.h"
+#include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -97,6 +104,94 @@ bool FGuideGridBreaksTiesByRelationThenReferenceTest::RunTest(const FString& Par
 	TestEqual(TEXT("what you are extending beats the road you are beside"),
 		static_cast<int32>(Second.Winners[0].Relation),
 		static_cast<int32>(SnapGuide::ERelation::Extending));
+
+	return true;
+}
+
+/**
+ * NOTHING MAY PROPOSE A PAIR THE GRID DOES NOT DECLARE.
+ *
+ * THE TEST THE 2026-09-20 REPORT NEEDED. The old registry test walked the enum against the
+ * button list and could never have caught it: Collinear x Runway was firing while nothing
+ * declared that cell existed, because there was no notion of a cell. This walks the other way -
+ * from what the chain actually produces, back to the list.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuideGridHasNoCellOutsideTheListTest,
+	"Airside.Tool.GuideGridHasNoCellOutsideTheList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// ONE OF EACH THING A SOURCE CAN LOOK AT, all within reach of one origin, so every source
+	// has something to answer with. A field holding only a taxiway would let a source proposing
+	// into a hole pass simply for having nothing to propose about.
+	//
+	// NO APRON AND NO STAND YET. FApronGuideSource is the second plan, and placing an entity
+	// needs a UEntityDefinition this fixture has no business authoring - so the Apron and Stand
+	// columns are unexercised here, and this test gets stronger when that plan lands. Said out
+	// loud because a test whose coverage is narrower than its name is how a green run comes to
+	// mean nothing.
+	if (!TestTrue(TEXT("the runway is laid"),
+		TestGuide::LayRunway(Actor, FVector2D(-30000.0, 9000.0), FVector2D(30000.0, 9000.0))))
+	{
+		return false;
+	}
+	IRoadEditTarget* Target = Actor;
+	const int32 West = Target->PlaceNode(FVector2D(-10000.0, 0.0));
+	const int32 East = Target->PlaceNode(FVector2D(10000.0, 0.0));
+	Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+	const int32 SouthWest = Target->PlaceNode(FVector2D(-10000.0, -6000.0));
+	const int32 SouthEast = Target->PlaceNode(FVector2D(10000.0, -6000.0));
+	Target->ConnectNodes(SouthWest, SouthEast, ERoadKind::Taxiway, INDEX_NONE);
+	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
+
+	FGuideAnchor Anchor;
+	Anchor.Origin = FVector2D(0.0, 3000.0);
+	Anchor.Reference = FVector2D(1.0, 0.0);
+	Anchor.ReferenceAt = FVector2D(-4000.0, 3000.0);
+	Anchor.ReferenceName = TEXT("this road");
+	Anchor.AlignTo.Add({ FVector2D(6000.0, 3000.0), TEXT("that node") });
+
+	// EVERY ROW AND EVERY COLUMN ON, which is the only setting under which a source proposing
+	// into a hole is visible at all: with anything switched off, the gate would remove the
+	// illegal candidate for the wrong reason and the test would pass while the bug stood.
+	FSnapGuideSettings Settings;
+	Settings.bExtending = true;
+	Settings.bLevelWith = true;
+	Settings.bParallel = true;
+	Settings.bCollinear = true;
+	Settings.bMatchingGap = true;
+	Settings.bRoad = true;
+	Settings.bRunway = true;
+	Settings.bApron = true;
+	Settings.bStand = true;
+	Settings.bWorld = true;
+
+	// THE CHAIN'S SOURCES, ASKED WITHOUT ARBITRATION. Resolve returns only the winners, and a
+	// winner is at most two candidates - an illegal cell that lost its race would never be seen.
+	const FSnapGuideChain Chain;
+	TArray<SnapGuide::FCandidate> Everything;
+	Chain.ProposeAll(*Actor->Network, Anchor, Settings, Everything);
+
+	if (!TestTrue(TEXT("the sources proposed something to check"), Everything.Num() > 0))
+	{
+		return false;
+	}
+
+	for (const SnapGuide::FCandidate& Candidate : Everything)
+	{
+		TestTrue(*FString::Printf(TEXT("relation %d against reference %d is a declared cell ('%s')"),
+				static_cast<int32>(Candidate.Relation),
+				static_cast<int32>(Candidate.Reference),
+				*Candidate.Description),
+			SnapGuide::IsLegalCell(Candidate.Relation, Candidate.Reference));
+	}
 
 	return true;
 }
