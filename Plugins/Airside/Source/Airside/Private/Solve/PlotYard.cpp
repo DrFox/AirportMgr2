@@ -452,16 +452,33 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 		{
 			FReservedStand Stand;
 			Stand.KitIndex = Kit;
-			Stand.RunLength = 1;
 
 			// ONLY THE FIRST STAND OF A BACK-FENCE KIT TAKES THE RAY. The back-fence pass
 			// walks depths along one line out of the gate, so a second stand offered that
 			// line either lands on the first or is refused outright. The rest are sampled
 			// like anything else.
-			const bool bPlaced = Kits[Kit].Footprint.bAgainstTheBackFence
-					&& Reservation.CeilingFor(Kit) == 0
-				? Space.PlaceAgainstTheBackFence(Kits[Kit].Footprint, Stand)
-				: Space.TryPlace(Kits[Kit].Footprint, Stand);
+			const bool bTakesTheRay = Kits[Kit].Footprint.bAgainstTheBackFence
+				&& Reservation.CeilingFor(Kit) == 0;
+
+			// AS LONG AS IT CAN, THEN SHORTER. A plot with room for two bays should get a
+			// two-bay run rather than nothing: refusing the whole run because the third bay
+			// does not fit would leave ground empty that the player drew and paid for.
+			const int32 Cap = FMath::Clamp(Kits[Kit].RunCap, 1, 64);
+			bool bPlaced = false;
+			for (int32 Length = Cap; Length >= 1 && !bPlaced; --Length)
+			{
+				// THE RUN'S FOOTPRINT, not the module's. Bays share walls, so a run is N
+				// times as wide and exactly as deep - no clearance between bays, because they
+				// are one building. FKitSpec::Footprint stays one module's so that this
+				// multiplication happens in exactly one place.
+				FFootprint Run = Kits[Kit].Footprint;
+				Run.WidthUu *= Length;
+
+				Stand.RunLength = Length;
+				bPlaced = bTakesTheRay
+					? Space.PlaceAgainstTheBackFence(Run, Stand)
+					: Space.TryPlace(Run, Stand);
+			}
 
 			if (bPlaced)
 			{

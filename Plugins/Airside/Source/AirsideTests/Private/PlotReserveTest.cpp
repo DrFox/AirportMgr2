@@ -343,4 +343,114 @@ bool FPlotReserveLeavesTheGateClearTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Three sheds become one stand three bays wide, at one heading.
+ *
+ * RESERVED AT FULL WIDTH UP FRONT, never grown. A run that grew as the player bought bays
+ * would need ground it was never promised, and the promise is the whole design: every
+ * ghosted slot is a claim that the module fits there.
+ *
+ * NO JITTER INSIDE A RUN. The bays share walls, so a heading that wandered between them
+ * would open a wedge of daylight down the middle of one building.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotReserveGroupsShedsIntoRunsTest,
+	"Airside.Solve.PlotReserveGroupsShedsIntoRuns",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotReserveGroupsShedsIntoRunsTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = YardRect(3200.0, 2400.0);
+
+	TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
+	Specs[0].RunCap = 3;
+
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		Outline, FVector2D(0.0, 0.0), FVector2D(3200.0, 0.0), FVector2D(1600.0, 0.0),
+		Specs, /*Seed=*/1234);
+
+	int32 ShedStands = 0;
+	int32 LongestRun = 0;
+	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+	{
+		if (Stand.KitIndex != 0)
+		{
+			// A KIT WITH RunCap 1 IS NEVER GROUPED, stated rather than assumed: a run rule
+			// that ignored the cap would quietly weld two tanks into one object.
+			TestEqual(TEXT("an ungrouped kit holds exactly one module"),
+				Stand.RunLength, 1);
+			continue;
+		}
+		++ShedStands;
+		TestTrue(*FString::Printf(TEXT("a shed stand holds 1..RunCap bays, got %d"),
+			Stand.RunLength), Stand.RunLength >= 1 && Stand.RunLength <= 3);
+		LongestRun = FMath::Max(LongestRun, Stand.RunLength);
+	}
+
+	TestTrue(TEXT("a 32 x 24 m plot reserves at least one shed run"), ShedStands > 0);
+
+	// GROUPING IS THE POINT, not an option the solver may decline. A plot this size has room
+	// for a full run, and a solver that placed three one-bay stands would pass every
+	// assertion above while doing none of the work.
+	TestEqual(TEXT("and at least one run is full"), LongestRun, 3);
+
+	// Grouping must not COST the plot sheds: three bays in one 12 m run occupy less ground
+	// than three scattered 4 m sheds each carrying a 1 m clearance skirt.
+	TestTrue(*FString::Printf(TEXT("grouping does not cost the plot sheds, got %d"),
+		Reservation.CeilingFor(0)), Reservation.CeilingFor(0) >= 3);
+
+	return true;
+}
+
+/**
+ * Only one shed run stands against the back fence.
+ *
+ * THE RAY IS ONE LINE OF GROUND. PlaceAgainstTheBackFence walks depths along the gate's
+ * inward ray, so a second stand offered the same ray either lands on the first or is
+ * refused. The rest of the runs are sampled like anything else. Worth watching in PIE - if a
+ * second run adrift in the yard reads wrong, cap shed runs at one rather than widening the
+ * ray.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotReserveBacksOneRunOnlyTest,
+	"Airside.Solve.PlotReserveBacksOneRunOnly",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotReserveBacksOneRunOnlyTest::RunTest(const FString& Parameters)
+{
+	// Deep and wide enough that more than one shed run fits.
+	const TArray<FVector2D> Outline = YardRect(6000.0, 3000.0);
+
+	TArray<PlotYard::FKitSpec> Specs = DepotSpecs();
+	Specs[0].RunCap = 3;
+
+	const PlotYard::FReservation Reservation = PlotYard::Reserve(
+		Outline, FVector2D(0.0, 0.0), FVector2D(6000.0, 0.0), FVector2D(3000.0, 0.0),
+		Specs, /*Seed=*/1234);
+
+	// The back-fence heading is the inward bearing EXACTLY - the sampler always adds a
+	// jitter, so counting stands at exactly that heading counts the ones that took the ray.
+	int32 Squared = 0;
+	int32 ShedStands = 0;
+	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+	{
+		if (Stand.KitIndex != 0)
+		{
+			continue;
+		}
+		++ShedStands;
+		if (Stand.Heading == UE_DOUBLE_HALF_PI)
+		{
+			++Squared;
+		}
+	}
+
+	// More than one shed run, or the claim below is about nothing.
+	TestTrue(*FString::Printf(TEXT("a 60 x 30 m plot holds more than one shed run, got %d"),
+		ShedStands), ShedStands > 1);
+	TestEqual(TEXT("exactly one shed run is square against the back fence"), Squared, 1);
+
+	return true;
+}
+
 #endif
