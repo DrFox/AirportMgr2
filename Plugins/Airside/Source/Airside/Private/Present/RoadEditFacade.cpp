@@ -897,6 +897,52 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 		return false;
 	}
 
+	// A RUNWAY MAY NOT BE DRAGGED SHORTER THAN ONE. MinSegmentLength above is the solver's
+	// floor - what a piece of pavement needs to be trimmable - and says nothing about
+	// whether a STRIP is still a runway. Dragging a threshold in is how you would shorten
+	// one, and without this the aircraft admitted to it yesterday would be refused today
+	// with nothing to say when it changed.
+	//
+	// ONE CLAUSE ON MoveNode rather than a MoveRunwayThreshold beside it: a threshold IS a
+	// road node, and a second mutator would be a second answer to "may this node move" for
+	// the two to drift apart on.
+	//
+	// THE WHOLE CHAIN, not the arm being moved - a split runway has interior nodes, and its
+	// length is the sum of its pieces.
+	for (const FRoadSegmentId& Incident : Live->Incident)
+	{
+		if (!Owner.Network->IsRunwaySegment(Incident))
+		{
+			continue;
+		}
+
+		double Length = 0.0;
+		for (const FRoadSegmentId& Piece : Owner.Network->RunwayChainOrSeed(Incident))
+		{
+			const FRoadSegment* Segment = Owner.Network->GetSegment(Piece);
+			const FRoadNode* PieceA = Segment != nullptr ? Owner.Network->GetNode(Segment->A) : nullptr;
+			const FRoadNode* PieceB = Segment != nullptr ? Owner.Network->GetNode(Segment->B) : nullptr;
+			if (PieceA == nullptr || PieceB == nullptr)
+			{
+				continue;
+			}
+
+			// Measured where the node WOULD land, as NodeCornersFit does just above.
+			const FVector2D At = (Segment->A == Node) ? To : PieceA->Position;
+			const FVector2D To2 = (Segment->B == Node) ? To : PieceB->Position;
+			Length += FVector2D::Distance(At, To2);
+		}
+
+		if (Length < Owner.MinimumRunwayLength)
+		{
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("Move refused: it would leave the runway %.0f uu long, under the %.0f "
+					 "minimum."), Length, Owner.MinimumRunwayLength);
+			return false;
+		}
+		break;
+	}
+
 	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
 	// is one edit of its own. IsEditing is what tells the two apart.
 	URoadEditHistory* Use = HistoryForEdit();

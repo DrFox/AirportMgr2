@@ -6,6 +6,8 @@
 #include "Tool/BuildSession.h"
 #include "Tool/EditTool.h"
 #include "Tool/RoadBuildTool.h"
+#include "Profiles/RoadProfile.h"
+#include "Tool/RoadNaming.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -540,6 +542,130 @@ bool FEditModeNamesItselfTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("the edit tool names itself Edit"), EditName, FString(TEXT("Edit")));
 	TestNotEqual(TEXT("and that is not the lit build tool's name"), EditName, BuildName);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMoveRunwayThresholdRefusesUnderMinimumLengthTest,
+	"Airside.Model.MoveRunwayThresholdRefusesUnderMinimumLength",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMoveRunwayThresholdRefusesUnderMinimumLengthTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// A NODE FIRST, purely to bring the network into being: the facade creates URoadNetwork
+	// lazily inside PlaceNode and PlaceRunway does NOT - see LayRunway in the fixtures, which
+	// records the crash that taught this.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+
+	// Our own bar rather than the fixture's LayRunway, which drops MinimumRunwayLength to
+	// 100 uu and would leave this test with nothing to refuse.
+	const double Minimum = 10000.0;
+	Actor->MinimumRunwayLength = Minimum;
+
+	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Profile->bContinuousThroughJunctions = true;
+
+	// Comfortably over the minimum, so there is room to drag the threshold IN.
+	Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Minimum * 1.5, 0.0), Profile);
+
+	const URoadNetwork* Network = Actor->GetNetwork();
+	if (!TestTrue(TEXT("the runway was laid"), Network != nullptr && Network->GetNodes().Num() >= 2))
+	{
+		return false;
+	}
+
+	// The threshold at the far end - the one a drag would pull inwards.
+	int32 Far = INDEX_NONE;
+	for (int32 Index = 0; Index < Network->GetNodes().Num(); ++Index)
+	{
+		if (Network->GetNodes()[Index].bAlive && Network->GetNodes()[Index].Position.X > Minimum)
+		{
+			Far = Index;
+			break;
+		}
+	}
+	if (!TestTrue(TEXT("a far threshold exists"), Far != INDEX_NONE)) { return false; }
+
+	// A SHORTENING THAT STAYS LEGAL IS ACCEPTED - the control, without which the refusal
+	// below would pass on a MoveNode that had simply stopped working on runways.
+	TestTrue(TEXT("a threshold may be pulled in while the strip stays long enough"),
+		Actor->MoveNode(Far, FVector2D(Minimum * 1.2, 0.0)));
+
+	// AND ONE THAT WOULD CUT IT UNDER THE MINIMUM IS REFUSED. MinSegmentLength is the
+	// solver's floor and says nothing about whether a STRIP is still a runway; without this
+	// clause the aircraft admitted yesterday is refused today with nothing to say when it
+	// changed.
+	TestFalse(TEXT("but not past the minimum runway length"),
+		Actor->MoveNode(Far, FVector2D(Minimum * 0.5, 0.0)));
+
+	TestTrue(TEXT("and the refused move left the threshold exactly where it was"),
+		Actor->GetNetwork()->GetNodes()[Far].Position.Equals(FVector2D(Minimum * 1.2, 0.0), 1e-6));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDraggingAThresholdRedesignatesTheRunwayTest,
+	"Airside.Model.DraggingAThresholdRedesignatesTheRunway",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDraggingAThresholdRedesignatesTheRunwayTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// THE DESIGNATOR IS DERIVED, NOT STORED - RunwayDesignator::ToPairText takes a direction
+	// and keeps nothing, and RoadNaming's header was written for this exact case: "the same
+	// strip must not become '27/09' because a node was dragged". So this needed no code at
+	// all, and this test is what stops that being an assumption.
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	Actor->MinimumRunwayLength = 10000.0;
+
+	URoadProfile* Profile = URoadProfile::MakeTransient(4500.0, 1500.0, 450.0);
+	Profile->bContinuousThroughJunctions = true;
+
+	const double Length = Actor->MinimumRunwayLength * 1.5;
+	Actor->PlaceRunway(FVector2D(0.0, 0.0), FVector2D(Length, 0.0), Profile);
+
+	const URoadNetwork* Network = Actor->GetNetwork();
+	if (!TestTrue(TEXT("the runway was laid"), Network != nullptr && Network->GetSegments().Num() > 0))
+	{
+		return false;
+	}
+
+	const FRoadSegmentId Strip = Network->SegmentIdAt(0);
+	// NAMED AS A RUNWAY, whatever the bearing works out to. Which pair of numbers +X earns
+	// is RunwayDesignator's business and the compass convention's - see
+	// Airside.Tool.WorldAxesAreNamedByTheCompass - and asserting a particular pair here
+	// would be this test holding a second opinion about north.
+	const FString Before = RoadNaming::Describe(*Network, Strip);
+	TestTrue(*FString::Printf(TEXT("the strip is named as a runway, not as a road: '%s'"),
+		*Before), Before.Contains(TEXT("runway")));
+
+	// Swing the far threshold well north - about 37 degrees, four designator steps.
+	int32 Far = INDEX_NONE;
+	for (int32 Index = 0; Index < Network->GetNodes().Num(); ++Index)
+	{
+		if (Network->GetNodes()[Index].bAlive && Network->GetNodes()[Index].Position.X > Length * 0.5)
+		{
+			Far = Index;
+			break;
+		}
+	}
+	if (!TestTrue(TEXT("a far threshold exists"), Far != INDEX_NONE)) { return false; }
+	if (!TestTrue(TEXT("the threshold swings"),
+			Actor->MoveNode(Far, FVector2D(Length * 0.8, Length * 0.6))))
+	{
+		return false;
+	}
+
+	const FString After = RoadNaming::Describe(*Actor->GetNetwork(), Strip);
+	TestNotEqual(TEXT("dragging a threshold re-derives the runway's designator, with no "
+					  "stored value to go stale"), After, Before);
 	return true;
 }
 
