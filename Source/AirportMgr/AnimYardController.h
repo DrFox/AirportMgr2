@@ -16,7 +16,7 @@ enum class EYardAction : uint8
 	NextChannel,
 	ScrubUp,
 	ScrubDown,
-	ToggleAirborne,
+	ToggleConfiguration,
 	ToggleSolo,
 	Reset,
 

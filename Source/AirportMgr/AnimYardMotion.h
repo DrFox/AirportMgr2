@@ -20,6 +20,32 @@ enum class EYardChannel : uint8
 	EngineRPM,
 };
 
+/**
+ * What the aeroplane is CONFIGURED as: where the gear is, and whether the wheels are driven.
+ *
+ * AN ENUM AND NOT A PAIR OF FLAGS. bAirborne and "the gear is moving" can each be true or
+ * false, and two of the four combinations are states no aeroplane is ever in - CLAUDE.md's own
+ * rule, and FRoadAgent carried five bools before EAgentPhase for exactly this reason.
+ *
+ * THE TWO TRAVELLING STATES ARE THE POINT. Retracting and Extending are where the legs and
+ * doors actually move, and that travel is what the bench exists to show; a configuration that
+ * was only ever OnGround or Airborne would snap between two poses and skip it.
+ */
+enum class EYardConfig : uint8
+{
+	/** Wheels driven by GroundSpeed, gear down and locked, bays hanging open. */
+	OnGround,
+
+	/** Off the wheels: they are winding down, and the legs are travelling up behind them. */
+	Retracting,
+
+	/** Clean. Wheels stopped, legs stowed, doors shut. */
+	Airborne,
+
+	/** The doors lead and the legs follow them down - see FGearPerformance::FractionsAt. */
+	Extending,
+};
+
 /** One leg of the demo loop. See FYardMotion::Stages, which is the list these name. */
 enum class EYardStage : uint8
 {
@@ -126,6 +152,19 @@ struct AIRPORTMGR_API FYardMotion
 	/** Off the wheels. A toggle, not a channel - see EYardChannel. */
 	bool bAirborne = false;
 
+	/**
+	 * Where the gear is in its cycle, as a STATE rather than as a number. See EYardConfig.
+	 *
+	 * DRIVEN BY ToggleConfiguration AND BY THE DEMO LOOP ALIKE, so the readout says the same
+	 * thing whichever is in charge - the loop's GearUp stage reports Retracting for the same
+	 * reason a commanded retraction does.
+	 */
+	EYardConfig Config = EYardConfig::OnGround;
+
+	/** How far into a commanded retraction or extension, seconds. Meaningless in the two
+	 *  settled states, and zeroed on arrival at either so it cannot be read as a stale one. */
+	double ConfigElapsed = 0.0;
+
 	// --- Loop state ---------------------------------------------------------------------
 
 	/** Frozen. Set by Scrub as well as by the pause key - see Scrub. */
@@ -154,6 +193,17 @@ struct AIRPORTMGR_API FYardMotion
 
 	static const TCHAR* StageName(EYardStage Stage);
 	static const TCHAR* ChannelName(EYardChannel Channel);
+	static const TCHAR* ConfigName(EYardConfig Config);
+
+	/**
+	 * How long one stage of the demo loop runs, seconds - read from the one stage list.
+	 *
+	 * IT IS ALSO WHAT A COMMANDED GEAR TRAVEL TAKES. A separate "how long does G take" tunable
+	 * would be a second figure for one thing, and the two would diverge the first time either
+	 * was retuned; the retraction the key commands runs for exactly as long as the one the loop
+	 * shows, because it reads the same entry.
+	 */
+	static double SecondsOf(EYardStage Stage);
 
 	// --- Driving ------------------------------------------------------------------------
 
@@ -177,11 +227,25 @@ struct AIRPORTMGR_API FYardMotion
 	void Scrub(EYardChannel Channel, double Delta);
 
 	/**
-	 * Off the wheels, or back on them - and PAUSE, for the reason Scrub pauses: the next frame
-	 * of the demo loop sets bAirborne from whichever stage it is in, so a toggle that did not
-	 * take control would last exactly one frame.
+	 * Take it off the wheels, or put it back on them - gear, bays and wheels together.
+	 *
+	 * ONE KEY FOR THE WHOLE CONFIGURATION, asked for from play. Going up: off the wheels at
+	 * once so UAirsideAgentAnim starts decaying its own wheel rate, ground speed commanded to
+	 * zero, and the legs begin travelling up. Coming down: the legs travel down, the wheels are
+	 * given taxi speed again, and it is on the ground.
+	 *
+	 * IT TRAVELS RATHER THAN ARRIVING. Advance services the travel, and does so EVEN WHILE
+	 * PAUSED - the pause freezes the demo LOOP, and a commanded change is not the loop. A pause
+	 * that froze this too would make the key do nothing at all.
+	 *
+	 * PAUSES, for the reason Scrub pauses: the next frame of the loop sets both the gear and
+	 * bAirborne from whichever stage it is in, so a command that did not take control would
+	 * last exactly one frame.
+	 *
+	 * CONTINUOUS ON A REVERSAL. Pressing it twice in a row is the obvious thing to do at a
+	 * bench, and the leg carries on from where it is rather than snapping to the end first.
 	 */
-	void ToggleAirborne();
+	void ToggleConfiguration();
 
 	/** Back to parked, loop running from the top. */
 	void Reset();

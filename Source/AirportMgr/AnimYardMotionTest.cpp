@@ -359,4 +359,152 @@ bool FAnimYardMotionStaysOnItsMarkTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardConfigurationTravelsTest,
+	"AirportMgr.View.AnimYard.ConfigurationTravels",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardConfigurationTravelsTest::RunTest(const FString& Parameters)
+{
+	// G IS A CONFIGURATION, NOT A FLAG. Asked for from play: on the ground the wheels turn and
+	// the gear is down with its bays open; airborne the wheels wind down and the legs and doors
+	// come up. Those move TOGETHER, and the gear TRAVELS - a fraction that snapped from 0 to 1
+	// would skip the one part of the cycle anybody is looking at, and would also hide the door
+	// sequencing, which is the half rigs are most often wired backwards.
+	const FGearPerformance Gear = RetractableGear();
+
+	FYardMotion Motion;
+	Motion.Reset();
+
+	TestEqual(TEXT("the bench starts on the ground"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::OnGround));
+
+	// 1. GOING UP STARTS A TRAVEL, it does not arrive. The wheels are commanded to stop in the
+	// same breath - UAirsideAgentAnim decays its own last rate from there, which is the
+	// spin-down worth watching.
+	Motion.ToggleConfiguration();
+	TestEqual(TEXT("the toggle starts a retraction"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::Retracting));
+	TestTrue(TEXT("it is off the wheels at once, so the spin-down starts"), Motion.bAirborne);
+	TestEqual(TEXT("and the wheels are commanded to stop"), Motion.GroundSpeed, 0.0, 1e-9);
+	TestEqual(TEXT("but the gear has not moved yet"), Motion.GearCycleFraction, 0.0, 1e-9);
+
+	// 2. A COMMANDED CHANGE RUNS WHILE THE LOOP IS PAUSED. The toggle pauses, as every manual
+	// input does - and if the pause froze the travel too, G would do nothing at all and the
+	// gear would sit wherever it started.
+	TestTrue(TEXT("the toggle takes control of the loop"), Motion.bPaused);
+
+	const double Travel = FYardMotion::SecondsOf(EYardStage::GearUp);
+	Motion.Advance(Travel * 0.5);
+
+	TestTrue(*FString::Printf(TEXT("the gear is part way up, not at either end (%.3f)"),
+		Motion.GearCycleFraction),
+		Motion.GearCycleFraction > 0.01 && Motion.GearCycleFraction < 0.99);
+	TestEqual(TEXT("and is still travelling"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::Retracting));
+
+	// 3. IT ARRIVES, ONCE, AND STAYS. A travel that ran past its end would send the gear back
+	// down the moment it finished coming up.
+	Motion.Advance(Travel);
+	TestEqual(TEXT("the retraction finishes"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::Airborne));
+	TestEqual(TEXT("gear fully stowed"), Motion.GearCycleFraction, 1.0, 1e-9);
+
+	Motion.Advance(Travel);
+	TestEqual(TEXT("and stays stowed however long it is left"), Motion.GearCycleFraction, 1.0, 1e-9);
+
+	// 4. CLEAN, THE DOORS ARE SHUT AND THE LEGS ARE UP - measured through the one evaluator, so
+	// this is what the rig is actually told.
+	{
+		const FAgentMotion Clean = Motion.ToAgentMotion(Gear);
+		TestEqual(TEXT("airborne: gear up"), Clean.GearDownFraction, 0.0, 1e-9);
+		TestEqual(TEXT("airborne: bays shut"), Clean.BayDoorOpenFraction, 0.0, 1e-9);
+		TestTrue(TEXT("airborne: off the wheels"), Clean.bAirborne);
+	}
+
+	// 5. COMING BACK DOWN IS THE SAME TRAVEL IN REVERSE, and the wheels are turning again at the
+	// end of it - "ground expand and open", which is what the request asked for in as many words.
+	Motion.ToggleConfiguration();
+	TestEqual(TEXT("the toggle starts an extension"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::Extending));
+
+	Motion.Advance(FYardMotion::SecondsOf(EYardStage::GearDown) * 2.0);
+	TestEqual(TEXT("the extension finishes on the ground"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::OnGround));
+	TestEqual(TEXT("gear down and locked"), Motion.GearCycleFraction, 0.0, 1e-9);
+	TestFalse(TEXT("back on the wheels"), Motion.bAirborne);
+	TestEqual(TEXT("and the wheels are turning again"), Motion.GroundSpeed, Motion.TaxiSpeed, 1e-9);
+
+	{
+		const FAgentMotion Down = Motion.ToAgentMotion(Gear);
+		TestEqual(TEXT("on the ground: gear down"), Down.GearDownFraction, 1.0, 1e-9);
+		TestEqual(TEXT("on the ground: bays open"), Down.BayDoorOpenFraction, 1.0, 1e-9);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardConfigurationReversesContinuouslyTest,
+	"AirportMgr.View.AnimYard.ConfigurationReversesContinuously",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardConfigurationReversesContinuouslyTest::RunTest(const FString& Parameters)
+{
+	// PRESSING G TWICE IN A ROW IS THE OBVIOUS THING TO DO at a bench - you are looking for the
+	// pose where a rig breaks, so you run the gear up, change your mind, and run it back. The
+	// leg must carry on from where it is, not jump to the top and start again: a snap there
+	// reads as the rig failing rather than the bench restarting.
+	FYardMotion Motion;
+	Motion.Reset();
+
+	Motion.ToggleConfiguration();
+	Motion.Advance(FYardMotion::SecondsOf(EYardStage::GearUp) * 0.4);
+
+	const double Caught = Motion.GearCycleFraction;
+	TestTrue(*FString::Printf(TEXT("the gear is genuinely mid-travel (%.3f)"), Caught),
+		Caught > 0.05 && Caught < 0.95);
+
+	Motion.ToggleConfiguration();
+	TestEqual(TEXT("reversing does not move the leg on the frame it is commanded"),
+		Motion.GearCycleFraction, Caught, 1e-9);
+	TestEqual(TEXT("and it is now extending"),
+		static_cast<int32>(Motion.Config), static_cast<int32>(EYardConfig::Extending));
+
+	// AND IT GOES THE OTHER WAY from there, rather than sitting still or carrying on up.
+	Motion.Advance(FYardMotion::SecondsOf(EYardStage::GearDown) * 0.2);
+	TestTrue(*FString::Printf(TEXT("the leg is coming back down (%.3f from %.3f)"),
+		Motion.GearCycleFraction, Caught), Motion.GearCycleFraction < Caught);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardScrubCancelsTheTravelTest,
+	"AirportMgr.View.AnimYard.ScrubCancelsTheTravel",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardScrubCancelsTheTravelTest::RunTest(const FString& Parameters)
+{
+	// TWO THINGS WRITING THE GEAR FRACTION WOULD FIGHT FOR IT EVERY FRAME. A hand on the gear
+	// channel wins: the travel is abandoned where it stands and the value stays where it was
+	// dragged, rather than being overwritten by the rest of a cycle nobody asked to continue.
+	FYardMotion Motion;
+	Motion.Reset();
+	Motion.ToggleConfiguration();
+	Motion.Advance(FYardMotion::SecondsOf(EYardStage::GearUp) * 0.3);
+
+	Motion.Scrub(EYardChannel::GearCycle, Motion.ChannelStep(EYardChannel::GearCycle));
+	const double Dragged = Motion.GearCycleFraction;
+
+	TestTrue(TEXT("the travel is over"), Motion.Config != EYardConfig::Retracting
+		&& Motion.Config != EYardConfig::Extending);
+
+	Motion.Advance(FYardMotion::SecondsOf(EYardStage::GearUp) * 2.0);
+	TestEqual(TEXT("and nothing carries the leg on afterwards"),
+		Motion.GearCycleFraction, Dragged, 1e-9);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

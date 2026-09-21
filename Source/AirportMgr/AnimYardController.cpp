@@ -28,7 +28,8 @@ namespace
 		{ EKeys::Tab,            EYardAction::NextChannel,    TEXT("next channel") },
 		{ EKeys::Period,         EYardAction::ScrubUp,        TEXT("scrub up (hold Shift: fine)") },
 		{ EKeys::Comma,          EYardAction::ScrubDown,      TEXT("scrub down (hold Shift: fine)") },
-		{ EKeys::G,              EYardAction::ToggleAirborne, TEXT("on the wheels / airborne") },
+		{ EKeys::G,              EYardAction::ToggleConfiguration,
+			TEXT("airborne / on the wheels: gear, bays and wheels together") },
 		{ EKeys::F,              EYardAction::ToggleSolo,     TEXT("solo the nearest model") },
 		{ EKeys::R,              EYardAction::Reset,          TEXT("reset and resume") },
 		{ EKeys::MouseScrollUp,  EYardAction::ZoomIn,         TEXT("zoom in") },
@@ -281,8 +282,8 @@ void AAnimYardController::Do(EYardAction Action)
 		Bench.Scrub(CaretChannel, -Bench.ChannelStep(CaretChannel) * ScrubScale());
 		break;
 
-	case EYardAction::ToggleAirborne:
-		Bench.ToggleAirborne();
+	case EYardAction::ToggleConfiguration:
+		Bench.ToggleConfiguration();
 		break;
 
 	case EYardAction::ToggleSolo:

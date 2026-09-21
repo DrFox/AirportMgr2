@@ -121,8 +121,11 @@ void AAnimYardHUD::DrawHUD()
 			*Meter(Bench.Value(Channel), Min, Max)));
 	}
 
-	Line(YardBodyColour, FString::Printf(TEXT("  %-9s %10s"), TEXT("wheels"),
-		Bench.bAirborne ? TEXT("airborne") : TEXT("on ground")));
+	// THE CONFIGURATION, NOT THE FLAG. G moves the gear, the bays and the wheels together, and
+	// the two TRAVELLING states are most of what there is to watch - a row that only ever said
+	// airborne or on-ground would go blank for the seconds that matter.
+	Line(YardBodyColour, FString::Printf(TEXT("  %-9s %s"), TEXT("config"),
+		FYardMotion::ConfigName(Bench.Config)));
 
 	// THE UNDRIVEN MODELS, NAMED. Three of the four ground vehicles have no Animation Blueprint
 	// at all today, so a still model in this yard is usually correct - and a bench that left you

@@ -44,6 +44,49 @@ namespace
 	};
 
 	/**
+	 * Move a commanded gear travel on, and settle it when it arrives.
+	 *
+	 * PREFIXED, like everything else that lives in this file's anonymous namespace - the module
+	 * is a unity build, so these names are not file-private in practice. See AnimYardHUD.cpp,
+	 * which broke the build at five unrelated lines by forgetting it.
+	 *
+	 * CLAMPED, NOT WRAPPED, the same rule FGearPerformance::FractionsAt states for the same
+	 * reason: a cycle that ran past its end would send the gear back down the moment it
+	 * finished coming up.
+	 */
+	void AdvanceYardConfiguration(FYardMotion& Motion, double DeltaSeconds)
+	{
+		const bool bRetracting = Motion.Config == EYardConfig::Retracting;
+		const bool bExtending = Motion.Config == EYardConfig::Extending;
+		if (!bRetracting && !bExtending)
+		{
+			return;
+		}
+
+		const double Travel = FYardMotion::SecondsOf(
+			bRetracting ? EYardStage::GearUp : EYardStage::GearDown);
+
+		Motion.ConfigElapsed = FMath::Clamp(Motion.ConfigElapsed + DeltaSeconds, 0.0, Travel);
+		const double Alpha = Travel > 0.0 ? Motion.ConfigElapsed / Travel : 1.0;
+
+		// ONE IS STOWED - see FYardMotion::GearCycleFraction. A retraction walks it up and an
+		// extension walks it down, and FractionsAt makes the second the exact time-reverse of
+		// the first, so the two read one curve from opposite ends.
+		Motion.GearCycleFraction = bRetracting ? Alpha : 1.0 - Alpha;
+
+		if (Motion.ConfigElapsed >= Travel)
+		{
+			Motion.Config = bRetracting ? EYardConfig::Airborne : EYardConfig::OnGround;
+			Motion.ConfigElapsed = 0.0;
+
+			// SNAPPED TO THE END rather than left at whatever the last alpha computed. A leg
+			// resting at 0.9999 is a leg not quite locked, and that shows on a door whose two
+			// free edges are authored to meet at 0.0 mm.
+			Motion.GearCycleFraction = bRetracting ? 1.0 : 0.0;
+		}
+	}
+
+	/**
 	 * Which stage a loop time lands in, and how far through it, 0..1.
 	 *
 	 * SHARED BY Advance AND CurrentStage rather than written twice, because the HUD's stage
@@ -121,6 +164,11 @@ const TCHAR* FYardMotion::ChannelName(EYardChannel Channel)
 
 void FYardMotion::Advance(double DeltaSeconds)
 {
+	// SERVICED BEFORE THE PAUSE CHECK, AND THAT IS THE POINT. bPaused freezes the demo LOOP; a
+	// configuration the player commanded is not the loop, and ToggleConfiguration pauses as it
+	// starts one. A travel that stopped here would make the key appear to do nothing.
+	AdvanceYardConfiguration(*this, DeltaSeconds);
+
 	if (bPaused) { return; }
 
 	const double Loop = LoopSeconds();
@@ -226,12 +274,35 @@ void FYardMotion::Advance(double DeltaSeconds)
 		bAirborne = false;
 		break;
 	}
+
+	// THE LOOP OWNS THE CONFIGURATION WHILE IT IS RUNNING, so the readout says the same thing
+	// whichever is in charge: the loop's own gear stages report a travel, exactly as a commanded
+	// retraction does, rather than the HUD calling a moving leg "airborne, clean".
+	//
+	// UNREACHABLE WHILE A COMMAND IS IN FLIGHT: ToggleConfiguration pauses, and a paused loop
+	// has already returned above. The two never write this field on the same frame.
+	Config = Stage == EYardStage::GearUp
+		? EYardConfig::Retracting
+		: Stage == EYardStage::GearDown
+			? EYardConfig::Extending
+			: (bAirborne ? EYardConfig::Airborne : EYardConfig::OnGround);
+	ConfigElapsed = 0.0;
 }
 
 void FYardMotion::Scrub(EYardChannel Channel, double Delta)
 {
 	// See the header: pausing is part of the scrub, not the caller's job to remember.
 	bPaused = true;
+
+	// A HAND ON A CHANNEL CANCELS A COMMANDED TRAVEL. Two writers to the gear fraction would
+	// fight for it every frame, and the drag would be overwritten by the rest of a cycle nobody
+	// asked to continue. The leg is left exactly where it stands; which settled state that
+	// counts as is decided by the wheels, which the travel has already set.
+	if (Config == EYardConfig::Retracting || Config == EYardConfig::Extending)
+	{
+		Config = bAirborne ? EYardConfig::Airborne : EYardConfig::OnGround;
+		ConfigElapsed = 0.0;
+	}
 
 	double Min = 0.0;
 	double Max = 0.0;
@@ -247,11 +318,63 @@ void FYardMotion::Scrub(EYardChannel Channel, double Delta)
 	}
 }
 
-void FYardMotion::ToggleAirborne()
+const TCHAR* FYardMotion::ConfigName(EYardConfig InConfig)
 {
-	// See the header: taking control is the whole of what makes the toggle stick.
+	switch (InConfig)
+	{
+	case EYardConfig::OnGround:   return TEXT("on the wheels");
+	case EYardConfig::Retracting: return TEXT("gear retracting");
+	case EYardConfig::Airborne:   return TEXT("airborne, clean");
+	case EYardConfig::Extending:  return TEXT("gear extending");
+	}
+	return TEXT("?");
+}
+
+double FYardMotion::SecondsOf(EYardStage Stage)
+{
+	// READ FROM THE ONE STAGE LIST. See the header: a commanded gear travel runs for exactly as
+	// long as the one the demo loop shows, because there is only one figure to read.
+	for (const FYardStage& Entry : GStages)
+	{
+		if (Entry.Stage == Stage)
+		{
+			return Entry.Seconds;
+		}
+	}
+	return 0.0;
+}
+
+void FYardMotion::ToggleConfiguration()
+{
+	// See the header: taking control is the whole of what makes the command stick.
 	bPaused = true;
-	bAirborne = !bAirborne;
+
+	// EXTENDING COUNTS AS BEING ON THE WAY DOWN, so pressing the key during one sends the leg
+	// back up rather than restarting the extension - which is what "toggle" has to mean when
+	// there are four states and only two of them are settled.
+	const bool bGoingUp = Config == EYardConfig::OnGround || Config == EYardConfig::Extending;
+
+	// SEEDED FROM WHERE THE LEG ACTUALLY IS. Reversing halfway up carries on down from halfway;
+	// zeroing the elapsed time would snap it to the end it started from, which at a bench reads
+	// as the rig failing rather than as the bench restarting. The progress is measured along the
+	// NEW direction, which is why it is one minus the fraction when coming down.
+	const double Travel = SecondsOf(bGoingUp ? EYardStage::GearUp : EYardStage::GearDown);
+	const double Progress = bGoingUp ? GearCycleFraction : 1.0 - GearCycleFraction;
+	ConfigElapsed = FMath::Clamp(Progress, 0.0, 1.0) * Travel;
+
+	Config = bGoingUp ? EYardConfig::Retracting : EYardConfig::Extending;
+
+	// THE WHEELS CHANGE ON THE COMMAND, NOT AT THE END OF THE TRAVEL. Going up, bAirborne is
+	// what makes UAirsideAgentAnim decay its own wheel rate over WheelSpinDownSeconds, and that
+	// spin-down is the thing worth watching - it has to begin as the legs do, not two seconds
+	// after them. Coming down the wheels are given taxi speed again, which is the "ground expand
+	// and open" half of the request: something for the wheel animation to actually run on.
+	//
+	// THIS OVERWRITES A SCRUBBED SPEED, deliberately. The key is a configuration command - put
+	// it on the ground with its wheels turning - rather than a request to move one channel, and
+	// a version that preserved a hand-set zero would land an aeroplane on dead wheels.
+	bAirborne = bGoingUp;
+	GroundSpeed = bGoingUp ? 0.0 : TaxiSpeed;
 }
 
 void FYardMotion::Reset()
@@ -266,6 +389,8 @@ void FYardMotion::Reset()
 	bAirborne = false;
 	bPaused = false;
 	LoopTime = 0.0;
+	Config = EYardConfig::OnGround;
+	ConfigElapsed = 0.0;
 }
 
 EYardStage FYardMotion::CurrentStage() const

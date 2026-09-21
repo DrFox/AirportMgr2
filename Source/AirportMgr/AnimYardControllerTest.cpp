@@ -157,11 +157,11 @@ bool FAnimYardActionsDriveTheYardTest::RunTest(const FString& Parameters)
 	// next frame of the demo loop puts it straight back.
 	Controller->Do(EYardAction::Reset);
 	TestFalse(TEXT("reset leaves it on the ground"), Yard->GetMotion().bAirborne);
-	Controller->Do(EYardAction::ToggleAirborne);
+	Controller->Do(EYardAction::ToggleConfiguration);
 	TestTrue(TEXT("the airborne action lifts it off the wheels"), Yard->GetMotion().bAirborne);
 	TestTrue(TEXT("and pauses, so the loop cannot undo it on the next frame"),
 		Yard->GetMotion().bPaused);
-	Controller->Do(EYardAction::ToggleAirborne);
+	Controller->Do(EYardAction::ToggleConfiguration);
 	TestFalse(TEXT("and puts it back down"), Yard->GetMotion().bAirborne);
 
 	// 5. RESET PARKS EVERYTHING AND RESUMES. See FYardMotion::Reset for why resuming is part
