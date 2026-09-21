@@ -18,7 +18,6 @@
 class ARoadNetworkActor;
 class UAircraftType;
 class UOpsRuntime;
-class UFlightBoard;
 struct FAirframe;
 struct FStandFacts;
 class UBuildCameraComponent;
@@ -103,7 +102,9 @@ public:
 	bool bShowGuidelines = true;
 
 	/**
-	 * What key 7 lands. Null - the shipping state - lands the content set's default.
+	 * What key 7 lands. Null lands the content set's default; DefaultGame.ini currently sets
+	 * this to a specific test type (issue #191 fixed this comment - it used to call null "the
+	 * shipping state", which stopped being true the moment a project .ini line set it).
 	 *
 	 * A TESTING OVERRIDE, and deliberately shaped so it cannot quietly become the game's
 	 * behaviour: it is consulted by the Land key and by nothing else, so offers, dispatch and
@@ -303,15 +304,15 @@ public:
 	 *  ResolveCallCountForTest. Read as a DELTA across calls, not an absolute count. */
 	int32 HasRunwayRecomputeCountForTest() const { return RunwayRecomputeCountForTest; }
 
-	/**
-	 * Move the landing fee one step, up or down. See UPricing::LandingFeeMultiplier.
-	 *
-	 * STEPS RATHER THAN A FREE SLIDER, for the reason ESimSpeed is an enum and not a float:
-	 * the game offers these settings, and two code paths cannot then disagree about what
-	 * "higher" means. Clamped at both ends - a zero fee would make DemandFactor meaningless
-	 * and a tenfold one would empty the inbox with no way back that reads as a mistake.
-	 */
-	void StepLandingFee(int32 Delta);
+	// StepLandingFee(int32) WAS HERE, and was REMOVED, not forwarded, by issue #191: the
+	// game.feedown/feeup actions used to reach it purely to get from a controller reference to
+	// UOpsRuntime::GetPricing(). FBuildActionContext (BuildActions.h) now hands them Runtime
+	// directly, so those actions call UPricing::StepLandingFee themselves and this method had
+	// no remaining caller to forward for - see FBuildActionContext's own comment on why a verb
+	// no longer has to become a controller method just to reach the object that actually owns
+	// it. Not a UFUNCTION, so nothing outside this file could have named it either - see the
+	// refactor contract's "every UFUNCTION and interface virtual stays reachable" clause,
+	// which this removal does not fall under.
 
 	/** Open or close the ledger panel. The game.ledger action's verb. */
 	void ToggleLedger();
@@ -338,17 +339,13 @@ public:
 	 * NOT a tool, and not in ToolRegistry(): an arrival is one decision taken at the view
 	 * focus rather than a gesture with states, so giving it an IBuildTool would be inventing
 	 * a mode for it to sit in.
+	 *
+	 * A THIN FORWARDER as of issue #191: resolving which airframe lands and driving it through
+	 * the flight board are now UOpsRuntime::LandNear's job (Present/ of AirportOps, which
+	 * already owns the board) - this supplies the view focus, the configured test override if
+	 * any, and the one path LandNear cannot cover: the editor mode's no-runtime direct dispatch.
 	 */
 	void LandAircraftNearViewFocus();
-
-	/**
-	 * The land key's flight-board path: one flight with an immediate ETA, accepted at once.
-	 *
-	 * Split out rather than inlined so that the no-runtime fallback above it stays legible -
-	 * the editor mode has no game instance, and so no board, and the key must still work
-	 * there. Logs the refusal sentence when the airport cannot take it.
-	 */
-	void LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board, const FAirframe& Airframe);
 
 	void OnClearNetwork();
 	void OnUndo();

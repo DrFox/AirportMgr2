@@ -1,5 +1,6 @@
 #include "Model/Pricing.h"
 
+#include "AirportOpsLog.h"
 #include "Model/RoadEntity.h"
 #include "Solve/IcaoCode.h"
 
@@ -25,6 +26,28 @@ double UPricing::LandingFee(const FAirframe& Airframe) const
 {
 	const FString Letter = IcaoCode::LetterForWingspan(Airframe.Wingspan);
 	return BaseLandingFeeForLetter(Letter) * LandingFeeMultiplier;
+}
+
+void UPricing::StepLandingFee(int32 Direction)
+{
+	if (Direction == 0)
+	{
+		return;
+	}
+
+	// TEN PER CENT A STEP, and clamped at both ends - see this method's own header comment for
+	// why. MOVED FROM ARoadBuildController::StepLandingFee by issue #191.
+	constexpr double Step = 0.1;
+	constexpr double Floor = 0.5;
+	constexpr double Ceiling = 2.0;
+
+	const double Was = LandingFeeMultiplier;
+	LandingFeeMultiplier = FMath::Clamp(Was + (Direction > 0 ? Step : -Step), Floor, Ceiling);
+
+	// LOGGED, because the lever changes the offer cadence for the rest of the game and "why did
+	// the offers dry up" is otherwise a question the log cannot answer.
+	UE_LOG(LogAirportOps, Log, TEXT("Landing fee %.0f%% -> %.0f%%"),
+		Was * 100.0, LandingFeeMultiplier * 100.0);
 }
 
 double UPricing::ParkingFeePerHour(const FAirframe& Airframe) const

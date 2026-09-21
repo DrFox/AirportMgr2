@@ -1,8 +1,21 @@
 #include "BuildActions.h"
+#include "Model/Pricing.h"
+#include "Present/OpsRuntime.h"
+#include "Present/OpsRuntimeSubsystem.h"
 #include "RoadBuildController.h"
 #include "Tool/BuildSession.h"
 
 #define LOCTEXT_NAMESPACE "AirportMgr"
+
+FBuildActionContext::FBuildActionContext(ARoadBuildController& InController)
+	: Controller(InController)
+	// SAME LOOKUP TryRun always did inline (UOpsRuntimeSubsystem::Get(GetWorld())) - moved
+	// here so every verb reads it from the context rather than repeating the call, the way
+	// HasRuntime and (before issue #191) StepLandingFee/LandAircraftNearViewFocus each did.
+	, Runtime(UOpsRuntimeSubsystem::Get(InController.GetWorld()))
+	, Target(InController.GetTarget())
+{
+}
 
 namespace
 {
@@ -26,14 +39,17 @@ const TCHAR* ActionSectionName(EActionSection Section)
 
 namespace
 {
-	bool Always(const ARoadBuildController&) { return true; }
-	bool Never(const ARoadBuildController&) { return false; }
-	bool HasRuntime(const ARoadBuildController& C) { return C.HasOpsRuntime(); }
+	bool Always(const FBuildActionContext&) { return true; }
+	bool Never(const FBuildActionContext&) { return false; }
+	/** Ctx.Runtime rather than C.HasOpsRuntime(): the SAME UOpsRuntimeSubsystem::Get the
+	 *  controller's own query ran, resolved once per action rather than once per predicate -
+	 *  see FBuildActionContext's own comment (issue #191). */
+	bool HasRuntime(const FBuildActionContext& Ctx) { return Ctx.Runtime != nullptr; }
 
 	FBuildAction Make(const TCHAR* Id, EActionSection Section, FText Label, FKey Key, bool bCtrl,
-		TFunction<void(ARoadBuildController&)> Execute,
-		TFunction<bool(const ARoadBuildController&)> IsActive,
-		TFunction<bool(const ARoadBuildController&)> IsEnabled)
+		TFunction<void(FBuildActionContext&)> Execute,
+		TFunction<bool(const FBuildActionContext&)> IsActive,
+		TFunction<bool(const FBuildActionContext&)> IsEnabled)
 	{
 		FBuildAction A;
 		A.Id = Id;
@@ -53,12 +69,12 @@ namespace
 
 		// --- Time ---
 		Out.Add(Make(TEXT("time.slower"), EActionSection::Time, LOCTEXT("Slower", "Slower"), EKeys::Comma, false,
-			[](ARoadBuildController& C) { C.StepSpeed(-1); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.StepSpeed(-1); }, Never, HasRuntime));
 		Out.Add(Make(TEXT("time.pause"), EActionSection::Time, LOCTEXT("Pause", "Pause"), EKeys::P, false,
-			[](ARoadBuildController& C) { C.TogglePause(); },
-			[](const ARoadBuildController& C) { return C.IsPaused(); }, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.TogglePause(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsPaused(); }, HasRuntime));
 		Out.Add(Make(TEXT("time.faster"), EActionSection::Time, LOCTEXT("Faster", "Faster"), EKeys::Period, false,
-			[](ARoadBuildController& C) { C.StepSpeed(+1); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.StepSpeed(+1); }, Never, HasRuntime));
 
 		// --- Tools: GENERATED from Airside's registry, never listed here ---
 		const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
@@ -67,8 +83,8 @@ namespace
 			const FToolRegistration& Tool = Registry[Index];
 			Out.Add(Make(*FString::Printf(TEXT("tool.%s"), *Tool.Name.ToString().ToLower()),
 				EActionSection::Tools, Tool.Name, Tool.Key, false,
-				[Index](ARoadBuildController& C) { C.SelectTool(Index); },
-				[Index](const ARoadBuildController& C) { return C.GetActiveToolIndex() == Index; },
+				[Index](FBuildActionContext& Ctx) { Ctx.Controller.SelectTool(Index); },
+				[Index](const FBuildActionContext& Ctx) { return Ctx.Controller.GetActiveToolIndex() == Index; },
 				Always));
 		}
 
@@ -83,8 +99,8 @@ namespace
 		// "Build [Enter]" at the cursor, and it reads the key back off this entry. A bar-only
 		// action would leave that prompt naming no key at all.
 		Out.Add(Make(TEXT("edit.build"), EActionSection::Edit, LOCTEXT("Build", "Build"), EKeys::Enter, false,
-			[](ARoadBuildController& C) { C.OnBuild(); }, Never,
-			[](const ARoadBuildController& C) { return C.GetToolReadout().bCommittable; }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.OnBuild(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetToolReadout().bCommittable; }));
 		// THE THREE MODES, one row each and one toggle behind all three. They are mutually
 		// exclusive because they are one enum on the session, not because these three rows
 		// agree to be - see EGestureMode, and the report that made that necessary: Remove and
@@ -93,11 +109,11 @@ namespace
 		// REMOVE AND INSERT HAVE NO KEY because Ctrl and Shift already mean them while HELD.
 		// These rows are the sticky form, for work that outlasts a comfortable reach.
 		Out.Add(Make(TEXT("edit.remove"), EActionSection::Edit, LOCTEXT("Remove", "Remove"), EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Remove); },
-			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Remove; }, Always));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Remove); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Remove; }, Always));
 		Out.Add(Make(TEXT("edit.insert"), EActionSection::Edit, LOCTEXT("Insert", "Insert"), EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Insert); },
-			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Insert; }, Always));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Insert); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Insert; }, Always));
 
 		// EDIT IS THE ONE WITH A KEY, because it is the one you enter deliberately and stay
 		// in. M, not E: Q/E is camera turn, polled every frame in UpdateView. M is also the
@@ -106,56 +122,77 @@ namespace
 		// GREYED when the lit tool exposes no handles, so the bar answers "why can I not edit
 		// this" instead of lighting over a mode that would do nothing at all.
 		Out.Add(Make(TEXT("edit.editmode"), EActionSection::Edit, LOCTEXT("EditMode", "Edit"), EKeys::M, false,
-			[](ARoadBuildController& C) { C.ToggleGestureMode(EGestureMode::Edit); },
-			[](const ARoadBuildController& C) { return C.GetGestureMode() == EGestureMode::Edit; },
-			[](const ARoadBuildController& C) { return C.ActiveToolHasEditHandles(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGestureMode(EGestureMode::Edit); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.GetGestureMode() == EGestureMode::Edit; },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.ActiveToolHasEditHandles(); }));
 		Out.Add(Make(TEXT("edit.undo"), EActionSection::Edit, LOCTEXT("Undo", "Undo"), EKeys::Z, true,
-			[](ARoadBuildController& C) { C.OnUndo(); }, Never,
-			[](const ARoadBuildController& C) { return C.CanUndo(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.OnUndo(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanUndo(); }));
 		Out.Add(Make(TEXT("edit.redo"), EActionSection::Edit, LOCTEXT("Redo", "Redo"), EKeys::Y, true,
-			[](ARoadBuildController& C) { C.OnRedo(); }, Never,
-			[](const ARoadBuildController& C) { return C.CanRedo(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.OnRedo(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanRedo(); }));
 		Out.Add(Make(TEXT("edit.clear"), EActionSection::Edit, LOCTEXT("Clear", "Clear"), EKeys::BackSpace, false,
-			[](ARoadBuildController& C) { C.OnClearNetwork(); }, Never,
-			[](const ARoadBuildController& C) { return C.HasNetworkContent(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.OnClearNetwork(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasNetworkContent(); }));
 
 		// --- Aircraft ---
 		Out.Add(Make(TEXT("aircraft.land"), EActionSection::Aircraft, LOCTEXT("Land", "Land"), EKeys::Seven, false,
-			[](ARoadBuildController& C) { C.LandAircraftNearViewFocus(); }, Never,
-			[](const ARoadBuildController& C) { return C.HasRunway(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.LandAircraftNearViewFocus(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasRunway(); }));
 		Out.Add(Make(TEXT("aircraft.guidelines"), EActionSection::Aircraft, LOCTEXT("Guidelines", "Guidelines"), EKeys::G, false,
-			[](ARoadBuildController& C) { C.OnToggleGuidelines(); },
-			[](const ARoadBuildController& C) { return C.IsGuidelineOverlayOn(); }, Always));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.OnToggleGuidelines(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuidelineOverlayOn(); }, Always));
 
 		// --- Selection: the inspector's verbs. Rows HERE so the panel's buttons, the bar
 		// and the C key are one list (spec §6.2). Depart has no key: a key that departed
 		// whatever happened to be selected is a misclick away from an unintended take-off.
 		Out.Add(Make(TEXT("selection.depart"), EActionSection::Selection, LOCTEXT("Depart", "Depart"), EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.DepartSelected(); }, Never,
-			[](const ARoadBuildController& C) { return C.CanDepartSelected(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.DepartSelected(); }, Never,
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.CanDepartSelected(); }));
 		Out.Add(Make(TEXT("selection.follow"), EActionSection::Selection, LOCTEXT("Follow", "Follow"), EKeys::C, false,
-			[](ARoadBuildController& C) { C.ToggleWatchAgent(); },
-			[](const ARoadBuildController& C) { return C.IsWatchingAgent(); },
-			[](const ARoadBuildController& C) { return C.HasSelectedAircraft() || C.HasAgent() || C.IsWatchingAgent(); }));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleWatchAgent(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsWatchingAgent(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.HasSelectedAircraft() || Ctx.Controller.HasAgent() || Ctx.Controller.IsWatchingAgent(); }));
 
 		// --- Game ---
 		Out.Add(Make(TEXT("game.save"), EActionSection::Game, LOCTEXT("Save", "Save"), EKeys::K, false,
-			[](ARoadBuildController& C) { C.QuickSave(); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.QuickSave(); }, Never, HasRuntime));
 		Out.Add(Make(TEXT("game.load"), EActionSection::Game, LOCTEXT("Load", "Load"), EKeys::L, false,
-			[](ARoadBuildController& C) { C.QuickLoad(); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.QuickLoad(); }, Never, HasRuntime));
 
 		// THE FEE LEVER, and it goes THROUGH THIS TABLE rather than beside it. BuildActions is
 		// already the one list the bar, the key bindings and the inspector all read, and a pair
 		// of hand-added buttons next to the generated ones is this codebase's named recurring
 		// bug - see CLAUDE.md, "Check where a list is CONSUMED".
 		//
+		// BOUND STRAIGHT TO Ctx.Runtime's UPricing, not a controller forwarder (issue #191):
+		// StepLandingFee's step size, floor and ceiling are UPricing's own decision now (see
+		// its header), and this verb's real owner was never ARoadBuildController - the
+		// controller used to exist only as a proxy onto UOpsRuntime::GetPricing(). This is the
+		// case FBuildActionContext exists for: a verb whose owner is not the controller no
+		// longer has to become a controller method to be reachable from here.
+		//
 		// No keys: a mis-hit that silently repriced every future offer is worse than a click.
 		Out.Add(Make(TEXT("game.feedown"), EActionSection::Game, LOCTEXT("FeeDown", "Fee -"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.StepLandingFee(-1); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx)
+			{
+				if (UPricing* Pricing = Ctx.Runtime != nullptr ? Ctx.Runtime->GetPricing() : nullptr)
+				{
+					Pricing->StepLandingFee(-1);
+				}
+			},
+			Never, HasRuntime));
 		Out.Add(Make(TEXT("game.feeup"), EActionSection::Game, LOCTEXT("FeeUp", "Fee +"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.StepLandingFee(+1); }, Never, HasRuntime));
+			[](FBuildActionContext& Ctx)
+			{
+				if (UPricing* Pricing = Ctx.Runtime != nullptr ? Ctx.Runtime->GetPricing() : nullptr)
+				{
+					Pricing->StepLandingFee(+1);
+				}
+			},
+			Never, HasRuntime));
 
 		// B, and a key is fine here where the fee lever's is not: opening a panel changes
 		// nothing about the airport, so a mis-hit costs a keystroke rather than repricing
@@ -163,8 +200,8 @@ namespace
 		// pause and the overlay toggles already do.
 		Out.Add(Make(TEXT("game.ledger"), EActionSection::Game, LOCTEXT("Ledger", "Ledger"),
 			EKeys::B, false,
-			[](ARoadBuildController& C) { C.ToggleLedger(); },
-			[](const ARoadBuildController& C) { return C.IsLedgerShowing(); }, HasRuntime));
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleLedger(); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsLedgerShowing(); }, HasRuntime));
 
 		// TWO LISTS, ONE PER AXIS, and AirportMgr.Actions.GuideGridIsInTheRegistry walks BOTH
 		// enums against them rather than counting: a row or column added without a button is a
@@ -175,13 +212,13 @@ namespace
 		// hold, which is not a registry action - see FToolContext::bSuspendGuides.
 		Out.Add(Make(TEXT("snap.extending"), EActionSection::Snap, LOCTEXT("SnapExtending", "Extending"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Extending); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Extending); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Extending); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Extending); },
 			Always));
 		Out.Add(Make(TEXT("snap.levelwith"), EActionSection::Snap, LOCTEXT("SnapLevelWith", "Level with"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::LevelWith); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::LevelWith); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::LevelWith); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::LevelWith); },
 			Always));
 		// "DIRECTION", NOT "PARALLEL", although the relation behind it is ERelation::Parallel -
 		// renamed 2026-09-20 after a player switched on Angled from and World, got nothing, and
@@ -194,23 +231,23 @@ namespace
 		// The enum keeps its name - see SnapGuide::ERelation::Parallel, which records this.
 		Out.Add(Make(TEXT("snap.direction"), EActionSection::Snap, LOCTEXT("SnapDirection", "Direction"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Parallel); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Parallel); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Parallel); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Parallel); },
 			Always));
 		Out.Add(Make(TEXT("snap.collinear"), EActionSection::Snap, LOCTEXT("SnapCollinear", "Collinear"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::Collinear); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::Collinear); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::Collinear); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::Collinear); },
 			Always));
 		Out.Add(Make(TEXT("snap.angledfrom"), EActionSection::Snap, LOCTEXT("SnapAngledFrom", "Angled from"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::AngledFrom); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::AngledFrom); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::AngledFrom); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::AngledFrom); },
 			Always));
 		Out.Add(Make(TEXT("snap.matchinggap"), EActionSection::Snap, LOCTEXT("SnapMatchingGap", "Matching gap"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideRelation(SnapGuide::ERelation::MatchingGap); },
-			[](const ARoadBuildController& C) { return C.IsGuideRelationOn(SnapGuide::ERelation::MatchingGap); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideRelation(SnapGuide::ERelation::MatchingGap); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideRelationOn(SnapGuide::ERelation::MatchingGap); },
 			Always));
 
 		// THE SECOND AXIS. Before 2026-09-20 these sat in the same list as the rows above, which
@@ -223,33 +260,33 @@ namespace
 		// SnapGuide::EReference.
 		Out.Add(Make(TEXT("snapto.taxiway"), EActionSection::SnapTo, LOCTEXT("SnapToTaxiway", "Taxiway"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Taxiway); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Taxiway); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Taxiway); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Taxiway); },
 			Always));
 		Out.Add(Make(TEXT("snapto.serviceroad"), EActionSection::SnapTo, LOCTEXT("SnapToServiceRoad", "Service road"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::ServiceRoad); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::ServiceRoad); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::ServiceRoad); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::ServiceRoad); },
 			Always));
 		Out.Add(Make(TEXT("snapto.runway"), EActionSection::SnapTo, LOCTEXT("SnapToRunway", "Runway"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Runway); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Runway); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Runway); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Runway); },
 			Always));
 		Out.Add(Make(TEXT("snapto.apron"), EActionSection::SnapTo, LOCTEXT("SnapToApron", "Apron"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Apron); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Apron); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Apron); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Apron); },
 			Always));
 		Out.Add(Make(TEXT("snapto.stand"), EActionSection::SnapTo, LOCTEXT("SnapToStand", "Stand"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::Stand); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::Stand); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::Stand); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::Stand); },
 			Always));
 		Out.Add(Make(TEXT("snapto.world"), EActionSection::SnapTo, LOCTEXT("SnapToWorld", "World"),
 			EKeys::Invalid, false,
-			[](ARoadBuildController& C) { C.ToggleGuideReference(SnapGuide::EReference::World); },
-			[](const ARoadBuildController& C) { return C.IsGuideReferenceOn(SnapGuide::EReference::World); },
+			[](FBuildActionContext& Ctx) { Ctx.Controller.ToggleGuideReference(SnapGuide::EReference::World); },
+			[](const FBuildActionContext& Ctx) { return Ctx.Controller.IsGuideReferenceOn(SnapGuide::EReference::World); },
 			Always));
 		return Out;
 	}
@@ -263,12 +300,15 @@ TConstArrayView<FBuildAction> BuildActions()
 
 bool FBuildAction::TryRun(ARoadBuildController& C, const TCHAR* Via) const
 {
-	if (!IsEnabled(C))
+	// THE ONE PLACE a bare controller reference becomes an FBuildActionContext (issue #191) -
+	// every caller above this keeps passing what it always held.
+	FBuildActionContext Context(C);
+	if (!IsEnabled(Context))
 	{
 		return false;
 	}
 	UE_LOG(LogRoadBuild, Log, TEXT("%s: %s"), Via, *Id.ToString());
-	Execute(C);
+	Execute(Context);
 	return true;
 }
 

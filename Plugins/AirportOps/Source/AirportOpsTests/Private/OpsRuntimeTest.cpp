@@ -2,6 +2,7 @@
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/BuildPurse.h"
+#include "Model/Flight.h"
 #include "Model/FlightBoard.h"
 #include "Model/OpsEvents.h"
 #include "Model/RoadGuideline.h"
@@ -245,6 +246,88 @@ bool FOpsRuntimeDetachClearsPurseTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("with no purse, CanAfford treats it as free"), Facade->CanAfford(Quote));
 	TestEqual(TEXT("and never dereferences the detached purse to decide that"),
 		Spy.CanAffordCalls, 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeLandNearTest,
+	"AirportOps.Present.LandNear",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeLandNearTest::RunTest(const FString& Parameters)
+{
+	// THE SEAM ISSUE #191 INTRODUCED: LandNear replaced ~90 lines split across
+	// ARoadBuildController::LandAircraftNearViewFocus and LandThroughTheBoard, which no test
+	// exercised directly because both lived on a PlayerController. This measures the two facts
+	// that matter about the move - that LandNear actually reaches UFlightBoard::AcceptImmediate
+	// rather than silently doing nothing, and that it resolves the RIGHT airframe (the content
+	// default, or the caller's override) - without needing a runway, a stand or a route: those
+	// are AcceptImmediate's and ArrivalPlanner's own concerns, already covered by
+	// AirportOps.Model.FlightBoard.AcceptImmediate and Airside.Model.ArrivalPlanner.
+	//
+	// A network with NO runway is used ON PURPOSE, not as a shortcut: AcceptImmediate always
+	// records the flight it built (UFlightBoard::AddOffer) before asking ArrivalPlanner
+	// whether it can be accepted, so the refusal - NoRunway, deterministic and needing no
+	// fixture - is exactly as good a vantage point as an accepted landing for watching what
+	// airframe reached the board.
+	{
+		// UNATTACHED: Target is null, the same state the editor mode's runtime never reaches
+		// (it has none) but a freshly-constructed one starts in. Must refuse rather than crash.
+		UOpsRuntime* Unattached = NewObject<UOpsRuntime>();
+		const EArrivalRefusal Why = Unattached->LandNear(FVector2D(100.0, 100.0), nullptr);
+		TestEqual(TEXT("no attached network: refused as NoRunway rather than crashing"),
+			Why, EArrivalRefusal::NoRunway);
+		TestEqual(TEXT("and nothing was ever offered to a board with no target to check"),
+			Unattached->GetFlightBoard()->Offers().Num(), 0);
+	}
+
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+
+	// A NODE, NOT NOTHING: Actor->Network is null until the first edit (URoadEditFacade::
+	// EnsureNetwork is lazy), and LandNear's own null guard would otherwise refuse here for a
+	// reason that has nothing to do with the one this test means to measure. No runway either
+	// way - see the class comment on why that refusal is the deliberately chosen vantage point.
+	Actor->PlaceNode(FVector2D::ZeroVector);
+	if (!TestNotNull(TEXT("the actor has a network"), Actor->Network.Get())) { return false; }
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+
+	const EArrivalRefusal FirstWhy = Runtime->LandNear(FVector2D(500.0, 500.0), nullptr);
+	TestEqual(TEXT("still NoRunway - this network has none - proving the refusal came from "
+		"ArrivalPlanner and not from LandNear's own null guards"), FirstWhy, EArrivalRefusal::NoRunway);
+
+	TArray<UFlight*> Offers = Runtime->GetFlightBoard()->Offers();
+	if (!TestEqual(TEXT("one flight was made and offered despite the refusal - AcceptImmediate "
+		"records before it asks, and LandNear must reach that far"), Offers.Num(), 1))
+	{
+		return false;
+	}
+	TestEqual(TEXT("with no override, LandNear resolved the content default airframe"),
+		Offers[0]->Airframe.TypeCode, UAirsideSettings::ResolveDefaultAirframe().TypeCode);
+
+	// NOW WITH AN OVERRIDE - the Land key's DefaultGame.ini test type, standing in for whatever
+	// ARoadBuildController::LandAircraftType resolved. A DISTINCT TypeCode, so the assertion
+	// below can only pass if LandNear actually used it rather than falling back to the default -
+	// the exact regression a controller-side change to that fallback logic could reintroduce.
+	FAirframe Override;
+	Override.TypeCode = FName(TEXT("Airside_LandNearTest_Override"));
+	Override.Wingspan = 4321.0;
+	const EArrivalRefusal SecondWhy = Runtime->LandNear(FVector2D(-500.0, -500.0), &Override);
+	TestEqual(TEXT("still NoRunway, same network"), SecondWhy, EArrivalRefusal::NoRunway);
+
+	Offers = Runtime->GetFlightBoard()->Offers();
+	if (!TestEqual(TEXT("a second flight was offered"), Offers.Num(), 2))
+	{
+		return false;
+	}
+	TestEqual(TEXT("with an override, LandNear used IT rather than the content default - the "
+		"one fact that proves the caller's FAirframe* actually reaches AcceptImmediate"),
+		Offers[1]->Airframe.TypeCode, Override.TypeCode);
+
 	return true;
 }
 

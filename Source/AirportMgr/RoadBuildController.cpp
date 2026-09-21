@@ -16,10 +16,6 @@
 #include "Model/InspectFacts.h"
 #include "Model/RoadNetwork.h"
 #include "Model/SimClock.h"
-#include "Model/Flight.h"
-#include "Model/FlightBoard.h"
-#include "Model/GroundTraffic.h"
-#include "Model/Pricing.h"
 #include "Present/OpsRuntime.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
@@ -183,7 +179,11 @@ void ARoadBuildController::SetupInputComponent()
 
 	// Bound as raw keys rather than through Enhanced Input: the mappings would need
 	// InputAction and InputMappingContext content assets, and this driver is meant to
-	// work the moment the module compiles, with nothing to author first.
+	// work the moment the module compiles, with nothing to author first. This was the LAST
+	// reason AirportMgr.Build.cs named "EnhancedInput" as a dependency - nothing here ever
+	// called into it - so issue #191 dropped the dependency; the engine still configures
+	// EnhancedPlayerInput/EnhancedInputComponent as the project-wide default in
+	// DefaultInput.ini, which is a plugin-level setting this module's Build.cs never gated.
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &ARoadBuildController::OnPrimaryPressed);
 	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this, &ARoadBuildController::OnPrimaryReleased);
 	InputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this, &ARoadBuildController::OnCancelGesture);
@@ -230,89 +230,41 @@ void ARoadBuildController::LandAircraftNearViewFocus()
 		return;
 	}
 
-	// The VIEW FOCUS rather than the cursor (which this used to read): the bar's Land button
-	// is clicked with the cursor on the bar, where "nearest the cursor" is meaningless, and
-	// the focus is where the player is looking either way.
-	UE_LOG(LogRoadBuild, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
-		BuildCameraComp->ViewFocus().X, BuildCameraComp->ViewFocus().Y);
+	// ViewFocus(), not ActiveRig().Focus: while watching an agent, ActiveRig() is the WATCH
+	// rig, whose Focus is a leash offset in the AIRCRAFT's frame, not a road-plane position -
+	// key 7 must still aim at the build view's own focus regardless of which camera is on
+	// screen. This is the one piece of the old ~90-line method that could not move with the
+	// rest to UOpsRuntime::LandNear (issue #191): only the controller knows which camera is on
+	// screen.
+	const FVector2D Focus = BuildCameraComp->ViewFocus();
 
-	// The SAME resolver every dispatch falls back to, for the same reason: an aircraft that
-	// approached as one airframe and taxied as another would be two different aircraft
-	// depending on which phase you were watching - see UAirsideSettings::
-	// ResolveDefaultAirframe. One FAirframe argument now, not four: issue #29 gave
-	// DispatchArrival the same shape ResolveDefaultAirframe already returns.
-	//
 	// UNLESS A TYPE IS CONFIGURED FOR THE KEY. That override exists so a particular aeroplane
-	// can be put on the runway without waiting for the board to offer one, and it is read
-	// HERE and nowhere else - offers and their arrivals still resolve their own type, so this
-	// cannot become the game's behaviour by being forgotten. Which type the key used is
-	// logged every time, so a forgotten override is a line in the log rather than the wrong
-	// aircraft landing for no visible reason.
-	FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
-	if (const UAircraftType* Configured = LandAircraftType.LoadSynchronous())
-	{
-		Airframe = Configured->Airframe();
-		UE_LOG(LogRoadBuild, Log,
-			TEXT("Land: using the configured test type %s (%s) rather than the default - "
-				 "clear LandAircraftType in DefaultGame.ini to restore it"),
-			*Configured->GetName(), *Airframe.TypeCode.ToString());
-	}
-	else
-	{
-		UE_LOG(LogRoadBuild, Log, TEXT("Land: using the content default airframe (%s)"),
-			*Airframe.TypeCode.ToString());
-	}
+	// can be put on the runway without waiting for the board to offer one, and it is read HERE
+	// and nowhere else - offers and their arrivals still resolve their own type, so this
+	// cannot become the game's behaviour by being forgotten. Resolved to an FAirframe (the
+	// shape every dispatch already takes, issue #29) once, so BOTH paths below - through the
+	// board and the no-runtime fallback - honour it the same way the single pre-split method
+	// used to.
+	const UAircraftType* Configured = LandAircraftType.LoadSynchronous();
+	const FAirframe Override = Configured != nullptr ? Configured->Airframe() : FAirframe();
 
-	// THROUGH THE BOARD WHEN THERE IS ONE. Two doors onto arrival is how this codebase has
-	// shipped three lists-that-must-agree bugs: an aeroplane dispatched here directly would
-	// belong to no flight, so nothing would ever give its stand back or know it had landed.
-	// The key keeps its meaning - an aeroplane now, near the focus - it just becomes a
-	// flight with an immediate ETA, which is the same thing said properly.
+	// THROUGH THE BOARD WHEN THERE IS ONE, so the aeroplane belongs to a flight the rest of
+	// the game can track - see LandNear's own header for why a direct dispatch is a second
+	// door onto arrival.
 	if (UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld()))
 	{
-		if (UFlightBoard* Board = Runtime->GetFlightBoard())
-		{
-			LandThroughTheBoard(*Runtime, *Board, Airframe);
-			return;
-		}
-	}
-
-	// No runtime: the editor mode, which has no game instance and so no board. The direct
-	// dispatch stays for it rather than the key silently doing nothing.
-	//
-	// DispatchArrival has already logged which runway, which exit and which stand it chose,
-	// or why it declined.
-	Target->DispatchArrival(BuildCameraComp->ViewFocus(), Airframe);
-}
-
-void ARoadBuildController::LandThroughTheBoard(UOpsRuntime& Runtime, UFlightBoard& Board,
-	const FAirframe& Airframe)
-{
-	USimClock* Clock = Runtime.GetClock();
-	UGroundTraffic* Traffic = Target->GetGroundTraffic();
-	if (Clock == nullptr || Traffic == nullptr || Target->Network == nullptr)
-	{
+		Runtime->LandNear(Focus, Configured != nullptr ? &Override : nullptr);
 		return;
 	}
 
-	// ONE CALL: make, aim, add and accept the debug flight are all UFlightBoard's job now -
-	// see AcceptImmediate's own header (issue #96). Focus travels with the flight it builds,
-	// so it lands where aimed without re-aiming the board for every later offer.
+	// No runtime: the editor mode, which has no game instance and so no board - LandNear needs
+	// one to reach FlightBoard through, so the direct dispatch this used to fall back to when
+	// UOpsRuntimeSubsystem::Get failed stays here, the one path LandNear cannot cover. Still
+	// honours the configured override, same as the pre-split method did.
 	//
-	// Minimal touch, issue #94: TargetView.Focus -> BuildCameraComp->ViewFocus() - the field
-	// it read moved to UBuildCameraComponent. ViewFocus(), not ActiveRig().Focus: while
-	// watching an agent, ActiveRig() is the WATCH rig, whose Focus is a leash offset in the
-	// AIRCRAFT's frame, not a road-plane position - key 7 must still aim at the build view's
-	// own focus regardless of which camera is on screen.
-	const EArrivalRefusal Why = Board.AcceptImmediate(*Traffic, *Target->Network, *Clock, Airframe,
-		BuildCameraComp->ViewFocus(), NSLOCTEXT("AirportMgr", "DebugAirline", "(key 7)"));
-	if (Why != EArrivalRefusal::None)
-	{
-		// The key used to do nothing at all when the airport was full. Now it says which of
-		// the seven refusals it was, in the sentence the inbox would show.
-		UE_LOG(LogRoadBuild, Warning, TEXT("Land: no flight. %s"),
-			*ArrivalPlanner::DescribeRefusal(Why));
-	}
+	// DispatchArrival has already logged which runway, which exit and which stand it chose,
+	// or why it declined.
+	Target->DispatchArrival(Focus, Configured != nullptr ? Override : UAirsideSettings::ResolveDefaultAirframe());
 }
 
 bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRefusals) const
@@ -787,33 +739,6 @@ bool ARoadBuildController::HasAgent() const
 bool ARoadBuildController::HasOpsRuntime() const
 {
 	return UOpsRuntimeSubsystem::Get(GetWorld()) != nullptr;
-}
-
-void ARoadBuildController::StepLandingFee(int32 Delta)
-{
-	UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
-	UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
-	if (Pricing == nullptr || Delta == 0)
-	{
-		return;
-	}
-
-	// TEN PER CENT A STEP, and clamped at both ends. Zero would make UPricing::DemandFactor
-	// meaningless - a free landing is priced by a guard rather than by the curve - and a
-	// tenfold fee would empty the inbox so completely that the way back would not read as the
-	// player's own doing.
-	constexpr double Step = 0.1;
-	constexpr double Floor = 0.5;
-	constexpr double Ceiling = 2.0;
-
-	const double Was = Pricing->LandingFeeMultiplier;
-	Pricing->LandingFeeMultiplier =
-		FMath::Clamp(Was + (Delta > 0 ? Step : -Step), Floor, Ceiling);
-
-	// LOGGED, because the lever changes the offer cadence for the rest of the game and "why
-	// did the offers dry up" is otherwise a question the log cannot answer.
-	UE_LOG(LogRoadBuild, Log, TEXT("Landing fee %.0f%% -> %.0f%%"),
-		Was * 100.0, Pricing->LandingFeeMultiplier * 100.0);
 }
 
 void ARoadBuildController::ToggleLedger()

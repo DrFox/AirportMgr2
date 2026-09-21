@@ -72,6 +72,25 @@ public:
 	/** What this aeroplane pays to land, the player's lever included. */
 	double LandingFee(const FAirframe& Airframe) const;
 
+	/**
+	 * Move LandingFeeMultiplier one step, up (Direction > 0) or down (Direction < 0). A no-op
+	 * for Direction == 0.
+	 *
+	 * TEN PER CENT A STEP, and clamped at both ends. Zero would make DemandFactor() meaningless
+	 * - a free landing is priced by a guard rather than by the curve - and a tenfold fee would
+	 * empty the inbox so completely that the way back would not read as the player's own doing.
+	 *
+	 * STEPS RATHER THAN A FREE SLIDER, for the reason ESimSpeed is an enum and not a float: the
+	 * game offers these settings, and two code paths cannot then disagree about what "higher"
+	 * means.
+	 *
+	 * MOVED FROM ARoadBuildController::StepLandingFee by issue #191: the step size, the floor
+	 * and the ceiling are a pricing rule, not a PlayerController's business, and the old home
+	 * could only be exercised by driving PIE. Logged under LogAirportOps, not LogRoadBuild - the
+	 * fee is Model/'s own decision now, and whichever driver asks for it is incidental.
+	 */
+	void StepLandingFee(int32 Direction);
+
 	/** Per GAME hour on a stand. A tenth of the landing fee - see the class comment. */
 	double ParkingFeePerHour(const FAirframe& Airframe) const;
 
