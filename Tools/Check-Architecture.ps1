@@ -52,6 +52,32 @@
          this rule is what stops the next shared-look table from landing back in Tool/ by habit.
          Comment lines are excluded the way rule 5 excludes them - a WHY comment naming a colour
          to explain why Tool/ does not hold one is not the thing this rule exists to catch.
+      11. Declared but not consumed (issue #255). Three shapes, each reconstructed from a
+          shipped bug and proved to fire before being removed again (see the PR):
+            a. A DECLARE_*DELEGATE* member (file-scoped: the macro and its instance sit in
+               the same header, however far apart) with zero .Add*/.Bind* binders anywhere,
+               or zero .Broadcast/.Execute callers anywhere - issue #169's UFlightBoard::
+               OnChanged, documented as a signal nothing subscribed to.
+            b. A UI_COMMAND with no MapAction anywhere - the shape issue #184 left behind:
+               a command that exists and is even mapped once, but only the LAST MapAction
+               of a given command survives (UICommandList::MapAction is a TMap::Add), so a
+               command an later binding never touches again is functionally unconsumed.
+            c. An IBuildTool hook (RoadBuildTool.h) with no caller anywhere outside its own
+               declaration - issue #185's OnCommit/BuildReadout, reachable from PIE and from
+               nowhere in the editor mode until each was wired in by hand.
+          Production tree only for what gets CHECKED (test fixtures build scratch scenarios
+          on purpose, the way rules 4-6 already exempt them); the search for a binder/caller
+          spans the whole tree, since a real one may legitimately sit in a test spy.
+      12. Comment-only facts (issue #255): a WARNING, not a failure - see the script's own
+          Verdict section. Counts comment lines that assert a fact about other code ("the
+          only caller", "never happens", "no edit needed", "nothing else reads") with no
+          `// ENFORCED BY:` marker within three lines naming what actually holds the line
+          true. Starts as a count so the backlog is visible; promotes to a failure once it
+          reaches zero (see CLAUDE.md's "Conventions" for the marker itself).
+
+    Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
+    so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
+    nobody re-greps.
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -405,9 +431,105 @@ foreach ($file in $outputDeviceFiles) {
     }
 }
 
+# --- 11. Declared but not consumed -------------------------------------------------------
+# Issue #255. All three sub-rules search this ONE list - built once, not per-symbol, because
+# 11c alone checks ~15 verbs and re-walking the tree per verb is exactly the cost rule 4's
+# original per-symbol loop already accepted at a much smaller N.
+$allTreeFiles = @()
+foreach ($tree in $trees) { $allTreeFiles += Get-Sources $tree @('.h', '.cpp') }
+
+# 11a. A DECLARE_*DELEGATE* member with zero binders anywhere, or zero broadcasters anywhere.
+# FILE-SCOPED PAIRING, not next-line: RoadEditFacade.h's FOnNetworkChanged OnChanged sits
+# directly under its DECLARE_MULTICAST_DELEGATE_OneParam line, but OpsEvents.h's dynamic
+# delegates sit a UPROPERTY(BlueprintAssignable) away - so this matches "<Type> <Name>;"
+# ANYWHERE in the same header the macro is in, not only the line after it. Declaring file
+# must be production (test fixtures script their own delegates on purpose, the way rules 4-6
+# already exempt them); the binder/broadcaster SEARCH covers the whole tree, since a real one
+# may legitimately be a test spy.
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h')) {
+        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
+        $text = Get-Content -Raw -Path $file.FullName
+        $delegateTypes = [regex]::Matches($text, 'DECLARE_(MULTICAST_)?DELEGATE\w*\(\s*(F\w+)') |
+            ForEach-Object { $_.Groups[2].Value } | Select-Object -Unique
+        foreach ($type in $delegateTypes) {
+            foreach ($mm in [regex]::Matches($text, '(?m)^.*\b' + [regex]::Escape($type) + '\s+(\w+)\s*;')) {
+                if ($mm.Value -match 'DECLARE_') { continue }
+                $member = $mm.Groups[1].Value
+                $line = ($text.Substring(0, $mm.Index) -split "`n").Count
+                $binderPattern = '\b' + [regex]::Escape($member) + '\.(Add\w*|Bind\w*)\('
+                $broadcastPattern = '\b' + [regex]::Escape($member) + '\.(Broadcast|Execute)\('
+                if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $binderPattern -Quiet)) {
+                    $failures.Add("unconsumed-delegate: $($file.FullName):$line $type $member has zero .Add*/.Bind* binders anywhere - delete it or bind it (issue #169's OnChanged shape)")
+                }
+                if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $broadcastPattern -Quiet)) {
+                    $failures.Add("unconsumed-delegate: $($file.FullName):$line $type $member has zero .Broadcast/.Execute callers anywhere - delete it or fire it (issue #169's OnChanged shape)")
+                }
+            }
+        }
+    }
+}
+
+# 11b. A UI_COMMAND with no MapAction anywhere. MapAction's first argument is the command
+# field, so "within 80 characters of MapAction(" catches the codebase's own style
+# (Toolkit->GetToolkitCommands()->MapAction(Commands.CancelGesture, ...)) without needing to
+# parse the call across its (often multi-line) remaining arguments.
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.cpp')) {
+        $text = Get-Content -Raw -Path $file.FullName
+        foreach ($m in [regex]::Matches($text, 'UI_COMMAND\(\s*(\w+)\s*,')) {
+            $name = $m.Groups[1].Value
+            $line = ($text.Substring(0, $m.Index) -split "`n").Count
+            $mapPattern = 'MapAction\([^,]{0,80}\b' + [regex]::Escape($name) + '\b'
+            if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $mapPattern -Quiet)) {
+                $failures.Add("unconsumed-uicommand: $($file.FullName):$line UI_COMMAND($name, ...) has no MapAction binding it anywhere (issue #184's shape: the LAST MapAction of a command wins, so an unreached one is dead)")
+            }
+        }
+    }
+}
+
+# 11c. An IBuildTool hook (RoadBuildTool.h) with no caller anywhere outside its own
+# declaration - issue #185's shape, generalised past the two verbs (OnCommit, BuildReadout)
+# that issue happened to name. A caller line is excluded when it IS the declaration
+# ("virtual") or an out-of-line override definition ("ClassName::Method") - neither is a
+# driver reaching the hook, both are the interface restating its own name.
+$toolInterfaceFile = Join-Path $plugin 'Public\Tool\RoadBuildTool.h'
+if (Test-Path $toolInterfaceFile) {
+    $text = Get-Content -Raw -Path $toolInterfaceFile
+    $structStart = $text.IndexOf('struct AIRSIDE_API IBuildTool')
+    if ($structStart -ge 0) {
+        $braceOpen = $text.IndexOf('{', $structStart)
+        $depth = 0
+        $i = $braceOpen
+        for (; $i -lt $text.Length; $i++) {
+            if ($text[$i] -eq '{') { $depth++ }
+            elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { break } }
+        }
+        $body = $text.Substring($braceOpen, $i - $braceOpen + 1)
+        $bodyStartLine = ($text.Substring(0, $braceOpen) -split "`n").Count
+        foreach ($m in [regex]::Matches($body, 'virtual\s+[\w:&*<>,\s]+?\s+(\w+)\s*\(')) {
+            $method = $m.Groups[1].Value
+            if ($method -eq 'IBuildTool') { continue } # the destructor, ~IBuildTool
+            $line = $bodyStartLine + (($body.Substring(0, $m.Index) -split "`n").Count - 1)
+            $callerPattern = '\b' + [regex]::Escape($method) + '\s*\('
+            $hasCaller = $false
+            foreach ($h in (Select-String -Path $allTreeFiles.FullName -Pattern $callerPattern)) {
+                if ($h.Path -eq $toolInterfaceFile) { continue }
+                if ($h.Line -match 'virtual') { continue }
+                if ($h.Line -match ('::\s*' + [regex]::Escape($method) + '\s*\(')) { continue }
+                $hasCaller = $true
+                break
+            }
+            if (-not $hasCaller) {
+                $failures.Add("unconsumed-tool-verb: $($toolInterfaceFile):$line IBuildTool::$method has no caller anywhere outside its own declaration (issue #185's OnCommit/BuildReadout shape)")
+            }
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations)' -ForegroundColor Green
     exit 0
 }
 
