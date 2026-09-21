@@ -1,7 +1,15 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/GroundTraffic.h"
+#include "Model/NodeReach.h"
+#include "Model/RoadAgent.h"
+#include "Model/RoadTraffic.h"
+#include "Model/RunwayQuery.h"
+#include "Model/TrafficContext.h"
+#include "Model/TrafficOccupancy.h"
+#include "Model/TrafficRules.h"
+
+class URoadNetwork;
 
 /**
  * One agent's claim pass, extracted off UGroundTraffic (issue #84) so the biggest single
@@ -22,9 +30,29 @@
  * ClaimAhead's own header (the numbered sequence: the two early branches, the window, step
  * 0's crossing, steps 1-2's wanted list, step 3's ask) is Run's doc comment below - moved
  * with the code it describes, not re-derived.
+ *
+ * MOVED OFF Model/GroundTraffic.h (issue #175): this struct never named UGroundTraffic, only
+ * FTrafficRules and the two caches, so pulling in the whole header - the UCLASS, its
+ * generated.h, FDeadlockResolver, FPlanReResolver - bought this file nothing. Includes now
+ * name exactly the four types the members below and Run's own signature use.
+ *
+ * CONSTRUCTED FROM FTrafficContext, not four positional references (issue #175): every
+ * production call site already holds the four as one bundle - see Model/TrafficContext.h -
+ * and a second, positional way to build the same struct would be the two-constructors
+ * shape the codebase's "lists that must agree are ONE list" argues against. Rules, Table,
+ * Reach and Chains stay separate MEMBERS rather than becoming `const FTrafficContext&
+ * Context` and four accessors: every body below already reads them as bare names, several
+ * of them in comments that explain exactly why each one is a reference, and rewriting both
+ * would be exactly the "second reading of the same step" this file's own header warns
+ * against - the constructor is the one place that has to know about FTrafficContext at all.
  */
 struct AIRSIDE_API FClaimPass
 {
+	explicit FClaimPass(const FTrafficContext& Context)
+		: Rules(Context.Rules), Table(Context.Occupancy), Reach(Context.Reach), Chains(Context.Chains)
+	{
+	}
+
 	const FTrafficRules& Rules;
 	FTrafficOccupancy& Table;
 	FNodeReachCache& Reach;

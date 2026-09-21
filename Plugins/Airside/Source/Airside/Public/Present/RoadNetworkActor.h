@@ -2,8 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Model/GroundTraffic.h"
 #include "Model/RoadHandles.h"
+#include "Model/TrafficRules.h"
 #include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
 #include "Present/PlotPresenter.h"
@@ -25,9 +25,16 @@ class URoadMaterialSet;
 class URoadEditHistory;
 class URoadEditFacade;
 class UAirsideTraffic;
+class UGroundTraffic;
 class UTyreSmoke;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
+
+// UGroundTraffic FORWARD DECLARED, NOT INCLUDED (issue #175): GetGroundTraffic() below
+// returns a bare pointer, which needs no more than that, and this header's own
+// FTrafficRules member needs only Model/TrafficRules.h - see that header's own comment.
+// Present/AirsideTraffic.h, which every .cpp dereferencing the pointer already includes,
+// still pulls in the full Model/GroundTraffic.h.
 
 /**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident
