@@ -48,6 +48,13 @@ FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 	// all; if a future tool draws both at once, this is the pair to re-check.
 	case EPreviewStyle::Guide:                       return FLinearColor(0.0f, 0.55f, 0.55f);
 
+	// VIOLET, a hue nothing else in this table uses. A handle is not something the gesture
+	// would DO (Pending's green, Snap's amber) nor something it is measured against
+	// (Guide's dark cyan) - it is a thing the player may take hold of, and it is drawn over
+	// the graph's own orange, grey and blue node marks, so it has to be legible against all
+	// three at once.
+	case EPreviewStyle::Handle:                      return FLinearColor(0.8f, 0.4f, 1.0f);
+
 	// GraphOverlay's context styles - the same colours ARoadBuildHUD::DrawNodes/DrawStands
 	// used to wire to their own StubColour/EndColour/JunctionColour/StandColour/
 	// ServiceAnchorColour UPROPERTYs, now the default ARoadBuildHUD::Looks is seeded from.
@@ -143,6 +150,15 @@ FPreviewLook PreviewPalette::DefaultLook(EPreviewStyle Style)
 	case EPreviewStyle::StandPose:
 		Look.RadiusScale = 2.2f;
 		Look.ThicknessScale = GraphThicknessScale;
+		break;
+
+	// SMALLER THAN Hover's ring (1.0), for the reason StandPose's comment gives just above:
+	// FEditTool marks the handle under the cursor a second time as Hover, in the same frame
+	// and at the same position, and equal radii would simply overdraw rather than read as
+	// "grabbable, and this is the one". Heavier in thickness to stay visible at that size.
+	case EPreviewStyle::Handle:
+		Look.RadiusScale = 0.6f;
+		Look.ThicknessScale = 1.5f;
 		break;
 	}
 

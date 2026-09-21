@@ -244,4 +244,43 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildActionsEditModeIsInTheOneListTest,
+	"AirportMgr.Actions.EditModeIsInTheOneList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildActionsEditModeIsInTheOneListTest::RunTest(const FString& Parameters)
+{
+	// THROUGH THE TABLE, which is what makes the key binding, the bar button and the startup
+	// banner one list - see BuildActions()'s own comment and the three times this project
+	// shipped a key that went nowhere. A toggle wired straight into SetupInputComponent would
+	// work at the keyboard and leave no button, which is exactly how the mode would stay
+	// undiscoverable - the complaint this whole feature exists to answer.
+	const FBuildAction* Edit = FindAction(FName(TEXT("edit.editmode")));
+	if (!TestNotNull(TEXT("the Edit mode toggle is in BuildActions"), Edit)) { return false; }
+
+	TestTrue(TEXT("it sits in the Edit section, not on the tool row - it is the other axis "
+				  "and must not read as a tenth tool"),
+		Edit->Section == EActionSection::Edit);
+
+	// M, NOT E: Q/E is camera turn, polled every frame. A binding that rotated the view while
+	// toggling the mode would be a bug nothing else in this suite would catch.
+	TestTrue(TEXT("bound to M"), Edit->Key == EKeys::M);
+	TestFalse(TEXT("and needs no modifier"), Edit->bRequiresCtrl);
+
+	TestNotNull(TEXT("it can be run"), (void*)(bool)Edit->Execute);
+	TestNotNull(TEXT("it lights when the mode is on"), (void*)(bool)Edit->IsActive);
+	TestNotNull(TEXT("and greys when the lit tool exposes nothing"), (void*)(bool)Edit->IsEnabled);
+
+	// NO OTHER ACTION MAY SHARE THE KEY. FindAction(FKey, bool) returns the first match, so a
+	// collision would silently give one of the two actions away.
+	int32 OnM = 0;
+	for (const FBuildAction& Action : BuildActions())
+	{
+		OnM += (Action.Key == EKeys::M) ? 1 : 0;
+	}
+	TestEqual(TEXT("M belongs to exactly one action"), OnM, 1);
+	return true;
+}
+
 #endif

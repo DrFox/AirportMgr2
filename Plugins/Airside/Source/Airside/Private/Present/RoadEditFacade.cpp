@@ -15,6 +15,7 @@
 #include "Model/RoadSlotMap.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/RoadGeom.h"
 #include "Tool/RoadPlacement.h"
 #include "Solve/RunwayDesignator.h"
 #include "Tool/GuidelineDrawTool.h"
@@ -783,6 +784,156 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	History->CommitEdit();
 }
 
+bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)
+{
+	ARoadNetworkActor& Owner = Actor();
+	if (Owner.Network == nullptr)
+	{
+		return false;
+	}
+
+	const FApronId Apron = Owner.Network->ApronIdAt(ApronIndex);
+	const FApronSurface* Live = Owner.Network->GetApron(Apron);
+	if (Live == nullptr || !Live->Outline.IsValidIndex(CornerIndex))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("MoveApronCorner refused: apron %d has no corner %d"), ApronIndex, CornerIndex);
+		return false;
+	}
+
+	// JUDGED ON A COPY, BEFORE ANYTHING IS WRITTEN. A self-intersecting outline has no
+	// inside, and the surface builder has no answer for one - so a corner dragged across
+	// its own polygon has to be refused rather than fixed up afterwards.
+	//
+	// AND REFUSED OUT HERE, ABOVE THE SCOPE, for the reason SetIntermediateHoldingPosition
+	// records at length: ~FRoadEditScope abandons the snapshot and restores nothing, so a
+	// mutation followed by a `return false` inside a scope leaves a changed graph with no
+	// undo entry to reach it.
+	//
+	// THROUGH RoadGeom::IsSimplePolygon, the same test FApronDrawTool closes an outline
+	// against - one answer to "is this a valid apron", not a second opinion.
+	TArray<FVector2D> Proposed = Live->Outline;
+	Proposed[CornerIndex] = To;
+	if (!RoadGeom::IsSimplePolygon(Proposed))
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("MoveApronCorner refused: corner %d of apron %d would cross its own outline"),
+			CornerIndex, ApronIndex);
+		return false;
+	}
+
+	// JOINS A DRAG ALREADY IN PROGRESS, so the whole drag is one undo step; on its own it is
+	// one edit of its own. IsEditing is what tells the two apart - the arrangement MoveNode
+	// uses, and NOT an FRoadEditScope: a scope calls BeginEdit unconditionally, which
+	// ensure-fails on the pending snapshot an interactive edit has already taken.
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
+	if (bOwnsEdit)
+	{
+		Use->BeginEdit(*Owner.Network, TEXT("move apron corner"));
+	}
+
+	const bool bMoved = Owner.Network->SetApronCorner(Apron, CornerIndex, To);
+
+	if (bOwnsEdit)
+	{
+		if (bMoved)
+		{
+			Use->CommitEdit();
+		}
+		else
+		{
+			Use->AbandonEdit();
+		}
+	}
+
+	if (bMoved)
+	{
+		// Every frame of a drag, like MoveNode and for the same reason: the pavement has
+		// changed and the mesh is stale until something rebuilds it.
+		NotifyChanged();
+	}
+	return bMoved;
+}
+
+bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
+{
+	FRoadNodeId Keep;
+	FRoadNodeId Absorb;
+	if (!MakeLiveNodeId(KeepIndex, Keep) || !MakeLiveNodeId(AbsorbIndex, Absorb))
+	{
+		UE_LOG(LogRoadMesh, Warning,
+			TEXT("MergeNodes refused: %d or %d is not a live node"), KeepIndex, AbsorbIndex);
+		return false;
+	}
+	if (Keep == Absorb)
+	{
+		return false;
+	}
+
+	ARoadNetworkActor& Owner = Actor();
+
+	// JOINS A DRAG ALREADY IN PROGRESS, so drop-to-merge is ONE undo step with the move that
+	// carried the node there - the arrangement MoveNode already uses, and the reason
+	// IsEditing is what tells the two apart. On its own it is one edit of its own.
+	URoadEditHistory* Use = HistoryForEdit();
+	const bool bOwnsEdit = Use != nullptr && !Use->IsEditing();
+	if (bOwnsEdit)
+	{
+		Use->BeginEdit(*Owner.Network, TEXT("merge nodes"));
+	}
+
+	if (!Owner.Network->MergeNodes(Keep, Absorb))
+	{
+		if (bOwnsEdit && Use != nullptr)
+		{
+			// Nothing was touched, so ABANDON is right here and Revert would be wrong - see
+			// URoadEditHistory::RevertEdit on the distinction.
+			Use->AbandonEdit();
+		}
+		return false;
+	}
+
+	// JUDGED AFTER, AND ONLY AFTER. RoadPlacement::NodeCornersFit reads a node's CURRENT arms
+	// and judges them at a proposed position; it has no way to be asked about an arm set that
+	// does not exist yet. So unlike MoveNode - which can and does judge before moving - a
+	// merge has to happen before its corners can be measured at all.
+	//
+	// WHICH IS WHY THIS REVERTS RATHER THAN REFUSING. AbandonEdit drops the snapshot and
+	// leaves the model as the edit left it, which here would be a merged junction the solver
+	// cannot surface. RevertEdit hands back the state the edit started from, exactly as
+	// EndInteractiveEdit does for a drag nobody can pay for.
+	const FRoadNode* Merged = Owner.Network->GetNode(Keep);
+	if (Merged != nullptr && !RoadPlacement::NodeCornersFit(*Owner.Network, Keep, Merged->Position))
+	{
+		if (Use != nullptr)
+		{
+			if (URoadNetwork* Reverted = Use->RevertEdit())
+			{
+				Owner.Network = Reverted;
+				HideGhost();
+				NotifyChanged();
+			}
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Merge refused: node %d folded into %d makes a corner the solver cannot "
+				 "trim, so the whole edit is reverted."), AbsorbIndex, KeepIndex);
+		return false;
+	}
+
+	UE_LOG(LogRoadMesh, Log, TEXT("Merged node %d into %d"), AbsorbIndex, KeepIndex);
+
+	if (bOwnsEdit && Use != nullptr)
+	{
+		Use->CommitEdit();
+	}
+
+	// Pavement changed, so this notifies - unlike SetIntermediateHoldingPosition, which
+	// changes neither pavement nor mesh and deliberately does not.
+	NotifyChanged();
+	return true;
+}
+
 bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 {
 	FRoadNodeId Node;
@@ -796,6 +947,87 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	if (Live == nullptr)
 	{
 		return false;
+	}
+
+	// A RUNWAY CHAIN IS STRAIGHT, and this is where that becomes true rather than merely
+	// assumed. FRunwayMarkingBuilder paints every marking along ONE frame - an origin, a
+	// direction and a length from RunwayExtentAt, which reports only the two ENDS - so a
+	// chain bent at an interior node draws a straight centreline down a crooked strip.
+	// Reported from play, 2026-09-20: "it bends the runway, but keeps the centre line
+	// straight".
+	//
+	// TWO EVALUATORS IS THE ACTUAL DEFECT. The surface follows the nodes and the markings
+	// follow the ends, and nothing made them agree - the same shape as the guideline
+	// invariant in CLAUDE.md. Rather than teach the markings to bend, which would be a
+	// second crooked-runway feature nobody asked for, the graph stops representing one.
+	//
+	// IN MoveNode, NOT IN THE EDIT TOOL. It is an invariant of the model, so it holds for
+	// every caller rather than for the one gesture that happened to expose it.
+	{
+		TArray<FRoadNodeId> RunwayNeighbours;
+		FRoadSegmentId AnyRunwayArm;
+		for (const FRoadSegmentId& Incident : Live->Incident)
+		{
+			if (Owner.Network->IsRunwaySegment(Incident))
+			{
+				RunwayNeighbours.Add(Owner.Network->GetOtherEnd(Incident, Node));
+				AnyRunwayArm = Incident;
+			}
+		}
+
+		// THE LINE THE NODE MAY NOT LEAVE, or two unset points when it is free to go
+		// anywhere. Two cases, one rule:
+		//
+		//   - AN INTERIOR NODE (a taxiway exit, runway on both sides) is pinned between its
+		//     two runway neighbours, and their line is the strip's.
+		//
+		//   - A THRESHOLD with exits behind it may still slide, and its line runs through
+		//     its one neighbour and where it currently stands - which IS the strip's line,
+		//     because the chain is straight, which is the invariant being kept.
+		//
+		// A THRESHOLD ON A STRIP WITH NO EXITS IS FREE, and that is not an exception: with
+		// nothing between the ends there is no interior node to leave behind, so no move can
+		// bend anything. It is the drag the runway tool's own handle offers.
+		const FRoadNode* LineFrom = nullptr;
+		FVector2D LineThrough = FVector2D::ZeroVector;
+
+		if (RunwayNeighbours.Num() >= 2)
+		{
+			LineFrom = Owner.Network->GetNode(RunwayNeighbours[0]);
+			if (const FRoadNode* Second = Owner.Network->GetNode(RunwayNeighbours[1]))
+			{
+				LineThrough = Second->Position;
+			}
+			else
+			{
+				LineFrom = nullptr;
+			}
+		}
+		else if (RunwayNeighbours.Num() == 1 && AnyRunwayArm.IsSet()
+			&& Owner.Network->RunwayChainOrSeed(AnyRunwayArm).Num() > 1)
+		{
+			LineFrom = Owner.Network->GetNode(RunwayNeighbours[0]);
+			LineThrough = Live->Position;
+		}
+
+		if (LineFrom != nullptr)
+		{
+			const FVector2D Line = LineThrough - LineFrom->Position;
+			const double LengthSquared = Line.SizeSquared();
+			if (LengthSquared > UE_DOUBLE_SMALL_NUMBER)
+			{
+				// The foot of the perpendicular, UNCLAMPED: the length, corner and
+				// minimum-runway checks below decide how far along is legal, so the node
+				// stops at the last legal spot rather than at some other one chosen here.
+				//
+				// PROJECTED RATHER THAN REFUSED. Refusing was the first cut and its own test
+				// caught it: it also refuses extending a threshold straight along its own
+				// line, which bends nothing and is the most ordinary runway edit there is.
+				// Sliding costs no more machinery and leaves nothing to explain.
+				const double T = FVector2D::DotProduct(To - LineFrom->Position, Line) / LengthSquared;
+				To = LineFrom->Position + Line * T;
+			}
+		}
 	}
 
 	// Judged before moving. Every road this node holds gets longer or shorter as it goes,
@@ -817,6 +1049,52 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	if (!RoadPlacement::NodeCornersFit(*Owner.Network, Node, To))
 	{
 		return false;
+	}
+
+	// A RUNWAY MAY NOT BE DRAGGED SHORTER THAN ONE. MinSegmentLength above is the solver's
+	// floor - what a piece of pavement needs to be trimmable - and says nothing about
+	// whether a STRIP is still a runway. Dragging a threshold in is how you would shorten
+	// one, and without this the aircraft admitted to it yesterday would be refused today
+	// with nothing to say when it changed.
+	//
+	// ONE CLAUSE ON MoveNode rather than a MoveRunwayThreshold beside it: a threshold IS a
+	// road node, and a second mutator would be a second answer to "may this node move" for
+	// the two to drift apart on.
+	//
+	// THE WHOLE CHAIN, not the arm being moved - a split runway has interior nodes, and its
+	// length is the sum of its pieces.
+	for (const FRoadSegmentId& Incident : Live->Incident)
+	{
+		if (!Owner.Network->IsRunwaySegment(Incident))
+		{
+			continue;
+		}
+
+		double Length = 0.0;
+		for (const FRoadSegmentId& Piece : Owner.Network->RunwayChainOrSeed(Incident))
+		{
+			const FRoadSegment* Segment = Owner.Network->GetSegment(Piece);
+			const FRoadNode* PieceA = Segment != nullptr ? Owner.Network->GetNode(Segment->A) : nullptr;
+			const FRoadNode* PieceB = Segment != nullptr ? Owner.Network->GetNode(Segment->B) : nullptr;
+			if (PieceA == nullptr || PieceB == nullptr)
+			{
+				continue;
+			}
+
+			// Measured where the node WOULD land, as NodeCornersFit does just above.
+			const FVector2D At = (Segment->A == Node) ? To : PieceA->Position;
+			const FVector2D To2 = (Segment->B == Node) ? To : PieceB->Position;
+			Length += FVector2D::Distance(At, To2);
+		}
+
+		if (Length < Owner.MinimumRunwayLength)
+		{
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("Move refused: it would leave the runway %.0f uu long, under the %.0f "
+					 "minimum."), Length, Owner.MinimumRunwayLength);
+			return false;
+		}
+		break;
 	}
 
 	// Joins a drag already in progress, so the whole drag is one undo step; on its own it
@@ -891,9 +1169,14 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// the roads meeting it - SegmentsIncidentTo is what the deletion plan already shows the
 	// player - so crediting only the node would pay back nothing for the pavement that
 	// actually disappears.
+	// WHAT THE PLAN ACTUALLY TAKES, not every arm of the node: a runway arm is not doomed
+	// by deleting something attached to it (FRoadDeletionPlan::bKeepTarget), and crediting
+	// the player for a runway still on the ground would be paying them to disconnect a
+	// taxiway.
 	FBuildQuote Quote;
-	for (const int32 Incident : SegmentsIncidentTo(NodeIndex))
+	for (const FRoadSegmentId& DoomedArm : Plan.Doomed)
 	{
+		const int32 Incident = DoomedArm.Index;
 		const FBuildQuote Each = QuoteForSegment(Incident);
 		Quote.BaseAmount += Each.BaseAmount;
 		if (!Quote.Source.IsValid())
@@ -907,8 +1190,22 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 
 	FRoadEditScope Edit(HistoryForEdit(), Owner.Network, TEXT("delete node"));
 
+	if (Plan.bKeepTarget)
+	{
+		// THE ARMS, NOT THE NODE. RemoveNode cascades every incident segment, which is
+		// exactly what must not happen here - the runway this node carries is staying. So
+		// the doomed arms are removed one by one and the node is left standing, because it
+		// is the runway's threshold.
+		for (const FRoadSegmentId& DoomedArm : Plan.Doomed)
+		{
+			Owner.Network->RemoveSegment(DoomedArm);
+		}
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Deleted %d arm(s) at node %d; its runway is left where it is."),
+			Plan.Doomed.Num(), NodeIndex);
+	}
 	// The cascade is the model's: a segment whose endpoint is gone has no geometry.
-	if (!Owner.Network->RemoveNode(Node))
+	else if (!Owner.Network->RemoveNode(Node))
 	{
 		UE_LOG(LogRoadMesh, Warning, TEXT("DeleteNode refused: node %d would not remove"), NodeIndex);
 		return false;
@@ -918,7 +1215,14 @@ bool URoadEditFacade::DeleteNode(int32 NodeIndex)
 	// being applied to exactly the state it was approved for.
 	for (const FRoadNodeId& Stranded : Plan.Rejoin)
 	{
-		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Owner.ResolveProfile()).IsSet())
+		// THE PLAN'S PROFILE, not the level's default: the road being healed keeps its own
+		// cross-section. See FRoadDeletionPlan::HealProfile for what laying the default
+		// instead used to do to a runway.
+		URoadProfile* Relay = Plan.HealProfile != nullptr
+			? Plan.HealProfile.Get()
+			: Owner.ResolveProfile();
+
+		if (!Owner.Network->AddStraightSegment(Stranded, Plan.Anchor, Relay).IsSet())
 		{
 			UE_LOG(LogRoadMesh, Error,
 				TEXT("DeleteNode healed only partly: node %d could not rejoin %d"),

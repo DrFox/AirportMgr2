@@ -1,5 +1,8 @@
 #include "Tool/RoadDrawTool.h"
 
+#include "Tool/RemoveGesture.h"
+#include "Tool/RoadGuideAnchor.h"
+
 #include "Model/BuildPurse.h"
 
 #include "AirsideLog.h"
@@ -333,70 +336,7 @@ bool FRoadDrawTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTa
 		Out.ReferenceName = TEXT("this road");
 	}
 
-	// EVERY LIVE NODE IN REACH IS SOMETHING TO LINE UP WITH - "level with that junction" is what
-	// a player squinting at a taxiway layout actually wants. A node has no name, so the label
-	// cannot say WHICH; the dashed line drawn to it is what does.
-	//
-	// A DELETED NODE KEEPS ITS SLOT, so bAlive is checked here as the segment loop above checks
-	// its own: offering one would draw a guide to a junction the player has removed.
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
-	const TArray<FRoadNode>& Nodes = Network->GetNodes();
-	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
-	{
-		const FRoadNode& Node = Nodes[Index];
-
-		// NOT THE NODE BEING EXTENDED FROM: its own lines pass through the origin, so both would
-		// always be in tolerance and the guide would say "you are level with yourself".
-		if (Index == Pending || !Node.bAlive
-			|| FVector2D::DistSquared(Node.Position, Out.Origin) > Reach * Reach)
-		{
-			continue;
-		}
-		// A NODE BELONGS TO EVERY COLUMN THAT MEETS IT - ruled 2026-09-20, when Road became
-		// Taxiway and ServiceRoad. A node is a place where segments end, and where a taxiway
-		// meets a service road it is honestly both; picking a winner would make one of the two
-		// buttons lie about a junction the player can see. So: one FGuidePoint per DISTINCT
-		// kind of incident segment, and the node's position repeated under each.
-		//
-		// AND A BARE NODE OFFERS NOTHING. With no live segment on it there is no kind to tag,
-		// and the tool's own Kind would be a guess about what the player will attach to it -
-		// which is exactly the second opinion about the gesture that FGuidePoint::Reference
-		// exists to avoid. In practice the only bare node is the one being extended from, and
-		// that is excluded above.
-		SnapGuide::EReference Columns[] = {
-			SnapGuide::EReference::Taxiway,
-			SnapGuide::EReference::ServiceRoad,
-			SnapGuide::EReference::Runway };
-
-		for (const SnapGuide::EReference Column : Columns)
-		{
-			bool bIncident = false;
-			for (const FRoadSegmentId Meeting : Node.Incident)
-			{
-				SnapGuide::EReference Of = SnapGuide::EReference::Taxiway;
-				if (RoadNaming::ReferenceOf(*Network, Meeting, Of) && Of == Column)
-				{
-					bIncident = true;
-					break;
-				}
-			}
-			if (!bIncident)
-			{
-				continue;
-			}
-
-			// SPELT OUT, not braced: a third member arrived on FGuidePoint in 2026-09-20 and a
-			// braced initialiser would have taken the default for it in silence.
-			FGuidePoint Point;
-			Point.At = Node.Position;
-			Point.Name = TEXT("that node");
-
-			// THE ONE PLACE A NETWORK FACT REACHES A TOOL-FED SOURCE, and the tag is what lets
-			// the matching button switch it off.
-			Point.Reference = Column;
-			Out.AlignTo.Add(Point);
-		}
-	}
+	RoadGuideAnchor::AddNodeCandidates(*Network, Out.Origin, Pending, Out);
 
 	return true;
 }
@@ -408,19 +348,8 @@ int32 FRoadDrawTool::GetPendingNode() const
 
 void FRoadDrawTool::Remove(const FToolContext& Context)
 {
-	switch (Context.Snap.Kind)
+	if (!RemoveGesture::Apply(Context))
 	{
-	case ERoadSnapKind::Node:
-		Context.Target->DeleteNode(Context.Snap.Node.Index);
-		break;
-
-	case ERoadSnapKind::Segment:
-		Context.Target->DeleteSegment(Context.Snap.Segment.Index);
-		break;
-
-	case ERoadSnapKind::Free:
-	default:
-		// Open ground. Nothing to remove is the correct outcome, not a refusal.
 		return;
 	}
 
@@ -430,7 +359,6 @@ void FRoadDrawTool::Remove(const FToolContext& Context)
 	// put the Road tool back into taxiway mode after a Ctrl+click removal, and the next
 	// click would lay a 23 m aircraft lane where the player was drawing a road.
 	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex);
-	// No RebuildMesh() here any more - DeleteNode/DeleteSegment notify on commit (issue #77).
 }
 
 void FRoadDrawTool::OnClick(const FToolContext& Context)
@@ -538,48 +466,6 @@ void FRoadDrawTool::OnCancel(const FToolContext& Context)
 	}
 }
 
-void FRoadDrawTool::OnDragBegin(const FToolContext& Context)
-{
-	// Only a node can be dragged, and never while aiming a deletion - dragging something
-	// about to be removed would be nonsense.
-	if (Context.Target == nullptr || Context.bRemoveModifier
-		|| Context.Snap.Kind != ERoadSnapKind::Node)
-	{
-		return;
-	}
-
-	DragNode = Context.Snap.Node.Index;
-
-	// One undo step for the whole drag, not one per frame.
-	Context.Target->BeginInteractiveEdit(TEXT("move node"));
-}
-
-void FRoadDrawTool::OnDrag(const FToolContext& Context)
-{
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
-	{
-		return;
-	}
-
-	// A refused move simply does not happen, so the node stops following the cursor rather
-	// than dragging a road shorter than the solver can trim. No RebuildMesh() here any more -
-	// MoveNode notifies every successful call, drag frame included (issue #77).
-	Context.Target->MoveNode(DragNode, Context.Cursor);
-}
-
-void FRoadDrawTool::OnDragEnd(const FToolContext& Context)
-{
-	if (DragNode == INDEX_NONE || Context.Target == nullptr)
-	{
-		return;
-	}
-
-	DragNode = INDEX_NONE;
-	Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-	// No RebuildMesh() here any more - the last OnDrag's MoveNode already notified for the
-	// final position; EndInteractiveEdit only closes the undo step, it moves nothing (#77).
-}
-
 void FRoadDrawTool::Tick(const FToolContext& Context)
 {
 	if (Context.Target == nullptr)
@@ -589,10 +475,9 @@ void FRoadDrawTool::Tick(const FToolContext& Context)
 
 	const int32 Pending = GetPendingNode();
 
-	// No ghost while a deletion is being aimed or a node is being dragged: in one the
-	// preview would offer to build the thing about to be removed, and in the other the
-	// road being reshaped is already on screen.
-	if (Pending == INDEX_NONE || Context.bRemoveModifier || DragNode != INDEX_NONE)
+	// No ghost while a deletion is being aimed: the preview would otherwise offer to build
+	// the very thing that is about to be removed.
+	if (Pending == INDEX_NONE || Context.bRemoveModifier)
 	{
 		Context.Target->HideGhost();
 		return;
@@ -619,12 +504,6 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 	// picked again - a click landing on a road started minutes ago and forgotten.
 	OnCancel(Context);
 
-	if (DragNode != INDEX_NONE && Context.Target != nullptr)
-	{
-		Context.Target->EndInteractiveEdit(/*bKeep*/ true);
-		DragNode = INDEX_NONE;
-	}
-
 	if (Context.Target != nullptr)
 	{
 		Context.Target->HideGhost();
@@ -633,98 +512,10 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 
 void FRoadDrawTool::PreviewRemoval(const FToolContext& Context, IToolPreviewSink& Sink) const
 {
-	if (Context.Network() == nullptr)
-	{
-		return;
-	}
-
-	const URoadNetwork& Network = *Context.Network();
-
-	auto SegmentEnds = [&Network](int32 SegmentIndex, FVector2D& OutA, FVector2D& OutB)
-	{
-		const TArray<FRoadSegment>& Segments = Network.GetSegments();
-		if (!Segments.IsValidIndex(SegmentIndex) || !Segments[SegmentIndex].bAlive)
-		{
-			return false;
-		}
-		const FRoadNode* EndA = Network.GetNode(Segments[SegmentIndex].A);
-		const FRoadNode* EndB = Network.GetNode(Segments[SegmentIndex].B);
-		if (EndA == nullptr || EndB == nullptr)
-		{
-			return false;
-		}
-		OutA = EndA->Position;
-		OutB = EndB->Position;
-		return true;
-	};
-
-	switch (Context.Snap.Kind)
-	{
-	case ERoadSnapKind::Node:
-	{
-		// The whole plan, asked of the model rather than guessed at here, so what is drawn
-		// and what the click does are one answer - including the refusal.
-		const FRoadDeletionPlan Plan = Context.Target->PlanNodeDeletion(Context.Snap.Node.Index);
-
-		Sink.Marker(Context.Snap.Position, EPreviewStyle::Doomed);
-
-		for (const FRoadSegmentId& Doomed : Plan.Doomed)
-		{
-			FVector2D A;
-			FVector2D B;
-			if (SegmentEnds(Doomed.Index, A, B))
-			{
-				Sink.Line(A, B, EPreviewStyle::Doomed);
-			}
-		}
-
-		if (!Plan.bValid)
-		{
-			// Drawing a heal it cannot perform would be a promise it will break.
-			Sink.Label(Context.Snap.Position,
-				FString::Printf(TEXT("cannot rejoin node %d (%s)"),
-					Plan.RefusedNeighbour.Index, RoadPlacement::Describe(Plan.Refusal)),
-				EPreviewStyle::Refused);
-			break;
-		}
-
-		for (const FRoadNodeId& Swept : Plan.Swept)
-		{
-			if (const FRoadNode* Gone = Network.GetNode(Swept))
-			{
-				Sink.Marker(Gone->Position, EPreviewStyle::Doomed);
-			}
-		}
-
-		// Deleting is no longer purely subtractive, so showing only what goes would be
-		// half the truth.
-		const FRoadNode* Anchor = Network.GetNode(Plan.Anchor);
-		for (const FRoadNodeId& Stranded : Plan.Rejoin)
-		{
-			const FRoadNode* End = Network.GetNode(Stranded);
-			if (Anchor != nullptr && End != nullptr)
-			{
-				Sink.Line(End->Position, Anchor->Position, EPreviewStyle::Heal);
-			}
-		}
-		break;
-	}
-
-	case ERoadSnapKind::Segment:
-	{
-		FVector2D A;
-		FVector2D B;
-		if (SegmentEnds(Context.Snap.Segment.Index, A, B))
-		{
-			Sink.Line(A, B, EPreviewStyle::Doomed);
-		}
-		break;
-	}
-
-	case ERoadSnapKind::Free:
-	default:
-		break;
-	}
+	// THE SHARED ANSWER - see RemoveGesture. This routine and the deletion below it used to
+	// be the only pair, and now FEditTool offers the same gesture; two copies of an
+	// 80-line plan is how a preview comes to show something the click will not do.
+	RemoveGesture::Describe(Context, Sink);
 }
 
 void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

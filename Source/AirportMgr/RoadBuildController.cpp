@@ -463,16 +463,15 @@ FToolContext ARoadBuildController::MakeToolContext() const
 
 	// See FBuildSession::MakeContext for why Cursor is the raw hit and Snap rides beside
 	// it rather than being folded into it.
-	// The sticky modifier ORs with the held key: the bar's Remove button and a held Ctrl
-	// mean the same thing, and either lights the same button.
+	// ONLY THE HELD KEYS from here. The sticky mode ORs with them inside MakeContext now
+	// that the session owns it - see EGestureMode.
 	// ALT GOES BEFORE THE HOVER AGENT, and the order is load-bearing: bSuspendGuides was
 	// inserted ahead of HoverAgent, so leaving this call as it was would have passed an int32
 	// agent id into a bool - compiling perfectly and suspending every guide the moment the
 	// cursor was over an aeroplane, while the hover pick silently became 0.
 	return Session.MakeContext(Target, PlaneHit, Tunables,
-		ClickModifier == EClickModifier::Remove || IsRemoveHeld(),
-		ClickModifier == EClickModifier::Insert
-			|| IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
+		IsRemoveHeld(),
+		IsInputKeyDown(EKeys::LeftShift) || IsInputKeyDown(EKeys::RightShift),
 		IsInputKeyDown(EKeys::LeftAlt) || IsInputKeyDown(EKeys::RightAlt),
 		HoverAgentUnderCursor());
 }
@@ -608,10 +607,9 @@ void ARoadBuildController::SelectTool(int32 Index)
 	{
 		return;
 	}
+	// The session drops a sticky BUILD modifier with the tool it was lit under, and keeps
+	// Edit - see FBuildSession::SelectTool for why those two differ.
 	Session.SelectTool(Index, MakeToolContext());
-	// A sticky modifier was chosen for the tool it was lit under. Dropping it here is what
-	// stops a Remove left on from the road tool deleting the first stand the player clicks.
-	ClickModifier = EClickModifier::None;
 	if (IBuildTool* Active = Session.GetActiveTool())
 	{
 		UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Active->GetDisplayName().ToString());
@@ -623,10 +621,30 @@ int32 ARoadBuildController::GetActiveToolIndex() const
 	return Session.GetActiveToolIndex();
 }
 
-void ARoadBuildController::ToggleClickModifier(EClickModifier Mode)
+
+
+void ARoadBuildController::ToggleGestureMode(EGestureMode Mode)
 {
-	ClickModifier = (ClickModifier == Mode) ? EClickModifier::None : Mode;
-	UE_LOG(LogRoadBuild, Log, TEXT("Click modifier: %s"), *UEnum::GetValueAsString(ClickModifier));
+	// The caller's context, so the outgoing tool can abandon a part-drawn chain against a
+	// real target rather than a default-constructed one.
+	Session.ToggleGestureMode(Mode, MakeToolContext());
+}
+
+EGestureMode ARoadBuildController::GetGestureMode() const
+{
+	return Session.GetGestureMode();
+}
+
+bool ARoadBuildController::WantsRoadNodesDrawn() const
+{
+	return Session.WantsRoadNodesDrawn();
+}
+
+bool ARoadBuildController::ActiveToolHasEditHandles() const
+{
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	const int32 Index = Session.GetActiveToolIndex();
+	return Registry.IsValidIndex(Index) && Registry[Index].EditHandles != EEditHandleKind::None;
 }
 
 bool ARoadBuildController::CanUndo() const { return Target != nullptr && Target->CanUndo(); }

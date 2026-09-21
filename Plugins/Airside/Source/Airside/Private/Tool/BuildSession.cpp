@@ -1,5 +1,7 @@
 #include "Tool/BuildSession.h"
 
+#include "AirsideLog.h"
+#include "Model/RoadNetwork.h"
 #include "Tool/ApronDrawTool.h"
 #include "Tool/GuidelineDrawTool.h"
 #include "Tool/HoldingPointTool.h"
@@ -31,37 +33,45 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// tool's, whose slot this fills; the printed keys 1-3 keep their meaning.
 		{ EKeys::Four,  TEXT("Select"),   LOCTEXT("Select",    "Select"),
 			LOCTEXT("SelectTooltip", "Click an aircraft or a stand to inspect it. Escape deselects."),
-			[] { return MakeUnique<FSelectTool>(); } },
+			[] { return MakeUnique<FSelectTool>(); },
+			EEditHandleKind::None },
 
 		{ EKeys::One,   TEXT("Taxiway"),  LOCTEXT("Taxiway",   "Taxiway"),
-			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node, drag a node to move it. The taxiway key pressed again cycles the width."),
-			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); } },
+			LOCTEXT("TaxiwayTooltip", "Draw taxiways: click to chain, ctrl to remove, shift to insert a node. The taxiway key pressed again cycles the width. Press M to edit placed nodes."),
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::Taxiway); },
+			EEditHandleKind::AirsideNode, /*bShowsRoadNodes*/ true },
 		{ EKeys::Two,   TEXT("Apron"),    LOCTEXT("Apron",     "Apron"),
 			LOCTEXT("ApronTooltip", "Draw a polygon of pavement; click the first corner again to close it."),
-			[] { return MakeUnique<FApronDrawTool>(); } },
+			[] { return MakeUnique<FApronDrawTool>(); },
+			EEditHandleKind::ApronCorner },
 		{ EKeys::Three, TEXT("Stand"),    LOCTEXT("Stand",     "Stand"),
 			LOCTEXT("StandTooltip", "Place an aircraft stand: press to position, drag to aim, release."),
-			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); } },
+			[] { return MakeUnique<FStandPlaceTool>(EPlaceableEntity::Stand); },
+			EEditHandleKind::None },
 		{ EKeys::Five,  TEXT("Guideline"), LOCTEXT("Guideline", "Guidelines"),
 			LOCTEXT("GuidelineTooltip", "Draw a routing link the derivation never made: click a node, click another."),
-			[] { return MakeUnique<FGuidelineDrawTool>(); } },
+			[] { return MakeUnique<FGuidelineDrawTool>(); },
+			EEditHandleKind::None },
 		{ EKeys::Six,   TEXT("Runway"),   LOCTEXT("Runway",    "Runway"),
 			LOCTEXT("RunwayTooltip", "Click one threshold, then the other. In play the runway key pressed again cycles the width, with Shift the surface, with Ctrl the approach."),
-			[] { return MakeUnique<FRunwayTool>(); } },
+			[] { return MakeUnique<FRunwayTool>(); },
+			EEditHandleKind::RunwayThreshold },
 
 		// EIGHT, not seven: key 7 is "land an aircraft", which is not a tool and is not in
 		// this table - see ARoadBuildController::LandAircraftNearViewFocus. Numbering around it keeps
 		// the printed key on the bar and the key that actually works the same number.
 		{ EKeys::Eight, TEXT("HoldingPosition"), LOCTEXT("HoldingPosition", "Holding point"),
 			LOCTEXT("HoldingPositionTooltip", "Click a taxiway junction node to place an intermediate holding position; click it again to remove it. Runway holding positions are derived from the runway."),
-			[] { return MakeUnique<FHoldingPointTool>(); } },
+			[] { return MakeUnique<FHoldingPointTool>(); },
+			EEditHandleKind::None },
 
 		// NINE: the SAME FRoadDrawTool, laying the service road cross-section instead of the
 		// taxiway one. One tool, two entries - see FRoadDrawTool's own constructor comment
 		// for why this is not a second class.
 		{ EKeys::Nine,  TEXT("Road"),     LOCTEXT("Road",      "Road"),
-			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node."),
-			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); } },
+			LOCTEXT("RoadTooltip", "Draw service roads for ground vehicles: click to chain, ctrl to remove, shift to insert a node. Press M to edit placed nodes."),
+			[] { return MakeUnique<FRoadDrawTool>(ERoadKind::ServiceRoad); },
+			EEditHandleKind::ServiceRoadNode, /*bShowsRoadNodes*/ true },
 
 		// ZERO, after nine: it is the next key along a keyboard's top row, and every other
 		// number is spoken for.
@@ -75,7 +85,8 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 		// was cheap and PIE showed what it cost - see the plot gesture design doc.
 		{ EKeys::Zero,  TEXT("FuelDepot"), LOCTEXT("FuelDepot", "Fuel depot"),
 			LOCTEXT("FuelDepotTooltip", "Place a fuel depot: click a service road to anchor it, drag along the road for width, away from it for depth, then press Build."),
-			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); } },
+			[] { return MakeUnique<FPlotPlaceTool>(EPlaceableEntity::FuelDepot); },
+			EEditHandleKind::None },
 	};
 	return TConstArrayView<FToolRegistration>(Registry);
 }
@@ -90,7 +101,43 @@ FBuildSession::FBuildSession()
 
 IBuildTool* FBuildSession::GetActiveTool() const
 {
+	// THE ONE PLACE THE MODE IS HONOURED, and what makes "Edit suppresses the build tool"
+	// structural rather than a rule nine tools each have to remember. Both drivers reach
+	// every tool through this function - nine call sites in ARoadBuildController, eight in
+	// URoadBuildEditorTool - so returning the edit tool here is the whole switch, and
+	// neither driver needed a line changed for it.
+	if (Mode == EGestureMode::Edit)
+	{
+		return &EditTool;
+	}
 	return Tools.IsValidIndex(ActiveTool) ? Tools[ActiveTool].Get() : nullptr;
+}
+
+void FBuildSession::SetGestureMode(EGestureMode InMode, const FToolContext& DeactivateContext)
+{
+	if (InMode == Mode)
+	{
+		return;
+	}
+
+	// The outgoing tool abandons whatever it had part-drawn, exactly as SelectTool does and
+	// for the same reason: switching to Edit mid-chain and back would otherwise resume a
+	// road the player stopped drawing in order to go and fix something else.
+	if (IBuildTool* Outgoing = GetActiveTool())
+	{
+		Outgoing->OnDeactivate(DeactivateContext);
+	}
+
+	Mode = InMode;
+
+	// NAMED, not a number: this line is how "which mode am I actually in" gets answered from
+	// the log rather than guessed at, which is the failure the report that prompted the merge
+	// took the long way round.
+	const TCHAR* Named =
+		Mode == EGestureMode::Edit   ? TEXT("Edit")   :
+		Mode == EGestureMode::Remove ? TEXT("Remove") :
+		Mode == EGestureMode::Insert ? TEXT("Insert") : TEXT("Build");
+	UE_LOG(LogAirside, Log, TEXT("Gesture mode -> %s"), Named);
 }
 
 void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContext)
@@ -119,6 +166,20 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 
 	ActiveTool = Index;
 
+	// A STICKY BUILD MODIFIER WAS CHOSEN FOR THE TOOL IT WAS LIT UNDER, so picking another
+	// drops it - what stops a Remove left on from the road tool deleting the first stand the
+	// player clicks. Moved here from ARoadBuildController::SelectTool with the modes.
+	//
+	// EDIT SURVIVES, and the difference is not an exception grudgingly carved out: Remove and
+	// Insert modify what a BUILD gesture does, and choosing a new build tool is choosing a new
+	// gesture, so the modifier belonged to the old one. Edit is not a build gesture at all -
+	// the lit tool only says which handles it exposes, so switching tools WHILE editing is the
+	// ordinary way to go from moving taxiway nodes to moving apron corners.
+	if (Mode == EGestureMode::Remove || Mode == EGestureMode::Insert)
+	{
+		Mode = EGestureMode::Build;
+	}
+
 	// A build tool is modal over the airport, not over a thing in it: the selection closes
 	// with the panel when one opens, and does not come back when it is cancelled.
 	if (Index != 0)
@@ -127,15 +188,15 @@ void FBuildSession::SelectTool(int32 Index, const FToolContext& DeactivateContex
 	}
 }
 
-bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FVector2D& PlaneHit,
+bool FBuildSession::ResolveSnap(const URoadNetwork* Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Snap, FRoadSnapResult& Out) const
 {
 	Out = FRoadSnapResult();
-	Out.Position = PlaneHit;
+	Out.Position = Query.Cursor;
 
 	if (Network != nullptr)
 	{
-		Out = SnapChain.Resolve(*Network, PlaneHit, Snap);
+		Out = SnapChain.Resolve(*Network, Query, Snap);
 	}
 	return true;
 }
@@ -150,16 +211,49 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	Context.Selection = &Selection;
 	Context.Limits = Tunables.Limits;
 	Context.SnapRadius = Tunables.ToolPickRadius;
-	Context.bRemoveModifier = bRemoveModifier;
-	Context.bInsertModifier = bInsertModifier;
+	// THE STICKY MODE ORS WITH THE HELD KEY. The bar's Remove button and a held Ctrl mean
+	// the same thing to a tool, and either lights the same button - the arrangement
+	// ARoadBuildController::MakeToolContext used to make with its own EClickModifier, moved
+	// here when the modes became one enum so the editor mode gets it too.
+	Context.bRemoveModifier = bRemoveModifier || Mode == EGestureMode::Remove;
+	Context.bInsertModifier = bInsertModifier || Mode == EGestureMode::Insert;
 	Context.bSuspendGuides = bSuspendGuides;
+
+	// WHERE FToolRegistration::EditHandles IS CONSUMED - the one reader, so the tool table
+	// stays the one place that mapping is written. The LIT tool decides, not the edit tool:
+	// that is what makes Taxiway light taxiway nodes and Apron light apron corners while a
+	// single FEditTool serves both.
+	//
+	// None outside Edit, so nothing can act on a handle kind while FEditTool is not even
+	// the tool running.
+	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
+	Context.EditHandles = (Mode == EGestureMode::Edit && Registry.IsValidIndex(ActiveTool))
+		? Registry[ActiveTool].EditHandles
+		: EEditHandleKind::None;
 
 	// Resolved ONCE and carried, rather than each consumer asking again. The tool acts on
 	// this and the overlay draws it, so what is highlighted and what happens cannot come
 	// from two searches that merely tend to agree.
 	FRoadSnapResult Snapped;
 	const URoadNetwork* Network = Target != nullptr ? Target->GetNetwork() : nullptr;
-	ResolveSnap(Network, PlaneHit, Tunables.Snap, Snapped);
+
+	FRoadSnapQuery Query;
+	Query.Cursor = PlaneHit;
+
+	// WHAT THE ACTIVE TOOL IS MOVING, so a drag stops snapping to the node in its own hand.
+	// Asked here rather than inside the chain because only the tool knows, and only this
+	// function holds both the tool and the query. The tool hands over a slot INDEX and this
+	// makes the generation-checked handle - the one place a dead slot is refused.
+	if (const IBuildTool* Snapping = GetActiveTool(); Snapping != nullptr && Network != nullptr)
+	{
+		const int32 Exclude = Snapping->GetSnapExclusion();
+		if (Exclude != INDEX_NONE)
+		{
+			Query.ExcludeNode = Network->NodeIdAt(Exclude);
+		}
+	}
+
+	ResolveSnap(Network, Query, Tunables.Snap, Snapped);
 
 	Context.SetCursor(PlaneHit, Snapped);
 

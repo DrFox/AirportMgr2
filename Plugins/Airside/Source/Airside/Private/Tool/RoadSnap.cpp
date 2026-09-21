@@ -6,9 +6,11 @@
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
 
-bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const
 {
+	const FVector2D& Cursor = Query.Cursor;
+
 	if (Settings.NodeRadius <= 0.0)
 	{
 		return false;
@@ -31,6 +33,18 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
 	{
 		if (!Nodes[Index].bAlive)
+		{
+			continue;
+		}
+
+		// THE NODE BEING DRAGGED DOES NOT CLAIM ITS OWN CURSOR - the cursor is on it, so
+		// without this it always wins and the node can never move anywhere.
+		//
+		// BY HANDLE, not by position. Two nodes legitimately sit at the same coordinates for
+		// the frame between a drop and the merge that resolves them, and a position test
+		// would exclude the merge TARGET as well as the node in hand - which is the one
+		// thing the drag most needs to find.
+		if (Query.ExcludeNode.IsSet() && Query.ExcludeNode.Index == Index)
 		{
 			continue;
 		}
@@ -77,9 +91,11 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cu
 	return true;
 }
 
-bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const
 {
+	const FVector2D& Cursor = Query.Cursor;
+
 	if (!Settings.bSnapToSegments || Settings.SegmentRadius <= 0.0)
 	{
 		return false;
@@ -108,6 +124,16 @@ bool FRoadSegmentSnapRule::Resolve(const URoadNetwork& Network, const FVector2D&
 	{
 		const FRoadSegment& Segment = Segments[Index];
 		if (!Segment.bAlive)
+		{
+			continue;
+		}
+
+		// AN ARM OF THE DRAGGED NODE IS NOT SPLITTABLE BY THAT NODE'S OWN CURSOR. The node
+		// rule above has already excluded the node; without the same guard here its arms
+		// remain, and the cursor a little way along one of them offers to SPLIT the very
+		// road it is dragging - a new node dropped mid-arm, mid-drag.
+		if (Query.ExcludeNode.IsSet()
+			&& (Segment.A == Query.ExcludeNode || Segment.B == Query.ExcludeNode))
 		{
 			continue;
 		}
@@ -204,13 +230,13 @@ void FRoadSnapChain::AddRule(TUniquePtr<IRoadSnapRule> Rule)
 	}
 }
 
-FRoadSnapResult FRoadSnapChain::Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+FRoadSnapResult FRoadSnapChain::Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Settings) const
 {
 	for (const TUniquePtr<IRoadSnapRule>& Rule : Rules)
 	{
 		FRoadSnapResult Claimed;
-		if (Rule->Resolve(Network, Cursor, Settings, Claimed))
+		if (Rule->Resolve(Network, Query, Settings, Claimed))
 		{
 			return Claimed;
 		}
@@ -218,6 +244,6 @@ FRoadSnapResult FRoadSnapChain::Resolve(const URoadNetwork& Network, const FVect
 
 	FRoadSnapResult Free;
 	Free.Kind = ERoadSnapKind::Free;
-	Free.Position = Cursor;
+	Free.Position = Query.Cursor;
 	return Free;
 }

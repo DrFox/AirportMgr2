@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Profiles/RoadProfile.h"
 #include "Tool/RoadPlacement.h"
 
 class URoadNetwork;
@@ -30,11 +31,53 @@ struct FRoadDeletionPlan
 	/** Neighbours to connect to Anchor, in a deterministic order. */
 	TArray<FRoadNodeId> Rejoin;
 
-	/** Segments the deletion removes. */
+	/**
+	 * Segments the deletion removes.
+	 *
+	 * NOT ALWAYS EVERY ARM OF THE TARGET. A node carrying a runway loses only its
+	 * non-runway arms - see bKeepTarget.
+	 */
 	TArray<FRoadSegmentId> Doomed;
+
+	/**
+	 * True when the node itself stays and only Doomed goes.
+	 *
+	 * THE RUNWAY IS NEVER TOUCHED BY DELETING SOMETHING ATTACHED TO IT. Reported from play
+	 * with a picture: a taxiway joined the runway AT ITS THRESHOLD, and deleting that node
+	 * healed "degree 2" by running the runway's far end straight to the taxiway's next
+	 * corner - bending the runway to reach it. What is wanted, and what this expresses, is
+	 * that the runway stays exactly where it is and the taxiway goes.
+	 *
+	 * So a threshold with a taxiway on it keeps its node: the node is the threshold, and
+	 * the runway still ends there. An INTERIOR runway junction is the one case where the
+	 * target still disappears, because its two runway arms rejoin each other - collinear,
+	 * so nothing moves - and the node was only ever there to carry the branch.
+	 */
+	bool bKeepTarget = false;
 
 	/** Neighbours left holding no road at all, which go with it. */
 	TArray<FRoadNodeId> Swept;
+
+	/**
+	 * The cross-section the rejoins are laid with - the road being healed, not the level's
+	 * default.
+	 *
+	 * ON THE PLAN BECAUSE THE PLAN IS JUDGED WITH IT. It was computed inside
+	 * PlanNodeDeletion, used to validate each rejoin against a scratch graph, and then
+	 * thrown away: URoadEditFacade::DeleteNode laid the real segment with
+	 * ARoadNetworkActor::ResolveProfile() instead - the level's default taxiway. So a heal
+	 * was approved for one cross-section and performed with another, which is the same
+	 * two-answers shape URoadNetwork::SplitSegment's comment records about the ghost.
+	 *
+	 * Visible on any road that is not the default width; FATAL on a runway, whose relaid
+	 * strip simply stopped being a runway - URoadNetwork::IsRunwaySegment reads the profile
+	 * and nothing else. Found while fixing "no way to disconnect a taxiway from a runway",
+	 * not by that report.
+	 *
+	 * Null when there is nothing to rejoin, and the facade falls back to its own default
+	 * as before.
+	 */
+	TObjectPtr<URoadProfile> HealProfile;
 };
 
 /**

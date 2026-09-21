@@ -169,14 +169,14 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
-	// EPreviewStyle is a plain 0-based enum ending at Guide - iterated the same way
+	// EPreviewStyle is a plain 0-based enum ending at Handle - iterated the same way
 	// FBuildActionsRegistryTest walks EActionSection, rather than by reflection.
 	//
 	// THIS BOUND IS THE FIFTH LIST a new style has to appear in, and the only one nothing
 	// else would have caught: a value added after the old bound was simply not tested, so
 	// the constructor's seeding list could have missed it in silence. Adding a style means
 	// moving this line.
-	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Guide); ++S)
+	for (uint8 S = 0; S <= static_cast<uint8>(EPreviewStyle::Handle); ++S)
 	{
 		const EPreviewStyle Style = static_cast<EPreviewStyle>(S);
 		const FPreviewLook& Look = Hud->LookForTest(Style);

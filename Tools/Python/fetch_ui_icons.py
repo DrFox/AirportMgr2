@@ -72,6 +72,12 @@ ICONS = {
     "edit.redo":           ("delapouite", "clockwise-rotation"),
     "edit.clear":          ("delapouite", "broom"),
 
+    # THE FOUR-WAY ARROWS, for the Edit MODE toggle rather than an edit verb. It sits beside
+    # the verbs on the bar but means "now you may move things", so a glyph about motion
+    # rather than about a tool. "move-drag", "four-arrows" and "lorc/move" all return the
+    # HTML 404 under HTTP 200 this file warns about; this one is real.
+    "edit.editmode":       ("delapouite", "move"),
+
     "aircraft.land":       ("delapouite", "commercial-airplane"),
     "aircraft.guidelines": ("delapouite", "control-tower"),
 

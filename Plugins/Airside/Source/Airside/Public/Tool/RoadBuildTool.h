@@ -10,6 +10,49 @@
 #include "RoadBuildTool.generated.h"
 
 /**
+ * What a tool exposes for editing while the session's mode is Edit.
+ *
+ * DECLARED ON FToolRegistration, not in a switch beside it - see that struct's field. This
+ * is a list that must agree with the tool table, and CLAUDE.md's answer to that is to make
+ * it ONE list. A map from tool id to handle kind living inside FEditTool is exactly the
+ * shape this codebase has shipped three times and regretted: a second list nothing checks
+ * against the first.
+ *
+ * IT LIVES IN THIS HEADER rather than in BuildSession.h, where FToolRegistration is,
+ * because FToolContext below carries it too and BuildSession.h already includes this file.
+ * The reverse include would close a cycle Check-Architecture.ps1 fails.
+ *
+ * A NODE CARRIES NO KIND - kind lives on the segment's Profile (see FRoadNode). So
+ * AirsideNode and ServiceRoadNode are questions about a node's ARMS, answered through
+ * RoadNaming::ReferenceOf, the one home for that classification. A node where a service
+ * road meets a taxiway answers yes to both, correctly, because it is both.
+ */
+UENUM()
+enum class EEditHandleKind : uint8
+{
+	/** This tool has nothing to edit. The bar greys the Edit toggle and says so. */
+	None,
+
+	/** A node with an incident taxiway-or-runway segment. */
+	AirsideNode,
+
+	/** A node with an incident service-road segment. */
+	ServiceRoadNode,
+
+	/**
+	 * The END node of a runway chain - not its interior nodes.
+	 *
+	 * A split runway has interior nodes, and dragging one of those sideways would kink the
+	 * strip rather than reposition it. A threshold is where the runway STOPS, which is one
+	 * incident runway arm and no more.
+	 */
+	RunwayThreshold,
+
+	/** A corner of an apron outline. Not a node: see FEditTool's handle type. */
+	ApronCorner,
+};
+
+/**
  * Everything a tool needs to decide what an input means.
  *
  * Target is IRoadEditTarget, not the concrete ARoadNetworkActor - see that header's
@@ -83,6 +126,18 @@ struct FToolContext
 	 * else does, rather than inventing a second notion of near.
 	 */
 	double SnapRadius = 150.0;
+
+	/**
+	 * What the LIT tool exposes for editing, from its registry entry. None at every moment
+	 * the session's mode is not Edit.
+	 *
+	 * ON THE CONTEXT rather than on FEditTool, for the reason this struct's own header
+	 * gives about holding no state: a context is built fresh each frame, so the edit tool
+	 * cannot keep a stale view of which tool is lit. Switching from Taxiway to Apron with
+	 * Edit held would otherwise leave road nodes grabbable until something remembered to
+	 * push the change across.
+	 */
+	EEditHandleKind EditHandles = EEditHandleKind::None;
 
 	/**
 	 * Target's network, null-safe. A Ctrl-remove preview always needs Target non-null AND
@@ -244,6 +299,20 @@ enum class EPreviewStyle : uint8
 	 * and renumbering it repoints any value already serialised against it.
 	 */
 	Guide,
+
+	/**
+	 * A point the Edit mode can grab. Drawn for EVERY handle the lit tool exposes, so "what
+	 * can I move here" is answered by looking rather than by trying - which is the whole
+	 * reason the mode is discoverable at all.
+	 *
+	 * NOT Hover, which already means "what a click would select right now" and is drawn for
+	 * exactly ONE thing, the pickable under the cursor. These two are on screen in the same
+	 * frame and touching the same point, so they are two meanings and two styles.
+	 *
+	 * AT THE END, like Pinned, Provisional and Guide above and for the same reason: this is
+	 * a UENUM and renumbering it repoints any value already serialised against it.
+	 */
+	Handle,
 };
 
 /**
@@ -368,6 +437,24 @@ struct AIRSIDE_API IBuildTool
 	 * the drawing rather than the describing, for that reason.
 	 */
 	virtual bool WantsFreeStartGuides() const { return false; }
+
+	/**
+	 * A node this tool's gesture is MOVING, which the snap chain must not offer it.
+	 *
+	 * INDEX_NONE by default: only a drag has one, and every tool that draws rather than
+	 * moves should keep snapping to everything. See FRoadSnapQuery::ExcludeNode for what
+	 * goes wrong without it - the dragged node claims its own cursor and cannot move.
+	 *
+	 * TAKES NO CONTEXT, like DescribeGuideAnchor and for the identical reason: it is read
+	 * from inside FBuildSession::MakeContext WHILE the context is being built, so there is
+	 * none to pass. The snap it would help resolve is the very field being filled.
+	 *
+	 * A SLOT INDEX, like every other index a tool passes across the IRoadEditTarget seam.
+	 * A tool has picked one out of GetNodes() and has no business constructing a
+	 * generation-checked handle; MakeContext turns it into one, in the one place that can
+	 * refuse a dead slot.
+	 */
+	virtual int32 GetSnapExclusion() const { return INDEX_NONE; }
 
 	/**
 	 * What this tool is dragging, and against what, for the guide chain. False means "no

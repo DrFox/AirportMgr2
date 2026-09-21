@@ -115,23 +115,47 @@ struct AIRSIDE_API FRoadSnapSettings
 };
 
 /**
+ * Where the cursor is, and what it may NOT claim.
+ *
+ * A STRUCT AND NOT A SECOND PARAMETER, per CLAUDE.md's "one struct per thing": the cursor
+ * and what it is forbidden to resolve to are one question, and the next exclusion to
+ * arrive adds a field here rather than a parameter to two rules, the chain, ResolveSnap
+ * and MakeContext.
+ *
+ * THE EXCLUSION EXISTS FOR THE DRAG, and nothing else needs one yet. Dragging node A puts
+ * the cursor ON A, so FRoadNodeSnapRule claims A and hands back A's own stored position -
+ * the node is pinned where it already is, for ever. That is why a drag could not snap at
+ * all before this existed, and why FRoadDrawTool's drag passed the raw cursor instead.
+ *
+ * A NODE AND NOT A bool, because a drag must still find OTHER nodes: that is precisely
+ * how a merge target is picked.
+ */
+struct AIRSIDE_API FRoadSnapQuery
+{
+	FVector2D Cursor = FVector2D::ZeroVector;
+
+	/** Unset for every caller that is not dragging - which is all of them but one. */
+	FRoadNodeId ExcludeNode;
+};
+
+/**
  * One link of the snap chain - design spec section 7.4.
  *
- * Resolve returns true to claim the cursor and stop the chain, false to pass. A rule
+ * Resolve returns true to claim the query and stop the chain, false to pass. A rule
  * must not write to Out unless it claims.
  */
 struct AIRSIDE_API IRoadSnapRule
 {
 	virtual ~IRoadSnapRule() = default;
 
-	virtual bool Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+	virtual bool Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 		const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const = 0;
 };
 
 /** Priority 1: an existing node within NodeRadius. The nearest one wins. */
 struct AIRSIDE_API FRoadNodeSnapRule final : public IRoadSnapRule
 {
-	virtual bool Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+	virtual bool Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 		const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const override;
 };
 
@@ -145,7 +169,7 @@ struct AIRSIDE_API FRoadNodeSnapRule final : public IRoadSnapRule
  */
 struct AIRSIDE_API FRoadSegmentSnapRule final : public IRoadSnapRule
 {
-	virtual bool Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+	virtual bool Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 		const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const override;
 };
 
@@ -184,9 +208,24 @@ public:
 	/** Appends a rule at the LOWEST priority so far. Order of calls is the chain's order. */
 	void AddRule(TUniquePtr<IRoadSnapRule> Rule);
 
-	/** First rule to claim the cursor wins; Free when none does. */
-	FRoadSnapResult Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+	/** First rule to claim the query wins; Free when none does. */
+	FRoadSnapResult Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 		const FRoadSnapSettings& Settings) const;
+
+	/**
+	 * No exclusion - what every caller before the drag meant, and what a CLICK always
+	 * means.
+	 *
+	 * Kept so no existing call site changes: CLAUDE.md's rule that every reachable entry
+	 * point stays reachable at its old name, as a forwarder where the logic moved.
+	 */
+	FRoadSnapResult Resolve(const URoadNetwork& Network, const FVector2D& Cursor,
+		const FRoadSnapSettings& Settings) const
+	{
+		FRoadSnapQuery Query;
+		Query.Cursor = Cursor;
+		return Resolve(Network, Query, Settings);
+	}
 
 	int32 NumRules() const { return Rules.Num(); }
 

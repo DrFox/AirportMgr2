@@ -207,6 +207,145 @@ bool URoadNetwork::SetNodePosition(FRoadNodeId Node, const FVector2D& To)
 	return true;
 }
 
+bool URoadNetwork::SetApronCorner(FApronId Apron, int32 CornerIndex, const FVector2D& To)
+{
+	FApronSurface* Live = RoadSlot::Get<FApronId>(Aprons, Apron);
+	if (Live == nullptr || !Live->Outline.IsValidIndex(CornerIndex))
+	{
+		return false;
+	}
+
+	Live->Outline[CornerIndex] = To;
+	return true;
+}
+
+bool URoadNetwork::MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb)
+{
+	if (!RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Nodes, Keep)
+		|| !RoadSlot::IsValid<FRoadNodeId, FRoadNode>(Nodes, Absorb)
+		|| Keep == Absorb)
+	{
+		return false;
+	}
+
+	const FVector2D KeepAt = Nodes[Keep.Index].Position;
+
+	// COPIED BEFORE ANY SURGERY: RemoveSegment mutates the very array this walks, and a
+	// repoint below edits it too. The same copy RemoveNode takes, for the same reason.
+	const TArray<FRoadSegmentId> Arms = Nodes[Absorb.Index].Incident;
+
+	for (const FRoadSegmentId Arm : Arms)
+	{
+		FRoadSegment* Segment = RoadSlot::Get<FRoadSegmentId>(Segments, Arm);
+		if (Segment == nullptr)
+		{
+			continue;
+		}
+
+		const bool bAbsorbIsA = (Segment->A == Absorb);
+		const FRoadNodeId Far = bAbsorbIsA ? Segment->B : Segment->A;
+
+		// CASE 1: the arm runs BETWEEN the two nodes being merged. Once they are one node it
+		// is a self-loop - no length, no direction, and nothing the junction solver can make
+		// a surface from. Collapsing it is the whole point of merging a stubby pair.
+		if (Far == Keep)
+		{
+			RemoveSegment(Arm);
+			continue;
+		}
+
+		// CASE 2: Keep already reaches that far end, so repointing would leave two segments
+		// between one pair of nodes - coincident pavement at one Z, which is a z-fight and
+		// not a surface. One of them has to go, and it is the NARROWER: see the header.
+		FRoadSegmentId Rival;
+		for (const FRoadSegmentId Existing : Nodes[Keep.Index].Incident)
+		{
+			if (GetOtherEnd(Existing, Keep) == Far)
+			{
+				Rival = Existing;
+				break;
+			}
+		}
+
+		if (Rival.IsSet())
+		{
+			const FRoadSegment* RivalSegment = RoadSlot::Get<FRoadSegmentId>(Segments, Rival);
+			const URoadProfile* RivalProfile = RivalSegment != nullptr ? ProfileFor(*RivalSegment) : nullptr;
+			const URoadProfile* ArmProfile = ProfileFor(*Segment);
+
+			const double RivalWidth = RivalProfile != nullptr ? RivalProfile->GetTotalWidth() : 0.0;
+			const double ArmWidth = ArmProfile != nullptr ? ArmProfile->GetTotalWidth() : 0.0;
+
+			// STRICTLY GREATER, so an exact tie keeps the arm already on Keep - the edit that
+			// touches less, and a rule that does not depend on which node the player happened
+			// to drag onto which.
+			if (ArmWidth > RivalWidth)
+			{
+				RemoveSegment(Rival);
+				// Falls through to the repoint below: the wider arm is the survivor and still
+				// has to be moved onto Keep.
+			}
+			else
+			{
+				RemoveSegment(Arm);
+				continue;
+			}
+
+			// Re-fetched: RemoveSegment above may have moved this slot's neighbours about, and
+			// the pointer taken before it is not one to trust afterwards.
+			Segment = RoadSlot::Get<FRoadSegmentId>(Segments, Arm);
+			if (Segment == nullptr)
+			{
+				continue;
+			}
+		}
+
+		// CASE 3: repoint. The Control point travels by HALF the endpoint's displacement,
+		// which is how far the chord's midpoint moves - so a straight segment stays exactly
+		// straight and a curve keeps its bend relative to its chord. SetNodePosition applies
+		// the identical rule; getting it wrong leaves the arm aiming at where its end used
+		// to be, because GetOutgoingTangent derives direction from Control and not from the
+		// endpoints.
+		const FVector2D Was = Nodes[Absorb.Index].Position;
+		Segment->Control += (KeepAt - Was) * 0.5;
+
+		if (bAbsorbIsA)
+		{
+			Segment->A = Keep;
+		}
+		else
+		{
+			Segment->B = Keep;
+		}
+
+		Nodes[Absorb.Index].Incident.Remove(Arm);
+		Nodes[Keep.Index].Incident.AddUnique(Arm);
+	}
+
+	// Absorb is bare by now - every arm was either removed or repointed - so this takes no
+	// segments with it. Going through RemoveNode rather than the slot directly keeps the one
+	// cascade, in case a future arm kind is missed above.
+	RemoveNode(Absorb);
+
+	// THE INCIDENCE ORDER, at Keep and at every neighbour. URoadNetwork's contract is that
+	// Incident stays sorted by outgoing bearing and the junction solver walks it assuming
+	// so - an arm in the wrong slot puts one road's geometry on another road's cut line.
+	// Every repointed arm changed its bearing at BOTH ends, which is the half SetNodePosition
+	// records being invisible until a junction is solved.
+	SortIncident(Keep);
+	const TArray<FRoadSegmentId> Touching = Nodes[Keep.Index].Incident;
+	for (const FRoadSegmentId Arm : Touching)
+	{
+		const FRoadNodeId Other = GetOtherEnd(Arm, Keep);
+		if (Other.IsSet())
+		{
+			SortIncident(Other);
+		}
+	}
+
+	return true;
+}
+
 const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const
 {
 	return RoadSlot::Get<FRoadNodeId>(Nodes, Node);

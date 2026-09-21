@@ -204,6 +204,19 @@ public:
 	virtual bool DeleteNode(int32 NodeIndex) = 0;
 	virtual bool DeleteSegment(int32 SegmentIndex) = 0;
 	virtual bool MoveNode(int32 NodeIndex, FVector2D To) = 0;
+
+	/**
+	 * Fold AbsorbIndex into KeepIndex - the merge a drop-on-node performs.
+	 *
+	 * KEEP IS THE NODE THE PLAYER AIMED AT and Absorb the one in their hand, so the thing
+	 * they were pointing to is the thing that survives. A merge that kept the dragged node
+	 * instead would move the target, which is the opposite of what the gesture says.
+	 *
+	 * REFUSES AND REVERTS rather than leaving two nodes at one position: see
+	 * URoadEditFacade::MergeNodes, and URoadEditHistory::RevertEdit on why refusing after
+	 * the fact needs undoing rather than abandoning.
+	 */
+	virtual bool MergeNodes(int32 KeepIndex, int32 AbsorbIndex) = 0;
 	virtual void BeginInteractiveEdit(const FString& Label) = 0;
 	virtual void EndInteractiveEdit(bool bKeep) = 0;
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const = 0;
@@ -213,6 +226,16 @@ public:
 	virtual int32 AddApron(const TArray<FVector2D>& Outline) = 0;
 	virtual bool DeleteApron(int32 ApronIndex) = 0;
 	virtual int32 FindApronAt(FVector2D Where) const = 0;
+
+	/**
+	 * Move one corner of an apron outline - the Edit mode's apron handle.
+	 *
+	 * REFUSES A MOVE THAT CROSSES THE OUTLINE, because a self-intersecting polygon has no
+	 * inside and the surface builder has no answer for one. Judged through
+	 * RoadGeom::IsSimplePolygon, the same test FApronDrawTool already closes an outline
+	 * against, rather than a second opinion about what a valid apron is.
+	 */
+	virtual bool MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To) = 0;
 
 	// --- Entities ------------------------------------------------------------------------
 
