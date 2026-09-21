@@ -13,6 +13,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/RunwayAdmission.h"
 #include "Profiles/RoadProfile.h"
@@ -275,7 +276,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			int32 Reachable = 0;
 			for (const FGuidelineNodeId& Exit : Exits)
 			{
-				FRouteQuery Q; Q.Start = Exit; Q.Goal = Stand.PoseNode; Q.Class = ETraversalClass::Aircraft;
+				FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = Exit; Q.Goal = Stand.PoseNode; Q.Class = ETraversalClass::Aircraft;
 				Reachable += RouteSearch::Find(*Net, Q).IsValid() ? 1 : 0;
 			}
 			Reach = FString::Printf(TEXT("reachable from %d of %d runway nodes"), Reachable, Exits.Num());

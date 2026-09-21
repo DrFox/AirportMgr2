@@ -14,6 +14,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
@@ -24,7 +25,7 @@ namespace
 {
 	FRoutePlan M2TrafficRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
 	{
-		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = Class;
+		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = Class;
 		return RouteSearch::Find(Net, Q);
 	}
 

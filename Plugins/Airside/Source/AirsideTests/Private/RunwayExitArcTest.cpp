@@ -9,6 +9,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -209,6 +210,8 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId WEnd = ExitArcNodeFor(*Net, RW1, true);
 		const FGuidelineNodeId EEnd = ExitArcNodeFor(*Net, RW2, false);
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = WEnd;
 		Query.Goal = EEnd;
 		Query.Class = ETraversalClass::Aircraft;

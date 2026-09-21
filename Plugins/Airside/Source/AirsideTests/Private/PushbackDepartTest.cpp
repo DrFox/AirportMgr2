@@ -7,6 +7,7 @@
 #include "Model/RoadAgent.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 
@@ -77,6 +78,8 @@ namespace
 		FGuidelineNodeId From, FGuidelineNodeId To)
 	{
 		FRouteQuery Q;
+		Q.Errand = ERouteErrand::GraphProbe;
+		Q.Policy = FRoutePolicy::For(Q.Errand);
 		Q.Start = From;
 		Q.Goal = To;
 		Q.Class = ETraversalClass::Aircraft;

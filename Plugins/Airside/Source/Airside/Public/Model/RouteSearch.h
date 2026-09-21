@@ -240,19 +240,15 @@ struct AIRSIDE_API FRouteQuery
 	UPROPERTY() double CongestionWeight = 2.0;
 
 	/**
-	 * Start/Goal/Class/Wingspan in one expression, rather than default-constructing and
-	 * setting each by hand - five call sites did (#103). Everything else (bans, avoidance,
-	 * congestion) is per-caller enough that setting it after is clearer than a builder
-	 * taking eight parameters most callers do not use.
-	 */
-	static FRouteQuery For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		const FAirframe& Airframe, ETraversalClass Class);
-
-	/**
-	 * Start/Goal/Class/Wingspan AND the whole routing policy, from the errand.
+	 * Start/Goal/Class/Wingspan AND the whole routing policy, in one expression, rather than
+	 * default-constructing and setting each by hand - five call sites did (#103). The bans
+	 * stay per-caller: a deadlock resolver's banned edge is per-incident, not per-errand, and
+	 * a table row for it would be a row of one.
 	 *
-	 * THE ONLY FACTORY PRODUCTION CODE MAY USE. The errand-less overload above survives
-	 * only until every caller has been migrated, and is then deleted.
+	 * THE ONLY FACTORY. An errand-less overload existed until 2026-09-21 and is deliberately
+	 * gone: it was the shape that let five call sites build a query without ever saying what
+	 * it was for, and inherit the permissive policy by omission. Avoidance is no longer in
+	 * the "set it after" list for the same reason.
 	 */
 	static FRouteQuery For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
 		const FAirframe& Airframe, ETraversalClass Class);

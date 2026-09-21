@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -12,6 +13,8 @@ namespace
 	FRoutePlan PreemptionRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B, ETraversalClass Class)
 	{
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = A;
 		Query.Goal = B;
 		Query.Class = Class;

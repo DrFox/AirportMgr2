@@ -4,6 +4,7 @@
 #include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 #include "Profiles/RoadProfile.h"
@@ -33,6 +34,8 @@ bool FRouteStepEndDistanceTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, D, C);
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = A;
 	Query.Goal = D;
 	Query.Class = ETraversalClass::Aircraft;
@@ -76,9 +79,9 @@ bool FRouteSpliceTest::RunTest(const FString& Parameters)
 	TestGraph::Join(*Net, B, X);
 	TestGraph::Join(*Net, X, C);
 
-	FRouteQuery Q; Q.Start = A; Q.Goal = C; Q.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = C; Q.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Head = RouteSearch::Find(*Net, Q);
-	FRouteQuery T; T.Start = B; T.Goal = C; T.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery T; T.Errand = ERouteErrand::GraphProbe; T.Policy = FRoutePolicy::For(T.Errand); T.Start = B; T.Goal = C; T.Class = ETraversalClass::GroundVehicle;
 	T.BannedEdge = Head.Steps[1].Edge;   // forbid B->C, so the tail goes via X
 	const FRoutePlan Tail = RouteSearch::Find(*Net, T);
 	if (!TestTrue(TEXT("tail routes round the ban"), Tail.IsValid() && Tail.Steps.Num() == 2)) { return false; }
@@ -137,12 +140,19 @@ bool FRouteOccupancyCostTest::RunTest(const FString& Parameters)
 	FTrafficClaim Blocker;
 	Table.TryClaim(Queue, Blocker);
 
-	FRouteQuery Q; Q.Start = West; Q.Goal = East; Q.Class = ETraversalClass::GroundVehicle;
+	// THE ERRAND CHANGES PART WAY THROUGH, and it has to: this test's whole point is to
+	// compare a route costed WITHOUT the table against the same route costed WITH it, and
+	// the search refuses a mismatch in either direction. GraphProbe for the plain pass,
+	// VehicleToJob (requires the table, carries no runway penalty to disturb the costs) from
+	// the moment it is attached. That the errand differs across the two is exactly the
+	// distinction being measured, so naming it here is not a workaround.
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = West; Q.Goal = East; Q.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Plain = RouteSearch::Find(*Net, Q);
 	if (!TestTrue(TEXT("the plain route exists"), Plain.IsValid() && Plain.Steps.Num() == 2)) { return false; }
 	TestEqual(TEXT("no table: south"), Plain.Steps[0].To, South);
 
 	Q.Occupancy = &Table; Q.QueryingAgent = 1; Q.CongestionWeight = 2.0;
+	Q.Errand = ERouteErrand::VehicleToJob; Q.Policy = FRoutePolicy::For(Q.Errand);
 	const FRoutePlan Costed = RouteSearch::Find(*Net, Q);
 	if (!TestTrue(TEXT("the costed route exists"), Costed.IsValid())) { return false; }
 	TestEqual(TEXT("a queue on the south edge sends a stranger north"), Costed.Steps[0].To, North);
@@ -155,7 +165,7 @@ bool FRouteOccupancyCostTest::RunTest(const FString& Parameters)
 	// A NULL TABLE IS THE OLD SEARCH, POINT FOR POINT. The cost term is the one thing added
 	// to EdgeCost, and every caller that never heard of occupancy passes a bare query; a
 	// change that moved those routes by a metre would move every ghost the player is shown.
-	FRouteQuery Bare; Bare.Start = West; Bare.Goal = East; Bare.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Bare; Bare.Errand = ERouteErrand::GraphProbe; Bare.Policy = FRoutePolicy::For(Bare.Errand); Bare.Start = West; Bare.Goal = East; Bare.Class = ETraversalClass::GroundVehicle;
 	TestTrue(TEXT("the null-table plan is the old plan to the point"), Plain.Polyline == RouteSearch::Find(*Net, Bare).Polyline);
 	return true;
 }
@@ -199,7 +209,15 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 	auto ViaRunway = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; };
 	auto ViaDetour = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; };
 
-	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	// THE ERRAND CHANGES PART WAY THROUGH THIS TEST, and it has to. The first three cases
+	// run with NO occupancy table and the rest run with one, and the search refuses a
+	// mismatch either way round - so a single errand cannot cover both halves. GraphProbe
+	// (reads no table) here, VehicleToJob (requires one, and carries no runway penalty to
+	// disturb the costs) from the moment the table is attached.
+	//
+	// AvoidRunways is swept by hand below: this test is about ERunwayAvoidance itself, one
+	// layer under the policy that normally chooses it.
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
 	TestTrue(TEXT("None: the runway end is ordinary line, the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
 
 	Q.AvoidRunways = ERunwayAvoidance::All;
@@ -210,6 +228,7 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 
 	FTrafficOccupancy Table;
 	Q.Occupancy = &Table; Q.QueryingAgent = 1;
+	Q.Errand = ERouteErrand::VehicleToJob; Q.Policy = FRoutePolicy::For(Q.Errand);
 	TestTrue(TEXT("Held, empty table: the short way"), ViaRunway(RouteSearch::Find(*Net, Q)));
 
 	// A RESERVATION IS ENOUGH: a departure at the bar holds the strip reserved, not occupied,
@@ -272,6 +291,8 @@ bool FRouteRunwaySeedMemoTest::RunTest(const FString& Parameters)
 	RouteSearch::ResetRunwaySeedResolveCountForTest();
 
 	FRouteQuery Q;
+	Q.Errand = ERouteErrand::GraphProbe;
+	Q.Policy = FRoutePolicy::For(Q.Errand);
 	Q.Start = Chain[0];
 	Q.Goal = Chain.Last();
 	Q.Class = ETraversalClass::Aircraft;

@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
 
@@ -193,6 +194,8 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		TrafficSplitJoin(*Network, South, East);
 
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = West;
 		Query.Goal = East;
 		Query.Class = ETraversalClass::Aircraft;

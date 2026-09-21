@@ -48,7 +48,7 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	// sweeps DERIVED guidelines, and a fixture that vanished mid-test would look like a
 	// broken forwarder.
 	TestGraph::Join(Net, A, B, { EGuidelineDir::Bidirectional, nullptr, false });
-	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Plan = RouteSearch::Find(Net, Q);
 	if (!TestTrue(TEXT("route found"), Plan.IsValid())) { return false; }
 

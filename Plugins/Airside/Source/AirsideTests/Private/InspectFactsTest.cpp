@@ -6,6 +6,7 @@
 #include "Model/InspectFacts.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -48,7 +49,7 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 	InspJoin(*Net, B, Pose);
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	FRouteQuery Q; Q.Start = A; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
 	FAirframe Piper = UAirsideSettings::ResolveDefaultAirframe();
 	Piper.TypeCode = TEXT("PA46");
 	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), Piper, ETraversalClass::Aircraft, 1.0);
