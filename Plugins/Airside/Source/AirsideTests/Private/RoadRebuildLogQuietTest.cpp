@@ -4,6 +4,7 @@
 #include "Misc/AutomationTest.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -19,59 +20,36 @@ namespace
 	 * (AddOutputDevice/RemoveOutputDevice bracketing a single call), the same shape
 	 * FAutomationTestBase::AddExpectedMessage's own scoping uses.
 	 */
-	class FLogRoadMeshLogSpy : public FOutputDevice
+	// ISSUE #216d: was its own FOutputDevice hand-copy of AirsideTestWorld.h's FLogLineSpy
+	// (Count, CapturedLines, and the CanBeUsedOnMultipleThreads override that #216's root
+	// cause depends on - see that struct's own doc comment for the mechanism). Now derives
+	// from the shared spy and adds only the one thing specific to this test: recognising
+	// RoadRebuildCensus::Log's "Rebuilt:" line among the captured ones.
+	class FLogRoadMeshLogSpy : public FLogLineSpy
 	{
 	public:
-		int32 Count = 0;
 		bool bSawRebuiltLine = false;
 
-		// ISSUE #216: the count alone cannot say WHICH line survived, and that is exactly
-		// the question an order-dependent failure needs answered - a line captured here that
-		// this test's own code never emits (the census, the sink's DIAG, the markings count)
-		// means the spy's window is catching something unrelated, not a leak in the quiet
-		// path itself. Captured verbatim rather than re-derived from Count, so the failure
-		// message names the actual line instead of asking a human to reproduce it under a
-		// debugger to find out.
-		TArray<FString> CapturedLines;
+		FLogRoadMeshLogSpy() : FLogLineSpy(FName(TEXT("LogRoadMesh"))) {}
 
-		// ISSUE #216 ROOT CAUSE (fourth/fifth sighting): an FOutputDevice that does not
-		// override this defaults to false, which FOutputDeviceRedirectorState::AddOutputDevice
-		// (Engine/Source/Runtime/Core/Private/Misc/OutputDeviceRedirector.cpp) files under
-		// BUFFERED, not unbuffered. LaunchEngineLoop.cpp calls GLog->TryStartDedicatedPrimaryThread()
-		// at boot (unless "-NoLogThread" is passed, which Run-AirsideTests.ps1 does not), and
-		// once that thread exists IT becomes the redirector's "primary thread" - so a UE_LOG
-		// call from THIS test's own game thread no longer qualifies for synchronous delivery to
-		// a buffered device (see Serialize()'s IsPrimaryThread(ThreadId) check); the line is
-		// enqueued instead and only reaches this spy whenever that background thread next wakes
-		// and drains the queue, entirely independent of when AddOutputDevice/RemoveOutputDevice
-		// bracket the call. Under the full suite's log volume that thread lags far enough behind
-		// that lines are still queued - sometimes all of them, sometimes only the tail past
-		// RunwayRubber/RoadRebuildCensus - when RemoveOutputDevice fires, which is why isolated
-		// `-Filter Airside.Present` runs (far less log volume, the thread stays caught up) did
-		// not reproduce it. Engine/Source/Runtime/Core/Public/Misc/AutomationTest.h's own
-		// FAutomationTestOutputDevice and FAutomationTestMessageFilter hit exactly this and
-		// override this the same way, captioned "Make it unbuffered by returning true" - this
-		// spy needs the identical override for the identical reason: it is added and removed
-		// around a narrow window and must not race a thread it does not control.
-		virtual bool CanBeUsedOnMultipleThreads() const override
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
 		{
-			return true;
-		}
-
-		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
-		{
-			static const FName RoadMeshCategory(TEXT("LogRoadMesh"));
-			if (Category == RoadMeshCategory && Verbosity == ELogVerbosity::Log)
+			// ISSUE #216: the count alone cannot say WHICH line survived, and that is exactly
+			// the question an order-dependent failure needs answered - a line captured here
+			// that this test's own code never emits (the census, the sink's DIAG, the markings
+			// count) means the spy's window is catching something unrelated, not a leak in the
+			// quiet path itself. FLogLineSpy already captures verbatim rather than re-deriving
+			// from Count; this override only adds the "was one of them the census line" check,
+			// gated on whether the base class actually accepted this one (its own Category/
+			// Verbosity filter), not on every Serialize call this device receives.
+			const int32 CountBefore = Count;
+			FLogLineSpy::Serialize(V, Verbosity, InCategory);
+			if (Count != CountBefore && FCString::Strstr(V, TEXT("Rebuilt:")) != nullptr)
 			{
-				++Count;
-				CapturedLines.Add(FString(V));
 				// RoadRebuildCensus::Log's own final line - see its header. The one line
-				// CLAUDE.md's "Diagnosing" section names by name, so this test does so too rather
-				// than trusting the count alone to say WHICH line survived.
-				if (FCString::Strstr(V, TEXT("Rebuilt:")) != nullptr)
-				{
-					bSawRebuiltLine = true;
-				}
+				// CLAUDE.md's "Diagnosing" section names by name, so this test does so too
+				// rather than trusting the count alone to say WHICH line survived.
+				bSawRebuiltLine = true;
 			}
 		}
 	};

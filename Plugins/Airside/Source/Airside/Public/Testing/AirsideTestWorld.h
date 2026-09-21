@@ -71,6 +71,65 @@ struct FAirsideTestWorld
 };
 
 /**
+ * Captures every line logged to CATEGORY at exactly ELogVerbosity::Log while this spy is
+ * registered (AddOutputDevice/RemoveOutputDevice bracketing a single call) - the shape
+ * RoadRebuildLogQuietTest's FLogRoadMeshLogSpy and GroundTrafficTest's FLogAirsideTrafficSpy
+ * each hand-wrote, one field apart. Issue #216d: a second near-identical copy is how the
+ * SAME bug (below) gets shipped twice, so this is the one place that carries the fix, not a
+ * pattern for each new spy to remember to copy.
+ *
+ * ISSUE #216 ROOT CAUSE (fourth/fifth sighting on RoadRebuildLogQuietTest, before this class
+ * existed): an FOutputDevice that does not override CanBeUsedOnMultipleThreads defaults to
+ * false, which FOutputDeviceRedirectorState::AddOutputDevice (Engine/Source/Runtime/Core/
+ * Private/Misc/OutputDeviceRedirector.cpp) files under BUFFERED, not unbuffered.
+ * LaunchEngineLoop.cpp calls GLog->TryStartDedicatedPrimaryThread() at boot (unless
+ * "-NoLogThread" is passed, which Run-AirsideTests.ps1 does not), and once that thread exists
+ * IT becomes the redirector's "primary thread" - so a UE_LOG call from THIS test's own game
+ * thread no longer qualifies for synchronous delivery to a buffered device (see Serialize()'s
+ * IsPrimaryThread(ThreadId) check); the line is enqueued instead and only reaches this spy
+ * whenever that background thread next wakes and drains the queue, entirely independent of
+ * when AddOutputDevice/RemoveOutputDevice bracket the call. Under the full suite's log volume
+ * that thread lags far enough behind that lines are still queued - sometimes all of them,
+ * sometimes only the tail - when RemoveOutputDevice fires, which is why isolated
+ * `-Filter` runs (far less log volume, the thread stays caught up) do not reproduce it.
+ * Engine/Source/Runtime/Core/Public/Misc/AutomationTest.h's own FAutomationTestOutputDevice
+ * and FAutomationTestMessageFilter hit exactly this and override this the same way, captioned
+ * "Make it unbuffered by returning true" - every spy of this shape needs the identical
+ * override for the identical reason: it is added and removed around a narrow window and must
+ * not race a thread it does not control. Check-Architecture.ps1 rule 10 enforces the override
+ * on any OTHER FOutputDevice subclass a future test writes by hand instead of using this one.
+ */
+struct FLogLineSpy : public FOutputDevice
+{
+	/** The log category this spy watches; set at construction, never changed. */
+	FName Category;
+
+	/** CapturedLines.Num(), kept as its own field so a caller need not spell the array out
+	 *  for a bare count (RoadRebuildLogQuietTest's DragSpy.Count != 0 check, for one). */
+	int32 Count = 0;
+
+	/** Verbatim, not re-derived from Count: a failure should name the actual line rather than
+	 *  ask a human to reproduce it under a debugger to find out (issue #216, third sighting). */
+	TArray<FString> CapturedLines;
+
+	explicit FLogLineSpy(FName InCategory) : Category(InCategory) {}
+
+	virtual bool CanBeUsedOnMultipleThreads() const override
+	{
+		return true;
+	}
+
+	virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& InCategory) override
+	{
+		if (InCategory == Category && Verbosity == ELogVerbosity::Log)
+		{
+			++Count;
+			CapturedLines.Add(FString(V));
+		}
+	}
+};
+
+/**
  * Every IRoadEditTarget pure virtual defaulted to an inert answer (false / INDEX_NONE /
  * nullptr / empty) - issue #189. RunwayToolTest.cpp's FFakeRunwayTarget and
  * TaxiwayWidthTest.cpp's FFakeWidthTarget each hand-stubbed all 35 of them and differed in
