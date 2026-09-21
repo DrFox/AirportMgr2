@@ -135,6 +135,22 @@ public:
 
 		/** Already resolved - see ARoadNetworkActor::ResolveProfile. */
 		URoadProfile* Profile = nullptr;
+
+		/**
+		 * True on a Geometry (drag-frame) rebuild - issue #178. RebuildSurfaceOnly runs this at
+		 * up to 60fps while a node or apron corner is held, and every one of RebuildInternal's
+		 * own census lines (RebuildAprons, RebuildRunwayMarkings, RebuildRunwayRubber,
+		 * RoadRebuildCensus::Log) and FDynamicMeshSink::Accept's per-component diagnostics -
+		 * including its O(V) BadNormals scan - cost the same whether or not LogRoadMesh's
+		 * verbosity would have printed them. RebuildInternal is the ONLY place that ever sets
+		 * this (from Kind, never from a caller): a caller that fills this struct without
+		 * knowing the field exists gets false, and logs exactly as it always has. See
+		 * RebuildSurfaceOnly's own comment for what a Geometry rebuild already skips upstream
+		 * of this - the guideline graph, the anchors, the markings - and CLAUDE.md's
+		 * "Diagnosing" section for why the census itself is never removed, only silenced here:
+		 * a drag still ends in one Topology rebuild that logs it in full.
+		 */
+		bool bQuiet = false;
 	};
 
 	/**
@@ -316,12 +332,16 @@ private:
 	 * BuildFn is never even called, so a caller checking for INDEX_NONE can return early
 	 * exactly as it did when its own null check opened the function.
 	 *
-	 * DOES NOT LOG. Each caller's own summary line differs too much to fold in here (an
-	 * apron's material name, a runway's whole marking-type census) - see each Rebuild*'s own
-	 * UE_LOG for what that layer reports, and OutBuffers exists so it can.
+	 * DOES NOT LOG ITS OWN CENSUS. Each caller's own summary line differs too much to fold in
+	 * here (an apron's material name, a runway's whole marking-type census) - see each
+	 * Rebuild*'s own UE_LOG for what that layer reports, and OutBuffers exists so it can.
+	 * bQuiet (issue #178) IS handled here, though: it reaches the FDynamicMeshSink this
+	 * function constructs, since every caller already has it on hand in its own Settings and
+	 * passing it through here is one parameter rather than a sink built at each of the four
+	 * call sites instead of inside this shared one.
 	 */
 	int32 RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-		UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers);
+		UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet);
 
 	/** Half a unit above the road, so paint wins the depth test against the pavement it lies
 	 *  on - shared by RebuildMarkings and RebuildRunwayMarkings, which used to compute this

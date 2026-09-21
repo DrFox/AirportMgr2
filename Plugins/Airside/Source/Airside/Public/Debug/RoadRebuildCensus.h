@@ -23,7 +23,14 @@ struct FRoadSolveResult;
  */
 namespace RoadRebuildCensus
 {
+	/**
+	 * bQuiet (issue #178) skips the whole census - not just its three UE_LOG lines, but the
+	 * FStrings and TSets built to fill them - on a Geometry (drag-frame) rebuild, which calls
+	 * this at up to 60fps while a node is held. The caller (URoadSurfacePresenter::
+	 * RebuildInternal) passes FSurfaceSettings::bQuiet, so this fires normally on every
+	 * Topology rebuild, including the one a drag ends with.
+	 */
 	AIRSIDE_API void Log(const URoadNetwork& Network, const FRoadMeshBuffers& Buffers,
 		const UDynamicMeshComponent& MeshComponent, const FRoadSolveResult& Solved,
-		const UMaterialInterface* Surface, const URoadMaterialSet* Set);
+		const UMaterialInterface* Surface, const URoadMaterialSet* Set, bool bQuiet);
 }
