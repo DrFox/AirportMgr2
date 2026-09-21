@@ -15,6 +15,12 @@ it makes them part of the airport, which is not what they are yet. A yard is som
 LOOK at them. Nothing else references this map, so it can be deleted the day each model has
 a real home.
 
+IT IS ALSO THE ANIMATION BENCH. build_bench() places an AAnimYard and sets the level's game
+mode override, which together make every rigged model in here MOVE - the demo loop on entry,
+and any channel draggable by hand. That is a second reason the yard is not M_Starter: the
+bench drives ten rigs in lockstep from one set of made-up numbers, which is exactly what the
+airport must never do.
+
 LAYOUT IS MEASURED, NOT TYPED. Each model's spacing comes from its own imported bounds, so
 adding a model to a row needs no arithmetic and a re-export that changes a size cannot leave
 two models overlapping. The rows are aircraft and ground equipment because mixing a 28 m
@@ -342,6 +348,67 @@ def build_start():
     start.set_actor_rotation(unreal.Rotator(0.0, -10.0, 0.0), False)
 
 
+BENCH_CLASS = "/Script/AirportMgr.AnimYard"
+BENCH_GAME_MODE = "/Script/AirportMgr.AnimYardGameMode"
+
+
+def build_bench():
+    """The animation bench: one AAnimYard actor, and the game mode that gives PIE its keys.
+
+    WHY THE MAP CARRIES IT rather than the bench finding its own way in. AAnimYard adopts
+    whatever ASkeletalMeshActors this script placed and spawns an ARoadAgentActor on each
+    one's mark - UAirsideAgentAnim only ever runs on one of those, because it casts its
+    owning actor and returns early on anything else. Nothing in the yard animates without
+    it, so the actor belongs in the level the same way the sun does.
+
+    THE GAME MODE OVERRIDE IS THE HALF THAT IS EASY TO FORGET. Without it PIE starts with
+    the project's default controller and no keys are bound: the models move on the demo
+    loop and nothing responds, which reads as a broken bench rather than a missing line in
+    World Settings. verify() reads it back off disk for exactly that reason.
+
+    LOADED BY PATH rather than named as unreal.AnimYard, so a run against a build that does
+    not have these classes yet fails with a sentence instead of an AttributeError.
+    """
+    bench_class = unreal.load_class(None, BENCH_CLASS)
+    if bench_class is None:
+        fail("%s not found - build AirportMgrEditor before running this, or the yard will "
+             "have no bench in it" % BENCH_CLASS)
+        return False
+
+    bench = actors().spawn_actor_from_class(bench_class, unreal.Vector(0.0, 0.0, 0.0))
+    bench.set_actor_label("AnimYard")
+    say("placed the animation bench")
+
+    game_mode = unreal.load_class(None, BENCH_GAME_MODE)
+    if game_mode is None:
+        fail("%s not found - PIE would start with no bench keys bound" % BENCH_GAME_MODE)
+        return False
+
+    settings = world_settings()
+    if settings is None:
+        fail("no AWorldSettings in the level, so the game mode override cannot be set")
+        return False
+    settings.set_editor_property("default_game_mode", game_mode)
+    say("set the level's game mode override to AAnimYardGameMode")
+    return True
+
+
+def world_settings():
+    """The level's AWorldSettings, or None.
+
+    NOT THROUGH get_all_level_actors, which was the first attempt and does not return it:
+    probed 2026-09-21 against this very level, that call reports 27 actors and WorldSettings
+    is not among them, so the type test found nothing and the run failed with "no
+    AWorldSettings in the level". It is an actor, but not a LEVEL actor in the sense that
+    subsystem means - which is also why start_level()'s destroy-everything pass has never
+    harmed it.
+
+    UWorld::GetWorldSettings is reflected and answers directly.
+    """
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    return world.get_world_settings() if world is not None else None
+
+
 def verify(expected_models):
     """RELOAD AND COUNT, because the save is the step that lies.
 
@@ -387,6 +454,27 @@ def verify(expected_models):
              "only, which reads as the materials being wrong")
         return False
     say("PASS the lighting survived the save")
+
+    # THE BENCH AND ITS GAME MODE, READ BACK OFF DISK. Both are single lines that a save can
+    # silently drop, and each fails in a way that looks like something else: no bench actor
+    # and every model stands in bind pose (which reads as the Animation Blueprints being
+    # unwired); no game mode override and the models move but no key does anything (which
+    # reads as the bindings being wrong).
+    bench_class = unreal.load_class(None, BENCH_CLASS)
+    bench = [a for a in found if bench_class is not None and a.get_class() == bench_class]
+    if not bench:
+        fail("no AAnimYard survived the save - nothing in the yard would animate")
+        return False
+    say("PASS the animation bench survived the save")
+
+    settings = world_settings()
+    on_disk = settings.get_editor_property("default_game_mode") if settings else None
+    wanted = unreal.load_class(None, BENCH_GAME_MODE)
+    if on_disk != wanted:
+        fail("the level's game mode override came back as %s, not AAnimYardGameMode - PIE "
+             "would run the bench with no keys bound" % on_disk)
+        return False
+    say("PASS the game mode override survived the save")
     return True
 
 
@@ -400,6 +488,9 @@ def main():
     build_floor()
     placed = build_rows()
     build_start()
+    if not build_bench():
+        say("DONE")
+        return
 
     if not levels().save_current_level():
         fail("save_current_level() returned False - the .umap is locked, which means the "
@@ -409,7 +500,8 @@ def main():
     say("saved %s" % LEVEL)
 
     if verify(placed):
-        say("the yard holds %d model(s); open %s and look" % (len(placed), LEVEL))
+        say("the yard holds %d model(s); open %s and PLAY - Space pauses, Tab picks a "
+            "channel, comma and period scrub it" % (len(placed), LEVEL))
     say("=" * 78)
     say("DONE")
 
