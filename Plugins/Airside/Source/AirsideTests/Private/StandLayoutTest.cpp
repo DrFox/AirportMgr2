@@ -324,10 +324,16 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 
 		// CONVERTED TO NOSE-GEAR COORDINATES FIRST, because the row is stated about the stop
 		// mark and a footprint is stated about whatever origin its type declares. Zero means
-		// the origin IS the steered axle (see FAirframe::SteerAxleX); the Piper declares
-		// 237.8, its main gear, so its nose reads 385.1 raw and 147.3 converted. The first
-		// draft of this test skipped the conversion and asserted in a comment that it could
-		// not matter - it mattered on the first run, and by 85 uu.
+		// the origin IS the steered axle (see FAirframe::SteerAxleX).
+		//
+		// THE CONVERSION IS A NO-OP FOR ALL THREE TYPES TODAY and it STAYS, which is the
+		// point worth recording. It was here because the Piper declared 237.8 - its main gear
+		// - so its nose read 385.1 raw and 147.3 converted; plane7 brought that type onto the
+		// nose-gear origin on 2026-09-21 and every row now converts by zero. The first draft
+		// of this test skipped the conversion and asserted in a comment that it could not
+		// matter. It mattered on the first run, and by 85 uu. Deleting it now because no
+		// current type exercises it would be making that same claim a second time, against a
+		// field FAirframe still supports and a vehicle still uses.
 		const double ToStopMark = Type->SteerAxleX;
 		const double Nose = Type->Footprint.NoseX - ToStopMark;
 		const double Tail = Type->Footprint.TailX - ToStopMark;

@@ -34,10 +34,17 @@ UAirsideAgentAnim produces one: every angle there is derived from the agent's mo
 beacon turns whether or not the truck is moving. Reported as unrecognised rather than quietly
 skipped, so the gap is a decision someone can see.
 """
-import json
-import struct
+import os
+import sys
 
 import unreal
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript. The commandlet
+# executes the file without adding its folder the way `python foo.py` would, so the import
+# below raises ModuleNotFoundError and the run dies before a single MARKER: line - which
+# reads as "the commandlet did nothing" rather than as a missing path. Put it on first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_anim import bone_plan, fail, joint_names, say  # noqa: E402
 
 SOURCE = r"C:\repos\AirportMgr2Models\fueltruck1\export\fueltruck1.glb"
 
@@ -47,63 +54,6 @@ ABP_PATH = "/Game/Vehicles/FuelTruck1"
 ABP_NAME = "ABP_FuelTruck1"
 
 
-def say(msg):
-    unreal.log("MARKER: " + str(msg))
-
-
-def fail(msg):
-    unreal.log_error("MARKER: FAIL " + str(msg))
-
-
-def joint_names():
-    """The joint names the .glb's skin declares, read from the file itself.
-
-    A glb is a 12-byte header then a length-prefixed JSON chunk; no dependency needed, and
-    the editor's Python has no glTF reader anyway.
-    """
-    try:
-        with open(SOURCE, "rb") as handle:
-            handle.read(12)
-            length = struct.unpack("<I4s", handle.read(8))[0]
-            doc = json.loads(handle.read(length).decode("utf-8"))
-    except Exception as exc:
-        fail("could not read the skin from %s: %s" % (SOURCE, exc))
-        return []
-
-    nodes = doc.get("nodes", [])
-    names = []
-    for skin in doc.get("skins", []):
-        for index in skin.get("joints", []):
-            if 0 <= index < len(nodes):
-                names.append(nodes[index].get("name", "?"))
-    return names
-
-
-def bone_plan():
-    """(bone, variable) per joint the export declares, root excluded.
-
-    The NAMES come from the .glb; the MAPPING is the decision this script owns. A joint that
-    matches no rule is reported rather than skipped silently - an unrecognised bone is either
-    a rig the sim cannot drive yet or a typo, and both want saying.
-    """
-    plan = []
-    for name in joint_names():
-        lowered = name.lower()
-        if lowered == "root":
-            continue
-        if "steer" in lowered:
-            # BEFORE the wheel rule. 'steer_FL' does not contain 'wheel' so the order does
-            # not bite on this rig the way it does on plane2's 'nosewheel_steer' - but the
-            # order is kept anyway, because the next vehicle's bone may well be named that
-            # way and the failure is silent: a STEERING bone wired to the ROLL angle spins
-            # the wheel about its strut and reads as a broken castor.
-            plan.append((name, "SteerAngleDegrees"))
-        elif "wheel" in lowered:
-            plan.append((name, "WheelAngleDegrees"))
-        else:
-            plan.append((name, "?  UNRECOGNISED - nothing in UAirsideAgentAnim drives it"))
-    return plan
-
 
 def report_plan():
     """The editor work this script cannot do, as a list rather than a memory of one."""
@@ -112,7 +62,7 @@ def report_plan():
     say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
     say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
-    for bone, variable in bone_plan():
+    for bone, variable in bone_plan(joint_names(SOURCE)):
         say("    %-12s  Rotation driven by %s" % (bone, variable))
     say("")
     say("  ON EVERY ONE OF THOSE NODES:")

@@ -183,6 +183,43 @@ SPECS = [
              "forward into each nacelle, and BOTH bays have doors.",
     ),
     Spec(
+        key="plane7",
+        source=MODELS + r"\plane7\export\plane7.glb",
+        mesh_dir="/Game/Aircraft/Plane7",
+        skel_name="SK_Plane7",
+        # THE SAME THREE NAMES A FOURTH TIME. plane7/scripts/build_rig.py names them to match
+        # plane3, plane4 and plane5 deliberately; the LEGS are nosegear/maingear_L/maingear_R
+        # and are not named here for the reason plane4's row gives - a leg's centre is not an
+        # axle.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR, and on THIS model that is the whole point of the exercise rather than a
+        # convention being followed quietly. plane7 REPLACES SM_PiperMeridian, whose import
+        # measured it about the MAIN-gear axle and made UAircraftType::BuildPiperMeridian the
+        # one type in the game declaring an origin deviation. The .glb's UE_ORIGIN is the
+        # nose-gear contact patch, (0, -2.378, 0) in Blender world space, so the deviation is
+        # retired at the source the way plane3's was - see plane7/README.md, which argues it
+        # from the stand: the nose gear is the point that stops on the painted mark, so a
+        # parked aircraft shares the stand's pose with no offset to compose.
+        origin_on="front",
+        # THE PLACEHOLDER IS GONE WITH IT. piperMeridian/ was a downloaded, baked, textured
+        # asset - 19,418 tris and a 2048 BaseColor/Normal/MetallicRoughness set - and the one
+        # aircraft in Content that wore its own materials rather than the shared fleet set.
+        # plane7 is a fleet-style rebuild of the same aeroplane: 6,672 tris, no textures at
+        # all, seven flat-colour slots whose values are lifted verbatim from plane3.glb and
+        # plane4.glb so the by-value merge in build_fleet_materials.py folds them together
+        # rather than logging drift.
+        note="Piper PA-46-500TP Meridian, replacing the placeholder SM_PiperMeridian. 8.712 m "
+             "long, 13.110 m span, 3.413 m to the fin tip against a published 9.02 / 13.11 / "
+             "3.44 - the length is 3.4% short DELIBERATELY, see the model's README, and the "
+             "wingspan (the figure stands and gates are sized from) is exact by construction. "
+             "Origin on the NOSE gear; the main axle is at -237.8 uu, which is the figure "
+             "FAirframe::FixedAxleX wants. Thirteen joints: the gear retracts and BOTH bays "
+             "have doors, as plane5's does.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

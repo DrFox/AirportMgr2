@@ -1,0 +1,369 @@
+"""What every build_<model>_anim.py needs and none of them should own a copy of.
+
+Imported from the editor's Python, so `import unreal` is available. THE SCRIPT'S OWN
+DIRECTORY IS NOT ON sys.path under -run=pythonscript - see import_models.py's header for the
+full note - so every caller puts it there before importing this.
+
+WHY THIS FILE EXISTS, AND WHY IT IS NOT airside_import.py. Two promises made in two headers
+came due on the same model:
+
+  * build_plane1_anim.py: "the fourth model is the one that extracts rather than copies".
+    The fourth declined.
+  * build_plane5_anim.py, more specifically: "THE SIXTH MODEL SHOULD EXTRACT. Said here
+    rather than in a commit message nobody greps: one bone_plan() in airside_import.py, four
+    callers."
+
+plane7 is the sixth, so this is that extraction - but it lands HERE rather than in
+airside_import.py, which is the one thing that note got wrong. airside_import.py is the
+IMPORT mechanism: Interchange pipelines, the rename-and-move-up, the bounds and rig and
+material checks. Anim authoring is a different job against different assets at a different
+point in the pipeline, and the only reason the note named that file is that in September 2026
+it was the only shared module there was. A second one is cheaper than a module that does two
+jobs, which is the argument Present/ already makes about ARoadNetworkActor.
+
+WHAT MOVED, AND WHAT IT COST. Four copies of bone_plan, five of joint_names, and one copy of
+the axis resolver that plane7 would have made two of. The resolver was written for plane5 on
+2026-09-20 and is the newest and least-copied of the three; extracting it now is the whole
+point, because the alternative was a second copy of two hundred lines on the same day the
+first duplication was being paid off.
+
+THE CALLERS KEEP THEIR OWN TABLES. A model's SOURCE, MESH, SKELETON, ABP name and
+DRIVEN_BONES are facts about that model and stay in that model's script, where somebody
+changing an export will be standing. What is here is the MECHANISM - every line of it was
+identical across the copies, and the two that were not identical had drifted rather than
+diverged on purpose.
+"""
+import json
+import os
+import struct
+
+import unreal
+
+
+def say(msg):
+    unreal.log("MARKER: " + str(msg))
+
+
+def fail(msg):
+    unreal.log_error("MARKER: FAIL " + str(msg))
+
+
+# ---------------------------------------------------------------------------- the .glb
+
+
+def joint_names(source):
+    """The joint names a .glb's skin declares, read from the file itself.
+
+    A glb is a 12-byte header then a length-prefixed JSON chunk; no dependency needed, and the
+    editor's Python has no glTF reader anyway.
+
+    FIVE IDENTICAL COPIES BEFORE THIS ONE - four anim scripts and airside_import.py's own,
+    which takes an already-parsed doc rather than a path and so cannot simply be called from
+    here. That one stays: it is reading a document the import already has open, and making it
+    re-read the file to share this function would be the tail wagging the dog.
+    """
+    try:
+        with open(source, "rb") as handle:
+            handle.read(12)
+            length = struct.unpack("<I4s", handle.read(8))[0]
+            doc = json.loads(handle.read(length).decode("utf-8"))
+    except Exception as exc:
+        fail("could not read the skin from %s: %s" % (source, exc))
+        return []
+
+    nodes = doc.get("nodes", [])
+    names = []
+    for skin in doc.get("skins", []):
+        for index in skin.get("joints", []):
+            if 0 <= index < len(nodes):
+                names.append(nodes[index].get("name", "?"))
+    return names
+
+
+# ------------------------------------------------------------------------- the bone plan
+
+
+# THE RULES, IN ORDER, MOST SPECIFIC FIRST. A bone is matched by SUBSTRING on its lowered
+# name, so the ordering is the whole of the decision - see bone_plan below for why each row
+# sits where it does. A list rather than an if-chain because the ORDER is the contract, and a
+# list makes the contract one thing to read rather than a shape to infer from control flow.
+BONE_RULES = [
+    ("prop",  "PropAngleDegrees"),
+    ("steer", "SteerAngleDegrees"),
+    ("wheel", "WheelAngleDegrees"),
+    ("gear",  "GearAngleDegrees"),
+    ("door",  "BayDoorAngleDegrees"),
+]
+
+UNRECOGNISED = "?  UNRECOGNISED - nothing in UAirsideAgentAnim drives it"
+
+
+def bone_plan(names):
+    """(bone, variable) per joint, root excluded: which UAirsideAgentAnim property drives it.
+
+    The NAMES come from the .glb; the MAPPING is the decision this function owns. A joint that
+    matches no rule is reported rather than skipped silently - an unrecognised bone is either
+    a rig the sim does not know how to drive yet, or a typo, and both want saying.
+
+    THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
+    check it - see CLAUDE.md, "check where a list is CONSUMED". Since 2026-09-21 there IS a
+    checker one step down the pipeline: Tools/wire_plane<N>_anim.py --verify reads the compiled
+    graph back and fails on any bone whose driver disagrees.
+
+    THE FOUR COPIES HAD ALREADY DRIFTED, exactly the way build_plane1_anim.py predicted they
+    would: the gear and door rules landed in build_plane2_anim.py on 2026-09-19 and were typed
+    into plane1's copy separately. The reasons those copies carried are kept below, because
+    they are what the ORDERING rests on and the ordering is the only thing here that can be
+    wrong in a way nothing catches:
+
+      * STEER BEFORE WHEEL, and this one is load-bearing rather than merely disciplined: every
+        aircraft rig here has a 'nosewheel_steer', which contains both needles. The wheel rule
+        winning would tell someone to wire a STEERING bone to the ROLL angle, which spins the
+        nose gear about its own strut and reads on screen as a broken castor. fueltruck1's
+        'steer_FL' does not collide, and its copy kept the order anyway, because the next
+        vehicle's bone may well be named the aircraft way and the failure is silent.
+      * GEAR AFTER WHEEL. On plane5's and plane7's rigs the retract bones are the PARENTS of
+        the rolling ones, so a wrong winner here retracts the aeroplane every time it rolls
+        forward.
+      * EVERY RULE IS OFFERED TO EVERY RIG, including rules no bone of that rig can match.
+        plane1's copy kept gear and door for a 172 whose gear is welded on, so that its plan
+        could not quietly become a different plan from plane2's; fueltruck1's copy omitted
+        prop, gear and door altogether. Unifying the two changes no rig's plan today - checked
+        joint by joint across all four rigs rather than assumed - and it means a rig that
+        grows a door gets picked up instead of reported unrecognised.
+      * A STALE NOTE IN A LIST NOBODY RE-READS IS HOW A FEATURE SHIPS SWITCHED OFF. plane2's
+        copy carried "(NOT YET in UAirsideAgentAnim - leave this bone unwired until it is)"
+        beside the steer rule for long after the property existed, so the plan was telling its
+        reader to leave a working bone unwired. One copy is one place for that to go stale.
+    """
+    plan = []
+    for name in names:
+        lowered = name.lower()
+        if lowered == "root":
+            continue
+        for needle, variable in BONE_RULES:
+            if needle in lowered:
+                plan.append((name, variable))
+                break
+        else:
+            plan.append((name, UNRECOGNISED))
+    return plan
+
+
+def report_bone_plan(names):
+    """Print the plan and return the number of joints nothing drives."""
+    unrecognised = 0
+    for bone, variable in bone_plan(names):
+        say("    %-16s  %s" % (bone, variable))
+        if variable.startswith("?"):
+            unrecognised += 1
+    return unrecognised
+
+
+# ----------------------------------------------------------------------- the rotation axis
+
+
+# A Transform (Modify) Bone applied in Bone Space takes an FRotator whose three components
+# turn about the bone's own local axes: Roll is local X, Pitch local Y, Yaw local Z.
+COMPONENT_OF_LOCAL_AXIS = {0: "Roll", 1: "Pitch", 2: "Yaw"}
+
+# The axle runs ACROSS the aeroplane. This is the anchor the whole resolution hangs on and the
+# one rotation axis in a rig that is knowable without reading anybody's comment: wheel_L and
+# wheel_R sit either side of the centreline, so whatever they turn about lies along UE's Y.
+AXLE_UE = (0.0, 1.0, 0.0)
+
+# The rig a new one is checked against. SK_Plane2 is a SHIPPED, HAND-WIRED, KNOWN-GOOD asset -
+# ABP_Plane2 has driven the Twin Otter in game for weeks - and it carries the three bone
+# classes every aeroplane here shares with it: a propeller, a rolling wheel and a steering
+# bone.
+#
+# NOT SK_Plane4, although plane4 is the first rig with gear and doors. ABP_Plane4 was
+# duplicated from ABP_Plane2 in the editor and retargeted by hand, so it is not independent
+# evidence; and plane4's own bind orientations are not uniform the way plane5's and plane7's
+# are - measured 2026-09-21, its two main gear bones resolve onto OPPOSITE local axes.
+# Checking against it would be checking against the less trustworthy of the two.
+REFERENCE_MESH = "/Game/Aircraft/Plane2/SK_Plane2"
+
+
+def _local_axes(quat):
+    """The bone's own X, Y and Z, in the space the quaternion is expressed in.
+
+    BY HAND rather than through MathLibrary, because this is nine lines of arithmetic against
+    an API whose exact Python spelling would have to be looked up, and a wrong guess here
+    fails at the one point where a wrong answer is indistinguishable from a right one.
+    """
+    x, y, z, w = quat.x, quat.y, quat.z, quat.w
+    return (
+        (1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)),
+        (2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)),
+        (2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)),
+    )
+
+
+def _closest_axis(frame, want):
+    """(index, dot) of the frame axis most nearly parallel to `want`."""
+    best, best_dot = 0, 0.0
+    for index, axis in enumerate(frame):
+        dot = sum(a * b for a, b in zip(axis, want))
+        if abs(dot) > abs(best_dot):
+            best, best_dot = index, dot
+    return best, best_dot
+
+
+def bone_frames(mesh_path):
+    """{bone: (localX, localY, localZ)} in COMPONENT space, off a skeletal mesh's reference
+    pose. {} with a logged failure if the asset is not there."""
+    mesh = unreal.EditorAssetLibrary.load_asset(mesh_path)
+    if mesh is None:
+        fail("no %s" % mesh_path)
+        return {}
+    pose = mesh.get_editor_property("skeleton").get_reference_pose()
+    frames = {}
+    for name in unreal.AnimPose.get_bone_names(pose):
+        transform = unreal.AnimPose.get_bone_pose(pose, name, unreal.AnimPoseSpaces.WORLD)
+        frames[str(name)] = _local_axes(transform.rotation)
+    return frames
+
+
+def resolve_axis(mesh_path, driven_bones):
+    """(bone, rotator component, sign) for every driven bone, MEASURED - or [] on failure.
+
+    WHY THIS IS MEASURED AND NOT TYPED. Every wiring script in this project before plane5 took
+    "Yaw, in Bone Space" on faith, on the strength of wire_fueltruck_anim.py's note that "the
+    rigger orients each bone so that its own Z is the axis it is meant to turn about". That
+    note is TRUE OF THE RIGS IT WAS WRITTEN AGAINST and it is a property of those assets, not
+    a law. It is exactly the shape of claim CLAUDE.md says to distrust: a statement ABOUT a
+    mechanism standing in for the mechanism. plane5 was also the first rig where a single
+    wrong axis would be easy to miss - four doors and three legs, most of them small and most
+    of the time stowed - and plane7 has the same thirteen.
+
+    THE ANCHOR IS THE AXLE - see AXLE_UE. Whichever of wheel_L's own local axes lies along
+    UE Y is the local axis this rig rotates about, and since each build_rig.py poses every
+    bone about the same one, it is the local axis for all of them.
+
+    THE UNIFORMITY IS CHECKED RATHER THAN TRUSTED: every driven bone's chosen axis must lie
+    along one of UE's own axes to within about a degree. A bone whose rotation axis points
+    somewhere diagonal is a bone the rigger did not align, and on a rig built from one table
+    and posed by one line that is a change to look at rather than a rounding.
+
+    THE SIGN COMES FROM A SHIPPED GRAPH. ABP_Plane2 drives nosewheel_steer with a plain
+    GetSteerAngleDegrees() on Yaw and no negation, so a steer bone whose local axis points the
+    same way as plane2's takes the same plain positive. This is the one thing that cannot be
+    derived from the new rig alone: a sign is only meaningful against a convention, and the
+    convention lives in the assets that already work.
+    """
+    label = mesh_path.rsplit("/", 1)[-1]
+    frames = bone_frames(mesh_path)
+    if not frames:
+        return []
+
+    missing = [bone for bone in driven_bones if bone not in frames]
+    if missing:
+        fail("%s has no %s - the rig was renamed. Bones: %s"
+             % (label, ", ".join(missing), ", ".join(sorted(frames))))
+        return []
+
+    index, along = _closest_axis(frames["wheel_L"], AXLE_UE)
+    if abs(along) < 0.99:
+        fail("wheel_L's axle is not along UE Y - its closest local axis is %s at %.2f. Either "
+             "the bone is not on the axle, or the import reoriented the rig."
+             % ("XYZ"[index], along))
+        return []
+    component = COMPONENT_OF_LOCAL_AXIS[index]
+    say("    the rig turns about each bone's local %s (%s), anchored on wheel_L's axle lying "
+        "along UE Y at %.3f" % ("XYZ"[index], component, along))
+
+    sign = _sign_against_reference(frames, index, label)
+    if sign is None:
+        return []
+
+    rows = []
+    for bone in driven_bones:
+        axis = frames[bone][index]
+        if max(abs(value) for value in axis) < 0.99:
+            fail("%s's local %s points (%.2f, %.2f, %.2f), which is along none of UE's axes. "
+                 "A driven bone on this rig should be square to the airframe."
+                 % (bone, "XYZ"[index], axis[0], axis[1], axis[2]))
+            continue
+        rows.append((bone, component, sign))
+    return rows
+
+
+def _sign_against_reference(frames, index, label):
+    """+1.0 or -1.0, from SK_Plane2's steering bone; None on a disagreement worth stopping for.
+
+    A MISSING REFERENCE IS NOT FATAL. plane2 may simply not be imported in this checkout, and
+    refusing to author an asset over that would be refusing for want of unrelated content -
+    the shape AircraftFieldLengthTest's skip already takes. It is reported, loudly, because an
+    unchecked sign is the one thing here running on the fleet's habit rather than on evidence.
+    """
+    reference = bone_frames(REFERENCE_MESH)
+    if not reference:
+        say("    NOTE %s is absent, so the SIGN could not be checked against a shipped rig; "
+            "taking the fleet's +1. Import plane2 and re-run to close this."
+            % REFERENCE_MESH)
+        return 1.0
+
+    for bone in ("wheel_L", "nosewheel_steer"):
+        if bone not in reference:
+            fail("%s has no %s to check against" % (REFERENCE_MESH, bone))
+            return None
+
+    ref_index, ref_along = _closest_axis(reference["wheel_L"], AXLE_UE)
+    if ref_index != index:
+        fail("SK_Plane2's wheel_L turns about its local %s and %s's about its local %s. That "
+             "rig does not follow the fleet's bone convention, so wiring it like the others "
+             "would turn every part about the wrong axis."
+             % ("XYZ"[ref_index], label, "XYZ"[index]))
+        return None
+    say("    PASS SK_Plane2's wheel_L resolves onto local %s too (%.3f) - same convention"
+        % ("XYZ"[ref_index], ref_along))
+
+    ours = frames["nosewheel_steer"][index]
+    theirs = reference["nosewheel_steer"][index]
+    agreement = sum(a * b for a, b in zip(ours, theirs))
+    if abs(agreement) < 0.99:
+        fail("nosewheel_steer's local %s points %.2f away from SK_Plane2's - the two steering "
+             "bones are not oriented alike, so plane2's sign convention cannot be carried "
+             "over" % ("XYZ"[index], agreement))
+        return None
+    sign = 1.0 if agreement > 0 else -1.0
+    say("    PASS nosewheel_steer agrees with SK_Plane2's to %.3f, so the fleet's signs carry "
+        "over (x %+.0f)" % (agreement, sign))
+    return sign
+
+
+def axis_plan_path(key):
+    """Saved/<key>_axis_plan.json, beside the log this script's output lands in."""
+    return os.path.join(unreal.Paths.project_saved_dir(), "%s_axis_plan.json" % key)
+
+
+def write_axis_plan(key, mesh_path, resolved):
+    """Hand the resolved axes to Tools/wire_<key>_anim.py rather than making it type them.
+
+    ONE LIST, WHICH IS CLAUDE.md'S RULE AND NOT A CONVENIENCE. The bone, its variable, its
+    rotator component and its sign are four columns of one table, and the first two are
+    knowable from the .glb while the last two are only knowable from the imported skeleton.
+    Split across two files they are two lists that must agree, with no compiler between them
+    and a failure mode - a part turning about the wrong axis - that looks like a modelling bug
+    rather than a wiring one. So the half that is MEASURED is written by the script that
+    measured it, and the wiring script refuses to run without it.
+
+    IN Saved/ AND THEREFORE NOT COMMITTED, deliberately. It is derived, it is worthless against
+    a different export, and a stale copy is exactly the "half-run pipeline" that
+    Airside.Content.FootprintMatchesTheMesh exists to catch elsewhere. Re-running the
+    commandlet is step one of wiring the graph; the file is how step one talks to step two.
+    """
+    path = axis_plan_path(key)
+    payload = {
+        "mesh": mesh_path,
+        "bones": [{"bone": bone, "component": component, "sign": sign}
+                  for bone, component, sign in resolved],
+    }
+    try:
+        with open(path, "w") as handle:
+            json.dump(payload, handle, indent=2)
+    except IOError as exc:
+        fail("could not write %s: %s" % (path, exc))
+        return
+    say("wrote %s - Tools/wire_%s_anim.py reads its rotation axes from this" % (path, key))

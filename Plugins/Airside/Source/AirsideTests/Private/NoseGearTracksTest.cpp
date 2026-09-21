@@ -403,9 +403,14 @@ bool FAuthoredStopPointsDoNotMoveTest::RunTest(const FString& Parameters)
 	// 3. A DECLARED DEVIATION PARKS ITS STEERED AXLE THERE INSTEAD, so its origin sits that
 	//    offset short - and that is the intent, not a tolerance. A stand's origin is the
 	//    NOSE GEAR STOP MARK (UAircraftType's local space), so the nose gear is the point
-	//    that belongs on the mark; the Piper's origin is its main-gear axle and belongs
-	//    2.6 m behind it. This is the composition BuildPiperMeridian predicted would be
-	//    needed "the day something does" park one on a stand.
+	//    that belongs on the mark, and an airframe whose origin is somewhere else belongs
+	//    that far behind it.
+	//
+	//    THE FIXTURE IS SYNTHETIC AND STAYS THAT WAY. It used to name the Piper, whose origin
+	//    was its main-gear axle until plane7 replaced the placeholder mesh on 2026-09-21; no
+	//    AIRCRAFT type declares a deviation now, and UAirsideSettings::ResolveDefaultVehicle's
+	//    truck does. The rule this pins is about FAirframe and not about any one asset, which
+	//    is why a hand-built 260.0 was always the right fixture for it.
 	const TPair<double, double> Deviating = RunToRest(260.0, /*bUseTarget*/ false);
 	TestTrue(FString::Printf(TEXT("a deviating airframe puts its STEERED axle at the route "
 		"end (travelled %.1f)"), Deviating.Value),

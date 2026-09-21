@@ -219,44 +219,65 @@ void UAircraftType::BuildPiperMeridian(UAircraftType* Type)
 	Type->DisplayName = LOCTEXT("PA46", "PA-46-500TP Meridian");
 	Type->ServicePoints.Reset();
 
-	// ORIGIN IS THE MAIN-GEAR AXLE, and this type alone deviates from the nose-gear origin
-	// the class documents. Two reasons, both about not writing down a number twice:
+	// ORIGIN IS THE NOSE-GEAR CONTACT PATCH, which is the local space this class documents
+	// and which every modelled type in the fleet now shares.
 	//
-	//   SM_PiperMeridian was imported about the main-gear axle - see Tools/Python/
-	//   import_piper.py, which MEASURES the mesh rather than trusting the exporter's README.
-	//   ARoadAgentActor::SetPose puts that origin on the guideline, so the mains track the
-	//   painted line, which is what a taxiing aircraft does.
+	// IT WAS THE MAIN-GEAR AXLE UNTIL 2026-09-21, this type's one declared deviation, and the
+	// deviation died with the mesh it was measured off. SM_PiperMeridian was a downloaded
+	// placeholder that happened to be built about its mains, and Tools/Python/import_piper.py
+	// measured it there rather than trusting its README. plane7 replaces it and is exported
+	// about the nose gear for the reason AirportMgr2Models/plane7/README.md gives: that is the
+	// point which stops on the mark painted on the stand, so a parked aircraft shares the
+	// stand's pose with no offset to compose. Same call plane3's origin got - change the
+	// export, not the reader.
 	//
-	//   The figures below are that same measurement, so the drawn envelope and the drawn
-	//   aeroplane cannot disagree. Authoring them about the nose gear instead would have
-	//   put the envelope a wheelbase - about 2.6 m - ahead of the aircraft inside it.
+	// WHAT IT COST TO CARRY, now recovered: the comment this replaces predicted that parking
+	// one on a stand would need the wheelbase composed in, and on 2026-09-13 it did. Nothing
+	// composes it any more.
 	//
-	// WHAT THIS COSTS: parking one on a stand. A stand's origin is the nose gear stop mark,
-	// so composing the two needs the wheelbase, which the other types do not. THAT DAY
-	// ARRIVED on 2026-09-13, and the offset is a field exactly as this comment asked - see
-	// SteerAxleX below and FAirframe::SteerAxleX.
-	Type->Footprint.NoseX = 385.1;
-	Type->Footprint.TailX = -531.5;
+	// THE FIXED-AXLE ORIGIN IS NOT LOST FROM THE CODEBASE, which matters because
+	// FAirframe::FixedAxleX cited this type as its one live declarer.
+	// UAirsideSettings::ResolveDefaultVehicle's truck declares it, and for the model's own
+	// reason rather than an importer's accident: fueltruck1 is exported about the rear axle
+	// because that is what a front-steered truck pivots about.
+	//
+	// EVERY FIGURE BELOW IS MEASURED off plane7/export/plane7.glb, and Tools/Python/
+	// build_plane7_type.py takes the same measurements the same way onto DA_Aircraft_Plane7,
+	// so the drawn envelope and the drawn aeroplane cannot disagree.
+	Type->Footprint.NoseX = 119.4;    // the spinner tip
+	Type->Footprint.TailX = -751.8;   // the fin trailing edge - 871.2 uu apart, the 8.712 m length
 	Type->Footprint.Wingspan = PiperMeridianWingspan();   // 43 ft 0 in, published, and the import asserts it
 
-	// The mains are ON the wing, which is why the axle sits essentially under the spar.
-	Type->Footprint.WingX = 0.0;
+	// Mid-chord of the wing, which is the spanwise line FEntityFootprint::WingX documents.
+	// IT WAS 0.0, and that was only ever true of the old origin: the mains sit under the spar,
+	// so a main-gear origin put the wing on it by construction. On the nose-gear origin the
+	// same wing is 2.24 m aft.
+	Type->Footprint.WingX = -224.3;
 
-	// THE AXLES, MEASURED off SK_PiperMeridian's own rig rather than taken from the "about
-	// 2.6 m" this comment used to estimate: the reference pose puts wheel_f at x = 237.8
-	// and wheel_rl/wheel_rr at x = 0, so the wheelbase is 2.378 m and the mains really are
-	// on the origin, as this type's deviation claims. (Their z of 21.0 is the 0.210 m wheel
-	// radius MainWheelRadius carries, which is the same measurement arriving twice.)
+	// THE AXLES, MEASURED off SK_Plane7's own rig - the inverse bind matrices put nosewheel at
+	// x = 0.0 and wheel_L/wheel_R at x = -237.8. The wheelbase is still the 2.378 m the old
+	// mesh read, so only the datum moved; the aeroplane is the same size it always was.
+	// (Their z of 22.2 is the 0.445 m main tyre's radius, which is MainWheelRadius below
+	// arriving a second way.)
 	//
-	// FixedAxleX is therefore zero and SteerAxleX is the wheelbase - the mirror image of a
-	// conforming airframe, and the whole content of this type's declared deviation.
-	Type->SteerAxleX = 237.8;
-	Type->FixedAxleX = 0.0;
+	// A CONFORMING AIRFRAME NOW: the steered axle IS the origin and the fixed axle is behind
+	// it, where this type used to be the mirror image of one.
+	Type->SteerAxleX = 0.0;
+	Type->FixedAxleX = -237.8;
 
-	// Tailplane is the one estimate here rather than a measurement - it is used only to
-	// draw, and nothing decides anything from it.
-	Type->Footprint.TailplaneSpan = 460.0;
-	Type->Footprint.TailplaneX = -470.0;
+	// 6.00-6 mains, 0.445 m across. AUTHORED rather than left to UAircraftType's class
+	// default, which is a placeholder for types nobody has modelled - and which was the
+	// PLACEHOLDER MERIDIAN'S OWN 21.0 until this model arrived, so leaving it would have spun
+	// plane7's wheels at the deleted mesh's rate. The model builds the PUBLISHED tyre rather
+	// than the download's 6%-small one; see AirportMgr2Models/plane7/README.md.
+	Type->MainWheelRadius = 22.2;
+
+	// MEASURED NOW, NOT ESTIMATED. Both of these were "the one estimate here" while the mesh
+	// was a baked placeholder with no separable parts. plane7 exports the tailplane as its own
+	// object, so the same airside_import.part_bounds_uu reading every other figure here
+	// answers these too - 460 and -470 were 8% and 41% out respectively.
+	Type->Footprint.TailplaneSpan = 496.7;
+	Type->Footprint.TailplaneX = -665.8;
 
 	// NO SERVICE POINTS, deliberately. A Meridian's cabin door and refuel points would be
 	// invented numbers - nothing in this repo measures them - and an invented door station

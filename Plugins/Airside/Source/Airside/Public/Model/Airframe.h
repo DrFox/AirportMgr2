@@ -663,10 +663,16 @@ struct AIRSIDE_API FAirframe
 	 * The STEERED axle, uu along local +X. Nose gear on an aircraft, front axle on a vehicle.
 	 *
 	 * ZERO MEANS THE ORIGIN IS THAT AXLE, which is UAircraftType's documented local space:
-	 * "origin at the NOSE GEAR, +X forward, +Y starboard". Non-zero is a DECLARED deviation,
-	 * and exactly one type declares it - see BuildPiperMeridian, whose own comment asked for
-	 * this field by name: "that offset belongs here as a field and not as a constant at the
-	 * call site".
+	 * "origin at the NOSE GEAR, +X forward, +Y starboard". Non-zero is a DECLARED deviation.
+	 *
+	 * NO AIRCRAFT TYPE DECLARES ONE ANY MORE. BuildPiperMeridian did - it asked for this field
+	 * by name, "that offset belongs here as a field and not as a constant at the call site" -
+	 * until plane7 replaced the placeholder mesh it was measured off and brought it onto the
+	 * nose-gear origin with the rest of the fleet. The live declarer is now
+	 * UAirsideSettings::ResolveDefaultVehicle's fuel truck, which carries SteerAxleX 494.5
+	 * against FixedAxleX 0: fueltruck1 is exported about its rear axle because that is what a
+	 * front-steered truck pivots about, so on a VEHICLE the deviation is the model's own
+	 * choice rather than an importer's accident.
 	 *
 	 * Named for the axle rather than the nose gear because vehicles carry this struct too,
 	 * and a truck has no nose gear.

@@ -3,8 +3,10 @@
 #include "Engine/SkeletalMesh.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
 #include "Present/RoadAgentActor.h"
+#include "UObject/UObjectGlobals.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -217,6 +219,94 @@ bool FAgentActorTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("heading becomes yaw"),
 			FMath::IsNearlyEqual(Agent->GetActorRotation().Yaw, 30.0, 0.01));
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMeridianPitchesAboutItsMainsTest,
+	"Airside.Present.MeridianPitchesAboutItsMains",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
+{
+	// THE ONE BEHAVIOUR CHANGE IN plane7's IMPORT, pinned - everything else about that model
+	// swap was a change of numbers.
+	//
+	// ARoadAgentActor::SetPose corrects for pitch by holding FAgentMotion::PitchPivotX still,
+	// and FRoadAgent copies that straight off FAirframe::FixedAxleX. A ZERO PIVOT IS EXACTLY
+	// ZERO CORRECTION, so while the Meridian's origin WAS its main-gear axle - which is what
+	// SM_PiperMeridian was imported about - this aeroplane was silently exempt from the whole
+	// mechanism. plane7 is exported about the nose gear, so FixedAxleX is -237.8 and the
+	// Meridian is corrected like every other measured airframe.
+	//
+	// THIS TEST GOES RED IF ANYONE PUTS THE DEVIATION BACK, which is the point: reverting
+	// BuildPiperMeridian to a main-gear origin would leave every assertion in
+	// Airside.Model.AirframeAxles passing on a self-consistent type, and change nothing
+	// visible except that a Meridian's tail sinks through the tarmac during the flare - a
+	// defect that was reported from play once already, for plane2, and described as "the rear
+	// wheels push into the ground on landing".
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildPiperMeridian(Type);
+	const FAirframe Meridian = Type->Airframe();
+
+	// 1. THE TYPE HAS A PIVOT TO BE CORRECTED ABOUT. Asserted before anything is drawn,
+	//    because if this is zero the actor assertions below would pass trivially: an
+	//    uncorrected aeroplane keeps its ORIGIN on the surface, and the origin is what
+	//    GetActorLocation reports.
+	TestTrue(FString::Printf(TEXT("the Meridian declares a main gear aft of its origin "
+		"(%.1f uu)"), Meridian.FixedAxleX), Meridian.FixedAxleX < -100.0);
+
+	constexpr double SurfaceZ = 40.0;
+	constexpr double PitchDegrees = 8.0;
+
+	ARoadAgentActor* Flaring = NewObject<ARoadAgentActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("a flaring Meridian constructs"), Flaring))
+	{
+		return false;
+	}
+	Flaring->SetAirframe(AgentActorTestAirframe());
+
+	// THE PIVOT COMES FROM THE TYPE, NOT FROM A LITERAL. Airside.Present.AgentActor already
+	// pins the arithmetic with a hand-typed -454.3; what is being pinned HERE is that the
+	// figure BuildPiperMeridian carries is the one that arrives, so the test cannot keep
+	// passing against a number the aeroplane no longer has.
+	//
+	// ON A DIAGONAL, for AgentActor's reason: a correction differenced in the wrong frame is
+	// zero at heading zero and wrong everywhere else.
+	FAgentMotion Pitched;
+	Pitched.Position = FVector2D(-800.0, 1500.0);
+	Pitched.Heading = FMath::DegreesToRadians(115.0);
+	Pitched.PitchDegrees = PitchDegrees;
+	Pitched.PitchPivotX = Meridian.FixedAxleX;
+	Flaring->SetMotion(Pitched, SurfaceZ);
+
+	// 2. THE MAINS STAY ON THE TARMAC. Asked of the actor's own transform rather than
+	//    recomputed here, so what is measured is what the renderer will draw.
+	const FVector Mains = Flaring->GetActorTransform().TransformPosition(
+		FVector(Pitched.PitchPivotX, 0.0, 0.0));
+	TestTrue(FString::Printf(TEXT("a flaring Meridian keeps its mains on the surface "
+		"(Z %.1f against %.1f)"), Mains.Z, SurfaceZ),
+		FMath::Abs(Mains.Z - SurfaceZ) < 1.0);
+
+	// 3. AND THE NOSE ACTUALLY RISES, or assertion 2 would pass on an aeroplane that refused
+	//    to pitch at all. 237.8 uu of wheelbase at 8 degrees lifts the nose gear 33 uu, and
+	//    THE NOSE GEAR IS THE ORIGIN now - so this is the assertion that would have been
+	//    false before plane7, when the correction was the identity and the origin stayed
+	//    exactly on the surface.
+	const double Lift = Flaring->GetActorLocation().Z - SurfaceZ;
+	const double Want = -Meridian.FixedAxleX * FMath::Sin(FMath::DegreesToRadians(PitchDegrees));
+	TestTrue(FString::Printf(TEXT("while its nose gear lifts by the wheelbase times sin(pitch)"
+		" - %.1f uu against %.1f"), Lift, Want), FMath::Abs(Lift - Want) < 1.0);
+
+	// 4. AND THE MAINS DO NOT SLIDE OFF THE LINE THE MODEL PUT THEM ON. Pitching may raise
+	//    the nose; it may not move the aircraft sideways off its centreline.
+	const FVector2D MainsPlan(Mains.X, Mains.Y);
+	const FVector2D Expected = Pitched.Position + FVector2D(
+		FMath::Cos(Pitched.Heading), FMath::Sin(Pitched.Heading)) * Pitched.PitchPivotX;
+	TestTrue(FString::Printf(TEXT("and stay on the route point's own line (%.1f uu away)"),
+		FVector2D::Distance(MainsPlan, Expected)),
+		FVector2D::Distance(MainsPlan, Expected) < 1.0);
 
 	return true;
 }

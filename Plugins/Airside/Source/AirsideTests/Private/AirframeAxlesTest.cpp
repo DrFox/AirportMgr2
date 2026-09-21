@@ -33,8 +33,16 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("axle figures turn the geometric law on"), Conforming.HasAxles());
 	TestEqual(TEXT("wheelbase is nose gear to main gear"), Conforming.Wheelbase(), 454.3, 0.01);
 
-	// 3. The Piper's documented deviation - origin at the MAIN gear - measures the same
-	//    wheelbase. If this ever fails, the two laws disagree about the same aeroplane.
+	// 3. A DECLARED DEVIATION - origin at the FIXED axle - measures the same wheelbase. If
+	//    this ever fails, the two laws disagree about the same vehicle.
+	//
+	//    THIS USED TO NAME THE PIPER, which was the one aircraft type declaring it, until
+	//    plane7 replaced the placeholder mesh on 2026-09-21 and brought the Meridian onto the
+	//    nose-gear origin. The rule is still live and still exercised by a shipped asset:
+	//    UAirsideSettings::ResolveDefaultVehicle's fuel truck carries SteerAxleX 494.5 against
+	//    FixedAxleX 0, because fueltruck1 is exported about its rear axle. Kept as a
+	//    HAND-BUILT airframe rather than repointed at the truck, because what is being pinned
+	//    is FAirframe::Wheelbase's arithmetic, not any one asset's figures.
 	FAirframe Deviating;
 	Deviating.SteerAxleX = 454.3;
 	Deviating.FixedAxleX = 0.0;
@@ -50,6 +58,11 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	Type->Footprint.TailX = -531.5;
 	Type->SteerAxleX = 260.0;
 	Type->FixedAxleX = 0.0;
+	// THE FOUR FIGURES ABOVE ARE OVERWRITTEN ON PURPOSE and are not the Meridian's any more.
+	// BuildPiperMeridian is used here only to get a fully populated type in one line; what is
+	// being pinned is that Airframe() COPIES each field, so the values are deliberately ones
+	// no real type carries. A reader who "corrects" them to the current Meridian's would be
+	// testing that the builder agrees with itself.
 	Type->Ground.MaxSteerDegrees = 55.0;
 	Type->Ground.MaxLateralAccelUu = 200.0;
 
@@ -81,18 +94,33 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("an unauthored airframe needs a tug"),
 		Unmeasured.PushbackNeed, EPushbackNeed::VehicleTug);
 
-	// 5. THE PIPER IS MEASURED and keeps its main-gear origin: SteerAxleX is its wheelbase,
-	//    FixedAxleX is zero. Measured off SK_PiperMeridian's reference pose - wheel_f at
-	//    x = 237.8, wheel_rl and wheel_rr at x = 0 - rather than from the "about 2.6 m" the
-	//    type's comment used to estimate, which was 9 per cent out.
+	// 5. THE MERIDIAN IS MEASURED AND NOW CONFORMS: the steered axle IS the origin and the
+	//    mains are aft of it. Measured off SK_Plane7's reference pose - nosewheel at x = 0.0,
+	//    wheel_L and wheel_R at x = -237.8 - where it used to be measured off
+	//    SK_PiperMeridian's about the other end.
+	//
+	//    THE WHEELBASE IS UNCHANGED AT 2.378 m, AND THAT IS THE ASSERTION THAT MATTERS. Only
+	//    the datum moved: plane7 is a rebuild of the same aeroplane, so a wheelbase that had
+	//    shifted would mean the new model is a different size rather than the same one
+	//    re-origined. It is the one figure that survives the whole substitution unchanged.
 	UAircraftType* Meridian = NewObject<UAircraftType>();
 	UAircraftType::BuildPiperMeridian(Meridian);
 	const FAirframe Piper = Meridian->Airframe();
-	TestTrue(TEXT("the Piper steers geometrically"), Piper.HasAxles());
-	TestEqual(TEXT("its wheelbase is the measured 2.378 m"), Piper.Wheelbase(), 237.8, 0.1);
-	TestEqual(TEXT("and its fixed axle is the origin, which is its declared deviation"),
-		Piper.FixedAxleX, 0.0, 0.01);
+	TestTrue(TEXT("the Meridian steers geometrically"), Piper.HasAxles());
+	TestEqual(TEXT("its wheelbase is the measured 2.378 m, unchanged by the re-origin"),
+		Piper.Wheelbase(), 237.8, 0.1);
+	TestEqual(TEXT("its steered axle is the origin, per the class convention"),
+		Piper.SteerAxleX, 0.0, 0.01);
+	TestEqual(TEXT("and its mains are aft of that origin, not on it"),
+		Piper.FixedAxleX, -237.8, 0.1);
 	TestTrue(TEXT("it has a steering lock to turn on"), Piper.Ground.MaxSteerDegrees > 0.0);
+
+	// AND IT IS NOW PITCHED ABOUT ITS MAINS, which ARoadAgentActor::SetPose keys off exactly
+	// this field being non-zero. Asserted here because the sign is what makes the correction
+	// move the tail DOWN and the nose UP rather than the reverse, and a positive FixedAxleX
+	// would pass every other check in this function.
+	TestTrue(TEXT("a non-zero, aft fixed axle is what turns the pitch-pivot correction on"),
+		Piper.FixedAxleX < 0.0);
 
 	// 6. THE AIRLINERS STAY ON THE PIVOT LAW, deliberately: no mesh to measure against, and
 	//    a published wheelbase would be a figure nobody could check on screen. They are kept
@@ -127,6 +155,14 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane4"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane5"),
+		// THE MERIDIAN JOINS THE LIST, which it could not while its mesh was a placeholder
+		// imported about the main gear: the steered-axle check below asserts the class
+		// convention, and that type declared a deviation from it. plane7 conforms, so the
+		// half-run guard now covers every modelled aeroplane in the game rather than five of
+		// six. It is also the only row whose footprint is typed in C++ as well as authored -
+		// see Tools/Python/build_plane7_type.py, which checks the same four figures from the
+		// other direction.
+		TEXT("/Game/Entities/DA_Aircraft_Plane7"),
 	};
 
 	for (const TCHAR* Path : Measured)
@@ -221,8 +257,11 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a 172 is pushed off a stand by one person leaning on the strut - and the "
 			   "class default is VehicleTug, so this row is the only thing standing between "
 			   "the smallest aeroplane in the game and the Pushback depot") },
-		{ TEXT("/Game/Entities/DA_Aircraft_Piper"),  EPushbackNeed::SelfManoeuvre,
-		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane7"), EPushbackNeed::SelfManoeuvre,
+		  TEXT("the starter aeroplane reverses itself, so a new airport needs no depot - and "
+			   "this row is what proves the 2026-09-21 RENAME of DA_Aircraft_Piper carried "
+			   "its authored values rather than quietly creating a fresh asset on defaults, "
+			   "which would read VehicleTug and gate a Meridian behind the depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane2"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Twin Otter beta-ranges off a stand") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,

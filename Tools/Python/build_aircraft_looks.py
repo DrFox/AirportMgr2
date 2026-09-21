@@ -15,9 +15,17 @@ from. That function lives in Airside, and Airside may not name /Game assets - Ch
 Architecture enforces the direction. A mesh reference is content, so it is set from the
 content layer, the same way build_road_profiles.py wires a profile into the content set.
 
-IN PLACE, never delete-and-recreate. DA_Aircraft_Piper is referenced by DA_Airline_Cumbria's
-fleet, and deleting an asset something points at breaks the reference rather than updating
-it - build_airlines.py's own load-or-create carries the same warning.
+IN PLACE, never delete-and-recreate. These type assets are referenced by
+DA_Airline_Cumbria's fleet, and deleting an asset something points at breaks the reference
+rather than updating it - build_airlines.py's own load-or-create carries the same warning.
+
+THE MERIDIAN'S ROW LEFT ON 2026-09-21, when plane7 replaced SM_PiperMeridian and
+DA_Aircraft_Piper was renamed to DA_Aircraft_Plane7. Tools/Python/build_plane7_type.py sets
+that type's mesh and anim class along with everything else it authors, so a row here would
+be a second writer of one pair of fields - the "lists that must agree" failure, with the
+losing script being whichever ran last. The newer per-model build_plane<N>_type.py scripts
+all own their own look for the same reason; what is left in this table is the two types that
+have no such script.
 
 THE CONTENT DEFAULT REMAINS, and is now a real fallback rather than the only answer: a type
 with no mesh of its own still draws as UAirsideContent::AgentMesh. What changed is that
@@ -31,11 +39,6 @@ import unreal
 # "A" for a Meridian and "C" for both an A320 and a 737, so it cannot name a type.
 # FAirframe::TypeCode takes this instead.
 LOOKS = {
-    "/Game/Entities/DA_Aircraft_Piper": (
-        "/Game/Aircraft/PiperMeridian/SK_PiperMeridian",
-        "/Game/Aircraft/PiperMeridian/ABP_PiperMeridian",
-        "PA46",
-    ),
     "/Game/Entities/DA_Aircraft_Plane2": (
         "/Game/Aircraft/Plane2/SK_Plane2",
         "/Game/Aircraft/Plane2/ABP_Plane2",
