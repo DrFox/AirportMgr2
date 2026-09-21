@@ -21,33 +21,6 @@ namespace
 		return Context.GuidedCursor();
 	}
 
-	/**
-	 * The dashed line to each thing the corner is lined up with, and its label.
-	 *
-	 * IT LIVES IN THE TOOL, and that is what caught this out. FBuildSession resolves the guide
-	 * onto the context, but NOTHING DRAWS IT until a tool asks - so a tool that describes an
-	 * anchor and stops has a guide computed and thrown away, showing the player nothing. That is
-	 * exactly what this tool did between gaining its anchor and gaining this, and the anchor's
-	 * own test passed throughout: it measured the producer and never the consumer.
-	 */
-	void OutlineDrawGuide(const FToolContext& Context, const FVector2D& Moving,
-		IToolPreviewSink& Sink)
-	{
-		if (!Context.Guide.bActive)
-		{
-			return;
-		}
-
-		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
-		{
-			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
-
-			// At the line's MIDPOINT, like every other tool: two labels at the moving point
-			// overprint, and the plugin has no camera to offset them by readable pixels.
-			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
-				EPreviewStyle::Guide);
-		}
-	}
 }
 
 // --- Idle -----------------------------------------------------------------------------
@@ -105,7 +78,10 @@ void FOutlineIdleState::BuildPreview(const FToolContext& Context, const IOutline
 	// guide here and nothing would ever show it without this call. See
 	// IBuildTool::WantsFreeStartGuides on why describing an anchor and stopping is half a
 	// feature - it is the shape of the bug that shipped on 2026-09-20.
-	OutlineDrawGuide(Context, First, Sink);
+	if (Context.Guide.bActive)
+	{
+		Sink.Guides(Context.Guide, First);
+	}
 }
 
 // --- Drawing --------------------------------------------------------------------------
@@ -211,9 +187,9 @@ void FOutlineDrawingState::BuildPreview(const FToolContext& Context, const IOutl
 	// AND WHAT IT IS LINED UP WITH. Not drawn while closing: the corner is going to the first
 	// one, so a guide line to somewhere else would be describing a constraint that is not
 	// being applied.
-	if (!bClosing)
+	if (!bClosing && Context.Guide.bActive)
 	{
-		OutlineDrawGuide(Context, Ahead, Sink);
+		Sink.Guides(Context.Guide, Ahead);
 	}
 
 	if (bCrosses)

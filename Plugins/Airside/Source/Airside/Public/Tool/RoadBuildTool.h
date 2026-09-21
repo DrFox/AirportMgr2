@@ -360,6 +360,31 @@ struct IToolPreviewSink
 			Line(Points.Last(), Points[0], Style);
 		}
 	}
+
+	/**
+	 * The dashed line to every guide winner, and its label at the line's midpoint.
+	 *
+	 * FIVE TOOLS MADE THIS EMISSION SEPARATELY - OutlineDrawTool, RunwayTool, StandPlaceTool,
+	 * RoadDrawTool, PlotPlaceTool (#192) - each with its own copy of "one line, one label,
+	 * per winner" and its own comment defending the copy. NON-VIRTUAL, like Polyline above: it
+	 * is built entirely from Line and Label, so every sink gets it for free rather than each
+	 * reimplementing the loop.
+	 *
+	 * GUARDING AND "WHICH POINT IS MOVING" STAY THE CALLER'S JOB. Only a tool knows whether its
+	 * own gesture is active right now (Context.Guide.bActive) - PlotPlaceTool additionally
+	 * gates on which corner is being dragged - and PlotPlaceTool's Moving is the corner Quad's
+	 * InFront clamp may have relocated, not simply the cursor. Folding either into this method
+	 * would give it an opinion about a specific tool's gesture, which is exactly what a shared
+	 * sink method must not have.
+	 */
+	void Guides(const SnapGuide::FResult& Guide, const FVector2D& Moving)
+	{
+		for (const SnapGuide::FCandidate& Winner : Guide.Winners)
+		{
+			Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
+			Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description, EPreviewStyle::Guide);
+		}
+	}
 };
 
 /**

@@ -567,6 +567,24 @@ bool URoadNetwork::ClearSegmentEndSolve(FRoadSegmentId Segment, bool bEndA)
 	return true;
 }
 
+bool URoadNetwork::SegmentEnds(FRoadSegmentId Segment, FVector2D& OutA, FVector2D& OutB) const
+{
+	const FRoadSegment* Seg = GetSegment(Segment);
+	if (Seg == nullptr || !Seg->bAlive)
+	{
+		return false;
+	}
+	const FRoadNode* A = GetNode(Seg->A);
+	const FRoadNode* B = GetNode(Seg->B);
+	if (A == nullptr || B == nullptr)
+	{
+		return false;
+	}
+	OutA = A->Position;
+	OutB = B->Position;
+	return true;
+}
+
 FRoadNodeId URoadNetwork::GetOtherEnd(FRoadSegmentId Segment, FRoadNodeId AtNode) const
 {
 	const FRoadSegment* Seg = GetSegment(Segment);

@@ -171,27 +171,6 @@ namespace
 		return bFound;
 	}
 
-	/** A segment's straight-line ends, or false if either is dead. */
-	bool SegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
-		FVector2D& OutA, FVector2D& OutB)
-	{
-		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr)
-		{
-			return false;
-		}
-
-		const FRoadNode* A = Network.GetNode(Segment->A);
-		const FRoadNode* B = Network.GetNode(Segment->B);
-		if (A == nullptr || B == nullptr)
-		{
-			return false;
-		}
-
-		OutA = A->Position;
-		OutB = B->Position;
-		return true;
-	}
 }
 
 FText FPlotPlaceTool::GetDisplayName() const
@@ -468,7 +447,7 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 
 		FVector2D RoadA = FVector2D::ZeroVector;
 		FVector2D RoadB = FVector2D::ZeroVector;
-		if (!SegmentEnds(*Network, Road, RoadA, RoadB))
+		if (!Network->SegmentEnds(Road, RoadA, RoadB))
 		{
 			return;
 		}
@@ -656,7 +635,7 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 		{
 			FVector2D RoadA = FVector2D::ZeroVector;
 			FVector2D RoadB = FVector2D::ZeroVector;
-			if (SegmentEnds(*Network, Road, RoadA, RoadB))
+			if (Network->SegmentEnds(Road, RoadA, RoadB))
 			{
 				const FVector2D Span = RoadB - RoadA;
 				const double Length = Span.Size();
@@ -738,19 +717,7 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// corners is under the cursor (see DescribeGuideAnchor), and Shown[Pinned] IS that corner.
 	if (Context.Guide.bActive && (Pinned == 2 || Pinned == 3) && Shown.IsValidIndex(Pinned))
 	{
-		const FVector2D Moving = Shown[Pinned];
-		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
-		{
-			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
-
-			// THE LABEL SITS AT ITS OWN LINE'S MIDPOINT, not at the corner. With one guide the
-			// corner was the obvious place - it is where the eye is - but two guides put both
-			// labels on the same point and the plugin has no camera to offset them by a
-			// readable number of pixels. The midpoint needs no measurement and puts each label
-			// on the line it describes.
-			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
-				EPreviewStyle::Guide);
-		}
+		Sink.Guides(Context.Guide, Shown[Pinned]);
 	}
 
 	// CONTENTS AT THREE CORNERS, NOT TWO. With two pinned both back corners are unknown and

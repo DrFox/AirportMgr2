@@ -82,43 +82,6 @@ FRunwayFacts FRunwayTool::Facts() const
 	return Out;
 }
 
-namespace
-{
-	/**
-	 * The dashed line to each thing the drag is lined up with, and its label.
-	 *
-	 * THE SAME EMISSION FRoadDrawTool AND FPlotPlaceTool MAKE, deliberately: three tools drawing
-	 * one meaning three different ways would be presentation drifting apart inside the plugin.
-	 *
-	 * IT LIVES IN THE TOOL, and that is what caught this out. FBuildSession resolves the guide
-	 * onto the context, but NOTHING DRAWS IT until a tool asks - so a tool that describes an
-	 * anchor and stops has a guide computed and thrown away, showing the player nothing at all.
-	 * That is exactly what this tool did between gaining its anchor and gaining this, and the
-	 * anchor's own test passed throughout: it measured the producer and never the consumer.
-	 *
-	 * PREFIXED because this module is a UNITY build and "DrawGuide" is the name any second tool
-	 * would also pick - see the SegmentEnds collision recorded in SnapGuideChain.cpp.
-	 */
-	void RunwayDrawGuide(const FToolContext& Context, const FVector2D& Moving,
-		IToolPreviewSink& Sink)
-	{
-		if (!Context.Guide.bActive)
-		{
-			return;
-		}
-
-		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
-		{
-			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
-
-			// At the line's MIDPOINT: two labels at the moving point overprint, and the plugin
-			// has no camera to offset them by a readable number of pixels.
-			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
-				EPreviewStyle::Guide);
-		}
-	}
-}
-
 bool FRunwayTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditTarget* Target,
 	FGuideAnchor& Out) const
 {
@@ -235,7 +198,10 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 		// the two branches could not drift. It DRAWS now: the free start gives the first click
 		// its own guides, and this is the consumer that makes them visible. A call kept honest
 		// for months turned out to be the whole of the second half of that feature.
-		RunwayDrawGuide(Context, Context.GuidedCursor(), Sink);
+		if (Context.Guide.bActive)
+		{
+			Sink.Guides(Context.Guide, Context.GuidedCursor());
+		}
 		if (Profile != nullptr)
 		{
 			// All three choices, so what the next click commits to is readable before it is
@@ -253,7 +219,10 @@ void FRunwayTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Si
 	}
 
 	const FVector2D Far = Context.GuidedCursor();
-	RunwayDrawGuide(Context, Far, Sink);
+	if (Context.Guide.bActive)
+	{
+		Sink.Guides(Context.Guide, Far);
+	}
 
 	const FVector2D Along = Far - Threshold;
 	const double Length = Along.Size();

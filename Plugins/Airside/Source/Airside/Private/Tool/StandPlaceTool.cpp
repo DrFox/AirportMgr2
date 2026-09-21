@@ -10,40 +10,6 @@
 
 #define LOCTEXT_NAMESPACE "Airside"
 
-namespace
-{
-	/**
-	 * The dashed line to each thing the stand is lined up with, and its label.
-	 *
-	 * PREFIXED for the unity build, like FRoadDrawTool's RoadGuidedSnap and
-	 * FOutlineDrawTool's OutlineDrawGuide - "DrawGuide" is the name a fourth tool would also
-	 * pick, and two of them collide only once they share a blob.
-	 *
-	 * IT LIVES IN THE TOOL because nothing else draws a guide: FBuildSession resolves one onto
-	 * the context and stops there, so a tool that describes an anchor and never emits is a
-	 * feature that computes correctly and shows the player nothing. See
-	 * IBuildTool::WantsFreeStartGuides.
-	 */
-	void StandDrawGuide(const FToolContext& Context, const FVector2D& Moving,
-		IToolPreviewSink& Sink)
-	{
-		if (!Context.Guide.bActive)
-		{
-			return;
-		}
-
-		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
-		{
-			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
-
-			// At the line's MIDPOINT, like every other tool: two labels at the moving point
-			// overprint, and the plugin has no camera to offset them by readable pixels.
-			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
-				EPreviewStyle::Guide);
-		}
-	}
-}
-
 FText FStandPlaceTool::GetDisplayName() const
 {
 	// TWO NAMES FOR ONE TOOL, and each must match the registry's own Name for its entry -
@@ -266,9 +232,9 @@ void FStandPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink
 	// dashed line to something the cursor is passing would describe a constraint that is no
 	// longer being applied - the same rule the outline tool keeps while closing. In practice
 	// the anchor declines mid-aim too, so this is belt and braces on one frame's ordering.
-	if (!bAiming)
+	if (!bAiming && Context.Guide.bActive)
 	{
-		StandDrawGuide(Context, At, Sink);
+		Sink.Guides(Context.Guide, At);
 	}
 }
 

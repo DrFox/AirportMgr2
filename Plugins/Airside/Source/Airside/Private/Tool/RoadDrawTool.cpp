@@ -553,16 +553,7 @@ void FRoadDrawTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& 
 	// floating beside it.
 	if (Context.Guide.bActive)
 	{
-		const FVector2D Moving = RoadGuidedSnap(Context).Position;
-		for (const SnapGuide::FCandidate& Winner : Context.Guide.Winners)
-		{
-			Sink.Line(Moving, Winner.ReferenceAt, EPreviewStyle::Guide);
-
-			// At the line's MIDPOINT: two labels at the moving point overprint, and the plugin
-			// has no camera to offset them by a readable number of pixels. Design section 6.
-			Sink.Label((Moving + Winner.ReferenceAt) * 0.5, Winner.Description,
-				EPreviewStyle::Guide);
-		}
+		Sink.Guides(Context.Guide, RoadGuidedSnap(Context).Position);
 	}
 
 	if (Context.Snap.Kind == ERoadSnapKind::Segment && Context.Network() != nullptr)
