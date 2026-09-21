@@ -1458,4 +1458,149 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnchorLinkResolvesEachPendingLinkOnceTest,
+	"Airside.Build.AnchorLinkResolvesEachPendingLinkOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnchorLinkResolvesEachPendingLinkOnceTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// #177: FAnchorLink::Gather's own reach probe for a declared entry called
+	// FAnchorLink::Resolve to decide whether the entry was worth emitting at all, then threw
+	// the result away into a map nothing downstream read (FEntryReach::Contact/Distance/
+	// bReaches) - and FAnchorLink::Build called Resolve AGAIN for the very same link a few
+	// hundred lines later. Two full ILinkFinder::Find scans of the guideline graph per link,
+	// not one. A stand with a road behind it (FStandIsEnteredWhereItDeclaresTest's own fixture)
+	// is exactly the shape that paid for the duplicate: every one of its declared entries takes
+	// the Gather-side probe.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	double AftX = TNumericLimits<double>::Max();
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
+	}
+	constexpr double GapNear = 4500.0;
+
+	auto LayFixture = [&](URoadNetwork& Net)
+	{
+		FGuidelineNodeId Far;
+		Lay(Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+			ETraversalClass::GroundVehicle, Far);
+		PlaceStand(Net, *Stand, FVector2D::ZeroVector, 0.0);
+	};
+
+	// GROUND TRUTH: FAnchorLink::Gather is the public seam FAnchorLink::Build calls
+	// internally, so calling it directly on an otherwise-identical, freshly-placed network
+	// reports exactly how many links THIS Build will have to resolve - a figure independent of
+	// whether Build then resolves each one once or twice, which is the whole point of asking it
+	// this way rather than hard-coding an entry count that would drift the moment the fixture's
+	// stand template changes shape.
+	int32 PendingCount = 0;
+	{
+		URoadNetwork* Ground = NewObject<URoadNetwork>(GetTransientPackage());
+		LayFixture(*Ground);
+
+		TArray<FPendingLink> Pending;
+		TSet<FGuidelineNodeId> AnchorNodes;
+		FAnchorLink::Gather(*Ground, FAnchorLink::DefaultMaxLeadIn,
+			FAnchorLink::DefaultServiceLinkRadius, Pending, AnchorNodes);
+		PendingCount = Pending.Num();
+	}
+	TestTrue(TEXT("the fixture actually has links to resolve"), PendingCount > 0);
+
+	// THE MEASUREMENT: the SAME fixture, built for real, bracketed by the counter Resolve
+	// itself bumps. Equal to PendingCount is the claim post-fix; more than it - up to double,
+	// on the code this issue describes - is the defect.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	LayFixture(*Net);
+
+	const int32 Before = Net->AnchorLinkFindCallCountForTest();
+	FAnchorLink::Build(*Net);
+	const int32 Calls = Net->AnchorLinkFindCallCountForTest() - Before;
+
+	TestEqual(
+		*FString::Printf(TEXT("one ILinkFinder::Find per pending link (%d), not two"), PendingCount),
+		Calls, PendingCount);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnchorLinkDoesNotRescanEveryGuidelineTest,
+	"Airside.Build.AnchorLinkDoesNotRescanEveryGuideline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnchorLinkDoesNotRescanEveryGuidelineTest::RunTest(const FString& Parameters)
+{
+	using namespace ServiceLinkFixture;
+
+	// #177's SECOND measurement: FProximityLinkFinder::Find used to sample EVERY joinable
+	// guideline in the network on every call, so an airport with a hundred taxiways nowhere
+	// near a given stand paid for all hundred on each of that stand's entries. A guideline
+	// outside a link's own Reach can never be nearer than Reach, so AnchorLinkFinder.cpp's
+	// CannotReachWithin rejects one by its control-point bounding box before paying for
+	// URoadNetwork::SampleGuideline's walk. Measured, not asserted: the SAME fixture with a
+	// crowd of decoy guidelines added must cost about what it costs with none of them, not one
+	// sample per decoy per link.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	double AftX = TNumericLimits<double>::Max();
+	for (const FServiceBay& Bay : Stand->ServiceBays)
+	{
+		AftX = FMath::Min(AftX, Bay.EntryLocal.X);
+	}
+	constexpr double GapNear = 4500.0;
+
+	auto LayFixture = [&](URoadNetwork& Net, int32 DecoyCount)
+	{
+		FGuidelineNodeId Far;
+		Lay(Net, FVector2D(AftX - GapNear, -20000.0), FVector2D(AftX - GapNear, 20000.0),
+			ETraversalClass::GroundVehicle, Far);
+
+		// FAR BEYOND EVERY REACH THIS FIXTURE'S LINKS USE - DefaultMaxLeadIn is 20000 uu, the
+		// service radius 6500 - so none of these can ever be joined, and any cost they add is
+		// pure waste the bounding-box reject exists to avoid.
+		for (int32 Index = 0; Index < DecoyCount; ++Index)
+		{
+			FGuidelineNodeId DecoyFar;
+			const double OffsetY = 5000.0 * Index;
+			Lay(Net, FVector2D(2000000.0, OffsetY), FVector2D(2000000.0, OffsetY + 1000.0),
+				ETraversalClass::GroundVehicle, DecoyFar);
+		}
+
+		PlaceStand(Net, *Stand, FVector2D::ZeroVector, 0.0);
+	};
+
+	URoadNetwork* Bare = NewObject<URoadNetwork>(GetTransientPackage());
+	LayFixture(*Bare, 0);
+	const int32 BeforeBare = Bare->SampleGuidelineCallCountForTest();
+	FAnchorLink::Build(*Bare);
+	const int32 BareCost = Bare->SampleGuidelineCallCountForTest() - BeforeBare;
+
+	URoadNetwork* Crowded = NewObject<URoadNetwork>(GetTransientPackage());
+	constexpr int32 DecoyCount = 200;
+	LayFixture(*Crowded, DecoyCount);
+	const int32 BeforeCrowded = Crowded->SampleGuidelineCallCountForTest();
+	FAnchorLink::Build(*Crowded);
+	const int32 CrowdedCost = Crowded->SampleGuidelineCallCountForTest() - BeforeCrowded;
+
+	AddInfo(FString::Printf(TEXT("SampleGuideline calls: %d with no decoys, %d with %d of them"),
+		BareCost, CrowdedCost, DecoyCount));
+
+	// NOT ONE SAMPLE PER DECOY PER LINK, which is what the pre-#177 shape cost: 200 decoys
+	// times one Find per pending link would have added in the low thousands. A generous
+	// multiple of four covers the real edge's own samples (the finder loop plus Join's
+	// post-hit resample of the edge it actually joins) without so much slack that a real
+	// regression could hide under it.
+	TestTrue(
+		*FString::Printf(TEXT("%d distant decoys cost about the same as none (%d vs %d)"),
+			DecoyCount, CrowdedCost, BareCost),
+		CrowdedCost <= BareCost * 4 + 4);
+
+	return true;
+}
+
 #endif

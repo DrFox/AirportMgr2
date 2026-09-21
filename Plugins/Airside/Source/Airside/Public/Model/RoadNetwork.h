@@ -311,6 +311,26 @@ public:
 	int32 SampleGuidelineCallCountForTest() const { return SampleGuidelineCalls; }
 
 	/**
+	 * How many times FAnchorLink::Resolve has dispatched to an ILinkFinder, for #177: Gather's
+	 * declared-entry loop used to run this exact search too, on every entry, purely to fill a
+	 * map (FEntryReach's Contact/Distance/bReaches) that nothing downstream ever read - so every
+	 * such link paid for two full scans of the guideline graph where Build's own scan was the
+	 * only one anything used. A test brackets a Build with this and compares the delta against
+	 * the number of pending links (from a separate Gather call), the same convention as
+	 * SampleGuidelineCallCountForTest: counts every dispatch regardless of caller, so a test
+	 * reads the delta across the operation it is measuring, not the raw total.
+	 */
+	int32 AnchorLinkFindCallCountForTest() const { return AnchorLinkFindCalls; }
+
+	/**
+	 * Bumped once per FAnchorLink::Resolve call - see AnchorLinkFindCallCountForTest. Not
+	 * folded into Resolve itself because Resolve is FAnchorLink's static, not a member here;
+	 * this is the one line on the Network side of that call, the same seam SampleGuideline's own
+	 * counter sits on.
+	 */
+	void NoteAnchorLinkFind() const { ++AnchorLinkFindCalls; }
+
+	/**
 	 * Mutable access to a guideline node.
 	 *
 	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldingPositionFor and
@@ -628,4 +648,9 @@ private:
 	 *  is on UBuildSession: SampleGuideline is const and this counts real work it did, not a
 	 *  decision. Not a UPROPERTY - a session counter, not state. */
 	mutable int32 SampleGuidelineCalls = 0;
+
+	/** See AnchorLinkFindCallCountForTest. mutable for the same reason SampleGuidelineCalls is:
+	 *  NoteAnchorLinkFind is called from a const Resolve and this counts real dispatch it did,
+	 *  not a decision. Not a UPROPERTY - a session counter, not state. */
+	mutable int32 AnchorLinkFindCalls = 0;
 };

@@ -457,48 +457,6 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			return Link;
 		};
 
-		// WHAT EACH ENTRY NODE CAN REACH: the road point it would join, and how far off it is.
-		struct FEntryReach
-		{
-			FGuidelineNodeId Node;
-			FVector2D At = FVector2D::ZeroVector;
-			FVector2D Contact = FVector2D::ZeroVector;
-			double Distance = TNumericLimits<double>::Max();
-			bool bReaches = false;
-		};
-
-		TMap<FGuidelineNodeId, FEntryReach> Reach;
-		for (const FGuidelineNodeId& NodeId : Declared.Value)
-		{
-			const FGuidelineNode* Node = Network.GetGuidelineNode(NodeId);
-			if (Node == nullptr)
-			{
-				continue;
-			}
-
-			FEntryReach Found;
-			Found.Node = NodeId;
-			Found.At = Node->Position;
-
-			const FPendingLink Probe = EntryLink(NodeId, Node->Position);
-			if (const FLinkHit Hit = Resolve(Network, Probe, OutAnchorNodes); Hit.IsSet())
-			{
-				const FGuidelineEdge* Road = Network.GetGuidelineEdge(Hit.Edge);
-				const FGuidelineNode* RoadA =
-					Road != nullptr ? Network.GetGuidelineNode(Road->A) : nullptr;
-				const FGuidelineNode* RoadB =
-					Road != nullptr ? Network.GetGuidelineNode(Road->B) : nullptr;
-				if (RoadA != nullptr && RoadB != nullptr)
-				{
-					Found.Contact = GuidelineGeom::Eval(
-						RoadA->Position, Road->Control, RoadB->Position, Hit.Param);
-					Found.Distance = FVector2D::Distance(Found.At, Found.Contact);
-					Found.bReaches = true;
-				}
-			}
-			Reach.Add(NodeId, Found);
-		}
-
 		// ONE LINK PER DECLARED ENTRY, and no grouping at all.
 		//
 		// THE PAIRING IS DELETED WITH THE LANE THAT NEEDED IT. A lane's entries were authored
@@ -516,6 +474,25 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 		// threads past a parked one. Refusing all but the nearest is exactly the behaviour that
 		// ruling forbids. What bounds a connector now is ServiceLinkRadius alone, which is the
 		// question actually being asked: is a road within reach of THIS entry.
+		//
+		// ONE LOOP, NOT TWO, since #177. There used to be a first pass that called Resolve for
+		// EVERY declared node - including one already joined by hand, which this loop's
+		// AlreadyJoined check was always going to throw away - purely to fill a
+		// TMap<FGuidelineNodeId, FEntryReach> with a Contact/Distance/bReaches that a second
+		// pass over the SAME nodes then read only Node/At from. The probe's OUTCOME never
+		// decided anything: the comment on OutPending.Add below is unchanged from before this
+		// fix and says so - a link is emitted "EVEN WHEN THE PROBE FOUND NOTHING". So the
+		// search itself is gone, not merely the fields it filled; FAnchorLink::Build below
+		// still calls Resolve exactly once for the link this loop emits, the same as it always
+		// did for a pose or an anchor.
+		//
+		// NOT CACHED HERE EITHER, and that is deliberate rather than an oversight: a link's
+		// FLinkHit names an EDGE, and an earlier entry's Join a few hundred lines below can
+		// split the very edge a later entry would resolve to - all four of one stand's entries
+		// regularly share the single road behind it. A Hit taken NOW, before any of this pass's
+		// joins, would be stale by the time Build's loop reaches a later entry; Build must
+		// resolve against the graph AS IT STANDS AT THAT MOMENT, which only a fresh Resolve
+		// there can see.
 		for (const FGuidelineNodeId& NodeId : Declared.Value)
 		{
 			if (AlreadyJoined(Network, NodeId))
@@ -523,8 +500,8 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 				continue;
 			}
 
-			const FEntryReach* Found = Reach.Find(NodeId);
-			if (Found == nullptr)
+			const FGuidelineNode* Node = Network.GetGuidelineNode(NodeId);
+			if (Node == nullptr)
 			{
 				continue;
 			}
@@ -533,7 +510,7 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			// stand that joined nothing at all, and it can only do that for a link it was
 			// given. A stand out of reach of every road therefore gets one warning line naming
 			// it, not silence.
-			OutPending.Add(EntryLink(Found->Node, Found->At));
+			OutPending.Add(EntryLink(NodeId, Node->Position));
 		}
 	}
 }
@@ -544,6 +521,11 @@ FLinkHit FAnchorLink::Resolve(const URoadNetwork& Network, const FPendingLink& L
 	// STRATEGY DISPATCH. Left unset (FLinkHit::IsSet false) when the finder finds nothing -
 	// Find never writes to Hit unless it claims, the same contract IRoadSnapRule's Resolve
 	// documents for the same reason.
+	//
+	// COUNTED HERE, for #177: this is the one call site of ILinkFinder::Find, so a test that
+	// wants to know whether a link was searched once or twice reads
+	// URoadNetwork::AnchorLinkFindCallCountForTest rather than instrumenting either finder.
+	Network.NoteAnchorLinkFind();
 	FLinkHit Hit;
 	LinkFinderFor(Link.Kind).Find(Network, Link, AnchorNodes, Hit);
 	return Hit;
@@ -1076,6 +1058,12 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 	// along that lane is known.
 	for (FPendingLink& Link : Pending)
 	{
+		// THE ONLY RESOLVE A DECLARED ENTRY GETS, since #177 deleted the one Gather used to run
+		// on the same link to fill a probe nothing read (see the WHY comment on Gather's
+		// declared-entry loop). Resolved fresh, here, against the graph as THIS pass has left
+		// it so far - which matters when several of a stand's entries share one road: an
+		// earlier entry's Join a few lines down can split that road, and a Hit taken before
+		// this pass started would not see the split.
 		const FLinkHit Hit = Resolve(Network, Link, AnchorNodes);
 		if (!Hit.IsSet())
 		{
