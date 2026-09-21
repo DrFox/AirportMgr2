@@ -158,9 +158,9 @@ bool URoadEditFacade::MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) cons
 	return OutId.IsSet();
 }
 
-void URoadEditFacade::NotifyChanged()
+void URoadEditFacade::NotifyChanged(EChangeKind Kind)
 {
-	OnChanged.Broadcast();
+	OnChanged.Broadcast(Kind);
 }
 
 bool URoadEditFacade::CanAfford(const FBuildQuote& Quote) const
@@ -782,6 +782,13 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	}
 
 	History->CommitEdit();
+
+	// THE ONE TOPOLOGY NOTIFY A DRAG FIRES (issue #165). Every frame of the drag itself
+	// notified Geometry only, through MoveNode, which left the guideline graph, anchor
+	// links, plots and traffic exactly as stale as they were when the drag began - none of
+	// them re-derive from a Geometry notify. This is where a committed drag catches them up,
+	// exactly once, no matter how many frames it ran for.
+	NotifyChanged(EChangeKind::Topology);
 }
 
 bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)
@@ -849,9 +856,14 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 
 	if (bMoved)
 	{
-		// Every frame of a drag, like MoveNode and for the same reason: the pavement has
-		// changed and the mesh is stale until something rebuilds it.
-		NotifyChanged();
+		// GEOMETRY, like MoveNode and for the same reason (issue #165): an apron corner is
+		// not in the road graph at all (see OnDragBegin's own comment), so a corner drag
+		// cannot touch the guideline graph, anchor links, plots or traffic - there is nothing
+		// there for a Topology rebuild to catch that a Geometry one would miss. Every frame
+		// of a drag, the pavement has changed and the mesh is stale until something rebuilds
+		// it; EndInteractiveEdit still fires the one Topology notify at drag end, same as a
+		// node drag.
+		NotifyChanged(EChangeKind::Geometry);
 	}
 	return bMoved;
 }
@@ -1124,9 +1136,15 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	// FIRST frame owns the edit (see IsEditing above), but every frame that actually moves
 	// the node must still rebuild - that per-frame notification during a drag is the whole
 	// reason this is not folded into CommitAndNotify, which fires once per committed edit.
+	//
+	// GEOMETRY, NOT TOPOLOGY (issue #165). A move changes no node's existence and no
+	// segment's endpoints-as-a-set, only where things sit, so the listener can rebuild the
+	// surface alone and skip the guideline graph, anchor links, plots and traffic every
+	// frame of the drag - EndInteractiveEdit fires the one Topology notify that catches
+	// those up once the drag commits.
 	if (bMoved)
 	{
-		NotifyChanged();
+		NotifyChanged(EChangeKind::Geometry);
 	}
 
 	return bMoved;

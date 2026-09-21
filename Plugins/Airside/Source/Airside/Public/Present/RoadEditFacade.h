@@ -63,6 +63,13 @@ class IBuildPurse;
  * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
  * position changes neither pavement nor mesh.
  *
+ * MoveNode's PER-FRAME NOTIFY IS EChangeKind::Geometry (issue #165) - every earlier drag
+ * frame ran the full pipeline, guideline graph and anchor links and plots and traffic
+ * included, at frame rate. Nothing about a slid position needs any of those rebuilt until
+ * the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true) fires one
+ * EChangeKind::Topology notify of its own once the drag commits, and that single notify is
+ * what catches the derived graph up - see its own comment.
+ *
  * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
  * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and
  * fall off the end without calling Commit() on it, so a successful link or unlink pushed no
@@ -90,8 +97,15 @@ public:
 	 */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
 
-	/** Fired wherever this class's mutators used to call ARoadNetworkActor::RebuildMesh(). */
-	DECLARE_MULTICAST_DELEGATE(FOnNetworkChanged);
+	/**
+	 * Fired wherever this class's mutators used to call ARoadNetworkActor::RebuildMesh().
+	 *
+	 * CARRIES EChangeKind (issue #165), so the listener can skip the derived-graph passes
+	 * (guidelines, anchor links, plots, traffic) on a Geometry-only notify - see that enum's
+	 * own comment for the Geometry/Topology split, and NotifyChanged below for which mutators
+	 * pass which.
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnNetworkChanged, EChangeKind);
 	FOnNetworkChanged OnChanged;
 
 	// --- IRoadEditTarget ---------------------------------------------------------------
@@ -258,8 +272,14 @@ private:
 	 * THE single OnChanged.Broadcast() call site - see the class comment for exactly which
 	 * mutators call this directly (Undo, Redo, ClearNetwork, MoveNode) versus through
 	 * CommitAndNotify below, and which two currently call neither (issue #125).
+	 *
+	 * DEFAULTS TO Topology, which is every call site except MoveNode's per-frame notify
+	 * (issue #165): every scope-committing mutator through CommitAndNotify changes the
+	 * graph's shape, and so do Undo/Redo/ClearNetwork (they replace Network wholesale) and
+	 * MergeNodes (it removes a node). MoveNode passes Geometry explicitly, because a drag
+	 * frame moves a position and nothing else - see its own call site.
 	 */
-	void NotifyChanged();
+	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
 	/**
 	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits

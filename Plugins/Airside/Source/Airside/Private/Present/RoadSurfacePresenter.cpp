@@ -393,6 +393,16 @@ void URoadSurfacePresenter::InvalidateGhostCache()
 
 void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings)
 {
+	RebuildInternal(Network, Settings, EChangeKind::Topology);
+}
+
+void URoadSurfacePresenter::RebuildSurfaceOnly(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	RebuildInternal(Network, Settings, EChangeKind::Geometry);
+}
+
+void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& Settings, EChangeKind Kind)
+{
 	// See InvalidateGhostCache's own comment for why this must happen on every rebuild.
 	InvalidateGhostCache();
 
@@ -413,18 +423,26 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network);
 
-	// The guideline graph is derived from the same solve, and until this call existed it
-	// was derived NOWHERE outside the tests - so every route query at runtime ran against
-	// an empty graph and correctly reported that nothing was connected.
-	//
-	// Anchor lead-ins go second and must: they join stands to guidelines that only exist
-	// once the line above has run, and both are swept and rebuilt together.
-	FRoadGuidelineBuilder::Build(Network, Solved);
-	//
-	// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
-	// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
-	// per-airport gameplay tuning and the other is a fact about a painted line.
-	FAnchorLink::Build(Network, FAnchorLink::DefaultMaxLeadIn, Settings.ServiceLinkRadius);
+	// TOPOLOGY ONLY, PAST HERE (issue #165). A Geometry change - a MoveNode or
+	// MoveApronCorner drag frame - moved positions and nothing else, so the graph's SHAPE is
+	// exactly what it was; re-deriving it every frame of a drag is the cost issue #165 is
+	// about. See RebuildSurfaceOnly's own comment for what that leaves stale and why that is
+	// tolerated for a drag's duration.
+	if (Kind == EChangeKind::Topology)
+	{
+		// The guideline graph is derived from the same solve, and until this call existed it
+		// was derived NOWHERE outside the tests - so every route query at runtime ran against
+		// an empty graph and correctly reported that nothing was connected.
+		//
+		// Anchor lead-ins go second and must: they join stands to guidelines that only exist
+		// once the line above has run, and both are swept and rebuilt together.
+		FRoadGuidelineBuilder::Build(Network, Solved);
+		//
+		// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
+		// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
+		// per-airport gameplay tuning and the other is a fact about a painted line.
+		FAnchorLink::Build(Network, FAnchorLink::DefaultMaxLeadIn, Settings.ServiceLinkRadius);
+	}
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single
 	// material", and ARoadNetworkActor::ResolveMaterialSet supplies a content default without
@@ -443,11 +461,21 @@ void URoadSurfacePresenter::Rebuild(URoadNetwork& Network, const FSurfaceSetting
 	Builder.Emit(Sink);
 
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt
-	// together so one call still means "make the world match the model".
+	// together so one call still means "make the world match the model". Independent of the
+	// guideline graph - FRoadMeshBuilder for apron outlines reads Network.GetAprons()/
+	// GetEntities() directly - so this runs for a Geometry change too.
 	RebuildAprons(Network, Settings);
-	// And the holding-position paint, from the graph derived above.
-	RebuildMarkings(Network, Settings);
-	// And the runways' own paint, from their facts.
+
+	if (Kind == EChangeKind::Topology)
+	{
+		// And the holding-position paint, from the graph derived above. NOT run for a
+		// Geometry change: FHoldingPositionMarkingBuilder::Build reads
+		// Network.GetGuidelineNodes(), which was deliberately left untouched above - see
+		// RebuildSurfaceOnly's own comment.
+		RebuildMarkings(Network, Settings);
+	}
+	// And the runways' own paint, from their facts - Network's segments and RunwayFactsFor,
+	// not the guideline graph, so this runs every time same as RebuildAprons.
 	RebuildRunwayMarkings(Network, Settings);
 	// And the rubber under it, which is not paint at all - see RebuildRunwayRubber.
 	RebuildRunwayRubber(Network, Settings);

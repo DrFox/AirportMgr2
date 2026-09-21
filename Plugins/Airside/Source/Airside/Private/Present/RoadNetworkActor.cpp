@@ -154,7 +154,13 @@ ARoadNetworkActor::ARoadNetworkActor()
 	// RebuildMesh() on itself now broadcasts OnChanged instead, because the facade has no
 	// pointer to the presenter that does the rebuilding. This is the one place that wires
 	// the two back together.
-	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh);
+	//
+	// RebuildMeshForChange, NOT RebuildMesh (issue #165): OnChanged now carries an
+	// EChangeKind, and RebuildMesh() is the IRoadEditTarget override every test and
+	// OpsRuntime.cpp calls directly with no argument - it must keep meaning "make everything
+	// match the model" (EChangeKind::Topology), so it stays a thin forwarder to this instead
+	// of taking the parameter itself. See RebuildMeshForChange's own comment for the split.
+	Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMeshForChange);
 
 	Traffic = CreateDefaultSubobject<UAirsideTraffic>(TEXT("Traffic"));
 	Smoke = CreateDefaultSubobject<UTyreSmoke>(TEXT("Smoke"));
@@ -626,8 +632,20 @@ FBuildSessionTunables ARoadNetworkActor::MakeTunables(double ViewWorldWidth)
 
 void ARoadNetworkActor::RebuildMesh()
 {
+	// THE PUBLIC NAME STAYS A THIN FORWARDER (issue #165). RebuildMesh() is an
+	// IRoadEditTarget virtual and a UFUNCTION(CallInEditor) button, called with no argument
+	// from OpsRuntime.cpp and from every test in this plugin that wants "make everything
+	// match the model" - none of them should have to know EChangeKind exists. Topology is
+	// what that phrase has always meant: every pass runs, same as before this issue.
+	RebuildMeshForChange(EChangeKind::Topology);
+}
+
+void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
+{
 	// Counted before anything else, so RebuildCountForTest sees every call including the
-	// early-return below - a rebuild that bailed for lack of a network still ran.
+	// early-return below - a rebuild that bailed for lack of a network still ran. Counts
+	// BOTH kinds, deliberately: it answers "did OnChanged reach the actor", not "did the
+	// derived graph re-run" - see TopologyRebuildCount for the latter.
 	++RebuildCount;
 
 	// Unconditional, matching the pre-split RebuildMesh exactly: even the path below that
@@ -641,6 +659,21 @@ void ARoadNetworkActor::RebuildMesh()
 	{
 		return;
 	}
+
+	if (Kind == EChangeKind::Geometry)
+	{
+		// SURFACE ONLY (issue #165). A drag frame moved positions and nothing else, so the
+		// solve and the mesh it feeds are the only things that can have changed - see
+		// URoadSurfacePresenter::RebuildSurfaceOnly for exactly what that skips and why, and
+		// URoadEditFacade::MoveNode for the notify this answers. Plots and Traffic are
+		// skipped here too: RebuildFrom and OnGraphRebuilt both re-derive from the guideline
+		// graph RebuildSurfaceOnly deliberately leaves untouched, so re-running them against
+		// it would cost the same as a full rebuild for no new information.
+		Presenter->RebuildSurfaceOnly(*Network, MakeSurfaceSettings());
+		return;
+	}
+
+	++TopologyRebuildCount;
 	Presenter->Rebuild(*Network, MakeSurfaceSettings());
 
 	// The boxes standing on that surface. After the surface, so a plot drawn this frame has
