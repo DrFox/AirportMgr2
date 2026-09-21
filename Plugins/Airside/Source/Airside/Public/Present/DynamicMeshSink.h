@@ -25,11 +25,23 @@ public:
 	/**
 	 * InMaterials null keeps the single-material path: one SetMaterial(0, InMaterial) and
 	 * no material-ID attribute, exactly as before per-band materials existed.
+	 *
+	 * bInQuiet (issue #178) silences Accept's per-call diagnostics: the O(V) BadNormals scan
+	 * over every normal element, and the two LogRoadMesh Log lines that report it and the
+	 * component's post-SetMesh state. False by default, so every existing call site - the
+	 * road junction gallery, the ghost preview - keeps logging exactly as before; only
+	 * URoadSurfacePresenter::RebuildInternal ever passes true, and only for a Geometry
+	 * (drag-frame) rebuild, which this constructs 60 times a second while a node is held.
+	 * Warnings (non-manifold triangles, a colour-override clobbering a material set) are
+	 * NOT gated - they name a defect, not a per-frame report, and both are already
+	 * conditional on something going wrong rather than firing on every call.
 	 */
 	explicit FDynamicMeshSink(UDynamicMeshComponent* InComponent, UMaterialInterface* InMaterial = nullptr,
-		bool bInUseConstantVertexColour = true, const URoadMaterialSet* InMaterials = nullptr)
+		bool bInUseConstantVertexColour = true, const URoadMaterialSet* InMaterials = nullptr,
+		bool bInQuiet = false)
 		: Component(InComponent), Material(InMaterial)
-		, bUseConstantVertexColour(bInUseConstantVertexColour), Materials(InMaterials) {}
+		, bUseConstantVertexColour(bInUseConstantVertexColour), Materials(InMaterials)
+		, bQuiet(bInQuiet) {}
 	virtual void Accept(const FRoadMeshBuffers& Buffers) override;
 
 	/**
@@ -70,4 +82,7 @@ private:
 
 	/** Null means the single-material path. Non-owning, like Component and Material. */
 	const URoadMaterialSet* Materials = nullptr;
+
+	/** See the constructor's own comment. */
+	bool bQuiet = false;
 };

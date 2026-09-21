@@ -11,8 +11,16 @@
 
 void RoadRebuildCensus::Log(const URoadNetwork& Network, const FRoadMeshBuffers& Buffers,
 	const UDynamicMeshComponent& MeshComponent, const FRoadSolveResult& Solved,
-	const UMaterialInterface* Surface, const URoadMaterialSet* Set)
+	const UMaterialInterface* Surface, const URoadMaterialSet* Set, bool bQuiet)
 {
+	// BEFORE any of the work below, not after: every line here is preceded by an FString or a
+	// TSet built to fill it, and a drag frame that only wanted UE_LOG's own verbosity check to
+	// fail would still pay for all of it (issue #178). See the header for who passes true.
+	if (bQuiet)
+	{
+		return;
+	}
+
 	// SEGMENTS AND APRONS ARE REPORTED, not just nodes, because without them "0 triangles"
 	// is ambiguous in the one way that matters: an empty network and a broken builder read
 	// identically. That ambiguity cost a whole diagnosis - a level with five nodes and no

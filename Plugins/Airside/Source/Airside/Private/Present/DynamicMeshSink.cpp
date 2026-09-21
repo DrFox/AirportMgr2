@@ -218,81 +218,90 @@ void FDynamicMeshSink::Accept(const FRoadMeshBuffers& Buffers)
 	Component->SetMesh(MoveTemp(Mesh));
 	Component->NotifyMeshUpdated();
 
-	// Every explanation reasoned from engine source has been wrong, so this reports the
-	// runtime state instead of inferring it. Relevance is the one that can make a
-	// primitive draw in no pass at all while mesh, bounds and material all look correct.
+	// GATED ON bQuiet (issue #178): both blocks below run on every call MoveNode's drag makes
+	// through RebuildSurfaceOnly - up to 60 times a second, once per surface layer - and the
+	// first one walks every normal element to count BadNormals before either line can even be
+	// formatted. Skipping the scan is the point; skipping only the UE_LOG would still pay for
+	// it. bQuiet is false for every rebuild that matters for diagnosis (Topology, the gallery,
+	// the ghost preview), so nothing here is lost - only repeated less.
+	if (!bQuiet)
 	{
-		using namespace UE::Geometry;
-		const FDynamicMesh3& Live = Component->GetDynamicMesh()->GetMeshRef();
-
-		int32 BadNormals = 0;
-		int32 CheckedNormals = 0;
-		FVector3f FirstNormal(0.0f, 0.0f, 0.0f);
-		if (Live.HasAttributes() && Live.Attributes()->PrimaryNormals() != nullptr)
+		// Every explanation reasoned from engine source has been wrong, so this reports the
+		// runtime state instead of inferring it. Relevance is the one that can make a
+		// primitive draw in no pass at all while mesh, bounds and material all look correct.
 		{
-			const FDynamicMeshNormalOverlay* Normals = Live.Attributes()->PrimaryNormals();
-			for (const int32 ElementId : Normals->ElementIndicesItr())
+			using namespace UE::Geometry;
+			const FDynamicMesh3& Live = Component->GetDynamicMesh()->GetMeshRef();
+
+			int32 BadNormals = 0;
+			int32 CheckedNormals = 0;
+			FVector3f FirstNormal(0.0f, 0.0f, 0.0f);
+			if (Live.HasAttributes() && Live.Attributes()->PrimaryNormals() != nullptr)
 			{
-				const FVector3f N = Normals->GetElement(ElementId);
-				if (CheckedNormals == 0) { FirstNormal = N; }
-				++CheckedNormals;
-				if (!FMath::IsFinite(N.X) || !FMath::IsFinite(N.Y) || !FMath::IsFinite(N.Z) ||
-					N.SizeSquared() < UE_KINDA_SMALL_NUMBER)
+				const FDynamicMeshNormalOverlay* Normals = Live.Attributes()->PrimaryNormals();
+				for (const int32 ElementId : Normals->ElementIndicesItr())
 				{
-					++BadNormals;
+					const FVector3f N = Normals->GetElement(ElementId);
+					if (CheckedNormals == 0) { FirstNormal = N; }
+					++CheckedNormals;
+					if (!FMath::IsFinite(N.X) || !FMath::IsFinite(N.Y) || !FMath::IsFinite(N.Z) ||
+						N.SizeSquared() < UE_KINDA_SMALL_NUMBER)
+					{
+						++BadNormals;
+					}
 				}
 			}
+
+			UMaterialInterface* Assigned = Component->GetMaterial(0);
+
+			// Via the component's own scene rather than GMaxRHIShaderPlatform, which lives in
+			// the RHI module - not a dependency worth adding for a diagnostic.
+			FMaterialRelevance Relevance;
+			if (const FSceneInterface* Scene = Component->GetScene())
+			{
+				Relevance = Component->GetMaterialRelevance(Scene->GetShaderPlatform());
+			}
+
+			// Kept, at Log rather than Warning. This one line - specifically FirstNormal -
+			// identified a defect that survived two slices, several hand-derivations and a
+			// review, all of which agreed with each other while measuring the wrong thing.
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("DIAG: NumMaterials=%d Mat=%s RenderProxy=%d BlendMode=%d ")
+				TEXT("Relevance[Opaque=%d Masked=%d NormalTranslucency=%d SeparateTranslucency=%d] ")
+				TEXT("UVLayers=%d NormalElems=%d BadNormals=%d FirstNormal=(%.3f,%.3f,%.3f) ")
+				TEXT("TangentsMode=%d ColorMode=%d TwoSided=%d DrawPath=%d"),
+				Component->GetNumMaterials(),
+				Assigned ? *Assigned->GetName() : TEXT("none"),
+				(Assigned && Assigned->GetRenderProxy()) ? 1 : 0,
+				Assigned ? static_cast<int32>(Assigned->GetBlendMode()) : -1,
+				Relevance.bOpaque ? 1 : 0,
+				Relevance.bMasked ? 1 : 0,
+				Relevance.bNormalTranslucency ? 1 : 0,
+				Relevance.bSeparateTranslucency ? 1 : 0,
+				Live.HasAttributes() ? Live.Attributes()->NumUVLayers() : -1,
+				CheckedNormals, BadNormals,
+				FirstNormal.X, FirstNormal.Y, FirstNormal.Z,
+				static_cast<int32>(Component->GetTangentsType()),
+				static_cast<int32>(Component->GetColorOverrideMode()),
+				Component->GetTwoSided() ? 1 : 0,
+				static_cast<int32>(Component->GetMeshDrawPath()));
 		}
 
-		UMaterialInterface* Assigned = Component->GetMaterial(0);
-
-		// Via the component's own scene rather than GMaxRHIShaderPlatform, which lives in
-		// the RHI module - not a dependency worth adding for a diagnostic.
-		FMaterialRelevance Relevance;
-		if (const FSceneInterface* Scene = Component->GetScene())
-		{
-			Relevance = Component->GetMaterialRelevance(Scene->GetShaderPlatform());
-		}
-
-		// Kept, at Log rather than Warning. This one line - specifically FirstNormal -
-		// identified a defect that survived two slices, several hand-derivations and a
-		// review, all of which agreed with each other while measuring the wrong thing.
+		const FBoxSphereBounds Bounds = Component->Bounds;
 		UE_LOG(LogRoadMesh, Log,
-			TEXT("DIAG: NumMaterials=%d Mat=%s RenderProxy=%d BlendMode=%d ")
-			TEXT("Relevance[Opaque=%d Masked=%d NormalTranslucency=%d SeparateTranslucency=%d] ")
-			TEXT("UVLayers=%d NormalElems=%d BadNormals=%d FirstNormal=(%.3f,%.3f,%.3f) ")
-			TEXT("TangentsMode=%d ColorMode=%d TwoSided=%d DrawPath=%d"),
-			Component->GetNumMaterials(),
-			Assigned ? *Assigned->GetName() : TEXT("none"),
-			(Assigned && Assigned->GetRenderProxy()) ? 1 : 0,
-			Assigned ? static_cast<int32>(Assigned->GetBlendMode()) : -1,
-			Relevance.bOpaque ? 1 : 0,
-			Relevance.bMasked ? 1 : 0,
-			Relevance.bNormalTranslucency ? 1 : 0,
-			Relevance.bSeparateTranslucency ? 1 : 0,
-			Live.HasAttributes() ? Live.Attributes()->NumUVLayers() : -1,
-			CheckedNormals, BadNormals,
-			FirstNormal.X, FirstNormal.Y, FirstNormal.Z,
-			static_cast<int32>(Component->GetTangentsType()),
-			static_cast<int32>(Component->GetColorOverrideMode()),
-			Component->GetTwoSided() ? 1 : 0,
-			static_cast<int32>(Component->GetMeshDrawPath()));
+			TEXT("Sink: built %d verts / %d tris -> component holds %d tris. ")
+			TEXT("Editable=%d Registered=%d Visible=%d HiddenInGame=%d Mobility=%d "
+				 "CompLoc=(%.0f,%.0f,%.0f) BoundsOrigin=(%.0f,%.0f,%.0f) BoundsExtent=(%.0f,%.0f,%.0f) Mat=%s"),
+			BuiltVertices, BuiltTriangles, Component->GetDynamicMesh()->GetMeshRef().TriangleCount(),
+			Component->IsEditable() ? 1 : 0,
+			Component->IsRegistered() ? 1 : 0,
+			Component->IsVisible() ? 1 : 0,
+			Component->bHiddenInGame ? 1 : 0,
+			static_cast<int32>(Component->Mobility),
+			Component->GetComponentLocation().X, Component->GetComponentLocation().Y,
+			Component->GetComponentLocation().Z,
+			Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z,
+			Bounds.BoxExtent.X, Bounds.BoxExtent.Y, Bounds.BoxExtent.Z,
+			Component->GetMaterial(0) ? *Component->GetMaterial(0)->GetName() : TEXT("none"));
 	}
-
-	const FBoxSphereBounds Bounds = Component->Bounds;
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Sink: built %d verts / %d tris -> component holds %d tris. ")
-		TEXT("Editable=%d Registered=%d Visible=%d HiddenInGame=%d Mobility=%d "
-			 "CompLoc=(%.0f,%.0f,%.0f) BoundsOrigin=(%.0f,%.0f,%.0f) BoundsExtent=(%.0f,%.0f,%.0f) Mat=%s"),
-		BuiltVertices, BuiltTriangles, Component->GetDynamicMesh()->GetMeshRef().TriangleCount(),
-		Component->IsEditable() ? 1 : 0,
-		Component->IsRegistered() ? 1 : 0,
-		Component->IsVisible() ? 1 : 0,
-		Component->bHiddenInGame ? 1 : 0,
-		static_cast<int32>(Component->Mobility),
-		Component->GetComponentLocation().X, Component->GetComponentLocation().Y,
-		Component->GetComponentLocation().Z,
-		Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z,
-		Bounds.BoxExtent.X, Bounds.BoxExtent.Y, Bounds.BoxExtent.Z,
-		Component->GetMaterial(0) ? *Component->GetMaterial(0)->GetName() : TEXT("none"));
 }

@@ -58,7 +58,7 @@ UDynamicMeshComponent* URoadSurfacePresenter::GetLayerComponent(ESurfaceLayer La
 }
 
 int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int32(FRoadMeshBuffers&)> BuildFn,
-	UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers)
+	UMaterialInterface* Material, bool bUseConstantColour, FRoadMeshBuffers& OutBuffers, bool bQuiet)
 {
 	UDynamicMeshComponent* Component = GetLayerComponent(Layer);
 	if (Component == nullptr)
@@ -68,7 +68,7 @@ int32 URoadSurfacePresenter::RebuildLayer(ESurfaceLayer Layer, TFunctionRef<int3
 
 	const int32 Count = BuildFn(OutBuffers);
 
-	FDynamicMeshSink Sink(Component, Material, bUseConstantColour);
+	FDynamicMeshSink Sink(Component, Material, bUseConstantColour, nullptr, bQuiet);
 	Sink.Accept(OutBuffers);
 	Component->SetVisibility(Count > 0);
 	return Count;
@@ -208,19 +208,25 @@ void URoadSurfacePresenter::RebuildRunwayMarkings(URoadNetwork& Network, const F
 		{
 			return FRunwayMarkingBuilder::Build(Network, MarkingZ, OutBuffers, &Census);
 		},
-		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers);
+		Material != nullptr ? Material : Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers,
+		Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
 		return;
 	}
 
 	// The census, reported: which markings were painted says more about a runway's facts
-	// than a triangle count, and it is what the probe reads.
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Runway markings: %d runway(s), %d triangle(s) at Z=%.1f - %d threshold stripes, %d designator strokes, ")
-		TEXT("%d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
-		Painted, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
-		Census.CentrelineDashes, Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
+	// than a triangle count, and it is what the probe reads. Skipped on a Geometry rebuild
+	// (issue #178) - RunwayFactsFor and the builder above still ran, since the paint itself
+	// must track the drag, but this line would otherwise repeat unchanged 60 times a second.
+	if (!Settings.bQuiet)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Runway markings: %d runway(s), %d triangle(s) at Z=%.1f - %d threshold stripes, %d designator strokes, ")
+			TEXT("%d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
+			Painted, Buffers.Indices.Num() / 3, MarkingZ, Census.ThresholdStripes, Census.DesignatorStrokes,
+			Census.CentrelineDashes, Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
+	}
 }
 
 void URoadSurfacePresenter::RebuildRunwayRubber(URoadNetwork& Network, const FSurfaceSettings& Settings)
@@ -254,17 +260,21 @@ void URoadSurfacePresenter::RebuildRunwayRubber(URoadNetwork& Network, const FSu
 			// rather than leaving the previous build on screen.
 			return bHasMaterial ? FRunwayMarkingBuilder::BuildRubber(Network, RubberZ, OutBuffers, &Census) : 0;
 		},
-		Settings.RubberMaterial, Settings.bUseConstantVertexColour, Buffers);
+		Settings.RubberMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Runways == INDEX_NONE)
 	{
 		return;
 	}
 
 	// Patches, not triangles, because the patch count is what the builder promises and what
-	// a wrong one would show: four per paved runway, two per usable end.
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Runway rubber: %d runway(s), %d patch(es), %d triangle(s) at Z=%.2f"),
-		Runways, Census.RubberPatches, Buffers.Indices.Num() / 3, RubberZ);
+	// a wrong one would show: four per paved runway, two per usable end. Skipped on a
+	// Geometry rebuild (issue #178) - see RebuildRunwayMarkings' own comment.
+	if (!Settings.bQuiet)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Runway rubber: %d runway(s), %d patch(es), %d triangle(s) at Z=%.2f"),
+			Runways, Census.RubberPatches, Buffers.Indices.Num() / 3, RubberZ);
+	}
 }
 
 double URoadSurfacePresenter::GetApronSurfaceZ(double SurfaceZ, double ApronZOffset) const
@@ -327,7 +337,7 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 			return Count;
 		},
 		Settings.ApronMaterial != nullptr ? Settings.ApronMaterial : Settings.SurfaceMaterial,
-		Settings.bUseConstantApronColour, Buffers);
+		Settings.bUseConstantApronColour, Buffers, Settings.bQuiet);
 	if (Built == INDEX_NONE)
 	{
 		return;
@@ -335,12 +345,17 @@ void URoadSurfacePresenter::RebuildAprons(URoadNetwork& Network, const FSurfaceS
 
 	// Reported rather than inferred. An apron that is built and never seen, and one that
 	// is never built, look identical from outside - and every explanation reasoned from
-	// engine source about the roads was wrong before the numbers were printed.
-	UE_LOG(LogRoadMesh, Log,
-		TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
-		Built, Buffers.Indices.Num() / 3, ApronZ,
-		Settings.ApronMaterial != nullptr ? *Settings.ApronMaterial->GetName() : TEXT("<fallback>"),
-		Settings.bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
+	// engine source about the roads was wrong before the numbers were printed. Skipped on a
+	// Geometry rebuild (issue #178) - see RebuildRunwayMarkings' own comment; the apron is
+	// still rebuilt every drag frame (see RebuildInternal), only the report is silenced.
+	if (!Settings.bQuiet)
+	{
+		UE_LOG(LogRoadMesh, Log,
+			TEXT("Aprons: %d surface(s), %d triangle(s) at Z=%.1f, material %s%s"),
+			Built, Buffers.Indices.Num() / 3, ApronZ,
+			Settings.ApronMaterial != nullptr ? *Settings.ApronMaterial->GetName() : TEXT("<fallback>"),
+			Settings.bUseConstantApronColour ? TEXT(" (CONSTANT COLOUR - material overridden)") : TEXT(""));
+	}
 
 	// Worth saying out loud: a road surface this close to the ground leaves nothing to
 	// separate the two surfaces with, and both will z-fight at distance whatever is done
@@ -375,15 +390,21 @@ void URoadSurfacePresenter::RebuildMarkings(URoadNetwork& Network, const FSurfac
 		{
 			return FHoldingPositionMarkingBuilder::Build(Network, MarkingZ, OutBuffers);
 		},
-		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers);
+		Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Buffers, Settings.bQuiet);
 	if (Painted == INDEX_NONE)
 	{
 		return;
 	}
 
-	// Reported, not inferred - the same reason the aprons say what they built.
-	UE_LOG(LogRoadMesh, Log, TEXT("Holding positions: %d painted, %d triangle(s) at Z=%.1f"),
-		Painted, Buffers.Indices.Num() / 3, MarkingZ);
+	// Reported, not inferred - the same reason the aprons say what they built. This function
+	// only ever runs on a Topology rebuild (see RebuildInternal), so Settings.bQuiet is
+	// always false here today; threaded through anyway so RebuildLayer has one contract for
+	// all four callers rather than three that pass it and one that cannot.
+	if (!Settings.bQuiet)
+	{
+		UE_LOG(LogRoadMesh, Log, TEXT("Holding positions: %d painted, %d triangle(s) at Z=%.1f"),
+			Painted, Buffers.Indices.Num() / 3, MarkingZ);
+	}
 }
 
 void URoadSurfacePresenter::InvalidateGhostCache()
@@ -401,8 +422,18 @@ void URoadSurfacePresenter::RebuildSurfaceOnly(URoadNetwork& Network, const FSur
 	RebuildInternal(Network, Settings, EChangeKind::Geometry);
 }
 
-void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& Settings, EChangeKind Kind)
+void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& InSettings, EChangeKind Kind)
 {
+	// A LOCAL, MUTABLE COPY - not a reference to InSettings, which belongs to the caller (see
+	// FSurfaceSettings's own header comment: "copied by value into every call"). bQuiet is
+	// derived from Kind HERE, the only place issue #178 lets it be set: a Geometry rebuild is
+	// the per-frame drag path (see RebuildSurfaceOnly), so it is quiet; a Topology rebuild -
+	// including the one a drag ends with - logs exactly as it always has. Every downstream
+	// Rebuild*/RebuildLayer/RoadRebuildCensus::Log call below reads Settings.bQuiet rather
+	// than Kind directly, so none of them need to know EChangeKind exists.
+	FSurfaceSettings Settings = InSettings;
+	Settings.bQuiet = (Kind == EChangeKind::Geometry);
+
 	// See InvalidateGhostCache's own comment for why this must happen on every rebuild.
 	InvalidateGhostCache();
 
@@ -457,7 +488,8 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 	FRoadMeshBuilder Builder(Settings.SurfaceZ, Settings.TexelsPerUnit, Materials);
 	Builder.Build(Network, Solved, Settings.RibbonSegments);
 
-	FDynamicMeshSink Sink(MeshComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Materials);
+	FDynamicMeshSink Sink(MeshComponent, Settings.SurfaceMaterial, Settings.bUseConstantVertexColour, Materials,
+		Settings.bQuiet);
 	Builder.Emit(Sink);
 
 	// Aprons share nothing with the roads and are built separately, but they are rebuilt
@@ -498,9 +530,11 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 
 	// Diagnostic-only from here: profile counts, the material slot list, distinct material
 	// ids, profile names in use, and the final "Rebuilt:" line. Kept behind RoadRebuildCensus
-	// so this function stays about DOING the rebuild, not reporting on it.
+	// so this function stays about DOING the rebuild, not reporting on it. Settings.bQuiet
+	// (issue #178) skips the whole thing - strings, sets and all - on a Geometry rebuild; it
+	// still runs in full on the Topology rebuild a drag ends with.
 	RoadRebuildCensus::Log(Network, Builder.GetBuffers(), *MeshComponent, Solved,
-		Settings.SurfaceMaterial, Settings.MaterialSet);
+		Settings.SurfaceMaterial, Settings.MaterialSet, Settings.bQuiet);
 }
 
 UMaterialInstanceDynamic* URoadSurfacePresenter::GhostMaterialInstance(UMaterialInterface* GhostMaterialBase)
