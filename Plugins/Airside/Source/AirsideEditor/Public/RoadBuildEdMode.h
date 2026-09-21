@@ -70,6 +70,38 @@ public:
 	FToolContext MakeReselectContext() const;
 
 	/**
+	 * (Re)binds ToolRegistry()[Index]'s command to StartToolAction(Index) on the toolkit's own
+	 * command list, replacing whatever is mapped there already.
+	 *
+	 * THE FIX FOR ISSUE #184. `UEdMode::Enter()` calls `BindCommands()` before running this
+	 * class's own `Enter()` body, so a binding installed in `BindCommands()` is always in place
+	 * BEFORE `RegisterTool()` runs for that same command - and `RegisterTool()` maps the engine's
+	 * own `StartTool` onto the exact same toolkit command list. `UICommandList::MapAction` is a
+	 * `TMap::Add`, which replaces: whichever call happens last wins, so the engine's binding
+	 * always overwrote this one and the reselect guard in `StartToolAction` was unreachable.
+	 * Called from `Enter()` immediately after each `RegisterTool()` instead, so this one runs
+	 * last and wins.
+	 *
+	 * `FIsActionChecked` still asks the ENGINE whether this tool is the active one
+	 * (`UInteractiveToolsContext::IsToolActive`, inherited onto `UEditorInteractiveToolsContext`)
+	 * rather than a flag kept here - re-pointing the execute action must not also silently stop
+	 * a palette button lighting up while its own tool is running.
+	 *
+	 * PUBLIC for the same reason `MakeReselectContext` is: a headless test cannot reach the real
+	 * `RegisterTool` (it needs a live `UEditorInteractiveToolsContext`, which only `Enter()` with
+	 * a real editor viewport creates), so `Airside.Editor.ToolCommandBindingSurvivesRegisterTool`
+	 * simulates `RegisterTool`'s own `MapAction` with a spy and calls this directly afterwards,
+	 * in the same order `Enter()` does.
+	 */
+	void MapReselectAwareToolCommand(int32 Index, const TSharedPtr<FUICommandInfo>& Command);
+
+	/**
+	 * The toolkit's own command list, once `CreateToolkit()` has run - for the same test.
+	 * `Toolkit` is otherwise private to `UEdMode` and unreachable without a full `Enter()`.
+	 */
+	TSharedPtr<FUICommandList> ToolkitCommandsForTest() const;
+
+	/**
 	 * Substitutes for GetWorld()'s usual answer (EditorToolsContext->GetWorld()), which is
 	 * unconditionally null without Enter() and a real FEditorModeTools/viewport - see
 	 * GetWorld's own comment. Null in production; nothing here ever sets it, and
