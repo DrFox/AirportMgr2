@@ -726,7 +726,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// ONE INSTANCE FOR THE HANDOVER CLAIM BELOW (issue #84): the only FClaimPass call in this
 	// loop is ClaimGoalNode at the Taxiing -> Parked handover, so this is cheaper than
 	// constructing one per agent and exactly as correct - see Arbitrate's own instance for why.
-	FClaimPass Pass{Rules, Occupancy, NodeReach};
+	FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
 
 	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
@@ -987,10 +987,12 @@ FGuidelineNodeId UGroundTraffic::StepFromNode(const FRoutePlan& Plan, int32 Step
 void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 {
 	// ONE PASS, SHARED ACROSS EVERY AGENT THIS CALL CLAIMS FOR (issue #84): FClaimPass carries
-	// no state between agents - Rules, Occupancy and NodeReach are references to this class's
-	// own members - so one instance for the whole Arbitrate call is exactly as correct as a
-	// fresh one per agent, and cheaper.
-	FClaimPass Pass{Rules, Occupancy, NodeReach};
+	// no state between agents - Rules, Occupancy, NodeReach and RunwayChains are references
+	// to this class's own members - so one instance for the whole Arbitrate call is exactly
+	// as correct as a fresh one per agent, and cheaper. RunwayChains (issue #170) makes that
+	// sharing pay for a second thing too: two agents in the same Arbitrate call naming the
+	// same runway seed now walk it once between them, not once each.
+	FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
 
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
 	// pass writes to the agents, so a copy would be arbitrating over stale ones.

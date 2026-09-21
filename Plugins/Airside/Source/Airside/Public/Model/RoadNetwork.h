@@ -198,6 +198,11 @@ public:
 	FRunwayFacts RunwayFactsFor(FRoadSegmentId Seed) const;
 	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId Seed,
 		double* OutChainHalfWidth = nullptr) const;
+	/** IsGuidelineNodeOnRunway(Node, Seed), against a chain already walked - added beside
+	 *  IsPointOnRunway's own Chain overload for the same caller (issue #170): an
+	 *  FRunwayChainCache entry answers both without walking RunwayChain(Seed) twice. */
+	bool IsGuidelineNodeOnRunway(FGuidelineNodeId Node, const TArray<FRoadSegmentId>& Chain,
+		double* OutChainHalfWidth = nullptr) const;
 	bool IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
 		double* OutChainHalfWidth = nullptr) const;
 	bool IsPointOnRunway(const FVector2D& Position, const TArray<FRoadSegmentId>& Chain,

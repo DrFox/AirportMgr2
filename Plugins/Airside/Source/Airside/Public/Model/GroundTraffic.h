@@ -5,6 +5,7 @@
 #include "Model/NodeReach.h"
 #include "Model/RoadAgent.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RunwayQuery.h"
 #include "Model/TrafficOccupancy.h"
 #include "GroundTraffic.generated.h"
 
@@ -780,6 +781,10 @@ public:
 	/** What the last OnGraphRebuilt did. See FGraphRebuildSummary for why a test needs it. */
 	FGraphRebuildSummary GetLastRebuildSummaryForTest() const { return LastRebuild; }
 
+	/** Actual RunwayQuery::RunwayChain walks the claim pass has forced through RunwayChains
+	 *  this session - see FRunwayChainCache::GetWalksForTest (issue #170). */
+	int32 GetRunwayChainWalksForTest() const { return RunwayChains.GetWalksForTest(); }
+
 	// FClaimGeometry MOVED TO FClaimPass (Model/TrafficClaims.h) IN ISSUE #84, with the claim
 	// pass it belongs to. Airside.Model.Traffic.ClaimGeometry now includes that header instead
 	// of this one.
@@ -806,6 +811,14 @@ private:
 	 * re-samples.
 	 */
 	mutable FNodeReachCache NodeReach;
+
+	/**
+	 * Which segments make up the strip a runway seed belongs to, memoised - see
+	 * FRunwayChainCache for the bug this exists for (issue #170) and why EditRevision is the
+	 * right key. MUTABLE for the same reason as NodeReach above: memoisation of the graph,
+	 * not simulation state, so a const claim pass may still fill it in.
+	 */
+	mutable FRunwayChainCache RunwayChains;
 
 	/** Sim seconds elapsed through Advance. The deadlock resolver's retry clock. */
 	UPROPERTY(Transient) double SimSeconds = 0.0;
