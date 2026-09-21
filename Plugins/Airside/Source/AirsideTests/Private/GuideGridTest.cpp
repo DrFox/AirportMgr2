@@ -6,6 +6,7 @@
 #include "Solve/GuideArbiter.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideLabel.h"
 #include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -235,10 +236,13 @@ bool FGuideGridHasNoCellOutsideTheListTest::RunTest(const FString& Parameters)
 
 	for (const SnapGuide::FCandidate& Candidate : Everything)
 	{
+		// Candidate.Description ITSELF IS EMPTY - #183 moved its formatting out of ProposeAll and
+		// into FSnapGuideChain::Resolve, which this test bypasses on purpose (see the comment
+		// above). SnapGuide::Describe is called here only so a failure still names the guide.
 		TestTrue(*FString::Printf(TEXT("relation %d against reference %d is a declared cell ('%s')"),
 				static_cast<int32>(Candidate.Relation),
 				static_cast<int32>(Candidate.Reference),
-				*Candidate.Description),
+				*SnapGuide::Describe(*Actor->Network, Anchor, Candidate.Label)),
 			SnapGuide::IsLegalCell(Candidate.Relation, Candidate.Reference));
 	}
 

@@ -128,6 +128,107 @@ namespace SnapGuide
 		Perpendicular
 	};
 
+	/**
+	 * WHICH TEMPLATE a label reads from - see FGuideLabel. One member per distinct string shape
+	 * the 13 `FString::Printf` sites named in #183 used to build, so Describe can switch on this
+	 * instead of every caller carrying its own format string.
+	 *
+	 * DegreesTo COVERS BOTH "0 degrees to %s" (FPointAlignGuideSource's Level) and the diagonal
+	 * "%d degrees to %s" AddDirections used for 45 and 135: the two were always the same template
+	 * at Degrees=0, and giving PointAlign its own member would be a second name for one string.
+	 */
+	enum class ELabelKind : uint8
+	{
+		/** "<Verb> <Name>" - FGuideLabel::Verb + the resolved name. */
+		Along,
+		/** "square to <Name>". */
+		SquareTo,
+		/** "<Degrees> degrees to <Name>", Degrees printed even at 0. */
+		DegreesTo,
+		/** "<Degrees> degrees from the end of <Name>" - AddSpokes. */
+		AngledFromEnd,
+		/** "in line with <Name>". */
+		InLineWith,
+		/** "edge flush with <Name>". */
+		EdgeFlushWith,
+		/** "<GapUu, in metres> m, matching <Name>" - FOffsetGuideSource. */
+		MatchingGap,
+		/** FGuideLabel::Text IS the whole string - a compile-time literal, so a pointer costs
+		 *  nothing and needs no <Name> at all. World axes and the apron corner's two fixed
+		 *  strings use this. */
+		Literal,
+	};
+
+	/**
+	 * WHERE <Name> COMES FROM - see ELabelKind. Solve/ may not know a URoadNetwork or a
+	 * FGuideAnchor (this header's own "DEPENDENCY-FREE" banner), so a label cannot carry the
+	 * resolved FString itself; it carries enough to ask the Tool/ layer that built the candidate,
+	 * which still has both. See SnapGuide::Describe in Tool/SnapGuideLabel.h.
+	 */
+	enum class ELabelSubject : uint8
+	{
+		/** No <Name> to resolve - ELabelKind::Literal supplies the whole string via Text. */
+		None,
+		/** RoadNaming::Describe(Network, Segment) - SegmentIndex/SegmentGeneration below. */
+		Segment,
+		/** FGuideAnchor::ReferenceName - the anchor carries exactly one, so no index is needed. */
+		GestureReference,
+		/** FGuideAnchor::AlignTo[SubjectIndex].Name. */
+		GesturePoint,
+		/** EntityNaming::Describe(Network.GetEntities()[SubjectIndex]). */
+		Entity,
+		/** The fixed "the apron edge" text - FApronSurface carries no name of its own. */
+		ApronEdge,
+	};
+
+	/**
+	 * WHAT Description WOULD SAY, if this candidate wins - the INGREDIENTS, not the FString.
+	 *
+	 * #183: 13 `FString::Printf` sites paid for every candidate `Propose` emitted - every spoke
+	 * off every segment in reach, every direction off every reference - when `Arbitrate` keeps at
+	 * most two. A label costs nothing to fill (an enum, an int, a pointer with STATIC duration -
+	 * never a heap string), so `Propose` can fill one per candidate for free and the one real
+	 * `FString::Printf` call happens only for the winners, in `SnapGuide::Describe`.
+	 *
+	 * A CANDIDATE MAY STILL SET Description DIRECTLY instead of a Label - GuideArbiterTest builds
+	 * candidates by hand to test Arbitrate in isolation from Tool/, and Arbitrate itself never
+	 * reads Label; it only ever copies whichever candidates it keeps, Label and Description alike.
+	 */
+	struct FGuideLabel
+	{
+		ELabelKind Kind = ELabelKind::Literal;
+		ELabelSubject Subject = ELabelSubject::None;
+
+		/** AddSpokes' angle, AddDirections' diagonal, or PointAlign's fixed 0 - degrees, not
+		 *  radians, and never read outside ELabelKind::DegreesTo/AngledFromEnd. */
+		int32 Degrees = 0;
+
+		/** FOffsetGuideSource's gap, uu - only ELabelKind::MatchingGap reads it. */
+		double GapUu = 0.0;
+
+		/**
+		 * A FRoadSegmentId's own two fields, COPIED RATHER THAN TYPED: Model/RoadHandles.h needs
+		 * its own .generated.h, and this header may not gain one - see the DEPENDENCY-FREE banner
+		 * at the top of this file. Tool/SnapGuideLabel.cpp reassembles the handle to call
+		 * RoadNaming::Describe; only meaningful when Subject == ELabelSubject::Segment.
+		 */
+		int32 SegmentIndex = INDEX_NONE;
+		int32 SegmentGeneration = 0;
+
+		/** FGuideAnchor::AlignTo's index (GesturePoint) or Network.GetEntities()'s (Entity). */
+		int32 SubjectIndex = INDEX_NONE;
+
+		/**
+		 * "parallel to", "square to", "aligned with", "along" - always a string LITERAL passed
+		 * down from the call site, never built at runtime, so a raw pointer costs nothing and
+		 * outlives every candidate it is copied into. Only ELabelKind::Along reads it.
+		 */
+		const TCHAR* Verb = nullptr;
+
+		/** The whole label when Kind == Literal - again always a literal, never heap text. */
+		const TCHAR* Text = nullptr;
+	};
+
 	/** One thing the cursor could line up with. */
 	struct FCandidate
 	{
@@ -154,8 +255,19 @@ namespace SnapGuide
 		 */
 		FVector2D ReferenceAt = FVector2D::ZeroVector;
 
-		/** "square to the frontage", "45 degrees". Shown beside the line. */
+		/**
+		 * "square to the frontage", "45 degrees". Shown beside the line.
+		 *
+		 * EMPTY UNTIL A CANDIDATE WINS - #183. `Propose` no longer fills this (see FGuideLabel):
+		 * `FSnapGuideChain::Resolve` fills it, from `Label`, for the at most two survivors of
+		 * `Arbitrate`, via `SnapGuide::Describe`. A caller that builds a candidate by hand rather
+		 * than through a source - GuideArbiterTest, to test Arbitrate without Tool/ - may still
+		 * set this directly; Arbitrate carries it unchanged either way, exactly as before.
+		 */
 		FString Description;
+
+		/** The recipe for Description, cheap to fill on every candidate - see FGuideLabel. */
+		FGuideLabel Label;
 
 		/**
 		 * WHAT this guide means, and WHAT it is measured against. Two fields since 2026-09-20;

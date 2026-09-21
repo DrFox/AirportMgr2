@@ -7,6 +7,7 @@
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
 #include "Tool/RoadNaming.h"
+#include "Tool/SnapGuideLabel.h"
 
 namespace
 {
@@ -54,9 +55,14 @@ namespace
 	 * here as well would be two relations naming one line. NOT the reflections either: a guide is
 	 * a LINE and SnapGuide::Arbitrate measures the ACUTE angle, so 225 degrees is the same line
 	 * as 45 - the same reason FWorldGuideSource proposes four directions rather than eight.
+	 *
+	 * LABEL, NOT NAME - #183. This used to take the already-resolved FString and Printf it three
+	 * times per call; now it takes the un-formatted RECIPE (which segment, or the apron) and
+	 * copies it into each spoke's Label, filling in only what varies (Kind, Degrees). Nothing
+	 * here allocates - see FGuideLabel.
 	 */
 	void AddSpokes(const FVector2D& End, const FVector2D& Along, SnapGuide::EReference Reference,
-		const FString& Name, TArray<SnapGuide::FCandidate>& Out)
+		const SnapGuide::FGuideLabel& Subject, TArray<SnapGuide::FCandidate>& Out)
 	{
 		for (const int32 Degrees : { 45, 90, 135 })
 		{
@@ -90,7 +96,9 @@ namespace
 			// Two identical labels on two lines pointing at two places is the mark whose
 			// meaning has gone. This one says the thing that makes it itself: it comes out of
 			// the reference's END.
-			Spoke.Description = FString::Printf(TEXT("%d degrees from the end of %s"), Degrees, *Name);
+			Spoke.Label = Subject;
+			Spoke.Label.Kind = SnapGuide::ELabelKind::AngledFromEnd;
+			Spoke.Label.Degrees = Degrees;
 			Out.Add(Spoke);
 		}
 	}
@@ -113,10 +121,15 @@ namespace
 	 * ALONGVERB, because a stand does not read like a road: "aligned with stand 3" and
 	 * "parallel to the taxiway" are one relation in two sets of words, and the caller is the
 	 * only thing that knows which its own reference wants.
+	 *
+	 * LABEL, NOT NAME - #183, the same change AddSpokes got: Subject is the un-formatted recipe,
+	 * copied into each of the four candidates with only Kind (and Degrees, on the diagonals) set
+	 * per iteration. AlongVerb is still passed as a raw literal pointer, never copied into a
+	 * heap string - FGuideLabel::Verb is exactly that pointer.
 	 */
 	void AddDirections(const FVector2D& Along, const FVector2D& Origin,
 		const FVector2D& ReferenceAt, SnapGuide::EReference Reference, const TCHAR* AlongVerb,
-		const FString& Name, TArray<SnapGuide::FCandidate>& Out)
+		const SnapGuide::FGuideLabel& Subject, TArray<SnapGuide::FCandidate>& Out)
 	{
 		for (const int32 Degrees : { 0, 45, 90, 135 })
 		{
@@ -145,17 +158,20 @@ namespace
 			// the taxiway" are what a player has read since stage 1, and are plainer than "0
 			// degrees" and "90 degrees" would be. Only the diagonals, which have no such word,
 			// fall back to a number.
+			Candidate.Label = Subject;
 			if (Degrees == 0)
 			{
-				Candidate.Description = FString::Printf(TEXT("%s %s"), AlongVerb, *Name);
+				Candidate.Label.Kind = SnapGuide::ELabelKind::Along;
+				Candidate.Label.Verb = AlongVerb;
 			}
 			else if (Degrees == 90)
 			{
-				Candidate.Description = FString::Printf(TEXT("square to %s"), *Name);
+				Candidate.Label.Kind = SnapGuide::ELabelKind::SquareTo;
 			}
 			else
 			{
-				Candidate.Description = FString::Printf(TEXT("%d degrees to %s"), Degrees, *Name);
+				Candidate.Label.Kind = SnapGuide::ELabelKind::DegreesTo;
+				Candidate.Label.Degrees = Degrees;
 			}
 			Out.Add(Candidate);
 		}
@@ -214,9 +230,6 @@ namespace
 	{
 		return Cursor;
 	}
-
-	/** What a player reads for an apron. FApronSurface carries no name - see FApronGuideSource. */
-	const TCHAR* ApronEdgeName() { return TEXT("the apron edge"); }
 
 	/**
 	 * One of the four world axes: the compass bearing it lies on, and what a player reads.
@@ -299,7 +312,11 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	Parallel.Through = Anchor.Origin;
 	Parallel.Fit = SnapGuide::EFit::Angular;
 	Parallel.ReferenceAt = Anchor.ReferenceAt;
-	Parallel.Description = FString::Printf(TEXT("along %s"), *Anchor.ReferenceName);
+	// GestureReference NEEDS NO INDEX - the anchor carries exactly one ReferenceName, unlike
+	// AlignTo's several points. See ELabelSubject.
+	Parallel.Label.Kind = SnapGuide::ELabelKind::Along;
+	Parallel.Label.Subject = SnapGuide::ELabelSubject::GestureReference;
+	Parallel.Label.Verb = TEXT("along");
 	Parallel.Relation = SnapGuide::ERelation::Extending;
 	Parallel.Reference = SnapGuide::EReference::ThisGesture;
 	Out.Add(Parallel);
@@ -311,7 +328,7 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 	// once in this codebase and this is not the place to restate it.
 	SnapGuide::FCandidate Square = Parallel;
 	Square.Direction = RoadGeom::PerpCCW(Along);
-	Square.Description = FString::Printf(TEXT("square to %s"), *Anchor.ReferenceName);
+	Square.Label.Kind = SnapGuide::ELabelKind::SquareTo;
 	Out.Add(Square);
 }
 
@@ -338,7 +355,8 @@ void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 		// the map to point at, and a dashed line shot off to nowhere would say less than one
 		// that says "this is the corner you are square from". The label carries the rest.
 		Candidate.ReferenceAt = Anchor.Origin;
-		Candidate.Description = Axis.Name;
+		Candidate.Label.Kind = SnapGuide::ELabelKind::Literal;
+		Candidate.Label.Text = Axis.Name;
 		Candidate.Relation = SnapGuide::ERelation::Parallel;
 		Candidate.Reference = SnapGuide::EReference::World;
 		Out.Add(Candidate);
@@ -356,8 +374,13 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 	const FVector2D Along = Anchor.Reference.GetSafeNormal();
 	const FVector2D Across = RoadGeom::PerpCCW(Along);
 
-	for (const FGuidePoint& Point : Anchor.AlignTo)
+	// INDEXED, NOT A RANGE-FOR - #183. A GesturePoint label carries an INDEX into AlignTo rather
+	// than a copy of Point.Name, so Describe can look the name up again later for the (at most
+	// two) winners instead of every point-times-two candidate paying for it now.
+	for (int32 Index = 0; Index < Anchor.AlignTo.Num(); ++Index)
 	{
+		const FGuidePoint& Point = Anchor.AlignTo[Index];
+
 		// TWO LINES PER POINT, along the reference and across it. "0 degrees to corner 3" is
 		// the one that makes a rectangle out of a plot; the perpendicular is what says the two
 		// back corners sit above one another.
@@ -369,7 +392,10 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		Level.Through = Point.At;
 		Level.Fit = SnapGuide::EFit::Perpendicular;
 		Level.ReferenceAt = Point.At;
-		Level.Description = FString::Printf(TEXT("0 degrees to %s"), *Point.Name);
+		Level.Label.Kind = SnapGuide::ELabelKind::DegreesTo;
+		Level.Label.Degrees = 0;
+		Level.Label.Subject = SnapGuide::ELabelSubject::GesturePoint;
+		Level.Label.SubjectIndex = Index;
 		Level.Relation = SnapGuide::ERelation::LevelWith;
 
 		// THE POINT'S OWN COLUMN, not this source's. One source serves both the gesture's
@@ -380,7 +406,7 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 
 		SnapGuide::FCandidate Square = Level;
 		Square.Direction = Across;
-		Square.Description = FString::Printf(TEXT("square to %s"), *Point.Name);
+		Square.Label.Kind = SnapGuide::ELabelKind::SquareTo;
 		Out.Add(Square);
 	}
 }
@@ -450,8 +476,16 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	// THE COLUMN AND THE LABEL COME FROM ONE CLASSIFICATION, which is the whole of the
 	// 2026-09-20 split: this used to hard-code EReference::Road while Describe said "the
 	// service road", so the line appeared under a button marked Road. RoadNaming answers both.
+	//
+	// THE NAME ITSELF IS NOT RESOLVED HERE - #183. RoadNaming::Describe used to run once per
+	// Propose call regardless of whether this source's four candidates went on to win; now the
+	// segment's handle travels in the label and SnapGuide::Describe resolves it only if one does.
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::Segment;
+	Subject.SegmentIndex = Nearest.Index;
+	Subject.SegmentGeneration = Nearest.Generation;
 	AddDirections(NearestDir, Anchor.Origin, NearestAt, NearestColumn, TEXT("parallel to"),
-		RoadNaming::Describe(Network, Nearest), Out);
+		Subject, Out);
 }
 
 void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
@@ -502,8 +536,10 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		// PER SEGMENT, not per source. One walk of the graph passes a taxiway and a service
 		// road in the same pass, and the two answer to different buttons since 2026-09-20.
 		InLine.Reference = Column;
-		InLine.Description = FString::Printf(TEXT("in line with %s"),
-			*RoadNaming::Describe(Network, Id));
+		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
+		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
+		InLine.Label.SegmentIndex = Id.Index;
+		InLine.Label.SegmentGeneration = Id.Generation;
 
 		// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
 		// cursor happens to be: the player needs to see WHICH road they are in line with, and
@@ -540,9 +576,12 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		// NO REACH TEST, and that one absence is the only thing separating this source from
 		// Parallel - see the declaration for why it is deliberate.
+		SnapGuide::FGuideLabel Subject;
+		Subject.Subject = SnapGuide::ELabelSubject::Segment;
+		Subject.SegmentIndex = Id.Index;
+		Subject.SegmentGeneration = Id.Generation;
 		AddDirections(Span.GetSafeNormal(), Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
-			SnapGuide::EReference::Runway, TEXT("parallel to"),
-			RoadNaming::Describe(Network, Id), Out);
+			SnapGuide::EReference::Runway, TEXT("parallel to"), Subject, Out);
 	}
 }
 
@@ -587,8 +626,10 @@ void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		InLine.ReferenceAt = ClosestOn(A, B, Cursor);
 		InLine.Relation = SnapGuide::ERelation::Collinear;
 		InLine.Reference = SnapGuide::EReference::Runway;
-		InLine.Description = FString::Printf(TEXT("in line with %s"),
-			*RoadNaming::Describe(Network, Id));
+		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
+		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
+		InLine.Label.SegmentIndex = Id.Index;
+		InLine.Label.SegmentGeneration = Id.Generation;
 		Out.Add(InLine);
 	}
 }
@@ -630,13 +671,16 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		}
 
 		const FVector2D Along = Span.GetSafeNormal();
-		const FString Name = RoadNaming::Describe(Network, Id);
+		SnapGuide::FGuideLabel Subject;
+		Subject.Subject = SnapGuide::ELabelSubject::Segment;
+		Subject.SegmentIndex = Id.Index;
+		Subject.SegmentGeneration = Id.Generation;
 
 		// BOTH ENDS - see this source's own header for why neither may be picked for the
 		// player - and both under the SEGMENT'S OWN column, so "45 degrees to the service
 		// road" answers to the ServiceRoad button and not to the Taxiway one.
-		AddSpokes(A, Along, Column, Name, Out);
-		AddSpokes(B, Along, Column, Name, Out);
+		AddSpokes(A, Along, Column, Subject, Out);
+		AddSpokes(B, Along, Column, Subject, Out);
 	}
 }
 
@@ -668,22 +712,27 @@ void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuide
 		// NO REACH TEST, like every other source in the Runway column: a rapid-exit taxiway is
 		// laid from wherever the player is standing, not only from beside the threshold.
 		const FVector2D Along = Span.GetSafeNormal();
-		const FString Name = RoadNaming::Describe(Network, Id);
-		AddSpokes(A, Along, SnapGuide::EReference::Runway, Name, Out);
-		AddSpokes(B, Along, SnapGuide::EReference::Runway, Name, Out);
+		SnapGuide::FGuideLabel Subject;
+		Subject.Subject = SnapGuide::ELabelSubject::Segment;
+		Subject.SegmentIndex = Id.Index;
+		Subject.SegmentGeneration = Id.Generation;
+		AddSpokes(A, Along, SnapGuide::EReference::Runway, Subject, Out);
+		AddSpokes(B, Along, SnapGuide::EReference::Runway, Subject, Out);
 	}
 }
 
 void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
 	ForEachApronEdge(Network, Anchor.Origin,
-		[&Anchor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+		[&Anchor, &Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			// ANGULAR, THROUGH THE DRAG'S OWN ORIGIN - this answers "which way from here", so
 			// there is no position to be flush with and the half-width never applies.
 			AddDirections(Along, Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
-				SnapGuide::EReference::Apron, TEXT("parallel to"), ApronEdgeName(), Out);
+				SnapGuide::EReference::Apron, TEXT("parallel to"), Subject, Out);
 		});
 }
 
@@ -699,6 +748,7 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 			InLine.ReferenceAt = ClosestOn(A, B, Cursor);
 			InLine.Relation = SnapGuide::ERelation::Collinear;
 			InLine.Reference = SnapGuide::EReference::Apron;
+			InLine.Label.Subject = SnapGuide::ELabelSubject::ApronEdge;
 
 			// FLUSH, NOT CENTRED. An apron edge is a BOUNDARY and a road's cursor is its
 			// CENTRELINE, so lining the two up directly would put half the road's pavement over
@@ -717,7 +767,7 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 				// ONE LINE, NOT TWO COINCIDENT ONES. Identical candidates would tie and make the
 				// source-order rule arbitrate a choice that does not exist.
 				InLine.Through = A;
-				InLine.Description = FString::Printf(TEXT("in line with %s"), ApronEdgeName());
+				InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
 				Out.Add(InLine);
 				return;
 			}
@@ -728,12 +778,12 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 			// neither may be chosen for the player.
 			SnapGuide::FCandidate Near = InLine;
 			Near.Through = A + Across * Left;
-			Near.Description = FString::Printf(TEXT("edge flush with %s"), ApronEdgeName());
+			Near.Label.Kind = SnapGuide::ELabelKind::EdgeFlushWith;
 			Out.Add(Near);
 
 			SnapGuide::FCandidate Far = InLine;
 			Far.Through = A - Across * Right;
-			Far.Description = Near.Description;
+			Far.Label = Near.Label;
 			Out.Add(Far);
 		});
 }
@@ -744,10 +794,12 @@ void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 	// ONE END PER EDGE, not both: an outline is closed, so every corner is the A end of exactly
 	// one edge. Visiting B as well would propose each corner's spokes twice - once per edge
 	// meeting there - and a duplicate candidate is a tie the source order then has to break.
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
 	ForEachApronEdge(Network, Cursor,
-		[&Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
+		[&Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
-			AddSpokes(A, Along, SnapGuide::EReference::Apron, ApronEdgeName(), Out);
+			AddSpokes(A, Along, SnapGuide::EReference::Apron, Subject, Out);
 		});
 }
 
@@ -777,12 +829,16 @@ void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 			Level.ReferenceAt = A;
 			Level.Relation = SnapGuide::ERelation::LevelWith;
 			Level.Reference = SnapGuide::EReference::Apron;
-			Level.Description = TEXT("0 degrees to the apron corner");
+			// LITERAL, NOT DegreesTo/SquareTo + ApronEdge: an apron CORNER has no "the apron
+			// edge" to be level or square WITH, so the whole string is fixed rather than built
+			// from a subject - see ELabelKind::Literal.
+			Level.Label.Kind = SnapGuide::ELabelKind::Literal;
+			Level.Label.Text = TEXT("0 degrees to the apron corner");
 			Out.Add(Level);
 
 			SnapGuide::FCandidate Square = Level;
 			Square.Direction = Across;
-			Square.Description = TEXT("square to the apron corner");
+			Square.Label.Text = TEXT("square to the apron corner");
 			Out.Add(Square);
 		});
 }
@@ -805,8 +861,13 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 {
 	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
 
-	for (const FEntityInstance& Entity : Network.GetEntities())
+	// INDEXED, NOT A RANGE-FOR - #183, the same change PointAlign got: the label carries an
+	// INDEX into Network.GetEntities() so EntityNaming::Describe runs again only for a winner,
+	// in SnapGuide::Describe, rather than once per entity in reach whether it wins or not.
+	const TArray<FEntityInstance>& Entities = Network.GetEntities();
+	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
+		const FEntityInstance& Entity = Entities[Index];
 		if (!Entity.bAlive
 			|| FVector2D::DistSquared(Entity.Position, Anchor.Origin) > Reach * Reach)
 		{
@@ -820,8 +881,11 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 		// "ALIGNED WITH", not "parallel to": a stand is a thing that FACES, and a road is a
 		// thing that runs. The dashed line goes to the thing itself, which for an entity is
 		// simply its pose.
+		SnapGuide::FGuideLabel Subject;
+		Subject.Subject = SnapGuide::ELabelSubject::Entity;
+		Subject.SubjectIndex = Index;
 		AddDirections(Facing, Anchor.Origin, Entity.Position, SnapGuide::EReference::Stand,
-			TEXT("aligned with"), EntityNaming::Describe(Entity), Out);
+			TEXT("aligned with"), Subject, Out);
 	}
 }
 
@@ -886,7 +950,6 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 	}
 
 	const FVector2D Across = RoadGeom::PerpCCW(ReferenceDir);
-	const FString ReferenceName = RoadNaming::Describe(Network, Reference);
 
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
@@ -969,8 +1032,14 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		// THE NUMBER IS IN THE LABEL. "matching the taxiway" alone would leave the player
 		// unable to tell 40 m from 45 m, which is the one thing they are trying to control.
-		Match.Description = FString::Printf(TEXT("%.0f m, matching %s"),
-			Gap / 100.0, *ReferenceName);
+		// GapUu TRAVELS RAW, /100 DEFERRED TO Describe: the conversion is one multiply, and
+		// doing it here would not save an allocation - the point is not calling
+		// RoadNaming::Describe(Network, Reference) for every neighbour whether it wins or not.
+		Match.Label.Kind = SnapGuide::ELabelKind::MatchingGap;
+		Match.Label.Subject = SnapGuide::ELabelSubject::Segment;
+		Match.Label.SegmentIndex = Reference.Index;
+		Match.Label.SegmentGeneration = Reference.Generation;
+		Match.Label.GapUu = Gap;
 		Out.Add(Match);
 	}
 }
@@ -1061,5 +1130,17 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 {
 	TArray<SnapGuide::FCandidate> Candidates;
 	ProposeAll(Network, Anchor, Cursor, Enabled, Candidates);
-	return SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
+	SnapGuide::FResult Result = SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
+
+	// THE ONLY PLACE Description IS BUILT - #183. Arbitrate throws away every candidate but the
+	// (at most two) winners; this is the one point in the whole call that still has both Network
+	// and Anchor in scope AND knows which candidates survived, so it is where SnapGuide::Describe
+	// gets called - never inside Propose, which is what used to pay for every candidate discarded
+	// a moment later.
+	for (SnapGuide::FCandidate& Winner : Result.Winners)
+	{
+		Winner.Description = SnapGuide::Describe(Network, Anchor, Winner.Label);
+	}
+
+	return Result;
 }
