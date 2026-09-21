@@ -315,8 +315,11 @@ private:
 	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(Kind), in one call so a mutator that
 	 * commits an edit cannot forget to notify - which is exactly how ten of these went silent
 	 * before issue #77 (see the class comment). Takes the scope by reference rather than being
-	 * a method ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not
-	 * know about this facade's OnChanged, or Tool/ would depend on Present/.
+	 * a method ON FRoadEditScope itself: that type used to live in Tool/RoadEditHistory.h and
+	 * had to stay ignorant of this facade's OnChanged, or Tool/ would have depended on
+	 * Present/. Issue #191 moved FRoadEditScope to Present/RoadEditHistory.h alongside this
+	 * facade, so the two now share a layer - but folding this into a method on the scope is a
+	 * design change, not a move, and stayed out of that refactor's scope.
 	 *
 	 * KIND DEFAULTS TO Topology, same as NotifyChanged itself, for every caller that does not
 	 * pass one - which was every caller until SetIntermediateHoldingPosition (issue #179)

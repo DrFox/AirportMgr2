@@ -18,7 +18,7 @@
 #include "Solve/RoadGeom.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
-#include "Tool/PreviewPalette.h"
+#include "Present/PreviewPalette.h"
 #include "ToolContextInterfaces.h"
 
 #define LOCTEXT_NAMESPACE "RoadBuildEditorTool"

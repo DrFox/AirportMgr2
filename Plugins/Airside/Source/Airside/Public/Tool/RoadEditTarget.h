@@ -64,9 +64,10 @@ enum class EChangeKind : uint8
  * Pattern: Facade (ARoadNetworkActor) exposed to Strategy (the IBuildTool family) through
  * an interface, so Tool/ has no COMPILE-TIME dependency on Present/. Before this seam, six
  * Tool/*.cpp files included Present/RoadNetworkActor.h purely for FToolContext::Target's
- * concrete type - and Present/ already includes Tool/ headers (RoadEditHistory, RoadHeal,
- * RoadSnap) for the actor's own facade methods, so a tool header including Present/ back
- * would have closed a real cycle. This header is that seam: it names exactly the calls
+ * concrete type - and Present/ already includes Tool/ headers (RoadHeal, RoadSnap) for the
+ * actor's own facade methods (RoadEditHistory too, until issue #191 moved it to Present/
+ * alongside the facade it serves), so a tool header including Present/ back would have
+ * closed a real cycle. This header is that seam: it names exactly the calls
  * FToolContext::Target makes (enumerated with
  * `grep -ho 'Context\.Target->[A-Za-z_]*' Tool/*.cpp`), nothing more, and
  * ARoadNetworkActor implements it alongside being an AActor.

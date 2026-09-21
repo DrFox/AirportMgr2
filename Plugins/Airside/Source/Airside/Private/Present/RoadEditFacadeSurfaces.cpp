@@ -23,7 +23,7 @@
 #include "Present/RoadNetworkActor.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
-#include "Tool/RoadEditHistory.h"
+#include "Present/RoadEditHistory.h"
 
 bool URoadEditFacade::Travel(TFunctionRef<URoadNetwork*(URoadEditHistory&, URoadNetwork&)> Step)
 {
