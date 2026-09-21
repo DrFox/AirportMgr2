@@ -274,4 +274,165 @@ bool FRoadBandWeldTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBandWeldBentJunctionTest,
+	"Airside.Build.BandWeldBentJunction",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBandWeldBentJunctionTest::RunTest(const FString& Parameters)
+{
+	// #193: AddJunctionByEarClipping built its rim from Junction.Boundary alone, with none of
+	// the interior band points AddJunction's own fan rim inserts along each arm's cut line -
+	// so a BENT junction (the one case that reaches ear-clipping instead of the fan - see
+	// CornerFitTest.cpp's "Airside.Build.BendJunctionIsPaved") welded only at its cut lines'
+	// two ENDS and silently dropped every interior band vertex the segment ribbon on the
+	// OTHER side of that same line still emits. Coplanar and invisible today with one
+	// material; the T-vertex is real regardless and opens the moment a kerb or a per-band
+	// material needs it. This is the star case above, at a junction the fan refuses.
+	//
+	// SAME NODE POSITIONS, WIDTH AND RADIUS as BendJunctionIsPaved, so this reaches the
+	// identical refused-fan condition that test already pins - PreferredFilletRadius and the
+	// cut-line geometry are both functions of TotalWidth alone (URoadProfile::Fill splits
+	// TotalWidth into bands; it does not add to it), so adding a shoulder here does not move
+	// the veto. The shoulder exists purely to give the profile INTERIOR band boundaries to
+	// weld, the same way this file's own star case needed one.
+	// HAND-BUILT, NOT MakeTransient's ShoulderWidth: Fill() always adds a shoulder on BOTH
+	// sides, which gives two INTERIOR boundaries per cut line, both exactly collinear with
+	// each other and with the cut line's own two ends. One band only - a single interior
+	// boundary - is enough to prove the fix and keeps the fixture out of the ear-clipper's
+	// handling of a run of THREE OR MORE collinear rim points, which is a separate question
+	// from whether AddJunctionByEarClipping inserts the point at all.
+	URoadProfile* Profile = NewObject<URoadProfile>(GetTransientPackage());
+	{
+		FProfileBand Shoulder;
+		Shoulder.Width = 120.0;
+		Shoulder.Type = ERoadBandType::Shoulder;
+		Shoulder.MaterialSlot = TEXT("Asphalt");
+		Profile->Bands.Add(Shoulder);
+
+		FProfileBand Lane;
+		Lane.Width = 280.0;   // 400 total, matching BendJunctionIsPaved's TotalWidth exactly.
+		Lane.Type = ERoadBandType::Lane;
+		Lane.MaterialSlot = TEXT("Concrete");
+		Profile->Bands.Add(Lane);
+
+		// CentrelineOffset and PreferredFilletRadius are left at their class defaults - -1.0
+		// (symmetric) and StandardTaxiwayFilletRadius (1500.0) respectively - which is exactly
+		// what BendJunctionIsPaved's own MakeTransient(400.0, 1500.0) produced.
+	}
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FRoadNodeId N5 = Net->AddNode(FVector2D(1528.0, -2036.0));
+	const FRoadNodeId N4 = Net->AddNode(FVector2D(679.0, -86.0));
+	const FRoadNodeId N2 = Net->AddNode(FVector2D(2344.0, 737.0));
+	const FRoadSegmentId ToN4 = Net->AddStraightSegment(N5, N4, Profile);
+	const FRoadSegmentId FromN4 = Net->AddStraightSegment(N4, N2, Profile);
+
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
+	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
+
+	const FJunctionResult* Bend = Solved.NodeResults.Find(N4.Index);
+	if (!TestNotNull(TEXT("the bend has a junction result"), Bend))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("the fixture still reaches the ear-clip path - the fan is refused, "
+		"the rim is present"), Bend->Triangles.Num() == 0 && Bend->Boundary.Num() >= 4))
+	{
+		return false;
+	}
+
+	const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(Profile);
+	TestEqual(TEXT("the two-band profile gives three boundaries - one interior"),
+		Bands.Alphas.Num(), 3);
+
+	const FRoadSegment* ToN4Seg = Net->GetSegment(ToN4);
+	const FRoadSegment* FromN4Seg = Net->GetSegment(FromN4);
+	if (!TestNotNull(TEXT("N5->N4 segment resolves"), ToN4Seg)
+		|| !TestNotNull(TEXT("N4->N2 segment resolves"), FromN4Seg))
+	{
+		return false;
+	}
+
+	// SEGMENTS FIRST, THEN THE JUNCTION - the order Build() enforces (WeldVertex's own
+	// "first writer wins" contract) and the reason a plain "does this position exist in
+	// Buffers.Positions" check CANNOT measure this bug: AddSegment's own comment says the
+	// cross-section at EACH END of a ribbon "ARE the stored cut vertices", so it writes every
+	// one of these band boundaries at N4 ITSELF, on both arms, whether or not the junction
+	// ever references them. The T-vertex this issue is about is not a MISSING position - the
+	// ribbon guarantees the position exists - it is the junction's own triangulation skipping
+	// past it with a straight RightCut-to-LeftCut edge instead of bending at it. So the
+	// measurement has to be topological: is the vertex used by a triangle the JUNCTION itself
+	// emitted, not merely one the ribbon did. IndicesBeforeJunction marks exactly that split.
+	FRoadMeshBuilder Builder(10.0);
+	const FRoadMeshBuffers& Buffers = Builder.GetBuffers();
+	Builder.AddSegment(*Net, ToN4, 1);
+	Builder.AddSegment(*Net, FromN4, 1);
+	const int32 IndicesBeforeJunction = Buffers.Indices.Num();
+
+	const TArray<FRoadSegmentId>* Arms = Solved.NodeArmSegments.Find(N4.Index);
+	const TArray<FRoadSegmentId> NoArms;
+	Builder.AddJunction(*Net, N4.Index, *Bend, Arms ? *Arms : NoArms);
+
+	if (!TestTrue(TEXT("the bend is paved despite the refused fan"),
+		Buffers.Indices.Num() > IndicesBeforeJunction))
+	{
+		return false;
+	}
+
+	auto FindVertexIndex = [&](const FVector2D& Point) -> int32
+	{
+		for (int32 Index = 0; Index < Buffers.Positions.Num(); ++Index)
+		{
+			if (Buffers.Positions[Index].X == Point.X && Buffers.Positions[Index].Y == Point.Y)
+			{
+				return Index;
+			}
+		}
+		return INDEX_NONE;
+	};
+
+	auto UsedByJunction = [&](int32 VertexIndex)
+	{
+		for (int32 Slot = IndicesBeforeJunction; Slot < Buffers.Indices.Num(); ++Slot)
+		{
+			if (Buffers.Indices[Slot] == VertexIndex)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// THE MEASUREMENT: only the INTERIOR boundary (index 1 of 3) is the one
+	// BuildRimWithBandPoints inserts - boundary 0 and the last are the cut line's own two
+	// ends, already part of every rim, ear-clipped or not. On unfixed code the interior
+	// boundary exists in the buffer (the ribbon put it there) but UsedByJunction is false for
+	// it - the junction's own triangles jump straight from RightCut to LeftCut.
+	auto CheckCutLine = [&](const TCHAR* Label, const FVector2D& RightCut, const FVector2D& LeftCut)
+	{
+		for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
+		{
+			const FVector2D Expected = FRoadMeshBuilder::CutLinePoint(RightCut, LeftCut, Bands.Alphas[Boundary]);
+			const int32 VertexIndex = FindVertexIndex(Expected);
+			if (!TestTrue(FString::Printf(
+				TEXT("%s: band boundary %d's vertex exists - the ribbon always writes it"),
+				Label, Boundary), VertexIndex != INDEX_NONE))
+			{
+				continue;
+			}
+			TestTrue(FString::Printf(
+				TEXT("%s: band boundary %d is part of the JUNCTION's own rim, not a T-vertex "
+					"the ribbon alone put there"), Label, Boundary),
+				UsedByJunction(VertexIndex));
+		}
+	};
+
+	// N4 is the B end of ToN4Seg (N5 -> N4) and the A end of FromN4Seg (N4 -> N2).
+	CheckCutLine(TEXT("N5->N4 at N4"), ToN4Seg->RightCutB, ToN4Seg->LeftCutB);
+	CheckCutLine(TEXT("N4->N2 at N4"), FromN4Seg->RightCutA, FromN4Seg->LeftCutA);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

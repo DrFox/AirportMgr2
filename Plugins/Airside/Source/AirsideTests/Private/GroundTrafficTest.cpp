@@ -2827,4 +2827,161 @@ bool FTrafficGraphRebuildNodeVisitsTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReofferStandsRetireReentrancyTest,
+	"Airside.Model.Traffic.ReofferStandsRetireReentrancy",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
+{
+	// #193: ReofferStands used to re-derive its agent's index with FindIndex AFTER calling
+	// RedirectAgent, which broadcasts OnAgentPhaseChanged. In play, UFuelService::OnAgentPhase
+	// answers that broadcast by calling UGroundTraffic::RetireAgent SYNCHRONOUSLY - so a
+	// listener that retires the very agent being redirected removes it from Agents mid-call,
+	// and Agents[FindIndex(Id)] afterwards indexed with INDEX_NONE. This test stands in for
+	// UFuelService with a plain lambda, so it exercises the real re-entrancy without pulling
+	// in the AirportOps module: the fix is in Model/, and belongs to a Model/ test.
+	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+
+	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold, TestAirframes::Piper(), 1.0);
+	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
+	Traffic->Advance(0.05, A.Net);   // one tick: on final
+	const FGuidelineNodeId Goal0 = Traffic->FindAgent(Id)->GoalNode;
+	const FEntityInstanceId Target = (Goal0 == A.Pose(A.Stands[0])) ? A.Stands[0] : A.Stands[1];
+	const FEntityInstanceId Spare = (Target == A.Stands[0]) ? A.Stands[1] : A.Stands[0];
+
+	// BOTH STANDS GONE, exactly like StandRetargetTest's own step 2: the aircraft lands with
+	// nowhere to go, sets bAwaitingStand, and parks at the node it waited at. That is the
+	// state ReofferStands' Waiting list is built from.
+	A.Net->RemoveEntity(Target);
+	TestGraph::Rebuild(*A.Net);
+	Traffic->OnGraphRebuilt(*A.Net);
+	A.Net->RemoveEntity(Spare);
+	TestGraph::Rebuild(*A.Net);
+	Traffic->OnGraphRebuilt(*A.Net);
+	if (!TestTrue(TEXT("it lands and waits"), RunUntil(*Traffic, *A.Net, 600.0,
+		[&]() { const FRoadAgent* P = Traffic->FindAgent(Id); return P && P->Phase == EAgentPhase::Parked; })))
+	{
+		return false;
+	}
+
+	// THE LISTENER STANDS IN FOR UFuelService::OnAgentPhase: it retires this agent the moment
+	// it sees ITS phase change away from Parked - which is the redirect ReofferStands is about
+	// to drive - and does so exactly once, so the Gone broadcast RetireAgent itself raises does
+	// not recurse.
+	bool bRetiredDuringRedirect = false;
+	int32 PhaseChangedBroadcasts = 0;
+	Traffic->OnAgentPhaseChanged.AddLambda(
+		[&](int32 EventId, EAgentPhase From, EAgentPhase To)
+		{
+			++PhaseChangedBroadcasts;
+			if (EventId == Id && From == EAgentPhase::Parked && To != EAgentPhase::Gone && !bRetiredDuringRedirect)
+			{
+				bRetiredDuringRedirect = true;
+				Traffic->RetireAgent(Id);
+			}
+		});
+
+	// A STAND APPEARS. Advance's re-offer pass (ReofferStands) finds the waiter, plans a route
+	// to it, and calls RedirectAgent - which is where the listener above fires. On unfixed code
+	// this crashes (Agents[INDEX_NONE]) rather than merely failing, which is why this is the
+	// regression: a green run here means the re-entrancy is actually safe, not just unassessed.
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+	A.Net->PlaceEntity(Stand, Stand->Anchors, A.ExitAt + FVector2D(9000.0, -10000.0), 0.0);
+	TestGraph::Rebuild(*A.Net);
+	Traffic->OnGraphRebuilt(*A.Net);
+	Traffic->Advance(0.05, A.Net);   // the re-offer runs at the end of a tick
+
+	TestTrue(TEXT("the listener actually got to retire mid-redirect (the case under test ran)"),
+		bRetiredDuringRedirect);
+	TestTrue(TEXT("more than one broadcast fired: the redirect's and RetireAgent's Gone"),
+		PhaseChangedBroadcasts >= 2);
+	TestNull(TEXT("the agent is gone - retired, not left half-redirected"), Traffic->FindAgent(Id));
+	TestEqual(TEXT("the table is left with no agents at all, not a dangling slot"),
+		Traffic->GetAgentCount(), 0);
+	return true;
+}
+
+namespace
+{
+	/** Captures LogAirsideTraffic lines at Log verbosity, the same shape as
+	 *  RoadRebuildLogQuietTest's FLogRoadMeshLogSpy - scoped to one AddOutputDevice/
+	 *  RemoveOutputDevice bracket per use. */
+	class FLogAirsideTrafficSpy : public FOutputDevice
+	{
+	public:
+		TArray<FString> CapturedLines;
+
+		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
+		{
+			static const FName TrafficCategory(TEXT("LogAirsideTraffic"));
+			if (Category == TrafficCategory && Verbosity == ELogVerbosity::Log)
+			{
+				CapturedLines.Add(FString(V));
+			}
+		}
+	};
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArrivalStandCountLogTest,
+	"Airside.Model.Traffic.ArrivalStandCountLog",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FArrivalStandCountLogTest::RunTest(const FString& Parameters)
+{
+	// #193: DispatchArrival's own "%d stand(s) on the airport" line read
+	// Network.GetEntities().Num() - the whole slot array, dead slots and depots included -
+	// where every other reader of "how many stands" means live EServiceRole::Aircraft
+	// entities. Two ways that number can be wrong, both set up here: a DEAD SLOT (one of the
+	// fixture's two stands, removed - RemoveEntity frees the slot but GetEntities() still
+	// counts it) and a DEPOT (a live entity whose PoseRole is Fuel, not Aircraft). Both must
+	// be excluded, so the true count (1) is the number to look for, not GetEntities().Num()
+	// (which would read 3: two stand slots, one of them dead, plus the live depot).
+	const FTestAirport A = FTestAirport::Build(TestAirframes::Piper(), { .StandCount = 2 });
+
+	// A DEPOT, placed but not joined to any guideline - joining is irrelevant to a log line
+	// that only counts entities, and skipping FAnchorLink::Build keeps this test to the one
+	// thing under test.
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+	A.Net->PlaceEntity(Depot, Depot->Anchors, A.ExitAt + FVector2D(0.0, 20000.0),
+		0.0, /*DesignWingspan=*/0.0, Depot->PoseRole, Depot->Trucks);
+
+	// A DEAD SLOT: one of the two stands, removed. The other stays live so the arrival still
+	// has somewhere to go - StandRetargetTest's own step 1 confirms one stand's removal
+	// leaves the graph routable to the survivor.
+	TestTrue(TEXT("a stand removed to free (not erase) its slot"), A.Net->RemoveEntity(A.Stands[0]));
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	FLogAirsideTrafficSpy Spy;
+	GLog->AddOutputDevice(&Spy);
+	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold, TestAirframes::Piper(), 1.0);
+	GLog->RemoveOutputDevice(&Spy);
+	if (!TestTrue(TEXT("dispatched onto the surviving stand"), Id > 0)) { return false; }
+
+	const FString* Line = Spy.CapturedLines.FindByPredicate(
+		[](const FString& L) { return L.Contains(TEXT("stand(s) on the airport")); });
+	if (!TestTrue(TEXT("the arrival line was logged"), Line != nullptr)) { return false; }
+
+	// PARSED OUT OF THE ACTUAL LINE, not re-derived from the model, so this fails if the
+	// wording ever drifts from "%d stand(s)" without anyone noticing - the same reason
+	// RoadRebuildLogQuietTest's spy names its captured line rather than trusting a count alone.
+	int32 Reported = -1;
+	const int32 Marker = Line->Find(TEXT(" stand(s) on the airport"));
+	if (TestTrue(TEXT("the line names a count before 'stand(s)'"), Marker != INDEX_NONE))
+	{
+		int32 DigitsStart = Marker;
+		while (DigitsStart > 0 && FChar::IsDigit((*Line)[DigitsStart - 1])) { --DigitsStart; }
+		Reported = FCString::Atoi(*Line->Mid(DigitsStart, Marker - DigitsStart));
+	}
+
+	TestEqual(TEXT("only the one LIVE aircraft-role stand is counted - not the dead slot, ")
+		TEXT("not the depot"), Reported, 1);
+	return true;
+}
+
 #endif

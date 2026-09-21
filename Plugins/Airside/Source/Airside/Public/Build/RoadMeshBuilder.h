@@ -162,6 +162,29 @@ private:
 	 */
 	static FName RunwaySlotFor(const URoadNetwork& Network, FRoadSegmentId Segment);
 
+	/**
+	 * Junction.Boundary[0..RimCount) with each arm's INTERIOR band points inserted along its
+	 * own cut line - the rim AddJunction's fan path builds, factored out (issue #193) so
+	 * AddJunctionByEarClipping can build the IDENTICAL rim rather than a plainer one.
+	 *
+	 * Before this existed, AddJunctionByEarClipping took Junction.Boundary as its rim
+	 * verbatim - no insertion at all - so a bent junction (the one case that reaches
+	 * ear-clipping instead of the fan) welded its rim ONLY at each arm's RightCut/LeftCut and
+	 * silently dropped every interior band vertex the segment ribbon on the other side of that
+	 * same cut line still emits (AddSegment, via the same CutLinePoint/Bands.Alphas pairing).
+	 * The two sides of the seam then disagreed on how many vertices it holds: a T-vertex, not
+	 * merely a coincident one, invisible while every band shares one material and open the
+	 * moment it does not.
+	 *
+	 * SAME BOUNDS AS THE ORIGINAL LOOP, deliberately, including no wraparound check between
+	 * the last rim slot and the first: whatever AddJunction's insertion already does is what
+	 * this must reproduce, bitwise, not a corrected version of it - see CutLinePoint's own
+	 * comment on why two algebraically-equal expressions are not this contract's business.
+	 */
+	TArray<FVector2D> BuildRimWithBandPoints(const URoadNetwork& Network,
+		const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments,
+		int32 RimCount) const;
+
 	double ZHeight;
 	double TexelsPerUnit;
 	const URoadMaterialSet* Materials = nullptr;

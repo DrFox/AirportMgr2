@@ -1,13 +1,16 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "AirsideTestFixtures.h"
+#include "Entities/EntityDefinition.h"
+#include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Model/BuildPurse.h"
-#include "Tool/RoadDrawTool.h"
 #include "Tool/RoadBuildTool.h"
+#include "Tool/RoadDrawTool.h"
+#include "Tool/RoadEditTarget.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -378,6 +381,148 @@ bool FGhostPricesTheRoadTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a road nobody can pay for is drawn Refused, so the player sees the refusal "
 		"before the click rather than after it"),
 		Broke.Styles.Contains(EPreviewStyle::Refused));
+	return true;
+}
+
+namespace
+{
+	/** A 12 m x 12 m plot, wound clockwise, with the road-facing edge stated in that same
+	 *  winding order - the exact fixture PlotPlacementTest's
+	 *  FPlotOutlineIsAlwaysCounterClockwiseTest already proves places a depot successfully. */
+	struct FPricedDepotPlot
+	{
+		TArray<FVector2D> Outline = {
+			FVector2D(0.0, 0.0), FVector2D(0.0, 1200.0),
+			FVector2D(1200.0, 1200.0), FVector2D(1200.0, 0.0) };
+		FVector2D FrontageA = FVector2D(1200.0, 0.0);
+		FVector2D FrontageB = FVector2D(0.0, 0.0);
+	};
+}
+
+/**
+ * Issue #193: PlaceEntityInPlot ended in CommitAndNotify - no quote, no CanAfford, no charge -
+ * while PlaceEntity charges BuildCost::ForEntity for the identical UEntityDefinition. A plotted
+ * depot was free; a plopped stand was not. This is FBuildPurseChargesTest's own shape, aimed at
+ * the plot path instead of ConnectNodes.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseChargesForPlottedDepotTest,
+	"Airside.Present.BuildPurseChargesForPlottedDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseChargesForPlottedDepotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	ARoadNetworkActor* Actor = World.Actor;
+	Actor->ClearNetwork();
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+	// A NON-ZERO PLACEMENT COST - MakeFuelDepotTransient's own default is 0.0, which would
+	// make "the entity is priced" indistinguishable from "the entity is free".
+	Depot->PlacementCost = 5000.0;
+	Actor->FuelDepotDefinition = Depot;
+
+	FRecordingPurse Purse;
+	Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const FPricedDepotPlot Plot;
+	IRoadEditTarget* Target = Actor;
+	const int32 Placed = Target->PlaceEntityInPlot(Plot.Outline, Plot.FrontageA, Plot.FrontageB,
+		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("the depot is placed"), Placed != INDEX_NONE)) { return false; }
+
+	if (!TestEqual(TEXT("placing a plotted depot charges exactly once"), Purse.Charges.Num(), 1))
+	{
+		return false;
+	}
+
+	// 5000 FOR THE ENTITY (Depot->PlacementCost) PLUS THE PAD: a 12 m x 12 m plot, 144 m2 at
+	// UAirsideSettings::ApronCostPerSquareMetre's default of 15/m2 - the same rate AddApron
+	// charges, summed rather than invented, exactly as the issue asked.
+	TestEqual(TEXT("charged the entity's placement cost plus the pad's apron rate x area - not "
+		"free, and not the entity alone"),
+		Purse.Charges[0], 5000.0 + 144.0 * 15.0, 1e-6);
+
+	return true;
+}
+
+/**
+ * Issue #193, the other half: a plot nobody can afford must place nothing, exactly as
+ * PlaceEntity already refuses - not build the depot and then discover it should not have.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseRefusesPlottedDepotTest,
+	"Airside.Present.BuildPurseRefusesPlottedDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseRefusesPlottedDepotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	ARoadNetworkActor* Actor = World.Actor;
+	Actor->ClearNetwork();
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+	Depot->PlacementCost = 5000.0;
+	Actor->FuelDepotDefinition = Depot;
+
+	FRecordingPurse Purse;
+	Purse.Funds = 0.0;
+	Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const FPricedDepotPlot Plot;
+	IRoadEditTarget* Target = Actor;
+	const int32 Placed = Target->PlaceEntityInPlot(Plot.Outline, Plot.FrontageA, Plot.FrontageB,
+		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
+
+	TestEqual(TEXT("a plot nobody can pay for is refused"), Placed, INDEX_NONE);
+	TestEqual(TEXT("and nothing was charged for it"), Purse.Charges.Num(), 0);
+	TestEqual(TEXT("no entity was left behind by the refusal"),
+		Actor->GetNetwork()->GetEntities().Num(), 0);
+	return true;
+}
+
+/**
+ * Issue #193, the refund half: undo on a plotted depot must reverse the SAME charge id
+ * CommitPurchase recorded, through the identical pending-charge path PlaceEntity's own undo
+ * uses - not silently leave the money spent, which CommitAndNotify's plain path would have.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBuildPurseUndoReversesPlottedDepotTest,
+	"Airside.Present.BuildPurseUndoReversesPlottedDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBuildPurseUndoReversesPlottedDepotTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld World;
+	ARoadNetworkActor* Actor = World.Actor;
+	Actor->ClearNetwork();
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+	Depot->PlacementCost = 5000.0;
+	Actor->FuelDepotDefinition = Depot;
+
+	FRecordingPurse Purse;
+	Actor->GetEditFacade()->SetPurse(&Purse);
+
+	const FPricedDepotPlot Plot;
+	IRoadEditTarget* Target = Actor;
+	const int32 Placed = Target->PlaceEntityInPlot(Plot.Outline, Plot.FrontageA, Plot.FrontageB,
+		{ EDepotModule::Shed }, EPlaceableEntity::FuelDepot);
+	if (!TestTrue(TEXT("the depot is placed"), Placed != INDEX_NONE)) { return false; }
+	if (!TestEqual(TEXT("the plot charged"), Purse.Charges.Num(), 1)) { return false; }
+
+	TestTrue(TEXT("undo steps back"), Actor->GetEditFacade()->Undo());
+
+	TestEqual(TEXT("undo reverses the plot's own charge id - by id, the same pending-charge "
+		"path PlaceEntity's own undo uses"), Purse.Reversed.Num(), 1);
+	TestEqual(TEXT("and it is that build's own id"),
+		Purse.Reversed.IsValidIndex(0) ? Purse.Reversed[0] : 0, 1);
+	TestEqual(TEXT("and the depot itself is gone again"),
+		Actor->GetNetwork()->GetEntities().ContainsByPredicate(
+			[](const FEntityInstance& E) { return E.bAlive; }), false);
 	return true;
 }
 

@@ -148,25 +148,88 @@ void FRoadMeshBuilder::AddTriangle(int32 A, int32 B, int32 C, int32 MaterialID)
 	Buffers.AppendTriangleUp(A, B, C, MaterialID);
 }
 
-void FRoadMeshBuilder::AddJunctionByEarClipping(const URoadNetwork& Network, int32 NodeIndex,
-	const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments)
+TArray<FVector2D> FRoadMeshBuilder::BuildRimWithBandPoints(const URoadNetwork& Network,
+	const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments, int32 RimCount) const
 {
-	// The rim is every boundary point but the trailing apex slot - see SolveBoundary.
-	const int32 RimCount = Junction.Boundary.Num() - 1;
+	// FACTORED OUT OF AddJunction (issue #193), UNCHANGED, so AddJunctionByEarClipping's rim
+	// agrees with the fan path's bitwise rather than merely resembling it - see this method's
+	// own header for what disagreeing cost.
 	TArray<FVector2D> Rim;
-	Rim.Reserve(RimCount);
+	Rim.Reserve(RimCount * 2);
+
 	for (int32 Slot = 0; Slot < RimCount; ++Slot)
 	{
 		Rim.Add(Junction.Boundary[Slot]);
+
+		// SolveBoundary emits each arm's RightCut immediately followed by its LeftCut, so
+		// a matching adjacent pair identifies that arm's cut line. Matched bitwise: these
+		// are the same values, not merely nearby ones.
+		const int32 NextSlot = Slot + 1;
+		if (NextSlot >= RimCount)
+		{
+			continue;
+		}
+
+		for (int32 ArmIndex = 0; ArmIndex < Junction.Arms.Num(); ++ArmIndex)
+		{
+			const FJunctionArmResult& Arm = Junction.Arms[ArmIndex];
+			const bool bIsCutLine =
+				Junction.Boundary[Slot].X == Arm.RightCut.X &&
+				Junction.Boundary[Slot].Y == Arm.RightCut.Y &&
+				Junction.Boundary[NextSlot].X == Arm.LeftCut.X &&
+				Junction.Boundary[NextSlot].Y == Arm.LeftCut.Y;
+
+			if (!bIsCutLine || !ArmSegments.IsValidIndex(ArmIndex))
+			{
+				continue;
+			}
+
+			const FRoadSegment* ArmSegment = Network.GetSegment(ArmSegments[ArmIndex]);
+			// ProfileFor, NOT Segment->Profile. A reloaded segment's own pointer is null -
+			// the profile it was given lived in the transient package - and reading it raw
+			// here produced no bands, so the junction rim lost every interior boundary while
+			// the segments meeting it still had theirs.
+			const URoadProfile* ArmProfile =
+				ArmSegment ? Network.ProfileFor(*ArmSegment) : nullptr;
+			const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(ArmProfile, Materials,
+				RunwaySlotFor(Network, ArmSegments[ArmIndex]));
+
+			// Interior boundaries only: 0 and 1 are the cut vertices already in the rim.
+			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
+			{
+				Rim.Add(CutLinePoint(Arm.RightCut, Arm.LeftCut, Bands.Alphas[Boundary]));
+			}
+			break;
+		}
 	}
+	return Rim;
+}
+
+void FRoadMeshBuilder::AddJunctionByEarClipping(const URoadNetwork& Network, int32 NodeIndex,
+	const FJunctionResult& Junction, const TArray<FRoadSegmentId>& ArmSegments)
+{
+	// The rim is every boundary point but the trailing apex slot - see SolveBoundary. WITH ITS
+	// ARMS' BAND POINTS INSERTED, the same way AddJunction's own fan rim gets them - issue
+	// #193: this used to be Junction.Boundary[0..RimCount) verbatim, which left every band
+	// boundary the segment ribbon on the other side of each cut line still emits as a
+	// T-vertex here. See BuildRimWithBandPoints's own comment.
+	const int32 RimCount = Junction.Boundary.Num() - 1;
+	TArray<FVector2D> Rim = BuildRimWithBandPoints(Network, Junction, ArmSegments, RimCount);
 
 	TArray<UE::Geometry::FIndex3i> Triangles;
+	// COLLINEAR RIM POINTS, EXPECTED NOW: each arm's inserted band points sit exactly on that
+	// arm's own straight cut line (CutLinePoint lerps between the same two endpoints the rim
+	// corner samples), so three consecutive rim points are frequently collinear where a band
+	// boundary lands. TriangulateSimplePolygon accepts this - it produces zero-area ears at
+	// those points, and the Area2 filter below already exists to drop exactly those, so no
+	// change to the triangulator call itself was needed, only verified against
+	// RoadBandWeldTest's new bent-junction case.
 	PolygonTriangulation::TriangulateSimplePolygon<double>(Rim, Triangles, /*bOrientAsHoleFill*/ false);
 	if (Triangles.Num() == 0)
 	{
 		UE_LOG(LogRoadMesh, Warning,
 			TEXT("Node %d: junction rim of %d points could not be triangulated; the corner is not paved"),
-			NodeIndex, RimCount);
+			NodeIndex, Rim.Num());
 		return;
 	}
 
@@ -175,7 +238,7 @@ void FRoadMeshBuilder::AddJunctionByEarClipping(const URoadNetwork& Network, int
 	JunctionSlots(Network, ArmSegments, StripSlot, FanSlot);
 
 	TArray<int32> RimIndices;
-	RimIndices.Reserve(RimCount);
+	RimIndices.Reserve(Rim.Num());
 	for (const FVector2D& Point : Rim)
 	{
 		RimIndices.Add(WeldVertex(Point, FVector2f(0.0f, 0.0f), JunctionMasks(1.0)));
@@ -268,55 +331,10 @@ void FRoadMeshBuilder::AddJunction(const URoadNetwork& Network, int32 NodeIndex,
 
 	// Rebuild the rim with each arm's band points inserted along its cut line. The solver's
 	// own Triangles array indexes the ORIGINAL boundary, so it cannot be reused once points
-	// are inserted - the fan is rebuilt below instead.
-	TArray<FVector2D> Rim;
-	Rim.Reserve(ApexSlot * 2);
-
-	for (int32 Slot = 0; Slot < ApexSlot; ++Slot)
-	{
-		Rim.Add(Junction.Boundary[Slot]);
-
-		// SolveBoundary emits each arm's RightCut immediately followed by its LeftCut, so
-		// a matching adjacent pair identifies that arm's cut line. Matched bitwise: these
-		// are the same values, not merely nearby ones.
-		const int32 NextSlot = Slot + 1;
-		if (NextSlot >= ApexSlot)
-		{
-			continue;
-		}
-
-		for (int32 ArmIndex = 0; ArmIndex < Junction.Arms.Num(); ++ArmIndex)
-		{
-			const FJunctionArmResult& Arm = Junction.Arms[ArmIndex];
-			const bool bIsCutLine =
-				Junction.Boundary[Slot].X == Arm.RightCut.X &&
-				Junction.Boundary[Slot].Y == Arm.RightCut.Y &&
-				Junction.Boundary[NextSlot].X == Arm.LeftCut.X &&
-				Junction.Boundary[NextSlot].Y == Arm.LeftCut.Y;
-
-			if (!bIsCutLine || !ArmSegments.IsValidIndex(ArmIndex))
-			{
-				continue;
-			}
-
-			const FRoadSegment* ArmSegment = Network.GetSegment(ArmSegments[ArmIndex]);
-			// ProfileFor, NOT Segment->Profile. A reloaded segment's own pointer is null -
-			// the profile it was given lived in the transient package - and reading it raw
-			// here produced no bands, so the junction rim lost every interior boundary while
-			// the segments meeting it still had theirs.
-			const URoadProfile* ArmProfile =
-				ArmSegment ? Network.ProfileFor(*ArmSegment) : nullptr;
-			const FRoadProfileBands Bands = FRoadProfileBands::FromProfile(ArmProfile, Materials,
-				RunwaySlotFor(Network, ArmSegments[ArmIndex]));
-
-			// Interior boundaries only: 0 and 1 are the cut vertices already in the rim.
-			for (int32 Boundary = 1; Boundary + 1 < Bands.Alphas.Num(); ++Boundary)
-			{
-				Rim.Add(CutLinePoint(Arm.RightCut, Arm.LeftCut, Bands.Alphas[Boundary]));
-			}
-			break;
-		}
-	}
+	// are inserted - the fan is rebuilt below instead. FACTORED OUT (issue #193) so
+	// AddJunctionByEarClipping builds the IDENTICAL rim rather than a plainer one - see
+	// BuildRimWithBandPoints's own comment.
+	TArray<FVector2D> Rim = BuildRimWithBandPoints(Network, Junction, ArmSegments, ApexSlot);
 
 	// Weld the rim, its inset ring and the apex. Cut vertices and band points are already
 	// owned by their segments, so these attributes are discarded for them; they land on arc

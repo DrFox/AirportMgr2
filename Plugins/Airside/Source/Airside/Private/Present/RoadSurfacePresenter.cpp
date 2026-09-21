@@ -181,7 +181,16 @@ const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfa
 
 UMaterialInstanceDynamic* URoadSurfacePresenter::RunwayMarkingMaterialInstance(UMaterialInterface* SurfaceMaterialBase)
 {
-	if (RunwayMarkingMID == nullptr && SurfaceMaterialBase != nullptr)
+	// RE-CREATED WHEN THE BASE MOVES, not just when there is none yet (issue #193). "Created
+	// once" used to mean "created once per ACTOR LIFETIME": PR #232's resolved-material cache
+	// on the actor already re-resolves SurfaceMaterial the moment SurfaceMaterial itself is
+	// edited (bResolvedContentDirty, invalidated by PostEditChangeProperty on every property),
+	// so SurfaceMaterialBase here DOES change on the very next rebuild - but this MID kept
+	// pointing at whatever it was first created against, so the runway kept its old skin and
+	// only the road surface re-skinned. MID->Parent is the parent this instance actually holds
+	// (set by Create, below), so comparing against it - not against some separately-tracked
+	// base - cannot drift out of step with what was last built.
+	if (SurfaceMaterialBase != nullptr && (RunwayMarkingMID == nullptr || RunwayMarkingMID->Parent != SurfaceMaterialBase))
 	{
 		RunwayMarkingMID = UMaterialInstanceDynamic::Create(SurfaceMaterialBase, this);
 		// WHITE, the one thing that differs from the holding-position paint. The road
@@ -574,7 +583,10 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 
 UMaterialInstanceDynamic* URoadSurfacePresenter::GhostMaterialInstance(UMaterialInterface* GhostMaterialBase)
 {
-	if (GhostMID == nullptr && GhostMaterialBase != nullptr)
+	// SEE RunwayMarkingMaterialInstance's comment (issue #193) - the same cache-never-follows
+	// defect, the same fix: compare against MID->Parent, the base this instance actually holds,
+	// rather than trusting a one-time null check to mean "still current".
+	if (GhostMaterialBase != nullptr && (GhostMID == nullptr || GhostMID->Parent != GhostMaterialBase))
 	{
 		GhostMID = UMaterialInstanceDynamic::Create(GhostMaterialBase, this);
 	}
