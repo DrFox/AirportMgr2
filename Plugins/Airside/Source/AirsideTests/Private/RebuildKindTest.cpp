@@ -129,6 +129,23 @@ bool FDragNotifiesGeometryOnlyTest::RunTest(const FString& Parameters)
 			Actor->RebuildCountForTest(), RebuildsBeforeNoOp);
 	}
 
+	// --- Review follow-up: a BARE call outside Begin/End must catch itself up -------------
+	//
+	// THE BARE-CALL TRAP. A MoveNode call with no wrapping BeginInteractiveEdit/
+	// EndInteractiveEdit - the exact shape RunwayToolTest/RoadNetworkActorTest and this very
+	// file's control assertions above use - has no later Topology notify coming from anyone:
+	// MoveNode's own notify is the only one this move will ever get, so it has to be
+	// Topology, not Geometry, or the derived graph would go stale the moment a caller forgot
+	// to wrap a single move in an interactive edit.
+	{
+		const int32 TopologyBeforeBareMove = Actor->TopologyRebuildCountForTest();
+		TestTrue(TEXT("a bare MoveNode call, wrapped by nothing, still moves the node"),
+			Actor->MoveNode(A, FVector2D(900.0, 900.0)));
+		TestEqual(TEXT("and runs the derived-graph pass exactly once by itself, because there "
+			"is no EndInteractiveEdit coming to do it later"),
+			Actor->TopologyRebuildCountForTest(), TopologyBeforeBareMove + 1);
+	}
+
 	return true;
 }
 

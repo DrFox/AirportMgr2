@@ -63,12 +63,18 @@ class IBuildPurse;
  * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
  * position changes neither pavement nor mesh.
  *
- * MoveNode's PER-FRAME NOTIFY IS EChangeKind::Geometry (issue #165) - every earlier drag
- * frame ran the full pipeline, guideline graph and anchor links and plots and traffic
- * included, at frame rate. Nothing about a slid position needs any of those rebuilt until
- * the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true) fires one
- * EChangeKind::Topology notify of its own once the drag commits, and that single notify is
- * what catches the derived graph up - see its own comment.
+ * MoveNode's (and MoveApronCorner's) PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY
+ * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up). Every
+ * earlier drag frame ran the full pipeline, guideline graph and anchor links and plots and
+ * traffic included, at frame rate. Nothing about a slid position needs any of those rebuilt
+ * until the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true) fires
+ * one EChangeKind::Topology notify of its own once the drag commits, and that single notify
+ * is what catches the derived graph up - see its own comment. THE BARE-CALL TRAP: that promise
+ * only holds while `Use->IsEditing()` is true at the moment of the notify - a call with no
+ * EndInteractiveEdit coming (an editor world, where HistoryForEdit() is a deliberate no-op,
+ * or a bare `Actor->MoveNode(...)` that opens and closes its own tiny edit) notifies
+ * EChangeKind::Topology instead, because nothing else will ever catch it up. See MoveNode's
+ * own comment for the exact three cases.
  *
  * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
  * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and

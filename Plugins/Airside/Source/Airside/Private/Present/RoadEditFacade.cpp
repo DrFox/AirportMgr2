@@ -886,18 +886,32 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 		}
 	}
 
+	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN - THE BARE-CALL TRAP (review
+	// follow-up on #165). `Use->IsEditing()` here means this call joined a drag that
+	// BeginInteractiveEdit started and EndInteractiveEdit has not yet closed - the ONLY case
+	// where something downstream (EndInteractiveEdit's own Topology notify) is guaranteed to
+	// catch the derived graph up later. Anything else has no EndInteractiveEdit coming and
+	// must do the whole job itself, Topology, right here:
+	//   - Use is null: an EDITOR WORLD, where HistoryForEdit() is a deliberate no-op (see its
+	//     own comment) - BeginInteractiveEdit/EndInteractiveEdit never touch History there
+	//     either, so this notify is the only one this drag will ever get, one frame at a time.
+	//   - bOwnsEdit was true: this very call opened and closed its own tiny edit above, so it
+	//     is a BARE call with no surrounding drag - same reasoning, same fix.
+	// An apron corner is not in the road graph at all (see OnDragBegin's own comment), so a
+	// Topology rebuild here does not cost this call anything a Geometry one would have saved
+	// beyond what a genuine mid-drag frame already skips.
+	const bool bMidInteractiveEdit = Use != nullptr && Use->IsEditing();
 	if (bMoved)
 	{
-		// GEOMETRY, like MoveNode and for the same reason (issue #165): an apron corner is
-		// not in the road graph at all (see OnDragBegin's own comment), so a corner drag
-		// cannot touch the guideline graph, anchor links, plots or traffic - there is nothing
-		// there for a Topology rebuild to catch that a Geometry one would miss. Every frame
-		// of a drag, the pavement has changed and the mesh is stale until something rebuilds
-		// it; EndInteractiveEdit still fires the one Topology notify at drag end, same as a
-		// node drag - see bGeometryChangedDuringEdit's own comment for why that flag does not
-		// distinguish which kind of drag set it.
-		bGeometryChangedDuringEdit = true;
-		NotifyChanged(EChangeKind::Geometry);
+		if (bMidInteractiveEdit)
+		{
+			bGeometryChangedDuringEdit = true;
+			NotifyChanged(EChangeKind::Geometry);
+		}
+		else
+		{
+			NotifyChanged(EChangeKind::Topology);
+		}
 	}
 	return bMoved;
 }
@@ -1171,16 +1185,34 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	// the node must still rebuild - that per-frame notification during a drag is the whole
 	// reason this is not folded into CommitAndNotify, which fires once per committed edit.
 	//
-	// GEOMETRY, NOT TOPOLOGY (issue #165). A move changes no node's existence and no
-	// segment's endpoints-as-a-set, only where things sit, so the listener can rebuild the
-	// surface alone and skip the guideline graph, anchor links, plots and traffic every
-	// frame of the drag - EndInteractiveEdit fires the one Topology notify that catches
-	// those up once the drag commits, IF this actually ran during that edit - see
-	// bGeometryChangedDuringEdit's own comment for why that flag exists at all.
+	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN - THE BARE-CALL TRAP (review
+	// follow-up on #165). A move changes no node's existence and no segment's
+	// endpoints-as-a-set, only where things sit, so a frame that is part of a real drag can
+	// rebuild the surface alone and skip the guideline graph, anchor links, plots and
+	// traffic - EndInteractiveEdit fires the one Topology notify that catches those up once
+	// the drag commits (see bGeometryChangedDuringEdit's own comment). But that promise only
+	// holds while `Use->IsEditing()` is true, meaning THIS call joined a drag
+	// BeginInteractiveEdit opened and EndInteractiveEdit has not yet closed. Two cases have
+	// no EndInteractiveEdit coming at all, so THIS is the only notify they will ever get and
+	// it has to do the whole job:
+	//   - Use is null: an EDITOR WORLD, where HistoryForEdit() is a deliberate no-op (see its
+	//     own comment) - BeginInteractiveEdit/EndInteractiveEdit never touch History there,
+	//     so every editor-mode move is, in effect, its own one-frame edit.
+	//   - bOwnsEdit was true: this call opened and closed its own tiny edit above (the bare,
+	//     un-wrapped `Actor->MoveNode(...)` every test before this review makes) - same
+	//     reasoning, same fix.
+	const bool bMidInteractiveEdit = Use != nullptr && Use->IsEditing();
 	if (bMoved)
 	{
-		bGeometryChangedDuringEdit = true;
-		NotifyChanged(EChangeKind::Geometry);
+		if (bMidInteractiveEdit)
+		{
+			bGeometryChangedDuringEdit = true;
+			NotifyChanged(EChangeKind::Geometry);
+		}
+		else
+		{
+			NotifyChanged(EChangeKind::Topology);
+		}
 	}
 
 	return bMoved;
