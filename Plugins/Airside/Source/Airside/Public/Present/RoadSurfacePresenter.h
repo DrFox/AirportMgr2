@@ -192,6 +192,20 @@ public:
 	void RebuildSurfaceOnly(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/**
+	 * RebuildMarkings alone (issue #179, EChangeKind::Markings) - no solve, no road mesh, no
+	 * aprons, no runway paint or rubber, and critically NEITHER FRoadGuidelineBuilder::Build
+	 * NOR FAnchorLink::Build: SetIntermediateHoldingPosition flips a flag on a guideline node
+	 * that already exists, so the graph RebuildMarkings reads is exactly as fresh as it was
+	 * before the toggle. THE OPPOSITE PROBLEM FROM RebuildSurfaceOnly's own comment: that one
+	 * skips the markings because the graph they would read is stale; this one is safe to
+	 * paint from precisely because nothing here made it stale. Routing this flag through
+	 * Rebuild (Topology) instead would re-derive the guideline graph unconditionally and
+	 * reallocate every node in it - including the one whose flag had just been set - for an
+	 * edit that changed no shape at all.
+	 */
+	void RebuildMarkingsOnly(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
 	 * Forget what the ghost cache last showed, without touching the ghost component's
 	 * visibility.
 	 *
@@ -286,6 +300,12 @@ public:
 	/** Triangles currently in the tyre rubber, for Airside.Present.RunwayRubberDrawn. */
 	int32 RunwayRubberTriangleCountForTest() const;
 
+	/** Triangles currently in the holding-position paint, for
+	 *  Airside.Present.HoldingPositionMeshFollowsToggle (issue #179) - the same shape as
+	 *  the two triangle counts above, added for the same reason: a test that reads the
+	 *  layer itself rather than trusting the builder was asked to run. */
+	int32 HoldingPaintTriangleCountForTest() const;
+
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
 
@@ -316,7 +336,11 @@ private:
 	 * mesh identically, and differ only in whether the derived-graph passes run, which is a
 	 * single `if (Kind == EChangeKind::Topology)` rather than two near-duplicate functions
 	 * that could drift the way RebuildAprons/RebuildMarkings/RebuildRunwayMarkings did before
-	 * RebuildLayer folded THEM into one shape (issue #81).
+	 * RebuildLayer folded THEM into one shape (issue #81). RebuildMarkingsOnly is NOT a third
+	 * near-duplicate for the same reason: EChangeKind::Markings (issue #179) shares nothing
+	 * with the solve/mesh path above - it returns before the solve even runs - so it is an
+	 * early exit at the top of this function instead of a body that would otherwise fall
+	 * through the same steps Geometry and Topology share.
 	 */
 	void RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& Settings, EChangeKind Kind);
 

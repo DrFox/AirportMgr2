@@ -644,7 +644,7 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 {
 	// Counted before anything else, so RebuildCountForTest sees every call including the
 	// early-return below - a rebuild that bailed for lack of a network still ran. Counts
-	// BOTH kinds, deliberately: it answers "did OnChanged reach the actor", not "did the
+	// EVERY kind, deliberately: it answers "did OnChanged reach the actor", not "did the
 	// derived graph re-run" - see TopologyRebuildCount for the latter.
 	++RebuildCount;
 
@@ -670,6 +670,23 @@ void ARoadNetworkActor::RebuildMeshForChange(EChangeKind Kind)
 		// graph RebuildSurfaceOnly deliberately leaves untouched, so re-running them against
 		// it would cost the same as a full rebuild for no new information.
 		Presenter->RebuildSurfaceOnly(*Network, MakeSurfaceSettings());
+		return;
+	}
+
+	if (Kind == EChangeKind::Markings)
+	{
+		// PAINT ONLY (issue #179). SetIntermediateHoldingPosition flips a flag on an
+		// existing guideline node: it creates nothing, destroys nothing, and moves nothing,
+		// so the solve, the road mesh, the guideline graph and everything derived from it
+		// are exactly what they were. This is deliberately NOT the Topology path with steps
+		// skipped: URoadSurfacePresenter::RebuildInternal's Topology branch calls
+		// FRoadGuidelineBuilder::Build unconditionally, which reallocates every guideline
+		// node - so routing this flag through Topology invalidated the very node whose flag
+		// had just been set, and every other live FGuidelineNodeId in the level besides
+		// (three tests caught this the day it was tried). RebuildMarkingsOnly repaints the
+		// HoldingPaint layer from the CURRENT graph instead. Plots and Traffic are skipped
+		// for the same reason Geometry skips them above: nothing they derive from moved.
+		Presenter->RebuildMarkingsOnly(*Network, MakeSurfaceSettings());
 		return;
 	}
 

@@ -60,8 +60,15 @@ class IBuildPurse;
  * NotifyChanged directly, and on every successful call rather than once: a drag joins one
  * scope-free edit across many frames (BeginInteractiveEdit/EndInteractiveEdit), and needs a
  * rebuild each frame it actually moves, not only when the drag ends.
- * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
- * position changes neither pavement nor mesh.
+ * SetIntermediateHoldingPosition now goes through CommitAndNotify too (issue #179) - it used
+ * to commit WITHOUT notifying, on the reasoning that a holding position changes neither
+ * pavement nor mesh, which stopped being true once FHoldingPositionMarkingBuilder started
+ * painting the flag as a dashed bar in URoadSurfacePresenter::RebuildMarkings. The bare
+ * Commit() was the same split-brain issue #77 closed, reopened by a comment nobody updated
+ * when the paint layer shipped. UNLIKE every other CommitAndNotify call site, it passes
+ * EChangeKind::Markings explicitly rather than taking the default: see that enum's own
+ * comment for why Topology - the default, and every other scope-committing mutator's kind -
+ * is actively wrong here, not merely more expensive than needed.
  *
  * MoveNode's (and MoveApronCorner's) PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY
  * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up). Every
@@ -280,19 +287,30 @@ private:
 	 * CommitAndNotify below, and which two currently call neither (issue #125).
 	 *
 	 * DEFAULTS TO Topology, which is every call site except MoveNode's per-frame notify
-	 * (issue #165): every scope-committing mutator through CommitAndNotify changes the
-	 * graph's shape, and so do Undo/Redo/ClearNetwork (they replace Network wholesale) and
-	 * MergeNodes (it removes a node). MoveNode passes Geometry explicitly, because a drag
-	 * frame moves a position and nothing else - see its own call site.
+	 * (issue #165) and SetIntermediateHoldingPosition's (issue #179): every OTHER scope-
+	 * committing mutator through CommitAndNotify changes the graph's shape, and so do
+	 * Undo/Redo/ClearNetwork (they replace Network wholesale) and MergeNodes (it removes a
+	 * node). MoveNode passes Geometry explicitly, because a drag frame moves a position and
+	 * nothing else - see its own call site. SetIntermediateHoldingPosition passes Markings
+	 * explicitly, through CommitAndNotify's own Kind parameter, because it moves nothing and
+	 * changes no shape either - see EChangeKind's own comment for why Topology's default
+	 * would be actively wrong there, not just wasteful.
 	 */
 	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
 	/**
-	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits
-	 * an edit cannot forget to notify - which is exactly how ten of these went silent before
-	 * issue #77 (see the class comment). Takes the scope by reference rather than being a
-	 * method ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not
+	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(Kind), in one call so a mutator that
+	 * commits an edit cannot forget to notify - which is exactly how ten of these went silent
+	 * before issue #77 (see the class comment). Takes the scope by reference rather than being
+	 * a method ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not
 	 * know about this facade's OnChanged, or Tool/ would depend on Present/.
+	 *
+	 * KIND DEFAULTS TO Topology, same as NotifyChanged itself, for every caller that does not
+	 * pass one - which was every caller until SetIntermediateHoldingPosition (issue #179)
+	 * needed to pass Markings instead. Threaded through rather than given its own overload:
+	 * a second CommitAndNotify would be a second free door, and this issue's whole point is
+	 * that a commit and its notification must be one call, not a matching pair a mutator can
+	 * get out of step.
 	 *
 	 * FOR AN EDIT THAT MOVES NO PAVEMENT - placing a bare node, naming a runway, splitting a
 	 * segment, unlinking a guideline. Anything that CREATES or DESTROYS surface must use
@@ -301,7 +319,7 @@ private:
 	 * told which anyway - but all three end here, so NotifyChanged still has exactly one call
 	 * site, which is what issue #77 was about.
 	 */
-	void CommitAndNotify(FRoadEditScope& Edit);
+	void CommitAndNotify(FRoadEditScope& Edit, EChangeKind Kind = EChangeKind::Topology);
 
 	/**
 	 * Commit an edit that built something, and take the money for it.

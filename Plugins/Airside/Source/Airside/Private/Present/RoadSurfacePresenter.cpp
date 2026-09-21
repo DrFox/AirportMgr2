@@ -125,6 +125,16 @@ int32 URoadSurfacePresenter::RunwayRubberTriangleCountForTest() const
 	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
 }
 
+int32 URoadSurfacePresenter::HoldingPaintTriangleCountForTest() const
+{
+	UDynamicMeshComponent* Component = GetLayerComponent(ESurfaceLayer::HoldingPaint);
+	if (Component == nullptr || Component->GetDynamicMesh() == nullptr)
+	{
+		return 0;
+	}
+	return Component->GetDynamicMesh()->GetMeshRef().TriangleCount();
+}
+
 const URoadMaterialSet* URoadSurfacePresenter::EffectiveMaterialSet(const FSurfaceSettings& Settings)
 {
 	if (EffectiveSet == nullptr)
@@ -422,6 +432,11 @@ void URoadSurfacePresenter::RebuildSurfaceOnly(URoadNetwork& Network, const FSur
 	RebuildInternal(Network, Settings, EChangeKind::Geometry);
 }
 
+void URoadSurfacePresenter::RebuildMarkingsOnly(URoadNetwork& Network, const FSurfaceSettings& Settings)
+{
+	RebuildInternal(Network, Settings, EChangeKind::Markings);
+}
+
 void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& InSettings, EChangeKind Kind)
 {
 	// A LOCAL, MUTABLE COPY - not a reference to InSettings, which belongs to the caller (see
@@ -436,6 +451,19 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 
 	// See InvalidateGhostCache's own comment for why this must happen on every rebuild.
 	InvalidateGhostCache();
+
+	if (Kind == EChangeKind::Markings)
+	{
+		// PAINT ONLY, PAST HERE (issue #179). Nothing below this line - the solve, the road
+		// mesh, aprons, the guideline graph, anchor links, runway paint and rubber - can have
+		// changed: SetIntermediateHoldingPosition flips a flag on a guideline node that
+		// already exists. RebuildMarkings reads Network.GetGuidelineNodes() exactly as they
+		// stand, which is safe ONLY because this returns before FRoadGuidelineBuilder::Build
+		// (below, under Topology) would reallocate them - see RebuildMarkingsOnly's own
+		// comment for why routing this through Topology instead was tried and reverted.
+		RebuildMarkings(Network, Settings);
+		return;
+	}
 
 	UDynamicMeshComponent* MeshComponent = GetLayerComponent(ESurfaceLayer::Road);
 	if (MeshComponent == nullptr)

@@ -19,16 +19,32 @@ class UGroundTraffic;
 class UEntityDefinition;
 
 /**
- * What a graph change notification is ABOUT - issue #165. Every committed edit and every
- * drag frame used to run the same full pipeline (solve, guideline graph, anchor links,
- * plots, traffic), because URoadEditFacade::OnChanged carried no way to say less had
- * happened. A dragged node is GEOMETRY: positions moved, but nothing was created, destroyed,
- * split, or reclassified, so the graph's SHAPE - which nodes exist, how they connect - is
- * exactly what it was. Everything else (PlaceNode, ConnectNodes, SplitSegment, DeleteNode,
+ * What a graph change notification is ABOUT - issue #165, extended to three kinds by issue
+ * #179. Every committed edit and every drag frame used to run the same full pipeline (solve,
+ * guideline graph, anchor links, plots, traffic), because URoadEditFacade::OnChanged carried
+ * no way to say less had happened.
+ *
+ * GEOMETRY: a dragged node. Positions moved, but nothing was created, destroyed, split, or
+ * reclassified, so the graph's SHAPE - which nodes exist, how they connect - is exactly what
+ * it was. MoveNode and MoveApronCorner are the only sources of this kind.
+ *
+ * MARKINGS: SetIntermediateHoldingPosition, and (as of #179) nothing else. Neither the
+ * pavement nor the graph's SHAPE changed - only a flag a paint layer reads did. This is
+ * deliberately NOT folded into Geometry or Topology: Geometry's own rebuild
+ * (RebuildSurfaceOnly) skips FHoldingPositionMarkingBuilder on purpose, because the graph it
+ * would read is mid-drag and stale (see RebuildSurfaceOnly's comment) - wrong for a click that
+ * needs the CURRENT graph repainted right away. Topology is wrong the other way: its
+ * FRoadGuidelineBuilder::Build call reallocates every guideline node UNCONDITIONALLY, so
+ * routing a holding-position toggle through it invalidated the very node whose flag had just
+ * been set, and every other live FGuidelineNodeId in the level besides - three tests caught
+ * this the day it was tried. Markings is the kind that is safe to repaint from the graph
+ * exactly as it stands, because nothing about this edit could have made it stale.
+ *
+ * TOPOLOGY: everything else (PlaceNode, ConnectNodes, SplitSegment, DeleteNode,
  * DeleteSegment, AddApron/DeleteApron, PlaceEntity/DeleteEntity, runway facts, and the one
- * notify EndInteractiveEdit fires when a drag commits) is TOPOLOGY, because the derived
- * graph - guidelines, anchor links, stand layouts, plots, agent routes - can only be stale
- * or wrong if one of those changed.
+ * notify EndInteractiveEdit fires when a drag commits), because the derived graph -
+ * guidelines, anchor links, stand layouts, plots, agent routes - can only be stale or wrong
+ * if one of those changed.
  *
  * A PLAIN enum, not a UENUM: it travels on FOnNetworkChanged, an ordinary
  * DECLARE_MULTICAST_DELEGATE - never a UPROPERTY or a UFUNCTION parameter - so nothing here
@@ -37,6 +53,7 @@ class UEntityDefinition;
 enum class EChangeKind : uint8
 {
 	Geometry,
+	Markings,
 	Topology
 };
 
