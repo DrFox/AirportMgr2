@@ -259,6 +259,12 @@ bitwise; the guideline graph shares by HANDLE and needs no such contract.
 - **Honour the return of anything that fills an out-parameter.** `FVector2D X;` is
   uninitialised, and a function that returns false without writing `X` leaves garbage the
   next line will use. Either initialise, or branch on the return - never both discard.
+- **A comment is not a contract.** Issue #255: four closed issues (#79, #77, #78, #33)
+  regressed within weeks because their fixes touched sites, not shapes. A PR closing a
+  `refactor`/`layering`/`pattern` issue adds a Check-Architecture rule for the SHAPE it
+  removed, or says in its body why no regex can see it. A comment that justifies a linear
+  scan, a full rebuild or a fixed-size assumption carries the number and the date it was
+  true ("N was ~10 on 2026-09-21"), never a bare "the graph is small".
 
 ## Refactor contract
 
