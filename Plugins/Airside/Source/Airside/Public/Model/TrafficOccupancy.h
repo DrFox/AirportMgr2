@@ -274,6 +274,18 @@ struct AIRSIDE_API FTrafficOccupancy
 	/** Agents whose reservation was removed by a preemption since the last call; clears. */
 	TSet<int32> TakePreempted();
 
+	/**
+	 * Same contract, APPENDED into OutPreempted instead of returned by value (issue #190):
+	 * Arbitrate() calls the by-value overload above every substep regardless of whether
+	 * anybody was actually preempted, and MoveTemp(Preempted) hands this table's own storage
+	 * to the caller every time - cheap while Preempted is empty, but the first real
+	 * preemption leaves this table to rebuild an allocation from nothing on every later call
+	 * until the next one. Appending into a caller-owned scratch set instead lets THIS
+	 * table's Preempted keep its own allocation too - Reset() below empties it without
+	 * freeing it, the discipline FClaimPass::Wanted/OverlapsThisPass already use.
+	 */
+	void TakePreempted(TSet<int32>& OutPreempted);
+
 	void Clear();
 
 private:

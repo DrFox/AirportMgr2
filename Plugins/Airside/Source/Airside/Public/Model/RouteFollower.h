@@ -139,6 +139,64 @@ struct AIRSIDE_API FRouteFollower
 	 */
 	UPROPERTY() FSpeedProfile Profile;
 
+	/**
+	 * GuidelineGeom::PointAtDistance's hint (issue #190): a checkpoint of ITS OWN loop, not a
+	 * second measure of the polyline - see that function's header. Valid because Travelled is
+	 * monotonically non-decreasing between Start/Replace calls (Speed floors at Target, and
+	 * Target is never negative - see Advance), which is exactly the condition the hint needs
+	 * to never walk backwards. RESET in Start and Replace, where the polyline itself changes
+	 * and an old checkpoint would name a vertex on a route this follower is no longer walking.
+	 *
+	 * Not a UPROPERTY: pure memoisation of Advance's own last call, nothing a save needs -
+	 * the same reasoning LastStepsForTest and the two Guideline caches use elsewhere.
+	 */
+	int32 CursorVertex = 1;
+	double CursorWalked = 0.0;
+
+	/**
+	 * Every step index carrying FRouteStep::bReverseLeg, ascending - computed once per
+	 * Start/Replace rather than by FRoadAgent::TryArmReverseLeg scanning every step of
+	 * Plan.Steps on every single Taxiing tick to answer "is there one anywhere" (issue
+	 * #190), which on the overwhelming majority of plans - no reverse leg at all - was
+	 * paying for the whole route every substep to learn nothing.
+	 *
+	 * HERE RATHER THAN ON FRoadAgent, even though arming the leg is that struct's job: Start
+	 * and Replace are the only two places Plan is ever assigned, WHICHEVER CALLER reaches
+	 * them - GroundTrafficRebuild.cpp calls Replace directly on an agent's Follower, with no
+	 * FRoadAgent method in between - so this is the one place a cache of Plan.Steps can be
+	 * kept in step with the plan it describes without a second reset path to forget.
+	 */
+	TArray<int32> ReverseLegSteps;
+
+	/**
+	 * Cursor into ReverseLegSteps. Entries before it are spans FRAMES old and permanently
+	 * behind Travelled - which only grows between Start/Replace calls, see CursorVertex's
+	 * own comment - so advancing past one is never revisited, not merely deferred. NOT
+	 * advanced when NextReverseLegRun's caller fails to arm what it returned: the next call
+	 * must offer the SAME candidate again, exactly as the scan this replaces would have
+	 * found it again next tick.
+	 */
+	int32 ReverseLegCursor = 0;
+
+	/**
+	 * The next not-yet-passed contiguous bReverseLeg run, if Travelled has reached it -
+	 * FRoadAgent::TryArmReverseLeg's whole search, done here where ReverseLegSteps and the
+	 * cursor live. Mirrors the per-step scan it replaces exactly: a run whose FIRST step is
+	 * behind Travelled falls out of consideration one candidate at a time, so a run whose
+	 * true start failed to arm (Reverse.Start refused it) is still offered from its second
+	 * step once the first one falls behind, the way the full rescan used to.
+	 *
+	 * False when nothing is ahead - the common case, answered in one array-empty check
+	 * rather than a walk of every step - and OutFrom/OutTo are left untouched.
+	 */
+	bool NextReverseLegRun(int32& OutFrom, int32& OutTo);
+
+private:
+	/** Fills ReverseLegSteps from Plan.Steps and resets ReverseLegCursor to 0. Called from
+	 *  Start and Replace only - see ReverseLegSteps's own comment for why it lives there. */
+	void RebuildReverseLegSteps();
+
+public:
 	void Start(const FRoutePlan& InPlan, const FAirframe& InAirframe, double InitialSpeed = 0.0,
 		TOptional<double> InitialHeading = TOptional<double>(), double InitialTravelled = 0.0);
 

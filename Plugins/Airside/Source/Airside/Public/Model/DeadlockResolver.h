@@ -85,6 +85,28 @@ struct AIRSIDE_API FDeadlockResolver
 
 private:
 	/**
+	 * Resolve's own scratch, PROMOTED FROM LOCALS (issue #190): Waiting and Visited used to
+	 * be declared fresh at the top of every Resolve() call, and Path/Position fresh at the
+	 * top of every not-yet-visited waiter's walk within it - four heap allocations (Waiting,
+	 * Visited always; Path/Position once per waiter) every substep ANY agent is stalled,
+	 * which for a busy junction with a jam in it is every substep for as long as the jam
+	 * lasts. Reset at the top of the scope that used to declare them; kept as members purely
+	 * so their capacity survives from one Resolve() call - or one waiter's walk - to the next.
+	 */
+	TMap<int32, int32> Waiting;
+
+	/** See Waiting above. Reset once per Resolve() call, at the same point Waiting is filled. */
+	TSet<int32> Visited;
+
+	/** See Waiting above. Reset once per WAITER walked, not once per Resolve() call - a
+	 *  cycle's path is only meaningful within the one walk that built it. */
+	TArray<int32> Path;
+
+	/** See Path above - the same walk's membership test and the cycle's start index in one,
+	 *  reset alongside it. */
+	TMap<int32, int32> Position;
+
+	/**
 	 * Can this member of a cycle turn where it stands? Spec §5's refined resolver rule.
 	 *
 	 * True only for a Taxiing agent that is STOPPED, was refused something (BlockedStep), and

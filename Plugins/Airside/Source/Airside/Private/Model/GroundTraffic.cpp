@@ -947,12 +947,36 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 
 int32 UGroundTraffic::CurrentStep(const FRoutePlan& Plan, double Travelled)
 {
-	for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+	// BINARY SEARCH, NOT A LEFT-TO-RIGHT WALK (issue #190): FClaimPass::WindowFor calls this
+	// for every agent every substep, and Steps[N].EndDistance is CUMULATIVE polyline length
+	// (RouteSearch.cpp builds it by appending each step's points in turn), so it is
+	// monotonically non-decreasing along Plan.Steps - which is all a binary search for "the
+	// first index where Travelled < EndDistance" needs.
+	//
+	// NOT A PERSISTED CURSOR, the shape the rest of this issue uses: T here is
+	// FClaimPass::CentreOf, not Follower.Travelled, and CentreOf's own comment says why it
+	// FLIPS SIGN in EAgentPhase::Manoeuvring - a push's centre moves the opposite way along
+	// the plan from an ordinary taxi's. A cursor assumes the distance it walks only grows,
+	// which is exactly what stops being true there; a binary search needs no such assumption
+	// and gives the identical answer for whatever Travelled is asked, in either direction.
+	int32 Lo = 0;
+	int32 Hi = Plan.Steps.Num();
+	while (Lo < Hi)
 	{
-		if (Travelled < Plan.Steps[Index].EndDistance)
+		const int32 Mid = Lo + (Hi - Lo) / 2;
+		if (Travelled < Plan.Steps[Mid].EndDistance)
 		{
-			return Index;
+			Hi = Mid;
 		}
+		else
+		{
+			Lo = Mid + 1;
+		}
+	}
+
+	if (Lo < Plan.Steps.Num())
+	{
+		return Lo;
 	}
 
 	// Past the end of the last step - an agent that has arrived, or one a rounding error
@@ -987,13 +1011,16 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
 	// pass writes to the agents, so a copy would be arbitrating over stale ones.
-	TArray<int32> Order;
-	Order.Reserve(Agents.Num());
+	//
+	// MEMBER, NOT A LOCAL (issue #190) - see ArbitrationOrder's own comment. Reset here
+	// rather than left with whatever the last Arbitrate() call sorted.
+	ArbitrationOrder.Reset();
+	ArbitrationOrder.Reserve(Agents.Num());
 	for (int32 Index = 0; Index < Agents.Num(); ++Index)
 	{
-		Order.Add(Index);
+		ArbitrationOrder.Add(Index);
 	}
-	Order.Sort([this](int32 Left, int32 Right)
+	ArbitrationOrder.Sort([this](int32 Left, int32 Right)
 	{
 		const int32 LeftRank = TraversalPriority(Agents[Left].Class);
 		const int32 RightRank = TraversalPriority(Agents[Right].Class);
@@ -1005,7 +1032,7 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 		return LeftRank != RightRank ? LeftRank > RightRank : Agents[Left].Id < Agents[Right].Id;
 	});
 
-	for (const int32 Index : Order)
+	for (const int32 Index : ArbitrationOrder)
 	{
 		Pass.Run(Agents[Index], Network);
 	}
@@ -1013,7 +1040,14 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 	// ONE RE-PASS over whoever lost a reservation to a higher rank during that pass. Without
 	// it a preempted agent drives a whole frame on a reservation it no longer holds - into
 	// the very node that was just taken from it.
-	for (const int32 AgentId : Occupancy.TakePreempted())
+	//
+	// OUT-PARAM, NOT A RETURNED TSet (issue #190): TakePreempted used to return its find by
+	// value, moving Occupancy's own set out and leaving it to rebuild from nothing the next
+	// time a preemption actually happened. PreemptedScratch is this class's own member and
+	// keeps its capacity across every Arbitrate() call instead.
+	PreemptedScratch.Reset();
+	Occupancy.TakePreempted(PreemptedScratch);
+	for (const int32 AgentId : PreemptedScratch)
 	{
 		const int32 Index = FindIndex(AgentId);
 		if (Index != INDEX_NONE)

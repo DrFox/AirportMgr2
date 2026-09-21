@@ -364,6 +364,16 @@ TSet<int32> FTrafficOccupancy::TakePreempted()
 	return Out;
 }
 
+void FTrafficOccupancy::TakePreempted(TSet<int32>& OutPreempted)
+{
+	// APPENDED, NOT MOVED (issue #190): a move would hand Preempted's own allocation to the
+	// caller and leave this table to rebuild one from scratch the next time a preemption
+	// happens - see the header. Reset() below empties Preempted without freeing it, so this
+	// table keeps its allocation exactly as OutPreempted keeps its caller's.
+	OutPreempted.Append(Preempted);
+	Preempted.Reset();
+}
+
 void FTrafficOccupancy::ReleaseGuidelineClaims()
 {
 	// THE KIND IS THE WHOLE TEST, and it is asked of the RESOURCE rather than of the holder:

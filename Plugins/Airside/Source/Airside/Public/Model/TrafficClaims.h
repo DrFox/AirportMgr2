@@ -76,13 +76,34 @@ struct AIRSIDE_API FClaimPass
 	 * both to empty at its own top, so nothing of one agent's pass leaks into the next's.
 	 *
 	 * NOT Pending: FWantedClaim is deliberately defined only in TrafficClaims.cpp (see its
-	 * forward declaration below), so a member of that type would need FClaimPass's own
-	 * destructor declared here and defined there just to give TArray's destructor a complete
-	 * type to call - a real C++ pattern, but more machinery than a 4-element array per pass
-	 * justifies. Pending stays a local in Run(), reallocated every pass.
+	 * forward declaration below), and a MEMBER of TArray<FWantedClaim> - not merely a
+	 * reference parameter naming it - forces this header's own class template TArray<FWantedClaim>
+	 * to be instantiated wherever FClaimPass is laid out, which needs FWantedClaim complete
+	 * in every including TU. TRIED an out-of-line ~FClaimPass() for issue #190, the pattern
+	 * this comment used to say would work if it were ever worth it - it does not: UE 5.8's
+	 * TArray destructor is itself constrained on the element type (a CDerivedFrom<T, FGCObject>
+	 * check), and that constraint is evaluated while INSTANTIATING TArray<FWantedClaim> for
+	 * the member's own layout, not while generating FClaimPass::~FClaimPass()'s body - so the
+	 * out-of-line destructor never gets a chance to defer it. Measured: GroundTrafficRebuild.cpp
+	 * and TrafficSplitTest.cpp, which construct an FClaimPass without ever including
+	 * TrafficClaims.cpp's FWantedClaim definition, failed exactly there (2026-09-21). See
+	 * Run() for the TInlineAllocator this became instead - a reference parameter's type never
+	 * needs completeness, so BuildPending/ApplyClaims can still be handed a fixed-capacity
+	 * array without a member ever existing.
 	 */
 	TArray<FTrafficResource> Wanted;
 	TArray<int32> OverlapsThisPass;
+
+	/**
+	 * HoldRunwayOnly's own scratch - RunwayHeld plus whatever the body is physically
+	 * crossing, the whole "hold only their surface" claim for a non-Taxiing agent.
+	 * PROMOTED FROM A LOCAL for the same reason as the two above (issue #190): a non-Taxiing
+	 * agent (parked, on the roll, lining up) still runs HoldRunwayOnly every substep, and a
+	 * fresh TArray<FTrafficResource> was being allocated and freed for it exactly as often.
+	 * FTrafficResource is an ordinary complete type here (unlike FWantedClaim above), so this
+	 * one needed none of that struct's trouble. Reset at HoldRunwayOnly's own top.
+	 */
+	TArray<FTrafficResource> Surfaces;
 
 	/**
 	 * ClaimAhead: one agent's whole claim pass for this tick. Spec §3.
@@ -237,6 +258,18 @@ struct AIRSIDE_API FClaimPass
 	struct FWantedClaim;
 
 	/**
+	 * Pending's array type (issue #190): TInlineAllocator<16> so a pass's usual handful of
+	 * entries - Reserve(4) below is the common case - never reaches the heap at all, without
+	 * making Pending a MEMBER (see Wanted's own comment for why that door is closed for this
+	 * particular type). A REFERENCE to this type is fine to name here with FWantedClaim only
+	 * forward-declared - unlike a member, forming a reference never instantiates the class
+	 * template - so BuildPending and ApplyClaims below can still take it by reference; Pending
+	 * itself stays a local in Run(), reallocated - now onto the inline buffer, not the heap -
+	 * every pass.
+	 */
+	using FPendingClaims = TArray<FWantedClaim, TInlineAllocator<16>>;
+
+	/**
 	 * The two maps between ROUTE distance - what the follower walks and what a stop point is
 	 * expressed in - and EDGE distance, which is what a claim's interval means. Pure
 	 * arithmetic on doubles: no member of this struct, no network, no agent.
@@ -309,11 +342,11 @@ struct AIRSIDE_API FClaimPass
 	/** Steps 0-2: everything the agent wants this tick, IN ROUTE ORDER, which is what the
 	 *  first-refusal rule reads. Nothing is asked of the table here. */
 	void BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
-		const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const;
+		const FClaimWindow& Window, FPendingClaims& Pending) const;
 
 	/** Step 3: ask the table for each in turn, keep what was granted or occupied, and let
 	 *  the FIRST refusal write StopWithin, WaitingOn and BlockedStep. */
-	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const TArray<FWantedClaim>& Pending);
+	void ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window, const FPendingClaims& Pending);
 
 	/** How far a refused claim lets the agent go, in route distance from T. A pure function
 	 *  of the refusal's kind, the step it was raised on, and the window. */
