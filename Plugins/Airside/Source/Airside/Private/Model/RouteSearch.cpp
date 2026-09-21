@@ -34,9 +34,28 @@ namespace
 	 * already looked it up to check A != B; a second lookup here would just be the same
 	 * allocation-per-relaxation complaint wearing a different hat.
 	 */
-	double EdgeCost(const FGuidelineEdge& Edge, FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
+	double EdgeCost(const FGuidelineEdge& Edge, FGuidelineEdgeId EdgeId, const FRouteQuery& Query,
+		bool bRunwayEdge)
 	{
 		double Length = Edge.Length;
+
+		// A RUNWAY THIS ERRAND IS STILL ALLOWED TO USE COSTS A MULTIPLE OF ITS LENGTH.
+		// Layered UNDER the avoidance filter rather than replacing it: a filter is absolute
+		// and is what an arrival's taxi needs, but an errand that slipped through without one
+		// should degrade to a detour rather than to a free taxi down the strip - which is
+		// exactly what the four undeclared call sites of 2026-09-21 did. The two never both
+		// apply: a policy carrying All AND a penalty is refused by the table test, because
+		// the edge is gone before this line is reached.
+		//
+		// MULTIPLICATIVE, NOT ADDITIVE, so a long strip costs proportionally more than a
+		// short one; a flat charge would be swallowed by a 3km runway. Still >= Length, so
+		// the straight-line heuristic stays admissible and the first pop stays optimal -
+		// which is what FMath::Max guards here and ClampMin guards in the Details panel. A
+		// query built in C++ never passes through the clamp, so both are needed.
+		if (bRunwayEdge && Query.Policy.bPenaliseRunways)
+		{
+			Length *= FMath::Max(1.0, Query.RunwayPenalty);
+		}
 
 		// Congestion: what others hold on this edge, weighted. Additive and non-negative,
 		// so the straight-line heuristic stays admissible and the first pop stays optimal.
@@ -167,10 +186,15 @@ namespace
 				return;
 			}
 
+			// ONE ANSWER, TWO READERS: the filter just below and the cost term inside
+			// EdgeCost. Asking the memo twice would be cheap, but reading it once is what
+			// guarantees the edge the filter judged is the edge the cost charged for.
+			const bool bRunwayEdge = IsRunwayEdge(Edge->DerivedFrom);
+
 			// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
 			// taxi along one and when.
 			if (Query.AvoidRunways != ERunwayAvoidance::None
-				&& IsRunwayEdge(Edge->DerivedFrom)
+				&& bRunwayEdge
 				&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
 			{
 				return;
@@ -181,7 +205,7 @@ namespace
 				return;
 			}
 
-			const double Cost = EdgeCost(*Edge, EdgeId, Query);
+			const double Cost = EdgeCost(*Edge, EdgeId, Query, bRunwayEdge);
 			if (Cost < 0.0)
 			{
 				return;

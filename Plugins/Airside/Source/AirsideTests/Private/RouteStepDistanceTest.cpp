@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
@@ -283,6 +284,114 @@ bool FRouteRunwaySeedMemoTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("one seed resolved once, however many of its edges the search relaxed"),
 		RouteSearch::RunwaySeedResolveCountForTest(), 1);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteRunwayPenaltyTest,
+	"Airside.Model.RouteSearch.RunwayPenalty",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunwayPenaltyTest::RunTest(const FString& Parameters)
+{
+	// A(0,0) to B(20000,0). Along the strip is SHORT; the detour via D is longer but legal.
+	// The penalty is the only thing that can make the longer way win, which is what makes
+	// this measure the rule rather than name it: at a multiplier of 1.0 it must go red.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
+	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+	if (!TestTrue(TEXT("the strip is a runway segment"), Net->IsRunwaySegment(Strip))) { return false; }
+
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
+	// D at 8000 north: the detour is roughly 34000 uu against the strip's ~22000, so it
+	// loses on plain length and wins at a penalty of ten. A margin, not a hair - a detour
+	// that only just won would be measuring floating-point noise.
+	const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(10000.0, 8000.0));
+	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
+	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
+	TestGraph::Join(*Net, A, D); TestGraph::Join(*Net, D, B);
+	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
+	{
+		FGuidelineEdge Along;
+		Along.A = R1; Along.B = R2;
+		Along.Control = FVector2D(10000.0, -1000.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		Net->AddGuidelineEdge(MoveTemp(Along));
+	}
+
+	auto ViaRunway = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 3 && Plan.Steps[0].To == R1; };
+	auto ViaDetour = [&](const FRoutePlan& Plan) { return Plan.IsValid() && Plan.Steps.Num() == 2 && Plan.Steps[0].To == D; };
+
+	const FAirframe Airframe;
+
+	// GraphProbe: no filter, no penalty. The strip is ordinary line and the short way wins.
+	const FRouteQuery Probe = FRouteQuery::For(ERouteErrand::GraphProbe, A, B, Airframe, ETraversalClass::Aircraft);
+	TestTrue(TEXT("with no policy at all the strip is ordinary line - the short way"),
+		ViaRunway(RouteSearch::Find(*Net, Probe)));
+
+	// PlayerIssued: no filter, but a penalty. Same graph, opposite answer.
+	FRouteQuery Player = FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe, ETraversalClass::Aircraft);
+	TestTrue(TEXT("the penalty alone sends a player-issued route round the strip"),
+		ViaDetour(RouteSearch::Find(*Net, Player)));
+
+	// AND THE PENALTY IS THE THING DOING IT, not the errand: turn the multiplier off and the
+	// same errand takes the strip again. Without this the test would still pass on a build
+	// where PlayerIssued had quietly been given an All filter instead.
+	Player.RunwayPenalty = 1.0;
+	TestTrue(TEXT("at a multiplier of one the same errand takes the strip"),
+		ViaRunway(RouteSearch::Find(*Net, Player)));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteRunwayOnlyWayTest,
+	"Airside.Model.RouteSearch.RunwayPenaltyStillRoutesWhenItIsTheOnlyWay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunwayOnlyWayTest::RunTest(const FString& Parameters)
+{
+	// THE DEGRADATION PlayerIssued EXISTS FOR. No detour at all: a filter would report
+	// Unreachable and read as a broken tool, where a penalty takes the only way there is.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RoadR1 = Net->AddNode(FVector2D(0.0, -1000.0));
+	const FRoadNodeId RoadR2 = Net->AddNode(FVector2D(20000.0, -1000.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadR1, RoadR2, Runway);
+
+	const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(20000.0, 0.0));
+	const FGuidelineNodeId R1 = Net->AddGuidelineNode(FVector2D(0.0, -1000.0));
+	const FGuidelineNodeId R2 = Net->AddGuidelineNode(FVector2D(20000.0, -1000.0));
+	TestGraph::Join(*Net, A, R1); TestGraph::Join(*Net, R2, B);
+	{
+		FGuidelineEdge Along;
+		Along.A = R1; Along.B = R2;
+		Along.Control = FVector2D(10000.0, -1000.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		Net->AddGuidelineEdge(MoveTemp(Along));
+	}
+
+	const FAirframe Airframe;
+
+	const FRoutePlan Player = RouteSearch::Find(*Net,
+		FRouteQuery::For(ERouteErrand::PlayerIssued, A, B, Airframe, ETraversalClass::Aircraft));
+	TestTrue(TEXT("a penalty is expensive, not impossible: the only way through is still found"),
+		Player.IsValid());
+
+	// THE CONTRAST THAT GIVES THAT ITS MEANING. An errand with a filter reports Unreachable
+	// on the very same graph - so the assertion above is about the penalty, not about the
+	// graph happening to be routable.
+	const FRoutePlan TaxiIn = RouteSearch::Find(*Net,
+		FRouteQuery::For(ERouteErrand::ArrivalTaxiIn, A, B, Airframe, ETraversalClass::Aircraft));
+	TestEqual(TEXT("a filtered errand refuses the same graph outright"),
+		TaxiIn.Result, ERouteResult::Unreachable);
 
 	return true;
 }
