@@ -4,6 +4,7 @@
 #include "UObject/Object.h"
 #include "PlotPresenter.generated.h"
 
+class ARoadNetworkActor;
 class UInstancedStaticMeshComponent;
 class URoadNetwork;
 
@@ -103,6 +104,19 @@ public:
 	int32 GetGateGapCount() const { return GateGaps; }
 
 private:
+	/**
+	 * The owning actor - a checked lookup, not a stored pointer, for the reason
+	 * URoadEditFacade::Actor() gives: this presenter is ALWAYS a CreateDefaultSubobject of one
+	 * (see ARoadNetworkActor::Plots), so a null Outer here is a construction error rather than
+	 * a state to handle gracefully.
+	 *
+	 * ADDED FOR ResolveDepotKits (issue #181): RebuildFrom used to call
+	 * DepotKitSpecs(UAirsideSettings::GetContent()) itself, a second resolution of the same
+	 * table FPlotPlaceTool's ghost reads through IRoadEditTarget - this reaches the actor's
+	 * ONE method instead, the same one the facade forwards to.
+	 */
+	ARoadNetworkActor& Actor() const;
+
 	UPROPERTY(Transient) TObjectPtr<UInstancedStaticMeshComponent> Boxes;
 
 	/** Reserved-but-unbought slots. Wears the ghost material; see Initialise. */

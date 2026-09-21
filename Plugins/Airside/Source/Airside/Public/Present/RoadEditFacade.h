@@ -177,6 +177,10 @@ public:
 	virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity Kind) const override;
 	using IRoadEditTarget::GetStandDefinition;
 
+	/** See IRoadEditTarget::ResolveDepotKits. Forwards to the actor, like ResolveProfileFor
+	 *  above - the content lookup itself stays on ARoadNetworkActor with every other Resolve*. */
+	virtual TArray<PlotYard::FKitSpec> ResolveDepotKits() const override;
+
 	/**
 	 * UpdateGhost, HideGhost, RebuildMesh and DispatchAgent are IRoadEditTarget virtuals
 	 * whose real work happens on URoadSurfacePresenter or UAirsideTraffic - neither of which

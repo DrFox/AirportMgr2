@@ -118,6 +118,15 @@ const UEntityDefinition* URoadEditFacade::GetEntityDefinition(EPlaceableEntity K
 	return Actor().ResolveEntityDefinition(Kind);
 }
 
+TArray<PlotYard::FKitSpec> URoadEditFacade::ResolveDepotKits() const
+{
+	// THE ACTOR'S OWN RESOLVER, not a call to DepotKitSpecs here: content resolves in exactly
+	// one function per CLAUDE.md, and ARoadNetworkActor::ResolveDepotKits is it - UPlotPresenter
+	// reaches the same method, so a tool's preview and the presenter's built depot cannot come
+	// from two different resolutions of the content set.
+	return Actor().ResolveDepotKits();
+}
+
 void URoadEditFacade::UpdateGhost(int32 FromNodeIndex, const FRoadSnapResult& Snap, bool bValid,
 	ERoadKind Kind, int32 WidthIndex)
 {

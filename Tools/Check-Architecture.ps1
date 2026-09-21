@@ -9,10 +9,12 @@
 
     Rules:
       1. Include direction. Model/ and Solve/ never include Build|Tool|Present|Entities|
-         Content; Tool/ never includes Present/; Build/ never includes Present|Tool; Solve/
-         includes only CoreMinimal.h and Solve/. (Issue #31: Model<->Entities and
+         Content; Tool/ never includes Present|Content; Build/ never includes Present|Tool;
+         Solve/ includes only CoreMinimal.h and Solve/. (Issue #31: Model<->Entities and
          Tool<->Present cycles shipped and stayed; issue #104: AirportOps' FuelService.cpp
-         resolved a content default itself instead of taking it from Present/.)
+         resolved a content default itself instead of taking it from Present/; issue #181:
+         FPlotPlaceTool reached Content/ directly for the depot kit table, the #78 pattern
+         in a new tool, and this rule did not catch it because it only forbade Present/.)
       2. One log category per name across each unity-build module: Airside, AirportOps,
          AirsideEditor, AirsideTests and AirportOpsTests. It is a unity build, so two
          DEFINE_LOG_CATEGORY_STATIC of one name in different .cpp files collide at compile
@@ -66,7 +68,7 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
 # handled separately as an allow-list.
 $forbidden = @{
     'Model' = 'Build/|Tool/|Present/|Entities/|Content/'
-    'Tool'  = 'Present/'
+    'Tool'  = 'Present/|Content/'
     'Build' = 'Present/|Tool/'
 }
 foreach ($module in $modules) {

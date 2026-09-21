@@ -135,6 +135,11 @@ struct FNullEditTarget : IRoadEditTarget
 	virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
 	using IRoadEditTarget::DispatchAgent;
 	virtual void RebuildMesh() override {}
+
+	/** A FAKE RESOLVES NOTHING COMPOSITE, same as ResolveProfileFor above - the real table
+	 *  lives on ARoadNetworkActor and is pinned by Airside.Tool.PlotSpecsComeFromTheTarget
+	 *  (issue #181). Most derived fakes never touch a plot; the ones that do override this. */
+	virtual TArray<PlotYard::FKitSpec> ResolveDepotKits() const override { return {}; }
 };
 
 #endif // WITH_DEV_AUTOMATION_TESTS

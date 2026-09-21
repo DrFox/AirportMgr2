@@ -168,6 +168,36 @@ namespace
 		Tool.OnClick(PlotAt(Actor, DepthAt));
 		Tool.OnClick(PlotAt(Actor, FVector2D(AnchorAt.X, DepthAt.Y)));
 	}
+
+	/**
+	 * A target that answers ResolveDepotKits with a table nothing else would produce, and
+	 * forwards GetNetwork to a real network so OnClick's road search still has something to
+	 * find - issue #181.
+	 *
+	 * DERIVES FROM FNullEditTarget (#189), like FFakeRunwayTarget/FFakeWidthTarget: every
+	 * virtual this does not override is its inert default, because FPlotPlaceTool calls
+	 * nothing else on Target before BuildReadout reaches ReservationFor in this test's
+	 * scenario.
+	 */
+	struct FFakeKitTarget : FNullEditTarget
+	{
+		const URoadNetwork* NetworkPtr = nullptr;
+		UEntityDefinition* Definition = nullptr;
+		TArray<PlotYard::FKitSpec> Kits;
+
+		virtual const URoadNetwork* GetNetwork() const override { return NetworkPtr; }
+		virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return Definition; }
+		using IRoadEditTarget::GetStandDefinition;
+
+		/**
+		 * THE ONE METHOD THIS TEST IS ABOUT. A sentinel table, set by the test rather than
+		 * derived from any content: if FPlotPlaceTool ever goes back to resolving specs from
+		 * DepotKitSpecs(UAirsideSettings::GetContent()) itself instead of from Context.Target
+		 * (the #181 regression), the tool would show the project's grey-box table instead of
+		 * this one and FPlotSpecsComeFromTheTargetTest would catch it.
+		 */
+		virtual TArray<PlotYard::FKitSpec> ResolveDepotKits() const override { return Kits; }
+	};
 }
 
 /**
@@ -1328,6 +1358,99 @@ bool FPlotSolvesOnceForTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("three frames locked in Confirm run no further solve"),
 		Tool.GetSolveCountForTest(), 2);
+
+	return true;
+}
+
+/**
+ * ONE TABLE, TWO CONSUMERS - issue #181. FPlotPlaceTool used to resolve the depot kit table
+ * itself, via `#include "Content/AirsideSettings.h"` and DepotKitSpecs(UAirsideSettings::
+ * GetContent()) - the #78 pattern (RunwayTool reaching UAirsideContent directly) shipping
+ * again in a new tool, and a second resolution of the same table UPlotPresenter already
+ * read on its own. Both happened to agree in every build so far, because both called the
+ * SAME global accessor - which is exactly why the duplication was invisible until this
+ * issue's review caught the include, not a divergent number in PIE.
+ *
+ * FFakeKitTarget's sentinel proves the WIRING rather than the coincidence: it hands the tool
+ * a table nothing else on Earth would produce, through Context.Target->ResolveDepotKits() -
+ * the same seam URoadEditFacade forwards to ARoadNetworkActor::ResolveDepotKits, and the one
+ * UPlotPresenter now reads through the actor rather than calling DepotKitSpecs a second time
+ * (see PlotPresenter.cpp). If the tool ever again resolved specs from
+ * UAirsideSettings::GetContent() itself, GetSpecsForTest() would show the project's grey-box
+ * three, not this one.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotSpecsComeFromTheTargetTest,
+	"Airside.Tool.PlotSpecsComeFromTheTarget",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotSpecsComeFromTheTargetTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	// LAID THROUGH THE REAL ACTOR, not the fake: the fake exists to answer ResolveDepotKits
+	// only, and OnClick's Idle-stage road search needs an actual segment to find.
+	Actor->ClearNetwork();
+	LayServiceRoad(Actor, 0.0);
+
+	FFakeKitTarget Fake;
+	Fake.NetworkPtr = Actor->Network;
+	Fake.Definition = UEntityDefinition::MakeFuelDepotTransient();
+
+	PlotYard::FKitSpec Sentinel;
+	Sentinel.Footprint.LengthUu = 12345.0;
+	Sentinel.Footprint.WidthUu = 6789.0;
+	Sentinel.ApronUu = FVector2D(111.0, 222.0);
+	Sentinel.ReserveWeight = 7;
+	Sentinel.RunCap = 3;
+	Fake.Kits = { Sentinel };
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	// THE ANCHOR CLICK, built by hand rather than through OnRoad(): that helper reads the
+	// actor's own Network to fill Context.Snap, and this context's Target is the fake, not
+	// the actor - IRoadEditTarget::GetNetwork() must answer through the fake for Context.
+	// Network() to see the road at all (FToolContext::Network() reads Target->GetNetwork()).
+	FToolContext Anchor = TestTool::ContextAt(Fake, FVector2D(0.0, 200.0), ERoadSnapKind::Segment);
+	Anchor.Snap.Segment = Actor->Network->SegmentIdAt(0);
+	const FRoadSegment* Segment = Actor->Network->GetSegment(Anchor.Snap.Segment);
+	const FRoadNode* NodeA = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
+	const FRoadNode* NodeB = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
+	if (!TestNotNull(TEXT("service road segment"), Segment)
+		|| !TestNotNull(TEXT("segment end A"), NodeA) || !TestNotNull(TEXT("segment end B"), NodeB))
+	{
+		return false;
+	}
+	Anchor.Snap.SegmentT =
+		RoadGeom::ClosestPointOnSegment(NodeA->Position, NodeB->Position, Anchor.Cursor);
+	Tool.OnClick(Anchor);
+	if (!TestEqual(TEXT("anchored"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage)))
+	{
+		return false;
+	}
+
+	// ONE MORE FRAME, OFF THE ROAD: Pinned() == 1 already gives Quad() two points (the anchor
+	// and the far frontage end extrapolated from the cursor), which is all BuildReadout needs
+	// to reach ReservationFor - see that function's own comment on resolving specs lazily,
+	// before the outline is complete.
+	const FToolContext Frame = TestTool::ContextAt(Fake, FVector2D(600.0, 200.0));
+	FToolReadoutCollector Collector;
+	Tool.BuildReadout(Frame, Collector);
+
+	const TArray<PlotYard::FKitSpec>& Specs = Tool.GetSpecsForTest();
+	if (!TestEqual(TEXT("exactly the fake's one kit, not the grey-box three"), Specs.Num(), 1))
+	{
+		return false;
+	}
+	TestEqual(TEXT("length came from the target"), Specs[0].Footprint.LengthUu, Sentinel.Footprint.LengthUu);
+	TestEqual(TEXT("width came from the target"), Specs[0].Footprint.WidthUu, Sentinel.Footprint.WidthUu);
+	TestEqual(TEXT("apron came from the target"), Specs[0].ApronUu, Sentinel.ApronUu);
+	TestEqual(TEXT("reserve weight came from the target"), Specs[0].ReserveWeight, Sentinel.ReserveWeight);
+	TestEqual(TEXT("run cap came from the target"), Specs[0].RunCap, Sentinel.RunCap);
 
 	return true;
 }

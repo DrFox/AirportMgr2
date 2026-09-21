@@ -335,6 +335,16 @@ public:
 	/** See IRoadEditTarget::ResolveProfileFor - the one place this rule lives. */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
 
+	/**
+	 * The depot kit table, from the content set - see IRoadEditTarget::ResolveDepotKits.
+	 *
+	 * THE SAME METHOD UPlotPresenter CALLS, through this actor rather than through
+	 * DepotKitSpecs(UAirsideSettings::GetContent()) a second time (issue #181) - a presenter
+	 * and a tool resolving the table independently is the split the reservation design (#180)
+	 * exists to prevent, in a new place.
+	 */
+	virtual TArray<PlotYard::FKitSpec> ResolveDepotKits() const override;
+
 	/** Remove a HAND-AUTHORED guideline edge. Refuses a derived one. */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	virtual bool DisconnectGuideline(int32 EdgeIndex) override;

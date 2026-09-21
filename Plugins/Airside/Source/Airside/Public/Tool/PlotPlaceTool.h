@@ -123,6 +123,17 @@ public:
 	int32 GetSolveCountForTest() const { return SolveCountForTest; }
 
 	/**
+	 * The kit specs this tool last resolved, empty before any solve.
+	 *
+	 * FOR TESTS ONLY - issue #181. ReservationFor now resolves them through
+	 * Context.Target->ResolveDepotKits() instead of calling DepotKitSpecs itself, and
+	 * UPlotPresenter resolves through the SAME actor method (ARoadNetworkActor::ResolveDepotKits) -
+	 * this is what a test compares the presenter's own specs against to prove the two really
+	 * are one table read twice, not two tables that happen to agree today.
+	 */
+	TArray<PlotYard::FKitSpec> GetSpecsForTest() const { return Memo.Specs; }
+
+	/**
 	 * The plot as it stands THIS frame: pinned corners as placed, the moving one taken from
 	 * the cursor, in the outline's own winding with the frontage as edge 0->1.
 	 *

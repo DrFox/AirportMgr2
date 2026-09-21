@@ -3,6 +3,7 @@
 #include "Present/TyreSmoke.h"
 
 #include "AirsideLog.h"
+#include "Build/DepotKit.h"
 #include "Containers/StaticArray.h"
 #include "Components/BillboardComponent.h"
 #include "Components/DynamicMeshComponent.h"
@@ -530,6 +531,16 @@ int32 ARoadNetworkActor::GetTaxiwayProfileCount() const
 {
 	const UAirsideContent* Content = UAirsideSettings::GetContent();
 	return Content != nullptr ? Content->TaxiwayProfiles.Num() : 0;
+}
+
+TArray<PlotYard::FKitSpec> ARoadNetworkActor::ResolveDepotKits() const
+{
+	// THE ONE CALL SITE, per CLAUDE.md's "Content/ resolves every content default in exactly
+	// one function": both URoadEditFacade (for FPlotPlaceTool) and UPlotPresenter reach this
+	// method rather than calling DepotKitSpecs(UAirsideSettings::GetContent()) themselves -
+	// see issue #181, where the tool had grown its own copy of this exact line.
+	const UAirsideContent* Content = UAirsideSettings::GetContent();
+	return DepotKitSpecs(Content);
 }
 
 URoadProfile* ARoadNetworkActor::ResolveTaxiwayProfile(int32 Index) const
