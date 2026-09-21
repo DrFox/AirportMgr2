@@ -32,9 +32,9 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 		return;
 	}
 
-	UE_MVVM_SET_PROPERTY_VALUE(Airline, Live->AirlineName);
-	UE_MVVM_SET_PROPERTY_VALUE(TypeName, Live->TypeName);
-	UE_MVVM_SET_PROPERTY_VALUE(Eta, DescribeEta(Live->ArrivesAt, Clock.Now()));
+	Airline = Live->AirlineName;
+	TypeName = Live->TypeName;
+	Eta = DescribeEta(Live->ArrivesAt, Clock.Now());
 
 	// THE REAL PLAN IS EXPENSIVE (issue #169): a full ArrivalPlanner::Plan is a route search
 	// over every stand, then every runway exit, so it is only re-run when one of the three
@@ -50,14 +50,14 @@ void UOfferViewModel::Refresh(const UFlightBoard& Board, const UGroundTraffic& T
 		// THE REAL PLAN, with the live occupancy. The greyed-out reason is the sentence the
 		// arrival itself would print, because it is the same refusal.
 		const EArrivalRefusal Why = Board.WhyNotAcceptable(Traffic, Network, *Live);
-		UE_MVVM_SET_PROPERTY_VALUE(bAcceptable, Why == EArrivalRefusal::None);
+		bAcceptable = Why == EArrivalRefusal::None;
 
 		// THE REASON-ONLY OVERLOAD, not a plan built by hand just to carry Why - ToastStackWidget
 		// already reads it this way, and a plan with every other field default-constructed is not
 		// a plan, it is Why wearing a bigger struct.
-		UE_MVVM_SET_PROPERTY_VALUE(Refusal, Why == EArrivalRefusal::None
+		Refusal = Why == EArrivalRefusal::None
 			? FText::GetEmpty()
-			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why)));
+			: FText::FromString(ArrivalPlanner::DescribeRefusal(Why));
 
 		BoardRevisionAt = BoardNow;
 		GuidelineRevisionAt = GuidelineNow;
@@ -103,13 +103,11 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 		if (!bSameFlights)
 		{
 			Rows.Reset();
-			Offers.Reset();
 			for (UFlight* Each : Pending)
 			{
 				UOfferViewModel* Row = NewObject<UOfferViewModel>(this);
 				Row->Flight = Each;
 				Rows.Add(Row);
-				Offers.Add(Row);
 			}
 		}
 
@@ -125,10 +123,24 @@ void UOfferInboxViewModel::Refresh(UFlightBoard& InBoard, UGroundTraffic& InTraf
 		}
 	}
 
-	// THROUGH THE MACRO, never a plain assignment. Assigning the member compiles, draws
-	// correctly the first time, and then never updates the badge again - and nothing in a
-	// binding says why.
-	UE_MVVM_SET_PROPERTY_VALUE(PendingCount, Rows.Num());
+	// A PLAIN ASSIGNMENT (issue #191 dropped UE_MVVM_SET_PROPERTY_VALUE here): the count used
+	// to be set through the macro so a Blueprint binding would hear about it, but nothing
+	// ever bound this field - OfferInboxWidget::PaintRows reads GetPendingCount() directly
+	// every refresh, which is what actually keeps the badge current.
+	PendingCount = Rows.Num();
+}
+
+TArray<UOfferViewModel*> UOfferInboxViewModel::GetOffers() const
+{
+	// BUILT HERE, NOT STORED: see the header comment on why this used to be a second member
+	// (Offers) kept in step with Rows by hand, and why that was the "two lists" bug.
+	TArray<UOfferViewModel*> Result;
+	Result.Reserve(Rows.Num());
+	for (const TObjectPtr<UOfferViewModel>& Row : Rows)
+	{
+		Result.Add(Row);
+	}
+	return Result;
 }
 
 bool UOfferInboxViewModel::Accept(UOfferViewModel* Row)

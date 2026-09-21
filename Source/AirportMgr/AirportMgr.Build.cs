@@ -24,10 +24,15 @@ public class AirportMgr : ModuleRules
 
 		// UMG: the build bar. Slate/SlateCore: FInputChord (the registry's Ctrl bindings) and
 		// the UMG types' bases.
-		// ModelViewViewModel: the offer inbox binds viewmodels rather than polling the board.
-		// BETA in 5.8 - if a binding misbehaves the fallback is a plain widget reading the
-		// board directly, as UInspectorWidget does, not a redesign.
-		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore", "ModelViewViewModel" });
+		//
+		// NO ModelViewViewModel (issue #191 dropped it): this used to say "the offer inbox
+		// binds viewmodels rather than polling the board", but no Content/UI Blueprint ever
+		// bound a field, so every UE_MVVM_SET_PROPERTY_VALUE broadcast a change to zero
+		// subscribers. OfferInboxWidget and LedgerPanelWidget poll on NativeTick and read
+		// plain getters (see their own headers) - the actual, working design, and the one
+		// PR #196 already made cheap by gating on a revision instead of every tick. The
+		// viewmodels are now plain UObject DTOs; see OfferViewModels.h and LedgerViewModels.h.
+		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

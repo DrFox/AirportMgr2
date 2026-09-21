@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "MVVMViewModelBase.h"
 
 #include "LedgerViewModels.generated.h"
 
@@ -15,15 +14,18 @@ enum class ELedgerCategory : uint8;
  * One row of the ledger panel.
  *
  * A VIEWMODEL, NOT THE MODEL, for the reason UOfferViewModel's header gives: FLedgerEntry
- * lives in AirportOps Model/ and must not learn about the MVVM runtime, or it could not be
- * tested without one. This flattens an entry into the four strings a row draws.
+ * lives in AirportOps Model/ and must not learn about the UI, or it could not be tested
+ * without one. This flattens an entry into the four strings a row draws.
+ *
+ * PLAIN UObject, NOT UMVVMViewModelBase (issue #191 dropped the base) - see
+ * UOfferViewModel's header for why: nothing ever bound a field on either class.
  *
  * THE AMOUNT IS ALREADY FORMATTED, currency symbol and all, because UPricing::Format is the
  * one place money becomes text - a row doing its own formatting would be a second answer to
  * what a number looks like, and the two would drift the first time the symbol changed.
  */
 UCLASS(BlueprintType)
-class AIRPORTMGR_API ULedgerRowViewModel : public UMVVMViewModelBase
+class AIRPORTMGR_API ULedgerRowViewModel : public UObject
 {
 	GENERATED_BODY()
 
@@ -41,19 +43,19 @@ public:
 private:
 	/** "Day 3  14:20". The player has no feel for a game-second count - the same choice
 	 *  UOfferViewModel::Eta makes. */
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetWhen",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetWhen",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	FText When;
 
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetCategory",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetCategory",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	FText Category;
 
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetWhat",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetWhat",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	FText What;
 
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetAmount",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetAmount",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	FText Amount;
 
@@ -64,7 +66,7 @@ private:
 	 * string by the time a row sees it, and parsing a minus back out of it to pick a colour
 	 * is how a localised minus sign becomes a green outgoing.
 	 */
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "IsOutgoing",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "IsOutgoing",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	bool bOutgoing = false;
 };
@@ -81,9 +83,12 @@ private:
  * UOfferInboxWidget's header on why a UListView cannot be built usefully in code here - so
  * the panel shows the most recent few dozen movements rather than every one a long game
  * holds. That is also what the panel is FOR: "where did my money just go".
+ *
+ * PLAIN UObject, NOT UMVVMViewModelBase (issue #191 dropped the base) - see
+ * UOfferViewModel's header for why.
  */
 UCLASS(BlueprintType)
-class AIRPORTMGR_API ULedgerPanelViewModel : public UMVVMViewModelBase
+class AIRPORTMGR_API ULedgerPanelViewModel : public UObject
 {
 	GENERATED_BODY()
 
@@ -107,11 +112,11 @@ public:
 private:
 	UPROPERTY(Transient) TArray<TObjectPtr<ULedgerRowViewModel>> RowModels;
 
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetBalance",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "GetBalance",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	FText Balance;
 
-	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "IsOverdrawn",
+	UPROPERTY(BlueprintReadOnly, Transient, Getter = "IsOverdrawn",
 		Category = "Ledger", meta = (AllowPrivateAccess))
 	bool bOverdrawn = false;
 

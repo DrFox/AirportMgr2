@@ -148,8 +148,10 @@ void UOfferInboxWidget::PaintRows()
 			: FText::AsNumber(Pending));
 	}
 
-	// The Blueprint path: the list view owns the rows and MVVM gives each entry widget its
-	// own UOfferViewModel through UMVVMViewListViewBaseClassExtension.
+	// The Blueprint path: UListView::SetListItems (core UMG, not ModelViewViewModel - issue
+	// #191 dropped that dependency, since nothing used it) hands each entry widget its own
+	// UOfferViewModel through IUserObjectListEntry; the entry widget's Blueprint graph reads
+	// its getters the same way PaintRows does below for the code-built path.
 	if (OfferList != nullptr)
 	{
 		OfferList->SetListItems(Rows);
