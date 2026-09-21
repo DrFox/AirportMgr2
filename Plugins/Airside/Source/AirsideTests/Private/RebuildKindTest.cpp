@@ -86,6 +86,49 @@ bool FDragNotifiesGeometryOnlyTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("and PlaceNode still runs the derived-graph pass"),
 		Actor->TopologyRebuildCountForTest(), TopologyBeforePlace + 1);
 
+	// --- Review follow-up: an ABANDONED drag must still catch the derived graph up --------
+	//
+	// AbandonEdit only drops the undo SNAPSHOT; it does NOT put the node back (MoveNode
+	// bypasses the scope AbandonEdit would otherwise roll back - see the facade's class
+	// comment). Without EndInteractiveEdit(false) itself notifying Topology when something
+	// actually moved, cancelling a drag (Escape) would leave the guideline graph, anchor
+	// links, plots and traffic pointed at pre-drag positions FOREVER - nothing else would
+	// ever notify Topology for that edit again.
+	{
+		const int32 TopologyBeforeAbandon = Actor->TopologyRebuildCountForTest();
+		Facade->BeginInteractiveEdit(TEXT("drag then abandon"));
+		TestTrue(TEXT("the soon-to-be-abandoned drag still moves the node while it is live"),
+			Actor->MoveNode(A, FVector2D(500.0, 500.0)));
+		TestTrue(TEXT("and a second frame of it"),
+			Actor->MoveNode(A, FVector2D(700.0, 700.0)));
+		Facade->EndInteractiveEdit(/*bKeep*/ false);
+
+		TestEqual(TEXT("an abandoned drag that moved something still runs the derived-graph "
+			"pass exactly once, not zero times - the staleness a plain AbandonEdit would "
+			"otherwise leave forever"),
+			Actor->TopologyRebuildCountForTest(), TopologyBeforeAbandon + 1);
+	}
+
+	// --- Review follow-up: a MOTIONLESS drag must cost NOTHING -----------------------------
+	//
+	// A click-release that opens and closes an interactive edit without a single successful
+	// MoveNode/MoveApronCorner (the cursor never left the node, or every attempted move was
+	// refused) is not a drag at all. Before issue #165, that sequence fired no notify
+	// whatsoever, because MoveNode's own notify simply never happened - an unconditional
+	// Topology notify at EndInteractiveEdit would be a full rebuild that never used to run.
+	{
+		const int32 TopologyBeforeNoOp = Actor->TopologyRebuildCountForTest();
+		const int32 RebuildsBeforeNoOp = Actor->RebuildCountForTest();
+		Facade->BeginInteractiveEdit(TEXT("click, no drag"));
+		Facade->EndInteractiveEdit(/*bKeep*/ true);
+
+		TestEqual(TEXT("a Begin/End with no successful move in between runs the "
+			"derived-graph pass zero times"),
+			Actor->TopologyRebuildCountForTest(), TopologyBeforeNoOp);
+		TestEqual(TEXT("and rebuilds the surface zero times either - nothing changed at all"),
+			Actor->RebuildCountForTest(), RebuildsBeforeNoOp);
+	}
+
 	return true;
 }
 

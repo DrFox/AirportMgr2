@@ -368,6 +368,29 @@ private:
 	mutable int32 DeletionPlanComputeCount = 0;
 
 	/**
+	 * Whether MoveNode or MoveApronCorner actually moved something during the CURRENT
+	 * interactive edit - cleared in BeginInteractiveEdit, set by their own Geometry notify.
+	 *
+	 * WHAT THIS GUARDS (issue #165 follow-up review). Before #165, every MoveNode/
+	 * MoveApronCorner notify ran the whole pipeline, so it did not matter whether the edit
+	 * that owned a drag was later kept or abandoned: the derived graph was always fresh.
+	 * After #165 a drag frame notifies Geometry only, so EndInteractiveEdit is the ONLY place
+	 * left that can catch the derived graph up - and it needs to know whether there is
+	 * anything to catch up. Read in exactly two places:
+	 *   - bKeep=false (abandoned): AbandonEdit only drops the undo snapshot, it does NOT put
+	 *     the nodes back, so a drag that moved something and was then abandoned (Escape) would
+	 *     leave guidelines/anchor links/plots/traffic pointed at pre-drag positions FOREVER
+	 *     with no flag here to say so - nothing else will ever notify Topology for that edit.
+	 *   - bKeep=true with nothing moved (a click-release that opened and closed an edit
+	 *     without a single successful move): firing a Topology notify anyway would be a full
+	 *     rebuild that never happened before #165, for no reason.
+	 * NOT read on the CanAfford-revert branch inside bKeep=true - that branch already
+	 * notifies Topology itself via RevertEdit, unconditionally, because a reverted drag always
+	 * changed something (the charge check only runs after a real move).
+	 */
+	bool bGeometryChangedDuringEdit = false;
+
+	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.
 	 *
 	 * A REFERENCE, not a pointer every caller has to null-check: this facade REQUIRES an

@@ -726,6 +726,10 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	// enough to drive through: build ten metres of taxiway, drag its end two kilometres, and
 	// the extra pavement is free - MoveNode creates no segment, so nothing else charges for it.
 	PavementValueAtDragStart = QuoteForAllPavement().BaseAmount;
+
+	// A FRESH EDIT HAS MOVED NOTHING YET - see the field's own comment for what
+	// EndInteractiveEdit does with this.
+	bGeometryChangedDuringEdit = false;
 }
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
@@ -739,6 +743,23 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 	if (!bKeep)
 	{
 		History->AbandonEdit();
+
+		// LATENT STALENESS ON ABANDON (issue #165 follow-up). AbandonEdit only drops the undo
+		// SNAPSHOT - it does not put the nodes back, because they were never recorded as a
+		// scope's mutation in the first place (MoveNode/MoveApronCorner bypass
+		// CommitAndNotify's scope entirely - see the class comment). So a drag that moved
+		// something and was then abandoned (Escape cancels a drag rather than committing it)
+		// would leave the guideline graph, anchor links, plots and traffic pointed at the
+		// PRE-drag positions FOREVER: nothing else will ever notify Topology for this edit.
+		// Before #165 every MoveNode/MoveApronCorner notify ran the whole pipeline, so an
+		// abandoned drag was still fresh; this restores exactly that guarantee, and ONLY when
+		// something actually moved - an edit opened and abandoned with no successful move
+		// costs nothing, same as it always has.
+		if (bGeometryChangedDuringEdit)
+		{
+			NotifyChanged(EChangeKind::Topology);
+		}
+		bGeometryChangedDuringEdit = false;
 		return;
 	}
 
@@ -783,12 +804,23 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 
 	History->CommitEdit();
 
-	// THE ONE TOPOLOGY NOTIFY A DRAG FIRES (issue #165). Every frame of the drag itself
-	// notified Geometry only, through MoveNode, which left the guideline graph, anchor
-	// links, plots and traffic exactly as stale as they were when the drag began - none of
-	// them re-derive from a Geometry notify. This is where a committed drag catches them up,
+	// THE ONE TOPOLOGY NOTIFY A DRAG FIRES (issue #165) - AND ONLY IF SOMETHING ACTUALLY
+	// MOVED. Every frame of a real drag notified Geometry only, through MoveNode/
+	// MoveApronCorner, which left the guideline graph, anchor links, plots and traffic
+	// exactly as stale as they were when the drag began - none of them re-derive from a
+	// Geometry notify. This is where a committed drag that moved something catches them up,
 	// exactly once, no matter how many frames it ran for.
-	NotifyChanged(EChangeKind::Topology);
+	//
+	// GUARDED, because a click-release that opens and closes an interactive edit without a
+	// single successful move (the cursor never left the node, or every move attempted was
+	// refused) is not a drag at all - before #165 that sequence fired no notify whatsoever,
+	// since MoveNode's own notify simply never happened, and an unconditional Topology notify
+	// here would be a full rebuild that never used to run.
+	if (bGeometryChangedDuringEdit)
+	{
+		NotifyChanged(EChangeKind::Topology);
+	}
+	bGeometryChangedDuringEdit = false;
 }
 
 bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To)
@@ -862,7 +894,9 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 		// there for a Topology rebuild to catch that a Geometry one would miss. Every frame
 		// of a drag, the pavement has changed and the mesh is stale until something rebuilds
 		// it; EndInteractiveEdit still fires the one Topology notify at drag end, same as a
-		// node drag.
+		// node drag - see bGeometryChangedDuringEdit's own comment for why that flag does not
+		// distinguish which kind of drag set it.
+		bGeometryChangedDuringEdit = true;
 		NotifyChanged(EChangeKind::Geometry);
 	}
 	return bMoved;
@@ -1141,9 +1175,11 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	// segment's endpoints-as-a-set, only where things sit, so the listener can rebuild the
 	// surface alone and skip the guideline graph, anchor links, plots and traffic every
 	// frame of the drag - EndInteractiveEdit fires the one Topology notify that catches
-	// those up once the drag commits.
+	// those up once the drag commits, IF this actually ran during that edit - see
+	// bGeometryChangedDuringEdit's own comment for why that flag exists at all.
 	if (bMoved)
 	{
+		bGeometryChangedDuringEdit = true;
 		NotifyChanged(EChangeKind::Geometry);
 	}
 
