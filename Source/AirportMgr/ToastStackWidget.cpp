@@ -27,6 +27,14 @@ void UToastStackWidget::BuildOnce(const UUIStyle& Style)
 	// UOpsRuntime would have made a save-game question out of a reading time.
 	Notifications = NewObject<UNotificationCentre>(this);
 
+	// Cached for TickFeed, which runs every frame: without this it called ResolveStyle() (a
+	// TMap lookup) and LoadSynchronous() three times (one per severity) EVERY TICK, for a
+	// widget that is on screen during every event burst - issue #186.
+	CachedStyle = &Style;
+	CachedIconInfo = Style.IconInfo.LoadSynchronous();
+	CachedIconSuccess = Style.IconSuccess.LoadSynchronous();
+	CachedIconWarning = Style.IconWarning.LoadSynchronous();
+
 	EnsureSlots(&Style);
 
 	// THE ONLY SUBSCRIBER THAT TURNS EVENTS INTO USER-VISIBLE ENTRIES, so there is one place
@@ -114,7 +122,10 @@ void UToastStackWidget::TickFeed(float RealDeltaSeconds)
 	// a HUMAN reads, so its lifetime belongs to the human and not to the simulation.
 	Notifications->Advance(RealDeltaSeconds);
 
-	Rebuild(*UAirportMgrUISettings::ResolveStyle());
+	// CachedStyle is set in BuildOnce, which UAirportMgrPanelWidget::Initialize guarantees
+	// runs before the first tick; the ResolveStyle() fallback only covers a test that drove
+	// TickFeed without going through Initialize.
+	SyncCards(CachedStyle != nullptr ? *CachedStyle : *UAirportMgrUISettings::ResolveStyle());
 }
 
 FLinearColor UToastStackWidget::ColourFor(const UUIStyle& Style, ENotificationSeverity Severity)
@@ -128,96 +139,166 @@ FLinearColor UToastStackWidget::ColourFor(const UUIStyle& Style, ENotificationSe
 	}
 }
 
-UTexture2D* UToastStackWidget::IconFor(const UUIStyle& Style, ENotificationSeverity Severity)
+UTexture2D* UToastStackWidget::IconFor(ENotificationSeverity Severity) const
 {
 	switch (Severity)
 	{
-	case ENotificationSeverity::Warning: return Style.IconWarning.LoadSynchronous();
-	case ENotificationSeverity::Success: return Style.IconSuccess.LoadSynchronous();
+	case ENotificationSeverity::Warning: return CachedIconWarning;
+	case ENotificationSeverity::Success: return CachedIconSuccess;
 	case ENotificationSeverity::Info:
-	default:                             return Style.IconInfo.LoadSynchronous();
+	default:                             return CachedIconInfo;
 	}
 }
 
-void UToastStackWidget::Rebuild(const UUIStyle& Style)
+float UToastStackWidget::OpacityFor(const FNotificationEntry& Entry) const
+{
+	// Fades over its last two seconds rather than vanishing, so the eye is not pulled to a
+	// sudden disappearance at the edge of vision. Never below 0.15: a toast that has faded
+	// out but not yet expired would still be taking up a row, and an invisible row that
+	// pushes the others around reads as a glitch.
+	const double Remaining = Notifications->FeedLifetimeRealSeconds
+		- (Notifications->Now() - Entry.RaisedAtRealSeconds);
+	return static_cast<float>(FMath::Clamp(Remaining / 2.0, 0.15, 1.0));
+}
+
+void UToastStackWidget::SyncCards(const UUIStyle& Style)
 {
 	if (ToastColumn == nullptr)
 	{
 		return;
 	}
 
-	// Rebuilt each tick rather than diffed. The list is at most a handful of rows and every
-	// one of them changes opacity every frame anyway, so a diff would buy nothing and cost
-	// a second model of what is on screen.
-	ToastColumn->ClearChildren();
+	const TConstArrayView<FNotificationEntry> Entries = Notifications->Entries();
 
-	const double Now = Notifications->Now();
-	for (const FNotificationEntry& Entry : Notifications->Entries())
+	// CHECKED AT EVERY INDEX, NOT JUST THE HEAD. Today Notifications->Entries() is a queue -
+	// PostFeed only appends at the back, and both ways an entry leaves (Advance()'s
+	// oldest-first expiry and PostFeed's MaxEntries cap) only ever drop the FRONT - so in
+	// practice Cards[0] disagreeing with Entries[0] is the only disagreement there ever is,
+	// and this loop exits after one comparison per tick. But that is because every entry
+	// shares ONE FeedLifetimeRealSeconds; a future per-severity lifetime would let a Warning
+	// outlive an Info raised earlier, expiring an entry out of the MIDDLE of the list, and a
+	// front-only trim would silently hand a survivor's opacity (and, if this ever grows a
+	// countdown label, its text) to the wrong card with no test going red. Walking every
+	// index costs nothing while the invariant holds and stays correct the day it does not -
+	// see AirportMgr.UI.ToastCardsSurviveARemovalFromTheMiddle, which removes from the middle
+	// on purpose.
+	int32 WalkIndex = 0;
+	while (WalkIndex < Cards.Num() && WalkIndex < Entries.Num())
 	{
-		const FLinearColor Severity = ColourFor(Style, Entry.Severity);
-
-		// A ROUNDED CARD, NOT A TINTED RECTANGLE. UBorder's default brush is a flat box, and
-		// SetBrushColor only tints it - which is how these drew as square slabs while
-		// UUIStyle::CornerRadius sat in the asset unread. FSlateRoundedBoxBrush is the only
-		// thing in Slate that actually rounds a corner, and it takes the radius and an
-		// outline in one construction.
-		//
-		// PanelDark, not Panel: a toast floats OVER the world and sits directly above a
-		// Panel-coloured bar, so drawing it in Panel made it read as part of the bar.
-		UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
-		Row->SetBrush(FSlateRoundedBoxBrush(Style.PanelDark, Style.CornerRadius,
-			FLinearColor(Severity.R, Severity.G, Severity.B, 0.85f), ToastOutlineWidth));
-		Row->SetPadding(FMargin(12.0f, 9.0f));
-
-		UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
-		Row->SetContent(Line);
-
-		// The severity says itself twice - icon and outline - because colour alone is not a
-		// message to a player who cannot tell the brick from the sage.
-		if (UTexture2D* Icon = IconFor(Style, Entry.Severity))
+		if (Cards[WalkIndex].EntryId != Entries[WalkIndex].Id)
 		{
-			UImage* Chip = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
-			Chip->SetBrushFromTexture(Icon, false);
-			Chip->SetDesiredSizeOverride(FVector2D(ToastIconSize));
-			Chip->SetColorAndOpacity(Severity);
-			UHorizontalBoxSlot* ChipSlot = Line->AddChildToHorizontalBox(Chip);
-			ChipSlot->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
-			ChipSlot->SetVerticalAlignment(VAlign_Center);
+			if (Cards[WalkIndex].Card != nullptr)
+			{
+				Cards[WalkIndex].Card->RemoveFromParent();
+			}
+			Cards.RemoveAt(WalkIndex);
+			continue;   // re-test THIS index against the array as it now stands
 		}
+		++WalkIndex;
+	}
 
-		UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
-		Words->SetText(Entry.Text);
-		Style.ApplyText(*Words, EUITextRole::Body, Style.Text);
-
-		// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
-		// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across
-		// the corner of the screen. Wrapped to a card width it is two short lines the eye
-		// takes in at once.
-		Words->SetAutoWrapText(true);
-		Words->SetWrapTextAt(ToastWrapWidth);
-		UHorizontalBoxSlot* WordSlot = Line->AddChildToHorizontalBox(Words);
-		WordSlot->SetVerticalAlignment(VAlign_Center);
-
-		// Fades over its last two seconds rather than vanishing, so the eye is not pulled to
-		// a sudden disappearance at the edge of vision. Never below 0.15: a toast that has
-		// faded out but not yet expired would still be taking up a row, and an invisible
-		// row that pushes the others around reads as a glitch.
-		const double Remaining = Notifications->FeedLifetimeRealSeconds - (Now - Entry.RaisedAtRealSeconds);
-		Row->SetRenderOpacity(static_cast<float>(FMath::Clamp(Remaining / 2.0, 0.15, 1.0)));
-
-		// NEWEST AT THE BOTTOM, which is what append gives: the eye that just looked at the
-		// bar is already at the bottom of the screen, and a new toast appearing under the
-		// last one it read is the shortest distance for it to travel.
-		//
-		// A GAP BETWEEN CARDS. Without it the rounded corners meet and the stack fuses back
-		// into the one slab the rounding was there to break up.
-		UVerticalBoxSlot* RowSlot = Cast<UVerticalBoxSlot>(ToastColumn->AddChild(Row));
-		if (RowSlot != nullptr)
+	// Anything past Entries.Num() belongs to no live entry either - the walk above only ever
+	// compares up to Entries.Num(), so a removal at the very tail needs its own pass. Not
+	// reachable while removal is front-only, same caveat as above.
+	while (Cards.Num() > Entries.Num())
+	{
+		const int32 Last = Cards.Num() - 1;
+		if (Cards[Last].Card != nullptr)
 		{
-			RowSlot->SetPadding(FMargin(0.0f, ToastGap, 0.0f, 0.0f));
-			RowSlot->SetHorizontalAlignment(HAlign_Right);
+			Cards[Last].Card->RemoveFromParent();
+		}
+		Cards.RemoveAt(Last);
+	}
+
+	// Append a card for every entry that arrived since the last tick. BuildCard is the ONLY
+	// place a toast's widgets are constructed - everything about it but its opacity is fixed
+	// for the entry's whole life.
+	for (int32 Index = Cards.Num(); Index < Entries.Num(); ++Index)
+	{
+		FToastCard NewCard;
+		NewCard.EntryId = Entries[Index].Id;
+		NewCard.Card = BuildCard(Style, Entries[Index]);
+		Cards.Add(NewCard);
+	}
+
+	// The only per-frame write for a survivor: SetRenderOpacity on a widget that already
+	// exists. No ConstructWidget, no LoadSynchronous, no ClearChildren.
+	for (int32 Index = 0; Index < Entries.Num() && Index < Cards.Num(); ++Index)
+	{
+		if (Cards[Index].Card != nullptr)
+		{
+			Cards[Index].Card->SetRenderOpacity(OpacityFor(Entries[Index]));
 		}
 	}
+}
+
+UBorder* UToastStackWidget::BuildCard(const UUIStyle& Style, const FNotificationEntry& Entry)
+{
+	++CardsConstructed;
+
+	const FLinearColor Severity = ColourFor(Style, Entry.Severity);
+
+	// A ROUNDED CARD, NOT A TINTED RECTANGLE. UBorder's default brush is a flat box, and
+	// SetBrushColor only tints it - which is how these drew as square slabs while
+	// UUIStyle::CornerRadius sat in the asset unread. FSlateRoundedBoxBrush is the only
+	// thing in Slate that actually rounds a corner, and it takes the radius and an
+	// outline in one construction.
+	//
+	// PanelDark, not Panel: a toast floats OVER the world and sits directly above a
+	// Panel-coloured bar, so drawing it in Panel made it read as part of the bar.
+	UBorder* Row = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+	Row->SetBrush(FSlateRoundedBoxBrush(Style.PanelDark, Style.CornerRadius,
+		FLinearColor(Severity.R, Severity.G, Severity.B, 0.85f), ToastOutlineWidth));
+	Row->SetPadding(FMargin(12.0f, 9.0f));
+
+	UHorizontalBox* Line = WidgetTree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass());
+	Row->SetContent(Line);
+
+	// The severity says itself twice - icon and outline - because colour alone is not a
+	// message to a player who cannot tell the brick from the sage.
+	if (UTexture2D* Icon = IconFor(Entry.Severity))
+	{
+		UImage* Chip = WidgetTree->ConstructWidget<UImage>(UImage::StaticClass());
+		Chip->SetBrushFromTexture(Icon, false);
+		Chip->SetDesiredSizeOverride(FVector2D(ToastIconSize));
+		Chip->SetColorAndOpacity(Severity);
+		UHorizontalBoxSlot* ChipSlot = Line->AddChildToHorizontalBox(Chip);
+		ChipSlot->SetPadding(FMargin(0.0f, 0.0f, 10.0f, 0.0f));
+		ChipSlot->SetVerticalAlignment(VAlign_Center);
+	}
+
+	UTextBlock* Words = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass());
+	Words->SetText(Entry.Text);
+	Style.ApplyText(*Words, EUITextRole::Body, Style.Text);
+
+	// WRAPPED, and this is most of what made the old row look clunky: "Arrival refused:
+	// the runway is in use. Wait for it to clear." on one line is a 400 uu ribbon across
+	// the corner of the screen. Wrapped to a card width it is two short lines the eye
+	// takes in at once.
+	Words->SetAutoWrapText(true);
+	Words->SetWrapTextAt(ToastWrapWidth);
+	UHorizontalBoxSlot* WordSlot = Line->AddChildToHorizontalBox(Words);
+	WordSlot->SetVerticalAlignment(VAlign_Center);
+
+	// Set once at birth rather than left at 1.0: a toast built partway through its fade (the
+	// tail of a burst posted in one frame with an already-ticked one) must not flash at full
+	// opacity for a frame before the next tick corrects it.
+	Row->SetRenderOpacity(OpacityFor(Entry));
+
+	// NEWEST AT THE BOTTOM, which is what append gives: the eye that just looked at the
+	// bar is already at the bottom of the screen, and a new toast appearing under the
+	// last one it read is the shortest distance for it to travel.
+	//
+	// A GAP BETWEEN CARDS. Without it the rounded corners meet and the stack fuses back
+	// into the one slab the rounding was there to break up.
+	UVerticalBoxSlot* RowSlot = Cast<UVerticalBoxSlot>(ToastColumn->AddChild(Row));
+	if (RowSlot != nullptr)
+	{
+		RowSlot->SetPadding(FMargin(0.0f, ToastGap, 0.0f, 0.0f));
+		RowSlot->SetHorizontalAlignment(HAlign_Right);
+	}
+
+	return Row;
 }
 
 int32 UToastStackWidget::ToastCountForTest() const
@@ -238,4 +319,34 @@ bool UToastStackWidget::FirstToastBrushForTest(FSlateBrush& OutBrush) const
 	}
 	OutBrush = Row->Background;
 	return true;
+}
+
+UBorder* UToastStackWidget::NthToastForTest(int32 Index) const
+{
+	return (ToastColumn != nullptr && Index >= 0 && Index < ToastColumn->GetChildrenCount())
+		? Cast<UBorder>(ToastColumn->GetChildAt(Index))
+		: nullptr;
+}
+
+bool UToastStackWidget::NthToastTextForTest(int32 Index, FText& OutText) const
+{
+	const UBorder* Row = NthToastForTest(Index);
+	const UHorizontalBox* Line = Row != nullptr ? Cast<UHorizontalBox>(Row->GetContent()) : nullptr;
+	if (Line == nullptr)
+	{
+		return false;
+	}
+
+	// The text block is the LAST child: the icon, when the severity has one, is added first
+	// in BuildCard. Searching from the end rather than assuming an index keeps this working
+	// whether or not this entry got an icon.
+	for (int32 ChildIndex = Line->GetChildrenCount() - 1; ChildIndex >= 0; --ChildIndex)
+	{
+		if (const UTextBlock* Words = Cast<UTextBlock>(Line->GetChildAt(ChildIndex)))
+		{
+			OutText = Words->GetText();
+			return true;
+		}
+	}
+	return false;
 }

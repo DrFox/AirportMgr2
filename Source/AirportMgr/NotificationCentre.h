@@ -27,6 +27,15 @@ struct FNotificationEntry
 	UPROPERTY() ENotificationSeverity Severity = ENotificationSeverity::Info;
 	UPROPERTY() FText Text;
 	UPROPERTY() double RaisedAtRealSeconds = 0.0;
+
+	/**
+	 * Stable identity, assigned once by PostFeed and never reused. Added for issue #186: the
+	 * toast widget keeps one card per entry across ticks, and telling "the same entry, still
+	 * here" from "a different entry that happens to sit at the same array index" needs a key
+	 * that outlives the entry's position in List - an index shifts every time the FRONT is
+	 * trimmed, an Id does not.
+	 */
+	UPROPERTY() int32 Id = INDEX_NONE;
 };
 
 /**
@@ -80,7 +89,20 @@ public:
 
 	TConstArrayView<FNotificationEntry> Entries() const { return List; }
 
+	/**
+	 * TEST ONLY. Removes one entry by Id wherever it sits in List, so a test can simulate
+	 * what a future per-severity FeedLifetimeRealSeconds would do - expire something out of
+	 * the MIDDLE of the feed - without that feature actually existing yet. Real removal stays
+	 * front-only (Advance's expiry, PostFeed's MaxEntries cap); this exists so
+	 * UToastStackWidget::SyncCards is proven correct against more than the one shape real
+	 * removal happens to take today.
+	 */
+	bool RemoveEntryForTest(int32 EntryId);
+
 private:
 	UPROPERTY() TArray<FNotificationEntry> List;
 	double NowRealSeconds = 0.0;
+
+	/** Never reused, never reset: see FNotificationEntry::Id. */
+	int32 NextEntryId = 0;
 };
