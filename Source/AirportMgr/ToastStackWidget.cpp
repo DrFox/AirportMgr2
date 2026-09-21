@@ -170,20 +170,44 @@ void UToastStackWidget::SyncCards(const UUIStyle& Style)
 
 	const TConstArrayView<FNotificationEntry> Entries = Notifications->Entries();
 
-	// TRIM THE FRONT, EXACTLY, NOT AS A HEURISTIC. Notifications->Entries() is a queue:
-	// PostFeed only ever appends at the back, and both ways an entry leaves - Advance()'s
-	// oldest-first expiry and PostFeed's MaxEntries cap - only ever drop the FRONT. So once
-	// Cards[0] names the same entry as Entries[0], every following pair is aligned too, and
-	// nothing after the trim point needs to move or be rebuilt. This is issue #186's whole
-	// fix: the tree used to be torn down and reconstructed here every tick regardless.
-	while (Cards.Num() > 0
-		&& (Entries.Num() == 0 || Cards[0].EntryId != Entries[0].Id))
+	// CHECKED AT EVERY INDEX, NOT JUST THE HEAD. Today Notifications->Entries() is a queue -
+	// PostFeed only appends at the back, and both ways an entry leaves (Advance()'s
+	// oldest-first expiry and PostFeed's MaxEntries cap) only ever drop the FRONT - so in
+	// practice Cards[0] disagreeing with Entries[0] is the only disagreement there ever is,
+	// and this loop exits after one comparison per tick. But that is because every entry
+	// shares ONE FeedLifetimeRealSeconds; a future per-severity lifetime would let a Warning
+	// outlive an Info raised earlier, expiring an entry out of the MIDDLE of the list, and a
+	// front-only trim would silently hand a survivor's opacity (and, if this ever grows a
+	// countdown label, its text) to the wrong card with no test going red. Walking every
+	// index costs nothing while the invariant holds and stays correct the day it does not -
+	// see AirportMgr.UI.ToastCardsSurviveARemovalFromTheMiddle, which removes from the middle
+	// on purpose.
+	int32 WalkIndex = 0;
+	while (WalkIndex < Cards.Num() && WalkIndex < Entries.Num())
 	{
-		if (Cards[0].Card != nullptr)
+		if (Cards[WalkIndex].EntryId != Entries[WalkIndex].Id)
 		{
-			Cards[0].Card->RemoveFromParent();
+			if (Cards[WalkIndex].Card != nullptr)
+			{
+				Cards[WalkIndex].Card->RemoveFromParent();
+			}
+			Cards.RemoveAt(WalkIndex);
+			continue;   // re-test THIS index against the array as it now stands
 		}
-		Cards.RemoveAt(0);
+		++WalkIndex;
+	}
+
+	// Anything past Entries.Num() belongs to no live entry either - the walk above only ever
+	// compares up to Entries.Num(), so a removal at the very tail needs its own pass. Not
+	// reachable while removal is front-only, same caveat as above.
+	while (Cards.Num() > Entries.Num())
+	{
+		const int32 Last = Cards.Num() - 1;
+		if (Cards[Last].Card != nullptr)
+		{
+			Cards[Last].Card->RemoveFromParent();
+		}
+		Cards.RemoveAt(Last);
 	}
 
 	// Append a card for every entry that arrived since the last tick. BuildCard is the ONLY
@@ -297,9 +321,32 @@ bool UToastStackWidget::FirstToastBrushForTest(FSlateBrush& OutBrush) const
 	return true;
 }
 
-UBorder* UToastStackWidget::FirstToastForTest() const
+UBorder* UToastStackWidget::NthToastForTest(int32 Index) const
 {
-	return (ToastColumn != nullptr && ToastColumn->GetChildrenCount() > 0)
-		? Cast<UBorder>(ToastColumn->GetChildAt(0))
+	return (ToastColumn != nullptr && Index >= 0 && Index < ToastColumn->GetChildrenCount())
+		? Cast<UBorder>(ToastColumn->GetChildAt(Index))
 		: nullptr;
+}
+
+bool UToastStackWidget::NthToastTextForTest(int32 Index, FText& OutText) const
+{
+	const UBorder* Row = NthToastForTest(Index);
+	const UHorizontalBox* Line = Row != nullptr ? Cast<UHorizontalBox>(Row->GetContent()) : nullptr;
+	if (Line == nullptr)
+	{
+		return false;
+	}
+
+	// The text block is the LAST child: the icon, when the severity has one, is added first
+	// in BuildCard. Searching from the end rather than assuming an index keeps this working
+	// whether or not this entry got an icon.
+	for (int32 ChildIndex = Line->GetChildrenCount() - 1; ChildIndex >= 0; --ChildIndex)
+	{
+		if (const UTextBlock* Words = Cast<UTextBlock>(Line->GetChildAt(ChildIndex)))
+		{
+			OutText = Words->GetText();
+			return true;
+		}
+	}
+	return false;
 }

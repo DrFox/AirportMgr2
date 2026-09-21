@@ -190,7 +190,7 @@ bool FToastSeverityTest::RunTest(const FString& Parameters)
  * issue); CardsConstructedForTest counts BuildCard calls instead - the one function every
  * new card's construction is required to go through - which is the same measurement with one
  * probe. The identity check below is what actually goes red on the reverted code: on main,
- * FirstToastForTest() returns a DIFFERENT UBorder every tick even though nothing changed.
+ * NthToastForTest(0) returns a DIFFERENT UBorder every tick even though nothing changed.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FToastStackDoesNotRebuildUnchangedEntriesTest,
@@ -220,7 +220,7 @@ bool FToastStackDoesNotRebuildUnchangedEntriesTest::RunTest(const FString& Param
 	const int32 BuiltAfterFirstTick = Stack->CardsConstructedForTest();
 	TestEqual(TEXT("one BuildCard per entry, once"), BuiltAfterFirstTick, 3);
 
-	UBorder* FirstCard = Stack->FirstToastForTest();
+	UBorder* FirstCard = Stack->NthToastForTest(0);
 	if (!TestNotNull(TEXT("the first card exists"), FirstCard)) { return false; }
 
 	// K MORE TICKS, N UNCHANGED ENTRIES: nothing is posted and nothing expires (all three are
@@ -235,7 +235,85 @@ bool FToastStackDoesNotRebuildUnchangedEntriesTest::RunTest(const FString& Param
 	TestEqual(TEXT("30 more ticks of an unchanged feed construct ZERO new cards"),
 		Stack->CardsConstructedForTest(), BuiltAfterFirstTick);
 	TestTrue(TEXT("the front card is the SAME UBorder instance, not a rebuilt lookalike"),
-		Stack->FirstToastForTest() == FirstCard);
+		Stack->NthToastForTest(0) == FirstCard);
+	return true;
+}
+
+/**
+ * REVIEW HARDENING, #200. SyncCards used to trim only the FRONT of Cards, which is exact only
+ * because every entry today shares one FeedLifetimeRealSeconds - real removal never touches
+ * the middle. UNotificationCentre::RemoveEntryForTest stands in for a future feature that
+ * WOULD (a per-severity lifetime letting a Warning outlive an Info raised earlier) so this
+ * test is written against that shape now, before it exists, rather than after it ships broken.
+ *
+ * Three entries, remove the MIDDLE one directly (not by waiting out its lifetime - nothing
+ * here ages out early on its own): the first and third must keep their OWN card instances and
+ * their OWN text, sliding up one slot without being torn down and rebuilt.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FToastStackHandlesAMidListRemovalTest,
+	"AirportMgr.UI.ToastCardsSurviveARemovalFromTheMiddle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FToastStackHandlesAMidListRemovalTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	UToastStackWidget* Stack = MakeStack(World);
+	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
+
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("first")));
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("second")));
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("third")));
+	if (!TestEqual(TEXT("three entries posted"), Stack->Centre()->Entries().Num(), 3))
+	{
+		return false;
+	}
+	const int32 MiddleId = Stack->Centre()->Entries()[1].Id;
+
+	// Build: three cards, one apiece.
+	Stack->TickFeed(1.0f / 60.0f);
+	TestEqual(TEXT("three entries built three cards"), Stack->ToastCountForTest(), 3);
+	const int32 BuiltBeforeRemoval = Stack->CardsConstructedForTest();
+
+	UBorder* FirstCardBefore = Stack->NthToastForTest(0);
+	UBorder* ThirdCardBefore = Stack->NthToastForTest(2);
+	if (!TestNotNull(TEXT("the first card exists"), FirstCardBefore)
+		|| !TestNotNull(TEXT("the third card exists"), ThirdCardBefore))
+	{
+		return false;
+	}
+
+	// THE MIDDLE ENTRY GOES, not the front and not the back - the case a front-only trim
+	// cannot see coming.
+	TestTrue(TEXT("the middle entry is removed"), Stack->Centre()->RemoveEntryForTest(MiddleId));
+	TestEqual(TEXT("two entries remain"), Stack->Centre()->Entries().Num(), 2);
+
+	Stack->TickFeed(1.0f / 60.0f);
+
+	TestEqual(TEXT("two cards remain - the middle one's card was dropped"),
+		Stack->ToastCountForTest(), 2);
+	TestEqual(TEXT("dropping a survivor's card is not building one - ZERO new construction"),
+		Stack->CardsConstructedForTest(), BuiltBeforeRemoval);
+
+	TestTrue(TEXT("the FIRST entry's card is the same instance, not rebuilt"),
+		Stack->NthToastForTest(0) == FirstCardBefore);
+	TestTrue(TEXT("the THIRD entry's card is the same instance, now one slot up, not rebuilt"),
+		Stack->NthToastForTest(1) == ThirdCardBefore);
+
+	FText Row0Text, Row1Text;
+	if (!TestTrue(TEXT("row 0 has text"), Stack->NthToastTextForTest(0, Row0Text))
+		|| !TestTrue(TEXT("row 1 has text"), Stack->NthToastTextForTest(1, Row1Text)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("row 0 still shows the FIRST entry, in order"), Row0Text.ToString(), FString(TEXT("first")));
+	TestEqual(TEXT("row 1 now shows the THIRD entry, in order - not the removed middle one"),
+		Row1Text.ToString(), FString(TEXT("third")));
 	return true;
 }
 

@@ -89,6 +89,16 @@ public:
 
 	TConstArrayView<FNotificationEntry> Entries() const { return List; }
 
+	/**
+	 * TEST ONLY. Removes one entry by Id wherever it sits in List, so a test can simulate
+	 * what a future per-severity FeedLifetimeRealSeconds would do - expire something out of
+	 * the MIDDLE of the feed - without that feature actually existing yet. Real removal stays
+	 * front-only (Advance's expiry, PostFeed's MaxEntries cap); this exists so
+	 * UToastStackWidget::SyncCards is proven correct against more than the one shape real
+	 * removal happens to take today.
+	 */
+	bool RemoveEntryForTest(int32 EntryId);
+
 private:
 	UPROPERTY() TArray<FNotificationEntry> List;
 	double NowRealSeconds = 0.0;

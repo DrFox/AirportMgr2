@@ -27,3 +27,15 @@ void UNotificationCentre::Advance(double RealDeltaSeconds)
 		return (NowRealSeconds - Entry.RaisedAtRealSeconds) >= FeedLifetimeRealSeconds;
 	});
 }
+
+bool UNotificationCentre::RemoveEntryForTest(int32 EntryId)
+{
+	const int32 FoundIndex = List.IndexOfByPredicate(
+		[EntryId](const FNotificationEntry& Entry) { return Entry.Id == EntryId; });
+	if (FoundIndex == INDEX_NONE)
+	{
+		return false;
+	}
+	List.RemoveAt(FoundIndex);
+	return true;
+}

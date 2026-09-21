@@ -90,9 +90,16 @@ public:
 	 */
 	int32 CardsConstructedForTest() const { return CardsConstructed; }
 
-	/** The first card's own widget identity, so a test can tell "the same UBorder, unchanged"
-	 *  from "a new UBorder that happens to look the same" - the brush alone cannot say that. */
-	UBorder* FirstToastForTest() const;
+	/**
+	 * A card's own widget identity, by its position in the stack, so a test can tell "the
+	 * same UBorder, unchanged" from "a new UBorder that happens to look the same" anywhere in
+	 * the list - not just at the front, which a removal out of the middle needs to prove.
+	 */
+	UBorder* NthToastForTest(int32 Index) const;
+
+	/** That card's message text, so a test can confirm cards did not silently swap which
+	 *  entry they show after a removal that is not simply "drop the oldest". */
+	bool NthToastTextForTest(int32 Index, FText& OutText) const;
 
 protected:
 	/** Builds the stack's chrome and subscribes to the ops runtime's events. See
@@ -125,9 +132,9 @@ private:
 
 	void EnsureSlots(const UUIStyle* Style);
 
-	/** Add and drop cards to match Notifications->Entries(), then set every survivor's
-	 *  opacity for this frame. See the .cpp for why trimming from the front is exact rather
-	 *  than a heuristic. */
+	/** Add and drop cards to match Notifications->Entries() BY ID, at every index, then set
+	 *  every survivor's opacity for this frame. See the .cpp for why an id-driven walk is
+	 *  the correct check even though front-only removal makes it a one-comparison loop today. */
 	void SyncCards(const UUIStyle& Style);
 
 	/** Builds the one card for a freshly-arrived entry. Everything about a toast except its
