@@ -74,13 +74,24 @@ ROW_PITCH_UU = 5000.0
 FLOOR_X_M = 220.0
 FLOOR_Y_M = 220.0
 
-# A NEUTRAL GREY FLOOR, not M_ApronConcrete, and the choice is deliberate. The apron material
-# is built for a road mesh that carries its own UV1 (see the road appearance notes - colour
-# there comes from UV1, not from the material's own parameters), and a single scaled
-# BasicShapes/Plane has UV 0-1 across 220 m, so a tiling surface applied to it stretches one
-# texel over the whole yard. A studio-grey floor is also simply the better backdrop for
-# judging a model's own colours.
-FLOOR_MATERIAL = "/Engine/BasicShapes/BasicShapeMaterial"
+# THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
+#
+# THIS REVERSES THE ORIGINAL ARGUMENT, which is recorded here rather than deleted. It ran: use
+# a NEUTRAL GREY, not an apron material, because the apron is built for a road mesh carrying
+# its own UV1 (colour there comes from UV1, not from the material's parameters) and a single
+# scaled BasicShapes/Plane has UV 0-1 across 220 m - so a tiling surface stretches one texel
+# over the whole yard. A studio grey was also called the better backdrop for judging colours.
+#
+# THE STRETCH IS REAL AND IS THE POINT. At 220 m across one UV tile there is no readable
+# texture left, so M_Ground resolves to a flat olive that reads as a field rather than as a
+# studio - which is what was wanted, and is why the objection does not bite. What the argument
+# still correctly warns against is a material whose detail MATTERS: put M_ApronConcrete here
+# and you get one stretched texel, not concrete.
+#
+# THE GREY LOST ON ITS OWN MERITS TOO. Judged against the models rather than in the abstract,
+# it read as studio backdrop rather than ground, and the lighting was dropped to match - see
+# SUN_INTENSITY. The two changes were made together in the editor and belong together here.
+FLOOR_MATERIAL = "/Game/Environment/M_Ground"
 FLOOR_MESH = "/Engine/BasicShapes/Plane"
 
 # LIGHTING COPIED FROM build_environment.py, not invented, so the models are judged under the
@@ -91,6 +102,16 @@ SUN_PITCH = -42.0
 SUN_YAW = 150.0
 SUN_TEMPERATURE = 5800.0
 SUN_SOURCE_ANGLE = 1.5
+
+# HOW BRIGHT THE SUN IS, which this script did not set at all until 2026-09-21 - it left the
+# engine's own default, and the yard came out glaring against the new floor. Measured back off
+# the level after the value was found by eye in the editor, so re-running this reproduces the
+# yard somebody actually looked at rather than the one it shipped with.
+#
+# A SET VALUE RATHER THAN AN OMISSION IS THE WHOLE FIX. An unset property is not "the default
+# on purpose", it is a value nobody has decided, and the first re-run of this script silently
+# undid a change that had been made deliberately.
+SUN_INTENSITY = 2.487
 FOG_DENSITY = 0.005
 FOG_HEIGHT_FALLOFF = 0.2
 
@@ -187,6 +208,7 @@ def build_lighting():
     comp.set_editor_property("use_temperature", True)
     comp.set_editor_property("temperature", SUN_TEMPERATURE)
     comp.set_editor_property("light_source_angle", SUN_SOURCE_ANGLE)
+    comp.set_editor_property("intensity", SUN_INTENSITY)
 
     sky = actors().spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0.0, 0.0, 2000.0))
     sky.set_actor_label("SkyLight")
@@ -228,8 +250,8 @@ def build_lighting():
     settings.set_editor_property("film_grain_intensity", 0.0)
     ppv.set_editor_property("settings", settings)
 
-    say("lighting: sun pitch %.0f yaw %.0f, sky light real-time, atmosphere, fog, post "
-        "(exposure %s)" % (SUN_PITCH, SUN_YAW,
+    say("lighting: sun pitch %.0f yaw %.0f intensity %.3f, sky light real-time, atmosphere, "
+        "fog, post (exposure %s)" % (SUN_PITCH, SUN_YAW, SUN_INTENSITY,
                            "locked at EV100 %.2f" % LOCK_EXPOSURE_EV100
                            if LOCK_EXPOSURE_EV100 is not None else "on auto"))
 
