@@ -760,19 +760,38 @@ void URoadEditFacade::BeginInteractiveEdit(const FString& Label)
 	// A FRESH EDIT HAS MOVED NOTHING YET - see the field's own comment for what
 	// EndInteractiveEdit does with this.
 	bGeometryChangedDuringEdit = false;
+
+	// SET UNCONDITIONALLY, WHATEVER Use AND Network TURNED OUT TO BE - see the field's own
+	// comment (issue #190). PavementValueAtDragStart and bGeometryChangedDuringEdit above are
+	// already set the same way, and this is the flag MoveNode/MoveApronCorner now decide
+	// Geometry vs Topology on, so it has to be true for every world BeginInteractiveEdit is
+	// called in, not only the one with a History to open.
+	bInteractiveEditOpen = true;
 }
 
 void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 {
-	URoadEditHistory* History = Actor().History;
-	if (History == nullptr || !History->IsEditing())
+	// GATED ON bInteractiveEditOpen, NOT ON History (issue #190) - see that field's own
+	// comment. History is null in an editor world by HistoryForEdit()'s own design, and the
+	// old `History == nullptr || !History->IsEditing()` guard treated that exactly like "no
+	// edit is open", so an editor-mode drag's EndInteractiveEdit call was always a no-op: no
+	// bookkeeping reset, and no chance to fire the Topology notify a drag that moved
+	// something still owes the derived graph.
+	if (!bInteractiveEditOpen)
 	{
 		return;
 	}
+	bInteractiveEditOpen = false;
+
+	URoadEditHistory* History = Actor().History;
+	const bool bHasHistoryEdit = History != nullptr && History->IsEditing();
 
 	if (!bKeep)
 	{
-		History->AbandonEdit();
+		if (bHasHistoryEdit)
+		{
+			History->AbandonEdit();
+		}
 
 		// LATENT STALENESS ON ABANDON (issue #165 follow-up). AbandonEdit only drops the undo
 		// SNAPSHOT - it does not put the nodes back, because they were never recorded as a
@@ -784,7 +803,9 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		// Before #165 every MoveNode/MoveApronCorner notify ran the whole pipeline, so an
 		// abandoned drag was still fresh; this restores exactly that guarantee, and ONLY when
 		// something actually moved - an edit opened and abandoned with no successful move
-		// costs nothing, same as it always has.
+		// costs nothing, same as it always has. bHasHistoryEdit's absence changes nothing
+		// here: an editor-world abandon has no snapshot to drop either way, only the same
+		// catch-up notify to fire.
 		if (bGeometryChangedDuringEdit)
 		{
 			NotifyChanged(EChangeKind::Topology);
@@ -793,53 +814,68 @@ void URoadEditFacade::EndInteractiveEdit(bool bKeep)
 		return;
 	}
 
-	// THE DIFFERENCE THE DRAG MADE, priced at today's rates. A drag that lengthened the
-	// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
-	// value rather than refunded in full - otherwise dragging a taxiway long and short again
-	// would be a loop that returns more than it costs.
-	FBuildQuote Delta = QuoteForAllPavement();
-	const double After = Delta.BaseAmount;
-	Delta.BaseAmount = After - PavementValueAtDragStart;
-	PavementValueAtDragStart = 0.0;
-
-	if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+	if (bHasHistoryEdit)
 	{
-		// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
-		// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
-		// the one edit that has to be undone rather than merely refused - see
-		// URoadEditHistory::RevertEdit.
-		if (URoadNetwork* Reverted = History->RevertEdit())
-		{
-			Actor().Network = Reverted;
-			HideGhost();
-			NotifyChanged();
-		}
-		UE_LOG(LogRoadMesh, Log,
-			TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
-		return;
-	}
+		// THE DIFFERENCE THE DRAG MADE, priced at today's rates. A drag that lengthened the
+		// pavement is a purchase; one that shortened it is a disposal, and is credited at scrap
+		// value rather than refunded in full - otherwise dragging a taxiway long and short again
+		// would be a loop that returns more than it costs.
+		FBuildQuote Delta = QuoteForAllPavement();
+		const double After = Delta.BaseAmount;
+		Delta.BaseAmount = After - PavementValueAtDragStart;
+		PavementValueAtDragStart = 0.0;
 
-	if (Purse != nullptr)
+		if (Delta.BaseAmount > 0.0 && !CanAfford(Delta))
+		{
+			// REVERTED, NOT ABANDONED. The node has already moved on every frame of the drag, so
+			// dropping the snapshot would leave the longer taxiway standing and unpaid for. This is
+			// the one edit that has to be undone rather than merely refused - see
+			// URoadEditHistory::RevertEdit.
+			if (URoadNetwork* Reverted = History->RevertEdit())
+			{
+				Actor().Network = Reverted;
+				HideGhost();
+				NotifyChanged();
+			}
+			UE_LOG(LogRoadMesh, Log,
+				TEXT("Drag reverted: cannot afford the %.0f of pavement it added"), Delta.BaseAmount);
+			return;
+		}
+
+		if (Purse != nullptr)
+		{
+			if (Delta.BaseAmount > 0.0)
+			{
+				History->SetPendingCharge(Purse->Charge(Delta), Delta);
+			}
+			else if (Delta.BaseAmount < 0.0)
+			{
+				Delta.BaseAmount = -Delta.BaseAmount;
+				Purse->Credit(Delta);
+			}
+		}
+
+		History->CommitEdit();
+	}
+	else
 	{
-		if (Delta.BaseAmount > 0.0)
-		{
-			History->SetPendingCharge(Purse->Charge(Delta), Delta);
-		}
-		else if (Delta.BaseAmount < 0.0)
-		{
-			Delta.BaseAmount = -Delta.BaseAmount;
-			Purse->Credit(Delta);
-		}
+		// THE HISTORY-LESS BRANCH (issue #190) - AN EDITOR WORLD, where HistoryForEdit() never
+		// hands BeginInteractiveEdit anything to open. There is no undo snapshot to commit
+		// (the editor's own transaction already covers Ctrl+Z - see this class's header) and
+		// no economy to charge against outside PIE, so this skips the pricing, CanAfford and
+		// Purse steps above entirely - MINUS THE PURSE - and only resets the drag-start
+		// reading BeginInteractiveEdit took, before falling through to the same Topology
+		// catch-up every committed drag owes the derived graph.
+		PavementValueAtDragStart = 0.0;
 	}
-
-	History->CommitEdit();
 
 	// THE ONE TOPOLOGY NOTIFY A DRAG FIRES (issue #165) - AND ONLY IF SOMETHING ACTUALLY
 	// MOVED. Every frame of a real drag notified Geometry only, through MoveNode/
 	// MoveApronCorner, which left the guideline graph, anchor links, plots and traffic
 	// exactly as stale as they were when the drag began - none of them re-derive from a
 	// Geometry notify. This is where a committed drag that moved something catches them up,
-	// exactly once, no matter how many frames it ran for.
+	// exactly once, no matter how many frames it ran for - IN THE EDITOR WORLD TOO, now that
+	// this runs whether or not there was a History edit to commit above (issue #190).
 	//
 	// GUARDED, because a click-release that opens and closes an interactive edit without a
 	// single successful move (the cursor never left the node, or every move attempted was
@@ -917,23 +953,24 @@ bool URoadEditFacade::MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVect
 	}
 
 	// GEOMETRY ONLY WHILE AN INTERACTIVE EDIT IS STILL OPEN - THE BARE-CALL TRAP (review
-	// follow-up on #165). `Use->IsEditing()` here means this call joined a drag that
+	// follow-up on #165). bInteractiveEditOpen here means this call joined a drag that
 	// BeginInteractiveEdit started and EndInteractiveEdit has not yet closed - the ONLY case
 	// where something downstream (EndInteractiveEdit's own Topology notify) is guaranteed to
 	// catch the derived graph up later. Anything else has no EndInteractiveEdit coming and
-	// must do the whole job itself, Topology, right here:
-	//   - Use is null: an EDITOR WORLD, where HistoryForEdit() is a deliberate no-op (see its
-	//     own comment) - BeginInteractiveEdit/EndInteractiveEdit never touch History there
-	//     either, so this notify is the only one this drag will ever get, one frame at a time.
-	//   - bOwnsEdit was true: this very call opened and closed its own tiny edit above, so it
-	//     is a BARE call with no surrounding drag - same reasoning, same fix.
+	// must do the whole job itself, Topology, right here: a BARE call (bOwnsEdit was true -
+	// this very call opened and closed its own tiny history edit above, with no surrounding
+	// BeginInteractiveEdit at all) never set the flag in the first place.
+	//
+	// bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) - that test
+	// was always false in an editor world, where HistoryForEdit() is a deliberate no-op (see
+	// its own comment), so an editor-mode drag notified Topology on every frame regardless of
+	// URoadBuildEdMode's own Begin/EndInteractiveEdit calls bracketing it exactly as PIE's do.
 	// An apron corner is not in the road graph at all (see OnDragBegin's own comment), so a
 	// Topology rebuild here does not cost this call anything a Geometry one would have saved
 	// beyond what a genuine mid-drag frame already skips.
-	const bool bMidInteractiveEdit = Use != nullptr && Use->IsEditing();
 	if (bMoved)
 	{
-		if (bMidInteractiveEdit)
+		if (bInteractiveEditOpen)
 		{
 			bGeometryChangedDuringEdit = true;
 			NotifyChanged(EChangeKind::Geometry);
@@ -1222,20 +1259,22 @@ bool URoadEditFacade::MoveNode(int32 NodeIndex, FVector2D To)
 	// rebuild the surface alone and skip the guideline graph, anchor links, plots and
 	// traffic - EndInteractiveEdit fires the one Topology notify that catches those up once
 	// the drag commits (see bGeometryChangedDuringEdit's own comment). But that promise only
-	// holds while `Use->IsEditing()` is true, meaning THIS call joined a drag
-	// BeginInteractiveEdit opened and EndInteractiveEdit has not yet closed. Two cases have
-	// no EndInteractiveEdit coming at all, so THIS is the only notify they will ever get and
-	// it has to do the whole job:
-	//   - Use is null: an EDITOR WORLD, where HistoryForEdit() is a deliberate no-op (see its
-	//     own comment) - BeginInteractiveEdit/EndInteractiveEdit never touch History there,
-	//     so every editor-mode move is, in effect, its own one-frame edit.
-	//   - bOwnsEdit was true: this call opened and closed its own tiny edit above (the bare,
-	//     un-wrapped `Actor->MoveNode(...)` every test before this review makes) - same
-	//     reasoning, same fix.
-	const bool bMidInteractiveEdit = Use != nullptr && Use->IsEditing();
+	// holds while bInteractiveEditOpen is true, meaning THIS call joined a drag
+	// BeginInteractiveEdit opened and EndInteractiveEdit has not yet closed. A BARE call has
+	// no EndInteractiveEdit coming at all (bOwnsEdit was true - this call opened and closed
+	// its own tiny history edit above, the un-wrapped `Actor->MoveNode(...)` every test
+	// before this review makes) and never set the flag, so it falls to the else branch and
+	// does the whole job itself, Topology, right here.
+	//
+	// bInteractiveEditOpen, NOT `Use != nullptr && Use->IsEditing()` (issue #190) - that test
+	// was always false in an editor world, where HistoryForEdit() is a deliberate no-op (see
+	// its own comment): Use was null for every editor-mode move regardless of whether
+	// URoadBuildEdMode had a real drag open, so every editor drag frame notified Topology in
+	// full and EndInteractiveEdit's own History-gated early return meant nothing ever fired
+	// the one catch-up notify a committed drag owes the derived graph.
 	if (bMoved)
 	{
-		if (bMidInteractiveEdit)
+		if (bInteractiveEditOpen)
 		{
 			bGeometryChangedDuringEdit = true;
 			NotifyChanged(EChangeKind::Geometry);

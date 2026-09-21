@@ -1110,8 +1110,10 @@ TArray<FGuidelineEdgeId> URoadNetwork::GetOutgoingGuidelines(
 {
 	// A thin forwarder onto ForEachOutgoingGuideline (#171), added so RouteSearch's inner loop
 	// could stop paying for this array on every node expansion - see that method's own comment.
-	// This function's own callers (tests, GroundTrafficRebuild) still get the TArray they want,
-	// from the one incidence-and-direction rule rather than a second copy of it.
+	// GroundTrafficRebuild was the last production caller still building this array just to
+	// walk it looking for one match (#190); it now calls ForEachOutgoingGuideline directly, so
+	// this function's only remaining callers are the tests that genuinely want the TArray, from
+	// the one incidence-and-direction rule rather than a second copy of it.
 	TArray<FGuidelineEdgeId> Out;
 	ForEachOutgoingGuideline(Node, Class, [&Out](FGuidelineEdgeId Id) { Out.Add(Id); });
 	return Out;

@@ -641,6 +641,11 @@ void ARoadBuildController::SelectTool(int32 Index)
 	{
 		UE_LOG(LogRoadBuild, Log, TEXT("Tool: %s"), *Active->GetDisplayName().ToString());
 	}
+
+	// The active tool pointer usually changes here, which FToolReadoutKey already catches -
+	// but SelectTool can also re-select the CURRENT tool's index, dropping its sticky BUILD
+	// modifier without changing the pointer. See InvalidateToolReadoutCache's comment.
+	InvalidateToolReadoutCache();
 }
 
 int32 ARoadBuildController::GetActiveToolIndex() const
@@ -660,6 +665,10 @@ void ARoadBuildController::ToggleGestureMode(EGestureMode Mode)
 	// The caller's context, so the outgoing tool can abandon a part-drawn chain against a
 	// real target rather than a default-constructed one.
 	Session.ToggleGestureMode(Mode, MakeToolContext());
+
+	// Build<->Edit changes EEditHandleKind, already in the key - but also abandons whatever
+	// stage the outgoing tool was in. See InvalidateToolReadoutCache's comment.
+	InvalidateToolReadoutCache();
 }
 
 EGestureMode ARoadBuildController::GetGestureMode() const
@@ -789,6 +798,9 @@ void ARoadBuildController::OnUndo()
 		Tool->OnDeactivate(MakeToolContext());
 	}
 
+	// The deactivate above abandons the tool's stage - see InvalidateToolReadoutCache.
+	InvalidateToolReadoutCache();
+
 	UE_LOG(LogRoadBuild, Log, TEXT("Undid: %s"), *Label);
 }
 
@@ -810,6 +822,9 @@ void ARoadBuildController::OnRedo()
 	{
 		Tool->OnDeactivate(MakeToolContext());
 	}
+
+	// The deactivate above abandons the tool's stage - see InvalidateToolReadoutCache.
+	InvalidateToolReadoutCache();
 }
 
 void ARoadBuildController::OnPrimaryPressed()
@@ -864,6 +879,10 @@ void ARoadBuildController::UpdateDrag()
 	}
 
 	Tool->OnDrag(DragContext);
+
+	// A drag step can advance the tool's own stage with FrameContext's cursor unmoved from
+	// this frame's - see InvalidateToolReadoutCache's comment.
+	InvalidateToolReadoutCache();
 }
 
 void ARoadBuildController::OnPrimaryReleased()
@@ -886,6 +905,10 @@ void ARoadBuildController::OnPrimaryReleased()
 	{
 		Tool->OnClick(Context);
 	}
+
+	// A click or a drag end is exactly the kind of stage advance FToolReadoutKey cannot see -
+	// see InvalidateToolReadoutCache's comment.
+	InvalidateToolReadoutCache();
 }
 
 void ARoadBuildController::PlayerTick(float DeltaTime)
@@ -936,23 +959,59 @@ void ARoadBuildController::PlayerTick(float DeltaTime)
 	}
 }
 
+ARoadBuildController::FToolReadoutKey ARoadBuildController::MakeReadoutKey(
+	const IBuildTool* Tool, const FToolContext& Context)
+{
+	FToolReadoutKey Key;
+	Key.Tool = Tool;
+	Key.Cursor = Context.Cursor;
+	Key.SnapKind = Context.Snap.Kind;
+	Key.SnapNode = Context.Snap.Node;
+	Key.SnapSegment = Context.Snap.Segment;
+	Key.bGuideActive = Context.Guide.bActive;
+	Key.GuidePoint = Context.Guide.Point;
+	Key.EditHandles = Context.EditHandles;
+	return Key;
+}
+
 void ARoadBuildController::CollectToolReadout()
 {
-	ToolReadoutCollector.Reset();
-
 	// The target guard is the same one MakeToolContext's callers already obey: a context
 	// built with no actor has no network to snap against, and a tool asked about one would
-	// be describing a gesture it could not commit anyway.
+	// be describing a gesture it could not commit anyway. UNCONDITIONAL - this path never
+	// consults FToolReadoutKey, so a road actor removed out from under the controller clears
+	// the bar instead of leaving a stale key matching an equally stale readout.
 	if (Target == nullptr)
 	{
+		ToolReadoutCollector.Reset();
+		bHasReadoutKey = false;
 		return;
 	}
-	if (const IBuildTool* Tool = GetActiveTool())
+
+	const IBuildTool* Tool = GetActiveTool();
+	if (Tool == nullptr)
 	{
-		// FrameContext, not a fresh MakeToolContext() - issue #167. Built once at the top of
-		// PlayerTick, above, and shared with Tick and the HUD.
-		Tool->BuildReadout(FrameContext, ToolReadoutCollector);
+		ToolReadoutCollector.Reset();
+		bHasReadoutKey = false;
+		return;
 	}
+
+	// FrameContext, not a fresh MakeToolContext() - issue #167. Built once at the top of
+	// PlayerTick, above, and shared with Tick and the HUD.
+	const FToolReadoutKey NewKey = MakeReadoutKey(Tool, FrameContext);
+	if (bHasReadoutKey && NewKey == LastReadoutKey)
+	{
+		// SAME QUESTION AS LAST FRAME - issue #190. ToolReadoutCollector.Readout still holds
+		// last frame's answer; a still cursor now costs one key comparison instead of a
+		// TArray<TPair<FString,FString>> and a Printf per fact every tick.
+		return;
+	}
+
+	ToolReadoutCollector.Reset();
+	Tool->BuildReadout(FrameContext, ToolReadoutCollector);
+	LastReadoutKey = NewKey;
+	bHasReadoutKey = true;
+	++ToolReadoutRevision;
 }
 
 void ARoadBuildController::OnBuild()
@@ -965,11 +1024,17 @@ void ARoadBuildController::OnBuild()
 		// would be a second thing to keep in agreement with the readout.
 		Tool->OnCommit(MakeToolContext());
 	}
+
+	// A commit resets the tool's stage - see InvalidateToolReadoutCache's comment.
+	InvalidateToolReadoutCache();
 }
 
 void ARoadBuildController::OnCancelGesture()
 {
 	Session.CancelActiveGesture(MakeToolContext());
+
+	// A cancel abandons whatever stage the gesture was in - see InvalidateToolReadoutCache.
+	InvalidateToolReadoutCache();
 }
 
 void ARoadBuildController::OnClearNetwork()
@@ -987,6 +1052,9 @@ void ARoadBuildController::OnClearNetwork()
 
 	Target->ClearNetwork();
 	UE_LOG(LogRoadBuild, Log, TEXT("Network cleared."));
+
+	// The network the last readout described no longer exists - see InvalidateToolReadoutCache.
+	InvalidateToolReadoutCache();
 }
 
 // --- Sim clock and quick save ---------------------------------------------------------------

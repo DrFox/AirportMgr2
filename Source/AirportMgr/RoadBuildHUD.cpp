@@ -129,7 +129,18 @@ void ARoadBuildHUD::DrawHUD()
 		// THE CONTROLLER'S READOUT, not a second BuildReadout call here. The bar's Build
 		// button reads that same collected value, so the prompt cannot offer a commit the
 		// button would refuse.
-		DrawPlotPanel(Context.Cursor, PanelLines(Controller->GetToolReadout()));
+		//
+		// CACHED ON THE REVISION, not rebuilt every DrawHUD - issue #190. PanelLines is a
+		// Printf per fact plus the warnings and the commit prompt; CollectToolReadout already
+		// skips its own work on an unchanged frame, and rebuilding these lines anyway on top
+		// of that cache would still pay the cost this exists to avoid.
+		const int32 Revision = Controller->GetToolReadoutRevision();
+		if (Revision != CachedPanelLinesRevision)
+		{
+			CachedPanelLines = PanelLines(Controller->GetToolReadout());
+			CachedPanelLinesRevision = Revision;
+		}
+		DrawPlotPanel(Context.Cursor, CachedPanelLines);
 	}
 }
 

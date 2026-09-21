@@ -36,6 +36,31 @@ namespace
 	{
 		return Agents.IndexOfByPredicate([AgentId](const FRoadAgent& A) { return A.Id == AgentId; });
 	}
+
+	/**
+	 * "id, id, id" for a log line, in Cycle's own order - skipping any id FindAgentIn cannot
+	 * resolve, the same skip the loop that used to build this inline made (#190).
+	 *
+	 * CALLED ONLY FROM THE BRANCH THAT ACTUALLY LOGS. This used to be a member of the
+	 * Candidates-gathering loop in FDeadlockResolver::Resolve, concatenated once per cycle
+	 * every time one went bDue whether or not LogAirsideTraffic's runtime verbosity would
+	 * keep the line - UE_LOG itself skips evaluating a suppressed call's arguments, but a
+	 * string built in its own statement before the call is not one of those arguments, so it
+	 * paid for the Printf/+= regardless. See each call site's own IsSuppressed guard.
+	 */
+	FString JoinCycleMembers(const TArray<int32>& Cycle, const TArray<FRoadAgent>& Agents)
+	{
+		FString Out;
+		for (const int32 Id : Cycle)
+		{
+			if (FindIndexIn(Agents, Id) == INDEX_NONE)
+			{
+				continue;
+			}
+			Out += Out.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
+		}
+		return Out;
+	}
 }
 
 bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 SpliceStep,
@@ -263,7 +288,6 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 			});
 			const int32 Yielder = ByYieldOrder[0];
 
-			FString YieldMembers;
 			for (const int32 Id : Cycle)
 			{
 				const int32 Index = FindIndexIn(Agents, Id);
@@ -271,15 +295,28 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 				{
 					Agents[Index].LastResolveAttempt = SimSeconds;
 				}
-				YieldMembers += YieldMembers.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
 			}
 
 			Occupancy.ReleaseReservations(Yielder);
 			YieldedAt.Add(Key, SimSeconds);
 			++Yields;
 			LastYieldedAgent = Yielder;
-			UE_LOG(LogAirsideTraffic, Log, TEXT("Reservation cycle among agents [%s]: agent %d yields its reservations"),
-				*YieldMembers, Yielder);
+
+			// DEFERRED TO HERE, AND ONLY IF THE LINE WILL ACTUALLY PRINT (#190) - see
+			// JoinCycleMembers' own comment. Unlike that helper, this one keeps every Cycle id
+			// unconditionally: the stamping loop above has no FindAgentIn null-skip either, so
+			// neither did the concatenation it used to share a loop with.
+			if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Log))
+			{
+				FString YieldMembers;
+				for (const int32 Id : Cycle)
+				{
+					YieldMembers += YieldMembers.IsEmpty()
+						? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
+				}
+				UE_LOG(LogAirsideTraffic, Log, TEXT("Reservation cycle among agents [%s]: agent %d yields its reservations"),
+					*YieldMembers, Yielder);
+			}
 			++DeadlockLogLines;
 			CyclesSeen.Add(Key);
 			continue;
@@ -294,7 +331,6 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		// member had a whole taxiway system to turn into (PIE, 2026-09-06).
 		TArray<int32> Candidates;
 		bool bAllAircraft = true;
-		FString Members;
 		for (const int32 Id : Cycle)
 		{
 			const FRoadAgent* Member = FindAgentIn(Agents, Id);
@@ -307,7 +343,6 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 				bAllAircraft = false;
 				continue;
 			}
-			Members += Members.IsEmpty() ? FString::Printf(TEXT("%d"), Id) : FString::Printf(TEXT(", %d"), Id);
 			bAllAircraft = bAllAircraft && Member->Class == ETraversalClass::Aircraft;
 
 			if (!CanReplanAtBlockedStep(*Member, &Network, Rules, Reach))
@@ -380,23 +415,36 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		// ALL-AIRCRAFT CYCLES ARE A DESIGN PROBLEM, NOT A TRAFFIC ONE - the input to the
 		// build-tool warning of the systems map §6 - so they are raised to Warning whatever
 		// the outcome. A cycle nobody can break is a Warning either way.
+		//
+		// Members IS BUILT HERE, PER BRANCH, NOT ONCE ABOVE (#190) - see JoinCycleMembers' own
+		// comment. Three branches, two verbosities, so each guards on the ONE it is about to
+		// log at rather than a single check that could not speak for both.
 		if (bResolved)
 		{
 			if (bAllAircraft)
 			{
-				UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft deadlock among agents [%s] resolved: agent %d replans"),
-					*Members, Candidate);
+				if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Warning))
+				{
+					UE_LOG(LogAirsideTraffic, Warning, TEXT("All-aircraft deadlock among agents [%s] resolved: agent %d replans"),
+						*JoinCycleMembers(Cycle, Agents), Candidate);
+				}
 			}
 			else
 			{
-				UE_LOG(LogAirsideTraffic, Log, TEXT("Deadlock among agents [%s] resolved: agent %d replans"),
-					*Members, Candidate);
+				if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Log))
+				{
+					UE_LOG(LogAirsideTraffic, Log, TEXT("Deadlock among agents [%s] resolved: agent %d replans"),
+						*JoinCycleMembers(Cycle, Agents), Candidate);
+				}
 			}
 		}
 		else
 		{
-			UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]: no member can turn; retrying in %.0f s"),
-				bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *Members, Rules.RetrySeconds);
+			if (!LogAirsideTraffic.IsSuppressed(ELogVerbosity::Warning))
+			{
+				UE_LOG(LogAirsideTraffic, Warning, TEXT("%sDeadlock among agents [%s]: no member can turn; retrying in %.0f s"),
+					bAllAircraft ? TEXT("All-aircraft ") : TEXT(""), *JoinCycleMembers(Cycle, Agents), Rules.RetrySeconds);
+			}
 		}
 
 		++DeadlockLogLines;

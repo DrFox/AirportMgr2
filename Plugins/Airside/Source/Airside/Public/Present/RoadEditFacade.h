@@ -71,17 +71,21 @@ class IBuildPurse;
  * is actively wrong here, not merely more expensive than needed.
  *
  * MoveNode's (and MoveApronCorner's) PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY
- * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up). Every
- * earlier drag frame ran the full pipeline, guideline graph and anchor links and plots and
- * traffic included, at frame rate. Nothing about a slid position needs any of those rebuilt
- * until the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true) fires
- * one EChangeKind::Topology notify of its own once the drag commits, and that single notify
- * is what catches the derived graph up - see its own comment. THE BARE-CALL TRAP: that promise
- * only holds while `Use->IsEditing()` is true at the moment of the notify - a call with no
- * EndInteractiveEdit coming (an editor world, where HistoryForEdit() is a deliberate no-op,
- * or a bare `Actor->MoveNode(...)` that opens and closes its own tiny edit) notifies
+ * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up, and again by
+ * #190). Every earlier drag frame ran the full pipeline, guideline graph and anchor links and
+ * plots and traffic included, at frame rate. Nothing about a slid position needs any of those
+ * rebuilt until the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true)
+ * fires one EChangeKind::Topology notify of its own once the drag commits, and that single
+ * notify is what catches the derived graph up - see its own comment. THE BARE-CALL TRAP: that
+ * promise only holds while bInteractiveEditOpen is true at the moment of the notify - a call
+ * with no EndInteractiveEdit coming (a bare `Actor->MoveNode(...)` that opens and closes its
+ * own tiny history edit, with no surrounding BeginInteractiveEdit at all) notifies
  * EChangeKind::Topology instead, because nothing else will ever catch it up. See MoveNode's
- * own comment for the exact three cases.
+ * own comment for the exact cases, and bInteractiveEditOpen's own comment for why this is no
+ * longer `Use->IsEditing()` (#190): that test was always false in an editor world, where
+ * HistoryForEdit() is a deliberate no-op, so every editor-mode drag frame notified Topology in
+ * full and EndInteractiveEdit's own History-gated guard meant the derived graph was never
+ * caught up either - the split applied to PIE only, for the whole time #165 existed.
  *
  * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
  * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and
@@ -469,6 +473,25 @@ private:
 	 * changed something (the charge check only runs after a real move).
 	 */
 	bool bGeometryChangedDuringEdit = false;
+
+	/**
+	 * Whether an interactive edit is open RIGHT NOW - set in BeginInteractiveEdit, cleared in
+	 * EndInteractiveEdit - issue #190.
+	 *
+	 * TRACKED INDEPENDENTLY OF URoadEditHistory::IsEditing(), which MoveNode and
+	 * MoveApronCorner used to test instead (`Use != nullptr && Use->IsEditing()`) to decide
+	 * Geometry vs Topology. That test is FALSE FOR EVERY EDITOR-MODE DRAG: HistoryForEdit()
+	 * is a deliberate no-op in an editor world (see its own comment - "the editor's
+	 * transaction system does the Memento's job already"), so `Use` is null there and
+	 * `Use->IsEditing()` could never have been true, whatever URoadBuildEdMode's own
+	 * Begin/EndInteractiveEdit calls were doing. Every editor-mode drag frame therefore
+	 * notified Topology - the full derived-graph rebuild #165 exists to skip - and
+	 * EndInteractiveEdit's own early-return on `History == nullptr` meant nothing ever fired
+	 * the one catch-up notify a real drag needs either. This bool answers "is a drag open"
+	 * on its own terms, true in both worlds for exactly the span BeginInteractiveEdit and
+	 * EndInteractiveEdit bracket, so the split applies wherever a drag does.
+	 */
+	bool bInteractiveEditOpen = false;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.
