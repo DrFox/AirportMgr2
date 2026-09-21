@@ -11,14 +11,20 @@
 
 namespace
 {
-	constexpr float LeftMargin = 24.0f;
-	constexpr float TopMargin = 24.0f;
-	constexpr float LineHeight = 18.0f;
+	// EVERY NAME HERE IS PREFIXED, and it is not decoration. This module is a UNITY build, so
+	// an anonymous namespace is not file-private in practice: plain `Heading` and `LineHeight`
+	// here broke the build at five unrelated lines in BuildBarWidget.cpp, RoadBuildHUD.cpp,
+	// BuildCameraRigTest.cpp and UIStyleTest.cpp, each of which has a local of that name that
+	// C4459 then calls a shadowed global. It is the same hazard CLAUDE.md records for duplicate
+	// DEFINE_LOG_CATEGORY_STATIC - compiles alone, collides together.
+	constexpr float YardLeftMargin = 24.0f;
+	constexpr float YardTopMargin = 24.0f;
+	constexpr float YardLineHeight = 18.0f;
 
-	const FLinearColor Heading(0.95f, 0.95f, 0.95f);
-	const FLinearColor Body(0.75f, 0.78f, 0.82f);
-	const FLinearColor Caret(1.0f, 0.82f, 0.25f);
-	const FLinearColor Quiet(0.45f, 0.47f, 0.50f);
+	const FLinearColor YardHeadingColour(0.95f, 0.95f, 0.95f);
+	const FLinearColor YardBodyColour(0.75f, 0.78f, 0.82f);
+	const FLinearColor YardCaretColour(1.0f, 0.82f, 0.25f);
+	const FLinearColor YardQuietColour(0.45f, 0.47f, 0.50f);
 
 	/**
 	 * A channel's value as a bar, so a sweep is readable at a glance.
@@ -60,28 +66,28 @@ void AAnimYardHUD::DrawHUD()
 		return;
 	}
 
-	float Y = TopMargin;
+	float Y = YardTopMargin;
 	const auto Line = [this, Font, &Y](const FLinearColor& Colour, const FString& Text)
 	{
-		DrawText(Text, Colour, LeftMargin, Y, Font);
-		Y += LineHeight;
+		DrawText(Text, Colour, YardLeftMargin, Y, Font);
+		Y += YardLineHeight;
 	};
 
 	const AAnimYard* Yard = Controller->Yard();
 	if (Yard == nullptr)
 	{
-		Line(Caret, TEXT("No AAnimYard in this level - nothing will move."));
-		Line(Body, TEXT("Re-run Tools/Python/build_model_yard.py to place one."));
+		Line(YardCaretColour, TEXT("No AAnimYard in this level - nothing will move."));
+		Line(YardBodyColour, TEXT("Re-run Tools/Python/build_model_yard.py to place one."));
 		return;
 	}
 
 	const FYardMotion& Bench = Yard->GetMotion();
 
-	Line(Heading, FString::Printf(TEXT("%s    stage: %s    loop %.1f / %.0fs"),
+	Line(YardHeadingColour, FString::Printf(TEXT("%s    stage: %s    loop %.1f / %.0fs"),
 		Bench.bPaused ? TEXT("|| PAUSED") : TEXT(">  RUNNING"),
 		FYardMotion::StageName(Bench.CurrentStage()),
 		Bench.LoopTime, FYardMotion::LoopSeconds()));
-	Y += LineHeight * 0.5f;
+	Y += YardLineHeight * 0.5f;
 
 	// THE CHANNELS, FROM THE SAME LIST Tab WALKS. A hand-written set of rows here would be a
 	// second list, and the one it disagreed with would be the one with the new channel in it.
@@ -92,14 +98,14 @@ void AAnimYardHUD::DrawHUD()
 		Bench.ChannelRange(Channel, Min, Max);
 
 		const bool bIsCaret = Channel == Controller->Caret();
-		Line(bIsCaret ? Caret : Body, FString::Printf(TEXT("%s %-9s %10.2f   %s"),
+		Line(bIsCaret  ? YardCaretColour : YardBodyColour, FString::Printf(TEXT("%s %-9s %10.2f   %s"),
 			bIsCaret ? TEXT(">") : TEXT(" "),
 			FYardMotion::ChannelName(Channel),
 			Bench.Value(Channel),
 			*Meter(Bench.Value(Channel), Min, Max)));
 	}
 
-	Line(Body, FString::Printf(TEXT("  %-9s %10s"), TEXT("wheels"),
+	Line(YardBodyColour, FString::Printf(TEXT("  %-9s %10s"), TEXT("wheels"),
 		Bench.bAirborne ? TEXT("airborne") : TEXT("on ground")));
 
 	// THE UNDRIVEN MODELS, NAMED. Three of the four ground vehicles have no Animation Blueprint
@@ -119,22 +125,22 @@ void AAnimYardHUD::DrawHUD()
 		}
 	}
 
-	Y += LineHeight * 0.5f;
-	Line(Body, FString::Printf(TEXT("%d model(s), %d driven%s"),
+	Y += YardLineHeight * 0.5f;
+	Line(YardBodyColour, FString::Printf(TEXT("%d model(s), %d driven%s"),
 		Yard->Subjects().Num(), Driven,
 		Yard->Solo() != nullptr ? *FString::Printf(TEXT("   SOLO: %s"), *Yard->Solo()->GetName()) : TEXT("")));
 
 	if (!Undriven.IsEmpty())
 	{
-		Line(Quiet, FString::Printf(TEXT("no anim class: %s"), *Undriven));
+		Line(YardQuietColour, FString::Printf(TEXT("no anim class: %s"), *Undriven));
 	}
 
 	// THE KEYS, FROM THE TABLE THAT BINDS THEM. See YardActions().
-	Y += LineHeight * 0.5f;
+	Y += YardLineHeight * 0.5f;
 	for (const FYardActionBinding& Action : YardActions())
 	{
-		Line(Quiet, FString::Printf(TEXT("[%s]  %s"),
+		Line(YardQuietColour, FString::Printf(TEXT("[%s]  %s"),
 			*Action.Key.GetDisplayName().ToString(), Action.Help));
 	}
-	Line(Quiet, TEXT("[WASD] fly   [Q/E] turn   [middle-drag] turn"));
+	Line(YardQuietColour, TEXT("[WASD] fly   [Q/E] turn   [middle-drag] turn"));
 }

@@ -1,9 +1,27 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AnimYard.h"
 
-struct FYardRig;
 class USkeletalMesh;
+
+/** One drivable mesh and the rig that drives it, with a name to report it by. */
+struct FYardRigEntry
+{
+	TObjectPtr<USkeletalMesh> Mesh;
+	FYardRig Rig;
+
+	/** The asset that declared the pairing - a UAircraftType, or the content asset. */
+	FString DeclaredBy;
+
+	/**
+	 * DeclaredBy NAMED this mesh, rather than resolving to it through a game-wide fallback.
+	 *
+	 * The tie-break when two types answer for one mesh - see EveryRig, which records the
+	 * A320 that claimed the Meridian's model by declaring no model of its own.
+	 */
+	bool bMeshDeclaredByItsType = false;
+};
 
 /**
  * Which Animation Blueprint drives which mesh, answered from the content the GAME uses.
@@ -31,4 +49,16 @@ namespace AnimYardCatalogue
 	 * Cumbria's fleet.
 	 */
 	bool FindRigFor(USkeletalMesh* Mesh, FYardRig& OutRig);
+
+	/**
+	 * Every mesh the project can drive, and what drives it.
+	 *
+	 * THE ENUMERATION FindRigFor IS BUILT ON, rather than a second walk of the same assets.
+	 * It exists as its own function because a test wants the WHOLE list - see
+	 * AirportMgr.View.AnimYard.EveryRigDrivesItsBones, which ticks each rig and checks the
+	 * Animation Blueprint actually moves something. A test that enumerated the content for
+	 * itself would be a second catalogue, and the one it disagreed with would be the one
+	 * carrying the rig nobody had checked.
+	 */
+	void EveryRig(TArray<FYardRigEntry>& Out);
 }
