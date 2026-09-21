@@ -57,7 +57,9 @@ namespace GuidelineGeom
 	 * rate, and short-circuiting that one to two points would change where a follower is
 	 * at a given distance. This test admits only the case where it provably cannot.
 	 */
-	AIRSIDE_API bool IsStraight(
+	// NOT AIRSIDE_API (issue #191): every caller (AnchorLink.cpp) is inside this module's own
+	// Private/, so exporting it bought no consumer anything.
+	bool IsStraight(
 		const FVector2D& A, const FVector2D& Control, const FVector2D& B);
 
 	/**
@@ -95,7 +97,9 @@ namespace GuidelineGeom
 	 * parameter a split needs. Exact for a straight guideline, where the polyline is the
 	 * curve.
 	 */
-	AIRSIDE_API double ParamAtSample(int32 Index, double Fraction, int32 Count);
+	// NOT AIRSIDE_API (issue #191): every caller (AnchorLink.cpp, AnchorLinkFinder.cpp) is
+	// inside this module's own Private/.
+	double ParamAtSample(int32 Index, double Fraction, int32 Count);
 
 	/** Summed length of an already-sampled polyline. */
 	AIRSIDE_API double PolylineLength(const TArray<FVector2D>& Points);
@@ -144,7 +148,9 @@ namespace GuidelineGeom
 	 *
 	 * Both are left untouched for a polyline with no direction at all.
 	 */
-	AIRSIDE_API void VertexHeadings(
+	// NOT AIRSIDE_API (issue #191): its only caller (SpeedProfile.cpp) is inside this
+	// module's own Private/.
+	void VertexHeadings(
 		const TArray<FVector2D>& Points, int32 Vertex,
 		double& OutArriving, double& OutLeaving);
 
@@ -162,7 +168,9 @@ namespace GuidelineGeom
 	 * sweep, and a stand lane's road join slides along the lane - and "how far back
 	 * along this curve" has to be the same walk in both or the two disagree by a sample.
 	 */
-	AIRSIDE_API double ParamAtArcOffset(
+	// NOT AIRSIDE_API (issue #191): its only caller (AnchorLink.cpp) is inside this module's
+	// own Private/.
+	double ParamAtArcOffset(
 		const TArray<FVector2D>& Points, double Param, double Offset);
 
 	/**

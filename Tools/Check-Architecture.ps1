@@ -135,6 +135,34 @@ foreach ($file in Get-Sources (Join-Path $Root 'Plugins\Airside\Source') @('.h',
     }
 }
 
+# --- 1c. Runtime-vs-editor direction: Airside never includes or names AirsideEditor -------
+# Issue #191. The SAME shape as 1b above, mirrored: AirsideEditor -> Airside is the only legal
+# direction (AirsideEditor.Build.cs's own comment says so), because the runtime plugin must
+# ship without an editor module. Matched on CODE references, the same three ways as 1b - an
+# include path, the module's API macro, or a name from its one class family (RoadBuildEd*
+# covers URoadBuildEdMode, FRoadBuildEdModeCommands, URoadBuildEditorTool and
+# URoadBuildEditorToolBuilder, the whole of AirsideEditor's public surface) - so a bare
+# `class URoadBuildEdMode;` forward declaration is caught with no #include required to catch
+# it. Scoped to the Airside MODULE only (not AirsideTests, which composes both sides on
+# purpose for the composition tests CLAUDE.md's "Architecture" section describes).
+#
+# COMMENT LINES EXCLUDED, unlike 1b above (which does not exempt them but happens never to
+# meet one): RoadBuildEditorTool is discussed BY NAME throughout Airside's own WHY comments -
+# the two-drivers design this whole plugin is built around - and a doc comment explaining
+# that split is exactly the comment CLAUDE.md wants more of, not a layering violation. Doc
+# blocks here are `/** ... * ... */`, not `//`, so the check is against a leading `*` or `/*`
+# as well - rule 5/6/7's `StartsWith('//')` alone would have missed every one of these.
+foreach ($file in Get-Sources $plugin @('.h', '.cpp')) {
+    # RoadBuildEd, not \bRoadBuildEd\w* - every real name (URoadBuildEdMode,
+    # FRoadBuildEdModeCommands, ...) has a U/F prefix immediately before "RoadBuildEd" with
+    # no word boundary between them, so a \b there would never fire on the actual class names.
+    $hits = Select-String -Path $file.FullName -Pattern '#include\s+"[^"]*AirsideEditor|AIRSIDEEDITOR_API|RoadBuildEd'
+    foreach ($h in $hits) {
+        if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+        $failures.Add("editor-direction: $($file.FullName):$($h.LineNumber) Airside must not reference AirsideEditor: $($h.Line.Trim())")
+    }
+}
+
 foreach ($half in 'Public', 'Private') {
     $dir = Join-Path $plugin (Join-Path $half 'Solve')
     foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
@@ -208,12 +236,18 @@ foreach ($tree in $trees) {
 #   X.Index = Index; ... X.Generation = ...   - split across up to two statements
 # RoadSlotMap.h is the one legal definer (RoadSlot::Add and RoadSlot::HandleAt themselves).
 # Test modules are exempt (see the doc comment above) the same way rule 4 exempts them.
+#
+# EVERY \w+ SUBJECT BELOW IS \w+(\.\w+)*, not a bare \w+ (issue #191's review comment). PR
+# #220's first draft built {Segment.Index, Segment.Generation} - a DOTTED field on both
+# sides of the brace - and the bare \w+ this rule used to have could not match "Segment.Index"
+# at all, so the whole hit went unseen until a human caught it in review. All three regexes
+# get the same fix, since all three take a hand-built field as their subject.
 $handlePatterns = @(
-    '\{\s*\w+,\s*\w+(\[\w+\])?\.Generation\s*\}',
-    '\.Generation\s*=\s*\w+(\[\w+\])?\.Generation'
+    '\{\s*\w+(\.\w+)*,\s*\w+(\.\w+)*(\[\w+\])?\.Generation\s*\}',
+    '\.Generation\s*=\s*\w+(\.\w+)*(\[\w+\])?\.Generation'
 )
 # "Within 2 lines": the Index line, then at most one line between it and the Generation line.
-$handleSplitPattern = '\.Index\s*=\s*\w+;[^\n]*\n(?:[^\n]*\n){0,1}[^\n]*\.Generation\s*='
+$handleSplitPattern = '\.Index\s*=\s*\w+(\.\w+)*;[^\n]*\n(?:[^\n]*\n){0,1}[^\n]*\.Generation\s*='
 foreach ($tree in $trees) {
     foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
         if ($file.Name -eq 'RoadSlotMap.h') { continue }
@@ -281,9 +315,61 @@ foreach ($module in $modules) {
     }
 }
 
+# --- 8. No GetWorld/UWorld/GEngine in Model/ or Solve/ ------------------------------------
+# Issue #191. Model/ and Solve/ are the "plain UObjects, testable with NewObject and no
+# world" / "dependency-free geometry" layers CLAUDE.md's Architecture section describes - a
+# GetWorld() call, a UWorld reference or a GEngine reach-through is exactly the dependency
+# that promise rules out, since none of the three exist in a world-free test. Applied to the
+# production tree only, like rule 7 - a comment that explains why a function does NOT call
+# GetWorld (there is at least one, guarding against a regression) is not the thing this rule
+# exists to catch, the same exemption every token-ban rule above gives comments. Doc blocks
+# here are `/** ... * ... */`, like rule 1c above, so the exemption checks for a leading `*`
+# or `/*` too, not only `//` - rules 5/6/7 never needed that because none of their banned
+# tokens happen to come up inside this codebase's block comments the way UWorld does here.
+$worldPattern = '\b(GetWorld|UWorld|GEngine)\b'
+foreach ($module in $modules) {
+    foreach ($half in 'Public', 'Private') {
+        foreach ($layer in 'Model', 'Solve') {
+            $dir = Join-Path $module (Join-Path $half $layer)
+            foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+                $hits = Select-String -Path $file.FullName -Pattern $worldPattern
+                foreach ($h in $hits) {
+                    if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+                    $failures.Add("model-solve-world: $($file.FullName):$($h.LineNumber) $layer/ must stay world-free: $($h.Line.Trim())")
+                }
+            }
+        }
+    }
+}
+
+# --- 9. Every Test* assertion in a test module names a reason ----------------------------
+# Issue #191's review comment. FAutomationTestBase's TestTrue/TestEqual/TestNull/... all take
+# a description FIRST - the text a failure actually prints - and the shapes this codebase
+# uses for it are: a TEXT(...) literal, an FString (often FString::Printf, sometimes
+# dereferenced through a pointer with a leading *), a bare (possibly dotted) variable someone
+# built the message into earlier (Each.Why, a loop's own Reason), or a dereferenced computed
+# expression such as *(Label + TEXT(" solves")). What is NOT one of those - a bare comparison,
+# a literal number, anything that reads as the CONDITION rather than a description of it - is
+# exactly the shape issue #191's review found twice, both a variable holding the reason with
+# no #include-visible trace of that, which the negative lookahead's \w+(\.\w+)*\s*[,)] admits.
+# The whitespace-then-token check sits INSIDE the lookahead, not before it, because a `\s*`
+# outside one still backtracks past real content to a bare whitespace character, satisfying
+# the negative lookahead against nothing.
+$reasonModules = @($airsideTests, $opsTests)
+$reasonPattern = '(?<![A-Za-z0-9_])Test\w+\((?!\s*(TEXT|\*?FString|\*?\(|\w+(\.\w+)*\s*[,)]))'
+foreach ($module in $reasonModules) {
+    foreach ($file in Get-Sources $module @('.h', '.cpp')) {
+        $text = Get-Content -Raw -Path $file.FullName
+        foreach ($m in [regex]::Matches($text, $reasonPattern)) {
+            $line = ($text.Substring(0, $m.Index) -split "`n").Count
+            $failures.Add("assertion-without-reason: $($file.FullName):$line calls an assertion with no recognisable reason argument: $($m.Value.Trim())")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons)' -ForegroundColor Green
     exit 0
 }
 
