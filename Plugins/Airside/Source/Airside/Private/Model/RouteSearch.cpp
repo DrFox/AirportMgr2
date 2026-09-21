@@ -9,6 +9,14 @@
 namespace
 {
 	/**
+	 * See RouteSearch::SearchCallCountForTest. Bumped once per full graph search - RunSearch
+	 * (either of Find's two passes) or FindToGoals - rather than once per public entry point,
+	 * so Find()'s own unconstrained retry on a TooWide failure still counts as the second
+	 * search it actually runs.
+	 */
+	int32 GSearchCallCountForTest = 0;
+
+	/**
 	 * Cached length plus the query's congestion charge.
 	 *
 	 * Reads FGuidelineEdge::Length rather than sampling (#171): this used to call
@@ -52,8 +60,220 @@ namespace
 		return Edge.MaxWingspan > 0.0 && Wingspan > Edge.MaxWingspan;
 	}
 
+	/** Ordering for the open-list min-heap: cheapest estimated total first. Free rather than
+	 *  a lambda per search (#190), so RunSearch and FindToGoals's separate Open arrays share
+	 *  one definition instead of two lambdas that could drift. */
+	bool ByCost(const TPair<double, FGuidelineNodeId>& A, const TPair<double, FGuidelineNodeId>& B)
+	{
+		return A.Key < B.Key;
+	}
+
+	/**
+	 * Relaxes every live outgoing edge of At into Best/Arrived/Open - the one neighbour-
+	 * expansion rule, so RunSearch's single-goal walk and FindToGoals' multi-goal one (#190,
+	 * deferred from #171/#201) cannot drift into two different answers for what "may this
+	 * edge be crossed" means. Heuristic is the only thing that differs between the two searches
+	 * (distance to the one goal, or zero - see FindToGoals' own comment) and is threaded
+	 * through as a parameter instead. RunwayInUse is the caller's own map, threaded through by
+	 * reference, so its per-runway memo is paid once per SEARCH, not once per expansion.
+	 */
+	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan,
+		FGuidelineNodeId At, double Reached, const TSet<FGuidelineNodeId>& Closed,
+		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
+		TMap<FGuidelineNodeId, double>& Best, TMap<FGuidelineNodeId, FRouteStep>& Arrived,
+		TArray<TPair<double, FGuidelineNodeId>>& Open)
+	{
+		// Whether a runway's chain is in use - held by somebody other than the querier, or
+		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
+		// per runway segment seen: the chain walk and the table scan are not free, and every
+		// edge along a long strip would otherwise pay for both.
+		auto IsRunwayHeld = [&Network, &Query, &RunwayInUse](FRoadSegmentId Seed)
+		{
+			if (const bool* Known = RunwayInUse.Find(Seed.Index))
+			{
+				return *Known;
+			}
+			// bCountOwnOccupied true: ERunwayAvoidance::Held's own comment (FRouteQuery)
+			// says why the querier's OWN occupied claim counts too.
+			const bool bHeld = Query.Occupancy != nullptr
+				&& Query.Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), Query.QueryingAgent, /*bCountOwnOccupied*/ true);
+			RunwayInUse.Add(Seed.Index, bHeld);
+			return bHeld;
+		};
+
+		// Traffic class and one-way direction are already applied here - this is the
+		// network's own answer to "what may leave this node", so the search never
+		// re-implements the rule and cannot drift from it.
+		//
+		// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#171): the array
+		// GetOutgoingGuidelines built was a fresh TArray thrown away at the end of every
+		// one of these node expansions, and a route search over a real airport expands
+		// many nodes. Each `continue` below becomes a `return` from this visitor - the
+		// same "skip this edge" the loop meant, since there is no outer loop left to
+		// continue.
+		Network.ForEachOutgoingGuideline(At, Query.Class, [&](FGuidelineEdgeId EdgeId)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
+			if (Edge == nullptr || Edge->A == Edge->B)
+			{
+				return;
+			}
+
+			if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
+			{
+				return;
+			}
+
+			// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
+			// blocker is an aircraft standing on the node, and an edge-only ban lets the
+			// search re-enter round the back. See FRouteQuery::BannedNode.
+			if (Query.BannedNode.IsSet()
+				&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
+			{
+				return;
+			}
+
+			// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
+			// taxi along one and when.
+			if (Query.AvoidRunways != ERunwayAvoidance::None
+				&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
+				&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
+			{
+				return;
+			}
+
+			if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
+			{
+				return;
+			}
+
+			const double Cost = EdgeCost(*Edge, EdgeId, Query);
+			if (Cost < 0.0)
+			{
+				return;
+			}
+
+			const bool bReversed = (Edge->B == At);
+			const FGuidelineNodeId Next = bReversed ? Edge->A : Edge->B;
+			if (Closed.Contains(Next))
+			{
+				return;
+			}
+
+			const double Tentative = Reached + Cost;
+			const double* Known = Best.Find(Next);
+			if (Known != nullptr && *Known <= Tentative)
+			{
+				return;
+			}
+
+			Best.Add(Next, Tentative);
+
+			FRouteStep Step;
+			Step.Edge = EdgeId;
+			Step.To = Next;
+			Step.bReversed = bReversed;
+
+			// CARRIED INTO THE PLAN, because FRoadAgent is world-free and has no network to
+			// ask. Without this the follower cannot tell a span meant to be driven
+			// backwards from any other, and drives it forwards - which is the 180 degree
+			// flip this whole change exists to delete.
+			Step.bReverseLeg = Edge->bReverseLeg;
+			Arrived.Add(Next, Step);
+
+			const FGuidelineNode* NextNode = Network.GetGuidelineNode(Next);
+			const double Estimate = NextNode != nullptr ? Heuristic(NextNode->Position) : 0.0;
+			Open.HeapPush(TPair<double, FGuidelineNodeId>(Tentative + Estimate, Next), ByCost);
+		});
+	}
+
+	/**
+	 * Backtraces Arrived from Goal to Start and welds the polyline - RunSearch's single-goal
+	 * tail and FMultiGoalSearch::BuildPlan (any goal settled by a shared multi-goal search,
+	 * #190) both call this instead of each re-reading the step map: the "lists that must
+	 * agree are one list" rule CLAUDE.md asks for, applied to a backtrace instead of a UI list.
+	 */
+	FRoutePlan BuildPlanFromArrival(const URoadNetwork& Network, FGuidelineNodeId Start,
+		const FGuidelineNode& StartNode, FGuidelineNodeId Goal, const TMap<FGuidelineNodeId, FRouteStep>& Arrived)
+	{
+		FRoutePlan Plan;
+		Plan.Start = Start;
+
+		if (Goal == Start)
+		{
+			Plan.Result = ERouteResult::SameNode;
+			return Plan;
+		}
+
+		Plan.Result = ERouteResult::Unreachable;
+		if (!Arrived.Contains(Goal))
+		{
+			return Plan;
+		}
+		Plan.Result = ERouteResult::Found;
+
+		for (FGuidelineNodeId Walk = Goal; Walk != Start; )
+		{
+			const FRouteStep* Step = Arrived.Find(Walk);
+			if (Step == nullptr)
+			{
+				// Only reachable if the arrival map and the closed set disagreed, which
+				// would be a defect in this function rather than in the graph.
+				Plan.Result = ERouteResult::Unreachable;
+				Plan.Steps.Reset();
+				return Plan;
+			}
+
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step->Edge);
+			if (Edge == nullptr)
+			{
+				Plan.Result = ERouteResult::Unreachable;
+				Plan.Steps.Reset();
+				return Plan;
+			}
+
+			Plan.Steps.Add(*Step);
+
+			// The step ARRIVED at Walk, so the node before it is the other end: A when the
+			// edge was walked forwards, B when it was walked backwards.
+			Walk = Step->bReversed ? Edge->B : Edge->A;
+		}
+		Algo::Reverse(Plan.Steps);
+
+		// One array for drawing and for driving. The weld is exact rather than tolerant:
+		// GuidelineGeom::Sample evaluates the endpoints at t=0 and t=1, which for a
+		// quadratic returns A and B themselves, so dropping each segment's first point
+		// leaves no gap and no duplicate.
+		Plan.Polyline.Add(StartNode.Position);
+		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
+		{
+			FRouteStep& Step = Plan.Steps[Index];
+			TArray<FVector2D> Points;
+			if (!Network.SampleGuideline(Step.Edge, Points, Step.bReversed))
+			{
+				continue;
+			}
+
+			for (int32 At = 1; At < Points.Num(); ++At)
+			{
+				Plan.Polyline.Add(Points[At]);
+			}
+
+			// Measured off the array just appended, not off Points: the two are the same
+			// numbers today, and reading the plan's own polyline is what keeps them the same
+			// if the weld rule above ever changes.
+			Step.EndVertex = Plan.Polyline.Num() - 1;
+			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
+		}
+
+		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
+		return Plan;
+	}
+
 	FRoutePlan RunSearch(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan)
 	{
+		++GSearchCallCountForTest;
+
 		FRoutePlan Plan;
 		Plan.Result = ERouteResult::Unreachable;
 		Plan.Start = Query.Start;
@@ -75,11 +295,6 @@ namespace
 			return FVector2D::Distance(From, GoalAt);
 		};
 
-		auto ByCost = [](const TPair<double, FGuidelineNodeId>& A, const TPair<double, FGuidelineNodeId>& B)
-		{
-			return A.Key < B.Key;
-		};
-
 		// Sized off the graph up front (#171): Best, Arrived and Closed can each hold every
 		// node the search settles, and a search over a real airport commonly does, so growing
 		// each of them by rehashing one node at a time paid for several reallocations a call
@@ -92,25 +307,7 @@ namespace
 		Arrived.Reserve(NumNodes);
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
-
-		// Whether a runway's chain is in use - held by somebody other than the querier, or
-		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
-		// per runway segment seen: the chain walk and the table scan are not free, and every
-		// edge along a long strip would otherwise pay for both.
 		TMap<int32, bool> RunwayInUse;
-		auto IsRunwayHeld = [&Network, &Query, &RunwayInUse](FRoadSegmentId Seed)
-		{
-			if (const bool* Known = RunwayInUse.Find(Seed.Index))
-			{
-				return *Known;
-			}
-			// bCountOwnOccupied true: ERunwayAvoidance::Held's own comment (FRouteQuery)
-			// says why the querier's OWN occupied claim counts too.
-			const bool bHeld = Query.Occupancy != nullptr
-				&& Query.Occupancy->IsAnyHeld(Network.RunwaySurfaces(Seed), Query.QueryingAgent, /*bCountOwnOccupied*/ true);
-			RunwayInUse.Add(Seed.Index, bHeld);
-			return bHeld;
-		};
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -146,154 +343,14 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-
-			// Traffic class and one-way direction are already applied here - this is the
-			// network's own answer to "what may leave this node", so the search never
-			// re-implements the rule and cannot drift from it.
-			//
-			// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#171): the array
-			// GetOutgoingGuidelines built was a fresh TArray thrown away at the end of every
-			// one of these node expansions, and a route search over a real airport expands
-			// many nodes. Each `continue` below becomes a `return` from this visitor - the
-			// same "skip this edge" the loop meant, since there is no outer loop left to
-			// continue.
-			Network.ForEachOutgoingGuideline(At, Query.Class, [&](FGuidelineEdgeId EdgeId)
-			{
-				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-				if (Edge == nullptr || Edge->A == Edge->B)
-				{
-					return;
-				}
-
-				if (Query.BannedEdge.IsSet() && EdgeId == Query.BannedEdge)
-				{
-					return;
-				}
-
-				// A banned NODE bans every edge INTO it, whichever arm - the deadlock replan's
-				// blocker is an aircraft standing on the node, and an edge-only ban lets the
-				// search re-enter round the back. See FRouteQuery::BannedNode.
-				if (Query.BannedNode.IsSet()
-					&& ((Edge->B == At ? Edge->A : Edge->B) == Query.BannedNode))
-				{
-					return;
-				}
-
-				// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
-				// taxi along one and when.
-				if (Query.AvoidRunways != ERunwayAvoidance::None
-					&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
-					&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
-				{
-					return;
-				}
-
-				if (!bIgnoreWingspan && ExceedsWingspan(*Edge, Query.Wingspan))
-				{
-					return;
-				}
-
-				const double Cost = EdgeCost(*Edge, EdgeId, Query);
-				if (Cost < 0.0)
-				{
-					return;
-				}
-
-				const bool bReversed = (Edge->B == At);
-				const FGuidelineNodeId Next = bReversed ? Edge->A : Edge->B;
-				if (Closed.Contains(Next))
-				{
-					return;
-				}
-
-				const double Tentative = Reached + Cost;
-				const double* Known = Best.Find(Next);
-				if (Known != nullptr && *Known <= Tentative)
-				{
-					return;
-				}
-
-				Best.Add(Next, Tentative);
-
-				FRouteStep Step;
-				Step.Edge = EdgeId;
-				Step.To = Next;
-				Step.bReversed = bReversed;
-
-				// CARRIED INTO THE PLAN, because FRoadAgent is world-free and has no network to
-				// ask. Without this the follower cannot tell a span meant to be driven
-				// backwards from any other, and drives it forwards - which is the 180 degree
-				// flip this whole change exists to delete.
-				Step.bReverseLeg = Edge->bReverseLeg;
-				Arrived.Add(Next, Step);
-
-				const FGuidelineNode* NextNode = Network.GetGuidelineNode(Next);
-				const double Estimate = NextNode != nullptr ? Heuristic(NextNode->Position) : 0.0;
-				Open.HeapPush(TPair<double, FGuidelineNodeId>(Tentative + Estimate, Next), ByCost);
-			});
+			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, Best, Arrived, Open);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
 		{
 			return Plan;
 		}
-
-		for (FGuidelineNodeId Walk = Query.Goal; Walk != Query.Start; )
-		{
-			const FRouteStep* Step = Arrived.Find(Walk);
-			if (Step == nullptr)
-			{
-				// Only reachable if the arrival map and the closed set disagreed, which
-				// would be a defect in this function rather than in the graph.
-				Plan.Result = ERouteResult::Unreachable;
-				Plan.Steps.Reset();
-				return Plan;
-			}
-
-			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step->Edge);
-			if (Edge == nullptr)
-			{
-				Plan.Result = ERouteResult::Unreachable;
-				Plan.Steps.Reset();
-				return Plan;
-			}
-
-			Plan.Steps.Add(*Step);
-
-			// The step ARRIVED at Walk, so the node before it is the other end: A when the
-			// edge was walked forwards, B when it was walked backwards.
-			Walk = Step->bReversed ? Edge->B : Edge->A;
-		}
-		Algo::Reverse(Plan.Steps);
-
-		// One array for drawing and for driving. The weld is exact rather than tolerant:
-		// GuidelineGeom::Sample evaluates the endpoints at t=0 and t=1, which for a
-		// quadratic returns A and B themselves, so dropping each segment's first point
-		// leaves no gap and no duplicate.
-		Plan.Polyline.Add(StartNode->Position);
-		for (int32 Index = 0; Index < Plan.Steps.Num(); ++Index)
-		{
-			FRouteStep& Step = Plan.Steps[Index];
-			TArray<FVector2D> Points;
-			if (!Network.SampleGuideline(Step.Edge, Points, Step.bReversed))
-			{
-				continue;
-			}
-
-			for (int32 At = 1; At < Points.Num(); ++At)
-			{
-				Plan.Polyline.Add(Points[At]);
-			}
-
-			// Measured off the array just appended, not off Points: the two are the same
-			// numbers today, and reading the plan's own polyline is what keeps them the same
-			// if the weld rule above ever changes.
-			Step.EndVertex = Plan.Polyline.Num() - 1;
-			Step.EndDistance = GuidelineGeom::PolylineLength(Plan.Polyline);
-		}
-
-		Plan.Length = GuidelineGeom::PolylineLength(Plan.Polyline);
-		return Plan;
+		return BuildPlanFromArrival(Network, Query.Start, *StartNode, Query.Goal, Arrived);
 	}
 }
 
@@ -328,6 +385,21 @@ FGuidelineNodeIndex::FGuidelineNodeIndex(const URoadNetwork& Network, double Cel
 			Cells.FindOrAdd(CellOf(Nodes[Index].Position)).Add(Index);
 		}
 	}
+}
+
+FRoutePlan FMultiGoalSearch::BuildPlan(const URoadNetwork& Network, FGuidelineNodeId Goal) const
+{
+	const FGuidelineNode* StartNode = Network.GetGuidelineNode(Start);
+	if (StartNode == nullptr)
+	{
+		// The search this came from already required a live Start node to produce anything -
+		// only reachable if Start died between FindToGoals and this call, which is the
+		// caller's own network mutating mid-choice, not something this function can repair.
+		FRoutePlan Plan;
+		Plan.Result = ERouteResult::NoStart;
+		return Plan;
+	}
+	return BuildPlanFromArrival(Network, Start, *StartNode, Goal, Arrived);
 }
 
 namespace
@@ -403,6 +475,9 @@ namespace RouteSearch
 	int32 NodeVisitCountForTest() { return GNodeVisitCountForTest; }
 	void ResetNodeVisitCountForTest() { GNodeVisitCountForTest = 0; }
 
+	int32 SearchCallCountForTest() { return GSearchCallCountForTest; }
+	void ResetSearchCallCountForTest() { GSearchCallCountForTest = 0; }
+
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)
 	{
 		FRoutePlan Plan;
@@ -442,6 +517,93 @@ namespace RouteSearch
 		}
 
 		return Plan;
+	}
+
+	FMultiGoalSearch FindToGoals(const URoadNetwork& Network, const FRouteQuery& Query,
+		const TArray<FGuidelineNodeId>& Goals, TArray<FGoalReach>& OutReach)
+	{
+		++GSearchCallCountForTest;
+
+		FMultiGoalSearch Result;
+		Result.Start = Query.Start;
+		OutReach.Init(FGoalReach(), Goals.Num());
+
+		const FGuidelineNode* StartNode = Network.GetGuidelineNode(Query.Start);
+		if (StartNode == nullptr)
+		{
+			return Result;
+		}
+
+		// Every distinct, live goal other than Start itself - the same SameNode/NoGoal
+		// exclusion Find() applies per-goal before it ever searches, applied here up front so
+		// the loop below only ever waits on a goal that could actually be settled.
+		TSet<FGuidelineNodeId> Unsettled;
+		for (const FGuidelineNodeId& Goal : Goals)
+		{
+			if (Goal.IsSet() && Goal != Query.Start && Network.GetGuidelineNode(Goal) != nullptr)
+			{
+				Unsettled.Add(Goal);
+			}
+		}
+
+		// Sized off the graph up front, same reasoning as RunSearch's own comment (#171).
+		const int32 NumNodes = Network.GetGuidelineNodes().Num();
+		Result.Best.Reserve(NumNodes);
+		Result.Arrived.Reserve(NumNodes);
+		TSet<FGuidelineNodeId> Closed;
+		Closed.Reserve(NumNodes);
+		TMap<int32, bool> RunwayInUse;
+		TArray<TPair<double, FGuidelineNodeId>> Open;
+		Open.Reserve(NumNodes);
+
+		// Zero: see this function's own header comment on why a single-goal heuristic's
+		// traversal-order saving is moot for a search that must settle every goal, held ones
+		// included.
+		auto Heuristic = [](const FVector2D&) { return 0.0; };
+
+		Result.Best.Add(Query.Start, 0.0);
+		Open.HeapPush(TPair<double, FGuidelineNodeId>(0.0, Query.Start), ByCost);
+
+		while (Open.Num() > 0 && Unsettled.Num() > 0)
+		{
+			TPair<double, FGuidelineNodeId> Top;
+			Open.HeapPop(Top, ByCost);
+
+			const FGuidelineNodeId At = Top.Value;
+			if (Closed.Contains(At))
+			{
+				continue;
+			}
+			Closed.Add(At);
+			Unsettled.Remove(At);
+
+			const FGuidelineNode* Node = Network.GetGuidelineNode(At);
+			if (Node == nullptr)
+			{
+				continue;
+			}
+
+			const double Reached = Result.Best.FindChecked(At);
+			ExpandNode(Network, Query, /*bIgnoreWingspan=*/false, At, Reached, Closed, Heuristic,
+				RunwayInUse, Result.Best, Result.Arrived, Open);
+		}
+
+		for (int32 Index = 0; Index < Goals.Num(); ++Index)
+		{
+			const FGuidelineNodeId Goal = Goals[Index];
+			if (!Goal.IsSet() || Goal == Query.Start)
+			{
+				continue;
+			}
+			const double* Length = Result.Best.Find(Goal);
+			if (Length != nullptr && Result.Arrived.Contains(Goal))
+			{
+				OutReach[Index].bReachable = true;
+				OutReach[Index].Length = *Length;
+			}
+		}
+
+		return Result;
 	}
 
 	FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail)

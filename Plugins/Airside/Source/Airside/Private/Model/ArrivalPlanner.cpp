@@ -10,38 +10,64 @@ namespace ArrivalPlanner
 		const FAirframe& Airframe, const FTrafficOccupancy* Occupancy, int32 ExcludingAgent,
 		FRoutePlan* OutRoute, bool* bOutSawHeld)
 	{
-		FGuidelineNodeId Best;
-		FRoutePlan BestRoute;
-		double BestLength = TNumericLimits<double>::Max();
-		bool bSawHeld = false;
+		// Every live stand's pose node, in FEntityInstance ENUMERATION ORDER - the tie-break
+		// below ("first minimum wins") depends on Candidates keeping GetEntities()'s own
+		// order, exactly as the old per-stand loop implicitly did by walking it directly.
+		TArray<FGuidelineNodeId> Candidates;
+		Candidates.Reserve(Network.GetEntities().Num());
 		for (const FEntityInstance& Stand : Network.GetEntities())
 		{
-			if (!Stand.bAlive || !Stand.PoseNode.IsSet())
+			if (Stand.bAlive && Stand.PoseNode.IsSet())
 			{
-				continue;
+				Candidates.Add(Stand.PoseNode);
 			}
-			FRouteQuery Query = FRouteQuery::For(From, Stand.PoseNode, Airframe, ETraversalClass::Aircraft);
-			Query.AvoidRunways = ERunwayAvoidance::All;
-			const FRoutePlan Route = RouteSearch::Find(Network, Query);
-			if (!Route.IsValid() || Route.Polyline.Num() < 2 || Route.Steps.Num() == 0)
+		}
+
+		// Built by hand rather than FRouteQuery::For: that factory also takes a Goal, and
+		// there isn't ONE here - FindToGoals takes the whole Candidates set instead of a
+		// single Query.Goal. See RouteSearch::FindToGoals (#190, deferred from #171/#201):
+		// ONE multi-goal search from From replaces the old one-Find()-per-stand loop, which
+		// stayed O(exits x stands) searches per dispatch, per re-offer, per plan re-resolve
+		// even after #201 made each individual search cheap.
+		FRouteQuery Query;
+		Query.Start = From;
+		Query.Class = ETraversalClass::Aircraft;
+		Query.Wingspan = Airframe.Wingspan;
+		Query.AvoidRunways = ERunwayAvoidance::All;
+
+		// The wingspan retry Find() pays for on TooWide (RouteSearch::Find's own unconstrained
+		// re-run) is NOT reproduced here - see FindToGoals' own comment. This loop never read
+		// Result, only IsValid()/Polyline/Steps, so that second search bought it nothing then
+		// either.
+		TArray<FGoalReach> Reach;
+		const FMultiGoalSearch Search = RouteSearch::FindToGoals(Network, Query, Candidates, Reach);
+
+		FGuidelineNodeId Best;
+		double BestLength = TNumericLimits<double>::Max();
+		bool bSawHeld = false;
+		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+		{
+			if (!Reach[Index].bReachable)
 			{
 				continue;
 			}
 			// Held is asked AFTER reachability, so bSawHeld means "a stand this aircraft could
 			// have used" - the only reading under which NoFreeStand is the right word.
-			if (Occupancy != nullptr && Occupancy->IsHeld(FTrafficResource::OfNode(Stand.PoseNode), ExcludingAgent))
+			if (Occupancy != nullptr && Occupancy->IsHeld(FTrafficResource::OfNode(Candidates[Index]), ExcludingAgent))
 			{
 				bSawHeld = true;
 				continue;
 			}
-			if (Route.Length < BestLength)
+			if (Reach[Index].Length < BestLength)
 			{
-				BestLength = Route.Length;
-				BestRoute = Route;
-				Best = Stand.PoseNode;
+				BestLength = Reach[Index].Length;
+				Best = Candidates[Index];
 			}
 		}
-		if (OutRoute != nullptr) { *OutRoute = BestRoute; }
+		// The FULL route (Polyline/Steps) for the ONE winner, backtraced from the SAME search
+		// above rather than re-run - see FMultiGoalSearch::BuildPlan. A default FRoutePlan
+		// (Result NoStart) when nothing won, matching the old loop's untouched BestRoute.
+		if (OutRoute != nullptr) { *OutRoute = Best.IsSet() ? Search.BuildPlan(Network, Best) : FRoutePlan(); }
 		if (bOutSawHeld != nullptr) { *bOutSawHeld = bSawHeld; }
 		return Best;
 	}

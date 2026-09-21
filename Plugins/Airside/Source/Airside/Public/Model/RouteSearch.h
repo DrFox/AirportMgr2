@@ -300,6 +300,47 @@ struct AIRSIDE_API FGuidelineNodeIndex
 };
 
 /**
+ * One goal's answer from RouteSearch::FindToGoals: reachable, and if so, at what cost.
+ *
+ * ONE STRUCT, not two parallel TArrays a caller could index out of step with each other or
+ * with the Goals array they were computed from - see CLAUDE.md's "one struct per thing".
+ */
+struct AIRSIDE_API FGoalReach
+{
+	bool bReachable = false;
+	double Length = 0.0;
+};
+
+/**
+ * The state one RouteSearch::FindToGoals call leaves behind, so a caller that has already
+ * picked its winner out of the FGoalReach array can get that ONE goal's full FRoutePlan
+ * without a second Dijkstra - see FindToGoals' own comment for why this exists (#190,
+ * deferred from #171/#201).
+ *
+ * A PLAIN STRUCT, not a class hiding these behind an interface, matching FGuidelineNodeIndex
+ * above: Arrived and Best ARE the state, and a caller that reads them directly is not
+ * depending on anything that can drift out from under it.
+ */
+struct AIRSIDE_API FMultiGoalSearch
+{
+	/** Every node the search settled and the step that reached it - bitwise the same map
+	 *  RunSearch's own Arrived is, built by the same expansion. */
+	TMap<FGuidelineNodeId, FRouteStep> Arrived;
+
+	/** Shortest cost to every settled node, keyed the same way. */
+	TMap<FGuidelineNodeId, double> Best;
+
+	FGuidelineNodeId Start;
+
+	/**
+	 * Backtraces Arrived from Goal to Start and welds the polyline exactly as RunSearch's own
+	 * tail does - see BuildPlanFromArrival, which both now share. An Unreachable plan (never
+	 * Found) if Goal was never settled by the search this came from.
+	 */
+	FRoutePlan BuildPlan(const URoadNetwork& Network, FGuidelineNodeId Goal) const;
+};
+
+/**
  * Shortest route over the guideline graph, by A*.
  *
  * NOT in Solve/ and not behind a graph adapter, unlike the junction solver. That solver is
@@ -318,6 +359,39 @@ namespace RouteSearch
 	AIRSIDE_API FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query);
 
 	/**
+	 * ONE Dijkstra out of Query.Start that settles the shortest cost to EVERY node in Goals,
+	 * in place of Query.Goal - the primitive ArrivalPlanner::ChooseStand needs (#190, deferred
+	 * from #171/#201): its old per-stand loop ran one Find() per candidate, O(exits x stands)
+	 * searches per dispatch, per re-offer, per plan re-resolve, even once #201 made each one
+	 * cheap. This turns that count into O(exits).
+	 *
+	 * ZERO HEURISTIC, NOT Find()'s single-goal one: min(straight-line distance to any goal)
+	 * would still be admissible for every goal at once (each edge already costs at least its
+	 * own chord, the reason Find()'s heuristic is admissible at all), but the traversal-order
+	 * saving it buys is moot here - the caller wants EVERY goal's true cost, including held
+	 * ones a plain "first goal popped" search would never visit (see ChooseStand's own
+	 * comment on bSawHeld). A zero heuristic is exactly that full settle with one fewer
+	 * moving part, and correctness - not traversal order - is what a refactor with no
+	 * behaviour change is measured on.
+	 *
+	 * Stops once every live, distinct goal (Start itself and unset/dead handles excluded, the
+	 * same SameNode/NoGoal exclusion Find() applies per-goal before it ever searches) has been
+	 * settled, or the open list empties - whichever comes first - so an unreachable goal costs
+	 * exactly the graph it actually touches, not a search to exhaustion.
+	 *
+	 * OutReach is written for every entry of Goals, order preserved, so a caller doing its own
+	 * tie-break (ChooseStand's "first minimum in enumeration order") reads OutReach[Index]
+	 * against Goals[Index] rather than re-deriving which is which.
+	 *
+	 * The wingspan retry Find() pays for on failure (ERouteResult::TooWide) is deliberately
+	 * NOT reproduced: ChooseStand never reads Result, only IsValid()/Polyline/Steps, so that
+	 * second, unconstrained search would buy it nothing - see ArrivalPlanner.cpp's own comment
+	 * at the call site.
+	 */
+	AIRSIDE_API FMultiGoalSearch FindToGoals(const URoadNetwork& Network, const FRouteQuery& Query,
+		const TArray<FGuidelineNodeId>& Goals, TArray<FGoalReach>& OutReach);
+
+	/**
 	 * Head's first KeepSteps steps followed by all of Tail, welded at the node Tail starts
 	 * from. Precondition: Tail.Start is the node Head's KeepSteps-th step arrives at (or
 	 * Head.Start when KeepSteps is 0). EndDistance and EndVertex are re-based so the
@@ -326,6 +400,20 @@ namespace RouteSearch
 	 * jump in the polyline the agent would then drive across.
 	 */
 	AIRSIDE_API FRoutePlan Splice(const FRoutePlan& Head, int32 KeepSteps, const FRoutePlan& Tail);
+
+	/**
+	 * How many full graph searches - RunSearch (Find's constrained pass or its unconstrained
+	 * retry) or FindToGoals - have run since the last reset. ArrivalPlanner::ChooseStand's own
+	 * measurement (#190, deferred from #171/#201): its old per-stand loop ran one of these per
+	 * CANDIDATE STAND; the multi-goal search runs one per EXIT regardless of stand count. See
+	 * Airside.Model.ArrivalPlanner.ChooseStandSearchCount. A free variable behind namespace
+	 * functions, not a member, for the same reason NodeVisitCountForTest just below is: there
+	 * is no instance to count on.
+	 */
+	AIRSIDE_API int32 SearchCallCountForTest();
+
+	/** Zeroes the counter above - see ResetNodeVisitCountForTest's own reason for existing. */
+	AIRSIDE_API void ResetSearchCallCountForTest();
 
 	/**
 	 * The nearest guideline node to a world position that this class could actually use.

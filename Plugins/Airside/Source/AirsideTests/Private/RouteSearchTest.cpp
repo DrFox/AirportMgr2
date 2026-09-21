@@ -453,4 +453,100 @@ bool FRouteSearchNodeIndexTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// #190, deferred from #171/#201: ArrivalPlanner::ChooseStand's old per-stand loop called
+// Find() once per candidate stand - O(exits x stands) searches per dispatch even after #201
+// made each individual one cheap. FindToGoals replaces that with ONE search whose goal set
+// is every candidate at once. RunSearch and FindToGoals share their neighbour expansion and
+// their backtrace (ExpandNode and BuildPlanFromArrival in RouteSearch.cpp), so this compares
+// FindToGoals' answer for every goal in ONE call against Find()'s own answer for that SAME
+// goal, one call each - a fixture where the two disagreed is exactly what a refactor with no
+// behaviour change must not ship.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteSearchFindToGoalsTest,
+	"Airside.Model.RouteSearch.FindToGoals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteSearchFindToGoalsTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	const FGuidelineNodeId Start = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+	const FGuidelineNodeId Near = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+	const FGuidelineNodeId Tied = Net->AddGuidelineNode(FVector2D(0.0, 1000.0));   // same length as Near
+	const FGuidelineNodeId Far = Net->AddGuidelineNode(FVector2D(0.0, -3000.0));
+	const FGuidelineNodeId Marooned = Net->AddGuidelineNode(FVector2D(5000.0, 5000.0)); // never joined
+	const FGuidelineNodeId Narrow = Net->AddGuidelineNode(FVector2D(-1000.0, 0.0));
+
+	Join(*Net, Start, Near);
+	Join(*Net, Start, Tied);
+	Join(*Net, Start, Far);
+	Join(*Net, Start, Narrow, EGuidelineDir::Bidirectional, /*MaxWingspan=*/3600.0);
+
+	FRouteQuery Query;
+	Query.Start = Start;
+	Query.Class = ETraversalClass::Aircraft;
+	Query.Wingspan = 6500.0; // wider than Narrow's own edge admits
+
+	FGuidelineNodeId Dead;
+	Dead.Index = 999;
+	Dead.Generation = 1;
+
+	// Near TWICE, Start itself, and a dead handle thrown in - every exclusion FindToGoals
+	// must apply on its own (SameNode, NoGoal, and simply not being asked about a node
+	// twice) rather than relying on the caller to have de-duplicated first.
+	const TArray<FGuidelineNodeId> Goals = { Near, Tied, Far, Marooned, Narrow, Start, Dead, Near };
+
+	TArray<FGoalReach> Reach;
+	const FMultiGoalSearch Search = RouteSearch::FindToGoals(*Net, Query, Goals, Reach);
+
+	if (!TestEqual(TEXT("one entry per goal, order preserved"), Reach.Num(), Goals.Num()))
+	{
+		return false;
+	}
+
+	auto CheckAgainstFind = [&](int32 GoalIndex, const TCHAR* Name)
+	{
+		FRouteQuery Single = Query;
+		Single.Goal = Goals[GoalIndex];
+		const FRoutePlan Oracle = RouteSearch::Find(*Net, Single);
+
+		TestEqual(FString::Printf(TEXT("%s: reachability matches Find()"), Name),
+			Reach[GoalIndex].bReachable, Oracle.IsValid());
+		if (Oracle.IsValid())
+		{
+			TestTrue(FString::Printf(TEXT("%s: length matches Find() (%.3f vs %.3f)"),
+				Name, Reach[GoalIndex].Length, Oracle.Length),
+				FMath::IsNearlyEqual(Reach[GoalIndex].Length, Oracle.Length, 1e-6));
+
+			const FRoutePlan Rebuilt = Search.BuildPlan(*Net, Goals[GoalIndex]);
+			TestTrue(FString::Printf(TEXT("%s: BuildPlan reconstructs a valid route from the shared search"), Name),
+				Rebuilt.IsValid());
+			TestEqual(FString::Printf(TEXT("%s: BuildPlan takes the same number of steps as Find()"), Name),
+				Rebuilt.Steps.Num(), Oracle.Steps.Num());
+			TestTrue(FString::Printf(TEXT("%s: BuildPlan's length matches Find()'s (%.3f vs %.3f)"),
+				Name, Rebuilt.Length, Oracle.Length),
+				FMath::IsNearlyEqual(Rebuilt.Length, Oracle.Length, 1e-6));
+		}
+	};
+
+	CheckAgainstFind(0, TEXT("Near"));
+	CheckAgainstFind(1, TEXT("Tied"));
+	CheckAgainstFind(2, TEXT("Far"));
+	CheckAgainstFind(3, TEXT("Marooned"));
+	CheckAgainstFind(4, TEXT("Narrow (wingspan-blocked)"));
+	CheckAgainstFind(7, TEXT("Near (repeated)"));
+
+	TestFalse(TEXT("Start itself is never reachable from itself"), Reach[5].bReachable);
+	TestFalse(TEXT("a dead handle is never reachable"), Reach[6].bReachable);
+
+	// THE TIE ITSELF: Near and Tied cost exactly the same from Start, so both must come back
+	// reachable at the same length - FindToGoals settles every goal actually asked for,
+	// never stopping at the first one popped the way a single-goal search would.
+	TestTrue(TEXT("Near and Tied are both reachable"), Reach[0].bReachable && Reach[1].bReachable);
+	TestTrue(TEXT("and cost exactly the same, not merely both non-zero"),
+		FMath::IsNearlyEqual(Reach[0].Length, Reach[1].Length, 1e-6));
+
+	return true;
+}
+
 #endif
