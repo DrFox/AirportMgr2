@@ -400,6 +400,21 @@ FRouteQuery FRouteQuery::For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
 	return Query;
 }
 
+FRouteQuery FRouteQuery::For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
+	const FAirframe& Airframe, ETraversalClass Class)
+{
+	FRouteQuery Query = For(Start, Goal, Airframe, Class);
+	Query.Errand = Errand;
+	Query.Policy = FRoutePolicy::For(Errand);
+
+	// THE TABLE OVERWRITES THE FIELD, rather than being set beside it. AvoidRunways stays a
+	// public member because the search reads it in the hot loop; making the table its only
+	// writer here is what stops a caller setting both and getting whichever was assigned
+	// last.
+	Query.AvoidRunways = Query.Policy.Avoidance;
+	return Query;
+}
+
 FGuidelineNodeIndex::FGuidelineNodeIndex(const URoadNetwork& Network, double CellSizeIn)
 	// GUARDED, NOT ASSERTED: Rules.ResolveRadius is EditAnywhere, so a project file can set
 	// it to 0 or less, and dividing CellOf's position by a zero or negative cell size would

@@ -6,6 +6,7 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
+#include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteSearch.h"
@@ -139,7 +140,12 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 	// --- Arriving from the WEST -------------------------------------------------------
 	{
 		const FGuidelineNodeId From = SweepNodeNearest(*Net, FVector2D(-28000.0, 0.0));
-		const FRouteQuery Query{ From, Instance.PoseNode, ETraversalClass::Aircraft, 0.0 };
+		// GraphProbe: this test is about the SHAPE of the lead-in, not about routing
+		// policy, so it takes the errand that has none rather than inheriting one it
+		// never meant to assert. An FAirframe default carries Wingspan 0 - unconstrained -
+		// which is what the brace-init this replaces passed positionally.
+		const FRouteQuery Query = FRouteQuery::For(
+			ERouteErrand::GraphProbe, From, Instance.PoseNode, FAirframe(), ETraversalClass::Aircraft);
 		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 
 		if (TestTrue(TEXT("a route reaches the stand from the west"), Plan.IsValid()))
@@ -159,7 +165,12 @@ bool FLeadInSweepTest::RunTest(const FString& Parameters)
 	// the same defect moved a few metres rather than fixed.
 	{
 		const FGuidelineNodeId From = SweepNodeNearest(*Net, FVector2D(28000.0, 0.0));
-		const FRouteQuery Query{ From, Instance.PoseNode, ETraversalClass::Aircraft, 0.0 };
+		// GraphProbe: this test is about the SHAPE of the lead-in, not about routing
+		// policy, so it takes the errand that has none rather than inheriting one it
+		// never meant to assert. An FAirframe default carries Wingspan 0 - unconstrained -
+		// which is what the brace-init this replaces passed positionally.
+		const FRouteQuery Query = FRouteQuery::For(
+			ERouteErrand::GraphProbe, From, Instance.PoseNode, FAirframe(), ETraversalClass::Aircraft);
 		const FRoutePlan Plan = RouteSearch::Find(*Net, Query);
 
 		if (TestTrue(TEXT("a route reaches the stand from the east"), Plan.IsValid()))

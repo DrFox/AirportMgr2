@@ -1,6 +1,9 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
+#include "Model/Airframe.h"
 #include "Model/RoutePolicy.h"
+#include "Model/RouteSearch.h"
+#include "Model/TrafficRules.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -95,6 +98,45 @@ bool FRoutePolicyCallSitesTest::RunTest(const FString& Parameters)
 	Row(ERouteErrand::DepartureBacktrack,  ERunwayAvoidance::None, EOccupancyUse::Never,    TEXT("DeparturePlanner.cpp:106"));
 	Row(ERouteErrand::Replan,              ERunwayAvoidance::Held, EOccupancyUse::Required, TEXT("GroundTrafficRebuild.cpp:95"));
 	Row(ERouteErrand::CandidateComparison, ERunwayAvoidance::All,  EOccupancyUse::Never,    TEXT("FuelService.cpp:234"));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoutePolicyQueryTest,
+	"Airside.Model.RoutePolicy.QueryResolvesTheTable",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoutePolicyQueryTest::RunTest(const FString& Parameters)
+{
+	FAirframe Airframe;
+	Airframe.Wingspan = 3000.0;
+
+	const FRouteQuery TaxiIn = FRouteQuery::For(
+		ERouteErrand::ArrivalTaxiIn, FGuidelineNodeId(), FGuidelineNodeId(),
+		Airframe, ETraversalClass::Aircraft);
+
+	TestEqual(TEXT("the errand is carried, so the search can refuse an unset one"),
+		TaxiIn.Errand, ERouteErrand::ArrivalTaxiIn);
+	TestEqual(TEXT("avoidance comes from the table, not from the caller"),
+		TaxiIn.AvoidRunways, ERunwayAvoidance::All);
+	TestEqual(TEXT("the resolved policy travels with the query for the cost to read"),
+		TaxiIn.Policy.Occupancy, EOccupancyUse::Never);
+	TestEqual(TEXT("the factory still fills wingspan from the airframe"),
+		TaxiIn.Wingspan, 3000.0);
+
+	const FRouteQuery Backtrack = FRouteQuery::For(
+		ERouteErrand::DepartureBacktrack, FGuidelineNodeId(), FGuidelineNodeId(),
+		Airframe, ETraversalClass::Aircraft);
+	TestEqual(TEXT("the one errand that must use a strip is not given a filter"),
+		Backtrack.AvoidRunways, ERunwayAvoidance::None);
+
+	// TWO DEFAULTS THAT MUST AGREE, checked rather than trusted. FRouteQuery carries its own
+	// RunwayPenalty because a query built without any FTrafficRules to hand must still be
+	// costed the same way one built with them is - and two constants typed in two files are
+	// how the Piper's numbers ended up different at seven sites.
+	TestEqual(TEXT("FRouteQuery's penalty default equals FTrafficRules'"),
+		FRouteQuery().RunwayPenalty, FTrafficRules().RunwayPenalty);
 
 	return true;
 }

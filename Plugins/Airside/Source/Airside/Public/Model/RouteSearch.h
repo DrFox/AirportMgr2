@@ -156,6 +156,38 @@ struct AIRSIDE_API FRouteQuery
 
 	UPROPERTY() FGuidelineNodeId Goal;
 
+	/**
+	 * What this route is FOR. Everything policy-shaped below is derived from it.
+	 *
+	 * UNSET IS REFUSED by Find and FindToGoals - see IsQueryAnswerable. The four call sites
+	 * that used to say nothing about runway avoidance, and silently got the permissive
+	 * answer, are the reason the default cannot be a usable one.
+	 */
+	UPROPERTY() ERouteErrand Errand = ERouteErrand::Unset;
+
+	/**
+	 * The resolved row for Errand, filled by For(). Carried on the query rather than
+	 * re-resolved inside the search so that ONE lookup answers the avoidance test, the cost
+	 * term and the occupancy check - three readers, one answer, the same rule
+	 * FRouteStep::EndVertex follows about the polyline.
+	 */
+	UPROPERTY() FRoutePolicy Policy;
+
+	/**
+	 * Multiplier on a runway edge's length, applied only when Policy.bPenaliseRunways.
+	 *
+	 * MIRRORS FTrafficRules::RunwayPenalty exactly as CongestionWeight below mirrors
+	 * FTrafficRules::CongestionWeight: a query built with no rules to hand must still be
+	 * costed the way one built with them is. Airside.Model.RoutePolicy.QueryResolvesTheTable
+	 * asserts the two defaults agree, because two constants in two files is how the Piper's
+	 * figures ended up different at seven sites.
+	 *
+	 * NEVER BELOW 1.0. A multiplier under one would make an edge cheaper than its own chord
+	 * and break the straight-line heuristic's admissibility silently - the first pop would
+	 * stop being optimal and nothing would say so.
+	 */
+	UPROPERTY() double RunwayPenalty = 10.0;
+
 	UPROPERTY() ETraversalClass Class = ETraversalClass::GroundVehicle;
 
 	/**
@@ -214,6 +246,15 @@ struct AIRSIDE_API FRouteQuery
 	 * taking eight parameters most callers do not use.
 	 */
 	static FRouteQuery For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
+		const FAirframe& Airframe, ETraversalClass Class);
+
+	/**
+	 * Start/Goal/Class/Wingspan AND the whole routing policy, from the errand.
+	 *
+	 * THE ONLY FACTORY PRODUCTION CODE MAY USE. The errand-less overload above survives
+	 * only until every caller has been migrated, and is then deleted.
+	 */
+	static FRouteQuery For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
 		const FAirframe& Airframe, ETraversalClass Class);
 
 	/** Chainable: the congestion cost term, set together because CongestionWeight is
