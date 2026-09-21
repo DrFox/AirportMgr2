@@ -44,12 +44,15 @@ struct AIRSIDE_API FRoadSegment
 	 */
 	UPROPERTY() FRunwayFacts Runway;
 
-	/** Written ONLY by FRoadNetworkSolver. Distance from each end at which the segment is cut. */
+	/** Written ONLY by FRoadNetworkSolver, through URoadNetwork::WriteSegmentEndSolve (#191) -
+	 *  not a raw pointer, so this and the cut vertices below cannot land out of step with
+	 *  bSolvedA/B. Distance from each end at which the segment is cut. */
 	UPROPERTY() double TrimA = 0.0;
 	UPROPERTY() double TrimB = 0.0;
 
 	/**
-	 * The segment's four end vertices, written ONLY by FRoadNetworkSolver.
+	 * The segment's four end vertices, written ONLY by FRoadNetworkSolver (see TrimA/B's
+	 * own comment on how that is enforced).
 	 *
 	 * These are the SAME values the junction boundary polygon contains, stored rather
 	 * than recomputed. A mesh builder that rebuilt them from Position + Tangent*Trim

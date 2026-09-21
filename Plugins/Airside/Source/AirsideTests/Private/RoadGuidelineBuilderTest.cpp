@@ -285,12 +285,11 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 
 		if (TestTrue(TEXT("found a derived edge to edit"), Edited.IsSet()))
 		{
-			FGuidelineEdge* Mutable = Net->GetGuidelineEdgeMutable(Edited);
-			if (TestNotNull(TEXT("the edge is mutable"), Mutable))
-			{
-				Mutable->bDerived = false;
-				Mutable->MaxWingspan = 6543.0;   // a value derivation would never produce
-			}
+			// FRoadNetworkTestAccess (#191): no production caller writes bDerived/MaxWingspan
+			// directly, so this simulated edit goes through the one friend struct that may,
+			// not the raw GetGuidelineEdgeMutable that used to be public for everyone.
+			TestTrue(TEXT("the edge is mutable"),
+				FRoadNetworkTestAccess(*Net).MarkGuidelineEdgeEditedForTest(Edited, 6543.0));   // a value derivation would never produce
 
 			FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 

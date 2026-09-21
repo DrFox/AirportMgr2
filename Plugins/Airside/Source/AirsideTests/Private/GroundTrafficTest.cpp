@@ -159,7 +159,11 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
 	TestGraph::Join(*Net, W, J); TestGraph::Join(*Net, J, E);
 	TestGraph::Join(*Net, S, J); TestGraph::Join(*Net, J, N);
-	Net->GetGuidelineNodeMutable(J)->PriorityOverride = { ETraversalClass::GroundVehicle, ETraversalClass::Aircraft };
+	// FRoadNetworkTestAccess (#191): no production caller writes PriorityOverride yet - see
+	// FGuidelineNode's own comment - so this goes through the one friend struct that may,
+	// not the raw GetGuidelineNodeMutable that used to be public for everyone.
+	FRoadNetworkTestAccess(*Net).SetGuidelineNodePriorityOverrideForTest(J,
+		{ ETraversalClass::GroundVehicle, ETraversalClass::Aircraft });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);

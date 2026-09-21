@@ -3,6 +3,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/JunctionSolver.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -124,14 +125,17 @@ bool FRoadNetworkTest::RunTest(const FString& Parameters)
 			Fresh->LeftCutA.IsZero() && Fresh->RightCutA.IsZero() &&
 			Fresh->LeftCutB.IsZero() && Fresh->RightCutB.IsZero());
 
-		// Only the solver writes these; the test stands in for it here.
-		FRoadSegment* Mutable = CutNet->GetSegmentMutable(Seg);
-		Mutable->LeftCutA  = FVector2D(1150.0, 1150.0);
-		Mutable->RightCutA = FVector2D(1150.0, -1150.0);
-		Mutable->LeftCutB  = FVector2D(8850.0, -1150.0);
-		Mutable->RightCutB = FVector2D(8850.0, 1150.0);
-		Mutable->bSolvedA = true;
-		Mutable->bSolvedB = true;
+		// Only the solver writes these; the test stands in for it here through the same
+		// WriteSegmentEndSolve mutator SolveNodeInto calls (#191), not a raw FRoadSegment*.
+		FJunctionArmResult SolveA;
+		SolveA.LeftCut  = FVector2D(1150.0, 1150.0);
+		SolveA.RightCut = FVector2D(1150.0, -1150.0);
+		CutNet->WriteSegmentEndSolve(Seg, /*bEndA=*/true, SolveA);
+
+		FJunctionArmResult SolveB;
+		SolveB.LeftCut  = FVector2D(8850.0, -1150.0);
+		SolveB.RightCut = FVector2D(8850.0, 1150.0);
+		CutNet->WriteSegmentEndSolve(Seg, /*bEndA=*/false, SolveB);
 
 		const FRoadSegment* Solved = CutNet->GetSegment(Seg);
 		TestTrue(TEXT("solved flags survive"), Solved->bSolvedA && Solved->bSolvedB);
@@ -273,6 +277,163 @@ bool FRoadNetworkSampleGuidelineTest::RunTest(const FString& Parameters)
 	Net->RemoveGuidelineEdge(EdgeId);
 	TArray<FVector2D> Removed;
 	TestFalse(TEXT("a removed edge id refuses"), Net->SampleGuideline(EdgeId, Removed));
+
+	return true;
+}
+
+/**
+ * The narrow mutators #191 put in place of the three raw *Mutable accessors, each pinning
+ * the ONE invariant that accessor let a caller skip:
+ *   - RelinkGuidelineEdge fixes Incident at all four nodes - the repair a raw FGuidelineEdge*
+ *     writing A/B directly could bypass. Untested before this (grep found no caller in
+ *     AirsideTests/), and it is now the ONLY way to move an edge's endpoints at all, since
+ *     GetGuidelineEdgeMutable is private.
+ *   - WriteSegmentEndSolve/ClearSegmentEndSolve write TrimA/B, the cut vertices and
+ *     bSolvedA/B TOGETHER, so a segment can never report bSolved true over a stale vertex -
+ *     the failure this pins is one write landing without the others.
+ *   - SetGuidelineNodeOrigin and SetGuidelineNodeHoldingPosition each write their whole
+ *     multi-field fact in one call, so a caller cannot leave GuidelineIndex stale beside a
+ *     fresh Segment/bEndA, or a Runway HoldingPosition beside a cleared HoldingPositionFor.
+ *
+ * "Airside.Model.Guideline.NarrowMutators", a distinct leaf beside SampleGuideline above -
+ * see that test's own comment on why "Network" cannot be reused as both leaf and parent.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadNetworkNarrowMutatorsTest,
+	"Airside.Model.Guideline.NarrowMutators",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadNetworkNarrowMutatorsTest::RunTest(const FString& Parameters)
+{
+	// --- RelinkGuidelineEdge fixes Incident at all four nodes ---
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId A = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+		const FGuidelineNodeId B = Net->AddGuidelineNode(FVector2D(1000.0, 0.0));
+		const FGuidelineNodeId C = Net->AddGuidelineNode(FVector2D(0.0, 1000.0));
+		const FGuidelineNodeId D = Net->AddGuidelineNode(FVector2D(1000.0, 1000.0));
+
+		FGuidelineEdge Edge;
+		Edge.A = A;
+		Edge.B = B;
+		const FGuidelineEdgeId EdgeId = Net->AddGuidelineEdge(MoveTemp(Edge));
+		TestTrue(TEXT("edge added"), EdgeId.IsSet());
+		TestTrue(TEXT("A starts incident"), Net->GetGuidelineNode(A)->Incident.Contains(EdgeId));
+		TestTrue(TEXT("B starts incident"), Net->GetGuidelineNode(B)->Incident.Contains(EdgeId));
+
+		TestTrue(TEXT("relink to C/D succeeds"), Net->RelinkGuidelineEdge(EdgeId, C, D));
+
+		// The invariant a raw FGuidelineEdge* write could skip: the OLD ends must drop the
+		// edge, not just the new ones pick it up - a stale entry here is exactly the "walks
+		// them assuming they are [in sync]" trap URoadNetwork::SetNodePosition warns about
+		// for the road graph's own Incident list.
+		TestFalse(TEXT("A no longer incident"), Net->GetGuidelineNode(A)->Incident.Contains(EdgeId));
+		TestFalse(TEXT("B no longer incident"), Net->GetGuidelineNode(B)->Incident.Contains(EdgeId));
+		TestTrue(TEXT("C now incident"), Net->GetGuidelineNode(C)->Incident.Contains(EdgeId));
+		TestTrue(TEXT("D now incident"), Net->GetGuidelineNode(D)->Incident.Contains(EdgeId));
+
+		const FGuidelineEdge* Relinked = Net->GetGuidelineEdge(EdgeId);
+		TestEqual(TEXT("edge now points at C"), Relinked->A, C);
+		TestEqual(TEXT("edge now points at D"), Relinked->B, D);
+	}
+
+	// --- WriteSegmentEndSolve / ClearSegmentEndSolve write TrimA/B, the cut vertices and
+	//     bSolvedA/B together, and only for the end named ---
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Profile = URoadProfile::MakeTransient(2300.0, 1500.0);
+		const FRoadNodeId P = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId Q = Net->AddNode(FVector2D(10000.0, 0.0));
+		const FRoadSegmentId Seg = Net->AddStraightSegment(P, Q, Profile);
+
+		FJunctionArmResult SolveA;
+		SolveA.CutDistance = 500.0;
+		SolveA.LeftCut = FVector2D(500.0, 500.0);
+		SolveA.RightCut = FVector2D(500.0, -500.0);
+		TestTrue(TEXT("writes A end"), Net->WriteSegmentEndSolve(Seg, /*bEndA=*/true, SolveA));
+
+		const FRoadSegment* AfterA = Net->GetSegment(Seg);
+		TestTrue(TEXT("A end reports solved"), AfterA->bSolvedA);
+		TestFalse(TEXT("B end untouched"), AfterA->bSolvedB);
+		TestEqual(TEXT("TrimA written"), AfterA->TrimA, 500.0);
+		TestTrue(TEXT("LeftCutA written"), AfterA->LeftCutA.Equals(FVector2D(500.0, 500.0)));
+		TestTrue(TEXT("RightCutA written"), AfterA->RightCutA.Equals(FVector2D(500.0, -500.0)));
+
+		// A failed solve at this end must stop reporting it live WITHOUT zeroing the vertices
+		// a mesh builder already trusted from the write above (see bSolvedA's own comment).
+		TestTrue(TEXT("clears A end"), Net->ClearSegmentEndSolve(Seg, /*bEndA=*/true));
+		const FRoadSegment* AfterClear = Net->GetSegment(Seg);
+		TestFalse(TEXT("A end no longer reports solved"), AfterClear->bSolvedA);
+		TestTrue(TEXT("LeftCutA left as the last solve wrote it"),
+			AfterClear->LeftCutA.Equals(FVector2D(500.0, 500.0)));
+
+		TestFalse(TEXT("dead segment refuses a write"),
+			Net->WriteSegmentEndSolve(FRoadSegmentId(), true, SolveA));
+	}
+
+	// --- SetGuidelineNodeOrigin overwrites all three FGuidelineEndRef fields together ---
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* Profile = URoadProfile::MakeTransient(2300.0, 1500.0);
+		// Real segment ids, not hand-built handles (#79/#173) - Origin.Segment is compared
+		// by IsSet/Generation like any other handle, and a fabricated one would not pin
+		// anything about what this mutator actually does.
+		const FRoadSegmentId SegA = Net->AddStraightSegment(
+			Net->AddNode(FVector2D(0.0, 0.0)), Net->AddNode(FVector2D(1000.0, 0.0)), Profile);
+		const FRoadSegmentId SegB = Net->AddStraightSegment(
+			Net->AddNode(FVector2D(0.0, 1000.0)), Net->AddNode(FVector2D(1000.0, 1000.0)), Profile);
+		const FGuidelineNodeId Node = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+
+		FGuidelineEndRef First;
+		First.Segment = SegA;
+		First.bEndA = true;
+		First.GuidelineIndex = 3;
+		TestTrue(TEXT("sets Origin"), Net->SetGuidelineNodeOrigin(Node, First));
+		TestTrue(TEXT("Origin reads back"), Net->GetGuidelineNode(Node)->Origin == First);
+
+		// A later write must replace EVERY field, not just the ones that differ - the raw
+		// pointer this replaced let a caller update Segment/bEndA and leave GuidelineIndex
+		// from a slot's previous life.
+		FGuidelineEndRef Second;
+		Second.Segment = SegB;
+		Second.bEndA = false;
+		Second.GuidelineIndex = 0;
+		TestTrue(TEXT("overwrites Origin"), Net->SetGuidelineNodeOrigin(Node, Second));
+		const FGuidelineEndRef Read = Net->GetGuidelineNode(Node)->Origin;
+		TestTrue(TEXT("Origin now the second value"), Read == Second);
+		TestFalse(TEXT("stale GuidelineIndex did not survive"), Read == First);
+
+		TestFalse(TEXT("dead node refuses a write"), Net->SetGuidelineNodeOrigin(FGuidelineNodeId(), First));
+	}
+
+	// --- SetGuidelineNodeHoldingPosition writes Kind and For together, and leaves marks
+	//     alone - unlike SetIntermediateHoldingPosition, which is the player's entry point ---
+	{
+		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+		URoadProfile* RunwayProfile = URoadProfile::MakeTransient(4500.0, 1500.0);
+		RunwayProfile->bContinuousThroughJunctions = true;
+		const FRoadNodeId RP = Net->AddNode(FVector2D(0.0, 0.0));
+		const FRoadNodeId RQ = Net->AddNode(FVector2D(20000.0, 0.0));
+		const FRoadSegmentId Runway = Net->AddStraightSegment(RP, RQ, RunwayProfile);
+		const FGuidelineNodeId Node = Net->AddGuidelineNode(FVector2D(0.0, 0.0));
+
+		TestTrue(TEXT("sets Runway + For together"),
+			Net->SetGuidelineNodeHoldingPosition(Node, EHoldingPositionKind::Runway, Runway));
+		const FGuidelineNode* Set = Net->GetGuidelineNode(Node);
+		TestEqual(TEXT("Kind written"), Set->HoldingPosition, EHoldingPositionKind::Runway);
+		TestEqual(TEXT("For written"), Set->HoldingPositionFor, Runway);
+		TestEqual(TEXT("no mark recorded - the builder owns marks itself"),
+			Net->GetHoldingPositionMarks().Num(), 0);
+
+		TestTrue(TEXT("clears Kind and For together"),
+			Net->SetGuidelineNodeHoldingPosition(Node, EHoldingPositionKind::None, FRoadSegmentId()));
+		const FGuidelineNode* Cleared = Net->GetGuidelineNode(Node);
+		TestEqual(TEXT("Kind cleared"), Cleared->HoldingPosition, EHoldingPositionKind::None);
+		TestFalse(TEXT("For cleared too - never left set beside a None kind"), Cleared->HoldingPositionFor.IsSet());
+
+		TestFalse(TEXT("dead node refuses a write"),
+			Net->SetGuidelineNodeHoldingPosition(FGuidelineNodeId(), EHoldingPositionKind::Runway, Runway));
+	}
 
 	return true;
 }

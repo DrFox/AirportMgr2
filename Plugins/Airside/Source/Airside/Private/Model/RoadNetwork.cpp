@@ -4,6 +4,7 @@
 #include "Model/RunwayQuery.h"
 #include "Profiles/RoadProfile.h"
 #include "Solve/GuidelineGeom.h"
+#include "Solve/JunctionSolver.h"
 #include "Solve/RoadGeom.h"
 
 FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
@@ -524,6 +525,48 @@ FRoadSegment* URoadNetwork::GetSegmentMutable(FRoadSegmentId Segment)
 	return RoadSlot::Get<FRoadSegmentId>(Segments, Segment);
 }
 
+bool URoadNetwork::WriteSegmentEndSolve(FRoadSegmentId Segment, bool bEndA, const FJunctionArmResult& Solve)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	if (bEndA)
+	{
+		Found->TrimA = Solve.CutDistance;
+		Found->LeftCutA = Solve.LeftCut;
+		Found->RightCutA = Solve.RightCut;
+		Found->bSolvedA = true;
+	}
+	else
+	{
+		Found->TrimB = Solve.CutDistance;
+		Found->LeftCutB = Solve.LeftCut;
+		Found->RightCutB = Solve.RightCut;
+		Found->bSolvedB = true;
+	}
+	return true;
+}
+
+bool URoadNetwork::ClearSegmentEndSolve(FRoadSegmentId Segment, bool bEndA)
+{
+	FRoadSegment* Found = GetSegmentMutable(Segment);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	if (bEndA)
+	{
+		Found->bSolvedA = false;
+	}
+	else
+	{
+		Found->bSolvedB = false;
+	}
+	return true;
+}
+
 FRoadNodeId URoadNetwork::GetOtherEnd(FRoadSegmentId Segment, FRoadNodeId AtNode) const
 {
 	const FRoadSegment* Seg = GetSegment(Segment);
@@ -838,7 +881,7 @@ bool URoadNetwork::SampleGuideline(FGuidelineEdgeId Edge, TArray<FVector2D>& Out
 
 bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bSet)
 {
-	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	const FGuidelineNode* Found = GetGuidelineNode(Node);
 	if (Found == nullptr)
 	{
 		return false;
@@ -850,10 +893,13 @@ bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bS
 	{
 		return false;
 	}
-	Found->HoldingPosition = bSet ? EHoldingPositionKind::Intermediate : EHoldingPositionKind::None;
-	Found->HoldingPositionFor = FRoadSegmentId();
-
+	// Copied before the write below: SetGuidelineNodeHoldingPosition touches HoldingPosition/
+	// HoldingPositionFor only, but Origin is read through the same pointer and a const one
+	// is what this function should be holding once it stops writing fields by hand (#191).
 	const FGuidelineEndRef At = Found->Origin;
+	SetGuidelineNodeHoldingPosition(Node,
+		bSet ? EHoldingPositionKind::Intermediate : EHoldingPositionKind::None, FRoadSegmentId());
+
 	if (!At.IsSet())
 	{
 		// An ANCHOR or hand-placed node - not derived, never swept, and its handle survives
@@ -884,16 +930,60 @@ bool URoadNetwork::SetIntermediateHoldingPosition(FGuidelineNodeId Node, bool bS
 
 bool URoadNetwork::SetRunwayHoldingPositionForTest(FGuidelineNodeId Node, FRoadSegmentId Protects)
 {
-	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
 	// A set Protects must be a live runway. Refusing beats storing it: the arbiter expands
 	// whatever a position names through RunwayChain, and a taxiway named there would hand
 	// a crossing agent a strip made of the taxiway it is standing on.
-	if (Found == nullptr || !Protects.IsSet() || !IsRunwaySegment(Protects))
+	if (GetGuidelineNode(Node) == nullptr || !Protects.IsSet() || !IsRunwaySegment(Protects))
 	{
 		return false;
 	}
-	Found->HoldingPosition = EHoldingPositionKind::Runway;
-	Found->HoldingPositionFor = Protects;
+	return SetGuidelineNodeHoldingPosition(Node, EHoldingPositionKind::Runway, Protects);
+}
+
+bool URoadNetwork::SetGuidelineNodeOrigin(FGuidelineNodeId Node, const FGuidelineEndRef& Origin)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->Origin = Origin;
+	return true;
+}
+
+bool URoadNetwork::SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For)
+{
+	FGuidelineNode* Found = GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->HoldingPosition = Kind;
+	Found->HoldingPositionFor = For;
+	return true;
+}
+
+bool FRoadNetworkTestAccess::MarkGuidelineEdgeEditedForTest(FGuidelineEdgeId Edge, double MaxWingspan)
+{
+	FGuidelineEdge* Found = Network.GetGuidelineEdgeMutable(Edge);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->bDerived = false;
+	Found->MaxWingspan = MaxWingspan;
+	return true;
+}
+
+bool FRoadNetworkTestAccess::SetGuidelineNodePriorityOverrideForTest(FGuidelineNodeId Node,
+	TArray<ETraversalClass> PriorityOverride)
+{
+	FGuidelineNode* Found = Network.GetGuidelineNodeMutable(Node);
+	if (Found == nullptr)
+	{
+		return false;
+	}
+	Found->PriorityOverride = MoveTemp(PriorityOverride);
 	return true;
 }
 
