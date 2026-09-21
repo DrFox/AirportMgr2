@@ -335,28 +335,35 @@ bool RoadGeom::PointInPolygon(TArrayView<const FVector2D> Polygon, const FVector
 		return false;
 	}
 
-	// Crossing number: count the edges a ray cast in +X from Point passes through. Odd
-	// means inside. Winding-agnostic, so an outline stored either way round answers the
-	// same - which matters because the model normalises winding on the way in and callers
-	// should not have to know that.
-	bool bInside = false;
-	for (int32 Index = 0, Previous = Polygon.Num() - 1; Index < Polygon.Num(); Previous = Index++)
+	// Winding number, not crossing number (even-odd) - issue #182, moved verbatim from
+	// PlotFit's own file-static Contains, which is now deleted. See PointInPolygon's own
+	// header comment for why the two rules can disagree and which one this function chose.
+	//
+	// NONZERO, not a sign or a count - a CW outline winds negatively and must still read as
+	// inside, which is what lets an outline stored either way round answer the same.
+	int32 Winding = 0;
+	const int32 Count = Polygon.Num();
+	for (int32 Index = 0; Index < Count; ++Index)
 	{
-		const FVector2D& Low = Polygon[Index];
-		const FVector2D& High = Polygon[Previous];
+		const FVector2D& A = Polygon[Index];
+		const FVector2D& B = Polygon[(Index + 1) % Count];
 
-		// Half-open in Y so a vertex exactly at the ray's height is counted once, not twice.
-		if ((Low.Y > Point.Y) != (High.Y > Point.Y))
+		// Which side of the directed edge A->B the point falls on. Positive is left.
+		const double Side = (B.X - A.X) * (Point.Y - A.Y) - (Point.X - A.X) * (B.Y - A.Y);
+
+		// Half-open in Y so a vertex exactly at the point's height is counted on one edge of
+		// the pair meeting there, not both - the same reason the old crossing-number version
+		// tested this way.
+		if (A.Y <= Point.Y)
 		{
-			const double CrossingX =
-				(High.X - Low.X) * (Point.Y - Low.Y) / (High.Y - Low.Y) + Low.X;
-			if (Point.X < CrossingX)
-			{
-				bInside = !bInside;
-			}
+			if (B.Y > Point.Y && Side > 0.0) { ++Winding; }
+		}
+		else if (B.Y <= Point.Y && Side < 0.0)
+		{
+			--Winding;
 		}
 	}
-	return bInside;
+	return Winding != 0;
 }
 
 bool RoadGeom::CornerReachAtZeroRadius(double HalfWidthA, double HalfWidthB, double Theta,

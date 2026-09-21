@@ -4,7 +4,6 @@
 #include "Profiles/RoadProfile.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
-#include "Solve/PlotFit.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
@@ -74,9 +73,9 @@ namespace
 	 * one that feels grudging: floored, the cursor must travel a whole further step before
 	 * the plot grows, so it always lags behind the hand.
 	 *
-	 * NOT PlotFit::BayWidthUu. That is 4 m because a SHED is 4 m, and it used to mean the
-	 * plot's step as well - one number doing two jobs, which is how a plot could be drawn
-	 * narrower than anything that could stand in it.
+	 * NOT the shed's own 4 m width (PlotFit::BayWidthUu, retired by issue #182). That number
+	 * used to mean the plot's step as well - one number doing two jobs, which is how a plot
+	 * could be drawn narrower than anything that could stand in it.
 	 */
 	double QuantisedFrontage(double Raw)
 	{
@@ -98,9 +97,9 @@ namespace
 	 */
 	int32 AnchorIndexAt(double SegmentT, double Length)
 	{
-		// FrontageStepUu, not BayWidthUu: an anchor on a 4 m grid under a frontage growing in
-		// 5 m steps would let two plots drawn side by side never sit flush, which is the
-		// entire reason the frontage has a quantum.
+		// FrontageStepUu, not the shed's 4 m width: an anchor on a 4 m grid under a frontage
+		// growing in 5 m steps would let two plots drawn side by side never sit flush, which
+		// is the entire reason the frontage has a quantum.
 		const double AlongRoad = FMath::Clamp(SegmentT, 0.0, 1.0) * Length;
 		const int32 Count = FMath::FloorToInt(Length / FrontageStepUu);
 		return FMath::Clamp(FMath::RoundToInt(AlongRoad / FrontageStepUu), 0, Count);
@@ -109,10 +108,11 @@ namespace
 	/**
 	 * How far along the road anchor N stands, uu.
 	 *
-	 * THE MULTIPLICATION LIVES HERE, once. Both callers used to do it themselves against
-	 * PlotFit::BayWidthUu, so moving the index to the 5 m step left them multiplying by 4 m -
-	 * the anchor landed 2 km from the cursor and three tests failed for reasons that looked
-	 * nothing like the cause. An index and its stride are one fact.
+	 * THE MULTIPLICATION LIVES HERE, once. Both callers used to do it themselves against the
+	 * shed's own 4 m width (PlotFit::BayWidthUu, retired by issue #182), so moving the index
+	 * to the 5 m step left them multiplying by 4 m - the anchor landed 2 km from the cursor
+	 * and three tests failed for reasons that looked nothing like the cause. An index and its
+	 * stride are one fact.
 	 */
 	double AnchorOffset(int32 Index)
 	{
@@ -489,6 +489,10 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 		// judged from - offsetting first would tilt that test by half a road width.
 		Corners[0] += Inward * KerbOffset(*Network, Road, Side >= 0.0);
 
+		// A FRESH GESTURE, so any refusal the LAST one earned at commit is no longer about
+		// anything on screen - see bLastCommitRefused's own comment.
+		bLastCommitRefused = false;
+
 		Stage = EPlotStage::Frontage;
 		return;
 	}
@@ -560,6 +564,10 @@ void FPlotPlaceTool::OnClick(const FToolContext& Context)
 
 void FPlotPlaceTool::OnCancel(const FToolContext& Context)
 {
+	// STEPPING BACK RE-OPENS THE GESTURE, so a refusal earned by the shape being left behind
+	// no longer describes anything the player can still commit.
+	bLastCommitRefused = false;
+
 	// ONE STAGE AT A TIME, the same answer the outline tool gives a misclick: binning the
 	// whole gesture is a harsher response than the mistake deserves.
 	switch (Stage)
@@ -591,7 +599,21 @@ void FPlotPlaceTool::OnCommit(const FToolContext& Context)
 
 	// THE SAME QUAD THE GHOST DREW. Built from Quad() rather than rebuilt from a width and a
 	// depth, so what is committed cannot differ from what was on screen when Build was hit.
-	Context.Target->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Modules, Kind);
+	const int32 Placed =
+		Context.Target->PlaceEntityInPlot(Outline, Outline[0], Outline[1], Modules, Kind);
+
+	// HONOUR THE RETURN - issue #182. This used to fall through to Idle whatever
+	// PlaceEntityInPlot answered, so a plot the facade refused (its own reservation solve
+	// found nothing to place, or found no definition to place it from) vanished from the
+	// tool with only a log line the player never sees. INDEX_NONE now KEEPS the gesture in
+	// Confirm - the same shape stays on screen, and BuildReadout's next call warns through
+	// bLastCommitRefused. See that field's own comment on why this branch is a safety net
+	// rather than the ordinary path: Committable is judged by the SAME evaluator.
+	if (Placed == INDEX_NONE)
+	{
+		bLastCommitRefused = true;
+		return;
+	}
 
 	// BACK TO IDLE, ready for the next one. A tool that stayed in Confirm would let the
 	// player press Build twice and get two depots stacked on one plot.
@@ -603,6 +625,7 @@ void FPlotPlaceTool::OnDeactivate(const FToolContext& Context)
 	// Discarded outright, like the outline tool's part-drawn shape: it exists only on this
 	// object, so nothing in the model has to be cleaned up.
 	Stage = EPlotStage::Idle;
+	bLastCommitRefused = false;
 }
 
 void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const
@@ -823,16 +846,41 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 		Sink.Fact(DepotKitLabel(static_cast<EDepotModule>(Kit)), FString::FromInt(Ceiling));
 	}
 
-	if (Stage == EPlotStage::Confirm && Total == 0)
+	// THE SAME TWO QUESTIONS URoadEditFacade::PlaceEntityInPlot ASKS - issue #182. Definition
+	// is resolved through the target the same way ReservationFor resolves it for Layout, and
+	// Total comes from the SAME evaluator call (PlotLayoutFor(Layout)->Solve, memoized above)
+	// the facade runs again at commit - so Committable cannot light the Build button over a
+	// plot the facade is about to refuse, which is what `Committable(Stage == Confirm)` did
+	// regardless of whether the reservation placed anything.
+	const bool bHasDefinition =
+		Context.Target != nullptr && Context.Target->GetEntityDefinition(Kind) != nullptr;
+
+	if (Stage == EPlotStage::Confirm)
 	{
-		// WAS "No room to grow", fired when a full depot had no spare bay. Under reservation
-		// a full plot is the normal end state and warning about it would cry wolf on every
-		// well-drawn depot; a plot that holds NOTHING is the case worth naming. The direct
-		// analogue of Manor Lords' "Plots without Extension Space" is now the ghost itself.
-		Sink.Warning(TEXT("This plot holds nothing"));
+		if (!bHasDefinition)
+		{
+			// THE SAME FACT the facade's own log line names - see PlaceEntityInPlot's refusal
+			// message - said here because the player, unlike the log, is looking at the bar.
+			Sink.Warning(TEXT("No fuel depot is authored to build here"));
+		}
+		else if (Total == 0)
+		{
+			// WAS "No room to grow", fired when a full depot had no spare bay. Under
+			// reservation a full plot is the normal end state and warning about it would cry
+			// wolf on every well-drawn depot; a plot that holds NOTHING is the case worth
+			// naming. The direct analogue of Manor Lords' "Plots without Extension Space" is
+			// now the ghost itself.
+			Sink.Warning(TEXT("This plot holds nothing"));
+		}
+		else if (bLastCommitRefused)
+		{
+			// See bLastCommitRefused's own comment on why this should be unreachable and is
+			// kept anyway.
+			Sink.Warning(TEXT("Build failed: the plot was refused"));
+		}
 	}
 
-	Sink.Committable(Stage == EPlotStage::Confirm);
+	Sink.Committable(Stage == EPlotStage::Confirm && bHasDefinition && Total > 0);
 }
 
 #undef LOCTEXT_NAMESPACE

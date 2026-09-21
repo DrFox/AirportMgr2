@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Algo/Reverse.h"
 #include "Misc/AutomationTest.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
@@ -7,8 +8,7 @@
 
 namespace
 {
-	/** An axis-aligned rectangle, CCW, with its SOUTH edge (y = 0) as the frontage.
-	 *  Same shape PlotFitTest uses, so the two files describe the same world. */
+	/** An axis-aligned rectangle, CCW, with its SOUTH edge (y = 0) as the frontage. */
 	TArray<FVector2D> YardRect(double Width, double Depth)
 	{
 		return { FVector2D(0.0, 0.0), FVector2D(Width, 0.0),
@@ -491,6 +491,40 @@ bool FPlotYardDropsWhatWillNotFitTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("but the shed still stands"), Yard.Stands[0].bPlaced);
 
 	TestEqual(TEXT("and there is no room for more"), Yard.RoomForMore, 0);
+
+	return true;
+}
+
+/**
+ * EITHER WINDING FITS THE SAME PLOT - moved from the now-deleted
+ * Airside.Solve.PlotFitFacesAwayFromRoad, which pinned the identical property for
+ * PlotFit::FitBays before issue #182 retired it. PlotYard::InwardOf derives the interior
+ * side from the outline's own signed area rather than assuming counter-clockwise, for the
+ * reason its own comment gives: a plot whose clicks happened to run clockwise must still aim
+ * its modules INTO the plot, not out across the road.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardInwardOfHonoursEitherWindingTest,
+	"Airside.Solve.PlotYardInwardOfHonoursEitherWinding",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardInwardOfHonoursEitherWindingTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Ccw = YardRect(1200.0, 1200.0);
+	const FVector2D InwardCcw =
+		PlotYard::InwardOf(Ccw, FVector2D(0.0, 0.0), FVector2D(1200.0, 0.0));
+	TestTrue(TEXT("a CCW plot's inward normal points north, into the plot"),
+		InwardCcw.Y > 0.9);
+
+	// THE SAME PLOT, WOUND THE OTHER WAY - the frontage travels with it, in the winding's
+	// own direction, exactly as URoadEditFacade::PlaceEntityInPlot swaps FrontageA/B when it
+	// corrects a clockwise outline to CCW for the mesh builder.
+	TArray<FVector2D> Cw = Ccw;
+	Algo::Reverse(Cw);
+	const FVector2D InwardCw =
+		PlotYard::InwardOf(Cw, FVector2D(1200.0, 0.0), FVector2D(0.0, 0.0));
+	TestTrue(TEXT("a CW plot's inward normal still points north, into the plot"),
+		InwardCw.Y > 0.9);
 
 	return true;
 }

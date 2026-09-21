@@ -230,6 +230,15 @@ public:
 	int32 DeletionPlanComputeCountForTest() const { return DeletionPlanComputeCount; }
 
 	/**
+	 * How many times PlaceEntityInPlot has actually run the plot's reservation solve - issue
+	 * #182. FPlotPlaceTool::GetSolveCountForTest proves the PREVIEW asked the real evaluator;
+	 * this is its opposite number for the COMMIT, so a test can show both the readout's
+	 * refusal and the facade's refusal came from the one evaluator actually running, not from
+	 * a cached or assumed answer on either side.
+	 */
+	int32 PlotEvaluatorCountForTest() const { return PlotEvaluatorCount; }
+
+	/**
 	 * Wired by ARoadNetworkActor, right after it creates Traffic - the same "reconnect what a
 	 * pointer can't" idiom the constructor already uses for OnChanged (see the class comment).
 	 * FindRoute calls this instead of reaching Actor().GetTraffic()->GetModel() itself: this
@@ -377,6 +386,27 @@ private:
 	bool DeleteSlot(bool bDoomed, const TCHAR* Label, TFunctionRef<bool(URoadNetwork&)> Remove,
 		const FBuildQuote& Quote = FBuildQuote());
 
+	/**
+	 * THE ONE EVALUATOR PlaceEntityInPlot judges a plot against - issue #182. Runs
+	 * PlotLayoutFor(Layout)->Solve(Site, Specs), the IDENTICAL call
+	 * FPlotPlaceTool::ReservationFor makes for the ghost and the readout, so a commit cannot
+	 * disagree with the preview that led to it the way PlotFit::FitBays - a 4 m x 12 m bay
+	 * grid with its own point-in-polygon test - used to.
+	 *
+	 * TAKES Outline/FrontageA/FrontageB AS GIVEN, not corrected for winding: PlotYard's own
+	 * functions read the interior side off the outline's signed area (PlotYard::InwardOf), so
+	 * they answer the same for a plot wound either way as long as FrontageA/FrontageB travel
+	 * with it - exactly the property PlaceEntityInPlot already relied on for PlotFit. Kind
+	 * resolves the definition (for EPlotLayout) and nothing else; Modules plays no part in
+	 * what a plot can HOLD, only in what it starts pre-built with.
+	 *
+	 * BUMPS PlotEvaluatorCount ON EVERY CALL, unlike FPlotPlaceTool's own memo: nothing here
+	 * is asked twice in a row the way a hover frame asks the tool, so there is no repeat call
+	 * worth short-circuiting - see PlotEvaluatorCountForTest for what the count is FOR.
+	 */
+	PlotYard::FReservation ReserveForPlot(TArrayView<const FVector2D> Outline,
+		FVector2D FrontageA, FVector2D FrontageB, EPlaceableEntity Kind) const;
+
 	IBuildPurse* Purse = nullptr;
 
 	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */
@@ -394,6 +424,11 @@ private:
 	mutable bool bHasLastDeletionPlan = false;
 	mutable FRoadDeletionPlan LastDeletionPlan;
 	mutable int32 DeletionPlanComputeCount = 0;
+
+	/** See PlotEvaluatorCountForTest. MUTABLE for the same reason DeletionPlanComputeCount is:
+	 *  ReserveForPlot is logically a query, callable from a const context, that must still
+	 *  count how many times it actually ran. */
+	mutable int32 PlotEvaluatorCount = 0;
 
 	/**
 	 * Whether MoveNode or MoveApronCorner actually moved something during the CURRENT

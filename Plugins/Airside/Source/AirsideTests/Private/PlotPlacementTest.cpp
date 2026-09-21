@@ -170,9 +170,9 @@ bool FPlotOutlineIsAlwaysCounterClockwiseTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("stored counter-clockwise however it was drawn"), Twice > 0.0);
 
 	// AND THE MODULE IS STILL INSIDE THE PLOT. Reversing the outline without swapping the
-	// frontage with it would leave PlotFit reading the interior side backwards and lay every
-	// bay across the road - a subtler failure than the invisible pad, and one the winding
-	// assertion alone would not catch.
+	// frontage with it would leave PlotYard::InwardOf reading the interior side backwards and
+	// lay every module across the road - a subtler failure than the invisible pad, and one
+	// the winding assertion alone would not catch.
 	TestTrue(TEXT("and the pose sits on the frontage, not across the road"),
 		Entities[0].Position.Y > -1.0 && Entities[0].Position.Y < 1.0);
 

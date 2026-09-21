@@ -3,106 +3,52 @@
 #include "CoreMinimal.h"
 
 /**
- * Fitting module bays into a drawn plot, against the edge that faces the road.
+ * What survives of the plot's own bay-grid fit, after issue #182 retired the rest of it.
  *
- * Dependency-free, like every other Solve/ header: CoreMinimal.h and nothing else. In
- * particular NOT FTransform2D, which lives in Math/TransformCalculus2D.h and is not pulled
- * in by CoreMinimal.h - a bay is a centre and a heading, which is all a placement needs,
- * and reaching for a transform type would cost this header its world-free tests.
+ * Dependency-free, like every other Solve/ header: CoreMinimal.h and nothing else.
  *
- * WHICH EDGE IS THE FRONTAGE IS NOT ASKED HERE. Finding the nearest road needs the network,
- * which this layer may not see, so the caller picks the edge and hands it in. See
- * URoadEditFacade::FindFrontageEdge. That split is the whole reason this file can be tested
- * with no world, no actor and no NewObject.
+ * FitBays, FPlotFit, FPlotBay, EPlotRefusal and this file's own file-static Contains lived
+ * here until #182: a 4 m x 12 m bay grid, with its OWN winding-number point-in-polygon test,
+ * that URoadEditFacade::PlaceEntityInPlot still judged a commit against while the tool's
+ * ghost and readout judged the SAME plot against PlotYard::Reserve - two evaluators, with two
+ * different answers for exactly the self-touching outlines this file's old Contains comment
+ * said it existed to get right, and the facade discarded FitBays's own refusal besides
+ * (PlaceEntityInPlot's return went unchecked in FPlotPlaceTool::OnCommit). See that spec's
+ * section 8, which had already named the truncation half of this as a known second opinion:
+ * docs/superpowers/specs/2026-09-16-four-point-plot-gesture-design.md.
+ *
+ * URoadEditFacade::PlaceEntityInPlot now runs PlotLayoutFor(Layout)->Solve(Site, Specs) - the
+ * IDENTICAL call FPlotPlaceTool::ReservationFor makes for the preview - so there is one
+ * evaluator, not two that might disagree. Its point-in-polygon test moved to
+ * RoadGeom::PointInPolygon, which switched from crossing number to winding number for the
+ * same reason this file's old Contains gave: see RoadGeom::PointInPolygon's own comment.
+ *
+ * DELETED RATHER THAN LEFT, the same ruling this file made once already for the grid of slots
+ * that preceded FitBays (see git history if that comment is wanted verbatim) - a solver
+ * nothing calls is a thing the next reader has to disprove the importance of before they can
+ * change anything near it. FPlotFitBaysTest and FPlotFitFacesAwayFromRoadTest moved with it:
+ * the boundary-exact, notched and either-winding cases they pinned are PlotYard's own
+ * contract now (Airside.Solve.PlotYard*), proved through RoadGeom::PointInPolygon rather than
+ * a second Contains that could quietly stop agreeing with it.
  */
 namespace PlotFit
 {
 	/**
-	 * 4 m. The Tier 1 depot on the concept sheet is three of these, which is where the
-	 * number came from - see the design doc §3.2. Everything else keys off it, so moving it
-	 * moves what every plot can hold.
-	 */
-	inline constexpr double BayWidthUu = 400.0;
-
-	/**
-	 * 12 m. ONE ROW ONLY: a plot drawn deeper is yard, not a second rank of bays. That keeps
-	 * the fit arithmetic instead of a packing solver.
+	 * How far a corner probe is pulled in from its own corner before asking whether it is
+	 * inside the plot, uu. 1 cm.
 	 *
-	 * WAS 8 m, THE CONCEPT SHEET'S SITE DEPTH, and that number could not survive an apron. A
-	 * shed is 8 m deep - exactly the whole site - so even before anything needed clear ground
-	 * the smallest legal plot had none in front of the door. The moment the shed got its 4 m
-	 * apron the Tier 1 depot stopped fitting in its own site: 12 m of claimed depth in an 8 m
-	 * plot, reserving nothing at all. Airside.Build.FuelYardFitsTheConceptSheet caught it.
+	 * STILL LIVE: PlotYard::StandCorners insets every stand corner by exactly this before
+	 * PlotYard and RoadGeom::PointInPolygon judge it, for the reason FitBays needed it too -
+	 * NOT A TOLERANCE FUDGE. A plot exactly the width of what stands in it puts a corner
+	 * exactly ON the outline, and a containment test is undefined on the boundary: it answers
+	 * by floating-point coin flip, differently on another machine. Probing just inside asks
+	 * the question that was actually meant - "is this corner within the plot" - rather than
+	 * "is this point on its edge".
 	 *
-	 * THE SHEET AND THE GAME NOW DISAGREE BY 4 m, deliberately. The sheet's plan view says
-	 * 8.0 m and it was drawn before a truck needed somewhere to stand.
-	 */
-	inline constexpr double BayDepthUu = 1200.0;
-
-	/**
-	 * How far a corner probe is pulled in from the bay's own corner before asking whether
-	 * it is inside the plot, uu. 1 cm.
-	 *
-	 * NOT A TOLERANCE FUDGE - it is load-bearing. A plot exactly three bays wide puts every
-	 * bay corner exactly ON the outline, and a winding-number test is undefined on the
-	 * boundary: it answers by floating-point coin flip, differently on another machine.
-	 * Probing just inside asks the question that was actually meant - "is this bay within
-	 * the plot" - rather than "is this point on its edge".
+	 * KEPT IN THIS NAMESPACE rather than moved to PlotYard, which is its only remaining
+	 * consumer: PlotYard::StandCorners's own doc comment already points here, and repointing
+	 * every one of those citations for a constant's sake would be the tidying-for-taste
+	 * CLAUDE.md asks this kind of change to leave alone.
 	 */
 	inline constexpr double CornerInsetUu = 1.0;
-
-	enum class EPlotRefusal : uint8
-	{
-		None,
-		/** Less than one bay of frontage, or too shallow for one bay to stand in. */
-		TooSmall,
-		/** The caller found no road-facing edge to fit against. */
-		NoFrontage
-	};
-
-	struct FPlotBay
-	{
-		FVector2D Centre = FVector2D::ZeroVector;
-
-		/**
-		 * Radians. +X points AWAY from the frontage, because the truck drives out of the
-		 * back of the installation - see UEntityDefinition::BuildFuelDepot, whose comment
-		 * records that this was once stated the wrong way round.
-		 */
-		double Heading = 0.0;
-	};
-
-	struct FPlotFit
-	{
-		TArray<FPlotBay> Bays;
-		bool bFits = false;
-		EPlotRefusal Why = EPlotRefusal::None;
-	};
-
-	// A GRID OF SLOTS AND A RECTANGLE BUILDER lived here until 2026-09-17: FPlotGrid,
-	// BuildGrid and GridOutline. They served the rectangle gesture, and the four-point
-	// gesture that replaced it has no rows and no bays - a plot is four corners the player
-	// placed, and its contents are laid out by Solve/PlotYard rather than fitted to a grid.
-	// See docs/superpowers/specs/2026-09-16-four-point-plot-gesture-design.md.
-	//
-	// DELETED RATHER THAN LEFT. A solver nothing calls is a thing the next reader has to
-	// disprove the importance of before they can change anything near it.
-	//
-	// FitBays below is NOT dead: URoadEditFacade::PlaceEntityInPlot still calls it, for
-	// better and worse - see that spec's section 8 on the second evaluator it represents.
-
-	/**
-	 * Lay bays along the frontage edge, inside Outline.
-	 *
-	 * Outline is a simple polygon, closed implicitly - the last point joins the first and
-	 * the array does NOT repeat it, the same contract FApronSurface::Outline states.
-	 *
-	 * FrontageA -> FrontageB must be given in the outline's own winding order, which is what
-	 * URoadEditFacade::FindFrontageEdge returns. EITHER WINDING IS ACCEPTED: the interior
-	 * side is derived from the polygon's signed area rather than assumed counter-clockwise,
-	 * because a plot whose clicks happened to run the other way round would otherwise aim
-	 * every bay out of the plot and across the road.
-	 */
-	AIRSIDE_API FPlotFit FitBays(TArrayView<const FVector2D> Outline,
-		FVector2D FrontageA, FVector2D FrontageB);
 }
