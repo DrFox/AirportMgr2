@@ -6,6 +6,55 @@
 #include "Model/RoadNode.h"
 #include "Solve/RoadGeom.h"
 
+namespace
+{
+	/**
+	 * A safe UPPER BOUND on how far a node's junction could possibly claim, computed WITHOUT
+	 * a junction solve - issue #167. Every live node outside the fixed radius used to pay a
+	 * full FRoadNetworkSolver::NodeClaims (SolveNodeCuts + SolveBoundary, with the TArray
+	 * allocations that go with assembling arms and a boundary polygon) just to be told no; on
+	 * an airport of more than a handful of nodes that is the dominant cost of every hover.
+	 *
+	 * DERIVED FROM THE SOLVER'S OWN CLAMP, not from "half-width + fillet radius" as the
+	 * obvious-looking shortcut: FRoadNetworkSolver::SolveNodeCuts caps every arm's CutDistance
+	 * at ArmAllowance, which is at most that arm's own chord length (see BuildNodeInput's
+	 * "THE ALLOWANCE IS SET BY BOTH ENDS" comment in RoadNetworkSolver.cpp - ArmAllowance is
+	 * MinHere + SlackShare * Slack, and Slack = Length - MinHere - MinFar, so ArmAllowance can
+	 * never exceed Length). A fillet's cot(Theta/2) term has no such bound on its own and would
+	 * make "half-width + fillet radius" an UNSAFE bound on a sharp, wide-radius corner. Chord
+	 * length + half-width is always at least as large as the true NodeReach, so this can only
+	 * ever admit a node to the real solve, never wrongly refuse one - see RoadSnap.h's own
+	 * comment: "the claim is the junction's PAVEMENT", and this bound is an over-approximation
+	 * of it, never a substitute.
+	 *
+	 * Cheap on purpose: no tangents, no arcs, no boundary polygon - just each incident
+	 * segment's stored endpoints and its profile's half-width, both already resident on the
+	 * node and the network.
+	 */
+	double MaxPossibleNodeClaimReach(const URoadNetwork& Network, const FRoadNode& Node)
+	{
+		double Reach = 0.0;
+		for (const FRoadSegmentId& SegmentId : Node.Incident)
+		{
+			const FRoadSegment* Segment = Network.GetSegment(SegmentId);
+			if (Segment == nullptr)
+			{
+				continue;
+			}
+			const FRoadNode* A = Network.GetNode(Segment->A);
+			const FRoadNode* B = Network.GetNode(Segment->B);
+			if (A == nullptr || B == nullptr)
+			{
+				continue;
+			}
+			const URoadProfile* Profile = Network.ProfileFor(*Segment);
+			const double HalfWidth = Profile != nullptr ? Profile->GetMaxHalfWidth() : 0.0;
+			Reach = FMath::Max(Reach, FVector2D::Distance(A->Position, B->Position) + HalfWidth);
+		}
+		return Reach;
+	}
+}
+
 bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FRoadSnapQuery& Query,
 	const FRoadSnapSettings& Settings, FRoadSnapResult& Out) const
 {
@@ -64,10 +113,20 @@ bool FRoadNodeSnapRule::Resolve(const URoadNetwork& Network, const FRoadSnapQuer
 		// The claim is the junction's PAVEMENT, not a circle of its reach. A circle of the
 		// deepest cut covered open ground beside a tight corner, and the cursor a hand's
 		// width off the concrete still snapped to the node (2026-09-06, "same node").
+		//
+		// A CHEAP REJECT FIRST - issue #167. On an airport of more than a handful of nodes,
+		// every node outside the fixed radius used to pay the solve above just to be told no;
+		// MaxPossibleNodeClaimReach answers the same question from data already on the node
+		// (arm lengths and profile widths) with no solve at all, and only lets a candidate
+		// through to NodeClaims when it could possibly be inside the real, tighter boundary.
 		if (!bClaimed && Settings.JunctionSnapFactor > 0.0)
 		{
-			const FRoadNodeId Id = Network.NodeIdAt(Index);
-			bClaimed = FRoadNetworkSolver::NodeClaims(Network, Id, Cursor, Settings.JunctionSnapFactor);
+			const double MaxReach = MaxPossibleNodeClaimReach(Network, Nodes[Index]) * Settings.JunctionSnapFactor;
+			if (DistanceSquared <= MaxReach * MaxReach)
+			{
+				const FRoadNodeId Id = Network.NodeIdAt(Index);
+				bClaimed = FRoadNetworkSolver::NodeClaims(Network, Id, Cursor, Settings.JunctionSnapFactor);
+			}
 		}
 
 		if (bClaimed)

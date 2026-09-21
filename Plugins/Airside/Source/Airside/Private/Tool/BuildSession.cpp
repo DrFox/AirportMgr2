@@ -205,6 +205,12 @@ FToolContext FBuildSession::MakeContext(IRoadEditTarget* Target, const FVector2D
 	const FBuildSessionTunables& Tunables, bool bRemoveModifier, bool bInsertModifier,
 	bool bSuspendGuides, int32 HoverAgent) const
 {
+	// COUNTED FIRST, unconditionally: see MakeContextCallCountForTest's own comment. This is
+	// the one function every MakeToolContext call on either driver funnels through, which is
+	// what makes it the right chokepoint to count "how many contexts did that operation build"
+	// rather than adding a counter to each of the several call sites that reach here.
+	++ContextBuildCountForTest;
+
 	FToolContext Context;
 	Context.Target = Target;
 	Context.HoverAgent = HoverAgent;

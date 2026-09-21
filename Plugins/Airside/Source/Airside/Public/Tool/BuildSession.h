@@ -331,6 +331,16 @@ public:
 	/** The last position RecordPlaneHit was given, or the origin before either driver has hit anything. */
 	const FVector2D& LastPlaneHit() const { return LastPlaneHitValue; }
 
+	/**
+	 * How many times MakeContext has actually run the snap + guide pipeline, for issue #167's
+	 * composition test: PlayerTickForTest brackets a tick with this to prove PlayerTick built
+	 * exactly one context and handed it to CollectToolReadout and Tick, rather than each
+	 * calling MakeToolContext (and so this) on its own. Counts every call regardless of
+	 * caller or driver, so a test reads the delta across the operation it is measuring rather
+	 * than the raw total.
+	 */
+	int32 MakeContextCallCountForTest() const { return ContextBuildCountForTest; }
+
 private:
 	/**
 	 * The selectable tools, in key order: index 0 is key 1.
@@ -393,4 +403,8 @@ private:
 
 	/** See RecordPlaneHit/LastPlaneHit. mutable for the same reason Selection is. */
 	mutable FVector2D LastPlaneHitValue = FVector2D::ZeroVector;
+
+	/** See MakeContextCallCountForTest(). mutable for the same reason - MakeContext is const
+	 *  and this counts real work it did, not a decision. */
+	mutable int32 ContextBuildCountForTest = 0;
 };

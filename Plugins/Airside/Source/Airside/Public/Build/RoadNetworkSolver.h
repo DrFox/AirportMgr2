@@ -122,6 +122,19 @@ public:
 	static bool NodeClaims(const URoadNetwork& Network, FRoadNodeId Node, const FVector2D& Point, double Factor = 1.0);
 
 	/**
+	 * How many times NodeClaims has actually run a junction solve, for the issue #167 test
+	 * that a node far outside its own claim radius never reaches it - FRoadNodeSnapRule's
+	 * cheap MaxPossibleNodeClaimReach reject is meant to keep it that way. A free-standing
+	 * counter rather than a member, because the snap rule holds no FRoadNetworkSolver
+	 * instance to count on - this is the one static entry point every caller goes through.
+	 */
+	static int32 NodeClaimsCallCountForTest;
+
+	/** Zeroes the counter above. A test calls this right before the measurement it cares
+	 *  about, so an earlier test's solves cannot be mistaken for this one's. */
+	static void ResetNodeClaimsCallCountForTest() { NodeClaimsCallCountForTest = 0; }
+
+	/**
 	 * How far along Segment, from AtNode, the junction there is paved: the arm's SOLVED cut
 	 * distance, fillet fitted. Where the segment's own pavement begins, so the segment snap
 	 * rule can stand off a junction by exactly what the junction covers - NodeReach adds a
