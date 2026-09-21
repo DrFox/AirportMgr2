@@ -1,4 +1,6 @@
 #include "CoreMinimal.h"
+#include "AirsideLog.h"
+#include "Logging/LogVerbosity.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
@@ -69,6 +71,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRebuildLogQuietOnDragTest::RunTest(const FString& Parameters)
 {
+	// ISSUE #216 (third sighting): read BEFORE anything else runs, not just before the commit
+	// spy, because the question this answers is whether an EARLIER test in the suite left
+	// LogRoadMesh's runtime verbosity somewhere other than its Log default (a SetVerbosity
+	// call that never restored it would silently drop every Log-level line this test depends
+	// on, on the affected side of Log, while an unrelated diagnostic logged at Warning or
+	// Display would still get through - exactly the "some lines survive, one specific line
+	// does not" shape the third sighting reported).
+	const ELogVerbosity::Type StartVerbosity = GetLogRoadMeshVerbosityForTest();
+
 	// NewObject, no world: matching Airside.Present.DragNotifiesGeometryOnly rather than a
 	// spawned FAirsideTestWorld actor - what is under test is what gets logged, which needs
 	// neither PostRegisterAllComponents nor a real World.
@@ -128,15 +139,47 @@ bool FRebuildLogQuietOnDragTest::RunTest(const FString& Parameters)
 	// AND THE DRAG STILL ENDS IN ONE TOPOLOGY REBUILD THAT LOGS IN FULL - the census this
 	// project's CLAUDE.md "Diagnosing" section depends on is silenced per-frame here, never
 	// removed: it still runs, in full, the moment the drag commits.
+	//
+	// ISSUE #216: RebuildCountForTest/TopologyRebuildCountForTest bracket the commit too, not
+	// just the spy - Count and bSawRebuiltLine alone cannot tell "the Topology rebuild ran and
+	// logged something else" apart from "the Topology rebuild never ran at all", and the third
+	// sighting needs exactly that distinction: a 0 TopologyRebuildCountForTest delta means
+	// EndInteractiveEdit never reached RebuildMeshForChange(Topology), which points at
+	// bGeometryChangedDuringEdit or the notify itself; a nonzero delta with no 'Rebuilt:' line
+	// means the rebuild ran but RoadRebuildCensus::Log's own path is what dropped it.
+	const int32 RebuildCountBeforeCommit = Actor->RebuildCountForTest();
+	const int32 TopologyRebuildCountBeforeCommit = Actor->TopologyRebuildCountForTest();
+
 	FLogRoadMeshLogSpy CommitSpy;
 	GLog->AddOutputDevice(&CommitSpy);
 	Facade->EndInteractiveEdit(/*bKeep*/ true);
 	GLog->RemoveOutputDevice(&CommitSpy);
 
-	TestTrue(TEXT("the drag's commit (a Topology rebuild) still logs RoadRebuildCensus's "
-		"'Rebuilt:' line"), CommitSpy.bSawRebuiltLine);
-	TestTrue(TEXT("and logs more than zero LogRoadMesh lines at Log level there - the census "
-		"is silenced per-frame, not deleted"), CommitSpy.Count > 0);
+	const int32 RebuildCountAfterCommit = Actor->RebuildCountForTest();
+	const int32 TopologyRebuildCountAfterCommit = Actor->TopologyRebuildCountForTest();
+
+	// ISSUE #216: the SAME shape of dump the drag half got in PR #219 - verbatim captured
+	// lines rather than a bare count, plus the two facts a captured line alone cannot state:
+	// whether the Topology rebuild ran at all (the RebuildCountForTest deltas), and whether
+	// LogRoadMesh's own verbosity was ever anything but Log at the start of this test (a
+	// leaked SetVerbosity from an earlier test in the suite would explain a Log-level line
+	// vanishing while nothing else in this test's assertions would catch it).
+	if (!CommitSpy.bSawRebuiltLine || CommitSpy.Count == 0)
+	{
+		AddError(FString::Printf(
+			TEXT("the drag's commit (a Topology rebuild) must still log RoadRebuildCensus's ")
+			TEXT("'Rebuilt:' line in full - silenced only on a drag frame (issue #178), never ")
+			TEXT("on the commit that ends one. Saw bSawRebuiltLine=%s, Count=%d. LogRoadMesh ")
+			TEXT("verbosity at this test's start was %s (Log is the built-in default - ")
+			TEXT("anything else leaked from an earlier test). RebuildCountForTest %d -> %d, ")
+			TEXT("TopologyRebuildCountForTest %d -> %d (a zero TopologyRebuildCountForTest ")
+			TEXT("delta means the Topology rebuild never ran at all). Captured line(s): %s"),
+			CommitSpy.bSawRebuiltLine ? TEXT("true") : TEXT("false"), CommitSpy.Count,
+			::ToString(StartVerbosity),
+			RebuildCountBeforeCommit, RebuildCountAfterCommit,
+			TopologyRebuildCountBeforeCommit, TopologyRebuildCountAfterCommit,
+			*FString::Join(CommitSpy.CapturedLines, TEXT("; "))));
+	}
 
 	return true;
 }
