@@ -43,15 +43,41 @@ bool FIcaoCodeTest::RunTest(const FString& Parameters)
 			IcaoCode::MaxWingspanForWidth(2650.0), 2400.0);
 	}
 
-	// 3. RADIUS FOR LETTER. Case-insensitive, and an unrecognised letter falls back to C
-	//    rather than the widest or narrowest curve.
+	// 3. RADIUS FOR LETTER, keyed on the enum. Case-insensitivity and the fallback for a
+	//    string nobody recognises are Parse's rules now, not this table's - an EIcaoCode
+	//    cannot BE an unrecognised letter, so there is nothing here left to fall back from.
+	//    See FIcaoCodeParseTest.
 	{
-		TestEqual(TEXT("A"), IcaoCode::RadiusForLetter(TEXT("A")), 1500.0);
-		TestEqual(TEXT("lower-case b matches too"), IcaoCode::RadiusForLetter(TEXT("b")), 2000.0);
-		TestEqual(TEXT("F"), IcaoCode::RadiusForLetter(TEXT("F")), 6000.0);
-		TestEqual(TEXT("an empty code falls back to C"), IcaoCode::RadiusForLetter(TEXT("")), 2500.0);
-		TestEqual(TEXT("an unrecognised code falls back to C"), IcaoCode::RadiusForLetter(TEXT("Z")), 2500.0);
+		TestEqual(TEXT("A"), IcaoCode::RadiusForLetter(EIcaoCode::A), 1500.0);
+		TestEqual(TEXT("B"), IcaoCode::RadiusForLetter(EIcaoCode::B), 2000.0);
+		TestEqual(TEXT("F"), IcaoCode::RadiusForLetter(EIcaoCode::F), 6000.0);
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FIcaoCodeParseTest,
+	"Airside.Solve.IcaoCodeParse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FIcaoCodeParseTest::RunTest(const FString& Parameters)
+{
+	// THE ONLY PLACE A TYPO BECOMES A DECISION now, so its rule is pinned by name: TRIMMED
+	// then UPPERCASED, once, and anything left over that is not exactly one of A-F is
+	// nullopt rather than a guess. Every table function used to make this decision itself,
+	// silently, on every call - see the header for why that was the defect.
+	TestTrue(TEXT("lower-case parses"), IcaoCode::Parse(TEXT("c")).IsSet());
+	TestEqual(TEXT("lower-case parses to the right letter"),
+		IcaoCode::Parse(TEXT("c")).Get(EIcaoCode::A), EIcaoCode::C);
+	TestTrue(TEXT("upper-case parses"), IcaoCode::Parse(TEXT("C")).IsSet());
+	TestEqual(TEXT("surrounding whitespace is trimmed, not just leading"),
+		IcaoCode::Parse(TEXT(" C ")).Get(EIcaoCode::A), EIcaoCode::C);
+	TestFalse(TEXT("an unrecognised letter is nullopt, not a guess at Code C"),
+		IcaoCode::Parse(TEXT("X")).IsSet());
+	TestFalse(TEXT("empty is nullopt"), IcaoCode::Parse(TEXT("")).IsSet());
+	TestFalse(TEXT("more than one character is nullopt, even if it starts with a real letter"),
+		IcaoCode::Parse(TEXT("CC")).IsSet());
 
 	return true;
 }
@@ -68,14 +94,14 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// the span band, plus twice the wingtip clearance, plus twice a service lane, plus the aft
 	// edge's own allowance - every letter, to the centimetre - so that is what is asserted, and
 	// the figures move together or the test fails.
-	struct FCase { const TCHAR* Letter; double Span; double Clearance; double AftEdge; };
+	struct FCase { EIcaoCode Code; const TCHAR* Letter; double Span; double Clearance; double AftEdge; };
 	const FCase Cases[] = {
-		{ TEXT("A"), 1500.0, 300.0, 600.0 },
-		{ TEXT("B"), 2400.0, 300.0, 600.0 },
-		{ TEXT("C"), 3600.0, 450.0, 600.0 },
-		{ TEXT("D"), 5200.0, 750.0, 600.0 },
-		{ TEXT("E"), 6500.0, 750.0, 600.0 },
-		{ TEXT("F"), 8000.0, 750.0, 600.0 },
+		{ EIcaoCode::A, TEXT("A"), 1500.0, 300.0, 600.0 },
+		{ EIcaoCode::B, TEXT("B"), 2400.0, 300.0, 600.0 },
+		{ EIcaoCode::C, TEXT("C"), 3600.0, 450.0, 600.0 },
+		{ EIcaoCode::D, TEXT("D"), 5200.0, 750.0, 600.0 },
+		{ EIcaoCode::E, TEXT("E"), 6500.0, 750.0, 600.0 },
+		{ EIcaoCode::F, TEXT("F"), 8000.0, 750.0, 600.0 },
 	};
 
 	for (const FCase& Case : Cases)
@@ -83,7 +109,7 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 		TestEqual(
 			*FString::Printf(TEXT("stand %s is its span, clearances, lanes and aft edge"),
 				Case.Letter),
-			IcaoCode::StandWidthForLetter(Case.Letter),
+			IcaoCode::StandWidthForLetter(Case.Code),
 			Case.Span + 2.0 * (Case.Clearance + IcaoCode::ServiceLaneWidth()) + Case.AftEdge,
 			0.5);
 	}
@@ -91,18 +117,21 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// THE BANDS TILE. A width belonging to no letter, or to two, is what a stored maximum
 	// beside the next row's minimum would eventually produce; derived, one letter's ceiling IS
 	// the next one's floor, and every width above Code A's floor has exactly one answer.
-	const TCHAR* Ladder[] = { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E") };
-	for (const TCHAR* Letter : Ladder)
+	const EIcaoCode Ladder[] = { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E };
+	for (const EIcaoCode Code : Ladder)
 	{
+		// The enum's own ordinal gives "the next letter" now that FString::Chr(Letter[0] + 1)
+		// has nothing to increment - one more reason the table functions are safer keyed this
+		// way: there is no letter past F for this to walk off the end of, by construction.
+		const EIcaoCode Next = static_cast<EIcaoCode>(static_cast<uint8>(Code) + 1);
 		TestEqual(
-			*FString::Printf(TEXT("%s's ceiling is the next letter's floor"), Letter),
-			IcaoCode::MaxStandWidthForLetter(Letter),
-			IcaoCode::StandWidthForLetter(
-				FString::Chr(static_cast<TCHAR>(Letter[0] + 1))),
+			*FString::Printf(TEXT("%s's ceiling is the next letter's floor"), IcaoCode::ToLetter(Code)),
+			IcaoCode::MaxStandWidthForLetter(Code),
+			IcaoCode::StandWidthForLetter(Next),
 			0.5);
 	}
 	TestTrue(TEXT("Code F has no ceiling - nothing is too wide to be a stand"),
-		IcaoCode::MaxStandWidthForLetter(TEXT("F")) > 1.0e9);
+		IcaoCode::MaxStandWidthForLetter(EIcaoCode::F) > 1.0e9);
 
 	// AND THE MIRROR. A stand's SIZE decides which airframes may use it, which is the mechanic:
 	// a player who drags a bigger stand gets bigger aircraft as a consequence.
@@ -134,7 +163,7 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 
 	// Depth is authored rather than derived, so it is asserted by value - with its provenance
 	// in the table, which is where a reader checks it against a real aerodrome.
-	TestEqual(TEXT("a Code C stand is 55 m deep"), IcaoCode::StandDepthForLetter(TEXT("C")), 5500.0, 0.5);
+	TestEqual(TEXT("a Code C stand is 55 m deep"), IcaoCode::StandDepthForLetter(EIcaoCode::C), 5500.0, 0.5);
 
 	// AND HOW LONG AN AIRFRAME THE LETTER ADMITS, which is what a stand's ground geometry is
 	// kept clear of. Code C's figure is MEASURED - it is the 737-800's tail, the longest type
@@ -148,15 +177,15 @@ bool FStandWidthIsDerivedFromClearanceTest::RunTest(const FString& Parameters)
 	// authored design values and are asserted only for their ORDER, which is the one thing
 	// that must hold however the figures are revised.
 	TestEqual(TEXT("Code C admits the 737-800's tail, and is measured from it"),
-		IcaoCode::MaxTailAftForLetter(TEXT("C")), 3538.0, 0.5);
+		IcaoCode::MaxTailAftForLetter(EIcaoCode::C), 3538.0, 0.5);
 
 	double Previous = 0.0;
-	for (const TCHAR* Letter : { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E"), TEXT("F") })
+	for (const EIcaoCode Code : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
-		const double Aft = IcaoCode::MaxTailAftForLetter(Letter);
+		const double Aft = IcaoCode::MaxTailAftForLetter(Code);
 		TestTrue(
 			*FString::Printf(TEXT("%s admits a longer airframe than the letter below it (%.0f after %.0f)"),
-				Letter, Aft, Previous),
+				IcaoCode::ToLetter(Code), Aft, Previous),
 			Aft > Previous);
 		Previous = Aft;
 	}
@@ -175,44 +204,45 @@ bool FWingKeepOutIsTheUnionOfAdmittedWingsTest::RunTest(const FString& Parameter
 	// the ground is marked once for all of them, which is what a real apron paints under a
 	// large swept wing. So the band has to be ordered, negative, and inside the airframe it
 	// belongs to - every letter.
-	for (const TCHAR* Letter : { TEXT("A"), TEXT("B"), TEXT("C"), TEXT("D"), TEXT("E"), TEXT("F") })
+	for (const EIcaoCode Code : { EIcaoCode::A, EIcaoCode::B, EIcaoCode::C, EIcaoCode::D, EIcaoCode::E, EIcaoCode::F })
 	{
-		const double Fwd = IcaoCode::WingFwdForLetter(Letter);
-		const double Aft = IcaoCode::WingAftForLetter(Letter);
+		const double Fwd = IcaoCode::WingFwdForLetter(Code);
+		const double Aft = IcaoCode::WingAftForLetter(Code);
+		const TCHAR* Letter = IcaoCode::ToLetter(Code);
 
 		TestTrue(*FString::Printf(TEXT("%s's wing band runs aft to fwd (%.0f .. %.0f)"),
 			Letter, Aft, Fwd), Aft < Fwd);
 		TestTrue(*FString::Printf(TEXT("%s's wing is behind the stop mark (%.0f)"), Letter, Fwd),
 			Fwd < 0.0);
 		TestTrue(*FString::Printf(TEXT("%s's wing is inside its own airframe (%.0f vs %.0f)"),
-			Letter, Aft, -IcaoCode::MaxTailAftForLetter(Letter)),
-			Aft > -IcaoCode::MaxTailAftForLetter(Letter));
+			Letter, Aft, -IcaoCode::MaxTailAftForLetter(Code)),
+			Aft > -IcaoCode::MaxTailAftForLetter(Code));
 	}
 
 	// CONTAINMENT, at the corners that decide it. Code C's box is x in [-2150, -950] out to
 	// the span band's half, 1800.
 	TestTrue(TEXT("under the wing root is inside"),
-		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-1500.0, 700.0)));
+		IcaoCode::WingKeepOutContains(EIcaoCode::C, FVector2D(-1500.0, 700.0)));
 	TestFalse(TEXT("forward of the leading edge is clear"),
-		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-800.0, 700.0)));
+		IcaoCode::WingKeepOutContains(EIcaoCode::C, FVector2D(-800.0, 700.0)));
 	TestFalse(TEXT("aft of the trailing edge is clear"),
-		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-2400.0, 700.0)));
+		IcaoCode::WingKeepOutContains(EIcaoCode::C, FVector2D(-2400.0, 700.0)));
 	TestFalse(TEXT("outboard of the wingtip is clear"),
-		IcaoCode::WingKeepOutContains(TEXT("C"), FVector2D(-1500.0, 1900.0)));
+		IcaoCode::WingKeepOutContains(EIcaoCode::C, FVector2D(-1500.0, 1900.0)));
 
 	// AND THE SEGMENT TEST, which is the one a route is judged by. The first case is the whole
 	// point of clipping rather than sampling: both ENDS are clear and the middle is not.
 	TestTrue(TEXT("a lane crossing under the wing is caught, though both ends are clear"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-1500.0, -1900.0), FVector2D(-1500.0, 1900.0)));
 	TestFalse(TEXT("the same crossing made aft of the trailing edge is clear"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-2400.0, -1900.0), FVector2D(-2400.0, 1900.0)));
 	TestFalse(TEXT("and forward of the leading edge is clear"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-800.0, -1900.0), FVector2D(-800.0, 1900.0)));
 	TestFalse(TEXT("a lane running along outside the tip is clear"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-4000.0, 2450.0), FVector2D(500.0, 2450.0)));
 
 	// A DIAGONAL FROM ONE CLEAR SIDE TO THE OTHER IS NOT CLEAR, and this is the case the
@@ -220,12 +250,12 @@ bool FWingKeepOutIsTheUnionOfAdmittedWingsTest::RunTest(const FString& Parameter
 	// between them goes straight through it. Getting round the wing means going round the
 	// TIP, which no single segment across the centreline can do.
 	TestTrue(TEXT("a diagonal between two clear points still crosses"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-2400.0, -1900.0), FVector2D(-800.0, 1900.0)));
 
 	// AND CONTACT COUNTS. A lane laid exactly on the wingtip is a lane under the wingtip.
 	TestTrue(TEXT("a lane laid exactly on the tip is not clear of it"),
-		IcaoCode::WingKeepOutCrossedBy(TEXT("C"),
+		IcaoCode::WingKeepOutCrossedBy(EIcaoCode::C,
 			FVector2D(-4000.0, 1800.0), FVector2D(500.0, 1800.0)));
 
 	return true;

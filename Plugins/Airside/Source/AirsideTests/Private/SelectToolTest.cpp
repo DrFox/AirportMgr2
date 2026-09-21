@@ -175,4 +175,45 @@ bool FSelectToolPickTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSelectToolIsIdleReadsLiveSelectionTest,
+	"Airside.Tool.SelectTool.IsIdleReadsLiveSelection",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSelectToolIsIdleReadsLiveSelectionTest::RunTest(const FString& Parameters)
+{
+	// THE BUG THIS PINS: IsIdle() takes no context (IBuildTool's contract), so a bool mirror
+	// updated only on OnClick/OnCancel/Tick is only ever as fresh as the last of those calls -
+	// and IBuildTool::DescribeGuideAnchor calls IsIdle() from INSIDE FBuildSession::MakeContext,
+	// before this frame's Tick has run. Something else clearing the session's FSelection
+	// between two of this tool's own calls - the inspector panel, another tool activating - is
+	// exactly that case, so this clears it directly, with NO Tick in between, and asserts
+	// IsIdle() already agrees. A bool-mirror implementation goes red here: it would still see
+	// yesterday's selection until its next Tick.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	FSelToolFixture F = SelToolBuild(TestWorld.World);
+	if (!TestNotNull(TEXT("fixture actor"), F.Actor)) { return false; }
+	if (!TestTrue(TEXT("a stand was placed"), F.StandIndex != INDEX_NONE)) { return false; }
+
+	FSelectTool Tool;
+	FSelection Sel;
+
+	TestTrue(TEXT("a tool that has never seen a context is idle"), Tool.IsIdle());
+
+	Tool.OnClick(SelToolContext(F.Actor, Sel, F.StandAt, 0));
+	if (!TestTrue(TEXT("the click actually selected the stand"), Sel.IsSet())) { return false; }
+	TestFalse(TEXT("a selected stand is not idle"), Tool.IsIdle());
+
+	// CLEARED DIRECTLY, NOT THROUGH THE TOOL - no OnCancel, no OnClick, no Tick call follows.
+	// FBuildSession::SelectTool does exactly this to the session's own FSelection when a build
+	// tool activates (see test 6 above), which is the real caller this reproduces.
+	Sel.Clear();
+	TestTrue(TEXT("IsIdle flips the instant the selection is cleared, with no Tick between"),
+		Tool.IsIdle());
+
+	return true;
+}
+
 #endif

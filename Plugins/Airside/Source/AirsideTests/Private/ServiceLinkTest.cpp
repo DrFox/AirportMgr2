@@ -60,9 +60,14 @@ namespace ServiceLinkFixture
 	 */
 	FBox2D StandGroundOf(const UEntityDefinition& Definition)
 	{
+		// LetterForStandSize DERIVES the letter from geometry this fixture built itself, so
+		// a parse failure here would mean the derivation is broken - not a typo - and check()
+		// says so loudly rather than silently measuring the wrong letter's nose.
 		const FString Letter = IcaoCode::LetterForStandSize(
 			Definition.RequiredExtent.X, Definition.RequiredExtent.Y);
-		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
+		const TOptional<EIcaoCode> Code = IcaoCode::Parse(Letter);
+		check(Code.IsSet());
+		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(*Code);
 		const double HalfWidth = 0.5 * Definition.RequiredExtent.X;
 		return FBox2D(FVector2D(NoseFwd - Definition.RequiredExtent.Y, -HalfWidth),
 			FVector2D(NoseFwd, HalfWidth));
@@ -364,7 +369,7 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 	{
 		URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 		FGuidelineNodeId Far;
-		const double NoseX = IcaoCode::MaxNoseFwdForLetter(TEXT("C"));
+		const double NoseX = IcaoCode::MaxNoseFwdForLetter(EIcaoCode::C);
 		Lay(*Net, FVector2D(NoseX + GapNear, -20000.0), FVector2D(NoseX + GapNear, 20000.0),
 			ETraversalClass::GroundVehicle, Far);
 
