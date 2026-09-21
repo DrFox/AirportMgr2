@@ -119,10 +119,10 @@ struct AIRSIDE_API FAgentMotion
 	 * Where the undercarriage has got to - gear, bay doors and main truck. See FGearPose,
 	 * which names each fraction, says which way round it counts, and carries the reasons.
 	 *
-	 * ONE STRUCT AND NOT THREE DOUBLES, since 2026-09-21. It was two loose doubles until the
-	 * 777's truck tilt made a third, and three values that are always written together by one
-	 * evaluator are one thing - CLAUDE.md's rule, and the same argument FAirframe itself is
-	 * an instance of.
+	 * ONE STRUCT AND NOT THREE DOUBLES, since 2026-09-21. It was two loose doubles until truck
+	 * tilt made a third, and three values that are always written together by one evaluator
+	 * are one thing - CLAUDE.md's rule, and the same argument FAirframe itself is an instance
+	 * of.
 	 *
 	 * A DEFAULT-CONSTRUCTED POSE IS A PARKED AEROPLANE, which is also the bind pose of every
 	 * rig in the fleet, so a vehicle and an airframe that declared no gear both get the

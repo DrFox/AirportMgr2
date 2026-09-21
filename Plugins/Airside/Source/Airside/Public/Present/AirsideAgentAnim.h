@@ -300,12 +300,22 @@ public:
 	 *
 	 * ZERO BY DEFAULT AND NOT A FLEET FIGURE, which is the one place this property differs
 	 * from the two above it. They default to plane4's measurements because plane4 is the rig
-	 * they were written for; there is no shipped rig with a truck at all yet, and a made-up
-	 * default here would be a number nobody measured sitting in the slot where a measurement
-	 * goes. Zero is also correct rather than merely safe: every airframe in this fleet has
-	 * single-axle main gear, no bogie beam and no bone for one, so the angle that rotates
-	 * nothing is the permanently right answer for all of them. plane6's figure is whatever its
-	 * build_rig.py measures when the 777 is rigged.
+	 * they were written for; NO SHIPPED RIG HAS A TRUCK BONE AT ALL, so a made-up default here
+	 * would be a number nobody measured sitting in the slot where a measurement goes. Zero is
+	 * also correct rather than merely safe: with no truck bone to drive there is nothing for
+	 * a non-zero angle to move, so it is the right answer for every rig in the fleet.
+	 *
+	 * THE FIRST REAL FIGURE WILL BE THE A380's (plane8), not the 777's. plane6 was the
+	 * aeroplane this feature was built for and it shipped without truck bones in the end, so
+	 * whoever rigs plane8 measures this - by posing the bogie to the angle at which it clears
+	 * the bay, the way build_export.py found BayDoorClosedAngleDegrees' 81 by sweeping.
+	 *
+	 * AN A380 MAY WANT TWO OF THESE. Its wing gear is a four-wheel bogie and its body gear a
+	 * six-wheel one, and if the drawing puts them at different tilt angles they need a figure
+	 * each - one fraction still drives both, because they move on the same cycle. That is a
+	 * second property the day the drawing says so, and not before; the same judgement, and
+	 * the same wording, BayDoorClosedAngleDegrees already carries about a rig that models its
+	 * doors shut.
 	 */
 	UPROPERTY(EditDefaultsOnly, Category = "Airside")
 	float TruckTiltedAngleDegrees = 0.0f;

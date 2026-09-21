@@ -180,7 +180,12 @@ bool FGearWithoutATruckNeverTiltsTest::RunTest(const FString& Parameters)
 {
 	// TruckTiltSeconds = 0 means "this airframe has no truck", not "an instant tilt" - the
 	// same distinction DoorSeconds draws, and a fact about the aeroplane rather than a missing
-	// measurement. Every airframe in this fleet before plane6 is single-axle.
+	// measurement.
+	//
+	// THIS IS THE CASE THE WHOLE FLEET IS IN, which makes it the case worth pinning hardest:
+	// nothing shipped declares a truck, including plane6's 777, which was rigged without truck
+	// bones after all. So this test guards every aeroplane in the game and the one below it
+	// guards none of them yet - see FGearPose::TruckLevelFraction on why that is the bet.
 	FGearPerformance Gear;
 	Gear.TravelSeconds = 4.0;
 	Gear.TruckTiltSeconds = 0.0;
@@ -560,9 +565,10 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the 737 has retractable gear"), Frame.Gear.IsSet());
 	TestEqual(TEXT("with the real transit time"), Frame.Gear.TravelSeconds, 7.0);
 	TestEqual(TEXT("and a second of nose bay door each side"), Frame.Gear.DoorSeconds, 1.0);
-	// NO TRUCK, AND PERMANENTLY. A 737 main leg carries one axle; the bogie beam arrives with
-	// the 777. This is the guard that the truck stage did not get sprayed across the fleet for
-	// completeness, which is exactly how the paper 737 acquired gear figures it never flew.
+	// NO TRUCK, AND PERMANENTLY. A 737 main leg carries one axle, so this one is true of the
+	// aeroplane rather than of how far the fleet has got. This is the guard that the truck
+	// stage did not get sprayed across the fleet for completeness, which is exactly how the
+	// paper 737 acquired gear figures it never flew.
 	TestEqual(TEXT("and no truck to tilt - a 737 main gear is a single axle"),
 		Frame.Gear.TruckTiltSeconds, 0.0);
 	TestEqual(TEXT("making an eight second cycle - one travel, one door movement"),
@@ -615,10 +621,10 @@ bool FGearAnglesFollowTheFractionsTest::RunTest(const FString& Parameters)
 	// free edges meet on the centreline to 0.0 mm", per its build_export.py.
 	const float Retracted = 90.0f;
 	const float DoorClosed = 81.0f;
-	// NOT A MEASUREMENT. No rig in this fleet has a truck yet - plane6 is the first and is not
-	// exported - so this is a round number chosen to make the arithmetic below readable, and
-	// it is flagged as such so nobody copies it into an Animation Blueprint. The real figure
-	// is whatever plane6's build_rig.py measures.
+	// NOT A MEASUREMENT, unlike the two above it. NO rig in this fleet has a truck bone - the
+	// 777 this was built for was rigged without one - so this is a round number chosen to make
+	// the arithmetic below readable, and it is flagged as such so nobody copies it into an
+	// Animation Blueprint. The real figure will be measured off the A380 (plane8).
 	const float TruckTilted = 12.0f;
 
 	// A PARKED AEROPLANE ROTATES NO BONE AT ALL, and that is the single most useful fact in

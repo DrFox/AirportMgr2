@@ -286,8 +286,12 @@ struct AIRSIDE_API FGearPerformance
 	 * One truck tilt, seconds. ZERO MEANS THE AIRFRAME HAS NO TRUCK TO TILT.
 	 *
 	 * A FACT ABOUT THE AEROPLANE, exactly as DoorSeconds' zero is, and not an unmeasured
-	 * figure: a single-axle main gear has no bogie beam, no tilt actuator and no bone for
-	 * one. Every airframe in this fleet before the 777 leaves this zero and always will.
+	 * figure: a single-axle main gear has no bogie beam, no tilt actuator and no bone for one.
+	 *
+	 * EVERY AIRFRAME IN THE FLEET LEAVES IT ZERO TODAY, including plane6's 777, which was the
+	 * aeroplane this was written for and which then shipped without truck bones. The A380
+	 * (plane8) is where it starts mattering. See FGearPose::TruckLevelFraction for why that
+	 * is a deliberate bet rather than dead code.
 	 *
 	 * COUNTED ONCE AND SPENT ONCE, like the doors, but at the OPPOSITE END of the cycle - the
 	 * truck tilts before a retracting leg can enter the well and levels after an extending one

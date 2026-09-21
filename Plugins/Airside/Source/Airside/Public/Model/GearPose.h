@@ -18,9 +18,9 @@
  *
  * ONE STRUCT BECAUSE THEY ARE ALWAYS WRITTEN TOGETHER - CLAUDE.md's rule. These were two
  * out-parameters on FGearPerformance::FractionsAt and two loose doubles on FAgentMotion until
- * the 777's truck tilt made a third, at which point the copying was happening at four sites
- * and a caller that filled two of three would have left the third at whatever the last call
- * put there. They are one table with one row.
+ * truck tilt made a third, at which point the copying was happening at four sites and a
+ * caller that filled two of three would have left the third at whatever the last call put
+ * there. They are one table with one row.
  *
  * EVERY FRACTION IS NAMED FOR ITS REST STATE AND IS 1.0 THERE. That is not a coincidence, it
  * is the convention: together these three ones ARE a parked aeroplane - gear down, bay hanging
@@ -65,16 +65,28 @@ struct AIRSIDE_API FGearPose
 	 * WHAT IT IS. A wide-body main leg does not carry one axle, it carries a four- or
 	 * six-wheel TRUCK on a beam that pivots about the bottom of the oleo. The truck lies level
 	 * on the tarmac because the tarmac is flat, and it has to be swung to a particular angle
-	 * before it will pass into the wheel well - a 777's bay is not deep enough to take a
-	 * 4.4 m bogie lying flat. So the tilt is a SECOND BONE on the same leg, between the
-	 * retract bone and the rolling ones, and it is what made one bone per leg stop being
-	 * enough when plane6 was modelled.
+	 * before it will pass into the wheel well, which is not deep enough to take a four-metre
+	 * bogie lying flat. So the tilt is a SECOND BONE on the same leg, between the retract bone
+	 * and the rolling ones.
+	 *
+	 * NOTHING IN THE FLEET DRIVES IT YET, AND THAT IS NOT AN OVERSIGHT. This was built for
+	 * plane6's 777 on 2026-09-21 and plane6 then shipped WITHOUT truck bones - its gear reads
+	 * well enough at ramp distance without one. The A380 (plane8, concept sheet already in the
+	 * models repo) is the aeroplane that will need it: a four-wheel wing bogie and a six-wheel
+	 * body bogie, both of which tilt, and neither of which will fit its bay lying flat.
+	 *
+	 * SO THIS IS DELIBERATELY THE HALF NOBODY CAN SEE, the same bet FGearPerformance's whole
+	 * extend cycle is - "the whole argument for building the half nobody can see", in
+	 * ExtendBelowHeight's own words. It costs one fraction that never leaves 1.0 and one
+	 * angle that is always zero. What keeps it from rotting is that the tests below exercise
+	 * it against an airframe that DOES declare a truck, so the arithmetic is measured even
+	 * though no rig reaches it.
 	 *
 	 * ONE DEFAULTS TO LEVEL, which is the third of the three ones described above, and which
-	 * is also every aeroplane in this fleet before the 777: a single-axle main gear has no
-	 * truck to tilt and no bone for one, so the fraction that rotates nothing is the right
-	 * answer for it permanently. See FGearPerformance::TruckTiltSeconds, where zero means
-	 * exactly that.
+	 * is also every aeroplane in this fleet today: a single-axle main gear, or a bogie nobody
+	 * rigged a bone for, has no truck to tilt, so the fraction that rotates nothing is the
+	 * right answer for it. See FGearPerformance::TruckTiltSeconds, where zero means exactly
+	 * that.
 	 *
 	 * CYCLE-DRIVEN, NOT WEIGHT-ON-WHEELS. A real truck also hangs tilted whenever the leg is
 	 * extended and unloaded, and levels itself with an audible thump as the aeroplane settles

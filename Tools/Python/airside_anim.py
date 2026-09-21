@@ -127,7 +127,12 @@ def bone_plan(names):
       * GEAR AFTER WHEEL. On plane5's and plane7's rigs the retract bones are the PARENTS of
         the rolling ones, so a wrong winner here retracts the aeroplane every time it rolls
         forward.
-      * TRUCK BEFORE BOTH OF THOSE, added 2026-09-21 for plane6's 777. A wide-body main leg
+      * TRUCK BEFORE BOTH OF THOSE, added 2026-09-21 for plane6's 777 - which then shipped
+        with no truck bones, so the first rig to match these two needles will be the A380's
+        (plane8). The rule stays: it costs nothing on a rig with no such bone, and the whole
+        point of BONE_RULES is that a rig which GROWS a part gets picked up instead of
+        reported unrecognised, which is the argument the last bullet below already makes.
+        A wide-body main leg
         is three bones deep - gear_L > truck_L > wheel_L1..L3 - and the middle one is the only
         bone in this fleet whose plausible names collide with TWO other rules at once: a rig
         that called it `gear_truck_L` would be read as a retract bone and one that called it
