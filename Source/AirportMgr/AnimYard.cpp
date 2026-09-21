@@ -34,7 +34,7 @@ void AAnimYard::BeginPlay()
 	{
 		if (Subject.Agent == nullptr && Subject.Source != nullptr)
 		{
-			Undriven += FString::Printf(TEXT("%s "), *Subject.Source->GetName());
+			Undriven += FString::Printf(TEXT("'%s' "), *NameOf(Subject.Source));
 		}
 	}
 
@@ -145,6 +145,19 @@ ARoadAgentActor* AAnimYard::AgentFor(const AActor* Source) const
 		}
 	}
 	return nullptr;
+}
+
+FString AAnimYard::NameOf(const AActor* Actor)
+{
+	if (Actor == nullptr)
+	{
+		return TEXT("(none)");
+	}
+#if WITH_EDITOR
+	return Actor->GetActorLabel();
+#else
+	return Actor->GetName();
+#endif
 }
 
 void AAnimYard::SetSolo(const AActor* Source)

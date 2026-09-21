@@ -121,14 +121,16 @@ void AAnimYardHUD::DrawHUD()
 		}
 		else if (Subject.Source != nullptr)
 		{
-			Undriven += FString::Printf(TEXT("%s  "), *Subject.Source->GetName());
+			Undriven += FString::Printf(TEXT("%s   "), *AAnimYard::NameOf(Subject.Source));
 		}
 	}
 
 	Y += YardLineHeight * 0.5f;
 	Line(YardBodyColour, FString::Printf(TEXT("%d model(s), %d driven%s"),
 		Yard->Subjects().Num(), Driven,
-		Yard->Solo() != nullptr ? *FString::Printf(TEXT("   SOLO: %s"), *Yard->Solo()->GetName()) : TEXT("")));
+		Yard->Solo() != nullptr
+			? *FString::Printf(TEXT("   SOLO: %s"), *AAnimYard::NameOf(Yard->Solo()))
+			: TEXT("")));
 
 	if (!Undriven.IsEmpty())
 	{

@@ -232,7 +232,7 @@ void AAnimYardController::Do(EYardAction Action)
 		FYardMotion::ChannelName(CaretChannel), Bench.Value(CaretChannel),
 		Bench.GroundSpeed, Bench.SteerDegrees, Bench.GearCycleFraction, Bench.EngineRPM,
 		Bench.bAirborne ? TEXT("airborne") : TEXT("on the wheels"),
-		TheYard->Solo() != nullptr ? *TheYard->Solo()->GetName() : TEXT("none"));
+		TheYard->Solo() != nullptr ? *AAnimYard::NameOf(TheYard->Solo()) : TEXT("none"));
 }
 
 void AAnimYardController::OnActionKey(FKey Key)

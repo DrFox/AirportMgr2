@@ -137,6 +137,20 @@ public:
 	/** The agent standing on this model's mark, or null if nothing drives it. */
 	ARoadAgentActor* AgentFor(const AActor* Source) const;
 
+	/**
+	 * What to call a model on screen and in the log.
+	 *
+	 * THE EDITOR LABEL, which is the name build_model_yard.py actually set - "Plane5 (King Air
+	 * 350i)", "Tug1 (Goldhofer D 620)". GetName() gives SkeletalMeshActor_13, which is what the
+	 * first run of the bench printed for the three undriven vehicles: a line that names three
+	 * models and identifies none of them, in a yard where being undriven is usually correct and
+	 * the whole point of the line is saying WHICH.
+	 *
+	 * GUARDED, because GetActorLabel is editor-only. A packaged build has no labels and falls
+	 * back to the object name, which is the best that exists there.
+	 */
+	static FString NameOf(const AActor* Actor);
+
 	/** What every rig is being told to do. */
 	const FYardMotion& GetMotion() const { return Motion; }
 	FYardMotion& EditMotion() { return Motion; }
