@@ -222,6 +222,22 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 void UOpsRuntime::Detach()
 {
+	// THE PURSE, UN-WIRED - the other half of Attach's "handed to the facade here and
+	// nowhere else" (issue #193): Attach calls Facade->SetPurse(Ledger), but until this fix
+	// nothing here ever called SetPurse(nullptr) to match. The facade's Purse is a raw
+	// IBuildPurse* precisely because it does not own the ledger and outlives no attach - see
+	// its own comment - so a Detach that left it set kept pointing at THIS runtime's Ledger
+	// after Target (and, on a level change, this whole object) could be gone, and
+	// URoadEditFacade::CanAfford dereferences it on every quote design time is supposed to
+	// treat as free again.
+	if (Target != nullptr)
+	{
+		if (URoadEditFacade* Facade = Target->GetEditFacade())
+		{
+			Facade->SetPurse(nullptr);
+		}
+	}
+
 	if (Target != nullptr && Target->GetTraffic() != nullptr)
 	{
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);

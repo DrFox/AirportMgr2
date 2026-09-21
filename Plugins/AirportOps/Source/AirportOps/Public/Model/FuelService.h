@@ -140,6 +140,21 @@ struct AIRPORTOPS_API FFuelDemand
 	 * way. None means nothing has been refused yet.
 	 */
 	UPROPERTY() EDepartureRefusal LastDepartureRefusal = EDepartureRefusal::None;
+
+	/**
+	 * The guideline revision THIS demand's refusal was decided against.
+	 *
+	 * PER DEMAND, NOT ON THE SERVICE (issue #193): a single UFuelService::LastRefusedRevision
+	 * used to stand in for every demand's own fact, and two demands refused on different
+	 * ticks share the one field. Demand A refusing later in the SAME Tick pass overwrites it
+	 * with the newer revision before Demand B - already Unserviceable from an older one - is
+	 * checked, so B reads "already seen this revision" against a value ITS OWN refusal never
+	 * set, and stays stuck with the re-offer log line never firing. Moving the fact onto the
+	 * demand it describes is what makes two demands unable to corrupt each other's history.
+	 * Not saved, for the same reason UFuelService's copy never was: it dates a graph within
+	 * one session, and Demands itself is Transient.
+	 */
+	UPROPERTY() uint32 RefusedAtRevision = 0;
 };
 
 /**
@@ -314,6 +329,27 @@ public:
 	 *  which FuelServiceTest.cpp already builds for the behavioural side of this class. */
 	void SetGoingHomeForTest(int32 TruckId, FEntityInstanceId Depot) { GoingHome.Add(TruckId, Depot); }
 
+	/**
+	 * Appends a demand with the caller's own starting state, Stand left unset.
+	 *
+	 * BYPASSES OnAgentPhase, so a test can put two demands in a CHOSEN ARRAY ORDER with a
+	 * chosen refusal-revision HISTORY - exactly the two facts FFuelDemand::RefusedAtRevision's
+	 * bug (issue #193) turns on - without contriving two stands that fail for independent,
+	 * timing-sensitive reasons real geometry cannot pin to a single tick. Safe only where
+	 * ChooseDepot never reads Stand, i.e. with no depot on the fixture's airport at all: the
+	 * NoDepot branch is decided from Network.GetEntities() alone.
+	 */
+	void AddDemandForTest(int32 AircraftId, EFuelDemandState State, EFuelRefusal Why,
+		uint32 RefusedAtRevision)
+	{
+		FFuelDemand Demand;
+		Demand.AircraftId = AircraftId;
+		Demand.State = State;
+		Demand.Why = Why;
+		Demand.RefusedAtRevision = RefusedAtRevision;
+		Demands.Add(Demand);
+	}
+
 private:
 	/**
 	 * Send every aircraft whose turnaround has run out and whose services are finished.
@@ -353,16 +389,6 @@ private:
 	 * has actually arrived. TRANSIENT for the same reason as Demands above.
 	 */
 	UPROPERTY(Transient) TMap<int32, FEntityInstanceId> GoingHome;
-
-	/**
-	 * The guideline revision the last refusal was decided against.
-	 *
-	 * WHAT MAKES Unserviceable RE-OFFERABLE WITHOUT BEING RETRIED EVERY TICK. The revision is
-	 * bumped by every guideline mutation (URoadNetwork::GetGuidelineRevision), so a player
-	 * drawing the missing road changes it and nothing else does. Not saved: it dates a graph
-	 * within one session, and a loaded graph starts at zero with every agent gone anyway.
-	 */
-	UPROPERTY(Transient) uint32 LastRefusedRevision = 0;
 
 	FFuelDemand* FindByAircraft(int32 AircraftId);
 	const FFuelDemand* FindByAircraft(int32 AircraftId) const;
