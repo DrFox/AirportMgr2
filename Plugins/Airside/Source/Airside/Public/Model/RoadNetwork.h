@@ -592,6 +592,16 @@ public:
 	TArray<FName> GetAnchorIdsForRole(FEntityInstanceId Entity, EServiceRole Role) const;
 
 	/**
+	 * The first anchor id for a role, or NAME_None - what UFuelService::FuelAnchorOf actually
+	 * needs every tick and GetAnchorIdsForRole above never was (issue #190): that heap-
+	 * allocates a TArray<FName> BY VALUE for a caller that reads element 0 and stops, once
+	 * per waiting aircraft per tick for as long as the fleet stays saturated. Same ordering
+	 * rule as GetAnchorIdsForRole - only ids the instance actually resolved, in definition
+	 * order - so the two agree on which id "first" means.
+	 */
+	FName FirstAnchorIdForRole(FEntityInstanceId Entity, EServiceRole Role) const;
+
+	/**
 	 * Overwrite one resolved anchor's LocalHeading and Role in place. False when Entity or
 	 * AnchorId does not resolve to anything.
 	 *

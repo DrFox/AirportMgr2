@@ -855,6 +855,135 @@ bool FFuelQueuesOnABusyDepotTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelBusyWaitSkipsChooseDepotTest, "AirportOps.Ops.FuelBusyWaitSkipsChooseDepot",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelBusyWaitSkipsChooseDepotTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #190, MEASURED DIRECTLY. A Needed demand behind a saturated fleet used to run
+	// ChooseDepot - a walk of every depot, a route search, and an IsServiceNodeConnected BFS
+	// - every single tick for as long as the fleet stayed busy, exactly the queue this
+	// module's own FFuelQueuesOnABusyDepotTest drains. Same fixture: one depot, one truck,
+	// two stands.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+
+	const int32 First = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
+
+	if (!TestTrue(TEXT("the depot dispatches its truck"),
+		Fixture.AdvanceUntil([&Fixture]
+		{
+			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
+				? &Fixture.Service->GetDemands()[0] : nullptr;
+			return Demand != nullptr && Demand->TruckId != 0;
+		}, 30.0)))
+	{
+		return false;
+	}
+
+	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
+	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
+
+	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
+	{
+		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		{
+			if (Demand.AircraftId == Second) { return &Demand; }
+		}
+		return nullptr;
+	};
+
+	// ONE TICK TO DISCOVER IT IS BUSY. This is the call ChooseDepot must still make - finding
+	// out costs exactly one walk, the same as any other Needed demand's first look.
+	Fixture.Advance(1.0 / 30.0);
+	const FFuelDemand* Waiting = SecondDemand();
+	if (!TestNotNull(TEXT("the second demand survives its first tick"), Waiting)) { return false; }
+	if (!TestEqual(TEXT("setup: it is Needed and busy, not Unserviceable"),
+		static_cast<int32>(Waiting->State), static_cast<int32>(EFuelDemandState::Needed)))
+	{
+		return false;
+	}
+
+	// FROM HERE, NOTHING ABOUT THE AIRPORT OR THE FLEET CHANGES for a couple of seconds - the
+	// first truck is still out (its 40 s dwell alone dwarfs this window). Every one of the
+	// next 60 ticks is exactly the case the ticket names: a saturated fleet, checked again
+	// for no reason.
+	Fixture.Service->ResetChooseDepotCallCountForTest();
+	for (int32 Index = 0; Index < 60; ++Index)
+	{
+		Fixture.Advance(1.0 / 30.0);
+	}
+
+	TestEqual(TEXT("60 idle ticks against an unchanged fleet and graph call ChooseDepot zero times"),
+		Fixture.Service->GetChooseDepotCallCountForTest(), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelBusyWaitReoffersOnceTest, "AirportOps.Ops.FuelBusyWaitReoffersOnce",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelBusyWaitReoffersOnceTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER HALF OF #190's FIX: skipping ChooseDepot while busy is only correct if a
+	// truck actually freeing up still reaches the waiting demand - and reaches it exactly
+	// once, the tick FleetRevision moves, not on a retry every idle tick from then on.
+	FFuelFixture Fixture;
+	Fixture.bSecondStand = true;
+	Fixture.Build(/*bWithRoad=*/true);
+
+	const int32 First = Fixture.ParkAircraft();
+	if (!TestTrue(TEXT("an aircraft parked at the first stand"), First != 0)) { return false; }
+
+	if (!TestTrue(TEXT("the depot dispatches its truck"),
+		Fixture.AdvanceUntil([&Fixture]
+		{
+			const FFuelDemand* Demand = Fixture.Service->GetDemands().Num() > 0
+				? &Fixture.Service->GetDemands()[0] : nullptr;
+			return Demand != nullptr && Demand->TruckId != 0;
+		}, 30.0)))
+	{
+		return false;
+	}
+
+	const int32 Second = Fixture.ParkAircraftAt(Fixture.StandPose2);
+	if (!TestTrue(TEXT("a second aircraft parked at the second stand"), Second != 0)) { return false; }
+
+	auto SecondDemand = [&Fixture, Second]() -> const FFuelDemand*
+	{
+		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		{
+			if (Demand.AircraftId == Second) { return &Demand; }
+		}
+		return nullptr;
+	};
+
+	// ESTABLISH BUSY, then start counting from a clean slate.
+	Fixture.Advance(1.0 / 30.0);
+	if (!TestNotNull(TEXT("setup: the second demand is busy"), SecondDemand())) { return false; }
+	Fixture.Service->ResetChooseDepotCallCountForTest();
+
+	// SAME BOUND AS FFuelQueuesOnABusyDepot: the first truck's whole round trip - drive out,
+	// the 40 s dwell, drive home.
+	const bool bServed = Fixture.AdvanceUntil([&SecondDemand]
+	{
+		const FFuelDemand* Demand = SecondDemand();
+		return Demand != nullptr && Demand->TruckId != 0;
+	}, 450.0);
+	if (!TestTrue(TEXT("the truck coming home re-offers the waiting demand"), bServed)) { return false; }
+
+	// THE DEFECT THIS WOULD CATCH: reverting the skip in Tick's Needed case turns this back
+	// into "every idle tick along the way", which over a 450 s bound is thousands of calls,
+	// not one.
+	TestEqual(TEXT("ChooseDepot ran exactly once to do it - the free-up is caught the tick it "
+		"happens, not retried on every idle tick beforehand"),
+		Fixture.Service->GetChooseDepotCallCountForTest(), 1);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFuelTurnaroundDepartsTest,
 	"AirportOps.Model.TurnaroundDeparts",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

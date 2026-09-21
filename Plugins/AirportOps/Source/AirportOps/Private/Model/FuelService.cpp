@@ -73,15 +73,20 @@ FFuelDemand* UFuelService::FindByTruck(int32 TruckId)
 
 FGuidelineNodeId UFuelService::FuelAnchorOf(const URoadNetwork& Network, FEntityInstanceId Stand)
 {
-	// BY ROLE, THEN BY ID. Role is a category - a stand may one day have two hydrants - so
-	// this answers "where can fuel be worked" and takes the first; never by array position,
-	// which is the invariant FResolvedAnchor exists to remove.
-	for (const FName AnchorId : Network.GetAnchorIdsForRole(Stand, EServiceRole::Fuel))
+	// BY ROLE, THEN BY ID, AND THE FIRST ONE ONLY (issue #190). Role is a category - a stand
+	// may one day have two hydrants - so this answers "where can fuel be worked" and takes
+	// the first; never by array position, which is the invariant FResolvedAnchor exists to
+	// remove. FirstAnchorIdForRole, not GetAnchorIdsForRole: this runs once per waiting
+	// aircraft per tick, and building a whole TArray<FName> just to read element 0 was the
+	// busy-wait's own share of the allocation this issue found.
+	const FName AnchorId = Network.FirstAnchorIdForRole(Stand, EServiceRole::Fuel);
+	if (AnchorId.IsNone())
 	{
-		if (const FResolvedAnchor* Resolved = Network.FindResolvedAnchor(Stand, AnchorId))
-		{
-			return Resolved->Node;
-		}
+		return FGuidelineNodeId();
+	}
+	if (const FResolvedAnchor* Resolved = Network.FindResolvedAnchor(Stand, AnchorId))
+	{
+		return Resolved->Node;
 	}
 	return FGuidelineNodeId();
 }
@@ -109,6 +114,11 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 	// THE ORDER OF THESE TESTS IS THE SPEC'S, and it is the order of the player's hand: no
 	// depot at all is a building to place, a depot off the road is a road to draw, and only
 	// then is it worth talking about the stand or the graph.
+	// COUNTED HERE, not in Tick's Needed case: this is the ONE place the work Tick's
+	// busy-wait skip (issue #190) exists to avoid actually happens, so a test that asserts
+	// zero calls during idle ticks is measuring the real cost and not a proxy for it.
+	++ChooseDepotCallCountForTest;
+
 	FDepotChoice Result;
 	Result.Why = EFuelRefusal::NoDepot;
 
@@ -305,7 +315,10 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 	const FEntityInstance* Home = Network.GetEntity(Depot);
 	if (Truck == nullptr)
 	{
+		// GONE, so it no longer counts as out for Depot anywhere - TrucksOutFor's total for
+		// it just went down. See FleetRevision.
 		GoingHome.Remove(TruckId);
+		++FleetRevision;
 		return;
 	}
 
@@ -339,6 +352,10 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		TruckId, Depot.Index);
 	Traffic.RetireAgent(TruckId);
 	GoingHome.Remove(TruckId);
+
+	// RETIRED, not merely redirected: Depot's own count just dropped, exactly as it does
+	// when a truck actually makes it home below - see FleetRevision.
+	++FleetRevision;
 }
 
 void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Network,
@@ -393,6 +410,11 @@ void UFuelService::OnAgentPhase(UGroundTraffic& Traffic, const URoadNetwork& Net
 				AgentId, Home->Index);
 			GoingHome.Remove(AgentId);
 			Traffic.RetireAgent(AgentId);
+
+			// A DEPOT SLOT FREED. The event UFuelService::FleetRevision exists for: a demand
+			// that has been waiting on every depot being busy is worth re-offering the
+			// instant one of them stops being busy, not thirty times a second until then.
+			++FleetRevision;
 		}
 		return;
 	}
@@ -484,6 +506,21 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 
 		case EFuelDemandState::Needed:
 		{
+			// EVENT-DRIVEN BUSY-WAIT (issue #190). ChooseDepot walks every depot, routes to
+			// the nearest, and BFSes the stand's own lane ring (IsServiceNodeConnected) - all
+			// of it thrown away every tick a saturated fleet leaves this demand exactly as
+			// busy as it was last tick. Skipped entirely when NEITHER clock this demand's own
+			// last busy-check saw has moved since: Revision (a road, depot or pump was built
+			// - the same fact Unserviceable's own re-offer above reads) or FleetRevision (a
+			// truck freed up). Either is the only way ChooseDepot's answer could possibly
+			// differ from what it already gave this demand - see
+			// FFuelDemand::BusyAtGuidelineRevision.
+			if (Demand.BusyAtGuidelineRevision == Revision
+				&& Demand.BusyAtFleetRevision == FleetRevision)
+			{
+				break;
+			}
+
 			const FGuidelineNodeId Hydrant = FuelAnchorOf(Network, Demand.Stand);
 			const FDepotChoice Choice = ChooseDepot(Network, Hydrant);
 
@@ -492,8 +529,12 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 				if (Choice.Why == EFuelRefusal::None)
 				{
 					// Every depot is simply busy. Still Needed - it will be offered again
-					// next tick - and not logged, because it happens every tick until one
-					// frees and would drown the line that matters.
+					// once FleetRevision or the graph moves - and not logged, because it
+					// would otherwise recur every tick until one frees and drown the line
+					// that matters. RECORDED so the skip above can hold until one of those
+					// two clocks actually ticks.
+					Demand.BusyAtGuidelineRevision = Revision;
+					Demand.BusyAtFleetRevision = FleetRevision;
 					break;
 				}
 

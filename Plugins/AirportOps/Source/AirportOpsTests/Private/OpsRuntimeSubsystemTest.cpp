@@ -122,4 +122,49 @@ bool FOpsRuntimeSubsystemReattachTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ISSUE #190: EnsureAttached used to run TActorIterator over the whole level EVERY tick for
+ * as long as the target stayed unfound - the entire span before a player has placed a road,
+ * or a whole main menu with no game-world actor at all. Measures the fix directly rather
+ * than merely naming it: GetActorScanCountForTest is the real cost (a scan of every actor),
+ * not a proxy for it - the same reason FFuelBusyWaitSkipsChooseDepotTest counts
+ * ChooseDepot calls rather than trusting the shape of the code that calls it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeSubsystemIdleCostsNoScanTest,
+	"AirportOps.Present.OpsRuntimeSubsystemIdleCostsNoScan",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeSubsystemIdleCostsNoScanTest::RunTest(const FString& Parameters)
+{
+	FOpsSubsystemTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World))
+	{
+		return false;
+	}
+
+	UOpsRuntimeSubsystem* Sub = TestWorld.GameInstance->GetSubsystem<UOpsRuntimeSubsystem>();
+	if (!TestNotNull(TEXT("the subsystem exists on a real game instance"), Sub))
+	{
+		return false;
+	}
+
+	// NO ACTOR, EVER - the case the ticket names: a world with nothing to find. The first
+	// tick may still scan once, to catch an ARoadNetworkActor already placed before this
+	// subsystem noticed the world (see AttachToWorld's own comment).
+	Sub->Tick(0.1f);
+	const int32 AfterFirstTick = Sub->GetActorScanCountForTest();
+	TestTrue(TEXT("the first tick scans at most once"), AfterFirstTick <= 1);
+
+	for (int32 Index = 0; Index < 20; ++Index)
+	{
+		Sub->Tick(0.1f);
+	}
+
+	TestEqual(TEXT("twenty more idle ticks against the SAME world scan zero more times"),
+		Sub->GetActorScanCountForTest(), AfterFirstTick);
+
+	return true;
+}
+
 #endif
