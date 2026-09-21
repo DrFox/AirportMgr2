@@ -152,6 +152,17 @@ public:
 	UPROPERTY() bool bLandingFeePaid = false;
 
 	/**
+	 * USimClock::Now at which this flight reached a terminal phase (Declined, Expired or
+	 * Departed), or 0 before that.
+	 *
+	 * WHAT UFlightBoard::RollUp AGES AGAINST, the same role FLedgerEntry::At plays for
+	 * ULedger::RollUp - see UFlightBoard::History and issue #188. Zero rather than an Optional:
+	 * a flight that has not yet terminated is never read against this field, the same way
+	 * ParkedAt above is a real time or an unread zero and not a third state to track.
+	 */
+	UPROPERTY() double TerminatedAt = 0.0;
+
+	/**
 	 * The id this flight holds a stand under.
 	 *
 	 * NEGATIVE, because UGroundTraffic allocates agent ids NextAgentId++ from 1 and the

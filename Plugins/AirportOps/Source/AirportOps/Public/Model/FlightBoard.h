@@ -53,6 +53,17 @@ public:
 	virtual void OnAfterRestore(int32 SnapshotVersion) override;
 
 	/**
+	 * How many game days a terminal flight (Declined, Expired or Departed) is kept in History
+	 * before RollUp forgets it outright.
+	 *
+	 * DISCARDED, NOT FOLDED like ULedger::RollUp's BroughtForward entry: a flight has no
+	 * summable amount to fold into a stand-in, and the money it earned already lives on
+	 * permanently in ULedger's own rows (see PostLandingFee/PostParkingFee) - keeping a copy
+	 * here would only be a second, decaying record of the same fact.
+	 */
+	UPROPERTY() int32 MaxDays = 30;
+
+	/**
 	 * What actually puts an aeroplane in the world. UOpsRuntime::Attach points this at
 	 * ARoadNetworkActor::DispatchArrival; tests substitute a recorder.
 	 *
@@ -199,6 +210,29 @@ public:
 	 */
 	int32 GetWhyNotAcceptableCallsForTest() const { return WhyNotAcceptableCallsForTest; }
 
+	/** How many flights RollUp has ever forgotten outright. See RollUp and the test that
+	 *  measures History staying bounded across many simulated days. */
+	int32 GetHistoryCountForTest() const { return History.Num(); }
+
+	/**
+	 * THE MAINTAINED INDEX production reaches through the private FindByAgent/FindById -
+	 * OnAgentPhase calls the first, the Schedule/ScheduleExpiry clock callbacks the second.
+	 * Exposed only so a test can compare its answer against FindByAgentLinearForTest /
+	 * FindByIdLinearForTest's O(n) scan - see issue #188.
+	 */
+	UFlight* FindByAgentForTest(int32 AgentId) const { return FindByAgent(AgentId); }
+	UFlight* FindByIdForTest(int32 Id) const { return FindById(Id); }
+
+	/**
+	 * THE ORACLE those two are checked against: an O(n) scan of Flights (and, for an id,
+	 * History too - see FindById's own comment on why an id keeps answering after the flight
+	 * has gone terminal). Kept expressly so a maintained index that drifted from Flights/
+	 * History fails a test rather than just costing more, the same reason ULedger keeps
+	 * FoldBalanceForTest beside its own cache.
+	 */
+	UFlight* FindByAgentLinearForTest(int32 AgentId) const;
+	UFlight* FindByIdLinearForTest(int32 Id) const;
+
 	/**
 	 * TAKES THE CLOCK because the fees posted here are dated, and a ledger entry that could not
 	 * say when it happened would break the roll-up and the determinism test both. The sibling
@@ -221,13 +255,28 @@ public:
 	 */
 	void RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& Network, USimClock& Clock);
 
+	/**
+	 * Forgets any History entry older than MaxDays game-days.
+	 *
+	 * SAME DAILY BEAT AS ULedger::RollUp - see UOpsRuntime::PostDailyUpkeep, the one
+	 * production caller. A separate schedule of its own would be a second timer to keep in
+	 * step with the ledger's for no reason: both fold once a day and nothing here needs finer
+	 * granularity than that.
+	 */
+	void RollUp(double Now);
+
 	/** Offers still awaiting an answer, in the order they arrived. */
 	TArray<UFlight*> Offers() const;
 
 	/** Everything accepted and not yet departed. */
 	TArray<UFlight*> Live() const;
 
-	int32 PendingOfferCount() const { return Offers().Num(); }
+	/**
+	 * O(1): a maintained counter, not Offers().Num(). ISSUE #188 NAMED THIS CALL DIRECTLY - a
+	 * count has no reason to cost an allocation and a full scan just to read its length, which
+	 * is all Offers().Num() was ever doing here.
+	 */
+	int32 PendingOfferCount() const { return OfferedCount; }
 
 	/**
 	 * Copies this board's own ApproachFocus onto every flight it holds.
@@ -240,7 +289,26 @@ public:
 	void AimUnaimedFlightsAtBoardFocus();
 
 private:
+	/**
+	 * Every flight not yet in a terminal phase: offered, accepted, or anywhere between landing
+	 * and departing. TERMINAL flights (Declined, Expired, Departed) are moved into History the
+	 * moment they get there - see MoveToHistory - rather than staying here forever, which is
+	 * what made FindByAgent, FindById, Offers(), Live() and every save cost O(every flight
+	 * this session has ever seen) instead of O(what is actually happening) - issue #188.
+	 */
 	UPROPERTY() TArray<TObjectPtr<UFlight>> Flights;
+
+	/**
+	 * Terminal flights MoveToHistory has retired, in the order they arrived here.
+	 *
+	 * BOUNDED BY RollUp, which forgets anything older than MaxDays on the same daily beat as
+	 * ULedger::RollUp. SAVED like Flights (see IOpsPersistent's class comment: a model
+	 * object's non-Transient UPROPERTYs ARE its saved state) - now that it is bounded, keeping
+	 * it in the save is cheap, and a player who just watched a flight leave should still find
+	 * it if a "recent departures" view ever reads this.
+	 */
+	UPROPERTY() TArray<TObjectPtr<UFlight>> History;
+
 	UPROPERTY() int32 NextFlightId = 1;
 
 	/** See Revision. Not a UPROPERTY - a session counter, not state a save would ever need. */
@@ -262,6 +330,27 @@ private:
 	/** Same shape as ArrivalHandles, same reason: not saved, rebuilt by RearmSchedules. */
 	TMap<int32, int32> ExpiryHandles;
 
+	/**
+	 * FindByAgent's and FindById's O(1) answer (issue #188 item 2).
+	 *
+	 * ByAgent is maintained at the sites that set or clear UFlight::AgentId: DispatchNow adds,
+	 * OnAgentPhase's Gone branch removes. ById is maintained at AddOffer (a flight gets its id
+	 * once, there) and stays populated across the Flights -> History move in MoveToHistory - a
+	 * clock callback keyed on an id must keep finding its flight for as long as the flight
+	 * exists, which is exactly as long as RollUp has not yet forgotten it. RollUp is the one
+	 * place an entry actually leaves this map.
+	 *
+	 * NOT UPROPERTYs: a restored flight's own Id/AgentId fields are the saved truth, and these
+	 * are rebuilt from Flights and History in OnAfterRestore - the same split ArrivalHandles/
+	 * ExpiryHandles above already use for the clock's handles.
+	 */
+	TMap<int32, TObjectPtr<UFlight>> ByAgent;
+	TMap<int32, TObjectPtr<UFlight>> ById;
+
+	/** PendingOfferCount's O(1) answer. Maintained at every entry into and exit from the
+	 *  Offered phase; not a UPROPERTY, rebuilt in OnAfterRestore like the maps above. */
+	int32 OfferedCount = 0;
+
 	void DispatchNow(UGroundTraffic& Traffic, UFlight& Flight);
 	void Schedule(UGroundTraffic& Traffic, USimClock& Clock, UFlight& Flight);
 
@@ -275,6 +364,26 @@ private:
 	/** Called on Accept/Decline: the offer has been answered, so it can no longer lapse. */
 	void CancelExpiry(USimClock& Clock, UFlight& Offer);
 
-	UFlight* FindByAgent(int32 AgentId);
-	UFlight* FindById(int32 Id);
+	/**
+	 * Retires Flight out of the live list: stamps TerminatedAt, moves it Flights -> History,
+	 * and drops its ByAgent entry if it still had one. THE ONE PLACE a flight leaves Flights,
+	 * so every terminal transition - Decline, the expiry callback, the load-time lapse in
+	 * RearmSchedules, OnAgentPhase's Departed branch, and the migration sweep in
+	 * OnAfterRestore - goes through it rather than five call sites each remembering their own
+	 * piece of the move (issue #188).
+	 */
+	void MoveToHistory(UFlight& Flight, double Now);
+
+	/**
+	 * Rebuilds ByAgent, ById and OfferedCount from scratch off Flights and History. Called
+	 * from OnAfterRestore AND from RearmSchedules - see RearmSchedules's own comment on why a
+	 * board deserialised without going through OpsSave::Restore still needs this before its
+	 * re-armed clock callbacks can find anything by id.
+	 */
+	void RebuildIndices();
+
+	/** O(1) via ByAgent/ById. CONST because a lookup does not change what the board holds -
+	 *  which also lets FindByAgentForTest/FindByIdForTest above call them on a const board. */
+	UFlight* FindByAgent(int32 AgentId) const;
+	UFlight* FindById(int32 Id) const;
 };
