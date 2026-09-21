@@ -72,6 +72,21 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 			   "aeroplane in name only") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3.DA_Aircraft_Plane3"), TEXT("plane3"), 0.0,
 		  nullptr },
+		// plane5's CEILING IS THE Q400's PUBLISHED LENGTH, NOT THE MERIDIAN's, and that is the
+		// first ceiling here that measures a type against another MODELLED type rather than
+		// against the paper yardstick. The King Air exists to be the rung between the Twin
+		// Otter and the Q400: it demands TARMAC, which no lighter type does, and it demands
+		// noticeably less of it than the Q400 does. Lose the second half and the first half
+		// buys nothing - paving would admit nothing that lengthening had not already admitted,
+		// and the type would be a Q400 that carries eleven people.
+		//
+		// 140200 is build_plane3_type.py's REQUIREMENTS["takeoff_field_length"]. Typed here
+		// because a test may not import a Python table; if plane3's figure moves, this fails
+		// and says so, which is the behaviour wanted from a second copy that cannot be avoided.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"), TEXT("plane5"), 140200.0,
+		  TEXT("a King Air that needed as much runway as a Q400 would not be the rung between "
+			   "the Twin Otter and the Q400 - paving would admit nothing that lengthening had "
+			   "not already admitted") },
 	};
 
 	for (const FPublished& Each : Published)

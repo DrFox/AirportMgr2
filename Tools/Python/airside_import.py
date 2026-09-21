@@ -58,6 +58,7 @@ FLEET = {
     "plane2":     ("plane2",     "/Game/Aircraft/Plane2/SK_Plane2"),
     "plane3":     ("plane3",     "/Game/Aircraft/Plane3/SK_Plane3"),
     "plane4":     ("plane4",     "/Game/Aircraft/Plane4/SK_Plane4"),
+    "plane5":     ("plane5",     "/Game/Aircraft/Plane5/SK_Plane5"),
     "fueltruck1": ("fueltruck1", "/Game/Vehicles/FuelTruck1/SK_FuelTruck1"),
     "gpu1":       ("gpu1",       "/Game/Vehicles/GPU1/SK_GPU1"),
     "tug1":       ("tug1",       "/Game/Vehicles/Tug1/SK_Tug1"),
@@ -66,7 +67,7 @@ FLEET = {
 
 # Asset folder name -> the name Content uses, for instance naming only.
 PRETTY = {"plane1": "Plane1", "plane2": "Plane2", "plane3": "Plane3", "plane4": "Plane4",
-          "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1",
+          "plane5": "Plane5", "fueltruck1": "FuelTruck1", "gpu1": "GPU1", "tug1": "Tug1",
           "utility1": "Utility1"}
 
 # Below this two looks are the same colour written twice. The verifier may not check tighter

@@ -1,0 +1,396 @@
+"""Authors ABP_Plane5's AnimGraph - thirteen bones - and reads it back to prove it.
+
+  python Tools/wire_plane5_anim.py            # wires, compiles, saves, verifies
+  python Tools/wire_plane5_anim.py --verify   # verifies only, changes nothing
+  python Tools/wire_plane5_anim.py --read     # prints the chain as it stands, no assertions
+
+THE EDITOR MUST BE RUNNING. That is why this lives in Tools/ and not Tools/Python/: every
+script in there is a `-run=pythonscript` commandlet that needs the editor CLOSED. The two
+halves of this model's Anim Blueprint are opposite that way - build_plane5_anim.py creates
+the asset and resolves the rotation axes with the editor down, this wires it with the editor
+up - and that is one restart, not a wall. See docs/2026-09-20-animgraph-authoring.md.
+
+Copied from Tools/wire_fueltruck_anim.py, which is the worked example that document points
+at. Three things are genuinely different here and each is argued at its site: the CHAIN ORDER
+has to respect a real bone hierarchy, the ROTATION AXIS is read rather than assumed, and
+there are four bones driven by one door angle.
+
+THE PLAN IS HALF READ FROM A FILE, AND THAT IS THE POINT
+--------------------------------------------------------
+PLAN below carries the bone, its variable and its multiplier. It does NOT carry the rotator
+component or the sign, because those are facts about the IMPORTED SKELETON and this script
+cannot see one. build_plane5_anim.py measures them off SK_Plane5's reference pose - each
+bone's own local axes resolved into component space, matched against build_rig.py's stated
+bone contract - and writes Saved/plane5_axis_plan.json. This script refuses to run without
+that file.
+
+WHY THAT IS WORTH THE INDIRECTION. Every wiring script before this one hard-codes "Yaw, in
+Bone Space" for every bone, on the strength of wire_fueltruck_anim.py's note that "the rigger
+orients each bone so that its own Z is the axis it is meant to turn about". That note is a
+true observation about plane1's and the fuel truck's rigs. It is not a law, nothing enforces
+it, and plane5 is the first rig with FOUR doors and THREE legs folding two different ways -
+so it is the first rig where a single wrong axis would be easy to miss on screen and
+impossible to spot in a diff. Measured beats typed; see CLAUDE.md.
+
+THE FOUR DECISIONS THIS SCRIPT OWNS
+-----------------------------------
+ORDER: a bone comes AFTER every bone it is the PARENT of. FCSPose::SafeSetCSBoneTransforms
+exists to "refresh any Children they have that has been previously converted to Component
+Space", so rotating the parent last takes the already-rotated child with it. ABP_Plane1 and
+ABP_Plane2 both ship that order for nosewheel_steer, and PLAN's own comment records what the
+three build_*_anim.py scripts printed instead until 2026-09-20.
+
+  THIS IS THE FIRST RIG WHERE THE RULE BINDS TWICE. plane1 and the fuel truck have one
+  parent/child pair each (steer over wheel). plane5 has a three-deep chain -
+  gear_nose > nosewheel_steer > nosewheel - AND gear_L/gear_R as the parents of
+  wheel_L/wheel_R. Retract before roll and the wheels spin in the bay instead of with it.
+
+AXIS: read, per bone, from Saved/plane5_axis_plan.json. See above.
+
+MODES: Translation Ignore, Rotation ADD TO EXISTING, Scale Ignore, Rotation Space Bone Space,
+set explicitly rather than left to the node's defaults. Both were got wrong once on
+ABP_Plane2: Translation on Replace writes (0,0,0) and drops each part at the root, and
+Rotation on Replace discards the bind-pose orientation.
+
+ONE DOOR ANGLE DRIVES FOUR DOORS, and nothing here mirrors anything. door_main_L/_R close
+OUTBOARD and door_nose_L/_R close INBOARD; the mirroring lives in each bone's rest direction,
+which is what the measured axis column comes back carrying. A script that "helpfully" negated
+the right-hand side would break exactly the rig the rigger got right.
+
+IDEMPOTENT BY DELETION: every node but Output Pose is removed before anything is created. A
+half-finished run costs nothing to clean up, and re-running after an export changes the rig
+is the supported way to rebuild rather than a risk. A .uasset has no merge - see the
+project's note on resolving .uasset conflicts by re-authoring - and this is that script.
+"""
+import json
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import Mcp
+
+BP_PATH = "/Game/Aircraft/Plane5/ABP_Plane5"
+BP = {"refPath": "%s.ABP_Plane5" % BP_PATH}
+GRAPH = {"refPath": "%s.ABP_Plane5:AnimGraph" % BP_PATH}
+
+AXIS_PLAN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "Saved", "plane5_axis_plan.json")
+
+# (bone, variable, multiplier) in CHAIN ORDER, source first. None drives the axis directly.
+#
+# THE ORDER IS THE HIERARCHY, BOTTOM UP. Read it as three groups:
+#
+#   props            - no children, no constraint, first because they are the simplest
+#   wheels           - children of the retract bones, so they MUST precede them
+#   nosewheel_steer  - parent of nosewheel, child of gear_nose: strictly between the two
+#   retract bones    - parents of everything above them on this rig
+#   doors            - children of root, unconstrained; last because they are independent
+#
+# THE -1 ON THE ROLLING AND SPINNING BONES matches every such bone in the fleet:
+# UAirsideAgentAnim accumulates an ABSOLUTE angle and the rigs turn the other way about their
+# own axis. It is a multiplier and not a negated axis on purpose - the axis column is
+# measured and this is a convention, and mixing the two would make the measurement unreadable.
+#
+# THE GEAR AND DOOR BONES TAKE None. Their sense is already carried by the rest direction the
+# axis column reports: GearAngleDegrees runs 0 (down) to +90 (retracted) and
+# BayDoorAngleDegrees 0 (open) to +90 (shut), and a leg that folds aft has its axis pointing
+# the other way rather than its number negated. See plane5/scripts/build_rig.py, and
+# UAirsideAgentAnim::GearAnglesFrom for which fraction is inverted and why.
+PLAN = [
+    ("prop_L",          "PropAngleDegrees",    -1.0),
+    ("prop_R",          "PropAngleDegrees",    -1.0),
+    ("wheel_L",         "WheelAngleDegrees",   -1.0),
+    ("wheel_R",         "WheelAngleDegrees",   -1.0),
+    ("nosewheel",       "WheelAngleDegrees",   -1.0),
+    ("nosewheel_steer", "SteerAngleDegrees",   None),
+    ("gear_L",          "GearAngleDegrees",    None),
+    ("gear_R",          "GearAngleDegrees",    None),
+    ("gear_nose",       "GearAngleDegrees",    None),
+    ("door_main_L",     "BayDoorAngleDegrees", None),
+    ("door_main_R",     "BayDoorAngleDegrees", None),
+    ("door_nose_L",     "BayDoorAngleDegrees", None),
+    ("door_nose_R",     "BayDoorAngleDegrees", None),
+]
+
+MODES = {
+    "translationMode": "BMM_Ignore",
+    "rotationMode": "BMM_Additive",
+    "scaleMode": "BMM_Ignore",
+    "rotationSpace": "BCS_BoneSpace",
+}
+
+# MakeRotator's three input pins, by the local axis each turns about. Roll is the bone's own
+# X, Pitch its Y, Yaw its Z - which is why the axis plan reports a local axis and this maps
+# it to a pin name rather than the other way round.
+PIN_OF_COMPONENT = {"Roll": "Roll", "Pitch": "Pitch", "Yaw": "Yaw"}
+
+
+def load_axis_plan():
+    """{bone: (component, sign)}, measured by build_plane5_anim.py.
+
+    A MISSING FILE IS A CLEAR MESSAGE AND NOT A DEFAULT. Defaulting to Yaw here would wire a
+    plausible graph off an assumption this script exists to stop making.
+    """
+    if not os.path.exists(AXIS_PLAN):
+        sys.exit(
+            "No %s.\n"
+            "The rotation axes are MEASURED off SK_Plane5's reference pose, not assumed.\n"
+            "Close the editor and run:\n"
+            "  UnrealEditor-Cmd.exe <project> -run=pythonscript "
+            "-script=Tools/Python/build_plane5_anim.py -unattended -nosplash -nopause\n"
+            "then reopen it and run this again." % AXIS_PLAN)
+    with open(AXIS_PLAN) as handle:
+        payload = json.load(handle)
+    axes = {row["bone"]: (row["component"], row["sign"]) for row in payload["bones"]}
+
+    missing = [bone for bone, _, _ in PLAN if bone not in axes]
+    if missing:
+        sys.exit("%s resolves no axis for: %s\n"
+                 "That commandlet FAILS a bone whose rig disagrees with build_rig.py's bone "
+                 "contract, so this is a rig to look at rather than a file to patch."
+                 % (AXIS_PLAN, ", ".join(missing)))
+    return axes
+
+
+# Sent to ProgrammaticToolset as ONE call. Doing it from here instead would be ~200 MCP round
+# trips; the sandbox can call any registered tool, so the whole graph costs one.
+WIRE = r'''
+import json
+BP = %(bp)s
+G = %(graph)s
+PLAN = %(plan)s
+MODES = %(modes)s
+BT = "editor_toolset.toolsets.blueprint.BlueprintTools."
+OT = "editor_toolset.toolsets.object.ObjectTools."
+AT = "editor_toolset.toolsets.asset.AssetTools."
+
+def node(type_id, x, y):
+    return execute_tool(BT + "create_node",
+        json.dumps({"graph": G, "type_id": type_id, "pos": {"x": x, "y": y}}))["returnValue"]
+
+def info(n):
+    return execute_tool(BT + "get_node_infos", json.dumps({"nodes": [n]}))["returnValue"][0]
+
+def pin_index(ni, side, name):
+    for p in (ni["output_pins"] if side == "out" else ni["input_pins"]):
+        if p["name"] == name:
+            return p["pin_id"]["index_id"]
+    raise RuntimeError("no %%s pin %%r on %%s" %% (side, name, ni["type_id"]))
+
+def connect(a, ai, b, bi):
+    execute_tool(BT + "connect_pins", json.dumps({
+        "output_pin": {"direction": "EGPD_Output", "index_id": ai, "node": a},
+        "input_pin":  {"direction": "EGPD_Input",  "index_id": bi, "node": b}}))
+
+def run():
+    root = execute_tool(BT + "find_nodes",
+        json.dumps({"graph": G, "title": "Output Pose"}))["returnValue"][0]
+    for n in execute_tool(BT + "find_nodes", json.dumps({"graph": G, "title": ""}))["returnValue"]:
+        if n["refPath"] != root["refPath"]:
+            execute_tool(BT + "delete_node", json.dumps({"node": n}))
+
+    prev = None
+    for row, (bone, var, mul, pin) in enumerate(PLAN):
+        y = row * 320
+        # The getter's CATEGORY is the C++ UPROPERTY Category, so these are Variables|Airside|
+        # and not Variables|Default|. Composing the type_id by hand returns "does not exist".
+        getter = node("Variables|Airside|Get" + var, -1500, y + 120)
+        mk = node("Math|Rotator|MakeRotator", -900, y + 80)
+        mb = node("Animation|SkeletalControls|Transform(Modify)Bone", -560, y)
+
+        values = {"boneToModify": {"boneName": bone}}
+        values.update(MODES)
+        execute_tool(OT + "set_properties",
+                     json.dumps({"instance": mb, "values": json.dumps({"node": values})}))
+
+        mk_ni, mb_ni = info(mk), info(mb)
+        # THE PIN IS PER BONE, not Yaw for everything - see this file's header.
+        axis = pin_index(mk_ni, "in", pin)
+        if mul is None:
+            connect(getter, 0, mk, axis)
+        else:
+            # A PROMOTABLE operator - wildcard until something is plugged in, and it reads
+            # back afterwards as Math|Float|float*float, which is NOT a type_id that creates
+            # one. Connect A first, then re-read: B and ReturnValue move once it is a float.
+            m = node("Utilities|Operators|Multiply", -1200, y + 120)
+            connect(getter, 0, m, pin_index(info(m), "in", "A"))
+            m_ni = info(m)
+            execute_tool(BT + "set_pin_value", json.dumps({
+                "pin": {"direction": "EGPD_Input", "index_id": pin_index(m_ni, "in", "B"),
+                        "node": m}, "value": "%%f" %% mul}))
+            connect(m, pin_index(m_ni, "out", "ReturnValue"), mk, axis)
+
+        connect(mk, pin_index(mk_ni, "out", "ReturnValue"), mb, pin_index(mb_ni, "in", "Rotation"))
+        if prev is not None:
+            connect(prev, 0, mb, pin_index(mb_ni, "in", "ComponentPose"))
+        prev = mb
+
+    # The ModifyBone chain is component space; the Output Pose wants local.
+    c2l = node("Animation|ConvertSpaces|ComponentToLocal", -200, 0)
+    connect(prev, 0, c2l, 0)
+    connect(c2l, 0, root, 0)
+
+    execute_tool(BT + "compile_blueprint", json.dumps({"blueprint": BP, "warnings_as_errors": False}))
+    execute_tool(AT + "save_assets", json.dumps({"asset_paths": ["%(asset)s"]}))
+    return {"wired": [b for b, _, _, _ in PLAN]}
+'''
+
+
+def connect_mcp():
+    try:
+        session, _ = Mcp.post({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": "2025-03-26", "capabilities": {},
+                       "clientInfo": {"name": "wire_plane5_anim", "version": "1"}},
+        })
+    except OSError as exc:
+        sys.exit("The editor is not running, or its MCP server is not up: %s" % exc)
+    Mcp.post({"jsonrpc": "2.0", "method": "notifications/initialized"}, session)
+    return session
+
+
+# THIRTEEN BONES IS ABOUT 200 TOOL CALLS IN ONE REQUEST, and it takes over a minute. Mcp.py's
+# 30 s default is right for an interactive call and wrong for this one: the editor finishes
+# the work regardless, so a client that gives up leaves a COMPLETED graph behind and prints a
+# traceback that reads as failure. Measured 2026-09-21, wiring this graph for the first time.
+WIRE_TIMEOUT = 600
+
+
+def call(session, toolset, tool, args, timeout=Mcp.DEFAULT_TIMEOUT):
+    result = Mcp.rpc(session, 1, "tools/call", {"name": "call_tool", "arguments": {
+        "toolset_name": toolset, "tool_name": tool, "arguments": args}}, timeout=timeout)
+    text = result["content"][0]["text"]
+    try:
+        return json.loads(text)["returnValue"]
+    except (ValueError, KeyError):
+        # A tool that fails returns PROSE where a result would be JSON, and a traceback out
+        # of execute_tool_script arrives the same way. Surface it rather than dying on the
+        # decode: the message is the diagnosis and json.loads throws it away.
+        sys.exit("%s.%s failed:\n%s" % (toolset.split(".")[-1], tool, text))
+
+
+BT = "editor_toolset.toolsets.blueprint.BlueprintTools"
+OT = "editor_toolset.toolsets.object.ObjectTools"
+
+
+def read_chain(session):
+    """Every driven bone, in chain order, walked back from Output Pose.
+
+    ORDER IS READ, not assumed: it is one of the four decisions above, and a verifier that
+    only checked membership would pass a graph that retracts the gear before it rolls the
+    wheels - which on this rig spins each wheel inside its own bay.
+    """
+    nodes = call(session, BT, "find_nodes", {"graph": GRAPH, "title": ""})
+    if not nodes:
+        return []
+    info = {n["node"]["refPath"]: n for n in
+            call(session, BT, "get_node_infos", {"nodes": nodes})}
+
+    def source(pin):
+        if not pin["connected_pins"]:
+            return pin["value"]
+        n = info[pin["connected_pins"][0]["node"]["refPath"]]
+        inner = [source(p) for p in n["input_pins"]
+                 if p["connected_pins"] or p["value"] not in ("", "(LinkID=-1,SourceLinkID=-1)")]
+        return "%s(%s)" % (n["type_id"].split("|")[-1], ",".join(inner))
+
+    current = [n for n in info.values() if n["type_id"] == "Misc.|OutputPose"][0]
+    chain = []
+    while True:
+        pin = current["input_pins"][0]
+        if not pin["connected_pins"]:
+            break
+        current = info[pin["connected_pins"][0]["node"]["refPath"]]
+        chain.append(current)
+
+    rows = []
+    for n in reversed(chain):          # reversed: report source-first, as PLAN reads
+        if "Transform(Modify)Bone" not in n["type_id"]:
+            continue
+        props = json.loads(call(session, OT, "get_properties",
+                                {"instance": n["node"], "properties": ["node"]}))["node"]
+        rotation = [p for p in n["input_pins"] if p["name"] == "Rotation"][0]
+        rows.append((props["boneToModify"]["boneName"],
+                     {k: props[k] for k in MODES},
+                     source(rotation)))
+    return rows
+
+
+def expected(variable, mul, pin):
+    """What read_chain() should report for one row.
+
+    MakeRotator reads back with its three components IN ORDER - Roll, Pitch, Yaw - and only
+    the driven one carries an expression, so the position of that expression IS the axis.
+    That is what makes the axis verifiable at all rather than merely set.
+    """
+    driven = "Get%s()" % variable if mul is None else \
+             "float*float(Get%s(),%f)" % (variable, mul)
+    parts = ["0.0", "0.0", "0.0"]
+    parts[["Roll", "Pitch", "Yaw"].index(pin)] = driven
+    return "MakeRotator(%s)" % ",".join(parts)
+
+
+def verify(session, axes):
+    """Fails loudly, bone by bone. Returns True only if the graph matches PLAN exactly."""
+    rows = read_chain(session)
+    ok = True
+
+    if len(rows) != len(PLAN):
+        print("FAIL %d driven bones in the chain, PLAN has %d" % (len(rows), len(PLAN)))
+        ok = False
+
+    for i, (bone, variable, mul) in enumerate(PLAN):
+        if i >= len(rows):
+            print("FAIL %-16s missing from the chain" % bone)
+            ok = False
+            continue
+        pin = PIN_OF_COMPONENT[axes[bone][0]]
+        got_bone, got_modes, got_rotation = rows[i]
+        want = expected(variable, mul, pin)
+        if got_bone != bone:
+            print("FAIL position %d is %s, PLAN says %s - the CHAIN ORDER is wrong"
+                  % (i, got_bone, bone))
+            ok = False
+        if got_modes != MODES:
+            print("FAIL %-16s modes %s" % (got_bone, got_modes))
+            ok = False
+        if got_rotation != want:
+            print("FAIL %-16s rotation %s, wanted %s" % (got_bone, got_rotation, want))
+            ok = False
+        if got_bone == bone and got_modes == MODES and got_rotation == want:
+            print("PASS %-16s %-5s %s" % (bone, pin, got_rotation))
+
+    print("VERIFY %s" % ("PASS" if ok else "FAIL"))
+    return ok
+
+
+def main(argv):
+    session = connect_mcp()
+
+    if "--read" in argv:
+        for bone, modes, rotation in read_chain(session):
+            print("%-16s %s  %s" % (bone, rotation, modes))
+        return 0
+
+    axes = load_axis_plan()
+    if "--verify" not in argv:
+        # The axis column joins PLAN here rather than in PLAN itself, so that the file on
+        # disk stays the only place it is stated.
+        plan = [(bone, variable, mul, PIN_OF_COMPONENT[axes[bone][0]])
+                for bone, variable, mul in PLAN]
+        for bone, _, _, pin in plan:
+            print("axis %-16s %s" % (bone, pin))
+        # repr, NOT json.dumps. The result is pasted into a PYTHON source file, and
+        # json.dumps writes None as `null`, which the sandbox rejects with "name 'null' is
+        # not defined" - a runtime error from a script that parses perfectly.
+        script = WIRE % {"bp": repr(BP), "graph": repr(GRAPH),
+                         "plan": repr(plan), "modes": repr(MODES),
+                         "asset": BP_PATH}
+        result = call(session, "editor_toolset.toolsets.programmatic.ProgrammaticToolset",
+                      "execute_tool_script", {"script": script}, timeout=WIRE_TIMEOUT)
+        print("wired: %s" % json.loads(result)["wired"])
+    return 0 if verify(session, axes) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -25,6 +25,7 @@ B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
 PIPER = "/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"
 PLANE1 = "/Game/Entities/DA_Aircraft_Plane1.DA_Aircraft_Plane1"
 PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
+PLANE5 = "/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"
 
 # name -> (display name, fleet asset paths, offers per game day)
 #
@@ -79,7 +80,20 @@ AIRLINES = {
     # NOTE THAT THE 172 DOES NOT OUT-STOL THE TWIN OTTER, which is the intuition to resist:
     # plane2 needs 366 m to this type's 497. A DHC-6 is a STOL aeroplane and a 172 is a
     # trainer, so the short-field floor stays where it was.
-    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2], 4.0),
+    #
+    # 2026-09-21: THE KING AIR JOINS, AND IT IS THE FIRST MEMBER OF THIS FLEET THAT CANNOT
+    # USE GRASS. Every other type Cumbria flies is a grass type, so its whole ladder has been
+    # made of LENGTH and WIDTH; DA_Aircraft_Plane5 asks for TARMAC and 1,006 m. That is a
+    # capability the player buys by PAVING, and the smallest paved runway that earns
+    # anything - a Q400 wants 1,402 m on the same surface, so paving pays before lengthening
+    # does for the first time.
+    #
+    # ON THIS AIRLINE AND NOT A NEW ONE, deliberately. A second operator is a second thing to
+    # balance and the entry above records what the last empty one cost; Cumbria already
+    # spans a 172 to a Twin Otter, and a King Air is the same kind of operation. The day the
+    # jets get models, the Meridian line above comes back and the split is jets against
+    # everything else.
+    "DA_Airline_Cumbria": ("Cumbria Air", [PIPER, PLANE1, PLANE2, PLANE5], 4.0),
 }
 
 

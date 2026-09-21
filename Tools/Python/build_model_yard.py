@@ -39,6 +39,12 @@ ROWS = [
         # entry that makes "small to large" true of the whole row rather than of most of it.
         ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
         ("/Game/Aircraft/PiperMeridian/SK_PiperMeridian", "Piper Meridian"),
+        # AHEAD OF THE TWIN OTTER, and "smallest first" had to pick a dimension to be first
+        # ON. It picks SPAN - 17.69 m against 19.75 - because span is what the row is read
+        # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so
+        # nothing is traded away by choosing. These two are the fleet's only Code B pair and
+        # standing them together is most of the reason for placing this one at all.
+        ("/Game/Aircraft/Plane5/SK_Plane5", "Plane5 (King Air 350i)"),
         ("/Game/Aircraft/Plane2/SK_Plane2", "Plane2 (Twin Otter)"),
         ("/Game/Aircraft/Plane3/SK_Plane3", "Plane3 (Dash 8-Q400)"),
         ("/Game/Aircraft/Plane4/SK_Plane4", "Plane4 (737-800W)"),
