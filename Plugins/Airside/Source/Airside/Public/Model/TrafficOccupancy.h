@@ -48,6 +48,23 @@ struct AIRSIDE_API FTrafficResource
 };
 
 /**
+ * Hashes exactly what operator== compares - Kind plus the one handle that Kind says is
+ * live - so two resources the operator calls equal always land in the same TMap bucket.
+ * Needed for FTrafficOccupancy's per-resource index (issue #168): without it, TMap<
+ * FTrafficResource, ...> does not compile.
+ */
+FORCEINLINE uint32 GetTypeHash(const FTrafficResource& Resource)
+{
+	switch (Resource.Kind)
+	{
+	case ETrafficResourceKind::Edge:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Edge));
+	case ETrafficResourceKind::Node:    return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Node));
+	case ETrafficResourceKind::Surface: return HashCombine(GetTypeHash(Resource.Kind), GetTypeHash(Resource.Surface));
+	default:                            return GetTypeHash(Resource.Kind);
+	}
+}
+
+/**
  * One agent's hold on one resource.
  *
  * OCCUPIED versus RESERVED is the whole arbitration rule (spec 3.3). A claim that contains
@@ -104,9 +121,12 @@ enum class EClaimResult : uint8
  * before asking here for the runway. A table that knew about aircraft would have to grow
  * with every rule anyone added to traffic.
  *
- * A flat array searched linearly rather than a map per kind: an airport has tens of agents
- * holding a handful of claims each, and the whole table is rebuilt in one pass per tick.
- * Measured before it is indexed.
+ * Claims is still the flat array it always was - GetClaims() and every test read it exactly
+ * as before - but TryClaim, IsHeld, FindClaim and the per-agent Release* calls no longer
+ * walk the whole thing: ByResource and ByAgent (below) index it, so each looks only at the
+ * claims on the one resource or by the one agent it cares about. MEASURED, THEN INDEXED
+ * (issue #168): with A agents holding k claims each, the un-indexed table cost O(A^2 k^2)
+ * compares per arbitration pass, up to 32 times a frame at the top of the speed ladder.
  */
 USTRUCT()
 struct AIRSIDE_API FTrafficOccupancy
@@ -200,6 +220,14 @@ struct AIRSIDE_API FTrafficOccupancy
 	const TArray<FTrafficClaim>& GetClaims() const { return Claims; }
 
 	/**
+	 * How many OTHER claims the last TryClaim call compared itself against - issue #168's
+	 * own measure that the index, not the agent or claim count, decides the cost. Not reset
+	 * automatically: a test reads it right after the TryClaim it means to measure, the way
+	 * GetLastStepsForTest works on UGroundTraffic.
+	 */
+	int32 GetLastTryClaimComparesForTest() const { return LastTryClaimComparesForTest; }
+
+	/**
 	 * The one claim AgentId holds on Resource, or null. What the deadlock resolver reads to
 	 * tell a blocker that is standing on the ground (bOccupied) from one that has merely
 	 * reserved it - the difference between a jam and a yield. See ResolveDeadlocks.
@@ -250,14 +278,69 @@ struct AIRSIDE_API FTrafficOccupancy
 
 private:
 	/**
-	 * Claims.RemoveAllSwap(Predicate), named once behind the six Release* wrappers that
-	 * each called it directly (#103) - each keeps its own WHY comment on what it releases
-	 * and why; this is only the mechanism they all share.
+	 * Every claim matching Predicate, gone - scanning the WHOLE table, named once behind the
+	 * release calls that are not about one agent. ReleaseGuidelineClaims is the one caller
+	 * left (issue #168 moved every PER-AGENT release onto ReleaseAgentWhere below, which
+	 * reads ByAgent instead of scanning everyone): a rebuild frees resources for every agent
+	 * at once, so there is no one bucket to narrow it to.
+	 *
+	 * Collects matching indices first, then removes them highest-first through
+	 * RemoveClaimAtSwap - no longer the one-line Claims.RemoveAllSwap(Predicate) this used
+	 * to be, because a bare RemoveAllSwap does not know to keep ByResource and ByAgent true.
 	 */
 	void ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate);
 
+	/**
+	 * The same release, scoped to AgentId's own claims via ByAgent - ReleaseAll, Release,
+	 * ReleaseReservations, ReleaseExcept and ReleaseGuidelineClaimsOf all give back one
+	 * agent's ground, and an agent holds a handful of claims whatever the airport's size
+	 * (issue #168's TrafficOccupancy.cpp:188-193: ReleaseExcept was O(every claim x Keep)).
+	 */
+	void ReleaseAgentWhere(int32 AgentId, TFunctionRef<bool(const FTrafficClaim&)> Predicate);
+
+	/** Claims.Add(Claim), then indexes the new slot. The only place a claim is APPENDED -
+	 *  TryClaim's in-place update (same agent, same resource) skips this because neither
+	 *  index key changes. */
+	void AddClaim(const FTrafficClaim& Claim);
+
+	/** Adds Claims[Index] - already written - to ByResource and ByAgent. */
+	void IndexClaim(int32 Index);
+
+	/** Removes Claims[Index] from ByResource and ByAgent, without touching Claims itself. */
+	void UnindexClaim(int32 Index);
+
+	/**
+	 * Claims.RemoveAtSwap(Index), keeping ByResource and ByAgent true afterwards.
+	 *
+	 * RemoveAtSwap moves the LAST claim into Index's slot; done blind, the index maps would
+	 * still say that claim lives at the old (now past-the-end) position. This unindexes the
+	 * claim being removed, then - if the last claim is about to move - repoints ITS bucket
+	 * entries from the old index to the new one BEFORE the array itself changes, which is
+	 * why the check has to happen here and not after RemoveAtSwap returns.
+	 *
+	 * INDICES, NOT A STABLE SLOT ARRAY: RoadSlotMap's bAlive/generation scheme was the other
+	 * option issue #168 considered, but it would have made GetClaims() return dead slots -
+	 * every test above reads Table.GetClaims().Num() as an exact count, and so does
+	 * production code that means to see only what is held right now. Repointing the one
+	 * claim a swap actually moves costs the same O(1) either way and keeps Claims exactly
+	 * the shape it always was.
+	 */
+	void RemoveClaimAtSwap(int32 Index);
+
 	UPROPERTY() TArray<FTrafficClaim> Claims;
+
+	/**
+	 * Claim indices on one resource, and on one agent - issue #168. Neither is a UPROPERTY,
+	 * same reasoning as Preempted below: both hold nothing but int32s derived from Claims,
+	 * kept true by every mutator above, so there is nothing here for the collector to trace
+	 * or for SaveGame to serialise that Claims does not already own.
+	 */
+	TMap<FTrafficResource, TArray<int32>> ByResource;
+	TMap<int32, TArray<int32>> ByAgent;
 
 	/** Not a UPROPERTY: consumed within the tick that produced it. */
 	TSet<int32> Preempted;
+
+	/** See GetLastTryClaimComparesForTest. */
+	int32 LastTryClaimComparesForTest = 0;
 };

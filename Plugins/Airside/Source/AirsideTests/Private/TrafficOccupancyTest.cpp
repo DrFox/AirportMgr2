@@ -240,4 +240,280 @@ bool FTrafficOccupancyReleaseGuidelineClaimsTest::RunTest(const FString& Paramet
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyIndexedCostTest,
+	"Airside.Model.Occupancy.IndexedCost",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+/**
+ * ISSUE #168: TryClaim must compare against the claims on ONE resource, not every claim in
+ * the table. A flat scan grows with the WHOLE table (agents x claims each); this pins the
+ * fix by building a table where one edge's queue is short but the table around it is not,
+ * and reading GetLastTryClaimComparesForTest() rather than trusting a walkthrough of the
+ * code - the whole "measure, don't infer" rule this project runs on.
+ */
+bool FTrafficOccupancyIndexedCostTest::RunTest(const FString& Parameters)
+{
+	FTrafficOccupancy Table;
+	FTrafficClaim Blocker;
+
+	// THE BACKGROUND: 50 agents x 8 claims each, none of them on the edge under test, so the
+	// table is exactly the scale the issue's O(A^2 k^2) figure is about - 400 claims - but
+	// every one of them lands in its OWN node's bucket (nodes are exclusive, so a bucket of
+	// more than one claim on the same node is a contradiction).
+	const int32 Agents = 50;
+	const int32 ClaimsPerAgent = 8;
+	for (int32 Agent = 0; Agent < Agents; ++Agent)
+	{
+		for (int32 Claim = 0; Claim < ClaimsPerAgent; ++Claim)
+		{
+			// AgentId 0 is reserved (ExcludingAgent's "nobody" elsewhere in this file), so
+			// background agents start at 1000 - well clear of the queue's 1..8 below.
+			const int32 AgentId = 1000 + Agent;
+			const int32 NodeIndex = Agent * ClaimsPerAgent + Claim;
+			TestEqual(TEXT("background claim granted - the fixture must actually reach 400 claims"),
+				Table.TryClaim(M2OccNodeClaim(AgentId, NodeIndex, false, 2), Blocker), EClaimResult::Granted);
+		}
+	}
+	TestEqual(TEXT("the fixture holds A*k claims before the measured call"), Table.GetClaims().Num(), Agents * ClaimsPerAgent);
+
+	// THE QUEUE UNDER TEST: 8 agents packed end to end on ONE edge - a queue, not a block,
+	// exactly what FTrafficClaim::Conflicts' half-open rule exists to allow.
+	const int32 QueueLen = 8;
+	for (int32 Agent = 0; Agent < QueueLen; ++Agent)
+	{
+		TestEqual(TEXT("queue claim granted"),
+			Table.TryClaim(M2OccEdgeClaim(Agent + 1, 7, Agent * 1000.0, Agent * 1000.0 + 900.0, false, 2), Blocker),
+			EClaimResult::Granted);
+	}
+
+	// THE MEASURED CALL: one more claim on the SAME edge, past the back of the queue - it
+	// conflicts with nothing, so every compare TryClaim makes is one this test can count and
+	// name in advance: exactly the QueueLen claims already on edge 7, and NONE of the 400
+	// background claims on other resources.
+	const EClaimResult Result = Table.TryClaim(
+		M2OccEdgeClaim(9999, 7, QueueLen * 1000.0, QueueLen * 1000.0 + 900.0, false, 2), Blocker);
+	TestEqual(TEXT("the new tail of the queue is granted"), Result, EClaimResult::Granted);
+	TestEqual(TEXT("TryClaim compared against exactly the queue on edge 7, not the whole table"),
+		Table.GetLastTryClaimComparesForTest(), QueueLen);
+	TestTrue(TEXT("and that is far below what an un-indexed scan of A*k claims would have cost"),
+		Table.GetLastTryClaimComparesForTest() < Agents * ClaimsPerAgent);
+	return true;
+}
+
+namespace
+{
+	/**
+	 * THE PRE-#168 TABLE, kept verbatim so FTrafficOccupancyIndexedEquivalenceTest can drive
+	 * it and the indexed FTrafficOccupancy with the identical random sequence and diff the
+	 * result. Only the calls the driver below exercises are reproduced - this is a reference
+	 * for TryClaim's arbitration and the per-agent Release* family, not a second production
+	 * implementation.
+	 */
+	struct FLegacyOccupancy
+	{
+		TArray<FTrafficClaim> Claims;
+
+		EClaimResult TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker)
+		{
+			int32 ExistingIndex = INDEX_NONE;
+			for (int32 i = 0; i < Claims.Num(); ++i)
+			{
+				if (Claims[i].AgentId == Claim.AgentId && Claims[i].Resource == Claim.Resource)
+				{
+					ExistingIndex = i;
+					break;
+				}
+			}
+
+			TArray<int32> ToPreempt;
+			for (int32 Index = 0; Index < Claims.Num(); ++Index)
+			{
+				if (Claims[Index].AgentId == Claim.AgentId) { continue; }
+				if (!Claims[Index].Conflicts(Claim)) { continue; }
+				if (Claims[Index].bOccupied)
+				{
+					OutBlocker = Claims[Index];
+					return EClaimResult::Held;
+				}
+				if (!Claim.bOccupied && Claims[Index].Rank >= Claim.Rank)
+				{
+					OutBlocker = Claims[Index];
+					return EClaimResult::Held;
+				}
+				ToPreempt.Add(Index);
+			}
+
+			if (ExistingIndex != INDEX_NONE) { Claims[ExistingIndex] = Claim; }
+			else { Claims.Add(Claim); }
+
+			for (int32 At = ToPreempt.Num() - 1; At >= 0; --At)
+			{
+				Claims.RemoveAtSwap(ToPreempt[At]);
+			}
+			return EClaimResult::Granted;
+		}
+
+		void ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate)
+		{
+			Claims.RemoveAllSwap([&Predicate](const FTrafficClaim& C) { return Predicate(C); });
+		}
+		void ReleaseAll(int32 AgentId)
+		{
+			ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
+		}
+		void Release(int32 AgentId, const FTrafficResource& Resource)
+		{
+			ReleaseWhere([AgentId, &Resource](const FTrafficClaim& C)
+			{
+				return C.AgentId == AgentId && C.Resource == Resource;
+			});
+		}
+		void ReleaseReservations(int32 AgentId)
+		{
+			ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId && !C.bOccupied; });
+		}
+		void ReleaseExcept(int32 AgentId, const TArray<FTrafficResource>& Keep)
+		{
+			ReleaseWhere([AgentId, &Keep](const FTrafficClaim& C)
+			{
+				return C.AgentId == AgentId && !Keep.Contains(C.Resource);
+			});
+		}
+	};
+
+	/** A total order over claims by IDENTITY (agent + resource), not by table position -
+	 *  table position is allowed to differ between the legacy and the indexed table (both
+	 *  use swap-removal, and issue #168 changed WHERE the swaps happen), so this is what
+	 *  "identical GetClaims() contents" is measured by. */
+	FString M2OccCanonKey(const FTrafficClaim& C)
+	{
+		return FString::Printf(TEXT("%d|%d|%d|%d|%d|%.1f|%.1f|%d|%d"),
+			C.AgentId, (int32)C.Resource.Kind,
+			C.Resource.Edge.Index, C.Resource.Node.Index, C.Resource.Surface.Index,
+			C.From, C.To, C.bOccupied ? 1 : 0, C.Rank);
+	}
+
+	TArray<FString> M2OccSortedKeys(const TArray<FTrafficClaim>& Claims)
+	{
+		TArray<FString> Keys;
+		Keys.Reserve(Claims.Num());
+		for (const FTrafficClaim& C : Claims) { Keys.Add(M2OccCanonKey(C)); }
+		Keys.Sort();
+		return Keys;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficOccupancyIndexedEquivalenceTest,
+	"Airside.Model.Occupancy.IndexedEquivalence",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+/**
+ * ISSUE #168: the index changes HOW a claim is found, never WHAT TryClaim or a Release* call
+ * decides. Fixed-seed random claims and releases are driven, step for step, into the OLD
+ * flat table (FLegacyOccupancy, reproduced above) and the NEW indexed one, and the two must
+ * hold the same set of claims after every single step - a stronger check than reusing the
+ * hand-picked scenarios above, because it exercises orderings and overlaps nobody hand-wrote.
+ */
+bool FTrafficOccupancyIndexedEquivalenceTest::RunTest(const FString& Parameters)
+{
+	FLegacyOccupancy Old;
+	FTrafficOccupancy New;
+	FRandomStream Rng(20260921);
+
+	const int32 NumAgents = 6;
+	const int32 NumHandles = 3;
+
+	for (int32 Step = 0; Step < 500; ++Step)
+	{
+		const int32 AgentId = 1 + Rng.RandRange(0, NumAgents - 1);
+		const int32 Op = Rng.RandRange(0, 99);
+
+		if (Op < 60)
+		{
+			// A random claim: kind, handle, and - for an edge - a random non-degenerate
+			// interval. Rank and occupancy are random too, so both tables see the full
+			// spread of TryClaim's three outcomes.
+			const int32 KindRoll = Rng.RandRange(0, 2);
+			const int32 HandleIndex = Rng.RandRange(0, NumHandles - 1);
+			const bool bOccupied = Rng.RandRange(0, 1) == 1;
+			const int32 Rank = Rng.RandRange(0, 3);
+
+			FTrafficClaim Claim;
+			Claim.AgentId = AgentId;
+			Claim.bOccupied = bOccupied;
+			Claim.Rank = Rank;
+			if (KindRoll == 0)
+			{
+				Claim.Resource = FTrafficResource::OfEdge(M2OccEdge(HandleIndex));
+				const double From = Rng.RandRange(0, 9) * 100.0;
+				Claim.From = From;
+				Claim.To = From + 100.0 + Rng.RandRange(0, 8) * 100.0;
+			}
+			else if (KindRoll == 1)
+			{
+				Claim.Resource = FTrafficResource::OfNode(M2OccNode(HandleIndex));
+			}
+			else
+			{
+				Claim.Resource = FTrafficResource::OfSurface(M2OccSurface(HandleIndex));
+			}
+
+			FTrafficClaim OldBlocker;
+			FTrafficClaim NewBlocker;
+			const EClaimResult OldResult = Old.TryClaim(Claim, OldBlocker);
+			const EClaimResult NewResult = New.TryClaim(Claim, NewBlocker);
+			TestEqual(*FString::Printf(TEXT("step %d: TryClaim's Held/Granted decision agrees"), Step),
+				NewResult, OldResult);
+		}
+		else if (Op < 75)
+		{
+			Old.ReleaseAll(AgentId);
+			New.ReleaseAll(AgentId);
+		}
+		else if (Op < 85)
+		{
+			const int32 KindRoll = Rng.RandRange(0, 2);
+			const int32 HandleIndex = Rng.RandRange(0, NumHandles - 1);
+			const FTrafficResource Resource = KindRoll == 0 ? FTrafficResource::OfEdge(M2OccEdge(HandleIndex))
+				: KindRoll == 1 ? FTrafficResource::OfNode(M2OccNode(HandleIndex))
+				: FTrafficResource::OfSurface(M2OccSurface(HandleIndex));
+			Old.Release(AgentId, Resource);
+			New.Release(AgentId, Resource);
+		}
+		else if (Op < 95)
+		{
+			Old.ReleaseReservations(AgentId);
+			New.ReleaseReservations(AgentId);
+		}
+		else
+		{
+			// Keep a random subset of this agent's own resources - reads them off the NEW
+			// table, which by this point in the run is exactly what production code does
+			// (ApplyClaims builds Wanted from what it just claimed, not from a fixture).
+			TArray<FTrafficResource> Keep;
+			for (const FTrafficClaim& C : New.GetClaims())
+			{
+				if (C.AgentId == AgentId && Rng.RandRange(0, 1) == 1)
+				{
+					Keep.Add(C.Resource);
+				}
+			}
+			Old.ReleaseExcept(AgentId, Keep);
+			New.ReleaseExcept(AgentId, Keep);
+		}
+
+		const TArray<FString> OldKeys = M2OccSortedKeys(Old.Claims);
+		const TArray<FString> NewKeys = M2OccSortedKeys(New.GetClaims());
+		if (OldKeys != NewKeys)
+		{
+			AddError(*FString::Printf(TEXT("step %d: indexed table diverged from the legacy one (%d claims vs %d)"),
+				Step, NewKeys.Num(), OldKeys.Num()));
+			return false;
+		}
+	}
+	return true;
+}
+
 #endif
