@@ -742,35 +742,16 @@ bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMot
 	//
 	// AT THE SPAN'S START, not one frame late: the follower has not moved yet this frame,
 	// so the handover happens before any forward motion is committed along it.
+	//
+	// THE SEARCH ITSELF LIVES ON THE FOLLOWER NOW (issue #190): this used to scan every
+	// step of Follower.Plan.Steps on every Taxiing tick to answer "is there one anywhere",
+	// which on the overwhelming majority of plans - no reverse leg at all - paid for the
+	// whole route every substep to learn nothing. NextReverseLegRun answers the identical
+	// question from a list precomputed once in Start/Replace - see its own comment for why
+	// it still finds a run's second step if the first one failed to arm.
 	int32 From = INDEX_NONE;
 	int32 To = INDEX_NONE;
-	for (int32 Step = 0; Step < Follower.Plan.Steps.Num(); ++Step)
-	{
-		if (!Follower.Plan.Steps[Step].bReverseLeg)
-		{
-			continue;
-		}
-		const double SpanStart =
-			Step == 0 ? 0.0 : Follower.Plan.Steps[Step - 1].EndDistance;
-		if (SpanStart + UE_DOUBLE_KINDA_SMALL_NUMBER < Follower.Travelled)
-		{
-			// Behind us: a span already driven, this frame or on an earlier one.
-			continue;
-		}
-		From = Step;
-		To = Step;
-
-		// THE WHOLE CONTIGUOUS RUN, because a reverse leg is several edges and arming
-		// them one at a time would stop and restart the manoeuvre at every vertex.
-		while (Follower.Plan.Steps.IsValidIndex(To + 1)
-			&& Follower.Plan.Steps[To + 1].bReverseLeg)
-		{
-			++To;
-		}
-		break;
-	}
-
-	if (From == INDEX_NONE)
+	if (!Follower.NextReverseLegRun(From, To))
 	{
 		return false;
 	}

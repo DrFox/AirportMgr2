@@ -39,10 +39,19 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host 'FAIL: Check-Architecture.ps1 found violations; tests not run.' -ForegroundColor Red
     exit 1
 }
-$logPath    = Join-Path $projectDir 'Saved\Logs\AirsideTests.log'
+$logPath     = Join-Path $projectDir 'Saved\Logs\AirsideTests.log'
+$prevLogPath = Join-Path $projectDir 'Saved\Logs\AirsideTests-prev.log'
 
-# A stale log would let a crashed run masquerade as the previous green one.
-if (Test-Path $logPath) { Remove-Item $logPath -Force }
+# A stale log would let a crashed run masquerade as the previous green one - but deleting it
+# outright loses the ONE thing a flaky, order-dependent failure needs: the raw log from the
+# run that actually failed. Issue #216's third sighting had nothing but the automation
+# report's single error line to go on, because this script had already overwritten the log
+# by the time anyone went looking. One generation is enough - this script is never run twice
+# unread - so rename (not copy) the previous run out of the way before starting a new one.
+if (Test-Path $logPath) {
+    if (Test-Path $prevLogPath) { Remove-Item $prevLogPath -Force }
+    Move-Item -Path $logPath -Destination $prevLogPath -Force
+}
 
 $editor  = Join-Path $Engine 'Engine\Binaries\Win64\UnrealEditor-Cmd.exe'
 $execArg = "-ExecCmds=Automation RunTests $Filter"

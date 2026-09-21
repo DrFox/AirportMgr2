@@ -2,8 +2,8 @@
 
 #include "AirsideLog.h"
 #include "Build/ExitGeometry.h"
-#include "Content/AirsideSettings.h"
 #include "Build/RoadMeshBuilder.h"
+#include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -46,7 +46,8 @@ namespace
 	}
 }
 
-void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved)
+void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
+	const FAirframe& LargestServiceVehicle)
 {
 	// Clear the previous derivation before regenerating, or Build accumulates.
 	//
@@ -371,19 +372,21 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 
 			// Each end records WHICH end it is, so a hand-authored edge can name what it
 			// attached to rather than which slot happened to hold it. Handles do not
-			// survive a rebuild; this does.
-			if (FGuidelineNode* NodeA = Network.GetGuidelineNodeMutable(Edge.A))
-			{
-				NodeA->Origin.Segment = SegmentId;
-				NodeA->Origin.bEndA = true;
-				NodeA->Origin.GuidelineIndex = Which;
-			}
-			if (FGuidelineNode* NodeB = Network.GetGuidelineNodeMutable(Edge.B))
-			{
-				NodeB->Origin.Segment = SegmentId;
-				NodeB->Origin.bEndA = false;
-				NodeB->Origin.GuidelineIndex = Which;
-			}
+			// survive a rebuild; this does. One whole FGuidelineEndRef per node through
+			// SetGuidelineNodeOrigin (#191), not three field writes through a raw pointer -
+			// a caller stopping between them used to be able to leave GuidelineIndex from
+			// the slot's previous life sitting beside a fresh Segment/bEndA.
+			FGuidelineEndRef OriginA;
+			OriginA.Segment = SegmentId;
+			OriginA.bEndA = true;
+			OriginA.GuidelineIndex = Which;
+			Network.SetGuidelineNodeOrigin(Edge.A, OriginA);
+
+			FGuidelineEndRef OriginB;
+			OriginB.Segment = SegmentId;
+			OriginB.bEndA = false;
+			OriginB.GuidelineIndex = Which;
+			Network.SetGuidelineNodeOrigin(Edge.B, OriginB);
 			Edge.Control = (AtA + AtB) * 0.5;
 			Edge.AllowedTraffic = FTrafficMask::Only(Declared.Class);
 			Edge.AllowedTraffic.Add(ETraversalClass::Emergency);
@@ -594,8 +597,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// which is worse than a slow corner and much harder to diagnose. What the
 					// player can act on is the segment length, so that is what this names.
 					{
-						const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
-						const double Needed = Largest.TightestFollowableRadius();
+						// ISSUE #190: LargestServiceVehicle is the caller's, resolved once for
+						// the whole rebuild - see this function's own comment - not re-resolved
+						// per ordered arm pair the way this warning used to.
+						const double Needed = LargestServiceVehicle.TightestFollowableRadius();
 						if (Needed > 0.0)
 						{
 							const double Delivered = GuidelineGeom::TightestRadius(
@@ -611,7 +616,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 									     "corner needs about %.0f, so the segments meeting here are "
 									     "too short. Draw them longer."),
 									Node->Position.X, Node->Position.Y, Delivered, Needed,
-									Largest.Wheelbase(), Largest.Ground.MaxSteerDegrees,
+									LargestServiceVehicle.Wheelbase(), LargestServiceVehicle.Ground.MaxSteerDegrees,
 									FVector2D::Distance(
 										Network.GetGuidelineNode(Turn.A)->Position, Turn.Control),
 									Needed * UE_DOUBLE_SQRT_2);
@@ -744,11 +749,11 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				{
 					continue;
 				}
-				if (FGuidelineNode* Node = Network.GetGuidelineNodeMutable(Network.GuidelineNodeIdAt(Index)))
-				{
-					Node->HoldingPosition = EHoldingPositionKind::None;
-					Node->HoldingPositionFor = FRoadSegmentId();
-				}
+				// Kind and For together through SetGuidelineNodeHoldingPosition (#191): the
+				// two fields must agree ("Runway iff HoldingPositionFor is set") and a raw
+				// pointer let this clear one without the other.
+				Network.SetGuidelineNodeHoldingPosition(
+					Network.GuidelineNodeIdAt(Index), EHoldingPositionKind::None, FRoadSegmentId());
 			}
 		}
 
@@ -770,13 +775,13 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			for (int32 Which = 0; Which < Profile->Guidelines.Num(); ++Which)
 			{
 				const FGuidelineNodeId* End = Ends.Find(EndKey(SegmentIndex, bEndA, Which));
-				FGuidelineNode* Node = End ? Network.GetGuidelineNodeMutable(*End) : nullptr;
-				if (Node == nullptr)
+				if (End == nullptr)
 				{
 					continue;
 				}
-				Node->HoldingPosition = EHoldingPositionKind::Runway;
-				Node->HoldingPositionFor = Pair.Value;
+				// SetGuidelineNodeHoldingPosition silently declines a dead node, same as the
+				// null check this replaced (#191).
+				Network.SetGuidelineNodeHoldingPosition(*End, EHoldingPositionKind::Runway, Pair.Value);
 			}
 		}
 
@@ -797,13 +802,12 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 				// to be left unwritten there.
 				continue;
 			}
-			FGuidelineNode* Node = Network.GetGuidelineNodeMutable(*Found);
+			const FGuidelineNode* Node = Network.GetGuidelineNode(*Found);
 			// A mark on an end that has since become a runway end is out-ranked by the
 			// derivation: the junction decides, and the stale mark is harmless.
 			if (Node != nullptr && Node->HoldingPosition != EHoldingPositionKind::Runway)
 			{
-				Node->HoldingPosition = EHoldingPositionKind::Intermediate;
-				Node->HoldingPositionFor = FRoadSegmentId();
+				Network.SetGuidelineNodeHoldingPosition(*Found, EHoldingPositionKind::Intermediate, FRoadSegmentId());
 			}
 		}
 	}

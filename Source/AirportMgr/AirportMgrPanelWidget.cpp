@@ -22,6 +22,7 @@ bool UAirportMgrPanelWidget::Initialize()
 	// CACHED BEFORE BuildOnce RUNS, not after: a subclass's own BuildOnce (UInspectorWidget's,
 	// ULedgerPanelWidget's) reads PanelStyle from inside its own EnsureSlots, called from here.
 	PanelStyle = &Style;
+	++BuildOnceCalls;   // See BuildOnceCallCountForTest - must read 1 even across a re-Initialize.
 	BuildOnce(Style);
 	return bOk;
 }
@@ -55,7 +56,8 @@ UPanelWidget* UAirportMgrPanelWidget::EnsureCardRoot(FName CardName, const FAnch
 		{
 			CardBorder->SetBrushColor(Style->PanelDark);
 		}
-		CardBorder->SetPadding(FMargin(12.0f, 10.0f));
+		// UUIStyle::CardPadding, not a literal here: see its own comment (issue #192).
+		CardBorder->SetPadding(Style->CardPadding);
 
 		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(CardBorder);
 		CardSlot->SetAnchors(Anchors);

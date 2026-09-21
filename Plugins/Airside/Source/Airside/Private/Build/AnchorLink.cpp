@@ -3,7 +3,6 @@
 #include "AirsideLog.h"
 #include "Build/AnchorLinkFinder.h"
 #include "Build/StandLayoutBuild.h"
-#include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
@@ -50,7 +49,28 @@ namespace
 	{
 		// The table itself is Solve/IcaoCode.h now - shared with RunwayAdmission (width ->
 		// wingspan) and InspectFacts (wingspan -> letter). See #85.
-		return IcaoCode::RadiusForLetter(Code.ToString());
+		//
+		// NONE IS NOT A TYPO. A fuel depot has no DesignAircraft (see BuildFuelDepot) and
+		// passes FName() here on purpose, falling back to Code C's radius exactly as that
+		// header says - so an unset code stays silent. Anything else that fails to parse is a
+		// human's UAircraftType::Code typed wrong, which is the ONE place that can happen: the
+		// table functions used to take the fallback silently on any bad string, so a typo
+		// became a lead-in painted for the wrong aeroplane with no line in the log to say so.
+		if (Code.IsNone())
+		{
+			return IcaoCode::RadiusForLetter(EIcaoCode::C);
+		}
+
+		if (const TOptional<EIcaoCode> Parsed = IcaoCode::Parse(Code.ToString()))
+		{
+			return IcaoCode::RadiusForLetter(*Parsed);
+		}
+
+		UE_LOG(LogAirside, Warning,
+			TEXT("UAircraftType::Code '%s' is not an ICAO letter A-F; its painted lead-in "
+			     "radius falls back to Code C's."),
+			*Code.ToString());
+		return IcaoCode::RadiusForLetter(EIcaoCode::C);
 	}
 
 	/**
@@ -532,7 +552,7 @@ FLinkHit FAnchorLink::Resolve(const URoadNetwork& Network, const FPendingLink& L
 }
 
 FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-	TSet<FGuidelineNodeId>& AnchorNodes)
+	TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle)
 {
 	const FGuidelineEdge* Found = Network.GetGuidelineEdge(Hit.Edge);
 	const FGuidelineNode* EndA = Found != nullptr ? Network.GetGuidelineNode(Found->A) : nullptr;
@@ -657,9 +677,10 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	double LaneRadius = 0.0;
 	if (Link.Class == ETraversalClass::GroundVehicle)
 	{
+		// ISSUE #190: the caller's resolved vehicle, not a fresh resolve - this ran twice
+		// per link (here and at the warning below) before Build started passing one down.
 		constexpr double Slack = 1.1;
-		LaneRadius = UAirsideSettings::ResolveLargestServiceVehicle()
-			.TightestFollowableRadius() * Slack;
+		LaneRadius = LargestServiceVehicle.TightestFollowableRadius() * Slack;
 	}
 
 	if (Link.LaneOwner.IsSet() && LaneRadius > 0.0)
@@ -1012,8 +1033,7 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	// the merge, never the crossing's turn-back, whose figure the gap does not move - see the
 	// sweep loop above for the measurement and for why a line naming the gap would be a lie
 	// about it.
-	if (const double Lock =
-			UAirsideSettings::ResolveLargestServiceVehicle().TightestFollowableRadius();
+	if (const double Lock = LargestServiceVehicle.TightestFollowableRadius();
 		LaneRadius > 0.0 && Lock > 0.0 && Tightest < Lock)
 	{
 		UE_LOG(LogAirside, Warning,
@@ -1037,7 +1057,8 @@ FGuidelineNodeId FAnchorLink::Join(URoadNetwork& Network, FPendingLink& Link, co
 	return LeadEnd;
 }
 
-int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double ServiceLinkRadius)
+int32 FAnchorLink::Build(URoadNetwork& Network, const FAirframe& LargestServiceVehicle,
+	double MaxLeadIn, double ServiceLinkRadius)
 {
 	// Gathered up front, because joining one anchor adds and removes edges and an
 	// iteration over the graph must not be holding pointers into it while that happens.
@@ -1101,7 +1122,7 @@ int32 FAnchorLink::Build(URoadNetwork& Network, double MaxLeadIn, double Service
 			continue;
 		}
 
-		const FGuidelineNodeId LeadEnd = Join(Network, Link, Hit, AnchorNodes);
+		const FGuidelineNodeId LeadEnd = Join(Network, Link, Hit, AnchorNodes, LargestServiceVehicle);
 		if (!LeadEnd.IsSet())
 		{
 			continue;

@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
+#include "Model/BuildPurse.h"
 #include "Model/FlightBoard.h"
 #include "Model/OpsEvents.h"
 #include "Model/RoadGuideline.h"
@@ -11,6 +12,7 @@
 #include "OpsEventsTestListener.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
 #include "Testing/AirsideTestWorld.h"
@@ -133,7 +135,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		// into a failing test that says nothing about the behaviour it guards. It used to
 		// read 8.0 and duly failed the day x16 and x32 were added, which is a maintenance
 		// cost with no diagnostic value.
-		const TArrayView<const ESimSpeed> Ladder = UOpsRuntime::SpeedLadder();
+		const TArrayView<const ESimSpeed> Ladder = USimClock::SpeedLadder();
 		const double Fastest = USimClock::Multiplier(Ladder.Last());
 		const double Slowest = USimClock::Multiplier(Ladder[0]);
 
@@ -171,6 +173,78 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("a load is a new undo baseline"), Actor->CanUndo());
 		TestFalse(TEXT("a missing slot is refused, not a crash"), Runtime->LoadFromSlot(TEXT("AirportOpsTest_NoSuchRuntimeSlot")));
 	}
+	return true;
+}
+
+namespace
+{
+	/**
+	 * Records every call rather than answering one - so a test can assert NONE happened,
+	 * which a purse that merely returns a fixed answer cannot prove: a stale pointer that
+	 * silently keeps saying "yes" would pass a value-only assertion just as well as a purse
+	 * that was never asked.
+	 */
+	class FSpyPurse : public IBuildPurse
+	{
+	public:
+		int32 CanAffordCalls = 0;
+
+		virtual bool CanAfford(const FBuildQuote& Quote) const override
+		{
+			++const_cast<FSpyPurse*>(this)->CanAffordCalls;
+			return true;
+		}
+		virtual int32 Charge(const FBuildQuote& Quote) override { return INDEX_NONE; }
+		virtual void Reverse(int32 ChargeId) override {}
+		virtual void Credit(const FBuildQuote& Quote) override {}
+		virtual FText Describe(const FBuildQuote& Quote) const override { return FText(); }
+	};
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsRuntimeDetachClearsPurseTest,
+	"AirportOps.Present.RuntimeDetachClearsPurse",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsRuntimeDetachClearsPurseTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #193: Attach wires Facade->SetPurse(Ledger) but until this fix Detach never
+	// called SetPurse(nullptr) to match, so the facade kept a raw IBuildPurse* pointing at
+	// a purse this runtime no longer owns. A SPY rather than the real Ledger, so the
+	// assertion is "the old purse is never asked again" rather than "CanAfford happens to
+	// still return the right answer" - the second is true of a stale pointer purely by luck
+	// until the ledger it points at is gone.
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+
+	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
+	Runtime->Attach(Actor);
+
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("Attach wired a facade"), Facade)) { return false; }
+
+	// SUBSTITUTED AFTER Attach, standing in for the ledger it actually wired: the point
+	// under test is Detach's own contract with whatever purse is currently set, not which
+	// object that happens to be in production.
+	FSpyPurse Spy;
+	Facade->SetPurse(&Spy);
+
+	// Detach IS PRIVATE - Attach's own first line is its only caller, as a re-entry guard
+	// for whatever was wired before. Attach(nullptr) reaches it the same way a second real
+	// Attach would: Detach() runs against the STILL-SET Target below, and only afterwards
+	// does Target become null and the early-return fire (see Attach's own body) - so nothing
+	// past this point rewires the purse and the facade is left exactly where Detach put it.
+	Runtime->Attach(nullptr);
+
+	TestNull(TEXT("Detach clears the purse"), Facade->GetPurse());
+
+	FBuildQuote Quote;
+	Quote.BaseAmount = 100.0;
+	TestTrue(TEXT("with no purse, CanAfford treats it as free"), Facade->CanAfford(Quote));
+	TestEqual(TEXT("and never dereferences the detached purse to decide that"),
+		Spy.CanAffordCalls, 0);
 	return true;
 }
 

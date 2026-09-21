@@ -12,6 +12,12 @@
 
 class URoadProfile;
 
+/** FRoadNetworkSolver's per-arm result (Solve/JunctionSolver.h) - forward-declared rather
+ *  than included so the many TUs that only touch the road graph, not the solver, do not
+ *  gain a Solve/ include through this header. WriteSegmentEndSolve takes it by reference,
+ *  and only URoadNetwork.cpp's body needs the full definition. */
+struct FJunctionArmResult;
+
 /**
  * Repository owning the road graph. All mutation goes through this type; URoadEditFacade is
  * the one caller the build tools use, and it snapshots the graph into URoadEditHistory (a
@@ -127,7 +133,6 @@ public:
 
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
-	FRoadSegment*       GetSegmentMutable(FRoadSegmentId Segment);
 
 	/** The handle for a live slot index, for callers walking GetNodes() by index. Unset if dead. */
 	FRoadNodeId NodeIdAt(int32 Index) const;
@@ -277,7 +282,6 @@ public:
 
 	const FGuidelineNode* GetGuidelineNode(FGuidelineNodeId Node) const;
 	const FGuidelineEdge* GetGuidelineEdge(FGuidelineEdgeId Edge) const;
-	FGuidelineEdge*       GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
 
 	/**
 	 * THE graph-edge call of GuidelineGeom::Sample. RouteSearch, NodeReach, GuidelineOverlay,
@@ -329,15 +333,6 @@ public:
 	 * counter sits on.
 	 */
 	void NoteAnchorLinkFind() const { ++AnchorLinkFindCalls; }
-
-	/**
-	 * Mutable access to a guideline node.
-	 *
-	 * The counterpart to GetGuidelineEdgeMutable. Needed because HoldingPositionFor and
-	 * PriorityOverride live on the NODE, and until the build tool can author them there is
-	 * otherwise no way for anything - including a test - to write either.
-	 */
-	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
 
 	const TArray<FGuidelineNode>& GetGuidelineNodes() const { return GuidelineNodes; }
 	const TArray<FGuidelineEdge>& GetGuidelineEdges() const { return GuidelineEdges; }
@@ -533,8 +528,14 @@ public:
 	/** The handle for a live slot index, for callers walking GetEntities() by index. Unset if dead. */
 	FEntityInstanceId EntityIdAt(int32 Index) const;
 
-	/** Index of the live entity whose PoseNode is Node, or INDEX_NONE. A linear scan: the
-	 *  inspector asks once per frame for one node, and there are tens of stands. */
+	/**
+	 * Index of the live entity whose PoseNode is Node, or INDEX_NONE.
+	 *
+	 * MEMOISED against GuidelineRevision, not a linear scan any more (issue #190): "the
+	 * inspector asks once per frame for one node, and there are tens of stands" stopped being
+	 * true once FClaimPass::ClaimGoalNode started calling this for every agent every
+	 * substep - the inspector was never the busy caller. See PoseNodeIndex.
+	 */
 	int32 FindEntityIndexByPoseNode(FGuidelineNodeId Node) const;
 
 	/**
@@ -610,8 +611,87 @@ public:
 	 */
 	bool SetEntityPoseRole(FEntityInstanceId Entity, EServiceRole PoseRole);
 
+	// --- Narrow mutators replacing the raw *Mutable accessors (#191) -------------------
+	// GetSegmentMutable, GetGuidelineEdgeMutable and GetGuidelineNodeMutable used to be
+	// public, which let a caller write one field of a multi-field fact and leave the rest
+	// stale: FRoadSegment's solver-only TrimA/LeftCutA/RightCutA/bSolvedA one at a time,
+	// FGuidelineNode's Origin (three FGuidelineEndRef fields) or HoldingPosition without
+	// its HoldingPositionFor, or an FGuidelineEdge's A/B with Incident left unfixed -
+	// RelinkGuidelineEdge exists for exactly that repair, and a raw write could skip it.
+	// The three accessors are private now; every caller that used to reach through them
+	// writes one whole fact through one of these instead.
+
+	/**
+	 * Write Solve as Segment's A or B end - TrimA/B, the LeftCut/RightCut vertices and
+	 * bSolvedA/B together, the four fields FRoadNetworkSolver::SolveNodeInto used to set
+	 * one at a time through a raw FRoadSegment*. FJunctionArmResult (Solve/), not a
+	 * bespoke struct: it is already exactly what SolveNodeInto holds per arm
+	 * (CutDistance/LeftCut/RightCut), so this takes it directly rather than unpacking it
+	 * into one bundle only to repack it into another here.
+	 *
+	 * False, and nothing written, for a dead segment.
+	 */
+	bool WriteSegmentEndSolve(FRoadSegmentId Segment, bool bEndA, const FJunctionArmResult& Solve);
+
+	/**
+	 * Clear one end's bSolvedA/B after a failed solve - see FRoadSegment::bSolvedA's own
+	 * comment: TrimA/B and the cut vertices are left exactly as a previous solve wrote
+	 * them, because a mesh builder reads them ONLY when bSolved says to, and zeroing them
+	 * here would be a second writer of values SolveNodeInto did not just recompute.
+	 *
+	 * False for a dead segment.
+	 */
+	bool ClearSegmentEndSolve(FRoadSegmentId Segment, bool bEndA);
+
+	/**
+	 * Overwrite a guideline node's Origin - which segment end it was derived for, or which
+	 * end a hand-drawn edge attached to (FGuidelineEndRef's three fields together).
+	 * FRoadGuidelineBuilder is the only caller: it records this the moment it makes a
+	 * node, and a raw FGuidelineNode* let it (or anything) write Segment and bEndA but
+	 * leave GuidelineIndex from the slot's previous life.
+	 *
+	 * False for a dead node.
+	 */
+	bool SetGuidelineNodeOrigin(FGuidelineNodeId Node, const FGuidelineEndRef& Origin);
+
+	/**
+	 * Overwrite a guideline node's HoldingPosition/HoldingPositionFor pair - the two
+	 * fields FGuidelineNode::HoldingPosition's own comment says must agree ("Runway iff
+	 * HoldingPositionFor is set"). A raw FGuidelineNode* let a caller write one and not
+	 * the other; this writes both or neither.
+	 *
+	 * UNLIKE SetIntermediateHoldingPosition, this does not touch HoldingPositionMarks -
+	 * FRoadGuidelineBuilder manages marks itself (PruneHoldingPositionMarks,
+	 * GetHoldingPositionMarks) while re-deriving every node's flag from scratch each
+	 * rebuild, so a mark side-effect here would be a second writer of the same fact
+	 * during that pass.
+	 *
+	 * False for a dead node.
+	 */
+	bool SetGuidelineNodeHoldingPosition(FGuidelineNodeId Node, EHoldingPositionKind Kind, FRoadSegmentId For);
+
 private:
 	void SortIncident(FRoadNodeId Node);
+
+	/** Kept private (#191) - SplitSegment, SetNodePosition and SetRunwayFacts above still
+	 *  call this directly for fields (Control, Runway) the narrow mutators above do not
+	 *  cover; everything outside this class goes through those instead. */
+	FRoadSegment* GetSegmentMutable(FRoadSegmentId Segment);
+
+	/** Kept private (#191) - no member function writes an edge's fields directly any more
+	 *  (RelinkGuidelineEdge fixes A/B and Incident together, inline); only
+	 *  FRoadNetworkTestAccess reaches through this now, for a field no production caller
+	 *  ever writes. */
+	FGuidelineEdge* GetGuidelineEdgeMutable(FGuidelineEdgeId Edge);
+
+	/** Kept private (#191) - SetGuidelineNodeOrigin and SetGuidelineNodeHoldingPosition are
+	 *  this class's own writers of it now (SetIntermediateHoldingPosition and
+	 *  SetRunwayHoldingPositionForTest go through the latter); FRoadNetworkTestAccess reaches
+	 *  through this directly for PriorityOverride, which none of them cover (see
+	 *  FGuidelineNode::PriorityOverride's own comment). */
+	FGuidelineNode* GetGuidelineNodeMutable(FGuidelineNodeId Node);
+
+	friend struct FRoadNetworkTestAccess;
 
 	UPROPERTY() TArray<FRoadNode>    Nodes;
 	UPROPERTY() TArray<int32>        NodeFreeList;
@@ -644,6 +724,28 @@ private:
 	UPROPERTY() TArray<FEntityInstance> Entities;
 	UPROPERTY() TArray<int32>           EntityFreeList;
 
+	/**
+	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and
+	 * FRunwayChainCache use against GuidelineRevision - brought inside this class rather than
+	 * a separate cache struct because there is only ever one Entities array to be stale
+	 * against, so the "which network was this built for" check those two need does not apply.
+	 *
+	 * NOT MAINTAINED BY PlaceEntity/RemoveEntity BY HAND, which is what the issue that added
+	 * this proposed: that is a second place this index could drift from Entities, exactly the
+	 * kind of duplication FindEntityIndexByPoseNode used to be safe from by reading Entities
+	 * directly. Every writer of PoseNode - PlaceEntity's AddGuidelineNode, RemoveEntity's
+	 * RemoveGuidelineNode - already bumps GuidelineRevision, so the mismatch is free to detect
+	 * and the rebuild below is the only place this map is ever written.
+	 *
+	 * MUTABLE: FindEntityIndexByPoseNode is const, and rebuilding this is memoisation of
+	 * Entities, not a decision - the array being memoised changed a revision ago, not now.
+	 */
+	mutable TMap<FGuidelineNodeId, int32> PoseNodeIndex;
+
+	/** GuidelineRevision PoseNodeIndex was built against. MAX_uint32 so the very first call
+	 *  always rebuilds rather than matching a network that happens to start at revision 0. */
+	mutable uint32 PoseNodeIndexRevision = MAX_uint32;
+
 	/** See SampleGuidelineCallCountForTest. mutable for the same reason ContextBuildCountForTest
 	 *  is on UBuildSession: SampleGuideline is const and this counts real work it did, not a
 	 *  decision. Not a UPROPERTY - a session counter, not state. */
@@ -653,4 +755,33 @@ private:
 	 *  NoteAnchorLinkFind is called from a const Resolve and this counts real dispatch it did,
 	 *  not a decision. Not a UPROPERTY - a session counter, not state. */
 	mutable int32 AnchorLinkFindCalls = 0;
+};
+
+/**
+ * Writes RoadNetworkTest.cpp, RoadGuidelineBuilderTest.cpp and GroundTrafficTest.cpp make
+ * that no production caller makes: standing in for a player's manual edit of a derived
+ * guideline edge, and setting a node's per-node traffic priority override (spec 5.4, on
+ * FGuidelineNode::PriorityOverride) before any build tool can author it (#191).
+ *
+ * ONE friend struct rather than either three public ForTest methods on URoadNetwork itself
+ * or leaving GetGuidelineEdgeMutable/GetGuidelineNodeMutable public for everyone - see
+ * FGroundTrafficTestAccess (Model/GroundTraffic.h) for the same argument made once there:
+ * a test constructs this wrapper around the network it wants to drive, and nothing else
+ * can reach the fields below. Stateless and cheap to construct per call; it holds nothing
+ * but the reference.
+ */
+struct AIRSIDE_API FRoadNetworkTestAccess
+{
+	explicit FRoadNetworkTestAccess(URoadNetwork& InNetwork) : Network(InNetwork) {}
+
+	/** Simulate a player's manual edit of a derived edge - RoadGuidelineBuilderTest's
+	 *  "edited edge survives regeneration" case. False for a dead edge. */
+	bool MarkGuidelineEdgeEditedForTest(FGuidelineEdgeId Edge, double MaxWingspan);
+
+	/** Write PriorityOverride directly - see FGuidelineNode's own comment. False for a
+	 *  dead node. */
+	bool SetGuidelineNodePriorityOverrideForTest(FGuidelineNodeId Node, TArray<ETraversalClass> PriorityOverride);
+
+private:
+	URoadNetwork& Network;
 };

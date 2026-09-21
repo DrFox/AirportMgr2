@@ -181,6 +181,21 @@ namespace PlotYard
 		TArray<FReservedStand> Stands;
 
 		/**
+		 * True when a Stand's Centre is the centre of its footprint PLUS its apron, rather
+		 * than the footprint alone.
+		 *
+		 * ONE FLAG, TWO READERS: UPlotPresenter::RebuildFrom offsets the drawn object back by
+		 * half the apron only when this is set, and FPlotPlaceTool::BuildPreview outlines the
+		 * reserved ground at footprint-plus-apron size only when this is set. PlotYard::Reserve
+		 * (the scatter strategy) never reads ApronUu at all - grep confirms - so its stands are
+		 * centred on the bare footprint; applying either reader's offset there drew a box half
+		 * an apron outside the ground the sampler actually fenced off (issue #193). Only
+		 * UFuelYardBandsStrategy claims apron ground as part of a stand's rectangle, so only it
+		 * sets this true.
+		 */
+		bool bStandsIncludeApron = false;
+
+		/**
 		 * How many modules of one kit this plot can hold.
 		 *
 		 * DERIVED, never stored beside Stands: a second count is a second thing to keep in

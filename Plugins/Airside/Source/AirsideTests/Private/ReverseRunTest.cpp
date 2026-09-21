@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadEntity.h"
 #include "Model/ReverseRun.h"
+#include "Model/RouteFollower.h"
 #include "Model/SpeedProfile.h"
 #include "Solve/GuidelineGeom.h"
 
@@ -485,6 +486,107 @@ bool FReverseSteersRatherThanSlidingTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("but reports no steering, having no steered wheel"),
 			Van.SteerDegrees, 0.0, UE_DOUBLE_KINDA_SMALL_NUMBER);
 	}
+	return true;
+}
+
+namespace
+{
+	/**
+	 * THE ORACLE (issue #190): FRoadAgent::TryArmReverseLeg's per-tick scan before
+	 * FRouteFollower::NextReverseLegRun replaced it - every step, every call, no state
+	 * carried between calls. Kept here, independent of the production code, so a real
+	 * divergence between the cursor and a fresh scan fails this test rather than passing
+	 * because both sides share one mistake.
+	 */
+	bool OracleNextReverseLegRun(const FRoutePlan& Plan, double Travelled, int32& OutFrom, int32& OutTo)
+	{
+		for (int32 Step = 0; Step < Plan.Steps.Num(); ++Step)
+		{
+			if (!Plan.Steps[Step].bReverseLeg)
+			{
+				continue;
+			}
+			const double SpanStart = Step == 0 ? 0.0 : Plan.Steps[Step - 1].EndDistance;
+			if (SpanStart + UE_DOUBLE_KINDA_SMALL_NUMBER < Travelled)
+			{
+				continue;
+			}
+			OutFrom = Step;
+			OutTo = Step;
+			while (Plan.Steps.IsValidIndex(OutTo + 1) && Plan.Steps[OutTo + 1].bReverseLeg)
+			{
+				++OutTo;
+			}
+			return true;
+		}
+		return false;
+	}
+}
+
+/**
+ * Pins FRouteFollower::NextReverseLegRun (issue #190) against OracleNextReverseLegRun above,
+ * sweeping Travelled forward across a plan with TWO SEPARATE reverse-leg runs - a single run
+ * would not catch the cursor failing to move on to the second one once the first falls
+ * behind. Every sample must agree, not just the ones that happen to land on a run.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReverseLegCursorMatchesOracleTest,
+	"Airside.Model.ReverseLegCursorMatchesOracle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReverseLegCursorMatchesOracleTest::RunTest(const FString& Parameters)
+{
+	// TEN 100 uu STEPS. Steps 2-3 are one contiguous reverse-leg run (200-400 uu), step 7 is
+	// a second, separate one (700-800 uu) - the case a "first run only" cache would get wrong.
+	// The polyline itself is a plain straight line: Start only needs it to profile the route,
+	// and this test never calls Advance, so its shape does not matter.
+	FRoutePlan Plan;
+	Plan.Result = ERouteResult::Found;
+	Plan.Polyline = { FVector2D(0.0, 0.0), FVector2D(1000.0, 0.0) };
+	Plan.Length = 1000.0;
+	Plan.Steps.SetNum(10);
+	for (int32 Step = 0; Step < Plan.Steps.Num(); ++Step)
+	{
+		Plan.Steps[Step].EndDistance = (Step + 1) * 100.0;
+		Plan.Steps[Step].EndVertex = 1;
+	}
+	Plan.Steps[2].bReverseLeg = true;
+	Plan.Steps[3].bReverseLeg = true;
+	Plan.Steps[7].bReverseLeg = true;
+
+	FRouteFollower Follower;
+	Follower.Start(Plan, FAirframe());
+
+	bool bAllMatch = true;
+	FString Mismatch;
+
+	// FINE, OFF-GRID INCREMENTS, so the sweep crosses each run's SpanStart boundary between
+	// samples at least once, not only exactly on it - the case that most exercises the
+	// cursor's own epsilon comparison rather than a round number that might coincide with it.
+	for (double Travelled = 0.0; Travelled <= 1000.0 && bAllMatch; Travelled += 13.7)
+	{
+		// Travelled ONLY GROWS between Start/Replace calls in production (see
+		// FRouteFollower::CursorVertex's own comment) - this sweep mirrors that by
+		// construction, since it is the one condition the cursor is allowed to assume.
+		Follower.Travelled = Travelled;
+
+		int32 OracleFrom = INDEX_NONE, OracleTo = INDEX_NONE;
+		const bool bOracle = OracleNextReverseLegRun(Plan, Travelled, OracleFrom, OracleTo);
+
+		int32 CursorFrom = INDEX_NONE, CursorTo = INDEX_NONE;
+		const bool bCursor = Follower.NextReverseLegRun(CursorFrom, CursorTo);
+
+		if (bOracle != bCursor || (bOracle && (OracleFrom != CursorFrom || OracleTo != CursorTo)))
+		{
+			bAllMatch = false;
+			Mismatch = FString::Printf(
+				TEXT("at Travelled %.1f: oracle (%d,%d,%d) vs cursor (%d,%d,%d)"),
+				Travelled, bOracle, OracleFrom, OracleTo, bCursor, CursorFrom, CursorTo);
+		}
+	}
+
+	TestTrue(FString::Printf(TEXT("the cursor matches a fresh scan at every step (%s)"), *Mismatch),
+		bAllMatch);
 	return true;
 }
 

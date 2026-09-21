@@ -112,7 +112,10 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 	// FClaimPass::Run clears WaitingOn the moment an agent stops taxiing - so a parked or
 	// retired agent cannot contribute an edge, and a cycle through one is not representable
 	// rather than merely unlikely.
-	TMap<int32, int32> Waiting;
+	//
+	// MEMBER, NOT A LOCAL (issue #190) - see the header. Reset here, not left with whatever
+	// the last Resolve() call found.
+	Waiting.Reset();
 	for (const FRoadAgent& Agent : Agents)
 	{
 		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
@@ -129,7 +132,9 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 	// agent already walked would follow the identical chain and find the identical cycle:
 	// skipping it is what makes this pass linear rather than quadratic, and what stops one
 	// cycle being handled once per member.
-	TSet<int32> Visited;
+	//
+	// MEMBER, NOT A LOCAL (issue #190) - see the header.
+	Visited.Reset();
 
 	for (const TPair<int32, int32>& Start : Waiting)
 	{
@@ -144,8 +149,11 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		// big a jam may be. Position is the path membership test and the cycle's start index
 		// in one, because the cycle is the path FROM the revisited agent onward, not all of it
 		// (an agent can wait on a jam it is not part of).
-		TArray<int32> Path;
-		TMap<int32, int32> Position;
+		//
+		// MEMBERS, NOT LOCALS (issue #190) - see the header. Reset per waiter walked, not
+		// per Resolve() call: a cycle's path means nothing outside the walk that built it.
+		Path.Reset();
+		Position.Reset();
 		int32 At = Start.Key;
 		int32 CycleAt = INDEX_NONE;
 		while (true)

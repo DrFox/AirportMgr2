@@ -90,7 +90,9 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 	Agent.ClearArbitration();
 	Agent.LastOverlaps.Reset();
 
-	TArray<FTrafficResource> Surfaces;
+	// MEMBER, NOT A LOCAL (issue #190) - see the header. Reset here, not left with whatever
+	// the previous non-Taxiing agent this pass built.
+	Surfaces.Reset();
 	Surfaces.Reserve(Agent.RunwayHeld.Num() + 1);
 	for (const FRoadSegmentId Segment : Agent.RunwayHeld)
 	{
@@ -292,13 +294,23 @@ FClaimPass::FClaimBody FClaimPass::SampleBody(const FRoutePlan& Plan, const FCla
 	// body's, not the graph's.
 	//
 	// All three or none: PointAtDistance fails only for a polyline too short to have a
-	// direction, which is a property of the array and not of the distance asked for.
+	// direction, which is a property of the array and not of the distance asked for - so
+	// re-ordering which of the three is tried first (below) cannot change bValid.
+	//
+	// WALKED TAIL, CENTRE, NOSE - ASCENDING - rather than the order the fields are named,
+	// so the hint (issue #190) can carry forward through all three instead of three
+	// independent scans of Plan.Polyline from vertex 0 for every agent every substep. F is
+	// a footprint and never negative, so Tail <= Centre <= Nose always; the hint's own
+	// Distance<Walked guard would catch it if that ever stopped holding, at the cost of one
+	// full scan rather than a wrong answer.
 	FClaimBody Body;
 	double Bearing = 0.0;
+	int32 HintVertex = 1;
+	double HintWalked = 0.0;
 	Body.bValid =
-		GuidelineGeom::PointAtDistance(Plan.Polyline, T + F * 0.5, Body.Nose, Bearing)
-		&& GuidelineGeom::PointAtDistance(Plan.Polyline, T, Body.Centre, Bearing)
-		&& GuidelineGeom::PointAtDistance(Plan.Polyline, T - F * 0.5, Body.Tail, Bearing);
+		GuidelineGeom::PointAtDistance(Plan.Polyline, T - F * 0.5, Body.Tail, Bearing, HintVertex, HintWalked)
+		&& GuidelineGeom::PointAtDistance(Plan.Polyline, T, Body.Centre, Bearing, HintVertex, HintWalked)
+		&& GuidelineGeom::PointAtDistance(Plan.Polyline, T + F * 0.5, Body.Nose, Bearing, HintVertex, HintWalked);
 	return Body;
 }
 
@@ -457,7 +469,7 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 }
 
 void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Network,
-	const FClaimWindow& Window, TArray<FWantedClaim>& Pending) const
+	const FClaimWindow& Window, FPendingClaims& Pending) const
 {
 	const FRoutePlan& Plan = Agent.PlanInProgress();
 	const double T = Window.T;
@@ -756,7 +768,7 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 }
 
 void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
-	const TArray<FWantedClaim>& Pending)
+	const FPendingClaims& Pending)
 {
 	// WHAT WAS ACTUALLY CLAIMED, not what was wanted: the loop below stops reserving at the
 	// first refusal, so a resource further along the route was never asked for this pass and
@@ -1038,7 +1050,13 @@ void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 	// 1 AND 2. WHAT THE AGENT WANTS, IN ROUTE ORDER: the node the current step left, then
 	// every step the window touches, with its edge interval, its end node and any runway
 	// surface the two imply. Nothing is asked of the table yet.
-	TArray<FWantedClaim> Pending;
+	//
+	// STILL A LOCAL, NOW ON THE INLINE BUFFER (issue #190) - see FPendingClaims's own
+	// comment for why this stays a local rather than joining Wanted/OverlapsThisPass as a
+	// member: FWantedClaim's forward declaration above blocks a member of this type, but not
+	// a reference parameter of it, so TInlineAllocator<16> gets the usual handful of entries
+	// off the heap without one.
+	FPendingClaims Pending;
 	BuildPending(Agent, Network, Window, Pending);
 
 	// 3. ASK THE TABLE, in that order. The FIRST refusal decides how far the agent may go.

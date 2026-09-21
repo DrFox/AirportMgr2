@@ -502,7 +502,17 @@ void FRoadDrawTool::OnDeactivate(const FToolContext& Context)
 {
 	// Abandon the part-drawn chain rather than leaving it to reappear when this tool is
 	// picked again - a click landing on a road started minutes ago and forgotten.
+	//
+	// OnCancel ONLY DOES THIS WHEN Context.Target IS SET (top-level FRoadDrawTool::OnCancel
+	// returns early otherwise), but BuildSession::SelectTool's own doc says OnDeactivate must
+	// tolerate a default-constructed FToolContext - the session holds no IRoadEditTarget of
+	// its own. Every other draw tool resets its part-drawn state unconditionally on
+	// deactivate (FOutlineDrawTool, FPlotPlaceTool, FRunwayTool, FStandPlaceTool); this one
+	// must too, or a chain started with a target survives a later deactivate that has none,
+	// and reappears - unfinished and un-cancellable by anything outside a click - next time
+	// this tool is picked.
 	OnCancel(Context);
+	State = MakeUnique<FRoadIdleState>(Kind, WidthIndex);
 
 	if (Context.Target != nullptr)
 	{

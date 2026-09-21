@@ -451,7 +451,10 @@ void UBuildBarWidget::RefreshClock()
 	FString Text;
 	if (Runtime == nullptr)
 	{
-		Text = TEXT("no clock");
+		// LOCTEXT, not TEXT(): a fallback readout is still a word the player reads (issue #192)
+		// - the composed clock sentence below stays TEXT()/Printf because it is numbers and
+		// symbols (day/hour/minute/speed), not language, once this fallback no longer applies.
+		Text = NSLOCTEXT("AirportMgr", "BarNoClock", "no clock").ToString();
 	}
 	else
 	{
@@ -492,7 +495,8 @@ void UBuildBarWidget::RefreshBalance()
 		{
 			// SAME SHAPE AS RefreshClock's "no clock": an empty readout would look like a
 			// balance of nothing, which is a very different thing from no game running.
-			BalanceText->SetText(FText::FromString(TEXT("no ledger")));
+			// LOCTEXT, not TEXT() (issue #192).
+			BalanceText->SetText(NSLOCTEXT("AirportMgr", "BarNoLedger", "no ledger"));
 			++SetTextCalls;
 			bLastBalanceWasFallback = true;
 		}

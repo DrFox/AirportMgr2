@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -74,8 +75,8 @@ namespace
 		Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, -9000.0), UE_DOUBLE_PI * 0.5 + UE_DOUBLE_PI);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
-		FAnchorLink::Build(*Net);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		return Net;
 	}
 

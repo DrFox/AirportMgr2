@@ -2,8 +2,10 @@
 #include "AirsideTestFixtures.h"
 #include "Materials/Material.h"
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
 #include "Present/RoadNetworkActor.h"
 #include "Present/TyreSmoke.h"
+#include "UObject/UObjectGlobals.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -71,6 +73,64 @@ bool FTyreSmokePoolTest::RunTest(const FString& Parameters)
 	Silent->Puff(FVector::ZeroVector, 2842.0);
 	Silent->Advance(0.1);
 	TestEqual(TEXT("with no material nothing is drawn"), Silent->LivePuffCountForTest(), 0);
+	return true;
+}
+
+/**
+ * ONE LIST NOW (issue #192 item 2). FPuff used to be a plain struct beside two
+ * index-parallel UPROPERTY arrays (PuffMeshes/PuffInstances) that existed only to root what
+ * the struct's own TObjectPtrs could not - DynamicMeshSink.h calls that exact shape "the
+ * defect this codebase has already paid for once". FTyreSmokePuff is a USTRUCT with
+ * UPROPERTY pointers now, so Puffs alone should root them.
+ *
+ * PROVEN BY A FORCED COLLECTION after every puff has spawned and expired: if Mesh/Instance
+ * were reachable only through the two deleted arrays, this is exactly where a puff's mesh
+ * would come back null, and the pool would no longer be the fixed size it promises.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTyreSmokePoolStaysRootedTest,
+	"Airside.Present.TyreSmokePoolStaysRooted",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTyreSmokePoolStaysRootedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to register components in"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
+
+	UTyreSmoke* Smoke = NewObject<UTyreSmoke>(Actor);
+
+	// ROOTED DIRECTLY, not via Actor->Smoke: this test's whole point is whether Puffs ALONE
+	// - now a reflected TArray<FTyreSmokePuff> - is what keeps the pool's components alive
+	// once something keeps Smoke itself alive. Adding a second path through the actor would
+	// leave the question "did Puffs do this, or did some other reference" unanswered.
+	Smoke->AddToRoot();
+	ON_SCOPE_EXIT { Smoke->RemoveFromRoot(); };
+
+	Smoke->PoolSize = 4;
+	Smoke->PuffSeconds = 1.0;
+	Smoke->Initialise(Actor, UMaterial::GetDefaultMaterial(MD_Surface));
+
+	// SPAWN PAST THE POOL, THEN LET EVERY PUFF EXPIRE - the pool has cycled through every
+	// slot at least once by the time this collection runs.
+	for (int32 Index = 0; Index < 9; ++Index)
+	{
+		Smoke->Puff(FVector(Index * 100.0, 0.0, 0.0), 2842.0);
+	}
+	Smoke->Advance(2.0);
+	if (!TestEqual(TEXT("everything has expired"), Smoke->LivePuffCountForTest(), 0))
+	{
+		return false;
+	}
+
+	CollectGarbage(RF_NoFlags);
+
+	TestEqual(TEXT("the pool is still exactly PoolSize long"),
+		Smoke->PoolCountForTest(), Smoke->PoolSize);
+	TestTrue(TEXT("every pooled puff still owns its mesh component after a collection"),
+		Smoke->EveryPuffHasAMeshForTest());
+
 	return true;
 }
 

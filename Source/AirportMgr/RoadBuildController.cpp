@@ -634,10 +634,26 @@ void ARoadBuildController::OnActionKey(FKey Key)
 	// The chord is already matched by the binding; Ctrl state is re-read only to pick between
 	// two actions on the same key that differ by it (none today, but the table allows it).
 	const bool bCtrl = IsInputKeyDown(EKeys::LeftControl) || IsInputKeyDown(EKeys::RightControl);
+	RunActionForKey(Key, bCtrl);
+}
+
+void ARoadBuildController::RunActionForKey(FKey Key, bool bCtrl)
+{
 	// TryRun, not Execute: a key used to fire a disabled action (undo with nothing to undo,
 	// land with no runway) because this scan never consulted IsEnabled - the bar and the
 	// inspector always did. Behaviour change: disabled actions now stop firing from keys too.
-	if (const FBuildAction* Action = FindAction(Key, bCtrl))
+	const FBuildAction* Action = FindAction(Key, bCtrl);
+	// FALL BACK TO THE PLAIN ACTION, issue #192: FindAction required an EXACT bRequiresCtrl
+	// match, so a plain tool key (e.g. '1') registered with bRequiresCtrl=false matched nothing
+	// while the player happened to be holding Ctrl for an unrelated reason (remove mode's own
+	// modifier) - the key that goes nowhere, CLAUDE.md's own name for this class of bug. Only
+	// tried when Ctrl WAS held and the exact match failed: an action that explicitly REQUIRES
+	// Ctrl must never fire without it, so this can never invoke one by accident.
+	if (Action == nullptr && bCtrl)
+	{
+		Action = FindAction(Key, false);
+	}
+	if (Action != nullptr)
 	{
 		Action->TryRun(*this, TEXT("Key"));
 	}

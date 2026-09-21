@@ -103,6 +103,18 @@ void ULedger::RollUp(double Now)
 		Count, Folded, CachedBalance);
 }
 
+void ULedger::PostDailyUpkeep(double Base, double Now)
+{
+	if (Base > 0.0)
+	{
+		Post(Now, ELedgerCategory::Upkeep, -Base, NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
+	}
+
+	// UNCONDITIONAL - see this method's own header comment for why a Base of zero used to
+	// (wrongly) skip this too.
+	RollUp(Now);
+}
+
 double ULedger::FoldBalanceForTest() const
 {
 	double Sum = StartingBalance;

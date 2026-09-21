@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -13,7 +14,7 @@
 namespace StandLayoutFixture
 {
 	/** The letter the shipping stand is built for. One place, so a test cannot name another. */
-	static const FString Letter(TEXT("C"));
+	static constexpr EIcaoCode Letter = EIcaoCode::C;
 
 	/** Every leg of every bay, named, so a failure says which one. */
 	struct FNamedLeg
@@ -72,7 +73,8 @@ bool FStandLayoutFitsItsLettersFloorTest::RunTest(const FString& Parameters)
 	// asked this, and a layout that quietly grew past its band would answer D here while still
 	// passing the two bounds above against a letter nobody re-derived.
 	TestEqual(TEXT("the layout's own extent still reads as a Code C stand"),
-		IcaoCode::LetterForStandSize(Stand->RequiredExtent.X, Stand->RequiredExtent.Y), Letter);
+		IcaoCode::LetterForStandSize(Stand->RequiredExtent.X, Stand->RequiredExtent.Y),
+		FString(IcaoCode::ToLetter(Letter)));
 
 	// A BAY PER SERVICE A GROUND VEHICLE DRIVES TO, which is narrower than "not the aeroplane"
 	// in two ways that both matter. The TUG is a ground vehicle and still gets none: pushback
@@ -222,7 +224,7 @@ bool FNoTemplateLegPassesUnderTheWingTest::RunTest(const FString& Parameters)
 					TEXT("%s passes under the wing between (%.0f, %.0f) and (%.0f, %.0f); "
 					     "code %s's keep-out runs x %.0f..%.0f"),
 					*Named.What, Sampled[At].X, Sampled[At].Y,
-					Sampled[At + 1].X, Sampled[At + 1].Y, *Letter,
+					Sampled[At + 1].X, Sampled[At + 1].Y, IcaoCode::ToLetter(Letter),
 					IcaoCode::WingAftForLetter(Letter), IcaoCode::WingFwdForLetter(Letter)));
 				break;
 			}
@@ -304,23 +306,40 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 	// THE BUILDERS, NOT THE ASSETS. A type authored only as a DA_Aircraft_* uasset - Plane2 is
 	// one - is invisible here, because a test may not load content. That is a real gap and it
 	// is named rather than papered over: what this catches is a BUILDER drifting past its row.
-	struct FCase { const TCHAR* What; void (*Build)(UAircraftType*); };
+	//
+	// A FACTORY, NOT A BUILDER, so the Piper case can be TestAirframes::PiperType() itself
+	// (issue #194: every other test site that needs a built Piper now goes through it,
+	// rather than repeating NewObject<UAircraftType>() plus BuildPiperMeridian by hand).
+	// A320 and 737 keep their own NewObject call inside a matching lambda rather than
+	// growing a fixture of their own - nothing else in the module needs "a bare A320".
+	struct FCase { const TCHAR* What; UAircraftType* (*Make)(); };
 	const FCase Cases[] = {
-		{ TEXT("A320"), &UAircraftType::BuildA320 },
-		{ TEXT("737-800"), &UAircraftType::Build737 },
-		{ TEXT("Piper Meridian"), &UAircraftType::BuildPiperMeridian },
+		{ TEXT("A320"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::BuildA320(T); return T; } },
+		{ TEXT("737-800"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::Build737(T); return T; } },
+		{ TEXT("Piper Meridian"), &TestAirframes::PiperType },
 	};
 
 	for (const FCase& Case : Cases)
 	{
-		UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
-		Case.Build(Type);
+		UAircraftType* Type = Case.Make();
 
-		// Code is an FName on UAircraftType; IcaoCode speaks FString, as every other caller
-		// of it does.
-		const FString Letter = Type->Code.ToString();
-		const double TailAft = IcaoCode::MaxTailAftForLetter(Letter);
-		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Letter);
+		// PARSED, NOT TRUSTED. UAircraftType::Code is an EditAnywhere FName - the same
+		// authored field AnchorLink::RadiusForCode reads off a placed stand's DesignAircraft -
+		// so this is exactly the site IcaoCode::Parse exists for: a builder that ever
+		// mistyped its own Code now fails THIS assertion by name, instead of every figure
+		// below silently being measured against Code C.
+		const TOptional<EIcaoCode> ParsedCode = IcaoCode::Parse(Type->Code.ToString());
+		if (!TestTrue(
+			*FString::Printf(TEXT("%s's Code '%s' is a recognised ICAO letter"),
+				Case.What, *Type->Code.ToString()),
+			ParsedCode.IsSet()))
+		{
+			continue;
+		}
+		const EIcaoCode Code = *ParsedCode;
+		const TCHAR* Letter = IcaoCode::ToLetter(Code);
+		const double TailAft = IcaoCode::MaxTailAftForLetter(Code);
+		const double NoseFwd = IcaoCode::MaxNoseFwdForLetter(Code);
 
 		// CONVERTED TO NOSE-GEAR COORDINATES FIRST, because the row is stated about the stop
 		// mark and a footprint is stated about whatever origin its type declares. Zero means
@@ -340,15 +359,15 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 
 		TestTrue(
 			*FString::Printf(TEXT("%s's tail at %.0f (raw %.0f) is within code %s's %.0f"),
-				Case.What, Tail, Type->Footprint.TailX, *Letter, TailAft),
+				Case.What, Tail, Type->Footprint.TailX, Letter, TailAft),
 			Tail >= -TailAft);
 		TestTrue(
 			*FString::Printf(TEXT("%s's nose at %.0f (raw %.0f) is within code %s's %.0f"),
-				Case.What, Nose, Type->Footprint.NoseX, *Letter, NoseFwd),
+				Case.What, Nose, Type->Footprint.NoseX, Letter, NoseFwd),
 			Nose <= NoseFwd);
 		TestTrue(
 			*FString::Printf(TEXT("%s's span of %.0f is within code %s"),
-				Case.What, Type->Footprint.Wingspan, *Letter),
+				Case.What, Type->Footprint.Wingspan, Letter),
 			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan) == Letter);
 
 		// AND ITS WING IS INSIDE ITS LETTER'S KEEP-OUT. The keep-out is authored as the union
@@ -358,10 +377,10 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 		const double WingLine = Type->Footprint.WingX - ToStopMark;
 		TestTrue(
 			*FString::Printf(TEXT("%s's wing line at %.0f is inside code %s's %.0f .. %.0f"),
-				Case.What, WingLine, *Letter,
-				IcaoCode::WingAftForLetter(Letter), IcaoCode::WingFwdForLetter(Letter)),
-			WingLine >= IcaoCode::WingAftForLetter(Letter)
-				&& WingLine <= IcaoCode::WingFwdForLetter(Letter));
+				Case.What, WingLine, Letter,
+				IcaoCode::WingAftForLetter(Code), IcaoCode::WingFwdForLetter(Code)),
+			WingLine >= IcaoCode::WingAftForLetter(Code)
+				&& WingLine <= IcaoCode::WingFwdForLetter(Code));
 	}
 
 	return true;

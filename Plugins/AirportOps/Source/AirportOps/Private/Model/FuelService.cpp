@@ -466,9 +466,13 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 		case EFuelDemandState::Unserviceable:
 		{
 			// THE PLAYER MAY HAVE DRAWN THE ROAD. Re-offered only when the graph has
-			// actually changed, which the revision reports without walking it - otherwise a
-			// demand nothing can serve is retried thirty times a second, logging as it goes.
-			if (Revision != LastRefusedRevision)
+			// actually changed SINCE THIS DEMAND'S OWN REFUSAL, which its own
+			// RefusedAtRevision reports without walking the graph - otherwise a demand
+			// nothing can serve is retried thirty times a second, logging as it goes. PER
+			// DEMAND (issue #193), not one service-level fact: a shared field lets a
+			// DIFFERENT demand refusing later in this same pass overwrite the value this
+			// one's own history needed compared against.
+			if (Revision != Demand.RefusedAtRevision)
 			{
 				Demand.State = EFuelDemandState::Needed;
 				Demand.Why = EFuelRefusal::None;
@@ -495,7 +499,7 @@ void UFuelService::Tick(UGroundTraffic& Traffic, const URoadNetwork& Network,
 
 				Demand.State = EFuelDemandState::Unserviceable;
 				Demand.Why = Choice.Why;
-				LastRefusedRevision = Revision;
+				Demand.RefusedAtRevision = Revision;
 
 				// THE COUNTS THAT DECIDED IT, in the line itself. A bare reason sent the player
 				// to look at the wrong end of the airport once already (PIE 2026-09-07); these

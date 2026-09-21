@@ -316,8 +316,9 @@ UButton* UOfferInboxWidget::MakeAnswerButton(const UUIStyle& Style, const TCHAR*
 	ButtonStyle.SetHovered(Rounded);
 	ButtonStyle.SetPressed(Rounded);
 	ButtonStyle.SetDisabled(Rounded);
-	ButtonStyle.SetNormalPadding(FMargin(12.0f, 5.0f));
-	ButtonStyle.SetPressedPadding(FMargin(12.0f, 5.0f));
+	// UUIStyle::ButtonPadding, not a literal here: see its own comment (issue #192).
+	ButtonStyle.SetNormalPadding(Style.ButtonPadding);
+	ButtonStyle.SetPressedPadding(Style.ButtonPadding);
 	Button->SetStyle(ButtonStyle);
 	Button->SetBackgroundColor(Fill);
 

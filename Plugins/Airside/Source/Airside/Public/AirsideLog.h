@@ -24,3 +24,16 @@
 DECLARE_LOG_CATEGORY_EXTERN(LogAirside, Log, All);
 DECLARE_LOG_CATEGORY_EXTERN(LogAirsideTraffic, Log, All);
 DECLARE_LOG_CATEGORY_EXTERN(LogRoadMesh, Log, All);
+
+/**
+ * ISSUE #216: DECLARE_LOG_CATEGORY_EXTERN's macro takes no module-API specifier, so
+ * LogRoadMesh's extern data symbol has no dllexport/dllimport and cannot link across a DLL
+ * boundary - AirsideTests (a separate module) reading LogRoadMesh.GetVerbosity() directly
+ * failed the link with an unresolved external, even though every .cpp INSIDE this module
+ * reads the category freely. A test chasing an order-dependent log failure needs to know
+ * whether an earlier test left the category's runtime verbosity somewhere other than its
+ * built-in default (a leaked FLogCategoryBase::SetVerbosity would silently drop the very
+ * Log-level lines RoadRebuildLogQuietTest.cpp counts) - this one exported function is the
+ * accessor, same shape as the RebuildCountForTest/GetLayerComponentForTest family.
+ */
+AIRSIDE_API ELogVerbosity::Type GetLogRoadMeshVerbosityForTest();

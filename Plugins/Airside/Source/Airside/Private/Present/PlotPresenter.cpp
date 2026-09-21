@@ -40,6 +40,9 @@ namespace
 		case EDepotModule::Shed: return ShedHeightUu;
 		case EDepotModule::Tank: return TankHeightUu;
 		case EDepotModule::Pump: return PumpHeightUu;
+		// THE SENTINEL, NOT A MODULE - named explicitly so a genuinely new module still falls
+		// through with no case here and keeps warning.
+		case EDepotModule::Count: break;
 		}
 		return ShedHeightUu;
 	}
@@ -265,12 +268,17 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 			const FVector2D Across = RoadGeom::PerpCCW(Forward);
 			const double FullWidth = One.WidthUu * Stand.RunLength;
 
-			// FLUSH TO THE BACK OF WHAT IT CLAIMED. A stand's centre is the centre of its
-			// footprint PLUS its apron, and the apron reaches towards the gate - so the
-			// object sits half an apron further back, leaving that ground clear in front of
-			// its door where a truck can use it. Draw at the stand's own centre and the
-			// building sits in the middle of its own apron.
-			const FVector2D ToBack = Forward * (Specs[Stand.KitIndex].ApronUu.X * 0.5);
+			// FLUSH TO THE BACK OF WHAT IT CLAIMED - ONLY WHEN THE STAND CLAIMED AN APRON AT
+			// ALL. A stand's centre is the centre of its footprint PLUS its apron only under
+			// UFuelYardBandsStrategy (Reservation.bStandsIncludeApron), and the apron reaches
+			// towards the gate - so the object sits half an apron further back there, leaving
+			// that ground clear in front of its door. PlotYard::Reserve (Scatter) never reads
+			// ApronUu when it samples a pose, so its Stand.Centre is already the footprint's
+			// own centre - applying this offset there drew the box half an apron outside the
+			// ground the sampler actually fenced off (issue #193).
+			const FVector2D ToBack = Reservation.bStandsIncludeApron
+				? Forward * (Specs[Stand.KitIndex].ApronUu.X * 0.5)
+				: FVector2D::ZeroVector;
 
 			if (Lit > 0)
 			{
@@ -295,6 +303,17 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 					/*bWorldSpace=*/true);
 			}
 			Ghosts += Dark;
+		}
+
+		// AN OWNED MODULE THAT RESERVED NO STAND IS A DROP. Every stand of a kit already took
+		// what it could hold (the Owned[Kit] -= Lit above), so whatever is left over is a
+		// module the player bought that the reservation never offered any ground - the case
+		// GetDroppedCount's own comment calls a bug rather than a refusal. This is the ++Dropped
+		// the run-length rewrite (61f92fc) deleted along with the old one-module-per-stand loop;
+		// see Airside.Present.PlotPresenterCountsDrops.
+		for (const int32 Leftover : Owned)
+		{
+			Dropped += Leftover;
 		}
 
 		// --- The fence -----------------------------------------------------------------

@@ -3,6 +3,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
+#include "AirsideTestFixtures.h"
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
 #include "Present/RoadAgentActor.h"
@@ -241,13 +242,13 @@ bool FMeridianPitchesAboutItsMainsTest::RunTest(const FString& Parameters)
 	// Meridian is corrected like every other measured airframe.
 	//
 	// THIS TEST GOES RED IF ANYONE PUTS THE DEVIATION BACK, which is the point: reverting
-	// BuildPiperMeridian to a main-gear origin would leave every assertion in
+	// BuildPiperMeridian - which TestAirframes::PiperType() is a one-line wrapper for - to a
+	// main-gear origin would leave every assertion in
 	// Airside.Model.AirframeAxles passing on a self-consistent type, and change nothing
 	// visible except that a Meridian's tail sinks through the tarmac during the flare - a
 	// defect that was reported from play once already, for plane2, and described as "the rear
 	// wheels push into the ground on landing".
-	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
-	UAircraftType::BuildPiperMeridian(Type);
+	UAircraftType* Type = TestAirframes::PiperType();
 	const FAirframe Meridian = Type->Airframe();
 
 	// 1. THE TYPE HAS A PIVOT TO BE CORRECTED ABOUT. Asserted before anything is drawn,

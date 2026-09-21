@@ -41,13 +41,14 @@ class URoadEditFacade;
  * is game-framework glue. The plugin must not depend on the game.
  *
  * SPLIT by issue #94: this class carried seven concerns as roughly 40 UPROPERTYs and a .cpp
- * to match - the view rig, the watch rig, four widget classes, a testing override and
- * placement. The camera (both rigs, CreateBuildCamera, UpdateView, ZoomBy, ToggleWatchAgent's
- * mechanics) is now UBuildCameraComponent, a subobject; the four HUD widgets are
- * UBuildHudLayer, a subobject. What remains here is INPUT (binding keys, reading them, the
- * click/drag/release gesture), SESSION AND TARGET (which tool is active, which actor is
- * being built into), and forwarding - every public method BuildActions() or Blueprint could
- * already call keeps its name, whether the work happens here or in a subobject now.
+ * to match - the view rig, the watch rig, four widget classes (a fifth, the ledger panel,
+ * joined later), a testing override and placement. The camera (both rigs, CreateBuildCamera,
+ * UpdateView, ZoomBy, ToggleWatchAgent's mechanics) is now UBuildCameraComponent, a subobject;
+ * the five HUD widgets are UBuildHudLayer, a subobject. What remains here is INPUT (binding
+ * keys, reading them, the click/drag/release gesture), SESSION AND TARGET (which tool is
+ * active, which actor is being built into), and forwarding - every public method
+ * BuildActions() or Blueprint could already call keeps its name, whether the work happens
+ * here or in a subobject now.
  */
 
 UCLASS(Config = Game)
@@ -259,6 +260,12 @@ public:
 	void SelectTool(int32 Index);
 	int32 GetActiveToolIndex() const;
 
+	/** Drives RunActionForKey with a SYNTHETIC Ctrl flag, same precedent as PlayerTickForTest:
+	 *  a headless test has no viewport to hold a real key down, so OnActionKey's own
+	 *  IsInputKeyDown read is bypassed rather than faked. See RunActionForKey's own comment
+	 *  for the fallback this exists to prove (issue #192). */
+	void OnActionKeyForTest(FKey Key, bool bCtrl) { RunActionForKey(Key, bCtrl); }
+
 	/**
 	 * Light Mode, or go back to Build if it was already lit. Forwards to the session, which
 	 * owns the one mode so PIE and the editor mode cannot disagree about it - and so Remove,
@@ -455,6 +462,19 @@ private:
 	 */
 	void OnActionKey(FKey Key);
 
+	/**
+	 * The lookup and TryRun OnActionKey wraps around a real IsInputKeyDown read - split out so
+	 * OnActionKeyForTest can drive it with a SYNTHETIC Ctrl flag instead of a real key-down
+	 * state a headless test has no viewport to produce (issue #192).
+	 *
+	 * FALLS BACK to the plain (bRequiresCtrl=false) action when the exact match misses and Ctrl
+	 * WAS held: FindAction used to require bRequiresCtrl to match exactly, so a plain tool key
+	 * (e.g. '1') matched nothing while Ctrl was held for an unrelated reason (remove mode's own
+	 * modifier) - the key that goes nowhere, CLAUDE.md's own name for this class of bug. Never
+	 * tried the other way: an action that REQUIRES Ctrl must never fire without it.
+	 */
+	void RunActionForKey(FKey Key, bool bCtrl);
+
 	/** Chord bindings carry no key, so Ctrl actions share this and ask which key was just pressed. */
 	void OnCtrlActionKey();
 
@@ -510,7 +530,7 @@ private:
 	TObjectPtr<UBuildCameraComponent> BuildCameraComp;
 
 	/**
-	 * The four HUD widgets and their configured classes - see UBuildHudLayer's own comment.
+	 * The five HUD widgets and their configured classes - see UBuildHudLayer's own comment.
 	 * A UObject, not a component: it owns no transform and ticks nothing, so it costs
 	 * nothing more than a UPROPERTY pointer to hold it. CreateDefaultSubobject rather than
 	 * NewObject - the same call as BuildCameraComp's above works for any UObject subobject,

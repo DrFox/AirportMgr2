@@ -143,6 +143,21 @@ public:
 	 */
 	virtual void PostInitProperties() override;
 
+#if WITH_EDITOR
+	/**
+	 * Marks the resolved-content cache dirty - issue #190. This is the ONE editor signal
+	 * that any of MaterialSet, SurfaceMaterial, ApronMaterial, RubberMaterial, GhostMaterial,
+	 * Content (via UAirsideSettings' own project settings, not this) or Profile might now
+	 * resolve differently, so it is also the only thing allowed to invalidate
+	 * ResolveSurfaceMaterial and its siblings' cached answers. See
+	 * bResolvedContentDirty's own comment for why every property change - not just the ones
+	 * this cache reads - is treated the same: telling them apart buys nothing a rebuild
+	 * cannot already tell is unnecessary work, and a missed one would serve stale materials
+	 * silently, which is the failure this exists to remove.
+	 */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+#endif
+
 	/**
 	 * Hand the presenter this actor's six surface components, indexed by ESurfaceLayer.
 	 *
@@ -514,11 +529,16 @@ public:
 	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/**
-	 * What the fuel depot tool places. Unset falls back to the content set's DefaultFuelDepot.
+	 * What the fuel depot tool places. Unset falls back to the content set's Placeables map
+	 * (UAirsideSettings::ResolvePlaceable) - see UAirsideContent::Placeables, which issue #192
+	 * item 1 gave the same map treatment this comment already argues against giving THIS pair.
 	 *
 	 * BESIDE StandDefinition rather than in a map keyed by EPlaceableEntity: there are two
 	 * kinds, and two asset pickers in the Details panel are easier to author than a map, for
-	 * no loss until a third arrives.
+	 * no loss until a third arrives. That argument was about the PER-ACTOR override, which
+	 * still has only two authors ever wanting to set by hand; the CONTENT set's default is a
+	 * different question, answered once for every actor, which is exactly where a third kind
+	 * would otherwise need a third named property and a ternary to match it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	TObjectPtr<UEntityDefinition> FuelDepotDefinition;
@@ -658,7 +678,7 @@ public:
 	double FallbackWidth = URoadProfile::StandardTaxiwayWidth;
 
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
-	double FallbackFilletRadius = 1500.0;
+	double FallbackFilletRadius = URoadProfile::StandardTaxiwayFilletRadius;
 
 	UPROPERTY(VisibleAnywhere, Category = "Airside")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;
@@ -869,6 +889,46 @@ public:
 private:
 	/** Profile made on demand when none is authored. Transient so it is never saved. */
 	UPROPERTY(Transient) TObjectPtr<URoadProfile> RuntimeProfile;
+
+	/**
+	 * MakeSurfaceSettings' own cache of the resolvers that actually pay for a
+	 * LoadSynchronous - SurfaceMaterial, ApronMaterial, RubberMaterial, GhostMaterial and
+	 * the three runway surfaces (issue #190). ResolveMaterialSet and ResolveProfile are not
+	 * cached here: neither ever calls LoadSynchronous (see each one's own body), so there is
+	 * nothing this cache would save them.
+	 *
+	 * STARTS DIRTY, not with a null-means-unresolved convention: a resolved-and-null answer
+	 * (no content set configured) is cached exactly like any other, which is what "a
+	 * null-material fallback must still resolve on the next rebuild" is about - a null
+	 * CACHED VALUE must still read as "already answered", never as "go and ask again". Only
+	 * PostEditChangeProperty is allowed to set this back to true; MakeSurfaceSettings never
+	 * clears its own dirty flag from the outside.
+	 *
+	 * UPROPERTY(Transient), NOT a bare bool, and that is load-bearing rather than
+	 * decorative - see PostInitProperties' own comment on why a Transient plain pointer
+	 * comes back as the CLASS DEFAULT OBJECT's value after a PIE duplication. The cache
+	 * pointers below are Transient for the same reason and so reset to the CDO's (null) on
+	 * every duplication; if this flag were a bare bool it would keep the ORIGINAL actor's
+	 * "clean" value across that same copy, and the duplicate would serve null materials
+	 * forever believing they were already resolved. Reflected the same way, it resets to
+	 * the CDO's own default - true - in step with them.
+	 */
+	UPROPERTY(Transient) bool bResolvedContentDirty = true;
+
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedSurfaceMaterialCache;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedApronMaterialCache;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedRubberMaterialCache;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ResolvedGhostMaterialCache;
+
+	/** Indexed by RunwayMaterialSlot(Surface), exactly like FSurfaceSettings::RunwayMaterials -
+	 *  a TArray rather than that struct's fixed C array because UPROPERTY reflection (what
+	 *  keeps the garbage collector tracing these) has no fixed-array support for TObjectPtr. */
+	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInterface>> ResolvedRunwayMaterialsCache;
+
+	/** Resolves SurfaceMaterial/ApronMaterial/RubberMaterial/GhostMaterial/the three runway
+	 *  materials into the cache above if, and only if, bResolvedContentDirty - see the
+	 *  cache's own comment. Called from MakeSurfaceSettings, which reads the cache after. */
+	void RefreshResolvedContentCacheIfDirty();
 
 	/**
 	 * Constructor helper for the five CreateDefaultSubobject<UDynamicMeshComponent> blocks

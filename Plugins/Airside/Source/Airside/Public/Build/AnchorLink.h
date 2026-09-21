@@ -4,6 +4,7 @@
 #include "Build/AnchorLinkFinder.h"
 
 class URoadNetwork;
+struct FAirframe;
 
 /**
  * Joins entity anchors to the guideline graph by casting each one's lead-in.
@@ -130,9 +131,15 @@ struct AIRSIDE_API FAnchorLink
 	 * lays the lead-in and its entry sweeps. Splitting these out is what makes each finder
 	 * unit-testable in isolation - nothing below Resolve needs a mutated graph, a placed
 	 * entity, or even a second guideline to react to.
+	 *
+	 * LargestServiceVehicle IS REQUIRED, not resolved in here - issue #190. Join asks
+	 * UAirsideSettings::ResolveLargestServiceVehicle() TWICE PER LINK for the lock a lane
+	 * connector must clear; the caller now resolves it once per rebuild and this Build hands
+	 * the same answer to every Join it calls, which is also why this file no longer includes
+	 * Content/AirsideSettings.h (Check-Architecture's Build->Content rule).
 	 */
-	static int32 Build(URoadNetwork& Network, double MaxLeadIn = DefaultMaxLeadIn,
-		double ServiceLinkRadius = DefaultServiceLinkRadius);
+	static int32 Build(URoadNetwork& Network, const FAirframe& LargestServiceVehicle,
+		double MaxLeadIn = DefaultMaxLeadIn, double ServiceLinkRadius = DefaultServiceLinkRadius);
 
 	/**
 	 * Every anchor, pose and declared lane entry that has nothing joined yet, plus every node
@@ -170,5 +177,5 @@ struct AIRSIDE_API FAnchorLink
 	 * moments earlier by this same link's own Resolve.
 	 */
 	static FGuidelineNodeId Join(URoadNetwork& Network, FPendingLink& Link, const FLinkHit& Hit,
-		TSet<FGuidelineNodeId>& AnchorNodes);
+		TSet<FGuidelineNodeId>& AnchorNodes, const FAirframe& LargestServiceVehicle);
 };

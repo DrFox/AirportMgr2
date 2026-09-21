@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -61,14 +62,14 @@ namespace
 		Net->AddStraightSegment(ExitNode, TaxiEnd, Taxiway);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// Facing east (heading 0), so its lead-in casts west onto the taxiway.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Net->PlaceEntity(Stand, Stand->Anchors, ExitAt + FVector2D(9000.0, -10000.0), 0.0,
 			6000.0, Stand->PoseRole, Stand->Trucks);
 
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		return Net;
 	}
 }

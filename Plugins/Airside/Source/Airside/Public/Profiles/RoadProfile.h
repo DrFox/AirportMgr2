@@ -5,6 +5,8 @@
 #include "Model/RoadTraffic.h"
 #include "RoadProfile.generated.h"
 
+struct FAirframe;
+
 /**
  * Which authored cross-section a build gesture lays.
  *
@@ -95,6 +97,14 @@ public:
 	static constexpr double StandardTaxiwayWidth = 2300.0;
 
 	/**
+	 * A real taxiway's fillet, uu - 15 m. PreferredFilletRadius's own default, the debug
+	 * gallery's FilletRadius and ARoadNetworkActor::FallbackFilletRadius all typed 1500.0
+	 * independently (issue #192 item 3); this is that number, named once, beside
+	 * StandardTaxiwayWidth for the same reason.
+	 */
+	static constexpr double StandardTaxiwayFilletRadius = 1500.0;
+
+	/**
 	 * What a metre of this profile costs to lay, and what a day of owning it costs.
 	 *
 	 * ON THE PROFILE rather than in a cost table beside it, so a new taxiway width cannot be
@@ -127,7 +137,7 @@ public:
 	 * 1500 is a TAXIWAY's, authored, and stays authored: a taxiway's corner is swept for the
 	 * largest AIRCRAFT admitted, and that figure comes from IcaoCode rather than any vehicle.
 	 */
-	UPROPERTY(EditAnywhere) double PreferredFilletRadius = 1500.0;
+	UPROPERTY(EditAnywhere) double PreferredFilletRadius = StandardTaxiwayFilletRadius;
 
 	/**
 	 * How much wider than the bare steering limit a fillet must be asked for, because THE
@@ -168,6 +178,18 @@ public:
 	 * shortfall nobody could see.
 	 */
 	double ResolvedFilletRadius() const;
+
+	/**
+	 * ResolvedFilletRadius, given the largest service vehicle rather than resolving it
+	 * fresh - issue #190. BuildNodeInput calls this once PER ARM of every node SolveAll
+	 * visits, and a node's arms may carry different profiles, so the alternative was
+	 * resolving UAirsideSettings::ResolveLargestServiceVehicle() from inside that per-arm
+	 * loop - the caller now resolves it ONCE per rebuild and hands the same answer to
+	 * every profile asked this way. The zero-arg overload above is unchanged and still
+	 * self-resolves, for the many callers (tests, the debug gallery) that ask once and are
+	 * not inside a hot loop.
+	 */
+	double ResolvedFilletRadius(const FAirframe& LargestServiceVehicle) const;
 
 	/**
 	 * Segments with this profile PASS THROUGH a node rather than ending at it, so they are

@@ -1,6 +1,7 @@
 #include "Present/RoadAgentActor.h"
 
 #include "AirsideLog.h"
+#include "Content/AirsidePrimitives.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
@@ -35,7 +36,7 @@ ARoadAgentActor::ARoadAgentActor()
 
 	// The engine's own primitive, not an authored asset: a placeholder that shows only
 	// until SetAirframe dresses the actor has no business owning content of its own.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(AirsidePrimitives::CubePath());
 	if (Cube.Succeeded())
 	{
 		Placeholder->SetStaticMesh(Cube.Object);

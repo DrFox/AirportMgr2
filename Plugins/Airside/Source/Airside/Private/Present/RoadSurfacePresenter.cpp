@@ -480,7 +480,12 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 	// this class must not decide content defaults, only draw what it is told.
 	Network.DefaultProfile = Settings.Profile;
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network);
+	// RESOLVED ONCE, HERE, AND PASSED DOWN (issue #190) - see Settings.LargestServiceVehicle's
+	// own comment. SolveAll's BuildNodeInput asks a profile's ResolvedFilletRadius per arm of
+	// every node it visits; without this, that ran UAirsideSettings::ResolveLargestServiceVehicle
+	// fresh each time, on every Geometry rebuild a drag frame produces as well as every Topology
+	// one.
+	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Network, 12, &Settings.LargestServiceVehicle);
 
 	// TOPOLOGY ONLY, PAST HERE (issue #165). A Geometry change - a MoveNode or
 	// MoveApronCorner drag frame - moved positions and nothing else, so the graph's SHAPE is
@@ -494,13 +499,15 @@ void URoadSurfacePresenter::RebuildInternal(URoadNetwork& Network, const FSurfac
 		// an empty graph and correctly reported that nothing was connected.
 		//
 		// Anchor lead-ins go second and must: they join stands to guidelines that only exist
-		// once the line above has run, and both are swept and rebuilt together.
-		FRoadGuidelineBuilder::Build(Network, Solved);
+		// once the line above has run, and both are swept and rebuilt together. Both take the
+		// SAME resolved vehicle SolveAll just used, rather than resolving their own (#190).
+		FRoadGuidelineBuilder::Build(Network, Solved, Settings.LargestServiceVehicle);
 		//
 		// THE SERVICE RADIUS COMES DOWN FROM THE LEVEL - see ARoadNetworkActor::ServiceLinkRadius.
 		// The aircraft cap keeps FAnchorLink's own default beside it, deliberately: one is
 		// per-airport gameplay tuning and the other is a fact about a painted line.
-		FAnchorLink::Build(Network, FAnchorLink::DefaultMaxLeadIn, Settings.ServiceLinkRadius);
+		FAnchorLink::Build(Network, Settings.LargestServiceVehicle, FAnchorLink::DefaultMaxLeadIn,
+			Settings.ServiceLinkRadius);
 	}
 
 	// THROUGH THE RESOLVED SETTING, never a raw property: an unset MaterialSet means "single

@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -18,8 +19,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogM2TrafficTest, Log, All);
 
 namespace
 {
@@ -86,7 +85,7 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 
 	// MEASURED AND LOGGED, so a failure is read off numbers rather than re-derived from the
 	// assertion text. The window arithmetic behind every one of these is in spec 3.1-3.2.
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("NodeYield measured: %d ticks, min separation %.0f uu, van min StopWithin %.0f uu, ")
 		TEXT("van blocked %d ticks, van min speed while blocked %.0f uu/s, plane min StopWithin %.0f"),
 		Ticks, MinSeparation, VanMinStopWithin, VanBlockedTicks, VanMinSpeedWhileWaiting, PlaneMinStopWithin);
@@ -160,7 +159,11 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 	const FGuidelineNodeId J = TestGraph::Node(*Net, 0.0, 0.0);
 	TestGraph::Join(*Net, W, J); TestGraph::Join(*Net, J, E);
 	TestGraph::Join(*Net, S, J); TestGraph::Join(*Net, J, N);
-	Net->GetGuidelineNodeMutable(J)->PriorityOverride = { ETraversalClass::GroundVehicle, ETraversalClass::Aircraft };
+	// FRoadNetworkTestAccess (#191): no production caller writes PriorityOverride yet - see
+	// FGuidelineNode's own comment - so this goes through the one friend struct that may,
+	// not the raw GetGuidelineNodeMutable that used to be public for everyone.
+	FRoadNetworkTestAccess(*Net).SetGuidelineNodePriorityOverrideForTest(J,
+		{ ETraversalClass::GroundVehicle, ETraversalClass::Aircraft });
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 	const int32 Plane = Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, W, E, ETraversalClass::Aircraft), TestAirframes::GroundOnly(), ETraversalClass::Aircraft, 1.0);
@@ -229,7 +232,7 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 		return !(L->Phase == EAgentPhase::Parked && Fo->Phase == EAgentPhase::Parked);
 	});
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("CarFollowing measured: %d ticks, min centre-to-centre gap %.0f uu (from dispatch), ")
 		TEXT("%.0f uu once the follower was under way, floor %.0f uu, caught up %d"),
 		Ticks, MinGap, MinGapUnderWay,
@@ -272,7 +275,7 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	const FRoadAgent* X = Traffic->FindAgent(P1);
 	const FRoadAgent* Y = Traffic->FindAgent(P2);
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("HeadOnStops measured: min separation %.0f uu, travelled %.0f / %.0f, speed %.4f / %.4f, waiting on %d / %d"),
 		MinSeparation, X->Follower.Travelled, Y->Follower.Travelled, X->Follower.Speed, Y->Follower.Speed,
 		X->GetWaitingOn(), Y->GetWaitingOn());
@@ -302,7 +305,7 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	const double StalledFor = FMath::Max(X->StalledSeconds, Y->StalledSeconds);
 	const double SinceFirst = FMath::Max(0.0, StalledFor - Traffic->Rules.StallSeconds);
 	const int32 Expected = FMath::FloorToInt32(SinceFirst / Traffic->Rules.RetrySeconds) + 1;
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("HeadOnStops cadence measured: stalled %.2f s, %.2f s since the first report, ")
 		TEXT("%d line(s) at one per %.0f s, expected %d"),
 		StalledFor, SinceFirst, Traffic->GetDeadlockLogLinesForTest(), Traffic->Rules.RetrySeconds, Expected);
@@ -360,7 +363,7 @@ bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
 		TestEqual(FString::Printf(TEXT("van %d was refused on its first step"), Van->Id), Van->GetBlockedStep(), 0);
 	}
 
-	UE_LOG(LogM2TrafficTest, Log, TEXT("BoxEntry measured: waits %d->%d, %d->%d, %d->%d"),
+	UE_LOG(LogAirsideTests, Log, TEXT("BoxEntry measured: waits %d->%d, %d->%d, %d->%d"),
 		V1, Vans[0]->GetWaitingOn(), V2, Vans[1]->GetWaitingOn(), V3, Vans[2]->GetWaitingOn());
 
 	// The cycle, named: van 1 stands on A and wants B, which van 2 is standing on.
@@ -455,7 +458,7 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	});
 
 	const FRoadAgent* Agent = Traffic->FindAgent(Van);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("BoxEntryFirstOnly measured: earliest stop point offered on the run-up %.0f uu ")
 		TEXT("(the chained rule offers 20100), finished at %.0f uu, speed %.4f, waiting on %d, blocked step %d"),
 		EarliestStopPointOffered, Agent->Follower.Travelled, Agent->Follower.Speed, Agent->GetWaitingOn(), Agent->GetBlockedStep());
@@ -530,7 +533,7 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 
 	// MEASURED AND LOGGED, so a failure is read off the numbers rather than re-derived from
 	// the assertion text. The bar is the end of step 0, at 17000 uu of route distance.
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("HoldingPosition measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
 		P->Follower.Travelled, P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5,
 		P->Follower.Speed, P->GetWaitingOn(), P->GetBlockedStep());
@@ -634,7 +637,7 @@ bool FTrafficArrivalRefusedRunwayOccupiedTest::RunTest(const FString& Parameters
 				{
 					Held += Two->GetOccupancy().IsHeld(FTrafficResource::OfSurface(Segment), 0) ? 1 : 0;
 				}
-				UE_LOG(LogM2TrafficTest, Log,
+				UE_LOG(LogAirsideTests, Log,
 					TEXT("ArrivalHoldsRunway measured: %d of %d chain segment(s) held before any tick"),
 					Held, P->RunwayHeld.Num());
 				TestTrue(TEXT("the whole chain is held in the dispatch call itself, before any Advance"),
@@ -797,7 +800,7 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 	});
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("CrossingHoldsRunway measured: hold began at route %.0f uu, ended at %.0f uu ")
 		TEXT("(near bar 17000, centreline 20000, tail clear 22250, far bar 23000, next node 40000); ")
 		TEXT("stopped at %.0f; crossing ended at %.0f; reserved-not-occupied on the strip for ")
@@ -873,7 +876,7 @@ bool FTrafficRunwayChainCacheTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the crossing agent reaches N and parks"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
 
 	const int32 Walks = Traffic->GetRunwayChainWalksForTest();
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("RunwayChainCache measured: %d actual RunwayQuery::RunwayChain walk(s) across the whole crossing ")
 		TEXT("(one runway strip named throughout by every one of UpdateCrossing's and BuildPending's several call ")
 		TEXT("sites, across every substep of every tick)"),
@@ -942,7 +945,7 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	});
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("RunwayEdgeClaim measured: stopped at route %.0f uu (want 18500 = the runway edge's ")
 		TEXT("start 20000 less the gap 1500), waiting on %d, blocked step %d"),
 		P->Follower.Travelled, P->GetWaitingOn(), P->GetBlockedStep());
@@ -1063,7 +1066,7 @@ bool FTrafficReplanTest::RunTest(const FString& Parameters)
 
 	// MEASURED, not asserted: a teleport is what a splice that re-based EndDistance wrongly
 	// would look like, and the number says how near the bound the drive actually ran.
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("Replan measured: max per-tick step %.1f uu (bound 51 = cruise 1000 uu/s x 0.05 s + 1), max Y %.0f"),
 		MaxJump, MaxY);
 
@@ -1210,7 +1213,7 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 		return !bAllParked;
 	});
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("DeadlockRing measured: resolved at tick %d of the second run (bound %d), agent %d replanned, ")
 		TEXT("%d cycle(s) detected, max per-tick step %.1f uu, min separation while taxiing %.0f uu"),
 		ResolvedAtTick, static_cast<int32>(Traffic->Rules.StallSeconds / 0.05) + 2,
@@ -1340,7 +1343,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		return !bAllParked;
 	});
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("DeadlockMixedClass measured: first resolved agent %d (van 1 = %d, van 2 = %d, aircraft = %d, van 4 = %d), ")
 		TEXT("%d cycle(s), %d line(s), aircraft plan %d step(s), min separation while taxiing %.0f uu"),
 		FirstResolved, V1, V2, P3, V4, Traffic->GetCyclesDetectedForTest(),
@@ -1348,7 +1351,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		Traffic->FindAgent(P3) ? Traffic->FindAgent(P3)->Follower.Plan.Steps.Num() : 0, MinSeparation);
 	for (const FRoadAgent& Agent : Traffic->GetAgents())
 	{
-		UE_LOG(LogM2TrafficTest, Log,
+		UE_LOG(LogAirsideTests, Log,
 			TEXT("  agent %d: phase %s, %.0f of %.0f uu, waiting on %d, blocked step %d, stalled %.1f s"),
 			Agent.Id, *UEnum::GetValueAsString(Agent.Phase), Agent.Follower.Travelled,
 			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.StalledSeconds);
@@ -1467,7 +1470,7 @@ bool FTrafficBarToBarCrossingTest::RunTest(const FString& Parameters)
 	}, Traffic->Rules.MaxSubstepSeconds);
 
 	const FRoadAgent* P = Traffic->FindAgent(Plane);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("BarToBarCrossing measured: armed at route %.0f uu (nose reaches the strip at 17250), ")
 		TEXT("released at %.0f uu (tail leaves it at 22750); near bar 17000, far bar 23000, next node 40000; ")
 		TEXT("stopped at %.0f"),
@@ -1635,8 +1638,8 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("and it is Arriving, so nothing is following that route yet"), P->Phase, EAgentPhase::Arriving);
 
 			const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-			FRoadGuidelineBuilder::Build(*Net, Again);
-			FAnchorLink::Build(*Net);
+			FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
+			FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 			TestNull(TEXT("the builder freed the taxi-in route's first handle"), Net->GetGuidelineEdge(OldFirst));
 
 			Traffic->OnGraphRebuilt(*Net);
@@ -1647,7 +1650,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			{
 				if (Net->GetGuidelineEdge(Step.Edge) != nullptr && Net->GetGuidelineNode(Step.To) != nullptr) { ++Live; }
 			}
-			UE_LOG(LogM2TrafficTest, Log,
+			UE_LOG(LogAirsideTests, Log,
 				TEXT("GraphRebuild arrival measured: %d taxi-in steps before the rebuild, %d live after, ")
 				TEXT("goal node %s, %.0f uu"),
 				Steps, Live, Net->GetGuidelineNode(P->GoalNode) != nullptr ? TEXT("live") : TEXT("DEAD"),
@@ -1708,7 +1711,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			return false;
 		}
 		const double Jump = FVector2D::Distance(WasAt, V->LastMotion.Position);
-		UE_LOG(LogM2TrafficTest, Log,
+		UE_LOG(LogAirsideTests, Log,
 			TEXT("GraphRebuild under-the-agent measured: was at %.0f uu (%.0f, %.0f), one tick after the ")
 			TEXT("rebuild (%.0f, %.0f) - %.0f uu moved; %d replanned, %d truncated, %d stranded"),
 			Travelled, WasAt.X, WasAt.Y, V->LastMotion.Position.X, V->LastMotion.Position.Y, Jump,
@@ -1736,7 +1739,7 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			Last = Q->LastMotion.Position;
 			return true;
 		});
-		UE_LOG(LogM2TrafficTest, Log,
+		UE_LOG(LogAirsideTests, Log,
 			TEXT("GraphRebuild under-the-agent: max per-tick displacement over the next 5 s %.1f uu"), MaxStep);
 		TestTrue(FString::Printf(TEXT("nor in the five seconds after it (max %.1f uu per tick, budget %.0f)"), MaxStep, PerTick),
 			MaxStep <= PerTick);
@@ -1799,7 +1802,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	};
 
 	const int32 HeldBefore = ClaimsHeldBy(Van);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("DeadPlanReleases measured: %d claim(s) held at %.0f uu before the plan died"),
 		HeldBefore, Traffic->FindAgent(Van)->Follower.Travelled);
 
@@ -1880,7 +1883,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				TestTrue(TEXT("stranded mid-crossing"), FGroundTrafficTestAccess(*Air).Strand(Plane));
 				Air->Advance(0.05, Cross);
 
-				UE_LOG(LogM2TrafficTest, Log,
+				UE_LOG(LogAirsideTests, Log,
 					TEXT("DeadPlanReleases crossing measured: %d claim(s) left in the table after the ")
 					TEXT("plan died, strip %s"),
 					Air->GetOccupancy().GetClaims().Num(),
@@ -1909,7 +1912,7 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 				const FRoadAgent* Parked = Air->FindAgent(Plane);
 				if (TestNotNull(TEXT("it is still there three seconds later"), Parked))
 				{
-					UE_LOG(LogM2TrafficTest, Log,
+					UE_LOG(LogAirsideTests, Log,
 						TEXT("DeadPlanReleases parked measured: phase %s, crossing phase %d, strip %s"),
 						*UEnum::GetValueAsString(Parked->Phase), static_cast<int32>(Parked->GetCrossingPhase()),
 						Air->GetOccupancy().IsHeld(Strip, 0) ? TEXT("HELD") : TEXT("free"));
@@ -2024,7 +2027,7 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 		return true;
 	});
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("DepartureMeetsArrivalOnTaxiway measured: min separation %.0f uu over %d ticks both taxiing; ")
 		TEXT("departure waited %d tick(s), arrival waited %d tick(s)"),
 		MinSeparation, TicksBothTaxiing, TicksFirstWaited, TicksSecondWaited);
@@ -2131,7 +2134,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 
 	const FRoadAgent* A = Traffic->FindAgent(First);
 	const FRoadAgent* B = Traffic->FindAgent(Second);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("ReservationCycleYields measured: cycle formed at tick %d; yields %d (last yielder %d, Second = %d); replans %d; ")
 		TEXT("cycles %d; First %s %d step(s) (was %d), Second %s %d step(s) (was %d)"),
 		CycleTick, Traffic->GetYieldsForTest(), Traffic->GetLastYieldedAgentForTest(), Second, Traffic->GetLastResolvedAgentForTest(),
@@ -2212,7 +2215,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 
 		const bool bReplanned = FGroundTrafficTestAccess(*Traffic).ReplanAt(Plane, *Net, /*SpliceStep=*/1, AB);
 		const FRoadAgent* After = Traffic->FindAgent(Plane);
-		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: free strip - replanned %d, %d step(s), uses strip %d, %.0f uu"),
+		UE_LOG(LogAirsideTests, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: free strip - replanned %d, %d step(s), uses strip %d, %.0f uu"),
 			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan), After->Follower.Plan.Length);
 		TestTrue(TEXT("a free runway end is a turnaround: the replan succeeds"), bReplanned);
 		TestTrue(TEXT("and goes round the end of the strip"), UsesStrip(After->Follower.Plan));
@@ -2231,7 +2234,7 @@ bool FTrafficReplanTurnsOverFreeRunwayEndTest::RunTest(const FString& Parameters
 		if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
 		const bool bReplanned = FGroundTrafficTestAccess(*Traffic).ReplanAt(Plane, *Net, /*SpliceStep=*/1, AB);
 		const FRoadAgent* After = Traffic->FindAgent(Plane);
-		UE_LOG(LogM2TrafficTest, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: held strip - replanned %d, %d step(s), uses strip %d"),
+		UE_LOG(LogAirsideTests, Log, TEXT("ReplanTurnsOverFreeRunwayEnd measured: held strip - replanned %d, %d step(s), uses strip %d"),
 			bReplanned, After->Follower.Plan.Steps.Num(), UsesStrip(After->Follower.Plan));
 		TestFalse(TEXT("a strip somebody else holds is not a turnaround: the replan fails"), bReplanned);
 		TestTrue(TEXT("and the agent keeps the route it had"), After->Follower.Plan.Steps.Num() == 3 && !UsesStrip(After->Follower.Plan));
@@ -2315,7 +2318,7 @@ bool FTrafficSubstepTest::RunTest(const FString& Parameters)
 
 	const double SplitGap = FMath::Abs(Split->Follower.Travelled - Fine->Follower.Travelled);
 	const double UnsplitGap = FMath::Abs(Unsplit->Follower.Travelled - Fine->Follower.Travelled);
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("Substep measured: travelled fine %.3f, split %.3f, unsplit %.3f; ")
 		TEXT("split gap %.4f uu, unsplit gap %.4f uu"),
 		Fine->Follower.Travelled, Split->Follower.Travelled, Unsplit->Follower.Travelled,
@@ -2372,7 +2375,7 @@ bool FTrafficSubstepLadderTest::RunTest(const FString& Parameters)
 	const double WorstOrdinaryFrame = 32.0 * (1.0 / 30.0);
 	const int32 StepsNeeded = FMath::CeilToInt(WorstOrdinaryFrame / Fresh->Rules.MaxSubstepSeconds);
 
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("SubstepCeilingCoversTheSpeedLadder: %.3f s needs %d steps of %.4f s; MaxSubsteps is %d"),
 		WorstOrdinaryFrame, StepsNeeded, Fresh->Rules.MaxSubstepSeconds, Fresh->Rules.MaxSubsteps);
 
@@ -2815,7 +2818,7 @@ bool FTrafficGraphRebuildNodeVisitsTest::RunTest(const FString& Parameters)
 	// bound below does not pin that constant; it only rules out the O(N)-per-call code this
 	// replaces, which would land within a rounding error of WorstCase itself.
 	const int64 WorstCase = static_cast<int64>(NumAgents) * (NumNodes + 1) * NumNodes;
-	UE_LOG(LogM2TrafficTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("GraphRebuildNodeVisits measured: %d node visits (%d agents, %d nodes, worst case %lld)"),
 		Visits, NumAgents, NumNodes, WorstCase);
 	TestTrue(FString::Printf(TEXT("node visits (%d) are well below A*S*N (%lld)"), Visits, WorstCase),

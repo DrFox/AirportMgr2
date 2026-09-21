@@ -56,7 +56,14 @@ int32 FDynamicMeshSink::BuildMesh(UE::Geometry::FDynamicMesh3& Mesh, const FRoad
 
 	// Mesh triangle id -> index into Buffers.MaterialIDs. Recorded here, where it is known,
 	// because it is NOT the identity - see the header.
+	//
+	// RESERVED AGAINST THE SOURCE TRIANGLE COUNT (issue #190): this used to grow one
+	// element at a time via `while (Num() <= Result) Add(INDEX_NONE)`, which is at most a
+	// handful of reallocations short of the true count anyway (AppendTriangle's own result
+	// tracks source order closely), so the reserve is cheap insurance rather than a measured
+	// fix - the real cost this issue is about is elsewhere on this same path.
 	TArray<int32> SourceTriangle;
+	SourceTriangle.Reserve(Buffers.Indices.Num() / 3);
 	int32 Rejected = 0;
 
 	for (int32 Slot = 0, Source = 0; Slot + 2 < Buffers.Indices.Num(); Slot += 3, ++Source)

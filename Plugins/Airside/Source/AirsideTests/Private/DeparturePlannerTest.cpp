@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -14,8 +15,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogDepartureTest, Log, All);
 
 namespace
 {
@@ -52,10 +51,10 @@ namespace
 		Out.Net->AddStraightSegment(X, E, Runway);
 		Out.Net->AddStraightSegment(X, T, Taxiway);
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		const FEntityInstanceId StandId = Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
-		FAnchorLink::Build(*Out.Net);
+		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		for (const FEntityInstance& Instance : Out.Net->GetEntities())
 		{
 			if (Instance.bAlive && Instance.PoseNode.IsSet()) { Out.StandNode = Instance.PoseNode; }
@@ -93,7 +92,7 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 
 	TestTrue(TEXT("departing from the E threshold, westbound"), Plan.End.Direction.X < -0.99 && FVector2D::Distance(Plan.End.Threshold, A.EAt) < 1.0);
@@ -138,10 +137,10 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(X, E, Runway);
 	Net->AddStraightSegment(X, T, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	Net->PlaceEntity(Stand, Stand->Anchors, XAt + FVector2D(25000.0, -14000.0), 0.0);
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	FGuidelineNodeId StandNode;
 	for (const FEntityInstance& Instance : Net->GetEntities()) { if (Instance.bAlive) { StandNode = Instance.PoseNode; } }
 	if (!TestTrue(TEXT("the stand is linked"), StandNode.IsSet())) { return false; }
@@ -151,7 +150,7 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("fixture: the hairpin entry leaves 24000, short of the %.0f needed"), Needed), Needed > 24000.0);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*Net, StandNode, WAt + FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 	TestTrue(TEXT("departing from the W threshold, eastbound"), Plan.End.Direction.X > 0.99);
 	TestTrue(TEXT("a backtrack"), Plan.bBacktrack);
@@ -215,7 +214,7 @@ bool FDepartureFromIntersectionIsContinuousTest::RunTest(const FString& Paramete
 		PrevPhase = Agent->Phase;
 		bHavePrev = true;
 	}
-	UE_LOG(LogDepartureTest, Log, TEXT("Departure handover: worst position step %.1f uu at %.2f s (allowed %.1f), handover frame step %.1f, airborne %d after %d ticks"),
+	UE_LOG(LogAirsideTests, Log, TEXT("Departure handover: worst position step %.1f uu at %.2f s (allowed %.1f), handover frame step %.1f, airborne %d after %d ticks"),
 		WorstStep, WorstAt, PositionStepAllowed, HandoverJump, bAirborne, Ticks);
 	TestTrue(TEXT("the departure rolled"), bSawDeparting);
 	TestTrue(TEXT("and got airborne within five minutes"), bAirborne);

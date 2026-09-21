@@ -1,5 +1,7 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Build/ExitGeometry.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadMeshBuilder.h"
@@ -19,8 +21,6 @@
 // one test each.
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogExitArcTest, Log, All);
 
 namespace
 {
@@ -136,7 +136,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FVector2D East(1.0, 0.0);
 	const FVector2D TowardT = FVector2D(1.0, -1.0).GetSafeNormal();
@@ -177,7 +177,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		if (TestNotNull(TEXT("an exit turn joins the upstream strip node to the taxiway end"), Exit))
 		{
 			const FArcFit Fit = ExitArcMeasure(*Exit, SUp, *Net, East, TowardT);
-			UE_LOG(LogExitArcTest, Log, TEXT("45 deg exit: leaves the runway %.2f deg off, meets the taxiway %.2f deg off, worst vertex %.2f deg"),
+			UE_LOG(LogAirsideTests, Log, TEXT("45 deg exit: leaves the runway %.2f deg off, meets the taxiway %.2f deg off, worst vertex %.2f deg"),
 				Fit.StartError, Fit.EndError, Fit.Worst);
 			TestTrue(FString::Printf(TEXT("exit leaves the centreline tangent (%.2f deg off)"), Fit.StartError), Fit.StartError < TangentTolerance);
 			TestTrue(FString::Printf(TEXT("exit meets the taxiway tangent (%.2f deg off)"), Fit.EndError), Fit.EndError < TangentTolerance);
@@ -242,7 +242,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		if (TestNotNull(TEXT("a turn joins the W-end strip node to the 90 degree taxiway"), Turn))
 		{
 			const FArcFit Fit = ExitArcMeasure(*Turn, SW, *Net, -East, FVector2D(0.0, -1.0));
-			UE_LOG(LogExitArcTest, Log, TEXT("90 deg exit: %.2f / %.2f deg off, worst vertex %.2f deg"), Fit.StartError, Fit.EndError, Fit.Worst);
+			UE_LOG(LogAirsideTests, Log, TEXT("90 deg exit: %.2f / %.2f deg off, worst vertex %.2f deg"), Fit.StartError, Fit.EndError, Fit.Worst);
 			TestTrue(FString::Printf(TEXT("90 degree exit tangent both ends (%.2f, %.2f deg off)"), Fit.StartError, Fit.EndError),
 				Fit.StartError < TangentTolerance && Fit.EndError < TangentTolerance);
 			TestTrue(FString::Printf(TEXT("and cornerless (worst vertex %.2f deg)"), Fit.Worst), Fit.Worst < 2.0 * VertexTolerance);
@@ -297,7 +297,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		Bare->AddStraightSegment(BW, BX, Runway);
 		Bare->AddStraightSegment(BX, BE, Runway);
 		const FRoadSolveResult BareSolved = FRoadNetworkSolver::SolveAll(*Bare);
-		FRoadGuidelineBuilder::Build(*Bare, BareSolved);
+		FRoadGuidelineBuilder::Build(*Bare, BareSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 		int32 Alive = 0;
 		for (const FGuidelineNode& Node : Bare->GetGuidelineNodes()) { Alive += Node.bAlive ? 1 : 0; }
 		TestEqual(TEXT("a runway meeting only itself has its four end nodes and no set-back nodes"), Alive, 4);
@@ -352,7 +352,7 @@ bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 	// Rebuild from scratch, as a save/load or any edit does.
 	const FVector2D Before = End->Position;
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*A.Net);
-	FRoadGuidelineBuilder::Build(*A.Net, Solved);
+	FRoadGuidelineBuilder::Build(*A.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	const FGuidelineNodeId After = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/true);
 	if (TestTrue(TEXT("the end still exists by identity after the rebuild"), After.IsSet()))
 	{
@@ -377,7 +377,7 @@ bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 		Net->AddStraightSegment(X, E, Runway);
 		const FRoadSegmentId XQ = Net->AddStraightSegment(X, Q, Taxiway);
 		const FRoadSolveResult S2 = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, S2);
+		FRoadGuidelineBuilder::Build(*Net, S2, UAirsideSettings::ResolveLargestServiceVehicle());
 		const FGuidelineNodeId QEnd = ExitArcNodeFor(*Net, XQ, true);
 		if (TestTrue(TEXT("arcs off: the taxiway end exists"), QEnd.IsSet()))
 		{
@@ -457,7 +457,7 @@ bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// The pavement the player sees, from the same solve.
 	FRoadMeshBuilder Pavement(10.0);
@@ -503,7 +503,7 @@ bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
-	UE_LOG(LogExitArcTest, Log, TEXT("On-pavement: %d arcs, %d sampled points, %d off the pavement. %s"), Arcs, Points, Off, *Worst);
+	UE_LOG(LogAirsideTests, Log, TEXT("On-pavement: %d arcs, %d sampled points, %d off the pavement. %s"), Arcs, Points, Off, *Worst);
 	TestTrue(TEXT("there are arcs to measure"), Arcs >= 6);
 	TestEqual(FString::Printf(TEXT("every sampled point of every arc lies on the pavement (%d of %d off). %s"), Off, Points, *Worst), Off, 0);
 	return true;

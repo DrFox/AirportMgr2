@@ -44,6 +44,14 @@
          was added for in issue #82. Test modules are exempt, the way rules 4 and 5 exempt
          them: a scripted scenario sets up state, it does not enforce production discipline on
          itself.
+      7. No FColor/FLinearColor/FSlateColor/FSlateBrush token in Tool/ (Public or Private). Tool/
+         describes intent to IToolPreviewSink by MEANING, never colour - see CLAUDE.md's
+         Architecture section - and issue #191 found PreviewPalette's colour table, ring radii
+         and line weights sitting in Tool/ anyway, despite both its consumers (the game HUD and
+         the editor viewport tool) already living in or including Present/. Moved to Present/;
+         this rule is what stops the next shared-look table from landing back in Tool/ by habit.
+         Comment lines are excluded the way rule 5 excludes them - a WHY comment naming a colour
+         to explain why Tool/ does not hold one is not the thing this rule exists to catch.
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -83,10 +91,21 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
 # --- 1. Include direction -----------------------------------------------------------------
 # Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
 # handled separately as an allow-list.
+#
+# Build's own entry names Content/AirsideSettings specifically, NOT the whole Content/
+# folder (issue #191, the last "Wrong layer" item). AnchorLink.cpp and RoadGuidelineBuilder.cpp
+# used to call UAirsideSettings::ResolveLargestServiceVehicle() themselves, from inside a
+# per-ordered-arm-pair and a per-link loop respectively - the #78 shape, Build/ resolving a
+# content default instead of taking it from whoever already resolved it once. Both are
+# parameterised now (issue #190) and neither includes AirsideSettings.h any more. DepotKit.cpp
+# still includes Content/AirsideContent.h, and that stays legal: DepotKitSpecs takes a
+# `const UAirsideContent*` PARAMETER (PR #212) and dereferences its DepotKits map, which is
+# the correct shape this rule wants everywhere else - forbidding the whole Content/ folder
+# would flag a file that never resolves anything itself.
 $forbidden = @{
     'Model' = 'Build/|Tool/|Present/|Entities/|Content/'
     'Tool'  = 'Present/|Content/'
-    'Build' = 'Present/|Tool/'
+    'Build' = 'Present/|Tool/|Content/AirsideSettings'
 }
 foreach ($module in $modules) {
     foreach ($layer in $forbidden.Keys) {
@@ -240,9 +259,31 @@ foreach ($tree in $trees) {
     }
 }
 
+# --- 7. No colour tokens in Tool/ ---------------------------------------------------------
+# Issue #191. Tool/ names a MEANING (EPreviewStyle) to IToolPreviewSink, never a colour - the
+# HUD and the editor viewport are the two sinks that decide what a meaning looks like, and
+# PreviewPalette's colour table, ring radii and line weights had drifted into Tool/ despite
+# both consumers already living in or including Present/. Applied to the production tree only
+# (Public/Tool and Private/Tool), the way rule 1 scopes to $modules rather than the test trees.
+$colourPattern = '\b(FColor|FLinearColor|FSlateColor|FSlateBrush)\b'
+foreach ($module in $modules) {
+    foreach ($half in 'Public', 'Private') {
+        $dir = Join-Path $module (Join-Path $half 'Tool')
+        foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+            $hits = Select-String -Path $file.FullName -Pattern $colourPattern
+            foreach ($h in $hits) {
+                # A WHY comment naming the banned token (to explain why Tool/ does not hold
+                # one) is not the thing itself - same exemption as rule 5.
+                if ($h.Line.Trim().StartsWith('//')) { continue }
+                $failures.Add("tool-colour: $($file.FullName):$($h.LineNumber) Tool/ must not name a colour - describe a MEANING to IToolPreviewSink instead: $($h.Line.Trim())")
+            }
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles, agent field writes)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour)' -ForegroundColor Green
     exit 0
 }
 

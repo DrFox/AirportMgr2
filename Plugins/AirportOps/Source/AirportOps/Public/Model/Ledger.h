@@ -154,6 +154,25 @@ public:
 	void RollUp(double Now);
 
 	/**
+	 * One day's upkeep for everything standing, as a single entry, plus this ledger's own
+	 * RollUp on the same beat.
+	 *
+	 * MOVED FROM UOpsRuntime (issue #191): computing the figure needs BuildCost::DailyUpkeep,
+	 * which lives in Build/ and which Model/ may not include (Check-Architecture rule 1), so
+	 * the runtime still resolves Base itself - this is just where POSTING it belongs, the same
+	 * split UOpsRuntime::CandidatesFromCatalog draws for Entities/.
+	 *
+	 * Base <= 0 skips the CHARGE - an airport with nothing standing on it costs nothing to
+	 * own, and a zero entry every day would be noise in the one place the player goes to find
+	 * out where the money went - but RollUp always runs. The previous shape (still in
+	 * UOpsRuntime before this move) skipped RollUp too whenever Base was zero, which PR #213's
+	 * own "Not done" flagged and nobody then decided on: a quiet day has nothing to do with
+	 * whether entries older than MaxDays are due to be folded, and skipping it only meant the
+	 * ledger stayed unbounded for exactly the games with the least happening in them.
+	 */
+	void PostDailyUpkeep(double Base, double Now);
+
+	/**
 	 * The balance computed from the entries.
 	 *
 	 * The test's half of the cached-total invariant described in the class comment. Never used

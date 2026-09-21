@@ -290,6 +290,20 @@ public:
 	 */
 	URoadEditHistory* HistoryForEdit();
 
+	/**
+	 * Discard every undo step. Harmless (and allocates nothing) when there is no history yet -
+	 * see EnsureHistory, which this deliberately does NOT call.
+	 *
+	 * THE DOOR THIS CLASS SHOULD ALWAYS HAVE HAD (issue #191): AirportOps' load path used to
+	 * reach past this facade and call Target->History->Clear() on the actor directly - one
+	 * plugin's composition root operating another's undo stack, when
+	 * "the history an edit should snapshot into" and everything about it is this facade's own
+	 * job (see HistoryForEdit above). A load is a new baseline: the history holds Mementos of
+	 * the PRE-load network, and an undo afterwards would revert an airport the player just
+	 * replaced on purpose.
+	 */
+	void ClearHistory();
+
 private:
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;
@@ -315,8 +329,11 @@ private:
 	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(Kind), in one call so a mutator that
 	 * commits an edit cannot forget to notify - which is exactly how ten of these went silent
 	 * before issue #77 (see the class comment). Takes the scope by reference rather than being
-	 * a method ON FRoadEditScope itself: that type lives in Tool/RoadEditHistory.h and must not
-	 * know about this facade's OnChanged, or Tool/ would depend on Present/.
+	 * a method ON FRoadEditScope itself: that type used to live in Tool/RoadEditHistory.h and
+	 * had to stay ignorant of this facade's OnChanged, or Tool/ would have depended on
+	 * Present/. Issue #191 moved FRoadEditScope to Present/RoadEditHistory.h alongside this
+	 * facade, so the two now share a layer - but folding this into a method on the scope is a
+	 * design change, not a move, and stayed out of that refactor's scope.
 	 *
 	 * KIND DEFAULTS TO Topology, same as NotifyChanged itself, for every caller that does not
 	 * pass one - which was every caller until SetIntermediateHoldingPosition (issue #179)

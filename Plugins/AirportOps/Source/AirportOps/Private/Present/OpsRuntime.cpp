@@ -20,7 +20,6 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
-#include "Tool/RoadEditHistory.h"
 
 UOpsRuntime::UOpsRuntime()
 {
@@ -54,8 +53,14 @@ TArray<FOfferCandidate> UOpsRuntime::CandidatesFromCatalog() const
 		{
 			continue;
 		}
-		for (const TObjectPtr<UAircraftType>& Type : Airline->Fleet)
+		for (const TSoftObjectPtr<UAircraftType>& SoftType : Airline->Fleet)
 		{
+			// LoadSynchronous, not a bare Get(): Fleet is now a SOFT reference (issue #191 -
+			// Model/AirlineDefinition.h may not own a hard pointer to an Entities/ type), and
+			// this is exactly the crossing point named below - Entities/ is legal to resolve
+			// HERE, in Present/, same as UAirsideSettings::ResolveDefaultVehicle resolves its
+			// own TSoftObjectPtrs.
+			UAircraftType* Type = SoftType.LoadSynchronous();
 			if (Type == nullptr)
 			{
 				continue;
@@ -217,6 +222,22 @@ void UOpsRuntime::Attach(ARoadNetworkActor* Actor)
 
 void UOpsRuntime::Detach()
 {
+	// THE PURSE, UN-WIRED - the other half of Attach's "handed to the facade here and
+	// nowhere else" (issue #193): Attach calls Facade->SetPurse(Ledger), but until this fix
+	// nothing here ever called SetPurse(nullptr) to match. The facade's Purse is a raw
+	// IBuildPurse* precisely because it does not own the ledger and outlives no attach - see
+	// its own comment - so a Detach that left it set kept pointing at THIS runtime's Ledger
+	// after Target (and, on a level change, this whole object) could be gone, and
+	// URoadEditFacade::CanAfford dereferences it on every quote design time is supposed to
+	// treat as free again.
+	if (Target != nullptr)
+	{
+		if (URoadEditFacade* Facade = Target->GetEditFacade())
+		{
+			Facade->SetPurse(nullptr);
+		}
+	}
+
 	if (Target != nullptr && Target->GetTraffic() != nullptr)
 	{
 		Target->GetTraffic()->OnAgentPhaseChanged.Remove(PhaseHandle);
@@ -280,48 +301,21 @@ void UOpsRuntime::ApplySpeed(ESimSpeed Speed)
 	Events->NotifySpeedChanged(Speed);
 }
 
-TArrayView<const ESimSpeed> UOpsRuntime::SpeedLadder()
-{
-	// A SECOND LIST THAT MUST AGREE WITH ESimSpeed, and exactly the kind CLAUDE.md names.
-	// A speed added to the enum but not to this ladder compiles, runs, and is simply
-	// unreachable: the player presses "faster" at the top rung and nothing happens, with
-	// no error anywhere. It is exposed rather than a static local precisely so a test can
-	// read it - AirportOps.Model.SimClock.SpeedLadderCoversEveryRung walks StaticEnum and
-	// fails if the two ever drift apart.
-	static const ESimSpeed Ladder[] = {
-		ESimSpeed::X1, ESimSpeed::X2, ESimSpeed::X4, ESimSpeed::X8, ESimSpeed::X16, ESimSpeed::X32 };
-	return MakeArrayView(Ladder, UE_ARRAY_COUNT(Ladder));
-}
-
 void UOpsRuntime::StepSpeed(int32 Delta)
 {
-	const TArrayView<const ESimSpeed> Ladder = SpeedLadder();
-	const int32 Rungs = Ladder.Num();
-
-	// Stepping while paused steps from ResumeSpeed, which is what a player pressing
-	// "faster" while paused means: resume, one notch up from where they were.
-	const ESimSpeed From = Clock->GetSpeed() == ESimSpeed::Paused ? ResumeSpeed : Clock->GetSpeed();
-	int32 Index = 0;
-	for (int32 I = 0; I < Rungs; ++I)
-	{
-		if (Ladder[I] == From) { Index = I; }
-	}
-	Index = FMath::Clamp(Index + Delta, 0, Rungs - 1);
-	ResumeSpeed = Ladder[Index];
-	ApplySpeed(ResumeSpeed);
+	// THE LADDER WALK AND ResumeSpeed ARE THE CLOCK'S OWN NOW (issue #191): it is the object
+	// that is actually saved, and it is the one with RealSecondsPerGameDay and every other
+	// speed-adjacent figure already. This is left to push the RESULT into the actor and the
+	// event bus, which is Present/'s job - ApplySpeed re-applies Clock->GetSpeed() to itself
+	// (a no-op; StepSpeed already set it) purely to reach the push/notify half in one call.
+	Clock->StepSpeed(Delta);
+	ApplySpeed(Clock->GetSpeed());
 }
 
 void UOpsRuntime::TogglePause()
 {
-	if (Clock->GetSpeed() == ESimSpeed::Paused)
-	{
-		ApplySpeed(ResumeSpeed);
-	}
-	else
-	{
-		ResumeSpeed = Clock->GetSpeed();
-		ApplySpeed(ESimSpeed::Paused);
-	}
+	Clock->TogglePause();
+	ApplySpeed(Clock->GetSpeed());
 }
 
 void UOpsRuntime::OnAgentPhase(int32 AgentId, EAgentPhase From, EAgentPhase To)
@@ -353,27 +347,21 @@ void UOpsRuntime::PostDailyUpkeep()
 		return;
 	}
 
+	// THE ONE CONTENT DEFAULT THIS FUNCTION RESOLVES, and the one reason it still exists as
+	// more than a Clock->Every(...) line: BuildCost::DailyUpkeep lives in Build/, which
+	// Model/ - where the posting and the skip-if-zero rule now live, see ULedger::
+	// PostDailyUpkeep - may not include (Check-Architecture rule 1).
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
 	const double Base = BuildCost::DailyUpkeep(*Target->Network,
 		Settings != nullptr ? Settings->ApronUpkeepPerSquareMetrePerDay : 0.0);
-	if (Base <= 0.0)
-	{
-		// An airport with nothing standing on it costs nothing to own, and an entry saying so
-		// every day would be noise in the one place the player goes to find out where the
-		// money went.
-		return;
-	}
-
-	Ledger->Post(Clock->Now(), ELedgerCategory::Upkeep, -Base,
-		NSLOCTEXT("Ledger", "DailyUpkeep", "Upkeep"));
-
-	// FOLDED HERE, on the same daily beat, because this is the only thing that happens once a
-	// game day and the roll-up has no reason to be its own schedule.
-	Ledger->RollUp(Clock->Now());
+	Ledger->PostDailyUpkeep(Base, Clock->Now());
 
 	// SAME BEAT, SAME REASON (issue #188): FlightBoard's own History needs no schedule of its
 	// own either, and a second daily timer here would just be a second place for the two to
-	// drift out of step with each other.
+	// drift out of step with each other. UNCONDITIONAL, matching ULedger::PostDailyUpkeep's own
+	// decision (issue #191) - a zero-upkeep day is not a reason to defer FlightBoard's
+	// housekeeping either; the previous shape returned before reaching either RollUp whenever
+	// Base was zero, which PR #213 flagged as "Not done" and left unresolved.
 	FlightBoard->RollUp(Clock->Now());
 
 	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
@@ -434,11 +422,14 @@ bool UOpsRuntime::LoadFromSlot(const FString& SlotName)
 	{
 		return false;
 	}
-	// The undo stack holds Mementos of the PRE-load network; an undo now would revert the
-	// player to an airport they just replaced on purpose. A load is a new baseline.
-	if (Target->History != nullptr)
+	// THROUGH THE FACADE, not Target->History->Clear() directly (issue #191): the history is
+	// URoadEditFacade's undo state to manage, and reaching past it from another plugin's
+	// composition root is exactly the layering slip the facade's ClearHistory doc comment
+	// names. The undo stack holds Mementos of the PRE-load network; an undo now would revert
+	// the player to an airport they just replaced on purpose. A load is a new baseline.
+	if (URoadEditFacade* Facade = Target->GetEditFacade())
 	{
-		Target->History->Clear();
+		Facade->ClearHistory();
 	}
 	// Present rebuilds from model: the mesh and the derived guideline graph are both
 	// produced by the presenter's Rebuild, which is what RebuildMesh runs.

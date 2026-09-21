@@ -1,7 +1,6 @@
 #include "CoreMinimal.h"
 #include "Misc/AutomationTest.h"
 #include "Model/SimClock.h"
-#include "Present/OpsRuntime.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -85,13 +84,17 @@ bool FSimClockSchedulerTest::RunTest(const FString& Parameters)
 }
 
 /**
- * THE LISTS-THAT-MUST-AGREE TEST. ESimSpeed and UOpsRuntime::SpeedLadder are two lists of
+ * THE LISTS-THAT-MUST-AGREE TEST. ESimSpeed and USimClock::SpeedLadder are two lists of
  * the same thing, and CLAUDE.md's rule is to check where the list is CONSUMED. A speed
  * added to the enum but missed off the ladder compiles and runs and is simply unreachable:
  * the player presses "faster" at the top rung and nothing happens, with no error anywhere.
  *
  * It walks StaticEnum rather than a hand-written list, so the enum is the single source of
  * truth and this cannot rot in the same direction as the bug it catches.
+ *
+ * BESIDE ITS SUBJECT since issue #191: the ladder moved off UOpsRuntime onto this class,
+ * along with ResumeSpeed and StepSpeed/TogglePause - see USimClock::ResumeSpeed's own
+ * comment for the save bug that made the move worth doing.
  */
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSimClockSpeedLadderTest,
@@ -100,7 +103,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FSimClockSpeedLadderTest::RunTest(const FString& Parameters)
 {
-	const TArrayView<const ESimSpeed> Ladder = UOpsRuntime::SpeedLadder();
+	const TArrayView<const ESimSpeed> Ladder = USimClock::SpeedLadder();
 	const UEnum* Enum = StaticEnum<ESimSpeed>();
 	if (Enum == nullptr)
 	{
@@ -138,6 +141,53 @@ bool FSimClockSpeedLadderTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("x16 multiplies by 16"), USimClock::Multiplier(ESimSpeed::X16), 16.0, 1e-12);
 	TestEqual(TEXT("x32 multiplies by 32"), USimClock::Multiplier(ESimSpeed::X32), 32.0, 1e-12);
+	return true;
+}
+
+/**
+ * STEP AND PAUSE, WORLD-FREE (issue #191, #98 partial). StepSpeed, TogglePause and ResumeSpeed
+ * moved here from UOpsRuntime so the SAVED object and the logic that computes what it holds
+ * are the same one - see ResumeSpeed's own comment on this class for the save bug that made
+ * the move worth doing, not just tidier. UOpsRuntime keeps methods of the same name, but they
+ * are now a two-line forward to this class plus the push into the actor and the event bus,
+ * which is Present/'s job and needs a world (AirportOps.Present.Runtime covers that half).
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSimClockStepAndPauseTest,
+	"AirportOps.Model.SimClock.StepAndPause",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSimClockStepAndPauseTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>();
+	TestEqual(TEXT("a bare clock starts at x1"), Clock->GetSpeed(), ESimSpeed::X1);
+
+	Clock->StepSpeed(+1);
+	TestEqual(TEXT("stepping climbs one rung"), Clock->GetSpeed(), ESimSpeed::X2);
+
+	Clock->TogglePause();
+	TestEqual(TEXT("pausing sets Paused"), Clock->GetSpeed(), ESimSpeed::Paused);
+	Clock->TogglePause();
+	TestEqual(TEXT("unpausing restores the speed it was paused from"), Clock->GetSpeed(), ESimSpeed::X2);
+
+	// Asked of the LADDER rather than a literal - see SpeedLadderCoversEveryRung's own
+	// comment for the maintenance cost of a hard-coded top rung.
+	const TArrayView<const ESimSpeed> Ladder = USimClock::SpeedLadder();
+	Clock->StepSpeed(Ladder.Num() + 2);
+	TestEqual(TEXT("stepping past the top clamps at the fastest rung"),
+		Clock->GetSpeed(), Ladder.Last());
+	Clock->StepSpeed(-Ladder.Num() - 4);
+	TestEqual(TEXT("stepping past the bottom clamps at the slowest rung, never Paused"),
+		Clock->GetSpeed(), Ladder[0]);
+
+	// Stepping WHILE paused steps from ResumeSpeed, not from Paused itself - Paused has no
+	// rung index, and "faster" from a stop means resume, one notch up from where the player
+	// left it, not unpause into the slowest rung.
+	Clock->SetSpeed(ESimSpeed::X4);
+	Clock->TogglePause();
+	Clock->StepSpeed(+1);
+	TestEqual(TEXT("stepping while paused resumes one rung above where the pause was from"),
+		Clock->GetSpeed(), ESimSpeed::X8);
 	return true;
 }
 

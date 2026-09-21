@@ -2,13 +2,14 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
-// INCLUDED RATHER THAN FORWARD DECLARED: EDepotModule keys DepotKits below, and UHT needs
-// an enum's definition to reflect a TMap key. Content/ carries no include-direction rule -
-// Check-Architecture constrains Model/, Solve/, Tool/ and Build/ only.
+// INCLUDED RATHER THAN FORWARD DECLARED: EDepotModule keys DepotKits below, and EPlaceableEntity
+// keys Placeables below it, and UHT needs an enum's definition to reflect a TMap key. Content/
+// carries no include-direction rule - Check-Architecture constrains Model/, Solve/, Tool/ and
+// Build/ only.
 #include "Model/RoadEntity.h"
+#include "Entities/EntityDefinition.h"
 #include "AirsideContent.generated.h"
 
-class UEntityDefinition;
 class UMaterialInterface;
 class URoadProfile;
 class UAnimInstance;
@@ -180,19 +181,48 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<URoadProfile> ServiceRoadProfile;
 
-	/** What the stand tool places. */
-	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
+	/**
+	 * DEPRECATED (issue #192 item 1). What the stand tool placed before Placeables existed.
+	 *
+	 * meta = (DeprecatedProperty) RATHER THAN AN "_DEPRECATED" NAME SUFFIX, unlike the three
+	 * runway materials above: those were RENAMED, so the suffix is what keeps UE's
+	 * tagged-property serialisation matching an old asset's bytes against a name that no
+	 * longer exists in the details panel. This field keeps its ORIGINAL name - nothing else
+	 * is claiming it - so the deprecation meta alone is enough to hide it from the panel and
+	 * Blueprint while PostLoad still finds it under the tag an old asset saved. See PostLoad
+	 * for the migration into Placeables[EPlaceableEntity::Stand].
+	 */
+	UPROPERTY(meta = (DeprecatedProperty, DeprecationMessage = "Use Placeables[EPlaceableEntity::Stand]"))
 	TSoftObjectPtr<UEntityDefinition> DefaultStand;
 
 	/**
-	 * What the fuel depot tool places. See UEntityDefinition::BuildFuelDepot.
+	 * DEPRECATED (issue #192 item 1). What the fuel depot tool placed before Placeables
+	 * existed. See DefaultStand's own comment for why this keeps its name rather than
+	 * gaining an "_DEPRECATED" suffix, and PostLoad for the migration into
+	 * Placeables[EPlaceableEntity::FuelDepot].
+	 */
+	UPROPERTY(meta = (DeprecatedProperty, DeprecationMessage = "Use Placeables[EPlaceableEntity::FuelDepot]"))
+	TSoftObjectPtr<UEntityDefinition> DefaultFuelDepot;
+
+	/**
+	 * What each placeable KIND resolves to by default. See UAirsideSettings::ResolvePlaceable,
+	 * the one place this is read.
 	 *
-	 * SCAFFOLDING that M4's UBuildingInstance replaces (fuel-service spec §0.1) - but the
-	 * ASSET REFERENCE is not, which is why it is here rather than a path in C++: a depot
-	 * placed in a level names this definition, and a folder move must repoint it.
+	 * A MAP KEYED BY EPlaceableEntity, replacing DefaultStand / DefaultFuelDepot above -
+	 * EntityDefinition.h's own comment claims "a new kind is a new data asset, not new code",
+	 * and a hand-named slot per kind plus a ternary resolver
+	 * (ARoadNetworkActor::ResolveEntityDefinition) never lived up to that, the way DepotKits
+	 * just below already does for EDepotModule. One new kind is now one new map entry and
+	 * nothing else - the same "lists that must agree are one list" rule DepotKits follows.
+	 *
+	 * NO ASSET EDIT NEEDED, matching RunwayMaterials' own note above: PostLoad migrates the
+	 * two deprecated properties into this map the first time an asset saved before it
+	 * existed loads, so DA_AirsideContent keeps naming a stand and a fuel depot with no
+	 * manual re-author step - which a renamed UPROPERTY cannot do on its own (a .uasset
+	 * cannot be re-authored headlessly; see the project's own memory notes on that).
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
-	TSoftObjectPtr<UEntityDefinition> DefaultFuelDepot;
+	TMap<EPlaceableEntity, TSoftObjectPtr<UEntityDefinition>> Placeables;
 
 	/**
 	 * The airframe a route wears when its start has no design aircraft to ask - most of the

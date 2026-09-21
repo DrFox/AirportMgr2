@@ -312,7 +312,7 @@ void FFuelFixture::RunAnchorLinks()
 	// Check-Architecture's layer rules apply inside the plugin modules themselves, not to
 	// their test modules. Called directly rather than through a solve, because this fixture
 	// authors its guidelines by hand and has no pavement for a solve to work on.
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
 void FFuelFixture::RelayPhases()
@@ -643,6 +643,78 @@ bool FFuelServiceRefusalsTest::RunTest(const FString& Parameters)
 			Fixture.Service->DescribeAgent(Fixture.Service->GetDemands()[0].AircraftId),
 			FString(TEXT("no road within reach of the stand's entrances")));
 	}
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelPerDemandRefusalRevisionTest, "AirportOps.Ops.FuelPerDemandRefusalRevision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelPerDemandRefusalRevisionTest::RunTest(const FString& Parameters)
+{
+	// THE RACE ISSUE #193 NAMES. UFuelService::LastRefusedRevision used to be ONE field for
+	// every demand's own fact. Demand A (Needed, processed first because it was ADDED first)
+	// refuses for the first time inside a Tick pass that ALSO revisits Demand B, already
+	// Unserviceable from an OLDER revision - A's write of the CURRENT revision into the
+	// shared field lands before B is checked, so B compares the current revision against a
+	// value its own refusal never set and stays stuck, with the re-offer log line
+	// ("the airport changed; aircraft %d asks again") never firing.
+	//
+	// BOTH DEMANDS ARE NoDepot, built directly with AddDemandForTest rather than through two
+	// independently-failing stands: NoDepot is decided from Network.GetEntities() alone (see
+	// ChooseDepot), so it is deterministic with no depot at all on the fixture's airport, and
+	// the test can pin exactly what each demand's history was and in what array order Tick
+	// will visit them - the one thing two real stands refusing on their own schedules cannot
+	// promise tick by tick.
+	FFuelFixture Fixture;
+	Fixture.Build(/*bWithRoad=*/true, /*bWithDepot=*/false);
+
+	// THE STARTING REVISION, READ RATHER THAN ASSUMED ZERO: Build already laid the taxiway's
+	// own guideline, which bumps it past zero before this test touches anything.
+	const uint32 OriginalRevision = Fixture.Net->GetGuidelineRevision();
+
+	// A: still Needed, added FIRST so Tick's loop reaches it before B.
+	Fixture.Service->AddDemandForTest(/*AircraftId=*/1, EFuelDemandState::Needed,
+		EFuelRefusal::None, /*RefusedAtRevision=*/OriginalRevision);
+
+	// B: already refused at the ORIGINAL revision, added SECOND.
+	Fixture.Service->AddDemandForTest(/*AircraftId=*/2, EFuelDemandState::Unserviceable,
+		EFuelRefusal::NoDepot, /*RefusedAtRevision=*/OriginalRevision);
+
+	// The player edits the airport - an inert node, far from anything, so the ONLY thing it
+	// changes is the revision both demands are judged against. Still no depot, so neither
+	// demand is actually fixable; the test is about whether B is even ASKED again.
+	Fixture.Net->AddGuidelineNode(FVector2D(90000.0, 90000.0));
+	const uint32 NewRevision = Fixture.Net->GetGuidelineRevision();
+	if (!TestEqual(TEXT("setup: the edit bumped the guideline revision by exactly one"),
+		NewRevision, OriginalRevision + 1)) { return false; }
+
+	// ONE TICK. A refuses for the first time, at the new revision, and writes that fact; B is
+	// checked in the very same pass, straight after.
+	Fixture.Service->Tick(*Fixture.Traffic, *Fixture.Net, *Fixture.Clock);
+
+	auto FindDemand = [&Fixture](int32 AircraftId) -> const FFuelDemand*
+	{
+		for (const FFuelDemand& Demand : Fixture.Service->GetDemands())
+		{
+			if (Demand.AircraftId == AircraftId) { return &Demand; }
+		}
+		return nullptr;
+	};
+
+	const FFuelDemand* DemandA = FindDemand(1);
+	const FFuelDemand* DemandB = FindDemand(2);
+	if (!TestNotNull(TEXT("A's demand survives the tick"), DemandA)) { return false; }
+	if (!TestNotNull(TEXT("B's demand survives the tick"), DemandB)) { return false; }
+
+	TestEqual(TEXT("A refuses for the first time, at the new revision"),
+		static_cast<int32>(DemandA->State), static_cast<int32>(EFuelDemandState::Unserviceable));
+
+	// THE DEFECT, DIRECTLY: B's OWN refusal was at revision 0, and the revision has moved to
+	// 1 - it must be re-offered on this same tick, not left reading a fact A's refusal just
+	// overwrote a moment before.
+	TestNotEqual(TEXT("B is re-offered too - its own stale refusal is not masked by A's"),
+		static_cast<int32>(DemandB->State), static_cast<int32>(EFuelDemandState::Unserviceable));
 	return true;
 }
 

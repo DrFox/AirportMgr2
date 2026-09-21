@@ -34,7 +34,7 @@ void UTyreSmoke::Initialise(AActor* InOwner, UMaterialInterface* InMaterial)
 	// components, so an existing pool is kept and only re-pointed at the material.
 	if (Puffs.Num() == PoolSize && Owner != nullptr)
 	{
-		for (FPuff& Puff : Puffs)
+		for (FTyreSmokePuff& Puff : Puffs)
 		{
 			if (Puff.Instance != nullptr && Material != nullptr)
 			{
@@ -45,8 +45,6 @@ void UTyreSmoke::Initialise(AActor* InOwner, UMaterialInterface* InMaterial)
 	}
 
 	Puffs.Reset();
-	PuffMeshes.Reset();
-	PuffInstances.Reset();
 	if (Owner == nullptr)
 	{
 		return;
@@ -63,7 +61,7 @@ void UTyreSmoke::Initialise(AActor* InOwner, UMaterialInterface* InMaterial)
 
 	for (int32 Index = 0; Index < PoolSize; ++Index)
 	{
-		FPuff Puff;
+		FTyreSmokePuff Puff;
 		Puff.Mesh = NewObject<UStaticMeshComponent>(Owner);
 		Puff.Mesh->SetStaticMesh(Sphere);
 		Puff.Mesh->SetupAttachment(Owner->GetRootComponent());
@@ -84,8 +82,6 @@ void UTyreSmoke::Initialise(AActor* InOwner, UMaterialInterface* InMaterial)
 			Puff.Mesh->SetMaterial(0, Puff.Instance);
 		}
 
-		PuffMeshes.Add(Puff.Mesh);
-		PuffInstances.Add(Puff.Instance);
 		Puffs.Add(Puff);
 	}
 }
@@ -120,7 +116,7 @@ void UTyreSmoke::Puff(const FVector& Where, double Wingspan)
 	}
 
 	const int32 Slot = ClaimSlot();
-	FPuff& Chosen = Puffs[Slot];
+	FTyreSmokePuff& Chosen = Puffs[Slot];
 
 	// Wingspan as a stand-in for mass - see the header. Clamped so an unmeasured span (zero)
 	// cannot collapse the puff to nothing, and so a freak value cannot fill the screen.
@@ -149,7 +145,7 @@ void UTyreSmoke::Advance(double DeltaSeconds)
 		return;
 	}
 
-	for (FPuff& Puff : Puffs)
+	for (FTyreSmokePuff& Puff : Puffs)
 	{
 		if (!Puff.bLive)
 		{
@@ -183,7 +179,7 @@ void UTyreSmoke::Advance(double DeltaSeconds)
 int32 UTyreSmoke::LivePuffCountForTest() const
 {
 	int32 Live = 0;
-	for (const FPuff& Puff : Puffs)
+	for (const FTyreSmokePuff& Puff : Puffs)
 	{
 		if (Puff.bLive)
 		{
@@ -191,4 +187,16 @@ int32 UTyreSmoke::LivePuffCountForTest() const
 		}
 	}
 	return Live;
+}
+
+bool UTyreSmoke::EveryPuffHasAMeshForTest() const
+{
+	for (const FTyreSmokePuff& Puff : Puffs)
+	{
+		if (Puff.Mesh == nullptr)
+		{
+			return false;
+		}
+	}
+	return true;
 }

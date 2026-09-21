@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -343,8 +344,8 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		// Now churn the graph. Twice, because the first Build has nothing to clear.
 		const FRoadSolveResult LiveSolved = FRoadNetworkSolver::SolveAll(*Live);
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FEntityInstance* After = Live->GetEntity(Gate12);
 		if (TestNotNull(TEXT("the stand survives a rebuild"), After))
@@ -511,6 +512,71 @@ bool FServiceNodeConnectedTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("an island is not on a road"), Net->IsServiceNodeConnected(Pose));
 	Join(Pose, Road, FEntityInstanceId());
 	TestTrue(TEXT("a bare lead-in is enough on its own"), Net->IsServiceNodeConnected(Pose));
+	return true;
+}
+
+/**
+ * FindEntityIndexByPoseNode is now memoised against GuidelineRevision instead of scanning
+ * Entities every call (issue #190) - see RoadNetwork.h's PoseNodeIndex. This pins the map
+ * staying correct across the two writes that touch it: a PLACE, adding an entry, and a
+ * REMOVE, which must drop the old entry rather than leave it pointing at a slot a later
+ * PlaceEntity recycles for something else.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFindEntityIndexByPoseNodeCacheTest,
+	"Airside.Model.FindEntityIndexByPoseNodeCache",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFindEntityIndexByPoseNodeCacheTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
+
+	const FEntityInstanceId First = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 0.0), 0.0);
+	const FEntityInstanceId Second = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(5000.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("both entities placed"), First.IsSet() && Second.IsSet()))
+	{
+		return false;
+	}
+
+	const FGuidelineNodeId FirstPose = Net->GetEntity(First)->PoseNode;
+	const FGuidelineNodeId SecondPose = Net->GetEntity(Second)->PoseNode;
+
+	// TWO CALLS EACH, so the SECOND one - after the first has already forced a rebuild - is
+	// answered from the memoised map rather than by coincidence of it being the first lookup.
+	TestEqual(TEXT("first entity found by its pose node"), Net->FindEntityIndexByPoseNode(FirstPose), 0);
+	TestEqual(TEXT("first entity found again"), Net->FindEntityIndexByPoseNode(FirstPose), 0);
+	TestEqual(TEXT("second entity found by its own pose node"), Net->FindEntityIndexByPoseNode(SecondPose), 1);
+
+	// REMOVE THE FIRST. Its slot is now free, its pose node gone with it - the map must not
+	// still answer "0" for a node that no longer names a live entity.
+	TestTrue(TEXT("the first entity removes"), Net->RemoveEntity(First));
+	TestEqual(TEXT("its old pose node no longer resolves"),
+		Net->FindEntityIndexByPoseNode(FirstPose), INDEX_NONE);
+	TestEqual(TEXT("the survivor is unaffected"), Net->FindEntityIndexByPoseNode(SecondPose), 1);
+
+	// A THIRD PLACEMENT LIKELY RECYCLES SLOT 0 (RoadSlot's free list is LIFO) - the case a map
+	// keyed by INDEX rather than by the pose node's own handle would get wrong: the recycled
+	// slot's PoseNode is a brand NEW guideline node, not the removed entity's, so the map must
+	// key on the pose node itself, exactly as FindEntityIndexByPoseNode's contract promises.
+	const FEntityInstanceId Third = Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(-5000.0, 0.0), 0.0);
+	if (!TestTrue(TEXT("third entity placed"), Third.IsSet()))
+	{
+		return false;
+	}
+	const FGuidelineNodeId ThirdPose = Net->GetEntity(Third)->PoseNode;
+	TestFalse(TEXT("the recycled slot's pose node is a new handle, not the removed one"),
+		ThirdPose == FirstPose);
+
+	const int32 ThirdIndex = Net->FindEntityIndexByPoseNode(ThirdPose);
+	if (TestTrue(TEXT("the new entity resolves to a valid index"), ThirdIndex != INDEX_NONE))
+	{
+		TestEqual(TEXT("and that index's own pose node matches, not a stale one from the slot it reused"),
+			Net->GetEntities()[ThirdIndex].PoseNode, ThirdPose);
+	}
+	TestEqual(TEXT("the removed node still resolves to nothing"),
+		Net->FindEntityIndexByPoseNode(FirstPose), INDEX_NONE);
+
 	return true;
 }
 

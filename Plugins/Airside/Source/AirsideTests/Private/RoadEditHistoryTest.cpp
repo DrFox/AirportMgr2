@@ -5,7 +5,7 @@
 #include "Model/RoadNode.h"
 #include "Model/RoadSlotMap.h"
 #include "Profiles/RoadProfile.h"
-#include "Tool/RoadEditHistory.h"
+#include "Present/RoadEditHistory.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 

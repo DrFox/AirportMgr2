@@ -52,8 +52,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	// 4. The figures survive the trip through an authored type, which is the only path the
 	//    game uses - a field added to FAirframe and not copied in Airframe() is a figure
 	//    that is authored and then silently dropped.
-	UAircraftType* Type = NewObject<UAircraftType>();
-	UAircraftType::BuildPiperMeridian(Type);
+	UAircraftType* Type = TestAirframes::PiperType();
 	Type->Footprint.NoseX = 385.1;
 	Type->Footprint.TailX = -531.5;
 	Type->SteerAxleX = 260.0;
@@ -103,8 +102,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    the datum moved: plane7 is a rebuild of the same aeroplane, so a wheelbase that had
 	//    shifted would mean the new model is a different size rather than the same one
 	//    re-origined. It is the one figure that survives the whole substitution unchanged.
-	UAircraftType* Meridian = NewObject<UAircraftType>();
-	UAircraftType::BuildPiperMeridian(Meridian);
+	UAircraftType* Meridian = TestAirframes::PiperType();
 	const FAirframe Piper = Meridian->Airframe();
 	TestTrue(TEXT("the Meridian steers geometrically"), Piper.HasAxles());
 	TestEqual(TEXT("its wheelbase is the measured 2.378 m, unchanged by the re-origin"),

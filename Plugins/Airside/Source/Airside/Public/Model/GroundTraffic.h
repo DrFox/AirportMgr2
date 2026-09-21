@@ -486,6 +486,25 @@ private:
 	UPROPERTY(Transient) FTrafficOccupancy Occupancy;
 
 	/**
+	 * Arbitrate's rank order, PROMOTED FROM A LOCAL (issue #190): a fresh TArray<int32> used
+	 * to be built and sorted every Arbitrate() call - once a substep, not once an agent, but
+	 * still a malloc/free for an array whose size barely changes tick to tick. Reset and
+	 * refilled at Arbitrate's own top; kept as a member purely so its capacity survives
+	 * between calls. Not a UPROPERTY - rebuilt every call, nothing a save would ever need.
+	 */
+	TArray<int32> ArbitrationOrder;
+
+	/**
+	 * Occupancy::TakePreempted's destination, PROMOTED FROM ITS RETURN VALUE (issue #190):
+	 * TakePreempted used to return a TSet<int32> BY VALUE, moving its own internal storage
+	 * out to the caller and leaving itself to rebuild one from nothing the next time an
+	 * agent is actually preempted - rare, but the reallocation this caused was not. Reset
+	 * and refilled at the top of every Arbitrate() call; see FTrafficOccupancy::TakePreempted
+	 * for the other half. Not a UPROPERTY, for the same reason as ArbitrationOrder above.
+	 */
+	TSet<int32> PreemptedScratch;
+
+	/**
 	 * How far each node's claim reaches along each of its edges - see NodeReach.h for the
 	 * bug this exists for. MUTABLE because the claim pass is const over the agent it is
 	 * building for and this is memoisation of the graph, not state of the simulation:

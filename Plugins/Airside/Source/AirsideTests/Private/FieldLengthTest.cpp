@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideContent.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
@@ -46,8 +47,7 @@ bool FFieldLengthsCoverTheRollTest::RunTest(const FString& Parameters)
 
 	// The authored Piper, independently of whether content resolved it: BuildPiperMeridian
 	// and the settings fallback must both carry figures that cover the same rolls.
-	UAircraftType* Piper = NewObject<UAircraftType>(GetTransientPackage());
-	UAircraftType::BuildPiperMeridian(Piper);
+	UAircraftType* Piper = TestAirframes::PiperType();
 	Check(TEXT("BuildPiperMeridian"), Piper->Airframe());
 	return true;
 }

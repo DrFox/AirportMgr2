@@ -34,6 +34,40 @@ bool FUIStyleResolvesTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * PINS THE DEFAULTS OF THE SEVEN TOKENS issue #192 ADDED, each replacing a bare literal that
+ * had no other reader (UAirportMgrPanelWidget::EnsureCardRoot's card padding, ULedgerPanelWidget
+ * EnsureSlots's row gap, UOfferInboxWidget::MakeAnswerButton's button padding,
+ * ARoadBuildHUD::DrawPlotPanel's ground colour, UToastStackWidget::BuildCard's outline alpha,
+ * and OpacityFor's fade floor/duration). DA_UIStyle, the authored content asset, carries no
+ * value for a brand new UPROPERTY - it gets the C++ default below - so this is what keeps that
+ * default from drifting from the literal it replaced without anyone noticing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FUIStyleNewTokenDefaultsTest,
+	"AirportMgr.UI.NewTokenDefaultsMatchTheOldLiterals",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FUIStyleNewTokenDefaultsTest::RunTest(const FString& Parameters)
+{
+	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	if (!TestNotNull(TEXT("a style"), Style)) { return false; }
+
+	// FMargin has no TestEqual overload (AutomationTest.h lists FVector/FRotator/FLinearColor/
+	// etc. by name, not a generic template), so these compare through its own operator==.
+	TestTrue(TEXT("CardPadding matches EnsureCardRoot's old literal"),
+		Style->CardPadding == FMargin(12.0f, 10.0f));
+	TestEqual(TEXT("RowGap matches the ledger's old literal"), Style->RowGap, 6.0f);
+	TestTrue(TEXT("ButtonPadding matches MakeAnswerButton's old literal"),
+		Style->ButtonPadding == FMargin(12.0f, 5.0f));
+	TestEqual(TEXT("HudGround matches DrawPlotPanel's old literal"),
+		Style->HudGround, FLinearColor(0.02f, 0.03f, 0.04f, 0.72f));
+	TestEqual(TEXT("OutlineAlpha matches BuildCard's old literal"), Style->OutlineAlpha, 0.85f);
+	TestEqual(TEXT("ToastFadeDuration matches OpacityFor's old literal"), Style->ToastFadeDuration, 2.0f);
+	TestEqual(TEXT("ToastFadeFloor matches OpacityFor's old literal"), Style->ToastFadeFloor, 0.15f);
+	return true;
+}
+
+/**
  * Walks the REGISTRY, not a hand-written list, so an action added without an icon fails
  * here rather than rendering as a blank square nobody notices. Same shape as
  * AirportOps.Model.SimClock.SpeedLadderCoversEveryRung.

@@ -1,5 +1,6 @@
 #include "Entities/EntityDefinition.h"
 
+#include "AirsideLog.h"
 #include "Content/AirsideSettings.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
@@ -208,7 +209,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 		Definition->Anchors.Add(Fixture);
 	};
 
-	const FString Letter(TEXT("C"));
+	const EIcaoCode Letter = EIcaoCode::C;
 
 	// EVERY FIXTURE IS CLEAR OF THE WING, and that is what places them rather than taste.
 	// Ruled 2026-09-17: nothing drives under a wing, so a service position beneath one could
@@ -284,7 +285,7 @@ void UEntityDefinition::BuildCodeCStandFor(
 }
 
 void UEntityDefinition::BuildStandTemplate(
-	UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest)
+	UEntityDefinition& Definition, EIcaoCode Letter, const FAirframe& Largest)
 {
 	// THE LAYOUT IS BUILT FOR THE FLOOR OF ITS LETTER'S BAND. 53 m to just under 75 is all
 	// Code C, and a template authored at a comfortable 60 would fail exactly where a player
@@ -437,7 +438,7 @@ void UEntityDefinition::BuildStandTemplate(
 			TEXT("Stand template '%s': no legal road contact - '%s' at %.0f wants it at least "
 			     "%.0f outboard and the branch run allows at most %.0f. That bay's serve leg will "
 			     "fold."),
-			*Letter,
+			IcaoCode::ToLetter(Letter),
 			Binding != nullptr ? *Binding->Id.ToString() : TEXT("?"),
 			Binding != nullptr ? Binding->LocalPosition.X : 0.0, ContactFloor, ContactCeiling);
 	}
@@ -590,7 +591,7 @@ void UEntityDefinition::BuildStandTemplate(
 		     "corner square %.0f diagonal %.0f back %.0f, lane y %.0f, branch pitch %.0f, "
 		     "contact y %.0f (band %.0f..%.0f), park run %.0f (band %.0f..%.0f), %d bay(s), "
 		     "needs %.0f x %.0f"),
-		*Letter, Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
+		IcaoCode::ToLetter(Letter), Width, Depth, BackX, NoseFwd, Radius, ReverseRadius,
 		Square, Diagonal, SquareBack, LaneY, BranchPitch,
 		ContactMag, ContactFloor, ContactCeiling,
 		ParkRun, ParkRunFloor, ParkRunCeiling,

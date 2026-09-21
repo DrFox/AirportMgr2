@@ -54,6 +54,10 @@ PlotYard::FFootprint DepotFootprint(EDepotModule Module)
 		Out.LengthUu = 300.0;
 		Out.WidthUu = 200.0;
 		return Out;
+	case EDepotModule::Count:
+		// THE SENTINEL, NOT A MODULE - named explicitly rather than folded into a default so
+		// a genuinely new module still falls through with no case here and keeps warning.
+		break;
 	}
 
 	// A module added to the enum with no entry here gets a bay-sized box rather than a
@@ -67,10 +71,11 @@ TArray<PlotYard::FKitSpec> DepotKitSpecs(const UAirsideContent* Content)
 {
 	TArray<PlotYard::FKitSpec> Specs;
 
-	// WALKED, not listed. Pump is the last value; adding a module after it extends this loop
-	// with no edit, and adding one BEFORE it cannot be forgotten because the index into this
-	// array is the enum value itself.
-	for (int32 Raw = 0; Raw <= static_cast<int32>(EDepotModule::Pump); ++Raw)
+	// WALKED TO THE SENTINEL, not to Pump: that was the last value once, and "adding a module
+	// after it extends this loop with no edit" was false the moment it stopped being last -
+	// issue #193. EDepotModule::Count is UMETA(Hidden), never a real module, and it moves
+	// itself every time a real value is added before it, which is what makes this true again.
+	for (int32 Raw = 0; Raw < static_cast<int32>(EDepotModule::Count); ++Raw)
 	{
 		const EDepotModule Module = static_cast<EDepotModule>(Raw);
 
@@ -117,6 +122,9 @@ FString DepotKitLabel(EDepotModule Module)
 	case EDepotModule::Shed: return TEXT("Sheds");
 	case EDepotModule::Tank: return TEXT("Tanks");
 	case EDepotModule::Pump: return TEXT("Pumps");
+	// THE SENTINEL, NOT A MODULE - named explicitly so a genuinely new module still falls
+	// through with no case here and keeps warning.
+	case EDepotModule::Count: break;
 	}
 
 	// A module added to the enum with no label here says SOMETHING rather than nothing: a

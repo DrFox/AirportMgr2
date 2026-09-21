@@ -105,6 +105,34 @@ void ARoadJunctionGallery::BuildGallery()
 	UE_LOG(LogRoadGallery, Log, TEXT("Gallery built: %d cells, %d nodes, %d segments"),
 		CellBearings.Num(), Network->GetNodes().Num(), Network->GetSegments().Num());
 
+	// SOLVED ONCE HERE, NOT PER FRAME (issue #190) - see CellInputs/CellResults' own
+	// comment. This is the exact per-cell body Tick used to run every frame: build the
+	// input, solve it, and keep both for Tick to redraw from.
+	CellInputs.Reset(CellCentres.Num());
+	CellResults.Reset(CellCentres.Num());
+	for (int32 CellIndex = 0; CellIndex < CellCentres.Num(); ++CellIndex)
+	{
+		FJunctionInput Input;
+		Input.Position = CellCentres[CellIndex];
+		Input.ArcSegments = 12;
+
+		for (const double Bearing : CellBearings[CellIndex])
+		{
+			FJunctionArm Arm;
+			Arm.Tangent = FVector2D(FMath::Cos(Bearing), FMath::Sin(Bearing));
+			Arm.HalfWidthLeft = Profile->GetHalfWidthLeft();
+			Arm.HalfWidthRight = Profile->GetHalfWidthRight();
+			Arm.FilletRadius = Profile->ResolvedFilletRadius();
+			Input.Arms.Add(Arm);
+		}
+
+		FJunctionResult Result = FJunctionSolver::SolveCuts(Input);
+		FJunctionSolver::SolveBoundary(Input, Result);
+
+		CellInputs.Add(MoveTemp(Input));
+		CellResults.Add(MoveTemp(Result));
+	}
+
 	RebuildGalleryMesh();
 }
 
@@ -162,8 +190,8 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 	}
 
 	// Ticking is not observable from outside, and "nothing drawn" looks identical
-	// whether Tick never ran or the lines were sub-pixel. Say so, once.
-	static int32 TickCount = 0;
+	// whether Tick never ran or the lines were sub-pixel. Say so, once. A MEMBER now, not a
+	// function-local static - see TickCount's own comment (issue #190).
 	if (++TickCount == 5)
 	{
 		UE_LOG(LogRoadGallery, Log, TEXT("Tick is running: %d cells, thickness %.1f"),
@@ -172,24 +200,19 @@ void ARoadJunctionGallery::Tick(float DeltaSeconds)
 
 	const double ZHeight = GetActorLocation().Z + 10.0;
 
+	// SOLVED ONCE IN BuildGallery, READ HERE (issue #190) - CellInputs/CellResults are
+	// exactly what this loop used to rebuild from scratch every frame. A defensive guard
+	// rather than an assert: Tick can run before BuildGallery has (see the null-Network
+	// branch above), in which case there is nothing yet to draw.
+	if (CellInputs.Num() != CellCentres.Num() || CellResults.Num() != CellCentres.Num())
+	{
+		return;
+	}
+
 	for (int32 CellIndex = 0; CellIndex < CellCentres.Num(); ++CellIndex)
 	{
-		FJunctionInput Input;
-		Input.Position = CellCentres[CellIndex];
-		Input.ArcSegments = 12;
-
-		for (const double Bearing : CellBearings[CellIndex])
-		{
-			FJunctionArm Arm;
-			Arm.Tangent = FVector2D(FMath::Cos(Bearing), FMath::Sin(Bearing));
-			Arm.HalfWidthLeft = Profile->GetHalfWidthLeft();
-			Arm.HalfWidthRight = Profile->GetHalfWidthRight();
-			Arm.FilletRadius = Profile->ResolvedFilletRadius();
-			Input.Arms.Add(Arm);
-		}
-
-		FJunctionResult Result = FJunctionSolver::SolveCuts(Input);
-		FJunctionSolver::SolveBoundary(Input, Result);
+		const FJunctionInput& Input = CellInputs[CellIndex];
+		const FJunctionResult& Result = CellResults[CellIndex];
 
 		RoadDebug::DrawJunction(GetWorld(), Input, Result, ZHeight, DebugLineThickness);
 

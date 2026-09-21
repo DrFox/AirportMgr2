@@ -80,9 +80,15 @@ namespace
 		FRandomStream Stream;
 
 		/**
-		 * Grown by ClearanceUu on every side, so the gap between two modules is enforced by
-		 * the same test that stops them intersecting. Two modules that merely touch read as
-		 * one building, which is the stamped look this file exists to remove.
+		 * Grown by HALF of ClearanceUu on every side, so two padded footprints standing edge
+		 * to edge land a full ClearanceUu apart - the gap is enforced by the same
+		 * intersection test that stops them overlapping outright. Two modules that merely
+		 * touch read as one building, which is the stamped look this file exists to remove.
+		 *
+		 * EVERY CALLER MUST PAD, or its contribution to the gap is zero rather than half:
+		 * PlaceAgainstTheBackFence used to skip this and store an unpadded rectangle in Taken,
+		 * so a shed standing next to a sampled module landed only ClearanceUu/2 away rather
+		 * than ClearanceUu - see PlaceAgainstTheBackFence's own comment (issue #193).
 		 */
 		static PlotYard::FFootprint Padded(const PlotYard::FFootprint& Footprint)
 		{
@@ -108,6 +114,13 @@ namespace
 		 * EVERY CORNER TESTED, the same question FitBays and the sampler ask, and inset by
 		 * the same CornerInsetUu for the same reason: a corner exactly on the boundary
 		 * answers a containment test by floating-point coin flip.
+		 *
+		 * THE FENCE TEST STAYS UNPADDED - "hard against the back fence" is the placement
+		 * Airside.Solve.PlotYardStandsTheShedAtTheBack pins, and padding the containment
+		 * search would hold the shed off the boundary it is supposed to touch. WHAT TAKEN
+		 * REMEMBERS IS PADDED, though: a shed that stayed unpadded there until issue #193 gave
+		 * whatever the sampler stood beside it only half of ClearanceUu rather than the whole
+		 * of it, because only the sampled side was ever contributing its half.
 		 */
 		bool PlaceAgainstTheBackFence(const PlotYard::FFootprint& Footprint,
 			PlotYard::FStand& OutStand)
@@ -151,7 +164,15 @@ namespace
 					// lets Reserve interleave back-fence and sampled placement in one walk
 					// without the two disagreeing about what ground is spoken for.
 					OutStand.bPlaced = true;
-					Taken.Add(Corners);
+
+					// PADDED FOR TAKEN ONLY: same centre and heading, corners recomputed at
+					// the grown size purely for what a LATER sampled stand tests itself
+					// against. Storing the unpadded Corners already computed above (as this
+					// did before issue #193) is what left the sampled-vs-shed gap at half of
+					// ClearanceUu.
+					TArray<FVector2D> PaddedCorners;
+					PlotYard::StandCorners(OutStand, Padded(Footprint), PaddedCorners);
+					Taken.Add(PaddedCorners);
 					return true;
 				}
 			}
@@ -459,6 +480,16 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 	// DISTINCT KITS, NOT THE WEIGHTED CYCLE: a foothold pass that walked the cycle would give
 	// a weight-3 shed three bays before the pump saw the yard at all, which is the same bug
 	// one step smaller. Largest first within the pass, for the reason the cycle sorts.
+	//
+	// WHETHER THE RAY WAS OFFERED, NOT WHETHER IT WAS TAKEN. CeilingFor(Kit) == 0 used to
+	// stand for "no attempt yet", but a back-fence placement that FAILS also leaves the
+	// ceiling at zero forever - so every later offer of that kit was forced back onto the
+	// same dead ray and it was never sampled anywhere else, contradicting "the rest are
+	// sampled like anything else" below (issue #193). Tracked separately so a failed first
+	// attempt still frees the rest of the cycle.
+	TArray<bool> RayOffered;
+	RayOffered.SetNumZeroed(Kits.Num());
+
 	auto PlaceOne = [&](int32 Kit, int32 MaxRun) -> bool
 	{
 		FReservedStand Stand;
@@ -467,8 +498,11 @@ PlotYard::FReservation PlotYard::Reserve(TArrayView<const FVector2D> Outline,
 		// ONLY THE FIRST STAND OF A BACK-FENCE KIT TAKES THE RAY. The back-fence pass walks
 		// depths along one line out of the gate, so a second stand offered that line either
 		// lands on the first or is refused outright. The rest are sampled like anything else.
-		const bool bTakesTheRay = Kits[Kit].Footprint.bAgainstTheBackFence
-			&& Reservation.CeilingFor(Kit) == 0;
+		const bool bTakesTheRay = Kits[Kit].Footprint.bAgainstTheBackFence && !RayOffered[Kit];
+		if (Kits[Kit].Footprint.bAgainstTheBackFence)
+		{
+			RayOffered[Kit] = true;
+		}
 
 		// AS LONG AS IT CAN, THEN SHORTER. A plot with room for two bays should get a two-bay
 		// run rather than nothing: refusing the whole run because the third bay does not fit

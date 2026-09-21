@@ -3,6 +3,33 @@
 #include "CoreMinimal.h"
 
 /**
+ * ICAO Annex 14 code letter, A through F.
+ *
+ * A PLAIN ENUM, NOT A UENUM: Solve/ is CoreMinimal.h-only and takes no engine types beyond
+ * it (see the namespace comment below), and nothing here needs UHT - no UPROPERTY stores
+ * it, no Blueprint reads it. Where a letter is AUTHORED - UAircraftType::Code - it stays an
+ * FName on the asset, because that is the UPROPERTY a human edits; IcaoCode::Parse is the
+ * one place that turns it into this enum, once, at the call site that reads it.
+ *
+ * REPLACES const FString& Letter ON EVERY TABLE FUNCTION BELOW. The nine functions keyed on
+ * a letter each fell back to Code C's row on any string that did not match A-F exactly -
+ * empty, lower-case before this existed, or a straight typo - and did it SILENTLY: nothing
+ * logged, so a mis-typed UAircraftType::Code became a stand sized for the wrong aeroplane
+ * with no line in the log to say so. An EIcaoCode cannot BE an unrecognised letter, so the
+ * table functions need no fallback any more; the one place a bad string can still arrive is
+ * Parse, and that is where the Warning now lives.
+ */
+enum class EIcaoCode : uint8
+{
+	A,
+	B,
+	C,
+	D,
+	E,
+	F
+};
+
+/**
  * ICAO Annex 14 code letters A-F, and the figures each one sets, kept as ONE table.
  *
  * Three call sites used to type this table separately, in three different orderings -
@@ -21,6 +48,29 @@
 namespace IcaoCode
 {
 	/**
+	 * Letter to EIcaoCode, or nullopt when it names none of A-F.
+	 *
+	 * TRIMMED THEN UPPERCASED, in that order, once, here - so "c", "C" and " C " (leading or
+	 * trailing whitespace, as a hand-typed FName can carry) all parse to EIcaoCode::C, and
+	 * anything else - empty, two letters, a digit, "Z" - is nullopt rather than a guess.
+	 *
+	 * LOGS NOTHING ITSELF: Solve/ is CoreMinimal-only and AirsideLog.h is outside it (see the
+	 * namespace comment). The nullopt is the signal; the ONE call site that reads authored
+	 * content off a data asset (AnchorLink.cpp's RadiusForCode, off UAircraftType::Code) is
+	 * what turns a miss into a UE_LOG Warning, because that is the one place a typo can
+	 * actually arrive from a human. Every other caller in this codebase hands Parse a letter
+	 * this program derived itself (LetterForWingspan, LetterForStandSize, or a compile-time
+	 * literal), which cannot be a typo and is asserted rather than logged where it is used.
+	 */
+	AIRSIDE_API TOptional<EIcaoCode> Parse(const FString& Letter);
+
+	/**
+	 * Parse's inverse, for a log line or a UI label - never for a lookup, which is what the
+	 * enum itself is for now.
+	 */
+	AIRSIDE_API const TCHAR* ToLetter(EIcaoCode Code);
+
+	/**
 	 * The letter for a wingspan, uu: under 15 m is A, under 24 m B, under 36 m C, under
 	 * 52 m D, under 65 m E, anything wider F.
 	 */
@@ -34,12 +84,13 @@ namespace IcaoCode
 	AIRSIDE_API double MaxWingspanForWidth(double TotalWidth);
 
 	/**
-	 * Minimum centreline curve radius, uu, for a stand sized to this code letter. Letter is
-	 * matched case-insensitively; no letter, or one nobody recognises, resolves to C - the
-	 * commonest stand in the world, so erring here does not put a 60 m curve on a
-	 * light-aircraft apron.
+	 * Minimum centreline curve radius, uu, for a stand sized to this code letter.
+	 *
+	 * TAKES THE ENUM, NOT A STRING, since 2026-09-21 - the fallback to Code C for "no letter,
+	 * or one nobody recognises" used to live here and hide a typo; Parse is where that
+	 * decision is made now, once, with a Warning at the call site that reads a human's typing.
 	 */
-	AIRSIDE_API double RadiusForLetter(const FString& Letter);
+	AIRSIDE_API double RadiusForLetter(EIcaoCode Code);
 
 	/**
 	 * The NARROWEST stand of this letter, uu: its span band, plus twice the letter's wingtip
@@ -65,10 +116,10 @@ namespace IcaoCode
 	 * uu of an edge - and 5300 held the lanes but not the six road contacts, which left
 	 * fillets clamped to 212 and 15 uu against a lock of 699.
 	 *
-	 * Letter matched case-insensitively, unknown letters resolving to C, as RadiusForLetter
-	 * does and for the same reason.
+	 * TAKES THE ENUM, as RadiusForLetter does and for the same reason - there is no unknown
+	 * letter left to fall back from once the input can only be A-F.
 	 */
-	AIRSIDE_API double StandWidthForLetter(const FString& Letter);
+	AIRSIDE_API double StandWidthForLetter(EIcaoCode Code);
 
 	/**
 	 * The WIDEST stand still of this letter, uu - the next letter's minimum.
@@ -82,7 +133,7 @@ namespace IcaoCode
 	 * DBL_MAX. A stand wider than any aeroplane needs is not an error - see the ruling that a
 	 * small airframe on a large stand is fine.
 	 */
-	AIRSIDE_API double MaxStandWidthForLetter(const FString& Letter);
+	AIRSIDE_API double MaxStandWidthForLetter(EIcaoCode Code);
 
 	/**
 	 * How wide a lane a service vehicle needs, uu - four metres, a service road's own lane.
@@ -98,9 +149,9 @@ namespace IcaoCode
 	 * How deep a stand of this letter is, uu - nose to the back of its GSE road. AUTHORED,
 	 * and the only figure here that is; see the row's comment for why no rule produces it.
 	 *
-	 * Letter matched as StandWidthForLetter matches it.
+	 * Takes the enum, as StandWidthForLetter does.
 	 */
-	AIRSIDE_API double StandDepthForLetter(const FString& Letter);
+	AIRSIDE_API double StandDepthForLetter(EIcaoCode Code);
 
 	/**
 	 * The letter a stand of this size is, or empty when it is smaller than any stand.
@@ -136,9 +187,9 @@ namespace IcaoCode
 	 * see FAirframe::SteerAxleX) is measured about that origin instead, and is far inside any
 	 * of these figures.
 	 *
-	 * Letter matched as StandWidthForLetter matches it.
+	 * Takes the enum, as StandWidthForLetter does.
 	 */
-	AIRSIDE_API double MaxTailAftForLetter(const FString& Letter);
+	AIRSIDE_API double MaxTailAftForLetter(EIcaoCode Code);
 
 	/**
 	 * How far FORWARD of the nose-gear stop mark the longest airframe this letter admits
@@ -152,7 +203,7 @@ namespace IcaoCode
 	 * Two figures rather than one length for the reason the aft one gives: the origin is the
 	 * nose GEAR, not the nose, and the overhang between them differs by type.
 	 */
-	AIRSIDE_API double MaxNoseFwdForLetter(const FString& Letter);
+	AIRSIDE_API double MaxNoseFwdForLetter(EIcaoCode Code);
 
 	/**
 	 * The WING KEEP-OUT for this letter: the fore-aft extent, uu about the nose-gear stop
@@ -176,8 +227,8 @@ namespace IcaoCode
 	 * figures are a 737-800 and an A320 root chord plus wing-body fairing, and every builder's
 	 * WingX is pinned inside its letter's band by a test, so the two cannot drift.
 	 */
-	AIRSIDE_API double WingFwdForLetter(const FString& Letter);
-	AIRSIDE_API double WingAftForLetter(const FString& Letter);
+	AIRSIDE_API double WingFwdForLetter(EIcaoCode Code);
+	AIRSIDE_API double WingAftForLetter(EIcaoCode Code);
 
 	/**
 	 * True when Local, in the stand's own space, is inside the wing keep-out - between the two
@@ -188,7 +239,7 @@ namespace IcaoCode
 	 * is the smallest box that certainly contains every admitted wing. It is conservative in
 	 * the right direction - it refuses ground a real wing leaves clear, never the reverse.
 	 */
-	AIRSIDE_API bool WingKeepOutContains(const FString& Letter, const FVector2D& Local);
+	AIRSIDE_API bool WingKeepOutContains(EIcaoCode Code, const FVector2D& Local);
 
 	/**
 	 * True when the segment A-B enters the wing keep-out anywhere along its length.
@@ -198,6 +249,5 @@ namespace IcaoCode
 	 * as a per-edge drivability test that cannot see a join. This clips the segment against the
 	 * box, so a crossing of any length is found.
 	 */
-	AIRSIDE_API bool WingKeepOutCrossedBy(
-		const FString& Letter, const FVector2D& A, const FVector2D& B);
+	AIRSIDE_API bool WingKeepOutCrossedBy(EIcaoCode Code, const FVector2D& A, const FVector2D& B);
 }

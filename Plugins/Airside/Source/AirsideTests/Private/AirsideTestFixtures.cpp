@@ -59,6 +59,13 @@ FRunwayRequirements TestAirframes::PiperRequirements()
 	return UAircraftType::PiperMeridianRequirements();
 }
 
+UAircraftType* TestAirframes::PiperType()
+{
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildPiperMeridian(Type);
+	return Type;
+}
+
 FGuidelineNodeId TestGraph::Node(URoadNetwork& Net, double X, double Y)
 {
 	return Net.AddGuidelineNode(FVector2D(X, Y), /*bDerived=*/false);
@@ -99,8 +106,8 @@ FGuidelineNodeId TestGraph::NodeFor(const URoadNetwork& Net, FRoadSegmentId Segm
 void TestGraph::Rebuild(URoadNetwork& Net)
 {
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(Net);
-	FRoadGuidelineBuilder::Build(Net, Solved);
-	FAnchorLink::Build(Net);
+	FRoadGuidelineBuilder::Build(Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
 FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOptions& Options, URoadNetwork* ExistingNet)
@@ -169,7 +176,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 	if (Options.bDerived)
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 
 	// STANDS FACE EAST (heading 0) so their lead-in casts WEST and meets the taxiway - see
@@ -184,7 +191,7 @@ FTestAirport FTestAirport::Build(const FAirframe& Airframe, const FTestAirportOp
 
 	if (Options.bDerived && Options.StandCount > 0)
 	{
-		FAnchorLink::Build(*Out.Net);
+		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 
 	return Out;
@@ -267,14 +274,14 @@ FExitArcAirport ExitArcBuildAirport(UObject* Outer, bool bWithStand, double XDis
 	Out.RW2 = Out.Net->AddStraightSegment(X, E, Runway);
 	Out.XT = Out.Net->AddStraightSegment(X, T, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-	FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+	FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	if (bWithStand)
 	{
 		// Faces east (heading 0), so its lead-in casts WEST and meets the 45 degree
 		// taxiway at (34000, -14000), 11000 uu away - inside FAnchorLink's reach.
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
-		FAnchorLink::Build(*Out.Net);
+		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 	return Out;
 }

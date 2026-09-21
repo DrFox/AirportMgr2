@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -70,7 +71,7 @@ namespace
 		}
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Actor->Network);
-		FRoadGuidelineBuilder::Build(*Actor->Network, Solved);
+		FRoadGuidelineBuilder::Build(*Actor->Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 }
 

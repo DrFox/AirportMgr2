@@ -48,6 +48,7 @@ bool FSelectTool::PositionOf(const FToolContext& Context, ESelectionKind Kind, i
 
 void FSelectTool::OnClick(const FToolContext& Context)
 {
+	SelectionRef = Context.Selection;
 	if (Context.Selection == nullptr)
 	{
 		UE_LOG(LogAirside, Warning, TEXT("Select: click with no selection to write to - the driver built a context without one."));
@@ -75,7 +76,6 @@ void FSelectTool::OnClick(const FToolContext& Context)
 			Sel.Clear();
 		}
 	}
-	bHasSelection = Sel.IsSet();
 	UE_LOG(LogAirside, Log, TEXT("Select: %s %d"),
 		Sel.Kind == ESelectionKind::Aircraft ? TEXT("aircraft") : Sel.Kind == ESelectionKind::Stand ? TEXT("stand") : TEXT("nothing"),
 		Sel.Id);
@@ -83,18 +83,18 @@ void FSelectTool::OnClick(const FToolContext& Context)
 
 void FSelectTool::OnCancel(const FToolContext& Context)
 {
+	SelectionRef = Context.Selection;
 	if (Context.Selection != nullptr)
 	{
 		Context.Selection->Clear();
 	}
-	bHasSelection = false;
 }
 
 void FSelectTool::Tick(const FToolContext& Context)
 {
+	SelectionRef = Context.Selection;
 	if (Context.Selection == nullptr || !Context.Selection->IsSet())
 	{
-		bHasSelection = false;
 		return;
 	}
 	// Polled, not subscribed: a tool has no delegate lifetime to manage, and this runs
@@ -106,7 +106,6 @@ void FSelectTool::Tick(const FToolContext& Context)
 		UE_LOG(LogAirside, Log, TEXT("Select: selection %d no longer exists; cleared."), Context.Selection->Id);
 		Context.Selection->Clear();
 	}
-	bHasSelection = Context.Selection->IsSet();
 }
 
 void FSelectTool::BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const

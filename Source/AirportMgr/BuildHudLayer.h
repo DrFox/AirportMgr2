@@ -11,19 +11,22 @@ class UToastStackWidget;
 class APlayerController;
 
 /**
- * Owns the four HUD widgets a build driver shows, and the one recipe that creates each of
+ * Owns the five HUD widgets a build driver shows, and the one recipe that creates each of
  * them the same way - see CreateConfiguredWidget.
  *
  * Pulled out of ARoadBuildController by issue #94: BeginPlay repeated "the configured
  * Blueprint if there is one, else the C++ class itself; make it; add it to the viewport at
  * this Z-order; log which" four times, once per widget, differing only in the class, the
  * Z-order and the two strings in the log line - the shape of duplication a template exists
- * to remove before a fifth widget copies it slightly wrong.
+ * to remove before a fifth widget copies it slightly wrong. The ledger panel was that fifth
+ * widget (issue #192): it arrived with a non-Config, non-Transient pair of UPROPERTYs, which
+ * meant DefaultGame.ini could not name a ledger Blueprint the way it can the other four. Its
+ * blocks now match theirs exactly.
  *
  * UCLASS(Config=Game), as ARoadBuildController was for these before the move: DefaultGame.ini
- * can still name a Blueprint for any of the four without a Blueprint subclass of the
- * controller existing to hold the default. Checked against every asset in Content/ and
- * DefaultGame.ini (issue #94's PR): nothing configures any of the four today, so nothing
+ * can name a Blueprint for any of the five without a Blueprint subclass of the controller
+ * existing to hold the default. Checked against every asset in Content/ and DefaultGame.ini
+ * (issue #94's PR, re-checked for #192): nothing configures any of the five today, so nothing
  * here falls back to a changed value because of the move.
  */
 UCLASS(Config = Game)
@@ -53,8 +56,9 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
 	TSubclassOf<UOfferInboxWidget> OfferInboxClass;
 
-	/** Optional Blueprint for the ledger panel. Code builds a plain card without one. */
-	UPROPERTY(EditAnywhere, Category = "HUD")
+	/** The ledger panel's Blueprint class; null means the plain C++ panel. Config, like the
+	 *  other four - see this class's own comment for why the ledger was the odd one out. */
+	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
 	TSubclassOf<ULedgerPanelWidget> LedgerPanelClass;
 
 	/** The inbox on screen. Play-mode only: the editor mode has no runtime to read. */
@@ -62,7 +66,8 @@ public:
 	TObjectPtr<UOfferInboxWidget> OfferInbox;
 
 	/** Where the money went. Hidden until the player asks - see ULedgerPanelWidget. */
-	UPROPERTY() TObjectPtr<ULedgerPanelWidget> LedgerPanel;
+	UPROPERTY(Transient)
+	TObjectPtr<ULedgerPanelWidget> LedgerPanel;
 
 	/** The toast stack's Blueprint class; null means the plain C++ stack, as above. */
 	UPROPERTY(Config, EditAnywhere, Category = "Airside|UI")
