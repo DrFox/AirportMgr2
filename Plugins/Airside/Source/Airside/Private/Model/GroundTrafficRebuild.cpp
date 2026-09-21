@@ -9,6 +9,7 @@
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
+#include "Model/TrafficContext.h"
 
 bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuery& Query,
 	int32 KeepSteps, FRoutePlan& Plan)
@@ -33,10 +34,16 @@ bool FPlanReResolver::SpliceReplan(const URoadNetwork& Network, const FRouteQuer
 	return true;
 }
 
-bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, const URoadNetwork& Network, int32 SpliceStep,
-	FGuidelineEdgeId BannedEdge, FGuidelineNodeId BannedNode, const FTrafficRules& Rules,
-	FTrafficOccupancy& Occupancy)
+bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEdgeId BannedEdge,
+	FGuidelineNodeId BannedNode, const FTrafficContext& Context)
 {
+	// REBOUND TO THE OLD NAMES (issue #175) - see FDeadlockResolver::Resolve's identical
+	// rebinding for why: the body below is unchanged from before Network, Rules and Occupancy
+	// became one FTrafficContext parameter.
+	const URoadNetwork& Network = Context.Network;
+	const FTrafficRules& Rules = Context.Rules;
+	FTrafficOccupancy& Occupancy = Context.Occupancy;
+
 	const FRoutePlan& Plan = Agent.Follower.Plan;
 
 	// EVERY GUARD BEFORE ANYTHING IS WRITTEN, and that is the whole shape of this function:
@@ -187,6 +194,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// whole graph. See Airside.Model.Traffic.GraphRebuildNodeVisits for the measurement.
 	const FGuidelineNodeIndex NodeIndex(Network, Rules.ResolveRadius);
 
+	// ONE CONTEXT FOR THE WHOLE REBUILD TOO (issue #175), for the same reason as NodeIndex
+	// just above: Network, Rules, Occupancy, NodeReach and RunwayChains are all fixed for the
+	// duration of this call, so every ReResolvePlan call and the stand re-offer pass below
+	// share the one bundle rather than each naming the five UGroundTraffic members again.
+	const FTrafficContext Context{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds};
+
 	int32 Considered = 0;
 	int32 Replanned = 0;
 	int32 Truncated = 0;
@@ -265,7 +278,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		}
 
 		++Considered;
-		switch (PlanReResolver.ReResolvePlan(Agent, *Plan, FromStep, Network, Rules, Occupancy, NodeIndex))
+		switch (PlanReResolver.ReResolvePlan(Agent, *Plan, FromStep, Context, NodeIndex))
 		{
 		case FPlanReResolver::EReResolve::Replanned: ++Replanned; break;
 		case FPlanReResolver::EReResolve::Truncated: ++Truncated; break;
@@ -287,7 +300,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// Advance - the player deletes a stand and presses 7 in the same breath. And a rebuild
 	// may have ADDED a stand, so the re-offer pass asks for every waiter.
 	{
-		FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
+		FClaimPass Pass{Context};
 		for (FRoadAgent& Agent : Agents)
 		{
 			Pass.ClaimGoalNode(Agent, Network);
@@ -309,9 +322,16 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 }
 
 FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
-	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network,
-	const FTrafficRules& Rules, FTrafficOccupancy& Occupancy, const FGuidelineNodeIndex& NodeIndex)
+	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const FTrafficContext& Context,
+	const FGuidelineNodeIndex& NodeIndex)
 {
+	// REBOUND TO THE OLD NAMES (issue #175) - see FDeadlockResolver::Resolve's identical
+	// rebinding for why: the body below, including the nested Strand lambda, is unchanged
+	// from before Network, Rules and Occupancy became one FTrafficContext parameter.
+	const URoadNetwork& Network = Context.Network;
+	const FTrafficRules& Rules = Context.Rules;
+	FTrafficOccupancy& Occupancy = Context.Occupancy;
+
 	// WHOSE PLAN THIS IS, asked by address. The two callers hand in one of exactly two plans
 	// and the difference matters twice below: only the follower's plan gets Replace (nothing
 	// is following a TaxiInPlan yet), and only the follower's plan can be replanned through
@@ -556,7 +576,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// AHEAD OF THE AGENT ONLY, by the branch above: ReplanAt's own precondition is that
 		// the splice is at or ahead of the step the agent is on, and it is now the caller
 		// that guarantees the strict half of that rather than the callee that tolerates it.
-		if (ReplanAt(Agent, Network, Failed, FGuidelineEdgeId(), FGuidelineNodeId(), Rules, Occupancy))
+		if (ReplanAt(Agent, Failed, FGuidelineEdgeId(), FGuidelineNodeId(), Context))
 		{
 			return EReResolve::Replanned;
 		}

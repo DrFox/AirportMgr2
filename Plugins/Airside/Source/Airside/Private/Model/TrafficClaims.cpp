@@ -14,8 +14,13 @@
 #include "Model/TrafficClaims.h"
 
 #include "AirsideLog.h"
+#include "Model/GroundTraffic.h"
 #include "Model/RoadNetwork.h"
 #include "Solve/GuidelineGeom.h"
+
+// GroundTraffic.h ABOVE IS FOR UGroundTraffic::StepStart/StepFromNode/CurrentStep ONLY
+// (issue #175): those three static helpers stayed on UGroundTraffic - see its header - so
+// this .cpp needs the full class now that TrafficClaims.h itself no longer pulls it in.
 
 /**
  * One thing an agent wants this tick, plus what the REFUSAL rule needs to know about it.

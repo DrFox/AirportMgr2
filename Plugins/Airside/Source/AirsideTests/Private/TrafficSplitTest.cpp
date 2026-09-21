@@ -85,6 +85,7 @@ bool FTrafficSplitDeadlockResolverStandaloneTest::RunTest(const FString& Paramet
 
 	FTrafficRules Rules; // StallSeconds 3, RetrySeconds 5 - both agents are well past both.
 	FNodeReachCache Reach;
+	FRunwayChainCache Chains; // Unread by the yield branch, but FTrafficContext names it too.
 	FPlanReResolver PlanReResolver;
 
 	// A bare network with nothing on it: the yield branch never reads it (it returns before
@@ -92,7 +93,8 @@ bool FTrafficSplitDeadlockResolverStandaloneTest::RunTest(const FString& Paramet
 	URoadNetwork* Network = NewObject<URoadNetwork>();
 
 	FDeadlockResolver Resolver;
-	Resolver.Resolve(Agents, *Network, Rules, Occupancy, Reach, PlanReResolver, /*SimSeconds=*/100.0);
+	Resolver.Resolve(Agents, FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/100.0},
+		PlanReResolver);
 
 	TestEqual(TEXT("one cycle detected"), Resolver.CyclesSeen.Num(), 1);
 	TestEqual(TEXT("settled by a yield, not a replan"), Resolver.Yields, 1);
@@ -132,7 +134,8 @@ bool FTrafficSplitClaimPassStandaloneTest::RunTest(const FString& Parameters)
 	FRunwayChainCache Chains; // Issue #170: FClaimPass's fourth reference, bare like the rest.
 	URoadNetwork* Network = NewObject<URoadNetwork>();
 
-	FClaimPass Pass{Rules, Occupancy, Reach, Chains};
+	// FTrafficContext, not four positional references (issue #175) - see Model/TrafficClaims.h.
+	FClaimPass Pass{FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/0.0}};
 	Pass.Run(Agent, *Network);
 
 	int32 Holder = 0;
@@ -165,9 +168,11 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		Agent.Id = 1;
 		Agent.Phase = EAgentPhase::Parked;
 		URoadNetwork* Network = NewObject<URoadNetwork>();
+		FNodeReachCache Reach;
+		FRunwayChainCache Chains;
 
-		const bool bReplanned = PlanReResolver.ReplanAt(
-			Agent, *Network, /*SpliceStep=*/0, FGuidelineEdgeId(), FGuidelineNodeId(), Rules, Occupancy);
+		const bool bReplanned = PlanReResolver.ReplanAt(Agent, /*SpliceStep=*/0, FGuidelineEdgeId(),
+			FGuidelineNodeId(), FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/0.0});
 		TestFalse(TEXT("a non-Taxiing agent is refused, with no UGroundTraffic involved"), bReplanned);
 	}
 
@@ -204,8 +209,10 @@ bool FTrafficSplitPlanReResolverStandaloneTest::RunTest(const FString& Parameter
 		Agent.GoalNode = East;
 		Agent.Follower.Start(Plan, FAirframe());
 
-		const bool bReplanned = PlanReResolver.ReplanAt(
-			Agent, *Network, /*SpliceStep=*/0, WestSouth, FGuidelineNodeId(), Rules, Occupancy);
+		FNodeReachCache Reach;
+		FRunwayChainCache Chains;
+		const bool bReplanned = PlanReResolver.ReplanAt(Agent, /*SpliceStep=*/0, WestSouth, FGuidelineNodeId(),
+			FTrafficContext{*Network, Rules, Occupancy, Reach, Chains, /*SimSeconds=*/0.0});
 
 		TestTrue(TEXT("banning the short edge still finds a route, with no UGroundTraffic"), bReplanned);
 		if (bReplanned)

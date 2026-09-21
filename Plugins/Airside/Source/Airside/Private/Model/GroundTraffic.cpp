@@ -13,39 +13,12 @@
 #include "Model/PushbackRun.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
+#include "Model/TrafficContext.h"
 #include "Solve/GuidelineGeom.h"
 #include "Solve/RunwayDesignator.h"
 
-double FTrafficRules::FootprintFor(ETraversalClass Class) const
-{
-	// Pedestrians and emergency vehicles take the vehicle figures: nothing authored says
-	// otherwise yet, and a fire truck is nearer a van than an aeroplane.
-	return Class == ETraversalClass::Aircraft ? AircraftFootprint : VehicleFootprint;
-}
-
-double FTrafficRules::GapFor(ETraversalClass Class) const
-{
-	return Class == ETraversalClass::Aircraft ? AircraftGap : VehicleGap;
-}
-
-double FTrafficRules::PushSpeedFor(EPushbackNeed Need) const
-{
-	// A SWITCH AND NOT A TERNARY CHAIN, deliberately, and unlike the two functions above -
-	// which have two cases and a documented "everything else" rule. This is the one place
-	// that must agree with EPushbackNeed, so a value added to that enum has to produce a
-	// compiler warning here rather than fall quietly into an else and push an A320 at a hand
-	// tug's pace. The codebase's "lists that must agree are ONE list", applied to arithmetic.
-	switch (Need)
-	{
-	case EPushbackNeed::SelfManoeuvre: return SelfManoeuvrePushSpeed;
-	case EPushbackNeed::HandTug:       return HandTugPushSpeed;
-	case EPushbackNeed::VehicleTug:    return VehicleTugPushSpeed;
-	}
-
-	// Unreachable while the switch is total. The CONSERVATIVE answer anyway, matching
-	// FAirframe::PushbackNeed's own default: slowest is never unsafe.
-	return HandTugPushSpeed;
-}
+// FTrafficRules::FootprintFor/GapFor/PushSpeedFor MOVED TO TrafficRules.cpp (issue #175),
+// with the struct itself - Model/TrafficRules.h.
 
 int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector2D& Near,
 	const FAirframe& Airframe, double ShutdownPauseSeconds)
@@ -726,7 +699,18 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// ONE INSTANCE FOR THE HANDOVER CLAIM BELOW (issue #84): the only FClaimPass call in this
 	// loop is ClaimGoalNode at the Taxiing -> Parked handover, so this is cheaper than
 	// constructing one per agent and exactly as correct - see Arbitrate's own instance for why.
-	FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
+	//
+	// TOptional, AND CONSTRUCTED ONLY WHEN THERE IS A NETWORK (issue #175): FTrafficContext
+	// holds Network by reference, which cannot be bound to a null pointer, and Network null is
+	// a real caller state - see Advance's own header, "the pre-M2 behaviour". The one call this
+	// Pass exists for is itself gated on Network != nullptr a few lines down, so skipping
+	// construction in that case changes nothing reachable; TOptional rather than a pointer to a
+	// local because FClaimPass has no default constructor to placement over.
+	TOptional<FClaimPass> Pass;
+	if (Network != nullptr)
+	{
+		Pass.Emplace(FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds});
+	}
 
 	// Every handover (arrive -> taxi -> depart -> gone, or arrive -> taxi -> park) is owned
 	// by FRoadAgent::Advance - see its own comment. This loop is left with: advance, watch
@@ -836,7 +820,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// for one frame.
 			if (Network != nullptr)
 			{
-				Pass.ClaimGoalNode(Agent, *Network);
+				Pass->ClaimGoalNode(Agent, *Network);
 			}
 			break;
 
@@ -888,7 +872,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		if (Agent.Phase != Before)
 		{
 			OnAgentPhaseChanged.Broadcast(Id, Before, Agent.Phase);
-			// #169: covers the Parked handover above (Pass.ClaimGoalNode claimed the stand
+			// #169: covers the Parked handover above (Pass->ClaimGoalNode claimed the stand
 			// earlier in this same iteration) and every other phase change that can move an
 			// arrival's answer - Arriving ending, a departure starting its push. LinedUp and
 			// Airborne bump for themselves, above, because they are the one case a phase change
@@ -904,7 +888,9 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 	// and hand the follower a plan the arbiter had not yet been asked about.
 	if (Network != nullptr)
 	{
-		DeadlockResolver.Resolve(Agents, *Network, Rules, Occupancy, NodeReach, PlanReResolver, SimSeconds);
+		// CONTEXT IN PLACE OF FOUR POSITIONAL MEMBERS (issue #175) - Network, Rules, Occupancy
+		// and NodeReach were four of Resolve's own seven parameters; see Model/TrafficContext.h.
+		DeadlockResolver.Resolve(Agents, FTrafficContext{*Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}, PlanReResolver);
 	}
 
 	// LAST OF ALL: a waiter is sent to a stand only once everyone has claimed, moved and been
@@ -992,7 +978,7 @@ void UGroundTraffic::Arbitrate(const URoadNetwork& Network)
 	// as correct as a fresh one per agent, and cheaper. RunwayChains (issue #170) makes that
 	// sharing pay for a second thing too: two agents in the same Arbitrate call naming the
 	// same runway seed now walk it once between them, not once each.
-	FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
+	FClaimPass Pass{FTrafficContext{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds}};
 
 	// BY RANK, NOT BY LIST ORDER. Indices rather than a sorted copy of the agents: the claim
 	// pass writes to the agents, so a copy would be arbitrating over stale ones.

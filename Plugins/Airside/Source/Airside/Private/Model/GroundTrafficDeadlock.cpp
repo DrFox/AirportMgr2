@@ -15,6 +15,7 @@
 #include "AirsideLog.h"
 #include "Model/RoadNetwork.h"
 #include "Model/TrafficClaims.h"
+#include "Model/TrafficContext.h"
 
 namespace
 {
@@ -49,7 +50,9 @@ bool UGroundTraffic::ReplanAt(int32 AgentId, const URoadNetwork& Network, int32 
 	{
 		return false;
 	}
-	return PlanReResolver.ReplanAt(Agents[Index], Network, SpliceStep, BannedEdge, BannedNode, Rules, Occupancy);
+	// CONTEXT IN PLACE OF Network, Rules AND Occupancy (issue #175) - see Model/TrafficContext.h.
+	return PlanReResolver.ReplanAt(Agents[Index], SpliceStep, BannedEdge, BannedNode,
+		FTrafficContext{Network, Rules, Occupancy, NodeReach, RunwayChains, SimSeconds});
 }
 
 bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const URoadNetwork* Network,
@@ -92,10 +95,18 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
 }
 
-void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const URoadNetwork& Network,
-	const FTrafficRules& Rules, FTrafficOccupancy& Occupancy, FNodeReachCache& Reach,
-	FPlanReResolver& PlanReResolver, double SimSeconds)
+void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContext& Context,
+	FPlanReResolver& PlanReResolver)
 {
+	// REBOUND TO THE OLD NAMES (issue #175), so the whole body below - written, and read,
+	// against Network/Rules/Occupancy/Reach/SimSeconds - is unchanged by the parameter object
+	// that replaced four of Resolve's seven positional parameters. See Model/TrafficContext.h.
+	const URoadNetwork& Network = Context.Network;
+	const FTrafficRules& Rules = Context.Rules;
+	FTrafficOccupancy& Occupancy = Context.Occupancy;
+	FNodeReachCache& Reach = Context.Reach;
+	const double SimSeconds = Context.SimSeconds;
+
 	// ONE EDGE PER STALLED WAITER. StalledSeconds only accrues while an agent is Taxiing,
 	// stopped and naming a blocker (see FRoadAgent::Advance's caller in AdvanceOnce), and
 	// FClaimPass::Run clears WaitingOn the moment an agent stops taxiing - so a parked or
@@ -349,7 +360,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const URoadNetwork& 
 				Turner->BlockedResource.Kind == ETrafficResourceKind::Node
 					? Turner->BlockedResource.Node : FGuidelineNodeId();
 
-			if (PlanReResolver.ReplanAt(*Turner, Network, Step, BannedEdge, BannedNode, Rules, Occupancy))
+			if (PlanReResolver.ReplanAt(*Turner, Step, BannedEdge, BannedNode, Context))
 			{
 				bResolved = true;
 				Candidate = Id;
