@@ -2,8 +2,8 @@
 
 #include "AirsideLog.h"
 #include "Build/ExitGeometry.h"
-#include "Content/AirsideSettings.h"
 #include "Build/RoadMeshBuilder.h"
+#include "Model/Airframe.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Profiles/RoadProfile.h"
@@ -46,7 +46,8 @@ namespace
 	}
 }
 
-void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved)
+void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
+	const FAirframe& LargestServiceVehicle)
 {
 	// Clear the previous derivation before regenerating, or Build accumulates.
 	//
@@ -594,8 +595,10 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 					// which is worse than a slow corner and much harder to diagnose. What the
 					// player can act on is the segment length, so that is what this names.
 					{
-						const FAirframe Largest = UAirsideSettings::ResolveLargestServiceVehicle();
-						const double Needed = Largest.TightestFollowableRadius();
+						// ISSUE #190: LargestServiceVehicle is the caller's, resolved once for
+						// the whole rebuild - see this function's own comment - not re-resolved
+						// per ordered arm pair the way this warning used to.
+						const double Needed = LargestServiceVehicle.TightestFollowableRadius();
 						if (Needed > 0.0)
 						{
 							const double Delivered = GuidelineGeom::TightestRadius(
@@ -611,7 +614,7 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 									     "corner needs about %.0f, so the segments meeting here are "
 									     "too short. Draw them longer."),
 									Node->Position.X, Node->Position.Y, Delivered, Needed,
-									Largest.Wheelbase(), Largest.Ground.MaxSteerDegrees,
+									LargestServiceVehicle.Wheelbase(), LargestServiceVehicle.Ground.MaxSteerDegrees,
 									FVector2D::Distance(
 										Network.GetGuidelineNode(Turn.A)->Position, Turn.Control),
 									Needed * UE_DOUBLE_SQRT_2);

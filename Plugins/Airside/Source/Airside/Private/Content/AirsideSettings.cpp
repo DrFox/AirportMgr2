@@ -15,8 +15,12 @@ UAirsideSettings::UAirsideSettings()
 	SectionName = TEXT("Airside");
 }
 
+int32 UAirsideSettings::GetContentCallCountForTest = 0;
+
 const UAirsideContent* UAirsideSettings::GetContent()
 {
+	++GetContentCallCountForTest;
+
 	const UAirsideSettings* Settings = GetDefault<UAirsideSettings>();
 	if (Settings == nullptr || Settings->Content.IsNull())
 	{
@@ -80,8 +84,15 @@ FAirframe UAirsideSettings::ResolveDefaultAirframe()
 	return Piper;
 }
 
+int32 UAirsideSettings::ResolveLargestServiceVehicleCallCountForTest = 0;
+
 FAirframe UAirsideSettings::ResolveLargestServiceVehicle()
 {
+	// COUNTED BEFORE ANYTHING ELSE - see the counter's own comment. Issue #190: this used to
+	// be called fresh per arm, per ordered arm pair and twice per link; a production caller
+	// now resolves it ONCE per rebuild and passes the answer down instead of calling back in.
+	++ResolveLargestServiceVehicleCallCountForTest;
+
 	// ONE CLASS TODAY, and deliberately no taxonomy yet: an EVehicleClass enum with a single
 	// member would be a list nothing chooses from - the "authored numbers nothing reads"
 	// failure this codebase has shipped three times. When the second dispenser arrives, this

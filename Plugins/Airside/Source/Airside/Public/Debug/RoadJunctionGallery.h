@@ -6,6 +6,9 @@
 // URoadProfile::StandardTaxiwayWidth/StandardTaxiwayFilletRadius, and a UPROPERTY default
 // initializer needs the static member's definition, which a forward declaration cannot give.
 #include "Profiles/RoadProfile.h"
+// FJunctionInput/FJunctionResult, cached per cell by BuildGallery rather than rebuilt every
+// Tick - see CellInputs/CellResults' own comment (issue #190).
+#include "Solve/JunctionSolver.h"
 #include "RoadJunctionGallery.generated.h"
 
 class URoadNetwork;
@@ -94,4 +97,23 @@ private:
 	/** Centre node of each gallery cell. */
 	TArray<FVector2D> CellCentres;
 	TArray<TArray<double>> CellBearings;
+
+	/**
+	 * Every cell's junction, solved ONCE in BuildGallery rather than every Tick (issue
+	 * #190) - index-parallel with CellCentres/CellBearings. Tick used to re-run
+	 * FJunctionSolver::SolveCuts/SolveBoundary and re-resolve every profile's fillet radius
+	 * for EVERY cell EVERY FRAME purely to redraw debug lines that had not changed since the
+	 * gallery was last built; PostEditChangeProperty already drops the whole gallery (and so
+	 * these caches) when an edited property could have changed the answer.
+	 */
+	TArray<FJunctionInput> CellInputs;
+	TArray<FJunctionResult> CellResults;
+
+	/**
+	 * A MEMBER, NOT A FUNCTION-LOCAL STATIC (issue #190). `static int32 TickCount` inside
+	 * Tick was shared across every ARoadJunctionGallery instance in the level - one gallery's
+	 * frame count telling a second gallery's log line when to fire, which is wrong the moment
+	 * two exist.
+	 */
+	int32 TickCount = 0;
 };

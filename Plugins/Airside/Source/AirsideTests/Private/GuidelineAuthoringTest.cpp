@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -29,7 +30,7 @@ namespace
 		Net->AddStraightSegment(FarA, FarB, Profile);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 		return Net;
 	}
 
@@ -139,7 +140,7 @@ bool FGuidelineAuthoringTest::RunTest(const FString& Parameters)
 	for (int32 Pass = 0; Pass < 2; ++Pass)
 	{
 		const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Again);
+		FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 
 	// The edge itself survives - this much the builder does promise.

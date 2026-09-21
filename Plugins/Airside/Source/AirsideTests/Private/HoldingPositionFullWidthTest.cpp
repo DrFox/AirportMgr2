@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
 #include "Build/HoldingPositionMarkingBuilder.h"
 #include "Build/RoadMeshBuilder.h"
@@ -57,7 +58,7 @@ bool FHoldingPositionFullWidthTest::RunTest(const FString& Parameters)
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 		if (!TestEqual(FString::Printf(TEXT("%.0f degrees: every node solves"), FMath::RadiansToDegrees(Angle)), Solved.FailedNodes, 0)) { continue; }
-		FRoadGuidelineBuilder::Build(*Net, Solved);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FRoadSegment* Segment = Net->GetSegment(XT);
 		const FGuidelineNodeId End = TestGraph::NodeFor(*Net, XT, /*bEndA=*/true);

@@ -1,6 +1,11 @@
 #include "Build/BuildCost.h"
 
-#include "Content/AirsideSettings.h"
+// NO Content/ INCLUDE (issue #191/#78's shape): every rate this file prices with -
+// Profile.CostPerMetre/UpkeepPerMetrePerDay, ForApron's RatePerSquareMetre, DailyUpkeep's
+// ApronRatePerSquareMetrePerDay - already arrives as a PARAMETER, resolved by the caller
+// (Present/RoadEditFacade.cpp's QuoteForApron; AirportOps' daily-upkeep poster). This file
+// never called UAirsideSettings; the include was dead weight left over from before those
+// callers existed.
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadApron.h"
 #include "Model/RoadEntity.h"

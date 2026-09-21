@@ -619,6 +619,23 @@ void FRoadMeshBuilder::Build(const URoadNetwork& Network, const FRoadSolveResult
 	// Segments first. See the header: this ordering is the whole reason this function
 	// exists rather than leaving each caller to remember it.
 	const TArray<FRoadSegment>& Segments = Network.GetSegments();
+
+	// A ROUGH RESERVE, not an exact one (issue #190): every live segment welds at least two
+	// cross-sections of two band edges each, and every solved node adds a fan around its
+	// rim, so WeldMap and Buffers grew both one element at a time with nothing sized against
+	// either count. Undershooting costs a rehash/realloc same as before this reserve
+	// existed; overshooting costs nothing this function gets back, so the estimate leans
+	// generous rather than tight.
+	const int32 EstimatedVertices = Segments.Num() * (RibbonSegments + 1) * 4 + Solved.NodeResults.Num() * 8;
+	if (EstimatedVertices > 0)
+	{
+		WeldMap.Reserve(WeldMap.Num() + EstimatedVertices);
+		Buffers.Positions.Reserve(Buffers.Positions.Num() + EstimatedVertices);
+		Buffers.UV0.Reserve(Buffers.UV0.Num() + EstimatedVertices);
+		Buffers.UV1.Reserve(Buffers.UV1.Num() + EstimatedVertices);
+		Buffers.UV2.Reserve(Buffers.UV2.Num() + EstimatedVertices);
+	}
+
 	for (int32 Index = 0; Index < Segments.Num(); ++Index)
 	{
 		if (!Segments[Index].bAlive)

@@ -1634,8 +1634,8 @@ bool FTrafficGraphRebuildTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("and it is Arriving, so nothing is following that route yet"), P->Phase, EAgentPhase::Arriving);
 
 			const FRoadSolveResult Again = FRoadNetworkSolver::SolveAll(*Net);
-			FRoadGuidelineBuilder::Build(*Net, Again);
-			FAnchorLink::Build(*Net);
+			FRoadGuidelineBuilder::Build(*Net, Again, UAirsideSettings::ResolveLargestServiceVehicle());
+			FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 			TestNull(TEXT("the builder freed the taxi-in route's first handle"), Net->GetGuidelineEdge(OldFirst));
 
 			Traffic->OnGraphRebuilt(*Net);

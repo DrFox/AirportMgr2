@@ -81,7 +81,7 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	const FEntityInstanceId Depot = Net.PlaceEntity(DepotDef, DepotDef->Anchors,
 		FVector2D(12000.0, RoadY + 4000.0), UE_DOUBLE_PI * 0.5, 0.0, DepotDef->PoseRole,
 		DepotDef->Trucks);
-	FAnchorLink::Build(Net);
+	FAnchorLink::Build(Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	UOpsRuntime* Runtime = NewObject<UOpsRuntime>();
 	if (!TestNotNull(TEXT("the runtime owns a fuel service"), Runtime->GetFuelService())) { return false; }

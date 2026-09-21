@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Build/AnchorLink.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -66,7 +67,7 @@ bool FTaxiThroughStandTest::RunTest(const FString& Parameters)
 		Stand->bTaxiThrough = false;
 		const FEntityInstanceId Placed = TaxiThroughPlaceStand(*Net, Stand);
 
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// Re-read AFTER Build: joining reallocates the node array, which is the trap
 		// AnchorLinkTest documents at the same point.
@@ -85,7 +86,7 @@ bool FTaxiThroughStandTest::RunTest(const FString& Parameters)
 		Stand->bTaxiThrough = true;
 		const FEntityInstanceId Placed = TaxiThroughPlaceStand(*Net, Stand);
 
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FGuidelineNode* Pose = Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode);
 		if (!TestNotNull(TEXT("the stop position resolves"), Pose))

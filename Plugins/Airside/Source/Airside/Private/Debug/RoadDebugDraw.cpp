@@ -5,9 +5,14 @@
 
 namespace
 {
+	// DEFAULTS OFF (issue #190; was 1). This CVar was gating ARoadJunctionGallery::Tick's
+	// own debug lines, not the road mesh itself, so a default of 1 meant every gallery in
+	// every session solved and drew boundary/cut overlays nobody had asked to see. Off by
+	// default costs nothing to turn back on - `road.DebugDraw 1` - when the gallery is
+	// actually being used to inspect a junction.
 	TAutoConsoleVariable<int32> CVarRoadDebugDraw(
 		TEXT("road.DebugDraw"),
-		1,
+		0,
 		TEXT("Airside debug drawing. 0 = off, 1 = boundary and cuts, 2 = adds solver internals."),
 		ECVF_Default);
 

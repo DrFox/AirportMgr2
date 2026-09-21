@@ -188,6 +188,34 @@ UDynamicMeshComponent* ARoadNetworkActor::MakeSurfaceComponent(FName Name)
 	return Component;
 }
 
+void ARoadNetworkActor::RefreshResolvedContentCacheIfDirty()
+{
+	if (!bResolvedContentDirty)
+	{
+		return;
+	}
+
+	// THROUGH THE RESOLVERS, never the raw properties - see ResolveMaterialSet's own
+	// comment for why a resolver that FILLED a null property changed a level. Run exactly
+	// once per dirty mark, however many rebuilds happen before the next one - issue #190:
+	// these are the seven of MakeSurfaceSettings' nine Resolve* calls that pay for an
+	// actual LoadSynchronous (ResolveMaterialSet and ResolveProfile do not - see each
+	// one's own body - so caching them would save nothing).
+	ResolvedSurfaceMaterialCache = ResolveSurfaceMaterial();
+	ResolvedApronMaterialCache = ResolveApronMaterial();
+	ResolvedRubberMaterialCache = ResolveRubberMaterial();
+	ResolvedGhostMaterialCache = ResolveGhostMaterial();
+
+	ResolvedRunwayMaterialsCache.SetNum(RunwayMaterialSlotCount);
+	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
+	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Tarmac)] = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
+	ResolvedRunwayMaterialsCache[RunwayMaterialSlot(ERunwaySurface::Concrete)] = ResolveRunwayMaterial(ERunwaySurface::Concrete);
+
+	// CLEARED LAST, so a crash or an early return above never leaves this actor believing a
+	// half-filled cache is complete.
+	bResolvedContentDirty = false;
+}
+
 URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 {
 	URoadSurfacePresenter::FSurfaceSettings Settings;
@@ -203,16 +231,30 @@ URoadSurfacePresenter::FSurfaceSettings ARoadNetworkActor::MakeSurfaceSettings()
 	Settings.DebugDrawSeconds = DebugDrawSeconds;
 	Settings.ServiceLinkRadius = ServiceLinkRadius;
 
-	// THROUGH THE RESOLVERS, never the raw properties - see ResolveMaterialSet's own
-	// comment for why a resolver that FILLED a null property changed a level.
-	Settings.SurfaceMaterial = ResolveSurfaceMaterial();
-	Settings.ApronMaterial = ResolveApronMaterial();
-	Settings.RubberMaterial = ResolveRubberMaterial();
-	Settings.GhostMaterial = ResolveGhostMaterial();
+	// RESOLVED FRESH EVERY CALL, DELIBERATELY NOT CACHED - issue #190. This does no
+	// LoadSynchronous (see UAirsideSettings::ResolveDefaultVehicle's own comment: "NO
+	// CONTENT LOOKUP"), so there is nothing the cache below would save it; what matters is
+	// that it runs ONCE HERE rather than once per arm/per ordered arm pair/twice per link
+	// further down the pipeline, which is what URoadSurfacePresenter::Rebuild now relies on.
+	Settings.LargestServiceVehicle = UAirsideSettings::ResolveLargestServiceVehicle();
+
+	// THE EXPENSIVE HALF, CACHED - see RefreshResolvedContentCacheIfDirty and
+	// bResolvedContentDirty's own comments.
+	RefreshResolvedContentCacheIfDirty();
+	Settings.SurfaceMaterial = ResolvedSurfaceMaterialCache;
+	Settings.ApronMaterial = ResolvedApronMaterialCache;
+	Settings.RubberMaterial = ResolvedRubberMaterialCache;
+	Settings.GhostMaterial = ResolvedGhostMaterialCache;
+	if (ResolvedRunwayMaterialsCache.Num() == RunwayMaterialSlotCount)
+	{
+		for (int32 Slot = 0; Slot < RunwayMaterialSlotCount; ++Slot)
+		{
+			Settings.RunwayMaterials[Slot] = ResolvedRunwayMaterialsCache[Slot];
+		}
+	}
+
+	// NEITHER CACHED, for the reason RefreshResolvedContentCacheIfDirty's own comment gives.
 	Settings.MaterialSet = ResolveMaterialSet();
-	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Grass)] = ResolveRunwayMaterial(ERunwaySurface::Grass);
-	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Tarmac)] = ResolveRunwayMaterial(ERunwaySurface::Tarmac);
-	Settings.RunwayMaterials[RunwayMaterialSlot(ERunwaySurface::Concrete)] = ResolveRunwayMaterial(ERunwaySurface::Concrete);
 	Settings.Profile = ResolveProfile();
 	return Settings;
 }
@@ -291,6 +333,20 @@ void ARoadNetworkActor::PostInitProperties()
 	}
 
 }
+
+#if WITH_EDITOR
+void ARoadNetworkActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	// EVERY PROPERTY, NOT JUST THE NINE MakeSurfaceSettings ACTUALLY READS - see the header's
+	// own comment for why. A property this cache does not read invalidates it for nothing
+	// worse than one extra resolve on the next rebuild; a property it DOES read and this
+	// missed would serve a stale material or profile until something else happened to mark
+	// it dirty, which is the failure #190's cache exists not to reintroduce.
+	bResolvedContentDirty = true;
+}
+#endif
 
 UObject* ARoadNetworkActor::FacadeOuterForTest() const
 {

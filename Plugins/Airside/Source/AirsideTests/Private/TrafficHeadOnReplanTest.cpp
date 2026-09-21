@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
 #include "AirsideTestsLog.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -107,7 +108,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 
 	{
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, Solved);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	}
 
 	// The bars the player placed: both arms at W, and both approaches to the crossing at X.

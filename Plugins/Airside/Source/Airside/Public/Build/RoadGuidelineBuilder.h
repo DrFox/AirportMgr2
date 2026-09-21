@@ -5,6 +5,7 @@
 #include "Model/RoadHandles.h"
 
 class URoadNetwork;
+struct FAirframe;
 
 /**
  * Derives the guideline graph from a solved surface network.
@@ -24,6 +25,15 @@ struct AIRSIDE_API FRoadGuidelineBuilder
 	 * Rebuilds every DERIVED guideline in Network from Solved.
 	 *
 	 * Edges with bDerived == false are left untouched, along with the nodes they need.
+	 *
+	 * LargestServiceVehicle IS REQUIRED, not resolved in here - issue #190. Every turn path
+	 * this builder lays warns against the same figure (a right-angle corner's takeable
+	 * radius), once per ordered arm pair, and used to call
+	 * UAirsideSettings::ResolveLargestServiceVehicle() fresh each time. Content/ is resolved
+	 * exactly once per rebuild, by URoadSurfacePresenter::Rebuild, and handed down here -
+	 * which is also why this file no longer includes Content/AirsideSettings.h at all
+	 * (Check-Architecture's Build->Content rule).
 	 */
-	static void Build(URoadNetwork& Network, const FRoadSolveResult& Solved);
+	static void Build(URoadNetwork& Network, const FRoadSolveResult& Solved,
+		const FAirframe& LargestServiceVehicle);
 };
