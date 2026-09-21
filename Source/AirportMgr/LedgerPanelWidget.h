@@ -77,13 +77,9 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<ULedgerPanelViewModel> Panel;
 
-	/** The card itself, so Toggle can hide it without hiding the widget's root - see
-	 *  UAirportMgrPanelWidget::BuildOnce on why the root stays SelfHitTestInvisible. */
-	UPROPERTY() TObjectPtr<UWidget> Card;
-
-	/** Cached for Refresh, which runs every tick: resolving the style there would be a
-	 *  synchronous asset load per frame. The same reason UInspectorWidget caches it. */
-	const UUIStyle* CachedStyle = nullptr;
+	// CardWidget and PanelStyle moved to the base class (issue #187): this panel was one of the two
+	// that already carried this exact pattern by hand, and UAirportMgrPanelWidget::EnsureCardRoot
+	// /Initialize now do it for every panel that calls EnsureCardRoot, not just this one.
 
 	bool bShowing = false;
 

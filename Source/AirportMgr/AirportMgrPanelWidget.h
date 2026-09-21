@@ -8,6 +8,7 @@
 class ARoadBuildController;
 class UPanelWidget;
 class UUIStyle;
+class UWidget;
 
 /**
  * Shared base for the code-built HUD panels: the bar, the inspector, the offer inbox, the
@@ -90,6 +91,48 @@ protected:
 	 */
 	UPanelWidget* EnsureCardRoot(FName CardName, const FAnchors& Anchors, FVector2D Alignment,
 		FVector2D Position, bool bRounded);
+
+	/**
+	 * The style resolved ONCE, before BuildOnce runs - see Initialize(). NEVER NULL once set.
+	 *
+	 * issue #187: UInspectorWidget and ULedgerPanelWidget each carried their own private copy
+	 * of exactly this ("resolving the style there would be a synchronous asset load per
+	 * frame" - Refresh runs every tick), and UBuildBarWidget carried none, so it paid
+	 * UAirportMgrUISettings::ResolveStyle() - a TSoftObjectPtr::LoadSynchronous - twice a tick
+	 * from RefreshState and RefreshBalance. One field here is what the other two already knew
+	 * to do, generalised so a fifth panel does not have to remember to invent it again.
+	 *
+	 * NAMED DIFFERENTLY FROM UInspectorWidget's OLD FIELD (CachedStyle) ON PURPOSE:
+	 * UToastStackWidget (issue #186, PR #200, in flight alongside this one) independently
+	 * added its OWN CachedStyle for the identical reason - proof the pattern generalises, but
+	 * also a name UHT will not let a subclass shadow. Toast's own field is left alone rather
+	 * than reworked here; a follow-up can point it at this one once #200 lands.
+	 */
+	UPROPERTY() TObjectPtr<const UUIStyle> PanelStyle;
+
+	/**
+	 * The card EnsureCardRoot built (or found by name on an asset-supplied root), so a
+	 * subclass that shows/hides it need not re-walk the widget tree to ask again.
+	 *
+	 * issue #187: UInspectorWidget's ShowInspectorCard called WidgetTree->FindWidget (a
+	 * recursive walk) once or twice EVERY tick just to toggle a Collapsed/Visible flag;
+	 * ULedgerPanelWidget already found it once in EnsureSlots and held it for exactly this
+	 * reason - this is that field, promoted so EnsureCardRoot itself can fill it for every
+	 * caller. Null for a panel that never calls EnsureCardRoot (UBuildBarWidget,
+	 * UToastStackWidget - see EnsureCardRoot's own comment).
+	 */
+	UPROPERTY() TObjectPtr<UWidget> CardWidget;
+
+	/**
+	 * Shows or hides CardWidget, doing nothing if it is already in the requested state.
+	 *
+	 * THE GATE ITSELF: SetVisibility has no early-out of its own (the same reason SetText is
+	 * this issue's other half), so a panel polled every tick used to re-invalidate Slate's
+	 * layout for a visibility that had not changed since the last frame. A no-op when CardWidget is
+	 * null (EnsureCardRoot not called, or an asset root with no widget of that name), so a
+	 * caller need not guard the call itself.
+	 */
+	void SetCardShown(bool bShown);
 
 private:
 	bool bBuilt = false;

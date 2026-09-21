@@ -121,6 +121,16 @@ public:
 	int32 ButtonCountForTest(EActionSection Section) const;
 	bool HasRootWidgetForTest() const;
 
+	/** Runs NativeTick with a throwaway geometry - the same precedent as
+	 *  ARoadBuildController::PlayerTickForTest - so a headless test can prove the per-tick
+	 *  refresh is cheap without a viewport ticking it for real. */
+	void NativeTickForTest(float DeltaTime) { FGeometry G; NativeTick(G, DeltaTime); }
+
+	/** How many times RefreshClock/RefreshBalance actually called SetText, as opposed to how
+	 *  many times they were asked - issue #187's gate measured directly, the same seam
+	 *  UInspectorWidget's own SetTextCallCountForTest uses. */
+	int32 SetTextCallCountForTest() const { return SetTextCalls; }
+
 	/**
 	 * The size the section row needs when it is only allowed to be AvailableWidth wide.
 	 *
@@ -173,4 +183,27 @@ private:
 	/** The balance, and the landing-fee multiplier beside it. Called from the same tick. */
 	void RefreshBalance();
 
+	/**
+	 * The clock's last composed sentence, so a still tick - 59 of every 60 real seconds at
+	 * x1, every tick while paused - sets no text at all (issue #187: SetText has no early-out
+	 * of its own). Compared as the COMPOSED string rather than a bare minute key: the
+	 * sentence also carries speed and the PAUSED suffix, and a minute-only key would leave a
+	 * just-paused game reading its old speed for up to a minute.
+	 */
+	FString LastClockText;
+
+	/**
+	 * What the balance line was last built from. Ledger::Revision() is the ledger's own
+	 * cheapest question (see ULedgerPanelWidget::Refresh for the identical idiom); the fee
+	 * multiplier joins it because StepLandingFee changes this line's text without posting to
+	 * the ledger, and Revision alone would leave the fee stale until the next post.
+	 */
+	int32 LastLedgerRevision = INDEX_NONE;
+	double LastFeeMultiplier = -1.0;
+	/** Whether the last balance paint was the "no ledger" fallback, so a real ledger appearing
+	 *  is never mistaken for "nothing changed" by the two keys above. */
+	bool bLastBalanceWasFallback = true;
+
+	/** See SetTextCallCountForTest. */
+	int32 SetTextCalls = 0;
 };

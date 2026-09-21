@@ -22,36 +22,10 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogInspector, Log, All);
 
-namespace
-{
-	/**
-	 * Shows or hides the card - the visible chrome - BY NAME rather than through a bound slot:
-	 * the code-built card is named InspectorCard, and a Blueprint restyle names its own card
-	 * the same to get the hide-when-nothing-selected behaviour. A free function rather than a
-	 * member so this fix was a function-body change Live Coding could apply.
-	 */
-	void ShowInspectorCard(UWidgetTree* Tree, bool bShown)
-	{
-		UWidget* Card = Tree != nullptr ? Tree->FindWidget(TEXT("InspectorCard")) : nullptr;
-		if (Card == nullptr)
-		{
-			return;
-		}
-		Card->SetVisibility(bShown ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	}
-
-	bool IsInspectorCardShown(UWidgetTree* Tree)
-	{
-		UWidget* Card = Tree != nullptr ? Tree->FindWidget(TEXT("InspectorCard")) : nullptr;
-		return Card != nullptr && Card->GetVisibility() != ESlateVisibility::Collapsed;
-	}
-}
-
 void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 {
-	// Cached for Refresh, which runs every tick: without this it called ResolveStyle() (a
-	// TSoftObjectPtr::LoadSynchronous) itself just to recolour one button.
-	CachedStyle = &Style;
+	// PanelStyle is the BASE class's now (issue #187) - UAirportMgrPanelWidget::Initialize
+	// sets it before calling this, from the same resolve BuildOnce's own parameter already is.
 
 	EnsureSlots(&Style);
 	if (DepartButton != nullptr) { DepartButton->OnClicked.AddDynamic(this, &UInspectorWidget::HandleDepart); }
@@ -59,7 +33,7 @@ void UInspectorWidget::BuildOnce(const UUIStyle& Style)
 	// SelfHitTestInvisible, not Collapsed: see UAirportMgrPanelWidget::BuildOnce for why an
 	// otherwise-empty panel must stay this way. Only the CARD hides; the root stays laid out.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	ShowInspectorCard(WidgetTree, false);
+	SetCardShown(false);
 }
 
 void UInspectorWidget::EnsureSlots(const UUIStyle* Style)
@@ -144,15 +118,21 @@ void UInspectorWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	if (const ARoadBuildController* C = Controller())
 	{
-		Refresh(C->GetTarget(), C->GetSelection());
+		// The controller already computed this frame's FAgentFacts for the bar's
+		// selection.depart row (ARoadBuildController::SelectedAgentFactsThisFrame) - passed
+		// through rather than asked for a second time (issue #187).
+		FAgentFacts Facts;
+		const bool bHaveFacts = C->SelectedAgentFactsThisFrame(Facts);
+		Refresh(C->GetTarget(), C->GetSelection(), bHaveFacts ? &Facts : nullptr);
 	}
 }
 
-void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection)
+void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
+	const FAgentFacts* PrecomputedAgentFacts)
 {
 	if (Target == nullptr || !Selection.IsSet())
 	{
-		ShowInspectorCard(WidgetTree, false);
+		SetCardShown(false);
 		bDepartEnabled = false;
 		return;
 	}
@@ -162,9 +142,20 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	if (Selection.Kind == ESelectionKind::Aircraft)
 	{
 		FAgentFacts F;
-		if (Target->GetGroundTraffic() == nullptr || !InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Selection.Id, F))
+		bool bOk;
+		if (PrecomputedAgentFacts != nullptr)
 		{
-			ShowInspectorCard(WidgetTree, false);
+			F = *PrecomputedAgentFacts;
+			bOk = true;
+		}
+		else
+		{
+			bOk = Target->GetGroundTraffic() != nullptr
+				&& InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Selection.Id, F);
+		}
+		if (!bOk)
+		{
+			SetCardShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -204,7 +195,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		FStandFacts S;
 		if (Target->GetNetwork() == nullptr || !InspectFacts::DescribeStand(Target->GetGroundTraffic(), *Target->GetNetwork(), Selection.Id, S))
 		{
-			ShowInspectorCard(WidgetTree, false);
+			SetCardShown(false);
 			bDepartEnabled = false;
 			return;
 		}
@@ -234,13 +225,33 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		bDepartEnabled = false;
 	}
 
-	if (TitleText != nullptr) { TitleText->SetText(FText::FromString(Title)); }
-	if (FactsText != nullptr) { FactsText->SetText(FText::FromString(Facts)); }
-	if (StatusText != nullptr) { StatusText->SetText(FText::FromString(Status)); }
+	// THE GATE. Compared against the COMPOSED text rather than a (selection id, phase) key -
+	// see LastTitle/LastFacts/LastStatus's own comment for why phase alone would freeze a
+	// moving aircraft's numbers. SetText has no early-out of its own (UIStyle.cpp's own note
+	// on why UBuildBarWidget gates its clock and balance the same way), so the common case -
+	// nothing selected, or a parked aircraft awaiting dispatch - now sets no text at all.
+	if (TitleText != nullptr && Title != LastTitle)
+	{
+		TitleText->SetText(FText::FromString(Title));
+		LastTitle = Title;
+		++SetTextCalls;
+	}
+	if (FactsText != nullptr && Facts != LastFacts)
+	{
+		FactsText->SetText(FText::FromString(Facts));
+		LastFacts = Facts;
+		++SetTextCalls;
+	}
+	if (StatusText != nullptr && Status != LastStatus)
+	{
+		StatusText->SetText(FText::FromString(Status));
+		LastStatus = Status;
+		++SetTextCalls;
+	}
 	if (DepartButton != nullptr)
 	{
-		// Cached in BuildOnce, not re-resolved here: Refresh runs every tick.
-		const UUIStyle* Style = CachedStyle != nullptr ? CachedStyle.Get() : UAirportMgrUISettings::ResolveStyle();
+		// PanelStyle is the base class's (issue #187) - never null once BuildOnce has run.
+		const UUIStyle* Style = PanelStyle != nullptr ? PanelStyle.Get() : UAirportMgrUISettings::ResolveStyle();
 		DepartButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		DepartButton->SetIsEnabled(bDepartEnabled);
 
@@ -260,7 +271,7 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 	{
 		FollowButton->SetVisibility(bAircraft ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	ShowInspectorCard(WidgetTree, true);
+	SetCardShown(true);
 }
 
 void UInspectorWidget::RunAction(int32 ActionIndex)
@@ -285,7 +296,7 @@ void UInspectorWidget::RunAction(int32 ActionIndex)
 void UInspectorWidget::HandleDepart() { RunAction(DepartActionIndex); }
 void UInspectorWidget::HandleFollow() { RunAction(FollowActionIndex); }
 
-bool UInspectorWidget::IsShownForTest() const { return IsInspectorCardShown(WidgetTree); }
+bool UInspectorWidget::IsShownForTest() const { return CardWidget != nullptr && CardWidget->GetVisibility() != ESlateVisibility::Collapsed; }
 bool UInspectorWidget::IsDepartEnabledForTest() const { return bDepartEnabled; }
 FString UInspectorWidget::TitleForTest() const { return TitleText != nullptr ? TitleText->GetText().ToString() : FString(); }
 FLinearColor UInspectorWidget::DepartLabelColourForTest() const

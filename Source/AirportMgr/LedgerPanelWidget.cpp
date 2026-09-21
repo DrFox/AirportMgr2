@@ -19,7 +19,7 @@
 
 void ULedgerPanelWidget::BuildOnce(const UUIStyle& Style)
 {
-	CachedStyle = &Style;
+	// PanelStyle is the base class's now (issue #187) - set before this runs.
 	Panel = NewObject<ULedgerPanelViewModel>(this);
 
 	EnsureSlots(&Style);
@@ -28,10 +28,7 @@ void ULedgerPanelWidget::BuildOnce(const UUIStyle& Style)
 	// UAirportMgrPanelWidget::BuildOnce documents: the root must stay laid out or the panel
 	// never gets another tick to un-hide itself with.
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	if (Card != nullptr)
-	{
-		Card->SetVisibility(ESlateVisibility::Collapsed);
-	}
+	SetCardShown(false);
 }
 
 void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
@@ -72,17 +69,13 @@ void ULedgerPanelWidget::EnsureSlots(const UUIStyle* Style)
 			RowsSlot->SetPadding(FMargin(0.0f, 6.0f, 0.0f, 0.0f));
 		}
 	}
-
-	Card = WidgetTree != nullptr ? WidgetTree->FindWidget(TEXT("LedgerCard")) : nullptr;
+	// CardWidget is found and cached by EnsureCardRoot itself now (issue #187) - see its own comment.
 }
 
 void ULedgerPanelWidget::Toggle()
 {
 	bShowing = !bShowing;
-	if (Card != nullptr)
-	{
-		Card->SetVisibility(bShowing ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	}
+	SetCardShown(bShowing);
 
 	// REPAINTED ON OPEN, not left to the next tick. A panel that appeared empty for a frame
 	// and then filled would read as a bug in the ledger rather than as a frame of latency.
@@ -116,10 +109,10 @@ void ULedgerPanelWidget::Refresh()
 	if (BalanceText != nullptr)
 	{
 		BalanceText->SetText(Panel->GetBalance());
-		if (CachedStyle != nullptr)
+		if (PanelStyle != nullptr)
 		{
 			BalanceText->SetColorAndOpacity(FSlateColor(
-				Panel->IsOverdrawn() ? CachedStyle->Warning : CachedStyle->Text));
+				Panel->IsOverdrawn() ? PanelStyle->Warning : PanelStyle->Text));
 		}
 	}
 
@@ -131,7 +124,7 @@ void ULedgerPanelWidget::Refresh()
 
 void ULedgerPanelWidget::PaintRows()
 {
-	if (RowColumn == nullptr || Panel == nullptr || CachedStyle == nullptr)
+	if (RowColumn == nullptr || Panel == nullptr || PanelStyle == nullptr)
 	{
 		return;
 	}
@@ -144,7 +137,7 @@ void ULedgerPanelWidget::PaintRows()
 	{
 		if (Row != nullptr)
 		{
-			RowColumn->AddChildToVerticalBox(BuildRow(*CachedStyle, *Row));
+			RowColumn->AddChildToVerticalBox(BuildRow(*PanelStyle, *Row));
 		}
 	}
 }

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Misc/FrameValue.h"
+#include "Model/InspectFacts.h"
 #include "Solve/GuideArbiter.h"
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
@@ -17,11 +19,11 @@ class ARoadNetworkActor;
 class UAircraftType;
 class UOpsRuntime;
 class UFlightBoard;
-struct FAgentFacts;
 struct FAirframe;
 struct FStandFacts;
 class UBuildCameraComponent;
 class UBuildHudLayer;
+class URoadEditFacade;
 
 
 /**
@@ -239,7 +241,7 @@ public:
 
 	/** Points this instance at InTarget without going through BeginPlay's level search - same
 	 *  precedent as PlayerTickForTest, for a test that has no level to search. */
-	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; }
+	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; BindRunwayCacheInvalidation(); }
 
 	/** How many FToolContexts FBuildSession has actually built, for the composition test
 	 *  above: PlayerTickForTest brackets a tick with this to count contexts built DURING it,
@@ -287,6 +289,12 @@ public:
 	bool HasRunway() const;
 	bool HasAgent() const;
 	bool HasOpsRuntime() const;
+
+	/** How many times HasRunway has actually re-walked the network (AirsideCapability::
+	 *  Summarise), as opposed to how many times it was asked - the seam that measures the
+	 *  cache below is doing something, the same idiom as UAirportMgrUISettings::
+	 *  ResolveCallCountForTest. Read as a DELTA across calls, not an absolute count. */
+	int32 HasRunwayRecomputeCountForTest() const { return RunwayRecomputeCountForTest; }
 
 	/**
 	 * Move the landing fee one step, up or down. See UPricing::LandingFeeMultiplier.
@@ -364,6 +372,17 @@ public:
 	bool HasSelectedAircraft() const { return GetSelection().Kind == ESelectionKind::Aircraft; }
 	/** The selected aircraft's facts, or false when nothing is selected or it has gone. */
 	bool SelectedAgentFacts(FAgentFacts& Out) const;
+
+	/**
+	 * The same facts as SelectedAgentFacts, computed AT MOST ONCE PER FRAME regardless of how
+	 * many callers ask - issue #187. Before this, the bar's selection.depart row
+	 * (CanDepartSelected, below) and UInspectorWidget::Refresh each called
+	 * InspectFacts::DescribeAgent independently, every tick, for the one selected aircraft -
+	 * three FString allocations apiece, twice over, for facts that cannot have changed between
+	 * the two calls in the same frame. TFrameValue rather than a hand-rolled GFrameCounter
+	 * check: the engine already has exactly this cache-for-one-frame primitive.
+	 */
+	bool SelectedAgentFactsThisFrame(FAgentFacts& Out) const;
 	bool SelectedStandFacts(FStandFacts& Out) const;
 	bool CanDepartSelected() const;
 	/** Depart the selected aircraft; logs the planner's answer. */
@@ -511,6 +530,47 @@ private:
 	 * way they did before issue #33.
 	 */
 	FBuildSession Session;
+
+	/**
+	 * HasRunway's cache, and how many times it has actually recomputed - see HasRunway's own
+	 * comment for why this now exists where one used to argue against it.
+	 *
+	 * Mutable: HasRunway is const (every other read-side query here is), and a cache behind a
+	 * const query is the standard shape for one - the const-ness is a promise about the
+	 * OBSERVABLE answer, not about whether answering it may remember work.
+	 */
+	mutable bool bRunwayCacheValid = false;
+	mutable bool bRunwayCache = false;
+	mutable int32 RunwayRecomputeCountForTest = 0;
+
+	/** Which facade bRunwayCacheValid is bound to - see BindRunwayCacheInvalidation. Compared
+	 *  by pointer so a Target swap (BeginPlay found a different actor than SetTargetForTest
+	 *  last pointed at, or vice versa in a test) re-subscribes rather than trusting a stale
+	 *  binding to a facade that no longer belongs to Target. */
+	TWeakObjectPtr<URoadEditFacade> BoundRunwayCacheFacade;
+
+	/**
+	 * Subscribes to Target's facade's OnChanged so a runway PLACED or REMOVED invalidates
+	 * bRunwayCacheValid - called from both BeginPlay and SetTargetForTest, the two places
+	 * Target is assigned. A no-op (beyond invalidating the cache) when Target is null or its
+	 * facade is already the one bound.
+	 */
+	void BindRunwayCacheInvalidation();
+
+	/** Target's facade's OnChanged handler. GEOMETRY MOVES NOTHING RUNWAY-SHAPED - a dragged
+	 *  node cannot create, delete or reclassify a segment - so only Topology can make
+	 *  HasRunway's cached answer wrong; see EChangeKind's own comment (Tool/RoadEditTarget.h)
+	 *  for the exact split. */
+	void OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind);
+
+	/**
+	 * This frame's SelectedAgentFacts, computed by SelectedAgentFactsThisFrame at most once
+	 * per GFrameCounter tick. TOptional inside TFrameValue: IsSet() alone would only say
+	 * "asked this frame", not "an aircraft was actually found" - a stand selected, or an
+	 * aircraft that departed between one caller and the next, both have to stay false for
+	 * every caller in the frame, not just the first.
+	 */
+	mutable TFrameValue<TOptional<FAgentFacts>> SelectedAgentFactsCache;
 
 	/**
 	 * This frame's readout, refilled by CollectToolReadout.

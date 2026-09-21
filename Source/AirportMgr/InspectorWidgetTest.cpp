@@ -130,4 +130,69 @@ bool FInspectorVerbsFromRegistryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * AN IDLE TICK SETS NO TEXT. Refresh used to call SetText on all three fields every time it
+ * ran, whether or not the facts had changed - and UTextBlock::SetText has no early-out of its
+ * own (TextBlock.cpp), so a parked aircraft awaiting dispatch re-invalidated three text
+ * layouts a tick for a sentence that had not changed since the last one. Issue #187.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FInspectorIdleTickSetsNoTextTest,
+	"AirportMgr.Inspector.IdleTickSetsNoText",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
+	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
+	URoadNetwork& Net = *Actor->Network;
+	const FGuidelineNodeId A = Net.AddGuidelineNode(FVector2D(0.0, 0.0), false);
+	const FGuidelineNodeId B = Net.AddGuidelineNode(FVector2D(20000.0, 0.0), false);
+	{
+		FGuidelineEdge Edge;
+		Edge.A = A; Edge.B = B;
+		Edge.Control = FVector2D(10000.0, 0.0);
+		Edge.AllowedTraffic = FTrafficMask::All();
+		Edge.Direction = EGuidelineDir::Bidirectional;
+		Edge.bDerived = false;
+		Net.AddGuidelineEdge(MoveTemp(Edge));
+	}
+	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
+	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
+
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
+	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
+
+	// AN IDLE TICK: nothing selected. This is the common case on a real HUD - most ticks have
+	// no selection at all - and it must set no text on any of the three fields.
+	FSelection None;
+	Panel->Refresh(Actor, None);
+	const int32 AfterFirstHiddenRefresh = Panel->SetTextCallCountForTest();
+	Panel->Refresh(Actor, None);
+	TestEqual(TEXT("repeating 'nothing selected' sets no text"),
+		Panel->SetTextCallCountForTest(), AfterFirstHiddenRefresh);
+
+	// SELECT THE AIRCRAFT: the first Refresh with real facts must set text - this is the
+	// transition the gate must never swallow.
+	FSelection Sel; Sel.Kind = ESelectionKind::Aircraft; Sel.Id = Id;
+	Panel->Refresh(Actor, Sel);
+	const int32 AfterFirstShownRefresh = Panel->SetTextCallCountForTest();
+	TestTrue(TEXT("selecting something for the first time sets text"),
+		AfterFirstShownRefresh > AfterFirstHiddenRefresh);
+
+	// THE IDLE CASE THIS ISSUE IS ABOUT: the same selection, refreshed again with nothing
+	// having moved (no Actor->Tick between the two calls) - the facts DescribeAgent returns
+	// are identical, so the gate must add nothing.
+	Panel->Refresh(Actor, Sel);
+	TestEqual(TEXT("an unchanged selection refreshed again sets no more text"),
+		Panel->SetTextCallCountForTest(), AfterFirstShownRefresh);
+
+	return true;
+}
+
 #endif
