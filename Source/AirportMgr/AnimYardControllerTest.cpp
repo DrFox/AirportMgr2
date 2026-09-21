@@ -400,4 +400,66 @@ bool FAnimYardCameraStartsInFrontOfTheAircraftTest::RunTest(const FString& Param
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardWheelUpComesCloserTest,
+	"AirportMgr.View.AnimYard.WheelUpComesCloser",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardWheelUpComesCloserTest::RunTest(const FString& Parameters)
+{
+	// WHICH WAY THE WHEEL GOES IS A DECISION, and nothing else would catch it being reversed:
+	// both actions stay bound either way, so EveryActionHasAKey is green on the wrong answer.
+	// This measures the WHOLE CHAIN - the key table, the action, and the sign it passes to
+	// ZoomBy - by asking what the camera actually did, which is the only form of the question
+	// that cannot be satisfied by a table agreeing with itself.
+	//
+	// IT CAUGHT ITS OWN FEATURE BEING WRONG. Written to pin a requested reversal, it went red
+	// and showed that the bench's ZoomIn had been calling ZoomBy(1.0) all along - pulling the
+	// camera AWAY, opposite to ARoadBuildController, with the action names describing the
+	// reverse of what they did. The wheel needed reversing; the key table was not the reason.
+	FAirsideTestWorld TestWorld(/*bSpawnActor*/ false);
+	if (TestWorld.World == nullptr) { AddError(TEXT("no test world")); return false; }
+
+	AAnimYardController* Controller = TestWorld.World->SpawnActor<AAnimYardController>();
+	if (Controller == nullptr) { AddError(TEXT("no controller")); return false; }
+
+	UBuildCameraComponent* Camera = Controller->Camera();
+	if (Camera == nullptr) { AddError(TEXT("no camera component")); return false; }
+	Camera->CreateBuildCamera(*Controller, 0.0);
+
+	const double Before = Camera->ActiveRig().Distance;
+
+	// THROUGH THE TABLE, not by naming the action. Looking the key up is what makes this a test
+	// of the binding rather than of Do() - swapping the two table rows back would redden it.
+	const FYardActionBinding* WheelUp = YardActions().FindByPredicate(
+		[](const FYardActionBinding& Action) { return Action.Key == EKeys::MouseScrollUp; });
+	if (WheelUp == nullptr)
+	{
+		AddError(TEXT("nothing is bound to the mouse wheel going up"));
+		return false;
+	}
+
+	Controller->Do(WheelUp->Action);
+
+	// ZoomBy MOVES THE TARGET RIG AND THE VIEW EASES TOWARDS IT - see FBuildCameraRig::
+	// EaseToward, which exists so one wheel click is a move rather than a cut. So the distance
+	// has to be read after the easing has had time to run, not on the frame of the click.
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Camera->UpdateFreeView(1.0f / 60.0f, 0.0, 0.0, 0.0, 0.0, 0.0);
+	}
+
+	const double After = Camera->ActiveRig().Distance;
+
+	TestTrue(*FString::Printf(TEXT("the wheel going up brings the camera CLOSER (%.0f uu out, "
+		"was %.0f), the same way round as the build driver"), After, Before), After < Before);
+
+	// AND THE HELP LINE AGREES WITH THE BEHAVIOUR. The table carries both, so a swap that
+	// changed one and not the other would leave the readout lying about its own keys - which
+	// is the failure mode the one-table arrangement exists to prevent.
+	TestEqual(TEXT("the on-screen help for wheel-up says so"), FString(WheelUp->Help), FString(TEXT("zoom in")));
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -32,6 +32,11 @@ namespace
 			TEXT("airborne / on the wheels: gear, bays and wheels together") },
 		{ EKeys::F,              EYardAction::ToggleSolo,     TEXT("solo the nearest model") },
 		{ EKeys::R,              EYardAction::Reset,          TEXT("reset and resume") },
+		// THE SAME WAY ROUND AS THE BUILD DRIVER: ARoadBuildController binds wheel-up to its
+		// ZoomIn, and so does this. The bench used to do the OPPOSITE, reported from play as
+		// the wheel being backwards - but the table was never the thing that was wrong, the
+		// sign in Do() was, so swapping these two rows would have left two lies cancelling out
+		// and an action called ZoomIn that pulled the camera away. See Do().
 		{ EKeys::MouseScrollUp,  EYardAction::ZoomIn,         TEXT("zoom in") },
 		{ EKeys::MouseScrollDown,EYardAction::ZoomOut,        TEXT("zoom out") },
 	};
@@ -244,7 +249,16 @@ void AAnimYardController::Do(EYardAction Action)
 	{
 		if (CameraComponent != nullptr)
 		{
-			CameraComponent->ZoomBy(Action == EYardAction::ZoomIn ? 1.0 : -1.0);
+			// NEGATIVE NOTCHES COME CLOSER. FBuildCameraRig::Zoom multiplies the distance by
+			// (1 + Step) per notch, so a POSITIVE notch pulls the camera AWAY - which is why
+			// ARoadBuildController::ZoomIn passes -1.0 and ZoomOut passes 1.0.
+			//
+			// THIS WAS THE OTHER WAY ROUND AND IT SHIPPED. EYardAction::ZoomIn called
+			// ZoomBy(1.0) and pulled the camera back, so the bench's wheel ran opposite to the
+			// airport's and the action names described the opposite of what they did. Reported
+			// from play as the wheel needing reversing, which it did - but the fix is here
+			// rather than in the key table, because the table was telling the truth.
+			CameraComponent->ZoomBy(Action == EYardAction::ZoomIn ? -1.0 : 1.0);
 		}
 		return;
 	}
