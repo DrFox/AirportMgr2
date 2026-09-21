@@ -23,12 +23,22 @@ namespace
 		int32 Count = 0;
 		bool bSawRebuiltLine = false;
 
+		// ISSUE #216: the count alone cannot say WHICH line survived, and that is exactly
+		// the question an order-dependent failure needs answered - a line captured here that
+		// this test's own code never emits (the census, the sink's DIAG, the markings count)
+		// means the spy's window is catching something unrelated, not a leak in the quiet
+		// path itself. Captured verbatim rather than re-derived from Count, so the failure
+		// message names the actual line instead of asking a human to reproduce it under a
+		// debugger to find out.
+		TArray<FString> CapturedLines;
+
 		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
 		{
 			static const FName RoadMeshCategory(TEXT("LogRoadMesh"));
 			if (Category == RoadMeshCategory && Verbosity == ELogVerbosity::Log)
 			{
 				++Count;
+				CapturedLines.Add(FString(V));
 				// RoadRebuildCensus::Log's own final line - see its header. The one line
 				// CLAUDE.md's "Diagnosing" section names by name, so this test does too rather
 				// than trusting the count alone to say WHICH line survived.
@@ -99,10 +109,21 @@ bool FRebuildLogQuietOnDragTest::RunTest(const FString& Parameters)
 	// THE MEASUREMENT: this is the line that fails on unpatched main, where the census and
 	// the sink's own diagnostics ran and logged at Log level on every frame regardless of
 	// whether the drag had moved anything interesting.
-	TestEqual(TEXT("a Geometry (drag-frame) rebuild logs nothing at Log level on LogRoadMesh - "
-		"not RoadRebuildCensus, not the Aprons/Runway markings/Runway rubber lines, not "
-		"FDynamicMeshSink::Accept's own DIAG and 'Sink: built' lines (issue #178)"),
-		DragSpy.Count, 0);
+	//
+	// ISSUE #216: on a failure the message NAMES every captured line verbatim, not just the
+	// count - a full-suite run reported this as its only failure while it passed alone, and
+	// a bare count cannot say whether the extra line is a real leak on the quiet path or
+	// something else entirely landing in the spy's window. Joined with '; ' rather than left
+	// as an array so it prints on one line the automation report does not truncate away.
+	if (DragSpy.Count != 0)
+	{
+		AddError(FString::Printf(
+			TEXT("a Geometry (drag-frame) rebuild logs nothing at Log level on LogRoadMesh - ")
+			TEXT("not RoadRebuildCensus, not the Aprons/Runway markings/Runway rubber lines, not ")
+			TEXT("FDynamicMeshSink::Accept's own DIAG and 'Sink: built' lines (issue #178). ")
+			TEXT("Expected 0, got %d. Captured line(s): %s"),
+			DragSpy.Count, *FString::Join(DragSpy.CapturedLines, TEXT("; "))));
+	}
 
 	// AND THE DRAG STILL ENDS IN ONE TOPOLOGY REBUILD THAT LOGS IN FULL - the census this
 	// project's CLAUDE.md "Diagnosing" section depends on is silenced per-frame here, never
