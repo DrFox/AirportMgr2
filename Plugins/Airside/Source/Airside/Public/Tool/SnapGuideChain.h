@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Model/RoadHandles.h"
 #include "Solve/GuideArbiter.h"
 #include "Tool/SnapGuideSettings.h"
 
@@ -165,9 +166,20 @@ struct AIRSIDE_API IGuideSource
 	 * matching-gap guide never appeared. The player was aiming with the cursor all along, and
 	 * this signature is what lets a source see it. See
 	 * Airside.Tool.OffsetGuideReachesWhatTheCursorIsNear.
+	 *
+	 * TAKES TUNING TOO, since #192 - every network source used to read a fresh, default
+	 * `SnapGuide::FTuning()` for its own reach test rather than the Tuning FSnapGuideChain::
+	 * Resolve was handed, so a caller that tightened SearchRadiusUu changed nothing a source
+	 * actually measured against.
+	 *
+	 * DEFAULTED, not required at every call site: the tests that ask one source directly for
+	 * its raw candidates (ProposedBy and its callers) are exercising that source in isolation
+	 * and have no chain-level Tuning to hand it, so the default keeps them reading exactly as
+	 * they did. FSnapGuideChain::ProposeAll passes its own, threaded from Resolve, explicitly.
 	 */
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const = 0;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const = 0;
 
 	/**
 	 * Which ERelation this link proposes. The toggle asks, and the chain skips it when off.
@@ -194,7 +206,8 @@ struct AIRSIDE_API IGuideSource
 struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Extending; }
 };
@@ -215,7 +228,8 @@ struct AIRSIDE_API FExtendingGuideSource final : public IGuideSource
 struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
@@ -233,7 +247,8 @@ struct AIRSIDE_API FWorldGuideSource final : public IGuideSource
 struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
 };
@@ -251,9 +266,73 @@ struct AIRSIDE_API FPointAlignGuideSource final : public IGuideSource
 struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
+};
+
+/**
+ * Which end of the gesture a segment source's reach test is measured from - see
+ * IGuideSource::Propose on Origin vs Cursor. FILE SCOPE, not nested in FSegmentGuideSource
+ * below: FParallelGuideSource is not one of that base's children (see its own comment) but
+ * still shares WalkGuideSegments in the .cpp, so both need to name the same policy.
+ */
+enum class EGuideReachFrom : uint8
+{
+	/** Unbounded - the Runway column's own sources; see FRunwayGuideSource. */
+	None,
+	Origin,
+	Cursor
+};
+
+/**
+ * Shared machinery for the five sources that walk URoadNetwork::GetSegments() once and emit
+ * PER MATCHING SEGMENT - Collinear, RunwayLine, AngledRoad, AngledRunway and Runway (#192).
+ * Each used to carry its own copy of the same prologue - SegmentIdAt, GuideRoadColumn-or-
+ * IsRunwaySegment, GuideSegmentEnds (now URoadNetwork::SegmentEnds), the Span.IsNearlyZero
+ * guard, and an optional reach test - eight walks in this file differing only in TWO
+ * policies (which column, how far the reach extends, if at all) and WHAT each did with a
+ * segment that passed.
+ *
+ * FParallelGuideSource IS NOT ONE OF THE FIVE: it reduces the same walk to a single NEAREST
+ * match before emitting once, a different shape from "emit per segment" that would make
+ * EmitForSegment lie about when it runs. It shares the walk itself - see WalkGuideSegments in
+ * the .cpp - without deriving from this base.
+ *
+ * TWO POLICY KNOBS, set once by each source's constructor rather than copied into a loop:
+ * bRunwayColumn picks GuideRoadColumn's Road columns (bounded by Tuning.SearchRadiusUu) or the
+ * Runway column (unbounded - see FRunwayGuideSource on why); ReachFrom says which end of the
+ * gesture an optional reach test is measured from, or that there is none.
+ */
+struct AIRSIDE_API FSegmentGuideSource : public IGuideSource
+{
+protected:
+	FSegmentGuideSource(SnapGuide::ERelation InRelation, bool bInRunwayColumn, EGuideReachFrom InReachFrom)
+		: SourceRelation(InRelation), bRunwayColumn(bInRunwayColumn), ReachFromPoint(InReachFrom)
+	{
+	}
+
+	/**
+	 * Called once per segment that cleared the column and reach gates, in GetSegments() order.
+	 * Column is this segment's classification - the Taxiway/ServiceRoad GuideRoadColumn found,
+	 * or Runway when the source was built with bRunwayColumn - so an override never asks again.
+	 */
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const = 0;
+
+public:
+	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override final;
+
+	virtual SnapGuide::ERelation Relation() const override final { return SourceRelation; }
+
+private:
+	SnapGuide::ERelation SourceRelation;
+	bool bRunwayColumn;
+	EGuideReachFrom ReachFromPoint;
 };
 
 /**
@@ -269,12 +348,17 @@ struct AIRSIDE_API FParallelGuideSource final : public IGuideSource
  * of one segment while standing beside another, and that is exactly the case worth telling
  * the player about.
  */
-struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
+struct AIRSIDE_API FCollinearGuideSource final : public FSegmentGuideSource
 {
-	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+	FCollinearGuideSource()
+		: FSegmentGuideSource(SnapGuide::ERelation::Collinear, /*bRunwayColumn=*/false, EGuideReachFrom::Cursor)
+	{
+	}
 
-	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+protected:
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
 };
 
 /**
@@ -288,12 +372,17 @@ struct AIRSIDE_API FCollinearGuideSource final : public IGuideSource
  * Below the local sources and above the world axes, because an airport squares to its runways
  * but not in preference to the taxiway the player is actually working on.
  */
-struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
+struct AIRSIDE_API FRunwayGuideSource final : public FSegmentGuideSource
 {
-	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+	FRunwayGuideSource()
+		: FSegmentGuideSource(SnapGuide::ERelation::Parallel, /*bRunwayColumn=*/true, EGuideReachFrom::None)
+	{
+	}
 
-	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
+protected:
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
 };
 
 /**
@@ -311,12 +400,17 @@ struct AIRSIDE_API FRunwayGuideSource final : public IGuideSource
  * Before 2026-09-20 Collinear DID offer it, by accident, because it walked every segment and
  * a runway is just a segment; the line therefore existed but answered to the wrong toggle.
  */
-struct AIRSIDE_API FRunwayLineGuideSource final : public IGuideSource
+struct AIRSIDE_API FRunwayLineGuideSource final : public FSegmentGuideSource
 {
-	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+	FRunwayLineGuideSource()
+		: FSegmentGuideSource(SnapGuide::ERelation::Collinear, /*bRunwayColumn=*/true, EGuideReachFrom::None)
+	{
+	}
 
-	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
+protected:
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
 };
 
 /**
@@ -335,12 +429,17 @@ struct AIRSIDE_API FRunwayLineGuideSource final : public IGuideSource
  * RUNWAYS ARE NOT WALKED HERE - FAngledRunwayGuideSource owns them, unbounded, exactly as the
  * partition has FParallelGuideSource leave them to FRunwayGuideSource.
  */
-struct AIRSIDE_API FAngledRoadGuideSource final : public IGuideSource
+struct AIRSIDE_API FAngledRoadGuideSource final : public FSegmentGuideSource
 {
-	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+	FAngledRoadGuideSource()
+		: FSegmentGuideSource(SnapGuide::ERelation::AngledFrom, /*bRunwayColumn=*/false, EGuideReachFrom::Cursor)
+	{
+	}
 
-	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+protected:
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
 };
 
 /**
@@ -351,12 +450,17 @@ struct AIRSIDE_API FAngledRoadGuideSource final : public IGuideSource
  * why a second source rather than a filter inside the road one: the chain skips a source by its
  * declared Relation(), so the reach policy is the only thing that can vary per source.
  */
-struct AIRSIDE_API FAngledRunwayGuideSource final : public IGuideSource
+struct AIRSIDE_API FAngledRunwayGuideSource final : public FSegmentGuideSource
 {
-	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+	FAngledRunwayGuideSource()
+		: FSegmentGuideSource(SnapGuide::ERelation::AngledFrom, /*bRunwayColumn=*/true, EGuideReachFrom::None)
+	{
+	}
 
-	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
+protected:
+	virtual void EmitForSegment(FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+		SnapGuide::EReference Column, const FGuideAnchor& Anchor, const FVector2D& Cursor,
+		TArray<SnapGuide::FCandidate>& Out) const override;
 };
 
 /**
@@ -379,7 +483,8 @@ struct AIRSIDE_API FAngledRunwayGuideSource final : public IGuideSource
 struct AIRSIDE_API FApronGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
@@ -396,7 +501,8 @@ struct AIRSIDE_API FApronGuideSource final : public IGuideSource
 struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Collinear; }
 };
@@ -405,7 +511,8 @@ struct AIRSIDE_API FApronLineGuideSource final : public IGuideSource
 struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::AngledFrom; }
 };
@@ -420,7 +527,8 @@ struct AIRSIDE_API FApronAngledGuideSource final : public IGuideSource
 struct AIRSIDE_API FApronCornerGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::LevelWith; }
 };
@@ -442,7 +550,8 @@ struct AIRSIDE_API FApronCornerGuideSource final : public IGuideSource
 struct AIRSIDE_API FOffsetGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::MatchingGap; }
 };
@@ -470,7 +579,8 @@ namespace EntityNaming
 struct AIRSIDE_API FAlignedGuideSource final : public IGuideSource
 {
 	virtual void Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const override;
+		const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const override;
 
 	virtual SnapGuide::ERelation Relation() const override { return SnapGuide::ERelation::Parallel; }
 };
@@ -513,7 +623,8 @@ public:
 	 */
 	void ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const FVector2D& Cursor, const FSnapGuideSettings& Enabled,
-		TArray<SnapGuide::FCandidate>& Out) const;
+		TArray<SnapGuide::FCandidate>& Out,
+		const SnapGuide::FTuning& Tuning = SnapGuide::FTuning()) const;
 
 	/**
 	 * Every source's candidates, arbitrated, with Previous carrying the flicker rule.

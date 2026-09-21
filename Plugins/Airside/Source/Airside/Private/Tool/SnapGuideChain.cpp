@@ -11,36 +11,9 @@
 
 namespace
 {
-	/**
-	 * A live segment's two ends. False when the segment or either node has gone.
-	 *
-	 * PREFIXED because FPlotPlaceTool.cpp has a SegmentEnds of its own in ITS anonymous
-	 * namespace, and this module is a UNITY build: two such helpers of one name compile
-	 * perfectly alone and collide the moment they land in the same blob. That is not
-	 * hypothetical - it is what this file did on the build that introduced it, and it is the
-	 * same trap AirsideTestFixtures.h was written to close for the test module.
-	 *
-	 * THE DUPLICATION IS REAL and left deliberately: merging the two means a shared header and
-	 * an edit to the plot tool, which is not this change's business. Noted for stage 3.
-	 */
-	bool GuideSegmentEnds(const URoadNetwork& Network, FRoadSegmentId Id,
-		FVector2D& OutA, FVector2D& OutB)
-	{
-		const FRoadSegment* Segment = Network.GetSegment(Id);
-		if (Segment == nullptr || !Segment->bAlive)
-		{
-			return false;
-		}
-		const FRoadNode* A = Network.GetNode(Segment->A);
-		const FRoadNode* B = Network.GetNode(Segment->B);
-		if (A == nullptr || B == nullptr)
-		{
-			return false;
-		}
-		OutA = A->Position;
-		OutB = B->Position;
-		return true;
-	}
+	// STAGE 3 HAS HAPPENED (#192): the SegmentEnds this file and FPlotPlaceTool.cpp each kept a
+	// PREFIXED copy of - the unity build made a plain name collide the moment both landed in one
+	// blob - now has one home, URoadNetwork::SegmentEnds. Both call sites use it.
 
 	/** The point on segment A-B nearest P. Clamped to the segment, not to its infinite line. */
 	FVector2D ClosestOn(const FVector2D& A, const FVector2D& B, const FVector2D& P)
@@ -185,9 +158,10 @@ namespace
 	 * the last corner back to the first to be got wrong.
 	 */
 	void ForEachApronEdge(const URoadNetwork& Network, const FVector2D& Origin,
+		const SnapGuide::FTuning& Tuning,
 		TFunctionRef<void(const FVector2D&, const FVector2D&, const FVector2D&)> Visit)
 	{
-		const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+		const double Reach = Tuning.SearchRadiusUu;
 
 		for (const FApronSurface& Apron : Network.GetAprons())
 		{
@@ -280,8 +254,8 @@ namespace
 	 * in the same race and let a runway answer while the Runway column was switched off. That
 	 * is the 2026-09-20 report, and this is where it stays fixed.
 	 *
-	 * PREFIXED like GuideSegmentEnds above: the tests module and this one are unity builds, and
-	 * "RoadColumnOf" is a name a second file would also pick.
+	 * PREFIXED: the tests module and this one are unity builds, and "RoadColumnOf" is a name a
+	 * second file would also pick.
 	 */
 	bool GuideRoadColumn(const URoadNetwork& Network, FRoadSegmentId Id,
 		SnapGuide::EReference& Out)
@@ -290,10 +264,78 @@ namespace
 			&& Out != SnapGuide::EReference::Runway;
 	}
 
+	/**
+	 * Walks URoadNetwork::GetSegments() once, gated to the Road columns (Taxiway/ServiceRoad,
+	 * bounded by Tuning.SearchRadiusUu) or the Runway column (unbounded), and calls Visit for
+	 * every segment that clears the column and reach gates - #192. This IS the prologue
+	 * FSegmentGuideSource::Propose runs for its five children, and FParallelGuideSource calls
+	 * it directly for the same walk with a different reduction on top - see both headers.
+	 *
+	 * WhichWayFromHere/WhereTheFarEndLanded, not a raw ternary: they were written the day the
+	 * Origin/Cursor split shipped and never wired to a shared walker until this one existed -
+	 * naming the choice at the call site is the whole of what IGuideSource::Propose argues for.
+	 */
+	void WalkGuideSegments(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+		const FVector2D& Cursor, bool bRunwayColumn, EGuideReachFrom ReachFrom,
+		const SnapGuide::FTuning& Tuning,
+		TFunctionRef<void(FRoadSegmentId, const FVector2D&, const FVector2D&, SnapGuide::EReference)> Visit)
+	{
+		const double Reach = Tuning.SearchRadiusUu;
+
+		const TArray<FRoadSegment>& Segments = Network.GetSegments();
+		for (int32 Index = 0; Index < Segments.Num(); ++Index)
+		{
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
+
+			// WHICH COLUMN, AND (for the Road walk) RUNWAYS REFUSED, in one question - see
+			// GuideRoadColumn. The Runway walk asks Network.IsRunwaySegment directly instead:
+			// GuideRoadColumn's whole job is refusing runways, so it has nothing to say to a
+			// caller that wants only them.
+			SnapGuide::EReference Column = SnapGuide::EReference::Runway;
+			if (bRunwayColumn)
+			{
+				if (!Network.IsRunwaySegment(Id))
+				{
+					continue;
+				}
+			}
+			else if (!GuideRoadColumn(Network, Id, Column))
+			{
+				continue;
+			}
+
+			FVector2D A = FVector2D::ZeroVector;
+			FVector2D B = FVector2D::ZeroVector;
+			if (!Network.SegmentEnds(Id, A, B))
+			{
+				continue;
+			}
+
+			const FVector2D Span = B - A;
+			if (Span.IsNearlyZero())
+			{
+				continue;
+			}
+
+			if (ReachFrom != EGuideReachFrom::None)
+			{
+				const FVector2D& From = (ReachFrom == EGuideReachFrom::Origin)
+					? WhichWayFromHere(Anchor, Cursor) : WhereTheFarEndLanded(Anchor, Cursor);
+				if (FVector2D::DistSquared(ClosestOn(A, B, From), From) > Reach * Reach)
+				{
+					continue;
+				}
+			}
+
+			Visit(Id, A, B, Column);
+		}
+	}
+
 }
 
 void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	if (Anchor.Reference.IsNearlyZero())
 	{
@@ -333,7 +375,8 @@ void FExtendingGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 }
 
 void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	for (const FWorldAxis& Axis : WorldAxes)
 	{
@@ -364,7 +407,8 @@ void FWorldGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 }
 
 void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	if (Anchor.Reference.IsNearlyZero())
 	{
@@ -412,61 +456,46 @@ void FPointAlignGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 }
 
 void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
-
+	// NOT ONE OF FSegmentGuideSource's CHILDREN - see that struct's header. This reduces
+	// WalkGuideSegments' walk to a single NEAREST match rather than emitting per segment: every
+	// road proposing would put the whole field in the race, and the winner would be decided by
+	// a road the player cannot see - see FTuning::SearchRadiusUu.
 	FRoadSegmentId Nearest;
 	FVector2D NearestAt = FVector2D::ZeroVector;
 	FVector2D NearestDir = FVector2D::ZeroVector;
 	SnapGuide::EReference NearestColumn = SnapGuide::EReference::Taxiway;
-	double BestSquared = Reach * Reach;
+	double BestSquared = TNumericLimits<double>::Max();
 
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-
-		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question - see GuideRoadColumn.
-		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
-		if (!GuideRoadColumn(Network, Id, Column))
+	// MEASURED FROM THE ORIGIN, not from the cursor: the road the gesture STARTED beside is the
+	// one it is being drawn parallel to, and a search keyed to the cursor would hand the guide
+	// to a different road halfway through the drag. WalkGuideSegments' own reach test already
+	// excludes anything beyond Tuning.SearchRadiusUu of the origin, so every segment this
+	// visitor sees is already in reach and "smallest Squared wins" is the whole of "nearest".
+	WalkGuideSegments(Network, Anchor, Cursor, /*bRunwayColumn=*/false, EGuideReachFrom::Origin,
+		Tuning,
+		[&Anchor, &Nearest, &NearestAt, &NearestDir, &NearestColumn, &BestSquared](
+			FRoadSegmentId Id, const FVector2D& A, const FVector2D& B, SnapGuide::EReference Column)
 		{
-			continue;
-		}
+			const FVector2D On = ClosestOn(A, B, Anchor.Origin);
+			const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
+			if (Squared > BestSquared)
+			{
+				return;
+			}
 
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
+			BestSquared = Squared;
+			Nearest = Id;
+			NearestAt = On;
+			NearestDir = (B - A).GetSafeNormal();
 
-		const FVector2D Span = B - A;
-		if (Span.IsNearlyZero())
-		{
-			continue;
-		}
-
-		// MEASURED FROM THE ORIGIN, not from the cursor: the road the gesture STARTED beside
-		// is the one it is being drawn parallel to, and a search keyed to the cursor would
-		// hand the guide to a different road halfway through the drag.
-		const FVector2D On = ClosestOn(A, B, Anchor.Origin);
-		const double Squared = FVector2D::DistSquared(On, Anchor.Origin);
-		if (Squared > BestSquared)
-		{
-			continue;
-		}
-
-		BestSquared = Squared;
-		Nearest = Id;
-		NearestAt = On;
-		NearestDir = Span.GetSafeNormal();
-
-		// CARRIED FROM THE WINNER, not asked again at the bottom. The nearest road is picked
-		// once and its column is a fact about THAT segment; a second classification call after
-		// the loop would be a second chance to pick a different one.
-		NearestColumn = Column;
-	}
+			// CARRIED FROM THE WINNER, not asked again at the bottom. The nearest road is picked
+			// once and its column is a fact about THAT segment; a second classification call
+			// after the loop would be a second chance to pick a different one.
+			NearestColumn = Column;
+		});
 
 	if (NearestDir.IsNearlyZero())
 	{
@@ -488,240 +517,125 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 		Subject, Out);
 }
 
-void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+void FSegmentGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
-
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-
-		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question - see GuideRoadColumn.
-		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
-		if (!GuideRoadColumn(Network, Id, Column))
+	WalkGuideSegments(Network, Anchor, Cursor, bRunwayColumn, ReachFromPoint, Tuning,
+		[this, &Anchor, &Cursor, &Out](FRoadSegmentId Id, const FVector2D& A, const FVector2D& B,
+			SnapGuide::EReference Column)
 		{
-			continue;
-		}
-
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
-
-		const FVector2D Span = B - A;
-		// FROM THE CURSOR, not the origin. This source answers where the far end LANDED, and
-		// the far end is under the cursor - a drag that began 300 m away is still being aimed
-		// at the road beneath it. See IGuideSource::Propose.
-		const FVector2D On = ClosestOn(A, B, Cursor);
-		if (Span.IsNearlyZero()
-			|| FVector2D::DistSquared(On, Cursor) > Reach * Reach)
-		{
-			continue;
-		}
-
-		// THROUGH THE SEGMENT'S OWN END, which is what makes this the line the road LIES ON
-		// rather than one through the drag. The arbiter measures the cursor's distance from
-		// that line, so the candidate is eligible exactly when the cursor is on the road's
-		// extension - however far along it the drag has gone.
-		SnapGuide::FCandidate InLine;
-		InLine.Direction = Span.GetSafeNormal();
-		InLine.Through = A;
-		InLine.Fit = SnapGuide::EFit::Perpendicular;
-		InLine.Relation = SnapGuide::ERelation::Collinear;
-
-		// PER SEGMENT, not per source. One walk of the graph passes a taxiway and a service
-		// road in the same pass, and the two answer to different buttons since 2026-09-20.
-		InLine.Reference = Column;
-		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
-		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
-		InLine.Label.SegmentIndex = Id.Index;
-
-		// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
-		// cursor happens to be: the player needs to see WHICH road they are in line with, and
-		// the near end of it is the part they can recognise.
-		InLine.ReferenceAt = On;
-		Out.Add(InLine);
-	}
+			EmitForSegment(Id, A, B, Column, Anchor, Cursor, Out);
+		});
 }
 
-void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+void FCollinearGuideSource::EmitForSegment(FRoadSegmentId Id, const FVector2D& A,
+	const FVector2D& B, SnapGuide::EReference Column, const FGuideAnchor& /*Anchor*/,
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		if (!Network.IsRunwaySegment(Id))
-		{
-			continue;
-		}
+	// THROUGH THE SEGMENT'S OWN END, which is what makes this the line the road LIES ON rather
+	// than one through the drag. The arbiter measures the cursor's distance from that line, so
+	// the candidate is eligible exactly when the cursor is on the road's extension - however
+	// far along it the drag has gone.
+	SnapGuide::FCandidate InLine;
+	InLine.Direction = (B - A).GetSafeNormal();
+	InLine.Through = A;
+	InLine.Fit = SnapGuide::EFit::Perpendicular;
+	InLine.Relation = SnapGuide::ERelation::Collinear;
 
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
+	// PER SEGMENT, not per source. One walk of the graph passes a taxiway and a service road in
+	// the same pass, and the two answer to different buttons since 2026-09-20.
+	InLine.Reference = Column;
+	InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
+	InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
+	InLine.Label.SegmentIndex = Id.Index;
 
-		const FVector2D Span = B - A;
-		if (Span.IsNearlyZero())
-		{
-			continue;
-		}
-
-		// NO REACH TEST, and that one absence is the only thing separating this source from
-		// Parallel - see the declaration for why it is deliberate.
-		SnapGuide::FGuideLabel Subject;
-		Subject.Subject = SnapGuide::ELabelSubject::Segment;
-		Subject.SegmentIndex = Id.Index;
-		AddDirections(Span.GetSafeNormal(), Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
-			SnapGuide::EReference::Runway, TEXT("parallel to"), Subject, Out);
-	}
+	// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
+	// cursor happens to be: the player needs to see WHICH road they are in line with, and the
+	// near end of it is the part they can recognise.
+	InLine.ReferenceAt = ClosestOn(A, B, Cursor);
+	Out.Add(InLine);
 }
 
-void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+void FRunwayGuideSource::EmitForSegment(FRoadSegmentId Id, const FVector2D& A,
+	const FVector2D& B, SnapGuide::EReference Column, const FGuideAnchor& Anchor,
+	const FVector2D& /*Cursor*/, TArray<SnapGuide::FCandidate>& Out) const
 {
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		if (!Network.IsRunwaySegment(Id))
-		{
-			continue;
-		}
-
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
-
-		const FVector2D Span = B - A;
-		if (Span.IsNearlyZero())
-		{
-			continue;
-		}
-
-		// NO REACH TEST, like FRunwayGuideSource and unlike FCollinearGuideSource: a runway's
-		// extended centreline is the approach path, and it is meaningful from anywhere.
-		//
-		// THROUGH THE RUNWAY'S OWN END, not through the drag - that is what makes this the line
-		// the runway LIES ON rather than one out of the cursor, and why it is Perpendicular
-		// where FRunwayGuideSource's two are Angular.
-		SnapGuide::FCandidate InLine;
-		InLine.Direction = Span.GetSafeNormal();
-		InLine.Through = A;
-		InLine.Fit = SnapGuide::EFit::Perpendicular;
-
-		// THE DASHED LINE GOES TO THE RUNWAY ITSELF, not to the point on its extension where
-		// the cursor happens to be: the player needs to see WHICH runway they are in line with.
-		InLine.ReferenceAt = ClosestOn(A, B, Cursor);
-		InLine.Relation = SnapGuide::ERelation::Collinear;
-		InLine.Reference = SnapGuide::EReference::Runway;
-		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
-		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
-		InLine.Label.SegmentIndex = Id.Index;
-		Out.Add(InLine);
-	}
+	// NO REACH TEST, and that one absence is the only thing separating this source from
+	// Parallel - see the declaration for why it is deliberate. EVERY MATCHING SEGMENT EMITS,
+	// unlike Parallel: Design section 3 says "every runway's heading" and means it, which only
+	// reads as one number when Parallel's OWN reach keeps the taxiway race small enough that
+	// "nearest" is the right question to ask instead.
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::Segment;
+	Subject.SegmentIndex = Id.Index;
+	AddDirections((B - A).GetSafeNormal(), Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
+		Column, TEXT("parallel to"), Subject, Out);
 }
 
-void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
+void FRunwayLineGuideSource::EmitForSegment(FRoadSegmentId Id, const FVector2D& A,
+	const FVector2D& B, SnapGuide::EReference Column, const FGuideAnchor& /*Anchor*/,
 	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
 {
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+	// NO REACH TEST, like FRunwayGuideSource and unlike FCollinearGuideSource: a runway's
+	// extended centreline is the approach path, and it is meaningful from anywhere.
+	//
+	// THROUGH THE RUNWAY'S OWN END, not through the drag - that is what makes this the line the
+	// runway LIES ON rather than one out of the cursor, and why it is Perpendicular where
+	// FRunwayGuideSource's two are Angular.
+	SnapGuide::FCandidate InLine;
+	InLine.Direction = (B - A).GetSafeNormal();
+	InLine.Through = A;
+	InLine.Fit = SnapGuide::EFit::Perpendicular;
 
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-
-		// WHICH COLUMN, AND RUNWAYS REFUSED, in one question. They are owned by
-		// FAngledRunwayGuideSource and owned WITHOUT a reach; walking one here would let it
-		// answer while the Runway column was switched off - the 2026-09-20 report in a new
-		// place. See GuideRoadColumn.
-		SnapGuide::EReference Column = SnapGuide::EReference::Taxiway;
-		if (!GuideRoadColumn(Network, Id, Column))
-		{
-			continue;
-		}
-
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
-
-		const FVector2D Span = B - A;
-		if (Span.IsNearlyZero()
-			// FROM THE CURSOR - a spoke is a line to LAND on, so the reach follows the end
-			// being placed rather than the one already pinned. See IGuideSource::Propose.
-			|| FVector2D::DistSquared(ClosestOn(A, B, Cursor), Cursor) > Reach * Reach)
-		{
-			continue;
-		}
-
-		const FVector2D Along = Span.GetSafeNormal();
-		SnapGuide::FGuideLabel Subject;
-		Subject.Subject = SnapGuide::ELabelSubject::Segment;
-		Subject.SegmentIndex = Id.Index;
-
-		// BOTH ENDS - see this source's own header for why neither may be picked for the
-		// player - and both under the SEGMENT'S OWN column, so "45 degrees to the service
-		// road" answers to the ServiceRoad button and not to the Taxiway one.
-		AddSpokes(A, Along, Column, Subject, Out);
-		AddSpokes(B, Along, Column, Subject, Out);
-	}
+	// THE DASHED LINE GOES TO THE RUNWAY ITSELF, not to the point on its extension where the
+	// cursor happens to be: the player needs to see WHICH runway they are in line with.
+	InLine.ReferenceAt = ClosestOn(A, B, Cursor);
+	InLine.Relation = SnapGuide::ERelation::Collinear;
+	InLine.Reference = Column;
+	InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
+	InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
+	InLine.Label.SegmentIndex = Id.Index;
+	Out.Add(InLine);
 }
 
-void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+void FAngledRoadGuideSource::EmitForSegment(FRoadSegmentId Id, const FVector2D& A,
+	const FVector2D& B, SnapGuide::EReference Column, const FGuideAnchor& /*Anchor*/,
+	const FVector2D& /*Cursor*/, TArray<SnapGuide::FCandidate>& Out) const
 {
-	const TArray<FRoadSegment>& Segments = Network.GetSegments();
-	for (int32 Index = 0; Index < Segments.Num(); ++Index)
-	{
-		const FRoadSegmentId Id = Network.SegmentIdAt(Index);
-		if (!Network.IsRunwaySegment(Id))
-		{
-			continue;
-		}
+	const FVector2D Along = (B - A).GetSafeNormal();
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::Segment;
+	Subject.SegmentIndex = Id.Index;
 
-		FVector2D A = FVector2D::ZeroVector;
-		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
-		{
-			continue;
-		}
+	// BOTH ENDS - see this source's own header for why neither may be picked for the player -
+	// and both under the SEGMENT'S OWN column, so "45 degrees to the service road" answers to
+	// the ServiceRoad button and not to the Taxiway one.
+	AddSpokes(A, Along, Column, Subject, Out);
+	AddSpokes(B, Along, Column, Subject, Out);
+}
 
-		const FVector2D Span = B - A;
-		if (Span.IsNearlyZero())
-		{
-			continue;
-		}
-
-		// NO REACH TEST, like every other source in the Runway column: a rapid-exit taxiway is
-		// laid from wherever the player is standing, not only from beside the threshold.
-		const FVector2D Along = Span.GetSafeNormal();
-		SnapGuide::FGuideLabel Subject;
-		Subject.Subject = SnapGuide::ELabelSubject::Segment;
-		Subject.SegmentIndex = Id.Index;
-		AddSpokes(A, Along, SnapGuide::EReference::Runway, Subject, Out);
-		AddSpokes(B, Along, SnapGuide::EReference::Runway, Subject, Out);
-	}
+void FAngledRunwayGuideSource::EmitForSegment(FRoadSegmentId Id, const FVector2D& A,
+	const FVector2D& B, SnapGuide::EReference Column, const FGuideAnchor& /*Anchor*/,
+	const FVector2D& /*Cursor*/, TArray<SnapGuide::FCandidate>& Out) const
+{
+	// NO REACH TEST, like every other source in the Runway column: a rapid-exit taxiway is laid
+	// from wherever the player is standing, not only from beside the threshold.
+	const FVector2D Along = (B - A).GetSafeNormal();
+	SnapGuide::FGuideLabel Subject;
+	Subject.Subject = SnapGuide::ELabelSubject::Segment;
+	Subject.SegmentIndex = Id.Index;
+	AddSpokes(A, Along, Column, Subject, Out);
+	AddSpokes(B, Along, Column, Subject, Out);
 }
 
 void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	SnapGuide::FGuideLabel Subject;
 	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
-	ForEachApronEdge(Network, Anchor.Origin,
+	ForEachApronEdge(Network, Anchor.Origin, Tuning,
 		[&Anchor, &Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			// ANGULAR, THROUGH THE DRAG'S OWN ORIGIN - this answers "which way from here", so
@@ -732,9 +646,10 @@ void FApronGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor&
 }
 
 void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
-	ForEachApronEdge(Network, Cursor,
+	ForEachApronEdge(Network, Cursor, Tuning,
 		[&Anchor, &Cursor, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			SnapGuide::FCandidate InLine;
@@ -784,14 +699,15 @@ void FApronLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 }
 
 void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	// ONE END PER EDGE, not both: an outline is closed, so every corner is the A end of exactly
 	// one edge. Visiting B as well would propose each corner's spokes twice - once per edge
 	// meeting there - and a duplicate candidate is a tie the source order then has to break.
 	SnapGuide::FGuideLabel Subject;
 	Subject.Subject = SnapGuide::ELabelSubject::ApronEdge;
-	ForEachApronEdge(Network, Cursor,
+	ForEachApronEdge(Network, Cursor, Tuning,
 		[&Subject, &Out](const FVector2D& A, const FVector2D& B, const FVector2D& Along)
 		{
 			AddSpokes(A, Along, SnapGuide::EReference::Apron, Subject, Out);
@@ -799,7 +715,8 @@ void FApronAngledGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 }
 
 void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
 	// NEEDS THE GESTURE'S OWN AXES, like FPointAlignGuideSource: "level with that corner" means
 	// level ALONG the edge you are extending, so with no reference there is no axis to measure
@@ -812,7 +729,7 @@ void FApronCornerGuideSource::Propose(const URoadNetwork& Network, const FGuideA
 	const FVector2D Along = Anchor.Reference.GetSafeNormal();
 	const FVector2D Across = RoadGeom::PerpCCW(Along);
 
-	ForEachApronEdge(Network, Cursor,
+	ForEachApronEdge(Network, Cursor, Tuning,
 		[&Along, &Across, &Out](const FVector2D& A, const FVector2D& B, const FVector2D&)
 		{
 			// THE CORNER IS A POINT, so it is not displaced by the drag's half-width - there is
@@ -852,9 +769,10 @@ FString EntityNaming::Describe(const FEntityInstance& Entity)
 }
 
 void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+	const double Reach = Tuning.SearchRadiusUu;
 
 	// INDEXED, NOT A RANGE-FOR - #183, the same change PointAlign got: the label carries an
 	// INDEX into Network.GetEntities() so EntityNaming::Describe runs again only for a winner,
@@ -885,9 +803,10 @@ void FAlignedGuideSource::Propose(const URoadNetwork& Network, const FGuideAncho
 }
 
 void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor& Anchor,
-	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out) const
+	const FVector2D& Cursor, TArray<SnapGuide::FCandidate>& Out,
+	const SnapGuide::FTuning& Tuning) const
 {
-	const double Reach = SnapGuide::FTuning().SearchRadiusUu;
+	const double Reach = Tuning.SearchRadiusUu;
 
 	// THE SAME REFERENCE FParallelGuideSource PICKS - the nearest road to the drag - so
 	// "parallel to the taxiway" and "the same gap as its neighbour" describe one road between
@@ -915,7 +834,7 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
+		if (!Network.SegmentEnds(Id, A, B))
 		{
 			continue;
 		}
@@ -974,7 +893,7 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 
 		FVector2D A = FVector2D::ZeroVector;
 		FVector2D B = FVector2D::ZeroVector;
-		if (!GuideSegmentEnds(Network, Id, A, B))
+		if (!Network.SegmentEnds(Id, A, B))
 		{
 			continue;
 		}
@@ -1067,7 +986,7 @@ void FSnapGuideChain::AddSource(TUniquePtr<IGuideSource> Source)
 
 void FSnapGuideChain::ProposeAll(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 	const FVector2D& Cursor, const FSnapGuideSettings& Enabled,
-	TArray<SnapGuide::FCandidate>& Out) const
+	TArray<SnapGuide::FCandidate>& Out, const SnapGuide::FTuning& Tuning) const
 {
 	// Stage 1 gathered at most six. Reserved for more because Parallel and Collinear propose
 	// per segment, and the array is rebuilt on every context - about three times a frame, per
@@ -1087,7 +1006,7 @@ void FSnapGuideChain::ProposeAll(const URoadNetwork& Network, const FGuideAnchor
 		}
 
 		const int32 Before = Out.Num();
-		Source->Propose(Network, Anchor, Cursor, Out);
+		Source->Propose(Network, Anchor, Cursor, Out, Tuning);
 
 		// THE REFERENCE IS FILTERED AFTER, and only over what this source just added. A source
 		// may span columns - FRunwayGuideSource is Runway while FParallelGuideSource is Road,
@@ -1123,7 +1042,7 @@ SnapGuide::FResult FSnapGuideChain::Resolve(const URoadNetwork& Network,
 	const SnapGuide::FTuning& Tuning) const
 {
 	TArray<SnapGuide::FCandidate> Candidates;
-	ProposeAll(Network, Anchor, Cursor, Enabled, Candidates);
+	ProposeAll(Network, Anchor, Cursor, Enabled, Candidates, Tuning);
 	SnapGuide::FResult Result = SnapGuide::Arbitrate(Candidates, Anchor.Origin, Cursor, Previous, Tuning);
 
 	// THE ONLY PLACE Description IS BUILT - #183. Arbitrate throws away every candidate but the

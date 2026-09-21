@@ -140,6 +140,16 @@ public:
 	/** The handle for a live slot index, for callers walking GetSegments() by index. Unset if dead. */
 	FRoadSegmentId SegmentIdAt(int32 Index) const;
 
+	/**
+	 * A segment's straight-line ends, or false when the segment or either node has gone.
+	 *
+	 * ONE HOME, not the three this used to have - a copy each in SnapGuideChain.cpp
+	 * (GuideSegmentEnds) and PlotPlaceTool.cpp (SegmentEnds), plus the collision the unity
+	 * build made of the second name (#192). Both callers wanted exactly this: the model is
+	 * where a fact about a segment belongs, not a tool-local helper reaching into it.
+	 */
+	bool SegmentEnds(FRoadSegmentId Segment, FVector2D& OutA, FVector2D& OutB) const;
+
 	/** Normalised tangent at AtNode, pointing away from that node along the segment. */
 	FVector2D GetOutgoingTangent(FRoadSegmentId Segment, FRoadNodeId AtNode) const;
 

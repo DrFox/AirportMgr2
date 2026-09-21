@@ -1,7 +1,11 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/SnapGuideChain.h"
+#include "Tool/SnapGuideSettings.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -161,6 +165,153 @@ bool FGuideChainOffersNothingBetweenCandidatesTest::RunTest(const FString& Param
 	const SnapGuide::FResult Result = Chain.Resolve(
 		*Network, Anchor, Cursor, SnapGuide::FResult());
 	TestFalse(TEXT("a cursor between two world axes is offered neither"), Result.bActive);
+
+	return true;
+}
+
+/**
+ * #192 item 1: SnapGuideChain.cpp's eight per-segment walks became one FSegmentGuideSource base
+ * plus a per-segment emit hook. This pins the candidate COUNT the six segment-walking sources
+ * produce for a fixture with one taxiway and one runway, so a refactor that changes what any of
+ * them emits - not just whether they compile - fails loudly rather than quietly.
+ *
+ * ONLY THOSE SIX RELATIONS/COLUMNS ARE ENABLED, so the total is the six sources' own arithmetic
+ * and nothing else's: Parallel x (Taxiway, Runway) is FParallelGuideSource (nearest taxiway, 4
+ * candidates) plus FRunwayGuideSource (every runway, 4); Collinear x (Taxiway, Runway) is
+ * FCollinearGuideSource (1) plus FRunwayLineGuideSource (1, unbounded); AngledFrom x (Taxiway,
+ * Runway) is FAngledRoadGuideSource (both ends x 3 spokes = 6) plus FAngledRunwayGuideSource (6,
+ * unbounded). 8 + 2 + 12 = 22. ServiceRoad/Apron/Stand/World are switched off, and there are no
+ * aprons or entities in the fixture, so the sources that also answer to Parallel/Collinear/
+ * AngledFrom (World, Apron x3, Aligned) contribute nothing to add or hide from that number.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSegmentWalkersProposeTheSameCandidateCountTest,
+	"Airside.Tool.SegmentWalkersProposeTheSameCandidateCount",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FSegmentWalkersProposeTheSameCandidateCountTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	if (!TestTrue(TEXT("the runway is laid"),
+		TestGuide::LayRunway(Actor, FVector2D(-5000.0, 8000.0), FVector2D(5000.0, 8000.0))))
+	{
+		return false;
+	}
+	IRoadEditTarget* Target = Actor;
+	const int32 West = Target->PlaceNode(FVector2D(-5000.0, 0.0));
+	const int32 East = Target->PlaceNode(FVector2D(5000.0, 0.0));
+	Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
+
+	FGuideAnchor Anchor;
+	Anchor.Origin = FVector2D::ZeroVector;
+	const FVector2D Cursor(0.0, 3000.0);
+
+	FSnapGuideSettings Settings;
+	Settings.bExtending = false;
+	Settings.bLevelWith = false;
+	Settings.bParallel = true;
+	Settings.bCollinear = true;
+	Settings.bAngledFrom = true;
+	Settings.bMatchingGap = false;
+	Settings.bTaxiway = true;
+	Settings.bServiceRoad = false;
+	Settings.bRunway = true;
+	Settings.bApron = false;
+	Settings.bStand = false;
+	Settings.bWorld = false;
+
+	const FSnapGuideChain Chain;
+	TArray<SnapGuide::FCandidate> Candidates;
+	Chain.ProposeAll(*Actor->Network, Anchor, Cursor, Settings, Candidates);
+
+	int32 Parallel = 0;
+	int32 Collinear = 0;
+	int32 AngledFrom = 0;
+	for (const SnapGuide::FCandidate& Candidate : Candidates)
+	{
+		switch (Candidate.Relation)
+		{
+		case SnapGuide::ERelation::Parallel:   ++Parallel; break;
+		case SnapGuide::ERelation::Collinear:  ++Collinear; break;
+		case SnapGuide::ERelation::AngledFrom: ++AngledFrom; break;
+		default: break;
+		}
+	}
+
+	TestEqual(TEXT("Parallel: FParallelGuideSource's 4 plus FRunwayGuideSource's 4"), Parallel, 8);
+	TestEqual(TEXT("Collinear: FCollinearGuideSource's 1 plus FRunwayLineGuideSource's 1"),
+		Collinear, 2);
+	TestEqual(TEXT("AngledFrom: FAngledRoadGuideSource's 6 plus FAngledRunwayGuideSource's 6"),
+		AngledFrom, 12);
+	TestEqual(TEXT("the six segment walkers propose 22 candidates between them"),
+		Candidates.Num(), 22);
+
+	return true;
+}
+
+/**
+ * #192 item 2: IGuideSource::Propose now takes the FTuning FSnapGuideChain::Resolve was handed,
+ * instead of every network source reading a fresh default SnapGuide::FTuning() for its own
+ * reach test. Shrinking SearchRadiusUu below a segment's distance must drop it from the
+ * candidates - which is false on main, where the Tuning argument to ProposeAll/Resolve changed
+ * nothing any source actually measured against.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FGuideSourceReachIsThreadedFromTuningTest,
+	"Airside.Tool.GuideSourceReachIsThreadedFromTuning",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FGuideSourceReachIsThreadedFromTuningTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("a network actor"), Actor)) { return false; }
+
+	// THE NEAR END SITS 3000uu FROM THE ORIGIN - inside the default SearchRadiusUu (10000) and
+	// outside a tightened one (2000), so the same fixture answers both halves of the comparison.
+	// FParallelGuideSource measures from the closest point on the segment, which clamps to this
+	// end since the origin is off the segment's far side.
+	IRoadEditTarget* Target = Actor;
+	const int32 West = Target->PlaceNode(FVector2D(3000.0, 0.0));
+	const int32 East = Target->PlaceNode(FVector2D(13000.0, 0.0));
+	Target->ConnectNodes(West, East, ERoadKind::Taxiway, INDEX_NONE);
+	if (!TestTrue(TEXT("the network exists"), Actor->Network != nullptr)) { return false; }
+
+	FGuideAnchor Anchor;
+	Anchor.Origin = FVector2D::ZeroVector;
+
+	FSnapGuideSettings Settings;
+	Settings.bExtending = false;
+	Settings.bLevelWith = false;
+	Settings.bParallel = true;
+	Settings.bCollinear = false;
+	Settings.bAngledFrom = false;
+	Settings.bMatchingGap = false;
+	Settings.bTaxiway = true;
+	Settings.bServiceRoad = false;
+	Settings.bRunway = false;
+	Settings.bApron = false;
+	Settings.bStand = false;
+	Settings.bWorld = false;
+
+	const FSnapGuideChain Chain;
+
+	TArray<SnapGuide::FCandidate> Default;
+	Chain.ProposeAll(*Actor->Network, Anchor, Anchor.Origin, Settings, Default);
+	TestEqual(TEXT("the default 10000uu reach finds the taxiway 3000uu away"), Default.Num(), 4);
+
+	SnapGuide::FTuning Tight;
+	Tight.SearchRadiusUu = 2000.0;
+	TArray<SnapGuide::FCandidate> Shrunk;
+	Chain.ProposeAll(*Actor->Network, Anchor, Anchor.Origin, Settings, Shrunk, Tight);
+	TestEqual(TEXT("a 2000uu reach does not - the source measured against IT, not a fresh default"),
+		Shrunk.Num(), 0);
 
 	return true;
 }
