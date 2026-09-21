@@ -75,6 +75,17 @@ namespace RunwayQuery
 		FRoadSegmentId Seed, double* OutChainHalfWidth = nullptr);
 
 	/**
+	 * The same question against a chain ALREADY WALKED - the node-shaped twin of
+	 * IsPointOnRunway's own chain overload, for exactly the same reason (#170): a claim pass
+	 * asks whether the SAME bar's node sits on the SAME strip from several places in one
+	 * tick (UpdateCrossing's arming test and its release fallback), and re-walking
+	 * RunwayChain(Seed) to answer each one is the network answering one question about
+	 * itself as many times as it was asked.
+	 */
+	AIRSIDE_API bool IsGuidelineNodeOnRunway(const URoadNetwork& Network, FGuidelineNodeId Node,
+		const TArray<FRoadSegmentId>& Chain, double* OutChainHalfWidth = nullptr);
+
+	/**
 	 * The same question about a bare POSITION, which is where the rule actually lives.
 	 *
 	 * IsGuidelineNodeOnRunway is this function applied to a node's position, and exists
@@ -157,3 +168,87 @@ namespace RunwayQuery
 	AIRSIDE_API TArray<FGuidelineNodeId> RunwayExitNodes(const URoadNetwork& Network, FRoadSegmentId Seed,
 		const FVector2D& Threshold, const FVector2D& Direction, double MinDistance);
 }
+
+/**
+ * RunwayChain/RunwayChainOrSeed, memoised against the ROAD graph's revision (issue #170).
+ *
+ * THE PROBLEM THIS SOLVES. TrafficClaims.cpp asks "which segments make up Seed's strip" from
+ * a dozen call sites across UpdateCrossing and BuildPending, and every one of them - direct
+ * calls, and IsPointOnRunway/IsGuidelineNodeOnRunway's Seed overloads underneath - used to
+ * re-walk the graph and heap-allocate a fresh TArray to answer it. A taxiing agent near a bar
+ * or a crossing paid that walk eight to ten times a substep; a parked or rolling aircraft
+ * paid it once a substep for the rest of its life, for an answer that cannot have changed
+ * since the last time it asked.
+ *
+ * KEYED ON GetEditRevision(), NOT GetGuidelineRevision(): chain membership is decided
+ * entirely by node/segment topology (FRoadNode::Incident, FRoadSegment::A/B, walked by
+ * RunwayChain) and IsRunwaySegment, which reads a segment's Profile pointer - set once, at
+ * AddSegment, and never reassigned afterward. EditRevision is bumped by exactly the mutators
+ * that can move any of that (AddNode, RemoveNode, AddSegment, RemoveSegment, SplitSegment,
+ * SetNodePosition, MergeNodes - see RoadNetwork.h's own comment on GetEditRevision).
+ * GuidelineRevision moves on guideline-only edits - a bar placed, an edge relinked - that
+ * leave every node and segment exactly where they were; keying on it would leave a chain
+ * wrong for the rest of the session the first time a runway grew an exit without a guideline
+ * edit landing in the same tick to bump it. SetRunwayFacts bumps NEITHER revision, but it
+ * cannot change chain membership either - it writes FRoadSegment::Runway (surface, approach
+ * class), a field IsRunwaySegment never reads.
+ *
+ * "THE WHOLE CHAIN, re-expanded per tick... so a rebuild cannot leave it stale"
+ * (TrafficClaims.cpp's own reasoning for storing the seed rather than the chain) is exactly
+ * what a revision check gives for free: a rebuild that changes the chain bumps EditRevision,
+ * the next ask sees a stale Revision and re-walks once, and every ask before that rebuild
+ * answers from the same entry instead of re-deriving it to reach the same answer.
+ *
+ * Owned by UGroundTraffic as a plain member, beside FNodeReachCache and for the same reason:
+ * derived state any tick can rebuild from the network, not simulation state, so it is
+ * neither a UPROPERTY nor saved.
+ */
+struct AIRSIDE_API FRunwayChainCache
+{
+	/** RunwayQuery::RunwayChain(Seed) - empty when Seed is not a live runway. */
+	const TArray<FRoadSegmentId>& Get(const URoadNetwork& Network, FRoadSegmentId Seed);
+
+	/** RunwayQuery::RunwayChainOrSeed(Seed) - from the SAME walk Get uses, not a second one:
+	 *  the two answers differ only when Get's chain comes back empty, so one entry holds
+	 *  both and neither is asked of the network twice. */
+	const TArray<FRoadSegmentId>& GetOrSeed(const URoadNetwork& Network, FRoadSegmentId Seed);
+
+	/** Drop everything. UGroundTraffic::OnGraphRebuilt calls it beside NodeReach's - the
+	 *  revision check above would catch it anyway; this just says so where the rebuild is. */
+	void Invalidate();
+
+	/** Entries currently held. Test-facing. */
+	int32 NumForTest() const { return Entries.Num(); }
+
+	/** Actual RunwayQuery::RunwayChain walks over this cache's whole life, INCLUDING ones an
+	 *  Invalidate() or a revision bump forced - a cache HIT never touches this. That is
+	 *  deliberate: it is a count of real work done, and dropping it on Invalidate() would
+	 *  hide the very re-walk a rebuild is supposed to cost exactly once.
+	 *  Airside.Model.Traffic.RunwayChainCache pins this at one per distinct seed across a
+	 *  whole taxi, where the uncached code walked it per call. */
+	int32 GetWalksForTest() const { return WalksForTest; }
+
+private:
+	/** One seed's answer to both questions - see Get and GetOrSeed. */
+	struct FEntry
+	{
+		TArray<FRoadSegmentId> Chain;
+		TArray<FRoadSegmentId> OrSeed;
+	};
+
+	/** Walks Network for Seed if this revision has not already answered for it, and returns
+	 *  the entry either way. Get and GetOrSeed differ only in which field they read. */
+	const FEntry& EntryFor(const URoadNetwork& Network, FRoadSegmentId Seed);
+
+	/** The network and revision the entries were computed against. */
+	const URoadNetwork* For = nullptr;
+	uint32 Revision = 0;
+
+	/** Keyed by SLOT INDEX, not a generation-checked handle - a reused slot is a graph
+	 *  mutation, and every mutation that could hand a runway's slot to something else also
+	 *  bumps EditRevision, which drops the whole table before a stale entry could be read
+	 *  back under the new occupant. Same reasoning as FNodeReachCache's own key. */
+	TMap<int32, FEntry> Entries;
+
+	int32 WalksForTest = 0;
+};

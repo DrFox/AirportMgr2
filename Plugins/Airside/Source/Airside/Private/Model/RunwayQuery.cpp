@@ -233,6 +233,15 @@ namespace RunwayQuery
 	bool IsGuidelineNodeOnRunway(const URoadNetwork& Network, FGuidelineNodeId Node,
 		FRoadSegmentId Seed, double* OutChainHalfWidth)
 	{
+		// SAME SPLIT AS IsPointOnRunway BELOW, and for the same reason (#170): a caller with
+		// only a seed pays for the walk here, and a caller already holding the chain (an
+		// FRunwayChainCache entry) does not, through the Chain overload beside it.
+		return IsGuidelineNodeOnRunway(Network, Node, RunwayChain(Network, Seed), OutChainHalfWidth);
+	}
+
+	bool IsGuidelineNodeOnRunway(const URoadNetwork& Network, FGuidelineNodeId Node,
+		const TArray<FRoadSegmentId>& Chain, double* OutChainHalfWidth)
+	{
 		// A NODE IS A POSITION HERE and nothing else, so the geometry lives in one function and
 		// the two callers cannot drift apart. An unknown node reports false with the half width
 		// still zeroed, which is what IsPointOnRunway does for a chain that is not a runway.
@@ -245,7 +254,7 @@ namespace RunwayQuery
 			}
 			return false;
 		}
-		return IsPointOnRunway(Network, Point->Position, Seed, OutChainHalfWidth);
+		return IsPointOnRunway(Network, Point->Position, Chain, OutChainHalfWidth);
 	}
 
 	bool IsPointOnRunway(const URoadNetwork& Network, const FVector2D& Position, FRoadSegmentId Seed,
@@ -389,4 +398,52 @@ namespace RunwayQuery
 		}
 		return Out;
 	}
+}
+
+const FRunwayChainCache::FEntry& FRunwayChainCache::EntryFor(const URoadNetwork& Network, FRoadSegmentId Seed)
+{
+	// SAME SHAPE AS FNodeReachCache::Get: the whole table is dropped rather than
+	// per-entry-checked, because a stale entry under the OLD revision is exactly as wrong as
+	// a missing one and dropping everything is one comparison instead of one per entry.
+	if (For != &Network || Revision != Network.GetEditRevision())
+	{
+		Entries.Reset();
+		For = &Network;
+		Revision = Network.GetEditRevision();
+	}
+
+	if (const FEntry* Found = Entries.Find(Seed.Index))
+	{
+		return *Found;
+	}
+
+	// THE ONE WALK an entry ever pays for: Chain and OrSeed are both derived from it here,
+	// so asking this cache for either question about the same seed in the same revision
+	// never costs a second one.
+	FEntry NewEntry;
+	NewEntry.Chain = RunwayQuery::RunwayChain(Network, Seed);
+	NewEntry.OrSeed = NewEntry.Chain;
+	if (NewEntry.OrSeed.Num() == 0)
+	{
+		NewEntry.OrSeed.Add(Seed);
+	}
+	++WalksForTest;
+	return Entries.Add(Seed.Index, MoveTemp(NewEntry));
+}
+
+const TArray<FRoadSegmentId>& FRunwayChainCache::Get(const URoadNetwork& Network, FRoadSegmentId Seed)
+{
+	return EntryFor(Network, Seed).Chain;
+}
+
+const TArray<FRoadSegmentId>& FRunwayChainCache::GetOrSeed(const URoadNetwork& Network, FRoadSegmentId Seed)
+{
+	return EntryFor(Network, Seed).OrSeed;
+}
+
+void FRunwayChainCache::Invalidate()
+{
+	Entries.Reset();
+	For = nullptr;
+	Revision = 0;
 }

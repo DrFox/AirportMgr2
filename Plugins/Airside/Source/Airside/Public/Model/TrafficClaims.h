@@ -30,6 +30,16 @@ struct AIRSIDE_API FClaimPass
 	FNodeReachCache& Reach;
 
 	/**
+	 * Which segments make up a runway seed's strip, memoised against the road graph's own
+	 * revision (issue #170) - UGroundTraffic's own member, handed in the same way Reach is.
+	 * HoldRunwayOnly, UpdateCrossing and BuildPending used to ask Network.RunwayChain/
+	 * RunwayChainOrSeed/IsPointOnRunway(Position, Seed) directly, each a fresh walk of the
+	 * graph; they now ask Chains, which walks once per (seed, revision) and answers every
+	 * further call - including every OTHER agent's pass this same tick - from a map lookup.
+	 */
+	FRunwayChainCache& Chains;
+
+	/**
 	 * ApplyClaims' scratch, PROMOTED FROM LOCALS (issue #168): one Arbitrate() call builds
 	 * one FClaimPass and runs it for every agent, so a TArray that used to be declared fresh
 	 * inside ApplyClaims allocated and freed once per agent per substep - up to 32 times a

@@ -433,6 +433,12 @@ bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, FRoadSegmentId
 	return RunwayQuery::IsGuidelineNodeOnRunway(*this, Node, Seed, OutChainHalfWidth);
 }
 
+bool URoadNetwork::IsGuidelineNodeOnRunway(FGuidelineNodeId Node, const TArray<FRoadSegmentId>& Chain,
+	double* OutChainHalfWidth) const
+{
+	return RunwayQuery::IsGuidelineNodeOnRunway(*this, Node, Chain, OutChainHalfWidth);
+}
+
 bool URoadNetwork::IsPointOnRunway(const FVector2D& Position, FRoadSegmentId Seed,
 	double* OutChainHalfWidth) const
 {

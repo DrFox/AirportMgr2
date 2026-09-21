@@ -837,6 +837,59 @@ bool FTrafficCrossingHoldsRunwayTest::RunTest(const FString& Parameters)
 
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficRunwayChainCacheTest,
+	"Airside.Model.Traffic.RunwayChainCache",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficRunwayChainCacheTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #170: HoldRunwayOnly, UpdateCrossing and BuildPending together ask "which
+	// segments make up Seed's strip" from a dozen call sites, and before FRunwayChainCache
+	// every one of them - direct RunwayChain/RunwayChainOrSeed calls, and the ones hiding
+	// inside IsPointOnRunway/IsGuidelineNodeOnRunway's Seed overloads - re-walked the graph
+	// and heap-allocated a fresh TArray to answer it, for the SAME seed, on the same
+	// substep, and then again on every substep after it for as long as the agent stood near
+	// a bar or a crossing.
+	//
+	// THE FIXTURE IS THE SAME SHAPE Airside.Model.Traffic.CrossingHoldsRunway MEASURES: one
+	// runway with a bar each side (so BOTH of BuildPending's bar/crossing branches fire, not
+	// just one), so this is pinned against geometry that rule was already written for rather
+	// than a shape invented just to make the count small.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	const FCrossingFixture Crossing = FCrossingFixture::Build(*Net, /*bFarBar=*/true);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	const FAirframe Airframe = TestAirframes::GroundOnly();
+	const int32 Plane = Traffic->DispatchAgent(Net,
+		M2TrafficRoute(*Net, Crossing.S, Crossing.N, ETraversalClass::Aircraft), Airframe, ETraversalClass::Aircraft, 1.0);
+	if (!TestTrue(TEXT("dispatched"), Plane > 0)) { return false; }
+
+	// THE WHOLE TAXI, near-bar to past-the-far-bar and on to N: every substep of every tick
+	// this agent spends taxiing asks the claim pass about Crossing.Strip at least once,
+	// through Agent.CrossingRunway (UpdateCrossing, BuildPending's route zero) and through
+	// H's and Far's HoldingPositionFor (BuildPending's bar branch) - the SAME seed
+	// throughout, since this fixture names exactly one runway.
+	TickUntil(*Traffic, *Net, 120.0, [&](int32) { return Traffic->FindAgent(Plane)->Phase != EAgentPhase::Parked; });
+	TestEqual(TEXT("the crossing agent reaches N and parks"), Traffic->FindAgent(Plane)->Phase, EAgentPhase::Parked);
+
+	const int32 Walks = Traffic->GetRunwayChainWalksForTest();
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("RunwayChainCache measured: %d actual RunwayQuery::RunwayChain walk(s) across the whole crossing ")
+		TEXT("(one runway strip named throughout by every one of UpdateCrossing's and BuildPending's several call ")
+		TEXT("sites, across every substep of every tick)"),
+		Walks);
+
+	// O(DISTINCT SEEDS), NOT O(CALLS): one strip is ever named here, so one walk pays for the
+	// whole taxi no matter how many times, or from how many call sites, it is asked about.
+	// This goes RED the moment TrafficClaims.cpp calls Network.RunwayChain/RunwayChainOrSeed/
+	// IsPointOnRunway(Position, Seed)/IsGuidelineNodeOnRunway(Node, Seed) directly again
+	// instead of asking FClaimPass::Chains.
+	TestEqual(TEXT("exactly one walk for the one runway strip this fixture names"), Walks, 1);
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FTrafficRunwayEdgeClaimTest,
 	"Airside.Model.Traffic.RunwayEdgeClaim",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

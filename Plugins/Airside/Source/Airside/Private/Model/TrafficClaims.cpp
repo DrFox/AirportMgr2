@@ -114,7 +114,11 @@ void FClaimPass::HoldRunwayOnly(FRoadAgent& Agent, const URoadNetwork& Network)
 		// THE WHOLE CHAIN, re-expanded per tick exactly as BuildPending's route zero does
 		// it: a runway is several segments once it has exits, and a rebuild may have
 		// changed which - so the seed is what is stored and the chain is what is claimed.
-		const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Agent.CrossingRunway);
+		// THROUGH Chains, not Network.RunwayChainOrSeed (issue #170): "re-expanded per tick"
+		// only ever meant "answered fresh if the graph could have changed it", and Chains
+		// gives that for a map lookup instead of a walk on every one of the substeps a
+		// parked or rolling aircraft spends holding its own surface.
+		const TArray<FRoadSegmentId>& Chain = Chains.GetOrSeed(Network, Agent.CrossingRunway);
 		for (const FRoadSegmentId Segment : Chain)
 		{
 			Surfaces.AddUnique(FTrafficResource::OfSurface(Segment));
@@ -335,7 +339,14 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	if (Agent.CrossingPhase == ECrossingPhase::None && bFromIsBar)
 	{
 		const FRoadSegmentId Bar = FromNode->HoldingPositionFor;
-		bool bOntoStrip = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, Bar);
+
+		// WALKED ONCE FOR THE WHOLE ARMING TEST (issue #170): the three tries below used to
+		// ask Network.IsGuidelineNodeOnRunway/IsPointOnRunway(Position, Bar) separately, each
+		// re-walking RunwayChain(Bar) to answer the same "which segments is Bar protecting"
+		// question the try before it had just answered. Chains.Get answers it once per Bar
+		// per revision; every one of these calls after the first is a map lookup.
+		const TArray<FRoadSegmentId>& BarChain = Chains.Get(Network, Bar);
+		bool bOntoStrip = Network.IsGuidelineNodeOnRunway(Plan.Steps[Current].To, BarChain);
 
 		if (!bOntoStrip)
 		{
@@ -346,7 +357,7 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 			const int32 LastVertex = FMath::Min(Plan.Steps[Current].EndVertex, Plan.Polyline.Num() - 1);
 			for (int32 Vertex = FMath::Max(0, FirstVertex); Vertex <= LastVertex && !bOntoStrip; ++Vertex)
 			{
-				bOntoStrip = Network.IsPointOnRunway(Plan.Polyline[Vertex], Bar);
+				bOntoStrip = Network.IsPointOnRunway(Plan.Polyline[Vertex], BarChain);
 			}
 		}
 
@@ -355,8 +366,8 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 			// FALLBACK ON LastMotion only when the polyline cannot be sampled at all. It
 			// is a tick stale, which is why it is not the first choice.
 			bOntoStrip = bHaveBody
-				? Network.IsPointOnRunway(NosePoint, Bar)
-				: Network.IsPointOnRunway(Agent.LastMotion.Position, Bar);
+				? Network.IsPointOnRunway(NosePoint, BarChain)
+				: Network.IsPointOnRunway(Agent.LastMotion.Position, BarChain);
 		}
 
 		if (bOntoStrip)
@@ -370,7 +381,7 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	// the asphalt, and the crossing does not begin at the bar, it begins at the edge of
 	// the surface.
 	if (Agent.CrossingPhase == ECrossingPhase::Committed && Agent.CrossingRunway.IsSet()
-		&& bHaveBody && Network.IsPointOnRunway(CentrePoint, Agent.CrossingRunway))
+		&& bHaveBody && Network.IsPointOnRunway(CentrePoint, Chains.Get(Network, Agent.CrossingRunway)))
 	{
 		// SAME SEED, NEW PHASE: BeginCrossing again rather than the phase alone, so the pair
 		// is written together even on this advance-in-place transition.
@@ -387,6 +398,12 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 	// and a hold that waits for a bar that does not exist never ends.
 	if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
 	{
+		// ONE WALK FOR ALL FOUR TESTS BELOW (issue #170): nose, centre, tail and the node
+		// fallback all ask the same seed, Agent.CrossingRunway - a chain this cache has
+		// almost certainly already answered for this tick, since 0a/0b above name the same
+		// seed once it is set.
+		const TArray<FRoadSegmentId>& CrossingChain = Chains.Get(Network, Agent.CrossingRunway);
+
 		bool bClear = false;
 		if (bHaveBody)
 		{
@@ -396,9 +413,9 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 			// onto the asphalt (measured at route 17825 on the two-bar crossing, where the
 			// tail is off the strip while the nose is already on it).
 			const bool bBodyClear =
-				!Network.IsPointOnRunway(NosePoint, Agent.CrossingRunway)
-				&& !Network.IsPointOnRunway(CentrePoint, Agent.CrossingRunway)
-				&& !Network.IsPointOnRunway(TailPoint, Agent.CrossingRunway);
+				!Network.IsPointOnRunway(NosePoint, CrossingChain)
+				&& !Network.IsPointOnRunway(CentrePoint, CrossingChain)
+				&& !Network.IsPointOnRunway(TailPoint, CrossingChain);
 
 			// WHICH SIDE the body is clear of is what the phase answers. OnStrip means the
 			// centre has been on the asphalt, so a clear body is one that has crossed.
@@ -416,7 +433,7 @@ void FClaimPass::UpdateCrossing(FRoadAgent& Agent, const URoadNetwork& Network,
 			// than deleted because a two-point plan is still a plan, and an agent on one
 			// must not hold a runway for ever.
 			double ChainHalfWidth = 0.0;
-			const bool bNodeOnStrip = Network.IsGuidelineNodeOnRunway(FromId, Agent.CrossingRunway, &ChainHalfWidth);
+			const bool bNodeOnStrip = Network.IsGuidelineNodeOnRunway(FromId, CrossingChain, &ChainHalfWidth);
 			const double TailPast = (T - F * 0.5) - UGroundTraffic::StepStart(Plan, Current);
 			bClear = !bFromIsBar && TailPast >= 0.0 && (!bNodeOnStrip || TailPast > ChainHalfWidth);
 		}
@@ -480,7 +497,10 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 	// is a moment from the asphalt and nothing may be cleared onto it in between.
 	if (Agent.CrossingPhase != ECrossingPhase::None && Agent.CrossingRunway.IsSet())
 	{
-		const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Agent.CrossingRunway);
+		// THROUGH Chains (issue #170), not a fresh Network.RunwayChainOrSeed walk: the same
+		// seed UpdateCrossing just asked about above, so this is very likely already the
+		// entry it just filled.
+		const TArray<FRoadSegmentId>& Chain = Chains.GetOrSeed(Network, Agent.CrossingRunway);
 		for (const FRoadSegmentId Segment : Chain)
 		{
 			FWantedClaim Crossing;
@@ -607,7 +627,10 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Step.Edge);
 			if (Edge != nullptr && Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom))
 			{
-				for (const FRoadSegmentId Segment : Network.RunwayChain(Edge->DerivedFrom))
+				// THROUGH Chains (issue #170): a long runway derives several short guideline
+				// steps, one Edge->DerivedFrom apiece but very often the SAME chain, and this
+				// loop used to re-walk it once per step this window touches.
+				for (const FRoadSegmentId Segment : Chains.Get(Network, Edge->DerivedFrom))
 				{
 					// COPIED FROM THE EDGE CLAIM, rank included: the surface is claimed
 					// BECAUSE of that edge, and ranking the two differently would let an
@@ -686,8 +709,10 @@ void FClaimPass::BuildPending(const FRoadAgent& Agent, const URoadNetwork& Netwo
 				// URoadNetwork::RunwayChain. Empty means the segment is no longer a runway
 				// (the profile changed under the mark) and the named segment alone is still
 				// honoured: a bar that silently stopped protecting anything is worse than one
-				// protecting a piece of what it used to.
-				const TArray<FRoadSegmentId> Chain = Network.RunwayChainOrSeed(Node->HoldingPositionFor);
+				// protecting a piece of what it used to. THROUGH Chains (issue #170): a bar
+				// visited on several ticks, or by several agents in one Arbitrate pass, asks
+				// for the same seed every time.
+				const TArray<FRoadSegmentId>& Chain = Chains.GetOrSeed(Network, Node->HoldingPositionFor);
 
 				for (const FRoadSegmentId Segment : Chain)
 				{

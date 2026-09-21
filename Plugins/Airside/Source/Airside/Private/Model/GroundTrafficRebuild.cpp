@@ -171,6 +171,12 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// would catch it on the next lookup; dropping it here says so where the rebuild is.
 	NodeReach.Invalidate();
 
+	// SAME REASONING, for the chains a runway seed used to answer for (issue #170): a
+	// rebuild is exactly the event GetEditRevision() exists to catch, and dropping it here
+	// rather than waiting for the next Get/GetOrSeed says so where the rebuild is, same as
+	// NodeReach above.
+	RunwayChains.Invalidate();
+
 	int32 Considered = 0;
 	int32 Replanned = 0;
 	int32 Truncated = 0;
@@ -271,7 +277,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// Advance - the player deletes a stand and presses 7 in the same breath. And a rebuild
 	// may have ADDED a stand, so the re-offer pass asks for every waiter.
 	{
-		FClaimPass Pass{Rules, Occupancy, NodeReach};
+		FClaimPass Pass{Rules, Occupancy, NodeReach, RunwayChains};
 		for (FRoadAgent& Agent : Agents)
 		{
 			Pass.ClaimGoalNode(Agent, Network);

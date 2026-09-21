@@ -129,9 +129,10 @@ bool FTrafficSplitClaimPassStandaloneTest::RunTest(const FString& Parameters)
 	FTrafficRules Rules;
 	FTrafficOccupancy Occupancy;
 	FNodeReachCache Reach;
+	FRunwayChainCache Chains; // Issue #170: FClaimPass's fourth reference, bare like the rest.
 	URoadNetwork* Network = NewObject<URoadNetwork>();
 
-	FClaimPass Pass{Rules, Occupancy, Reach};
+	FClaimPass Pass{Rules, Occupancy, Reach, Chains};
 	Pass.Run(Agent, *Network);
 
 	int32 Holder = 0;
