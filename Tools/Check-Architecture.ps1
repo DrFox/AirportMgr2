@@ -640,6 +640,10 @@ foreach ($module in $modules) {
                 $t = $h.Line.Trim()
                 if ($t.StartsWith('//') -or $t.StartsWith('*')) { continue }
                 $failures.Add("graph-probe: $($file.FullName):$($h.LineNumber) ERouteErrand::GraphProbe is for tests and Tool/ only - production code names the errand it means: $t")
+            }
+        }
+    }
+}
 
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
