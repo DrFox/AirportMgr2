@@ -114,6 +114,15 @@ public:
 	int32 PinnedCount() const;
 
 	/**
+	 * How many times ReservationFor has actually run the packer, rather than been asked to.
+	 *
+	 * FOR TESTS ONLY - issue #180. BuildPreview and BuildReadout ran the whole yard packer
+	 * once each per hover frame, though both describe the same outline; this is what a test
+	 * counts to prove the memo below is doing its job instead of merely existing.
+	 */
+	int32 GetSolveCountForTest() const { return SolveCountForTest; }
+
+	/**
 	 * The plot as it stands THIS frame: pinned corners as placed, the moving one taken from
 	 * the cursor, in the outline's own winding with the frontage as edge 0->1.
 	 *
@@ -134,6 +143,49 @@ private:
 	 */
 	PlotYard::FReservation ReservationFor(const FToolContext& Context,
 		TArrayView<const FVector2D> Outline) const;
+
+	/**
+	 * THE SOLVE, DONE ONCE PER SHOWN OUTLINE - issue #180.
+	 *
+	 * BuildPreview and BuildReadout are each asked for the SAME reservation - see
+	 * ReservationFor's own comment on why that is one computation, not two that agree - but
+	 * both are const, both used to call Solve directly, and both rebuilt the kit specs on top
+	 * of it: a hover frame paid for the packer twice and the spec table four times, and a
+	 * frame in Confirm stage paid for both though nothing had moved.
+	 *
+	 * MUTABLE, AND KEYED RATHER THAN CLEARED PER FRAME, because nothing here is told when a
+	 * frame starts: PR #199 gives BuildPreview and BuildReadout the same FToolContext in the
+	 * game driver, but the editor mode's Tick and BuildPreview calls are NOT guaranteed the
+	 * same cursor (URoadBuildEditorTool::OnUpdateHover and DrawPersistentState build theirs
+	 * separately), and CollectToolReadout runs BEFORE Tick in ARoadBuildController::PlayerTick
+	 * so a memo written only in Tick would hand BuildReadout last frame's shape. Comparing the
+	 * outline itself sidesteps both: whichever caller asks first with a given shape pays for
+	 * the solve, and every other caller - that frame, the next, or from the other driver -
+	 * reads the same answer until the shape actually changes.
+	 *
+	 * THE KIT SPECS ARE RESOLVED HERE TOO, once, because they never depended on the outline in
+	 * the first place - DepotKitSpecs walks EDepotModule, not the quad - so refetching them
+	 * alongside the packer on every outline change (or once, lazily, for an outline that never
+	 * completes - see ReservationFor) is what "once per solve, not per caller" means for a
+	 * value nothing here invalidates.
+	 */
+	struct FReservationMemo
+	{
+		bool bValid = false;
+		FVector2D Outline[4] = { FVector2D::ZeroVector, FVector2D::ZeroVector,
+			FVector2D::ZeroVector, FVector2D::ZeroVector };
+		EPlotLayout Layout = EPlotLayout::Scatter;
+
+		/** Resolved once, lazily: see ReservationFor for why this flag exists apart from bValid. */
+		bool bSpecsResolved = false;
+		TArray<PlotYard::FKitSpec> Specs;
+
+		PlotYard::FReservation Reservation;
+	};
+	mutable FReservationMemo Memo;
+
+	/** Bumped only on an actual solve - a cache hit must not move it. See GetSolveCountForTest. */
+	mutable int32 SolveCountForTest = 0;
 
 	EPlaceableEntity Kind = EPlaceableEntity::FuelDepot;
 
