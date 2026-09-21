@@ -94,6 +94,37 @@ public:
 	 */
 	bool MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb);
 
+	/**
+	 * Bumped by every node/segment mutator - AddNode, RemoveNode, AddSegment, RemoveSegment,
+	 * SplitSegment, SetNodePosition, MergeNodes (#166). Scoped to the ROAD graph only, unlike
+	 * GuidelineRevision below: the two callers this exists for - the ghost preview's cached
+	 * GhostNetwork and URoadEditFacade's cached FRoadDeletionPlan - both derive entirely from
+	 * nodes and segments, and a guideline-only edit (a holding bar placed, an edge relinked)
+	 * leaves every node and segment exactly where it was, so it must not invalidate either
+	 * cache. Not a UPROPERTY - a session clock, not state, same as GuidelineRevision.
+	 */
+	uint32 GetEditRevision() const { return EditRevision; }
+
+	/**
+	 * Overwrite every node/segment/guideline/apron/entity array from Source, leaving handles
+	 * (index and generation) identical to what DuplicateObject would have produced - a plain
+	 * TArray assignment per field, copying the same data DuplicateObject's reflection walk
+	 * copies (#166).
+	 *
+	 * EXISTS so a caller that needs a disposable scratch graph every frame - the ghost
+	 * preview is the one that mattered - can keep ONE URoadNetwork alive for its own
+	 * lifetime and refresh it here instead of allocating (and orphaning, to the next GC) a
+	 * fresh UObject each time. DefaultProfile is copied too and named explicitly here: it
+	 * is the one field a caller actually depends on (ProfileFor's fallback), and the exact
+	 * thing a straight "copy the arrays" pass would be tempted to leave out.
+	 *
+	 * NOT a full UObject clone - Outer, flags and anything Blueprint-visible are untouched -
+	 * so this is for a SCRATCH object already constructed for the purpose, never a
+	 * replacement for DuplicateObject where the whole UObject identity matters (undo's
+	 * snapshot, for one, still uses DuplicateObject deliberately).
+	 */
+	void CopyFrom(const URoadNetwork& Source);
+
 	const FRoadNode*    GetNode(FRoadNodeId Node) const;
 	const FRoadSegment* GetSegment(FRoadSegmentId Segment) const;
 	FRoadSegment*       GetSegmentMutable(FRoadSegmentId Segment);
@@ -547,6 +578,9 @@ private:
 
 	/** See GetGuidelineRevision. Plain, not a UPROPERTY - it is a session clock, not state. */
 	uint32 GuidelineRevision = 0;
+
+	/** See GetEditRevision. Plain, not a UPROPERTY - a session clock, not state. */
+	uint32 EditRevision = 0;
 
 	/**
 	 * SAVED, not transient: this is the only durable record that a bar was ever placed.

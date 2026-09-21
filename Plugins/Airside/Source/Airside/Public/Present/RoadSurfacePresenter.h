@@ -215,11 +215,12 @@ public:
 	/**
 	 * Show the segment a click would build, as real solved pavement.
 	 *
-	 * Built on a DUPLICATE of Network, never the live one - FRoadNetworkSolver::SolveAll
-	 * writes trim distances and cut vertices INTO whatever it is handed, so solving a
-	 * hypothetical segment against the real graph would leave the real road's stored
-	 * geometry describing a road nobody built. Call only on an IsGhostCacheHit miss - see
-	 * its comment - since this always does the full rebuild.
+	 * Built on a COPY of Network (GhostNetwork), never the live one -
+	 * FRoadNetworkSolver::SolveNodeInto writes trim distances and cut vertices INTO
+	 * whatever it is handed, exactly as SolveAll does, so solving a hypothetical segment
+	 * against the real graph would leave the real road's stored geometry describing a road
+	 * nobody built. Call only on an IsGhostCacheHit miss - see its comment - since this
+	 * always does the full rebuild.
 	 */
 	void UpdateGhost(URoadNetwork* Network, int32 FromNodeIndex, const FRoadSnapResult& Snap,
 		bool bValid, const FSurfaceSettings& Settings);
@@ -248,6 +249,14 @@ public:
 
 	/** The material set the last Rebuild handed the mesh, for tests: see EffectiveMaterialSet. */
 	const URoadMaterialSet* EffectiveMaterialSetForTest() const { return EffectiveSet; }
+
+	/**
+	 * How many times BuildGhostBuffers has allocated a NEW GhostNetwork, for
+	 * Airside.Present.NetworkActor: at most once for the life of this presenter, however
+	 * many frames a drag crosses, since #166 replaced a DuplicateObject per call with
+	 * GhostNetwork->CopyFrom into the same object.
+	 */
+	int32 GhostNetworkAllocCountForTest() const { return GhostNetworkAllocCount; }
 
 	/**
 	 * LayerComponents[Layer], for Airside.Present.NetworkActor.
@@ -380,14 +389,30 @@ private:
 	/** See RunwayMarkingMaterialInstance. */
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> RunwayMarkingMID;
 
-	/** The hypothetical graph the ghost is solved against. Rebuilt whenever the drag moves. */
+	/**
+	 * The hypothetical graph the ghost is solved against.
+	 *
+	 * ONE OBJECT FOR THE LIFE OF THIS PRESENTER (#166), not a fresh DuplicateObject per
+	 * call: BuildGhostBuffers refreshes it with URoadNetwork::CopyFrom instead of replacing
+	 * it, so a drag that crosses hundreds of frames allocates this exactly once (see
+	 * GhostNetworkAllocCount) rather than orphaning a whole duplicated network - eighteen
+	 * UPROPERTY arrays - to the garbage collector every cursor pixel.
+	 */
 	UPROPERTY(Transient) TObjectPtr<URoadNetwork> GhostNetwork;
+
+	/** See GhostNetworkAllocCountForTest. Not a UPROPERTY - a session counter, not state. */
+	int32 GhostNetworkAllocCount = 0;
 
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> GhostMID;
 
 	// What the ghost currently shows. A drag holds still for most frames, and rebuilding
-	// an unchanged preview means duplicating the network and re-solving it every frame for
-	// an identical result.
+	// an unchanged preview means re-solving it every frame for an identical result.
+	//
+	// LastGhostTo is QUANTISED to the nearest uu (#166), not the raw cursor position: a
+	// held mouse still reports sub-uu noise every tick, which used to miss this exact
+	// comparison on every one of those frames and rebuild anyway. One uu is far below
+	// anything a cursor can express on purpose - see IsGhostCacheHit's own call for the
+	// quantiser - and far above the jitter a real input device produces while "held still".
 	int32 LastGhostFrom = INDEX_NONE;
 	FVector2D LastGhostTo = FVector2D::ZeroVector;
 	ERoadSnapKind LastGhostKind = ERoadSnapKind::Free;

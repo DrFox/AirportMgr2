@@ -29,6 +29,22 @@ namespace RoadMaterialParams
 	constexpr const TCHAR* EdgeHalfWidth = TEXT("EdgeHalfWidth");
 }
 
+namespace
+{
+	/**
+	 * Rounds a ghost cache key to the nearest uu (#166). The cache used to compare the raw
+	 * cursor position exactly, which a held mouse still fails every tick - sub-uu jitter is
+	 * real noise from a real input device, not a decision to move the ghost. One uu is far
+	 * below anything a cursor can express on purpose and far above that noise, so this is
+	 * the cache KEY only; the geometry BuildGhostBuffers actually builds on a miss still
+	 * uses the raw, unquantised Snap.Position.
+	 */
+	FVector2D QuantiseGhostPosition(const FVector2D& Position)
+	{
+		return FVector2D(FMath::GridSnap<double>(Position.X, 1.0), FMath::GridSnap<double>(Position.Y, 1.0));
+	}
+}
+
 void URoadSurfacePresenter::Initialize(
 	const TStaticArray<TObjectPtr<UDynamicMeshComponent>, static_cast<int32>(ESurfaceLayer::Count)>& Components)
 {
@@ -502,15 +518,20 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 		return false;
 	}
 
-	// The duplicate, and the reason for the whole function. Slot indices and generation
-	// counters survive duplication, so a handle resolved against the real network
-	// resolves to the same thing here - which is what lets Snap's node and segment
-	// handles be used directly below without translation.
-	GhostNetwork = DuplicateObject<URoadNetwork>(Network, this);
+	// ONE GhostNetwork FOR THE LIFE OF THIS PRESENTER (#166), allocated once and refreshed
+	// here every call rather than duplicated per call - a fresh DuplicateObject for every
+	// cursor frame was the finding: eighteen UPROPERTY arrays allocated and orphaned to the
+	// next GC for every pixel the mouse crossed. CopyFrom is a handful of TArray
+	// assignments against an object that already exists, and - just as DuplicateObject did
+	// - leaves slot indices and generation counters identical to the live network's, which
+	// is what lets Snap's node and segment handles be used directly below without
+	// translation.
 	if (GhostNetwork == nullptr)
 	{
-		return false;
+		GhostNetwork = NewObject<URoadNetwork>(this);
+		++GhostNetworkAllocCount;
 	}
+	GhostNetwork->CopyFrom(*Network);
 
 	FRoadNodeId To;
 	switch (Snap.Kind)
@@ -543,7 +564,17 @@ bool URoadSurfacePresenter::BuildGhostBuffers(URoadNetwork* Network, int32 FromN
 		return false;
 	}
 
-	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*GhostNetwork);
+	// SOLVE ONLY From AND To (#166), not FRoadNetworkSolver::SolveAll: the ghost draws
+	// nothing but this segment and these two junctions (see the loop below), so a full
+	// solve was re-deriving geometry for every OTHER junction in the network purely to
+	// throw it away - O(N) junction solves for a preview that shows two. SolveNodeInto is
+	// SolveAll's own per-node body, so this writes exactly the fields SolveAll would have
+	// written for these two nodes (the ghosted segment's cuts AND every other live arm at
+	// each of them, which AddGhostJunction's fan needs) and nothing writes them differently
+	// depending on which caller asked.
+	FRoadSolveResult Solved;
+	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, From.Index, 12, Solved);
+	FRoadNetworkSolver::SolveNodeInto(*GhostNetwork, To.Index, 12, Solved);
 
 	// Only the NEW segment and the two junctions it reshapes. Drawing the whole ghost
 	// network would lay a translucent copy over every road already on screen, and the one
@@ -576,13 +607,15 @@ bool URoadSurfacePresenter::IsGhostCacheHit(const URoadNetwork* Network, int32 F
 		return false;
 	}
 
-	// A drag holds still for most of its frames. Rebuilding then means duplicating the
-	// network and re-solving it to produce exactly the same triangles, sixty times a
-	// second. Cleared by Rebuild, so any real edit invalidates it.
+	// A drag holds still for most of its frames. Rebuilding then means re-solving the two
+	// junctions to produce exactly the same triangles, sixty times a second. Cleared by
+	// Rebuild, so any real edit invalidates it. QuantiseGhostPosition on Snap.Position, not
+	// the raw value - see its own comment for why an exact comparison used to miss almost
+	// every frame of a "held still" drag.
 	if (bGhostVisible
 		&& FromNodeIndex == LastGhostFrom
 		&& Snap.Kind == LastGhostKind
-		&& Snap.Position == LastGhostTo)
+		&& QuantiseGhostPosition(Snap.Position) == LastGhostTo)
 	{
 		bOutValidityChanged = (bValid != bLastGhostValid);
 		return true;
@@ -648,7 +681,7 @@ void URoadSurfacePresenter::UpdateGhost(URoadNetwork* Network, int32 FromNodeInd
 
 	bGhostVisible = true;
 	LastGhostFrom = FromNodeIndex;
-	LastGhostTo = Snap.Position;
+	LastGhostTo = QuantiseGhostPosition(Snap.Position);
 	LastGhostKind = Snap.Kind;
 	bLastGhostValid = bValid;
 }
