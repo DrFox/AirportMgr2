@@ -243,6 +243,44 @@ ENGINE = {
     "spool_down_seconds": 10.0,
 }
 
+# THE GEAR, NEW ON 2026-09-21. plane3 shipped with a FIXED undercarriage for three months -
+# not as a decision but because the model had no retract bones, so a Q400 climbed out with
+# its wheels down. plane3/scripts/build_gear_rig.py added three legs and four doors and
+# build_gear_bays.py cut the bays, and this block is what makes the model's cycle run.
+#
+# EIGHT SECONDS, between plane5's six and plane4's seven-and-the-737's-bulk. A Dash 8's gear
+# is electrically selected and hydraulically actuated with a published VLO of 200 KIAS; it is
+# not a brisk light-twin cycle and it is not a 737's. Authored rather than measured - nothing
+# in a mesh knows how long an actuator takes.
+#
+# 1.5 SECONDS A DOOR, so a full cycle is 11. The Q400's main doors are larger than a King
+# Air's and smaller than a 737's, and they sit at the GEAR-UP end of the cycle in both
+# directions - build_gear_rig.py's CYCLE keys exactly that shape, because the doors hang open
+# with the gear down and shut only over the stowed wheel. FGearPerformance::FractionsAt is
+# the one evaluator that draws it; this block only says how long each stage takes.
+GEAR = {
+    "travel_seconds": 8.0,
+    "door_seconds": 1.5,
+    # ZERO, AND IT IS A FACT ABOUT THE AEROPLANE. A Q400 main leg carries a single axle with
+    # two wheels side by side - no bogie beam, no tilt actuator, and no bone for one. See
+    # FGearPerformance::TruckTiltSeconds, which says the same of every airframe in the fleet.
+    "truck_tilt_seconds": 0.0,
+    # A FEW HUNDRED FEET - 9000 uu is about 295 ft - because raising the gear is a pilot
+    # command and not a consequence of lift-off. The same figure plane4, plane5, plane6 and
+    # plane7 carry, on purpose: this is a procedure, not a capability.
+    "retract_above_height": 9000.0,
+    # ABOVE FApproachPerformance::FinalAltitude (2000 uu) on purpose, so every arrival is born
+    # down and locked and this never fires at today's figures.
+    "extend_below_height": 15000.0,
+}
+
+# NINETY DEGREES, where UAirsideAgentAnim defaults to plane4's measured 81. A fact about THIS
+# rig rather than a choice: plane3/scripts/gear_pivots.json keys door_open_deg at 90.0, and
+# build_gear_rig.py's pose_check() reports where each closed door's outer face lands against
+# the skin it was measured off. Left at 81 the four doors stop 9 degrees short of shut, which
+# on a retracted aeroplane is a visible gap at each bay.
+BAY_DOOR_CLOSED_ANGLE_DEGREES = 90.0
+
 # PUBLISHED FIELD LENGTHS, and they may never be shorter than the roll the model computes -
 # AirportMgr.Content.FieldLengthsCoverTheRoll states the rule: a published figure may be
 # generous, but one shorter than the roll admits an aircraft to a strip it then runs off the
@@ -330,11 +368,29 @@ def author_type():
         ground.set_editor_property(field, value)
     asset.set_editor_property("ground", ground)
 
-    for group, values in (("climb", CLIMB), ("approach", APPROACH), ("engine", ENGINE)):
+    for group, values in (("climb", CLIMB), ("approach", APPROACH), ("engine", ENGINE),
+                          ("gear", GEAR)):
         block = asset.get_editor_property(group)
         for field, value in values.items():
             block.set_editor_property(field, value)
         asset.set_editor_property(group, block)
+
+    # THE GEAR CYCLE MUST FINISH BEFORE THE AGENT IS REMOVED, asserted rather than argued,
+    # and against the climb figures just written rather than against a copy of them. An agent
+    # removed from the world part way through its cycle vanishes with its gear half up, in
+    # front of the player, and the only symptom is that it looked wrong for a moment. This is
+    # the check plane7's script introduced and plane6's first tripped; plane3 clears it with
+    # room, because a Q400 climbs at 170 kn where a 777 climbs at 250.
+    cycle = GEAR["door_seconds"] * 2.0 + GEAR["travel_seconds"]
+    rate = CLIMB["climb_speed"] * math.radians(CLIMB["climb_pitch_degrees"])
+    top = GEAR["retract_above_height"] + rate * cycle
+    if top >= CLIMB["clear_altitude"]:
+        fail("the %.0f s gear cycle finishes at about %.0f uu but the agent is cleared at "
+             "%.0f - it would vanish mid-retraction. Raise ClearAltitude or shorten the cycle."
+             % (cycle, top, CLIMB["clear_altitude"]))
+    else:
+        say("PASS the %.0f s gear cycle finishes at about %.0f uu, below the %.0f uu the "
+            "agent is cleared at" % (cycle, top, CLIMB["clear_altitude"]))
 
     requirements = asset.get_editor_property("requirements")
     for field, value in REQUIREMENTS.items():
@@ -351,8 +407,8 @@ def author_type():
     return path
 
 
-def set_anim_wheel_radius():
-    """The ANIMATION's copy of the radius, which defaults to the Meridian's 21 uu.
+def set_anim_defaults():
+    """The ANIMATION's copies of the two per-rig figures this model owns.
 
     On the generated class's default object, which is what the editor's Class Defaults panel
     edits and what every instance of the Anim Blueprint starts from. Left unset, a Q400's
@@ -372,15 +428,26 @@ def set_anim_wheel_radius():
     radius = measured()["wheel_radius"]
     before = defaults.get_editor_property("main_wheel_radius")
     defaults.set_editor_property("main_wheel_radius", radius)
+    # THE DOOR ANGLE JOINED ON 2026-09-21 with the bays themselves - see
+    # BAY_DOOR_CLOSED_ANGLE_DEGREES. Before that this rig had no doors and the default was
+    # simply unread.
+    defaults.set_editor_property("bay_door_closed_angle_degrees",
+                                 BAY_DOOR_CLOSED_ANGLE_DEGREES)
     unreal.EditorAssetLibrary.save_asset(ABP, only_if_is_dirty=False)
 
-    after = unreal.get_default_object(
-        unreal.EditorAssetLibrary.load_asset(ABP).generated_class()
-    ).get_editor_property("main_wheel_radius")
+    reloaded = unreal.get_default_object(
+        unreal.EditorAssetLibrary.load_asset(ABP).generated_class())
+    after = reloaded.get_editor_property("main_wheel_radius")
+    got_door = reloaded.get_editor_property("bay_door_closed_angle_degrees")
     if abs(after - radius) > 0.01:
         fail("ABP wheel radius read back as %.1f, expected %.1f" % (after, radius))
     else:
         say("PASS ABP_Plane3 wheel radius %.1f -> %.1f uu" % (before, after))
+    if abs(got_door - BAY_DOOR_CLOSED_ANGLE_DEGREES) > 0.01:
+        fail("ABP door closed angle read back as %.1f, expected %.1f"
+             % (got_door, BAY_DOOR_CLOSED_ANGLE_DEGREES))
+    else:
+        say("PASS ABP_Plane3 bay door closed at %.1f deg, this rig's shut angle" % got_door)
 
 
 def verify(path):
@@ -405,6 +472,21 @@ def verify(path):
             fail("%s read back as %s, expected %s" % (name, got, want))
         else:
             say("PASS %s = %.2f" % (name, got))
+
+    # THE GEAR, READ BACK FIELD BY FIELD, including the zero. set_editor_property silently
+    # no-ops on an unknown field name, reports success and saves cleanly - which would leave
+    # this type with TravelSeconds 0, indistinguishable on screen from the fixed-gear Q400
+    # this one has just stopped being.
+    gear = asset.get_editor_property("gear")
+    for field, want in GEAR.items():
+        got = gear.get_editor_property(field)
+        if abs(got - want) > 0.01:
+            fail("gear.%s read back as %s, expected %s" % (field, got, want))
+        else:
+            say("PASS gear.%-21s = %.1f" % (field, got))
+    say("PASS a full gear cycle is %.1f s: %.1f door, %.1f travel, %.1f door"
+        % (GEAR["door_seconds"] * 2.0 + GEAR["travel_seconds"],
+           GEAR["door_seconds"], GEAR["travel_seconds"], GEAR["door_seconds"]))
 
     footprint = asset.get_editor_property("footprint")
     span = footprint.get_editor_property("wingspan")
@@ -458,7 +540,7 @@ def run():
         return
     say("authored %s" % path)
     verify(path)
-    set_anim_wheel_radius()
+    set_anim_defaults()
     say("DONE")
 
 
