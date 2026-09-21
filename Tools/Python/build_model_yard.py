@@ -340,8 +340,17 @@ def build_rows():
 
 
 def build_start():
-    """A PlayerStart, so PIE puts the camera somewhere useful rather than at the origin
-    inside the Dash 8."""
+    """A PlayerStart, which PIE wants to exist but which DECIDES NOTHING here.
+
+    THIS COMMENT USED TO CLAIM IT PUT THE CAMERA SOMEWHERE USEFUL, and that stopped being
+    true the moment the bench took over the level - reported from play on 2026-09-21 as
+    "moving the PlayerStart doesn't work", which it does not. AAnimYardGameMode sets
+    DefaultPawnClass to null, so nothing is ever spawned here; the opening view is aimed by
+    AAnimYardController::AimAtTheAircraft, from where the aircraft actually stand.
+
+    Kept because a level with no PlayerStart warns on Play, and because the day this map is
+    opened under some other game mode it is the right thing to have.
+    """
     start = actors().spawn_actor_from_class(
         unreal.PlayerStart, unreal.Vector(-9000.0, 0.0, 400.0))
     start.set_actor_label("PlayerStart")
