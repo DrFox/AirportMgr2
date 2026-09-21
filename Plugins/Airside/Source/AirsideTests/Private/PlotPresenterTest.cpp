@@ -430,6 +430,83 @@ bool FPlotPresenterGhostsUnboughtSlotsTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * An owned module that reserved no stand is counted as dropped.
+ *
+ * THE RUN-LENGTH REWRITE (61f92fc) DELETED THE OLD ++Dropped along with the old
+ * one-module-per-stand loop and never replaced it, so GetDroppedCount() and the census log
+ * said 0 no matter how many modules a player owned beyond what the plot could seat - while
+ * GetDroppedCount's own comment calls a drop "a bug", i.e. an invariant with no accessor
+ * that could ever go red (issue #193). Fifty pumps on a plot that can seat a handful is not
+ * latent; PIE would have shown "50 pumps" bought and a fraction of them standing.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPresenterCountsDropsTest,
+	"Airside.Present.PlotPresenterCountsDrops",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPresenterCountsDropsTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+	if (!TestNotNull(TEXT("a plot presenter"), Actor->GetPlotPresenter())) { return false; }
+
+	UEntityDefinition* Depot = UEntityDefinition::MakeFuelDepotTransient();
+	if (!TestNotNull(TEXT("a depot definition"), Depot)) { return false; }
+
+	Actor->ClearNetwork();
+
+	// FAR MORE PUMPS THAN ANY PLOT THIS SIZE COULD SEAT - the point is not the exact number,
+	// only that it exceeds the reservation's own ceiling for the kit.
+	TArray<EDepotModule> Modules;
+	for (int32 I = 0; I < 50; ++I)
+	{
+		Modules.Add(EDepotModule::Pump);
+	}
+
+	FEntityPlacement Placement;
+	Placement.Definition = Depot;
+	Placement.Anchors = Depot->Anchors;
+	Placement.Position = FVector2D(1000.0, 0.0);
+	Placement.Heading = UE_DOUBLE_HALF_PI;
+	Placement.PoseRole = EServiceRole::Fuel;
+	Placement.Outline = DeepPlotAt(0.0);
+	Placement.Modules = Modules;
+	Actor->Network->PlaceEntity(Placement);
+	Actor->RebuildMesh();
+
+	const UPlotPresenter* Plots = Actor->GetPlotPresenter();
+
+	// THE SAME SOLVE THE PRESENTER RAN, through the seam it goes through - see
+	// PlotPresenterGhostsUnboughtSlotsTest's own comment on why this recomputes rather than
+	// remembers.
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	const TArray<FVector2D> Outline = DeepPlotAt(0.0);
+
+	FPlotSite Site;
+	Site.Outline = Outline;
+	Site.FrontageA = FVector2D(0.0, 0.0);
+	Site.FrontageB = FVector2D(2000.0, 0.0);
+	Site.Gate = FVector2D(1000.0, 0.0);
+	Site.Seed = DepotYardSeed(Site.Gate);
+
+	const PlotYard::FReservation Reservation =
+		PlotLayoutFor(EPlotLayout::FuelYardBands)->Solve(Site, Specs);
+	const int32 PumpCeiling = Reservation.CeilingFor(static_cast<int32>(EDepotModule::Pump));
+
+	if (!TestTrue(TEXT("the plot cannot seat all fifty pumps"), PumpCeiling < 50))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("every pump beyond the ceiling is dropped, not silently discarded"),
+		Plots->GetDroppedCount(), 50 - PumpCeiling);
+
+	return true;
+}
+
+/**
  * A built depot is the band layout's depot, and draws its objects rather than its aprons.
  *
  * MEASURED AGAINST THE STRATEGY DIRECTLY, which is what makes this red before the wiring:

@@ -189,7 +189,9 @@ enum class EDepotModule : uint8
 {
 	Shed,
 	Tank,
-	Pump
+	Pump,
+	/** Sentinel, never a real module - sizes DepotKitSpecs's walk instead of retyping Pump. */
+	Count UMETA(Hidden),
 };
 
 /**

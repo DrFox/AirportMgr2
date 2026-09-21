@@ -99,4 +99,31 @@ bool FDepotKitCarriesItsApronTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Every real EDepotModule gets a spec - walked to the sentinel, not to a hardcoded last value.
+ *
+ * "Pump is the last value; adding a module after it extends this loop with no edit" was false
+ * the moment a module was actually added after Pump: DepotKitSpecs walked to
+ * static_cast<int32>(EDepotModule::Pump) by name, so a new member got no spec and its owned
+ * instances vanished from Specs uncounted (issue #193). EDepotModule::Count is the sentinel
+ * that moves itself whenever a real member is inserted before it, which is what this pins:
+ * Specs.Num() must equal Count, not a number copied from today's enum.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDepotKitSpecsCoverEveryModuleTest,
+	"Airside.Build.DepotKitSpecsCoverEveryModule",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDepotKitSpecsCoverEveryModuleTest::RunTest(const FString& Parameters)
+{
+	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(nullptr);
+
+	// THE SENTINEL ITSELF, not Pump: a loop that stopped one short of Count would still pass
+	// a count taken from Pump, which is exactly the bug this test exists to catch.
+	TestEqual(TEXT("one spec per real module, sized to the sentinel"),
+		Specs.Num(), static_cast<int32>(EDepotModule::Count));
+
+	return true;
+}
+
 #endif

@@ -112,6 +112,38 @@ bool FScatterStrategyIsTheScatterTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * Only the strategy that actually claims an apron as part of a stand's rectangle says so.
+ *
+ * PlotYard::Reserve (what the scatter forwards to) never reads ApronUu when it samples a
+ * pose - grep confirms - so its Stand.Centre is the footprint's own centre and
+ * bStandsIncludeApron must stay false, or UPlotPresenter and FPlotPlaceTool::BuildPreview
+ * both draw the object half an apron away from ground the sampler never fenced off (issue
+ * #193). UFuelYardBandsStrategy centres every stand on ClaimedBy's footprint-plus-apron
+ * rectangle, so it must say true.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FReservationSaysWhetherItsStandsIncludeApronTest,
+	"Airside.Build.ReservationSaysWhetherItsStandsIncludeApron",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FReservationSaysWhetherItsStandsIncludeApronTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = StrategyRect(3200.0, 2400.0);
+	const TArray<PlotYard::FKitSpec> Specs = StrategySpecs();
+	const FPlotSite Site = StrategySite(Outline, 3200.0);
+
+	const UScatterLayoutStrategy* Scatter = NewObject<UScatterLayoutStrategy>();
+	TestFalse(TEXT("the scatter never claims an apron"),
+		Scatter->Solve(Site, Specs).bStandsIncludeApron);
+
+	const UFuelYardBandsStrategy* Bands = NewObject<UFuelYardBandsStrategy>();
+	TestTrue(TEXT("the band layout claims footprint-plus-apron for every stand"),
+		Bands->Solve(Site, Specs).bStandsIncludeApron);
+
+	return true;
+}
+
+/**
  * Every layout resolves to a strategy.
  *
  * WALKED, NOT LISTED, which is the lesson AircraftLookTest paid for: a test that names its
@@ -546,6 +578,70 @@ bool FFuelYardIsSizedByItsShedsTest::RunTest(const FString& Parameters)
 			}
 		}
 	}
+
+	return true;
+}
+
+/**
+ * The lane held back at each end of the shed row for a column kit must match what that
+ * column actually claims - footprint PLUS its lateral apron, via ClaimedBy - not the bare
+ * footprint alone (issue #193). A margin sized off Footprint.WidthUu let the shed row reach
+ * into ground a kit with a real lateral apron needed, so the column's own first stand was
+ * refused for overlapping a shed that had no business standing there, and the whole column
+ * ended empty - "the column loop breaks at index 0".
+ *
+ * NUMBERS CHOSEN FOR A CLEAR MARGIN, not a knife edge: the buggy formula here comes up 800uu
+ * short of the correct one - well over a full shed pitch - so a bug in this line puts a real
+ * 400uu of overlap between the shed row and the tank's own claimed ground, not a
+ * floating-point coin flip on a shared boundary.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFuelYardBandsMarginMatchesTheColumnsClaimTest,
+	"Airside.Build.FuelYardBandsMarginMatchesTheColumnsClaim",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFuelYardBandsMarginMatchesTheColumnsClaimTest::RunTest(const FString& Parameters)
+{
+	const TArray<FVector2D> Outline = StrategyRect(2600.0, 1600.0);
+	const FPlotSite Site = StrategySite(Outline, 2600.0);
+
+	PlotYard::FKitSpec Shed;
+	Shed.Footprint.LengthUu = 800.0;
+	Shed.Footprint.WidthUu = 400.0;
+	Shed.Footprint.bAgainstTheBackFence = true;
+	Shed.ApronUu = FVector2D(400.0, 0.0);
+	Shed.ReserveWeight = 3;
+	Shed.RunCap = 1;
+
+	// THE HIGH-SIDE COLUMN (kit index 1 - UsesTheHighSide), with a LATERAL apron: the one
+	// dimension an unauthored grey-box kit never has, and exactly the value the buggy margin
+	// left out.
+	PlotYard::FKitSpec Tank;
+	Tank.Footprint.LengthUu = 500.0;
+	Tank.Footprint.WidthUu = 500.0;
+	Tank.ApronUu = FVector2D(0.0, 400.0);
+	Tank.ReserveWeight = 2;
+	Tank.RunCap = 1;
+
+	PlotYard::FKitSpec Pump;
+	Pump.Footprint.LengthUu = 300.0;
+	Pump.Footprint.WidthUu = 200.0;
+	Pump.ReserveWeight = 1;
+	Pump.RunCap = 1;
+
+	const TArray<PlotYard::FKitSpec> Specs = { Shed, Tank, Pump };
+
+	const UFuelYardBandsStrategy* Strategy = NewObject<UFuelYardBandsStrategy>();
+	const PlotYard::FReservation Reservation = Strategy->Solve(Site, Specs);
+
+	int32 TankStands = 0;
+	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
+	{
+		if (Stand.KitIndex == 1) { ++TankStands; }
+	}
+
+	TestTrue(TEXT("the lateral-apron kit still gets a stand - the margin left it room, "
+		"the shed row did not reach into its claimed ground"), TankStands > 0);
 
 	return true;
 }
