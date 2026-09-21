@@ -50,7 +50,28 @@ namespace
 	{
 		// The table itself is Solve/IcaoCode.h now - shared with RunwayAdmission (width ->
 		// wingspan) and InspectFacts (wingspan -> letter). See #85.
-		return IcaoCode::RadiusForLetter(Code.ToString());
+		//
+		// NONE IS NOT A TYPO. A fuel depot has no DesignAircraft (see BuildFuelDepot) and
+		// passes FName() here on purpose, falling back to Code C's radius exactly as that
+		// header says - so an unset code stays silent. Anything else that fails to parse is a
+		// human's UAircraftType::Code typed wrong, which is the ONE place that can happen: the
+		// table functions used to take the fallback silently on any bad string, so a typo
+		// became a lead-in painted for the wrong aeroplane with no line in the log to say so.
+		if (Code.IsNone())
+		{
+			return IcaoCode::RadiusForLetter(EIcaoCode::C);
+		}
+
+		if (const TOptional<EIcaoCode> Parsed = IcaoCode::Parse(Code.ToString()))
+		{
+			return IcaoCode::RadiusForLetter(*Parsed);
+		}
+
+		UE_LOG(LogAirside, Warning,
+			TEXT("UAircraftType::Code '%s' is not an ICAO letter A-F; its painted lead-in "
+			     "radius falls back to Code C's."),
+			*Code.ToString());
+		return IcaoCode::RadiusForLetter(EIcaoCode::C);
 	}
 
 	/**

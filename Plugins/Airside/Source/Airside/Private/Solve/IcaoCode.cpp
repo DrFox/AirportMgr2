@@ -132,33 +132,42 @@ namespace IcaoCode
 		}
 
 		/**
-		 * The row for a letter, or null. Case-insensitive, as the letter arrives from a
-		 * data asset a human typed.
+		 * The row for Code, by INDEX - Rows is declared A, B, C, D, E, F in that order, the
+		 * same order EIcaoCode declares its values, so the enum's ordinal IS the row index.
+		 *
+		 * NO NULL CASE, and that is the whole point of the enum: FindRow(const FString&) used
+		 * to return nullptr for anything that did not match A-F, and every caller here turned
+		 * that into a silent fallback to CodeC(). An EIcaoCode cannot name a letter outside
+		 * A-F, so there is nothing left to fall back from - Parse is where an unrecognised
+		 * STRING is refused now, once, rather than here on every lookup.
 		 */
-		static const FRow* FindRow(const FString& Letter)
+		static const FRow& RowFor(EIcaoCode Code)
 		{
-			const FString Upper = Letter.ToUpper();
-			for (const FRow& Row : Rows)
-			{
-				if (Upper == Row.Letter)
-				{
-					return &Row;
-				}
-			}
-			return nullptr;
+			const int32 Index = static_cast<int32>(Code);
+			check(Index >= 0 && Index < UE_ARRAY_COUNT(Rows));
+			return Rows[Index];
 		}
+	}
 
-		/**
-		 * Code C's row, the fallback every letter-keyed lookup here shares. Looked up by
-		 * letter rather than indexed, so inserting a row cannot silently move the fallback
-		 * to a neighbouring code.
-		 */
-		static const FRow& CodeC()
+	TOptional<EIcaoCode> Parse(const FString& Letter)
+	{
+		// TRIMMED THEN UPPERCASED, IN THAT ORDER, ONCE - see the header for why both matter
+		// and why anything left over that is not exactly one of A-F is nullopt rather than a
+		// guess. This is the only place in the file that still compares a string.
+		const FString Trimmed = Letter.TrimStartAndEnd().ToUpper();
+		for (const FRow& Row : Rows)
 		{
-			const FRow* Row = FindRow(TEXT("C"));
-			check(Row != nullptr);
-			return *Row;
+			if (Trimmed == Row.Letter)
+			{
+				return static_cast<EIcaoCode>(&Row - &Rows[0]);
+			}
 		}
+		return TOptional<EIcaoCode>();
+	}
+
+	const TCHAR* ToLetter(EIcaoCode Code)
+	{
+		return RowFor(Code).Letter;
 	}
 
 	FString LetterForWingspan(double WingspanUu)
@@ -195,15 +204,9 @@ namespace IcaoCode
 		return Nearest->MaxWingspan;
 	}
 
-	double RadiusForLetter(const FString& Letter)
+	double RadiusForLetter(EIcaoCode Code)
 	{
-		if (const FRow* Row = FindRow(Letter))
-		{
-			return Row->StandTurnRadius;
-		}
-		// No code, or one nobody recognises. Code C is the commonest stand in the world, and
-		// erring to Code F instead would put a 60 m curve on a light-aircraft apron.
-		return CodeC().StandTurnRadius;
+		return RowFor(Code).StandTurnRadius;
 	}
 
 	double ServiceLaneWidth()
@@ -213,80 +216,55 @@ namespace IcaoCode
 		return 400.0;
 	}
 
-	double StandWidthForLetter(const FString& Letter)
+	double StandWidthForLetter(EIcaoCode Code)
 	{
-		if (const FRow* Row = FindRow(Letter))
-		{
-			return WidthOf(*Row);
-		}
-		// Same fallback and the same reason as RadiusForLetter: an unknown letter gets the
-		// commonest stand rather than the biggest, which would swallow the apron beside it.
-		return WidthOf(CodeC());
+		return WidthOf(RowFor(Code));
 	}
 
-	double MaxStandWidthForLetter(const FString& Letter)
+	double MaxStandWidthForLetter(EIcaoCode Code)
 	{
-		const FRow* Row = FindRow(Letter);
-		if (Row == nullptr)
-		{
-			Row = &CodeC();
-		}
-		const FRow* Above = RowAbove(*Row);
+		const FRow* Above = RowAbove(RowFor(Code));
 
 		// UNBOUNDED AT THE TOP. Code F has no letter above it, so there is no width at which a
 		// stand stops being one - and a stand wider than any aeroplane needs is not an error.
 		return Above != nullptr ? WidthOf(*Above) : TNumericLimits<double>::Max();
 	}
 
-	double StandDepthForLetter(const FString& Letter)
+	double StandDepthForLetter(EIcaoCode Code)
 	{
-		if (const FRow* Row = FindRow(Letter))
-		{
-			return Row->StandDepth;
-		}
-		return CodeC().StandDepth;
+		return RowFor(Code).StandDepth;
 	}
 
-	double MaxTailAftForLetter(const FString& Letter)
+	double MaxTailAftForLetter(EIcaoCode Code)
 	{
-		if (const FRow* Row = FindRow(Letter))
-		{
-			return Row->MaxTailAft;
-		}
-		return CodeC().MaxTailAft;
+		return RowFor(Code).MaxTailAft;
 	}
 
-	double MaxNoseFwdForLetter(const FString& Letter)
+	double MaxNoseFwdForLetter(EIcaoCode Code)
 	{
-		if (const FRow* Row = FindRow(Letter))
-		{
-			return Row->MaxNoseFwd;
-		}
-		return CodeC().MaxNoseFwd;
+		return RowFor(Code).MaxNoseFwd;
 	}
 
-	double WingFwdForLetter(const FString& Letter)
+	double WingFwdForLetter(EIcaoCode Code)
 	{
-		const FRow* Row = FindRow(Letter);
-		return (Row != nullptr ? Row : &CodeC())->WingFwd;
+		return RowFor(Code).WingFwd;
 	}
 
-	double WingAftForLetter(const FString& Letter)
+	double WingAftForLetter(EIcaoCode Code)
 	{
-		const FRow* Row = FindRow(Letter);
-		return (Row != nullptr ? Row : &CodeC())->WingAft;
+		return RowFor(Code).WingAft;
 	}
 
-	bool WingKeepOutContains(const FString& Letter, const FVector2D& Local)
+	bool WingKeepOutContains(EIcaoCode Code, const FVector2D& Local)
 	{
-		const FRow& Row = FindRow(Letter) != nullptr ? *FindRow(Letter) : CodeC();
+		const FRow& Row = RowFor(Code);
 		return Local.X >= Row.WingAft && Local.X <= Row.WingFwd
 			&& FMath::Abs(Local.Y) <= 0.5 * Row.MaxWingspan;
 	}
 
-	bool WingKeepOutCrossedBy(const FString& Letter, const FVector2D& A, const FVector2D& B)
+	bool WingKeepOutCrossedBy(EIcaoCode Code, const FVector2D& A, const FVector2D& B)
 	{
-		const FRow& Row = FindRow(Letter) != nullptr ? *FindRow(Letter) : CodeC();
+		const FRow& Row = RowFor(Code);
 		const double HalfSpan = 0.5 * Row.MaxWingspan;
 
 		// LIANG-BARSKY against the box, which answers "does any part of this segment lie

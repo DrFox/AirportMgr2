@@ -5,6 +5,7 @@
 #include "Entities/AircraftType.h"
 #include "Model/RoadEntity.h"
 #include "Model/RouteSearch.h"
+#include "Solve/IcaoCode.h"
 #include "EntityDefinition.generated.h"
 
 class URoadNetwork;
@@ -385,9 +386,13 @@ public:
 	 *
 	 * TAKES THE ANCHORS AS IT FINDS THEM. It adds no fixture and moves none: a bay is paint
 	 * laid beside plant that is already there.
+	 *
+	 * TAKES THE ENUM, not a string: every caller of this function holds a compile-time letter
+	 * ("C" today, from BuildCodeCStandFor) rather than one read off a data asset, so there is
+	 * no authored content here for IcaoCode::Parse to fail on - see Solve/IcaoCode.h.
 	 */
 	static void BuildStandTemplate(
-		UEntityDefinition& Definition, const FString& Letter, const FAirframe& Largest);
+		UEntityDefinition& Definition, EIcaoCode Letter, const FAirframe& Largest);
 
 	/**
 	 * Fill Definition with the fuel depot layout: a box on a service road, and one truck.

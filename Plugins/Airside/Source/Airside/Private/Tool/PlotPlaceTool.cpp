@@ -270,7 +270,17 @@ bool FPlotPlaceTool::DescribeGuideAnchor(const URoadNetwork* Network, IRoadEditT
 		// NUMBERED AS THE PLAYER COUNTS THEM - the readout says "Plot Points: 2/4", so corner
 		// 0 is "corner 1" on screen. A label naming a corner the bar does not is worse than
 		// no label.
-		Out.AlignTo.Add({ Corners[Index], FString::Printf(TEXT("corner %d"), Index + 1) });
+		//
+		// SPELT OUT, not braced, as RoadGuideAnchor::AddNodeCandidates and FStandPlaceTool's
+		// own DescribeGuideAnchor are: a third member arrived on FGuidePoint in 2026-09-20 and
+		// a braced initialiser would have taken the default for it in silence. Reference is
+		// left at its ThisGesture default here DELIBERATELY - these are the gesture's own
+		// pinned corners, the one column that needs no button - but that is a decision this
+		// line states rather than one a brace would have made by omission.
+		FGuidePoint Point;
+		Point.At = Corners[Index];
+		Point.Name = FString::Printf(TEXT("corner %d"), Index + 1);
+		Out.AlignTo.Add(Point);
 	}
 	return true;
 }

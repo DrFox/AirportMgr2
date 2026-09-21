@@ -29,12 +29,31 @@ public:
 	virtual void Tick(const FToolContext& Context) override;
 	virtual void BuildPreview(const FToolContext& Context, IToolPreviewSink& Sink) const override;
 
-	/** Idle when nothing is selected, so a second cancel falls through to the driver. */
-	virtual bool IsIdle() const override { return !bHasSelection; }
+	/**
+	 * Idle when nothing is selected, so a second cancel falls through to the driver.
+	 *
+	 * READS SelectionRef LIVE rather than a bool mirror updated on the last OnClick/OnCancel/
+	 * Tick - see that field's comment for why a mirror could not be trusted here.
+	 */
+	virtual bool IsIdle() const override { return SelectionRef == nullptr || !SelectionRef->IsSet(); }
 
 private:
-	/** Mirror of Context.Selection->IsSet() from the last call, because IsIdle takes no context. */
-	bool bHasSelection = false;
+	/**
+	 * The session's own selection - FToolContext::Selection, which always points at
+	 * FBuildSession::Selection - captured the first time a context carries one.
+	 *
+	 * NOT A SNAPSHOT, AND THAT IS THE POINT. IsIdle() takes no context (IBuildTool's contract,
+	 * shared with every other tool), so a bool mirror can only be as fresh as the last OnClick,
+	 * OnCancel or Tick that touched it - and IsIdle() is called from PLACES BEFORE THAT:
+	 * IBuildTool::DescribeGuideAnchor calls it from inside FBuildSession::MakeContext, i.e.
+	 * while THIS FRAME's context is still being built, before this frame's Tick has run. A
+	 * mirror is one frame stale exactly there, which is invisible until something else - the
+	 * inspector panel closing a stand's selection when it is deleted - changes Selection
+	 * between two of this tool's own calls. FBuildSession::Selection is a field that outlives
+	 * every frame rather than being rebuilt with the context, so the pointer stays valid for
+	 * the tool's whole lifetime once set, and dereferencing it always reads today's truth.
+	 */
+	const FSelection* SelectionRef = nullptr;
 
 	/** Road-plane position of a selection, or false when it no longer exists. */
 	static bool PositionOf(const FToolContext& Context, ESelectionKind Kind, int32 Id, FVector2D& Out);
