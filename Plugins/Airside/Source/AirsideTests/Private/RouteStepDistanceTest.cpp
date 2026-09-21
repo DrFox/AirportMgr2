@@ -231,4 +231,60 @@ bool FRouteRunwayAvoidanceTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteRunwaySeedMemoTest,
+	"Airside.Model.RouteSearch.RunwaySeedMemo",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteRunwaySeedMemoTest::RunTest(const FString& Parameters)
+{
+	// A LADDER ALONG ONE STRIP: five guideline edges all DerivedFrom the SAME runway segment,
+	// so a search that walks them asks "is this a runway" five times and must resolve the
+	// seed exactly once.
+	//
+	// MEASURES THE MEMO, does not name it. The search returns the same route with or without
+	// one, which is precisely why a correctness assertion here would stay green on a memo
+	// that had been deleted - only the count can tell.
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	URoadProfile* Runway = TestProfiles::Runway();
+	const FRoadNodeId RoadA = Net->AddNode(FVector2D(0.0, -1000.0));
+	const FRoadNodeId RoadB = Net->AddNode(FVector2D(50000.0, -1000.0));
+	const FRoadSegmentId Strip = Net->AddStraightSegment(RoadA, RoadB, Runway);
+	if (!TestTrue(TEXT("the strip is a runway segment"), Net->IsRunwaySegment(Strip))) { return false; }
+
+	TArray<FGuidelineNodeId> Chain;
+	for (int32 Index = 0; Index <= 5; ++Index)
+	{
+		Chain.Add(Net->AddGuidelineNode(FVector2D(Index * 10000.0, -1000.0)));
+	}
+	for (int32 Index = 0; Index < 5; ++Index)
+	{
+		FGuidelineEdge Along;
+		Along.A = Chain[Index];
+		Along.B = Chain[Index + 1];
+		Along.Control = FVector2D((Index * 10000.0) + 5000.0, -1000.0);
+		Along.AllowedTraffic = FTrafficMask::All();
+		Along.DerivedFrom = Strip;
+		Net->AddGuidelineEdge(MoveTemp(Along));
+	}
+
+	RouteSearch::ResetRunwaySeedResolveCountForTest();
+
+	FRouteQuery Q;
+	Q.Start = Chain[0];
+	Q.Goal = Chain.Last();
+	Q.Class = ETraversalClass::Aircraft;
+	// Held, not All: All would delete every edge, the search would never reach the cost, and
+	// the ladder would be walked once - making the memo look unnecessary.
+	Q.AvoidRunways = ERunwayAvoidance::Held;
+
+	const FRoutePlan Plan = RouteSearch::Find(*Net, Q);
+	TestTrue(TEXT("the ladder is routable, or the count below measures an empty search"), Plan.IsValid());
+
+	TestEqual(TEXT("one seed resolved once, however many of its edges the search relaxed"),
+		RouteSearch::RunwaySeedResolveCountForTest(), 1);
+
+	return true;
+}
+
 #endif

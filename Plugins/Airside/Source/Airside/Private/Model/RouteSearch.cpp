@@ -17,6 +17,13 @@ namespace
 	int32 GSearchCallCountForTest = 0;
 
 	/**
+	 * See RouteSearch::RunwaySeedResolveCountForTest. Bumped once per seed actually resolved -
+	 * a memo hit does not count, which is what makes the count measure the memo rather than
+	 * the traffic through it.
+	 */
+	int32 GRunwaySeedResolveCountForTest = 0;
+
+	/**
 	 * Cached length plus the query's congestion charge.
 	 *
 	 * Reads FGuidelineEdge::Length rather than sampling (#171): this used to call
@@ -80,9 +87,36 @@ namespace
 	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan,
 		FGuidelineNodeId At, double Reached, const TSet<FGuidelineNodeId>& Closed,
 		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
+		TMap<int32, bool>& RunwaySeeds,
 		TMap<FGuidelineNodeId, double>& Best, TMap<FGuidelineNodeId, FRouteStep>& Arrived,
 		TArray<TPair<double, FGuidelineNodeId>>& Open)
 	{
+		// Whether an edge's source segment IS a runway, once per segment seen. A slot lookup
+		// plus a profile resolve, which the avoidance test below used to pay on EVERY relaxation
+		// of every edge - a node is relaxed several times before Closed catches it, so a long
+		// strip paid for the same unchanged answer again and again. This is #171's complaint
+		// about EdgeCost's re-sampling, in the one place that survived it.
+		//
+		// PER SEARCH, NOT CACHED ON THE EDGE: runway-ness depends on the PROFILE, which changes
+		// when a road is re-profiled - an open invalidation trigger with no writer positioned to
+		// catch it, unlike FGuidelineEdge::Length's closed set of three writers. A stale true
+		// would refuse taxiways for the rest of the session.
+		auto IsRunwayEdge = [&Network, &RunwaySeeds](FRoadSegmentId Seed)
+		{
+			if (!Seed.IsSet())
+			{
+				return false;
+			}
+			if (const bool* Known = RunwaySeeds.Find(Seed.Index))
+			{
+				return *Known;
+			}
+			++GRunwaySeedResolveCountForTest;
+			const bool bRunway = Network.IsRunwaySegment(Seed);
+			RunwaySeeds.Add(Seed.Index, bRunway);
+			return bRunway;
+		};
+
 		// Whether a runway's chain is in use - held by somebody other than the querier, or
 		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
 		// per runway segment seen: the chain walk and the table scan are not free, and every
@@ -136,7 +170,7 @@ namespace
 			// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
 			// taxi along one and when.
 			if (Query.AvoidRunways != ERunwayAvoidance::None
-				&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
+				&& IsRunwayEdge(Edge->DerivedFrom)
 				&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
 			{
 				return;
@@ -308,6 +342,7 @@ namespace
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
 		TMap<int32, bool> RunwayInUse;
+		TMap<int32, bool> RunwaySeeds;
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -343,7 +378,7 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, Best, Arrived, Open);
+			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
@@ -475,6 +510,9 @@ namespace RouteSearch
 	int32 NodeVisitCountForTest() { return GNodeVisitCountForTest; }
 	void ResetNodeVisitCountForTest() { GNodeVisitCountForTest = 0; }
 
+	int32 RunwaySeedResolveCountForTest() { return GRunwaySeedResolveCountForTest; }
+	void ResetRunwaySeedResolveCountForTest() { GRunwaySeedResolveCountForTest = 0; }
+
 	int32 SearchCallCountForTest() { return GSearchCallCountForTest; }
 	void ResetSearchCallCountForTest() { GSearchCallCountForTest = 0; }
 
@@ -553,6 +591,7 @@ namespace RouteSearch
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
 		TMap<int32, bool> RunwayInUse;
+		TMap<int32, bool> RunwaySeeds;
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -585,7 +624,7 @@ namespace RouteSearch
 
 			const double Reached = Result.Best.FindChecked(At);
 			ExpandNode(Network, Query, /*bIgnoreWingspan=*/false, At, Reached, Closed, Heuristic,
-				RunwayInUse, Result.Best, Result.Arrived, Open);
+				RunwayInUse, RunwaySeeds, Result.Best, Result.Arrived, Open);
 		}
 
 		for (int32 Index = 0; Index < Goals.Num(); ++Index)

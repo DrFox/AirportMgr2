@@ -420,4 +420,20 @@ namespace RouteSearch
 	/** Zeroes the counter above, so an earlier test's or an earlier rebuild's visits are
 	 *  never mistaken for the ones a test is about to measure. */
 	AIRSIDE_API void ResetNodeVisitCountForTest();
+
+	/**
+	 * How many times a runway SEED has been resolved through URoadNetwork::IsRunwaySegment
+	 * inside a search, since the last reset - the measurement that ExpandNode's per-search
+	 * memo is actually consulted, rather than that it merely exists.
+	 *
+	 * A SEED, NOT AN EDGE: a long strip carries many guideline edges and one segment, and the
+	 * whole point of the memo is that the second edge along it costs nothing. A count that
+	 * rose with edges would be green on a memo that had been deleted. See
+	 * Airside.Model.RouteSearch.RunwaySeedMemo.
+	 */
+	AIRSIDE_API int32 RunwaySeedResolveCountForTest();
+
+	/** Zeroes the counter above, so an earlier search's resolves are never mistaken for the
+	 *  ones a test is about to measure. */
+	AIRSIDE_API void ResetRunwaySeedResolveCountForTest();
 }
