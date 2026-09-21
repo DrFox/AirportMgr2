@@ -246,6 +246,15 @@ public:
 	 *  to have built it. */
 	void CollectToolReadoutForTest() { FrameContext = MakeToolContext(); CollectToolReadout(); }
 
+	/**
+	 * How many times CollectToolReadout has actually rebuilt ToolReadoutCollector, rather than
+	 * reusing last frame's answer - see FToolReadoutKey. ARoadBuildHUD::DrawHUD caches
+	 * PanelLines' TArray<FString> against this number instead of rebuilding it (a Printf per
+	 * fact) every frame, and issue #190's composition test reads it directly: K ticks with a
+	 * still cursor must advance it once, not K times.
+	 */
+	int32 GetToolReadoutRevision() const { return ToolReadoutRevision; }
+
 	/** Runs PlayerTick without a real tick loop - same precedent as CollectToolReadoutForTest.
 	 *  Issue #167's composition test uses this to prove PlayerTick builds exactly one context
 	 *  and hands it to CollectToolReadout and Tick, rather than each building its own. The
@@ -449,11 +458,32 @@ private:
 	/**
 	 * One frame's readout from the active tool.
 	 *
-	 * RESETS UNCONDITIONALLY, before any guard: a frame with no target or no tool must leave
-	 * the readout EMPTY rather than holding the last gesture's facts on the bar. Called from
+	 * NO TARGET OR NO TOOL STILL RESETS UNCONDITIONALLY: a frame with neither must leave the
+	 * readout EMPTY rather than holding the last gesture's facts on the bar, and that path
+	 * never consults FToolReadoutKey - see the null checks at the top of the .cpp. Called from
 	 * PlayerTick ahead of the target guard for exactly that reason.
+	 *
+	 * WITH A TARGET AND A TOOL, REBUILDS ONLY WHEN FToolReadoutKey CHANGED - issue #190. A tool
+	 * asked the same question every frame a cursor sits still gave the same answer every time,
+	 * paying a TArray<TPair<FString,FString>> and a Printf per fact (BuildReadout's own cost)
+	 * for it. InvalidateToolReadoutCache() covers what the key cannot see - a tool's own
+	 * internal stage advancing on a click or a drag with the cursor unmoved - by clearing
+	 * bHasReadoutKey at every site that mutates gesture or tool state; see its callers.
 	 */
 	void CollectToolReadout();
+
+	/**
+	 * Forces the next CollectToolReadout to rebuild regardless of FToolReadoutKey - issue #190.
+	 *
+	 * THE KEY IS A FINGERPRINT OF FToolContext, not of a tool's own member state (PlotPlaceTool's
+	 * pinned-corner count and the like): a tool has no generic "stage" a driver could read, and
+	 * inventing one to fold into the key would touch every IBuildTool the way CLAUDE.md's "lists
+	 * that must agree" warns against. Every call this class makes INTO a tool or the session that
+	 * can change what BuildReadout would say - a click, a drag step, a commit, a cancel, an undo
+	 * or redo, a tool or mode switch - calls this right after, so the cache never has to guess
+	 * whether one of those changed the answer: it just stops trusting last frame's key.
+	 */
+	void InvalidateToolReadoutCache() { bHasReadoutKey = false; }
 
 	void OnCancelGesture();
 
@@ -608,6 +638,62 @@ private:
 	 * UObject reference in it, so there is nothing here for the GC to keep alive.
 	 */
 	FToolReadoutCollector ToolReadoutCollector;
+
+	/**
+	 * A cheap fingerprint of everything CollectToolReadout's answer can depend ON - issue #190.
+	 *
+	 * NOT FToolContext ITSELF: that struct carries a Target pointer and a Selection pointer
+	 * that compare equal across frames even when what they point AT has changed, which is
+	 * exactly the staleness this key must not have, and it carries Limits and a SnapRadius
+	 * that never vary within one session. This names only the values a tool's BuildReadout is
+	 * documented to read - Cursor, the snap chain's kind and handle, the guide, and which
+	 * handle kind Edit mode exposes - plus which tool is being asked, since a session mode or
+	 * tool switch can change the answer with the cursor sitting still.
+	 *
+	 * WHAT IT CANNOT SEE is a tool's OWN internal stage - FPlotPlaceTool's pinned-corner count
+	 * and the like - which is why InvalidateToolReadoutCache() exists: every call this class
+	 * makes that could advance one clears the cache directly instead of this struct trying to
+	 * fingerprint state no interface exposes.
+	 */
+	struct FToolReadoutKey
+	{
+		const IBuildTool* Tool = nullptr;
+		FVector2D Cursor = FVector2D::ZeroVector;
+		ERoadSnapKind SnapKind = ERoadSnapKind::Free;
+		FRoadNodeId SnapNode;
+		FRoadSegmentId SnapSegment;
+		bool bGuideActive = false;
+		FVector2D GuidePoint = FVector2D::ZeroVector;
+		EEditHandleKind EditHandles = EEditHandleKind::None;
+
+		bool operator==(const FToolReadoutKey& Other) const
+		{
+			return Tool == Other.Tool
+				&& Cursor == Other.Cursor
+				&& SnapKind == Other.SnapKind
+				&& SnapNode == Other.SnapNode
+				&& SnapSegment == Other.SnapSegment
+				&& bGuideActive == Other.bGuideActive
+				&& GuidePoint == Other.GuidePoint
+				&& EditHandles == Other.EditHandles;
+		}
+	};
+
+	/** Built from FrameContext and the active tool - see FToolReadoutKey. */
+	static FToolReadoutKey MakeReadoutKey(const IBuildTool* Tool, const FToolContext& Context);
+
+	/** Last frame's key, compared in CollectToolReadout. Undefined content when
+	 *  bHasReadoutKey is false - see that field. */
+	FToolReadoutKey LastReadoutKey;
+
+	/** False before the first successful build and right after InvalidateToolReadoutCache -
+	 *  a fresh controller or a just-invalidated one must rebuild rather than compare against
+	 *  a LastReadoutKey that happens to read as a match by construction (every FVector2D
+	 *  defaults to zero). */
+	bool bHasReadoutKey = false;
+
+	/** See GetToolReadoutRevision(). */
+	int32 ToolReadoutRevision = 0;
 
 	/** See GetFrameContext(). Built once at the top of PlayerTick; not a UPROPERTY for the
 	 *  same reason ToolReadoutCollector above is not one - FToolContext holds no UObject

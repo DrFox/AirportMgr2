@@ -245,6 +245,54 @@ bool FRoadBuildEdModeCommandBindingTest::RunTest(const FString& Parameters)
 }
 
 /**
+ * ISSUE #190: URoadBuildEditorTool::OwnSession used to be a VALUE member - a full nine-tool
+ * FBuildSession (FRoadDrawTool x2, FApronDrawTool, FStandPlaceTool, FGuidelineDrawTool,
+ * FRunwayTool, FHoldingPointTool, FPlotPlaceTool, FSelectTool) constructed by every activation
+ * ITF made, whether or not this instance ever read it - which it never does once
+ * SetSharedSession has been called, since Sess() always prefers SharedSession. This is what
+ * FRoadBuildEdModeSessionTest's own activations above have always paid without either test
+ * being able to say so: nothing there asks whether OwnSession got built, only whether
+ * SharedSession did.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEditorToolLazyOwnSessionTest,
+	"Airside.Editor.SharedSessionActivationAllocatesNoOwnSession",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEditorToolLazyOwnSessionTest::RunTest(const FString& Parameters)
+{
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(Mode);
+	Builder->ToolIndex = 0;
+	FToolBuilderState State;
+	State.ToolManager = NewObject<UInteractiveToolManager>(Mode);
+
+	UInteractiveTool* Built = Builder->BuildTool(State);
+	URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(Built);
+	if (!TestNotNull(TEXT("the builder made a tool"), Tool))
+	{
+		return false;
+	}
+	TestNotNull(TEXT("the builder shares the mode's session"), Tool->SessionForTest());
+	TestFalse(TEXT("BuildTool alone allocates nothing"), Tool->OwnSessionAllocatedForTest());
+
+	// Setup() IS THE HEAVY CALLER - it runs Sess().SelectTool, GetActiveTool and
+	// GetDisplayName, exactly the calls that used to find OwnSession sitting there built and
+	// read SharedSession instead. If Sess() ever fell back to OwnSession despite SharedSession
+	// being set, this is where it would have allocated it.
+	Tool->Setup();
+	TestFalse(TEXT("Setup() with a shared session still allocates no fallback session"),
+		Tool->OwnSessionAllocatedForTest());
+
+	return true;
+}
+
+/**
  * ISSUE #185: the fuel depot's last stage, OnCommit, had no editor command at all. The
  * editor mode's command set was the nine tool commands (checked above by
  * ToolCommandsMatchRegistry) plus Cancel and nothing else - "list declared, consumer

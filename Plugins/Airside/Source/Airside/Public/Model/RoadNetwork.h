@@ -430,7 +430,9 @@ public:
 	 * node can be expanded from several arms before the search finishes, so GetOutgoingGuidelines'
 	 * fresh array on every one of those calls was an allocation the search paid for and threw
 	 * away before the next relaxation. GetOutgoingGuidelines is now a thin forwarder onto this,
-	 * kept for its own callers (tests, GroundTrafficRebuild) that actually want the array - one
+	 * kept for the tests that genuinely want the array - GroundTrafficRebuild moved onto this
+	 * function directly at #190, once it was the last production caller still paying for one it
+	 * threw away on the same match-and-break shape RouteSearch had already been fixed for - one
 	 * incidence-and-direction rule, not two copies of it that could drift apart.
 	 */
 	void ForEachOutgoingGuideline(FGuidelineNodeId Node, ETraversalClass Class,

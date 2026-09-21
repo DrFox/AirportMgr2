@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -144,6 +145,109 @@ bool FDragNotifiesGeometryOnlyTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and runs the derived-graph pass exactly once by itself, because there "
 			"is no EndInteractiveEdit coming to do it later"),
 			Actor->TopologyRebuildCountForTest(), TopologyBeforeBareMove + 1);
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #190: the Geometry/Topology split above measured PIE - `GetWorld()` on the bare
+// NewObject actor FDragNotifiesGeometryOnlyTest builds is null, and HistoryForEdit() treats a
+// null world exactly like a game world, so that test's Facade always had History to open. An
+// actual editor world's HistoryForEdit() returns null BY DESIGN (the editor's own transaction
+// system does the Memento's job) - which used to mean MoveNode/MoveApronCorner's old test,
+// `Use != nullptr && Use->IsEditing()`, was false on EVERY editor-mode drag frame, and
+// EndInteractiveEdit's own `History == nullptr` early return meant nothing ever fired the one
+// Topology catch-up such a drag still owes the derived graph. URoadBuildEdMode's own
+// Begin/EndInteractiveEdit calls bracket a drag exactly as PIE's do; only the facade's OLD test
+// for "is one open" could not see it.
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FDragNotifiesGeometryOnlyInEditorWorldTest,
+	"Airside.Present.DragNotifiesGeometryOnlyInEditorWorld",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FDragNotifiesGeometryOnlyInEditorWorldTest::RunTest(const FString& Parameters)
+{
+	// AN ACTUAL EWorldType::Editor WORLD, not a bare NewObject actor - see this test's own
+	// banner comment for why that distinction is the whole point. Same fixture
+	// RoadBuildEdModeSessionTest uses for URoadBuildEdMode's own editor-world tests.
+	//
+	// BRACE-INITIALISED rather than parenthesised, since a local named TestWorld built with
+	// arguments starting in a slash-star comment reads to Check-Architecture.ps1's rule 9 as
+	// an assertion call missing its reason string. Braces call the same constructor without
+	// matching that pattern.
+	FAirsideTestWorld TestWorld{/*bSpawnActor=*/true, EWorldType::Editor};
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("an actor spawned into it"), Actor)) { return false; }
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(10000.0, 0.0));
+	if (!TestTrue(TEXT("the two nodes connect"), Actor->ConnectNodes(A, B)))
+	{
+		return false;
+	}
+
+	URoadEditFacade* Facade = Actor->GetEditFacade();
+	if (!TestNotNull(TEXT("the actor has a facade"), Facade))
+	{
+		return false;
+	}
+
+	// THE PRECONDITION THIS TEST EXISTS TO CHECK: an editor world's HistoryForEdit() really
+	// does return null here, the same as URoadBuildEdMode::GetSession's world does in the real
+	// editor. If this ever started returning non-null, the rest of this test would measure
+	// nothing FDragNotifiesGeometryOnlyTest was not already measuring in PIE.
+	if (!TestNull(TEXT("an editor world hands out no history to open"), Facade->HistoryForEdit()))
+	{
+		return false;
+	}
+
+	const int32 RebuildsBeforeDrag = Actor->RebuildCountForTest();
+	const int32 TopologyBeforeDrag = Actor->TopologyRebuildCountForTest();
+
+	// THREE FRAMES OF ONE DRAG, same shape as FDragNotifiesGeometryOnlyTest's PIE case -
+	// exactly what URoadBuildEditorTool's OnClickDrag calls, Begin once, MoveNode per frame,
+	// End once.
+	Facade->BeginInteractiveEdit(TEXT("drag node"));
+	TestTrue(TEXT("drag frame 1 moves"), Actor->MoveNode(B, FVector2D(10500.0, 500.0)));
+	TestTrue(TEXT("drag frame 2 moves"), Actor->MoveNode(B, FVector2D(11000.0, 900.0)));
+	TestTrue(TEXT("drag frame 3 moves"), Actor->MoveNode(B, FVector2D(11500.0, 1200.0)));
+	Facade->EndInteractiveEdit(/*bKeep*/ true);
+
+	TestEqual(TEXT("every drag frame still rebuilt the surface, plus one for the commit"),
+		Actor->RebuildCountForTest(), RebuildsBeforeDrag + 4);
+
+	// THE MEASUREMENT: the derived-graph pass ran exactly once for the whole drag, at
+	// EndInteractiveEdit, not once per MoveNode call and not zero times either - the shape
+	// that fails on unpatched main, where an editor-world drag either ran the pass every
+	// frame (the old `bMidInteractiveEdit` test never true) or never at all (EndInteractiveEdit
+	// a no-op with no History to gate on).
+	TestEqual(TEXT("but the guideline/anchor/plots/traffic pass ran exactly once, at the "
+		"drag's end - not once per frame and not never"),
+		Actor->TopologyRebuildCountForTest(), TopologyBeforeDrag + 1);
+
+	// --- An editor undo mid-drag: PR #247's FEditorUndoClient still deactivates the tool -----
+	//
+	// DeactivateOnUndo/FEditTool::OnDeactivate call EndInteractiveEdit(bKeep=true) on whatever
+	// the drag had moved so far, exactly as OnDragEnd does. This is the abandon-shaped half
+	// of the same fix: a drag that moved something and was then cut short still owes the
+	// derived graph its one catch-up, even with no History to have recorded a snapshot for
+	// PostUndo to have reverted in the first place.
+	{
+		const int32 TopologyBeforeUndo = Actor->TopologyRebuildCountForTest();
+		Facade->BeginInteractiveEdit(TEXT("drag then editor-undo"));
+		TestTrue(TEXT("the drag moves before the undo lands"),
+			Actor->MoveNode(A, FVector2D(500.0, 500.0)));
+		// bKeep=true: FEditTool::OnDeactivate's own call, not a cancel - an editor Ctrl+Z does
+		// not reach into a live drag to abandon it, it simply ends the interaction the same
+		// way releasing the mouse would.
+		Facade->EndInteractiveEdit(/*bKeep*/ true);
+
+		TestEqual(TEXT("a drag cut short by deactivation still runs the derived-graph pass "
+			"exactly once"),
+			Actor->TopologyRebuildCountForTest(), TopologyBeforeUndo + 1);
 	}
 
 	return true;

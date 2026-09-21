@@ -153,6 +153,19 @@ private:
 	 */
 	void DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FString>& Lines);
 
+	/**
+	 * PanelLines' last answer, and the ARoadBuildController::GetToolReadoutRevision() it was
+	 * built from - issue #190. DrawHUD calls PanelLines every frame it draws a tool's preview,
+	 * which is a Printf per fact even on a frame the controller's own readout did not change;
+	 * comparing the revision instead of rebuilding is what a still cursor now costs nothing for.
+	 *
+	 * -1 SENTINEL, not 0: GetToolReadoutRevision() starts at 0 too, and a fresh HUD comparing
+	 * 0 == 0 on its first frame would serve an empty CachedPanelLines instead of ever building
+	 * one until the revision moved past 0.
+	 */
+	TArray<FString> CachedPanelLines;
+	int32 CachedPanelLinesRevision = -1;
+
 	/** The controller this HUD belongs to, if it is the road build controller. */
 	ARoadBuildController* GetBuildController() const;
 

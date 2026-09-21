@@ -71,6 +71,12 @@ public:
 	/** Which session this instance is actually driving. For a test that it is the mode's. */
 	const FBuildSession* SessionForTest() const { return SharedSession; }
 
+	/** Whether the nine-tool fallback session has actually been built - issue #190. For a
+	 *  test that an activation handed a SharedSession never allocates OwnSession at all,
+	 *  rather than building it and simply not reading it. Reads the flag directly instead of
+	 *  calling Sess(), which would allocate it just to answer the question. */
+	bool OwnSessionAllocatedForTest() const { return OwnSession.IsValid(); }
+
 	/** The press/drag/release recogniser this instance drives. For a test that ITF's click
 	 *  and drag callbacks actually reach FBuildGesture, rather than a copy nothing calls -
 	 *  same precedent as SessionForTest, see issue #92. */
@@ -222,9 +228,40 @@ private:
 	 * asked for: wasteful in tool COUNT, cheap in reality, since these are small state
 	 * machines with nothing expensive to construct. The alternative - a second, editor-only
 	 * way to make just one - is exactly the kind of second copy issue #33 exists to remove.
+	 *
+	 * OwnSession IS LAZY (issue #190): ITF builds a new UObject per activation, and every
+	 * shipping path hands one of THESE a SharedSession before Sess() is ever called - so a
+	 * value-typed OwnSession used to construct a full nine-tool FBuildSession (FRoadDrawTool
+	 * x2, FApronDrawTool, FStandPlaceTool, FGuidelineDrawTool, FRunwayTool, FHoldingPointTool,
+	 * FPlotPlaceTool, FSelectTool) on EVERY activation and throw it away unread the moment
+	 * SharedSession was set. Building it only the one time Sess() is actually called with no
+	 * SharedSession - a tool used outside the mode - keeps the fallback this comment already
+	 * argued for, at the cost it was supposed to have.
 	 */
-	FBuildSession& Sess() { return SharedSession != nullptr ? *SharedSession : OwnSession; }
-	const FBuildSession& Sess() const { return SharedSession != nullptr ? *SharedSession : OwnSession; }
+	FBuildSession& Sess()
+	{
+		if (SharedSession != nullptr)
+		{
+			return *SharedSession;
+		}
+		if (!OwnSession.IsValid())
+		{
+			OwnSession = MakeUnique<FBuildSession>();
+		}
+		return *OwnSession;
+	}
+	const FBuildSession& Sess() const
+	{
+		if (SharedSession != nullptr)
+		{
+			return *SharedSession;
+		}
+		if (!OwnSession.IsValid())
+		{
+			OwnSession = MakeUnique<FBuildSession>();
+		}
+		return *OwnSession;
+	}
 
 	/** Set by the builder from URoadBuildEdMode::GetSession. Null only outside the mode. */
 	FBuildSession* SharedSession = nullptr;
@@ -234,8 +271,13 @@ private:
 	 * path does. Kept rather than asserting so a tool constructed in isolation still works,
 	 * and because a null session would crash where a private one merely loses state nobody
 	 * outside the mode is keeping.
+	 *
+	 * TUniquePtr, not a value member - see Sess()'s own comment. Mutable so the const overload
+	 * can build it too: a first call to Sess() const with no SharedSession is exactly as much
+	 * a "first use" as the non-const overload's, and there is no way to know which overload a
+	 * caller will reach for first.
 	 */
-	FBuildSession OwnSession;
+	mutable TUniquePtr<FBuildSession> OwnSession;
 
 	UPROPERTY()
 	TObjectPtr<ARoadNetworkActor> Target;

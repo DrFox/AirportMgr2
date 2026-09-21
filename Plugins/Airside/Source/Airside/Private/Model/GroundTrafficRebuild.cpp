@@ -462,12 +462,25 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			// nodes have at most one line between them that this class can mean, and matching
 			// a Bezier control point across a rebuild would be a second evaluator of the very
 			// thing that was just regenerated - see the guideline graph's "samples ONCE".
-			for (const FGuidelineEdgeId Candidate : Network.GetOutgoingGuidelines(Prev, Agent.Class))
+			//
+			// ForEachOutgoingGuideline, not GetOutgoingGuidelines (#190): a re-resolve runs once
+			// per agent per rebuild, on the same edit path RouteSearch's own switch (#171)
+			// already stopped paying a fresh TArray<FGuidelineEdgeId> per node expansion.
+			// Visit has no early-exit signal, so every outgoing edge is still visited - the
+			// `if (Rejoined.IsSet())` guard below is what keeps a node with more than one
+			// candidate from letting a later edge overwrite the first match, the same effect
+			// the old loop's `break` had.
+			Network.ForEachOutgoingGuideline(Prev, Agent.Class, [&](FGuidelineEdgeId Candidate)
 			{
+				if (Rejoined.IsSet())
+				{
+					return;
+				}
+
 				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(Candidate);
 				if (Edge == nullptr)
 				{
-					continue;
+					return;
 				}
 
 				const FGuidelineNodeId Other = (Edge->A == Prev) ? Edge->B : Edge->A;
@@ -480,9 +493,8 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 					// ran B-to-A, and a stale flag would reverse the sampled points under an
 					// agent that is already driving them.
 					bReversed = (Edge->B == Prev);
-					break;
 				}
-			}
+			});
 		}
 
 		if (!Rejoined.IsSet())
