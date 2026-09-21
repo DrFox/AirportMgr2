@@ -178,8 +178,10 @@ public:
 	 * ADDED SO RunwayTool NO LONGER KNOWS UAirsideContent (issue #78): it used to call
 	 * UAirsideSettings::GetContent() and load RunwayProfiles[Index] itself, the only file in
 	 * Tool/ that did - every other tool goes through this seam for content, per CLAUDE.md's
-	 * "Content resolves in Resolve* only". The tool keeps WidthIndex; this and
-	 * ResolveRunwayProfile below are all it needs from the target.
+	 * "Content resolves in Resolve* only".
+	 * ENFORCED BY: Check-Architecture.ps1 rule 1's Content clause (Tool/ may not include
+	 * Content/). The tool keeps WidthIndex; this and ResolveRunwayProfile below are all it
+	 * needs from the target.
 	 *
 	 * THE CLAIM ABOVE WENT FALSE ONCE ALREADY: FPlotPlaceTool grew its own include of the
 	 * content settings header for the depot kit table (issue #181) before ResolveDepotKits

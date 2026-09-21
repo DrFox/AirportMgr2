@@ -265,6 +265,14 @@ bitwise; the guideline graph shares by HANDLE and needs no such contract.
   removed, or says in its body why no regex can see it. A comment that justifies a linear
   scan, a full rebuild or a fixed-size assumption carries the number and the date it was
   true ("N was ~10 on 2026-09-21"), never a bare "the graph is small".
+- **`// ENFORCED BY:` marks a comment that states a fact about OTHER code** ("the only
+  caller", "never happens", "no edit needed", "nothing else reads") - name the test, lint
+  rule or `static_assert` that would go red if the fact stopped being true, within 3 lines of
+  the claim. Check-Architecture.ps1's rule 12 counts claims with no marker as a WARNING (not
+  a failure, so the existing backlog does not block a build); a PR adding a NEW claim of this
+  shape adds the marker with it. `RoadSlot::HandleAt`'s "three places rebuilt one by hand" is
+  enforced by rule 5; `RoadEditTarget.h`'s "the only file in Tool/ that did" by rule 1's
+  Content clause; `AirsideLog.h`'s one-category-per-concern claim by rule 2.
 
 ## Refactor contract
 

@@ -20,6 +20,9 @@
  * landings, take-offs, taxi, parking and shutdown - the field's traffic, wherever in the
  * plugin it is logged from. LogRoadMesh (declared here too, for the same reason) stays the
  * surface/edit-facade category: solve, rebuild census, ghost preview, apron and node edits.
+ *
+ * ENFORCED BY: Check-Architecture.ps1 rule 2 (one DEFINE_LOG_CATEGORY(_STATIC) per name,
+ * across each unity-build module).
  */
 DECLARE_LOG_CATEGORY_EXTERN(LogAirside, Log, All);
 DECLARE_LOG_CATEGORY_EXTERN(LogAirsideTraffic, Log, All);

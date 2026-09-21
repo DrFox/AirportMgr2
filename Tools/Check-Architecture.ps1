@@ -584,7 +584,34 @@ if (Test-Path $toolInterfaceFile) {
     }
 }
 
+# --- 12. Comment-only facts (WARNING, not a failure) --------------------------------------
+# Issue #255: the five criticals of the 2026-09-21 review were all comments that had been
+# true at ten nodes and were never re-checked - "measured before it is indexed", "hand-
+# authored at tens of nodes". A comment MAY explain a decision; it may never be the only
+# thing enforcing one. This counts comment lines asserting a fact about OTHER code with no
+# `// ENFORCED BY:` marker within 3 lines naming what actually holds it true (the marker
+# convention itself lives in CLAUDE.md's "Conventions"). A COUNT, not a failure - so today's
+# backlog is visible without breaking the build over comments that predate this rule - quoted
+# in the PR that adds this rule; promote the check to a failure once that count reaches zero.
+$commentFactPattern = 'the only (caller|file|place|site)|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)'
+$commentFactWarnings = New-Object System.Collections.Generic.List[string]
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+        $lines = Get-Content -Path $file.FullName
+        for ($idx = 0; $idx -lt $lines.Count; $idx++) {
+            $line = $lines[$idx].Trim()
+            if ($line -notmatch '^(//|/\*|\*)') { continue }
+            if ($line -notmatch $commentFactPattern) { continue }
+            $windowStart = [Math]::Max(0, $idx - 3)
+            $windowEnd = [Math]::Min($lines.Count - 1, $idx + 3)
+            if (($lines[$windowStart..$windowEnd] -join "`n") -match 'ENFORCED BY:') { continue }
+            $commentFactWarnings.Add("comment-only-fact: $($file.FullName):$($idx + 1) $line")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
+Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
     Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations)' -ForegroundColor Green
     exit 0
