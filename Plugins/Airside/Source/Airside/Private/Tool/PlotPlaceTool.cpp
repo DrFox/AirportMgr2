@@ -4,10 +4,6 @@
 #include "Profiles/RoadProfile.h"
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
-// The kit weights the reservation uses. Content/, not Present/ - the lint forbids Tool/ the
-// latter, and this is the same accessor UPlotPresenter resolves its specs through, so the
-// preview and the built depot read one set of figures.
-#include "Content/AirsideSettings.h"
 #include "Solve/PlotFit.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
@@ -382,9 +378,17 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	// walks EDepotModule, not the quad, so it owes nothing to Outline - and BuildReadout lists
 	// every kit at zero from the Frontage stage on, before a solve has ever run, which means
 	// the specs must exist even on the early return below.
+	//
+	// THROUGH THE TARGET, NOT DepotKitSpecs(UAirsideSettings::GetContent()) HERE (issue #181):
+	// that line used to live in this file, the #78 pattern (RunwayTool reaching UAirsideContent
+	// itself) shipping again in a new tool - and UPlotPresenter was already resolving the same
+	// table on its own, so a level's content could disagree with itself between the ghost and
+	// the built depot. IRoadEditTarget::ResolveDepotKits is the one place both now read it. A
+	// null Target (see the Context.Target guard on Definition above) leaves the specs empty
+	// rather than crashing - the same "no target, no content" answer GetEntityDefinition gives.
 	if (!Memo.bSpecsResolved)
 	{
-		Memo.Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+		Memo.Specs = Context.Target != nullptr ? Context.Target->ResolveDepotKits() : TArray<PlotYard::FKitSpec>();
 		Memo.bSpecsResolved = true;
 	}
 

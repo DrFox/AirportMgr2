@@ -9,6 +9,7 @@
 #include "Entities/EntityDefinition.h"
 #include "Model/RunwayFacts.h"
 #include "Profiles/RoadProfile.h"
+#include "Solve/PlotYard.h"
 #include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 
@@ -178,6 +179,13 @@ public:
 	 * Tool/ that did - every other tool goes through this seam for content, per CLAUDE.md's
 	 * "Content resolves in Resolve* only". The tool keeps WidthIndex; this and
 	 * ResolveRunwayProfile below are all it needs from the target.
+	 *
+	 * THE CLAIM ABOVE WENT FALSE ONCE ALREADY: FPlotPlaceTool grew its own include of the
+	 * content settings header for the depot kit table (issue #181) before ResolveDepotKits
+	 * below closed the same gap a second time. Prose did not hold the line the first time, so
+	 * Check-Architecture.ps1's rule 1 now forbids the Content/ folder from Tool/ mechanically,
+	 * the same way it already forbade Present/ - a third lapse fails the build instead of
+	 * waiting for a review.
 	 */
 	virtual int32 GetRunwayProfileCount() const = 0;
 
@@ -317,6 +325,18 @@ public:
 	{
 		return GetEntityDefinition(EPlaceableEntity::Stand);
 	}
+
+	/**
+	 * Every module kind a depot's plot can hold, as specs the yard solver understands.
+	 *
+	 * ADDED SO FPlotPlaceTool NO LONGER KNOWS UAirsideContent (issue #181) - THE SAME SEAM
+	 * GetRunwayProfileCount ABOVE CUT FOR THE RUNWAY TOOL AT #78, for a tool that had grown
+	 * the identical dependency a second time. UPlotPresenter resolves the SAME table through
+	 * ARoadNetworkActor::ResolveDepotKits (see URoadEditFacade's forwarder) rather than
+	 * calling DepotKitSpecs a second time, so the ghost a tool draws and the depot the
+	 * presenter builds read one source rather than two that happen to agree.
+	 */
+	virtual TArray<PlotYard::FKitSpec> ResolveDepotKits() const = 0;
 
 	// --- Ghost preview -------------------------------------------------------------------
 

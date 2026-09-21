@@ -4,11 +4,10 @@
 #include "Build/DepotKit.h"
 #include "Build/PlotLayoutStrategy.h"
 #include "Components/InstancedStaticMeshComponent.h"
-#include "Content/AirsideContent.h"
-#include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
+#include "Present/RoadNetworkActor.h"
 #include "Solve/PlotYard.h"
 #include "Solve/RoadGeom.h"
 
@@ -103,6 +102,17 @@ namespace
 
 }
 
+ARoadNetworkActor& UPlotPresenter::Actor() const
+{
+	// See the header: this presenter is a CreateDefaultSubobject of the actor it draws for,
+	// never constructed standalone, so a null Outer here means something built this the wrong
+	// way rather than a state RebuildFrom should tolerate.
+	ARoadNetworkActor* Found = GetTypedOuter<ARoadNetworkActor>();
+	checkf(Found != nullptr, TEXT("UPlotPresenter has no owning ARoadNetworkActor - it must be ")
+		TEXT("a CreateDefaultSubobject of one, never constructed standalone"));
+	return *Found;
+}
+
 void UPlotPresenter::Initialise(UInstancedStaticMeshComponent* InBoxes,
 	UInstancedStaticMeshComponent* InGhosts)
 {
@@ -152,11 +162,13 @@ void UPlotPresenter::RebuildFrom(const URoadNetwork& Network)
 	// HOISTED OUT OF THE LOOP: the specs are the same for every plot, and resolving the same
 	// three kits once per depot would do the work once per building on the airport.
 	//
-	// NULL IS A LEGAL ANSWER and the tests rely on it - with no content every kit falls back
-	// to the grey-box table, which is what lets all of this be tested without authoring an
-	// asset. Same accessor ARoadNetworkActor uses at every other content call site.
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(Content);
+	// THROUGH THE ACTOR, NOT DepotKitSpecs(UAirsideSettings::GetContent()) HERE (issue #181):
+	// that was a second resolution of the table FPlotPlaceTool's ghost reads through
+	// IRoadEditTarget::ResolveDepotKits, and the two drifted the moment DA_FuelDepot's layout
+	// was authored - see ReservationFor's own comment on that failure. NULL CONTENT IS STILL A
+	// LEGAL ANSWER and the tests rely on it: ARoadNetworkActor::ResolveDepotKits falls every
+	// kit back to the grey-box table the same way this call used to.
+	const TArray<PlotYard::FKitSpec> Specs = Actor().ResolveDepotKits();
 
 	int32 Plots = 0;
 
