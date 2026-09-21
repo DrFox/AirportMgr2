@@ -241,6 +241,46 @@ bool FGuideGridIsInTheRegistryTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE KEY THAT WENT NOWHERE, issue #192. FindAction(Key, bRequiresCtrl) required an EXACT
+ * match, so pressing a plain tool key (One, Taxiway, bRequiresCtrl=false) while Ctrl was held
+ * for an unrelated reason (FRoadDrawTool's own "ctrl to remove" click modifier) matched
+ * nothing and silently did nothing - CLAUDE.md's own name for this class of bug. Drives
+ * ARoadBuildController::RunActionForKey through OnActionKeyForTest with a SYNTHETIC Ctrl flag,
+ * since a headless test has no viewport to hold a real key down.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FActionKeyFallsBackWithoutCtrlTest,
+	"AirportMgr.Actions.KeyFallsBackWhenCtrlHasNoExactMatch",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FActionKeyFallsBackWithoutCtrlTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+
+	// One is the Taxiway tool's key (index 1 in ToolRegistry, bRequiresCtrl=false) - see
+	// BuildSession.cpp's own comment on the key order. FindAction(One, true) matches nothing:
+	// this is the exact miss the fallback exists for.
+	TestNull(TEXT("no action requires Ctrl on the tool key One"), FindAction(EKeys::One, true));
+	const FBuildAction* Plain = FindAction(EKeys::One, false);
+	if (!TestNotNull(TEXT("One selects a tool without Ctrl"), Plain)) { return false; }
+
+	TestNotEqual(TEXT("starts on a different tool than One selects"),
+		C->GetActiveToolIndex(), 1);
+
+	// THE REPORTED CASE: Ctrl held (a modifier meant for something else) plus the plain tool
+	// key. Pre-fix, RunActionForKey's exact match failed and nothing ran - this must now fall
+	// back to the same action FindAction(One, false) found above.
+	C->OnActionKeyForTest(EKeys::One, /*bCtrl=*/true);
+	TestEqual(TEXT("key 1 with Ctrl held still selects the tool"), C->GetActiveToolIndex(), 1);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FBuildActionsEditModeIsInTheOneListTest,
 	"AirportMgr.Actions.EditModeIsInTheOneList",

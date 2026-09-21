@@ -168,9 +168,26 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// aircraft on a pushback would otherwise report "-1.5 m/s (-3 kt)", which reads as a
 		// fault rather than as a direction. Which way it is going is the Status line's job.
 		const double Shown = FMath::Abs(F.GroundSpeed);
-		Facts = FString::Printf(TEXT("Heading %03.0f\nSpeed %.1f m/s (%.0f kt)\nAltitude %.0f m\nTo %s\nEngine %s"),
-			F.HeadingDegrees, Shown / 100.0, Shown / 100.0 * 1.94384, F.Altitude / 100.0,
-			*F.Destination, F.bEngineRunning ? TEXT("running") : TEXT("off"));
+		// LOCTEXT for the words, FString::Format (not Printf) for the sentence - issue #192.
+		// UE 5.8's FString::Printf format string must be a compile-time literal
+		// (FormatStringSan), so an NSLOCTEXT result cannot be its Fmt argument. Every number is
+		// pre-formatted with the SAME %-specifier as before into its own FString, then dropped
+		// into the translatable template as a plain {n} string substitution, so every digit this
+		// already printed is unchanged - only the words around them can now be translated.
+		const FText EngineState = F.bEngineRunning
+			? NSLOCTEXT("AirportMgr", "InspectorEngineRunning", "running")
+			: NSLOCTEXT("AirportMgr", "InspectorEngineOff", "off");
+		Facts = FString::Format(
+			*NSLOCTEXT("AirportMgr", "InspectorAircraftFacts",
+				"Heading {0}\nSpeed {1} m/s ({2} kt)\nAltitude {3} m\nTo {4}\nEngine {5}").ToString(),
+			{
+				FString::Printf(TEXT("%03.0f"), F.HeadingDegrees),
+				FString::Printf(TEXT("%.1f"), Shown / 100.0),
+				FString::Printf(TEXT("%.0f"), Shown / 100.0 * 1.94384),
+				FString::Printf(TEXT("%.0f"), F.Altitude / 100.0),
+				F.Destination,
+				EngineState.ToString(),
+			});
 		Status = F.Status;
 		bDepartEnabled = F.bCanDepart;
 
@@ -187,7 +204,8 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		}
 		if (!F.Fuel.IsEmpty())
 		{
-			Facts += FString::Printf(TEXT("\nFuel %s"), *F.Fuel);
+			Facts += FString::Format(
+				*NSLOCTEXT("AirportMgr", "InspectorFuelLine", "\nFuel {0}").ToString(), { F.Fuel });
 		}
 	}
 	else
@@ -203,24 +221,42 @@ void UInspectorWidget::Refresh(const ARoadNetworkActor* Target, const FSelection
 		// apart (see FStandFacts::PoseRole); a stand's own card is unchanged.
 		if (S.PoseRole == EServiceRole::Aircraft)
 		{
-			Title = FString::Printf(TEXT("Stand %d"), S.Index);
-			Facts = FString::Printf(TEXT("Code %s (%.0f m span)\n%d service anchors\n%s"),
-				*S.SizeClass, S.DesignWingspan / 100.0, S.AnchorCount,
-				S.bReachable ? TEXT("Reachable by taxiway") : TEXT("NOT reachable - no taxiway joins it"));
-			Status = S.OccupantAgent == 0 ? FString(TEXT("Empty"))
-				: S.bOccupantParked ? FString::Printf(TEXT("Occupied by aircraft #%d"), S.OccupantAgent)
-				: FString::Printf(TEXT("Reserved for aircraft #%d"), S.OccupantAgent);
+			// FString::Format, not Printf - see the aircraft branch's own comment on why
+			// (issue #192, UE 5.8's compile-time Printf format check).
+			Title = FString::Format(
+				*NSLOCTEXT("AirportMgr", "InspectorStandTitle", "Stand {0}").ToString(), { S.Index });
+			const FText Reachability = S.bReachable
+				? NSLOCTEXT("AirportMgr", "InspectorStandReachable", "Reachable by taxiway")
+				: NSLOCTEXT("AirportMgr", "InspectorStandUnreachable", "NOT reachable - no taxiway joins it");
+			Facts = FString::Format(
+				*NSLOCTEXT("AirportMgr", "InspectorStandFacts", "Code {0} ({1} m span)\n{2} service anchors\n{3}").ToString(),
+				{
+					S.SizeClass,
+					FString::Printf(TEXT("%.0f"), S.DesignWingspan / 100.0),
+					FString::FromInt(S.AnchorCount),
+					Reachability.ToString(),
+				});
+			Status = S.OccupantAgent == 0
+				? NSLOCTEXT("AirportMgr", "InspectorStandEmpty", "Empty").ToString()
+				: S.bOccupantParked
+					? FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandOccupied",
+						"Occupied by aircraft #{0}").ToString(), { S.OccupantAgent })
+					: FString::Format(*NSLOCTEXT("AirportMgr", "InspectorStandReserved",
+						"Reserved for aircraft #{0}").ToString(), { S.OccupantAgent });
 		}
 		else
 		{
 			// bReachable is the pose node having line on it, which for a depot means a
 			// SERVICE ROAD within its lead-in reach. The message names the fix rather than
 			// the symptom: the road is the thing the player goes and draws.
-			Title = FString::Printf(TEXT("Fuel depot %d"), S.Index);
+			Title = FString::Format(
+				*NSLOCTEXT("AirportMgr", "InspectorDepotTitle", "Fuel depot {0}").ToString(), { S.Index });
 			Facts = S.bReachable
-				? FString(TEXT("On a service road"))
-				: FString(TEXT("Fuel depot: not on a road"));
-			Status = S.bReachable ? TEXT("Ready") : TEXT("Cannot dispatch");
+				? NSLOCTEXT("AirportMgr", "InspectorDepotOnRoad", "On a service road").ToString()
+				: NSLOCTEXT("AirportMgr", "InspectorDepotNotOnRoad", "Fuel depot: not on a road").ToString();
+			Status = S.bReachable
+				? NSLOCTEXT("AirportMgr", "InspectorDepotReady", "Ready").ToString()
+				: NSLOCTEXT("AirportMgr", "InspectorDepotCannotDispatch", "Cannot dispatch").ToString();
 		}
 		bDepartEnabled = false;
 	}

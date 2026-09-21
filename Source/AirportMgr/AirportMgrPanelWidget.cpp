@@ -55,7 +55,8 @@ UPanelWidget* UAirportMgrPanelWidget::EnsureCardRoot(FName CardName, const FAnch
 		{
 			CardBorder->SetBrushColor(Style->PanelDark);
 		}
-		CardBorder->SetPadding(FMargin(12.0f, 10.0f));
+		// UUIStyle::CardPadding, not a literal here: see its own comment (issue #192).
+		CardBorder->SetPadding(Style->CardPadding);
 
 		UCanvasPanelSlot* CardSlot = Root->AddChildToCanvas(CardBorder);
 		CardSlot->SetAnchors(Anchors);

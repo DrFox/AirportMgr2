@@ -11,6 +11,7 @@
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
 #include "Present/PreviewPalette.h"
+#include "UIStyle.h"
 
 ARoadBuildHUD::ARoadBuildHUD()
 {
@@ -225,7 +226,10 @@ void ARoadBuildHUD::DrawPlotPanel(const FVector2D& PlanePoint, const TArray<FStr
 	// A GROUND BEHIND IT, unlike every other label this class draws. Those name a node on a
 	// dark road; this lands on whatever the plot is over - grass, concrete, the ghost's own
 	// white - and coloured text alone is unreadable on at least one of them.
-	DrawRect(FLinearColor(0.02f, 0.03f, 0.04f, 0.72f),
+	//
+	// UUIStyle::HudGround, not a literal here (issue #192) - see that field's own comment for
+	// why this is a style colour and not a PreviewPalette entry.
+	DrawRect(UAirportMgrUISettings::ResolveStyle()->HudGround,
 		Left, Top, Widest + PadX * 2.0f, Block + PadY * 2.0f);
 
 	for (int32 Index = 0; Index < Lines.Num(); ++Index)
