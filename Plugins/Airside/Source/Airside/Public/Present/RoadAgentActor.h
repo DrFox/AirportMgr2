@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Model/RoadEntity.h"
+#include "Model/AgentMotion.h"
 #include "RoadAgentActor.generated.h"
 
 class UAnimInstance;

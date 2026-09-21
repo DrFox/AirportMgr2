@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Model/RoadEntity.h"
+#include "Model/Airframe.h"
 #include "Model/RoadHandles.h"
 #include "Model/RouteSearch.h"
 #include "Model/RunwayAdmission.h"
