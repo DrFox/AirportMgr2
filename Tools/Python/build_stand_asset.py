@@ -210,17 +210,18 @@ def wire_depot_into_content(depot):
 airbus = build_aircraft("DA_Aircraft_A320", unreal.AircraftType.build_a320)
 build_aircraft("DA_Aircraft_B738", unreal.AircraftType.build737)
 
-# The Meridian, as an ASSET rather than only as ResolveDefaultAirframe's fallback.
+# THE MERIDIAN IS NO LONGER BUILT HERE. It was, from 2026-09-11, as DA_Aircraft_Piper - and
+# for a reason worth keeping legible even though the call has moved: M_Starter's runway is
+# 15 m wide and admits a 15 m wingspan, so neither Code C type can ever land there and every
+# offer was refused at the gate. A light type an airline can actually list is what gives a GA
+# field traffic, and what makes the jets a REASON to build a wider runway rather than a broken
+# inbox.
 #
-# Added 2026-09-11 for the offer inbox: M_Starter's runway is 15 m wide and admits a 15 m
-# wingspan, so neither Code C type can ever land there and every offer was refused at the
-# gate. A light type an airline can actually list is what gives a GA field traffic - and
-# what makes the jets a REASON to build a wider runway rather than a broken inbox.
-#
-# Built by the same UAircraftType::BuildPiperMeridian the fallback's figures come from, so
-# the asset cannot drift from the aeroplane already on screen. That is the whole point of
-# the builders being C++: one description, two consumers.
-build_aircraft("DA_Aircraft_Piper", unreal.AircraftType.build_piper_meridian)
+# It moved to Tools/Python/build_plane7_type.py on 2026-09-21, when plane7 replaced the
+# placeholder mesh and the asset was renamed to DA_Aircraft_Plane7. That script still calls
+# the same UAircraftType::BuildPiperMeridian this one did - one description, two consumers -
+# and additionally points the type at its mesh and rig, which this script has no business
+# knowing about. Two scripts authoring one asset is how the later run silently wins.
 
 # The stand is sized for the A320, and draws it to show how it would be used. When aircraft
 # exist, occupancy replaces this with whatever is actually parked.

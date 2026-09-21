@@ -55,10 +55,17 @@ PLANE2 IS A TWIN, which is new: ABP_PiperMeridian drives ONE prop bone. Both pro
 the same PropAngleDegrees here - they are not independently governed, and a real difference
 between them would be a simulation feature, not an animation one.
 """
-import json
-import struct
+import os
+import sys
 
 import unreal
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript. The commandlet
+# executes the file without adding its folder the way `python foo.py` would, so the import
+# below raises ModuleNotFoundError and the run dies before a single MARKER: line - which
+# reads as "the commandlet did nothing" rather than as a missing path. Put it on first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_anim import bone_plan, fail, joint_names, say  # noqa: E402
 
 SOURCE = r"C:\repos\AirportMgr2Models\plane2\export\plane2.glb"
 
@@ -66,86 +73,6 @@ SKELETON = "/Game/Aircraft/Plane2/SK_Plane2_Skeleton"
 MESH = "/Game/Aircraft/Plane2/SK_Plane2"
 ABP_PATH = "/Game/Aircraft/Plane2"
 ABP_NAME = "ABP_Plane2"
-
-def bone_plan():
-    """(bone, variable) per joint the export declares, root excluded.
-
-    The NAMES come from the .glb; the MAPPING is the decision this script owns. A joint that
-    matches neither rule is reported rather than skipped silently - an unrecognised bone is
-    either a rig the sim does not know how to drive yet, or a typo, and both want saying.
-
-    THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
-    check it - see CLAUDE.md, "check where a list is CONSUMED". gear/door were added on
-    2026-09-19 with the retraction work; before that plane4's five retract and hinge bones
-    were correctly reported UNRECOGNISED, which its own build_export.py predicted in writing.
-    """
-    plan = []
-    for name in joint_names():
-        lowered = name.lower()
-        if lowered == "root":
-            continue
-        if "prop" in lowered:
-            plan.append((name, "PropAngleDegrees"))
-        elif "steer" in lowered:
-            # BEFORE the wheel rule, because 'nosewheel_steer' matches both and the wheel
-            # rule would tell someone to wire a STEERING bone to the ROLL angle - which
-            # spins the nose gear about the strut and looks like a broken castor.
-            #
-            # THE PARENTHETICAL THAT USED TO BE HERE IS GONE, and its removal is the point.
-            # It read "(NOT YET IN UAirsideAgentAnim - see the nose-gear steering spec; leave
-            # this bone unwired until it is)", written when the variable was still planned.
-            # The nose-gear steering work landed and SteerAngleDegrees has been a property on
-            # UAirsideAgentAnim ever since, so the instruction was telling whoever read this
-            # plan to leave a working bone unwired. Caught on 2026-09-19 while adding the gear
-            # rules below - a stale note in a list nobody re-reads is exactly how a feature
-            # ships switched off.
-            plan.append((name, "SteerAngleDegrees"))
-        elif "wheel" in lowered:
-            plan.append((name, "WheelAngleDegrees"))
-        elif "gear" in lowered:
-            # AFTER the wheel rule, and the ordering is the discipline rather than a
-            # necessity today: no bone in plane4's rig matches two of these five. The steer
-            # rule above records what happens when one does - 'nosewheel_steer' matches both
-            # 'steer' and 'wheel', and the wrong winner spins the nose gear like a castor.
-            # Most-specific-first is what keeps the next rig from discovering that again.
-            plan.append((name, "GearAngleDegrees"))
-        elif "door" in lowered:
-            plan.append((name, "BayDoorAngleDegrees"))
-        else:
-            plan.append((name, "?  UNRECOGNISED - nothing in UAirsideAgentAnim drives it"))
-    return plan
-
-
-def joint_names():
-    """The joint names the .glb's skin declares, read from the file itself.
-
-    A glb is a 12-byte header then a length-prefixed JSON chunk; no dependency needed, and
-    the editor's Python has no glTF reader anyway.
-    """
-    try:
-        with open(SOURCE, "rb") as handle:
-            handle.read(12)
-            length = struct.unpack("<I4s", handle.read(8))[0]
-            doc = json.loads(handle.read(length).decode("utf-8"))
-    except Exception as exc:
-        unreal.log_error("MARKER: FAIL could not read the skin from %s: %s" % (SOURCE, exc))
-        return []
-
-    nodes = doc.get("nodes", [])
-    names = []
-    for skin in doc.get("skins", []):
-        for index in skin.get("joints", []):
-            if 0 <= index < len(nodes):
-                names.append(nodes[index].get("name", "?"))
-    return names
-
-
-def say(msg):
-    unreal.log("MARKER: " + str(msg))
-
-
-def fail(msg):
-    unreal.log_error("MARKER: FAIL " + str(msg))
 
 
 def report_plan():
@@ -155,7 +82,7 @@ def report_plan():
     say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
     say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
-    for bone, variable in bone_plan():
+    for bone, variable in bone_plan(joint_names(SOURCE)):
         say("    %-12s  Rotation driven by %s" % (bone, variable))
     say("")
     say("  ON EVERY ONE OF THOSE NODES:")

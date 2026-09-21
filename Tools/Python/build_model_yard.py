@@ -30,7 +30,7 @@ LEVEL = "/Game/Maps/M_ModelYard"
 # each entry is (asset path, label).
 #
 # THE THREE ALREADY-IMPORTED MODELS ARE HERE TOO. They cost nothing to place and they are
-# the scale reference that makes the new four legible - a Dash 8 next to a Piper says more
+# the scale reference that makes the new four legible - a Dash 8 next to a Meridian says more
 # about both than either says alone.
 ROWS = [
     ("Aircraft", 1200.0, [
@@ -38,7 +38,10 @@ ROWS = [
         # ahead of the Meridian because it is 2.1 m shorter and 2.1 m narrower - the first
         # entry that makes "small to large" true of the whole row rather than of most of it.
         ("/Game/Aircraft/Plane1/SK_Plane1", "Plane1 (Cessna 172)"),
-        ("/Game/Aircraft/PiperMeridian/SK_PiperMeridian", "Piper Meridian"),
+        # THE MERIDIAN, WHICH USED TO BE SK_PiperMeridian. plane7 replaced that placeholder on
+        # 2026-09-21 and it is 0.31 m SHORTER than the download was, which changes nothing
+        # about where it stands: the 172 is still 0.5 m shorter and 2.1 m narrower.
+        ("/Game/Aircraft/Plane7/SK_Plane7", "Plane7 (PA-46 Meridian)"),
         # AHEAD OF THE TWIN OTTER, and "smallest first" had to pick a dimension to be first
         # ON. It picks SPAN - 17.69 m against 19.75 - because span is what the row is read
         # for and what the Code letter turns on. Length agrees (14.00 against 15.77), so

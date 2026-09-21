@@ -64,10 +64,21 @@ public:
 	/**
 	 * Main wheel radius, uu. What a rolling wheel's spin rate is divided by.
 	 *
-	 * MEASURED off the model, not estimated: the Meridian's mains are 0.420 m across in
-	 * piper_aligned.blend, and their axle sits at Z = 0.21 with the origin on the ground,
-	 * which is the same number arrived at twice. An earlier guess of 0.34 m would have turned
-	 * the wheels at two thirds of the right rate - slow enough to look like a skid.
+	 * A PLACEHOLDER FOR TYPES NOBODY HAS MODELLED, and nothing more. Every type with a mesh
+	 * authors its own, measured off the rig - the hub's HEIGHT in the reference pose IS the
+	 * radius, since z = 0 is the contact plane - and Airside.Content.FootprintMatchesTheMesh
+	 * fails any that does not.
+	 *
+	 * THE 21.0 USED TO BE A MEASUREMENT, of SM_PiperMeridian's 0.420 m mains in
+	 * piper_aligned.blend. That mesh was deleted on 2026-09-21 and plane7 builds the
+	 * PUBLISHED 6.00-6 tyre instead, 0.445 m, so the default is now wrong for the one
+	 * aeroplane it was ever right for - BuildPiperMeridian authors 22.2 explicitly. The value
+	 * is LEFT AT 21.0 rather than updated because changing a UPROPERTY default silently
+	 * changes every asset that never set one, and the fix for a type that wants a real radius
+	 * is to measure it, not to inherit a better guess.
+	 *
+	 * Why it matters at all: an earlier guess of 0.34 m turned the wheels at two thirds of
+	 * the right rate - slow enough to look like a skid.
 	 */
 	UPROPERTY(EditAnywhere) double MainWheelRadius = 21.0;
 
@@ -249,15 +260,21 @@ public:
 	/**
 	 * A PA-46-500TP Meridian - the airframe that is actually on screen.
 	 *
-	 * Authored because SM_PiperMeridian is what ARoadAgentActor draws, so an agent taxiing
-	 * with an A320's turn rate is a Piper moving like an airliner. It is also the FALLBACK
-	 * when a route starts somewhere with no design aircraft, which is most of the graph.
+	 * Authored because this type's mesh is what ARoadAgentActor draws by default, so an agent
+	 * taxiing with an A320's turn rate is a Meridian moving like an airliner. It is also the
+	 * FALLBACK when a route starts somewhere with no design aircraft, which is most of the
+	 * graph.
 	 *
-	 * Its LOCAL ORIGIN IS THE MAIN-GEAR AXLE, not the nose gear this class otherwise
-	 * specifies, and that is a deviation with a reason rather than an oversight - see the
-	 * comment at the footprint. It is DECLARED rather than merely described: SteerAxleX
-	 * carries the measured 2.378 m wheelbase, so the follower and the stands both compose
-	 * against it without anything hard-coding the offset.
+	 * IT CONFORMS TO THIS CLASS'S LOCAL SPACE since 2026-09-21: origin at the nose gear,
+	 * SteerAxleX zero, FixedAxleX the measured -237.8. It was the one type in the game
+	 * declaring a main-gear origin, and that deviation was a property of the PLACEHOLDER mesh
+	 * rather than of the aeroplane - SM_PiperMeridian happened to be built about its mains.
+	 * plane7 replaced it, exported about the nose gear like the rest of the fleet, and the
+	 * .cpp records what the change cost and recovered.
+	 *
+	 * THE FIGURES ARE MEASURED OFF SK_Plane7 and Tools/Python/build_plane7_type.py re-measures
+	 * them every run and FAILS on a disagreement, which is how a C++ footprint is kept honest
+	 * about a mesh it cannot see.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "Airside")
 	static void BuildPiperMeridian(UAircraftType* Type);

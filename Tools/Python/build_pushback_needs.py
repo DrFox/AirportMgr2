@@ -13,9 +13,10 @@ IN PYTHON RATHER THAN IN BuildPiperMeridian and friends, for the reason
 build_aircraft_looks.py gives at length: those builders live in Airside, and a /Game asset
 path may not be named from there - Check-Architecture enforces the direction.
 
-IN PLACE, never delete-and-recreate. DA_Aircraft_Piper is referenced by DA_Airline_Cumbria's
+IN PLACE, never delete-and-recreate. DA_Aircraft_Plane7 is referenced by DA_Airline_Cumbria's
 fleet, and deleting an asset something points at breaks the reference rather than updating
-it. save_asset takes only_if_is_dirty=False because a headless save writes nothing at all
+it. It was DA_Aircraft_Piper until 2026-09-21, and it was RENAMED rather than replaced for
+exactly that reason - see Tools/Python/build_plane7_type.py. save_asset takes only_if_is_dirty=False because a headless save writes nothing at all
 unless it is forced.
 
 THE MARKER LINES ARE NOT THE EVIDENCE. Both headless save APIs report success while writing
@@ -42,7 +43,7 @@ NEEDS = {
         "default of VehicleTug would gate the smallest aeroplane in the game behind the "
         "depot",
     ),
-    "/Game/Entities/DA_Aircraft_Piper": (
+    "/Game/Entities/DA_Aircraft_Plane7": (
         unreal.PushbackNeed.SELF_MANOEUVRE,
         "the starter aeroplane reverses itself, so a new airport needs no depot",
     ),

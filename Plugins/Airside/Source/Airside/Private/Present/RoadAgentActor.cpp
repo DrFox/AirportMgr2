@@ -94,7 +94,16 @@ void ARoadAgentActor::SetMotion(const FAgentMotion& Motion, double SurfaceZ)
 	//
 	// The correction holds the pivot still while the body pitches about it. Zero pivot is
 	// exactly zero correction, so an unmeasured airframe - every vehicle, both airliners -
-	// and the Piper, whose origin already IS its main-gear axle, are untouched by this.
+	// is untouched by this.
+	//
+	// THE MERIDIAN JOINED THE CORRECTED SIDE ON 2026-09-21, and it is worth saying because it
+	// is the one BEHAVIOUR change in plane7's import rather than a change of numbers. Its
+	// origin used to BE its main-gear axle, so FixedAxleX was zero and this did nothing to
+	// it; plane7 is exported about the nose gear, FixedAxleX is -237.8, and the Meridian now
+	// pitches about its mains like every other measured airframe. That is the correct
+	// behaviour and always was - an aeroplane rotates about where the rubber touches - but it
+	// was reached by the type's datum moving, not by anyone editing this function. See
+	// Airside.Present.MeridianPitchesAboutItsMains.
 	//
 	// IN THE VIEW rather than in the model, because it is a fact about drawing a rigid body
 	// at an attitude, not about where the aircraft is: FAgentMotion::Position still means

@@ -26,17 +26,18 @@ whole pipeline ran unattended on 2026-09-20 and its graph diffed IDENTICAL to th
 hand-wired one. State machines remain hand work; see docs/2026-09-20-animgraph-authoring.md
 for what is and is not reachable, and for the wiring script.
 
-THIS IS THE THIRD COPY OF THAT MECHANISM AND THE SECOND COPY OF THE BONE PLAN, which is
-worth saying plainly rather than discovering. build_plane2_anim.py has it, and
-build_fueltruck_anim.py copied the asset half but not the plan. The MAPPING below - which
-substring of a bone name picks which UAirsideAgentAnim property - is a list that must agree
-with build_plane2_anim.py's and with the C++, and CLAUDE.md's rule is that such lists are
-ONE list. They are two here because the extraction is a refactor of a working tool that
-nobody asked for in the same breath as importing an aeroplane, and airside_import.py's
-header records the same judgement about the three import_*.py scripts: fold them in when the
-divergence bites. IT WILL BITE ON THE NEXT PROPERTY ADDED TO UAirsideAgentAnim - the gear and
-door rules landed in build_plane2_anim.py on 2026-09-19 and would have to be typed here too -
-so the fourth model is the one that extracts rather than copies.
+THE BONE PLAN IS NO LONGER A COPY. This header said "the fourth model is the one that
+extracts rather than copies", and predicted exactly how the duplication would bite: "IT WILL
+BITE ON THE NEXT PROPERTY ADDED TO UAirsideAgentAnim - the gear and door rules landed in
+build_plane2_anim.py on 2026-09-19 and would have to be typed here too". They were, the next
+day, by hand. The fourth model declined the extraction and the fifth recorded a promise that
+the sixth would do it; plane7 did, on 2026-09-21.
+
+The mapping now lives in Tools/Python/airside_anim.py with joint_names and the axis
+resolver, and that module's header carries the reasoning all four copies had. WHAT IS LEFT
+HERE is what is true of plane1: its paths, its five driven bones, and the wiring notes
+report_plan prints - including the disputed ORDER below, which is plane1's own finding and
+belongs to this file.
 
 ABP_Plane3 AND ABP_Plane4 HAVE NO SCRIPT AT ALL; both were duplicated from ABP_Plane2 in the
 editor and retargeted by hand. That works and leaves nothing behind that says the parent and
@@ -64,10 +65,17 @@ Add is correct rather than merely safer: UAirsideAgentAnim accumulates PropAngle
 wraps it to 0..360, so it is an absolute angle from the bind pose, not a per-frame delta that
 adding would integrate twice.
 """
-import json
-import struct
+import os
+import sys
 
 import unreal
+# THE SCRIPT'S OWN DIRECTORY IS NOT ON sys.path under -run=pythonscript. The commandlet
+# executes the file without adding its folder the way `python foo.py` would, so the import
+# below raises ModuleNotFoundError and the run dies before a single MARKER: line - which
+# reads as "the commandlet did nothing" rather than as a missing path. Put it on first.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from airside_anim import bone_plan, fail, joint_names, say  # noqa: E402
 
 SOURCE = r"C:\repos\AirportMgr2Models\plane1\export\plane1.glb"
 
@@ -77,84 +85,6 @@ ABP_PATH = "/Game/Aircraft/Plane1"
 ABP_NAME = "ABP_Plane1"
 
 
-def bone_plan():
-    """(bone, variable) per joint the export declares, root excluded.
-
-    The NAMES come from the .glb; the MAPPING is the decision this script owns. A joint that
-    matches neither rule is reported rather than skipped silently - an unrecognised bone is
-    either a rig the sim does not know how to drive yet, or a typo, and both want saying.
-
-    THIS LIST MUST AGREE WITH UAirsideAgentAnim'S PROPERTY NAMES and there is no compiler to
-    check it - see CLAUDE.md, "check where a list is CONSUMED". It must also agree with
-    build_plane2_anim.py's copy of the same rules; the header says why there are two and when
-    to make it one.
-    """
-    plan = []
-    for name in joint_names():
-        lowered = name.lower()
-        if lowered == "root":
-            continue
-        if "prop" in lowered:
-            plan.append((name, "PropAngleDegrees"))
-        elif "steer" in lowered:
-            # BEFORE the wheel rule, because 'nosewheel_steer' matches both and the wheel
-            # rule would tell someone to wire a STEERING bone to the ROLL angle - which spins
-            # the nose gear about the strut and looks like a broken castor. This rig has that
-            # exact collision, so the ordering is load-bearing here rather than defensive.
-            plan.append((name, "SteerAngleDegrees"))
-        elif "wheel" in lowered:
-            plan.append((name, "WheelAngleDegrees"))
-        elif "gear" in lowered:
-            # NO BONE IN THIS RIG REACHES THESE TWO, and they are kept anyway so the plan
-            # does not quietly become a different plan from plane2's. A 172's gear is welded
-            # on; if one of these ever fires here, the export has grown a retraction and the
-            # type needs a gear cycle to match.
-            plan.append((name, "GearAngleDegrees"))
-        elif "door" in lowered:
-            plan.append((name, "BayDoorAngleDegrees"))
-        else:
-            plan.append((name, "?  UNRECOGNISED - nothing in UAirsideAgentAnim drives it"))
-    return plan
-
-
-def joint_names():
-    """The joint names the .glb's skin declares, read from the file itself.
-
-    A glb is a 12-byte header then a length-prefixed JSON chunk; no dependency needed, and
-    the editor's Python has no glTF reader anyway.
-
-    READ RATHER THAN LISTED, which build_plane2_anim.py learned the hard way: it carried a
-    hand-written list naming a split nosewheel_L and nosewheel_R, and the very next export
-    replaced both with a single nosewheel. THIS rig proves the point twice over - it was
-    re-exported three times on 2026-09-19 and its main gear went from one `wheel` bone to
-    wheel_L and wheel_R in the last of them. A list typed here on the first attempt would
-    have been wrong by the third.
-    """
-    try:
-        with open(SOURCE, "rb") as handle:
-            handle.read(12)
-            length = struct.unpack("<I4s", handle.read(8))[0]
-            doc = json.loads(handle.read(length).decode("utf-8"))
-    except Exception as exc:
-        unreal.log_error("MARKER: FAIL could not read the skin from %s: %s" % (SOURCE, exc))
-        return []
-
-    nodes = doc.get("nodes", [])
-    names = []
-    for skin in doc.get("skins", []):
-        for index in skin.get("joints", []):
-            if 0 <= index < len(nodes):
-                names.append(nodes[index].get("name", "?"))
-    return names
-
-
-def say(msg):
-    unreal.log("MARKER: " + str(msg))
-
-
-def fail(msg):
-    unreal.log_error("MARKER: FAIL " + str(msg))
-
 
 def report_plan():
     """The editor work this script cannot do, as a list rather than a memory of one."""
@@ -163,7 +93,7 @@ def report_plan():
     say("  MCP CAN, against the running editor: docs/2026-09-20-animgraph-authoring.md.")
     say("  By hand, it is:")
     say("  open %s and, in AnimGraph, add one Transform (Modify) Bone per row:" % ABP_NAME)
-    for bone, variable in bone_plan():
+    for bone, variable in bone_plan(joint_names(SOURCE)):
         say("    %-16s  Rotation driven by %s" % (bone, variable))
     say("")
     say("  TWO BONES, NEVER BOTH ONTO ONE: the steer bone is the nose wheel's PARENT.")

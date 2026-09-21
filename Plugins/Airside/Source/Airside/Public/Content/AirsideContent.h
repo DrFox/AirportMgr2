@@ -242,7 +242,8 @@ public:
 	 *
 	 * SKELETAL, because the propeller and the wheels turn. A static mesh cannot animate, and
 	 * the parts that move are vertex groups inside one mesh rather than separate objects -
-	 * see the rig built by AirportMgr2Models/piperMeridian/scripts/build_lowpoly.py.
+	 * see the rig built by AirportMgr2Models/plane7/scripts/build_rig.py, which since
+	 * 2026-09-21 also retracts the gear and works four bay doors.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Defaults")
 	TSoftObjectPtr<USkeletalMesh> AgentMesh;

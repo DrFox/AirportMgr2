@@ -22,7 +22,7 @@ ENTITY_DIR = "/Game/Entities"
 
 A320 = "/Game/Entities/DA_Aircraft_A320.DA_Aircraft_A320"
 B738 = "/Game/Entities/DA_Aircraft_B738.DA_Aircraft_B738"
-PIPER = "/Game/Entities/DA_Aircraft_Piper.DA_Aircraft_Piper"
+PIPER = "/Game/Entities/DA_Aircraft_Plane7.DA_Aircraft_Plane7"
 PLANE1 = "/Game/Entities/DA_Aircraft_Plane1.DA_Aircraft_Plane1"
 PLANE2 = "/Game/Entities/DA_Aircraft_Plane2.DA_Aircraft_Plane2"
 PLANE5 = "/Game/Entities/DA_Aircraft_Plane5.DA_Aircraft_Plane5"
