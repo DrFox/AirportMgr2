@@ -2904,27 +2904,6 @@ bool FReofferStandsRetireReentrancyTest::RunTest(const FString& Parameters)
 	return true;
 }
 
-namespace
-{
-	/** Captures LogAirsideTraffic lines at Log verbosity, the same shape as
-	 *  RoadRebuildLogQuietTest's FLogRoadMeshLogSpy - scoped to one AddOutputDevice/
-	 *  RemoveOutputDevice bracket per use. */
-	class FLogAirsideTrafficSpy : public FOutputDevice
-	{
-	public:
-		TArray<FString> CapturedLines;
-
-		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
-		{
-			static const FName TrafficCategory(TEXT("LogAirsideTraffic"));
-			if (Category == TrafficCategory && Verbosity == ELogVerbosity::Log)
-			{
-				CapturedLines.Add(FString(V));
-			}
-		}
-	};
-}
-
 // ---------------------------------------------------------------------------------------
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FArrivalStandCountLogTest,
@@ -2957,7 +2936,11 @@ bool FArrivalStandCountLogTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a stand removed to free (not erase) its slot"), A.Net->RemoveEntity(A.Stands[0]));
 
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
-	FLogAirsideTrafficSpy Spy;
+	// ISSUE #216d: was its own hand-copied FOutputDevice (FLogAirsideTrafficSpy) missing the
+	// CanBeUsedOnMultipleThreads override #216 traced the RoadRebuildLogQuietTest flake to -
+	// now AirsideTestWorld.h's shared FLogLineSpy, which carries that override once for every
+	// spy of this shape instead of leaving each one to remember it by hand.
+	FLogLineSpy Spy(FName(TEXT("LogAirsideTraffic")));
 	GLog->AddOutputDevice(&Spy);
 	const int32 Id = Traffic->DispatchArrival(*A.Net, A.Threshold, TestAirframes::Piper(), 1.0);
 	GLog->RemoveOutputDevice(&Spy);
