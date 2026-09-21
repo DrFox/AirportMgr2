@@ -514,11 +514,16 @@ public:
 	TObjectPtr<UEntityDefinition> StandDefinition;
 
 	/**
-	 * What the fuel depot tool places. Unset falls back to the content set's DefaultFuelDepot.
+	 * What the fuel depot tool places. Unset falls back to the content set's Placeables map
+	 * (UAirsideSettings::ResolvePlaceable) - see UAirsideContent::Placeables, which issue #192
+	 * item 1 gave the same map treatment this comment already argues against giving THIS pair.
 	 *
 	 * BESIDE StandDefinition rather than in a map keyed by EPlaceableEntity: there are two
 	 * kinds, and two asset pickers in the Details panel are easier to author than a map, for
-	 * no loss until a third arrives.
+	 * no loss until a third arrives. That argument was about the PER-ACTOR override, which
+	 * still has only two authors ever wanting to set by hand; the CONTENT set's default is a
+	 * different question, answered once for every actor, which is exactly where a third kind
+	 * would otherwise need a third named property and a ternary to match it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Stands")
 	TObjectPtr<UEntityDefinition> FuelDepotDefinition;
@@ -658,7 +663,7 @@ public:
 	double FallbackWidth = URoadProfile::StandardTaxiwayWidth;
 
 	UPROPERTY(EditAnywhere, Category = "Airside", meta = (ClampMin = "0.0"))
-	double FallbackFilletRadius = 1500.0;
+	double FallbackFilletRadius = URoadProfile::StandardTaxiwayFilletRadius;
 
 	UPROPERTY(VisibleAnywhere, Category = "Airside")
 	TObjectPtr<UDynamicMeshComponent> MeshComponent;

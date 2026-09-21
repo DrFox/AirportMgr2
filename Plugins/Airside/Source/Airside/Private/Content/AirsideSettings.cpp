@@ -4,6 +4,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMesh.h"
 #include "Entities/AircraftType.h"
+#include "Entities/EntityDefinition.h"
 
 // File-local, matching every other category in this module.
 DEFINE_LOG_CATEGORY_STATIC(LogAirsideContent, Log, All);
@@ -229,6 +230,20 @@ FResolvedAgentView UAirsideSettings::ResolveAgentView(const FAirframe& Airframe)
 		View.AnimClass = Content->AgentAnimClass.LoadSynchronous();
 	}
 	return View;
+}
+
+UEntityDefinition* UAirsideSettings::ResolvePlaceable(EPlaceableEntity Kind)
+{
+	const UAirsideContent* Content = GetContent();
+	if (Content == nullptr)
+	{
+		return nullptr;
+	}
+	// FIND, NOT [] - an unmapped kind is a supported state (no content set has authored one
+	// yet), the same as every other Resolve* in this file, and TMap::operator[] asserts on a
+	// missing key rather than answering null.
+	const TSoftObjectPtr<UEntityDefinition>* Found = Content->Placeables.Find(Kind);
+	return Found != nullptr ? Found->LoadSynchronous() : nullptr;
 }
 
 UStaticMesh* UAirsideSettings::ResolveVehicleMesh()

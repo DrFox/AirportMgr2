@@ -28,4 +28,21 @@ void UAirsideContent::PostLoad()
 	Migrate(ERunwaySurface::Grass, RunwayGrassMaterial_DEPRECATED);
 	Migrate(ERunwaySurface::Tarmac, RunwayTarmacMaterial_DEPRECATED);
 	Migrate(ERunwaySurface::Concrete, RunwayConcreteMaterial_DEPRECATED);
+
+	// MIGRATED, NOT RESAVED (issue #192 item 1): an asset authored before Placeables existed
+	// still has its bytes under DefaultStand / DefaultFuelDepot - meta = (DeprecatedProperty)
+	// keeps those tagged names matching on load without an "_DEPRECATED" rename, since
+	// nothing else is claiming the old names. Each deprecated slot only fills its OWN map
+	// entry when Placeables does not already have one there, so a set authored (or re-saved)
+	// after this migration first ran is never clobbered by a leftover deprecated value
+	// nothing ever cleared - the same rule the RunwayMaterials migration above follows.
+	auto MigratePlaceable = [this](EPlaceableEntity Kind, const TSoftObjectPtr<UEntityDefinition>& Deprecated)
+	{
+		if (!Deprecated.IsNull() && !Placeables.Contains(Kind))
+		{
+			Placeables.Add(Kind, Deprecated);
+		}
+	};
+	MigratePlaceable(EPlaceableEntity::Stand, DefaultStand);
+	MigratePlaceable(EPlaceableEntity::FuelDepot, DefaultFuelDepot);
 }
