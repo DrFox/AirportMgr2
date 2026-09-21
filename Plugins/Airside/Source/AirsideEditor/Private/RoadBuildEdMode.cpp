@@ -94,6 +94,13 @@ void URoadBuildEdMode::Enter()
 		Builder->ToolIndex = Index;
 		RegisterTool(ToolCommands[Index], MakeToolName(Index), Builder);
 
+		// IMMEDIATELY AFTER RegisterTool, not in BindCommands (issue #184): RegisterTool just
+		// mapped this SAME command onto this SAME toolkit command list with the engine's own
+		// StartTool, and MapAction is a TMap::Add - whichever call runs LAST wins. Calling this
+		// here, after, is what makes the reselect guard the one a key press actually reaches;
+		// see MapReselectAwareToolCommand's own comment for the whole account.
+		MapReselectAwareToolCommand(Index, ToolCommands[Index]);
+
 		// THE REGISTRY'S OWN KEY, not Index + 1. The two agreed only while the table happened
 		// to run 1..N with no gaps, and the holding-position tool broke that - it sits at index 6
 		// but is bound to EIGHT, because key 7 is "land an aircraft" and is not a tool. The
@@ -134,28 +141,55 @@ void URoadBuildEdMode::BindCommands()
 	// Called from WITHIN Super::Enter(), before URoadBuildEdMode::Enter()'s own body runs -
 	// so this cannot read anything Enter() fills in later. MakeToolName(Index) is a pure
 	// function of ToolRegistry() for exactly that reason; see its comment in the header.
+	//
+	// THE TOOL KEYS DO NOT GO HERE ANY MORE (issue #184). They used to, with the comment that
+	// RegisterTool binds them into ToolCommandList, "which is processed by the viewport" - false
+	// for 5.8: RegisterTool binds them into THIS SAME toolkit list, with the engine's own
+	// StartTool, and since this method runs before RegisterTool ever does (see above), the
+	// engine's binding always landed second and always won - MapAction is a TMap::Add, which
+	// replaces. Mapped instead from Enter(), immediately after each RegisterTool call, where
+	// this class's own binding is the one that runs last; see MapReselectAwareToolCommand.
 	if (Toolkit.IsValid())
 	{
-		const TSharedRef<FUICommandList>& Commands2 = Toolkit->GetToolkitCommands();
-		Commands2->MapAction(Commands.CancelGesture,
+		Toolkit->GetToolkitCommands()->MapAction(Commands.CancelGesture,
 			FExecuteAction::CreateUObject(this, &URoadBuildEdMode::CancelActiveGesture));
-
-		// The tool keys go here TOO. RegisterTool binds them into ToolCommandList, which is
-		// processed by the viewport and therefore only once the viewport has keyboard
-		// focus - so 1/2/3 did nothing until you had clicked in it, and the click that
-		// gave it focus also started a road. Bound here as well, they work immediately.
-		const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
-		for (int32 Index = 0; Index < FMath::Min(ToolCommands.Num(), ToolRegistry().Num()); ++Index)
-		{
-			Commands2->MapAction(ToolCommands[Index], StartToolAction(Index));
-		}
 	}
 
-	if (ToolCommandList.IsValid())
+	// ToolCommandList itself is NOT bound to any more, tool keys or Escape: it is the list
+	// named in this function's own comment above as "created and then never consulted
+	// anywhere in UEdMode.cpp" - a mapping there was dead code, not a second, harmless copy.
+}
+
+void URoadBuildEdMode::MapReselectAwareToolCommand(int32 Index, const TSharedPtr<FUICommandInfo>& Command)
+{
+	if (!Toolkit.IsValid())
 	{
-		ToolCommandList->MapAction(Commands.CancelGesture,
-			FExecuteAction::CreateUObject(this, &URoadBuildEdMode::CancelActiveGesture));
+		return;
 	}
+
+	// GetInteractiveToolsContext() is null in Airside.Editor.ToolCommandBindingSurvivesRegisterTool
+	// (no Enter(), no viewport - the same gate StartToolAction's own comment describes), so this
+	// degrades to an unchecked binding there rather than refusing to install the fix at all. In
+	// production Enter() has already run CreateInteractiveToolsContexts() by the time this is
+	// called, so the checked delegate is always live there.
+	UEditorInteractiveToolsContext* ToolsContext = GetInteractiveToolsContext();
+	const FIsActionChecked IsChecked = ToolsContext != nullptr
+		? FIsActionChecked::CreateUObject(ToolsContext,
+			&UEditorInteractiveToolsContext::IsToolActive, EToolSide::Mouse, MakeToolName(Index))
+		: FIsActionChecked();
+
+	Toolkit->GetToolkitCommands()->MapAction(Command, StartToolAction(Index), FCanExecuteAction(), IsChecked);
+}
+
+TSharedPtr<FUICommandList> URoadBuildEdMode::ToolkitCommandsForTest() const
+{
+	// GetToolkitCommands() returns a TSharedRef, not a TSharedPtr, so the two arms of a ternary
+	// against nullptr do not share a common type - hence the explicit if rather than one line.
+	if (!Toolkit.IsValid())
+	{
+		return nullptr;
+	}
+	return Toolkit->GetToolkitCommands();
 }
 
 FToolContext URoadBuildEdMode::MakeReselectContext() const

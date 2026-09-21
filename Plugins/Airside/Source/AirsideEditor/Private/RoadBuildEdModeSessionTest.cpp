@@ -1,10 +1,12 @@
 #include "CoreMinimal.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Framework/Commands/UICommandList.h"
 #include "InteractiveToolManager.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdMode.h"
+#include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RunwayTool.h"
@@ -147,6 +149,105 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("a third activation builds"), Third);
 	TestEqual(TEXT("the width chosen before it was rebuilt is still chosen"),
 		static_cast<FRunwayTool*>(Mode->GetSession().GetActiveTool())->WidthIndex, 1);
+	return true;
+}
+
+/**
+ * THE BUG ITSELF (issue #184), not the session logic StartToolAction reaches once a key press
+ * gets to it - FRoadBuildEdModeSessionTest above already covers that a reselect on the shared
+ * session cycles width, and would pass even if no key press could ever reach StartToolAction at
+ * all. This test is about which of two MapAction calls a key press actually lands on.
+ *
+ * UEdMode::Enter() calls BindCommands() BEFORE running URoadBuildEdMode::Enter()'s own body,
+ * where RegisterTool runs - and RegisterTool maps the SAME command onto the SAME toolkit command
+ * list with the engine's own StartTool. UICommandList::MapAction is a TMap::Add, which replaces:
+ * whichever call happens LAST wins. BindCommands used to map this mode's own StartToolAction for
+ * every tool command, and RegisterTool always ran after it and always overwrote it - so every key
+ * press restarted the tool via the engine's StartTool, and the reselect guard in StartToolAction
+ * was dead code no test could see was dead, because FRoadBuildEdModeSessionTest drives the
+ * session directly and never asks the command list to run anything.
+ *
+ * CANNOT DRIVE THE REAL RegisterTool HERE - same gate as everywhere else in this file:
+ * RegisterTool needs a live UEditorInteractiveToolsContext, which only Enter() with a real
+ * editor viewport creates, and Run-AirsideTests.ps1 runs with -nullrhi (see the script's own
+ * comment). Standing in for it with a spy that MapAction's the SAME command, in the SAME order
+ * Enter() actually calls things (BindCommands, then something standing in for RegisterTool, then
+ * MapReselectAwareToolCommand) is what lets this test tell "our binding wins" apart from "our
+ * binding happened to run and nothing since touched the list" - the second is true of the OLD
+ * code too and would not have caught it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeCommandBindingTest,
+	"Airside.Editor.ToolCommandBindingSurvivesRegisterTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeCommandBindingTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	// CreateToolkit() alone, not Enter(): FBaseToolkit's own constructor builds ToolkitCommands
+	// (see BaseToolkit.cpp), so a real FUICommandList exists without Toolkit->Init()'s
+	// IToolkitHost - which is the one piece of a real Enter() this test cannot get headlessly.
+	Mode->CreateToolkit();
+
+	const TSharedPtr<FUICommandList> CommandList = Mode->ToolkitCommandsForTest();
+	if (!TestTrue(TEXT("CreateToolkit made a real command list"), CommandList.IsValid()))
+	{
+		return false;
+	}
+
+	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands =
+		FRoadBuildEdModeCommands::Get().ToolCommandsInOrder();
+	if (!TestTrue(TEXT("the registry has at least one tool"), ToolCommands.Num() > 0))
+	{
+		return false;
+	}
+	const TSharedPtr<FUICommandInfo> Command = ToolCommands[0];
+
+	// STEP ONE, in Enter()'s own order: BindCommands runs first. On today's fixed code this
+	// only maps CancelGesture and leaves Command untouched; the OLD code mapped
+	// StartToolAction(0) onto it here.
+	Mode->BindCommands();
+
+	// STEP TWO: RegisterTool, stood in for by a spy, because the real one needs a live
+	// UEditorInteractiveToolsContext this test cannot create. This is exactly what RegisterTool
+	// itself does at UEdMode.cpp:113 - MapAction the same command onto the same list.
+	bool bEngineBindingRan = false;
+	CommandList->MapAction(Command,
+		FExecuteAction::CreateLambda([&bEngineBindingRan]() { bEngineBindingRan = true; }));
+
+	// STEP THREE: what Enter() calls immediately after RegisterTool now (issue #184's fix).
+	Mode->MapReselectAwareToolCommand(0, Command);
+
+	const FUIAction* Action = CommandList->GetActionForCommand(Command);
+	if (!TestNotNull(TEXT("the command still has a mapped action"), Action))
+	{
+		return false;
+	}
+
+	// THE ASSERTION THAT FAILS ON THE OLD ORDER. If BindCommands's binding were still the one
+	// standing after RegisterTool - i.e. if this mode's own action, not the spy, survived
+	// step two - this test would have nothing to say about issue #184 at all, because that is
+	// not the bug: the bug is the spy (RegisterTool) winning over step three. Executing here
+	// exercises the SAME TMap::Add path production hits when a key is pressed.
+	Action->Execute();
+	TestFalse(TEXT("the tool's own reselect-aware binding, not RegisterTool's restart, "
+		"is what a key press reaches"), bEngineBindingRan);
+
+	// The mapping is still a live, executable command, not merely "not the engine's" -
+	// FCanExecuteAction() left unbound in MapReselectAwareToolCommand defaults to always
+	// executable (FUIAction::CanExecute), the same as the pre-#184 hand-written binding did.
+	TestTrue(TEXT("the command can still execute"), Action->CanExecute());
+
 	return true;
 }
 
