@@ -21,11 +21,6 @@ namespace
 	constexpr float YardTopMargin = 24.0f;
 	constexpr float YardLineHeight = 18.0f;
 
-	const FLinearColor YardHeadingColour(0.95f, 0.95f, 0.95f);
-	const FLinearColor YardBodyColour(0.75f, 0.78f, 0.82f);
-	const FLinearColor YardCaretColour(1.0f, 0.82f, 0.25f);
-	const FLinearColor YardQuietColour(0.45f, 0.47f, 0.50f);
-
 	/**
 	 * A channel's value as a bar, so a sweep is readable at a glance.
 	 *
@@ -65,6 +60,27 @@ void AAnimYardHUD::DrawHUD()
 	{
 		return;
 	}
+
+	// BLACK, ALL OF IT, asked for from play on 2026-09-21: the yard's floor was re-coloured and
+	// its lighting dimmed, and the pale grey these used to be became unreadable against it.
+	//
+	// LOCALS RATHER THAN NAMESPACE-SCOPE CONSTANTS, which is why they moved down here. An
+	// FLinearColor at namespace scope is a static with a dynamic initialiser, and Live Coding
+	// does not re-run those - the patched DLL would keep the old values and the change would
+	// look like it had not taken. Inside the function body it is an ordinary function-body edit,
+	// which is exactly what Live Coding does cover, so this can be retuned against a live editor
+	// without the user closing it. That mattered here and will matter again: a colour is judged
+	// by looking, so it is the kind of thing that gets changed three times in a row.
+	//
+	// THE CARET ROW IS NO LONGER PICKED OUT BY COLOUR. It keeps its '>' marker, which was always
+	// there beside the amber; if one black row among five turns out to be too subtle to find,
+	// the honest fix is a light backing panel behind the whole readout rather than a second
+	// colour, because a colour that reads on this floor is a colour that will stop reading on
+	// the next one.
+	const FLinearColor YardHeadingColour = FLinearColor::Black;
+	const FLinearColor YardBodyColour = FLinearColor::Black;
+	const FLinearColor YardCaretColour = FLinearColor::Black;
+	const FLinearColor YardQuietColour = FLinearColor::Black;
 
 	float Y = YardTopMargin;
 	const auto Line = [this, Font, &Y](const FLinearColor& Colour, const FString& Text)
