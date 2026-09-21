@@ -34,6 +34,30 @@ namespace
 		// debugger to find out.
 		TArray<FString> CapturedLines;
 
+		// ISSUE #216 ROOT CAUSE (fourth/fifth sighting): an FOutputDevice that does not
+		// override this defaults to false, which FOutputDeviceRedirectorState::AddOutputDevice
+		// (Engine/Source/Runtime/Core/Private/Misc/OutputDeviceRedirector.cpp) files under
+		// BUFFERED, not unbuffered. LaunchEngineLoop.cpp calls GLog->TryStartDedicatedPrimaryThread()
+		// at boot (unless "-NoLogThread" is passed, which Run-AirsideTests.ps1 does not), and
+		// once that thread exists IT becomes the redirector's "primary thread" - so a UE_LOG
+		// call from THIS test's own game thread no longer qualifies for synchronous delivery to
+		// a buffered device (see Serialize()'s IsPrimaryThread(ThreadId) check); the line is
+		// enqueued instead and only reaches this spy whenever that background thread next wakes
+		// and drains the queue, entirely independent of when AddOutputDevice/RemoveOutputDevice
+		// bracket the call. Under the full suite's log volume that thread lags far enough behind
+		// that lines are still queued - sometimes all of them, sometimes only the tail past
+		// RunwayRubber/RoadRebuildCensus - when RemoveOutputDevice fires, which is why isolated
+		// `-Filter Airside.Present` runs (far less log volume, the thread stays caught up) did
+		// not reproduce it. Engine/Source/Runtime/Core/Public/Misc/AutomationTest.h's own
+		// FAutomationTestOutputDevice and FAutomationTestMessageFilter hit exactly this and
+		// override this the same way, captioned "Make it unbuffered by returning true" - this
+		// spy needs the identical override for the identical reason: it is added and removed
+		// around a narrow window and must not race a thread it does not control.
+		virtual bool CanBeUsedOnMultipleThreads() const override
+		{
+			return true;
+		}
+
 		virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
 		{
 			static const FName RoadMeshCategory(TEXT("LogRoadMesh"));
@@ -42,7 +66,7 @@ namespace
 				++Count;
 				CapturedLines.Add(FString(V));
 				// RoadRebuildCensus::Log's own final line - see its header. The one line
-				// CLAUDE.md's "Diagnosing" section names by name, so this test does too rather
+				// CLAUDE.md's "Diagnosing" section names by name, so this test does so too rather
 				// than trusting the count alone to say WHICH line survived.
 				if (FCString::Strstr(V, TEXT("Rebuilt:")) != nullptr)
 				{
