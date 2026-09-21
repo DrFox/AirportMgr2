@@ -126,6 +126,7 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		TEXT("/Game/Entities/DA_Aircraft_Plane2"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
 		TEXT("/Game/Entities/DA_Aircraft_Plane4"),
+		TEXT("/Game/Entities/DA_Aircraft_Plane5"),
 	};
 
 	for (const TCHAR* Path : Measured)

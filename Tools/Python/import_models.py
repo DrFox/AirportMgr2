@@ -154,6 +154,35 @@ SPECS = [
              "hinge, but nothing in the engine drives either yet.",
     ),
     Spec(
+        key="plane5",
+        source=MODELS + r"\plane5\export\plane5.glb",
+        mesh_dir="/Game/Aircraft/Plane5",
+        skel_name="SK_Plane5",
+        # THE SAME THREE NAMES AGAIN, and by now that IS a convention rather than a
+        # coincidence - plane5/scripts/build_export.py names them deliberately to match
+        # plane3's and plane4's. The LEGS are nosegear/maingear_L/maingear_R and are not
+        # named here for the reason plane4's row gives: a leg's centre is not an axle.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L", "wheel_R"],
+        front_label="nose gear",
+        rear_label="main gear",
+        # NOSE GEAR. build_export.py's UE_ORIGIN is (0, 1.20, 0) in Blender world space -
+        # nosewheel_steer's head dropped to the tarmac - so the convention is declared at
+        # the source, as plane3's and plane4's are.
+        origin_on="front",
+        # THE FIRST RIG IN THE FLEET WITH MAIN-GEAR DOORS. plane4 retracts and hinges, but
+        # only its NOSE bay is modelled; this one adds door_main_L/_R, so all four doors take
+        # the same BayDoorAngleDegrees and the sequencing the model already drives - doors
+        # open, gear travels, doors close - is visible at both ends of the aeroplane.
+        note="Beechcraft King Air 350i. 14.00 m long, 17.69 m span, 4.40 m to the fin tip "
+             "against the Beechcraft Specification and Description's 14.22 / 17.65 / 4.37. "
+             "Origin on the NOSE gear; the main axle is at about -460 uu, which is the figure "
+             "FAirframe::FixedAxleX wants when this type is authored - and it is 35 cm SHORT "
+             "of the S&D's 16 ft 3 in (4.95 m) wheelbase, because build_gear.py worked from "
+             "14 ft 11 in. Fourteen joints, the most of any aeroplane here: the gear retracts "
+             "forward into each nacelle, and BOTH bays have doors.",
+    ),
+    Spec(
         key="tug1",
         source=MODELS + r"\tug1\export\tug1.glb",
         mesh_dir="/Game/Vehicles/Tug1",

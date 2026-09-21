@@ -27,7 +27,21 @@ import urllib.request
 URL = "http://localhost:8000/mcp"
 
 
-def post(body, session=None):
+# Long enough for any interactive call, and NOT long enough for a big
+# ProgrammaticToolset.execute_tool_script - which is why `timeout` became a parameter on
+# 2026-09-21 rather than this number being raised for everybody. Wiring plane5's thirteen
+# bones is about 200 tool calls inside ONE request and takes over a minute; wiring the fuel
+# truck's six fitted inside 30 s, which is why nothing noticed until then.
+#
+# THE TIMEOUT IS THE CLIENT'S ALONE. The editor carries on and finishes the work either way,
+# so a script that gives up here leaves a COMPLETED graph behind and prints a traceback -
+# which reads as "the wiring failed" and is the opposite of the truth. A caller that sends
+# long work raises its own limit; everything else keeps the short one, because a short
+# timeout on an interactive call is how a dead editor is noticed quickly.
+DEFAULT_TIMEOUT = 30
+
+
+def post(body, session=None, timeout=DEFAULT_TIMEOUT):
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -35,16 +49,16 @@ def post(body, session=None):
     if session:
         headers["Mcp-Session-Id"] = session
     req = urllib.request.Request(URL, json.dumps(body).encode(), headers, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         raw = r.read().decode("utf-8", "replace")
         return r.headers.get("Mcp-Session-Id"), (json.loads(raw) if raw.strip() else None)
 
 
-def rpc(session, rid, method, params=None):
+def rpc(session, rid, method, params=None, timeout=DEFAULT_TIMEOUT):
     body = {"jsonrpc": "2.0", "id": rid, "method": method}
     if params is not None:
         body["params"] = params
-    _, res = post(body, session)
+    _, res = post(body, session, timeout)
     if res is None:
         return None
     if "error" in res:
