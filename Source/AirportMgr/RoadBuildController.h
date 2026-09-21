@@ -7,6 +7,7 @@
 #include "BuildCameraRig.h"
 #include "GameFramework/PlayerController.h"
 #include "RoadBuildLog.h"
+#include "Solve/RoadGeom.h"
 #include "Tool/BuildGesture.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadBuildTool.h"
@@ -130,9 +131,17 @@ public:
 	 * distances: a fixed cap that allows a legitimate click when zoomed out would let a
 	 * horizon click through when zoomed in, and one tight enough for the close view would
 	 * reject half the screen when zoomed out.
+	 *
+	 * DEFAULTED FROM RoadGeom::DefaultMaxPlaceDistanceFactor, not a second 6.0 (issue
+	 * #191/#92-#93): the editor tool used to apply no cap at all
+	 * (TNumericLimits<double>::Max() in URoadBuildEditorTool::RayToPlane) while this one
+	 * guarded the horizon, so the same near-horizon click behaved differently depending on
+	 * which driver was open. The editor now measures its own view-centre distance
+	 * (URoadBuildEditorTool::ViewCentreDistance, set from Render) and applies the same
+	 * shared factor - see that class's own comment.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|View", meta = (ClampMin = "1.0"))
-	double MaxPlaceDistanceFactor = 6.0;
+	double MaxPlaceDistanceFactor = RoadGeom::DefaultMaxPlaceDistanceFactor;
 
 	/**
 	 * Use the orbiting build camera instead of the pawn's own view.
@@ -149,9 +158,12 @@ public:
 	 *
 	 * Without a threshold every slightly imprecise click on a node would nudge it, and the
 	 * click-to-chain interaction would become impossible to perform reliably.
+	 *
+	 * DEFAULTED FROM FBuildGesture::DefaultThresholdPixels, not a second 4.0 (issue
+	 * #191/#92-#93) - see that constant's own comment for the third copy this replaced.
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside|Move", meta = (ClampMin = "0.0"))
-	double DragThresholdPixels = 4.0;
+	double DragThresholdPixels = FBuildGesture::DefaultThresholdPixels;
 
 	/**
 	 * Show the ghost of the segment the next click would build.

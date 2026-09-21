@@ -420,7 +420,22 @@ struct AIRSIDE_API IBuildTool
 	virtual void OnDrag(const FToolContext& Context) {}
 	virtual void OnDragEnd(const FToolContext& Context) {}
 
-	/** Every frame, for previews that cost real work to build. */
+	/**
+	 * Every frame, for previews that cost real work to build.
+	 *
+	 * THE TWO DRIVERS' CADENCES DIFFER AND THAT IS DELIBERATELY LEFT ALONE (issue #191/#92-#93,
+	 * item (e) of the driver-divergence review): ARoadBuildController::PlayerTick calls this
+	 * unconditionally every engine frame; URoadBuildEditorTool calls it only from
+	 * OnUpdateHover, which ITF drives from mouse-generated hover events, not a frame timer. The
+	 * two overrides that exist - FRoadDrawTool::Tick (the ghost) and FSelectTool::Tick (the
+	 * stale-selection check) - read ONLY Context: cursor, snap, modifiers, Selection/Network
+	 * state. Neither measures wall-clock time or decays anything on its own, so a frame Tick is
+	 * not called on (the editor, while the mouse sits still) is a frame in which nothing either
+	 * override would have done differs from the frame before it. If a future override needs
+	 * real per-frame behaviour - a ghost that fades, a timed state - it needs an editor-side
+	 * per-frame tick this contract does not currently provide; URoadBuildEditorTool has none,
+	 * and adding one is that override's job to justify, not a default to build speculatively.
+	 */
 	virtual void Tick(const FToolContext& Context) {}
 
 	/**

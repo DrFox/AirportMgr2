@@ -45,6 +45,23 @@ enum class EGestureEnd : uint8
 class AIRSIDE_API FBuildGesture
 {
 public:
+	/**
+	 * Pixels a held press must travel before Move promotes it from a click to a drag.
+	 *
+	 * ONE NUMBER, not three (issue #191/#92-#93): `RoadBuildController.h`'s UPROPERTY and
+	 * `RoadBuildEditorTool.cpp`'s own file-scope `constexpr` each typed 4.0 independently, and
+	 * `BuildGestureCompositionTest.cpp` hard-coded a third copy in a comment justifying its own
+	 * test points - nothing enforced that the three agreed, which is exactly the "lists that
+	 * must agree are one list" failure CLAUDE.md names. Declared HERE, on the recogniser
+	 * itself, rather than on `FBuildSessionTunables`: the threshold is a fact about what a
+	 * click-vs-drag MEANS, which is this class's whole job, not a per-airport or per-view
+	 * setting like `Tunables.Limits` or `ToolPickRadius` that the two drivers are expected to
+	 * compute differently. Both drivers still keep their own field/property - a level author
+	 * can retune PIE's in the Details panel - but both now INITIALISE it from here, so the
+	 * three numbers cannot drift apart by a second typing.
+	 */
+	static constexpr double DefaultThresholdPixels = 4.0;
+
 	/** Left button down: remember where. Decides nothing - that waits for Move or Release. */
 	void Press(const FVector2D& Screen);
 
@@ -53,8 +70,11 @@ public:
 	 * past Threshold pixels; returns None while a press is not yet a drag (including when
 	 * nothing is pressed at all), DragBegan the one call that crosses the line, and Dragging
 	 * on every call after that.
+	 *
+	 * Threshold defaults to DefaultThresholdPixels above so a caller with no view-specific
+	 * reason to differ - URoadBuildEditorTool, since issue #191 - need not retype it.
 	 */
-	EGestureStep Move(const FVector2D& Screen, double Threshold);
+	EGestureStep Move(const FVector2D& Screen, double Threshold = DefaultThresholdPixels);
 
 	/**
 	 * Button up. Click when the press never became a drag, DragEnd when it had, Nothing when

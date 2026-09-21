@@ -53,7 +53,11 @@ TConstArrayView<FToolRegistration> ToolRegistry()
 			[] { return MakeUnique<FGuidelineDrawTool>(); },
 			EEditHandleKind::None },
 		{ EKeys::Six,   TEXT("Runway"),   LOCTEXT("Runway",    "Runway"),
-			LOCTEXT("RunwayTooltip", "Click one threshold, then the other. In play the runway key pressed again cycles the width, with Shift the surface, with Ctrl the approach."),
+			// "IN PLAY" DROPPED (issue #191/#92-#93): the reselect cycle used to work only in
+			// PIE - this tooltip said so - because the editor's reselect context carried no
+			// modifiers at all. URoadBuildEdMode::StartToolAction now reads the active tool's
+			// own Ctrl/Shift state into it, so the qualifier stopped being true.
+			LOCTEXT("RunwayTooltip", "Click one threshold, then the other. Press the runway key again to cycle the width, Shift for the surface, Ctrl for the approach."),
 			[] { return MakeUnique<FRunwayTool>(); },
 			EEditHandleKind::RunwayThreshold },
 

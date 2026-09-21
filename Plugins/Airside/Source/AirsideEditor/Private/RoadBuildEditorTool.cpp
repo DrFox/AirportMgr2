@@ -25,8 +25,10 @@
 
 namespace
 {
-	/** Below this, a press that moved is still a click. Pixels, as at runtime. */
-	constexpr double DragThresholdPixels = 4.0;
+	// DragThresholdPixels no longer lives here (issue #191/#92-#93): this was a THIRD 4.0,
+	// beside RoadBuildController.h's UPROPERTY and BuildGestureCompositionTest.cpp's own
+	// comment, nothing keeping the three in agreement - see FBuildGesture::
+	// DefaultThresholdPixels, which Gesture.Move below now defaults to.
 
 	/**
 	 * Draws what a build tool describes, into the editor viewport.
@@ -171,8 +173,22 @@ void URoadBuildEditorTool::Setup()
 
 	// Session is constructed with all six registry tools already - see FBuildSession's
 	// constructor - so selecting this instance's one is a switch, not a make.
+	//
+	// bRemoveHeld/bInsertHeld CARRIED, not left at their false defaults (issue #191/#92-#93):
+	// ARoadBuildController::SelectTool always builds its context through MakeToolContext(),
+	// which reads live Shift/Ctrl regardless of whether the press switches tools or reselects
+	// the one already active, so a runway picked up while Ctrl is still held from removing a
+	// taxiway carries that removal intent straight in. This instance's own modifiers are still
+	// their construction-time false/false at the exact moment Setup() runs on a genuine
+	// activation - the behaviours that report them are registered a few lines below - but this
+	// call site also fires as a RESELECT when ToolIndex is already the session's active tool
+	// (a fresh instance built for a second press of the same palette entry, before this one's
+	// own Setup has had a chance to see anything held), and reading the field rather than
+	// hand-writing false here is what stops that path being a second place a default is typed.
 	FToolContext SelectContext;
 	SelectContext.Target = Target;
+	SelectContext.bRemoveModifier = bRemoveHeld;
+	SelectContext.bInsertModifier = bInsertHeld;
 	Sess().SelectTool(ToolIndex, SelectContext);
 
 	UE_LOG(LogAirsideEditor, Log, TEXT("Airside ed tool active: %s, target %s"),
@@ -228,6 +244,16 @@ void URoadBuildEditorTool::Shutdown(EToolShutdownType ShutdownType)
 	UInteractiveTool::Shutdown(ShutdownType);
 }
 
+void URoadBuildEditorTool::DeactivateOnUndo()
+{
+	// Same guard and same call as Shutdown's own deactivate block above - see this method's
+	// header comment for why a mid-drag transaction is deliberately NOT handled here too.
+	if (IBuildTool* Tool = Sess().GetActiveTool(); Tool != nullptr && Target != nullptr)
+	{
+		Tool->OnDeactivate(MakeHoverContext());
+	}
+}
+
 ARoadNetworkActor* URoadBuildEditorTool::ResolveTarget() const
 {
 	UWorld* World = GetToolManager() != nullptr ? GetToolManager()->GetWorld() : nullptr;
@@ -249,13 +275,19 @@ bool URoadBuildEditorTool::RayToPlane(const FRay& Ray, FVector2D& OutPosition) c
 		return false;
 	}
 
-	// No max-distance guard, unlike the runtime driver's CursorOnRoadPlane: that guard is
-	// measured against the build camera's "current view distance", a concept this editor
-	// tool has no equivalent of (ViewWorldWidth is a WIDTH, not a distance, and is only
-	// refreshed in Render). An effectively infinite cap keeps this call refusing only for
-	// the two reasons it always did - parallel, or behind the camera.
+	// CAPPED THE SAME WAY PIE's CursorOnRoadPlane IS (issue #191/#92-#93): a perspective click
+	// near the horizon used to run away toward infinity here with NO guard at all, while
+	// ARoadBuildController measured every click against MaxPlaceDistanceFactor *
+	// ActiveRig().Distance. ViewCentreDistance is Render's own view-centre distance to the
+	// plane, refreshed every frame it runs - see that field's own comment for why a negative
+	// value (before the first Render, or during an orthographic view) leaves this uncapped,
+	// exactly as it always was.
+	const double MaxDistance = ViewCentreDistance > 0.0
+		? RoadGeom::DefaultMaxPlaceDistanceFactor * ViewCentreDistance
+		: TNumericLimits<double>::Max();
+
 	return RoadGeom::RayToPlaneZ(Ray.Origin, Ray.Direction, Target->SurfaceZ,
-		TNumericLimits<double>::Max(), OutPosition);
+		MaxDistance, OutPosition);
 }
 
 FToolContext URoadBuildEditorTool::MakeContext(const FInputDeviceRay& At) const
@@ -380,7 +412,7 @@ void URoadBuildEditorTool::OnClickDrag(const FInputDeviceRay& DragPos)
 		Sess().RecordPlaneHit(Plane);
 	}
 
-	const EGestureStep Step = Gesture.Move(DragPos.ScreenPosition, DragThresholdPixels);
+	const EGestureStep Step = Gesture.Move(DragPos.ScreenPosition);
 	if (Step == EGestureStep::None)
 	{
 		return;
@@ -557,6 +589,13 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 	if (Camera.bIsOrthographic)
 	{
 		ViewWorldWidth = Camera.OrthoWorldCoordinateWidth;
+
+		// UNCAPPED (issue #191/#92-#93): every ray under an orthographic projection shares the
+		// camera's own direction, so the horizon-runaway RayToPlane's cap guards against - a
+		// ray nearly parallel to the plane sending Distance toward infinity - cannot happen
+		// here regardless of where on screen a click lands. See ViewCentreDistance's own
+		// comment for the perspective case this exempts.
+		ViewCentreDistance = -1.0;
 	}
 	else
 	{
@@ -575,6 +614,12 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 				Distance = Along;
 			}
 		}
+
+		// STORED, not just spent on ViewWorldWidth below (issue #191/#92-#93): RayToPlane
+		// reads this back to cap a click the same way ARoadBuildController::CursorOnRoadPlane
+		// caps one against the build camera's own distance - see ViewCentreDistance's header
+		// comment for why this used to be computed and thrown away.
+		ViewCentreDistance = Distance;
 
 		ViewWorldWidth = 2.0 * Distance
 			* FMath::Tan(FMath::DegreesToRadians(Camera.HorizontalFOVDegrees * 0.5f));

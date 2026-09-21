@@ -76,6 +76,29 @@ public:
 	 *  same precedent as SessionForTest, see issue #92. */
 	const FBuildGesture& GestureForTest() const { return Gesture; }
 
+	/** Whether Ctrl/Shift are currently reported down by the behaviours OnUpdateModifierState
+	 *  hears from - see that method. Read by URoadBuildEdMode::StartToolAction so a reselect
+	 *  (the tool's own key pressed again) carries the SAME modifier a fresh click would, which
+	 *  PIE has always done by reading live key state for every SelectTool call - issue
+	 *  #191/#92-#93; before this the editor's reselect context was bare Target with both
+	 *  false, so Ctrl+the runway key never reached FRunwayTool::OnReselect's NextApproach
+	 *  branch here the way it does in play. */
+	bool IsRemoveModifierHeld() const { return bRemoveHeld; }
+	bool IsInsertModifierHeld() const { return bInsertHeld; }
+
+	/** Points this instance at InTarget without going through Setup's ResolveTarget, which
+	 *  needs a live UInteractiveToolManager/world neither BuildGestureCompositionTest nor the
+	 *  horizon-cap test below has - same precedent as ARoadBuildController::SetTargetForTest. */
+	void SetTargetForTest(ARoadNetworkActor* InTarget) { Target = InTarget; }
+
+	/** RayToPlane, exposed so a test can drive the horizon cap without a real
+	 *  IToolsContextRenderAPI to call Render() through - see SetViewCentreDistanceForTest. */
+	bool RayToPlaneForTest(const FRay& Ray, FVector2D& OutPosition) const { return RayToPlane(Ray, OutPosition); }
+
+	/** Stands in for what Render() measures every frame it actually runs - see
+	 *  ViewCentreDistance's own comment. */
+	void SetViewCentreDistanceForTest(double Distance) { ViewCentreDistance = Distance; }
+
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
@@ -83,6 +106,21 @@ public:
 
 	/** Escape. Drops a road chain or a half-drawn apron; see FRoadBuildEdModeCommands. */
 	void CancelGesture();
+
+	/**
+	 * Ctrl+Z / Ctrl+Y in the editor. Tells the active build tool to abandon whatever it had
+	 * part-drawn - the graph an undo or redo just changed may no longer hold the node or
+	 * segment it was chaining from.
+	 *
+	 * ISSUE #191/#92-#93: ARoadBuildController::OnUndo/OnRedo have always called
+	 * Tool->OnDeactivate for exactly this reason; this mode had no FEditorUndoClient at all
+	 * until now (URoadBuildEdMode::PostUndo/PostRedo call this), so an editor Ctrl+Z that
+	 * removed a node FRoadDrawTool was chaining from left it still holding one. Same shape as
+	 * Shutdown's own deactivate block above, kept separate rather than shared: Shutdown also
+	 * owns a mid-drag transaction this call has no business touching (GEditor's own undo
+	 * transaction is what got the mode here, not a drag this instance is mid-way through).
+	 */
+	void DeactivateOnUndo();
 
 	/**
 	 * Enter. Commits whatever the active tool has staged - see FRoadBuildEdModeCommands::Build
@@ -240,4 +278,20 @@ private:
 	 * is either unusably tight zoomed out or absurdly loose zoomed in.
 	 */
 	double ViewWorldWidth = 10000.0;
+
+	/**
+	 * Distance from the camera to the road plane AT THE VIEW CENTRE, refreshed each Render -
+	 * the same number Render already computed to derive ViewWorldWidth and used to discard
+	 * (issue #191/#92-#93). RayToPlane multiplies this by RoadGeom::DefaultMaxPlaceDistanceFactor
+	 * to cap a click the same way ARoadBuildController::CursorOnRoadPlane caps one against
+	 * BuildCameraComp->ActiveRig().Distance - before this fix RayToPlane passed
+	 * TNumericLimits<double>::Max() unconditionally, so a near-horizon click that PIE refused
+	 * landed kilometres out here instead.
+	 *
+	 * NEGATIVE MEANS "NO MEASUREMENT YET": before the first Render call (the very first frame
+	 * this tool is active) or while the current view is orthographic (every ray shares the
+	 * camera's own direction there, so the horizon runaway this guards against cannot happen -
+	 * see Render's own comment), RayToPlane must stay uncapped, exactly as it always was.
+	 */
+	double ViewCentreDistance = -1.0;
 };

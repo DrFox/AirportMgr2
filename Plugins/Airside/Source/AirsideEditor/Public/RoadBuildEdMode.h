@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "EditorUndoClient.h"
 #include "Tool/BuildSession.h"
 #include "Tools/UEdMode.h"
 #include "RoadBuildEdMode.generated.h"
@@ -27,7 +28,7 @@
  * Nothing about what a click MEANS lives here - that is all in the shared tools.
  */
 UCLASS()
-class URoadBuildEdMode : public UEdMode
+class URoadBuildEdMode : public UEdMode, public FEditorUndoClient
 {
 	GENERATED_BODY()
 
@@ -66,8 +67,17 @@ public:
 	 * Airside.Editor.ToolStateOutlivesTheToolInstance calls this directly instead of building
 	 * an unrelated target of its own - which is what let a prior version of that test pass
 	 * while the mode itself stayed broken.
+	 *
+	 * bRemoveModifier/bInsertModifier DEFAULT FALSE, not read from anywhere here: the MODE has
+	 * no keyboard of its own to poll (issue #191/#92-#93 - "reselect modifiers only in PIE").
+	 * StartToolAction supplies the real answer by asking the ACTIVE URoadBuildEditorTool
+	 * instance for the modifiers ITF's own behaviours already told it about
+	 * (IsRemoveModifierHeld/IsInsertModifierHeld) - the same cast CancelActiveGesture and
+	 * CommitActiveGesture already make. The defaults stay false so
+	 * Airside.Editor.ToolStateOutlivesTheToolInstance's plain reselect, which has no tool
+	 * instance to ask, keeps behaving exactly as it did before this parameter existed.
 	 */
-	FToolContext MakeReselectContext() const;
+	FToolContext MakeReselectContext(bool bRemoveModifier = false, bool bInsertModifier = false) const;
 
 	/**
 	 * (Re)binds ToolRegistry()[Index]'s command to StartToolAction(Index) on the toolkit's own
@@ -116,11 +126,29 @@ public:
 	virtual UWorld* GetWorld() const override;
 
 	virtual void Enter() override;
+	virtual void Exit() override;
 	virtual void CreateToolkit() override;
 	virtual TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> GetModeCommands() const override;
 	virtual void BindCommands() override;
 
+	// --- FEditorUndoClient ---------------------------------------------------------------
+	//
+	// PIE calls Tool->OnDeactivate on Undo/Redo/Clear (ARoadBuildController::OnUndo/OnRedo/
+	// OnClearNetwork) because the tool may be part-way through a chain built on a graph node
+	// the undo/redo just changed underneath it. This mode had NO EQUIVALENT AT ALL until issue
+	// #191/#92-#93 (`grep PostEditUndo|FEditorUndoClient|PostUndo` found zero hits) - so an
+	// editor Ctrl+Z that removed a node FRoadDrawTool was chaining from left the tool still
+	// holding it, silently. Registered in Enter(), unregistered in Exit() - GEditor's undo
+	// client list does not know to drop a mode that never told it to stop listening.
+	virtual void PostUndo(bool bSuccess) override;
+	virtual void PostRedo(bool bSuccess) override;
+
 private:
+	/** The shared body of PostUndo/PostRedo: both mean the same thing to the active tool -
+	 *  whatever it had part-drawn may no longer make sense - so there is one implementation,
+	 *  not two copies that could answer differently. */
+	void DeactivateActiveToolOnUndo(bool bSuccess);
+
 	/**
 	 * The registered ITF tool name for ToolRegistry()[Index] - "Airside_Road" and so on.
 	 *
