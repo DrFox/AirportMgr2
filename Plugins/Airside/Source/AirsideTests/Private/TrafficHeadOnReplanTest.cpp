@@ -197,8 +197,8 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 		const FRoadAgent* D = Traffic->FindAgent(Dep1);
 		if (D == nullptr) { bDepGone = true; }
 		if (A == nullptr) { break; }
-		if (D != nullptr && D->WaitingOn == Arrival && D->Follower.Speed < 1e-6) { bDepHeldAtBar = true; }
-		if (A->WaitingOn == Dep1 && A->BlockedResource.Kind == ETrafficResourceKind::Node && A->BlockedResource.Node == H)
+		if (D != nullptr && D->GetWaitingOn() == Arrival && D->Follower.Speed < 1e-6) { bDepHeldAtBar = true; }
+		if (A->GetWaitingOn() == Dep1 && A->GetBlockedResource().Kind == ETrafficResourceKind::Node && A->GetBlockedResource().Node == H)
 		{
 			bArrivalRefusedH = true;
 		}

@@ -74,13 +74,14 @@ bool FTrafficSplitDeadlockResolverStandaloneTest::RunTest(const FString& Paramet
 
 	TArray<FRoadAgent> Agents;
 	Agents.SetNum(2);
+	// Through Refuse, not by hand: WaitingOn and BlockedResource are private outside
+	// FClaimPass/RoadAgent.cpp (issue #174). Step and stop distance are unread by the yield
+	// path this test drives, so they are left at whatever Refuse is given here.
 	Agents[0].Id = 1;
-	Agents[0].WaitingOn = 2;
-	Agents[0].BlockedResource = FTrafficResource::OfNode(NodeX);
+	Agents[0].Refuse(INDEX_NONE, FTrafficResource::OfNode(NodeX), TNumericLimits<double>::Max(), 2);
 	Agents[0].StalledSeconds = 10.0;
 	Agents[1].Id = 2;
-	Agents[1].WaitingOn = 1;
-	Agents[1].BlockedResource = FTrafficResource::OfNode(NodeY);
+	Agents[1].Refuse(INDEX_NONE, FTrafficResource::OfNode(NodeY), TNumericLimits<double>::Max(), 1);
 	Agents[1].StalledSeconds = 10.0;
 
 	FTrafficRules Rules; // StallSeconds 3, RetrySeconds 5 - both agents are well past both.

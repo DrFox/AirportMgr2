@@ -72,9 +72,9 @@ bool FTrafficNodeYieldTest::RunTest(const FString& Parameters)
 		const FRoadAgent* P = Traffic->FindAgent(Plane);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		if (P == nullptr || V == nullptr) { return false; }
-		if (P->Phase == EAgentPhase::Taxiing) { PlaneMinStopWithin = FMath::Min(PlaneMinStopWithin, P->StopWithin); }
-		if (V->Phase == EAgentPhase::Taxiing) { VanMinStopWithin = FMath::Min(VanMinStopWithin, V->StopWithin); }
-		if (V->WaitingOn == Plane)
+		if (P->Phase == EAgentPhase::Taxiing) { PlaneMinStopWithin = FMath::Min(PlaneMinStopWithin, P->GetStopWithin()); }
+		if (V->Phase == EAgentPhase::Taxiing) { VanMinStopWithin = FMath::Min(VanMinStopWithin, V->GetStopWithin()); }
+		if (V->GetWaitingOn() == Plane)
 		{
 			bVanWaitedOnPlane = true;
 			++VanBlockedTicks;
@@ -173,8 +173,8 @@ bool FTrafficPriorityOverrideTest::RunTest(const FString& Parameters)
 		const FRoadAgent* P = Traffic->FindAgent(Plane);
 		const FRoadAgent* V = Traffic->FindAgent(Van);
 		if (P == nullptr || V == nullptr) { return false; }
-		bPlaneWaitedOnVan |= (P->WaitingOn == Van);
-		bVanWaitedOnPlane |= (V->WaitingOn == Plane);
+		bPlaneWaitedOnVan |= (P->GetWaitingOn() == Van);
+		bVanWaitedOnPlane |= (V->GetWaitingOn() == Plane);
 		return !(P->Phase == EAgentPhase::Parked && V->Phase == EAgentPhase::Parked);
 	});
 	TestTrue(TEXT("with the override the aircraft yields"), bPlaneWaitedOnVan);
@@ -224,7 +224,7 @@ bool FTrafficCarFollowingTest::RunTest(const FString& Parameters)
 			const double Gap = L->Follower.Travelled - Fo->Follower.Travelled;
 			MinGap = FMath::Min(MinGap, Gap);
 			if (Fo->Follower.Travelled > 0.0) { MinGapUnderWay = FMath::Min(MinGapUnderWay, Gap); }
-			if (Fo->WaitingOn == Lead) { bFollowerCaughtUp = true; }
+			if (Fo->GetWaitingOn() == Lead) { bFollowerCaughtUp = true; }
 		}
 		return !(L->Phase == EAgentPhase::Parked && Fo->Phase == EAgentPhase::Parked);
 	});
@@ -275,11 +275,11 @@ bool FTrafficHeadOnStopsTest::RunTest(const FString& Parameters)
 	UE_LOG(LogM2TrafficTest, Log,
 		TEXT("HeadOnStops measured: min separation %.0f uu, travelled %.0f / %.0f, speed %.4f / %.4f, waiting on %d / %d"),
 		MinSeparation, X->Follower.Travelled, Y->Follower.Travelled, X->Follower.Speed, Y->Follower.Speed,
-		X->WaitingOn, Y->WaitingOn);
+		X->GetWaitingOn(), Y->GetWaitingOn());
 
 	TestTrue(TEXT("both are stopped"), X->Follower.Speed < 1e-6 && Y->Follower.Speed < 1e-6);
 	TestTrue(TEXT("both are still taxiing, not parked"), X->Phase == EAgentPhase::Taxiing && Y->Phase == EAgentPhase::Taxiing);
-	TestTrue(TEXT("each waits on the other"), X->WaitingOn == P2 && Y->WaitingOn == P1);
+	TestTrue(TEXT("each waits on the other"), X->GetWaitingOn() == P2 && Y->GetWaitingOn() == P1);
 	TestTrue(FString::Printf(TEXT("never closer than one footprint (%.0f)"), MinSeparation), MinSeparation >= Traffic->Rules.AircraftFootprint - 1.0);
 
 	// AND THE DEADLOCK PASS SEES IT, ONCE. Two aircraft nose to nose on one edge is a
@@ -356,17 +356,17 @@ bool FTrafficBoxEntryTest::RunTest(const FString& Parameters)
 		const FRoadAgent* Van = Vans[Index];
 		if (!TestNotNull(TEXT("van still under way"), Van)) { return false; }
 		TestTrue(FString::Printf(TEXT("van %d never moved (speed %.3f)"), Van->Id, Van->Follower.Speed), Van->Follower.Speed < 1e-9);
-		TestEqual(FString::Printf(TEXT("van %d is stopped where it stands"), Van->Id), Van->StopWithin, 0.0);
-		TestEqual(FString::Printf(TEXT("van %d was refused on its first step"), Van->Id), Van->BlockedStep, 0);
+		TestEqual(FString::Printf(TEXT("van %d is stopped where it stands"), Van->Id), Van->GetStopWithin(), 0.0);
+		TestEqual(FString::Printf(TEXT("van %d was refused on its first step"), Van->Id), Van->GetBlockedStep(), 0);
 	}
 
 	UE_LOG(LogM2TrafficTest, Log, TEXT("BoxEntry measured: waits %d->%d, %d->%d, %d->%d"),
-		V1, Vans[0]->WaitingOn, V2, Vans[1]->WaitingOn, V3, Vans[2]->WaitingOn);
+		V1, Vans[0]->GetWaitingOn(), V2, Vans[1]->GetWaitingOn(), V3, Vans[2]->GetWaitingOn());
 
 	// The cycle, named: van 1 stands on A and wants B, which van 2 is standing on.
-	TestEqual(TEXT("van 1 waits on van 2"), Vans[0]->WaitingOn, V2);
-	TestEqual(TEXT("van 2 waits on van 3"), Vans[1]->WaitingOn, V3);
-	TestEqual(TEXT("van 3 waits on van 1"), Vans[2]->WaitingOn, V1);
+	TestEqual(TEXT("van 1 waits on van 2"), Vans[0]->GetWaitingOn(), V2);
+	TestEqual(TEXT("van 2 waits on van 3"), Vans[1]->GetWaitingOn(), V3);
+	TestEqual(TEXT("van 3 waits on van 1"), Vans[2]->GetWaitingOn(), V1);
 
 	// A second's worth of ticks changes nothing: this is a deadlock, and until Task 8 lands
 	// nothing is entitled to resolve it. Anyone who moved has driven into a junction.
@@ -442,10 +442,10 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	{
 		const FRoadAgent* Agent = Traffic->FindAgent(Van);
 		if (Agent == nullptr) { return false; }
-		if (Agent->Follower.Travelled < 20000.0 && Agent->StopWithin < 1.0e9)
+		if (Agent->Follower.Travelled < 20000.0 && Agent->GetStopWithin() < 1.0e9)
 		{
-			EarliestStopPointOffered = FMath::Min(EarliestStopPointOffered, Agent->Follower.Travelled + Agent->StopWithin);
-			bBlockedBeforeTheBoxes = bBlockedBeforeTheBoxes || Agent->WaitingOn == Phantom;
+			EarliestStopPointOffered = FMath::Min(EarliestStopPointOffered, Agent->Follower.Travelled + Agent->GetStopWithin());
+			bBlockedBeforeTheBoxes = bBlockedBeforeTheBoxes || Agent->GetWaitingOn() == Phantom;
 		}
 		if (Agent->Follower.Travelled > 100.0 && Agent->Follower.Travelled < 19999.0 && Agent->Follower.Speed < 1e-6)
 		{
@@ -458,7 +458,7 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	UE_LOG(LogM2TrafficTest, Log,
 		TEXT("BoxEntryFirstOnly measured: earliest stop point offered on the run-up %.0f uu ")
 		TEXT("(the chained rule offers 20100), finished at %.0f uu, speed %.4f, waiting on %d, blocked step %d"),
-		EarliestStopPointOffered, Agent->Follower.Travelled, Agent->Follower.Speed, Agent->WaitingOn, Agent->BlockedStep);
+		EarliestStopPointOffered, Agent->Follower.Travelled, Agent->Follower.Speed, Agent->GetWaitingOn(), Agent->GetBlockedStep());
 
 	if (!TestTrue(TEXT("the van WAS refused for the held node while still on the run-up (otherwise this measures nothing)"),
 		bBlockedBeforeTheBoxes)) { return false; }
@@ -475,7 +475,7 @@ bool FTrafficBoxEntryFirstOnlyTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("and stopped a gap short of the box whose end is held (%.0f uu, want 20100)"), Agent->Follower.Travelled),
 		Agent->Follower.Travelled <= 20101.0);
 	TestTrue(TEXT("stopped"), Agent->Follower.Speed < 1e-6);
-	TestEqual(TEXT("waiting on the phantom"), Agent->WaitingOn, Phantom);
+	TestEqual(TEXT("waiting on the phantom"), Agent->GetWaitingOn(), Phantom);
 	return true;
 }
 
@@ -533,13 +533,13 @@ bool FTrafficHoldingPositionTest::RunTest(const FString& Parameters)
 	UE_LOG(LogM2TrafficTest, Log,
 		TEXT("HoldingPosition measured: centre %.1f uu, nose %.1f uu (bar 17000), speed %.4f, waiting on %d, blocked step %d"),
 		P->Follower.Travelled, P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5,
-		P->Follower.Speed, P->WaitingOn, P->BlockedStep);
+		P->Follower.Speed, P->GetWaitingOn(), P->GetBlockedStep());
 
 	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
 	const double NoseAt = P->Follower.Travelled + Traffic->Rules.AircraftFootprint * 0.5;
 	TestTrue(FString::Printf(TEXT("nose within 50 uu of the hold bar and not past it (nose %.0f, bar 17000)"), NoseAt),
 		NoseAt <= 17000.0 + 1.0 && NoseAt >= 17000.0 - 50.0);
-	TestEqual(TEXT("waiting on the runway's holder"), P->WaitingOn, 99);
+	TestEqual(TEXT("waiting on the runway's holder"), P->GetWaitingOn(), 99);
 
 	Traffic->OccupancyForTest().ReleaseAll(99);
 
@@ -945,14 +945,14 @@ bool FTrafficRunwayEdgeClaimTest::RunTest(const FString& Parameters)
 	UE_LOG(LogM2TrafficTest, Log,
 		TEXT("RunwayEdgeClaim measured: stopped at route %.0f uu (want 18500 = the runway edge's ")
 		TEXT("start 20000 less the gap 1500), waiting on %d, blocked step %d"),
-		P->Follower.Travelled, P->WaitingOn, P->BlockedStep);
+		P->Follower.Travelled, P->GetWaitingOn(), P->GetBlockedStep());
 
 	TestTrue(TEXT("stopped"), P->Follower.Speed < 1e-6);
 	TestTrue(FString::Printf(TEXT("a gap short of where the runway edge BEGINS, not inside it (%.0f, want 18500)"),
 		P->Follower.Travelled),
 		FMath::Abs(P->Follower.Travelled - 18500.0) < 50.0);
-	TestEqual(TEXT("blocked on the step whose edge lies on the runway"), P->BlockedStep, 1);
-	TestEqual(TEXT("waiting on the holder of the OTHER segment of the same chain"), P->WaitingOn, 99);
+	TestEqual(TEXT("blocked on the step whose edge lies on the runway"), P->GetBlockedStep(), 1);
+	TestEqual(TEXT("waiting on the holder of the OTHER segment of the same chain"), P->GetWaitingOn(), 99);
 
 	Traffic->OccupancyForTest().ReleaseAll(99);
 	bool bPlaneHeldTheChain = false;
@@ -1178,10 +1178,10 @@ bool FTrafficDeadlockRingTest::RunTest(const FString& Parameters)
 
 	// All four stopped, each waiting on the next, before any resolution.
 	TickUntil(*Traffic, *Net, 1.0, [](int32) { return true; });
-	TestTrue(TEXT("V1 waits on V2"), Traffic->FindAgent(V1)->WaitingOn == V2);
-	TestTrue(TEXT("V2 waits on V3"), Traffic->FindAgent(V2)->WaitingOn == V3);
-	TestTrue(TEXT("V3 waits on V4"), Traffic->FindAgent(V3)->WaitingOn == V4);
-	TestTrue(TEXT("V4 waits on V1"), Traffic->FindAgent(V4)->WaitingOn == V1);
+	TestTrue(TEXT("V1 waits on V2"), Traffic->FindAgent(V1)->GetWaitingOn() == V2);
+	TestTrue(TEXT("V2 waits on V3"), Traffic->FindAgent(V2)->GetWaitingOn() == V3);
+	TestTrue(TEXT("V3 waits on V4"), Traffic->FindAgent(V3)->GetWaitingOn() == V4);
+	TestTrue(TEXT("V4 waits on V1"), Traffic->FindAgent(V4)->GetWaitingOn() == V1);
 	bool bNobodyMoved = true;
 	for (const int32 Id : { V1, V2, V3, V4 }) { bNobodyMoved &= Traffic->FindAgent(Id)->Follower.Travelled < 1.0; }
 	TestTrue(TEXT("nobody has moved"), bNobodyMoved);
@@ -1351,7 +1351,7 @@ bool FTrafficDeadlockMixedClassTest::RunTest(const FString& Parameters)
 		UE_LOG(LogM2TrafficTest, Log,
 			TEXT("  agent %d: phase %s, %.0f of %.0f uu, waiting on %d, blocked step %d, stalled %.1f s"),
 			Agent.Id, *UEnum::GetValueAsString(Agent.Phase), Agent.Follower.Travelled,
-			Agent.Follower.Plan.Length, Agent.WaitingOn, Agent.BlockedStep, Agent.StalledSeconds);
+			Agent.Follower.Plan.Length, Agent.GetWaitingOn(), Agent.GetBlockedStep(), Agent.StalledSeconds);
 	}
 
 	TestEqual(TEXT("the lowest-ranked member that can turn goes round: the van, not the aircraft"), FirstResolved, V2);
@@ -1837,9 +1837,9 @@ bool FTrafficDeadPlanReleasesTest::RunTest(const FString& Parameters)
 	// THE ARBITRATION FIELDS GO WITH THE CLAIMS. A stranded agent still naming a blocker
 	// would feed the deadlock resolver's wait-for graph an edge out of an agent that is not
 	// waiting for anything - the same reason the non-Taxiing branch clears them.
-	TestEqual(TEXT("waiting on nobody"), V->WaitingOn, 0);
-	TestEqual(TEXT("blocked on no step"), V->BlockedStep, INDEX_NONE);
-	TestTrue(TEXT("and under no cap it could drive against"), V->StopWithin >= TNumericLimits<double>::Max());
+	TestEqual(TEXT("waiting on nobody"), V->GetWaitingOn(), 0);
+	TestEqual(TEXT("blocked on no step"), V->GetBlockedStep(), INDEX_NONE);
+	TestTrue(TEXT("and under no cap it could drive against"), V->GetStopWithin() >= TNumericLimits<double>::Max());
 
 	// AND THE HALF A DEAD PLAN SAYS NOTHING ABOUT: AN AIRCRAFT'S BODY.
 	//
@@ -2018,8 +2018,8 @@ bool FTrafficDepartureMeetsArrivalOnTaxiwayTest::RunTest(const FString& Paramete
 		// taxiing, however fast the push was made. IsOnRoute is the question that was meant.
 		if (A->Phase != EAgentPhase::Taxiing || B->Phase != EAgentPhase::Taxiing) { return B->IsOnRoute() || A->IsOnRoute(); }
 		++TicksBothTaxiing;
-		TicksFirstWaited += A->WaitingOn != 0 ? 1 : 0;
-		TicksSecondWaited += B->WaitingOn != 0 ? 1 : 0;
+		TicksFirstWaited += A->GetWaitingOn() != 0 ? 1 : 0;
+		TicksSecondWaited += B->GetWaitingOn() != 0 ? 1 : 0;
 		MinSeparation = FMath::Min(MinSeparation, FVector2D::Distance(A->LastMotion.Position, B->LastMotion.Position));
 		return true;
 	});
@@ -2121,7 +2121,7 @@ bool FTrafficReservationCycleYieldsTest::RunTest(const FString& Parameters)
 		const FRoadAgent* A = Traffic->FindAgent(First);
 		const FRoadAgent* B = Traffic->FindAgent(Second);
 		if (A == nullptr || B == nullptr) { return false; }
-		if (!bCycleFormed && A->WaitingOn == Second && B->WaitingOn == First)
+		if (!bCycleFormed && A->GetWaitingOn() == Second && B->GetWaitingOn() == First)
 		{
 			bCycleFormed = true;
 			CycleTick = Tick;

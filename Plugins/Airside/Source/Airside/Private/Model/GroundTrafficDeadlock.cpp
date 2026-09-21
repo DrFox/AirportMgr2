@@ -60,13 +60,13 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 {
 	if (Agent.Phase != EAgentPhase::Taxiing
 		|| Agent.Follower.Speed >= KINDA_SMALL_NUMBER
-		|| Agent.BlockedStep < 0)
+		|| Agent.GetBlockedStep() < 0)
 	{
 		return false;
 	}
 
 	const FRoutePlan& Plan = Agent.Follower.Plan;
-	if (Agent.BlockedStep >= Plan.Steps.Num())
+	if (Agent.GetBlockedStep() >= Plan.Steps.Num())
 	{
 		// A BlockedStep that outran its plan - a replan between the refusal and here. Nothing
 		// to ban and no node to turn at, so this agent is not a candidate this window.
@@ -83,13 +83,13 @@ bool FDeadlockResolver::CanReplanAtBlockedStep(const FRoadAgent& Agent, const UR
 	// lines part late parks the agent that much further back again (StopWithinFor), and
 	// measured against the plain tolerance a waiter at a stand's join was never a
 	// candidate for the resolver that exists to turn it round.
-	const double ToNode = UGroundTraffic::StepStart(Plan, Agent.BlockedStep) - Agent.Follower.Travelled;
+	const double ToNode = UGroundTraffic::StepStart(Plan, Agent.GetBlockedStep()) - Agent.Follower.Travelled;
 	double Excess = 0.0;
-	if (Network != nullptr && Agent.BlockedStep > 0)
+	if (Network != nullptr && Agent.GetBlockedStep() > 0)
 	{
 		Excess = FClaimPass::ReachExcessAt(Rules, Reach, *Network,
-			UGroundTraffic::StepFromNode(Plan, Agent.BlockedStep),
-			Plan.Steps[Agent.BlockedStep - 1].Edge, Agent.Class);
+			UGroundTraffic::StepFromNode(Plan, Agent.GetBlockedStep()),
+			Plan.Steps[Agent.GetBlockedStep() - 1].Edge, Agent.Class);
 	}
 	return ToNode >= -KINDA_SMALL_NUMBER
 		&& ToNode <= Rules.GapFor(Agent.Class) + Rules.FootprintFor(Agent.Class) * 0.5 + Excess;
@@ -115,9 +115,9 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 	TMap<int32, int32> Waiting;
 	for (const FRoadAgent& Agent : Agents)
 	{
-		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.WaitingOn != 0)
+		if (Agent.StalledSeconds > Rules.StallSeconds && Agent.GetWaitingOn() != 0)
 		{
-			Waiting.Add(Agent.Id, Agent.WaitingOn);
+			Waiting.Add(Agent.Id, Agent.GetWaitingOn());
 		}
 	}
 	if (Waiting.Num() == 0)
@@ -235,7 +235,7 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 		{
 			const FRoadAgent* Member = FindAgentIn(Agents, Id);
 			const FTrafficClaim* Blocking = Member != nullptr
-				? Occupancy.FindClaim(Member->WaitingOn, Member->BlockedResource) : nullptr;
+				? Occupancy.FindClaim(Member->GetWaitingOn(), Member->GetBlockedResource()) : nullptr;
 			// A blocker nobody can find is treated as standing there: the replan path is the
 			// conservative one, and a stale refusal must not be able to talk the resolver
 			// into releasing anything.
@@ -314,8 +314,8 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 			// cycle was logged resolved twice before the arrival, which had a whole taxiway
 			// system to turn into, was asked. What it was refused is the destination; no ban
 			// makes a route to it that avoids it.
-			if (Member->BlockedResource.Kind == ETrafficResourceKind::Surface
-				&& Network.IsGuidelineNodeOnRunway(Member->GoalNode, Member->BlockedResource.Surface))
+			if (Member->GetBlockedResource().Kind == ETrafficResourceKind::Surface
+				&& Network.IsGuidelineNodeOnRunway(Member->GoalNode, Member->GetBlockedResource().Surface))
 			{
 				continue;
 			}
@@ -350,15 +350,15 @@ void FDeadlockResolver::Resolve(TArray<FRoadAgent>& Agents, const FTrafficContex
 			// BlockedStep - the ban would be read off the new plan otherwise, banning an edge
 			// of the route that was just chosen.
 			FRoadAgent* Turner = FindAgentIn(Agents, Id);
-			const int32 Step = Turner->BlockedStep;
+			const int32 Step = Turner->GetBlockedStep();
 			const FGuidelineEdgeId BannedEdge = Turner->Follower.Plan.Steps[Step].Edge;
 
 			// BAN WHAT REFUSED IT. A node with an aircraft standing on it is a wall from every
 			// direction, so the whole node goes; an edge or a runway surface bans the step's
 			// edge (and every replan already refuses runway-derived edges - see ReplanAt).
 			const FGuidelineNodeId BannedNode =
-				Turner->BlockedResource.Kind == ETrafficResourceKind::Node
-					? Turner->BlockedResource.Node : FGuidelineNodeId();
+				Turner->GetBlockedResource().Kind == ETrafficResourceKind::Node
+					? Turner->GetBlockedResource().Node : FGuidelineNodeId();
 
 			if (PlanReResolver.ReplanAt(*Turner, Step, BannedEdge, BannedNode, Context))
 			{

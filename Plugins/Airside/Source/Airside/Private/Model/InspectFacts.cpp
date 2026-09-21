@@ -53,9 +53,9 @@ namespace InspectFacts
 		{
 			return TEXT("Departure armed");
 		}
-		if (Agent.WaitingOn != 0)
+		if (Agent.GetWaitingOn() != 0)
 		{
-			return FString::Printf(TEXT("Holding for aircraft %d"), Agent.WaitingOn);
+			return FString::Printf(TEXT("Holding for aircraft %d"), Agent.GetWaitingOn());
 		}
 		if (Agent.IsCrossing())
 		{

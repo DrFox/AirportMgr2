@@ -302,6 +302,21 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() bool bAwaitingStand = false;
 
 	/**
+	 * Arms the wait: GOAL AND FLAG TOGETHER, so bAwaitingStand can never be true without the
+	 * node the re-offer pass (ReofferStands) searches from - the invariant this codebase's
+	 * review flagged as maintained only by convention (issue #174). Goal is usually the same
+	 * node it already was (the rebuild path re-arms in place); taking it as a parameter
+	 * rather than reading GoalNode inside the method means a caller cannot arm the wait
+	 * without saying, at the call site, what it is waiting FROM.
+	 */
+	void SetAwaitingStand(FGuidelineNodeId Goal) { GoalNode = Goal; bAwaitingStand = true; }
+
+	/** Ends the wait - a stand was found, or the agent moved on some other way. The new
+	 *  goal, if there is one, is set separately (SetGoal/SetGoalFrom): a caller that just
+	 *  found a stand already knows where it is sending the agent. */
+	void ClearAwaitingStand() { bAwaitingStand = false; }
+
+	/**
 	 * The engine is turning. NOT the same question as whether the aircraft is moving -
 	 * orthogonal to Phase, because an engine can run in ANY phase: idling while parked and
 	 * taxiing, at full power while departing, even while arriving (an arrival appears on
@@ -408,14 +423,33 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() ETraversalClass Class = ETraversalClass::Aircraft;
 
 	/** Where the current route is going, so a replan can aim at the same place. See
-	 *  SetGoalFrom, which is how this should be set from a fresh plan. */
+	 *  SetGoalFrom, which is how this should be set from a fresh plan, and SetGoal below
+	 *  for a caller that already has the node rather than a plan to take it from. */
 	UPROPERTY() FGuidelineNodeId GoalNode;
+
+	/**
+	 * Repoints the goal directly - a rebuild re-pointing a dead handle to where the same
+	 * position now resolves, a stand found for a waiter. NOT SetGoalFrom's replacement:
+	 * that derives the goal from a plan's own last step; this is for a caller that already
+	 * has the node itself. Issue #174 routed the rebuild's hand-written `Agent.GoalNode = X`
+	 * through this so the field has one production writer's worth of call sites to check
+	 * rather than five.
+	 */
+	void SetGoal(FGuidelineNodeId Goal) { GoalNode = Goal; }
 
 	// --- Written by UGroundTraffic's arbitration each tick; read by Advance ------------
 	//
 	// Arbitration writes, motion reads: there is no second evaluator of where the agent
 	// may go, only one input into the one follower.
-
+	//
+	// PRIVATE, WITH Refuse AND ClearArbitration AS THE ONLY WRITERS (issue #174). ApplyClaims
+	// used to set StopWithin, WaitingOn, BlockedStep and BlockedResource one field at a time,
+	// and GroundTrafficRebuild.cpp hand-typed the very three-field reset ClearArbitration
+	// exists for, verbatim, rather than calling it - the bug this friend-and-mutator pair
+	// exists to make impossible again. Getters below cover every outside reader (the deadlock
+	// resolver, InspectFacts, the stall clock in AdvanceOnce) so nothing that used to read the
+	// field directly loses the ability to; only the WRITE is now one call.
+private:
 	/** Distance beyond which the follower may not go this tick. See FRouteFollower::Advance. */
 	UPROPERTY() double StopWithin = TNumericLimits<double>::Max();
 
@@ -427,16 +461,6 @@ struct AIRSIDE_API FRoadAgent
 	UPROPERTY() int32 BlockedStep = -1;
 
 	/**
-	 * Resets StopWithin, WaitingOn and BlockedStep to "nothing is refusing this agent" - the
-	 * three-line reset that was hand-written, verbatim, at HoldRunwayOnly, ReleaseForDeadPlan
-	 * and ApplyClaims's not-held branch (issue #82). LastOverlaps is NOT included: it is either
-	 * reset alongside this one by the caller (HoldRunwayOnly, ReleaseForDeadPlan) or has
-	 * already been overwritten with this pass's freshly-computed overlaps before the caller
-	 * gets here (ApplyClaims) - folding it in here would stomp that computed value.
-	 */
-	void ClearArbitration();
-
-	/**
 	 * WHAT refused this agent at BlockedStep - the node, edge or runway segment - so the
 	 * deadlock resolver can ban the right thing. Banning the step's edge alone was the first
 	 * attempt and was wrong for a node: the search walked round the block and re-entered the
@@ -445,6 +469,38 @@ struct AIRSIDE_API FRoadAgent
 	 * is -1.
 	 */
 	UPROPERTY() FTrafficResource BlockedResource;
+
+public:
+	/** Read-only outside Refuse/ClearArbitration - see StopWithin's own comment. */
+	double GetStopWithin() const { return StopWithin; }
+
+	/** Read-only outside Refuse/ClearArbitration - see WaitingOn's own comment. */
+	int32 GetWaitingOn() const { return WaitingOn; }
+
+	/** Read-only outside Refuse/ClearArbitration - see BlockedStep's own comment. */
+	int32 GetBlockedStep() const { return BlockedStep; }
+
+	/** Read-only outside Refuse/ClearArbitration - see BlockedResource's own comment. */
+	const FTrafficResource& GetBlockedResource() const { return BlockedResource; }
+
+	/**
+	 * Refuses this agent at Step: what stopped it (Resource), how far it may still travel
+	 * (NewStopWithin) and who holds the thing (BlockerId) - the quadruple FClaimPass::
+	 * ApplyClaims used to write field by field (issue #174), which let a caller update three
+	 * of the four and leave the last one answering last tick's question. One call, so the
+	 * four either move together or not at all.
+	 */
+	void Refuse(int32 Step, const FTrafficResource& Resource, double NewStopWithin, int32 BlockerId);
+
+	/**
+	 * Resets StopWithin, WaitingOn and BlockedStep to "nothing is refusing this agent" - the
+	 * three-line reset that was hand-written, verbatim, at HoldRunwayOnly, ReleaseForDeadPlan
+	 * and ApplyClaims's not-held branch (issue #82). LastOverlaps is NOT included: it is either
+	 * reset alongside this one by the caller (HoldRunwayOnly, ReleaseForDeadPlan) or has
+	 * already been overwritten with this pass's freshly-computed overlaps before the caller
+	 * gets here (ApplyClaims) - folding it in here would stomp that computed value.
+	 */
+	void ClearArbitration();
 
 	/**
 	 * Everyone this agent was reported as OVERLAPPING on the last claim pass - two bodies
@@ -463,12 +519,27 @@ struct AIRSIDE_API FRoadAgent
 	/** Seconds stopped with WaitingOn set. Deadlock detection looks once this passes the rule. */
 	UPROPERTY() double StalledSeconds = 0.0;
 
+	/** Adds to the stall clock. AdvanceOnce's own ternary used to write this field by hand
+	 *  each tick (issue #174) - one arm of it is this call, the other is ResetStall. */
+	void AccrueStall(double DeltaSeconds) { StalledSeconds += DeltaSeconds; }
+
+	/** Zeroes the stall clock: the wait stopped, whether it resolved or the agent left it. */
+	void ResetStall() { StalledSeconds = 0.0; }
+
 	/** SimSeconds of the last replan attempt by the deadlock resolver; -1e9 = never. */
 	UPROPERTY() double LastResolveAttempt = -1.0e9;
 
 	/** Runway segments this agent occupies in a phase that is not a taxi: an arrival from
 	 *  StartArrival until Vacated, a departure from the handover until Gone. */
 	UPROPERTY() TArray<FRoadSegmentId> RunwayHeld;
+
+	/** Holds this chain from now - an arrival's touchdown (DispatchArrival) or a departure's
+	 *  line-up (the LinedUp handover). See RunwayHeld. */
+	void HoldRunway(const TArray<FRoadSegmentId>& Chain) { RunwayHeld = Chain; }
+
+	/** Releases whatever runway this agent held - the vacate (to the crossing rule) or the
+	 *  Airborne handover (to nobody; the strip is simply free). */
+	void ReleaseRunway() { RunwayHeld.Reset(); }
 
 	/** The chain a taxi ending on a runway will hold once it becomes a departure. */
 	UPROPERTY() TArray<FRoadSegmentId> DepartureRunway;
@@ -634,4 +705,24 @@ public:
 	 * EAgentEvent::Gone's own comment for why it is declared anyway.
 	 */
 	bool Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEvent& OutEvent);
+
+private:
+	/**
+	 * Checks whether the taxi has reached a reverse leg and, if so, drives the whole
+	 * handover: arms FReverseRun, or stops the agent and says why it refused. Split out of
+	 * Advance (issue #174 - Advance was 462 lines, and this block alone was over a hundred
+	 * of them) with NO change to what it does: same scan, same conditions, same log lines.
+	 *
+	 * RETURNS WHETHER IT HANDLED THE FRAME, not whether a reverse armed - true covers both
+	 * the armed case and the refused-and-stopped one, because either way Advance's caller
+	 * has nothing left to do this tick; false means the step under the agent is not a
+	 * reverse leg (or is not yet reached) and Advance should fall through to the follower.
+	 *
+	 * STILL SCANS Follower.Plan.Steps FROM THE TOP EVERY CALL, exactly as the inline block
+	 * did - the scan itself is NOT cached here. Issue #190's medium item is caching this as
+	 * a NextReverseLegStep computed once in Start/on a plan change; folding that in here
+	 * too would make one issue's diff answer for another's measurement. This is the
+	 * extraction only - see the PR for #174.
+	 */
+	bool TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion);
 };

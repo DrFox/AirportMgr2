@@ -2,6 +2,17 @@
 
 #include "AirsideLog.h"
 
+void FRoadAgent::Refuse(int32 Step, const FTrafficResource& Resource, double NewStopWithin, int32 BlockerId)
+{
+	// ONE CALL, FOUR FIELDS, together - see the declaration. ApplyClaims computes all four
+	// before logging anything about the refusal, so by the time this runs there is nothing
+	// left to compute; it is purely the write.
+	BlockedStep = Step;
+	BlockedResource = Resource;
+	StopWithin = NewStopWithin;
+	WaitingOn = BlockerId;
+}
+
 void FRoadAgent::ClearArbitration()
 {
 	// See the declaration for why LastOverlaps is not touched here: some callers reset it
@@ -503,113 +514,12 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 		// PIE: "it just flipped 180 degrees and went out forwards". That is the fourth time
 		// this codebase has shipped a list nothing consumed; see CLAUDE.md.
 		//
-		// ASKED OF THE PLAN, NOT THE NETWORK, because this struct is world-free - the mark
-		// rides on FRouteStep::bReverseLeg, copied there by the search.
-		//
-		// AT THE SPAN'S START, not one frame late: the follower has not moved yet this frame,
-		// so the handover happens before any forward motion is committed along it.
-		if (Phase == EAgentPhase::Taxiing)
+		// PULLED OUT TO TryArmReverseLeg (issue #174 - Advance was 462 lines, and the scan
+		// plus both its outcomes were the largest single piece). See that declaration for
+		// what "handled the frame" means and why the scan itself is not cached here.
+		if (Phase == EAgentPhase::Taxiing && TryArmReverseLeg(At, Heading, OutMotion))
 		{
-			int32 From = INDEX_NONE;
-			int32 To = INDEX_NONE;
-			for (int32 Step = 0; Step < Follower.Plan.Steps.Num(); ++Step)
-			{
-				if (!Follower.Plan.Steps[Step].bReverseLeg)
-				{
-					continue;
-				}
-				const double SpanStart =
-					Step == 0 ? 0.0 : Follower.Plan.Steps[Step - 1].EndDistance;
-				if (SpanStart + UE_DOUBLE_KINDA_SMALL_NUMBER < Follower.Travelled)
-				{
-					// Behind us: a span already driven, this frame or on an earlier one.
-					continue;
-				}
-				From = Step;
-				To = Step;
-
-				// THE WHOLE CONTIGUOUS RUN, because a reverse leg is several edges and arming
-				// them one at a time would stop and restart the manoeuvre at every vertex.
-				while (Follower.Plan.Steps.IsValidIndex(To + 1)
-					&& Follower.Plan.Steps[To + 1].bReverseLeg)
-				{
-					++To;
-				}
-				break;
-			}
-
-			if (From != INDEX_NONE)
-			{
-				const double SpanStart =
-					From == 0 ? 0.0 : Follower.Plan.Steps[From - 1].EndDistance;
-				if (Follower.Travelled + UE_DOUBLE_KINDA_SMALL_NUMBER >= SpanStart)
-				{
-					const FRoutePlan Span = RouteSearch::Section(Follower.Plan, From, To);
-					if (Reverse.Start(Span, Airframe, ReverseSpeed))
-					{
-						// WHERE THE TAXI PICKS UP, read before the phase changes because
-						// Follower.Plan is what it is read from.
-						ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
-						Phase = EAgentPhase::Reversing;
-
-						// ZEROED for the reason the Parked branch zeroes it: DescribeMotion
-						// reads Follower.Speed for GroundSpeed in every phase that has no
-						// speed of its own, and a reversing vehicle reporting its taxi speed
-						// is the small version of a pose that disagrees with its phase.
-						Follower.Speed = 0.0;
-
-						// ONE WHEELBASE IN, because that is where the FIXED axle already is.
-						//
-						// THE TWO PHASES PUT DIFFERENT PARTS OF THE VEHICLE ON THEIR LINE, and
-						// nothing said so until a truck jumped in PIE. FRouteFollower walks the
-						// STEERED axle along its polyline and then reports the body ORIGIN,
-						// trailed back by SteerAxleX (see the last line of its Advance).
-						// FReverseRun walks the FIXED axle and reports that point as it stands.
-						// For a vehicle whose origin sits on its fixed axle - which the fuel
-						// truck's does, SteerAxleX being its wheelbase - those two reports are
-						// THE SAME POINT, so nothing has to be converted between them. What has
-						// to be right is WHERE ALONG THE LINE the manoeuvre starts.
-						//
-						// The vehicle is parked with its steered axle on the service point, so
-						// its fixed axle is one wheelbase back along the line it came in on -
-						// which is the line this span begins on, run the other way. Arming at
-						// zero claims the fixed axle sits ON the service point and steps the
-						// whole body forward by a wheelbase to suit. Measured at 494.3 uu on a
-						// 494 uu wheelbase by AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip,
-						// which is the test that reproduces the REDIRECT the player watched -
-						// a truck parked at a service point being handed its route home.
-						Reverse.Travelled = FMath::Min(Airframe.Wheelbase(), Span.Length);
-
-						// POSED ON THE ARMING FRAME, not on the next one, and this is the same
-						// rule UGroundTraffic follows at dispatch: a zero-second Advance asks
-						// where the manoeuvre starts without moving it. Reporting the taxi's
-						// heading for one frame and the reverse's on the next is a 180 degree
-						// snap in the view - a smaller copy of the very bug being fixed, and it
-						// showed up as exactly that the first time this ran.
-						FVector2D BackAt = At;
-						double BackHeading = Heading;
-						Reverse.Advance(0.0, Airframe, StopWithin, BackAt, BackHeading);
-						LastMotion = DescribeMotion(BackAt, BackHeading);
-						OutMotion = LastMotion;
-						UE_LOG(LogAirsideTraffic, Log,
-							TEXT("Backing out: %.0f uu at %.0f uu/s."),
-							Span.Length, ReverseSpeed);
-						return true;
-					}
-
-					// REFUSED, AND SAID SO. FReverseRun::Start declines a curve this airframe
-					// cannot hold backwards and logs the radius; taxiing forwards along it is
-					// the crab this whole piece exists to delete, so the vehicle stops instead
-					// and the stall shows up as itself.
-					UE_LOG(LogAirsideTraffic, Warning,
-						TEXT("Reverse leg refused - %s cannot back along it. Stopping rather "
-						     "than driving it forwards."),
-						Airframe.HasAxles() ? TEXT("this vehicle") : TEXT("an unmeasured vehicle"));
-					Follower.Speed = 0.0;
-					OutMotion = LastMotion;
-					return true;
-				}
-			}
+			return true;
 		}
 
 		FVector2D FollowAt = At;
@@ -823,4 +733,116 @@ bool FRoadAgent::Advance(double DeltaSeconds, FAgentMotion& OutMotion, EAgentEve
 	default:
 		return false;
 	}
+}
+
+bool FRoadAgent::TryArmReverseLeg(const FVector2D& At, double Heading, FAgentMotion& OutMotion)
+{
+	// ASKED OF THE PLAN, NOT THE NETWORK, because this struct is world-free - the mark
+	// rides on FRouteStep::bReverseLeg, copied there by the search.
+	//
+	// AT THE SPAN'S START, not one frame late: the follower has not moved yet this frame,
+	// so the handover happens before any forward motion is committed along it.
+	int32 From = INDEX_NONE;
+	int32 To = INDEX_NONE;
+	for (int32 Step = 0; Step < Follower.Plan.Steps.Num(); ++Step)
+	{
+		if (!Follower.Plan.Steps[Step].bReverseLeg)
+		{
+			continue;
+		}
+		const double SpanStart =
+			Step == 0 ? 0.0 : Follower.Plan.Steps[Step - 1].EndDistance;
+		if (SpanStart + UE_DOUBLE_KINDA_SMALL_NUMBER < Follower.Travelled)
+		{
+			// Behind us: a span already driven, this frame or on an earlier one.
+			continue;
+		}
+		From = Step;
+		To = Step;
+
+		// THE WHOLE CONTIGUOUS RUN, because a reverse leg is several edges and arming
+		// them one at a time would stop and restart the manoeuvre at every vertex.
+		while (Follower.Plan.Steps.IsValidIndex(To + 1)
+			&& Follower.Plan.Steps[To + 1].bReverseLeg)
+		{
+			++To;
+		}
+		break;
+	}
+
+	if (From == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const double SpanStart = From == 0 ? 0.0 : Follower.Plan.Steps[From - 1].EndDistance;
+	if (Follower.Travelled + UE_DOUBLE_KINDA_SMALL_NUMBER < SpanStart)
+	{
+		return false;
+	}
+
+	const FRoutePlan Span = RouteSearch::Section(Follower.Plan, From, To);
+	if (Reverse.Start(Span, Airframe, ReverseSpeed))
+	{
+		// WHERE THE TAXI PICKS UP, read before the phase changes because
+		// Follower.Plan is what it is read from.
+		ResumeStep = Follower.Plan.Steps.IsValidIndex(To + 1) ? To + 1 : INDEX_NONE;
+		Phase = EAgentPhase::Reversing;
+
+		// ZEROED for the reason the Parked branch zeroes it: DescribeMotion
+		// reads Follower.Speed for GroundSpeed in every phase that has no
+		// speed of its own, and a reversing vehicle reporting its taxi speed
+		// is the small version of a pose that disagrees with its phase.
+		Follower.Speed = 0.0;
+
+		// ONE WHEELBASE IN, because that is where the FIXED axle already is.
+		//
+		// THE TWO PHASES PUT DIFFERENT PARTS OF THE VEHICLE ON THEIR LINE, and
+		// nothing said so until a truck jumped in PIE. FRouteFollower walks the
+		// STEERED axle along its polyline and then reports the body ORIGIN,
+		// trailed back by SteerAxleX (see the last line of its Advance).
+		// FReverseRun walks the FIXED axle and reports that point as it stands.
+		// For a vehicle whose origin sits on its fixed axle - which the fuel
+		// truck's does, SteerAxleX being its wheelbase - those two reports are
+		// THE SAME POINT, so nothing has to be converted between them. What has
+		// to be right is WHERE ALONG THE LINE the manoeuvre starts.
+		//
+		// The vehicle is parked with its steered axle on the service point, so
+		// its fixed axle is one wheelbase back along the line it came in on -
+		// which is the line this span begins on, run the other way. Arming at
+		// zero claims the fixed axle sits ON the service point and steps the
+		// whole body forward by a wheelbase to suit. Measured at 494.3 uu on a
+		// 494 uu wheelbase by AirportOps.Ops.TruckNeverTeleportsOnItsRoundTrip,
+		// which is the test that reproduces the REDIRECT the player watched -
+		// a truck parked at a service point being handed its route home.
+		Reverse.Travelled = FMath::Min(Airframe.Wheelbase(), Span.Length);
+
+		// POSED ON THE ARMING FRAME, not on the next one, and this is the same
+		// rule UGroundTraffic follows at dispatch: a zero-second Advance asks
+		// where the manoeuvre starts without moving it. Reporting the taxi's
+		// heading for one frame and the reverse's on the next is a 180 degree
+		// snap in the view - a smaller copy of the very bug being fixed, and it
+		// showed up as exactly that the first time this ran.
+		FVector2D BackAt = At;
+		double BackHeading = Heading;
+		Reverse.Advance(0.0, Airframe, StopWithin, BackAt, BackHeading);
+		LastMotion = DescribeMotion(BackAt, BackHeading);
+		OutMotion = LastMotion;
+		UE_LOG(LogAirsideTraffic, Log,
+			TEXT("Backing out: %.0f uu at %.0f uu/s."),
+			Span.Length, ReverseSpeed);
+		return true;
+	}
+
+	// REFUSED, AND SAID SO. FReverseRun::Start declines a curve this airframe
+	// cannot hold backwards and logs the radius; taxiing forwards along it is
+	// the crab this whole piece exists to delete, so the vehicle stops instead
+	// and the stall shows up as itself.
+	UE_LOG(LogAirsideTraffic, Warning,
+		TEXT("Reverse leg refused - %s cannot back along it. Stopping rather "
+		     "than driving it forwards."),
+		Airframe.HasAxles() ? TEXT("this vehicle") : TEXT("an unmeasured vehicle"));
+	Follower.Speed = 0.0;
+	OutMotion = LastMotion;
+	return true;
 }

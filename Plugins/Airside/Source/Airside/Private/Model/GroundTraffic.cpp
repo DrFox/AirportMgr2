@@ -65,7 +65,7 @@ int32 UGroundTraffic::DispatchArrival(const URoadNetwork& Network, const FVector
 	// THE RUNWAY IS HELD FROM NOW. Claimed as occupied every tick by Advance while the phase
 	// is Arriving; released at the Vacated handover. Held on the agent rather than looked
 	// up again at release, because by then the graph may have been rebuilt.
-	Agent.RunwayHeld = Plan.RunwayChain;
+	Agent.HoldRunway(Plan.RunwayChain);
 
 	// NO ZERO-SECOND POSE HERE, unlike DispatchAgent: FRoadAgent::StartArrival already ran
 	// one and wrote LastMotion from the approach's own starting pose - see its comment - so
@@ -764,7 +764,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 				// be found on a strip it is already leaving.
 				Agent.BeginCrossing(Agent.RunwayHeld[0], ECrossingPhase::OnStrip);
 			}
-			Agent.RunwayHeld.Reset();
+			Agent.ReleaseRunway();
 			break;
 
 		case EAgentEvent::LinedUp:
@@ -776,7 +776,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 			// frame. DepartureRunway comes off the AGENT rather than a fresh lookup, because
 			// by now the graph may have been rebuilt under it; it was recorded at dispatch
 			// for that reason.
-			Agent.RunwayHeld = Agent.DepartureRunway;
+			Agent.HoldRunway(Agent.DepartureRunway);
 
 			// CLAIMED HERE AND NOT ON THE NEXT TICK'S non-Taxiing pass. A route that ends on
 			// a junction turn path carries no DerivedFrom, so nothing claimed the strip while
@@ -842,7 +842,7 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 				// Everything the departure held goes - RunwayHeld, the crossing it passed a
 				// bar to reach - and the fields are reset so HoldRunwayOnly claims nothing back.
 				Occupancy.ReleaseAll(Id);
-				Agent.RunwayHeld.Reset();
+				Agent.ReleaseRunway();
 				Agent.EndCrossing();
 				UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d released the runway"), Id);
 				// #169: the mirror of LinedUp's bump, above, and for the same reason - Departing
@@ -864,10 +864,15 @@ void UGroundTraffic::AdvanceOnce(double DeltaSeconds, const URoadNetwork* Networ
 		// together are what FDeadlockResolver::Resolve means by a waiter, and the clock
 		// resets the moment any of them stops holding, so a junction wait that clears on its
 		// own leaves nothing behind.
-		Agent.StalledSeconds = (Agent.Phase == EAgentPhase::Taxiing && Agent.WaitingOn != 0
+		if (Agent.Phase == EAgentPhase::Taxiing && Agent.GetWaitingOn() != 0
 			&& Agent.Follower.Speed < KINDA_SMALL_NUMBER)
-			? Agent.StalledSeconds + DeltaSeconds
-			: 0.0;
+		{
+			Agent.AccrueStall(DeltaSeconds);
+		}
+		else
+		{
+			Agent.ResetStall();
+		}
 
 		if (Agent.Phase != Before)
 		{
@@ -931,7 +936,7 @@ void UGroundTraffic::ReofferStands(const URoadNetwork& Network)
 		}
 		if (RedirectAgent(Id, &Network, Route))
 		{
-			Agents[FindIndex(Id)].bAwaitingStand = false;
+			Agents[FindIndex(Id)].ClearAwaitingStand();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: a stand freed; sent to the stand at node %d"), Id, Stand.Index);
 		}
 	}
