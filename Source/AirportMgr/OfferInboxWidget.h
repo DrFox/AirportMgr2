@@ -58,15 +58,17 @@ public:
  * the look rather than breaking the feature.
  *
  * TWO LIST PATHS, ONE VIEWMODEL. If a Widget Blueprint supplies a UListView, the rows are
- * its entry widgets and MVVM hands each one its UOfferViewModel. Without one, the code
- * builds a vertical box of rows itself. A UListView cannot be built usefully in code here
- * because its entry widget class is a Blueprint asset, and virtualisation only earns its
- * keep at hundreds of rows - the inbox has a handful.
+ * its entry widgets, handed their UOfferViewModel through UMG's own IUserObjectListEntry -
+ * not ModelViewViewModel (issue #191 dropped that dependency: no such Blueprint exists in
+ * Content/UI, and the viewmodel is a plain UObject now, see OfferViewModels.h). Without a
+ * UListView, the code builds a vertical box of rows itself. A UListView cannot be built
+ * usefully in code here because its entry widget class is a Blueprint asset, and
+ * virtualisation only earns its keep at hundreds of rows - the inbox has a handful.
  *
  * TO RESTYLE IN THE DESIGNER: make a Widget Blueprint with this class as parent, name the
  * widgets to match the BindWidgetOptional members below, and set the list's entry widget
  * class. A RENAMED VIEWMODEL FIELD NEEDS THE BLUEPRINT RECOMPILED AND RESAVED, or the old
- * binding runs against the new class - the stale-Blueprint trap, in a new place.
+ * getter calls run against the new class - the stale-Blueprint trap, in a new place.
  */
 UCLASS()
 class AIRPORTMGR_API UOfferInboxWidget : public UAirportMgrPanelWidget

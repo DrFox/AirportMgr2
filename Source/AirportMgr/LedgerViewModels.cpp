@@ -43,21 +43,23 @@ void ULedgerRowViewModel::Refresh(const FLedgerEntry& Entry, const USimClock& Cl
 	const int32 Hour = static_cast<int32>(TimeOfDay / 3600.0);
 	const int32 Minute = static_cast<int32>(FMath::Fmod(TimeOfDay, 3600.0) / 60.0);
 
-	UE_MVVM_SET_PROPERTY_VALUE(When, FText::FromString(
-		FString::Printf(TEXT("Day %d  %02d:%02d"), Day, Hour, Minute)));
-	UE_MVVM_SET_PROPERTY_VALUE(Category, WordFor(Entry.Category));
-	UE_MVVM_SET_PROPERTY_VALUE(What, Entry.What);
-	UE_MVVM_SET_PROPERTY_VALUE(Amount, Pricing.Format(Entry.Amount));
-	UE_MVVM_SET_PROPERTY_VALUE(bOutgoing, Entry.Amount < 0.0);
+	// PLAIN ASSIGNMENT (issue #191 dropped UE_MVVM_SET_PROPERTY_VALUE here and on the fields
+	// below): nothing ever bound a field on this viewmodel - see OfferViewModels.h.
+	When = FText::FromString(FString::Printf(TEXT("Day %d  %02d:%02d"), Day, Hour, Minute));
+	Category = WordFor(Entry.Category);
+	What = Entry.What;
+	Amount = Pricing.Format(Entry.Amount);
+	bOutgoing = Entry.Amount < 0.0;
 }
 
 bool ULedgerPanelViewModel::Refresh(const ULedger& Ledger, const USimClock& Clock,
 	const UPricing& Pricing)
 {
 	// THE BALANCE IS REFRESHED EVEN WHEN THE ROWS ARE NOT. It is one string, and the gate
-	// exists to avoid rebuilding forty row objects - not to avoid setting a label.
-	UE_MVVM_SET_PROPERTY_VALUE(Balance, Pricing.Format(Ledger.Balance()));
-	UE_MVVM_SET_PROPERTY_VALUE(bOverdrawn, Ledger.Balance() < 0.0);
+	// exists to avoid rebuilding forty row objects - not to avoid setting a label. Plain
+	// assignment (issue #191): see ULedgerRowViewModel::Refresh's comment above.
+	Balance = Pricing.Format(Ledger.Balance());
+	bOverdrawn = Ledger.Balance() < 0.0;
 
 	if (Ledger.Revision() == BuiltAtRevision)
 	{

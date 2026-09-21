@@ -1,6 +1,5 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
-#include "FieldNotification/FieldId.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -36,16 +35,20 @@ namespace
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FOfferInboxCountBroadcastsTest,
-	"AirportMgr.UI.OfferInbox.PendingCountBroadcasts",
+	FOfferInboxCountUpdatesEachRefreshTest,
+	"AirportMgr.UI.OfferInbox.PendingCountUpdatesEachRefresh",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
 
-bool FOfferInboxCountBroadcastsTest::RunTest(const FString& Parameters)
+bool FOfferInboxCountUpdatesEachRefreshTest::RunTest(const FString& Parameters)
 {
-	// THE TEST EXISTS FOR ONE BUG: assigning the member instead of going through
-	// UE_MVVM_SET_PROPERTY_VALUE compiles, draws right on the first frame, and then never
-	// updates again. Nothing else in the build catches that - not the compiler, not a
-	// binding, not a PIE session where the badge merely looks stale.
+	// RENAMED AND REWRITTEN (issue #191): this used to prove PendingCount was set through
+	// UE_MVVM_SET_PROPERTY_VALUE rather than a plain assignment, by counting how many times
+	// a bound delegate fired - the bug being that a plain assignment "compiles, draws right
+	// on the first frame, and then never updates again" under a real MVVM binding. #191
+	// dropped UMVVMViewModelBase because nothing ever bound that field (no Content/UI
+	// Blueprint exists), so plain assignment is now the ONLY mechanism, and the thing worth
+	// pinning is simply that GetPendingCount() tracks the board across repeated refreshes -
+	// see OfferInboxWidget::PaintRows, which is what actually reads this every tick.
 	URoadNetwork* Net = InboxNetwork();
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
 	USimClock* Clock = NewObject<USimClock>();
@@ -54,28 +57,53 @@ bool FOfferInboxCountBroadcastsTest::RunTest(const FString& Parameters)
 
 	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
 
-	int32 Broadcasts = 0;
-	const UE::FieldNotification::FFieldId Field =
-		UOfferInboxViewModel::FFieldNotificationClassDescriptor::PendingCount;
-	Inbox->AddFieldValueChangedDelegate(Field,
-		INotifyFieldValueChanged::FFieldValueChangedDelegate::CreateLambda(
-			[&Broadcasts](UObject*, UE::FieldNotification::FFieldId) { ++Broadcasts; }));
-
 	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
-
 	TestEqual(TEXT("the count followed the board"), Inbox->GetPendingCount(), 1);
-	TestEqual(TEXT("and it BROADCAST, which is what a binding listens to"), Broadcasts, 1);
 
-	// A refresh that changes nothing must not broadcast: the macro compares before it sets,
-	// and a row rebuilt every tick would drop the list view's selection.
+	// A refresh that changes nothing must still read back correctly - the row-set gate (see
+	// UOfferInboxViewModel::Refresh's comment) must not stop the count from being current.
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
-	TestEqual(TEXT("an unchanged count does not broadcast again"), Broadcasts, 1);
+	TestEqual(TEXT("an unchanged board leaves the count unchanged"), Inbox->GetPendingCount(), 1);
 
 	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 900.0));
 	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
 	TestEqual(TEXT("a second offer moves the count"), Inbox->GetPendingCount(), 2);
-	TestEqual(TEXT("and broadcasts once more"), Broadcasts, 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferInboxOneRowListTest,
+	"AirportMgr.UI.OfferInbox.OneRowList",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferInboxOneRowListTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #191: Rows used to have a hand-mirrored Offers array kept in step at every place
+	// either changed - CLAUDE.md's "lists that must agree are one list". GetOffers() now
+	// builds its raw-pointer view from Rows on demand, so RowsForTest() (the source of
+	// truth) and GetOffers() (what the list view and Accept/DeclineRow index into) can never
+	// disagree - there is exactly one list, not two a caller could forget to keep in sync.
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+
+	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
+	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 900.0));
+
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+
+	TestEqual(TEXT("the list view's item count agrees with the one row list"),
+		Inbox->GetOffers().Num(), Inbox->RowsForTest().Num());
+
+	Inbox->Accept(Inbox->GetOffers()[0]);
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+
+	TestEqual(TEXT("and still agrees once a row has left - nothing to fall out of step"),
+		Inbox->GetOffers().Num(), Inbox->RowsForTest().Num());
 	return true;
 }
 
