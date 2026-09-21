@@ -5,10 +5,14 @@
 #include "AirsideEditorLog.h"
 #include "BaseBehaviors/ClickDragBehavior.h"
 #include "BaseBehaviors/MouseHoverBehavior.h"
+#include "CanvasTypes.h"
+#include "Engine/Engine.h"
+#include "Engine/Font.h"
 #include "EngineUtils.h"
 #include "InteractiveToolManager.h"
 #include "Model/RoadNetwork.h"
 #include "Present/RoadNetworkActor.h"
+#include "RoadBuildEdModeCommands.h"
 #include "ScopedTransaction.h"
 #include "SceneManagement.h"
 #include "Solve/RoadGeom.h"
@@ -517,6 +521,24 @@ void URoadBuildEditorTool::CancelGesture()
 	Gesture.Cancel();
 }
 
+void URoadBuildEditorTool::CommitGesture()
+{
+	IBuildTool* Tool = Sess().GetActiveTool();
+	if (Tool == nullptr || Target == nullptr)
+	{
+		return;
+	}
+
+	// UNDOABLE LIKE ANY OTHER EDIT (issue #185): OnCommit is what places the fuel depot -
+	// FPlotPlaceTool::OnCommit calls IRoadEditTarget::PlaceEntityInPlot - so Modify() has to
+	// run before that happens, exactly the same transaction shape CancelGesture and a plain
+	// click already use above. Ctrl+Z removing a placed depot is the whole point of this
+	// verb existing in an editor world rather than PIE's Memento history (see the class
+	// comment's "UNDO IS THE EDITOR'S").
+	FScopedRoadBuildTransaction Transaction(LOCTEXT("RoadBuildCommit", "Road Build"), Target);
+	Tool->OnCommit(MakeHoverContext());
+}
+
 void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 {
 	IBuildTool* Tool = Sess().GetActiveTool();
@@ -580,6 +602,82 @@ void URoadBuildEditorTool::Render(IToolsContextRenderAPI* RenderAPI)
 		Tool->BuildPreview(MakeHoverContext(), Sink);
 	}
 
+}
+
+void URoadBuildEditorTool::DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* RenderAPI)
+{
+	// SURFACES BuildReadout IN THE EDITOR (issue #185). Nothing here ever called it before -
+	// FViewportPreviewSink::Label is "deliberately nothing" because a PrimitiveDrawInterface
+	// draws geometry, not text, which is exactly why this uses DrawHUD's own FCanvas instead
+	// of Render's PDI: the same split ARoadBuildHUD keeps between its world-space ghost
+	// (DrawNodes/DrawStands) and its canvas panel (DrawPlotPanel). Without this, a fuel
+	// depot's bay counts, its warnings and whether it could even commit were invisible in the
+	// editor while the runtime HUD had always shown them.
+	IBuildTool* Tool = Sess().GetActiveTool();
+	const FSceneView* SceneView = RenderAPI != nullptr ? RenderAPI->GetSceneView() : nullptr;
+	if (Tool == nullptr || Target == nullptr || Canvas == nullptr || SceneView == nullptr || !bHoverValid)
+	{
+		return;
+	}
+
+	// A FRESH COLLECTOR EACH FRAME, never a member: FToolReadoutCollector::Reset's own
+	// comment is exactly why - a fact left over from last frame would describe a gesture the
+	// player has already changed.
+	FToolReadoutCollector Collector;
+	Tool->BuildReadout(MakeHoverContext(), Collector);
+
+	TArray<FString> Lines;
+	for (const TPair<FString, FString>& Fact : Collector.Readout.Facts)
+	{
+		Lines.Add(FString::Printf(TEXT("%s: %s"), *Fact.Key, *Fact.Value));
+	}
+	for (const FString& Warning : Collector.Readout.Warnings)
+	{
+		Lines.Add(Warning);
+	}
+
+	// THE HINT, not a second opinion about whether Enter would do anything - bCommittable IS
+	// the answer, same as it is for PIE's Build button (BuildActions.cpp's edit.build reads
+	// this exact field). THE KEY COMES OFF THE COMMAND ITSELF, not typed here, for the reason
+	// ARoadBuildHUD::CommitPromptText's own comment gives about two sources of truth.
+	if (Collector.Readout.bCommittable)
+	{
+		const TSharedPtr<FUICommandInfo>& BuildCommand = FRoadBuildEdModeCommands::Get().Build;
+		Lines.Add(BuildCommand.IsValid()
+			? FString::Printf(TEXT("Build  [%s]"), *BuildCommand->GetInputText().ToString())
+			: TEXT("Build"));
+	}
+
+	if (Lines.Num() == 0)
+	{
+		return;
+	}
+
+	UFont* Font = GEngine != nullptr ? GEngine->GetMediumFont() : nullptr;
+	if (Font == nullptr)
+	{
+		return;
+	}
+
+	// THE SAME CURSOR THE GHOST IS DRAWN AT (LastPlaneHit), projected with the view's OWN
+	// camera rather than re-deriving one - RenderAPI->GetSceneView() is exactly what the
+	// engine's own tools use for this (UMeshInspectorTool::DrawHUD, MeshModelingToolsExp).
+	FVector2D PixelPos;
+	const FVector WorldPos(Sess().LastPlaneHit(), Target->SurfaceZ);
+	if (!SceneView->WorldToPixel(WorldPos, PixelPos))
+	{
+		return;
+	}
+
+	// DPI-SCALED, like DrawShadowedString's every other caller in the engine: PixelPos is a
+	// physical pixel from the scene view, and Canvas expects DPI-independent coordinates.
+	const float DPIScale = Canvas->GetDPIScale();
+	float Y = static_cast<float>(PixelPos.Y) / DPIScale;
+	for (const FString& Line : Lines)
+	{
+		Canvas->DrawShadowedString(static_cast<float>(PixelPos.X) / DPIScale, Y, *Line, Font, FLinearColor::White);
+		Y += Font->GetMaxCharHeight();
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

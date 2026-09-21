@@ -251,4 +251,84 @@ bool FRoadBuildEdModeCommandBindingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ISSUE #185: the fuel depot's last stage, OnCommit, had no editor command at all. The
+ * editor mode's command set was the nine tool commands (checked above by
+ * ToolCommandsMatchRegistry) plus Cancel and nothing else - "list declared, consumer
+ * missing" in its fourth form (see CLAUDE.md's "Check where a list is CONSUMED"): PIE has
+ * always had edit.build on Enter reaching IBuildTool::OnCommit (BuildActions.cpp), and the
+ * editor mode had no equivalent key at all, so a depot could be drawn there and never placed.
+ *
+ * NAMES Build AND Cancel BY HAND rather than reading some third shared list, because there
+ * is no table both drivers can see to build one from: AirsideEditor.Build.cs depends on
+ * Airside only (the runtime plugin must never depend on the game), so this test cannot reach
+ * across to Source/AirportMgr/BuildActions.cpp and enumerate PIE's own Edit section the way
+ * ToolCommandsMatchRegistry enumerates ToolRegistry(), which lives in Airside where both
+ * sides can see it. Cancel and Build are exactly the two non-tool verbs
+ * FRoadBuildEdModeCommands hand-declares today; a third would be added to this same list by
+ * hand, same as it would be added to that class.
+ *
+ * THE SAME SEAM ToolCommandBindingSurvivesRegisterTool uses just above - CreateToolkit() for
+ * a real FUICommandList without a live IToolkitHost, then ToolkitCommandsForTest() to read
+ * back what BindCommands() actually installed - because the bug this guards against is
+ * exactly that shape: a command that EXISTS but was never MapAction'd onto the list a key
+ * press actually reaches.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEdModeEditVerbTest,
+	"Airside.Editor.EveryRuntimeEditVerbHasACommand",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEdModeEditVerbTest::RunTest(const FString& Parameters)
+{
+	if (!TestTrue(TEXT("the command set is registered"), FRoadBuildEdModeCommands::IsRegistered()))
+	{
+		return false;
+	}
+
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	// CreateToolkit() then BindCommands() directly, not Enter(): the same substitution
+	// ToolCommandBindingSurvivesRegisterTool makes, for the same reason - Enter() needs a
+	// live editor viewport this test does not have, and FBaseToolkit's own constructor
+	// already builds a real FUICommandList without one.
+	Mode->CreateToolkit();
+	Mode->BindCommands();
+
+	const TSharedPtr<FUICommandList> CommandList = Mode->ToolkitCommandsForTest();
+	if (!TestTrue(TEXT("CreateToolkit made a real command list"), CommandList.IsValid()))
+	{
+		return false;
+	}
+
+	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
+	const TArray<TPair<FString, TSharedPtr<FUICommandInfo>>> EditVerbs =
+	{
+		{ TEXT("Cancel"), Commands.CancelGesture },
+		{ TEXT("Build"),  Commands.Build },
+	};
+
+	for (const TPair<FString, TSharedPtr<FUICommandInfo>>& Verb : EditVerbs)
+	{
+		if (!TestTrue(*FString::Printf(TEXT("%s has a command"), *Verb.Key), Verb.Value.IsValid()))
+		{
+			continue;
+		}
+
+		// THE CONSUMED LIST, not the declared one - a command can exist and still never reach
+		// the toolkit if BindCommands forgets to MapAction it, which is precisely issue #185's
+		// shape before this PR: Build did not exist anywhere, so there was nothing here to
+		// find at all.
+		const FUIAction* Action = CommandList->GetActionForCommand(Verb.Value);
+		TestNotNull(*FString::Printf(TEXT("%s is bound on the toolkit list after BindCommands"),
+			*Verb.Key), Action);
+	}
+
+	return true;
+}
+
 #endif

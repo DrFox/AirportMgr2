@@ -53,6 +53,11 @@ void FRoadBuildEdModeCommands::RegisterCommands()
 	// NOT in ToolRegistry(): it is not a tool, so it stays a hand-written UI_COMMAND.
 	UI_COMMAND(CancelGesture, "Cancel", "End the road chain or abandon the apron being drawn.",
 		EUserInterfaceActionType::Button, FInputChord(EKeys::Escape));
+
+	// ALSO NOT in ToolRegistry(), for the same reason - see the header's own comment on
+	// issue #185. Same chord as PIE's edit.build (BuildActions.cpp).
+	UI_COMMAND(Build, "Build", "Commit the gesture the active tool has staged.",
+		EUserInterfaceActionType::Button, FInputChord(EKeys::Enter));
 }
 
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> FRoadBuildEdModeCommands::GetCommands()

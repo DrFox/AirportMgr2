@@ -153,6 +153,13 @@ void URoadBuildEdMode::BindCommands()
 	{
 		Toolkit->GetToolkitCommands()->MapAction(Commands.CancelGesture,
 			FExecuteAction::CreateUObject(this, &URoadBuildEdMode::CancelActiveGesture));
+
+		// ISSUE #185, same shape as Cancel just above: not a tool command, so RegisterTool
+		// never touches this binding and there is no reselect guard to protect - it can be
+		// mapped here, once, rather than re-mapped after each RegisterTool the way the tool
+		// keys are.
+		Toolkit->GetToolkitCommands()->MapAction(Commands.Build,
+			FExecuteAction::CreateUObject(this, &URoadBuildEdMode::CommitActiveGesture));
 	}
 
 	// ToolCommandList itself is NOT bound to any more, tool keys or Escape: it is the list
@@ -257,6 +264,18 @@ void URoadBuildEdMode::CancelActiveGesture()
 			Manager->GetActiveTool(EToolSide::Mouse)))
 		{
 			Tool->CancelGesture();
+		}
+	}
+}
+
+void URoadBuildEdMode::CommitActiveGesture()
+{
+	if (UInteractiveToolManager* Manager = GetToolManager())
+	{
+		if (URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(
+			Manager->GetActiveTool(EToolSide::Mouse)))
+		{
+			Tool->CommitGesture();
 		}
 	}
 }
