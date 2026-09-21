@@ -72,6 +72,21 @@ struct FCameraRigLimits
 	/** Yaw the rig resets to, in degrees. */
 	UPROPERTY(EditAnywhere)
 	double StartYaw = 0.0;
+
+	/**
+	 * Road-plane point the rig resets its focus to.
+	 *
+	 * THE MISSING THIRD OF THE STARTING POSE. StartDistance and StartYaw were here from the
+	 * start and Reset hard-coded the focus to the world origin beside them, which is fine for
+	 * an airport - the origin is where you start building - and wrong for anything laid out
+	 * somewhere else. The model yard's bench aims at its own row of aircraft, and had no way
+	 * to say so.
+	 *
+	 * DEFAULTS TO THE ORIGIN, which is exactly what Reset did before, so no existing caller
+	 * changes behaviour - see Airside.View.BuildCameraRig.ApplyLimitsAndReset, which pins it.
+	 */
+	UPROPERTY(EditAnywhere)
+	FVector2D StartFocus = FVector2D::ZeroVector;
 };
 
 /**
@@ -128,9 +143,11 @@ struct FBuildCameraRig
 	 *  ApplyWatchLimits used to be separately (issue #94). */
 	void ApplyLimits(const FCameraRigLimits& Limits);
 
-	/** ApplyLimits, then snap Focus to the origin, Distance to StartDistance (clamped) and
+	/** ApplyLimits, then snap Focus to StartFocus, Distance to StartDistance (clamped) and
 	 *  Yaw to StartYaw - what CreateBuildCamera's setup and ToggleWatchAgent's "reset on
-	 *  every entry" block each used to spell out separately (issue #94). */
+	 *  every entry" block each used to spell out separately (issue #94). StartFocus defaults
+	 *  to the origin, which is the value this hard-coded until the model yard needed to aim
+	 *  somewhere else. */
 	void Reset(const FCameraRigLimits& Limits);
 
 	// --- Derived ---------------------------------------------------------------------

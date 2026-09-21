@@ -15,6 +15,12 @@ it makes them part of the airport, which is not what they are yet. A yard is som
 LOOK at them. Nothing else references this map, so it can be deleted the day each model has
 a real home.
 
+IT IS ALSO THE ANIMATION BENCH. build_bench() places an AAnimYard and sets the level's game
+mode override, which together make every rigged model in here MOVE - the demo loop on entry,
+and any channel draggable by hand. That is a second reason the yard is not M_Starter: the
+bench drives ten rigs in lockstep from one set of made-up numbers, which is exactly what the
+airport must never do.
+
 LAYOUT IS MEASURED, NOT TYPED. Each model's spacing comes from its own imported bounds, so
 adding a model to a row needs no arithmetic and a re-export that changes a size cannot leave
 two models overlapping. The rows are aircraft and ground equipment because mixing a 28 m
@@ -68,13 +74,24 @@ ROW_PITCH_UU = 5000.0
 FLOOR_X_M = 220.0
 FLOOR_Y_M = 220.0
 
-# A NEUTRAL GREY FLOOR, not M_ApronConcrete, and the choice is deliberate. The apron material
-# is built for a road mesh that carries its own UV1 (see the road appearance notes - colour
-# there comes from UV1, not from the material's own parameters), and a single scaled
-# BasicShapes/Plane has UV 0-1 across 220 m, so a tiling surface applied to it stretches one
-# texel over the whole yard. A studio-grey floor is also simply the better backdrop for
-# judging a model's own colours.
-FLOOR_MATERIAL = "/Engine/BasicShapes/BasicShapeMaterial"
+# THE GROUND MATERIAL, CHOSEN BY EYE AND MEASURED BACK OFF THE LEVEL 2026-09-21.
+#
+# THIS REVERSES THE ORIGINAL ARGUMENT, which is recorded here rather than deleted. It ran: use
+# a NEUTRAL GREY, not an apron material, because the apron is built for a road mesh carrying
+# its own UV1 (colour there comes from UV1, not from the material's parameters) and a single
+# scaled BasicShapes/Plane has UV 0-1 across 220 m - so a tiling surface stretches one texel
+# over the whole yard. A studio grey was also called the better backdrop for judging colours.
+#
+# THE STRETCH IS REAL AND IS THE POINT. At 220 m across one UV tile there is no readable
+# texture left, so M_Ground resolves to a flat olive that reads as a field rather than as a
+# studio - which is what was wanted, and is why the objection does not bite. What the argument
+# still correctly warns against is a material whose detail MATTERS: put M_ApronConcrete here
+# and you get one stretched texel, not concrete.
+#
+# THE GREY LOST ON ITS OWN MERITS TOO. Judged against the models rather than in the abstract,
+# it read as studio backdrop rather than ground, and the lighting was dropped to match - see
+# SUN_INTENSITY. The two changes were made together in the editor and belong together here.
+FLOOR_MATERIAL = "/Game/Environment/M_Ground"
 FLOOR_MESH = "/Engine/BasicShapes/Plane"
 
 # LIGHTING COPIED FROM build_environment.py, not invented, so the models are judged under the
@@ -85,6 +102,16 @@ SUN_PITCH = -42.0
 SUN_YAW = 150.0
 SUN_TEMPERATURE = 5800.0
 SUN_SOURCE_ANGLE = 1.5
+
+# HOW BRIGHT THE SUN IS, which this script did not set at all until 2026-09-21 - it left the
+# engine's own default, and the yard came out glaring against the new floor. Measured back off
+# the level after the value was found by eye in the editor, so re-running this reproduces the
+# yard somebody actually looked at rather than the one it shipped with.
+#
+# A SET VALUE RATHER THAN AN OMISSION IS THE WHOLE FIX. An unset property is not "the default
+# on purpose", it is a value nobody has decided, and the first re-run of this script silently
+# undid a change that had been made deliberately.
+SUN_INTENSITY = 2.487
 FOG_DENSITY = 0.005
 FOG_HEIGHT_FALLOFF = 0.2
 
@@ -181,6 +208,7 @@ def build_lighting():
     comp.set_editor_property("use_temperature", True)
     comp.set_editor_property("temperature", SUN_TEMPERATURE)
     comp.set_editor_property("light_source_angle", SUN_SOURCE_ANGLE)
+    comp.set_editor_property("intensity", SUN_INTENSITY)
 
     sky = actors().spawn_actor_from_class(unreal.SkyLight, unreal.Vector(0.0, 0.0, 2000.0))
     sky.set_actor_label("SkyLight")
@@ -222,8 +250,8 @@ def build_lighting():
     settings.set_editor_property("film_grain_intensity", 0.0)
     ppv.set_editor_property("settings", settings)
 
-    say("lighting: sun pitch %.0f yaw %.0f, sky light real-time, atmosphere, fog, post "
-        "(exposure %s)" % (SUN_PITCH, SUN_YAW,
+    say("lighting: sun pitch %.0f yaw %.0f intensity %.3f, sky light real-time, atmosphere, "
+        "fog, post (exposure %s)" % (SUN_PITCH, SUN_YAW, SUN_INTENSITY,
                            "locked at EV100 %.2f" % LOCK_EXPOSURE_EV100
                            if LOCK_EXPOSURE_EV100 is not None else "on auto"))
 
@@ -334,12 +362,82 @@ def build_rows():
 
 
 def build_start():
-    """A PlayerStart, so PIE puts the camera somewhere useful rather than at the origin
-    inside the Dash 8."""
+    """A PlayerStart, which PIE wants to exist but which DECIDES NOTHING here.
+
+    THIS COMMENT USED TO CLAIM IT PUT THE CAMERA SOMEWHERE USEFUL, and that stopped being
+    true the moment the bench took over the level - reported from play on 2026-09-21 as
+    "moving the PlayerStart doesn't work", which it does not. AAnimYardGameMode sets
+    DefaultPawnClass to null, so nothing is ever spawned here; the opening view is aimed by
+    AAnimYardController::AimAtTheAircraft, from where the aircraft actually stand.
+
+    Kept because a level with no PlayerStart warns on Play, and because the day this map is
+    opened under some other game mode it is the right thing to have.
+    """
     start = actors().spawn_actor_from_class(
         unreal.PlayerStart, unreal.Vector(-9000.0, 0.0, 400.0))
     start.set_actor_label("PlayerStart")
     start.set_actor_rotation(unreal.Rotator(0.0, -10.0, 0.0), False)
+
+
+BENCH_CLASS = "/Script/AirportMgr.AnimYard"
+BENCH_GAME_MODE = "/Script/AirportMgr.AnimYardGameMode"
+
+
+def build_bench():
+    """The animation bench: one AAnimYard actor, and the game mode that gives PIE its keys.
+
+    WHY THE MAP CARRIES IT rather than the bench finding its own way in. AAnimYard adopts
+    whatever ASkeletalMeshActors this script placed and spawns an ARoadAgentActor on each
+    one's mark - UAirsideAgentAnim only ever runs on one of those, because it casts its
+    owning actor and returns early on anything else. Nothing in the yard animates without
+    it, so the actor belongs in the level the same way the sun does.
+
+    THE GAME MODE OVERRIDE IS THE HALF THAT IS EASY TO FORGET. Without it PIE starts with
+    the project's default controller and no keys are bound: the models move on the demo
+    loop and nothing responds, which reads as a broken bench rather than a missing line in
+    World Settings. verify() reads it back off disk for exactly that reason.
+
+    LOADED BY PATH rather than named as unreal.AnimYard, so a run against a build that does
+    not have these classes yet fails with a sentence instead of an AttributeError.
+    """
+    bench_class = unreal.load_class(None, BENCH_CLASS)
+    if bench_class is None:
+        fail("%s not found - build AirportMgrEditor before running this, or the yard will "
+             "have no bench in it" % BENCH_CLASS)
+        return False
+
+    bench = actors().spawn_actor_from_class(bench_class, unreal.Vector(0.0, 0.0, 0.0))
+    bench.set_actor_label("AnimYard")
+    say("placed the animation bench")
+
+    game_mode = unreal.load_class(None, BENCH_GAME_MODE)
+    if game_mode is None:
+        fail("%s not found - PIE would start with no bench keys bound" % BENCH_GAME_MODE)
+        return False
+
+    settings = world_settings()
+    if settings is None:
+        fail("no AWorldSettings in the level, so the game mode override cannot be set")
+        return False
+    settings.set_editor_property("default_game_mode", game_mode)
+    say("set the level's game mode override to AAnimYardGameMode")
+    return True
+
+
+def world_settings():
+    """The level's AWorldSettings, or None.
+
+    NOT THROUGH get_all_level_actors, which was the first attempt and does not return it:
+    probed 2026-09-21 against this very level, that call reports 27 actors and WorldSettings
+    is not among them, so the type test found nothing and the run failed with "no
+    AWorldSettings in the level". It is an actor, but not a LEVEL actor in the sense that
+    subsystem means - which is also why start_level()'s destroy-everything pass has never
+    harmed it.
+
+    UWorld::GetWorldSettings is reflected and answers directly.
+    """
+    world = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem).get_editor_world()
+    return world.get_world_settings() if world is not None else None
 
 
 def verify(expected_models):
@@ -387,6 +485,27 @@ def verify(expected_models):
              "only, which reads as the materials being wrong")
         return False
     say("PASS the lighting survived the save")
+
+    # THE BENCH AND ITS GAME MODE, READ BACK OFF DISK. Both are single lines that a save can
+    # silently drop, and each fails in a way that looks like something else: no bench actor
+    # and every model stands in bind pose (which reads as the Animation Blueprints being
+    # unwired); no game mode override and the models move but no key does anything (which
+    # reads as the bindings being wrong).
+    bench_class = unreal.load_class(None, BENCH_CLASS)
+    bench = [a for a in found if bench_class is not None and a.get_class() == bench_class]
+    if not bench:
+        fail("no AAnimYard survived the save - nothing in the yard would animate")
+        return False
+    say("PASS the animation bench survived the save")
+
+    settings = world_settings()
+    on_disk = settings.get_editor_property("default_game_mode") if settings else None
+    wanted = unreal.load_class(None, BENCH_GAME_MODE)
+    if on_disk != wanted:
+        fail("the level's game mode override came back as %s, not AAnimYardGameMode - PIE "
+             "would run the bench with no keys bound" % on_disk)
+        return False
+    say("PASS the game mode override survived the save")
     return True
 
 
@@ -400,6 +519,9 @@ def main():
     build_floor()
     placed = build_rows()
     build_start()
+    if not build_bench():
+        say("DONE")
+        return
 
     if not levels().save_current_level():
         fail("save_current_level() returned False - the .umap is locked, which means the "
@@ -409,7 +531,8 @@ def main():
     say("saved %s" % LEVEL)
 
     if verify(placed):
-        say("the yard holds %d model(s); open %s and look" % (len(placed), LEVEL))
+        say("the yard holds %d model(s); open %s and PLAY - Space pauses, Tab picks a "
+            "channel, comma and period scrub it" % (len(placed), LEVEL))
     say("=" * 78)
     say("DONE")
 

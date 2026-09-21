@@ -140,6 +140,17 @@ public:
 	void CreateBuildCamera(APlayerController& Owner, const ARoadNetworkActor& Target);
 
 	/**
+	 * The same camera, above a bare HEIGHT rather than above an airport.
+	 *
+	 * THE ACTOR WAS ONLY EVER READ FOR SurfaceZ on this path - one double - and the model
+	 * yard's animation bench has no ARoadNetworkActor to hand it: M_ModelYard is a floor, a
+	 * sun and a row of models. This overload is the body; the one above forwards, so every
+	 * existing caller keeps its signature (see CLAUDE.md's refactor contract) and the two
+	 * cannot drift because there is only one implementation.
+	 */
+	void CreateBuildCamera(APlayerController& Owner, double SurfaceZ);
+
+	/**
 	 * Reads WASD/QE (Right/Forward/Turn, each already resolved to [-1,1] by the caller, which
 	 * owns input) and a mouse drag into whichever rig is active, eases it towards its target
 	 * and applies the result to the spawned camera actor. Hands the watch rig back to the
@@ -158,6 +169,17 @@ public:
 	void UpdateView(float DeltaTime, double Right, double Forward, double Turn, double TurnPixels,
 		ARoadNetworkActor* Target);
 
+	/**
+	 * The build view alone, driven above a bare height - no watch rig, no agents to follow.
+	 *
+	 * WHAT UpdateView DOES ONCE IT HAS DECIDED NOT TO WATCH ANYTHING, extracted so the bench
+	 * can call it without an airport. UpdateView above still owns the watch decision and its
+	 * "Nothing to watch" log line, and tails into this; there is one copy of the pan, the
+	 * rotate, the ease and the placement.
+	 */
+	void UpdateFreeView(float DeltaTime, double Right, double Forward, double Turn, double TurnPixels,
+		double SurfaceZ);
+
 	/** Mouse wheel: moves whichever rig is active in or out; the pitch follows the distance. */
 	void ZoomBy(double Notches);
 
@@ -168,6 +190,9 @@ public:
 	 * terms this component has no business knowing.
 	 */
 	bool ToggleWatchAgent(const ARoadNetworkActor& Target, int32 PreferredAgentId);
+
+	/** The spawned camera, for AirportMgr.View.AnimYard.CameraNeedsNoAirport. */
+	ACameraActor* CameraActorForTest() const { return BuildCamera; }
 
 	bool IsWatchingAgent() const { return bWatchingAgent; }
 	int32 GetWatchAgentId() const { return WatchAgentId; }

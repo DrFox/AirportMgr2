@@ -32,7 +32,10 @@ public class AirportMgr : ModuleRules
 		// plain getters (see their own headers) - the actual, working design, and the one
 		// PR #196 already made cheap by gating on a revision instead of every tick. The
 		// viewmodels are now plain UObject DTOs; see OfferViewModels.h and LedgerViewModels.h.
-		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore" });
+		//
+		// AssetRegistry: AnimYardCatalogue scans for every UAircraftType in the project, so the
+		// model yard's bench needs no list of its own to keep in step with the fleet.
+		PrivateDependencyModuleNames.AddRange(new string[] { "UMG", "Slate", "SlateCore", "AssetRegistry" });
 		
 		// Uncomment if you are using online features
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");

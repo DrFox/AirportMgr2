@@ -30,6 +30,12 @@ UBuildCameraComponent::UBuildCameraComponent()
 
 void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, const ARoadNetworkActor& Target)
 {
+	// The actor was only ever read for this one figure - see the header's overload.
+	CreateBuildCamera(Owner, Target.SurfaceZ);
+}
+
+void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, double SurfaceZ)
+{
 	UWorld* World = Owner.GetWorld();
 	if (World == nullptr)
 	{
@@ -45,7 +51,7 @@ void UBuildCameraComponent::CreateBuildCamera(APlayerController& Owner, const AR
 	FActorSpawnParameters Params;
 	Params.ObjectFlags |= RF_Transient;
 	BuildCamera = World->SpawnActor<ACameraActor>(
-		CurrentView.CameraLocation(Target.SurfaceZ), CurrentView.CameraRotation(), Params);
+		CurrentView.CameraLocation(SurfaceZ), CurrentView.CameraRotation(), Params);
 	if (BuildCamera == nullptr)
 	{
 		return;
@@ -102,13 +108,29 @@ void UBuildCameraComponent::UpdateView(float DeltaTime, double Right, double For
 		UE_LOG(LogRoadBuild, Log, TEXT("Nothing to watch: back to the build view."));
 	}
 
+	UpdateFreeView(DeltaTime, Right, Forward, Turn, TurnPixels, Target->SurfaceZ);
+}
+
+void UBuildCameraComponent::UpdateFreeView(float DeltaTime, double Right, double Forward, double Turn,
+	double TurnPixels, double SurfaceZ)
+{
+	// ITS OWN GUARD. UpdateView above checks this before it ever reaches here, but the bench
+	// calls this directly and a camera that has not been created yet is the ordinary state on
+	// the first frame after possession.
+	if (BuildCamera == nullptr)
+	{
+		return;
+	}
+
 	TargetView.ApplyLimits(ViewLimits);
 	TargetView.Pan(Right, Forward, PanRate, DeltaTime);
+	// Keys are a rate and need DeltaTime; the mouse delta is already a per-frame distance and
+	// must NOT have it - see UpdateView's own comment.
 	TargetView.Rotate(Turn * RotateRate * DeltaTime + TurnPixels * MouseRotateRate);
 	CurrentView.EaseToward(TargetView, CameraLag, DeltaTime);
 
 	BuildCamera->SetActorLocationAndRotation(
-		CurrentView.CameraLocation(Target->SurfaceZ), CurrentView.CameraRotation());
+		CurrentView.CameraLocation(SurfaceZ), CurrentView.CameraRotation());
 }
 
 void UBuildCameraComponent::ZoomBy(double Notches)
