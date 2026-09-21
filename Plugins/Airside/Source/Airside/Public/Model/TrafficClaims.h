@@ -13,8 +13,11 @@
  * members, so a claim raised through this struct lands in the SAME occupancy table every
  * other agent's pass (and the deadlock resolver, and dispatch) reads. UGroundTraffic
  * constructs one of these per Arbitrate() call - see its .cpp - rather than holding one as a
- * persistent member, because this struct carries no state of its own between agents: Run
- * leaves nothing behind that the next agent's claim pass would need to see.
+ * persistent member, because this struct carries no DECIDED state of its own between agents:
+ * Run leaves nothing behind that the next agent's claim pass would read. Wanted and
+ * OverlapsThisPass below are the one exception, and only as SCRATCH - reset at the top of
+ * every ApplyClaims call, kept as members purely so their capacity survives from one agent to
+ * the next (issue #168).
  *
  * ClaimAhead's own header (the numbered sequence: the two early branches, the window, step
  * 0's crossing, steps 1-2's wanted list, step 3's ask) is Run's doc comment below - moved
@@ -25,6 +28,23 @@ struct AIRSIDE_API FClaimPass
 	const FTrafficRules& Rules;
 	FTrafficOccupancy& Table;
 	FNodeReachCache& Reach;
+
+	/**
+	 * ApplyClaims' scratch, PROMOTED FROM LOCALS (issue #168): one Arbitrate() call builds
+	 * one FClaimPass and runs it for every agent, so a TArray that used to be declared fresh
+	 * inside ApplyClaims allocated and freed once per agent per substep - up to 32 times a
+	 * frame at the top of the speed ladder - for a handful of entries it was about to throw
+	 * away anyway. As members they keep their capacity between agents; ApplyClaims resets
+	 * both to empty at its own top, so nothing of one agent's pass leaks into the next's.
+	 *
+	 * NOT Pending: FWantedClaim is deliberately defined only in TrafficClaims.cpp (see its
+	 * forward declaration below), so a member of that type would need FClaimPass's own
+	 * destructor declared here and defined there just to give TArray's destructor a complete
+	 * type to call - a real C++ pattern, but more machinery than a 4-element array per pass
+	 * justifies. Pending stays a local in Run(), reallocated every pass.
+	 */
+	TArray<FTrafficResource> Wanted;
+	TArray<int32> OverlapsThisPass;
 
 	/**
 	 * ClaimAhead: one agent's whole claim pass for this tick. Spec §3.

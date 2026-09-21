@@ -739,7 +739,11 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	// claims between this ReleaseExcept and the ones above - Arbitrate runs one agent at a
 	// time. Releasing everything and re-claiming is still rejected (Run's header):
 	// this drops only what was not asked for.
-	TArray<FTrafficResource> Wanted;
+	//
+	// MEMBER, NOT A LOCAL (issue #168): reset here rather than declared fresh, so its
+	// capacity survives from one agent's pass to the next instead of a malloc/free every
+	// time. See the header for why Pending does not get the same treatment.
+	Wanted.Reset();
 	Wanted.Reserve(Pending.Num());
 
 	const int32 WasWaitingOn = Agent.WaitingOn;
@@ -747,7 +751,8 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	bool bHeld = false;
 
 	// Everyone this pass overlapped, for the Warning's throttle. See FRoadAgent::LastOverlaps.
-	TArray<int32> OverlapsThisPass;
+	// MEMBER too, reset per agent - same reasoning as Wanted just above.
+	OverlapsThisPass.Reset();
 
 	for (const FWantedClaim& Want : Pending)
 	{

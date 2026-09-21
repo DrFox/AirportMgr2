@@ -66,6 +66,57 @@ void FTrafficOccupancy::Assert(const FTrafficClaim& Claim)
 	TryClaim(Claim, Blocker);
 }
 
+void FTrafficOccupancy::IndexClaim(int32 Index)
+{
+	ByResource.FindOrAdd(Claims[Index].Resource).Add(Index);
+	ByAgent.FindOrAdd(Claims[Index].AgentId).Add(Index);
+}
+
+void FTrafficOccupancy::UnindexClaim(int32 Index)
+{
+	const FTrafficClaim& C = Claims[Index];
+	if (TArray<int32>* Bucket = ByResource.Find(C.Resource))
+	{
+		Bucket->RemoveSingleSwap(Index);
+		if (Bucket->Num() == 0) { ByResource.Remove(C.Resource); }
+	}
+	if (TArray<int32>* Bucket = ByAgent.Find(C.AgentId))
+	{
+		Bucket->RemoveSingleSwap(Index);
+		if (Bucket->Num() == 0) { ByAgent.Remove(C.AgentId); }
+	}
+}
+
+void FTrafficOccupancy::AddClaim(const FTrafficClaim& Claim)
+{
+	Claims.Add(Claim);
+	IndexClaim(Claims.Num() - 1);
+}
+
+void FTrafficOccupancy::RemoveClaimAtSwap(int32 Index)
+{
+	UnindexClaim(Index);
+
+	// RemoveAtSwap is about to move the LAST claim into Index - unless Index already IS the
+	// last one, in which case nothing moves and there is nothing left to repoint.
+	const int32 LastIndex = Claims.Num() - 1;
+	if (Index != LastIndex)
+	{
+		const FTrafficClaim& Moved = Claims[LastIndex];
+		if (TArray<int32>* Bucket = ByResource.Find(Moved.Resource))
+		{
+			const int32 At = Bucket->Find(LastIndex);
+			if (At != INDEX_NONE) { (*Bucket)[At] = Index; }
+		}
+		if (TArray<int32>* Bucket = ByAgent.Find(Moved.AgentId))
+		{
+			const int32 At = Bucket->Find(LastIndex);
+			if (At != INDEX_NONE) { (*Bucket)[At] = Index; }
+		}
+	}
+	Claims.RemoveAtSwap(Index);
+}
+
 EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficClaim& OutBlocker)
 {
 	// A same-agent claim on the same resource is an UPDATE: checked against everyone else
@@ -73,29 +124,33 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 	// was rejected: a follower whose window grows each tick would re-claim its own edge and
 	// be granted straight through the leader's occupied interval - the pass-through defect
 	// this table exists to end.
+	LastTryClaimComparesForTest = 0;
 
-	// Find existing claim by same agent on same resource.
-	int32 ExistingIndex = INDEX_NONE;
-	for (int32 i = 0; i < Claims.Num(); ++i)
+	// NOBODY HOLDS THIS RESOURCE AT ALL: the common case at an airport's scale (issue #168),
+	// and the whole reason ByResource exists - granted with zero comparisons rather than a
+	// scan of every claim on every OTHER resource in the table.
+	TArray<int32>* Bucket = ByResource.Find(Claim.Resource);
+	if (Bucket == nullptr)
 	{
-		if (Claims[i].AgentId == Claim.AgentId && Claims[i].Resource == Claim.Resource)
-		{
-			ExistingIndex = i;
-			break;
-		}
+		AddClaim(Claim);
+		return EClaimResult::Granted;
 	}
 
-	// Check for conflicts against OTHER agents' claims (skip any by Claim.AgentId).
+	// Find an existing claim by the same agent, and conflicts against OTHER agents' claims -
+	// BOTH out of the same bucket, which holds every claim on this resource and nothing else.
+	int32 ExistingIndex = INDEX_NONE;
 	TArray<int32> ToPreempt;
-	for (int32 Index = 0; Index < Claims.Num(); ++Index)
+	for (int32 Index : *Bucket)
 	{
-		// Skip claims by the same agent (including the existing claim we'll update).
-		if (Claims[Index].AgentId == Claim.AgentId)
+		const FTrafficClaim& Existing = Claims[Index];
+		if (Existing.AgentId == Claim.AgentId)
 		{
+			ExistingIndex = Index;
 			continue;
 		}
 
-		if (!Claims[Index].Conflicts(Claim))
+		++LastTryClaimComparesForTest;
+		if (!Existing.Conflicts(Claim))
 		{
 			continue;
 		}
@@ -105,9 +160,9 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 		// Nobody is evicted from ground they are standing on, so an existing occupancy
 		// refuses everything - including another occupancy, which is two bodies in one place
 		// and the caller's problem to report.
-		if (Claims[Index].bOccupied)
+		if (Existing.bOccupied)
 		{
-			OutBlocker = Claims[Index];
+			OutBlocker = Existing;
 			return EClaimResult::Held;
 		}
 
@@ -117,10 +172,10 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 		// deadlock its cycle - the occupant was refused its OWN ground, abandoned the rest of
 		// its claim pass, and the wait-for graph became a fan into the reserver instead of a
 		// ring. See Airside.Model.Traffic.BoxEntry.
-		if (!Claim.bOccupied && Claims[Index].Rank >= Claim.Rank)
+		if (!Claim.bOccupied && Existing.Rank >= Claim.Rank)
 		{
 			// Equal rank keeps the holder - that IS first-to-reserve.
-			OutBlocker = Claims[Index];
+			OutBlocker = Existing;
 			return EClaimResult::Held;
 		}
 		ToPreempt.Add(Index);
@@ -130,18 +185,25 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 	// The agent's own claim is never in ToPreempt (we skip AgentId), so it won't move.
 	if (ExistingIndex != INDEX_NONE)
 	{
+		// Resource and AgentId are unchanged (that is what made this the existing claim),
+		// so neither index needs touching - only the interval/occupied/rank fields differ.
 		Claims[ExistingIndex] = Claim;
 	}
 	else
 	{
-		Claims.Add(Claim);
+		AddClaim(Claim);
 	}
 
-	// Now preempt lower-ranked reservations.
+	// Now preempt lower-ranked reservations, HIGHEST INDEX FIRST: RemoveClaimAtSwap moves the
+	// table's last claim into the slot it empties, so removing back-to-front never reshuffles
+	// an index this loop has not reached yet out from under it. SORTED explicitly - ToPreempt
+	// was built walking ByResource's bucket, whose order is insertion order, not the ascending
+	// scan the old flat-array version got for free.
+	ToPreempt.Sort();
 	for (int32 At = ToPreempt.Num() - 1; At >= 0; --At)
 	{
 		Preempted.Add(Claims[ToPreempt[At]].AgentId);
-		Claims.RemoveAtSwap(ToPreempt[At]);
+		RemoveClaimAtSwap(ToPreempt[At]);
 	}
 
 	return EClaimResult::Granted;
@@ -149,11 +211,16 @@ EClaimResult FTrafficOccupancy::TryClaim(const FTrafficClaim& Claim, FTrafficCla
 
 const FTrafficClaim* FTrafficOccupancy::FindClaim(int32 AgentId, const FTrafficResource& Resource) const
 {
-	for (const FTrafficClaim& Claim : Claims)
+	const TArray<int32>* Bucket = ByResource.Find(Resource);
+	if (Bucket == nullptr)
 	{
-		if (Claim.AgentId == AgentId && Claim.Resource == Resource)
+		return nullptr;
+	}
+	for (int32 Index : *Bucket)
+	{
+		if (Claims[Index].AgentId == AgentId)
 		{
-			return &Claim;
+			return &Claims[Index];
 		}
 	}
 	return nullptr;
@@ -161,19 +228,58 @@ const FTrafficClaim* FTrafficOccupancy::FindClaim(int32 AgentId, const FTrafficR
 
 void FTrafficOccupancy::ReleaseWhere(TFunctionRef<bool(const FTrafficClaim&)> Predicate)
 {
-	Claims.RemoveAllSwap([&Predicate](const FTrafficClaim& C) { return Predicate(C); });
+	// Collect first, remove highest-index-first after: the same reasoning as TryClaim's
+	// ToPreempt loop above, generalised to an arbitrary predicate over the whole table.
+	TArray<int32> ToRemove;
+	for (int32 Index = 0; Index < Claims.Num(); ++Index)
+	{
+		if (Predicate(Claims[Index]))
+		{
+			ToRemove.Add(Index);
+		}
+	}
+	for (int32 At = ToRemove.Num() - 1; At >= 0; --At)
+	{
+		RemoveClaimAtSwap(ToRemove[At]);
+	}
+}
+
+void FTrafficOccupancy::ReleaseAgentWhere(int32 AgentId, TFunctionRef<bool(const FTrafficClaim&)> Predicate)
+{
+	const TArray<int32>* Bucket = ByAgent.Find(AgentId);
+	if (Bucket == nullptr)
+	{
+		return;
+	}
+
+	// Copied out of the bucket before anything is removed: RemoveClaimAtSwap mutates this
+	// very TArray (it is ByAgent[AgentId]), and the same highest-index-first rule as
+	// ReleaseWhere applies to whatever indices survive the predicate.
+	TArray<int32> ToRemove;
+	for (int32 Index : *Bucket)
+	{
+		if (Predicate(Claims[Index]))
+		{
+			ToRemove.Add(Index);
+		}
+	}
+	ToRemove.Sort([](int32 A, int32 B) { return A > B; });
+	for (int32 Index : ToRemove)
+	{
+		RemoveClaimAtSwap(Index);
+	}
 }
 
 void FTrafficOccupancy::ReleaseAll(int32 AgentId)
 {
-	ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId; });
+	ReleaseAgentWhere(AgentId, [](const FTrafficClaim&) { return true; });
 }
 
 void FTrafficOccupancy::Release(int32 AgentId, const FTrafficResource& Resource)
 {
-	ReleaseWhere([AgentId, &Resource](const FTrafficClaim& C)
+	ReleaseAgentWhere(AgentId, [&Resource](const FTrafficClaim& C)
 	{
-		return C.AgentId == AgentId && C.Resource == Resource;
+		return C.Resource == Resource;
 	});
 }
 
@@ -182,23 +288,29 @@ void FTrafficOccupancy::ReleaseReservations(int32 AgentId)
 	// bOccupied IS THE WHOLE TEST, and it is the same one TryClaim arbitrates on: a claim
 	// that contains the agent's own position is where its body is, and nothing a caller does
 	// to its PLAN can move a body. See the header for the landing this cost.
-	ReleaseWhere([AgentId](const FTrafficClaim& C) { return C.AgentId == AgentId && !C.bOccupied; });
+	ReleaseAgentWhere(AgentId, [](const FTrafficClaim& C) { return !C.bOccupied; });
 }
 
 void FTrafficOccupancy::ReleaseExcept(int32 AgentId, const TArray<FTrafficResource>& Keep)
 {
-	ReleaseWhere([AgentId, &Keep](const FTrafficClaim& C)
+	ReleaseAgentWhere(AgentId, [&Keep](const FTrafficClaim& C)
 	{
-		return C.AgentId == AgentId && !Keep.Contains(C.Resource);
+		return !Keep.Contains(C.Resource);
 	});
 }
 
 double FTrafficOccupancy::HeldLengthOn(FGuidelineEdgeId Edge, int32 ExcludingAgent) const
 {
-	double Sum = 0.0;
-	for (const FTrafficClaim& C : Claims)
+	const TArray<int32>* Bucket = ByResource.Find(FTrafficResource::OfEdge(Edge));
+	if (Bucket == nullptr)
 	{
-		if (C.AgentId != ExcludingAgent && C.Resource.Kind == ETrafficResourceKind::Edge && C.Resource.Edge == Edge)
+		return 0.0;
+	}
+	double Sum = 0.0;
+	for (int32 Index : *Bucket)
+	{
+		const FTrafficClaim& C = Claims[Index];
+		if (C.AgentId != ExcludingAgent)
 		{
 			Sum += FMath::Max(0.0, C.To - C.From);
 		}
@@ -208,9 +320,15 @@ double FTrafficOccupancy::HeldLengthOn(FGuidelineEdgeId Edge, int32 ExcludingAge
 
 bool FTrafficOccupancy::IsHeld(const FTrafficResource& Resource, int32 ExcludingAgent, int32* OutHolder) const
 {
-	for (const FTrafficClaim& C : Claims)
+	const TArray<int32>* Bucket = ByResource.Find(Resource);
+	if (Bucket == nullptr)
 	{
-		if (C.AgentId != ExcludingAgent && C.Resource == Resource)
+		return false;
+	}
+	for (int32 Index : *Bucket)
+	{
+		const FTrafficClaim& C = Claims[Index];
+		if (C.AgentId != ExcludingAgent)
 		{
 			if (OutHolder != nullptr) { *OutHolder = C.AgentId; }
 			return true;
@@ -272,16 +390,17 @@ void FTrafficOccupancy::ReleaseGuidelineClaimsOf(int32 AgentId)
 	// preemption list here, unlike ReleaseGuidelineClaims: this is one agent giving ground
 	// back on a graph everybody else is still claiming over, and an agent that lost a
 	// reservation to a rival this tick still has to hear about it.
-	ReleaseWhere([AgentId](const FTrafficClaim& C)
+	ReleaseAgentWhere(AgentId, [](const FTrafficClaim& C)
 	{
-		return C.AgentId == AgentId
-			&& (C.Resource.Kind == ETrafficResourceKind::Edge
-				|| C.Resource.Kind == ETrafficResourceKind::Node);
+		return C.Resource.Kind == ETrafficResourceKind::Edge
+			|| C.Resource.Kind == ETrafficResourceKind::Node;
 	});
 }
 
 void FTrafficOccupancy::Clear()
 {
 	Claims.Reset();
+	ByResource.Reset();
+	ByAgent.Reset();
 	Preempted.Reset();
 }
