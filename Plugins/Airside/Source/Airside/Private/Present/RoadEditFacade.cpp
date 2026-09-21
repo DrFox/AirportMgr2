@@ -250,10 +250,10 @@ void URoadEditFacade::CommitDisposal(FRoadEditScope& Edit, const FBuildQuote& Qu
 	CommitAndNotify(Edit);
 }
 
-void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit)
+void URoadEditFacade::CommitAndNotify(FRoadEditScope& Edit, EChangeKind Kind)
 {
 	Edit.Commit();
-	NotifyChanged();
+	NotifyChanged(Kind);
 }
 
 int32 URoadEditFacade::PlaceNode(FVector2D Where)
@@ -663,10 +663,20 @@ bool URoadEditFacade::SetIntermediateHoldingPosition(int32 NodeIndex, bool bSet)
 			TEXT("Holding point at guideline node %d already as asked - no undo step pushed"), NodeIndex);
 		return true;
 	}
-	Edit.Commit();
-	// NO OnChanged broadcast: a holding position changes no pavement and no mesh. The
-	// overlay reads the node when it draws, so rebuilding the surface here would be work
-	// for nothing.
+	// THROUGH CommitAndNotify, NOT a bare Commit() (issue #179). The old comment here said a
+	// holding position changes no pavement and no mesh - true when it was written, false
+	// since FHoldingPositionMarkingBuilder started painting Node.HoldingPosition ==
+	// Intermediate as a dashed bar in URoadSurfacePresenter::RebuildMarkings. A bare Commit()
+	// left that paint layer stale until an unrelated edit happened to rebuild it - the exact
+	// "notification split-brain" issue #77 closed, reintroduced by a justification that
+	// predated the paint layer it was talking about.
+	//
+	// EChangeKind::Markings, NOT the Topology default: this changes neither the pavement nor
+	// the graph's SHAPE, so re-deriving the guideline graph over it (what Topology does, via
+	// FRoadGuidelineBuilder::Build) would be wasted work that also reallocates every live
+	// FGuidelineNodeId, including the node this call just toggled - see EChangeKind's own
+	// comment, which was written from three tests that failed the day Topology was tried here.
+	CommitAndNotify(Edit, EChangeKind::Markings);
 	UE_LOG(LogRoadMesh, Log, TEXT("Holding point %s at guideline node %d"),
 		bSet ? TEXT("set") : TEXT("cleared"), NodeIndex);
 	return true;
@@ -988,8 +998,9 @@ bool URoadEditFacade::MergeNodes(int32 KeepIndex, int32 AbsorbIndex)
 		Use->CommitEdit();
 	}
 
-	// Pavement changed, so this notifies - unlike SetIntermediateHoldingPosition, which
-	// changes neither pavement nor mesh and deliberately does not.
+	// Pavement changed AND a node was removed - the graph's SHAPE changed - so this notifies
+	// Topology (the default), unlike SetIntermediateHoldingPosition (issue #179), which
+	// notifies the cheaper EChangeKind::Markings because it changes neither.
 	NotifyChanged();
 	return true;
 }

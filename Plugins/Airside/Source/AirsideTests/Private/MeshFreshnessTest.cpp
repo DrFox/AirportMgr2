@@ -298,6 +298,95 @@ bool FMeshRebuildsOnFacadeChangeTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("whose Undo rebuilt the mesh once more"),
 		Actor->RebuildCountForTest(), RebuildsBeforeUnlink + 2);
 
+	// --- Issue #179: SetIntermediateHoldingPosition must commit through CommitAndNotify too --
+	//
+	// A fresh, isolated taxiway: the guideline nodes above have all been rebuilt at least
+	// once by this point (reallocated by position, not handle - see the reconnect comment
+	// above), so a new pair keeps this section from depending on any of that history.
+	const int32 HoldA = Actor->PlaceNode(FVector2D(100000.0, 100000.0));
+	const int32 HoldB = Actor->PlaceNode(FVector2D(106000.0, 100000.0));
+	TestTrue(TEXT("the holding-position taxiway connects"), Actor->ConnectNodes(HoldA, HoldB));
+	const int32 HoldNode = NearestGuidelineIndex(FVector2D(106000.0, 100000.0));
+	if (!TestTrue(TEXT("found a guideline node to toggle a holding position at"), HoldNode != INDEX_NONE))
+	{
+		return false;
+	}
+
+	// EXACTLY ONE, the same claim as every mutator above: before #179 this committed its
+	// scope with no OnChanged.Broadcast() at all, on the reasoning (now wrong - see
+	// RoadEditFacade.h) that a holding position changes no mesh.
+	const int32 RebuildsBeforeHold = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the holding position is set"), Actor->SetIntermediateHoldingPosition(HoldNode, true));
+	TestEqual(TEXT("SetIntermediateHoldingPosition's OnChanged broadcast rebuilt the mesh exactly "
+		"once (#179) - the HoldingPaint layer derives from this flag and was left stale before"),
+		Actor->RebuildCountForTest(), RebuildsBeforeHold + 1);
+
+	const int32 RebuildsBeforeHoldClear = Actor->RebuildCountForTest();
+	TestTrue(TEXT("the holding position clears"), Actor->SetIntermediateHoldingPosition(HoldNode, false));
+	TestEqual(TEXT("and clearing it notifies too, exactly once"),
+		Actor->RebuildCountForTest(), RebuildsBeforeHoldClear + 1);
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------------------
+// Issue #179: MeshRebuildsOnFacadeChange above counts REBUILDS, which proves OnChanged fired
+// but not that the HoldingPaint layer itself changed shape - a mutator could notify Topology
+// and still leave this one layer untouched if RebuildMarkings' own wiring were wrong.
+// HoldingPositionMarkingTest.cpp already measures FHoldingPositionMarkingBuilder::Build
+// directly, in isolation from the facade - which is exactly why it could not have caught
+// #179: the builder was always correct once asked. This is the composition test the issue
+// asked for: drive the toggle the way FHoldingPointTool::OnClick does, through the actor,
+// and read the HoldingPaint component the level actually renders.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FHoldingPositionMeshFollowsToggleTest,
+	"Airside.Present.HoldingPositionMeshFollowsToggle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FHoldingPositionMeshFollowsToggleTest::RunTest(const FString& Parameters)
+{
+	ARoadNetworkActor* Actor = NewObject<ARoadNetworkActor>(GetTransientPackage());
+	if (!TestNotNull(TEXT("actor constructed"), Actor))
+	{
+		return false;
+	}
+
+	const int32 A = Actor->PlaceNode(FVector2D(0.0, 0.0));
+	const int32 B = Actor->PlaceNode(FVector2D(6000.0, 0.0));
+	if (!TestTrue(TEXT("the taxiway connects"), Actor->ConnectNodes(A, B)))
+	{
+		return false;
+	}
+
+	// The B end's guideline node, found by POSITION rather than assumed index - the same
+	// lookup MeshRebuildsOnFacadeChange uses for its own guideline fixtures, since a
+	// rebuild reallocates these nodes.
+	const TArray<FGuidelineNode>& GuidelineNodes = Actor->Network->GetGuidelineNodes();
+	int32 HoldNode = INDEX_NONE;
+	double BestDistance = TNumericLimits<double>::Max();
+	for (int32 Index = 0; Index < GuidelineNodes.Num(); ++Index)
+	{
+		if (!GuidelineNodes[Index].bAlive) { continue; }
+		const double Distance = FVector2D::Distance(GuidelineNodes[Index].Position, FVector2D(6000.0, 0.0));
+		if (Distance < BestDistance) { BestDistance = Distance; HoldNode = Index; }
+	}
+	if (!TestTrue(TEXT("found a guideline node to toggle"), HoldNode != INDEX_NONE))
+	{
+		return false;
+	}
+
+	const int32 Before = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
+
+	TestTrue(TEXT("the holding position is set"), Actor->SetIntermediateHoldingPosition(HoldNode, true));
+	const int32 AfterSet = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
+	TestTrue(TEXT("setting an intermediate holding position paints the HoldingPaint layer with no "
+		"unrelated edit in between - issue #179's whole point"), AfterSet > Before);
+
+	TestTrue(TEXT("the holding position clears"), Actor->SetIntermediateHoldingPosition(HoldNode, false));
+	const int32 AfterClear = Actor->GetPresenter()->HoldingPaintTriangleCountForTest();
+	TestEqual(TEXT("clearing it repaints the layer back to the prior triangle count"),
+		AfterClear, Before);
+
 	return true;
 }
 
