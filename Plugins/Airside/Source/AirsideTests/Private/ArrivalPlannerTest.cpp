@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -52,7 +53,7 @@ bool FArrivalPlannerRunwayTooShortTest::RunTest(const FString& Parameters)
 	Network->AddStraightSegment(A, B, Runway);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved);
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, FVector2D::ZeroVector, Airframe);
 
@@ -224,7 +225,7 @@ bool FArrivalPlannerNoRouteToStandTest::RunTest(const FString& Parameters)
 	Network->AddStraightSegment(Exit, TaxiEnd, Taxiway);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Network);
-	FRoadGuidelineBuilder::Build(*Network, Solved);
+	FRoadGuidelineBuilder::Build(*Network, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FArrivalPlan Plan = ArrivalPlanner::Plan(*Network, ThresholdAt, Airframe);
 

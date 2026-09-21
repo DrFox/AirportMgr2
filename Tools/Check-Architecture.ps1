@@ -91,10 +91,21 @@ function Get-Sources([string] $Dir, [string[]] $Ext) {
 # --- 1. Include direction -----------------------------------------------------------------
 # Layer -> regex of forbidden include prefixes, applied inside EACH module. Solve/ is
 # handled separately as an allow-list.
+#
+# Build's own entry names Content/AirsideSettings specifically, NOT the whole Content/
+# folder (issue #191, the last "Wrong layer" item). AnchorLink.cpp and RoadGuidelineBuilder.cpp
+# used to call UAirsideSettings::ResolveLargestServiceVehicle() themselves, from inside a
+# per-ordered-arm-pair and a per-link loop respectively - the #78 shape, Build/ resolving a
+# content default instead of taking it from whoever already resolved it once. Both are
+# parameterised now (issue #190) and neither includes AirsideSettings.h any more. DepotKit.cpp
+# still includes Content/AirsideContent.h, and that stays legal: DepotKitSpecs takes a
+# `const UAirsideContent*` PARAMETER (PR #212) and dereferences its DepotKits map, which is
+# the correct shape this rule wants everywhere else - forbidding the whole Content/ folder
+# would flag a file that never resolves anything itself.
 $forbidden = @{
     'Model' = 'Build/|Tool/|Present/|Entities/|Content/'
     'Tool'  = 'Present/|Content/'
-    'Build' = 'Present/|Tool/'
+    'Build' = 'Present/|Tool/|Content/AirsideSettings'
 }
 foreach ($module in $modules) {
     foreach ($layer in $forbidden.Keys) {

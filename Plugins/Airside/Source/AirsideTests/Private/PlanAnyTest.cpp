@@ -54,10 +54,10 @@ namespace
 		Out.Net->AddStraightSegment(T, M, Taxiway);
 
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		Out.Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(45000.0, -14000.0), 0.0);
-		FAnchorLink::Build(*Out.Net);
+		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		for (const FEntityInstance& I : Out.Net->GetEntities())
 		{
 			if (I.bAlive && I.PoseNode.IsSet()) { Out.StandNode = I.PoseNode; }

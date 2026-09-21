@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Build/AnchorLink.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
@@ -96,7 +97,7 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId Pose = Instance->PoseNode;
 		TestEqual(TEXT("it starts an island"), IncidentCount(*Net, Pose), 0);
 
-		TestTrue(TEXT("the pose lead-in joins the road"), FAnchorLink::Build(*Net) >= 1);
+		TestTrue(TEXT("the pose lead-in joins the road"), FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle()) >= 1);
 		TestTrue(TEXT("and the pose node now has line on it"), IncidentCount(*Net, Pose) > 0);
 
 		// THE POINT: a truck can be routed off the depot. Before PoseRole the lead-in was
@@ -118,7 +119,7 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 
 		const FEntityInstanceId Placed = Net->PlaceEntity(Depot, Depot->Anchors,
 			FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5, 0.0, Depot->PoseRole, Depot->Trucks);
-		TestEqual(TEXT("a depot facing a taxiway joins nothing"), FAnchorLink::Build(*Net), 0);
+		TestEqual(TEXT("a depot facing a taxiway joins nothing"), FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle()), 0);
 		TestEqual(TEXT("and its pose node is still an island"),
 			IncidentCount(*Net, Net->GetEntity(Placed)->PoseNode), 0);
 	}
@@ -169,7 +170,7 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("the stand resolves"), Instance)) { return false; }
 
 	const FGuidelineNodeId Pose = Instance->PoseNode;
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// The aircraft half still works - a stand nothing can taxi to would make the fuel half
 	// meaningless, and it is the half every existing test relies on.

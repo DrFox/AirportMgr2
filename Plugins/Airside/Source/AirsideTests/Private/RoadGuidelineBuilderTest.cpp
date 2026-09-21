@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -27,7 +28,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solved"), Solved.FailedNodes, 0);
 
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// One edge per segment per declared guideline. The taxiway profile declares one, and
 	// there are two segments, so exactly two edges carry a DerivedFrom naming a segment.
@@ -130,7 +131,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSolveResult OffsetSolved = FRoadNetworkSolver::SolveAll(*Offset);
 		TestEqual(TEXT("the off-centre network solved"), OffsetSolved.FailedNodes, 0);
 
-		FRoadGuidelineBuilder::Build(*Offset, OffsetSolved);
+		FRoadGuidelineBuilder::Build(*Offset, OffsetSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// Eastward runs +X, so the segment's left is +Y. A guideline 175uu left of centre
 		// sits at roughly y = +175 at BOTH ends.
@@ -215,7 +216,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSolveResult TeeSolved = FRoadNetworkSolver::SolveAll(*Tee);
 		TestEqual(TEXT("the tee solved"), TeeSolved.FailedNodes, 0);
 
-		FRoadGuidelineBuilder::Build(*Tee, TeeSolved);
+		FRoadGuidelineBuilder::Build(*Tee, TeeSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		int32 TeeTurns = 0;
 		for (const FGuidelineEdge& Edge : Tee->GetGuidelineEdges())
@@ -248,7 +249,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 			if (Node.bAlive) { ++NodesBefore; }
 		}
 
-		FRoadGuidelineBuilder::Build(*Net, Solved);
+		FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		int32 After = 0;
 		for (const FGuidelineEdge& Edge : Net->GetGuidelineEdges())
@@ -291,7 +292,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 				Mutable->MaxWingspan = 6543.0;   // a value derivation would never produce
 			}
 
-			FRoadGuidelineBuilder::Build(*Net, Solved);
+			FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 			const FGuidelineEdge* Survivor = Net->GetGuidelineEdge(Edited);
 			if (TestNotNull(TEXT("the edited edge survives regeneration"), Survivor))
@@ -361,7 +362,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSolveResult SpanSolved = FRoadNetworkSolver::SolveAll(*Span);
 		TestEqual(TEXT("the wingspan network solved"), SpanSolved.FailedNodes, 0);
 
-		FRoadGuidelineBuilder::Build(*Span, SpanSolved);
+		FRoadGuidelineBuilder::Build(*Span, SpanSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		int32 SpanTurns = 0;
 		for (const FGuidelineEdge& Edge : Span->GetGuidelineEdges())
@@ -419,7 +420,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSolveResult OneWaySolved = FRoadNetworkSolver::SolveAll(*OneWay);
 		TestEqual(TEXT("the one-way network solved"), OneWaySolved.FailedNodes, 0);
 
-		FRoadGuidelineBuilder::Build(*OneWay, OneWaySolved);
+		FRoadGuidelineBuilder::Build(*OneWay, OneWaySolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// The hub's guideline node for the outbound arm's A end. Turn paths carry no
 		// DerivedFrom, so they are told apart from segment edges that way.
@@ -484,7 +485,7 @@ bool FRoadGuidelineBuilderTest::RunTest(const FString& Parameters)
 		const FRoadSolveResult MixedSolved = FRoadNetworkSolver::SolveAll(*Mixed);
 		TestEqual(TEXT("the mixed-class network solved"), MixedSolved.FailedNodes, 0);
 
-		FRoadGuidelineBuilder::Build(*Mixed, MixedSolved);
+		FRoadGuidelineBuilder::Build(*Mixed, MixedSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// EXACT counts, not "> 0". Three arms - two aircraft, one ground vehicle - give six
 		// ordered pairs: two aircraft-to-aircraft, and four crossing between classes. A

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "AirsideTestFixtures.h"
 #include "Build/ExitGeometry.h"
 #include "Build/RoadGuidelineBuilder.h"
@@ -136,7 +137,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FVector2D East(1.0, 0.0);
 	const FVector2D TowardT = FVector2D(1.0, -1.0).GetSafeNormal();
@@ -297,7 +298,7 @@ bool FRunwayExitArcTest::RunTest(const FString& Parameters)
 		Bare->AddStraightSegment(BW, BX, Runway);
 		Bare->AddStraightSegment(BX, BE, Runway);
 		const FRoadSolveResult BareSolved = FRoadNetworkSolver::SolveAll(*Bare);
-		FRoadGuidelineBuilder::Build(*Bare, BareSolved);
+		FRoadGuidelineBuilder::Build(*Bare, BareSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 		int32 Alive = 0;
 		for (const FGuidelineNode& Node : Bare->GetGuidelineNodes()) { Alive += Node.bAlive ? 1 : 0; }
 		TestEqual(TEXT("a runway meeting only itself has its four end nodes and no set-back nodes"), Alive, 4);
@@ -352,7 +353,7 @@ bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 	// Rebuild from scratch, as a save/load or any edit does.
 	const FVector2D Before = End->Position;
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*A.Net);
-	FRoadGuidelineBuilder::Build(*A.Net, Solved);
+	FRoadGuidelineBuilder::Build(*A.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	const FGuidelineNodeId After = ExitArcNodeFor(*A.Net, A.XT, /*bEndA=*/true);
 	if (TestTrue(TEXT("the end still exists by identity after the rebuild"), After.IsSet()))
 	{
@@ -377,7 +378,7 @@ bool FRunwayHoldingPositionsAreDerivedTest::RunTest(const FString& Parameters)
 		Net->AddStraightSegment(X, E, Runway);
 		const FRoadSegmentId XQ = Net->AddStraightSegment(X, Q, Taxiway);
 		const FRoadSolveResult S2 = FRoadNetworkSolver::SolveAll(*Net);
-		FRoadGuidelineBuilder::Build(*Net, S2);
+		FRoadGuidelineBuilder::Build(*Net, S2, UAirsideSettings::ResolveLargestServiceVehicle());
 		const FGuidelineNodeId QEnd = ExitArcNodeFor(*Net, XQ, true);
 		if (TestTrue(TEXT("arcs off: the taxiway end exists"), QEnd.IsSet()))
 		{
@@ -457,7 +458,7 @@ bool FRunwayExitArcOnPavementTest::RunTest(const FString& Parameters)
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
 	TestEqual(TEXT("every node solves"), Solved.FailedNodes, 0);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// The pavement the player sees, from the same solve.
 	FRoadMeshBuilder Pavement(10.0);

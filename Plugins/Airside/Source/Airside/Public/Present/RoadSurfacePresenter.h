@@ -5,6 +5,7 @@
 #include "Templates/Function.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadMeshSink.h"
+#include "Model/Airframe.h"
 #include "Model/RoadHandles.h"
 #include "Model/RunwayFacts.h"
 #include "Tool/RoadEditTarget.h"
@@ -110,6 +111,20 @@ public:
 		 * about a painted lead-in, not per-airport tuning.
 		 */
 		double ServiceLinkRadius = FAnchorLink::DefaultServiceLinkRadius;
+
+		/**
+		 * The biggest thing that may drive a service road - see
+		 * UAirsideSettings::ResolveLargestServiceVehicle.
+		 *
+		 * RESOLVED ONCE HERE, not by the solver, the guideline builder or the anchor
+		 * linker (issue #190). Each of those used to build a fresh FAirframe by calling
+		 * back into Content/ from an inner loop - per arm, per ordered arm pair, twice per
+		 * link - which is the exact shape ARoadNetworkActor::MakeSurfaceSettings exists to
+		 * avoid for the nine Resolve* calls beside it. Default-constructed (all-zero) rather
+		 * than defaulting to a real vehicle: a caller that forgets to set this gets a fillet
+		 * radius of zero rather than a plausible-looking wrong one, which fails loudly.
+		 */
+		FAirframe LargestServiceVehicle;
 
 		/** Already resolved - see ARoadNetworkActor::ResolveSurfaceMaterial and its siblings. */
 		UMaterialInterface* SurfaceMaterial = nullptr;

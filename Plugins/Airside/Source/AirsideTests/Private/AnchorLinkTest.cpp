@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/AnchorLink.h"
 #include "Entities/AircraftType.h"
@@ -74,7 +75,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		}
 		TestEqual(TEXT("and it starts an island - nothing joins it"), Stop->Incident.Num(), 0);
 
-		const int32 Joined = FAnchorLink::Build(*Net);
+		const int32 Joined = FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		TestTrue(TEXT("at least the stop position joins"), Joined >= 1);
 
 		// Re-read: joining reallocates the node array.
@@ -152,7 +153,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		const FEntityInstanceId Placed =
 			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), -UE_DOUBLE_PI * 0.5);
 
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FGuidelineNode* Stop = Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode);
 		if (TestNotNull(TEXT("the stop position resolves"), Stop))
@@ -172,7 +173,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		const FEntityInstanceId Placed = Net->PlaceEntity(
 			Stand, Stand->Anchors, FVector2D(0.0, FAnchorLink::DefaultMaxLeadIn * 2.0), UE_DOUBLE_PI * 0.5);
 
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FGuidelineNode* Stop = Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode);
 		if (TestNotNull(TEXT("the stop position resolves"), Stop))
@@ -192,8 +193,8 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		const FEntityInstanceId Placed =
 			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
 
-		FAnchorLink::Build(*Net);
-		const int32 SecondPass = FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
+		const int32 SecondPass = FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		TestEqual(TEXT("a second pass joins nothing new"), SecondPass, 0);
 
@@ -214,7 +215,7 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 
 		const FEntityInstanceId Placed =
 			Net->PlaceEntity(Stand, Stand->Anchors, FVector2D(0.0, 4000.0), UE_DOUBLE_PI * 0.5);
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		FRouteQuery Query;
 		Query.Start = West;

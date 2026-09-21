@@ -73,8 +73,8 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		SegmentsAlive, Net->GetEntities().Num(), Net->GetHoldingPositionMarks().Num(), GuidelineNodesSaved, GuidelineEdgesSaved, AuthoredEdgesSaved);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
-	const int32 Joined = FAnchorLink::Build(*Net);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
+	const int32 Joined = FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	int32 GuidelineNodes = 0, GuidelineEdges = 0, AuthoredEdges = 0, HoldingPositionNodes = 0;
 	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { if (N.bAlive) { ++GuidelineNodes; HoldingPositionNodes += N.HoldingPositionFor.IsSet() ? 1 : 0; } }

@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -343,8 +344,8 @@ bool FRoadEntityTest::RunTest(const FString& Parameters)
 
 		// Now churn the graph. Twice, because the first Build has nothing to clear.
 		const FRoadSolveResult LiveSolved = FRoadNetworkSolver::SolveAll(*Live);
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
-		FRoadGuidelineBuilder::Build(*Live, LiveSolved);
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
+		FRoadGuidelineBuilder::Build(*Live, LiveSolved, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		const FEntityInstance* After = Live->GetEntity(Gate12);
 		if (TestNotNull(TEXT("the stand survives a rebuild"), After))

@@ -312,7 +312,7 @@ void FFuelFixture::RunAnchorLinks()
 	// Check-Architecture's layer rules apply inside the plugin modules themselves, not to
 	// their test modules. Called directly rather than through a solve, because this fixture
 	// authors its guidelines by hand and has no pavement for a solve to work on.
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 }
 
 void FFuelFixture::RelayPhases()

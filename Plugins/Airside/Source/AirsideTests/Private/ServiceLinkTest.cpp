@@ -272,7 +272,7 @@ bool FAircraftLeadInStillCastsARayTest::RunTest(const FString& Parameters)
 	const FEntityInstanceId Placed =
 		PlaceStand(*Net, *Stand, FVector2D(0.0, 2000.0), -UE_DOUBLE_PI * 0.5);
 
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FGuidelineNode* Pose = Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode);
 	if (TestNotNull(TEXT("the stop position resolves"), Pose))
@@ -331,7 +331,7 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 				ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		// EVERY SERVICE, not just the fuel one. The two sides never meet, so a test that asked
 		// only about the hydrant would pass with the whole port side orphaned - which is
@@ -369,7 +369,7 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 			ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		TestFalse(TEXT("a road across the nose enters nothing - the entries are all aft"),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
@@ -385,7 +385,7 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 			ETraversalClass::GroundVehicle, Far);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		TestFalse(TEXT("a road 200 m behind the stand does not reach it"),
 			Net->IsServiceNodeConnected(AnchorNode(*Net, Placed, TEXT("HydrantPit"))));
@@ -423,7 +423,7 @@ bool FStandLaneDoesNotJoinItselfTest::RunTest(const FString& Parameters)
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
 
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	TestTrue(TEXT("the aircraft half still works - the pose joins the taxiway"),
 		Net->GetGuidelineNode(Net->GetEntity(Placed)->PoseNode)->Incident.Num() > 0);
@@ -436,7 +436,7 @@ bool FStandLaneDoesNotJoinItselfTest::RunTest(const FString& Parameters)
 
 	// A SECOND PASS JOINS NOTHING NEW, which is the ordinary case rather than an unusual one:
 	// the graph is rebuilt on every road edit and lane and links are laid again each time.
-	TestEqual(TEXT("a second pass joins nothing new"), FAnchorLink::Build(*Net), 0);
+	TestEqual(TEXT("a second pass joins nothing new"), FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle()), 0);
 	return true;
 }
 
@@ -481,7 +481,7 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 		Row.Add(PlaceStand(*Net, *Stand, FVector2D(0.0, -12000.0 + At * 8000.0), 0.0));
 	}
 
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	for (int32 At = 0; At < Row.Num(); ++At)
 	{
@@ -577,7 +577,7 @@ namespace ServiceLinkFixture
 		Built.Net = NewObject<URoadNetwork>(GetTransientPackage());
 		Built.RoadNear = Lay(*Built.Net, RoadFrom, RoadTo, ETraversalClass::GroundVehicle, Built.RoadFar);
 		Built.Placed = PlaceStand(*Built.Net, Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Built.Net);
+		FAnchorLink::Build(*Built.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		return Built;
 	}
 }
@@ -765,7 +765,7 @@ bool FStandLinkClearsTheTruckLockTest::RunTest(const FString& Parameters)
 			ETraversalClass::GroundVehicle, North);
 
 		const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-		FAnchorLink::Build(*Net);
+		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		int32 Measured = 0;
 		for (const FGuidelineNodeId& Entry : EntriesOf(*Net, Placed))
@@ -885,7 +885,7 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	FRouteQuery Query;
 	Query.Start = RoadSouth;
@@ -975,7 +975,7 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	if (!TestNotNull(TEXT("a design aircraft to clear"), Stand->DesignAircraft.Get())) { return false; }
 
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	FRouteQuery Query;
 	Query.Start = RoadWest;
@@ -1263,7 +1263,7 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	const FEntityInstanceId Placed = PlaceStand(*Net, *Stand, FVector2D::ZeroVector, 0.0);
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	const FGuidelineNodeId Hydrant = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
 	if (!TestTrue(TEXT("the hydrant resolves to a node"), Hydrant.IsSet()))
@@ -1518,7 +1518,7 @@ bool FAnchorLinkResolvesEachPendingLinkOnceTest::RunTest(const FString& Paramete
 	LayFixture(*Net);
 
 	const int32 Before = Net->AnchorLinkFindCallCountForTest();
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	const int32 Calls = Net->AnchorLinkFindCallCountForTest() - Before;
 
 	TestEqual(
@@ -1577,14 +1577,14 @@ bool FAnchorLinkDoesNotRescanEveryGuidelineTest::RunTest(const FString& Paramete
 	URoadNetwork* Bare = NewObject<URoadNetwork>(GetTransientPackage());
 	LayFixture(*Bare, 0);
 	const int32 BeforeBare = Bare->SampleGuidelineCallCountForTest();
-	FAnchorLink::Build(*Bare);
+	FAnchorLink::Build(*Bare, UAirsideSettings::ResolveLargestServiceVehicle());
 	const int32 BareCost = Bare->SampleGuidelineCallCountForTest() - BeforeBare;
 
 	URoadNetwork* Crowded = NewObject<URoadNetwork>(GetTransientPackage());
 	constexpr int32 DecoyCount = 200;
 	LayFixture(*Crowded, DecoyCount);
 	const int32 BeforeCrowded = Crowded->SampleGuidelineCallCountForTest();
-	FAnchorLink::Build(*Crowded);
+	FAnchorLink::Build(*Crowded, UAirsideSettings::ResolveLargestServiceVehicle());
 	const int32 CrowdedCost = Crowded->SampleGuidelineCallCountForTest() - BeforeCrowded;
 
 	AddInfo(FString::Printf(TEXT("SampleGuideline calls: %d with no decoys, %d with %d of them"),

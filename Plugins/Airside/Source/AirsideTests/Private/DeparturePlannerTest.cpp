@@ -52,10 +52,10 @@ namespace
 		Out.Net->AddStraightSegment(X, E, Runway);
 		Out.Net->AddStraightSegment(X, T, Taxiway);
 		const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Out.Net);
-		FRoadGuidelineBuilder::Build(*Out.Net, Solved);
+		FRoadGuidelineBuilder::Build(*Out.Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 		UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 		const FEntityInstanceId StandId = Out.Net->PlaceEntity(Stand, Stand->Anchors, Out.XAt + FVector2D(25000.0, -14000.0), 0.0);
-		FAnchorLink::Build(*Out.Net);
+		FAnchorLink::Build(*Out.Net, UAirsideSettings::ResolveLargestServiceVehicle());
 		for (const FEntityInstance& Instance : Out.Net->GetEntities())
 		{
 			if (Instance.bAlive && Instance.PoseNode.IsSet()) { Out.StandNode = Instance.PoseNode; }
@@ -138,10 +138,10 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	Net->AddStraightSegment(X, E, Runway);
 	Net->AddStraightSegment(X, T, Taxiway);
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
-	FRoadGuidelineBuilder::Build(*Net, Solved);
+	FRoadGuidelineBuilder::Build(*Net, Solved, UAirsideSettings::ResolveLargestServiceVehicle());
 	UEntityDefinition* Stand = UEntityDefinition::MakeStandTransient();
 	Net->PlaceEntity(Stand, Stand->Anchors, XAt + FVector2D(25000.0, -14000.0), 0.0);
-	FAnchorLink::Build(*Net);
+	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 	FGuidelineNodeId StandNode;
 	for (const FEntityInstance& Instance : Net->GetEntities()) { if (Instance.bAlive) { StandNode = Instance.PoseNode; } }
 	if (!TestTrue(TEXT("the stand is linked"), StandNode.IsSet())) { return false; }

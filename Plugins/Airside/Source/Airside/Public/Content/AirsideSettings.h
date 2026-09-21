@@ -86,6 +86,18 @@ public:
 	static const UAirsideContent* GetContent();
 
 	/**
+	 * How many times GetContent has actually run, for issue #190's cache test: every
+	 * ARoadNetworkActor::Resolve*Material call reaches this first, so a rebuild that changed
+	 * nothing MakeSurfaceSettings' cache reads should see this stay flat rather than climbing
+	 * by one per resolver per rebuild. Free-standing for the same reason
+	 * NodeClaimsCallCountForTest is: GetContent is static and every caller goes through it.
+	 */
+	static int32 GetContentCallCountForTest;
+
+	/** Zeroes the counter above - see GetContentCallCountForTest. */
+	static void ResetGetContentCallCountForTest() { GetContentCallCountForTest = 0; }
+
+	/**
 	 * The airframe a route wears when there is no design aircraft to ask - THE ONE place
 	 * UAircraftType::PiperMeridian*() may still be called from production code.
 	 *
@@ -138,6 +150,19 @@ public:
 	 * inversion impossible to repeat.
 	 */
 	static FAirframe ResolveLargestServiceVehicle();
+
+	/**
+	 * How many times ResolveLargestServiceVehicle has actually run, for issue #190's test
+	 * that a rebuild resolves it ONCE and hands the answer down, rather than re-building the
+	 * FAirframe by value per arm (RoadNetworkSolver's BuildNodeInput), per ordered arm pair
+	 * (FRoadGuidelineBuilder::Build) or twice per link (FAnchorLink::Join). A free-standing
+	 * counter, not a member - this function is static and every caller reaches it the same
+	 * way NodeClaimsCallCountForTest's own comment explains for FRoadNetworkSolver.
+	 */
+	static int32 ResolveLargestServiceVehicleCallCountForTest;
+
+	/** Zeroes the counter above - see ResolveLargestServiceVehicleCallCountForTest. */
+	static void ResetResolveLargestServiceVehicleCallCountForTest() { ResolveLargestServiceVehicleCallCountForTest = 0; }
 
 	/**
 	 * What an aircraft's view should wear: THE AGENT'S OWN AIRFRAME FIRST, falling back to

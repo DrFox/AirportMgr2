@@ -1,6 +1,7 @@
 #include "CoreMinimal.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
+#include "Content/AirsideSettings.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -51,7 +52,7 @@ bool FRoadCrossesTaxiwayTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	LayCrossing(*Net, /*bDrawFarSideOfRoad=*/true);
-	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net));
+	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net), UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// THE WHOLE CROSSING RULE, and it is already in the builder: Turn.AllowedTraffic is
 	// FromMask & ToMask, so a turn between arms of different classes keeps only Emergency.
@@ -101,7 +102,7 @@ bool FRoadEndsAgainstTaxiwayTest::RunTest(const FString& Parameters)
 {
 	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
 	LayCrossing(*Net, /*bDrawFarSideOfRoad=*/false);
-	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net));
+	FRoadGuidelineBuilder::Build(*Net, FRoadNetworkSolver::SolveAll(*Net), UAirsideSettings::ResolveLargestServiceVehicle());
 
 	// A road dead-ending against a taxiway's side: the only arm of its own class at that
 	// node is itself, so there is nothing to turn INTO and the junction derives no vehicle
