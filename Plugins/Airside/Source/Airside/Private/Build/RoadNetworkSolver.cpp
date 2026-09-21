@@ -51,9 +51,8 @@ namespace
 		{
 			return false;
 		}
-		FRoadNodeId NodeId;
-		NodeId.Index = NodeIndex;
-		NodeId.Generation = Node.Generation;
+		// Network.NodeIdAt, not a hand-built handle (#79, #173).
+		const FRoadNodeId NodeId = Network.NodeIdAt(NodeIndex);
 
 		OutInput.Position = Node.Position;
 		OutInput.ArcSegments = ArcSegments;
@@ -152,9 +151,8 @@ bool FRoadNetworkSolver::SolveNodeCuts(const URoadNetwork& Network, int32 NodeIn
 		return false;
 	}
 
-	FRoadNodeId NodeId;
-	NodeId.Index = NodeIndex;
-	NodeId.Generation = Node.Generation;
+	// Network.NodeIdAt, not a hand-built handle (#79, #173).
+	const FRoadNodeId NodeId = Network.NodeIdAt(NodeIndex);
 
 	// Incident is maintained sorted by CCW bearing, which is exactly what
 	// FJunctionSolver requires. Do not re-sort here.
@@ -434,9 +432,8 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 		return;
 	}
 
-	FRoadNodeId NodeId;
-	NodeId.Index = NodeIndex;
-	NodeId.Generation = Node.Generation;
+	// Network.NodeIdAt, not a hand-built handle (#79, #173).
+	const FRoadNodeId NodeId = Network.NodeIdAt(NodeIndex);
 
 	// The arm gathering, the skip rule and the fillet clamp all live in SolveNodeCuts,
 	// so a tool asking how far this junction reaches gets the answer from the same

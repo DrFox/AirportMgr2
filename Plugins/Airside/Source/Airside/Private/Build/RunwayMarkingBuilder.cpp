@@ -301,9 +301,8 @@ namespace
 		{
 			continue;
 		}
-		FRoadSegmentId Seed;
-		Seed.Index = Index;
-		Seed.Generation = Segment.Generation;
+		// Network.SegmentIdAt, not a hand-built handle (#79, #173).
+		const FRoadSegmentId Seed = Network.SegmentIdAt(Index);
 		if (!Network.IsRunwaySegment(Seed))
 		{
 			continue;

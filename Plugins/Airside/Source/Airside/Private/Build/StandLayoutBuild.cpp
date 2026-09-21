@@ -106,8 +106,8 @@ FStandLayoutBuild::FResult FStandLayoutBuild::Build(URoadNetwork& Network)
 	}
 
 	// By index, like FAnchorLink::Build: nothing here adds or removes an ENTITY, so holding
-	// this reference across the mutations below is safe, and the handle still has to be built
-	// by hand from the slot - the array elements have no stable handle of their own.
+	// this reference across the mutations below is safe. The handle itself comes from
+	// Network.EntityIdAt (#79, #173) - not built by hand here.
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
@@ -118,9 +118,7 @@ FStandLayoutBuild::FResult FStandLayoutBuild::Build(URoadNetwork& Network)
 			continue;
 		}
 
-		FEntityInstanceId EntityId;
-		EntityId.Index = Index;
-		EntityId.Generation = Instance.Generation;
+		const FEntityInstanceId EntityId = Network.EntityIdAt(Index);
 
 		const double Cosine = FMath::Cos(Instance.Heading);
 		const double Sine = FMath::Sin(Instance.Heading);

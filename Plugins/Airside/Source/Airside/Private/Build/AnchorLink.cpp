@@ -228,9 +228,9 @@ void FAnchorLink::Gather(URoadNetwork& Network, double MaxLeadIn, double Service
 			continue;
 		}
 
-		FEntityInstanceId EntityId;
-		EntityId.Index = Index;
-		EntityId.Generation = Instance.Generation;
+		// Network.EntityIdAt, not a hand-built handle (#79, #173): the slot map is the one
+		// place allowed to know a handle is {index, generation}.
+		const FEntityInstanceId EntityId = Network.EntityIdAt(Index);
 
 		// The stand's design aircraft is what its lead-in can take. A Code C stand's link
 		// then refuses a widebody by the ordinary wingspan rule rather than by a special
