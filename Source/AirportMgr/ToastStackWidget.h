@@ -7,8 +7,29 @@
 #include "NotificationCentre.h"
 #include "ToastStackWidget.generated.h"
 
+class UBorder;
 class UPanelWidget;
+class UTexture2D;
 class UUIStyle;
+
+/**
+ * A card and the entry it currently shows.
+ *
+ * PAIRED BY ID, not by array index. Notifications->Entries() is a queue - PostFeed appends at
+ * the back, expiry and the MaxEntries cap only ever drop the FRONT - so Cards and Entries stay
+ * index-aligned once trimmed, but the ID is what lets a tick tell "this card is still entry 7"
+ * from "the list moved and this card is now showing a different entry", which a bare parallel
+ * TArray<UBorder*> cannot say for itself. One struct, not two arrays that must be kept in step
+ * by hand - see CLAUDE.md's "lists that must agree are one list".
+ */
+USTRUCT()
+struct FToastCard
+{
+	GENERATED_BODY()
+
+	UPROPERTY() int32 EntryId = INDEX_NONE;
+	UPROPERTY() TObjectPtr<UBorder> Card;
+};
 
 /**
  * The feed surface: transient toasts, bottom right, above the bar.
@@ -61,6 +82,18 @@ public:
 	/** The first card's brush, so a test can read the corner radius actually drawn. */
 	bool FirstToastBrushForTest(struct FSlateBrush& OutBrush) const;
 
+	/**
+	 * How many cards have been CONSTRUCTED since the stack was built, as opposed to how many
+	 * are currently showing. Issue #186: the whole tree used to be torn down and rebuilt every
+	 * tick, so this is the counter that goes red if that regresses - N ticks of an unchanging
+	 * feed must add nothing to it.
+	 */
+	int32 CardsConstructedForTest() const { return CardsConstructed; }
+
+	/** The first card's own widget identity, so a test can tell "the same UBorder, unchanged"
+	 *  from "a new UBorder that happens to look the same" - the brush alone cannot say that. */
+	UBorder* FirstToastForTest() const;
+
 protected:
 	/** Builds the stack's chrome and subscribes to the ops runtime's events. See
 	 *  UAirportMgrPanelWidget::Initialize for why this runs from Initialize. */
@@ -70,12 +103,46 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<UNotificationCentre> Notifications;
 
-	void EnsureSlots(const UUIStyle* Style);
-	void Rebuild(const UUIStyle& Style);
+	/** Resolved once in BuildOnce, not re-resolved every tick - the pattern UInspectorWidget's
+	 *  CachedStyle already uses. TObjectPtr, not a raw pointer, so the style asset stays a GC
+	 *  root for as long as this widget is reachable. */
+	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
 
-	/** Severity to palette slot, and to icon. Static: they read the style, not the widget. */
+	/** One icon per severity, resolved once in BuildOnce instead of a LoadSynchronous() every
+	 *  tick per visible card - see IconFor. */
+	UPROPERTY() TObjectPtr<UTexture2D> CachedIconInfo;
+	UPROPERTY() TObjectPtr<UTexture2D> CachedIconSuccess;
+	UPROPERTY() TObjectPtr<UTexture2D> CachedIconWarning;
+
+	/**
+	 * One card per live entry, index-aligned with Notifications->Entries() once SyncCards has
+	 * trimmed the front. This is the whole fix for #186: a card is built once, on arrival, and
+	 * every later tick only touches SetRenderOpacity on the ones that survive.
+	 */
+	UPROPERTY() TArray<FToastCard> Cards;
+
+	int32 CardsConstructed = 0;
+
+	void EnsureSlots(const UUIStyle* Style);
+
+	/** Add and drop cards to match Notifications->Entries(), then set every survivor's
+	 *  opacity for this frame. See the .cpp for why trimming from the front is exact rather
+	 *  than a heuristic. */
+	void SyncCards(const UUIStyle& Style);
+
+	/** Builds the one card for a freshly-arrived entry. Everything about a toast except its
+	 *  opacity is fixed at birth, so this is the only place that constructs Slate widgets. */
+	UBorder* BuildCard(const UUIStyle& Style, const FNotificationEntry& Entry);
+
+	/** The fade curve, read at construction and again every later tick. */
+	float OpacityFor(const FNotificationEntry& Entry) const;
+
+	/** Severity to palette slot. Static: it reads the style, not the widget. */
 	static FLinearColor ColourFor(const UUIStyle& Style, ENotificationSeverity Severity);
-	static UTexture2D* IconFor(const UUIStyle& Style, ENotificationSeverity Severity);
+
+	/** Severity to icon. Not static any more: the textures are resolved once per severity in
+	 *  BuildOnce (see CachedIcon*) rather than LoadSynchronous()'d off the style every call. */
+	UTexture2D* IconFor(ENotificationSeverity Severity) const;
 
 	/** Both are FEED: they happened, they are worth knowing, and they need no decision. */
 	UFUNCTION() void OnNotification(const FString& Text);

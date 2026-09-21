@@ -8,6 +8,7 @@ void UNotificationCentre::PostFeed(const FText& Text, ENotificationSeverity Seve
 	Entry.Severity = Severity;
 	Entry.Text = Text;
 	Entry.RaisedAtRealSeconds = NowRealSeconds;
+	Entry.Id = NextEntryId++;
 	List.Add(Entry);
 
 	if (List.Num() > MaxEntries)

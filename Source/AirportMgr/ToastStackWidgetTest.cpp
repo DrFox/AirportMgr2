@@ -179,4 +179,64 @@ bool FToastSeverityTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * ISSUE #186, PINNED. TickFeed used to call Rebuild every frame, which did
+ * ToastColumn->ClearChildren() and reconstructed every card - UBorder, UHorizontalBox, UImage,
+ * UTextBlock - from scratch, for a widget that ticks every frame it is on screen. A fresh
+ * UBorder with an identical brush passes FToastCardRoundingTest above; only watching the
+ * WIDGET ITSELF across ticks catches a rebuild that merely looks unchanged.
+ *
+ * A plain count of ConstructWidget calls would need one probe per widget class (6, per the
+ * issue); CardsConstructedForTest counts BuildCard calls instead - the one function every
+ * new card's construction is required to go through - which is the same measurement with one
+ * probe. The identity check below is what actually goes red on the reverted code: on main,
+ * FirstToastForTest() returns a DIFFERENT UBorder every tick even though nothing changed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FToastStackDoesNotRebuildUnchangedEntriesTest,
+	"AirportMgr.UI.ToastCardsSurviveAnUnchangedTick",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FToastStackDoesNotRebuildUnchangedEntriesTest::RunTest(const FString& Parameters)
+{
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	if (!TestNotNull(TEXT("a world"), World)) { return false; }
+	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+	Context.SetCurrentWorld(World);
+	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+
+	UToastStackWidget* Stack = MakeStack(World);
+	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
+
+	// THREE ENTRIES, not one: the old ClearChildren()-and-rebuild would have rebuilt all of
+	// them, so the assertions below would go red for any of the three, not just the front.
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("Saved 'quick'")));
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("Loaded 'quick'")));
+	Stack->Centre()->PostFeed(FText::FromString(TEXT("Arrival refused - runway too short")));
+
+	// First tick: the three cards are BUILT. This is the one tick allowed to construct.
+	Stack->TickFeed(1.0f / 60.0f);
+	TestEqual(TEXT("three entries built three cards"), Stack->ToastCountForTest(), 3);
+	const int32 BuiltAfterFirstTick = Stack->CardsConstructedForTest();
+	TestEqual(TEXT("one BuildCard per entry, once"), BuiltAfterFirstTick, 3);
+
+	UBorder* FirstCard = Stack->FirstToastForTest();
+	if (!TestNotNull(TEXT("the first card exists"), FirstCard)) { return false; }
+
+	// K MORE TICKS, N UNCHANGED ENTRIES: nothing is posted and nothing expires (all three are
+	// well inside the 8-second default lifetime), so a correct widget touches opacity only.
+	for (int32 Frame = 0; Frame < 30; ++Frame)
+	{
+		Stack->TickFeed(1.0f / 60.0f);
+	}
+
+	TestEqual(TEXT("still three cards - none dropped, none duplicated"),
+		Stack->ToastCountForTest(), 3);
+	TestEqual(TEXT("30 more ticks of an unchanged feed construct ZERO new cards"),
+		Stack->CardsConstructedForTest(), BuiltAfterFirstTick);
+	TestTrue(TEXT("the front card is the SAME UBorder instance, not a rebuilt lookalike"),
+		Stack->FirstToastForTest() == FirstCard);
+	return true;
+}
+
 #endif
