@@ -1,7 +1,5 @@
 #include "CoreMinimal.h"
 #include "Components/VerticalBox.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
@@ -14,6 +12,7 @@
 #include "OfferViewModels.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -28,13 +27,10 @@ bool FOfferInboxWidgetTest::RunTest(const FString& Parameters)
 	// which is the path a player gets until somebody makes the asset, so it is the path worth
 	// pinning. Refresh is called directly, as UInspectorWidget's test does and for the same
 	// reason: a headless test never paints, so NativeTick never runs.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
 	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
 
 	// PLACE A NODE FIRST. ARoadNetworkActor::Network is null until URoadEditFacade::

@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "RoadBuildController.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/ToolReadout.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -24,13 +23,10 @@ bool FPlotReadoutReachesTheBarTest::RunTest(const FString& Parameters)
 {
 	// World-and-controller setup exactly as AirportMgr.Actions.ControllerOwnsCameraAndHud
 	// does it - the same degraded path, with no asset and no level.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 
 	// THE BUILD ACTION IS IN THE REGISTRY, not a bespoke button. The bar builds itself from

@@ -3,8 +3,6 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "InspectorWidget.h"
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
@@ -12,6 +10,7 @@
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/Selection.h"
 #include "UIStyle.h"
 
@@ -29,13 +28,10 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 	// Refresh is called directly with the same arguments NativeTick passes, because a
 	// headless test has no controller to poll through - the tick-to-Refresh seam is one
 	// line and is read, not run, here.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
 	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor"), Actor)) { return false; }
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	URoadNetwork& Net = *Actor->Network;
@@ -95,13 +91,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FInspectorVerbsFromRegistryTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(World, UInspectorWidget::StaticClass());
+	UInspectorWidget* Panel = CreateWidget<UInspectorWidget>(TestWorld.World, UInspectorWidget::StaticClass());
 	if (!TestNotNull(TEXT("the panel is created with no asset"), Panel)) { return false; }
 	if (!TestNotNull(TEXT("Depart button is built"), Panel->DepartButton.Get())) { return false; }
 	if (!TestNotNull(TEXT("Follow button is built"), Panel->FollowButton.Get())) { return false; }

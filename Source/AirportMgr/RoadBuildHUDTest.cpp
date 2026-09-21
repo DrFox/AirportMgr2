@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "BuildActions.h"
 #include "RoadBuildHUD.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadBuildTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -80,13 +79,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPinnedAndProvisionalReadApartTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	ARoadBuildHUD* Hud = TestWorld.World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
 	const FPreviewLook& Pinned = Hud->LookForTest(EPreviewStyle::Pinned);
@@ -160,13 +156,10 @@ bool FRoadBuildHUDLooksTest::RunTest(const FString& Parameters)
 	// matching entry used to fall through StyleColour's checkNoEntry() crash; now it is
 	// LookFor's, and this is what catches a style left out of the constructor's seeding list
 	// before a player does, at the first frame that draws it.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	ARoadBuildHUD* Hud = TestWorld.World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
 	// EPreviewStyle is a plain 0-based enum ending at Handle - iterated the same way
@@ -198,13 +191,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FGuideReadsApartFromProvisionalTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Ctx = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Ctx.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildHUD* Hud = World->SpawnActor<ARoadBuildHUD>();
+	ARoadBuildHUD* Hud = TestWorld.World->SpawnActor<ARoadBuildHUD>();
 	if (!TestNotNull(TEXT("the hud"), Hud)) { return false; }
 
 	const FPreviewLook& Guide = Hud->LookForTest(EPreviewStyle::Guide);
