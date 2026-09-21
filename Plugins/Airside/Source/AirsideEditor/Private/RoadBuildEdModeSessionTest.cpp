@@ -8,6 +8,7 @@
 #include "RoadBuildEditorTool.h"
 #include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
+#include "Tool/RoadDrawTool.h"
 #include "Tool/RunwayTool.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -319,6 +320,239 @@ bool FRoadBuildEdModeEditVerbTest::RunTest(const FString& Parameters)
 		TestNotNull(*FString::Printf(TEXT("%s is bound on the toolkit list after BindCommands"),
 			*Verb.Key), Action);
 	}
+
+	return true;
+}
+
+/**
+ * MakeReselectContext's HALF of issue #191/#92-#93's item (c): StartToolAction cannot be
+ * driven directly here (same gate as everywhere else in this file - it needs a live
+ * UEditorInteractiveToolsContext), so this exercises the piece it actually calls once that
+ * gate passes - that the modifiers it is GIVEN land on the returned FToolContext, rather than
+ * being silently dropped the way the old zero-argument version dropped them by construction.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMakeReselectContextCarriesModifiersTest,
+	"Airside.Editor.MakeReselectContextCarriesModifiers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMakeReselectContextCarriesModifiersTest::RunTest(const FString& Parameters)
+{
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	// A real world purely so FindOrCreate has somewhere to resolve a target - see
+	// FRoadBuildEdModeSessionTest's own comment on WorldOverrideForTest above.
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false, EWorldType::Editor);
+	if (!TestNotNull(TEXT("a world for the mode to resolve a target in"), TestWorld.World))
+	{
+		return false;
+	}
+	Mode->WorldOverrideForTest = TestWorld.World;
+
+	const FToolContext Plain = Mode->MakeReselectContext();
+	TestFalse(TEXT("no modifiers with no arguments, same as before this parameter existed"),
+		Plain.bRemoveModifier);
+	TestFalse(TEXT("no modifiers with no arguments, same as before this parameter existed"),
+		Plain.bInsertModifier);
+
+	const FToolContext WithRemove = Mode->MakeReselectContext(/*bRemoveModifier*/ true, /*bInsertModifier*/ false);
+	TestTrue(TEXT("a held remove modifier reaches the reselect context"), WithRemove.bRemoveModifier);
+	TestFalse(TEXT("insert was not asked for"), WithRemove.bInsertModifier);
+
+	const FToolContext WithInsert = Mode->MakeReselectContext(/*bRemoveModifier*/ false, /*bInsertModifier*/ true);
+	TestFalse(TEXT("remove was not asked for"), WithInsert.bRemoveModifier);
+	TestTrue(TEXT("a held insert modifier reaches the reselect context"), WithInsert.bInsertModifier);
+
+	return true;
+}
+
+/**
+ * Setup()'s OWN half of issue #191/#92-#93's item (c): its SelectContext used to be
+ * `FToolContext SelectContext; SelectContext.Target = Target;` - both modifiers left at their
+ * false defaults regardless of what ITF had already told this instance was held. That matters
+ * because a fresh tool object's Setup() can itself land on FBuildSession's RESELECT branch
+ * (Index == ActiveTool already) rather than a switch - exactly what a second activation of an
+ * already-active palette entry produces, which this test drives directly.
+ *
+ * FRunwayTool::OnReselect is the one place the distinction is externally visible without a
+ * viewport: Ctrl chooses NextApproach over NextWidth (see its own comment), so an Approach that
+ * moved while WidthIndex did not is what "the modifier reached Setup's context" looks like from
+ * outside FBuildSession. Chosen over the taxiway tool's own OnReselect (width-only) for exactly
+ * that reason - a width still cycling would not distinguish "modifier arrived" from "modifier
+ * ignored, cycled the default way".
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEditorToolSetupCarriesModifiersTest,
+	"Airside.Editor.SetupSelectContextCarriesHeldModifiers",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEditorToolSetupCarriesModifiersTest::RunTest(const FString& Parameters)
+{
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	int32 RunwayIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+	{
+		if (ToolRegistry()[Index].Key == EKeys::Six)
+		{
+			RunwayIndex = Index;
+		}
+	}
+	if (!TestTrue(TEXT("the registry has the runway tool on 6"), RunwayIndex != INDEX_NONE))
+	{
+		return false;
+	}
+
+	URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(Mode);
+	Builder->ToolIndex = RunwayIndex;
+	FToolBuilderState State;
+	State.ToolManager = NewObject<UInteractiveToolManager>(Mode);
+
+	// FIRST ACTIVATION: switches the shared session onto the runway tool (Index != the
+	// session's default ActiveTool 0), so Setup()'s own SelectTool call takes the SWITCH
+	// branch, not reselect. No target needed - NextApproach/NextSurface do not read one, and
+	// this test's probe (Approach) is one of those two, not NextWidth.
+	URoadBuildEditorTool* First = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
+	if (!TestNotNull(TEXT("the builder made a tool"), First))
+	{
+		return false;
+	}
+	First->Setup();
+
+	FRunwayTool* Runway = static_cast<FRunwayTool*>(Mode->GetSession().GetActiveTool());
+	if (!TestNotNull(TEXT("the runway tool is active on the shared session"), Runway))
+	{
+		return false;
+	}
+	const ERunwayApproach StartApproach = Runway->Approach;
+	const int32 StartWidth = Runway->WidthIndex;
+
+	// SECOND ACTIVATION of the SAME palette entry, the way pressing 6 again does: ITF always
+	// builds a fresh tool object (see URoadBuildEdMode::GetSession's own comment on why the
+	// SESSION, not the tool, is what has to persist), told Ctrl is down BEFORE its own Setup()
+	// runs - the same order OnUpdateModifierState arrives in once Setup has registered the
+	// behaviours that report it, just on the tool that is about to become active rather than
+	// the one leaving.
+	URoadBuildEditorTool* Second = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
+	if (!TestNotNull(TEXT("a second activation builds a second tool"), Second))
+	{
+		return false;
+	}
+	Second->OnUpdateModifierState(URoadBuildEditorTool::RemoveModifierId, true);
+	Second->Setup();
+
+	TestEqual(TEXT("still the same runway tool instance on the shared session"),
+		Mode->GetSession().GetActiveTool(), static_cast<IBuildTool*>(Runway));
+	TestEqual(TEXT("Ctrl held into Setup's SelectContext cycles the approach, not the width"),
+		Runway->WidthIndex, StartWidth);
+	TestTrue(TEXT("the approach actually moved, so the modifier reached OnReselect"),
+		Runway->Approach != StartApproach);
+
+	return true;
+}
+
+/**
+ * ITEM (d) OF ISSUE #191/#92-#93: PIE calls Tool->OnDeactivate on Undo/Redo/Clear
+ * (ARoadBuildController::OnUndo/OnRedo/OnClearNetwork) because the tool may be part-way
+ * through a chain built on a graph node the undo/redo just changed. This mode had NO
+ * FEditorUndoClient at all before now (`grep PostEditUndo|FEditorUndoClient|PostUndo` found
+ * zero hits), so FRoadDrawTool kept chaining from a node an editor Ctrl+Z had already removed.
+ *
+ * URoadBuildEdMode::PostUndo/PostRedo need a live UEditorInteractiveToolsContext to find "the
+ * active tool" through GetToolManager()->GetActiveTool() - the same gate every other test in
+ * this file works around - so this drives URoadBuildEditorTool::DeactivateOnUndo directly,
+ * which is the entire body of what PostUndo/PostRedo call once that gate passes (see
+ * DeactivateActiveToolOnUndo's own comment). What this actually measures: that deactivating a
+ * REAL FRoadDrawTool mid-chain, through a REAL IRoadEditTarget, drops the pending node - the
+ * concrete shape "FRoadDrawTool chains from a node Ctrl+Z removed" takes, not a re-statement
+ * that OnDeactivate exists.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRoadBuildEditorToolDeactivateOnUndoTest,
+	"Airside.Editor.UndoDeactivatesTheActiveBuildTool",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRoadBuildEditorToolDeactivateOnUndoTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World))
+	{
+		return false;
+	}
+	if (!TestNotNull(TEXT("a target actor"), TestWorld.Actor))
+	{
+		return false;
+	}
+
+	URoadBuildEdMode* Mode = NewObject<URoadBuildEdMode>(GetTransientPackage());
+	if (!TestNotNull(TEXT("an ed mode"), Mode))
+	{
+		return false;
+	}
+
+	int32 TaxiwayIndex = INDEX_NONE;
+	for (int32 Index = 0; Index < ToolRegistry().Num(); ++Index)
+	{
+		if (ToolRegistry()[Index].Key == EKeys::One)
+		{
+			TaxiwayIndex = Index;
+		}
+	}
+	if (!TestTrue(TEXT("the registry has the taxiway tool on 1"), TaxiwayIndex != INDEX_NONE))
+	{
+		return false;
+	}
+
+	URoadBuildEditorToolBuilder* Builder = NewObject<URoadBuildEditorToolBuilder>(Mode);
+	Builder->ToolIndex = TaxiwayIndex;
+	FToolBuilderState State;
+	State.ToolManager = NewObject<UInteractiveToolManager>(Mode);
+	URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(Builder->BuildTool(State));
+	if (!TestNotNull(TEXT("the builder made a tool"), Tool))
+	{
+		return false;
+	}
+
+	// Setup() FIRST, THEN SetTargetForTest - not the other order. Setup() unconditionally
+	// overwrites Target with ResolveTarget()'s own answer (null here: the bare
+	// UInteractiveToolManager this harness builds has no world to find TestWorld.Actor in), so
+	// calling SetTargetForTest before Setup() would have its assignment discarded the moment
+	// Setup() ran. Setup() also puts this instance's session onto the taxiway tool, which is
+	// what DeactivateOnUndo below needs Target for.
+	Tool->Setup();
+	Tool->SetTargetForTest(TestWorld.Actor);
+
+	FRoadDrawTool* Draw = static_cast<FRoadDrawTool*>(Mode->GetSession().GetActiveTool());
+	if (!TestNotNull(TEXT("the taxiway tool is active"), Draw))
+	{
+		return false;
+	}
+
+	// A CLICK THROUGH THE REAL TARGET, so the tool is genuinely chaining from a live node
+	// rather than a stand-in for one.
+	FToolContext ClickContext;
+	ClickContext.Target = TestWorld.Actor;
+	ClickContext.Cursor = FVector2D(0.0, 0.0);
+	Draw->OnClick(ClickContext);
+	if (!TestTrue(TEXT("the click left a pending node to chain from"),
+		Draw->GetPendingNode() != INDEX_NONE))
+	{
+		return false;
+	}
+
+	// THE FIX ITSELF: before issue #191, nothing called this on an editor undo at all.
+	Tool->DeactivateOnUndo();
+
+	TestTrue(TEXT("undo deactivated the tool, dropping the node it was chaining from - the "
+		"exact bug report this closes"), Draw->GetPendingNode() == INDEX_NONE);
 
 	return true;
 }

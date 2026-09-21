@@ -1,6 +1,7 @@
 #include "RoadBuildEdMode.h"
 
 #include "AirsideEditorLog.h"
+#include "Editor.h"
 #include "EdModeInteractiveToolsContext.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildEdModeCommands.h"
@@ -77,6 +78,15 @@ void URoadBuildEdMode::Enter()
 {
 	UEdMode::Enter();
 
+	// ISSUE #191/#92-#93: this mode had no FEditorUndoClient at all before now, so an editor
+	// Ctrl+Z never reached PostUndo below - see that method's own comment. Registered here,
+	// unregistered in Exit(), the same pairing GEditor's own clients use (FEditorModeTools
+	// itself is one - see EditorModeManager.h).
+	if (GEditor != nullptr)
+	{
+		GEditor->RegisterForUndo(this);
+	}
+
 	const FRoadBuildEdModeCommands& Commands = FRoadBuildEdModeCommands::Get();
 	const TArray<TSharedPtr<FUICommandInfo>> ToolCommands = Commands.ToolCommandsInOrder();
 	const TConstArrayView<FToolRegistration> Registry = ToolRegistry();
@@ -125,6 +135,20 @@ void URoadBuildEdMode::Enter()
 	// at runtime either - see ARoadBuildController::LandAircraftNearViewFocus - so wiring it up here
 	// needs its own command and its own cursor-to-plane resolution, not a seventh registry
 	// entry; out of scope for making the two drivers share ONE tool table.
+}
+
+void URoadBuildEdMode::Exit()
+{
+	// See Enter's own comment. GEditor can already be null on shutdown; UnregisterForUndo on a
+	// client that never registered (or a null GEditor) is a documented no-op, not a hazard, but
+	// the null check matches the one Enter's registration already makes rather than trusting
+	// that symmetry silently.
+	if (GEditor != nullptr)
+	{
+		GEditor->UnregisterForUndo(this);
+	}
+
+	UEdMode::Exit();
 }
 
 void URoadBuildEdMode::BindCommands()
@@ -199,7 +223,7 @@ TSharedPtr<FUICommandList> URoadBuildEdMode::ToolkitCommandsForTest() const
 	return Toolkit->GetToolkitCommands();
 }
 
-FToolContext URoadBuildEdMode::MakeReselectContext() const
+FToolContext URoadBuildEdMode::MakeReselectContext(bool bRemoveModifier, bool bInsertModifier) const
 {
 	// FRunwayTool::OnReselect calls NextWidth, which since issue #78 asks Context.Target for
 	// the profile count instead of reading content directly - so a reselect with a null
@@ -219,6 +243,8 @@ FToolContext URoadBuildEdMode::MakeReselectContext() const
 	// (see its own header comment) and drives this instead.
 	FToolContext Context;
 	Context.Target = ARoadNetworkActor::FindOrCreate(GetWorld());
+	Context.bRemoveModifier = bRemoveModifier;
+	Context.bInsertModifier = bInsertModifier;
 	return Context;
 }
 
@@ -241,11 +267,23 @@ FExecuteAction URoadBuildEdMode::StartToolAction(int32 ToolIndex)
 		if (Manager != nullptr && Manager->GetActiveToolName(EToolSide::Mouse) == ToolName)
 		{
 			// The session's own SelectTool sees Index == ActiveTool and calls OnReselect.
-			// Modifiers are left at their defaults (false/false): the editor's are read
-			// per-gesture from the viewport, not held as the sticky state the runtime bar
-			// keeps, so a plain reselect is what a bare key press means here. TARGET IS NOT
-			// LEFT AT ITS DEFAULT, though - see MakeReselectContext for why.
-			Session.SelectTool(ToolIndex, MakeReselectContext());
+			//
+			// MODIFIERS ARE NO LONGER LEFT AT THEIR DEFAULTS (issue #191/#92-#93 - "reselect
+			// modifiers only in PIE"). PIE always reads live Shift/Ctrl for every SelectTool
+			// call, switch or reselect, so Ctrl+the runway key cycles its approach there
+			// (FRunwayTool::OnReselect); this mode has no keyboard of its own to poll, so it
+			// asks the tool that is ACTUALLY ACTIVE right now - the one whose Drag/Hover
+			// behaviours have been reporting modifier state all along - for what it currently
+			// holds. The active tool for ToolName is exactly this branch's own subject: if
+			// Manager->GetActiveToolName(...) == ToolName, GetActiveTool(...) is that same
+			// instance, the same cast CancelActiveGesture/CommitActiveGesture already make.
+			const URoadBuildEditorTool* ActiveEditorTool =
+				Cast<URoadBuildEditorTool>(Manager->GetActiveTool(EToolSide::Mouse));
+			const bool bRemoveModifier = ActiveEditorTool != nullptr && ActiveEditorTool->IsRemoveModifierHeld();
+			const bool bInsertModifier = ActiveEditorTool != nullptr && ActiveEditorTool->IsInsertModifierHeld();
+
+			// TARGET IS NOT LEFT AT ITS DEFAULT, though - see MakeReselectContext for why.
+			Session.SelectTool(ToolIndex, MakeReselectContext(bRemoveModifier, bInsertModifier));
 			return;
 		}
 
@@ -289,6 +327,39 @@ void URoadBuildEdMode::CreateToolkit()
 TMap<FName, TArray<TSharedPtr<FUICommandInfo>>> URoadBuildEdMode::GetModeCommands() const
 {
 	return FRoadBuildEdModeCommands::GetCommands();
+}
+
+void URoadBuildEdMode::PostUndo(bool bSuccess)
+{
+	DeactivateActiveToolOnUndo(bSuccess);
+}
+
+void URoadBuildEdMode::PostRedo(bool bSuccess)
+{
+	DeactivateActiveToolOnUndo(bSuccess);
+}
+
+void URoadBuildEdMode::DeactivateActiveToolOnUndo(bool bSuccess)
+{
+	// MIRRORS ARoadBuildController::OnUndo/OnRedo's OWN GUARD: those only call OnDeactivate
+	// once Target->Undo()/Redo() has actually returned true - "nothing happened" gets a log
+	// line and nothing else. bSuccess here answers the same question for GEditor's transactor
+	// (see FEditorUndoClient::PostUndo's own doc comment), so a failed undo/redo leaves the
+	// active tool alone rather than abandoning a part-drawn chain over a transaction that
+	// never actually applied.
+	if (!bSuccess)
+	{
+		return;
+	}
+
+	if (UInteractiveToolManager* Manager = GetToolManager())
+	{
+		if (URoadBuildEditorTool* Tool = Cast<URoadBuildEditorTool>(
+			Manager->GetActiveTool(EToolSide::Mouse)))
+		{
+			Tool->DeactivateOnUndo();
+		}
+	}
 }
 
 #undef LOCTEXT_NAMESPACE

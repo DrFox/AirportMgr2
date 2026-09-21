@@ -196,6 +196,23 @@ namespace RoadGeom
 	};
 
 	/**
+	 * Default multiple of the viewer's own distance to the plane that a RayToPlaneZ caller
+	 * should treat as the furthest a click may resolve to.
+	 *
+	 * ONE NUMBER (issue #191/#92-#93): `ARoadBuildController::MaxPlaceDistanceFactor` measured
+	 * every PIE click against this multiple of `BuildCameraComp->ActiveRig().Distance`, while
+	 * `URoadBuildEditorTool::RayToPlane` passed `TNumericLimits<double>::Max()` unconditionally
+	 * - the editor had no cap at all, not merely a different one. This namespace does not apply
+	 * the factor itself (RayToPlaneZ takes a finished MaxDistance, and "the view" is not a
+	 * concept a dependency-free geometry file knows about); it is the shared default each
+	 * caller multiplies its OWN view-centre distance by, so PIE's UPROPERTY and the editor
+	 * tool's `ViewCentreDistance` (set from `Render`'s own view-centre measurement, which used
+	 * to compute this and throw it away) apply the identical rule instead of one driver
+	 * guarding a horizon the other one does not.
+	 */
+	inline constexpr double DefaultMaxPlaceDistanceFactor = 6.0;
+
+	/**
 	 * Where a ray meets the horizontal plane Z == PlaneZ, as an XY position.
 	 *
 	 * The one 3D function in an otherwise 2D file: both build drivers pick the road plane
@@ -208,8 +225,9 @@ namespace RoadGeom
 	 * click on the sky would land on the plane's mirror image); and Distance > MaxDistance,
 	 * because near the horizon the ray is almost parallel to the plane and the distance
 	 * runs away toward infinity, so a click a few pixels too high would land kilometres out.
-	 * Pass a very large MaxDistance to opt out of the third guard, as the editor tool does -
-	 * it has no notion of "current view distance" to measure a cap against.
+	 * Pass a very large MaxDistance to opt out of the third guard - what both drivers do
+	 * before they have any view-distance measurement to cap against yet (PIE before its first
+	 * camera exists; the editor tool before its first Render call - see ViewCentreDistance).
 	 *
 	 * OutWhy, when given, names which guard tripped - so a caller that wants to LOG a
 	 * refusal (the controller's CursorOnRoadPlane, which needs the reason but not the

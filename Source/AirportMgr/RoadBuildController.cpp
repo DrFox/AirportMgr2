@@ -306,6 +306,11 @@ bool ARoadBuildController::CursorOnRoadPlane(FVector2D& OutPosition, bool bLogRe
 	// view's distance even while watching an agent, when the watch rig - parked at a very
 	// different distance - was the one actually driving the camera. THE FORGOTTEN TERNARY
 	// that issue's evidence names; ActiveRig() is the one place that ternary is asked now.
+	//
+	// THE SAME RULE THE EDITOR APPLIES NOW (issue #191/#92-#93): URoadBuildEditorTool::
+	// RayToPlane multiplies its own Render-measured ViewCentreDistance by the identical
+	// RoadGeom::DefaultMaxPlaceDistanceFactor this UPROPERTY defaults from, so a near-horizon
+	// click refuses in both drivers rather than only here.
 	const double Furthest = MaxPlaceDistanceFactor * BuildCameraComp->ActiveRig().Distance;
 
 	RoadGeom::ERayToPlaneRefusal Why = RoadGeom::ERayToPlaneRefusal::None;

@@ -66,12 +66,17 @@ bool FBuildGestureCompositionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("a press reaches the gesture"), Tool->GestureForTest().IsPressed());
 	TestFalse(TEXT("and is not yet a drag"), Tool->GestureForTest().IsDragging());
 
-	// 1 uu of travel is under any reasonable drag threshold - still a click in progress.
-	Tool->OnClickDrag(DeviceRayAt(FVector2D(1.0, 0.0)));
+	// A QUARTER OF THE SHARED THRESHOLD, not a bare "1.0" (issue #191/#92-#93):
+	// URoadBuildEditorTool no longer carries its own copy of this number - OnClickDrag calls
+	// Gesture.Move with no threshold argument at all, so it runs against
+	// FBuildGesture::DefaultThresholdPixels' default parameter. Deriving these two points from
+	// that constant is what makes this test fail if a future change moves the shared default
+	// without noticing this call site, rather than passing by coincidence forever.
+	Tool->OnClickDrag(DeviceRayAt(FVector2D(FBuildGesture::DefaultThresholdPixels * 0.25, 0.0)));
 	TestFalse(TEXT("a small move does not promote to a drag"), Tool->GestureForTest().IsDragging());
 
-	// 10 uu is past the editor tool's own threshold (constexpr 4.0 in RoadBuildEditorTool.cpp).
-	Tool->OnClickDrag(DeviceRayAt(FVector2D(10.0, 0.0)));
+	// TWO AND A HALF TIMES THE SHARED THRESHOLD - comfortably past it, whatever its value.
+	Tool->OnClickDrag(DeviceRayAt(FVector2D(FBuildGesture::DefaultThresholdPixels * 2.5, 0.0)));
 	TestTrue(TEXT("a move past the threshold promotes to a drag"), Tool->GestureForTest().IsDragging());
 
 	// Escape mid-drag: the transaction this opened must close, which is what would assert
