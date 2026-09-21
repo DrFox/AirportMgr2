@@ -147,8 +147,49 @@ ARoadAgentActor* AAnimYard::AgentFor(const AActor* Source) const
 	return nullptr;
 }
 
+void AAnimYard::SetSolo(const AActor* Source)
+{
+	SoloSource = Source;
+
+	// PUSHED AT ONCE rather than left to the next Tick, so the row parks on the keypress. A
+	// frame of the old pose after a deliberate change reads as the key not having worked.
+	PushMotion();
+}
+
+const AActor* AAnimYard::NearestSubject(FVector2D Point) const
+{
+	const AActor* Best = nullptr;
+	double BestDistanceSq = TNumericLimits<double>::Max();
+
+	for (const FYardSubject& Subject : SubjectList)
+	{
+		if (Subject.Source == nullptr)
+		{
+			continue;
+		}
+
+		// AGAINST THE MARK, NOT THE MODEL'S BOUNDS. A 737 and a tug stand in the same row and
+		// the aeroplane's bounds reach halfway to its neighbour; nearest-by-bounds would make
+		// the big models almost impossible to look past. The mark is where the label is, which
+		// is what "that one" means when you are pointing a camera at a row.
+		const double DistanceSq = FVector2D::DistSquared(Subject.Mark, Point);
+		if (DistanceSq < BestDistanceSq)
+		{
+			BestDistanceSq = DistanceSq;
+			Best = Subject.Source;
+		}
+	}
+
+	return Best;
+}
+
 void AAnimYard::PushMotion()
 {
+	// THE RESTING STATE, built once. A default FYardMotion is exactly the parked aeroplane -
+	// wheels stopped, nosewheel centred, gear down, engine off - which is what everything the
+	// solo key did not pick is set to. See SetSolo for why they park rather than freeze.
+	const FYardMotion Parked;
+
 	for (const FYardSubject& Subject : SubjectList)
 	{
 		if (Subject.Agent == nullptr)
@@ -156,10 +197,12 @@ void AAnimYard::PushMotion()
 			continue;
 		}
 
+		const bool bDriven = SoloSource == nullptr || Subject.Source == SoloSource;
+
 		// THE PARTS COME FROM THE BENCH AND THE POSE FROM THE MARK. FYardMotion deliberately
 		// sets no position, heading, altitude or pitch at all (see its header); if it did, ten
 		// agents would share one pose and stand in one place.
-		FAgentMotion Pose = Motion.ToAgentMotion(Subject.Gear);
+		FAgentMotion Pose = (bDriven ? Motion : Parked).ToAgentMotion(Subject.Gear);
 		Pose.Position = Subject.Mark;
 		Pose.Heading = Subject.Heading;
 

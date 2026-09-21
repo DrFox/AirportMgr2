@@ -176,6 +176,13 @@ struct AIRPORTMGR_API FYardMotion
 	 */
 	void Scrub(EYardChannel Channel, double Delta);
 
+	/**
+	 * Off the wheels, or back on them - and PAUSE, for the reason Scrub pauses: the next frame
+	 * of the demo loop sets bAirborne from whichever stage it is in, so a toggle that did not
+	 * take control would last exactly one frame.
+	 */
+	void ToggleAirborne();
+
 	/** Back to parked, loop running from the top. */
 	void Reset();
 

@@ -247,6 +247,13 @@ void FYardMotion::Scrub(EYardChannel Channel, double Delta)
 	}
 }
 
+void FYardMotion::ToggleAirborne()
+{
+	// See the header: taking control is the whole of what makes the toggle stick.
+	bPaused = true;
+	bAirborne = !bAirborne;
+}
+
 void FYardMotion::Reset()
 {
 	// FIELD BY FIELD RATHER THAN `*this = FYardMotion()`, which would also throw away the

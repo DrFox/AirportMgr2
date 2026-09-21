@@ -141,6 +141,28 @@ public:
 	const FYardMotion& GetMotion() const { return Motion; }
 	FYardMotion& EditMotion() { return Motion; }
 
+	/**
+	 * Drive only this model; park the rest. Null drives them all again.
+	 *
+	 * PARKED AND NOT FROZEN. The un-soloed models go to FYardMotion's resting state rather
+	 * than holding whatever pose they were in when the key was pressed: a row frozen mid
+	 * steering-sweep is a row of wrong answers to compare the soloed rig against, and
+	 * comparison is the only reason the row is there.
+	 */
+	void SetSolo(const AActor* Source);
+
+	/** What is soloed, or null. */
+	const AActor* Solo() const { return SoloSource; }
+
+	/**
+	 * The subject nearest this road-plane point, or null if the yard is empty.
+	 *
+	 * THE SOLO KEY'S DECISION, minus the camera. The controller hands it
+	 * UBuildCameraComponent::ViewFocus, which is what "the model you are looking at" means for
+	 * an orbiting top-down rig; keeping the geometry here is what lets it be measured.
+	 */
+	const AActor* NearestSubject(FVector2D Point) const;
+
 private:
 	/**
 	 * The bench's whole simulation. See FYardMotion - one producer, written by the demo loop
@@ -153,6 +175,9 @@ private:
 	FYardMotion Motion;
 
 	UPROPERTY() TArray<FYardSubject> SubjectList;
+
+	/** See SetSolo. Null means the whole row runs in lockstep, which is the default. */
+	UPROPERTY() TObjectPtr<const AActor> SoloSource;
 
 	/** Push the current motion into every agent. Split out because Tick is not the only caller
 	 *  that wants it - adoption pushes once, so a newly adopted model is not in bind pose for
