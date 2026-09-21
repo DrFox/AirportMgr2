@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SpeedProfile.h"
 #include "RouteSearch.generated.h"
@@ -40,40 +41,6 @@ enum class ERouteResult : uint8
 	 * Code C stand reports the same thing as a taxiway nobody ever joined up.
 	 */
 	TooWide,
-};
-
-/**
- * What a route may do with edges that lie ALONG a runway (DerivedFrom a runway segment).
- * Crossing a runway at a junction is never affected: a crossing is a turn path and a node,
- * and turn paths carry no DerivedFrom. AN ENUM, NOT TWO BOOLS - "avoid all" and "avoid held"
- * can never both be wanted, and a pair of flags would have let a caller set both.
- */
-UENUM()
-enum class ERunwayAvoidance : uint8
-{
-	/** Runway edges are ordinary line. A departure backtracking to a threshold needs this. */
-	None,
-	/**
-	 * Skip a runway edge while the strip is IN USE: somebody else holds any segment of its
-	 * chain, reserved or occupied, OR the querier itself is standing on it (its own claim
-	 * is occupied). Set by a deadlock replan (2026-09-07): an agent turning round via a
-	 * free runway end is what the player expects to see; one taxiing along a strip a
-	 * landing has been cleared onto is the starvation the outright ban was written
-	 * against. THE QUERIER'S OWN BODY COUNTS, and its own reservation does not: the head-on
-	 * of 2026-09-06 was an arrival still standing on the strip with a departure REFUSED the
-	 * bar for it - the waiter holds nothing, so the table shows the runway held by the
-	 * querier alone, and a replan that kept it on the strip would be the very jam it was
-	 * asked to leave (Traffic.HeadOnReplansRoundBarHolder measures exactly this). Needs
-	 * FRouteQuery::Occupancy; with no table every runway is free. Properly a runway is
-	 * used on a CLEARANCE, which is URunwaySequencer's (M3); until then the table is the
-	 * truth about who is on the strip.
-	 */
-	Held,
-	/**
-	 * Skip every runway edge. An arrival's taxi-in and a departure's taxi to an
-	 * intersection entry: neither may taxi along a strip whatever the table says.
-	 */
-	All,
 };
 
 /** One edge of a found route, in traversal order. */

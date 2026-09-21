@@ -1576,7 +1576,11 @@ In `RouteSearch.cpp`, add a shared helper in the anonymous namespace:
 	}
 ```
 
-Call it first in `RunSearch` (returning a default `FRoutePlan()`, whose `Result` is already `NoStart`) and first in `FindToGoals` (returning a default `FMultiGoalSearch{}` after sizing `OutReach` to `Goals.Num()` with default `FGoalReach` entries, so a caller indexing `OutReach[i]` against `Goals[i]` does not read out of bounds).
+Call it as the **first statement of `Find`** - before the `NoStart`/`NoGoal`/`SameNode` checks - returning a default `FRoutePlan()`, whose `Result` is already `NoStart`.
+
+> **Not in `RunSearch`, and this is the trap.** `RunSearch` looks like the single choke point and is not: `Find` returns early for `NoStart`, `NoGoal` and `SameNode` *before* ever reaching it, so a bad query with a dead start handle would be refused for the wrong reason and never logged - and on the `TooWide` path `Find` calls `RunSearch` **twice**, which would log the same refusal twice. The two public entry points are the consumers; guard those.
+
+Call it likewise as the first statement of `FindToGoals`, returning a default `FMultiGoalSearch{}` after sizing `OutReach` to `Goals.Num()` with default `FGoalReach` entries - a caller indexing `OutReach[i]` against `Goals[i]` must not read out of bounds just because its query was refused.
 
 Add `#include "AirsideLog.h"` to `RouteSearch.cpp` if not already present.
 
