@@ -52,6 +52,32 @@
          this rule is what stops the next shared-look table from landing back in Tool/ by habit.
          Comment lines are excluded the way rule 5 excludes them - a WHY comment naming a colour
          to explain why Tool/ does not hold one is not the thing this rule exists to catch.
+      11. Declared but not consumed (issue #255). Three shapes, each reconstructed from a
+          shipped bug and proved to fire before being removed again (see the PR):
+            a. A DECLARE_*DELEGATE* member (file-scoped: the macro and its instance sit in
+               the same header, however far apart) with zero .Add*/.Bind* binders anywhere,
+               or zero .Broadcast/.Execute callers anywhere - issue #169's UFlightBoard::
+               OnChanged, documented as a signal nothing subscribed to.
+            b. A UI_COMMAND with no MapAction anywhere - the shape issue #184 left behind:
+               a command that exists and is even mapped once, but only the LAST MapAction
+               of a given command survives (UICommandList::MapAction is a TMap::Add), so a
+               command an later binding never touches again is functionally unconsumed.
+            c. An IBuildTool hook (RoadBuildTool.h) with no caller anywhere outside its own
+               declaration - issue #185's OnCommit/BuildReadout, reachable from PIE and from
+               nowhere in the editor mode until each was wired in by hand.
+          Production tree only for what gets CHECKED (test fixtures build scratch scenarios
+          on purpose, the way rules 4-6 already exempt them); the search for a binder/caller
+          spans the whole tree, since a real one may legitimately sit in a test spy.
+      12. Comment-only facts (issue #255): a WARNING, not a failure - see the script's own
+          Verdict section. Counts comment lines that assert a fact about other code ("the
+          only caller", "never happens", "no edit needed", "nothing else reads") with no
+          `// ENFORCED BY:` marker within three lines naming what actually holds the line
+          true. Starts as a count so the backlog is visible; promotes to a failure once it
+          reaches zero (see CLAUDE.md's "Conventions" for the marker itself).
+
+    Rule 4 above is now a data table (issue #255) rather than one hard-coded Piper check,
+    so "the only caller of X is Y" claims live as ROWS an author can add to, instead of prose
+    nobody re-greps.
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -203,28 +229,85 @@ foreach ($tree in $trees) {
     }
 }
 
-# --- 4. Piper fallback has one production caller, one test-fixture caller ---------------
-# Production code: only AircraftType.* and AirsideSettings.cpp. The two test modules are a
-# unity build and once exempted this rule entirely (#100's evidence: 51 call sites across 14
-# files) - now they get the same "one source of truth" rule, with AirsideTestFixtures.cpp
-# (TestAirframes::Piper()) as their one allowed caller, exactly as AircraftType.cpp is
-# production's.
-$allowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp', 'AirsideTestFixtures.cpp')
-foreach ($tree in $trees) {
-    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
-        if ($allowed -contains $file.Name) { continue }
-        # Word-boundary before "PiperMeridian" so BuildPiperMeridian() - a different concern,
-        # constructing the content asset rather than reading a fallback figure - is not
-        # mistaken for one of the accessor fallbacks (Ground/Climb/Approach/Engine/Wingspan/
-        # Requirements) this rule exists to keep to one source of truth.
-        $hits = Select-String -Path $file.FullName -Pattern '(?<![A-Za-z])PiperMeridian\w*\s*\('
-        foreach ($h in $hits) {
-            $reason = if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') {
-                'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
-            } else {
-                'go through UAirsideSettings::ResolveDefaultAirframe'
+# --- 4. Allowed-callers table: each row's symbol resolves from ONE known set of files ---
+# Issue #255 generalises the single hard-coded Piper check (issue #30) into a table, because
+# this week's review found the SAME "the only caller of X is Y" shape asserted in a comment
+# for four other symbols, with nothing checking any of them mechanically. A row names a
+# symbol's production allow-list; test callers either get their OWN tight allow-list (Piper's
+# row, unchanged from before this table existed) or a blanket TestExempt (rules 5-8's existing
+# exemption: a scripted scenario sets up state, it does not enforce production discipline on
+# itself). Comment lines are excluded (the same exemption rules 5-8 give a WHY comment that
+# NAMES the banned shape rather than being it) - RoadEditTarget.h, RunwayTool.h, PlotPresenter.h
+# and RoadNetworkActor.h all discuss these symbols by name in exactly that way.
+$AllowedCallers = @(
+    @{
+        Name        = 'PiperMeridian fallback'
+        Pattern     = '(?<![A-Za-z])PiperMeridian\w*\s*\('
+        ProdAllowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp')
+        TestAllowed = @('AirsideTestFixtures.cpp')
+        ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe'
+        TestReason  = 'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
+    },
+    @{
+        # CONFIRMED BY GREP FOR #255: production callers today are AirsideSettings.cpp
+        # (itself), RoadBuildController.cpp and OpsRuntime.cpp. Unlike Piper, tests call this
+        # directly from a couple dozen files on purpose - it IS the canonical "give me a
+        # plane" accessor test fixtures are supposed to use - so tests are blanket-exempt
+        # rather than narrowed to one fixture file.
+        Name        = 'UAirsideSettings::ResolveDefaultAirframe'
+        Pattern     = 'UAirsideSettings::ResolveDefaultAirframe\s*\('
+        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadBuildController.cpp', 'OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
+    },
+    @{
+        Name        = 'DepotKitSpecs'
+        Pattern     = 'DepotKitSpecs\s*\('
+        ProdAllowed = @('DepotKit.h', 'DepotKit.cpp', 'RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'go through ARoadNetworkActor::ResolveDepotKits (issue #181) - PlotPlaceTool.cpp and PlotPresenter.cpp both deliberately stopped calling this themselves'
+    },
+    @{
+        Name        = 'RoadHeal::PlanNodeDeletion'
+        Pattern     = 'RoadHeal::PlanNodeDeletion\s*\('
+        ProdAllowed = @('RoadHeal.h', 'RoadHeal.cpp', 'RoadEditFacade.cpp')
+        TestExempt  = $true
+        ProdReason  = "go through IRoadEditTarget::PlanNodeDeletion - URoadEditFacade is production's one wrapper"
+    },
+    @{
+        # THE CLAIM ("outside Content/ and the actor") WENT FALSE ALREADY, same as issue #181's
+        # RoadEditTarget.h comment on the runway-profile seam: #255's own grep for this row
+        # found Private/Debug/RoadJunctionGallery.cpp:158 calling GetContent() directly, the
+        # #78/#181 shape, undocumented before this table existed. It is listed here NOT as
+        # sanctioned but as a REPORTED FINDING (see #255's PR) - fixing it is out of this
+        # issue's scope (it is a lint issue, not a content-resolution one), and silently
+        # allow-listing it away without saying so would be exactly the false comment this
+        # issue exists to stop shipping. Follow-up: route it through ARoadNetworkActor.
+        Name        = 'UAirsideSettings::GetContent (outside Content/ and the actor)'
+        Pattern     = 'UAirsideSettings::GetContent\s*\(\s*\)'
+        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadNetworkActor.h', 'RoadNetworkActor.cpp', 'RoadJunctionGallery.cpp')
+        TestExempt  = $true
+        ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
+    }
+)
+foreach ($row in $AllowedCallers) {
+    foreach ($tree in $trees) {
+        foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+            # A *Test.cpp file in a MIXED module (AirportMgr, AirsideEditor - rule 10's own
+            # scoping) is a test caller too, not just one under a dedicated AirsideTests/
+            # AirportOpsTests folder - InspectorWidgetTest.cpp calling ResolveDefaultAirframe
+            # directly is exactly this and is not the second-source-of-truth this row exists
+            # to catch.
+            $inTests = ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') -or ($file.Name -like '*Test.cpp')
+            if ($row.ProdAllowed -contains $file.Name) { continue }
+            if ($inTests -and $row.TestAllowed -and ($row.TestAllowed -contains $file.Name)) { continue }
+            if ($inTests -and $row.TestExempt) { continue }
+            $hits = Select-String -Path $file.FullName -Pattern $row.Pattern
+            foreach ($h in $hits) {
+                if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+                $reason = if ($inTests -and $row.TestReason) { $row.TestReason } else { $row.ProdReason }
+                $failures.Add("allowed-callers: $($file.FullName):$($h.LineNumber) $($row.Name) - ${reason}: $($h.Line.Trim())")
             }
-            $failures.Add("content-default: $($file.FullName):$($h.LineNumber) calls a PiperMeridian*() fallback; $reason")
         }
     }
 }
@@ -405,9 +488,132 @@ foreach ($file in $outputDeviceFiles) {
     }
 }
 
+# --- 11. Declared but not consumed -------------------------------------------------------
+# Issue #255. All three sub-rules search this ONE list - built once, not per-symbol, because
+# 11c alone checks ~15 verbs and re-walking the tree per verb is exactly the cost rule 4's
+# original per-symbol loop already accepted at a much smaller N.
+$allTreeFiles = @()
+foreach ($tree in $trees) { $allTreeFiles += Get-Sources $tree @('.h', '.cpp') }
+
+# 11a. A DECLARE_*DELEGATE* member with zero binders anywhere, or zero broadcasters anywhere.
+# FILE-SCOPED PAIRING, not next-line: RoadEditFacade.h's FOnNetworkChanged OnChanged sits
+# directly under its DECLARE_MULTICAST_DELEGATE_OneParam line, but OpsEvents.h's dynamic
+# delegates sit a UPROPERTY(BlueprintAssignable) away - so this matches "<Type> <Name>;"
+# ANYWHERE in the same header the macro is in, not only the line after it. Declaring file
+# must be production (test fixtures script their own delegates on purpose, the way rules 4-6
+# already exempt them); the binder/broadcaster SEARCH covers the whole tree, since a real one
+# may legitimately be a test spy.
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h')) {
+        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
+        $text = Get-Content -Raw -Path $file.FullName
+        $delegateTypes = [regex]::Matches($text, 'DECLARE_(MULTICAST_)?DELEGATE\w*\(\s*(F\w+)') |
+            ForEach-Object { $_.Groups[2].Value } | Select-Object -Unique
+        foreach ($type in $delegateTypes) {
+            foreach ($mm in [regex]::Matches($text, '(?m)^.*\b' + [regex]::Escape($type) + '\s+(\w+)\s*;')) {
+                if ($mm.Value -match 'DECLARE_') { continue }
+                $member = $mm.Groups[1].Value
+                $line = ($text.Substring(0, $mm.Index) -split "`n").Count
+                $binderPattern = '\b' + [regex]::Escape($member) + '\.(Add\w*|Bind\w*)\('
+                $broadcastPattern = '\b' + [regex]::Escape($member) + '\.(Broadcast|Execute)\('
+                if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $binderPattern -Quiet)) {
+                    $failures.Add("unconsumed-delegate: $($file.FullName):$line $type $member has zero .Add*/.Bind* binders anywhere - delete it or bind it (issue #169's OnChanged shape)")
+                }
+                if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $broadcastPattern -Quiet)) {
+                    $failures.Add("unconsumed-delegate: $($file.FullName):$line $type $member has zero .Broadcast/.Execute callers anywhere - delete it or fire it (issue #169's OnChanged shape)")
+                }
+            }
+        }
+    }
+}
+
+# 11b. A UI_COMMAND with no MapAction anywhere. MapAction's first argument is the command
+# field, so "within 80 characters of MapAction(" catches the codebase's own style
+# (Toolkit->GetToolkitCommands()->MapAction(Commands.CancelGesture, ...)) without needing to
+# parse the call across its (often multi-line) remaining arguments.
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.cpp')) {
+        $text = Get-Content -Raw -Path $file.FullName
+        foreach ($m in [regex]::Matches($text, 'UI_COMMAND\(\s*(\w+)\s*,')) {
+            $name = $m.Groups[1].Value
+            $line = ($text.Substring(0, $m.Index) -split "`n").Count
+            $mapPattern = 'MapAction\([^,]{0,80}\b' + [regex]::Escape($name) + '\b'
+            if (-not (Select-String -Path $allTreeFiles.FullName -Pattern $mapPattern -Quiet)) {
+                $failures.Add("unconsumed-uicommand: $($file.FullName):$line UI_COMMAND($name, ...) has no MapAction binding it anywhere (issue #184's shape: the LAST MapAction of a command wins, so an unreached one is dead)")
+            }
+        }
+    }
+}
+
+# 11c. An IBuildTool hook (RoadBuildTool.h) with no caller anywhere outside its own
+# declaration - issue #185's shape, generalised past the two verbs (OnCommit, BuildReadout)
+# that issue happened to name. A caller line is excluded when it IS the declaration
+# ("virtual") or an out-of-line override definition ("ClassName::Method") - neither is a
+# driver reaching the hook, both are the interface restating its own name.
+$toolInterfaceFile = Join-Path $plugin 'Public\Tool\RoadBuildTool.h'
+if (Test-Path $toolInterfaceFile) {
+    $text = Get-Content -Raw -Path $toolInterfaceFile
+    $structStart = $text.IndexOf('struct AIRSIDE_API IBuildTool')
+    if ($structStart -ge 0) {
+        $braceOpen = $text.IndexOf('{', $structStart)
+        $depth = 0
+        $i = $braceOpen
+        for (; $i -lt $text.Length; $i++) {
+            if ($text[$i] -eq '{') { $depth++ }
+            elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { break } }
+        }
+        $body = $text.Substring($braceOpen, $i - $braceOpen + 1)
+        $bodyStartLine = ($text.Substring(0, $braceOpen) -split "`n").Count
+        foreach ($m in [regex]::Matches($body, 'virtual\s+[\w:&*<>,\s]+?\s+(\w+)\s*\(')) {
+            $method = $m.Groups[1].Value
+            if ($method -eq 'IBuildTool') { continue } # the destructor, ~IBuildTool
+            $line = $bodyStartLine + (($body.Substring(0, $m.Index) -split "`n").Count - 1)
+            $callerPattern = '\b' + [regex]::Escape($method) + '\s*\('
+            $hasCaller = $false
+            foreach ($h in (Select-String -Path $allTreeFiles.FullName -Pattern $callerPattern)) {
+                if ($h.Path -eq $toolInterfaceFile) { continue }
+                if ($h.Line -match 'virtual') { continue }
+                if ($h.Line -match ('::\s*' + [regex]::Escape($method) + '\s*\(')) { continue }
+                $hasCaller = $true
+                break
+            }
+            if (-not $hasCaller) {
+                $failures.Add("unconsumed-tool-verb: $($toolInterfaceFile):$line IBuildTool::$method has no caller anywhere outside its own declaration (issue #185's OnCommit/BuildReadout shape)")
+            }
+        }
+    }
+}
+
+# --- 12. Comment-only facts (WARNING, not a failure) --------------------------------------
+# Issue #255: the five criticals of the 2026-09-21 review were all comments that had been
+# true at ten nodes and were never re-checked - "measured before it is indexed", "hand-
+# authored at tens of nodes". A comment MAY explain a decision; it may never be the only
+# thing enforcing one. This counts comment lines asserting a fact about OTHER code with no
+# `// ENFORCED BY:` marker within 3 lines naming what actually holds it true (the marker
+# convention itself lives in CLAUDE.md's "Conventions"). A COUNT, not a failure - so today's
+# backlog is visible without breaking the build over comments that predate this rule - quoted
+# in the PR that adds this rule; promote the check to a failure once that count reaches zero.
+$commentFactPattern = 'the only (caller|file|place|site)|never (called|happens|runs)|no (edit|change) (is )?needed|nothing (else )?(reads|calls|binds)'
+$commentFactWarnings = New-Object System.Collections.Generic.List[string]
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+        $lines = Get-Content -Path $file.FullName
+        for ($idx = 0; $idx -lt $lines.Count; $idx++) {
+            $line = $lines[$idx].Trim()
+            if ($line -notmatch '^(//|/\*|\*)') { continue }
+            if ($line -notmatch $commentFactPattern) { continue }
+            $windowStart = [Math]::Max(0, $idx - 3)
+            $windowEnd = [Math]::Min($lines.Count - 1, $idx + 3)
+            if (($lines[$windowStart..$windowEnd] -join "`n") -match 'ENFORCED BY:') { continue }
+            $commentFactWarnings.Add("comment-only-fact: $($file.FullName):$($idx + 1) $line")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
+Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations)' -ForegroundColor Green
     exit 0
 }
 

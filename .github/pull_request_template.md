@@ -16,6 +16,9 @@ Closes #
 - Comment lines before/after in moved files: `N` -> `N` (WHY comments travel with their code)
 - Every `UFUNCTION` and interface virtual still reachable: yes / list what changed
 - Seams introduced (delegate, forwarder, interface) and the test that fails if each is unwired:
+- Comments in touched files that state a fact about OTHER code (only caller, never happens,
+  needs no edit to extend): list each and say what enforces it (test, lint, static_assert)
+  or rewrite it as a reason.
 
 ## Runtime
 
