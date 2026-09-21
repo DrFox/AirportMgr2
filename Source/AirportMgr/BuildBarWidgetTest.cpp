@@ -3,7 +3,9 @@
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
 #include "Misc/AutomationTest.h"
+#include "RoadBuildController.h"
 #include "Testing/AirsideTestWorld.h"
+#include "UIStyle.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -121,6 +123,55 @@ bool FBarGrowsForTheLineItWrappedToTest::RunTest(const FString& Parameters)
 		TEXT("a bar whose sections wrap reserves room for the extra line: %.0f cramped "
 			 "against %.0f roomy"), Cramped, Roomy),
 		Cramped > Roomy);
+
+	return true;
+}
+
+/**
+ * THE BAR USED TO RESOLVE THE STYLE TWICE A TICK (RefreshState AND RefreshBalance, each its
+ * own UAirportMgrUISettings::ResolveStyle() - a TSoftObjectPtr::LoadSynchronous). Issue #187
+ * moves that resolve into UAirportMgrPanelWidget::Initialize, once, before BuildOnce ever
+ * runs - measured here as a DELTA across several ticks, the same idiom
+ * FPlayerTickBuildsOneContextTest uses for issue #167, rather than trusting a trace of the
+ * two call sites by eye.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FBarCachesStyleAcrossTicksTest,
+	"AirportMgr.Actions.BarCachesStyleAcrossTicks",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FBarCachesStyleAcrossTicksTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
+	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
+	C->SetTargetForTest(TestWorld.Actor);
+	// A PlayerInput is required before any of RefreshState's IsEnabled/IsActive queries would
+	// be safe to run against - same precedent as FPlayerTickBuildsOneContextTest.
+	C->InitInputSystem();
+
+	// CreateWidget(APlayerController*, ...) refuses a controller with no attached local
+	// player (this one has none - a bare SpawnActor, same as every other controller test in
+	// this file). Created against the World instead: AController::PostInitializeComponents
+	// added C to the world's PlayerControllerList regardless of possession, which is what
+	// UAirportMgrPanelWidget::Controller()'s GetFirstPlayerController() fallback reads.
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
+	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
+
+	// Construction (Initialize -> BuildOnce) has already resolved the style once - that call
+	// is not what this test is about, so the baseline is taken AFTER it.
+	const int32 Before = UAirportMgrUISettings::ResolveCallCountForTest();
+	for (int32 Tick = 0; Tick < 5; ++Tick)
+	{
+		Bar->NativeTickForTest(1.0f / 60.0f);
+	}
+	const int32 After = UAirportMgrUISettings::ResolveCallCountForTest();
+
+	TestEqual(TEXT("five ticks with a controller present resolve the style zero times - it was "
+		"cached at construction, not re-asked from RefreshState or RefreshBalance"),
+		After - Before, 0);
 
 	return true;
 }

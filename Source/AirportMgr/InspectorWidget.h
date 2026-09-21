@@ -11,6 +11,7 @@ class ARoadNetworkActor;
 class UButton;
 class UTextBlock;
 class UUIStyle;
+struct FAgentFacts;
 
 /**
  * The inspector: what the selected aircraft or stand is doing, and the verbs for it.
@@ -51,8 +52,15 @@ public:
 	 * Re-reads the facts for Selection over Target and repaints. What NativeTick calls with
 	 * the controller's target and selection; public so a headless test can drive it with
 	 * no controller.
+	 *
+	 * PrecomputedAgentFacts is issue #187: NativeTick already asked the controller for the
+	 * selected aircraft's FAgentFacts to answer the bar's selection.depart row, and passes the
+	 * SAME struct here so this does not call InspectFacts::DescribeAgent a second time for one
+	 * frame's one selection. Null (the default, and always null from a headless test with no
+	 * controller) falls back to asking DescribeAgent itself, unchanged from before.
 	 */
-	void Refresh(const ARoadNetworkActor* Target, const FSelection& Selection);
+	void Refresh(const ARoadNetworkActor* Target, const FSelection& Selection,
+		const FAgentFacts* PrecomputedAgentFacts = nullptr);
 
 	bool IsShownForTest() const;
 	bool IsDepartEnabledForTest() const;
@@ -60,6 +68,10 @@ public:
 	/** Depart's CAPTION colour - the thing that must actually change with enabled state.
 	 *  See Refresh: the button's own background stays Style->Button always. */
 	FLinearColor DepartLabelColourForTest() const;
+	/** How many times Refresh actually called SetText on one of its three fields, as opposed
+	 *  to how many times it was asked - the seam issue #187's gate is measured through: an
+	 *  idle tick (same selection, same facts) must add nothing to this. */
+	int32 SetTextCallCountForTest() const { return SetTextCalls; }
 
 protected:
 	/** Builds the panel's chrome and binds its two verbs. See
@@ -85,13 +97,19 @@ private:
 	UPROPERTY() TObjectPtr<UTextBlock> DepartLabel;
 
 	/**
-	 * Set once from BuildOnce's own parameter. Refresh runs every tick and used to call
-	 * UAirportMgrUISettings::ResolveStyle() (a TSoftObjectPtr::LoadSynchronous) itself just to
-	 * recolour one button; caching the pointer this construction pass already resolved avoids
-	 * paying that every frame. Falls back to a fresh resolve if Refresh is ever reached before
-	 * BuildOnce (defensive only - CreateWidget always runs Initialize first).
+	 * What Title/Facts/Status last actually SET, so a repeat with nothing changed - the
+	 * common case, since heading/speed/altitude only move while an agent is actually taxiing
+	 * or flying and most ticks are "still parked" or "nothing selected" - calls SetText zero
+	 * times (issue #187: SetText has no early-out of its own, same reason UBuildBarWidget
+	 * gates its clock and balance). Compared against the COMPOSED string rather than a
+	 * (selection id, phase) key: phase alone stays "Taxiing" or "Rolling / Climbing" for many
+	 * seconds while heading, speed and altitude keep changing every one of them, and gating on
+	 * phase would freeze those numbers mid-motion - a real behaviour change, not a saving.
 	 */
-	UPROPERTY() TObjectPtr<const UUIStyle> CachedStyle;
+	FString LastTitle, LastFacts, LastStatus;
+
+	/** See SetTextCallCountForTest. */
+	int32 SetTextCalls = 0;
 
 	void EnsureSlots(const UUIStyle* Style);
 	void RunAction(int32 ActionIndex);

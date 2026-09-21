@@ -24,6 +24,7 @@
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntimeSubsystem.h"
 #include "Present/RoadAgentActor.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "SceneView.h"
 #include "Solve/RoadGeom.h"
@@ -60,6 +61,9 @@ void ARoadBuildController::BeginPlay()
 			TEXT("No ARoadNetworkActor in the level - place one, or clicks will do nothing."));
 		return;
 	}
+
+	// See HasRunway's own comment: the cache this subscribes to invalidate is issue #187.
+	BindRunwayCacheInvalidation();
 
 	// Session is constructed from ToolRegistry() already - see FBuildSession's constructor.
 	// There is no second list here to fall out of step with it: the mismatch this project
@@ -576,6 +580,24 @@ bool ARoadBuildController::SelectedAgentFacts(FAgentFacts& Out) const
 	return InspectFacts::DescribeAgent(*Target->GetGroundTraffic(), Target->GetNetwork(), Sel.Id, Out);
 }
 
+bool ARoadBuildController::SelectedAgentFactsThisFrame(FAgentFacts& Out) const
+{
+	if (!SelectedAgentFactsCache.IsSet())
+	{
+		FAgentFacts Facts;
+		SelectedAgentFactsCache = SelectedAgentFacts(Facts)
+			? TOptional<FAgentFacts>(MoveTemp(Facts))
+			: TOptional<FAgentFacts>();
+	}
+	const TOptional<FAgentFacts>& Cached = SelectedAgentFactsCache.GetValue();
+	if (Cached.IsSet())
+	{
+		Out = Cached.GetValue();
+		return true;
+	}
+	return false;
+}
+
 bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
 {
 	const FSelection& Sel = GetSelection();
@@ -588,8 +610,11 @@ bool ARoadBuildController::SelectedStandFacts(FStandFacts& Out) const
 
 bool ARoadBuildController::CanDepartSelected() const
 {
+	// THROUGH THE PER-FRAME CACHE (issue #187): the bar polls this every tick, and
+	// UInspectorWidget::Refresh asks the same question of the same selection the same frame -
+	// see SelectedAgentFactsThisFrame's own comment.
 	FAgentFacts Facts;
-	return SelectedAgentFacts(Facts) && Facts.bCanDepart;
+	return SelectedAgentFactsThisFrame(Facts) && Facts.bCanDepart;
 }
 
 void ARoadBuildController::DepartSelected()
@@ -692,11 +717,50 @@ bool ARoadBuildController::HasNetworkContent() const
 
 bool ARoadBuildController::HasRunway() const
 {
-	// One pass over the segments per query. The bar polls this every frame; at this
-	// project's segment counts that is nothing, and a cache would need invalidating on
-	// every edit - the facade's OnChanged - for a saving nobody would measure.
-	return Target != nullptr && Target->Network != nullptr
-		&& AirsideCapability::Summarise(*Target->Network).Runways.Num() > 0;
+	// CACHED, invalidated by the facade's OnChanged - issue #187. This comment used to argue
+	// AGAINST a cache here ("a saving nobody would measure"), written when this was the only
+	// per-tick reader of it; it is now one of roughly thirty rows RefreshState asks every tick
+	// (UBuildBarWidget::RefreshState), so the "nobody would measure" premise no longer holds -
+	// see CLAUDE.md on comments whose reasoning stops matching the code around them.
+	if (!bRunwayCacheValid)
+	{
+		bRunwayCache = Target != nullptr && Target->Network != nullptr
+			&& AirsideCapability::Summarise(*Target->Network).Runways.Num() > 0;
+		bRunwayCacheValid = true;
+		++RunwayRecomputeCountForTest;
+	}
+	return bRunwayCache;
+}
+
+void ARoadBuildController::BindRunwayCacheInvalidation()
+{
+	// A fresh Target's runway state has not been read yet, whatever the old one's cache said -
+	// invalidated unconditionally, even when Target is null (HasRunway's own null check then
+	// answers false, which is correct and needs no cached "true" from a previous target to
+	// survive the swap).
+	bRunwayCacheValid = false;
+
+	URoadEditFacade* Facade = Target != nullptr ? Target->GetEditFacade() : nullptr;
+	if (Facade == BoundRunwayCacheFacade.Get())
+	{
+		// Already subscribed to this exact facade (or both are null) - AddUObject has no
+		// duplicate-add guard of its own, so re-binding here would fire the handler twice
+		// per notify.
+		return;
+	}
+	BoundRunwayCacheFacade = Facade;
+	if (Facade != nullptr)
+	{
+		Facade->OnChanged.AddUObject(this, &ARoadBuildController::OnNetworkChangedInvalidateRunwayCache);
+	}
+}
+
+void ARoadBuildController::OnNetworkChangedInvalidateRunwayCache(EChangeKind Kind)
+{
+	if (Kind == EChangeKind::Topology)
+	{
+		bRunwayCacheValid = false;
+	}
 }
 
 bool ARoadBuildController::HasAgent() const

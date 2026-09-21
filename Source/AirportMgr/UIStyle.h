@@ -181,4 +181,21 @@ public:
 	 * the CDO renders in the declared palette instead of not rendering.
 	 */
 	static const UUIStyle* ResolveStyle();
+
+	/**
+	 * How many times ResolveStyle has actually run, since process start - not how many times a
+	 * caller ASKED, since that is the whole point of caching it.
+	 *
+	 * issue #187: UBuildBarWidget called this (a TSoftObjectPtr::LoadSynchronous) twice a
+	 * tick before it had anywhere to cache the result; this is the seam a headless test reads
+	 * to measure the fix directly, as a DELTA across N ticks, rather than trust a trace of the
+	 * call sites by eye - the same reason FBuildSession::MakeContextCallCountForTest exists.
+	 * A global counter, so a test must read it before and after and compare the difference:
+	 * other tests in the same run call ResolveStyle too, and an absolute count would be
+	 * whatever order the automation runner happened to execute them in.
+	 */
+	static int32 ResolveCallCountForTest() { return CallCountForTest; }
+
+private:
+	static int32 CallCountForTest;
 };

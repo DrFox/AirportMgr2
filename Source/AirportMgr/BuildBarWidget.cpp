@@ -409,7 +409,10 @@ void UBuildBarWidget::RefreshState()
 	{
 		return;
 	}
-	const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle();
+	// PanelStyle is the base class's (issue #187): this used to call ResolveStyle() - a
+	// TSoftObjectPtr::LoadSynchronous - here AND in RefreshBalance below, twice a tick, for a
+	// style that cannot change once BuildOnce has resolved it.
+	const UUIStyle* Style = PanelStyle;
 	const TConstArrayView<FBuildAction> Actions = BuildActions();
 	for (UBuildBarEntry* Entry : Entries)
 	{
@@ -445,17 +448,32 @@ void UBuildBarWidget::RefreshClock()
 		return;
 	}
 	const UOpsRuntime* Runtime = UOpsRuntimeSubsystem::Get(GetWorld());
+	FString Text;
 	if (Runtime == nullptr)
 	{
-		ClockText->SetText(FText::FromString(TEXT("no clock")));
+		Text = TEXT("no clock");
+	}
+	else
+	{
+		const USimClock* Clock = Runtime->GetClock();
+		const int32 Hour = static_cast<int32>(Clock->TimeOfDay() / 3600.0);
+		const int32 Minute = static_cast<int32>(FMath::Fmod(Clock->TimeOfDay(), 3600.0) / 60.0);
+		Text = FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
+			Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
+			Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""));
+	}
+
+	// THE GATE. See LastClockText's own comment for why the composed sentence, not a minute
+	// key, is what gets compared - SetText has no early-out of its own (UTextBlock.cpp), so an
+	// unpaused clock sitting on the same displayed minute (the common case, 59 times out of 60)
+	// used to re-invalidate this text block's layout every tick for an unchanged string.
+	if (Text == LastClockText)
+	{
 		return;
 	}
-	const USimClock* Clock = Runtime->GetClock();
-	const int32 Hour = static_cast<int32>(Clock->TimeOfDay() / 3600.0);
-	const int32 Minute = static_cast<int32>(FMath::Fmod(Clock->TimeOfDay(), 3600.0) / 60.0);
-	ClockText->SetText(FText::FromString(FString::Printf(TEXT("Day %d  %02d:%02d  x%.0f%s"),
-		Clock->Day() + 1, Hour, Minute, USimClock::Multiplier(Clock->GetSpeed()),
-		Clock->GetSpeed() == ESimSpeed::Paused ? TEXT("  PAUSED") : TEXT(""))));
+	LastClockText = Text;
+	ClockText->SetText(FText::FromString(Text));
+	++SetTextCalls;
 }
 
 void UBuildBarWidget::RefreshBalance()
@@ -470,24 +488,47 @@ void UBuildBarWidget::RefreshBalance()
 	const UPricing* Pricing = Runtime != nullptr ? Runtime->GetPricing() : nullptr;
 	if (Ledger == nullptr || Pricing == nullptr)
 	{
-		// SAME SHAPE AS RefreshClock's "no clock": an empty readout would look like a balance
-		// of nothing, which is a very different thing from no game running.
-		BalanceText->SetText(FText::FromString(TEXT("no ledger")));
+		if (!bLastBalanceWasFallback)
+		{
+			// SAME SHAPE AS RefreshClock's "no clock": an empty readout would look like a
+			// balance of nothing, which is a very different thing from no game running.
+			BalanceText->SetText(FText::FromString(TEXT("no ledger")));
+			++SetTextCalls;
+			bLastBalanceWasFallback = true;
+		}
 		return;
 	}
+
+	// THE GATE: the same Revision() idiom ULedgerPanelWidget::Refresh already uses - the
+	// cheapest question the ledger can answer, so this skips Pricing->Format (money formatting)
+	// and the FString::Printf below, not only the SetText that used to run unconditionally
+	// every tick. THE FEE MULTIPLIER JOINS THE KEY, because StepLandingFee changes what this
+	// line reads without posting to the ledger - Revision alone would leave the fee stale for
+	// up to a minute after the player moved the lever.
+	const int32 Revision = Ledger->Revision();
+	const double FeeMultiplier = Pricing->LandingFeeMultiplier;
+	if (!bLastBalanceWasFallback && Revision == LastLedgerRevision && FeeMultiplier == LastFeeMultiplier)
+	{
+		return;
+	}
+	bLastBalanceWasFallback = false;
+	LastLedgerRevision = Revision;
+	LastFeeMultiplier = FeeMultiplier;
 
 	// THE FEE BESIDE THE MONEY, because the lever only means anything next to what it earns -
 	// a percentage on its own tells the player nothing about whether to move it.
 	const FText Balance = Pricing->Format(Ledger->Balance());
 	BalanceText->SetText(FText::FromString(FString::Printf(TEXT("%s   fee %.0f%%"),
-		*Balance.ToString(), Pricing->LandingFeeMultiplier * 100.0)));
+		*Balance.ToString(), FeeMultiplier * 100.0)));
+	++SetTextCalls;
 
 	// RED BELOW ZERO, through the style's semantic slot rather than a literal colour - see
 	// UUIStyle. A negative balance locks placement, so it has to be visible without reading.
-	if (const UUIStyle* Style = UAirportMgrUISettings::ResolveStyle())
+	// PanelStyle is the base class's (issue #187), never null once BuildOnce has run.
+	if (PanelStyle != nullptr)
 	{
 		BalanceText->SetColorAndOpacity(FSlateColor(
-			Ledger->Balance() < 0.0 ? Style->Warning : Style->Text));
+			Ledger->Balance() < 0.0 ? PanelStyle->Warning : PanelStyle->Text));
 	}
 }
 

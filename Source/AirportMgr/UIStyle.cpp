@@ -48,8 +48,11 @@ UTexture2D* UUIStyle::IconFor(FName ActionId) const
 	return Found->LoadSynchronous();
 }
 
+int32 UAirportMgrUISettings::CallCountForTest = 0;
+
 const UUIStyle* UAirportMgrUISettings::ResolveStyle()
 {
+	++CallCountForTest;
 	const UAirportMgrUISettings* Settings = GetDefault<UAirportMgrUISettings>();
 	if (Settings->Style.IsNull())
 	{
