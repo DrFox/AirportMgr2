@@ -367,9 +367,47 @@ foreach ($module in $reasonModules) {
     }
 }
 
+# --- 10. Any FOutputDevice subclass in a test module overrides CanBeUsedOnMultipleThreads --
+# Issue #216: an FOutputDevice that does not override this defaults to false, which UE 5.8's
+# dedicated log-redirector thread (LaunchEngineLoop.cpp's TryStartDedicatedPrimaryThread,
+# active unless "-NoLogThread" - Run-AirsideTests.ps1 does not pass it) then files as BUFFERED
+# instead of delivered synchronously - a spy scoped to one AddOutputDevice/RemoveOutputDevice
+# bracket can see its lines late or never under full-suite log volume, independent of when
+# that bracket closes. RoadRebuildLogQuietTest's FLogRoadMeshLogSpy shipped without the
+# override and flaked across five sightings before the mechanism was found (#216);
+# GroundTrafficTest's near-identical FLogAirsideTrafficSpy then flaked the same way with the
+# same missing line. Both now derive from AirsideTestWorld.h's shared FLogLineSpy, which
+# carries the override once - this rule is what stops a THIRD hand-written spy of this shape
+# from omitting it again. Scoped to AirsideTests and AirportOpsTests in full (dedicated test
+# modules, the way rules 4/5/6 read them) plus only the *Test.cpp files of AirportMgr and
+# AirsideEditor (mixed production/test modules - the rule has no business in, say,
+# RoadNetworkActor.cpp). Comment lines excluded, the same exemption rules 5/6/7 give a WHY
+# comment that names the banned shape rather than being it.
+$airportMgr = Join-Path $Root 'Source\AirportMgr'
+$outputDeviceFiles = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+$outputDeviceFiles.AddRange([System.IO.FileInfo[]](Get-Sources $airsideTests @('.h', '.cpp')))
+$outputDeviceFiles.AddRange([System.IO.FileInfo[]](Get-Sources $opsTests @('.h', '.cpp')))
+$outputDeviceFiles.AddRange([System.IO.FileInfo[]]((Get-Sources $airportMgr @('.h', '.cpp')) | Where-Object { $_.Name -like '*Test.cpp' }))
+$outputDeviceFiles.AddRange([System.IO.FileInfo[]]((Get-Sources $editor @('.h', '.cpp')) | Where-Object { $_.Name -like '*Test.cpp' }))
+foreach ($file in $outputDeviceFiles) {
+    # Word boundary after FOutputDevice so FOutputDeviceRedirector/FOutputDeviceConsole/etc
+    # (real engine classes with the same prefix, no relation to this rule) are not mistaken
+    # for a direct subclass of FOutputDevice itself.
+    $hits = Select-String -Path $file.FullName -Pattern ':\s*(public\s+)?FOutputDevice\b'
+    if ($hits.Count -eq 0) { continue }
+    $text = Get-Content -Raw -Path $file.FullName
+    $hasOverride = $text -match 'CanBeUsedOnMultipleThreads'
+    foreach ($h in $hits) {
+        if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+        if (-not $hasOverride) {
+            $failures.Add("output-device-spy: $($file.FullName):$($h.LineNumber) declares an FOutputDevice subclass with no CanBeUsedOnMultipleThreads override in this file (issue #216's buffered-device race - derive from AirsideTestWorld.h's FLogLineSpy instead): $($h.Line.Trim())")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, content default, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies)' -ForegroundColor Green
     exit 0
 }
 
