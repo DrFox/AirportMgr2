@@ -1436,6 +1436,26 @@ TArray<FName> URoadNetwork::GetAnchorIdsForRole(FEntityInstanceId Entity, EServi
 	return Found;
 }
 
+FName URoadNetwork::FirstAnchorIdForRole(FEntityInstanceId Entity, EServiceRole Role) const
+{
+	// SAME WALK AS GetAnchorIdsForRole, stopping at the first match instead of collecting
+	// every one - see that function's own comment on why ResolvedAnchors is read directly.
+	const FEntityInstance* Instance = RoadSlot::Get<FEntityInstanceId>(Entities, Entity);
+	if (Instance == nullptr)
+	{
+		return NAME_None;
+	}
+
+	for (const FResolvedAnchor& Resolved : Instance->ResolvedAnchors)
+	{
+		if (Resolved.Role == Role)
+		{
+			return Resolved.Id;
+		}
+	}
+	return NAME_None;
+}
+
 bool URoadNetwork::RefreshResolvedAnchor(
 	FEntityInstanceId Entity, FName AnchorId, double LocalHeading, EServiceRole Role)
 {

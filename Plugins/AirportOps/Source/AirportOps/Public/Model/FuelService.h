@@ -155,6 +155,23 @@ struct AIRPORTOPS_API FFuelDemand
 	 * one session, and Demands itself is Transient.
 	 */
 	UPROPERTY() uint32 RefusedAtRevision = 0;
+
+	/**
+	 * The two session clocks last seen when this demand found every depot simply BUSY - see
+	 * UFuelService::Tick's Needed case and UFuelService::FleetRevision.
+	 *
+	 * NOT RefusedAtRevision above, and beside it rather than folded into it (issue #190,
+	 * "one struct per thing"): busy is never Unserviceable - ChooseDepot's own "NOTHING IS
+	 * WRONG - WAIT" comment - so it is a different fact with a different terminal condition,
+	 * and a re-offer needs BOTH a fleet fact (a truck may have freed up) and a graph fact (a
+	 * road, depot or pump may have been built), where Unserviceable only ever needed the one.
+	 *
+	 * MAX_uint32 so a demand that has never yet been found busy runs ChooseDepot once rather
+	 * than matching a fresh session that happens to start both clocks at 0 - the same reason
+	 * URoadNetwork::PoseNodeIndexRevision starts there instead of at 0.
+	 */
+	UPROPERTY() uint32 BusyAtGuidelineRevision = MAX_uint32;
+	UPROPERTY() uint32 BusyAtFleetRevision = MAX_uint32;
 };
 
 /**
@@ -330,6 +347,20 @@ public:
 	void SetGoingHomeForTest(int32 TruckId, FEntityInstanceId Depot) { GoingHome.Add(TruckId, Depot); }
 
 	/**
+	 * How many times ChooseDepot actually ran this session - the route search, the
+	 * IsServiceNodeConnected BFS, the whole depot walk. For a test to prove the Needed case's
+	 * busy-wait skip (issue #190) really skips it, rather than merely naming the contract.
+	 *
+	 * MUTABLE: ChooseDepot is const and this counts real work it did, not a decision - the
+	 * same reason URoadNetwork::SampleGuidelineCalls is mutable.
+	 */
+	int32 GetChooseDepotCallCountForTest() const { return ChooseDepotCallCountForTest; }
+	void ResetChooseDepotCallCountForTest() { ChooseDepotCallCountForTest = 0; }
+
+	/** See FleetRevision. For a test to assert a truck retiring/recalling actually moved it. */
+	uint32 GetFleetRevisionForTest() const { return FleetRevision; }
+
+	/**
 	 * Appends a demand with the caller's own starting state, Stand left unset.
 	 *
 	 * BYPASSES OnAgentPhase, so a test can put two demands in a CHOSEN ARRAY ORDER with a
@@ -444,4 +475,21 @@ private:
 	 */
 	void SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Network, int32 TruckId,
 		FEntityInstanceId Depot);
+
+	/**
+	 * Bumped at the three places TrucksOutFor's total for a depot can go DOWN: a truck
+	 * arriving home (OnAgentPhase's own retire), and SendTruckHome's two "this truck no
+	 * longer counts as out anywhere" branches (no route home; the agent was already gone).
+	 * A depot's truck COUNT growing is not tracked here - Instance.Trucks is set only at
+	 * placement (URoadNetwork::PlaceEntity), which already bumps GetGuidelineRevision, and
+	 * Tick's Needed case checks both clocks - see FFuelDemand::BusyAtFleetRevision.
+	 *
+	 * A SESSION CLOCK, NOT STATE, the same as URoadNetwork::GuidelineRevision: not a
+	 * UPROPERTY, and it does not need to be one, because Demands (Transient anyway) is the
+	 * only place a comparison against it has to survive from one Tick to the next.
+	 */
+	uint32 FleetRevision = 0;
+
+	/** See GetChooseDepotCallCountForTest. */
+	mutable int32 ChooseDepotCallCountForTest = 0;
 };
