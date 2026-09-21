@@ -939,9 +939,10 @@ double ARoadNetworkActor::LastAgentTaxiSpeedCapForTest() const
 }
 
 FRoutePlan ARoadNetworkActor::FindRoute(
-	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan) const
+	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan,
+	ERouteErrand Errand) const
 {
-	return Facade->FindRoute(Start, Goal, Class, Wingspan);
+	return Facade->FindRoute(Start, Goal, Class, Wingspan, Errand);
 }
 
 // =========================================================================================

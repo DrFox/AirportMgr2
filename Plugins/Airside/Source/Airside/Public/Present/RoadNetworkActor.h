@@ -293,7 +293,8 @@ public:
 	 *  graph rather than three of them reaching past it. */
 	virtual FRoutePlan FindRoute(
 		FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		ETraversalClass Class, double Wingspan) const override;
+		ETraversalClass Class, double Wingspan,
+		ERouteErrand Errand = ERouteErrand::PlayerIssued) const override;
 
 	// =====================================================================================
 	// THIN FORWARDERS. Every member below existed on this actor before issue #32 and is kept

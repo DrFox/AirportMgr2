@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 #include "Present/AirsideTraffic.h"
@@ -164,8 +165,12 @@ bool FTrafficForwardersTest::RunTest(const FString& Parameters)
 	FTrafficClaim Blocker;
 	Model->OccupancyForTest().TryClaim(Phantom, Blocker);
 
-	const FRoutePlan VanRoute = Actor->FindRoute(RA, RC, ETraversalClass::GroundVehicle, 0.0);
-	const FRoutePlan PlaneRoute = Actor->FindRoute(RA, RC, ETraversalClass::Aircraft, 0.0);
+	// THE ERRAND, NOT THE CLASS, since 2026-09-21. This pair has always asserted that a van
+	// sent to a job is costed by the occupancy table and an aeroplane's route is not; the
+	// rule now lives in FRoutePolicy rather than in an ETraversalClass branch inside
+	// FindRoute, and the assertion below is unchanged.
+	const FRoutePlan VanRoute = Actor->FindRoute(RA, RC, ETraversalClass::GroundVehicle, 0.0, ERouteErrand::VehicleToJob);
+	const FRoutePlan PlaneRoute = Actor->FindRoute(RA, RC, ETraversalClass::Aircraft, 0.0, ERouteErrand::PlayerIssued);
 	if (TestTrue(TEXT("both classes find a route across the diamond"), VanRoute.IsValid() && PlaneRoute.IsValid()))
 	{
 		// THE TWO ANSWERS DIFFER, and that difference IS the forwarder: one query carried the

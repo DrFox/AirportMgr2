@@ -8,6 +8,7 @@
 #include "AirsideLog.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/TrafficClaims.h"
 #include "Model/TrafficContext.h"
 
@@ -78,7 +79,7 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 		return false;
 	}
 
-	FRouteQuery Query = FRouteQuery::For(
+	FRouteQuery Query = FRouteQuery::For(ERouteErrand::Replan,
 		UGroundTraffic::StepFromNode(Plan, SpliceStep), Agent.GoalNode, Agent.Airframe, Agent.Class);
 	Query.BannedEdge = BannedEdge;
 	Query.BannedNode = BannedNode;
@@ -92,12 +93,20 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	// turnaround, and sent an aircraft round the whole taxiway loop past one it could have
 	// used (samples/routing.png, 2026-09-07). Crossings are turn paths and nodes, not
 	// runway edges, so they stay open either way. See ERunwayAvoidance.
-	Query.AvoidRunways = ERunwayAvoidance::Held;
+	//
+	// THE CHOICE NOW LIVES IN FRoutePolicy::For(Replan) and this paragraph is its
+	// justification; the assignment that used to stand here would be a second source of
+	// truth for it.
 
 	// THE COST TERM IS THE POINT OF REPLANNING, not the ban. The ban removes the one edge
 	// the caller knows is hopeless; the congestion cost is what stops the new route from
 	// being the next queue along, which a plain shortest path would walk straight into.
 	Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
+
+	// AND THE PENALTY FROM THE SAME RULES. Both replan errands allow a FREE runway end
+	// (Held, not All), so the multiplier is what keeps one a last resort rather than a
+	// shortcut. Read off the instance, so a level that tuned it is obeyed.
+	Query.RunwayPenalty = Rules.RunwayPenalty;
 
 	// A COPY, because SpliceReplan writes in place and this function promises the agent keeps
 	// the plan it had until BOTH the search and the splice have succeeded - see the guard
@@ -606,13 +615,14 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	}
 	else
 	{
-		FRouteQuery Query = FRouteQuery::For(
+		FRouteQuery Query = FRouteQuery::For(ERouteErrand::RebuildReResolve,
 			UGroundTraffic::StepFromNode(Plan, Failed), Agent.GoalNode, Agent.Airframe, Agent.Class);
 
 		// The congestion term, as ReplanAt takes it: the guidelines that survived the rebuild
 		// by handle - every hand-drawn one - still carry real queues, and a re-routed arrival
 		// should be steered round them rather than into the back of one.
 		Query.WithCongestion(Occupancy, Agent.Id, Rules.CongestionWeight);
+		Query.RunwayPenalty = Rules.RunwayPenalty;
 
 		if (SpliceReplan(Network, Query, Failed, Plan))
 		{

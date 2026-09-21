@@ -4,6 +4,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/TakeoffRun.h"
 
 namespace DeparturePlanner
@@ -57,11 +58,14 @@ namespace DeparturePlanner
 		// breaks. Only the QUERY and the ACCEPTED-ENTRY shapes were actually identical
 		// between them, so only those are factored out - neither loop's break/continue is
 		// touched.
-		auto TryRoute = [&](FGuidelineNodeId Candidate, ERunwayAvoidance Avoidance)
+		auto TryRoute = [&](FGuidelineNodeId Candidate, ERouteErrand Errand)
 		{
-			FRouteQuery Query = FRouteQuery::For(Start, Candidate, Airframe, Class);
-			Query.AvoidRunways = Avoidance;
-			return RouteSearch::Find(Network, Query);
+			// THE ERRAND, NOT AN AVOIDANCE. The two loops below differ in which one they
+			// mean - a normal entry may never touch a strip, a backtrack exists to - and
+			// naming the errand is what puts that difference in the one table rather than
+			// in two arguments at two call sites.
+			return RouteSearch::Find(Network,
+				FRouteQuery::For(Errand, Start, Candidate, Airframe, Class));
 		};
 
 		auto Accept = [&](const FRoutePlan& Route, FGuidelineNodeId Candidate, double Offset, bool bBacktrack)
@@ -85,7 +89,7 @@ namespace DeparturePlanner
 				// Sorted from the threshold: everything after this has less runway still.
 				break;
 			}
-			const FRoutePlan Route = TryRoute(Candidate, ERunwayAvoidance::All);
+			const FRoutePlan Route = TryRoute(Candidate, ERouteErrand::DepartureToEntry);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{
 				continue;
@@ -103,7 +107,7 @@ namespace DeparturePlanner
 		//    runway from its end, and a turn on the spot to face down it.
 		for (const FGuidelineNodeId& Candidate : Candidates)
 		{
-			const FRoutePlan Route = TryRoute(Candidate, ERunwayAvoidance::None);
+			const FRoutePlan Route = TryRoute(Candidate, ERouteErrand::DepartureBacktrack);
 			if (!Route.IsValid() || Route.Polyline.Num() < 2)
 			{
 				continue;
