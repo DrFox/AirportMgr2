@@ -1,6 +1,4 @@
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Framework/Commands/UICommandList.h"
 #include "InteractiveToolManager.h"
 #include "Misc/AutomationTest.h"
@@ -8,6 +6,7 @@
 #include "RoadBuildEdMode.h"
 #include "RoadBuildEdModeCommands.h"
 #include "RoadBuildEditorTool.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RunwayTool.h"
 
@@ -56,19 +55,12 @@ bool FRoadBuildEdModeSessionTest::RunTest(const FString& Parameters)
 	// GetWorld() needs help here at all. Not the same as registering the mode with a live
 	// editor (Enter() is never called); this substitutes for the ONE thing this test's
 	// reselect assertions need from a real editor session.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Editor, false);
-	if (!TestNotNull(TEXT("a world for the mode to resolve a target in"), World))
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false, EWorldType::Editor);
+	if (!TestNotNull(TEXT("a world for the mode to resolve a target in"), TestWorld.World))
 	{
 		return false;
 	}
-	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Editor);
-	WorldContext.SetCurrentWorld(World);
-	ON_SCOPE_EXIT
-	{
-		GEngine->DestroyWorldContext(World);
-		World->DestroyWorld(false);
-	};
-	Mode->WorldOverrideForTest = World;
+	Mode->WorldOverrideForTest = TestWorld.World;
 
 	// The runway tool, found by its registry key rather than a literal index - the table is
 	// not contiguous and an index written here would be a second claim about its order.

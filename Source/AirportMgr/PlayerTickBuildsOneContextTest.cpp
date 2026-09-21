@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -28,16 +27,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FPlayerTickBuildsOneContextTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Target = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Target = TestWorld.Actor;
 	if (!TestNotNull(TEXT("a target actor"), Target)) { return false; }
 
-	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 
 	// BYPASSES BeginPlay's level search, same precedent as the camera test's

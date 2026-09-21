@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "RoadBuildController.h"
 #include "BuildActions.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -15,13 +14,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FClickModifierTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 
 	// ONE ENUM, NOT A SET OF FLAGS: every illegal combination is unrepresentable, and that
@@ -97,13 +93,10 @@ bool FGestureModeCoverageTest::RunTest(const FString& Parameters)
 	// its own comment calls that bound "the fifth list a new style has to appear in, and the
 	// only one nothing else would have caught". Adding a mode here needs no edit to this test
 	// at all - it simply starts being checked.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 
 	const UEnum* Enum = StaticEnum<EGestureMode>();

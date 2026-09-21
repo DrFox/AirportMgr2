@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
 #include "BuildActions.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "RoadBuildController.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/BuildSession.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -101,13 +100,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	// No ARoadNetworkActor: this test only needs a world to spawn a controller in (#189).
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
+	ARoadBuildController* C = TestWorld.World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
 
 	int32 RanCount = 0;

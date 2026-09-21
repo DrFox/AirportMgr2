@@ -2,9 +2,8 @@
 #include "Blueprint/UserWidget.h"
 #include "BuildActions.h"
 #include "BuildBarWidget.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -18,13 +17,10 @@ bool FBuildBarWidgetTest::RunTest(const FString& Parameters)
 	// THE CONSUMER CHECK. The registry test proves the list is well formed; this proves the
 	// bar READS it - one button per action, in the right section - with no asset at all,
 	// which is the degraded path the design promises still works.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(World, UBuildBarWidget::StaticClass());
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 
 	for (uint8 S = 0; S < static_cast<uint8>(EActionSection::Count); ++S)
@@ -54,13 +50,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FBarWrapsRatherThanClippingTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(World, UBuildBarWidget::StaticClass());
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 
 	// ROOM FOR EVERYTHING: one line, and the width the sections actually want.
@@ -106,13 +99,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FBarGrowsForTheLineItWrappedToTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(World, UBuildBarWidget::StaticClass());
+	UBuildBarWidget* Bar = CreateWidget<UBuildBarWidget>(TestWorld.World, UBuildBarWidget::StaticClass());
 	if (!TestNotNull(TEXT("the bar is created with no asset"), Bar)) { return false; }
 
 	const float Wanted = static_cast<float>(Bar->SectionRowSizeForTest(6000.0f).X);

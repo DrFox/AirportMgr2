@@ -1,9 +1,8 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "NotificationCentre.h"
+#include "Testing/AirsideTestWorld.h"
 #include "ToastStackWidget.h"
 #include "UIStyle.h"
 #include "Styling/SlateBrush.h"
@@ -35,13 +34,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastStackShowsEveryEntryTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UToastStackWidget* Stack = MakeStack(World);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
 	if (!TestNotNull(TEXT("the stack is created with no asset"), Stack)) { return false; }
 	if (!TestNotNull(TEXT("it owns a notification centre"), Stack->Centre())) { return false; }
 
@@ -71,13 +67,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastStackRealSecondsTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UToastStackWidget* Stack = MakeStack(World);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
 	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
 
 	Stack->Centre()->PostFeed(FText::FromString(TEXT("Loaded 'quick'")));
@@ -116,13 +109,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastCardRoundingTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UToastStackWidget* Stack = MakeStack(World);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
 	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
 
 	Stack->Centre()->PostFeed(FText::FromString(TEXT("Saved 'quick'")));
@@ -199,13 +189,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastStackDoesNotRebuildUnchangedEntriesTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UToastStackWidget* Stack = MakeStack(World);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
 	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
 
 	// THREE ENTRIES, not one: the old ClearChildren()-and-rebuild would have rebuilt all of
@@ -257,13 +244,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FToastStackHandlesAMidListRemovalTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+	FAirsideTestWorld TestWorld(/*bSpawnActor=*/false);
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
 
-	UToastStackWidget* Stack = MakeStack(World);
+	UToastStackWidget* Stack = MakeStack(TestWorld.World);
 	if (!TestNotNull(TEXT("the stack is created"), Stack)) { return false; }
 
 	Stack->Centre()->PostFeed(FText::FromString(TEXT("first")));

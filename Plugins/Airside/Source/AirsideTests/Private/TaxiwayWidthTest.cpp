@@ -20,8 +20,12 @@ namespace
 	 * testable without UAirsideContent, because the whole point of the seam (#78) is that a
 	 * tool does not know the content set. Grep this file for UAirsideContent and find
 	 * nothing - if that ever stops being true, the tool has grown a content dependency.
+	 * Every virtual this does not override is FNullEditTarget's inert default (#189),
+	 * including GetRunwayProfileCount/ResolveRunwayProfile - this fake is the TAXIWAY tool's -
+	 * and ResolveProfileFor, since a fake resolves nothing composite (the real rule lives on
+	 * ARoadNetworkActor, pinned by Airside.Present.ProfileResolutionIsOneRule).
 	 */
-	struct FFakeWidthTarget : IRoadEditTarget
+	struct FFakeWidthTarget : FNullEditTarget
 	{
 		TArray<URoadProfile*> TaxiwayProfiles;
 
@@ -30,7 +34,6 @@ namespace
 		mutable int32 LastGhostWidth = -2;
 		int32 Connects = 0;
 
-		virtual const URoadNetwork* GetNetwork() const override { return nullptr; }
 		virtual int32 PlaceNode(FVector2D) override { return Connects; }
 		virtual bool ConnectNodes(int32, int32, ERoadKind, int32 WidthIndex) override
 		{
@@ -39,50 +42,11 @@ namespace
 			return true;
 		}
 		using IRoadEditTarget::ConnectNodes;
-		virtual int32 ConnectGuidelines(int32, int32) override { return INDEX_NONE; }
-		virtual bool PlaceRunway(FVector2D, FVector2D, URoadProfile*, const FRunwayFacts&) override { return false; }
-		using IRoadEditTarget::PlaceRunway;
-		virtual bool SetRunwayFacts(int32, const FRunwayFacts&) override { return false; }
-		virtual double GetMinimumRunwayLength() const override { return 0.0; }
-		virtual bool DisconnectGuideline(int32) override { return false; }
-		virtual bool SetIntermediateHoldingPosition(int32, bool) override { return false; }
-		virtual int32 SplitSegment(int32, FVector2D) override { return INDEX_NONE; }
-		virtual bool DeleteNode(int32) override { return false; }
-		virtual bool DeleteSegment(int32) override { return false; }
-		virtual bool MoveNode(int32, FVector2D) override { return false; }
-		virtual bool MergeNodes(int32, int32) override { return false; }
-		virtual bool MoveApronCorner(int32, int32, FVector2D) override { return false; }
-		virtual void BeginInteractiveEdit(const FString&) override {}
-		virtual void EndInteractiveEdit(bool) override {}
-		virtual FRoadDeletionPlan PlanNodeDeletion(int32) const override { return FRoadDeletionPlan(); }
-		virtual int32 AddApron(const TArray<FVector2D>&) override { return INDEX_NONE; }
-		virtual bool DeleteApron(int32) override { return false; }
-		virtual int32 FindApronAt(FVector2D) const override { return INDEX_NONE; }
-		virtual int32 PlaceEntity(FVector2D, double, EPlaceableEntity) override { return INDEX_NONE; }
-		virtual int32 PlaceEntityInPlot(const TArray<FVector2D>&, FVector2D, FVector2D,
-			const TArray<EDepotModule>&, EPlaceableEntity) override { return INDEX_NONE; }
-		using IRoadEditTarget::PlaceStand;
-		virtual bool DeleteEntity(int32) override { return false; }
-		virtual int32 FindEntityAt(FVector2D, double) const override { return INDEX_NONE; }
-		virtual const UEntityDefinition* GetEntityDefinition(EPlaceableEntity) const override { return nullptr; }
-		using IRoadEditTarget::GetStandDefinition;
 		virtual void UpdateGhost(int32, const FRoadSnapResult&, bool, ERoadKind, int32 WidthIndex) override
 		{
 			LastGhostWidth = WidthIndex;
 		}
 		using IRoadEditTarget::UpdateGhost;
-		virtual void HideGhost() override {}
-		virtual bool MakeLiveNodeId(int32, FRoadNodeId&) const override { return false; }
-		virtual FRoutePlan FindRoute(FGuidelineNodeId, FGuidelineNodeId, ETraversalClass, double) const override
-		{
-			return FRoutePlan();
-		}
-		using IRoadEditTarget::DispatchAgent;
-		virtual bool DispatchAgent(const FRoutePlan&, const FAirframe&, ETraversalClass) override { return false; }
-		virtual void RebuildMesh() override {}
-
-		virtual int32 GetRunwayProfileCount() const override { return 0; }
-		virtual URoadProfile* ResolveRunwayProfile(int32) const override { return nullptr; }
 
 		virtual int32 GetTaxiwayProfileCount() const override { return TaxiwayProfiles.Num(); }
 		virtual URoadProfile* ResolveTaxiwayProfile(int32 Index) const override
@@ -95,11 +59,6 @@ namespace
 			// clamp would let a test pass against behaviour a real target refuses.
 			return TaxiwayProfiles[FMath::Clamp(Index, 0, TaxiwayProfiles.Num() - 1)];
 		}
-
-		// A FAKE RESOLVES NOTHING COMPOSITE. The real rule lives on ARoadNetworkActor and is
-		// pinned by Airside.Present.ProfileResolutionIsOneRule; these fakes exist to watch what
-		// a tool ASKS FOR, not to re-implement what the actor answers.
-		virtual URoadProfile* ResolveProfileFor(ERoadKind, int32) override { return nullptr; }
 	};
 
 }

@@ -4,8 +4,6 @@
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
 #include "Model/LandingRun.h"
@@ -14,21 +12,8 @@
 #include "Profiles/RoadProfile.h"
 #include "Tool/SnapGuideChain.h"
 
-FAirsideTestWorld::FAirsideTestWorld()
-{
-	World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (World == nullptr) { return; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	Actor = World->SpawnActor<ARoadNetworkActor>();
-}
-
-FAirsideTestWorld::~FAirsideTestWorld()
-{
-	if (World == nullptr) { return; }
-	GEngine->DestroyWorldContext(World);
-	World->DestroyWorld(false);
-}
+// FAirsideTestWorld's constructor/destructor now live in Testing/AirsideTestWorld.h (#189) -
+// AirsideTestFixtures.h forwards to that header rather than declaring its own copy.
 
 FToolContext TestTool::ContextAt(IRoadEditTarget& Target, const FVector2D& Where,
 	ERoadSnapKind Kind, double SnapRadius)

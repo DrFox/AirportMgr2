@@ -1,7 +1,5 @@
 #include "CoreMinimal.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FlightBoard.h"
 #include "Model/OpsEvents.h"
@@ -15,6 +13,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadNetworkActor.h"
 #include "Profiles/RoadProfile.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -28,13 +27,9 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 	// THE COMPOSITION TEST FOR THE SEAM. Every piece below has its own unit test; this is
 	// the one that fails if any of them is left unwired: Airside delegate -> runtime ->
 	// bus, runtime speed -> actor scale, runtime save -> slot -> restore -> mesh rebuilt.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world to spawn into"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world to spawn into"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("actor spawned"), Actor)) { return false; }
 
 	// A real road, so the mesh has triangles the load can be measured by.

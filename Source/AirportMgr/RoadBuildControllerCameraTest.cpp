@@ -1,11 +1,10 @@
 #include "CoreMinimal.h"
 #include "BuildCameraComponent.h"
 #include "BuildHudLayer.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Misc/AutomationTest.h"
 #include "Present/RoadNetworkActor.h"
 #include "RoadBuildController.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -27,11 +26,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FRoadBuildControllerCameraTest::RunTest(const FString& Parameters)
 {
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
 	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
 
 	ARoadBuildController* C = World->SpawnActor<ARoadBuildController>();
 	if (!TestNotNull(TEXT("controller spawned"), C)) { return false; }
@@ -52,9 +49,9 @@ bool FRoadBuildControllerCameraTest::RunTest(const FString& Parameters)
 	// leave the wheel dead with no compile error to catch it.
 	//
 	// CreateBuildCamera called directly (bypassing BeginPlay's TActorIterator search) so the
-	// spawned camera actor exists for UpdateView to move - a fresh ARoadNetworkActor stands
-	// in for "whatever the level has".
-	ARoadNetworkActor* Target = World->SpawnActor<ARoadNetworkActor>();
+	// spawned camera actor exists for UpdateView to move - FAirsideTestWorld's own
+	// ARoadNetworkActor stands in for "whatever the level has".
+	ARoadNetworkActor* Target = TestWorld.Actor;
 	if (!TestNotNull(TEXT("a target actor"), Target))
 	{
 		return false;
@@ -99,13 +96,10 @@ bool FBuildCameraTurnIsFrameRateIndependentTest::RunTest(const FString& Paramete
 	// without one, so a world-free version of this test measured nothing and reported a
 	// cheerful zero degrees of rotation in both cases. Same world-spawn pattern as the
 	// forwarder test above.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
+	FAirsideTestWorld TestWorld;
+	UWorld* World = TestWorld.World;
 	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Target = World->SpawnActor<ARoadNetworkActor>();
+	ARoadNetworkActor* Target = TestWorld.Actor;
 	if (!TestNotNull(TEXT("a target actor"), Target)) { return false; }
 
 	// One frame of input at a given frame rate, as a yaw delta. A fresh controller per

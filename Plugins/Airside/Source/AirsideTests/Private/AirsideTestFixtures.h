@@ -5,44 +5,29 @@
 // name prefix (M2*, StandOcc2*, ...) - 12 different prefixes for the same handful of
 // fixtures, ~1,500 lines of pasted setup. One header shared by every .cpp in AirsideTests
 // needs no prefix at all: it is included once per translation unit like any other header,
-// not pasted into an anonymous namespace per file. See #99. NOT YET exposed to
-// AirportOpsTests - that needs a Public/ move, AIRSIDETESTS_API on the non-template members,
-// and an AirportOpsTests.Build.cs dependency; tracked as a #99 follow-up rather than done
-// here, given this PR's size.
+// not pasted into an anonymous namespace per file. See #99.
+//
+// #189 EXPOSED FAirsideTestWorld AND FNullEditTarget to AirportMgr, AirportOpsTests and
+// AirsideEditor - the Public/ move this comment used to defer - by putting them in
+// Airside/Public/Testing/AirsideTestWorld.h instead of here (AirsideTests is Private to this
+// module, so nothing outside it may include this header; Airside is a dependency of all four
+// test-hosting modules already). This header #includes and forwards rather than declaring
+// its own copy, so every one of the 64 existing FAirsideTestWorld users in this module needed
+// no change.
 
 #include "CoreMinimal.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Testing/AirsideTestWorld.h"
 #include "Tool/RoadBuildTool.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/SnapGuideChain.h"
 
 class ARoadNetworkActor;
-class UWorld;
 class URoadProfile;
 struct FRunwayRequirements;
-
-/**
- * A world and a network actor to test through the composition root rather than the model
- * alone - RAII so a test that returns early (TestTrue(...) { return false; }, this
- * codebase's idiom throughout) still tears the world down. Mirrors the
- * CreateWorld / CreateNewWorldContext / SpawnActor<ARoadNetworkActor> / DestroyWorldContext
- * sequence every present-layer test wrote out by hand (HoldingPointToolTest, RunwayToolTest,
- * TrafficForwardersTest before #99).
- */
-struct FAirsideTestWorld
-{
-	UWorld* World = nullptr;
-	ARoadNetworkActor* Actor = nullptr;
-
-	FAirsideTestWorld();
-	~FAirsideTestWorld();
-
-	FAirsideTestWorld(const FAirsideTestWorld&) = delete;
-	FAirsideTestWorld& operator=(const FAirsideTestWorld&) = delete;
-};
 
 /** FToolContext builders shared by every tool test - see ContextAt's own comment (#104). */
 namespace TestTool

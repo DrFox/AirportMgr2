@@ -1,8 +1,6 @@
 #include "CoreMinimal.h"
 #include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
-#include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "Entities/EntityDefinition.h"
 #include "Misc/AutomationTest.h"
 #include "Model/FuelService.h"
@@ -18,6 +16,7 @@
 #include "Present/OpsRuntime.h"
 #include "Present/RoadAgentActor.h"
 #include "Present/RoadNetworkActor.h"
+#include "Testing/AirsideTestWorld.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
 
@@ -52,13 +51,9 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 	// tick is left unwired. Every piece below has its own world-free test; this is the one
 	// that proves they are joined - the same job AirportOps.Present.Runtime does for
 	// save/load, spawned in a real world with a real actor and a real tick loop.
-	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
-	if (!TestNotNull(TEXT("a world"), World)) { return false; }
-	FWorldContext& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
-	Context.SetCurrentWorld(World);
-	ON_SCOPE_EXIT { GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
-
-	ARoadNetworkActor* Actor = World->SpawnActor<ARoadNetworkActor>();
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
 	if (!TestNotNull(TEXT("the actor"), Actor)) { return false; }
 
 	// A node first: the actor's Network is built lazily by the first edit.
