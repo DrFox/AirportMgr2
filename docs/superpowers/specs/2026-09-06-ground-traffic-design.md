@@ -358,9 +358,20 @@ a held node is a moment, a held edge is a queue. The heuristic stays straight-li
 admissible, because the added term is non-negative. Null occupancy is the old search
 bitwise; no existing route test moves.
 
-**Who routes with it.** Vehicles always. Aircraft never at dispatch (fixed at clearance);
-aircraft replan only via `ReplanFrom` below, in the deadlock and rebuild cases.
-`RedirectAgent` is AirportOps's decision and is unchanged.
+**Who routes with it.** *Amended 2026-09-21 - see
+`2026-09-21-route-policy-design.md` §9.* `FRoutePolicy::For(Errand).Occupancy`, checked both
+ways: a `Required` errand with no table is refused, and so is a `Never` errand handed one.
+`Required` for a route being re-chosen for an agent already under way; `Never` for a route
+fixed when it is issued, which covers every clearance and every comparison between
+candidates. Vehicle-versus-aircraft is NOT the axis, and the sentence this replaces said it
+was: a fuel truck choosing a depot is `Never` (a congestion-weighted comparison makes the
+winner flicker between ticks), an arrival taxiing in is `Never`, and both of an aircraft's
+replan paths are `Required`. `RedirectAgent` is AirportOps's decision and is unchanged.
+
+The original text, true of the two callers that existed on 2026-09-06 and untrue from
+2026-09-07 when `FuelService` landed, read: *"Vehicles always. Aircraft never at dispatch
+(fixed at clearance); aircraft replan only via `ReplanFrom` below, in the deadlock and
+rebuild cases."*
 
 **`UGroundTraffic::ReplanFrom(agent, node, bannedEdge)`.** Precondition: the agent is stopped
 with `node` the next step's `To`. Search `node → GoalNode` with the ban and the occupancy

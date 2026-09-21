@@ -413,11 +413,11 @@ That was true of the two callers that existed on 2026-09-06 and has not been tru
 
 ## 10. Risks and unjudged figures
 
-- **`RunwayPenalty` is a number nobody has judged.** It ships at `10.0` on the grounds that
-  a taxiway detour is rarely ten times the strip it parallels, and that is an argument, not
-  a measurement. Like the snap-guide constants, it needs a look at an actual map before
-  anyone calls it tuned — the map check, not the suite (memory:
-  `graph-changes-need-a-look-at-the-map`).
+- **`RunwayPenalty` is a number nobody has judged, AND IT IS STILL UNJUDGED AS SHIPPED.**
+  It went in at `10.0` on the grounds that a taxiway detour is rarely ten times the strip it
+  parallels, which is an argument, not a measurement. The suite proves the MECHANISM (a
+  detour of ~34000 uu beats a strip of ~22000 at ten, and loses at one) and proves nothing
+  about a real airport. The map check was NOT done - see section 12.
 - **Five sites change behaviour.** Four gain a restriction they never declared; the fifth
   gains congestion. Tests asserting a route across a strip through those paths will move.
   Each one that moves is reported with which errand changed it and why — none is quietly
@@ -440,3 +440,26 @@ That was true of the two callers that existed on 2026-09-06 and has not been tru
 - Turn cost. `AirsideSettings.cpp:74` claims "a route search costs a turn by Wingspan";
   wingspan is a *filter* (`ExceedsWingspan`), not a cost. The comment is corrected in
   passing; no turn cost is added.
+
+---
+
+## 12. Still outstanding at merge
+
+Everything in sections 1-11 is implemented and covered by the suite (716 tests, 0 failed).
+Two things are deliberately NOT done, and neither can be done from a headless run:
+
+1. **The in-editor repro of the original report.** A full departure cycle on the starter map,
+   confirming a pushback's taxi-out no longer runs along the strip, with
+   `python Tools/Mcp.py shot after-fix.png` as the evidence. The suite pins the POLICY ROW
+   (`Airside.Model.RouteSearch.ErrandsThatGainedAFilter`), not the route a real pushback
+   produces: `PushbackPlanner` is private to the plugin and cannot be called from a test
+   module, and every pre-existing fixture's edges are hand-authored with no `DerivedFrom`,
+   so none of them could route along a strip even before this change. That is also why no
+   existing test moved when five call sites changed behaviour.
+
+2. **Judging `RunwayPenalty` against a real layout.** Issue a `PlayerIssued` route between
+   two points whose shortest path runs lengthways along a runway with a parallel taxiway
+   available. If it takes the taxiway, 10.0 holds for this airport; if not, raise
+   `FTrafficRules::RunwayPenalty` **on the placed actor instance**, not in the constructor -
+   an editor-set UPROPERTY overrides the constructor default, so read the instance when
+   reporting what worked.
