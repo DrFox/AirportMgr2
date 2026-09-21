@@ -209,7 +209,8 @@ public:
 	virtual bool MakeLiveNodeId(int32 Index, FRoadNodeId& OutId) const override;
 
 	virtual FRoutePlan FindRoute(FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		ETraversalClass Class, double Wingspan) const override;
+		ETraversalClass Class, double Wingspan,
+		ERouteErrand Errand = ERouteErrand::PlayerIssued) const override;
 
 	// --- Facade-only members (not part of IRoadEditTarget) ------------------------------
 

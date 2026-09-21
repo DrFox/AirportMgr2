@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -46,8 +47,8 @@ bool FAgentRedirectTest::RunTest(const FString& Parameters)
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
 
-	FRouteQuery Out; Out.Start = Start; Out.Goal = End; Out.Class = ETraversalClass::GroundVehicle;
-	FRouteQuery Back; Back.Start = End; Back.Goal = Start; Back.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Out; Out.Errand = ERouteErrand::GraphProbe; Out.Policy = FRoutePolicy::For(Out.Errand); Out.Start = Start; Out.Goal = End; Out.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Back; Back.Errand = ERouteErrand::GraphProbe; Back.Policy = FRoutePolicy::For(Back.Errand); Back.Start = End; Back.Goal = Start; Back.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Outbound = RouteSearch::Find(Net, Out);
 	const FRoutePlan Return = RouteSearch::Find(Net, Back);
 	if (!TestTrue(TEXT("both legs route"), Outbound.IsValid() && Return.IsValid())) { return false; }

@@ -6,6 +6,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 
@@ -52,6 +53,8 @@ bool FTruckCrossesTaxiwayTest::RunTest(const FString& Parameters)
 	auto Route = [Net](FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class)
 	{
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = Start;
 		Query.Goal = Goal;
 		Query.Class = Class;

@@ -7,6 +7,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
 
@@ -88,6 +89,8 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 
 		// The point of the whole exercise: an aircraft can now be routed to the stand.
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = West;
 		Query.Goal = PoseNode;
 		Query.Class = ETraversalClass::Aircraft;
@@ -131,6 +134,8 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		// matters and a correct-looking degree can still be a severed taxiway.
 		{
 			FRouteQuery Through;
+			Through.Errand = ERouteErrand::GraphProbe;
+			Through.Policy = FRoutePolicy::For(Through.Errand);
 			Through.Start = West;
 			Through.Goal = East;
 			Through.Class = ETraversalClass::Aircraft;
@@ -218,6 +223,8 @@ bool FAnchorLinkTest::RunTest(const FString& Parameters)
 		FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = West;
 		Query.Goal = Net->GetEntity(Placed)->PoseNode;
 		Query.Class = ETraversalClass::Aircraft;

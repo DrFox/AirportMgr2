@@ -2,6 +2,7 @@
 
 #include "Model/LandingRun.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/TrafficOccupancy.h"
 
 namespace ArrivalPlanner
@@ -29,11 +30,17 @@ namespace ArrivalPlanner
 		// ONE multi-goal search from From replaces the old one-Find()-per-stand loop, which
 		// stayed O(exits x stands) searches per dispatch, per re-offer, per plan re-resolve
 		// even after #201 made each individual search cheap.
+		//
+		// THE POLICY STILL COMES FROM THE TABLE, hand-built or not: the errand is set and
+		// FRoutePolicy::For resolves it, so this site cannot drift from the one list even
+		// though it cannot use the factory.
 		FRouteQuery Query;
 		Query.Start = From;
 		Query.Class = ETraversalClass::Aircraft;
 		Query.Wingspan = Airframe.Wingspan;
-		Query.AvoidRunways = ERunwayAvoidance::All;
+		Query.Errand = ERouteErrand::ArrivalTaxiIn;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
+		Query.AvoidRunways = Query.Policy.Avoidance;
 
 		// The wingspan retry Find() pays for on TooWide (RouteSearch::Find's own unconstrained
 		// re-run) is NOT reproduced here - see FindToGoals' own comment. This loop never read

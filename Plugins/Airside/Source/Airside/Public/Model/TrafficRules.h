@@ -110,6 +110,20 @@ struct AIRSIDE_API FTrafficRules
 	/** Weight on held length in the routing cost. See FRouteQuery::CongestionWeight. */
 	UPROPERTY(EditAnywhere) double CongestionWeight = 2.0;
 
+	/**
+	 * What a runway edge costs, as a multiple of its length, on an errand whose policy allows
+	 * one at all (FRoutePolicy::bPenaliseRunways).
+	 *
+	 * TEN IS AN ARGUMENT, NOT A MEASUREMENT: a taxiway detour is rarely ten times the strip
+	 * it parallels, so ten sends a route round whenever round exists, and still lets the
+	 * strip win when it is the only way through. It has NOT been judged against a real
+	 * airport - see the spec's section 10.
+	 *
+	 * ClampMin 1.0: below one, a runway edge would cost less than its own chord and the
+	 * search's straight-line heuristic would stop being admissible, silently.
+	 */
+	UPROPERTY(EditAnywhere, meta = (ClampMin = "1.0")) double RunwayPenalty = 10.0;
+
 	/** Stopped-and-waiting this long before deadlock detection looks. A normal junction
 	 *  wait must never trip it. */
 	UPROPERTY(EditAnywhere) double StallSeconds = 3.0;

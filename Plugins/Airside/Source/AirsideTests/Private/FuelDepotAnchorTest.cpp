@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -104,6 +105,8 @@ bool FDepotJoinsRoadTest::RunTest(const FString& Parameters)
 		// cast as an AIRCRAFT unconditionally, found no aircraft guideline, and logged
 		// "joins nothing" on every rebuild for ever.
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = Pose;
 		Query.Goal = East;
 		Query.Class = ETraversalClass::GroundVehicle;
@@ -187,6 +190,8 @@ bool FStandFuelAnchorJoinsRoadTest::RunTest(const FString& Parameters)
 	// is an island is a stand no fuel service can ever serve - and "the search found
 	// nothing" would otherwise be indistinguishable from a broken search.
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = RoadWest;
 	Query.Goal = Fuel->Node;
 	Query.Class = ETraversalClass::GroundVehicle;

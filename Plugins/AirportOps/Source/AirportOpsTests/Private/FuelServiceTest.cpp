@@ -10,6 +10,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Profiles/RoadProfile.h"
@@ -361,6 +362,8 @@ int32 FFuelFixture::ParkAircraft()
 int32 FFuelFixture::ParkAircraftAt(FGuidelineNodeId Pose)
 {
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = TaxiwayFarEnd;
 	Query.Goal = Pose;
 	Query.Class = ETraversalClass::Aircraft;

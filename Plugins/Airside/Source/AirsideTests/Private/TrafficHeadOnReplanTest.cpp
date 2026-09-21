@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Profiles/RoadProfile.h"
 
@@ -17,7 +18,7 @@ namespace
 {
 	FRoutePlan M2HeadOnRoute(const URoadNetwork& Net, FGuidelineNodeId A, FGuidelineNodeId B)
 	{
-		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
 		return RouteSearch::Find(Net, Q);
 	}
 

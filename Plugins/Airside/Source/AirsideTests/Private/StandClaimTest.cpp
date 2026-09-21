@@ -4,6 +4,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficOccupancy.h"
 
@@ -52,7 +53,7 @@ bool FStandClaimTest::RunTest(const FString& Parameters)
 
 	// Redirect elsewhere: the stand frees between ticks, and the model says stands may have freed.
 	const FGuidelineNodeId Other = (Goal == PoseA) ? PoseB : PoseA;
-	FRouteQuery Q; Q.Start = Goal; Q.Goal = Other; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = Goal; Q.Goal = Other; Q.Class = ETraversalClass::Aircraft;
 	const FRoutePlan ToOther = RouteSearch::Find(*A.Net, Q);
 	if (!TestTrue(TEXT("a route between the stands exists"), ToOther.IsValid())) { return false; }
 	if (!TestTrue(TEXT("redirected"), Traffic->RedirectAgent(Id, A.Net, ToOther))) { return false; }

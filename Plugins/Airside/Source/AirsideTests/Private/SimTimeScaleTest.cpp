@@ -7,6 +7,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -42,7 +43,7 @@ bool FSimTimeScaleTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Query; Query.Start = Start; Query.Goal = End; Query.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Query; Query.Errand = ERouteErrand::GraphProbe; Query.Policy = FRoutePolicy::For(Query.Errand); Query.Start = Start; Query.Goal = End; Query.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Outbound = RouteSearch::Find(Net, Query);
 	if (!TestTrue(TEXT("the leg routes"), Outbound.IsValid())) { return false; }
 
@@ -123,7 +124,7 @@ bool FEvenStepTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Query; Query.Start = Start; Query.Goal = End; Query.Class = ETraversalClass::GroundVehicle;
+	FRouteQuery Query; Query.Errand = ERouteErrand::GraphProbe; Query.Policy = FRoutePolicy::For(Query.Errand); Query.Start = Start; Query.Goal = End; Query.Class = ETraversalClass::GroundVehicle;
 	const FRoutePlan Plan = RouteSearch::Find(Net, Query);
 	if (!TestTrue(TEXT("the leg routes"), Plan.IsValid())) { return false; }
 

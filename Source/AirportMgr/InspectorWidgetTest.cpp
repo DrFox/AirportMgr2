@@ -7,6 +7,7 @@
 #include "Misc/AutomationTest.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -46,7 +47,7 @@ bool FInspectorWidgetTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
 	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 
@@ -161,7 +162,7 @@ bool FInspectorIdleTickSetsNoTextTest::RunTest(const FString& Parameters)
 		Edge.bDerived = false;
 		Net.AddGuidelineEdge(MoveTemp(Edge));
 	}
-	FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::Aircraft;
 	if (!TestTrue(TEXT("dispatched"), Actor->DispatchAgent(RouteSearch::Find(Net, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 

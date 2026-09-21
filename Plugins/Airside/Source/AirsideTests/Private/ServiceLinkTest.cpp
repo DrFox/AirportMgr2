@@ -11,6 +11,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SpeedProfile.h"
 #include "Solve/GuidelineGeom.h"
@@ -353,6 +354,8 @@ bool FStandIsEnteredWhereItDeclaresTest::RunTest(const FString& Parameters)
 			// AND A TRUCK CAN ACTUALLY GET THERE. Connectivity is the claim; a route is the
 			// proof, and "the search found nothing" would otherwise read like a broken search.
 			FRouteQuery Query;
+			Query.Errand = ERouteErrand::GraphProbe;
+			Query.Policy = FRoutePolicy::For(Query.Errand);
 			Query.Start = Near;
 			Query.Goal = Node;
 			Query.Class = ETraversalClass::GroundVehicle;
@@ -495,6 +498,8 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 			Net->IsServiceNodeConnected(Hydrant));
 
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = RoadSouth;
 		Query.Goal = Hydrant;
 		Query.Class = ETraversalClass::GroundVehicle;
@@ -505,6 +510,8 @@ bool FRoadAlongsideARowOfStandsTest::RunTest(const FString& Parameters)
 	// EACH STAND GETS ITS OWN CONNECTION, which is what makes one road serving a row the
 	// normal case rather than a conflict.
 	FRouteQuery BetweenStands;
+	BetweenStands.Errand = ERouteErrand::GraphProbe;
+	BetweenStands.Policy = FRoutePolicy::For(BetweenStands.Errand);
 	BetweenStands.Start = AnchorNode(*Net, Row[0], TEXT("HydrantPit"));
 	BetweenStands.Goal = AnchorNode(*Net, Row.Last(), TEXT("HydrantPit"));
 	BetweenStands.Class = ETraversalClass::GroundVehicle;
@@ -893,6 +900,8 @@ bool FTruckDrivesTheWholeRouteToTheHydrantTest::RunTest(const FString& Parameter
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = RoadSouth;
 	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
 	Query.Class = ETraversalClass::GroundVehicle;
@@ -983,6 +992,8 @@ bool FTruckReachesHydrantWithoutCrossingTheAircraftTest::RunTest(const FString& 
 	FAnchorLink::Build(*Net, UAirsideSettings::ResolveLargestServiceVehicle());
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = RoadWest;
 	Query.Goal = AnchorNode(*Net, Placed, TEXT("HydrantPit"));
 	Query.Class = ETraversalClass::GroundVehicle;
@@ -1277,6 +1288,8 @@ bool FTruckLeavesTheServicePointBackwardsTest::RunTest(const FString& Parameters
 	}
 
 	FRouteQuery Out;
+	Out.Errand = ERouteErrand::GraphProbe;
+	Out.Policy = FRoutePolicy::For(Out.Errand);
 	Out.Start = Hydrant;
 	Out.Goal = RoadSouth;
 	Out.Class = ETraversalClass::GroundVehicle;

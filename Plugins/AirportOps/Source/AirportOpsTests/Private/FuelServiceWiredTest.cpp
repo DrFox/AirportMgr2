@@ -11,6 +11,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/OpsRuntime.h"
@@ -89,6 +90,8 @@ bool FFuelServiceWiredTest::RunTest(const FString& Parameters)
 
 	// Taxi an aircraft in to the stand.
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = TaxiSouth;
 	Query.Goal = Net.GetEntity(Stand)->PoseNode;
 	Query.Class = ETraversalClass::Aircraft;

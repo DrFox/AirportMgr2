@@ -10,6 +10,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -351,7 +352,7 @@ bool FStandPlaceToolTest::RunTest(const FString& Parameters)
 			Edge.bDerived = false;
 			Actor->Network->AddGuidelineEdge(MoveTemp(Edge));
 		}
-		FRouteQuery Q; Q.Start = From; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
+		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = From; Q.Goal = Pose; Q.Class = ETraversalClass::Aircraft;
 		if (!TestTrue(TEXT("an aircraft is sent to the stand"),
 			Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), UAirsideSettings::ResolveDefaultAirframe()))) { return false; }
 		const int32 Id = Actor->GetTraffic()->GetNewestAgentId();

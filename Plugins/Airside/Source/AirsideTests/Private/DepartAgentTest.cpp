@@ -7,6 +7,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
@@ -81,7 +82,7 @@ bool FDepartAgentModelTest::RunTest(const FString& Parameters)
 	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
 
 	// Taxi B -> A: parks at A, off the runway, engine shut down after the pause.
-	FRouteQuery Q; Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
 	const int32 Id = Traffic->DispatchAgent(Net, RouteSearch::Find(*Net, Q), TestAirframes::Piper(), ETraversalClass::Aircraft, 1.0);
 	if (!TestTrue(TEXT("dispatched"), Id > 0)) { return false; }
 
@@ -145,7 +146,7 @@ bool FDepartAgentForwardersTest::RunTest(const FString& Parameters)
 	Actor->PlaceNode(FVector2D(-100000.0, -100000.0));
 	const FDepAgentGraph G = DepAgentBuild(*Actor->Network);
 
-	FRouteQuery Q; Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
+	FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = G.B; Q.Goal = G.A; Q.Class = ETraversalClass::Aircraft;
 	if (!TestTrue(TEXT("dispatched through the actor"), Actor->DispatchAgent(RouteSearch::Find(*Actor->Network, Q), TestAirframes::Piper()))) { return false; }
 	const int32 Id = Actor->GetTraffic()->GetNewestAgentId();
 	TestNotNull(TEXT("the actor can name the agent's view by id"), Actor->GetAgentView(Id));

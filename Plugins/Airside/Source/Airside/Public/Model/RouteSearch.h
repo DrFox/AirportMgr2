@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Model/RoadHandles.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RoadTraffic.h"
 #include "Model/SpeedProfile.h"
 #include "RouteSearch.generated.h"
@@ -40,40 +41,6 @@ enum class ERouteResult : uint8
 	 * Code C stand reports the same thing as a taxiway nobody ever joined up.
 	 */
 	TooWide,
-};
-
-/**
- * What a route may do with edges that lie ALONG a runway (DerivedFrom a runway segment).
- * Crossing a runway at a junction is never affected: a crossing is a turn path and a node,
- * and turn paths carry no DerivedFrom. AN ENUM, NOT TWO BOOLS - "avoid all" and "avoid held"
- * can never both be wanted, and a pair of flags would have let a caller set both.
- */
-UENUM()
-enum class ERunwayAvoidance : uint8
-{
-	/** Runway edges are ordinary line. A departure backtracking to a threshold needs this. */
-	None,
-	/**
-	 * Skip a runway edge while the strip is IN USE: somebody else holds any segment of its
-	 * chain, reserved or occupied, OR the querier itself is standing on it (its own claim
-	 * is occupied). Set by a deadlock replan (2026-09-07): an agent turning round via a
-	 * free runway end is what the player expects to see; one taxiing along a strip a
-	 * landing has been cleared onto is the starvation the outright ban was written
-	 * against. THE QUERIER'S OWN BODY COUNTS, and its own reservation does not: the head-on
-	 * of 2026-09-06 was an arrival still standing on the strip with a departure REFUSED the
-	 * bar for it - the waiter holds nothing, so the table shows the runway held by the
-	 * querier alone, and a replan that kept it on the strip would be the very jam it was
-	 * asked to leave (Traffic.HeadOnReplansRoundBarHolder measures exactly this). Needs
-	 * FRouteQuery::Occupancy; with no table every runway is free. Properly a runway is
-	 * used on a CLEARANCE, which is URunwaySequencer's (M3); until then the table is the
-	 * truth about who is on the strip.
-	 */
-	Held,
-	/**
-	 * Skip every runway edge. An arrival's taxi-in and a departure's taxi to an
-	 * intersection entry: neither may taxi along a strip whatever the table says.
-	 */
-	All,
 };
 
 /** One edge of a found route, in traversal order. */
@@ -189,6 +156,38 @@ struct AIRSIDE_API FRouteQuery
 
 	UPROPERTY() FGuidelineNodeId Goal;
 
+	/**
+	 * What this route is FOR. Everything policy-shaped below is derived from it.
+	 *
+	 * UNSET IS REFUSED by Find and FindToGoals - see IsQueryAnswerable. The four call sites
+	 * that used to say nothing about runway avoidance, and silently got the permissive
+	 * answer, are the reason the default cannot be a usable one.
+	 */
+	UPROPERTY() ERouteErrand Errand = ERouteErrand::Unset;
+
+	/**
+	 * The resolved row for Errand, filled by For(). Carried on the query rather than
+	 * re-resolved inside the search so that ONE lookup answers the avoidance test, the cost
+	 * term and the occupancy check - three readers, one answer, the same rule
+	 * FRouteStep::EndVertex follows about the polyline.
+	 */
+	UPROPERTY() FRoutePolicy Policy;
+
+	/**
+	 * Multiplier on a runway edge's length, applied only when Policy.bPenaliseRunways.
+	 *
+	 * MIRRORS FTrafficRules::RunwayPenalty exactly as CongestionWeight below mirrors
+	 * FTrafficRules::CongestionWeight: a query built with no rules to hand must still be
+	 * costed the way one built with them is. Airside.Model.RoutePolicy.QueryResolvesTheTable
+	 * asserts the two defaults agree, because two constants in two files is how the Piper's
+	 * figures ended up different at seven sites.
+	 *
+	 * NEVER BELOW 1.0. A multiplier under one would make an edge cheaper than its own chord
+	 * and break the straight-line heuristic's admissibility silently - the first pop would
+	 * stop being optimal and nothing would say so.
+	 */
+	UPROPERTY() double RunwayPenalty = 10.0;
+
 	UPROPERTY() ETraversalClass Class = ETraversalClass::GroundVehicle;
 
 	/**
@@ -241,12 +240,17 @@ struct AIRSIDE_API FRouteQuery
 	UPROPERTY() double CongestionWeight = 2.0;
 
 	/**
-	 * Start/Goal/Class/Wingspan in one expression, rather than default-constructing and
-	 * setting each by hand - five call sites did (#103). Everything else (bans, avoidance,
-	 * congestion) is per-caller enough that setting it after is clearer than a builder
-	 * taking eight parameters most callers do not use.
+	 * Start/Goal/Class/Wingspan AND the whole routing policy, in one expression, rather than
+	 * default-constructing and setting each by hand - five call sites did (#103). The bans
+	 * stay per-caller: a deadlock resolver's banned edge is per-incident, not per-errand, and
+	 * a table row for it would be a row of one.
+	 *
+	 * THE ONLY FACTORY. An errand-less overload existed until 2026-09-21 and is deliberately
+	 * gone: it was the shape that let five call sites build a query without ever saying what
+	 * it was for, and inherit the permissive policy by omission. Avoidance is no longer in
+	 * the "set it after" list for the same reason.
 	 */
-	static FRouteQuery For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
+	static FRouteQuery For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
 		const FAirframe& Airframe, ETraversalClass Class);
 
 	/** Chainable: the congestion cost term, set together because CongestionWeight is
@@ -453,4 +457,20 @@ namespace RouteSearch
 	/** Zeroes the counter above, so an earlier test's or an earlier rebuild's visits are
 	 *  never mistaken for the ones a test is about to measure. */
 	AIRSIDE_API void ResetNodeVisitCountForTest();
+
+	/**
+	 * How many times a runway SEED has been resolved through URoadNetwork::IsRunwaySegment
+	 * inside a search, since the last reset - the measurement that ExpandNode's per-search
+	 * memo is actually consulted, rather than that it merely exists.
+	 *
+	 * A SEED, NOT AN EDGE: a long strip carries many guideline edges and one segment, and the
+	 * whole point of the memo is that the second edge along it costs nothing. A count that
+	 * rose with edges would be green on a memo that had been deleted. See
+	 * Airside.Model.RouteSearch.RunwaySeedMemo.
+	 */
+	AIRSIDE_API int32 RunwaySeedResolveCountForTest();
+
+	/** Zeroes the counter above, so an earlier search's resolves are never mistaken for the
+	 *  ones a test is about to measure. */
+	AIRSIDE_API void ResetRunwaySeedResolveCountForTest();
 }

@@ -610,10 +610,45 @@ foreach ($tree in $trees) {
     }
 }
 
+# --- 13. GraphProbe is for tests and tools only --------------------------------------------
+# The permissive routing policy - no runway filter, no penalty, no congestion - survives only
+# where it is NAMED. Four production call sites silently had exactly this policy before
+# 2026-09-21 because FRouteQuery's defaults were the permissive ones, and an aeroplane taxied
+# down a runway. ERouteErrand::GraphProbe is the one place that behaviour is still reachable,
+# and a production caller reaching for it is that bug coming back wearing a name.
+#
+# Scoped to the two production modules the way rule 1 is: the test modules are its intended
+# home, and Tool/ is exempt because a tool asking "is there any way from here to there" is a
+# shape question with no agent behind it.
+#
+# QUALIFIED USES ONLY (ERouteErrand::GraphProbe), so the enumerator's own declaration and the
+# paragraphs explaining it in RoutePolicy.h are not mistaken for callers of it.
+foreach ($module in $modules) {
+    foreach ($half in 'Public', 'Private') {
+        $dir = Join-Path $module $half
+        foreach ($file in Get-Sources $dir @('.h', '.cpp')) {
+            if ($file.FullName -like '*\Tool\*') { continue }
+            # RoutePolicy.h/.cpp DECLARE the errand and write its row; naming it there is
+            # the definition, not a use of it. Exempting the defining file by name rather
+            # than exempting 'case' labels everywhere, so a production switch that tried to
+            # special-case GraphProbe is still caught.
+            if ($file.Name -eq 'RoutePolicy.h' -or $file.Name -eq 'RoutePolicy.cpp') { continue }
+            $hits = Select-String -Path $file.FullName -Pattern 'ERouteErrand::GraphProbe'
+            foreach ($h in $hits) {
+                # A WHY comment naming the banned token is not the thing itself - the same
+                # exemption rules 5 and 7 make.
+                $t = $h.Line.Trim()
+                if ($t.StartsWith('//') -or $t.StartsWith('*')) { continue }
+                $failures.Add("graph-probe: $($file.FullName):$($h.LineNumber) ERouteErrand::GraphProbe is for tests and Tool/ only - production code names the errand it means: $t")
+            }
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 Write-Host "Check-Architecture: $($commentFactWarnings.Count) comment-only-fact warning(s) (rule 12; see Tools/Check-Architecture.ps1's own comment)." -ForegroundColor Yellow
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, editor direction, log categories, doc comments, allowed callers, hand-built handles, agent field writes, tool colour, model/solve world-free, assertion reasons, output-device spies, unconsumed declarations, graph-probe)' -ForegroundColor Green
     exit 0
 }
 

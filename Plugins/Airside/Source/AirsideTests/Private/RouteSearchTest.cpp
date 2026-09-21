@@ -3,6 +3,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RouteFollower.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Solve/GuidelineGeom.h"
 
@@ -65,6 +66,8 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 	Join(*Net, South, East);
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = West;
 	Query.Goal = East;
 	Query.Class = ETraversalClass::Aircraft;
@@ -106,12 +109,16 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Join(*OneWay, A, B, EGuidelineDir::AToB);
 
 		FRouteQuery Forward;
+		Forward.Errand = ERouteErrand::GraphProbe;
+		Forward.Policy = FRoutePolicy::For(Forward.Errand);
 		Forward.Start = A;
 		Forward.Goal = B;
 		Forward.Class = ETraversalClass::Aircraft;
 		TestTrue(TEXT("the one-way runs forwards"), RouteSearch::Find(*OneWay, Forward).IsValid());
 
 		FRouteQuery Back;
+		Back.Errand = ERouteErrand::GraphProbe;
+		Back.Policy = FRoutePolicy::For(Back.Errand);
 		Back.Start = B;
 		Back.Goal = A;
 		Back.Class = ETraversalClass::Aircraft;
@@ -130,6 +137,8 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Join(*Narrow, A, B, EGuidelineDir::Bidirectional, /*MaxWingspan=*/3600.0);
 
 		FRouteQuery Fits;
+		Fits.Errand = ERouteErrand::GraphProbe;
+		Fits.Policy = FRoutePolicy::For(Fits.Errand);
 		Fits.Start = A;
 		Fits.Goal = B;
 		Fits.Class = ETraversalClass::Aircraft;
@@ -157,6 +166,8 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Closed->AddGuidelineEdge(MoveTemp(Edge));
 
 		FRouteQuery Query2;
+		Query2.Errand = ERouteErrand::GraphProbe;
+		Query2.Policy = FRoutePolicy::For(Query2.Errand);
 		Query2.Start = A;
 		Query2.Goal = B;
 		Query2.Class = ETraversalClass::Aircraft;
@@ -171,6 +182,8 @@ bool FRouteSearchTest::RunTest(const FString& Parameters)
 		Dead.Generation = 1;
 
 		FRouteQuery Bad;
+		Bad.Errand = ERouteErrand::GraphProbe;
+		Bad.Policy = FRoutePolicy::For(Bad.Errand);
 		Bad.Start = Dead;
 		Bad.Goal = East;
 		TestEqual(TEXT("a dead start is NoStart"),
@@ -295,6 +308,8 @@ bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
 		const FGuidelineNodeId Goal = Net->AddGuidelineNode(FVector2D(9000.0, 9000.0));
 
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = Start;
 		Query.Goal = Goal;
 		Query.Class = ETraversalClass::Aircraft;
@@ -324,6 +339,8 @@ bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
 		Join(*Net, South, East);
 
 		FRouteQuery Query;
+		Query.Errand = ERouteErrand::GraphProbe;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
 		Query.Start = West;
 		Query.Goal = East;
 		Query.Class = ETraversalClass::Aircraft;
@@ -483,6 +500,8 @@ bool FRouteSearchFindToGoalsTest::RunTest(const FString& Parameters)
 	Join(*Net, Start, Narrow, EGuidelineDir::Bidirectional, /*MaxWingspan=*/3600.0);
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = Start;
 	Query.Class = ETraversalClass::Aircraft;
 	Query.Wingspan = 6500.0; // wider than Narrow's own edge admits

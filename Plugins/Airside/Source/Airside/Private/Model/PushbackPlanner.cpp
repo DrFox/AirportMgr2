@@ -4,6 +4,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 
 namespace
 {
@@ -170,7 +171,7 @@ FPushbackPlan PushbackPlanner::Plan(const URoadNetwork& Network, FGuidelineNodeI
 
 	for (const FGuidelineNodeId Goal : Along)
 	{
-		FRouteQuery Query = FRouteQuery::For(PoseNode, Goal, Airframe, Class);
+		FRouteQuery Query = FRouteQuery::For(ERouteErrand::PushbackClear, PoseNode, Goal, Airframe, Class);
 		Query.BannedEdge = Taken;
 
 		const FRoutePlan Candidate = RouteSearch::Find(Network, Query);
@@ -199,7 +200,11 @@ FPushbackPlan PushbackPlanner::Plan(const URoadNetwork& Network, FGuidelineNodeI
 	const FGuidelineNodeId PushEnd = Out.PushRoute.Steps.Last().To;
 	const FGuidelineNodeId Goal = Departure.Route.Steps.Last().To;
 
-	FRouteQuery Onward = FRouteQuery::For(PushEnd, Goal, Airframe, Class);
+	// THE ERRAND, AND IT IS NOT PushbackClear: this is the taxi out to the runway entry, and
+	// until 2026-09-21 it declared no runway policy at all and got the permissive one - the
+	// long taxi that let an aeroplane drive down the strip, which is the bug the table was
+	// built for.
+	const FRouteQuery Onward = FRouteQuery::For(ERouteErrand::PushbackTaxiOut, PushEnd, Goal, Airframe, Class);
 	Out.TaxiOutRoute = RouteSearch::Find(Network, Onward);
 	if (!Out.TaxiOutRoute.IsValid())
 	{

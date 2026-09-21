@@ -367,8 +367,12 @@ public:
 
 	// --- Routing and agents ------------------------------------------------------------
 
+	/** Errand names the routing policy - runway avoidance, penalty, whether the occupancy
+	 *  table is read. See FRoutePolicy. Defaulted, because every caller of this seam today
+	 *  is a player or a tool asking for a route directly. */
 	virtual FRoutePlan FindRoute(FGuidelineNodeId Start, FGuidelineNodeId Goal,
-		ETraversalClass Class, double Wingspan) const = 0;
+		ETraversalClass Class, double Wingspan,
+		ERouteErrand Errand = ERouteErrand::PlayerIssued) const = 0;
 
 	/**
 	 * One struct, not four - see FAirframe. Ground, Climb and Engine used to be separate

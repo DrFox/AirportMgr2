@@ -11,6 +11,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/RoadNode.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/TrafficClaims.h"
 #include "Present/AirsideTraffic.h"
@@ -71,7 +72,13 @@ namespace
 		int32 Dispatched = 0;
 		for (const FEntityInstanceId& Stand : Airport.Stands)
 		{
+			// GraphProbe: this fixture measures COST, not policy. It wants the plainest
+			// possible search - no runway filter, no penalty, no occupancy term - so that a
+			// later change to any errand's row cannot silently move the budget numbers and
+			// be read as a performance regression.
 			FRouteQuery Query;
+			Query.Errand = ERouteErrand::GraphProbe;
+			Query.Policy = FRoutePolicy::For(Query.Errand);
 			Query.Start = TaxiEntry;
 			Query.Goal = Airport.Pose(Stand);
 			Query.Class = ETraversalClass::Aircraft;

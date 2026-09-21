@@ -19,6 +19,7 @@
 #include "Model/RoadNetwork.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadSlotMap.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/RoadNetworkActor.h"
 #include "Solve/PlotYard.h"
@@ -530,7 +531,8 @@ void URoadEditFacade::ClearNetwork()
 }
 
 FRoutePlan URoadEditFacade::FindRoute(
-	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan) const
+	FGuidelineNodeId Start, FGuidelineNodeId Goal, ETraversalClass Class, double Wingspan,
+	ERouteErrand Errand) const
 {
 	const URoadNetwork* Network = GetNetwork();
 	if (Network == nullptr)
@@ -543,13 +545,20 @@ FRoutePlan URoadEditFacade::FindRoute(
 	Query.Goal = Goal;
 	Query.Class = Class;
 	Query.Wingspan = Wingspan;
+	Query.Errand = Errand;
+	Query.Policy = FRoutePolicy::For(Errand);
+	Query.AvoidRunways = Query.Policy.Avoidance;
 
-	// VEHICLES ALWAYS ROUTE WITH THE TABLE; AIRCRAFT NEVER DO. Spec §4. A van sent to a job
-	// should go round the queue that is there when it is dispatched, and it has no clearance
-	// to violate by doing so. An aircraft's route is fixed at clearance and stays fixed: a
-	// taxi clearance that quietly re-routed itself round traffic between being read out and
-	// being flown is not a clearance, and the only thing that may change an aircraft's route
-	// afterwards is UGroundTraffic::ReplanAt - a deadlock, or the graph itself changing.
+	// THE ERRAND DECIDES, NOT THE CLASS. This read "vehicles always route with the table;
+	// aircraft never" and branched on ETraversalClass - the ground-traffic spec's §4 rule,
+	// implemented locally here and at three other sites. It was never quite true: a fuel
+	// truck choosing a depot must NOT route with the table, or the winner flickers between
+	// ticks (FuelService.cpp's own comment). The axis that survives every site is whether
+	// the route may still change, and that is what the errand names.
+	//
+	// An aircraft's route is still fixed at clearance and stays fixed: PlayerIssued's row is
+	// EOccupancyUse::Never, and the only thing that may change an aircraft's route afterwards
+	// is UGroundTraffic::ReplanAt - a deadlock, or the graph itself changing.
 	//
 	// QueryingAgent stays 0: nothing has been dispatched yet, so there is no agent whose own
 	// claims should be discounted from the cost.
@@ -557,12 +566,13 @@ FRoutePlan URoadEditFacade::FindRoute(
 	// not reach past Network/History for anything else (#104, and see the class comment) -
 	// ARoadNetworkActor wires the provider once, right after it creates Traffic, the same
 	// way it wires OnChanged right after creating Facade.
-	if (Class != ETraversalClass::Aircraft && TrafficModelProvider)
+	if (Query.Policy.Occupancy == EOccupancyUse::Required && TrafficModelProvider)
 	{
 		if (const UGroundTraffic* Model = TrafficModelProvider())
 		{
 			Query.Occupancy = &Model->GetOccupancy();
 			Query.CongestionWeight = Model->Rules.CongestionWeight;
+			Query.RunwayPenalty = Model->Rules.RunwayPenalty;
 		}
 	}
 

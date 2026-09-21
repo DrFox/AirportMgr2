@@ -187,7 +187,8 @@ struct FNullEditTarget : IRoadEditTarget
 	using IRoadEditTarget::UpdateGhost;
 	virtual void HideGhost() override {}
 	virtual bool MakeLiveNodeId(int32, FRoadNodeId&) const override { return false; }
-	virtual FRoutePlan FindRoute(FGuidelineNodeId, FGuidelineNodeId, ETraversalClass, double) const override
+	virtual FRoutePlan FindRoute(FGuidelineNodeId, FGuidelineNodeId, ETraversalClass, double,
+		ERouteErrand Errand = ERouteErrand::PlayerIssued) const override
 	{
 		return FRoutePlan();
 	}

@@ -9,6 +9,7 @@
 #include "Model/RoadEntity.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Model/SimClock.h"
 #include "Solve/GuidelineGeom.h"
@@ -223,6 +224,9 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 		Query.Start = Instance.PoseNode;
 		Query.Goal = StandFuel;
 		Query.Class = ETraversalClass::GroundVehicle;
+		Query.Errand = ERouteErrand::CandidateComparison;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
+		Query.AvoidRunways = Query.Policy.Avoidance;
 
 		// 0 IS UNLIMITED, and a road guideline carries no span limit either, so neither side
 		// of that comparison means anything for a van.
@@ -230,13 +234,15 @@ UFuelService::FDepotChoice UFuelService::ChooseDepot(const URoadNetwork& Network
 
 		// NEVER ALONG A STRIP. A truck crossing a runway at a junction is unaffected - a
 		// crossing is a turn path and a node, and turn paths carry no DerivedFrom - but
-		// taxiing DOWN one is not something a fuel job may plan.
-		Query.AvoidRunways = ERunwayAvoidance::All;
+		// taxiing DOWN one is not something a fuel job may plan. The rule now lives in
+		// FRoutePolicy::For(CandidateComparison); this paragraph is its justification.
 
 		// NO OCCUPANCY WEIGHT, deliberately. Which depot is nearest is a fact about the
 		// airport's SHAPE, not about who happens to be on the road this instant; a
 		// congestion-weighted length would make the chosen depot flicker between ticks and
 		// the log unreadable. Congestion is the arbiter's job once the truck is under way.
+		// EOccupancyUse::Never on this errand's row IS that rule, and the search REFUSES a
+		// table passed alongside it rather than quietly ignoring one.
 
 		const FRoutePlan Plan = RouteSearch::Find(Network, Query);
 		if (!Plan.IsValid() || Plan.Length >= BestLength)
@@ -329,7 +335,16 @@ void UFuelService::SendTruckHome(UGroundTraffic& Traffic, const URoadNetwork& Ne
 		Query.Start = Truck->GoalNode;
 		Query.Goal = Home->PoseNode;
 		Query.Class = ETraversalClass::GroundVehicle;
-		Query.AvoidRunways = ERunwayAvoidance::All;
+		Query.Errand = ERouteErrand::VehicleToJob;
+		Query.Policy = FRoutePolicy::For(Query.Errand);
+		Query.AvoidRunways = Query.Policy.Avoidance;
+
+		// A DRIVE, NOT A COMPARISON, so unlike the depot choice above this one takes the
+		// table: the truck is committed to going home and should go round the queue that is
+		// there rather than into the back of it. The flicker argument covers a WINNER being
+		// re-picked every tick, which a committed route is not.
+		Query.WithCongestion(Traffic.GetOccupancy(), TruckId, Traffic.Rules.CongestionWeight);
+		Query.RunwayPenalty = Traffic.Rules.RunwayPenalty;
 		Plan = RouteSearch::Find(Network, Query);
 	}
 

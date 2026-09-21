@@ -8,6 +8,7 @@
 #include "Model/GroundTraffic.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadNetworkActor.h"
@@ -60,7 +61,7 @@ namespace
 		const FEntityInstanceId Placed = Net.PlaceEntity(Stand, Stand->Anchors, F.StandAt, 0.0);
 		F.StandIndex = Placed.Index;
 
-		FRouteQuery Q; Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
+		FRouteQuery Q; Q.Errand = ERouteErrand::GraphProbe; Q.Policy = FRoutePolicy::For(Q.Errand); Q.Start = A; Q.Goal = B; Q.Class = ETraversalClass::GroundVehicle;
 		FAirframe Van = UAirsideSettings::ResolveDefaultAirframe();
 		Van.Climb = FClimbPerformance();
 		F.Actor->DispatchAgent(RouteSearch::Find(Net, Q), Van, ETraversalClass::GroundVehicle);

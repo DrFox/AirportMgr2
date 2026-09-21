@@ -1,5 +1,6 @@
 #include "Model/RouteSearch.h"
 
+#include "AirsideLog.h"
 #include "Algo/Reverse.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -17,6 +18,13 @@ namespace
 	int32 GSearchCallCountForTest = 0;
 
 	/**
+	 * See RouteSearch::RunwaySeedResolveCountForTest. Bumped once per seed actually resolved -
+	 * a memo hit does not count, which is what makes the count measure the memo rather than
+	 * the traffic through it.
+	 */
+	int32 GRunwaySeedResolveCountForTest = 0;
+
+	/**
 	 * Cached length plus the query's congestion charge.
 	 *
 	 * Reads FGuidelineEdge::Length rather than sampling (#171): this used to call
@@ -27,9 +35,28 @@ namespace
 	 * already looked it up to check A != B; a second lookup here would just be the same
 	 * allocation-per-relaxation complaint wearing a different hat.
 	 */
-	double EdgeCost(const FGuidelineEdge& Edge, FGuidelineEdgeId EdgeId, const FRouteQuery& Query)
+	double EdgeCost(const FGuidelineEdge& Edge, FGuidelineEdgeId EdgeId, const FRouteQuery& Query,
+		bool bRunwayEdge)
 	{
 		double Length = Edge.Length;
+
+		// A RUNWAY THIS ERRAND IS STILL ALLOWED TO USE COSTS A MULTIPLE OF ITS LENGTH.
+		// Layered UNDER the avoidance filter rather than replacing it: a filter is absolute
+		// and is what an arrival's taxi needs, but an errand that slipped through without one
+		// should degrade to a detour rather than to a free taxi down the strip - which is
+		// exactly what the four undeclared call sites of 2026-09-21 did. The two never both
+		// apply: a policy carrying All AND a penalty is refused by the table test, because
+		// the edge is gone before this line is reached.
+		//
+		// MULTIPLICATIVE, NOT ADDITIVE, so a long strip costs proportionally more than a
+		// short one; a flat charge would be swallowed by a 3km runway. Still >= Length, so
+		// the straight-line heuristic stays admissible and the first pop stays optimal -
+		// which is what FMath::Max guards here and ClampMin guards in the Details panel. A
+		// query built in C++ never passes through the clamp, so both are needed.
+		if (bRunwayEdge && Query.Policy.bPenaliseRunways)
+		{
+			Length *= FMath::Max(1.0, Query.RunwayPenalty);
+		}
 
 		// Congestion: what others hold on this edge, weighted. Additive and non-negative,
 		// so the straight-line heuristic stays admissible and the first pop stays optimal.
@@ -45,6 +72,48 @@ namespace
 		}
 
 		return Length;
+	}
+
+	/**
+	 * Is this query answerable at all? Logged and refused rather than best-guessed.
+	 *
+	 * ONE FUNCTION, TWO ENTRY POINTS, AND NOT IN RunSearch. RunSearch looks like the single
+	 * choke point and is not: Find returns early for NoStart, NoGoal and SameNode BEFORE
+	 * reaching it, so a bad query with a dead start handle would be refused for the wrong
+	 * reason and never logged - and on the TooWide path Find calls RunSearch TWICE, which
+	 * would log one refusal twice. Find and FindToGoals are the consumers; they guard.
+	 *
+	 * ERROR, NOT WARNING: FAutomationTestBase's warning-fails-the-test flag is false in this
+	 * project and nothing sets it, so a Warning would let a silently permissive route ship
+	 * green - which is the exact failure this whole design exists to delete.
+	 */
+	bool IsQueryAnswerable(const FRouteQuery& Query)
+	{
+		if (Query.Errand == ERouteErrand::Unset)
+		{
+			UE_LOG(LogAirside, Error,
+				TEXT("Route query has no errand (node %d -> %d); refusing. See FRoutePolicy."),
+				Query.Start.Index, Query.Goal.Index);
+			return false;
+		}
+
+		const bool bWants = Query.Policy.Occupancy == EOccupancyUse::Required;
+		const bool bHas = Query.Occupancy != nullptr;
+		if (bWants != bHas)
+		{
+			// BOTH WAYS. Required-without-a-table is the obvious half; Never-WITH-one is the
+			// more useful, because a caller that went to the trouble of supplying occupancy
+			// believes it is being weighted by it, and silently dropping the pointer leaves
+			// that caller reasoning about a cost term the search never applied.
+			UE_LOG(LogAirside, Error,
+				TEXT("Route errand %d %s the occupancy table but %s given one; refusing."),
+				static_cast<int32>(Query.Errand),
+				bWants ? TEXT("requires") : TEXT("must not read"),
+				bHas ? TEXT("was") : TEXT("was not"));
+			return false;
+		}
+
+		return true;
 	}
 
 	/**
@@ -80,9 +149,36 @@ namespace
 	void ExpandNode(const URoadNetwork& Network, const FRouteQuery& Query, bool bIgnoreWingspan,
 		FGuidelineNodeId At, double Reached, const TSet<FGuidelineNodeId>& Closed,
 		TFunctionRef<double(const FVector2D&)> Heuristic, TMap<int32, bool>& RunwayInUse,
+		TMap<int32, bool>& RunwaySeeds,
 		TMap<FGuidelineNodeId, double>& Best, TMap<FGuidelineNodeId, FRouteStep>& Arrived,
 		TArray<TPair<double, FGuidelineNodeId>>& Open)
 	{
+		// Whether an edge's source segment IS a runway, once per segment seen. A slot lookup
+		// plus a profile resolve, which the avoidance test below used to pay on EVERY relaxation
+		// of every edge - a node is relaxed several times before Closed catches it, so a long
+		// strip paid for the same unchanged answer again and again. This is #171's complaint
+		// about EdgeCost's re-sampling, in the one place that survived it.
+		//
+		// PER SEARCH, NOT CACHED ON THE EDGE: runway-ness depends on the PROFILE, which changes
+		// when a road is re-profiled - an open invalidation trigger with no writer positioned to
+		// catch it, unlike FGuidelineEdge::Length's closed set of three writers. A stale true
+		// would refuse taxiways for the rest of the session.
+		auto IsRunwayEdge = [&Network, &RunwaySeeds](FRoadSegmentId Seed)
+		{
+			if (!Seed.IsSet())
+			{
+				return false;
+			}
+			if (const bool* Known = RunwaySeeds.Find(Seed.Index))
+			{
+				return *Known;
+			}
+			++GRunwaySeedResolveCountForTest;
+			const bool bRunway = Network.IsRunwaySegment(Seed);
+			RunwaySeeds.Add(Seed.Index, bRunway);
+			return bRunway;
+		};
+
 		// Whether a runway's chain is in use - held by somebody other than the querier, or
 		// occupied by the querier's own body (ERunwayAvoidance::Held says why both) - once
 		// per runway segment seen: the chain walk and the table scan are not free, and every
@@ -133,10 +229,15 @@ namespace
 				return;
 			}
 
+			// ONE ANSWER, TWO READERS: the filter just below and the cost term inside
+			// EdgeCost. Asking the memo twice would be cheap, but reading it once is what
+			// guarantees the edge the filter judged is the edge the cost charged for.
+			const bool bRunwayEdge = IsRunwayEdge(Edge->DerivedFrom);
+
 			// Runway-derived edges are the strip itself. See ERunwayAvoidance for who may
 			// taxi along one and when.
 			if (Query.AvoidRunways != ERunwayAvoidance::None
-				&& Edge->DerivedFrom.IsSet() && Network.IsRunwaySegment(Edge->DerivedFrom)
+				&& bRunwayEdge
 				&& (Query.AvoidRunways == ERunwayAvoidance::All || IsRunwayHeld(Edge->DerivedFrom)))
 			{
 				return;
@@ -147,7 +248,7 @@ namespace
 				return;
 			}
 
-			const double Cost = EdgeCost(*Edge, EdgeId, Query);
+			const double Cost = EdgeCost(*Edge, EdgeId, Query, bRunwayEdge);
 			if (Cost < 0.0)
 			{
 				return;
@@ -308,6 +409,7 @@ namespace
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
 		TMap<int32, bool> RunwayInUse;
+		TMap<int32, bool> RunwaySeeds;
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -343,7 +445,7 @@ namespace
 			}
 
 			const double Reached = Best.FindChecked(At);
-			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, Best, Arrived, Open);
+			ExpandNode(Network, Query, bIgnoreWingspan, At, Reached, Closed, Heuristic, RunwayInUse, RunwaySeeds, Best, Arrived, Open);
 		}
 
 		if (Plan.Result != ERouteResult::Found)
@@ -354,7 +456,7 @@ namespace
 	}
 }
 
-FRouteQuery FRouteQuery::For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
+FRouteQuery FRouteQuery::For(ERouteErrand Errand, FGuidelineNodeId Start, FGuidelineNodeId Goal,
 	const FAirframe& Airframe, ETraversalClass Class)
 {
 	FRouteQuery Query;
@@ -362,6 +464,14 @@ FRouteQuery FRouteQuery::For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
 	Query.Goal = Goal;
 	Query.Class = Class;
 	Query.Wingspan = Airframe.Wingspan;
+	Query.Errand = Errand;
+	Query.Policy = FRoutePolicy::For(Errand);
+
+	// THE TABLE OVERWRITES THE FIELD, rather than being set beside it. AvoidRunways stays a
+	// public member because the search reads it in the hot loop; making the table its only
+	// writer here is what stops a caller setting both and getting whichever was assigned
+	// last.
+	Query.AvoidRunways = Query.Policy.Avoidance;
 	return Query;
 }
 
@@ -475,12 +585,22 @@ namespace RouteSearch
 	int32 NodeVisitCountForTest() { return GNodeVisitCountForTest; }
 	void ResetNodeVisitCountForTest() { GNodeVisitCountForTest = 0; }
 
+	int32 RunwaySeedResolveCountForTest() { return GRunwaySeedResolveCountForTest; }
+	void ResetRunwaySeedResolveCountForTest() { GRunwaySeedResolveCountForTest = 0; }
+
 	int32 SearchCallCountForTest() { return GSearchCallCountForTest; }
 	void ResetSearchCallCountForTest() { GSearchCallCountForTest = 0; }
 
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)
 	{
 		FRoutePlan Plan;
+
+		// FIRST, ahead of the handle checks: a query with no errand is malformed whatever
+		// its handles say, and reporting NoStart for it would hide the real fault.
+		if (!IsQueryAnswerable(Query))
+		{
+			return Plan;
+		}
 
 		if (Network.GetGuidelineNode(Query.Start) == nullptr)
 		{
@@ -522,11 +642,21 @@ namespace RouteSearch
 	FMultiGoalSearch FindToGoals(const URoadNetwork& Network, const FRouteQuery& Query,
 		const TArray<FGuidelineNodeId>& Goals, TArray<FGoalReach>& OutReach)
 	{
-		++GSearchCallCountForTest;
-
 		FMultiGoalSearch Result;
 		Result.Start = Query.Start;
+
+		// SIZED BEFORE THE GUARD BELOW CAN RETURN, so a caller reading OutReach[i] against
+		// Goals[i] does not index an empty array just because its query was refused.
 		OutReach.Init(FGoalReach(), Goals.Num());
+
+		// AHEAD OF THE COUNTER, because a refused query runs no search and must not be
+		// counted as one - SearchCallCountForTest is how ChooseStand's own cost is measured.
+		if (!IsQueryAnswerable(Query))
+		{
+			return Result;
+		}
+
+		++GSearchCallCountForTest;
 
 		const FGuidelineNode* StartNode = Network.GetGuidelineNode(Query.Start);
 		if (StartNode == nullptr)
@@ -553,6 +683,7 @@ namespace RouteSearch
 		TSet<FGuidelineNodeId> Closed;
 		Closed.Reserve(NumNodes);
 		TMap<int32, bool> RunwayInUse;
+		TMap<int32, bool> RunwaySeeds;
 		TArray<TPair<double, FGuidelineNodeId>> Open;
 		Open.Reserve(NumNodes);
 
@@ -585,7 +716,7 @@ namespace RouteSearch
 
 			const double Reached = Result.Best.FindChecked(At);
 			ExpandNode(Network, Query, /*bIgnoreWingspan=*/false, At, Reached, Closed, Heuristic,
-				RunwayInUse, Result.Best, Result.Arrived, Open);
+				RunwayInUse, RunwaySeeds, Result.Best, Result.Arrived, Open);
 		}
 
 		for (int32 Index = 0; Index < Goals.Num(); ++Index)

@@ -9,6 +9,7 @@
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadTraffic.h"
+#include "Model/RoutePolicy.h"
 #include "Model/RouteSearch.h"
 #include "Present/AirsideTraffic.h"
 #include "Present/RoadAgentActor.h"
@@ -69,6 +70,8 @@ bool FVehicleAgentTest::RunTest(const FString& Parameters)
 	}
 
 	FRouteQuery Query;
+	Query.Errand = ERouteErrand::GraphProbe;
+	Query.Policy = FRoutePolicy::For(Query.Errand);
 	Query.Start = A;
 	Query.Goal = B;
 	Query.Class = ETraversalClass::GroundVehicle;
