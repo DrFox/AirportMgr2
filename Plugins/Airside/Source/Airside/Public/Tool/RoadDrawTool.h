@@ -14,8 +14,12 @@
  *
  * BuildPreview is const for the reason spec 7.2 gives: a state cannot mutate the network
  * while drawing what it would do.
+ *
+ * NOT AIRSIDE_API, deliberately (issue #191): nothing outside this module names IRoadDrawState,
+ * FRoadIdleState or FRoadChainingState - only FRoadDrawTool itself, below, is a public seam
+ * (built by RoadBuildController and the editor tool) and keeps its export.
  */
-struct AIRSIDE_API IRoadDrawState
+struct IRoadDrawState
 {
 	virtual ~IRoadDrawState() = default;
 
@@ -40,7 +44,7 @@ struct AIRSIDE_API IRoadDrawState
 };
 
 /** Nothing part-drawn. A click puts down the start of a road. */
-class AIRSIDE_API FRoadIdleState : public IRoadDrawState
+class FRoadIdleState : public IRoadDrawState
 {
 public:
 	/** Kind is carried by the STATE as well as by the tool because a state builds its own
@@ -63,7 +67,7 @@ private:
  * Remembers whether THIS chain created the start node, because cancelling removes the node
  * the chain dropped and must not remove one that was already there.
  */
-class AIRSIDE_API FRoadChainingState : public IRoadDrawState
+class FRoadChainingState : public IRoadDrawState
 {
 public:
 	FRoadChainingState(int32 InFrom, bool bInCreated, ERoadKind InKind = ERoadKind::Taxiway,

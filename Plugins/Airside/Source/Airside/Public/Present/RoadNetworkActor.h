@@ -2,16 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Model/RoadHandles.h"
 #include "Model/TrafficRules.h"
-#include "Entities/EntityDefinition.h"
 #include "Build/AnchorLink.h"
-#include "Present/PlotPresenter.h"
 #include "Present/RoadSurfacePresenter.h"
-#include "Profiles/RoadProfile.h"
 #include "Tool/BuildSession.h"
 #include "Tool/RoadEditTarget.h"
-#include "Tool/RoadHeal.h"
 #include "Tool/RoadSnap.h"
 #include "Tool/SnapGuideSettings.h"
 #include "RoadNetworkActor.generated.h"
@@ -27,6 +22,8 @@ class URoadEditFacade;
 class UAirsideTraffic;
 class UGroundTraffic;
 class UTyreSmoke;
+class UEntityDefinition;
+class UPlotPresenter;
 enum class EAgentPhase : uint8;
 enum class EDepartureRefusal : uint8;
 
@@ -35,6 +32,34 @@ enum class EDepartureRefusal : uint8;
 // FTrafficRules member needs only Model/TrafficRules.h - see that header's own comment.
 // Present/AirsideTraffic.h, which every .cpp dereferencing the pointer already includes,
 // still pulls in the full Model/GroundTraffic.h.
+//
+// UEntityDefinition and UPlotPresenter are FORWARD DECLARED THE SAME WAY (issue #191):
+// both are held only behind TObjectPtr here, with every accessor returning a bare pointer
+// (ResolveStandDefinition/ResolveFuelDepotDefinition/ResolveEntityDefinition/
+// GetEntityDefinition, GetPlotPresenter). Their complete types still reach this TU - the
+// class needs them nowhere else - via Tool/RoadEditTarget.h below, which already includes
+// Entities/EntityDefinition.h as ITS OWN base-interface dependency; UPlotPresenter's own
+// header moved to the .cpp instead, since nothing here names it but this forward
+// declaration. Model/RoadHandles.h, Entities/EntityDefinition.h, Tool/RoadHeal.h and
+// Profiles/RoadProfile.h used to be listed again here too, redundantly: Tool/RoadEditTarget.h
+// (below, mandatory - it is IRoadEditTarget, this actor's base) already includes all four
+// directly, so repeating them bought this header nothing and cost every one of its ~65
+// includers a second parse of the same four headers. URoadProfile is NOT fully droppable
+// the same way: FallbackWidth/FallbackFilletRadius default from
+// URoadProfile::StandardTaxiwayWidth/FilletRadius below, a static constexpr member access
+// that needs the complete type at THIS file's own class body, not just at the call sites
+// Tool/RoadEditTarget.h's includers happen to reach - the forward declaration above stays
+// for the pointer members, and the complete type still arrives via Tool/RoadEditTarget.h's
+// own Profiles/RoadProfile.h, one copy instead of two.
+//
+// URoadSurfacePresenter, by contrast, CANNOT lose its own #include above: MakeSurfaceSettings
+// and MakeSurfaceSettingsForTest name the nested URoadSurfacePresenter::FSurfaceSettings by
+// value, and a nested type has no forward-declaration syntax independent of its outer class -
+// the outer class must be complete wherever the nested name is written, inline body or not.
+//
+// FRoadDeletionPlan (Tool/RoadHeal.h) is returned BY VALUE from PlanNodeDeletion, not held
+// by pointer, so issue #191's "if by pointer" condition for it does not apply here - it keeps
+// arriving complete, just via Tool/RoadEditTarget.h rather than a second direct include.
 
 /**
  * Owns a road network and renders it as one batched dynamic mesh - the level-resident

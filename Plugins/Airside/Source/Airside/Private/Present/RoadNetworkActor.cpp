@@ -18,6 +18,7 @@
 #include "Model/DeparturePlanner.h"
 #include "Model/RoadNetwork.h"
 #include "Present/AirsideTraffic.h"
+#include "Present/PlotPresenter.h"  // UPlotPresenter is forward-declared in the header now (issue #191); this .cpp dereferences Plots-> directly
 #include "Present/RoadEditFacade.h"
 #include "Profiles/RoadProfile.h"
 

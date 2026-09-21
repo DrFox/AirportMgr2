@@ -16,8 +16,12 @@
  * self-crossing rule would be two lists that must agree, and they would drift the first
  * time either was tuned - the player would meet one closing gesture on aprons and a subtly
  * different one on depots without ever being told why.
+ *
+ * NOT AIRSIDE_API, deliberately (issue #191), and neither are IOutlineDrawState,
+ * FOutlineIdleState or FOutlineDrawingState below: nothing outside this module names any of
+ * them - only FOutlineDrawTool itself is a public seam and keeps its export.
  */
-struct AIRSIDE_API IOutlineTarget
+struct IOutlineTarget
 {
 	virtual ~IOutlineTarget() = default;
 
@@ -45,7 +49,7 @@ struct AIRSIDE_API IOutlineTarget
  * the tool that owns it would be binding to storage the tool's own constructor has not
  * reached yet; passing it per call has no such puzzle and keeps the states pure.
  */
-struct AIRSIDE_API IOutlineDrawState
+struct IOutlineDrawState
 {
 	virtual ~IOutlineDrawState() = default;
 
@@ -63,7 +67,7 @@ struct AIRSIDE_API IOutlineDrawState
 };
 
 /** Nothing part-drawn. A click puts down the first corner. */
-class AIRSIDE_API FOutlineIdleState : public IOutlineDrawState
+class FOutlineIdleState : public IOutlineDrawState
 {
 public:
 	virtual TUniquePtr<IOutlineDrawState> OnClick(
@@ -82,7 +86,7 @@ public:
  * yet - putting it in the graph would make every intermediate click an undoable edit and
  * leave a half-polygon behind if the player wandered off.
  */
-class AIRSIDE_API FOutlineDrawingState : public IOutlineDrawState
+class FOutlineDrawingState : public IOutlineDrawState
 {
 public:
 	explicit FOutlineDrawingState(const FVector2D& First) { Corners.Add(First); }

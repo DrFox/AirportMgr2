@@ -12,11 +12,14 @@ public class Airside : ModuleRules
 			"CoreUObject",
 			"Engine",
 			"GeometryCore",       // FDynamicMesh3
-			"GeometryFramework",  // UDynamicMeshComponent
 			"DeveloperSettings",  // UAirsideSettings, so the content set is configured not coded
 			"InputCore"           // FKey, for FToolRegistration - the one thing the shared tool table needs
 		});
 
-		PrivateDependencyModuleNames.AddRange(new string[] { });
+		// GeometryFramework (UDynamicMeshComponent) is PRIVATE: every Public header that
+		// names it holds a TObjectPtr behind a forward declaration (RoadNetworkActor.h,
+		// DynamicMeshSink.h, RoadJunctionGallery.h, RoadRebuildCensus.h) - no Public header
+		// needs the full type, so no consumer of Airside needs this dependency (issue #191).
+		PrivateDependencyModuleNames.AddRange(new string[] { "GeometryFramework" });
 	}
 }
