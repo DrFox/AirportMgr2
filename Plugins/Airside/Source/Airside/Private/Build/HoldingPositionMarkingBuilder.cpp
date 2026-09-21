@@ -1,5 +1,7 @@
 #include "Build/HoldingPositionMarkingBuilder.h"
 
+#include "AirsideLog.h"
+
 #include "Build/MarkingQuads.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
@@ -94,6 +96,23 @@ int32 FHoldingPositionMarkingBuilder::Build(const URoadNetwork& Network, double 
 			continue;   // an isolated node has no bar to be across
 		}
 		const FVector2D Across(-Toward.Y, Toward.X);
+
+		// WHAT THIS BAR IS ABOUT TO BE, before it is built. Reported from play as "the hold
+		// line doesnt cover the whol of the taxiway" (samples/issues.png), and five
+		// synthetic fixtures failed to reproduce it - each one put the bar somewhere its own
+		// arm really was all the asphalt there was. Rather than invent a sixth, this says
+		// where the bar stands and how wide it was told to be, so ONE pass over the level
+		// that shows the fault answers it.
+		//
+		// A LOG LINE IS A FEATURE (CLAUDE.md, "Diagnosing"), and this one is cheap: a
+		// handful of holding positions per airport, once per surface rebuild.
+		UE_LOG(LogAirside, Log,
+			TEXT("HoldBar: node %d at (%.0f, %.0f), %s, half width %.0f, across (%.2f, %.2f), "
+				 "origin segment %d"),
+			Index, Node.Position.X, Node.Position.Y,
+			Node.HoldingPosition == EHoldingPositionKind::Runway ? TEXT("runway") : TEXT("intermediate"),
+			HalfWidth, Across.X, Across.Y,
+			Node.Origin.IsSet() ? Node.Origin.Segment.Index : -1);
 
 		if (Node.HoldingPosition == EHoldingPositionKind::Runway)
 		{
