@@ -1,7 +1,6 @@
 #include "Tool/SnapGuideLabel.h"
 
 #include "Model/RoadEntity.h"
-#include "Model/RoadHandles.h"
 #include "Model/RoadNetwork.h"
 #include "Tool/RoadNaming.h"
 #include "Tool/SnapGuideChain.h"
@@ -17,8 +16,9 @@ namespace
 	 * <Name> FOR A LABEL - the one place every ELabelSubject is resolved, so Describe's switch on
 	 * ELabelKind below can read Name once rather than re-deriving it per template.
 	 *
-	 * SEGMENT'S HANDLE IS REASSEMBLED FROM TWO INTS, not passed as a FRoadSegmentId: see
-	 * FGuideLabel's own comment on why Solve/ could not carry the typed handle.
+	 * SEGMENT'S HANDLE COMES FROM Network.SegmentIdAt, NEVER hand-assembled from the label's bare
+	 * index and a carried Generation: see FGuideLabel::SegmentIndex's own comment on why that is
+	 * the one same rule RoadSlot::HandleAt enforces everywhere else, not an exception to it.
 	 */
 	FString NameFor(const URoadNetwork& Network, const FGuideAnchor& Anchor,
 		const SnapGuide::FGuideLabel& Label)
@@ -26,12 +26,7 @@ namespace
 		switch (Label.Subject)
 		{
 		case SnapGuide::ELabelSubject::Segment:
-		{
-			FRoadSegmentId Id;
-			Id.Index = Label.SegmentIndex;
-			Id.Generation = Label.SegmentGeneration;
-			return RoadNaming::Describe(Network, Id);
-		}
+			return RoadNaming::Describe(Network, Network.SegmentIdAt(Label.SegmentIndex));
 
 		case SnapGuide::ELabelSubject::GestureReference:
 			return Anchor.ReferenceName;

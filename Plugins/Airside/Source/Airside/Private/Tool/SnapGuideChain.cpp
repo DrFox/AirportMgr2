@@ -479,11 +479,11 @@ void FParallelGuideSource::Propose(const URoadNetwork& Network, const FGuideAnch
 	//
 	// THE NAME ITSELF IS NOT RESOLVED HERE - #183. RoadNaming::Describe used to run once per
 	// Propose call regardless of whether this source's four candidates went on to win; now the
-	// segment's handle travels in the label and SnapGuide::Describe resolves it only if one does.
+	// segment's array index travels in the label and SnapGuide::Describe resolves it only if one
+	// wins - see FGuideLabel::SegmentIndex on why an index, never the handle itself.
 	SnapGuide::FGuideLabel Subject;
 	Subject.Subject = SnapGuide::ELabelSubject::Segment;
 	Subject.SegmentIndex = Nearest.Index;
-	Subject.SegmentGeneration = Nearest.Generation;
 	AddDirections(NearestDir, Anchor.Origin, NearestAt, NearestColumn, TEXT("parallel to"),
 		Subject, Out);
 }
@@ -539,7 +539,6 @@ void FCollinearGuideSource::Propose(const URoadNetwork& Network, const FGuideAnc
 		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
 		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
 		InLine.Label.SegmentIndex = Id.Index;
-		InLine.Label.SegmentGeneration = Id.Generation;
 
 		// THE DASHED LINE GOES TO THE ROAD ITSELF, not to the point on its extension where the
 		// cursor happens to be: the player needs to see WHICH road they are in line with, and
@@ -579,7 +578,6 @@ void FRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		SnapGuide::FGuideLabel Subject;
 		Subject.Subject = SnapGuide::ELabelSubject::Segment;
 		Subject.SegmentIndex = Id.Index;
-		Subject.SegmentGeneration = Id.Generation;
 		AddDirections(Span.GetSafeNormal(), Anchor.Origin, ClosestOn(A, B, Anchor.Origin),
 			SnapGuide::EReference::Runway, TEXT("parallel to"), Subject, Out);
 	}
@@ -629,7 +627,6 @@ void FRunwayLineGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		InLine.Label.Kind = SnapGuide::ELabelKind::InLineWith;
 		InLine.Label.Subject = SnapGuide::ELabelSubject::Segment;
 		InLine.Label.SegmentIndex = Id.Index;
-		InLine.Label.SegmentGeneration = Id.Generation;
 		Out.Add(InLine);
 	}
 }
@@ -674,7 +671,6 @@ void FAngledRoadGuideSource::Propose(const URoadNetwork& Network, const FGuideAn
 		SnapGuide::FGuideLabel Subject;
 		Subject.Subject = SnapGuide::ELabelSubject::Segment;
 		Subject.SegmentIndex = Id.Index;
-		Subject.SegmentGeneration = Id.Generation;
 
 		// BOTH ENDS - see this source's own header for why neither may be picked for the
 		// player - and both under the SEGMENT'S OWN column, so "45 degrees to the service
@@ -715,7 +711,6 @@ void FAngledRunwayGuideSource::Propose(const URoadNetwork& Network, const FGuide
 		SnapGuide::FGuideLabel Subject;
 		Subject.Subject = SnapGuide::ELabelSubject::Segment;
 		Subject.SegmentIndex = Id.Index;
-		Subject.SegmentGeneration = Id.Generation;
 		AddSpokes(A, Along, SnapGuide::EReference::Runway, Subject, Out);
 		AddSpokes(B, Along, SnapGuide::EReference::Runway, Subject, Out);
 	}
@@ -1038,7 +1033,6 @@ void FOffsetGuideSource::Propose(const URoadNetwork& Network, const FGuideAnchor
 		Match.Label.Kind = SnapGuide::ELabelKind::MatchingGap;
 		Match.Label.Subject = SnapGuide::ELabelSubject::Segment;
 		Match.Label.SegmentIndex = Reference.Index;
-		Match.Label.SegmentGeneration = Reference.Generation;
 		Match.Label.GapUu = Gap;
 		Out.Add(Match);
 	}

@@ -169,7 +169,7 @@ namespace SnapGuide
 	{
 		/** No <Name> to resolve - ELabelKind::Literal supplies the whole string via Text. */
 		None,
-		/** RoadNaming::Describe(Network, Segment) - SegmentIndex/SegmentGeneration below. */
+		/** RoadNaming::Describe(Network, Network.SegmentIdAt(SegmentIndex)) - see that field. */
 		Segment,
 		/** FGuideAnchor::ReferenceName - the anchor carries exactly one, so no index is needed. */
 		GestureReference,
@@ -207,13 +207,18 @@ namespace SnapGuide
 		double GapUu = 0.0;
 
 		/**
-		 * A FRoadSegmentId's own two fields, COPIED RATHER THAN TYPED: Model/RoadHandles.h needs
-		 * its own .generated.h, and this header may not gain one - see the DEPENDENCY-FREE banner
-		 * at the top of this file. Tool/SnapGuideLabel.cpp reassembles the handle to call
-		 * RoadNaming::Describe; only meaningful when Subject == ELabelSubject::Segment.
+		 * The PLAIN ARRAY INDEX a FRoadSegmentId was read from - not the handle itself, and NOT
+		 * paired with a copied Generation: Model/RoadHandles.h needs its own .generated.h, and
+		 * this header may not gain one (the DEPENDENCY-FREE banner at the top of this file), so
+		 * FRoadSegmentId cannot be a member here at all. Carrying the bare index and asking
+		 * URoadNetwork::SegmentIdAt for a fresh, live-generation handle at format time is the
+		 * SAME RULE RoadSlot::HandleAt exists to enforce elsewhere in this codebase: a hand-built
+		 * {index, generation} pair is a second place that can go stale or be built wrong (#79,
+		 * #173, #214's own "hand-built handle" architecture check) - a bare index cannot be
+		 * either, because it is never mistaken for a handle in the first place. Only meaningful
+		 * when Subject == ELabelSubject::Segment; see SnapGuide::Describe.
 		 */
 		int32 SegmentIndex = INDEX_NONE;
-		int32 SegmentGeneration = 0;
 
 		/** FGuideAnchor::AlignTo's index (GesturePoint) or Network.GetEntities()'s (Entity). */
 		int32 SubjectIndex = INDEX_NONE;
