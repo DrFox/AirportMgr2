@@ -133,7 +133,7 @@ bool FOpsRuntimeTest::RunTest(const FString& Parameters)
 		// into a failing test that says nothing about the behaviour it guards. It used to
 		// read 8.0 and duly failed the day x16 and x32 were added, which is a maintenance
 		// cost with no diagnostic value.
-		const TArrayView<const ESimSpeed> Ladder = UOpsRuntime::SpeedLadder();
+		const TArrayView<const ESimSpeed> Ladder = USimClock::SpeedLadder();
 		const double Fastest = USimClock::Multiplier(Ladder.Last());
 		const double Slowest = USimClock::Multiplier(Ladder[0]);
 

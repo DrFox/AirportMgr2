@@ -290,6 +290,20 @@ public:
 	 */
 	URoadEditHistory* HistoryForEdit();
 
+	/**
+	 * Discard every undo step. Harmless (and allocates nothing) when there is no history yet -
+	 * see EnsureHistory, which this deliberately does NOT call.
+	 *
+	 * THE DOOR THIS CLASS SHOULD ALWAYS HAVE HAD (issue #191): AirportOps' load path used to
+	 * reach past this facade and call Target->History->Clear() on the actor directly - one
+	 * plugin's composition root operating another's undo stack, when
+	 * "the history an edit should snapshot into" and everything about it is this facade's own
+	 * job (see HistoryForEdit above). A load is a new baseline: the history holds Mementos of
+	 * the PRE-load network, and an undo afterwards would revert an airport the player just
+	 * replaced on purpose.
+	 */
+	void ClearHistory();
+
 private:
 	/** A live segment's handle from its slot index. See MakeLiveNodeId. */
 	bool MakeLiveSegmentId(int32 Index, FRoadSegmentId& OutId) const;

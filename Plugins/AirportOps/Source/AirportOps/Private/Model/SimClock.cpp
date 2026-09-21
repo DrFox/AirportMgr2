@@ -21,6 +21,50 @@ void USimClock::SetSpeed(ESimSpeed NewSpeed)
 	UE_LOG(LogAirportOps, Log, TEXT("Sim speed x%.0f"), Multiplier(Speed));
 }
 
+TArrayView<const ESimSpeed> USimClock::SpeedLadder()
+{
+	// A SECOND LIST THAT MUST AGREE WITH ESimSpeed, and exactly the kind CLAUDE.md names.
+	// A speed added to the enum but not to this ladder compiles, runs, and is simply
+	// unreachable: the player presses "faster" at the top rung and nothing happens, with
+	// no error anywhere. It is exposed rather than a static local precisely so a test can
+	// read it - AirportOps.Model.SimClock.SpeedLadderCoversEveryRung walks StaticEnum and
+	// fails if the two ever drift apart.
+	static const ESimSpeed Ladder[] = {
+		ESimSpeed::X1, ESimSpeed::X2, ESimSpeed::X4, ESimSpeed::X8, ESimSpeed::X16, ESimSpeed::X32 };
+	return MakeArrayView(Ladder, UE_ARRAY_COUNT(Ladder));
+}
+
+void USimClock::StepSpeed(int32 Delta)
+{
+	const TArrayView<const ESimSpeed> Ladder = SpeedLadder();
+	const int32 Rungs = Ladder.Num();
+
+	// Stepping while paused steps from ResumeSpeed, which is what a player pressing
+	// "faster" while paused means: resume, one notch up from where they were.
+	const ESimSpeed From = Speed == ESimSpeed::Paused ? ResumeSpeed : Speed;
+	int32 Index = 0;
+	for (int32 I = 0; I < Rungs; ++I)
+	{
+		if (Ladder[I] == From) { Index = I; }
+	}
+	Index = FMath::Clamp(Index + Delta, 0, Rungs - 1);
+	ResumeSpeed = Ladder[Index];
+	SetSpeed(ResumeSpeed);
+}
+
+void USimClock::TogglePause()
+{
+	if (Speed == ESimSpeed::Paused)
+	{
+		SetSpeed(ResumeSpeed);
+	}
+	else
+	{
+		ResumeSpeed = Speed;
+		SetSpeed(ESimSpeed::Paused);
+	}
+}
+
 double USimClock::Multiplier(ESimSpeed InSpeed)
 {
 	switch (InSpeed)

@@ -71,6 +71,27 @@ public:
 	ESimSpeed GetSpeed() const { return Speed; }
 	void SetSpeed(ESimSpeed NewSpeed);
 
+	/**
+	 * The rungs StepSpeed walks, in order, fastest last. Paused is deliberately NOT a rung:
+	 * it is TogglePause's business, and "step faster" from paused means resume, not unpause
+	 * into the slowest speed.
+	 *
+	 * Public because it is a list that must agree with ESimSpeed and something has to be
+	 * able to check that - see AirportOps.Model.SimClock.SpeedLadderCoversEveryRung, which
+	 * walks StaticEnum and fails if the two ever drift apart.
+	 *
+	 * MOVED FROM UOpsRuntime (issue #191, #98 partial), and ResumeSpeed and StepSpeed/
+	 * TogglePause followed it: they are this clock's own arithmetic over its own field, not
+	 * something the runtime should reach in to compute. See ResumeSpeed's own comment for the
+	 * save bug that made the move worth doing, not just tidier.
+	 */
+	static TArrayView<const ESimSpeed> SpeedLadder();
+
+	/** Speed control. StepSpeed(+1) climbs SpeedLadder() and stops at the top; -1 descends. */
+	void StepSpeed(int32 Delta);
+	/** Paused <-> the speed that was set before pausing. */
+	void TogglePause();
+
 	/** The speed table: 0, 1, 2, 4, 8. What Airside movement is scaled by. */
 	static double Multiplier(ESimSpeed Speed);
 
@@ -117,6 +138,18 @@ private:
 
 	UPROPERTY() double GameSeconds = 0.0;
 	UPROPERTY() ESimSpeed Speed = ESimSpeed::X1;
+
+	/**
+	 * What TogglePause returns to. X1 if nothing was ever set.
+	 *
+	 * LIVES HERE, NOT ON UOpsRuntime (issue #191, #98 partial): it used to, and UOpsRuntime is
+	 * not in UOpsRuntime::Persistents() - by design, it is Present/ composition, not saved
+	 * state (see its own class comment) - so a game saved while paused reloaded with this at
+	 * its constructor default no matter what speed the player had actually paused from. It is
+	 * just another non-Transient UPROPERTY on the object that IS saved, per OpsSave's own
+	 * "the RULE": a model object's non-Transient UPROPERTYs are its saved state.
+	 */
+	UPROPERTY() ESimSpeed ResumeSpeed = ESimSpeed::X1;
 
 	// Plain members, not UPROPERTY: see the class comment on why the queue is not saved.
 	TArray<FEntry> Entries;

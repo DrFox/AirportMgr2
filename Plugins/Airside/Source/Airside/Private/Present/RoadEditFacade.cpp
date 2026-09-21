@@ -80,6 +80,17 @@ URoadEditHistory* URoadEditFacade::HistoryForEdit()
 	return &EnsureHistory();
 }
 
+void URoadEditFacade::ClearHistory()
+{
+	// NO EnsureHistory: a fresh, empty history behaves identically to a null one everywhere
+	// else in this class (HistoryForEdit, CanUndo, CanRedo), so creating one just to clear it
+	// would be a wasted allocation on every design-time load, where nothing has ever edited yet.
+	if (URoadEditHistory* History = Actor().History)
+	{
+		History->Clear();
+	}
+}
+
 const URoadNetwork* URoadEditFacade::GetNetwork() const
 {
 	return Actor().Network;

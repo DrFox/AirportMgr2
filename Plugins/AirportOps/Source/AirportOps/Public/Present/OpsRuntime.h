@@ -71,18 +71,16 @@ public:
 	void Tick(double RealDeltaSeconds);
 
 	/**
-	 * The rungs StepSpeed walks, in order, fastest last. Paused is deliberately NOT a rung:
-	 * it is TogglePause's business, and "step faster" from paused means resume, not unpause
-	 * into the slowest speed.
-	 *
-	 * Public because it is a list that must agree with ESimSpeed and something has to be
-	 * able to check that - see its definition.
+	 * Speed control. Forwards to USimClock::StepSpeed/TogglePause (the ladder, ResumeSpeed and
+	 * the pause policy all moved there in issue #191 - #98 partial - so the SAVED state and the
+	 * logic that computes it are the same object; a game saved while paused used to reload with
+	 * ResumeSpeed at its constructor default because UOpsRuntime, which held it, is not itself
+	 * saved) and then pushes the result into the actor and the event bus, which is Present/'s
+	 * job and the reason these stay methods here rather than becoming a bare Clock-> call at
+	 * every caller.
 	 */
-	static TArrayView<const ESimSpeed> SpeedLadder();
-
-	/** Speed control. StepSpeed(+1) climbs SpeedLadder() and stops at the top; -1 descends. */
 	void StepSpeed(int32 Delta);
-	/** Paused <-> the speed that was set before pausing. */
+	/** Paused <-> the speed that was set before pausing. See StepSpeed's comment. */
 	void TogglePause();
 
 	bool SaveToSlot(const FString& SlotName);
@@ -126,7 +124,16 @@ private:
 	 *  a handle left armed across a Detach fires against a runtime with no network. */
 	int32 UpkeepHandle = INDEX_NONE;
 
-	/** One day's upkeep for everything standing, as a single entry. Bound in Attach. */
+	/**
+	 * One day's upkeep for everything standing, posted as a single entry. Bound in Attach.
+	 *
+	 * SHRUNK BY ISSUE #191: this used to decide the skip-if-zero rule and post the entry
+	 * itself; both moved to ULedger::PostDailyUpkeep, which see for the roll-up decision this
+	 * left behind. What is left here is exactly what CLAUDE.md's Architecture section asks
+	 * for - the ONE place a content default (BuildCost::DailyUpkeep, which lives in Build/,
+	 * which Model/ may not include) gets resolved - plus the FlightBoard beat that has to stay
+	 * next to it (see the .cpp).
+	 */
 	void PostDailyUpkeep();
 
 	/** The interval OfferHandle was armed with. See OfferIntervalSecondsForTest. */
@@ -137,9 +144,6 @@ private:
 
 	/** One offer, on the clock. Bound in Attach. */
 	void GenerateOffer();
-
-	/** What TogglePause returns to. X1 if nothing was ever set. */
-	UPROPERTY() ESimSpeed ResumeSpeed = ESimSpeed::X1;
 
 	FDelegateHandle PhaseHandle;
 	FDelegateHandle RefusalHandle;
