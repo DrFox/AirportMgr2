@@ -250,6 +250,24 @@ bool FRoadDrawToolTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and does not leave its node behind"), LiveNodes(Actor), 0);
 	}
 
+	// BuildSession::SelectTool deactivates the outgoing tool with a default FToolContext
+	// when the session holds no IRoadEditTarget of its own (see its doc comment) - which
+	// means Context.Target is null here, not merely unusual. FRoadDrawTool::OnCancel's
+	// early-out on a null Target used to leave State chaining in that case (issue #193),
+	// so the part-drawn state survived to the tool's next activation with nothing able to
+	// cancel it from outside a click.
+	{
+		Actor->ClearNetwork();
+		FRoadDrawTool Tool;
+
+		Tool.OnClick(AtGround(Actor, FVector2D(500.0, 500.0)));
+		TestFalse(TEXT("setup: the click started a chain"), Tool.IsIdle());
+
+		Tool.OnDeactivate(FToolContext());
+
+		TestTrue(TEXT("deactivating with no target still abandons the chain"), Tool.IsIdle());
+	}
+
 	// --- Preview ----------------------------------------------------------------------
 	//
 	// BuildPreview is const, per design spec 7.2, so a tool physically cannot mutate the
