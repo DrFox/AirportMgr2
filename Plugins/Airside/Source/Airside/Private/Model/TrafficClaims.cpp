@@ -1008,8 +1008,16 @@ double FClaimPass::StopWithinFor(const FWantedClaim& Want, const FTrafficClaim& 
 	return 0.0;
 }
 
+int32 FClaimPass::RunCallCountForTest = 0;
+
 void FClaimPass::Run(FRoadAgent& Agent, const URoadNetwork& Network)
 {
+	// COUNTED FIRST, unconditionally, the same convention RebuildCountForTest and
+	// MakeContextCallCountForTest use: every branch below returns early somewhere, and the
+	// question this answers is "how many times did Run actually get called", not "how many
+	// of those calls reached the bottom" - see RunCallCountForTest's own comment.
+	++RunCallCountForTest;
+
 	// NOT TAXIING: hold the runway and nothing else. An arrival on the roll and a departure
 	// lining up own the strip; whatever either held on the taxiway before the handover is
 	// released here, which is what makes "Vacated releases the chain" fall out of the tick

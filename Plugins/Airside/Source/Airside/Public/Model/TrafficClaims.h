@@ -185,6 +185,22 @@ struct AIRSIDE_API FClaimPass
 	 */
 	void Run(FRoadAgent& Agent, const URoadNetwork& Network);
 
+	/**
+	 * How many times Run has actually run, for issue #256's scale fixture: Arbitrate() calls
+	 * it once per agent in rank order, plus once more for each agent a later agent in that
+	 * same pass preempted (the "ONE RE-PASS over whoever lost a reservation" loop just below
+	 * Arbitrate's main one) - so the honest budget for a quiet tick is "at most once per agent
+	 * per substep", not "exactly once", and a test that wants to catch an O(agents^2) dispatch
+	 * bug needs the real count, not an assumption. Static, the same reason
+	 * FRoadNetworkSolver::NodeClaimsCallCountForTest is: Run is called from one place
+	 * (UGroundTraffic::Arbitrate) but a test has no FClaimPass instance of the one Arbitrate
+	 * built to ask.
+	 */
+	static int32 RunCallCountForTest;
+
+	/** Zeroes the counter above - see RunCallCountForTest. */
+	static void ResetRunCallCountForTest() { RunCallCountForTest = 0; }
+
 	/** A non-Taxiing agent's whole claim pass: hold RunwayHeld AND the chain its body is
 	 *  crossing, release everything else. Spec §3.4's "their surface and nothing else",
 	 *  where the surface includes the one it is standing on. Run's first branch. */

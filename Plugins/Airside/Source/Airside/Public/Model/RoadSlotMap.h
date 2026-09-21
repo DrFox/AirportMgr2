@@ -40,6 +40,9 @@ namespace RoadSlot
 	 * URoadNetwork::RunwayExtentAt, which names doing so as the reason it tracks nodes
 	 * rather than segment indices. A handle to a dead slot is not a handle, so this returns
 	 * a default (unset) one for anything not alive.
+	 *
+	 * ENFORCED BY: Check-Architecture.ps1 rule 5 (no hand-built {index, generation} outside
+	 * this file).
 	 */
 	template<typename THandle, typename TItem>
 	THandle HandleAt(const TArray<TItem>& Items, int32 Index)

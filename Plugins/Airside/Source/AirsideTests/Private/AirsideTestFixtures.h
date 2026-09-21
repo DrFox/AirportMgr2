@@ -230,12 +230,58 @@ struct FTestAirport
 	FRoadSegmentId ThresholdSegment;
 	TArray<FEntityInstanceId> Stands;
 
+	/** Fuel depots BuildScale places - empty for the plain Build() above, which places none.
+	 *  Same FEntityInstanceId a stand is, so Pose() below reads either kind. */
+	TArray<FEntityInstanceId> Depots;
+
+	/** An interior TAXIWAY grid node BuildScale places - unset for the plain Build() above.
+	 *  Unset (not Threshold or one of Exits) on purpose: a drag-frame test wants an ordinary
+	 *  junction, not a runway endpoint that MoveNode's own length/facts validation may treat
+	 *  differently - see Airside.Perf.Scale.DragFrameStaysGeometryOnly for the one caller. */
+	FRoadNodeId SampleGridNode;
+
 	/** Builds onto ExistingNet if given, else a fresh transient URoadNetwork. */
 	static FTestAirport Build(const FAirframe& Airframe, const FTestAirportOptions& Options = FTestAirportOptions(),
 		URoadNetwork* ExistingNet = nullptr);
 
-	/** One of Stands' own pose node, or unset. Generalises the StandOcc/StandOcc2/StandOcc3
-	 *  Pose triplet (StandClaimTest, StandChoiceTest, StandRetargetTest). */
+	/**
+	 * Issue #256: the ten-node shape above proves correctness; nothing in this module ever
+	 * measured COST at the scale a real airport reaches. Two long runways (each split at two
+	 * exits, matching Build's own single-exit shape doubled), an 8x20 taxiway grid south of
+	 * them (~300 road segments between the two - see the .cpp for the exact count), 30 stands
+	 * and 4 fuel depots hung off the grid's own rows.
+	 *
+	 * SEEDED, NOT RANDOM: Stream picks which of several plausible stand/depot slots and agent
+	 * routes a given Seed uses, so two calls with the same Seed build bit-identical networks
+	 * (a budget assertion that flakes on machine noise is worse than none) while still
+	 * spreading load across the grid rather than piling every stand onto one taxiway the way
+	 * a hand-picked fixture would. The GRID ITSELF is not randomised - its row/column count
+	 * and spacing are fixed - only which grid nodes get a stand, a depot, or an agent's route
+	 * endpoints varies with Seed.
+	 *
+	 * EXTENDS Build() rather than standing up a second builder file (see the issue's own
+	 * brief): reuses TestGraph::Lay, TestProfiles::Runway/Taxiway and TestAirframes exactly as
+	 * Build() does, and returns the SAME FTestAirport struct so Pose() below reads a scale
+	 * fixture's stands and depots with no second accessor. Does NOT dispatch agents itself,
+	 * matching Build()'s own division of labour: a caller that wants traffic on the fixture
+	 * calls Pose() for a depot and a stand, routes between them with RouteSearch::Find, and
+	 * dispatches - directly on a UGroundTraffic if no actor is involved, or on
+	 * Actor->GetTraffic()->GetModel() when one is, the same choice every existing fixture
+	 * caller already makes for itself.
+	 *
+	 * bDerived MATCHES FTestAirportOptions::bDerived above, kept as its own bool rather than
+	 * folded into a options struct of one field: false for a fixture built onto an actor's own
+	 * network (Actor->RebuildMesh does the derive, the real path an edit takes - see
+	 * ArrivalDispatchTest's own "world variant" for the established shape); true for a bare
+	 * network with nothing else to derive it.
+	 */
+	static FTestAirport BuildScale(const FAirframe& Airframe, int32 Seed, bool bDerived = true,
+		URoadNetwork* ExistingNet = nullptr);
+
+	/** One of Stands' or Depots' own pose node, or unset. Generalises the StandOcc/StandOcc2/
+	 *  StandOcc3 Pose triplet (StandClaimTest, StandChoiceTest, StandRetargetTest) - and now
+	 *  BuildScale's depots too, since a depot's placed FEntityInstance carries a PoseNode the
+	 *  same way a stand's does. */
 	FGuidelineNodeId Pose(FEntityInstanceId Stand) const;
 };
 
