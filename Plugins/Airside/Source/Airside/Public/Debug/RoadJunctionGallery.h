@@ -2,10 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+// INCLUDED RATHER THAN FORWARD DECLARED: TaxiwayWidth/FilletRadius below default from
+// URoadProfile::StandardTaxiwayWidth/StandardTaxiwayFilletRadius, and a UPROPERTY default
+// initializer needs the static member's definition, which a forward declaration cannot give.
+#include "Profiles/RoadProfile.h"
 #include "RoadJunctionGallery.generated.h"
 
 class URoadNetwork;
-class URoadProfile;
 class UDynamicMeshComponent;
 class UMaterialInterface;
 
@@ -50,8 +53,12 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, Category = "Airside") double ArmLength = 20000.0;
 
-	UPROPERTY(EditAnywhere, Category = "Airside") double TaxiwayWidth = 2300.0;
-	UPROPERTY(EditAnywhere, Category = "Airside") double FilletRadius = 1500.0;
+	// NAMED CONSTANTS, not typed literals (issue #192 item 3): both used to repeat
+	// URoadProfile::StandardTaxiwayWidth/StandardTaxiwayFilletRadius as bare 2300.0/1500.0,
+	// which is exactly the "authored asset's default is data" rule ARoadNetworkActor's own
+	// FallbackWidth already follows.
+	UPROPERTY(EditAnywhere, Category = "Airside") double TaxiwayWidth = URoadProfile::StandardTaxiwayWidth;
+	UPROPERTY(EditAnywhere, Category = "Airside") double FilletRadius = URoadProfile::StandardTaxiwayFilletRadius;
 
 	/**
 	 * Debug line thickness in WORLD units. The whole gallery spans ~150,000 uu, so a

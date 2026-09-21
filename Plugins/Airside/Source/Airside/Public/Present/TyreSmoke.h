@@ -8,6 +8,40 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 
 /**
+ * One pooled puff: a component, its instance, and how far through its life it is.
+ *
+ * A USTRUCT WITH UPROPERTY POINTERS (issue #192 item 2), not a plain struct beside two
+ * index-parallel UPROPERTY arrays that exist only to root what the struct itself could not.
+ * DynamicMeshSink.h's own comment names that shape "the defect this codebase has already
+ * paid for once" - two lists that must agree, kept in step by nothing but every writer
+ * remembering to touch both. A reflected TArray<FTyreSmokePuff> is the garbage collector's
+ * own list, so there is exactly one to keep in step, and reflection is what makes it
+ * root-able at all: an unreflected struct's TObjectPtr members are invisible to the
+ * collector, which is why the two extra arrays existed in the first place.
+ *
+ * NAMED FTyreSmokePuff RATHER THAN THE ISSUE'S FPuff, and AT FILE SCOPE rather than nested
+ * in UTyreSmoke: UHT does not reflect a USTRUCT declared inside a UCLASS body - the same
+ * constraint EntityDefinition.h's own comment records for ERoadKind and EPlaceableEntity,
+ * one level up from an enum - and a bare four-letter name at file scope in a UNITY build is
+ * exactly the collision this module's own log-category rule warns about, one level up from
+ * a macro.
+ */
+USTRUCT()
+struct FTyreSmokePuff
+{
+	GENERATED_BODY()
+
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Mesh;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> Instance;
+
+	/** Seconds since birth. At or past PuffSeconds the puff is dead and hidden. */
+	double Age = 0.0;
+	double Radius = 0.0;
+	FVector Born = FVector::ZeroVector;
+	bool bLive = false;
+};
+
+/**
  * The puffs of tyre smoke under the main wheels at touchdown, and the project's FIRST
  * effect - so this class is the precedent for any that follow.
  *
@@ -65,6 +99,17 @@ public:
 	/** Live puffs right now, for Airside.Present.TyreSmokePuffs. */
 	int32 LivePuffCountForTest() const;
 
+	/** The pool's own size, for Airside.Present.TyreSmokePoolStaysRooted. */
+	int32 PoolCountForTest() const { return Puffs.Num(); }
+
+	/**
+	 * True when every pooled puff still owns its mesh component, for the same test - the GC
+	 * rooting issue #192 item 2 exists to prove. FTyreSmokePuff::Mesh is a UPROPERTY now, so a
+	 * collection must never null it out from under the pool the way an unreflected pointer
+	 * would.
+	 */
+	bool EveryPuffHasAMeshForTest() const;
+
 	/** How long a puff lasts, seconds. Short: this is punctuation, not weather. */
 	UPROPERTY(EditAnywhere, Category = "Airside|Smoke", meta = (ClampMin = "0.05"))
 	double PuffSeconds = 1.3;
@@ -98,18 +143,6 @@ public:
 	int32 PoolSize = 8;
 
 private:
-	/** One pooled puff: a component, its instance, and how far through its life it is. */
-	struct FPuff
-	{
-		TObjectPtr<UStaticMeshComponent> Mesh;
-		TObjectPtr<UMaterialInstanceDynamic> Instance;
-		/** Seconds since birth. At or past PuffSeconds the puff is dead and hidden. */
-		double Age = 0.0;
-		double Radius = 0.0;
-		FVector Born = FVector::ZeroVector;
-		bool bLive = false;
-	};
-
 	/** Index of the puff to use next: the first dead one, else the OLDEST live one. */
 	int32 ClaimSlot();
 
@@ -117,12 +150,9 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> Material;
 
 	/**
-	 * The pool. Not a UPROPERTY-visible TArray of the struct, because FPuff is a plain struct
-	 * with TObjectPtrs in it: the two component arrays below are what the garbage collector
-	 * traces, and Puffs indexes them.
+	 * The pool, and now the ONLY list of it (issue #192 item 2) - see FTyreSmokePuff's own
+	 * comment for why a reflected TArray of a reflected struct is what makes the two
+	 * component arrays this replaced unnecessary rather than merely redundant.
 	 */
-	TArray<FPuff> Puffs;
-
-	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> PuffMeshes;
-	UPROPERTY(Transient) TArray<TObjectPtr<UMaterialInstanceDynamic>> PuffInstances;
+	UPROPERTY(Transient) TArray<FTyreSmokePuff> Puffs;
 };

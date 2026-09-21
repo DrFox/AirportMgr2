@@ -8,6 +8,8 @@
 class UAirsideContent;
 class USkeletalMesh;
 class UStaticMesh;
+class UEntityDefinition;
+enum class EPlaceableEntity : uint8;
 
 /** What UAirsideSettings::ResolveAgentView resolved - see its own comment. */
 USTRUCT()
@@ -151,6 +153,20 @@ public:
 	 * on the runway was not.
 	 */
 	static FResolvedAgentView ResolveAgentView(const FAirframe& Airframe);
+
+	/**
+	 * What a placement gesture of this KIND drops, by the content set's Placeables map - or
+	 * null with no content set configured, or none authored for this kind.
+	 *
+	 * THE ONE PLACE UAirsideContent::Placeables IS READ (issue #192 item 1), matching every
+	 * other Resolve* here: ARoadNetworkActor::ResolveEntityDefinition used to answer this with
+	 * a ternary over exactly two members, which is a list a third kind could join without
+	 * anything here noticing - the "check where a list is CONSUMED" failure this codebase has
+	 * shipped three times. A per-actor override still wins first (StandDefinition /
+	 * FuelDepotDefinition on the actor); this is only the content-set fallback, called from
+	 * ARoadNetworkActor::ResolveStandDefinition / ::ResolveFuelDepotDefinition.
+	 */
+	static UEntityDefinition* ResolvePlaceable(EPlaceableEntity Kind);
 
 	/** A service vehicle's body mesh - the content default, or null with none configured. */
 	static UStaticMesh* ResolveVehicleMesh();

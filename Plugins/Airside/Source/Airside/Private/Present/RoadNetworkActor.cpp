@@ -10,6 +10,7 @@
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Content/AirsideContent.h"
+#include "Content/AirsidePrimitives.h"
 #include "Content/AirsideSettings.h"
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
@@ -117,8 +118,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 	PlotBoxes = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotBoxes"));
 	PlotBoxes->SetupAttachment(RootComponent);
 	{
-		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(
-			TEXT("/Engine/BasicShapes/Cube.Cube"));
+		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(AirsidePrimitives::CubePath());
 		if (Cube.Succeeded())
 		{
 			PlotBoxes->SetStaticMesh(Cube.Object);
@@ -137,8 +137,7 @@ ARoadNetworkActor::ARoadNetworkActor()
 		CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("PlotGhostBoxes"));
 	PlotGhostBoxes->SetupAttachment(RootComponent);
 	{
-		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(
-			TEXT("/Engine/BasicShapes/Cube.Cube"));
+		static ConstructorHelpers::FObjectFinder<UStaticMesh> Cube(AirsidePrimitives::CubePath());
 		if (Cube.Succeeded())
 		{
 			PlotGhostBoxes->SetStaticMesh(Cube.Object);
@@ -496,15 +495,13 @@ URoadProfile* ARoadNetworkActor::ResolveRunwayProfile(int32 Index) const
 UEntityDefinition* ARoadNetworkActor::ResolveStandDefinition() const
 {
 	if (StandDefinition != nullptr) { return StandDefinition; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->DefaultStand.LoadSynchronous() : nullptr;
+	return UAirsideSettings::ResolvePlaceable(EPlaceableEntity::Stand);
 }
 
 UEntityDefinition* ARoadNetworkActor::ResolveFuelDepotDefinition() const
 {
 	if (FuelDepotDefinition != nullptr) { return FuelDepotDefinition; }
-	const UAirsideContent* Content = UAirsideSettings::GetContent();
-	return Content != nullptr ? Content->DefaultFuelDepot.LoadSynchronous() : nullptr;
+	return UAirsideSettings::ResolvePlaceable(EPlaceableEntity::FuelDepot);
 }
 
 UEntityDefinition* ARoadNetworkActor::ResolveEntityDefinition(EPlaceableEntity Kind) const
