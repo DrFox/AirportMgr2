@@ -6,6 +6,7 @@
 #include "Build/RoadNetworkSolver.h"
 #include "Model/RoadNetwork.h"
 #include "Model/RoadSlotMap.h"
+#include "Present/RoadEditFacade.h"
 #include "Present/RoadNetworkActor.h"
 #include "Tool/RoadEditTarget.h"
 #include "Tool/RoadSnap.h"
@@ -299,6 +300,41 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 			After.Generation, Before.Generation);
 		TestEqual(TEXT("the start node's incidence is untouched"),
 			Actor->Network->GetNodes()[GhostFrom].Incident.Num(), 1);
+
+		// #166: the ghost used to DuplicateObject a whole URoadNetwork every call - the
+		// BuildGhostBuffers above already made one. Everything from here must not make a
+		// second, however many times the "cursor" moves, and the cache key must tolerate a
+		// still hand's sub-uu jitter without a full rebuild.
+		URoadSurfacePresenter* Presenter = Actor->GetPresenter();
+		const int32 AllocCountAfterFirstGhost = Presenter->GhostNetworkAllocCountForTest();
+		TestEqual(TEXT("the first ghost allocated exactly one GhostNetwork"),
+			AllocCountAfterFirstGhost, 1);
+
+		Presenter->UpdateGhost(Actor->Network, GhostFrom, Hypothetical, true, Actor->MakeSurfaceSettingsForTest());
+		TestEqual(TEXT("driving the ghost through UpdateGhost allocates no second GhostNetwork"),
+			Presenter->GhostNetworkAllocCountForTest(), AllocCountAfterFirstGhost);
+
+		// SUB-UU JITTER, the noise a real input device reports while "held still" - the
+		// exact-equality cache this replaced missed every one of these frames and rebuilt
+		// anyway (see LastGhostTo's own comment).
+		FRoadSnapResult Jittered = Hypothetical;
+		Jittered.Position += FVector2D(0.2, -0.15);
+		bool bValidityChanged = false;
+		TestTrue(TEXT("sub-uu cursor jitter is a cache hit"),
+			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Jittered, true, bValidityChanged));
+
+		// A GENUINE MOVE is not a cache hit, and rebuilding it must still cost no second
+		// allocation - CopyFrom refreshes the one GhostNetwork already made.
+		FRoadSnapResult Moved = Hypothetical;
+		Moved.Position += FVector2D(500.0, 0.0);
+		TestFalse(TEXT("a real cursor move is not a cache hit"),
+			Presenter->IsGhostCacheHit(Actor->Network, GhostFrom, Moved, true, bValidityChanged));
+
+		FRoadMeshBuffers MovedBuffers;
+		TestTrue(TEXT("the ghost rebuilds at the new position"),
+			Actor->BuildGhostBuffers(GhostFrom, Moved, MovedBuffers));
+		TestEqual(TEXT("rebuilding at a genuinely new position still allocates no second GhostNetwork"),
+			Presenter->GhostNetworkAllocCountForTest(), AllocCountAfterFirstGhost);
 	}
 
 	// Delete, and the undo that has to put it back exactly. This is the whole reason undo
@@ -365,6 +401,43 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("a refused delete is not an undo step"),
 			Actor->PeekUndoLabel(), FString(TEXT("delete segment")));
 		TestTrue(TEXT("and the stack still has its real entry"), DepthBefore == 1 && Actor->CanUndo());
+	}
+
+	// #166: URoadEditFacade::PlanNodeDeletion caches its plan on (node, network edit
+	// revision). RoadHeal::PlanNodeDeletion duplicates the whole graph to validate every
+	// candidate rejoin against the copy, and FRemoveGesture asks the facade for it every
+	// frame Ctrl hovers a node - a still hover must not pay for that simulation twice.
+	{
+		Actor->ClearNetwork();
+		const int32 PlanA = Actor->PlaceNode(FVector2D(0.0, 0.0));
+		const int32 Middle = Actor->PlaceNode(FVector2D(3000.0, 0.0));
+		const int32 PlanB = Actor->PlaceNode(FVector2D(6000.0, 0.0));
+		TestTrue(TEXT("plan fixture connects A-Middle"), Actor->ConnectNodes(PlanA, Middle));
+		TestTrue(TEXT("plan fixture connects Middle-B"), Actor->ConnectNodes(Middle, PlanB));
+
+		URoadEditFacade* Facade = Actor->GetEditFacade();
+		const int32 ComputeCountBefore = Facade->DeletionPlanComputeCountForTest();
+
+		const FRoadDeletionPlan First = Actor->PlanNodeDeletion(Middle);
+		TestEqual(TEXT("the first ask computes the plan"),
+			Facade->DeletionPlanComputeCountForTest(), ComputeCountBefore + 1);
+		TestTrue(TEXT("the through node's plan heals"), First.bValid);
+
+		// SAME NODE, NO EDIT BETWEEN: the next frame of an unmoving Ctrl hover must be a
+		// cache hit, not a second whole-graph simulation.
+		const FRoadDeletionPlan Second = Actor->PlanNodeDeletion(Middle);
+		TestEqual(TEXT("a repeated ask with no edit in between is a cache hit"),
+			Facade->DeletionPlanComputeCountForTest(), ComputeCountBefore + 1);
+		TestTrue(TEXT("the cached plan names the same anchor"), Second.Anchor == First.Anchor);
+
+		// AN EDIT IN BETWEEN invalidates the cache for free, through EditRevision - see
+		// PlanNodeDeletion's own header comment for why there is no separate
+		// cache-invalidation call site to forget.
+		Actor->PlaceNode(FVector2D(0.0, 9000.0));
+		const FRoadDeletionPlan Third = Actor->PlanNodeDeletion(Middle);
+		TestEqual(TEXT("an edit between two asks forces a fresh plan"),
+			Facade->DeletionPlanComputeCountForTest(), ComputeCountBefore + 2);
+		TestTrue(TEXT("the fresh plan still names the same anchor"), Third.Anchor == First.Anchor);
 	}
 
 	// Moving a node, and the incidence order the solver depends on surviving it.

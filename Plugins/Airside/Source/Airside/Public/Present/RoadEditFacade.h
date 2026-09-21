@@ -122,6 +122,18 @@ public:
 	virtual bool MoveApronCorner(int32 ApronIndex, int32 CornerIndex, FVector2D To) override;
 	virtual void BeginInteractiveEdit(const FString& Label) override;
 	virtual void EndInteractiveEdit(bool bKeep) override;
+
+	/**
+	 * CACHED on (NodeIndex, Network's EditRevision) (#166). RoadHeal::PlanNodeDeletion
+	 * duplicates the whole graph and validates every candidate rejoin against the copy -
+	 * real work, and correctly so (see its own header for why the simulation needs a whole
+	 * graph) - but FRemoveGesture asks this every frame Ctrl hovers a node, for an answer
+	 * that cannot have changed unless the graph did. Recomputed only when NodeIndex differs
+	 * from the last call or EditRevision has moved; invalidation is free, because any edit
+	 * that would change the answer - including the deletion this same hover is about to
+	 * commit - bumps EditRevision itself (URoadNetwork's mutators do; see its own header),
+	 * so there is no separate "invalidate the plan cache" call site to forget.
+	 */
 	virtual FRoadDeletionPlan PlanNodeDeletion(int32 NodeIndex) const override;
 
 	virtual int32 AddApron(const TArray<FVector2D>& Outline) override;
@@ -177,6 +189,14 @@ public:
 
 	/** Discard the whole graph and the mesh built from it. Undoable. */
 	void ClearNetwork();
+
+	/**
+	 * How many times PlanNodeDeletion has actually run RoadHeal::PlanNodeDeletion (a cache
+	 * MISS), for Airside.Present.NetworkActor: two calls with the same node and no edit
+	 * between them must move this by exactly one, not two - see PlanNodeDeletion's own
+	 * comment for the cache this counts.
+	 */
+	int32 DeletionPlanComputeCountForTest() const { return DeletionPlanComputeCount; }
 
 	/**
 	 * Wired by ARoadNetworkActor, right after it creates Traffic - the same "reconnect what a
@@ -313,6 +333,19 @@ private:
 
 	/** What the pavement was worth when the current interactive drag began. See EndInteractiveEdit. */
 	double PavementValueAtDragStart = 0.0;
+
+	/**
+	 * PlanNodeDeletion's cache (#166) - see its own header comment. MUTABLE because
+	 * PlanNodeDeletion is const (it is a query, not a mutator: IRoadEditTarget's other
+	 * const methods have never had to cache anything, but this one's answer is expensive
+	 * and this class is where "expensive" is measured, not RoadHeal, which must still be
+	 * callable from a query with no side effects of its own).
+	 */
+	mutable int32 LastDeletionPlanNode = INDEX_NONE;
+	mutable uint32 LastDeletionPlanRevision = 0;
+	mutable bool bHasLastDeletionPlan = false;
+	mutable FRoadDeletionPlan LastDeletionPlan;
+	mutable int32 DeletionPlanComputeCount = 0;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.

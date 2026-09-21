@@ -10,6 +10,7 @@ FRoadNodeId URoadNetwork::AddNode(const FVector2D& Position)
 {
 	FRoadNode Node;
 	Node.Position = Position;
+	++EditRevision;
 	return RoadSlot::Add<FRoadNodeId>(Nodes, NodeFreeList, MoveTemp(Node));
 }
 
@@ -27,6 +28,7 @@ bool URoadNetwork::RemoveNode(FRoadNodeId Node)
 	{
 		RemoveSegment(Segment);
 	}
+	++EditRevision;
 	return RoadSlot::Remove<FRoadNodeId>(Nodes, NodeFreeList, Node);
 }
 
@@ -50,6 +52,7 @@ FRoadSegmentId URoadNetwork::AddSegment(FRoadNodeId A, FRoadNodeId B, const FVec
 	SortIncident(A);
 	SortIncident(B);
 
+	++EditRevision;
 	return Handle;
 }
 
@@ -84,6 +87,7 @@ bool URoadNetwork::RemoveSegment(FRoadSegmentId Segment)
 		NodeB->Incident.Remove(Segment);
 	}
 
+	++EditRevision;
 	return RoadSlot::Remove<FRoadSegmentId>(Segments, SegmentFreeList, Segment);
 }
 
@@ -170,6 +174,7 @@ bool URoadNetwork::SetNodePosition(FRoadNodeId Node, const FVector2D& To)
 
 	const FVector2D Was = Nodes[Node.Index].Position;
 	Nodes[Node.Index].Position = To;
+	++EditRevision;
 
 	// Every incident segment's CONTROL POINT has to come with it. GetOutgoingTangent - and
 	// therefore SortIncident, and therefore the solver - derives direction from Control,
@@ -229,6 +234,12 @@ bool URoadNetwork::MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb)
 	}
 
 	const FVector2D KeepAt = Nodes[Keep.Index].Position;
+	// Bumped up front, not per case below: every branch of this function - collapse,
+	// narrower-arm removal, and the plain repoint case that touches neither AddSegment nor
+	// RemoveSegment - is graph surgery, and RemoveNode's own bump at the end would still
+	// miss the repoint case (Segment->A/B and Incident are written directly, in CASE 3
+	// below, with no primitive mutator between here and there to carry it).
+	++EditRevision;
 
 	// COPIED BEFORE ANY SURGERY: RemoveSegment mutates the very array this walks, and a
 	// repoint below edits it too. The same copy RemoveNode takes, for the same reason.
@@ -344,6 +355,48 @@ bool URoadNetwork::MergeNodes(FRoadNodeId Keep, FRoadNodeId Absorb)
 	}
 
 	return true;
+}
+
+void URoadNetwork::CopyFrom(const URoadNetwork& Source)
+{
+	// EVERY ARRAY DuplicateObject's reflection walk used to clone, assigned by hand instead
+	// (#166): TArray::operator= is a deep copy, so handles (index and generation, both
+	// plain data inside the element structs) come across identical to what DuplicateObject
+	// gave the ghost preview - the property the whole call site depends on (see
+	// URoadSurfacePresenter::BuildGhostBuffers's own comment).
+	//
+	// WHOLESALE, not just Nodes/Segments: a caller that reasoned "the ghost only ever reads
+	// Nodes and Segments" would be a second place deciding what the ghost is allowed to
+	// need, and the day it grows a use for the guideline graph or an apron, this function
+	// would silently hand it stale data instead of a copy error loud enough to find. The
+	// cost of copying the rest is a few more TArray assignments, not a UObject allocation -
+	// the whole point of this function existing.
+	Nodes = Source.Nodes;
+	NodeFreeList = Source.NodeFreeList;
+	Segments = Source.Segments;
+	SegmentFreeList = Source.SegmentFreeList;
+
+	GuidelineNodes = Source.GuidelineNodes;
+	GuidelineNodeFreeList = Source.GuidelineNodeFreeList;
+	GuidelineEdges = Source.GuidelineEdges;
+	GuidelineEdgeFreeList = Source.GuidelineEdgeFreeList;
+	GuidelineRevision = Source.GuidelineRevision;
+
+	HoldingPositionMarks = Source.HoldingPositionMarks;
+
+	Aprons = Source.Aprons;
+	ApronFreeList = Source.ApronFreeList;
+
+	Entities = Source.Entities;
+	EntityFreeList = Source.EntityFreeList;
+
+	// THE ONE FIELD THE FIRST VERSION OF THIS FUNCTION ALMOST LEFT OUT: DefaultProfile is
+	// how ProfileFor answers for any segment with no profile of its own (see its own
+	// comment), and URoadSurfacePresenter::Rebuild sets it on the LIVE network before every
+	// solve - a copy that missed it would solve the ghost's arms at zero width the moment
+	// a level-loaded segment (profile lost to the transient package, see DefaultProfile's
+	// own comment) needed the fallback.
+	DefaultProfile = Source.DefaultProfile;
 }
 
 const FRoadNode* URoadNetwork::GetNode(FRoadNodeId Node) const

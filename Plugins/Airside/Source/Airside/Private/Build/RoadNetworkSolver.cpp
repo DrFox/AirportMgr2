@@ -411,99 +411,115 @@ double FRoadNetworkSolver::NodeReach(const URoadNetwork& Network, FRoadNodeId No
 	return Reach;
 }
 
-FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSegments)
+void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
+	FRoadSolveResult& InOutResult)
 {
-	FRoadSolveResult Out;
-
 	const TArray<FRoadNode>& Nodes = Network.GetNodes();
-	for (int32 NodeIndex = 0; NodeIndex < Nodes.Num(); ++NodeIndex)
+	if (!Nodes.IsValidIndex(NodeIndex))
 	{
-		const FRoadNode& Node = Nodes[NodeIndex];
-		if (!Node.bAlive || Node.Incident.Num() == 0)
+		return;
+	}
+
+	const FRoadNode& Node = Nodes[NodeIndex];
+	if (!Node.bAlive || Node.Incident.Num() == 0)
+	{
+		return;
+	}
+
+	FRoadNodeId NodeId;
+	NodeId.Index = NodeIndex;
+	NodeId.Generation = Node.Generation;
+
+	// The arm gathering, the skip rule and the fillet clamp all live in SolveNodeCuts,
+	// so a tool asking how far this junction reaches gets the answer from the same
+	// code that decides where the pavement actually stops.
+	FRoadNodeCuts Cuts;
+	if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts))
+	{
+		return;
+	}
+
+	FJunctionInput& Input = Cuts.Input;
+	FJunctionResult& Result = Cuts.Result;
+	const TArray<FRoadSegmentId>& ArmSegments = Cuts.ArmSegments;
+
+	FJunctionSolver::SolveBoundary(Input, Result);
+
+	if (!Result.bValid)
+	{
+		++InOutResult.FailedNodes;
+
+		// A failed solve must not leave a previous solve's vertices stranded looking
+		// valid. Clear only the end this node owns on every incident segment - the
+		// other end (at the segment's other node) is untouched and keeps its own flag.
+		for (const FRoadSegmentId SegmentId : Node.Incident)
 		{
-			continue;
-		}
-
-		FRoadNodeId NodeId;
-		NodeId.Index = NodeIndex;
-		NodeId.Generation = Node.Generation;
-
-		// The arm gathering, the skip rule and the fillet clamp all live in SolveNodeCuts,
-		// so a tool asking how far this junction reaches gets the answer from the same
-		// code that decides where the pavement actually stops.
-		FRoadNodeCuts Cuts;
-		if (!SolveNodeCuts(Network, NodeIndex, ArcSegments, Cuts))
-		{
-			continue;
-		}
-
-		FJunctionInput& Input = Cuts.Input;
-		FJunctionResult& Result = Cuts.Result;
-		const TArray<FRoadSegmentId>& ArmSegments = Cuts.ArmSegments;
-
-		FJunctionSolver::SolveBoundary(Input, Result);
-
-		if (!Result.bValid)
-		{
-			++Out.FailedNodes;
-
-			// A failed solve must not leave a previous solve's vertices stranded looking
-			// valid. Clear only the end this node owns on every incident segment - the
-			// other end (at the segment's other node) is untouched and keeps its own flag.
-			for (const FRoadSegmentId SegmentId : Node.Incident)
-			{
-				FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
-				if (Segment == nullptr)
-				{
-					continue;
-				}
-				if (Segment->A == NodeId)
-				{
-					Segment->bSolvedA = false;
-				}
-				else
-				{
-					Segment->bSolvedB = false;
-				}
-			}
-			continue;
-		}
-
-		// Write the solve back into the model. ArmSegments is index-aligned with
-		// Result.Arms (both built in lockstep above), so ArmSegments[ArmIndex] is the
-		// segment each arm belongs to, regardless of anything skipped while building Arms.
-		for (int32 ArmIndex = 0; ArmIndex < Result.Arms.Num(); ++ArmIndex)
-		{
-			const FRoadSegmentId SegmentId = ArmSegments[ArmIndex];
 			FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
 			if (Segment == nullptr)
 			{
 				continue;
 			}
-
-			const FJunctionArmResult& ArmResult = Result.Arms[ArmIndex];
-			const bool bIsEndA = (Segment->A == NodeId);
-
-			if (bIsEndA)
+			if (Segment->A == NodeId)
 			{
-				Segment->TrimA = ArmResult.CutDistance;
-				Segment->LeftCutA = ArmResult.LeftCut;
-				Segment->RightCutA = ArmResult.RightCut;
-				Segment->bSolvedA = true;
+				Segment->bSolvedA = false;
 			}
 			else
 			{
-				Segment->TrimB = ArmResult.CutDistance;
-				Segment->LeftCutB = ArmResult.LeftCut;
-				Segment->RightCutB = ArmResult.RightCut;
-				Segment->bSolvedB = true;
+				Segment->bSolvedB = false;
 			}
 		}
+		return;
+	}
 
-		// Copied BEFORE Result is moved from, and keyed on the same NodeIndex.
-		Out.NodeArmSegments.Add(NodeIndex, ArmSegments);
-		Out.NodeResults.Add(NodeIndex, MoveTemp(Result));
-		++Out.SolvedNodes;
+	// Write the solve back into the model. ArmSegments is index-aligned with
+	// Result.Arms (both built in lockstep above), so ArmSegments[ArmIndex] is the
+	// segment each arm belongs to, regardless of anything skipped while building Arms.
+	for (int32 ArmIndex = 0; ArmIndex < Result.Arms.Num(); ++ArmIndex)
+	{
+		const FRoadSegmentId SegmentId = ArmSegments[ArmIndex];
+		FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
+		if (Segment == nullptr)
+		{
+			continue;
+		}
+
+		const FJunctionArmResult& ArmResult = Result.Arms[ArmIndex];
+		const bool bIsEndA = (Segment->A == NodeId);
+
+		if (bIsEndA)
+		{
+			Segment->TrimA = ArmResult.CutDistance;
+			Segment->LeftCutA = ArmResult.LeftCut;
+			Segment->RightCutA = ArmResult.RightCut;
+			Segment->bSolvedA = true;
+		}
+		else
+		{
+			Segment->TrimB = ArmResult.CutDistance;
+			Segment->LeftCutB = ArmResult.LeftCut;
+			Segment->RightCutB = ArmResult.RightCut;
+			Segment->bSolvedB = true;
+		}
+	}
+
+	// Copied BEFORE Result is moved from, and keyed on the same NodeIndex.
+	InOutResult.NodeArmSegments.Add(NodeIndex, ArmSegments);
+	InOutResult.NodeResults.Add(NodeIndex, MoveTemp(Result));
+	++InOutResult.SolvedNodes;
+}
+
+FRoadSolveResult FRoadNetworkSolver::SolveAll(URoadNetwork& Network, int32 ArcSegments)
+{
+	FRoadSolveResult Out;
+
+	// EVERY LIVE NODE, IN ORDER, THROUGH SolveNodeInto - see that function's own comment.
+	// This loop and the ghost preview's two-call solve (BuildGhostBuffers) are now the same
+	// code run a different number of times, which is the whole point of #166: neither can
+	// decide where a junction's pavement stops without the other agreeing.
+	const int32 NodeCount = Network.GetNodes().Num();
+	for (int32 NodeIndex = 0; NodeIndex < NodeCount; ++NodeIndex)
+	{
+		SolveNodeInto(Network, NodeIndex, ArcSegments, Out);
 	}
 
 	return Out;

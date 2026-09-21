@@ -68,6 +68,27 @@ public:
 		FRoadNodeCuts& Out);
 
 	/**
+	 * SolveAll's own per-node body, exposed for exactly ONE node: solve its cuts, solve its
+	 * boundary, and write the result back into the model AND into InOutResult - the same
+	 * writes SolveAll makes for this node, because this IS the code SolveAll's loop runs
+	 * (#166).
+	 *
+	 * EXISTS so a caller that only cares about a HANDFUL of nodes - the ghost preview solves
+	 * exactly the segment it draws and the two junctions it reshapes - is not made to
+	 * re-solve and rewrite every OTHER junction in the network to get them. Calling this for
+	 * every live node, in order, is what SolveAll now does; calling it for two is the
+	 * ghost's whole solve. Either way there is exactly one place deciding what a junction
+	 * writes - a second copy of this loop body is a second place that could decide where
+	 * pavement stops and drift from the first.
+	 *
+	 * Leaves InOutResult and the model untouched when NodeIndex is not live or has no arms,
+	 * mirroring SolveAll's own `continue` for that case - so a caller may call this for a
+	 * node it is not sure is still live without checking first.
+	 */
+	static void SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, int32 ArcSegments,
+		FRoadSolveResult& InOutResult);
+
+	/**
 	 * How far a node's pavement reaches from its centre, in uu. Zero when it has no arms.
 	 *
 	 * Deliberately CONSERVATIVE: an arm's furthest pavement corner is at

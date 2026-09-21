@@ -1140,7 +1140,24 @@ FRoadDeletionPlan URoadEditFacade::PlanNodeDeletion(int32 NodeIndex) const
 	{
 		return FRoadDeletionPlan();
 	}
-	return RoadHeal::PlanNodeDeletion(*Owner.Network, Node, Owner.PlacementLimits);
+
+	// CACHE HIT: same node, and nothing about the graph has moved since the plan was made -
+	// see this method's own header comment for why EditRevision alone is enough to know
+	// that (#166). FRemoveGesture asks this every frame Ctrl hovers a node; without this,
+	// a still hover paid for RoadHeal::PlanNodeDeletion's whole-graph duplicate-and-validate
+	// simulation sixty times a second for an answer that could not have changed.
+	const uint32 Revision = Owner.Network->GetEditRevision();
+	if (bHasLastDeletionPlan && LastDeletionPlanNode == NodeIndex && LastDeletionPlanRevision == Revision)
+	{
+		return LastDeletionPlan;
+	}
+
+	LastDeletionPlan = RoadHeal::PlanNodeDeletion(*Owner.Network, Node, Owner.PlacementLimits);
+	LastDeletionPlanNode = NodeIndex;
+	LastDeletionPlanRevision = Revision;
+	bHasLastDeletionPlan = true;
+	++DeletionPlanComputeCount;
+	return LastDeletionPlan;
 }
 
 bool URoadEditFacade::DeleteNode(int32 NodeIndex)
