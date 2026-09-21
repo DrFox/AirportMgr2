@@ -84,6 +84,54 @@ bool FOpsSaveRoundTripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE SAVE BUG (issue #191 item 1, #98 partial). ResumeSpeed used to live on UOpsRuntime,
+ * which is not (and should not be - it is Present/ composition, not saved state) among
+ * Persistents(): a game saved while paused reloaded with ResumeSpeed at its constructor
+ * default, X1, no matter what speed the player had actually paused from. Moving ResumeSpeed
+ * onto USimClock - the object OpsSave actually saves - fixes it by construction, per OpsSave's
+ * own "the RULE": a model object's non-Transient UPROPERTYs are its saved state.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOpsSavePauseResumeSpeedSurvivesTest,
+	"AirportOps.Model.Save.PauseResumeSpeedSurvives",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOpsSavePauseResumeSpeedSurvivesTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>();
+	Clock->SetSpeed(ESimSpeed::X4);
+	Clock->TogglePause();
+	if (!TestEqual(TEXT("set up paused, as the report describes"), Clock->GetSpeed(), ESimSpeed::Paused))
+	{
+		return false;
+	}
+
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	UFuelService* Fuel = NewObject<UFuelService>();
+	URoadNetwork* Network = NewObject<URoadNetwork>();
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Network, Snapshot);
+
+	USimClock* RestoredClock = NewObject<USimClock>();
+	UFlightBoard* RestoredBoard = NewObject<UFlightBoard>();
+	UFuelService* RestoredFuel = NewObject<UFuelService>();
+	URoadNetwork* RestoredNetwork = NewObject<URoadNetwork>();
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot,
+			OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNetwork)))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("a save while paused reloads still paused"),
+		RestoredClock->GetSpeed(), ESimSpeed::Paused);
+	RestoredClock->TogglePause();
+	TestEqual(TEXT("unpausing after a load resumes the speed that was paused FROM, not the "
+		"constructor default - the bug this test pins"), RestoredClock->GetSpeed(), ESimSpeed::X4);
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FOpsSaveSlotTest,
 	"AirportOps.Model.Save.Slot",

@@ -67,9 +67,12 @@ bool FAircraftLookTest::RunTest(const FString& Parameters)
 		{
 			continue;
 		}
-		for (const TObjectPtr<UAircraftType>& Type : Airline->Fleet)
+		for (const TSoftObjectPtr<UAircraftType>& SoftType : Airline->Fleet)
 		{
-			if (Type != nullptr)
+			// LoadSynchronous, not IsValid/Get: Fleet is a soft reference now (issue #191 -
+			// Model/AirlineDefinition.h may not own a hard pointer to an Entities/ type), and
+			// SearchAllAssets above only populated the asset REGISTRY, not the object itself.
+			if (UAircraftType* Type = SoftType.LoadSynchronous())
 			{
 				Offerable.Add(Type);
 			}

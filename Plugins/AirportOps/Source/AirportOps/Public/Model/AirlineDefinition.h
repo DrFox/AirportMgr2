@@ -31,8 +31,18 @@ public:
 	/**
 	 * Every type this airline may send. An offer picks one of these that the airport can
 	 * actually take - see UOfferGenerator::AirportAdmits.
+	 *
+	 * SOFT, not a TObjectPtr (issue #191). UAircraftType lives in Airside's Entities/, and
+	 * this is Model/ - the layer that may not own an Entities/ type, per CLAUDE.md, the same
+	 * rule UAirsideContent::DefaultAircraft already follows for the same class. A bare forward
+	 * declaration used to let a hard TObjectPtr compile with no #include, which passed
+	 * Check-Architecture's include-direction lint while this header still owned an Entities/
+	 * reference - the lint greps #include lines, and there was none to catch. A soft pointer
+	 * means this header owns only a PATH, which Model/ is allowed to; UOpsRuntime::
+	 * CandidatesFromCatalog (Present/, where Entities/ is legal - see its own comment) is the
+	 * one place that resolves it to the real type.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Airline") TArray<TObjectPtr<UAircraftType>> Fleet;
+	UPROPERTY(EditAnywhere, Category = "Airline") TArray<TSoftObjectPtr<UAircraftType>> Fleet;
 
 	/** Relative weight against other airlines when an offer is generated. */
 	UPROPERTY(EditAnywhere, Category = "Airline", meta = (ClampMin = "0.0"))

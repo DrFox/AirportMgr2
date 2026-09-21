@@ -403,6 +403,26 @@ bool FRoadNetworkActorTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("and the stack still has its real entry"), DepthBefore == 1 && Actor->CanUndo());
 	}
 
+	// #191: AirportOps' load path used to reach past this facade and call
+	// Target->History->Clear() on the actor directly. ClearHistory() is the door that
+	// replaced it; this pins that the door itself actually empties the stack, since nothing
+	// else in THIS file exercises it - AirportOps.Present.Runtime (a different plugin) is what
+	// exercises the load path that now calls it.
+	{
+		Actor->ClearNetwork();
+		Actor->PlaceNode(FVector2D(0.0, 0.0));
+		TestTrue(TEXT("an edit exists to clear"), Actor->CanUndo());
+
+		Actor->GetEditFacade()->ClearHistory();
+		TestFalse(TEXT("ClearHistory empties the undo stack"), Actor->CanUndo());
+		TestFalse(TEXT("and the redo stack"), Actor->CanRedo());
+
+		// Harmless when there is nothing to clear - see ClearHistory's own comment on why it
+		// must not EnsureHistory just to empty one.
+		Actor->GetEditFacade()->ClearHistory();
+		TestFalse(TEXT("clearing an already-empty history stays empty"), Actor->CanUndo());
+	}
+
 	// #166: URoadEditFacade::PlanNodeDeletion caches its plan on (node, network edit
 	// revision). RoadHeal::PlanNodeDeletion duplicates the whole graph to validate every
 	// candidate rejoin against the copy, and FRemoveGesture asks the facade for it every
