@@ -59,6 +59,13 @@ FRunwayRequirements TestAirframes::PiperRequirements()
 	return UAircraftType::PiperMeridianRequirements();
 }
 
+UAircraftType* TestAirframes::PiperType()
+{
+	UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
+	UAircraftType::BuildPiperMeridian(Type);
+	return Type;
+}
+
 FGuidelineNodeId TestGraph::Node(URoadNetwork& Net, double X, double Y)
 {
 	return Net.AddGuidelineNode(FVector2D(X, Y), /*bDerived=*/false);

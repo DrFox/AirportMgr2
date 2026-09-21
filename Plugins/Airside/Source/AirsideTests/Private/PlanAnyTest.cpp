@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -11,8 +12,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogPlanAnyTest, Log, All);
 
 namespace
 {
@@ -78,7 +77,7 @@ bool FPlanAnyShortestTest::RunTest(const FString& Parameters)
 	const FAirframe Airframe = UAirsideSettings::ResolveDefaultAirframe();
 
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*A.Net, A.StandNode, Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogPlanAnyTest, Log, TEXT("PlanAny: %s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("PlanAny: %s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 
 	// Both strips admit the Piper; the W-E one is the shorter taxi from this stand.
@@ -89,7 +88,7 @@ bool FPlanAnyShortestTest::RunTest(const FString& Parameters)
 	A.Net->RunwayExtentAt(FVector2D(100000.0, -49990.0), OtherEnd);
 	const FDeparturePlan Other = DeparturePlanner::Plan(*A.Net, A.StandNode,
 		OtherEnd.Threshold + OtherEnd.Direction * 10.0, Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogPlanAnyTest, Log, TEXT("N-S alternative: %s"), *DeparturePlanner::Describe(Other));
+	UE_LOG(LogAirsideTests, Log, TEXT("N-S alternative: %s"), *DeparturePlanner::Describe(Other));
 	if (Other.IsValid())
 	{
 		TestTrue(TEXT("the chosen taxi is no longer than the other strip's"), Plan.Route.Length <= Other.Route.Length);
@@ -118,7 +117,7 @@ bool FPlanAnyAdmissionTest::RunTest(const FString& Parameters)
 	Airframe.Requirements.MinimumSurface = ERunwaySurface::Tarmac;
 
 	const FDeparturePlan Plan = DeparturePlanner::PlanAny(*A.Net, A.StandNode, Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogPlanAnyTest, Log, TEXT("PlanAny (near strip refused): %s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("PlanAny (near strip refused): %s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 	TestTrue(TEXT("chose the N-S strip (threshold on X=100000)"), FMath::Abs(Plan.End.Threshold.X - 100000.0) < 1.0);
 

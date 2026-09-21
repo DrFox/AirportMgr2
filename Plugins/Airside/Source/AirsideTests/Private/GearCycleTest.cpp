@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Misc/AutomationTest.h"
 #include "Entities/AircraftType.h"
 #include "Model/RoadAgent.h"
@@ -345,8 +346,7 @@ bool FGear737IsAuthoredAndTravelsTest::RunTest(const FString& Parameters)
 
 	// A PIPER IS NOT AUTHORED EITHER. Its rig cannot show a retraction, so it declares none -
 	// which catches an edit that sprays gear figures across every type for completeness.
-	UAircraftType* Piper = NewObject<UAircraftType>();
-	UAircraftType::BuildPiperMeridian(Piper);
+	UAircraftType* Piper = TestAirframes::PiperType();
 	TestFalse(TEXT("the Meridian declares no gear cycle, because its rig cannot show one"),
 		Piper->Airframe().Gear.IsSet());
 

@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Misc/AutomationTest.h"
 #include "Model/ArrivalPlanner.h"
 #include "Model/GroundTraffic.h"
@@ -10,8 +11,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogM2DepTest, Log, All);
 
 /**
  * THE SECOND PIE REPORT OF 2026-09-06: "an aircraft taking off never releases the runway".
@@ -90,7 +89,7 @@ bool FTrafficDepartureReleasesWhenAirborneTest::RunTest(const FString& Parameter
 		}
 	}
 
-	UE_LOG(LogM2DepTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("DepartureReleasesWhenAirborne measured: rolling at %.2f s, airborne at %.2f s, strip released at %.2f s, gone at %.2f s"),
 		RollStart, AirborneAt, ReleasedAt, GoneAt);
 

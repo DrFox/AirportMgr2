@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
 #include "Misc/AutomationTest.h"
@@ -10,8 +11,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogM2HeadOnTest, Log, All);
 
 namespace
 {
@@ -155,7 +154,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 				To ? To->Position.X : 0.0, To ? To->Position.Y : 0.0,
 				(Edge && Edge->DerivedFrom.IsSet()) ? *FString::Printf(TEXT(" seg %d"), Edge->DerivedFrom.Index) : TEXT(""));
 		}
-		UE_LOG(LogM2HeadOnTest, Log, TEXT("PROBE H = node %d (%.0f, %.0f); H2 = node %d (%.0f, %.0f); RunwayW = node %d; taxi-in %.0f uu:%s"),
+		UE_LOG(LogAirsideTests, Log, TEXT("PROBE H = node %d (%.0f, %.0f); H2 = node %d (%.0f, %.0f); RunwayW = node %d; taxi-in %.0f uu:%s"),
 			H.Index, HAt.X, HAt.Y, H2.Index, H2At.X, H2At.Y, RunwayW.Index, TaxiIn.Length, *Steps);
 	}
 	TestTrue(TEXT("the taxi-in's first turn is INTO the bar node H - the head-on route"),
@@ -226,7 +225,7 @@ bool FTrafficHeadOnReplansRoundBarHolderTest::RunTest(const FString& Parameters)
 	}
 
 	const FRoadAgent* A = Traffic->FindAgent(Arrival);
-	UE_LOG(LogM2HeadOnTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("HeadOnReplansRoundBarHolder measured: departure held at bar %d, arrival refused H %d, ")
 		TEXT("replan at tick %d, arrival max Y after replan %.0f, departure gone %d, arrival phase %d, ")
 		TEXT("cycles %d, deadlock lines %d"),
