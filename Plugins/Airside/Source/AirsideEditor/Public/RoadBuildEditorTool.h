@@ -79,9 +79,22 @@ public:
 	virtual void Setup() override;
 	virtual void Shutdown(EToolShutdownType ShutdownType) override;
 	virtual void Render(IToolsContextRenderAPI* RenderAPI) override;
+	virtual void DrawHUD(FCanvas* Canvas, IToolsContextRenderAPI* RenderAPI) override;
 
 	/** Escape. Drops a road chain or a half-drawn apron; see FRoadBuildEdModeCommands. */
 	void CancelGesture();
+
+	/**
+	 * Enter. Commits whatever the active tool has staged - see FRoadBuildEdModeCommands::Build
+	 * and issue #185.
+	 *
+	 * REACHABLE AT ANY MOMENT, like CancelGesture: this class decides nothing about whether a
+	 * commit makes sense right now, because IBuildTool::OnCommit already ignores the call in
+	 * every stage but the one it means something in (FPlotPlaceTool::OnCommit checks its own
+	 * Stage) - the same contract ARoadBuildController::OnBuild relies on in PIE. A second
+	 * guard here would be a second copy of a rule the tool already owns.
+	 */
+	void CommitGesture();
 
 	/**
 	 * Draws the graph that already exists - nodes by degree, stands by heading.

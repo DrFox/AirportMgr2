@@ -47,6 +47,22 @@ public:
 	 */
 	TSharedPtr<FUICommandInfo> CancelGesture;
 
+	/**
+	 * Commits the gesture the active tool has staged - the fuel depot's last step.
+	 *
+	 * ISSUE #185: this command did not exist at all. PIE has always had `edit.build` on
+	 * Enter (BuildActions.cpp) reaching `IBuildTool::OnCommit`, but the editor mode's command
+	 * set was the nine tool commands plus Cancel and nothing else - "list declared, consumer
+	 * missing" in its fourth form here (see CLAUDE.md's "Check where a list is CONSUMED").
+	 * A fuel depot could be drawn in the editor and never placed.
+	 *
+	 * SAME KEY AS PIE (Enter), for the reason CancelGesture's own comment gives about Escape:
+	 * a player who has learned one driver's verb should not have to learn a second key for
+	 * the same thing in the other. NOT in ToolRegistry(): like Cancel, it selects no tool, so
+	 * it stays a hand-written UI_COMMAND rather than a registry entry.
+	 */
+	TSharedPtr<FUICommandInfo> Build;
+
 private:
 	/** See ToolCommandsInOrder's own comment for why this replaced nine named fields. */
 	TArray<TSharedPtr<FUICommandInfo>> ToolCommands;

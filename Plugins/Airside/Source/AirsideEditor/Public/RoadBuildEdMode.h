@@ -136,6 +136,16 @@ private:
 	void CancelActiveGesture();
 
 	/**
+	 * Enter: tell whichever build tool is active to commit what it has staged.
+	 *
+	 * ISSUE #185. Mirrors CancelActiveGesture exactly - same cast to URoadBuildEditorTool off
+	 * the active tool, same reason the mode itself does no more than forward: what a commit
+	 * MEANS (the fuel depot's OnCommit places it; every other tool ignores the call) is the
+	 * shared tool's business, not this driver's.
+	 */
+	void CommitActiveGesture();
+
+	/**
 	 * Starts the tool at this registry index - or, when it is already running, RESELECTS it.
 	 *
 	 * Taking the index rather than the name because a reselect has to reach the session, and
