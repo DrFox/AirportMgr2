@@ -43,12 +43,38 @@ import wire_anim_lib
 # own axis. It is a multiplier and not a negated axis on purpose - the axis column is
 # measured and this is a convention, and mixing the two would make the measurement unreadable.
 #
-# THE GEAR AND DOOR BONES TAKE None. Their sense is already carried by the rest direction the
-# axis column reports: GearAngleDegrees runs 0 (down) to +90 (retracted) and
-# BayDoorAngleDegrees 0 (open) to +90 (shut). On THIS rig both main legs fold INBOARD and the
-# nose leg folds FORWARD off one positive number, because gear_L points +Y, gear_R points -Y
-# and gear_nose points -X - the mirroring is in the bone, never in the figure. plane7's
-# Meridian folds its nose leg AFT instead, and needs no different row here for it.
+# THE GEAR AND DOOR BONES TAKE -1 TOO, AND THE FLEET'S OTHER RIGS DO NOT. They should: this
+# is the same flip the rolling bones carry, and it was missed on the travelling ones because
+# until PR #250's animation bench nothing in the editor drove them where a human could look.
+#
+# WHY THERE IS A FLIP AT ALL. Blender is right-handed and UE is left-handed, so the import is
+# a MIRROR, not just a rotation - and a mirror reverses the sense of every rotation about a
+# bone's own axis. Every build_rig.py in the models repo keys its cycle with one line,
+#
+#     pb.rotation_euler = (0.0, math.radians(deg), 0.0)   # about the bone's own Y
+#
+# and POSITIVE deg is the retracted leg and the shut door. In UE that same positive turns the
+# other way, which is exactly what "the rigs turn the other way about their own axis" has
+# always said of the wheels.
+#
+# MEASURED, NOT ARGUED, and the control came first. Turning each bone by the authored angle
+# off SK_Plane6's reference pose and watching where the child lands:
+#
+#     gear_L    +90 lifts wheel_L2 274 uu and 494 uu OUTBOARD;  -90 lifts it 494 and inboard
+#     gear_nose +90 lifts nosewheel 234 uu and 366 uu AFT;      -90 lifts it 366 and forward
+#     door_main_L  +81 swings the panel INTO the fuselage;      -81 lays it flush across the bay
+#     door_nose_L  +81 swings it outboard;                      -81 closes it on the centreline
+#
+# The -90 column is plane6/scripts/gear_pivots.json's own retracted pose to the decimal - it
+# says the left leg rotates +90 about world +Y and puts the wheel 4.94 m up - so the model and
+# the graph disagreed by a sign and nothing else. THE PROBE WAS VALIDATED FIRST against the
+# one bone whose direction is known correct on screen: with the fleet's -1 the wheels roll
+# FORWARD on all four rigs, and without it they roll backwards.
+#
+# SO THE MIRRORING IS STILL IN THE BONE and this multiplier is not undoing it. gear_L points
+# +Y and gear_R points -Y, so ONE GearAngleDegrees still folds both inboard; gear_nose points
+# -X, so the same figure folds the nose leg FORWARD, which is what a 777 does. What -1 fixes
+# is the handedness of the whole rig, not the symmetry of a pair.
 #
 # NO TRUCK ROW. The bogies are rigid on their legs - see build_plane6_anim.py's header - so
 # there is no bone for TruckTiltAngleDegrees to drive and FGearPerformance::TruckTiltSeconds
@@ -64,13 +90,13 @@ PLAN = [
     ("wheel_R3",        "WheelAngleDegrees",   -1.0),
     ("nosewheel",       "WheelAngleDegrees",   -1.0),
     ("nosewheel_steer", "SteerAngleDegrees",   None),
-    ("gear_L",          "GearAngleDegrees",    None),
-    ("gear_R",          "GearAngleDegrees",    None),
-    ("gear_nose",       "GearAngleDegrees",    None),
-    ("door_main_L",     "BayDoorAngleDegrees", None),
-    ("door_main_R",     "BayDoorAngleDegrees", None),
-    ("door_nose_L",     "BayDoorAngleDegrees", None),
-    ("door_nose_R",     "BayDoorAngleDegrees", None),
+    ("gear_L",          "GearAngleDegrees",    -1.0),
+    ("gear_R",          "GearAngleDegrees",    -1.0),
+    ("gear_nose",       "GearAngleDegrees",    -1.0),
+    ("door_main_L",     "BayDoorAngleDegrees", -1.0),
+    ("door_main_R",     "BayDoorAngleDegrees", -1.0),
+    ("door_nose_L",     "BayDoorAngleDegrees", -1.0),
+    ("door_nose_R",     "BayDoorAngleDegrees", -1.0),
 ]
 
 MODEL = wire_anim_lib.Model("plane6", "/Game/Aircraft/Plane6/ABP_Plane6", PLAN)

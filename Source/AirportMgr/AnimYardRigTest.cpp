@@ -6,6 +6,7 @@
 
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
+#include "Model/Airframe.h"
 #include "Model/AgentMotion.h"
 #include "Present/RoadAgentActor.h"
 #include "Testing/AirsideTestWorld.h"
@@ -193,6 +194,175 @@ bool FAnimYardEveryRigDrivesItsBonesTest::RunTest(const FString& Parameters)
 
 		Agent->Destroy();
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FAnimYardGearFoldsIntoTheAirframeTest,
+	"AirportMgr.View.AnimYard.GearFoldsIntoTheAirframe",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FAnimYardGearFoldsIntoTheAirframeTest::RunTest(const FString& Parameters)
+{
+	// EVERY RIG IN THE FLEET FOLDED ITS GEAR OUTBOARD, THROUGH THE WING, AND SHIPPED.
+	//
+	// Blender is right-handed and UE is left-handed, so the glTF import MIRRORS every
+	// bone-local rotation: the model's positive is the graph's negative. The ROLLING bones
+	// have always carried a -1 for it - "the rigs turn the other way about their own axis" -
+	// and the TRAVELLING bones never did, because until the animation bench there was nothing
+	// in the editor that drove a retract where a human could look. plane4 had been wrong since
+	// 2026-09-19, plane5 and plane7 since they were written, and plane6's 777 is what showed
+	// it. Fixed in Tools/wire_plane<N>_anim.py; pinned here.
+	//
+	// EveryRigDrivesItsBones ABOVE CANNOT CATCH THIS and says so in its own terms: it asks
+	// "did anything move", deliberately, because a table of expected bone names would be a
+	// second declaration of each graph. A leg swinging the wrong way moves exactly as many
+	// bones as one swinging the right way.
+	//
+	// "A RETRACTING WHEEL GOES UP" WAS THE FIRST DRAFT OF THIS TEST AND IT MEASURED NOTHING.
+	// Measured before it was written: on every rig in the fleet the wheel rises at BOTH signs,
+	// because the leg pivots about a trunnion above and outboard of it and either rotation
+	// lifts it. plane6's left wheel rises 274 uu the wrong way and 494 uu the right way. A
+	// test asserting "higher than it started" would have been green on the very defect it was
+	// written for - which is the a-green-test-may-measure-nothing failure, caught here only
+	// because the probe was run against both signs before the assertion was chosen.
+	//
+	// WHAT DISCRIMINATES IS SIDEWAYS: a main leg that folds the wrong way swings OUTBOARD,
+	// away from the fuselage and through the wing it is supposed to retract into. plane6 goes
+	// 494 uu outboard, plane4 116 uu, plane7 72 uu, against a few uu of noise. So the rule is
+	// that no wheel ends a retraction FARTHER from the centreline than it began - which needs
+	// no per-rig table, because it is a fact about undercarriages rather than about models.
+	//
+	// IT DOES NOT DISCRIMINATE A FORE-AFT LEG, AND plane5 IS ONE. A King Air's mains fold
+	// FORWARD into the nacelles, so both signs leave |Y| unchanged and plane5 passes this
+	// either way. That is named rather than papered over: a forward/aft flip on such a rig is
+	// still uncaught, and closing it would mean each rig declaring which way its bay faces -
+	// the second declaration EveryRigDrivesItsBones above refuses to write, for reasons that
+	// apply here unchanged. Three of the four retractable rigs are covered, including all
+	// three that were wrong.
+	//
+	// A RIG WHOSE GEAR REALLY DOES RETRACT OUTBOARD would fail this, and should: no aeroplane
+	// in this fleet does, and the day one arrives the right move is to make that a declared
+	// property of the rig rather than to widen the tolerance here.
+	//
+	// The rise is asserted too, but as a SANITY bound rather than as the discriminator - a
+	// leg that has not moved at all fails it, and that is a different fault from a mirrored
+	// one.
+	FAirsideTestWorld TestWorld(/*bSpawnActor*/ false);
+	if (TestWorld.World == nullptr) { AddError(TEXT("no test world")); return false; }
+
+	TArray<FYardRigEntry> Rigs;
+	AnimYardCatalogue::EveryRig(Rigs);
+	if (Rigs.Num() == 0)
+	{
+		AddError(TEXT("the catalogue found no drivable rigs at all"));
+		return false;
+	}
+
+	// A COUNT, BECAUSE MOST OF THE CATALOGUE HAS NO GEAR. Three ground vehicles and two
+	// fixed-gear aeroplanes are skipped by FGearPerformance::IsSet, and a loop that skipped
+	// EVERY row would be green while measuring nothing - the failure a-green-test-may-measure
+	// -nothing describes, in the form most available here.
+	int32 Retractable = 0;
+
+	for (const FYardRigEntry& Entry : Rigs)
+	{
+		if (Entry.Mesh == nullptr || Entry.Rig.AnimClass == nullptr || !Entry.Rig.Gear.IsSet())
+		{
+			continue;
+		}
+		++Retractable;
+
+		const FString Who = FString::Printf(TEXT("%s (%s)"), *Entry.Mesh->GetName(), *Entry.DeclaredBy);
+
+		ARoadAgentActor* Agent = TestWorld.World->SpawnActor<ARoadAgentActor>();
+		if (Agent == nullptr) { AddError(TEXT("no agent")); return false; }
+		Agent->SetAirframe(Entry.Mesh, Entry.Rig.AnimClass);
+
+		USkeletalMeshComponent* Component = Agent->FindComponentByClass<USkeletalMeshComponent>();
+		if (Component == nullptr || Component->GetSkeletalMeshAsset() == nullptr)
+		{
+			AddError(FString::Printf(TEXT("%s: the agent was not dressed with the mesh"), *Who));
+			Agent->Destroy();
+			continue;
+		}
+		Component->InitAnim(/*bForceReinit*/ true);
+		if (Component->GetAnimInstance() == nullptr)
+		{
+			AddError(FString::Printf(TEXT("%s: no anim instance"), *Who));
+			Agent->Destroy();
+			continue;
+		}
+
+		FYardMotion Bench;
+		Bench.Reset();
+		Bench.bAirborne = true;
+		Settle(*Agent, *Component, Bench.ToAgentMotion(Entry.Rig.Gear), 1.0 / 60.0);
+		const TArray<FTransform> Down = PoseOf(*Component);
+
+		// FULLY STOWED, not part way. FYardMotion::GearCycleFraction is 0 down and locked,
+		// 1 stowed, and it walks FGearPerformance::FractionsAt - the one evaluator - so this
+		// is the same curve the game flies rather than a straight line the test invented.
+		Bench.GearCycleFraction = 1.0;
+		Settle(*Agent, *Component, Bench.ToAgentMotion(Entry.Rig.Gear), 1.0 / 60.0);
+		const TArray<FTransform> Stowed = PoseOf(*Component);
+
+		// THE WHEEL BONES, BY NAME, AND THE NAMES ARE NOT A PER-RIG TABLE. Every rig in this
+		// fleet names its rolling bones wheel_* and nosewheel, which airside_anim.BONE_RULES
+		// already relies on to decide what drives them - so reading the same convention here
+		// adds no declaration that the pipeline did not already make. A rig that renamed them
+		// would come out with zero wheels and fail the guard below rather than pass quietly.
+		const FReferenceSkeleton& Rig = Entry.Mesh->GetRefSkeleton();
+		int32 Checked = 0;
+		for (int32 Bone = 0; Bone < Rig.GetNum() && Bone < Stowed.Num(); ++Bone)
+		{
+			const FString Name = Rig.GetBoneName(Bone).ToString();
+			if (!Name.StartsWith(TEXT("wheel_")) && Name != TEXT("nosewheel"))
+			{
+				continue;
+			}
+			++Checked;
+
+			const FVector Before = Down[Bone].GetTranslation();
+			const FVector After = Stowed[Bone].GetTranslation();
+			const double Rose = After.Z - Before.Z;
+			const double Outboard = FMath::Abs(After.Y) - FMath::Abs(Before.Y);
+
+			// THE DISCRIMINATOR. 10 uu of slack, against the 72 uu that the least-wrong rig
+			// in the fleet moved - three quarters of an order of magnitude, so this is not a
+			// figure anyone has to tune.
+			TestTrue(*FString::Printf(
+				TEXT("%s: %s does not swing OUTBOARD as the gear stows - it moved %+.0f uu "
+					"away from the centreline, which is a leg folding out through the wing "
+					"rather than up into it. That is the mirrored-rotation sign error: the "
+					"bone wants a -1 in Tools/wire_%s_anim.py's PLAN."),
+				*Who, *Name, Outboard, *Entry.Mesh->GetName().Mid(3).ToLower()),
+				Outboard < 10.0);
+
+			// AND THE SANITY BOUND. Half the wheel's own hub height: a leg that has genuinely
+			// travelled has climbed most of its own length, while a graph that drove nothing
+			// leaves this at zero. Not the discriminator - see the header - because both signs
+			// clear it comfortably.
+			const double Floor = Before.Z * 0.5;
+			TestTrue(*FString::Printf(
+				TEXT("%s: %s rises when the gear stows - it moved %+.0f uu on Z, needed more "
+					"than %.0f. Zero here means the graph applied no gear angle at all."),
+				*Who, *Name, Rose, Floor), Rose > Floor);
+		}
+
+		TestTrue(*FString::Printf(TEXT("%s: its rig has wheel bones to measure - none found, so "
+			"nothing above was checked"), *Who), Checked > 0);
+		AddInfo(FString::Printf(TEXT("%s: %d wheel bone(s) checked"), *Who, Checked));
+
+		Agent->Destroy();
+	}
+
+	TestTrue(TEXT("at least one retractable-gear aircraft was found - if this is red the "
+		"catalogue or FGearPerformance::IsSet changed and this test measured nothing"),
+		Retractable > 0);
+	AddInfo(FString::Printf(TEXT("%d retractable-gear rig(s) of %d in the catalogue"),
+		Retractable, Rigs.Num()));
 
 	return true;
 }

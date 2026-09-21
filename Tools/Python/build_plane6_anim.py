@@ -73,11 +73,18 @@ ABP_NAME = "ABP_Plane6"
 # keys the cycle rather than merely asserted by the header above it.
 #
 # THE MIRRORING LIVES IN THE REST DIRECTION, NOT IN THE NUMBER, the same as plane5's and
-# plane7's. gear_L points +Y and gear_R points -Y so both fold INBOARD on one positive
-# GearAngleDegrees; gear_nose points -X and folds FORWARD - a 777's nose leg retracts forward,
-# which is the opposite of plane7's aft-folding Meridian and needs no different row anywhere.
-# All six wheel bones point the SAME way (+X) so that one WheelAngleDegrees spins them
-# together rather than three each way.
+# plane7's. gear_L points +Y and gear_R points -Y so both fold INBOARD on one GearAngleDegrees;
+# gear_nose points -X and folds FORWARD - a 777's nose leg retracts forward, which is the
+# opposite of plane7's aft-folding Meridian and needs no different row anywhere. All six wheel
+# bones point the SAME way (+X) so that one WheelAngleDegrees spins them together rather than
+# three each way.
+#
+# THE SENSE OF THAT ONE NUMBER IS A SEPARATE QUESTION FROM THE MIRRORING, and getting the two
+# confused is what shipped plane6's gear folding OUTBOARD on its first wiring. Blender is
+# right-handed and UE is left-handed, so the import mirrors every bone-local rotation: the
+# model's positive is the graph's negative, for gear and doors exactly as for the wheels that
+# have always carried a -1. Tools/wire_plane6_anim.py's header has the measurements and the
+# control that established it.
 DRIVEN_BONES = [
     "prop_L", "prop_R",
     "wheel_L1", "wheel_L2", "wheel_L3",
