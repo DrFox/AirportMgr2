@@ -1546,4 +1546,144 @@ bool FPlotSpecsComeFromTheTargetTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * The scatter never claims an apron - PlotYard::Reserve reads no ApronUu at all, grep
+ * confirms - so the ghost this draws for a scattered stand must outline the bare footprint,
+ * not footprint-plus-apron. Before issue #193 BuildPreview always inflated the outline by the
+ * kit's apron regardless of which strategy solved the plot, so a scattered stand's ghost
+ * claimed ground the sampler never fenced off. Every other test in this file uses an
+ * unauthored kit with a zero apron, so none of them could have caught it - FFakeKitTarget's
+ * sentinel table is what makes a real apron reach a scattered plot at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotPreviewOutlinesTheGroundActuallyReservedTest,
+	"Airside.Tool.PlotPreviewOutlinesTheGroundActuallyReserved",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotPreviewOutlinesTheGroundActuallyReservedTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	LayServiceRoad(Actor, 0.0);
+
+	FFakeKitTarget Fake;
+	Fake.NetworkPtr = Actor->Network;
+	Fake.Definition = UEntityDefinition::MakeFuelDepotTransient();
+	Fake.Definition->Layout = EPlotLayout::Scatter;
+
+	// AGAINST THE BACK FENCE, so its heading is InwardBearing with no jitter - the diagonal
+	// check below needs a fixed rectangle, not one that lands on a seed-dependent turn. A REAL
+	// APRON on both axes: this is the one thing an unauthored kit cannot supply, and it is
+	// exactly the value the bug folded into the outline it should never have touched.
+	PlotYard::FKitSpec Kit;
+	Kit.Footprint.LengthUu = 400.0;
+	Kit.Footprint.WidthUu = 300.0;
+	Kit.Footprint.bAgainstTheBackFence = true;
+	Kit.ApronUu = FVector2D(200.0, 150.0);
+	Kit.ReserveWeight = 1;
+	Kit.RunCap = 1;
+	Fake.Kits = { Kit };
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	// THE SAME MANUAL CONTEXT AS FPlotSpecsComeFromTheTargetTest, for the same reason: Context.
+	// Target must be the fake so ResolveDepotKits and GetEntityDefinition answer through it,
+	// and OnRoad()/PlotAt() bind to the real actor instead.
+	FToolContext Anchor = TestTool::ContextAt(Fake, FVector2D(0.0, 200.0), ERoadSnapKind::Segment);
+	Anchor.Snap.Segment = Actor->Network->SegmentIdAt(0);
+	const FRoadSegment* Segment = Actor->Network->GetSegment(Anchor.Snap.Segment);
+	const FRoadNode* NodeA = Segment != nullptr ? Actor->Network->GetNode(Segment->A) : nullptr;
+	const FRoadNode* NodeB = Segment != nullptr ? Actor->Network->GetNode(Segment->B) : nullptr;
+	if (!TestNotNull(TEXT("service road segment"), Segment)
+		|| !TestNotNull(TEXT("segment end A"), NodeA) || !TestNotNull(TEXT("segment end B"), NodeB))
+	{
+		return false;
+	}
+	Anchor.Snap.SegmentT =
+		RoadGeom::ClosestPointOnSegment(NodeA->Position, NodeB->Position, Anchor.Cursor);
+	Tool.OnClick(Anchor);
+	if (!TestEqual(TEXT("anchored"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Frontage)))
+	{
+		return false;
+	}
+
+	// A PLAIN 20 x 26 m RECTANGLE, big enough that a 4 x 3 m object with a 2-3 m apron fits
+	// comfortably wherever the back-fence probe lands it - the claim here is about the
+	// OUTLINE'S SIZE, not about squeezing the plot.
+	Tool.OnClick(TestTool::ContextAt(Fake, FVector2D(2000.0, 200.0)));
+	if (!TestEqual(TEXT("frontage pinned"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerA)))
+	{
+		return false;
+	}
+	Tool.OnClick(TestTool::ContextAt(Fake, FVector2D(2000.0, 2800.0)));
+	if (!TestEqual(TEXT("corner A pinned"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerB)))
+	{
+		return false;
+	}
+	Tool.OnClick(TestTool::ContextAt(Fake, FVector2D(0.0, 2800.0)));
+	if (!TestEqual(TEXT("corner B pinned, gesture ready to build"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm)))
+	{
+		return false;
+	}
+
+	// ONLY THE Pending-STYLE LINES, which is what a stand outline draws (BuildPreview's own
+	// comment); the plot boundary itself draws Pinned/Provisional and never lands here.
+	struct FStandOutlineSink : IToolPreviewSink
+	{
+		TArray<FVector2D> PendingCorners;
+		virtual void Marker(const FVector2D&, EPreviewStyle) override {}
+		virtual void Line(const FVector2D& From, const FVector2D& To, EPreviewStyle Style) override
+		{
+			if (Style == EPreviewStyle::Pending)
+			{
+				PendingCorners.AddUnique(From);
+				PendingCorners.AddUnique(To);
+			}
+		}
+		virtual void CrossMark(const FVector2D&, const FVector2D&, EPreviewStyle) override {}
+		virtual void Label(const FVector2D&, const FString&, EPreviewStyle) override {}
+	};
+
+	FStandOutlineSink Sink;
+	Tool.BuildPreview(TestTool::ContextAt(Fake, FVector2D(1000.0, 1000.0)), Sink);
+
+	// MORE THAN ONE STAND IS EXPECTED, and is not the claim under test: the yard keeps
+	// offering a placed kit more of itself until a whole cycle places nothing (PlotYard::
+	// Reserve's own comment), so a single-kit plot this size fills with several. Four corners
+	// PER STAND, in order (Polygon draws one quad per stand and this sink keeps them
+	// consecutive), is the shape every one of them must have.
+	if (!TestTrue(TEXT("at least one stand's outline drawn"), Sink.PendingCorners.Num() >= 4)
+		|| !TestEqual(TEXT("whole quads only, no partial one"),
+			Sink.PendingCorners.Num() % 4, 0))
+	{
+		return false;
+	}
+
+	// THE DIAGONAL IS ROTATION-INDEPENDENT, so this holds whatever heading each stand actually
+	// took. StandCorners insets every corner by PlotFit::CornerInsetUu (1 uu) on each side, so
+	// the bare 400 x 300 footprint's true diagonal is 2*sqrt(199^2+149^2) = 497.2, not a clean
+	// 500 - a 5 uu tolerance absorbs that without opening the door to the apron-inflated
+	// rectangle the bug drew instead (400+200 by 300+150*2 = 600 x 600, diagonal near 849,
+	// which is what this test caught before the fix).
+	for (int32 Index = 0; Index < Sink.PendingCorners.Num(); Index += 4)
+	{
+		const double Diagonal =
+			FVector2D::Distance(Sink.PendingCorners[Index], Sink.PendingCorners[Index + 2]);
+		TestTrue(*FString::Printf(
+			TEXT("stand %d outlines the bare footprint, not footprint-plus-apron, got diagonal %.1f"),
+			Index / 4, Diagonal),
+			FMath::IsNearlyEqual(Diagonal, 497.2, 5.0));
+	}
+
+	return true;
+}
+
 #endif

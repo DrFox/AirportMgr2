@@ -59,6 +59,41 @@ namespace
 	// PlotYard::StandsOverlap is now public and this file calls that: one derivation, and a
 	// test that computed overlap its own way would be checking its own arithmetic rather than
 	// the solver's - the same reason StandCorners is public.
+
+	/** How far P is from the segment AB - the same question ClosestPointOnSegment answers. */
+	double DistanceToSegment(const FVector2D& P, const FVector2D& A, const FVector2D& B)
+	{
+		const double T = RoadGeom::ClosestPointOnSegment(A, B, P);
+		return FVector2D::Distance(P, FMath::Lerp(A, B, T));
+	}
+
+	/**
+	 * The minimum gap between two disjoint convex quads - every vertex against every edge of
+	 * the OTHER quad, both ways round. That covers vertex-vertex too, since a vertex is an
+	 * endpoint of two edges, and is the whole of what "closest approach of two convex shapes"
+	 * needs when they do not overlap (StandsOverlap already guards that they do not).
+	 */
+	double MinGapBetweenQuads(const TArray<FVector2D>& A, const TArray<FVector2D>& B)
+	{
+		double MinGap = TNumericLimits<double>::Max();
+		for (const FVector2D& P : A)
+		{
+			for (int32 J = 0; J < B.Num(); ++J)
+			{
+				MinGap = FMath::Min(MinGap,
+					DistanceToSegment(P, B[J], B[(J + 1) % B.Num()]));
+			}
+		}
+		for (const FVector2D& P : B)
+		{
+			for (int32 J = 0; J < A.Num(); ++J)
+			{
+				MinGap = FMath::Min(MinGap,
+					DistanceToSegment(P, A[J], A[(J + 1) % A.Num()]));
+			}
+		}
+		return MinGap;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -156,6 +191,64 @@ bool FPlotYardStandsTheShedAtTheBackTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * A back-fence kit refused the gate ray is still sampled like anything else afterwards.
+ *
+ * bTakesTheRay used to stay true forever once CeilingFor(Kit) stayed at zero - which a FAILED
+ * back-fence attempt also leaves at zero - so every later offer of a back-fence kit was
+ * forced onto the same dead ray and never even tried anywhere else (issue #193). This plot
+ * notches the gate ray to a corridor narrower than the shed the whole way up, so
+ * PlaceAgainstTheBackFence refuses it at every depth, and opens into a wide lobe off to one
+ * side that has nothing to do with the ray at all.
+ *
+ * SEVERAL SEEDS, not one: PlaceAgainstTheBackFence has no randomness and fails the buggy way
+ * identically for every seed, while TryPlace samples - "at least one of several seeds finds
+ * the lobe" is the discriminator that does not depend on a single lucky draw. Reserve also
+ * keeps offering a placed kit more of itself until a whole cycle places nothing, so a fixed
+ * solver gets many independent tries at the lobe even within one seed.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardFreesABackFenceKitAfterAFailedRayTest,
+	"Airside.Solve.PlotYardFreesABackFenceKitAfterAFailedRay",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardFreesABackFenceKitAfterAFailedRayTest::RunTest(const FString& Parameters)
+{
+	// THE NECK: 300 uu wide, against an 800 x 400 shed - too narrow at every depth - running
+	// the plot's full height so the gate ray never clears it. THE LOBE: a wide extension to
+	// the right from halfway up, sharing no ground with the ray's own column.
+	const TArray<FVector2D> Outline = {
+		FVector2D(850.0, 0.0), FVector2D(1150.0, 0.0),
+		FVector2D(1150.0, 1000.0), FVector2D(3150.0, 1000.0),
+		FVector2D(3150.0, 2000.0), FVector2D(850.0, 2000.0) };
+	const FVector2D FrontageA(850.0, 0.0);
+	const FVector2D FrontageB(1150.0, 0.0);
+	const FVector2D Gate(1000.0, 0.0);
+
+	PlotYard::FKitSpec Spec;
+	Spec.Footprint = Shed();
+	Spec.ReserveWeight = 3;
+	Spec.RunCap = 1;
+
+	const TArray<PlotYard::FKitSpec> Kits = { Spec };
+
+	bool bFoundElsewhere = false;
+	for (int32 Seed = 1; Seed <= 8 && !bFoundElsewhere; ++Seed)
+	{
+		const PlotYard::FReservation Reservation =
+			PlotYard::Reserve(Outline, FrontageA, FrontageB, Gate, Kits, Seed);
+		if (Reservation.CeilingFor(0) > 0)
+		{
+			bFoundElsewhere = true;
+		}
+	}
+
+	TestTrue(TEXT("a shed refused the gate ray is still sampled into the open lobe, "
+		"given enough seeds"), bFoundElsewhere);
+
+	return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPlotYardKeepsModulesInsideThePlotTest,
 	"Airside.Solve.PlotYardKeepsModulesInsideThePlot",
@@ -248,6 +341,63 @@ bool FPlotYardDoesNotOverlapModulesTest::RunTest(const FString& Parameters)
 					Seed, A, B),
 					PlotYard::StandsOverlap(Yard.Stands[A], Footprints[A],
 						Yard.Stands[B], Footprints[B]));
+			}
+		}
+	}
+	return true;
+}
+
+/**
+ * Every pair of stands lands at least ClearanceUu apart - measured, not merely
+ * non-overlapping, which two modules that TOUCH already satisfy and read as one building.
+ *
+ * PlaceAgainstTheBackFence stored UNPADDED corners in Taken until issue #193, so a back-fence
+ * shed's gap to whatever the sampler stood beside it was half of ClearanceUu - and grep
+ * across this file's tests before that fix found no gap measured anywhere.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotYardKeepsClearanceBetweenEveryPairTest,
+	"Airside.Solve.PlotYardKeepsClearanceBetweenEveryPair",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotYardKeepsClearanceBetweenEveryPairTest::RunTest(const FString& Parameters)
+{
+	// THE SAME TIGHT PLOT FPlotYardDoesNotOverlapModulesTest uses: small enough that stands
+	// pack close together, so a shrunk clearance shows up as a measured gap rather than acres
+	// of empty space either way.
+	const TArray<FVector2D> Outline = YardRect(1600.0, 2000.0);
+	const PlotYard::FFootprint Footprints[] = { Shed(), Tank(), Pump() };
+
+	for (int32 Seed = 1; Seed <= 8; ++Seed)
+	{
+		const PlotYard::FYard Yard = PlotYard::LayOut(
+			Outline, FVector2D(0.0, 0.0), FVector2D(1600.0, 0.0), FVector2D(800.0, 0.0),
+			Footprints, Seed, Tank());
+
+		TArray<TArray<FVector2D>> Corners;
+		Corners.SetNum(Yard.Stands.Num());
+		for (int32 Index = 0; Index < Yard.Stands.Num(); ++Index)
+		{
+			if (Yard.Stands[Index].bPlaced)
+			{
+				PlotYard::StandCorners(Yard.Stands[Index], Footprints[Index], Corners[Index]);
+			}
+		}
+
+		for (int32 A = 0; A < Yard.Stands.Num(); ++A)
+		{
+			if (!Yard.Stands[A].bPlaced) { continue; }
+			for (int32 B = A + 1; B < Yard.Stands.Num(); ++B)
+			{
+				if (!Yard.Stands[B].bPlaced) { continue; }
+
+				// A ONE-UNIT TOLERANCE for CornerInsetUu, which pulls every corner in by 1 uu
+				// and so trims a hair off the true footprint on both sides of the gap.
+				const double Gap = MinGapBetweenQuads(Corners[A], Corners[B]);
+				TestTrue(*FString::Printf(
+					TEXT("seed %d: stand %d and %d are at least ClearanceUu apart, got %.1f"),
+					Seed, A, B, Gap),
+					Gap >= PlotYard::ClearanceUu - 1.0);
 			}
 		}
 	}

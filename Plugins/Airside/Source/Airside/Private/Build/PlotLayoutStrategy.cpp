@@ -209,6 +209,12 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		return Reservation;
 	}
 
+	// EVERY STAND BELOW IS CENTRED ON ITS CLAIMED (footprint-plus-apron) RECTANGLE, via
+	// ClaimedBy - see issue #193. The presenter and the preview both need to know that before
+	// they can draw the object flush to the back of what it claimed rather than at the centre
+	// of the claim itself.
+	Reservation.bStandsIncludeApron = true;
+
 	const FVector2D Inward = PlotYard::InwardOf(Site.Outline, Site.FrontageA, Site.FrontageB);
 	const double InwardBearing = RoadGeom::Bearing(Inward);
 
@@ -247,13 +253,21 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 	{
 		const int32 Kit = 0;
 
+		// SHEDS RUN FIRST IN THIS FUNCTION (see the block comment above), so nothing has been
+		// reserved yet - named rather than a bare 0 below so the "did this attempt place
+		// anything" test still reads correctly if that ever stops being true.
+		const int32 StandsBeforeSheds = Reservation.Stands.Num();
+
 		// THE WHOLE BACK FENCE IS THEIRS. Half of it was reserved for them until 2026-09-20,
 		// on the grounds that precedence should not be a monopoly - and the other half went
 		// to pumps: PIE, a 50 m plot, "all of that space along the back wall taken by pumps
 		// that could be used by sheds". The yard that keeps this honest is not a strip of
 		// back fence held back from the sheds; it is the open ground in FRONT of them, which
 		// the mix below is what protects.
-		const double ShedLength = Kits[Kit].Footprint.LengthUu + Kits[Kit].ApronUu.X;
+		//
+		// THE SECOND ROW'S DEPTH USED TO LIVE HERE (ShedLength + GateCorridorUu + ClearanceUu,
+		// multiplied by a Row index that was always 0) and is gone with the loop that read it
+		// - see "ONE ROW, AND ONLY ONE" below.
 
 		// A LANE AT EACH END, KEPT BACK FOR THE COLUMNS, and it is measured from the kits
 		// that will stand in it rather than being a fraction of anything. Half the width was
@@ -265,82 +279,71 @@ PlotYard::FReservation UFuelYardBandsStrategy::Solve(
 		double MarginLow = 0.0;
 		for (int32 Other = 1; Other < Kits.Num(); ++Other)
 		{
-			const double Need = Kits[Other].Footprint.WidthUu + PlotYard::ClearanceUu;
+			// THE SAME WIDTH THE COLUMN BELOW CLAIMS - ClaimedBy, not Footprint.WidthUu alone
+			// (issue #193). A margin sized off the bare module left a lane too narrow for a
+			// kit with a lateral apron, and the column loop refused its own first stand.
+			const double Need = ClaimedBy(Kits[Other], 1).WidthUu + PlotYard::ClearanceUu;
 			double& Margin = UsesTheHighSide(Other) ? MarginHigh : MarginLow;
 			Margin = FMath::Max(Margin, Need);
 		}
 
-		// ONE ROW, AND ONLY ONE. Two rows with an aisle between them was tried first and it
-		// is the trap in another costume: on a 45 x 35 m plot the second row reached to
-		// within 4 m of the gate, took 43% of the ground, and left the tanks and pumps
-		// nowhere to stand at all. The back fence is the sheds'; the rest of the plot is the
-		// yard, and a yard with nothing in it is the point.
+		// ONE ROW, AND ONLY ONE - inlined rather than a loop of one iteration. A second row
+		// with an aisle between them was tried first and is the trap in another costume: on a
+		// 45 x 35 m plot the second row reached to within 4 m of the gate, took 43% of the
+		// ground, and left the tanks and pumps nowhere to stand at all. The back fence is the
+		// sheds'; the rest of the plot is the yard, and a yard with nothing in it is the point.
 		//
 		// SO DEPTH BUYS NO SHEDS - frontage does. That is a property of THIS strategy and a
 		// first-iteration one; the design doc declines to make it a rule, and a layout that
-		// wants rows is a layout that has solved where its aisles go.
-		for (int32 Row = 0; Row < 1; ++Row)
+		// wants rows is a layout that has solved where its aisles go. (The `for (Row = 0;
+		// Row < 1)` this replaced never bought a second row either - Row was always 0 - so
+		// nothing about that decision changes here; only the dead scaffolding does.)
+		for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
+			--RunLength)
 		{
-			const double RowBack = Row * (ShedLength + PlotYard::GateCorridorUu
-				+ PlotYard::ClearanceUu);
+			const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
+			const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
+			const double HalfWidth = Claimed.WidthUu * 0.5;
 
-			const int32 BeforeRow = Reservation.Stands.Num();
-
-			for (int32 RunLength = FMath::Clamp(Kits[Kit].RunCap, 1, 64); RunLength >= 1;
-				--RunLength)
+			// SCANNED ACROSS THE PLOT, and an illegal position is SKIPPED rather than
+			// ending the row. A row locked to the back edge cannot read as scattered - it
+			// is a row with a gap where the plot is too shallow to stand in, which is what
+			// the ground actually looks like. Ending at the first refusal was right when
+			// every stand sat at one depth; it stops being right the moment the row
+			// follows the fence.
+			for (double Lateral = LateralMin + MarginLow + HalfWidth;
+				Lateral <= LateralMax - MarginHigh - HalfWidth; Lateral += Pitch)
 			{
-				const PlotYard::FFootprint Claimed = ClaimedBy(Kits[Kit], RunLength);
-				const double Pitch = Claimed.WidthUu + PlotYard::ClearanceUu;
-				const double HalfWidth = Claimed.WidthUu * 0.5;
-
-				// SCANNED ACROSS THE PLOT, and an illegal position is SKIPPED rather than
-				// ending the row. A row locked to the back edge cannot read as scattered - it
-				// is a row with a gap where the plot is too shallow to stand in, which is what
-				// the ground actually looks like. Ending at the first refusal was right when
-				// every stand sat at one depth; it stops being right the moment the row
-				// follows the fence.
-				for (double Lateral = LateralMin + MarginLow + HalfWidth;
-					Lateral <= LateralMax - MarginHigh - HalfWidth; Lateral += Pitch)
+				// EACH STAND AT THE DEPTH ITS OWN POSITION HAS. The SHALLOWER of its two
+				// lateral edges wins: a stand is only as deep as its shallowest corner
+				// allows, and taking the middle would hang one end over the fence.
+				double NearA = 0.0, FarA = 0.0, NearB = 0.0, FarB = 0.0;
+				if (!DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+						Lateral - HalfWidth, NearA, FarA)
+					|| !DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
+						Lateral + HalfWidth, NearB, FarB))
 				{
-					// EACH STAND AT THE DEPTH ITS OWN POSITION HAS. The SHALLOWER of its two
-					// lateral edges wins: a stand is only as deep as its shallowest corner
-					// allows, and taking the middle would hang one end over the fence.
-					double NearA = 0.0, FarA = 0.0, NearB = 0.0, FarB = 0.0;
-					if (!DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
-							Lateral - HalfWidth, NearA, FarA)
-						|| !DepthSpanAt(Site.Outline, Site.Gate, Inward, Across,
-							Lateral + HalfWidth, NearB, FarB))
-					{
-						continue;
-					}
-
-					PlotYard::FReservedStand Stand;
-					Stand.KitIndex = Kit;
-					Stand.RunLength = RunLength;
-					Stand.Heading = InwardBearing;
-					Stand.Centre = Site.Gate + Across * Lateral
-						+ Inward * (FMath::Min(FarA, FarB) - RowBack
-							- Claimed.LengthUu * 0.5);
-					Stand.bPlaced = true;
-
-					if (!IsLegal(Stand, Claimed, Site.Outline, Reservation.Stands, Kits)
-						|| BlocksAWayIn(Stand, Claimed, Reservation.Stands, Kits))
-					{
-						continue;
-					}
-
-					Reservation.Stands.Add(Stand);
+					continue;
 				}
 
-				if (Reservation.Stands.Num() > BeforeRow)
+				PlotYard::FReservedStand Stand;
+				Stand.KitIndex = Kit;
+				Stand.RunLength = RunLength;
+				Stand.Heading = InwardBearing;
+				Stand.Centre = Site.Gate + Across * Lateral
+					+ Inward * (FMath::Min(FarA, FarB) - Claimed.LengthUu * 0.5);
+				Stand.bPlaced = true;
+
+				if (!IsLegal(Stand, Claimed, Site.Outline, Reservation.Stands, Kits)
+					|| BlocksAWayIn(Stand, Claimed, Reservation.Stands, Kits))
 				{
-					break;
+					continue;
 				}
+
+				Reservation.Stands.Add(Stand);
 			}
 
-			// A ROW THAT PLACED NOTHING ENDS THE ROWS. The next one inward is shallower
-			// ground still, so there is nothing further back to find.
-			if (Reservation.Stands.Num() == BeforeRow)
+			if (Reservation.Stands.Num() > StandsBeforeSheds)
 			{
 				break;
 			}

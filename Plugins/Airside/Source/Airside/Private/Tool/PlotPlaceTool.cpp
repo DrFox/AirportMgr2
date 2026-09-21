@@ -788,13 +788,25 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 			continue;
 		}
 
-		// THE GROUND THE STAND CLAIMS, which is the run's footprint PLUS its apron. Outlining
-		// a single bay would promise the player two bays that are already spoken for, and
-		// outlining the buildings alone would promise the apron as somewhere to build.
+		// THE GROUND THE STAND CLAIMS, which is the run's footprint PLUS its apron ONLY WHEN
+		// THE RESERVATION ACTUALLY CLAIMED IT (Reservation.bStandsIncludeApron - issue #193).
+		// Outlining a single bay would promise the player two bays that are already spoken
+		// for, and outlining the buildings alone would promise the apron as somewhere to
+		// build; but PlotYard::Reserve (Scatter) never claims an apron in the first place, so
+		// drawing footprint-plus-apron there outlines ground the sampler never fenced off, and
+		// Stand.Centre is not even the centre of that rectangle - see FReservation's comment.
 		const PlotYard::FKitSpec& Kit = Specs[Stand.KitIndex];
 		PlotYard::FFootprint Run;
-		Run.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
-		Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+		if (Reservation.bStandsIncludeApron)
+		{
+			Run.LengthUu = Kit.Footprint.LengthUu + Kit.ApronUu.X;
+			Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength + Kit.ApronUu.Y * 2.0;
+		}
+		else
+		{
+			Run.LengthUu = Kit.Footprint.LengthUu;
+			Run.WidthUu = Kit.Footprint.WidthUu * Stand.RunLength;
+		}
 
 		PlotYard::StandCorners(Stand, Run, StandOutline);
 		Sink.Polygon(StandOutline, EPreviewStyle::Pending);
