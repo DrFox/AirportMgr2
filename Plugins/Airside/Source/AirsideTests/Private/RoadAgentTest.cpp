@@ -331,18 +331,27 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("EndCrossing clears the phase"), Agent.GetCrossingPhase(), ECrossingPhase::None);
 	TestFalse(TEXT("EndCrossing clears the seed"), Agent.GetCrossingRunway().IsSet());
 
+	// Refuse: the quadruple ApplyClaims used to write field by field (issue #174) - one call
+	// sets all four, read back through the getters, since this is the same "private field,
+	// public accessor" discipline BeginCrossing/EndCrossing established above.
+	FGuidelineNodeId BlockNode;
+	BlockNode.Index = 9;
+	const FTrafficResource BlockResource = FTrafficResource::OfNode(BlockNode);
+	Agent.Refuse(/*Step*/ 2, BlockResource, /*NewStopWithin*/ 1234.0, /*BlockerId*/ 7);
+	TestEqual(TEXT("Refuse sets BlockedStep"), Agent.GetBlockedStep(), 2);
+	TestTrue(TEXT("Refuse sets BlockedResource"), Agent.GetBlockedResource() == BlockResource);
+	TestEqual(TEXT("Refuse sets StopWithin"), Agent.GetStopWithin(), 1234.0);
+	TestEqual(TEXT("Refuse sets WaitingOn"), Agent.GetWaitingOn(), 7);
+
 	// ClearArbitration: StopWithin, WaitingOn and BlockedStep reset; LastOverlaps is
 	// deliberately NOT touched - see the declaration - so a caller that just computed it
 	// this pass is not stomped by calling this afterwards.
-	Agent.StopWithin = 1234.0;
-	Agent.WaitingOn = 7;
-	Agent.BlockedStep = 2;
 	Agent.LastOverlaps = { 9 };
 	Agent.ClearArbitration();
 	TestEqual(TEXT("ClearArbitration resets StopWithin to unbounded"),
-		Agent.StopWithin, TNumericLimits<double>::Max());
-	TestEqual(TEXT("ClearArbitration resets WaitingOn"), Agent.WaitingOn, 0);
-	TestEqual(TEXT("ClearArbitration resets BlockedStep"), Agent.BlockedStep, INDEX_NONE);
+		Agent.GetStopWithin(), TNumericLimits<double>::Max());
+	TestEqual(TEXT("ClearArbitration resets WaitingOn"), Agent.GetWaitingOn(), 0);
+	TestEqual(TEXT("ClearArbitration resets BlockedStep"), Agent.GetBlockedStep(), INDEX_NONE);
 	TestEqual(TEXT("ClearArbitration leaves LastOverlaps alone"), Agent.LastOverlaps.Num(), 1);
 
 	// SetGoalFrom: the goal follows a plan's own last step.
@@ -357,6 +366,42 @@ bool FRoadAgentInvariantMethodsTest::RunTest(const FString& Parameters)
 	FRoutePlan Empty;
 	Agent.SetGoalFrom(Empty);
 	TestFalse(TEXT("SetGoalFrom clears the goal when the plan has no steps"), Agent.GoalNode.IsSet());
+
+	// SetGoal: a caller that already has the node, not a plan to take it from.
+	FGuidelineNodeId Direct;
+	Direct.Index = 11;
+	Agent.SetGoal(Direct);
+	TestTrue(TEXT("SetGoal takes the node directly"), Agent.GoalNode == Direct);
+
+	// HoldRunway/ReleaseRunway: issue #174 - GroundTraffic.cpp used to assign RunwayHeld by
+	// hand at every one of these call sites.
+	FRoadSegmentId Strip;
+	Strip.Index = 4;
+	Agent.HoldRunway({ Strip });
+	TestEqual(TEXT("HoldRunway holds the chain given"), Agent.RunwayHeld.Num(), 1);
+	TestTrue(TEXT("HoldRunway holds the segment given"), Agent.RunwayHeld[0] == Strip);
+	Agent.ReleaseRunway();
+	TestEqual(TEXT("ReleaseRunway clears the chain"), Agent.RunwayHeld.Num(), 0);
+
+	// AccrueStall/ResetStall: AdvanceOnce's own ternary used to write StalledSeconds by hand.
+	Agent.AccrueStall(2.5);
+	Agent.AccrueStall(1.5);
+	TestEqual(TEXT("AccrueStall adds to the clock"), Agent.StalledSeconds, 4.0);
+	Agent.ResetStall();
+	TestEqual(TEXT("ResetStall zeroes the clock"), Agent.StalledSeconds, 0.0);
+
+	// SetAwaitingStand/ClearAwaitingStand: "bAwaitingStand implies GoalNode set" is the
+	// invariant the review named as maintained only by convention - SetAwaitingStand takes
+	// the goal as a parameter so a caller cannot arm the wait without saying what it is
+	// waiting from.
+	FGuidelineNodeId WaitFrom;
+	WaitFrom.Index = 13;
+	Agent.SetAwaitingStand(WaitFrom);
+	TestTrue(TEXT("SetAwaitingStand arms the wait"), Agent.bAwaitingStand);
+	TestTrue(TEXT("SetAwaitingStand sets the goal it waits from"), Agent.GoalNode == WaitFrom);
+	Agent.ClearAwaitingStand();
+	TestFalse(TEXT("ClearAwaitingStand ends the wait"), Agent.bAwaitingStand);
+	TestTrue(TEXT("ClearAwaitingStand leaves the goal alone"), Agent.GoalNode == WaitFrom);
 
 	return true;
 }

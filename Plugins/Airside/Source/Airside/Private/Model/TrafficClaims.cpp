@@ -776,8 +776,8 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 	Wanted.Reset();
 	Wanted.Reserve(Pending.Num());
 
-	const int32 WasWaitingOn = Agent.WaitingOn;
-	const int32 WasBlockedStep = Agent.BlockedStep;
+	const int32 WasWaitingOn = Agent.GetWaitingOn();
+	const int32 WasBlockedStep = Agent.GetBlockedStep();
 	bool bHeld = false;
 
 	// Everyone this pass overlapped, for the Warning's throttle. See FRoadAgent::LastOverlaps.
@@ -846,8 +846,7 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		}
 
 		bHeld = true;
-		Agent.BlockedStep = Want.Step;
-		Agent.BlockedResource = Want.Claim.Resource;
+		int32 NewBlockedStep = Want.Step;
 
 		// A BAR-HOLDER'S BLOCKED STEP IS THE ONE LEAVING THE BAR, not the one arriving at
 		// it. The refusal was raised for the step that ENDS at the bar node, and the agent
@@ -860,14 +859,13 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		if (Want.Surface == FWantedClaim::ESurface::HoldingPosition
 			&& Agent.PlanInProgress().Steps.IsValidIndex(Want.Step + 1))
 		{
-			Agent.BlockedStep = Want.Step + 1;
+			NewBlockedStep = Want.Step + 1;
 		}
 		// The transition tests below compare against what was STORED last pass, so they
 		// read the stored value, not Want.Step - a bar refusal stores the next step, and
 		// comparing the raw one logged "holding short" on every tick.
-		const int32 NewBlockedStep = Agent.BlockedStep;
 
-		Agent.StopWithin = StopWithinFor(Want, Blocker, Window);
+		const double NewStopWithin = StopWithinFor(Want, Blocker, Window);
 
 		// ON THE TRANSITION ONLY. Logged every tick this would be one line per agent per
 		// frame, which is how a log stops being read at all.
@@ -890,9 +888,14 @@ void FClaimPass::ApplyClaims(FRoadAgent& Agent, const FClaimWindow& Window,
 		else if (WasWaitingOn != Blocker.AgentId)
 		{
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d stops %.0f uu short of %s held by agent %d"),
-				Agent.Id, Agent.StopWithin, *Blocker.Resource.Describe(), Blocker.AgentId);
+				Agent.Id, NewStopWithin, *Blocker.Resource.Describe(), Blocker.AgentId);
 		}
-		Agent.WaitingOn = Blocker.AgentId;
+
+		// ONE CALL, FOUR FIELDS (issue #174) - BlockedStep, BlockedResource, StopWithin and
+		// WaitingOn used to be four separate assignments here, which is exactly the shape
+		// that let GroundTrafficRebuild.cpp hand-type a partial reset of the same fields
+		// instead of calling ClearArbitration. See FRoadAgent::Refuse.
+		Agent.Refuse(NewBlockedStep, Want.Claim.Resource, NewStopWithin, Blocker.AgentId);
 
 		// NO break: the loop above skips every RESERVATION past this point (claiming line
 		// beyond a refusal would hold it against everybody for a journey the agent is not

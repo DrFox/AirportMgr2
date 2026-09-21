@@ -155,9 +155,14 @@ bool FPlanReResolver::ReplanAt(FRoadAgent& Agent, int32 SpliceStep, FGuidelineEd
 	// any more - so the arbitration fields say so at once rather than a tick later. The
 	// stall clock resets with them, or the deadlock pass that asked for this replan would
 	// see the same stalled agent again on the very next tick and ask again.
-	Agent.WaitingOn = 0;
-	Agent.BlockedStep = INDEX_NONE;
-	Agent.StalledSeconds = 0.0;
+	//
+	// ClearArbitration() ALSO RESETS StopWithin, which this triple used to leave alone - a
+	// change with no observable effect: nothing reads StopWithin between here and the next
+	// tick's Arbitrate, which overwrites it for every Taxiing/Manoeuvring agent regardless
+	// (issue #174 - this was the very triple ClearArbitration exists for, hand-typed a
+	// fourth time because nothing had gone looking for other copies of it).
+	Agent.ClearArbitration();
+	Agent.ResetStall();
 
 	// CrossingRunway AND CrossingPhase ARE DELIBERATELY LEFT ALONE. Between them they say the
 	// agent's body is physically on a strip, which is a fact about where the aeroplane IS,
@@ -264,7 +269,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 				Network, Agent.LastMotion.Position, Agent.Class, Rules.ResolveRadius, &NodeIndex);
 			if (Here.IsSet())
 			{
-				Agent.GoalNode = Here;
+				Agent.SetGoal(Here);
 			}
 		}
 
@@ -394,7 +399,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 		// Spec 2026-09-07-stand-occupancy §5, amended.
 		if (!bDriving && Agent.bAwaitingStand && Plan.Start.IsSet())
 		{
-			Agent.GoalNode = Plan.Start;
+			Agent.SetGoal(Plan.Start);
 		}
 		return EReResolve::Stranded;
 	};
@@ -505,7 +510,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	const FGuidelineNodeId Goal = RouteSearch::FindNearestNode(Network, Plan.Polyline.Last(), Agent.Class, Radius, &NodeIndex);
 	if (Goal.IsSet())
 	{
-		Agent.GoalNode = Goal;
+		Agent.SetGoal(Goal);
 	}
 
 	// THE GOAL WAS A STAND AND THE STAND IS GONE - or a taxiway to it. An aircraft whose goal
@@ -522,14 +527,20 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			Network, ReplanFrom, Agent.Airframe, &Occupancy, Agent.Id);
 		if (NewStand.IsSet())
 		{
-			Agent.GoalNode = NewStand;
-			Agent.bAwaitingStand = false;
+			Agent.SetGoal(NewStand);
+			Agent.ClearAwaitingStand();
 			UE_LOG(LogAirsideTraffic, Log, TEXT("Agent %d: its stand is gone; retargeting to the stand at node %d"),
 				Agent.Id, NewStand.Index);
 		}
 		else
 		{
-			Agent.bAwaitingStand = true;
+			// GOAL UNCHANGED, deliberately: this branch is reached only when Goal (above)
+			// failed to resolve, so the agent's existing GoalNode - whatever it is, live or
+			// dead - is exactly what it carried into this call. SetAwaitingStand still takes
+			// it explicitly rather than leaving bAwaitingStand to flip on its own, so the
+			// invariant reads the same way at every call site: the flag never moves without
+			// naming the node it goes with.
+			Agent.SetAwaitingStand(Agent.GoalNode);
 			UE_LOG(LogAirsideTraffic, Warning, TEXT("Agent %d: its stand is gone and no free stand is reachable; it will wait"),
 				Agent.Id);
 		}
@@ -600,7 +611,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 			// which is right for a fresh dispatch but wrong here - FRoutePlan::IsValid() does
 			// NOT guarantee Steps.Num() > 0, and a valid-but-empty splice must leave the goal
 			// exactly where it was rather than blank it out from under a later replan.
-			Agent.GoalNode = Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode;
+			Agent.SetGoal(Plan.Steps.Num() > 0 ? Plan.Steps.Last().To : Agent.GoalNode);
 
 			UE_LOG(LogAirsideTraffic, Log,
 				TEXT("Agent %d taxi-in replanned by the rebuild at step %d: %.0f uu"),

@@ -100,11 +100,14 @@ bool FInspectFactsTest::RunTest(const FString& Parameters)
 		// under test, and the arbitration that sets WaitingOn has its own tests.
 		FRoadAgent Scripted = *Traffic->FindAgent(Id);
 		Scripted.Phase = EAgentPhase::Taxiing;
-		Scripted.WaitingOn = 7;
+		// Through Refuse, not by hand: WaitingOn is private outside FClaimPass/RoadAgent.cpp
+		// (issue #174). Step, resource and stop distance are unread by StatusOf, so their
+		// values here are arbitrary - only the blocker id (7) is under test.
+		Scripted.Refuse(0, FTrafficResource(), TNumericLimits<double>::Max(), 7);
 		TestEqual(TEXT("holding for another"), InspectFacts::StatusOf(Scripted), FString(TEXT("Holding for aircraft 7")));
 		Scripted.bDepartureArmed = true;
 		TestEqual(TEXT("armed departure outranks holding"), InspectFacts::StatusOf(Scripted), FString(TEXT("Departure armed")));
-		Scripted.bDepartureArmed = false; Scripted.WaitingOn = 0;
+		Scripted.bDepartureArmed = false; Scripted.ClearArbitration();
 		// The seed's value does not matter to StatusOf - only IsCrossing() does - but
 		// BeginCrossing needs one to keep CrossingRunway/CrossingPhase together (issue #82).
 		FRoadSegmentId ScriptedRunway;

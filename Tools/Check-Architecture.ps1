@@ -34,6 +34,16 @@
          it. Test modules are exempt: their fixtures build handles for slots the production
          accessors have no reason to expose (a deliberately dead one, say), the way rule 4
          exempts AirsideTestFixtures.cpp for the same reason.
+      6. FRoadAgent's WaitingOn, BlockedStep, StalledSeconds, RunwayHeld, bAwaitingStand and
+         GoalNode are written only through their own mutators (Refuse, ClearArbitration,
+         AccrueStall/ResetStall, HoldRunway/ReleaseRunway, SetAwaitingStand/ClearAwaitingStand,
+         SetGoal/SetGoalFrom) outside RoadAgent.cpp. Issue #174: 27 direct writes at five call
+         sites had each grown its own copy of an invariant (bAwaitingStand implies GoalNode
+         set; WaitingOn != 0 implies BlockedStep >= 0), and one of them - GroundTrafficRebuild.
+         cpp's replan handover - was a hand-typed re-write of the exact triple ClearArbitration
+         was added for in issue #82. Test modules are exempt, the way rules 4 and 5 exempt
+         them: a scripted scenario sets up state, it does not enforce production discipline on
+         itself.
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -210,9 +220,29 @@ foreach ($tree in $trees) {
     }
 }
 
+# --- 6. FRoadAgent invariant fields written only through their own mutators --------------
+# Issue #174. `[^=]` after the `=` excludes `==`/`!=`/`>=`/`<=` comparisons, which this
+# pattern would otherwise also match (an assignment's `=` is a leading substring of all
+# four). RoadAgent.cpp itself is exempt - it is the one file allowed to write these fields,
+# being where Refuse/ClearArbitration/HoldRunway/etc. are defined.
+$agentFieldPattern = 'Agent\.(WaitingOn|BlockedStep|StalledSeconds|RunwayHeld|bAwaitingStand|GoalNode)\s*=[^=]'
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.cpp')) {
+        if ($file.Name -eq 'RoadAgent.cpp') { continue }
+        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
+        $hits = Select-String -Path $file.FullName -Pattern $agentFieldPattern
+        foreach ($h in $hits) {
+            # A WHY comment naming the banned shape (this rule's own fix does, at
+            # GroundTrafficRebuild.cpp) is not the shape itself - same exemption as rule 5.
+            if ($h.Line.Trim().StartsWith('//')) { continue }
+            $failures.Add("agent-field-write: $($file.FullName):$($h.LineNumber) writes an FRoadAgent invariant field by hand; use its mutator (Refuse/ClearArbitration/HoldRunway/ReleaseRunway/AccrueStall/ResetStall/SetAwaitingStand/ClearAwaitingStand/SetGoal): $($h.Line.Trim())")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles, agent field writes)' -ForegroundColor Green
     exit 0
 }
 
