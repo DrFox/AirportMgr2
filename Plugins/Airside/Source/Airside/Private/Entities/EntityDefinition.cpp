@@ -706,9 +706,8 @@ int32 UEntityDefinition::RefreshResolvedAnchors(URoadNetwork& Network)
 	int32 ChangedCount = 0;
 
 	// Gathered by index, like FAnchorLink::Build: nothing here adds or removes an entity,
-	// so holding this reference across RefreshResolvedAnchor calls is safe, and the id
-	// still needs building by hand from Index and Generation - the array elements have no
-	// stable handle of their own to hand back.
+	// so holding this reference across RefreshResolvedAnchor calls is safe. The handle
+	// comes from Network.EntityIdAt (#79, #173) - not built by hand here.
 	const TArray<FEntityInstance>& Entities = Network.GetEntities();
 	for (int32 Index = 0; Index < Entities.Num(); ++Index)
 	{
@@ -718,9 +717,7 @@ int32 UEntityDefinition::RefreshResolvedAnchors(URoadNetwork& Network)
 			continue;
 		}
 
-		FEntityInstanceId EntityId;
-		EntityId.Index = Index;
-		EntityId.Generation = Instance.Generation;
+		const FEntityInstanceId EntityId = Network.EntityIdAt(Index);
 
 		// THE INSTANCE'S OWN POSE ROLE, for the same reason the anchors' snapshots are
 		// refreshed here: an entity placed and saved before FEntityInstance::PoseRole existed

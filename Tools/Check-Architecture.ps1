@@ -27,6 +27,13 @@
          PiperMeridian*() function outside AircraftType.*, UAirsideSettings and, in the test
          modules, AirsideTestFixtures.cpp (TestAirframes::Piper(), #100) is a second source of
          truth for one aeroplane. (Issue #30.)
+      5. No hand-built slot-map handle outside RoadSlotMap.h. A handle is {index, generation},
+         and RoadSlot::HandleAt is the one function allowed to assemble one - it performs the
+         bAlive check a hand-built handle skips. Issue #79 closed this shape three times over;
+         issue #173 found it back within a month, in five more places, because nothing linted
+         it. Test modules are exempt: their fixtures build handles for slots the production
+         accessors have no reason to expose (a deliberately dead one, say), the way rule 4
+         exempts AirsideTestFixtures.cpp for the same reason.
 
     Not checked here, deliberately: uninitialised FVector2D locals (issue #46). The idiom
     `FVector2D X; if (!Fill(X)) ...` is legitimate and appears ~60 times as out-params; the
@@ -165,9 +172,47 @@ foreach ($tree in $trees) {
     }
 }
 
+# --- 5. No hand-built slot-map handle outside RoadSlotMap.h -----------------------------
+# Three shapes a hand-built {index, generation} takes at a call site (#79, #173):
+#   {Index, Item.Generation}         - brace-init from a loop index and the item's field
+#   X.Generation = Item.Generation   - the generation half, wherever the Index half came from
+#   X.Index = Index; ... X.Generation = ...   - split across up to two statements
+# RoadSlotMap.h is the one legal definer (RoadSlot::Add and RoadSlot::HandleAt themselves).
+# Test modules are exempt (see the doc comment above) the same way rule 4 exempts them.
+$handlePatterns = @(
+    '\{\s*\w+,\s*\w+(\[\w+\])?\.Generation\s*\}',
+    '\.Generation\s*=\s*\w+(\[\w+\])?\.Generation'
+)
+# "Within 2 lines": the Index line, then at most one line between it and the Generation line.
+$handleSplitPattern = '\.Index\s*=\s*\w+;[^\n]*\n(?:[^\n]*\n){0,1}[^\n]*\.Generation\s*='
+foreach ($tree in $trees) {
+    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+        if ($file.Name -eq 'RoadSlotMap.h') { continue }
+        if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') { continue }
+
+        foreach ($pattern in $handlePatterns) {
+            $hits = Select-String -Path $file.FullName -Pattern $pattern
+            foreach ($h in $hits) {
+                # CODE, not a comment naming the shape to avoid - same reasoning as the
+                # cross-plugin rule above: a WHY comment that cites the banned pattern (as
+                # this rule's own fix does, at RunwayQuery.cpp and RouteSearch.cpp) is exactly
+                # the kind of comment this codebase wants more of, not a thing to fail on.
+                if ($h.Line.Trim().StartsWith('//')) { continue }
+                $failures.Add("hand-built-handle: $($file.FullName):$($h.LineNumber) builds a handle by hand; use the Network.*IdAt accessor: $($h.Line.Trim())")
+            }
+        }
+
+        $text = Get-Content -Raw -Path $file.FullName
+        foreach ($m in [regex]::Matches($text, $handleSplitPattern)) {
+            $line = ($text.Substring(0, $m.Index) -split "`n").Count
+            $failures.Add("hand-built-handle: $($file.FullName):$line splits a hand-built handle across .Index and .Generation assignments; use the Network.*IdAt accessor")
+        }
+    }
+}
+
 # --- Verdict -------------------------------------------------------------------------------
 if ($failures.Count -eq 0) {
-    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default)' -ForegroundColor Green
+    Write-Host 'Check-Architecture: PASS (include direction, cross-plugin, log categories, doc comments, content default, hand-built handles)' -ForegroundColor Green
     exit 0
 }
 

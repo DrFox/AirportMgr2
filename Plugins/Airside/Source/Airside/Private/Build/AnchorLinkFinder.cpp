@@ -148,9 +148,8 @@ bool FRayLinkFinder::Find(const URoadNetwork& Network, const FPendingLink& Link,
 			continue;
 		}
 
-		FGuidelineEdgeId Id;
-		Id.Index = Index;
-		Id.Generation = Edge.Generation;
+		// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
+		const FGuidelineEdgeId Id = Network.GuidelineEdgeIdAt(Index);
 
 		TArray<FVector2D> Points;
 		if (!Network.SampleGuideline(Id, Points))
@@ -221,9 +220,8 @@ bool FProximityLinkFinder::Find(const URoadNetwork& Network, const FPendingLink&
 		}
 
 		TArray<FVector2D> Points;
-		FGuidelineEdgeId ThisId;
-		ThisId.Index = Index;
-		ThisId.Generation = Edge.Generation;
+		// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
+		const FGuidelineEdgeId ThisId = Network.GuidelineEdgeIdAt(Index);
 		if (!Network.SampleGuideline(ThisId, Points))
 		{
 			continue;

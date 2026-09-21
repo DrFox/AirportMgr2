@@ -18,7 +18,9 @@ namespace
 		for (int32 Index = 0; Index < Segments.Num(); ++Index)
 		{
 			const FRoadSegment& Segment = Segments[Index];
-			const FRoadSegmentId Id{Index, Segment.Generation};
+			// Network.SegmentIdAt, NEVER a hand-built {Index, Segment.Generation} (#79, #173):
+			// the slot map is the one place allowed to know a handle is {index, generation}.
+			const FRoadSegmentId Id = Network.SegmentIdAt(Index);
 			if (!Network.IsRunwaySegment(Id))
 			{
 				continue;
@@ -65,7 +67,8 @@ namespace
 		// dead-end cut, a half width short of the road node the extent is measured from.
 		if (bRequireOnRunway)
 		{
-			const FRoadSegmentId Seed{Best, Segments[Best].Generation};
+			// Network.SegmentIdAt, not a hand-built handle (#79, #173) - see the Id above.
+			const FRoadSegmentId Seed = Network.SegmentIdAt(Best);
 			const URoadProfile* SeedProfile = Network.ProfileFor(Segments[Best]);
 			const double Reach = SeedProfile != nullptr ? SeedProfile->GetTotalWidth() : 0.0;
 			if (!RunwayQuery::IsPointOnRunway(Network, Near, Seed) && BestDistance > Reach)
@@ -82,7 +85,9 @@ namespace
 		//
 		// Plain RunwayChain, not RunwayChainOrSeed: Best was found by IsRunwaySegment in the
 		// search above, so the chain is never empty here.
-		const FRoadSegmentId SeedId{Best, Segments[Best].Generation};
+		//
+		// Network.SegmentIdAt, not a hand-built handle (#79, #173) - see the Id above.
+		const FRoadSegmentId SeedId = Network.SegmentIdAt(Best);
 		const TArray<FRoadSegmentId> Chain = RunwayQuery::RunwayChain(Network, SeedId);
 
 		TMap<FRoadNodeId, int32> ChainArms;
@@ -145,8 +150,9 @@ namespace
 		// EVERY FIELD WRITTEN HERE, ON THE SUCCESS PATH ONLY - a caller that discards the bool
 		// (RunwayAdmission.cpp does, deliberately: a missing node leaves Length 0 and Judge
 		// reads that as "no claim") must never see a half-filled OutEnd from an earlier return.
-		OutEnd.Seed.Index = Best;
-		OutEnd.Seed.Generation = Segments[Best].Generation;
+		//
+		// Network.SegmentIdAt, not a hand-built handle (#79, #173) - see the Id above.
+		OutEnd.Seed = Network.SegmentIdAt(Best);
 		OutEnd.Threshold = Threshold;
 		OutEnd.Length = Length;
 		OutEnd.Direction = Along / Length;

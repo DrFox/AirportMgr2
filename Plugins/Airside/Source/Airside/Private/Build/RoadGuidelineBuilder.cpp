@@ -38,10 +38,8 @@ namespace
 			if (Edge.bAlive && !Edge.bDerived &&
 				Edge.DerivedFrom == Segment && Edge.DerivedGuidelineIndex == Which)
 			{
-				FGuidelineEdgeId Id;
-				Id.Index = Index;
-				Id.Generation = Edge.Generation;
-				return Id;
+				// Network.GuidelineEdgeIdAt, not a hand-built handle (#79, #173).
+				return Network.GuidelineEdgeIdAt(Index);
 			}
 		}
 		return FGuidelineEdgeId();
@@ -435,15 +433,14 @@ void FRoadGuidelineBuilder::Build(URoadNetwork& Network, const FRoadSolveResult&
 			continue;
 		}
 
-		FRoadNodeId NodeId;
-		NodeId.Index = Pair.Key;
 		const FRoadNode* Node = Network.GetNodes().IsValidIndex(Pair.Key)
 			? &Network.GetNodes()[Pair.Key] : nullptr;
 		if (Node == nullptr || !Node->bAlive)
 		{
 			continue;
 		}
-		NodeId.Generation = Node->Generation;
+		// Network.NodeIdAt, not a hand-built handle (#79, #173).
+		const FRoadNodeId NodeId = Network.NodeIdAt(Pair.Key);
 
 		for (int32 From = 0; From < ArmSegments->Num(); ++From)
 		{
