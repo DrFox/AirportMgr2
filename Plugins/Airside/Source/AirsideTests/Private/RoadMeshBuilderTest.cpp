@@ -313,14 +313,13 @@ bool FRoadMeshBuilderTest::RunTest(const FString& Parameters)
 		const FRoadNodeId Q = HalfNet->AddNode(FVector2D(10000.0, 0.0));
 		const FRoadSegmentId HalfSolved = HalfNet->AddStraightSegment(P, Q, HalfProfile);
 
-		FRoadSegment* Mutable = HalfNet->GetSegmentMutable(HalfSolved);
-		if (TestNotNull(TEXT("half-solved segment exists"), Mutable))
+		// Through WriteSegmentEndSolve (#191), the same mutator SolveNodeInto calls, not a
+		// raw FRoadSegment* - bSolvedB deliberately left false: only the A end solved.
+		FJunctionArmResult HalfSolve;
+		HalfSolve.LeftCut = FVector2D(100.0, 100.0);
+		HalfSolve.RightCut = FVector2D(100.0, -100.0);
+		if (TestTrue(TEXT("half-solved segment exists"), HalfNet->WriteSegmentEndSolve(HalfSolved, /*bEndA=*/true, HalfSolve)))
 		{
-			Mutable->LeftCutA = FVector2D(100.0, 100.0);
-			Mutable->RightCutA = FVector2D(100.0, -100.0);
-			Mutable->bSolvedA = true;
-			// bSolvedB deliberately left false: only the A end solved.
-
 			FRoadMeshBuilder HalfBuilder(10.0);
 			HalfBuilder.AddSegment(*HalfNet, HalfSolved, 1);
 

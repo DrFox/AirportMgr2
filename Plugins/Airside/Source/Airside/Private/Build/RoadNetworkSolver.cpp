@@ -470,21 +470,17 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 		// A failed solve must not leave a previous solve's vertices stranded looking
 		// valid. Clear only the end this node owns on every incident segment - the
 		// other end (at the segment's other node) is untouched and keeps its own flag.
+		// ClearSegmentEndSolve (#191), not a raw FRoadSegment* write: the accessor that
+		// used to hand one out is private now, and this is the whole of what a failed
+		// solve needs to say - "not this end", nothing about the stale vertices beside it.
 		for (const FRoadSegmentId SegmentId : Node.Incident)
 		{
-			FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
+			const FRoadSegment* Segment = Network.GetSegment(SegmentId);
 			if (Segment == nullptr)
 			{
 				continue;
 			}
-			if (Segment->A == NodeId)
-			{
-				Segment->bSolvedA = false;
-			}
-			else
-			{
-				Segment->bSolvedB = false;
-			}
+			Network.ClearSegmentEndSolve(SegmentId, Segment->A == NodeId);
 		}
 		return;
 	}
@@ -495,29 +491,16 @@ void FRoadNetworkSolver::SolveNodeInto(URoadNetwork& Network, int32 NodeIndex, i
 	for (int32 ArmIndex = 0; ArmIndex < Result.Arms.Num(); ++ArmIndex)
 	{
 		const FRoadSegmentId SegmentId = ArmSegments[ArmIndex];
-		FRoadSegment* Segment = Network.GetSegmentMutable(SegmentId);
+		const FRoadSegment* Segment = Network.GetSegment(SegmentId);
 		if (Segment == nullptr)
 		{
 			continue;
 		}
 
-		const FJunctionArmResult& ArmResult = Result.Arms[ArmIndex];
-		const bool bIsEndA = (Segment->A == NodeId);
-
-		if (bIsEndA)
-		{
-			Segment->TrimA = ArmResult.CutDistance;
-			Segment->LeftCutA = ArmResult.LeftCut;
-			Segment->RightCutA = ArmResult.RightCut;
-			Segment->bSolvedA = true;
-		}
-		else
-		{
-			Segment->TrimB = ArmResult.CutDistance;
-			Segment->LeftCutB = ArmResult.LeftCut;
-			Segment->RightCutB = ArmResult.RightCut;
-			Segment->bSolvedB = true;
-		}
+		// WriteSegmentEndSolve (#191) takes ArmResult (Trim/LeftCut/RightCut/bSolved
+		// together) directly - the same struct SolveBoundary just filled, rather than
+		// this loop unpacking it into four separate writes through a raw FRoadSegment*.
+		Network.WriteSegmentEndSolve(SegmentId, Segment->A == NodeId, Result.Arms[ArmIndex]);
 	}
 
 	// Copied BEFORE Result is moved from, and keyed on the same NodeIndex.
