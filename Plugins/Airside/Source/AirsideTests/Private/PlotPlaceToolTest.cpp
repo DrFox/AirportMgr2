@@ -1210,4 +1210,126 @@ bool FPlotReadoutMatchesPreviewTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * THE PACKER RUNS ONCE PER SHOWN OUTLINE, NOT ONCE PER CALLER - issue #180.
+ *
+ * BuildPreview and BuildReadout each asked ReservationFor for what the codebase documents as
+ * ONE computation, and each ran PlotYard's O(K^2 x 64) sampler again to get it - twice a hover
+ * frame, and twice more in Confirm stage where nothing on screen had moved. This is the test
+ * that goes red if the memo is ever bypassed: it counts actual solves, not calls.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPlotSolvesOnceForTest,
+	"Airside.Tool.PlotSolvesOncePerOutline",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPlotSolvesOnceForTest::RunTest(const FString& Parameters)
+{
+	FAirsideTestWorld TestWorld;
+	if (!TestNotNull(TEXT("a world"), TestWorld.World)) { return false; }
+	ARoadNetworkActor* Actor = TestWorld.Actor;
+	if (!TestNotNull(TEXT("actor constructed"), Actor)) { return false; }
+
+	Actor->ClearNetwork();
+	Actor->FuelDepotDefinition = UEntityDefinition::MakeFuelDepotTransient();
+	LayServiceRoad(Actor, 0.0);
+
+	FPlotPlaceTool Tool(EPlaceableEntity::FuelDepot);
+
+	// THREE CLICKS, NOT FOUR: anchor, frontage, far back corner - CornerB, Pinned() == 3. That
+	// is the first stage where BOTH BuildPreview (gated "Pinned < 3") and BuildReadout (gated
+	// only on Shown.Num() >= 4, which a 3-pinned quad already has) run the real solve, so it is
+	// the stage that actually exercises the memo both callers share.
+	//
+	// THE SAME THREE COORDINATES DrawPlot USES, because they are known to reach CornerB with a
+	// simple (uncrossed) quad - DrawPlot's own fourth click lands at (AnchorAt.X, DepthAt.Y),
+	// which is exactly the NEAR corner this test goes on to drag, so the geometry below is that
+	// same shape observed one click earlier.
+	Tool.OnClick(OnRoad(Actor, FVector2D(0.0, 200.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(1200.0, 200.0)));
+	Tool.OnClick(PlotAt(Actor, FVector2D(600.0, 2000.0)));
+	if (!TestEqual(TEXT("three corners pinned"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::CornerB)))
+	{
+		return false;
+	}
+
+	// THE NEAR CORNER, on the anchor's own side of the frontage - the far corner (2) sits at
+	// x=600 above, so a near corner anywhere left of that stays a simple trapezoid rather than
+	// crossing edge 1->2 the way a corner dragged onto the far corner's own side would.
+	const FVector2D DraggingAt(0.0, 2000.0);
+
+	// ONE FRAME: Tick (a no-op here, but included because the driver always calls it), then
+	// BuildPreview, then BuildReadout - the exact trio ARoadBuildController::PlayerTick and
+	// RoadBuildHUD::DrawHUD run per frame, in the order they actually run it (BuildReadout
+	// beats Tick there - see ARoadBuildController::CollectToolReadout's own comment - which is
+	// exactly why the memo compares the OUTLINE rather than trusting Tick to run first).
+	{
+		const FToolContext Frame1 = PlotAt(Actor, DraggingAt);
+		Tool.Tick(Frame1);
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(Frame1, Sink);
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Frame1, Collector);
+	}
+	TestEqual(TEXT("one frame, one solve"), Tool.GetSolveCountForTest(), 1);
+
+	// A SECOND FRAME, cursor unmoved: a fresh FToolContext built from the same coordinates,
+	// the way MakeToolContext would build the driver's next frame if the player's hand had not
+	// moved. The outline this produces is bit-identical, so the memo must hold.
+	{
+		const FToolContext Frame2 = PlotAt(Actor, DraggingAt);
+		Tool.Tick(Frame2);
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(Frame2, Sink);
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Frame2, Collector);
+	}
+	TestEqual(TEXT("an unchanged outline runs no further solve"),
+		Tool.GetSolveCountForTest(), 1);
+
+	// A CHANGED OUTLINE: the same corner dragged sideways, which is a different Shown[3] and so
+	// a different key. One more solve, not two - BuildPreview and BuildReadout still describe
+	// the SAME shape this frame.
+	const FVector2D MovedAt(100.0, 2000.0);
+	{
+		const FToolContext Frame3 = PlotAt(Actor, MovedAt);
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(Frame3, Sink);
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Frame3, Collector);
+	}
+	TestEqual(TEXT("a changed outline runs exactly one more solve"),
+		Tool.GetSolveCountForTest(), 2);
+
+	// LOCK THE GESTURE ON THE SHAPE JUST SHOWN, same as any other click - see OnClick's own
+	// comment on why a click can only ever pin what Quad() drew.
+	Tool.OnClick(PlotAt(Actor, MovedAt));
+	if (!TestEqual(TEXT("locked"),
+		static_cast<int32>(Tool.GetStage()), static_cast<int32>(EPlotStage::Confirm)))
+	{
+		return false;
+	}
+
+	// K FRAMES IN CONFIRM, EACH WITH A DIFFERENT CURSOR: nothing moves once the gesture is
+	// locked (Quad ignores the cursor entirely from four pinned corners on - see Quad's own
+	// comment), so a wandering cursor here must cost nothing further. This is the case the
+	// issue called out by name: "in EPlotStage::Confirm nothing moves yet it still re-solves
+	// twice a frame".
+	for (int32 Frame = 0; Frame < 3; ++Frame)
+	{
+		const FToolContext Wandering =
+			PlotAt(Actor, FVector2D(100.0 * Frame, 500.0 + 100.0 * Frame));
+		Tool.Tick(Wandering);
+		FPlotGhostSink Sink;
+		Tool.BuildPreview(Wandering, Sink);
+		FToolReadoutCollector Collector;
+		Tool.BuildReadout(Wandering, Collector);
+	}
+	TestEqual(TEXT("three frames locked in Confirm run no further solve"),
+		Tool.GetSolveCountForTest(), 2);
+
+	return true;
+}
+
 #endif

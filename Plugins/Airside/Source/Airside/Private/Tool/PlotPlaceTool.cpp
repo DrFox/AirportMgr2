@@ -356,15 +356,54 @@ void FPlotPlaceTool::Quad(const FToolContext& Context, TArray<FVector2D>& OutQua
 PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	const FToolContext& Context, TArrayView<const FVector2D> Outline) const
 {
+	// FROM THE DEFINITION THIS TOOL IS ABOUT TO PLACE, which is the same object the presenter
+	// reads off the built entity.
+	//
+	// IT USED TO MAP ITS OWN Kind, and that second source of truth shipped: DA_FuelDepot was
+	// authored before EPlotLayout existed, so it carried the Scatter default while this line
+	// said FuelYardBands. The player dragged out a banded ghost and got a scattered depot -
+	// the exact preview-versus-built split the reservation design exists to prevent.
+	//
+	// A DEFINITION THE TARGET CANNOT RESOLVE falls back to the scatter, which is what an
+	// unauthored plot type would have drawn anyway.
+	//
+	// RESOLVED BEFORE THE MEMO IS CONSULTED, because it is part of the memo's own key - see
+	// FReservationMemo's comment.
+	const UEntityDefinition* Definition =
+		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
+	const EPlotLayout Layout =
+		Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
+
+	// WHAT THE PLOT WOULD HOLD, rather than where this tool's module list would stand.
+	// Capacity is a property of the ground being dragged out, decided once - so the ghost is
+	// the depot the player gets, and the counts beside it are that same solve counted.
+	//
+	// RESOLVED ONCE, LAZILY, REGARDLESS OF WHETHER THE OUTLINE IS COMPLETE: DepotKitSpecs
+	// walks EDepotModule, not the quad, so it owes nothing to Outline - and BuildReadout lists
+	// every kit at zero from the Frontage stage on, before a solve has ever run, which means
+	// the specs must exist even on the early return below.
+	if (!Memo.bSpecsResolved)
+	{
+		Memo.Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+		Memo.bSpecsResolved = true;
+	}
+
 	if (Outline.Num() < 4)
 	{
 		return PlotYard::FReservation();
 	}
 
-	// WHAT THE PLOT WILL HOLD, rather than where this tool's module list would stand.
-	// Capacity is a property of the ground being dragged out, decided once - so the ghost is
-	// the depot the player gets, and the counts beside it are that same solve counted.
-	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	// THE MEMO HIT: the same four corners and the same layout as last time, so the packer
+	// already ran for this shape and running it again would answer a question already asked.
+	// EXACT EQUALITY, not a tolerance - Quad() either reproduces a pinned corner bit for bit
+	// or derives the moving one from the same cursor value MakeToolContext resolved, so two
+	// calls describing the same frame's shape compare equal without help.
+	if (Memo.bValid && Memo.Layout == Layout
+		&& Memo.Outline[0] == Outline[0] && Memo.Outline[1] == Outline[1]
+		&& Memo.Outline[2] == Outline[2] && Memo.Outline[3] == Outline[3])
+	{
+		return Memo.Reservation;
+	}
 
 	// The pose the facade will store for this depot, so DepotYardSeed gives the yard that
 	// gets BUILT rather than one that merely resembles it - see Build/DepotKit.h.
@@ -377,22 +416,19 @@ PlotYard::FReservation FPlotPlaceTool::ReservationFor(
 	Site.Gate = Pose;
 	Site.Seed = DepotYardSeed(Pose);
 
-	// FROM THE DEFINITION THIS TOOL IS ABOUT TO PLACE, which is the same object the presenter
-	// reads off the built entity.
-	//
-	// IT USED TO MAP ITS OWN Kind, and that second source of truth shipped: DA_FuelDepot was
-	// authored before EPlotLayout existed, so it carried the Scatter default while this line
-	// said FuelYardBands. The player dragged out a banded ghost and got a scattered depot -
-	// the exact preview-versus-built split the reservation design exists to prevent.
-	//
-	// A DEFINITION THE TARGET CANNOT RESOLVE falls back to the scatter, which is what an
-	// unauthored plot type would have drawn anyway.
-	const UEntityDefinition* Definition =
-		Context.Target != nullptr ? Context.Target->GetEntityDefinition(Kind) : nullptr;
-	const EPlotLayout Layout =
-		Definition != nullptr ? Definition->Layout : EPlotLayout::Scatter;
+	Memo.Reservation = PlotLayoutFor(Layout)->Solve(Site, Memo.Specs);
+	Memo.Outline[0] = Outline[0];
+	Memo.Outline[1] = Outline[1];
+	Memo.Outline[2] = Outline[2];
+	Memo.Outline[3] = Outline[3];
+	Memo.Layout = Layout;
+	Memo.bValid = true;
 
-	return PlotLayoutFor(Layout)->Solve(Site, Specs);
+	// FOR TESTS ONLY, and only on the path that actually paid for a solve - see
+	// GetSolveCountForTest.
+	++SolveCountForTest;
+
+	return Memo.Reservation;
 }
 
 void FPlotPlaceTool::OnClick(const FToolContext& Context)
@@ -701,8 +737,11 @@ void FPlotPlaceTool::BuildPreview(const FToolContext& Context, IToolPreviewSink&
 	// Drawing the real footprints is only honest because the seed matches: DepotYardSeed off
 	// the frontage midpoint is the Position the facade will store, so these outlines are the
 	// boxes Build puts down, not an impression of them.
+	// ReservationFor RESOLVES Memo.Specs AS A SIDE EFFECT (issue #180) - reading it back here
+	// rather than calling DepotKitSpecs again is the second half of "once per solve, not per
+	// caller"; the first half is the memo hit above the case that made this call cheap.
 	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
-	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	const TArray<PlotYard::FKitSpec>& Specs = Memo.Specs;
 
 	TArray<FVector2D> StandOutline;
 	for (const PlotYard::FReservedStand& Stand : Reservation.Stands)
@@ -763,8 +802,10 @@ void FPlotPlaceTool::BuildReadout(const FToolContext& Context, IToolReadoutSink&
 
 	// THE SAME SOLVER THE PRESENTER RUNS, and the same call the ghost above draws from - so
 	// the boxes on screen and the counts on the bar are one computation, not two that agree.
+	// LITERALLY ONE COMPUTATION as of #180: this and BuildPreview's own call both read
+	// Memo through ReservationFor, so a hover frame calling both pays for the packer once.
 	const PlotYard::FReservation Reservation = ReservationFor(Context, Shown);
-	const TArray<PlotYard::FKitSpec> Specs = DepotKitSpecs(UAirsideSettings::GetContent());
+	const TArray<PlotYard::FKitSpec>& Specs = Memo.Specs;
 
 	// A LINE PER KIT, because "Room for 4" could only ever mean "4 of the sample footprint" -
 	// a number about a phantom tank rather than about anything the player can buy. These are
