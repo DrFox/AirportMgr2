@@ -229,28 +229,85 @@ foreach ($tree in $trees) {
     }
 }
 
-# --- 4. Piper fallback has one production caller, one test-fixture caller ---------------
-# Production code: only AircraftType.* and AirsideSettings.cpp. The two test modules are a
-# unity build and once exempted this rule entirely (#100's evidence: 51 call sites across 14
-# files) - now they get the same "one source of truth" rule, with AirsideTestFixtures.cpp
-# (TestAirframes::Piper()) as their one allowed caller, exactly as AircraftType.cpp is
-# production's.
-$allowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp', 'AirsideTestFixtures.cpp')
-foreach ($tree in $trees) {
-    foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
-        if ($allowed -contains $file.Name) { continue }
-        # Word-boundary before "PiperMeridian" so BuildPiperMeridian() - a different concern,
-        # constructing the content asset rather than reading a fallback figure - is not
-        # mistaken for one of the accessor fallbacks (Ground/Climb/Approach/Engine/Wingspan/
-        # Requirements) this rule exists to keep to one source of truth.
-        $hits = Select-String -Path $file.FullName -Pattern '(?<![A-Za-z])PiperMeridian\w*\s*\('
-        foreach ($h in $hits) {
-            $reason = if ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') {
-                'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
-            } else {
-                'go through UAirsideSettings::ResolveDefaultAirframe'
+# --- 4. Allowed-callers table: each row's symbol resolves from ONE known set of files ---
+# Issue #255 generalises the single hard-coded Piper check (issue #30) into a table, because
+# this week's review found the SAME "the only caller of X is Y" shape asserted in a comment
+# for four other symbols, with nothing checking any of them mechanically. A row names a
+# symbol's production allow-list; test callers either get their OWN tight allow-list (Piper's
+# row, unchanged from before this table existed) or a blanket TestExempt (rules 5-8's existing
+# exemption: a scripted scenario sets up state, it does not enforce production discipline on
+# itself). Comment lines are excluded (the same exemption rules 5-8 give a WHY comment that
+# NAMES the banned shape rather than being it) - RoadEditTarget.h, RunwayTool.h, PlotPresenter.h
+# and RoadNetworkActor.h all discuss these symbols by name in exactly that way.
+$AllowedCallers = @(
+    @{
+        Name        = 'PiperMeridian fallback'
+        Pattern     = '(?<![A-Za-z])PiperMeridian\w*\s*\('
+        ProdAllowed = @('AircraftType.h', 'AircraftType.cpp', 'AirsideSettings.cpp')
+        TestAllowed = @('AirsideTestFixtures.cpp')
+        ProdReason  = 'go through UAirsideSettings::ResolveDefaultAirframe'
+        TestReason  = 'go through TestAirframes::Piper() (AirsideTestFixtures.h)'
+    },
+    @{
+        # CONFIRMED BY GREP FOR #255: production callers today are AirsideSettings.cpp
+        # (itself), RoadBuildController.cpp and OpsRuntime.cpp. Unlike Piper, tests call this
+        # directly from a couple dozen files on purpose - it IS the canonical "give me a
+        # plane" accessor test fixtures are supposed to use - so tests are blanket-exempt
+        # rather than narrowed to one fixture file.
+        Name        = 'UAirsideSettings::ResolveDefaultAirframe'
+        Pattern     = 'UAirsideSettings::ResolveDefaultAirframe\s*\('
+        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadBuildController.cpp', 'OpsRuntime.cpp')
+        TestExempt  = $true
+        ProdReason  = 'a new production caller resolves the default airframe a second way instead of taking it from context - route it through one of the rows above or extend this row and say why'
+    },
+    @{
+        Name        = 'DepotKitSpecs'
+        Pattern     = 'DepotKitSpecs\s*\('
+        ProdAllowed = @('DepotKit.h', 'DepotKit.cpp', 'RoadNetworkActor.cpp')
+        TestExempt  = $true
+        ProdReason  = 'go through ARoadNetworkActor::ResolveDepotKits (issue #181) - PlotPlaceTool.cpp and PlotPresenter.cpp both deliberately stopped calling this themselves'
+    },
+    @{
+        Name        = 'RoadHeal::PlanNodeDeletion'
+        Pattern     = 'RoadHeal::PlanNodeDeletion\s*\('
+        ProdAllowed = @('RoadHeal.h', 'RoadHeal.cpp', 'RoadEditFacade.cpp')
+        TestExempt  = $true
+        ProdReason  = "go through IRoadEditTarget::PlanNodeDeletion - URoadEditFacade is production's one wrapper"
+    },
+    @{
+        # THE CLAIM ("outside Content/ and the actor") WENT FALSE ALREADY, same as issue #181's
+        # RoadEditTarget.h comment on the runway-profile seam: #255's own grep for this row
+        # found Private/Debug/RoadJunctionGallery.cpp:158 calling GetContent() directly, the
+        # #78/#181 shape, undocumented before this table existed. It is listed here NOT as
+        # sanctioned but as a REPORTED FINDING (see #255's PR) - fixing it is out of this
+        # issue's scope (it is a lint issue, not a content-resolution one), and silently
+        # allow-listing it away without saying so would be exactly the false comment this
+        # issue exists to stop shipping. Follow-up: route it through ARoadNetworkActor.
+        Name        = 'UAirsideSettings::GetContent (outside Content/ and the actor)'
+        Pattern     = 'UAirsideSettings::GetContent\s*\(\s*\)'
+        ProdAllowed = @('AirsideSettings.h', 'AirsideSettings.cpp', 'RoadNetworkActor.h', 'RoadNetworkActor.cpp', 'RoadJunctionGallery.cpp')
+        TestExempt  = $true
+        ProdReason  = "go through Content/ or ARoadNetworkActor - see this row's own comment for the one pre-existing exception"
+    }
+)
+foreach ($row in $AllowedCallers) {
+    foreach ($tree in $trees) {
+        foreach ($file in Get-Sources $tree @('.h', '.cpp')) {
+            # A *Test.cpp file in a MIXED module (AirportMgr, AirsideEditor - rule 10's own
+            # scoping) is a test caller too, not just one under a dedicated AirsideTests/
+            # AirportOpsTests folder - InspectorWidgetTest.cpp calling ResolveDefaultAirframe
+            # directly is exactly this and is not the second-source-of-truth this row exists
+            # to catch.
+            $inTests = ($file.FullName -match '\\(AirsideTests|AirportOpsTests)\\') -or ($file.Name -like '*Test.cpp')
+            if ($row.ProdAllowed -contains $file.Name) { continue }
+            if ($inTests -and $row.TestAllowed -and ($row.TestAllowed -contains $file.Name)) { continue }
+            if ($inTests -and $row.TestExempt) { continue }
+            $hits = Select-String -Path $file.FullName -Pattern $row.Pattern
+            foreach ($h in $hits) {
+                if ($h.Line.Trim() -match '^(//|/\*|\*)') { continue }
+                $reason = if ($inTests -and $row.TestReason) { $row.TestReason } else { $row.ProdReason }
+                $failures.Add("allowed-callers: $($file.FullName):$($h.LineNumber) $($row.Name) - ${reason}: $($h.Line.Trim())")
             }
-            $failures.Add("content-default: $($file.FullName):$($h.LineNumber) calls a PiperMeridian*() fallback; $reason")
         }
     }
 }
