@@ -44,8 +44,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	// 4. The figures survive the trip through an authored type, which is the only path the
 	//    game uses - a field added to FAirframe and not copied in Airframe() is a figure
 	//    that is authored and then silently dropped.
-	UAircraftType* Type = NewObject<UAircraftType>();
-	UAircraftType::BuildPiperMeridian(Type);
+	UAircraftType* Type = TestAirframes::PiperType();
 	Type->Footprint.NoseX = 385.1;
 	Type->Footprint.TailX = -531.5;
 	Type->SteerAxleX = 260.0;
@@ -85,8 +84,7 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	//    FixedAxleX is zero. Measured off SK_PiperMeridian's reference pose - wheel_f at
 	//    x = 237.8, wheel_rl and wheel_rr at x = 0 - rather than from the "about 2.6 m" the
 	//    type's comment used to estimate, which was 9 per cent out.
-	UAircraftType* Meridian = NewObject<UAircraftType>();
-	UAircraftType::BuildPiperMeridian(Meridian);
+	UAircraftType* Meridian = TestAirframes::PiperType();
 	const FAirframe Piper = Meridian->Airframe();
 	TestTrue(TEXT("the Piper steers geometrically"), Piper.HasAxles());
 	TestEqual(TEXT("its wheelbase is the measured 2.378 m"), Piper.Wheelbase(), 237.8, 0.1);

@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "AirsideTestFixtures.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/EntityDefinition.h"
@@ -17,8 +18,6 @@
 // AirsideTestFixtures.h so neither file needs the other.
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogArrivalExitArcTest, Log, All);
 
 /**
  * What falls out of the geometry without a planner change, measured rather than assumed:
@@ -115,7 +114,7 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 		// phase flips and the two either side of it.
 		if (Agent->Phase == EAgentPhase::Taxiing && Agent->Follower.Travelled < 60.0)
 		{
-			UE_LOG(LogArrivalExitArcTest, Log,
+			UE_LOG(LogAirsideTests, Log,
 				TEXT("t=%.3f phase %d at (%.1f, %.1f) hdg %.2f deg measured %.1f uu/s; follower travelled %.1f speed %.1f; rollout travelled %.1f speed %.1f"),
 				Ticks * Dt, static_cast<int32>(Agent->Phase), M.Position.X, M.Position.Y,
 				FMath::RadiansToDegrees(M.Heading), Speed,
@@ -123,7 +122,7 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 		}
 		else if (Agent->Phase == EAgentPhase::Arriving && Agent->Arrival.Travelled > Agent->Arrival.VacateAt - 40.0)
 		{
-			UE_LOG(LogArrivalExitArcTest, Log,
+			UE_LOG(LogAirsideTests, Log,
 				TEXT("t=%.3f phase %d at (%.1f, %.1f) hdg %.2f deg measured %.1f uu/s; rollout travelled %.1f of %.1f speed %.1f"),
 				Ticks * Dt, static_cast<int32>(Agent->Phase), M.Position.X, M.Position.Y,
 				FMath::RadiansToDegrees(M.Heading), Speed,
@@ -135,7 +134,7 @@ bool FTrafficVacatedHandoverIsContinuousTest::RunTest(const FString& Parameters)
 		bHadGround = true;
 	}
 
-	UE_LOG(LogArrivalExitArcTest, Log,
+	UE_LOG(LogAirsideTests, Log,
 		TEXT("Handover measured over %d ticks: worst speed step %.1f uu/s per tick at %.2f s (allowed %.1f), worst heading step %.3f deg at %.2f s (allowed %.3f), parked %d"),
 		Ticks, WorstSpeedStep, WorstSpeedAt, SpeedStepAllowed,
 		FMath::RadiansToDegrees(WorstHeadingStep), WorstHeadingAt, FMath::RadiansToDegrees(HeadingStepAllowed), bParked);

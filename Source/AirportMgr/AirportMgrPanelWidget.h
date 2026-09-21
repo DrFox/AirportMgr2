@@ -134,6 +134,23 @@ protected:
 	 */
 	void SetCardShown(bool bShown);
 
+public:
+	/**
+	 * How many times Initialize has actually resolved PanelStyle and called BuildOnce - the
+	 * bBuilt guard's own effect, made visible. Slate can call Initialize more than once on a
+	 * widget (re-parenting a panel, say), and BuildOnce is a "called exactly once" contract:
+	 * a second run would call WidgetTree->ConstructWidget again for content that already
+	 * exists. Named for the count rather than a bool so a widget built twice by a future
+	 * regression fails with "2", not merely "not 1" (issue #194: nothing measured this before).
+	 */
+	int32 BuildOnceCallCountForTest() const { return BuildOnceCalls; }
+
+	/** See PanelStyle's own comment - never null once Initialize has run. */
+	const UUIStyle* PanelStyleForTest() const { return PanelStyle; }
+
 private:
 	bool bBuilt = false;
+
+	/** See BuildOnceCallCountForTest. */
+	int32 BuildOnceCalls = 0;
 };

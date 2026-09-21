@@ -1,12 +1,11 @@
 #include "CoreMinimal.h"
+#include "AirsideTestsLog.h"
 #include "Misc/AutomationTest.h"
 #include "Model/NodeReach.h"
 #include "Model/RoadGuideline.h"
 #include "Model/RoadNetwork.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogNodeReachTest, Log, All);
 
 namespace
 {
@@ -50,7 +49,7 @@ bool FNodeReachStraightTest::RunTest(const FString& Parameters)
 	const FGuidelineEdgeId Out = NRJoin(*Net, J, E);
 
 	const double Reach = NodeReach::Compute(*Net, J, Out, NRFootprint);
-	UE_LOG(LogNodeReachTest, Log, TEXT("StraightContinuation measured: reach %.1f uu (want %.0f)"), Reach, NRFootprint * 0.5);
+	UE_LOG(LogAirsideTests, Log, TEXT("StraightContinuation measured: reach %.1f uu (want %.0f)"), Reach, NRFootprint * 0.5);
 	TestTrue(FString::Printf(TEXT("a straight continuation reaches exactly half a footprint (%.1f)"), Reach),
 		FMath::IsNearlyEqual(Reach, NRFootprint * 0.5, 1.0));
 
@@ -84,7 +83,7 @@ bool FNodeReachRightAngleTest::RunTest(const FString& Parameters)
 
 	const double Reach = NodeReach::Compute(*Net, J, ToE, NRFootprint);
 	const double Exact = NRFootprint / FMath::Sqrt(2.0);
-	UE_LOG(LogNodeReachTest, Log, TEXT("RightAngle measured: reach %.1f uu (exact parting %.1f, step %.1f)"),
+	UE_LOG(LogAirsideTests, Log, TEXT("RightAngle measured: reach %.1f uu (exact parting %.1f, step %.1f)"),
 		Reach, Exact, NRFootprint / 16.0);
 	TestTrue(FString::Printf(TEXT("never shorter than where the bodies actually part (%.1f vs %.1f)"), Reach, Exact),
 		Reach >= Exact);
@@ -117,7 +116,7 @@ bool FNodeReachTangentArcTest::RunTest(const FString& Parameters)
 
 	const double AlongArc = NodeReach::Compute(*Net, J, Arc, NRFootprint);
 	const double AlongLine = NodeReach::Compute(*Net, J, Line, NRFootprint);
-	UE_LOG(LogNodeReachTest, Log, TEXT("TangentArc measured: reach %.0f uu along the arc, %.0f along the line (circle estimate %.0f)"),
+	UE_LOG(LogAirsideTests, Log, TEXT("TangentArc measured: reach %.0f uu along the arc, %.0f along the line (circle estimate %.0f)"),
 		AlongArc, AlongLine, FMath::Sqrt(2.0 * R * NRFootprint));
 
 	TestTrue(FString::Printf(TEXT("the arc's reach is far past half a footprint (%.0f)"), AlongArc), AlongArc > 1700.0);
@@ -163,7 +162,7 @@ bool FNodeReachCacheTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("adding an edge bumped the revision"), Net->GetGuidelineRevision() > RevisionBefore);
 
 	const double After = Cache.Get(*Net, J, Line, NRFootprint);
-	UE_LOG(LogNodeReachTest, Log, TEXT("CacheFollowsRevision measured: %.0f uu before the arc, %.0f after"), Before, After);
+	UE_LOG(LogAirsideTests, Log, TEXT("CacheFollowsRevision measured: %.0f uu before the arc, %.0f after"), Before, After);
 	TestTrue(FString::Printf(TEXT("the same node's reach grew with the arc (%.0f -> %.0f)"), Before, After), After > 1700.0);
 
 	Cache.Invalidate();

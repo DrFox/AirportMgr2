@@ -26,6 +26,7 @@
 #include "Tool/SnapGuideChain.h"
 
 class ARoadNetworkActor;
+class UAircraftType;
 class URoadProfile;
 struct FRunwayRequirements;
 
@@ -143,6 +144,18 @@ namespace TestAirframes
 	 *  Airside.Model.ArrivalPlanner.NotAdmitted tests admission against the PUBLISHED
 	 *  figures on their own, not bundled into a flyable airframe. */
 	FRunwayRequirements PiperRequirements();
+
+	/**
+	 * A fresh, transient UAircraftType already run through BuildPiperMeridian - not merely
+	 * the FAirframe fields Piper() above gives, but the AUTHORED TYPE itself, for a test that
+	 * needs to mutate a footprint or an axle figure before reading it back through
+	 * Type->Airframe() (issue #194: AirframeAxlesTest.cpp, FieldLengthTest.cpp and
+	 * GearCycleTest.cpp each built one by hand with NewObject<UAircraftType>() plus their own
+	 * BuildPiperMeridian call - three copies of the same two lines with no fixture between
+	 * them). Check-Architecture rule 4 exempts this file as the one allowed PiperMeridian*()
+	 * caller in the test modules; every other test goes through this instead.
+	 */
+	UAircraftType* PiperType();
 }
 
 /** Runway and taxiway profiles authored by hand, MakeTransient so no asset is touched. */

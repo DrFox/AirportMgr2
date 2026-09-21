@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -20,8 +21,6 @@
 #include "UObject/UObjectIterator.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogM2MapProbe, Log, All);
 
 /**
  * A PROBE, not a test of the code: it loads the level the player last saved, takes the
@@ -69,7 +68,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	int32 GuidelineNodesSaved = 0, GuidelineEdgesSaved = 0, AuthoredEdgesSaved = 0;
 	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { GuidelineNodesSaved += N.bAlive ? 1 : 0; }
 	for (const FGuidelineEdge& E : Net->GetGuidelineEdges()) { if (E.bAlive) { ++GuidelineEdgesSaved; AuthoredEdgesSaved += E.bDerived ? 0 : 1; } }
-	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE saved level: %d live segments, %d entities, %d holding-position marks; guideline graph AS SAVED: %d nodes, %d edges (%d hand-authored)"),
+	UE_LOG(LogAirsideTests, Log, TEXT("PROBE saved level: %d live segments, %d entities, %d holding-position marks; guideline graph AS SAVED: %d nodes, %d edges (%d hand-authored)"),
 		SegmentsAlive, Net->GetEntities().Num(), Net->GetHoldingPositionMarks().Num(), GuidelineNodesSaved, GuidelineEdgesSaved, AuthoredEdgesSaved);
 
 	const FRoadSolveResult Solved = FRoadNetworkSolver::SolveAll(*Net);
@@ -79,7 +78,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	int32 GuidelineNodes = 0, GuidelineEdges = 0, AuthoredEdges = 0, HoldingPositionNodes = 0;
 	for (const FGuidelineNode& N : Net->GetGuidelineNodes()) { if (N.bAlive) { ++GuidelineNodes; HoldingPositionNodes += N.HoldingPositionFor.IsSet() ? 1 : 0; } }
 	for (const FGuidelineEdge& E : Net->GetGuidelineEdges()) { if (E.bAlive) { ++GuidelineEdges; AuthoredEdges += E.bDerived ? 0 : 1; } }
-	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE after rebuild: solved %d nodes (%d failed); guideline graph %d nodes, %d edges (%d hand-authored), %d holding-position nodes; anchor links joined this pass: %d"),
+	UE_LOG(LogAirsideTests, Log, TEXT("PROBE after rebuild: solved %d nodes (%d failed); guideline graph %d nodes, %d edges (%d hand-authored), %d holding-position nodes; anchor links joined this pass: %d"),
 		Solved.SolvedNodes, Solved.FailedNodes, GuidelineNodes, GuidelineEdges, AuthoredEdges, HoldingPositionNodes, Joined);
 
 	// FUEL READINESS, PER ENTITY, so "the truck never comes" is answered by a grep rather
@@ -101,7 +100,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			{
 				++DepotsTotal;
 				DepotsJoined += bPoseJoined ? 1 : 0;
-				UE_LOG(LogM2MapProbe, Log,
+				UE_LOG(LogAirsideTests, Log,
 					TEXT("PROBE depot %d at (%.0f, %.0f): pose %s a road, %d truck(s)"),
 					Index, Instance.Position.X, Instance.Position.Y,
 					bPoseJoined ? TEXT("joins") : TEXT("JOINS NO"), Instance.Trucks);
@@ -119,7 +118,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 				// StandFuel.IsSet() before it.
 				const bool bJoined = Anchor != nullptr && Net->IsServiceNodeConnected(Anchor->Node);
 				StandsWithJoinedFuel += bJoined ? 1 : 0;
-				UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d anchor '%s' (Fuel): %s a road"),
+				UE_LOG(LogAirsideTests, Log, TEXT("PROBE stand %d anchor '%s' (Fuel): %s a road"),
 					Index, *FuelId.ToString(), bJoined ? TEXT("joins") : TEXT("JOINS NO"));
 			}
 
@@ -136,10 +135,10 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			{
 				bLaneConnected = bLaneConnected || Net->IsServiceNodeConnected(Anchor.Node);
 			}
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d service lane: %d edge(s), %s a road"),
+			UE_LOG(LogAirsideTests, Log, TEXT("PROBE stand %d service lane: %d edge(s), %s a road"),
 				Index, LaneEdges, bLaneConnected ? TEXT("reaches") : TEXT("REACHES NO"));
 		}
-		UE_LOG(LogM2MapProbe, Log,
+		UE_LOG(LogAirsideTests, Log,
 			TEXT("PROBE fuel readiness: %d of %d stand fuel anchor(s) on a road, %d of %d depot(s) on a road"),
 			StandsWithJoinedFuel, StandsTotal, DepotsJoined, DepotsTotal);
 	}
@@ -152,7 +151,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		{
 			++NodeIndex;
 			if (!Node.bAlive) { continue; }
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE road node %d at (%.0f, %.0f), %d incident"), NodeIndex, Node.Position.X, Node.Position.Y, Node.Incident.Num());
+			UE_LOG(LogAirsideTests, Log, TEXT("PROBE road node %d at (%.0f, %.0f), %d incident"), NodeIndex, Node.Position.X, Node.Position.Y, Node.Incident.Num());
 		}
 	}
 
@@ -173,7 +172,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			for (const FGuidelineEdge& E : Net->GetGuidelineEdges()) { Derived += (E.bAlive && E.bDerived && E.DerivedFrom == SegmentId) ? 1 : 0; }
 			const FRoadNode* NodeA = Net->GetNode(Segment.A);
 			const FRoadNode* NodeB = Net->GetNode(Segment.B);
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE segment %d (%.0f, %.0f)->(%.0f, %.0f): solved A %d B %d, profile %s (%d guideline(s) declared), runway %d, %d derived edge(s)"),
+			UE_LOG(LogAirsideTests, Log, TEXT("PROBE segment %d (%.0f, %.0f)->(%.0f, %.0f): solved A %d B %d, profile %s (%d guideline(s) declared), runway %d, %d derived edge(s)"),
 				SegmentIndex,
 				NodeA ? NodeA->Position.X : 0.0, NodeA ? NodeA->Position.Y : 0.0,
 				NodeB ? NodeB->Position.X : 0.0, NodeB ? NodeB->Position.Y : 0.0,
@@ -205,7 +204,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 					P ? *P->GetName() : TEXT("no profile"));
 				Cut = Node.Origin.bEndA ? Segment->TrimA : Segment->TrimB;
 			}
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE holding position: node %d at (%.0f, %.0f) kind %d for runway seg %d, derived for %s, %.0f uu from its road node (its pavement cut is at %.0f), %d incident"),
+			UE_LOG(LogAirsideTests, Log, TEXT("PROBE holding position: node %d at (%.0f, %.0f) kind %d for runway seg %d, derived for %s, %.0f uu from its road node (its pavement cut is at %.0f), %d incident"),
 				Index, Node.Position.X, Node.Position.Y, static_cast<int32>(Node.HoldingPosition), Node.HoldingPositionFor.Index, *Where, FromRoadNode, Cut, Node.Incident.Num());
 		}
 	}
@@ -221,7 +220,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		FRoadMeshBuffers Markings;
 		FRunwayMarkingCensus Census;
 		const int32 Painted = FRunwayMarkingBuilder::Build(*Net, 0.0, Markings, &Census);
-		UE_LOG(LogM2MapProbe, Log, TEXT("PROBE runway markings: %d runway(s), %d triangle(s): %d threshold stripes, %d designator strokes, %d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
+		UE_LOG(LogAirsideTests, Log, TEXT("PROBE runway markings: %d runway(s), %d triangle(s): %d threshold stripes, %d designator strokes, %d centreline dashes, %d aiming bars, %d touchdown stripes, %d side stripes, %d grass markers"),
 			Painted, Markings.Indices.Num() / 3, Census.ThresholdStripes, Census.DesignatorStrokes, Census.CentrelineDashes,
 			Census.AimingPointBars, Census.TouchdownStripes, Census.SideStripes, Census.GrassMarkers);
 		TSet<int32> Seen;
@@ -239,7 +238,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			const FRunwayFacts Facts = Net->RunwayFactsFor(Id);
 			const FRunwayAdmission Landing = RunwayAdmission::Check(*Net, Id, Airframe, true);
 			const FRunwayAdmission Takeoff = RunwayAdmission::Check(*Net, Id, Airframe, false);
-			UE_LOG(LogM2MapProbe, Log, TEXT("PROBE runway %s from segment %d: %d segment(s), %.0f uu long, %.0f uu wide, %s, %s approach; default airframe landing: %s; take-off: %s"),
+			UE_LOG(LogAirsideTests, Log, TEXT("PROBE runway %s from segment %d: %d segment(s), %.0f uu long, %.0f uu wide, %s, %s approach; default airframe landing: %s; take-off: %s"),
 				*RunwayDesignator::ToPairText(ChainEnd.Direction), Index, Chain.Num(), ChainEnd.Length, Profile ? Profile->GetTotalWidth() : 0.0,
 				RunwaySurfaceName(Facts.Surface), RunwayApproachName(Facts.Approach),
 				*(Landing.IsAdmitted() ? FString(TEXT("admitted")) : RunwayAdmission::Describe(Landing)),
@@ -252,7 +251,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 	const FArrivalPlan Plan = bRunway
 		? ArrivalPlanner::Plan(*Net, NearestEnd.Threshold - NearestEnd.Direction * 1000.0, Airframe)
 		: FArrivalPlan();
-	UE_LOG(LogM2MapProbe, Log, TEXT("PROBE arrival from the nearest threshold: runway %d, plan says %s, %d usable exit(s)"),
+	UE_LOG(LogAirsideTests, Log, TEXT("PROBE arrival from the nearest threshold: runway %d, plan says %s, %d usable exit(s)"),
 		bRunway, *ArrivalPlanner::DescribeRefusal(Plan), Plan.ExitCount);
 
 	int32 StandIndex = 0;
@@ -281,7 +280,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 			}
 			Reach = FString::Printf(TEXT("reachable from %d of %d runway nodes"), Reachable, Exits.Num());
 		}
-		UE_LOG(LogM2MapProbe, Log, TEXT("PROBE stand %d at (%.0f, %.0f) heading %.2f: pose node %s (%d incident), %d of %d anchors joined, %s"),
+		UE_LOG(LogAirsideTests, Log, TEXT("PROBE stand %d at (%.0f, %.0f) heading %.2f: pose node %s (%d incident), %d of %d anchors joined, %s"),
 			StandIndex, Stand.Position.X, Stand.Position.Y, Stand.Heading,
 			Pose ? TEXT("live") : TEXT("DEAD"), Pose ? Pose->Incident.Num() : 0,
 			AnchorsJoined, Stand.ResolvedAnchors.Num(), *Reach);
@@ -312,7 +311,7 @@ bool FStarterMapProbeTest::RunTest(const FString& Parameters)
 		}
 		const FAirframe TypeAirframe = Type->Airframe();
 		const FArrivalPlan TypePlan = ArrivalPlanner::Plan(*Net, FVector2D::ZeroVector, TypeAirframe, nullptr);
-		UE_LOG(LogM2MapProbe, Log,
+		UE_LOG(LogAirsideTests, Log,
 			TEXT("PROBE admits %s (%.0f uu span, %.0f uu published landing): %s%s needs %.0f uu of %.0f uu"),
 			*Type->GetName(), TypeAirframe.Wingspan, TypeAirframe.Requirements.LandingFieldLength,
 			TypePlan.IsValid() ? TEXT("YES") : TEXT("NO - "),

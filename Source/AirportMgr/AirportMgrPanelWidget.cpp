@@ -22,6 +22,7 @@ bool UAirportMgrPanelWidget::Initialize()
 	// CACHED BEFORE BuildOnce RUNS, not after: a subclass's own BuildOnce (UInspectorWidget's,
 	// ULedgerPanelWidget's) reads PanelStyle from inside its own EnsureSlots, called from here.
 	PanelStyle = &Style;
+	++BuildOnceCalls;   // See BuildOnceCallCountForTest - must read 1 even across a re-Initialize.
 	BuildOnce(Style);
 	return bOk;
 }

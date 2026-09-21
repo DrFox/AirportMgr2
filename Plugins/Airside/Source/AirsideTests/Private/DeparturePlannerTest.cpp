@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestsLog.h"
 #include "Build/AnchorLink.h"
 #include "Build/RoadGuidelineBuilder.h"
 #include "Build/RoadNetworkSolver.h"
@@ -14,8 +15,6 @@
 #include "Profiles/RoadProfile.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
-
-DEFINE_LOG_CATEGORY_STATIC(LogDepartureTest, Log, All);
 
 namespace
 {
@@ -93,7 +92,7 @@ bool FDeparturePlannerIntersectionTest::RunTest(const FString& Parameters)
 	const double Needed = FTakeoffRun::RequiredRoll(Airframe.Ground, Airframe.Climb);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*A.Net, A.StandNode, A.EAt - FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 
 	TestTrue(TEXT("departing from the E threshold, westbound"), Plan.End.Direction.X < -0.99 && FVector2D::Distance(Plan.End.Threshold, A.EAt) < 1.0);
@@ -151,7 +150,7 @@ bool FDeparturePlannerBacktrackTest::RunTest(const FString& Parameters)
 	TestTrue(FString::Printf(TEXT("fixture: the hairpin entry leaves 24000, short of the %.0f needed"), Needed), Needed > 24000.0);
 
 	const FDeparturePlan Plan = DeparturePlanner::Plan(*Net, StandNode, WAt + FVector2D(1000.0, 0.0), Airframe, ETraversalClass::Aircraft);
-	UE_LOG(LogDepartureTest, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
+	UE_LOG(LogAirsideTests, Log, TEXT("%s"), *DeparturePlanner::Describe(Plan));
 	if (!TestTrue(FString::Printf(TEXT("planned: %s"), *DeparturePlanner::Describe(Plan)), Plan.IsValid())) { return false; }
 	TestTrue(TEXT("departing from the W threshold, eastbound"), Plan.End.Direction.X > 0.99);
 	TestTrue(TEXT("a backtrack"), Plan.bBacktrack);
@@ -215,7 +214,7 @@ bool FDepartureFromIntersectionIsContinuousTest::RunTest(const FString& Paramete
 		PrevPhase = Agent->Phase;
 		bHavePrev = true;
 	}
-	UE_LOG(LogDepartureTest, Log, TEXT("Departure handover: worst position step %.1f uu at %.2f s (allowed %.1f), handover frame step %.1f, airborne %d after %d ticks"),
+	UE_LOG(LogAirsideTests, Log, TEXT("Departure handover: worst position step %.1f uu at %.2f s (allowed %.1f), handover frame step %.1f, airborne %d after %d ticks"),
 		WorstStep, WorstAt, PositionStepAllowed, HandoverJump, bAirborne, Ticks);
 	TestTrue(TEXT("the departure rolled"), bSawDeparting);
 	TestTrue(TEXT("and got airborne within five minutes"), bAirborne);

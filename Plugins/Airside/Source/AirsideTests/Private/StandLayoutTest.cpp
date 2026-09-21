@@ -1,4 +1,5 @@
 #include "CoreMinimal.h"
+#include "AirsideTestFixtures.h"
 #include "Content/AirsideSettings.h"
 #include "Entities/AircraftType.h"
 #include "Entities/EntityDefinition.h"
@@ -304,17 +305,22 @@ bool FEveryAirframeFitsItsLettersRowTest::RunTest(const FString& Parameters)
 	// THE BUILDERS, NOT THE ASSETS. A type authored only as a DA_Aircraft_* uasset - Plane2 is
 	// one - is invisible here, because a test may not load content. That is a real gap and it
 	// is named rather than papered over: what this catches is a BUILDER drifting past its row.
-	struct FCase { const TCHAR* What; void (*Build)(UAircraftType*); };
+	//
+	// A FACTORY, NOT A BUILDER, so the Piper case can be TestAirframes::PiperType() itself
+	// (issue #194: every other test site that needs a built Piper now goes through it,
+	// rather than repeating NewObject<UAircraftType>() plus BuildPiperMeridian by hand).
+	// A320 and 737 keep their own NewObject call inside a matching lambda rather than
+	// growing a fixture of their own - nothing else in the module needs "a bare A320".
+	struct FCase { const TCHAR* What; UAircraftType* (*Make)(); };
 	const FCase Cases[] = {
-		{ TEXT("A320"), &UAircraftType::BuildA320 },
-		{ TEXT("737-800"), &UAircraftType::Build737 },
-		{ TEXT("Piper Meridian"), &UAircraftType::BuildPiperMeridian },
+		{ TEXT("A320"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::BuildA320(T); return T; } },
+		{ TEXT("737-800"), []() { UAircraftType* T = NewObject<UAircraftType>(GetTransientPackage()); UAircraftType::Build737(T); return T; } },
+		{ TEXT("Piper Meridian"), &TestAirframes::PiperType },
 	};
 
 	for (const FCase& Case : Cases)
 	{
-		UAircraftType* Type = NewObject<UAircraftType>(GetTransientPackage());
-		Case.Build(Type);
+		UAircraftType* Type = Case.Make();
 
 		// Code is an FName on UAircraftType; IcaoCode speaks FString, as every other caller
 		// of it does.
