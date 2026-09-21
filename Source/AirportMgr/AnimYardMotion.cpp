@@ -471,15 +471,21 @@ FAgentMotion FYardMotion::ToAgentMotion(const FGearPerformance& Gear) const
 	Motion.bAirborne = bAirborne;
 
 	// GUARDED ON IsSet() RATHER THAN CALLED UNCONDITIONALLY, and the guard is load-bearing.
-	// FractionsAt's unauthored branch answers `bRaising ? 0.0 : 1.0`, so asking it to raise a
-	// fixed-gear airframe returns GEAR STOWED - it is a don't-care path for the model, which
-	// checks IsSet() before it ever gets there (FRoadAgent::AdvanceGear), and the bench has to
-	// make the same check rather than inherit the answer. Every aircraft in the yard but
-	// plane4 is fixed-gear today, so without this the whole row would fold legs it has not got.
+	// FractionsAt's unauthored branch answers `bRaising ? 0.0 : 1.0` for the gear, so asking it
+	// to raise a fixed-gear airframe returns GEAR STOWED - it is a don't-care path for the
+	// model, which checks IsSet() before it ever gets there (FRoadAgent::AdvanceGear), and the
+	// bench has to make the same check rather than inherit the answer. Every aircraft in the
+	// yard but plane4 is fixed-gear today, so without this the whole row would fold legs it has
+	// not got.
+	//
+	// THE WHOLE POSE, ASSIGNED WHOLE. FractionsAt returns an FGearPose rather than filling two
+	// out-parameters (#248), and taking the struct is what makes the bench show the MAIN TRUCK
+	// TILT for nothing: a third fraction was added to the model and the yard needed no change
+	// to put it on screen. Naming the fields here instead would have quietly dropped it, which
+	// is the whole argument for passing the bundle - see CLAUDE.md on one struct per thing.
 	if (Gear.IsSet())
 	{
-		Gear.FractionsAt(GearCycleFraction * Gear.CycleSeconds(), /*bRaising*/ true,
-			Motion.GearDownFraction, Motion.BayDoorOpenFraction);
+		Motion.GearPose = Gear.FractionsAt(GearCycleFraction * Gear.CycleSeconds(), /*bRaising*/ true);
 	}
 
 	return Motion;

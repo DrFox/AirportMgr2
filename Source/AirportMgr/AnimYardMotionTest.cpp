@@ -258,15 +258,19 @@ bool FAnimYardMotionGearUsesTheOneEvaluatorTest::RunTest(const FString& Paramete
 		const double Fraction = static_cast<double>(i) / 20.0;
 		Motion.GearCycleFraction = Fraction;
 
-		double ExpectedGearDown = 0.0;
-		double ExpectedDoorOpen = 0.0;
-		Gear.FractionsAt(Fraction * Gear.CycleSeconds(), /*bRaising*/ true, ExpectedGearDown, ExpectedDoorOpen);
+		const FGearPose Expected = Gear.FractionsAt(Fraction * Gear.CycleSeconds(), /*bRaising*/ true);
 
 		const FAgentMotion Agent = Motion.ToAgentMotion(Gear);
 		TestEqual(*FString::Printf(TEXT("gear fraction at %.2f through the cycle"), Fraction),
-			Agent.GearDownFraction, ExpectedGearDown, 1e-9);
+			Agent.GearPose.GearDownFraction, Expected.GearDownFraction, 1e-9);
 		TestEqual(*FString::Printf(TEXT("door fraction at %.2f through the cycle"), Fraction),
-			Agent.BayDoorOpenFraction, ExpectedDoorOpen, 1e-9);
+			Agent.GearPose.BayDoorOpenFraction, Expected.BayDoorOpenFraction, 1e-9);
+
+		// THE MAIN TRUCK TOO, WHICH THE BENCH NEVER NAMES. #248 added a third fraction and
+		// ToAgentMotion assigns the pose whole, so it arrives without the yard knowing it
+		// exists - and this is what fails if a later hand "tidies" that into two named copies.
+		TestEqual(*FString::Printf(TEXT("truck fraction at %.2f through the cycle"), Fraction),
+			Agent.GearPose.TruckLevelFraction, Expected.TruckLevelFraction, 1e-9);
 	}
 
 	// FIXED GEAR IS NOT A DIVISION BY ZERO. An airframe with no retractable gear has
@@ -276,8 +280,8 @@ bool FAnimYardMotionGearUsesTheOneEvaluatorTest::RunTest(const FString& Paramete
 	Stowed.GearCycleFraction = 1.0;
 	const FAgentMotion Agent = Stowed.ToAgentMotion(Fixed);
 	TestEqual(TEXT("fixed gear stays down whatever the cycle channel says"),
-		Agent.GearDownFraction, 1.0, 1e-9);
-	TestEqual(TEXT("fixed gear leaves its doors alone"), Agent.BayDoorOpenFraction, 1.0, 1e-9);
+		Agent.GearPose.GearDownFraction, 1.0, 1e-9);
+	TestEqual(TEXT("fixed gear leaves its doors alone"), Agent.GearPose.BayDoorOpenFraction, 1.0, 1e-9);
 
 	return true;
 }
@@ -303,9 +307,9 @@ bool FAnimYardMotionResetIsParkedTest::RunTest(const FString& Parameters)
 
 	TestEqual(TEXT("reset stops the wheels"), Parked.GroundSpeed, Defaults.GroundSpeed, 1e-9);
 	TestEqual(TEXT("reset centres the nosewheel"), Parked.SteerAngleDegrees, Defaults.SteerAngleDegrees, 1e-9);
-	TestEqual(TEXT("reset puts the gear down and locked"), Parked.GearDownFraction, Defaults.GearDownFraction, 1e-9);
+	TestEqual(TEXT("reset puts the gear down and locked"), Parked.GearPose.GearDownFraction, Defaults.GearPose.GearDownFraction, 1e-9);
 	TestEqual(TEXT("reset leaves the bay doors open, which is what down-and-locked means"),
-		Parked.BayDoorOpenFraction, Defaults.BayDoorOpenFraction, 1e-9);
+		Parked.GearPose.BayDoorOpenFraction, Defaults.GearPose.BayDoorOpenFraction, 1e-9);
 	TestEqual(TEXT("reset shuts the engine down"), Parked.EngineRPM, Defaults.EngineRPM, 1e-9);
 	TestFalse(TEXT("reset puts it back on the ground"), Parked.bAirborne);
 
@@ -417,8 +421,8 @@ bool FAnimYardConfigurationTravelsTest::RunTest(const FString& Parameters)
 	// this is what the rig is actually told.
 	{
 		const FAgentMotion Clean = Motion.ToAgentMotion(Gear);
-		TestEqual(TEXT("airborne: gear up"), Clean.GearDownFraction, 0.0, 1e-9);
-		TestEqual(TEXT("airborne: bays shut"), Clean.BayDoorOpenFraction, 0.0, 1e-9);
+		TestEqual(TEXT("airborne: gear up"), Clean.GearPose.GearDownFraction, 0.0, 1e-9);
+		TestEqual(TEXT("airborne: bays shut"), Clean.GearPose.BayDoorOpenFraction, 0.0, 1e-9);
 		TestTrue(TEXT("airborne: off the wheels"), Clean.bAirborne);
 	}
 
@@ -437,8 +441,8 @@ bool FAnimYardConfigurationTravelsTest::RunTest(const FString& Parameters)
 
 	{
 		const FAgentMotion Down = Motion.ToAgentMotion(Gear);
-		TestEqual(TEXT("on the ground: gear down"), Down.GearDownFraction, 1.0, 1e-9);
-		TestEqual(TEXT("on the ground: bays open"), Down.BayDoorOpenFraction, 1.0, 1e-9);
+		TestEqual(TEXT("on the ground: gear down"), Down.GearPose.GearDownFraction, 1.0, 1e-9);
+		TestEqual(TEXT("on the ground: bays open"), Down.GearPose.BayDoorOpenFraction, 1.0, 1e-9);
 	}
 
 	return true;
