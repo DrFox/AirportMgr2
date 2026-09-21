@@ -185,6 +185,50 @@ SPECS = [
              "forward into each nacelle, and BOTH bays have doors.",
     ),
     Spec(
+        key="plane6",
+        source=MODELS + r"\plane6\export\plane6.glb",
+        mesh_dir="/Game/Aircraft/Plane6",
+        skel_name="SK_Plane6",
+        # THE SAME NOSE NAME A FIFTH TIME; THE MAINS ARE THE FIRST ROW THAT COULD NOT FOLLOW.
+        # Every aeroplane above this one has ONE main wheel a side and calls it wheel_L /
+        # wheel_R. A 777's main leg carries a SIX-WHEEL BOGIE - three axles a side - so
+        # plane6/scripts/build_rig.py names them wheel_L1..L3 and wheel_R1..R3, and there is
+        # no bone called wheel_L for this row to name.
+        #
+        # ALL SIX, NOT THE MIDDLE PAIR, and that is a decision rather than an inclusive
+        # reflex. axle_centres_uu AVERAGES what it matches, so six wheels give the BOGIE'S
+        # CENTRE - which is the point a multi-axle truck actually pivots about and therefore
+        # the point FAirframe::FixedAxleX wants. It reads -3123.0 uu against the middle
+        # axle's own -3122.0, a centimetre apart because the bogie is not quite evenly
+        # spaced (1.45 m forward, 1.48 m aft); Boeing's published 31.22 m wheelbase is
+        # measured to that middle axle. Naming the middle pair here would measure correctly
+        # today and silently stop the day a bogie is re-spaced or gains an axle; averaging
+        # the truck cannot.
+        front_nodes=["nosewheel"],
+        rear_nodes=["wheel_L1", "wheel_L2", "wheel_L3",
+                    "wheel_R1", "wheel_R2", "wheel_R3"],
+        front_label="nose gear",
+        rear_label="main bogies",
+        # NOSE GEAR, and on this airframe the convention needed a ruling that plane3, plane4,
+        # plane5 and plane7 never had to make. Those four have a vertical nose leg, so "the
+        # steer axis on the tarmac" and "the contact patch" are the same point. PLANE6'S NOSE
+        # LEG IS RAKED 12.4 DEGREES and they are 124 mm apart. build_export.py's UE_ORIGIN is
+        # the CONTACT PATCH, (0, 5.890, 0) in Blender world space, argued at the source: it
+        # is the point that stops on the mark painted on the stand, and it is the datum the
+        # published 31.22 m wheelbase is measured from.
+        origin_on="front",
+        note="Boeing 777-300ER. 73.883 m long, 64.780 m span, 18.290 m to the fin tip "
+             "against Boeing's published 73.86 / 64.80 / 18.5 - the span exact to 2 cm, "
+             "which matters because 64.78 m is 22 cm inside Code E's 65 m ceiling and this "
+             "is the first airframe in the project at any letter but B or C. Origin on the "
+             "NOSE gear; the main bogie centre is at -3123.0 uu, which is the figure "
+             "FAirframe::FixedAxleX wants when this type is authored. Eighteen joints, the "
+             "most of any model here: six main wheels on two three-axle bogies, and all "
+             "four bay doors, as plane5's and plane7's have. NO TRUCK BONES - the bogies "
+             "are rigid on their legs, so FGearPerformance::TruckTiltSeconds stays zero and "
+             "the A380 is where that field starts earning its place.",
+    ),
+    Spec(
         key="plane7",
         source=MODELS + r"\plane7\export\plane7.glb",
         mesh_dir="/Game/Aircraft/Plane7",

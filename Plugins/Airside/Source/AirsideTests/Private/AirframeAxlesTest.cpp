@@ -7,6 +7,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Model/GroundTraffic.h"
 #include "Model/RoadEntity.h"
+#include "Solve/IcaoCode.h"
 #include "UObject/UObjectGlobals.h"
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -132,6 +133,76 @@ bool FAirframeAxlesTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Every aeroplane authored by a build_plane<N>_type.py - the ones whose figures are MEASURED
+ * off an export rather than typed into a C++ builder.
+ *
+ * ONE LIST, BECAUSE TWO TESTS READ IT. FootprintMatchesTheMesh pins the authored figures
+ * against the mesh they were measured from; MeasuredTypesFitTheirLettersRow pins them against
+ * IcaoCode's table. Both are properties of the PIPELINE rather than of one aeroplane, so a
+ * type that joined one list and not the other would be half-covered with nothing saying which
+ * half - which is the failure CLAUDE.md names under "check where a list is CONSUMED", and
+ * which airside_import.py's FLEET already records paying for once.
+ *
+ * NOT THE PAPER TYPES. DA_Aircraft_A320 and DA_Aircraft_B738 carry no mesh and are built in
+ * C++, so there is nothing here to measure them against; Airside.Entities.
+ * EveryAirframeFitsItsLettersRow covers those through their builders.
+ */
+static const TCHAR* const MeasuredTypes[] = {
+	TEXT("/Game/Entities/DA_Aircraft_Plane1"),
+	TEXT("/Game/Entities/DA_Aircraft_Plane2"),
+	TEXT("/Game/Entities/DA_Aircraft_Plane3"),
+	TEXT("/Game/Entities/DA_Aircraft_Plane4"),
+	TEXT("/Game/Entities/DA_Aircraft_Plane5"),
+	// plane6 IS THE ROW THAT BROKE THE wheel_L LOOKUP BELOW, and it is here rather than
+	// excused because the half-run is exactly as available to a 777 as to a 172. A 777 main
+	// leg carries a three-axle bogie, so its rig names wheel_L1..L3 and has no bone called
+	// wheel_L at all - see LeftMainWheel.
+	TEXT("/Game/Entities/DA_Aircraft_Plane6"),
+	// THE MERIDIAN JOINS THE LIST, which it could not while its mesh was a placeholder
+	// imported about the main gear: the steered-axle check asserts the class convention, and
+	// that type declared a deviation from it. plane7 conforms, so the half-run guard now
+	// covers every modelled aeroplane in the game rather than five of six. It is also the only
+	// row whose footprint is typed in C++ as well as authored - see
+	// Tools/Python/build_plane7_type.py, which checks the same four figures from the other
+	// direction.
+	TEXT("/Game/Entities/DA_Aircraft_Plane7"),
+};
+
+/**
+ * The bone index of a rig's LEFT MAIN WHEEL, or INDEX_NONE.
+ *
+ * "wheel_L" UP TO plane5 AND "wheel_L1" ONCE A LEG CARRIES A BOGIE. Every aeroplane in this
+ * fleet before the 777 has one main wheel a side; a 777 main leg carries three axles, so
+ * plane6's rig names wheel_L1..L3 and there is no bone called wheel_L on it. The literal this
+ * replaces made "one main wheel a side" a silent precondition of being measurable at all -
+ * the test would have reported a MISSING BONE, which reads as a broken rig rather than as an
+ * assumption in the test.
+ *
+ * ANY OF THE BOGIE'S WHEELS WOULD DO for what the caller wants. The hub HEIGHT is the wheel
+ * radius, and three wheels on one axle beam are at one height - which is itself asserted, on
+ * the authoring side, by build_plane6_type.py's axles_and_radius. The lowest-numbered is
+ * taken so the choice is a rule rather than whatever the bone order happens to be, and
+ * Tools/Python/airside_anim.axle_anchor picks by the same rule for the same reason.
+ */
+static int32 LeftMainWheel(const FReferenceSkeleton& Rig)
+{
+	const int32 Single = Rig.FindBoneIndex(TEXT("wheel_L"));
+	if (Single != INDEX_NONE)
+	{
+		return Single;
+	}
+	for (int32 Axle = 1; Axle <= 4; ++Axle)
+	{
+		const int32 Found = Rig.FindBoneIndex(*FString::Printf(TEXT("wheel_L%d"), Axle));
+		if (Found != INDEX_NONE)
+		{
+			return Found;
+		}
+	}
+	return INDEX_NONE;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FFootprintMatchesTheMeshTest,
 	"Airside.Content.FootprintMatchesTheMesh",
@@ -146,24 +217,9 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 	//
 	// EVERY MEASURED TYPE, not just plane2. The half-run is a property of the PIPELINE, so
 	// the second aeroplane to go through it inherits the same exposure the moment it exists,
-	// and a test naming one asset would have gone on passing while the other drifted.
-	const TCHAR* const Measured[] = {
-		TEXT("/Game/Entities/DA_Aircraft_Plane1"),
-		TEXT("/Game/Entities/DA_Aircraft_Plane2"),
-		TEXT("/Game/Entities/DA_Aircraft_Plane3"),
-		TEXT("/Game/Entities/DA_Aircraft_Plane4"),
-		TEXT("/Game/Entities/DA_Aircraft_Plane5"),
-		// THE MERIDIAN JOINS THE LIST, which it could not while its mesh was a placeholder
-		// imported about the main gear: the steered-axle check below asserts the class
-		// convention, and that type declared a deviation from it. plane7 conforms, so the
-		// half-run guard now covers every modelled aeroplane in the game rather than five of
-		// six. It is also the only row whose footprint is typed in C++ as well as authored -
-		// see Tools/Python/build_plane7_type.py, which checks the same four figures from the
-		// other direction.
-		TEXT("/Game/Entities/DA_Aircraft_Plane7"),
-	};
-
-	for (const TCHAR* Path : Measured)
+	// and a test naming one asset would have gone on passing while the other drifted. The list
+	// is MeasuredTypes, shared with MeasuredTypesFitTheirLettersRow.
+	for (const TCHAR* Path : MeasuredTypes)
 	{
 		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
 			UAircraftType::StaticClass(), nullptr, Path));
@@ -212,9 +268,9 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 		// for missing by more than 10 uu - so the rig can be asked directly, and a stale
 		// figure now fails whatever value it happens to hold.
 		const FReferenceSkeleton& Rig = Mesh->GetRefSkeleton();
-		const int32 LeftWheel = Rig.FindBoneIndex(TEXT("wheel_L"));
-		if (TestTrue(*FString::Printf(TEXT("%s: its rig has a wheel_L bone to measure "
-			"against"), Path), LeftWheel != INDEX_NONE))
+		const int32 LeftWheel = LeftMainWheel(Rig);
+		if (TestTrue(*FString::Printf(TEXT("%s: its rig has a left main wheel bone to "
+			"measure against"), Path), LeftWheel != INDEX_NONE))
 		{
 			const double HubHeight = FAnimationRuntime::GetComponentSpaceTransformRefPose(
 				Rig, LeftWheel).GetTranslation().Z;
@@ -222,6 +278,90 @@ bool FFootprintMatchesTheMeshTest::RunTest(const FString& Parameters)
 				"height of the hub the rig carries"), Path),
 				Type->MainWheelRadius, HubHeight, 0.5);
 		}
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FMeasuredTypesFitTheirLettersRowTest,
+	"Airside.Content.MeasuredTypesFitTheirLettersRow",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FMeasuredTypesFitTheirLettersRowTest::RunTest(const FString& Parameters)
+{
+	// THE ASSET HALF OF Airside.Entities.EveryAirframeFitsItsLettersRow, and it exists because
+	// that test names its own gap: it builds its cases from the C++ BUILDERS, so a type that
+	// exists only as a DA_Aircraft_* uasset is invisible to it. Every MEASURED type is such a
+	// type. That gap was not theoretical - plane6's 777-300ER reaches 6799 uu aft of the stop
+	// mark against a Code E row authored at 6700, and nothing in the suite would have said so.
+	//
+	// WHAT GOES WRONG IF THIS IS RED. IcaoCode's row is what a STAND is laid out from - its
+	// width, its depth, its wingtip clearance and where its GSE road runs. A type larger than
+	// its letter admits parks with its tail, nose or wing over ground the layout treated as
+	// clear, and nothing on screen distinguishes that from a stand that is simply tight.
+	//
+	// THE SAME FOUR CHECKS, DELIBERATELY, rather than a subset chosen because these types are
+	// modelled: tail, nose, span-to-letter and the wing band. The two tests are one rule
+	// applied to two kinds of type, and a divergence between them would be a second rule
+	// nobody decided on.
+	for (const TCHAR* Path : MeasuredTypes)
+	{
+		UAircraftType* Type = Cast<UAircraftType>(StaticLoadObject(
+			UAircraftType::StaticClass(), nullptr, Path));
+		if (!TestNotNull(*FString::Printf(TEXT("%s loads"), Path), Type))
+		{
+			continue;
+		}
+
+		// PARSED, NOT TRUSTED - UAircraftType::Code is an FName a human can edit, and a
+		// mistyped letter would otherwise have every figure below measured against Code C.
+		const TOptional<EIcaoCode> Parsed = IcaoCode::Parse(Type->Code.ToString());
+		if (!TestTrue(*FString::Printf(TEXT("%s: its Code '%s' is a recognised ICAO letter"),
+			Path, *Type->Code.ToString()), Parsed.IsSet()))
+		{
+			continue;
+		}
+		const EIcaoCode Code = *Parsed;
+		const TCHAR* Letter = IcaoCode::ToLetter(Code);
+
+		// CONVERTED TO NOSE-GEAR COORDINATES FIRST, because the row is stated about the stop
+		// mark and a footprint is stated about whatever origin its type declares. Every
+		// measured type converts by zero today - FootprintMatchesTheMesh asserts SteerAxleX is
+		// zero for all of them - and the conversion stays for the reason its twin in
+		// StandLayoutTest gives: the first draft there left it out on the same reasoning and
+		// was wrong by 85 uu on the first run.
+		const double ToStopMark = Type->SteerAxleX;
+		const double Nose = Type->Footprint.NoseX - ToStopMark;
+		const double Tail = Type->Footprint.TailX - ToStopMark;
+
+		TestTrue(
+			*FString::Printf(TEXT("%s: its tail at %.0f is within code %s's %.0f"),
+				Path, Tail, Letter, IcaoCode::MaxTailAftForLetter(Code)),
+			Tail >= -IcaoCode::MaxTailAftForLetter(Code));
+		TestTrue(
+			*FString::Printf(TEXT("%s: its nose at %.0f is within code %s's %.0f"),
+				Path, Nose, Letter, IcaoCode::MaxNoseFwdForLetter(Code)),
+			Nose <= IcaoCode::MaxNoseFwdForLetter(Code));
+		TestEqual(
+			*FString::Printf(TEXT("%s: its measured span of %.0f uu is code %s's, which is the "
+				"letter it is authored at"), Path, Type->Footprint.Wingspan, Letter),
+			IcaoCode::LetterForWingspan(Type->Footprint.Wingspan), FString(Letter));
+
+		const double WingLine = Type->Footprint.WingX - ToStopMark;
+		TestTrue(
+			*FString::Printf(TEXT("%s: its wing line at %.0f is inside code %s's %.0f .. %.0f"),
+				Path, WingLine, Letter,
+				IcaoCode::WingAftForLetter(Code), IcaoCode::WingFwdForLetter(Code)),
+			WingLine >= IcaoCode::WingAftForLetter(Code)
+				&& WingLine <= IcaoCode::WingFwdForLetter(Code));
+
+		// SAID OUT LOUD WHETHER OR NOT IT PASSES, because the useful question when one of these
+		// fails is "by how much", and re-deriving it means loading the asset by hand.
+		AddInfo(FString::Printf(
+			TEXT("%s is code %s: nose %.0f/%.0f, tail %.0f/%.0f, span %.0f, wing %.0f"),
+			Path, Letter, Nose, IcaoCode::MaxNoseFwdForLetter(Code),
+			-Tail, IcaoCode::MaxTailAftForLetter(Code), Type->Footprint.Wingspan, WingLine));
 	}
 
 	return true;
@@ -264,6 +404,10 @@ bool FPushbackNeedsAuthoredTest::RunTest(const FString& Parameters)
 		  TEXT("a Twin Otter beta-ranges off a stand") },
 		{ TEXT("/Game/Entities/DA_Aircraft_Plane3"), EPushbackNeed::SelfManoeuvre,
 		  TEXT("a Q400 turns out of a regional stand on its own props; the depot is the jets' tax") },
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane6"), EPushbackNeed::VehicleTug,
+		  TEXT("a 350 t 777-300ER is the far end of the same progression - and this row is "
+			   "the only thing distinguishing an asset authored VehicleTug from one nobody "
+			   "authored at all, since the class default says the same thing") },
 		{ TEXT("/Game/Entities/DA_Aircraft_A320"),   EPushbackNeed::VehicleTug,
 		  TEXT("an A320 is what forces the Pushback depot") },
 		{ TEXT("/Game/Entities/DA_Aircraft_B738"),   EPushbackNeed::VehicleTug,

@@ -87,6 +87,18 @@ bool FAircraftFieldLengthsTest::RunTest(const FString& Parameters)
 		  TEXT("a King Air that needed as much runway as a Q400 would not be the rung between "
 			   "the Twin Otter and the Q400 - paving would admit nothing that lengthening had "
 			   "not already admitted") },
+		// plane6 CARRIES NO CEILING, AND IT IS THE FIRST ROW HERE WITH NOTHING ABOVE IT TO BE
+		// SHORTER THAN. Every ceiling above is "this type must ask less of a field than that
+		// one"; the 777-300ER is the largest aeroplane in the game, so the honest claim about
+		// it runs the other way - it must ask MORE than the 737 - and this struct has no
+		// column for a floor. Left as a claim nobody makes rather than as a generous ceiling
+		// that could not fail, which is the mistake the Meridian-yardstick note warns against.
+		// The roll-against-published check below is real and is the reason the row is here at
+		// all: 3,120 m is by far the largest published figure in the game, and a tuning pass
+		// that trimmed the take-off accel could put the roll past it without anything else
+		// noticing.
+		{ TEXT("/Game/Entities/DA_Aircraft_Plane6.DA_Aircraft_Plane6"), TEXT("plane6"), 0.0,
+		  nullptr },
 	};
 
 	for (const FPublished& Each : Published)

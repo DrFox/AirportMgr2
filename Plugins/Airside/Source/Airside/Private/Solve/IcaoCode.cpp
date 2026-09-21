@@ -37,16 +37,31 @@ namespace IcaoCode
 			/**
 			 * The longest airframe this letter admits, as uu AFT of the nose-gear stop mark.
 			 *
-			 * CODE C IS MEASURED and the rest are authored. C is the 737-800's tail at 3538,
-			 * which is the longest type this project ships, and IcaoCodeTest pins it against
-			 * Build737's own figure so the two cannot drift. No type is authored at any other
-			 * letter, so those are standard design values in the sense this file's header
-			 * gives for the rest of the table - revise one when a type arrives that exceeds
-			 * it, and the drift test in StandLayoutTest is what will say so.
+			 * CODE C AND CODE E ARE MEASURED and the rest are authored. C is the 737-800's
+			 * tail at 3538, and IcaoCodeTest pins it against Build737's own figure so the two
+			 * cannot drift. The remaining letters are standard design values in the sense this
+			 * file's header gives for the rest of the table - revise one when a type arrives
+			 * that exceeds it.
 			 *
 			 * WAS 3430 UNTIL 2026-09-19, when Build737's footprint was found to be carrying
 			 * the A320's nose overhang - see that function. Correcting the nose moved the
 			 * tail with it, because the tail is the nose less the published overall length.
+			 *
+			 * CODE E WAS 6700 UNTIL 2026-09-21, and that revision is the one this paragraph
+			 * invited. DA_Aircraft_Plane6, the 777-300ER, measures 6799.3 uu from its
+			 * nose-gear stop mark to its tailcone - so at 6700 a Code E stand would have laid
+			 * its GSE road and its aft edge a metre INSIDE the aeroplane parked on it. Raised
+			 * to 6800, which is the measurement plus a centimetre of rounding rather than a
+			 * round number chosen to be safe: E is now as tight against its largest admitted
+			 * type as C is.
+			 *
+			 * IT WAS NOT A TEST THAT FOUND IT, AND THAT GAP IS WORTH KNOWING ABOUT.
+			 * Airside.Entities.EveryAirframeFitsItsLettersRow builds its cases from the C++
+			 * BUILDERS - A320, Build737, the Piper - and says so; a type that exists only as a
+			 * DA_Aircraft_* asset is invisible to it, and plane6 is such a type. The asset side
+			 * is covered by Airside.Content.MeasuredTypesFitTheirLettersRow instead, which
+			 * loads the DAs and asserts this same row. Two tests because there are two kinds
+			 * of type, not because one of them is redundant.
 			 */
 			double MaxTailAft;
 
@@ -107,7 +122,7 @@ namespace IcaoCode
 			{ TEXT("B"), 2400.0, 2300.0, 2000.0,  300.0,  3000.0,  2000.0,  400.0,  -300.0, -1400.0, 600.0 },
 			{ TEXT("C"), 3600.0, 3000.0, 2500.0,  450.0,  5500.0,  3538.0,  507.0,  -950.0, -2150.0, 600.0 },
 			{ TEXT("D"), 5200.0, 4500.0, 4000.0,  750.0,  7000.0,  5500.0,  700.0, -1300.0, -3000.0, 600.0 },
-			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6700.0,  800.0, -1600.0, -3700.0, 600.0 },
+			{ TEXT("E"), 6500.0, 4500.0, 5000.0,  750.0,  9000.0,  6800.0,  800.0, -1600.0, -3700.0, 600.0 },
 			{ TEXT("F"), 8000.0, 6000.0, 6000.0,  750.0, 10000.0,  6900.0,  900.0, -1900.0, -4300.0, 600.0 },
 		};
 
