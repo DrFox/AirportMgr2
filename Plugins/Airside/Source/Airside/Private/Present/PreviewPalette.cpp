@@ -1,4 +1,4 @@
-#include "Tool/PreviewPalette.h"
+#include "Present/PreviewPalette.h"
 
 FLinearColor PreviewPalette::Default(EPreviewStyle Style)
 {

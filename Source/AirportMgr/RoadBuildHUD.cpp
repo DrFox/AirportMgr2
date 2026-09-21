@@ -10,7 +10,7 @@
 #include "RoadBuildController.h"
 #include "Tool/GraphOverlay.h"
 #include "Tool/GuidelineOverlay.h"
-#include "Tool/PreviewPalette.h"
+#include "Present/PreviewPalette.h"
 
 ARoadBuildHUD::ARoadBuildHUD()
 {
