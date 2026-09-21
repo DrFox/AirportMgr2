@@ -48,6 +48,24 @@ void UFlightBoard::AddOffer(USimClock& Clock, UFlight* Offer)
 		NextFlightId = FMath::Max(NextFlightId, Offer->Id + 1);
 	}
 	Flights.Add(Offer);
+	ById.Add(Offer->Id, Offer);
+	if (Offer->AgentId != INDEX_NONE)
+	{
+		// A TEST FIXTURE ROUTE, not a production one today (nothing hands AddOffer a flight
+		// that already names an agent) - but FFlightBoardFollowsTheAgentTest sets AgentId
+		// BEFORE AddOffer rather than through DispatchNow, and OnAgentPhase's FindByAgent has
+		// to find it anyway. DispatchNow's own ByAgent.Add stays the production path.
+		ByAgent.Add(Offer->AgentId, Offer);
+	}
+	if (Offer->Phase == EFlightPhase::Offered)
+	{
+		// GUARDED, NOT UNCONDITIONAL: AddOffer is also how FFlightBoardFollowsTheAgentTest-style
+		// fixtures introduce a flight that is already Landing (an agent mid-flight before the
+		// board existed, or a test skipping the accept/dispatch pipeline). Counting one of those
+		// as pending would inflate PendingOfferCount() forever - nothing here ever leaves
+		// Offered, so nothing would ever decrement it back out.
+		++OfferedCount;
+	}
 	ScheduleExpiry(Clock, *Offer);
 	++RevisionCount;
 }
@@ -69,7 +87,11 @@ void UFlightBoard::ScheduleExpiry(USimClock& Clock, UFlight& Offer)
 		if (Due != nullptr && Due->Phase == EFlightPhase::Offered)
 		{
 			Due->Phase = EFlightPhase::Expired;
+			--OfferedCount;
 			UE_LOG(LogAirportOps, Log, TEXT("Offer %d lapsed unanswered"), Due->Id);
+			// USES ExpiresAt, NOT Clock.Now(): this lambda only captured Id, and ExpiresAt IS
+			// the moment Advance decided to fire this callback in the first place.
+			MoveToHistory(*Due, Due->ExpiresAt);
 			++RevisionCount;
 		}
 	});
@@ -105,6 +127,7 @@ bool UFlightBoard::Accept(UGroundTraffic& Traffic, const URoadNetwork& Network, 
 	}
 
 	Flight.Phase = EFlightPhase::Accepted;
+	--OfferedCount;
 	CancelExpiry(Clock, Flight);
 	Schedule(Traffic, Clock, Flight);
 
@@ -165,6 +188,7 @@ void UFlightBoard::DispatchNow(UGroundTraffic& Traffic, UFlight& Flight)
 	}
 
 	Flight.AgentId = Traffic.GetNewestAgentId();
+	ByAgent.Add(Flight.AgentId, &Flight);
 	Flight.Phase = EFlightPhase::Landing;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d dispatched as agent %d"), Flight.Id, Flight.AgentId);
 	++RevisionCount;
@@ -178,7 +202,9 @@ void UFlightBoard::Decline(USimClock& Clock, UFlight& Flight)
 	}
 	CancelExpiry(Clock, Flight);
 	Flight.Phase = EFlightPhase::Declined;
+	--OfferedCount;
 	UE_LOG(LogAirportOps, Log, TEXT("Flight %d declined"), Flight.Id);
+	MoveToHistory(Flight, Clock.Now());
 	++RevisionCount;
 }
 
@@ -230,6 +256,79 @@ void UFlightBoard::OnAfterRestore(int32 SnapshotVersion)
 	if (SnapshotVersion < 3 && Flights.Num() > 0)
 	{
 		AimUnaimedFlightsAtBoardFocus();
+	}
+
+	// SWEEP UNCONDITIONALLY, NOT GATED ON SnapshotVersion < 4 (issue #188): every save before
+	// History existed put every flight ever created in Flights, terminal or not, because there
+	// was nowhere else for one to go - and an unconditional sweep is self-healing if a future
+	// change ever finds a second way a terminal flight ends up back in Flights, rather than
+	// growing a second version check to remember here.
+	//
+	// SNAPSHOT FIRST: MoveToHistory mutates Flights, and this loop is walking it.
+	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
+	for (const TObjectPtr<UFlight>& Each : Loaded)
+	{
+		if (Each == nullptr)
+		{
+			continue;
+		}
+		if (Each->Phase == EFlightPhase::Declined || Each->Phase == EFlightPhase::Expired
+			|| Each->Phase == EFlightPhase::Departed)
+		{
+			// TerminatedAt DID NOT EXIST before this change, so a flight loaded from a save
+			// that predates it has none - ExpiresAt (for a lapsed offer) or ArrivesAt (for
+			// anything else terminal) is the closest recorded moment to when it actually
+			// finished, and is only ever a fallback for THIS one-time migration: a flight
+			// retired after this change always carries the real TerminatedAt its own call
+			// site set - see Decline, the ScheduleExpiry callback, and OnAgentPhase below.
+			const double Approx =
+				Each->Phase == EFlightPhase::Expired ? Each->ExpiresAt : Each->ArrivesAt;
+			MoveToHistory(*Each, Approx);
+		}
+	}
+
+	RebuildIndices();
+}
+
+void UFlightBoard::RebuildIndices()
+{
+	// THE MAPS AND THE COUNTER (see their own comments) ARE NOT UPROPERTYs and so never
+	// survive a load - rebuilt here from Flights/History, which ARE the saved truth, rather
+	// than at every FindByAgent/FindById/PendingOfferCount call, which is the whole point of
+	// maintaining them at all.
+	//
+	// CALLED FROM BOTH OnAfterRestore AND RearmSchedules, not just the first: OpsSave::Restore
+	// calls OnAfterRestore, but FFlightSurvivesASaveTest - and anything else that goes through
+	// OpsSave::SerializeObject/DeserializeObject directly rather than the full Restore - never
+	// does. RearmSchedules is already documented as "call this after a load, unconditionally",
+	// so it is the one place that can be relied on to leave these maps correct regardless of
+	// which deserialising path got the flights here. Idempotent either way: this only ever
+	// reads Flights/History and rebuilds from scratch.
+	ByAgent.Reset();
+	ById.Reset();
+	OfferedCount = 0;
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		if (Each == nullptr)
+		{
+			continue;
+		}
+		ById.Add(Each->Id, Each);
+		if (Each->AgentId != INDEX_NONE)
+		{
+			ByAgent.Add(Each->AgentId, Each);
+		}
+		if (Each->Phase == EFlightPhase::Offered)
+		{
+			++OfferedCount;
+		}
+	}
+	for (const TObjectPtr<UFlight>& Each : History)
+	{
+		if (Each != nullptr)
+		{
+			ById.Add(Each->Id, Each);
+		}
 	}
 }
 
@@ -315,7 +414,15 @@ void UFlightBoard::OnAgentPhase(const UGroundTraffic& Traffic, const URoadNetwor
 
 	if (To == EAgentPhase::Gone)
 	{
+		ByAgent.Remove(Flight->AgentId);
 		Flight->AgentId = INDEX_NONE;
+	}
+
+	if (Flight->Phase == EFlightPhase::Departed)
+	{
+		// TERMINAL: retired out of the live list on the same phase change that made it so,
+		// rather than waiting for RollUp's daily beat - see MoveToHistory and issue #188.
+		MoveToHistory(*Flight, Clock.Now());
 	}
 
 	// THE MONEY, at two phases and those two specifically.
@@ -376,7 +483,18 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 	ArrivalHandles.Reset();
 	ExpiryHandles.Reset();
 
-	for (const TObjectPtr<UFlight>& Each : Flights)
+	// REBUILT HERE TOO, NOT ONLY IN OnAfterRestore: this is the one call every load path is
+	// documented to make (see this function's own header), while OnAfterRestore only runs
+	// under OpsSave::Restore. A board deserialised directly - OpsSave::SerializeObject/
+	// DeserializeObject, which FFlightSurvivesASaveTest uses on purpose to isolate the clock's
+	// own re-arm from the rest of Restore - would otherwise re-arm a Schedule/ScheduleExpiry
+	// callback whose eventual FindById(Id) found nothing, because ById was still empty.
+	RebuildIndices();
+
+	// SNAPSHOT, NOT A LIVE ITERATION: the Offered branch below can call MoveToHistory, which
+	// removes its argument from Flights - mutating the array a range-based for is walking.
+	const TArray<TObjectPtr<UFlight>> Loaded = Flights;
+	for (const TObjectPtr<UFlight>& Each : Loaded)
 	{
 		if (Each == nullptr)
 		{
@@ -391,9 +509,11 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 				// and say so" rule the arrival branch below follows, rather than leaving a
 				// stale "still offered" row nothing will ever expire.
 				Each->Phase = EFlightPhase::Expired;
+				--OfferedCount;
 				UE_LOG(LogAirportOps, Log,
 					TEXT("Offer %d expired at %.0f, before this load at %.0f: lapsed on load"),
 					Each->Id, Each->ExpiresAt, Clock.Now());
+				MoveToHistory(*Each, Each->ExpiresAt);
 				continue;
 			}
 			ScheduleExpiry(Clock, *Each);
@@ -424,6 +544,13 @@ void UFlightBoard::RearmSchedules(UGroundTraffic& Traffic, const URoadNetwork& N
 TArray<UFlight*> UFlightBoard::Offers() const
 {
 	TArray<UFlight*> Out;
+	// RESERVED, NOT LEFT TO GROW BY DOUBLING: Flights is small now that terminal flights are
+	// moved out at once (see MoveToHistory), but a poller calling this every frame still pays
+	// for however many reallocations an unreserved TArray::Add needs to reach it - issue #188
+	// item 3. A full maintained Offered-only list was rejected: see PendingOfferCount's own
+	// comment for the counter that replaced Offers().Num(), and CLAUDE.md's "lists that must
+	// agree are one list" for why a second array mirroring Flights was not the answer here too.
+	Out.Reserve(Flights.Num());
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
 		if (Each != nullptr && Each->Phase == EFlightPhase::Offered)
@@ -437,6 +564,7 @@ TArray<UFlight*> UFlightBoard::Offers() const
 TArray<UFlight*> UFlightBoard::Live() const
 {
 	TArray<UFlight*> Out;
+	Out.Reserve(Flights.Num());   // See Offers()'s own comment.
 	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
 		if (Each == nullptr)
@@ -453,13 +581,98 @@ TArray<UFlight*> UFlightBoard::Live() const
 	return Out;
 }
 
-UFlight* UFlightBoard::FindByAgent(int32 AgentId)
+void UFlightBoard::MoveToHistory(UFlight& Flight, double Now)
+{
+	Flight.TerminatedAt = Now;
+
+	// FOUND BY RAW-POINTER IDENTITY, hand-rolled rather than IndexOfByKey(&Flight): the array
+	// holds TObjectPtr<UFlight>, and comparing that to a bare UFlight* here rather than relying
+	// on TObjectPtr's implicit pointer conversion keeps this unambiguous at every UE_5.8 point
+	// release regardless of what else that conversion operator might overload against.
+	int32 Index = INDEX_NONE;
+	for (int32 I = 0; I < Flights.Num(); ++I)
+	{
+		if (Flights[I].Get() == &Flight)
+		{
+			Index = I;
+			break;
+		}
+	}
+	if (Index != INDEX_NONE)
+	{
+		// STABLE REMOVAL, NOT A SWAP: Offers() promises "still awaiting an answer, in the
+		// order they arrived" for whichever offers remain, and RemoveAtSwap would reorder the
+		// last element into the hole this leaves - a Declined offer moving out would silently
+		// reshuffle every OTHER offer's position in the inbox.
+		Flights.RemoveAt(Index);
+	}
+	History.Add(&Flight);
+
+	if (Flight.AgentId != INDEX_NONE)
+	{
+		// DEFENSIVE: every call site that can reach here already clears AgentId first
+		// (OnAgentPhase's Gone branch) or never set it at all (Decline, the expiry callback,
+		// RearmSchedules' load-time lapse never dispatch an offer) - but a ByAgent entry that
+		// outlived the flight it named would be found by some LATER agent's phase change and
+		// move a flight that has already departed.
+		ByAgent.Remove(Flight.AgentId);
+	}
+}
+
+void UFlightBoard::RollUp(double Now)
+{
+	const double Cutoff = Now - (MaxDays * USimClock::SecondsPerDay);
+
+	int32 Count = 0;
+	History.RemoveAll([this, Cutoff, &Count](const TObjectPtr<UFlight>& Each)
+	{
+		if (Each == nullptr || Each->TerminatedAt >= Cutoff)
+		{
+			return false;
+		}
+		// THE ONE PLACE ById LOSES AN ENTRY - see its own comment. Once this runs, nothing
+		// (a clock callback, a test, a future "recent departures" view) can find this flight
+		// again by any means, which is the point: it is forgotten, not archived.
+		ById.Remove(Each->Id);
+		++Count;
+		return true;
+	});
+
+	if (Count == 0)
+	{
+		return;
+	}
+
+	++RevisionCount;
+	UE_LOG(LogAirportOps, Log,
+		TEXT("Flight history rolled up: %d flight(s) older than %d day(s) forgotten"),
+		Count, MaxDays);
+}
+
+UFlight* UFlightBoard::FindByAgent(int32 AgentId) const
 {
 	if (AgentId == INDEX_NONE)
 	{
 		return nullptr;
 	}
-	for (TObjectPtr<UFlight>& Each : Flights)
+	return ByAgent.FindRef(AgentId);
+}
+
+UFlight* UFlightBoard::FindById(int32 Id) const
+{
+	return ById.FindRef(Id);
+}
+
+UFlight* UFlightBoard::FindByAgentLinearForTest(int32 AgentId) const
+{
+	// THE PRE-#188 IMPLEMENTATION, verbatim in shape: an id-bearing flight is always in
+	// Flights (see MoveToHistory, which is only ever reached after AgentId is cleared), so
+	// scanning Flights alone already agrees with ByAgent for every case that can occur.
+	if (AgentId == INDEX_NONE)
+	{
+		return nullptr;
+	}
+	for (const TObjectPtr<UFlight>& Each : Flights)
 	{
 		if (Each != nullptr && Each->AgentId == AgentId)
 		{
@@ -469,9 +682,18 @@ UFlight* UFlightBoard::FindByAgent(int32 AgentId)
 	return nullptr;
 }
 
-UFlight* UFlightBoard::FindById(int32 Id)
+UFlight* UFlightBoard::FindByIdLinearForTest(int32 Id) const
 {
-	for (TObjectPtr<UFlight>& Each : Flights)
+	// BOTH ARRAYS: unlike AgentId, an Id is never cleared, and ById answers for a flight in
+	// EITHER array for as long as RollUp has not forgotten it - see ById's own comment.
+	for (const TObjectPtr<UFlight>& Each : Flights)
+	{
+		if (Each != nullptr && Each->Id == Id)
+		{
+			return Each;
+		}
+	}
+	for (const TObjectPtr<UFlight>& Each : History)
 	{
 		if (Each != nullptr && Each->Id == Id)
 		{

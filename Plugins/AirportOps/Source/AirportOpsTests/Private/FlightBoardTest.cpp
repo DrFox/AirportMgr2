@@ -1,5 +1,6 @@
 #include "CoreMinimal.h"
 #include "Entities/EntityDefinition.h"
+#include "Math/RandomStream.h"
 #include "Misc/AutomationTest.h"
 #include "Model/Flight.h"
 #include "Model/FlightBoard.h"
@@ -368,6 +369,155 @@ bool FFlightBoardAcceptedNeverExpiresTest::RunTest(const FString& Parameters)
 	Clock->Advance(1.0);
 	TestEqual(TEXT("an accepted flight is not expired by its old offer deadline"),
 		Flight->Phase, EFlightPhase::Accepted);
+	return true;
+}
+
+/**
+ * ISSUE #188: Flights held every flight ever created for the whole session, so FindByAgent,
+ * FindById, Offers(), Live() and every save scanned or serialised it in full forever. This
+ * test measures the fix directly - it asserts the COUNT stays bounded, not merely that a
+ * RollUp method exists - and goes red on a revert the same way FFlightBoardIndexMatchesThe
+ * LinearScanTest below goes red on a maintained index that drifted from Flights/History.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardHistoryStaysBoundedTest,
+	"AirportOps.Model.FlightBoard.HistoryStaysBoundedAcrossManySimulatedDays",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardHistoryStaysBoundedTest::RunTest(const FString& Parameters)
+{
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+	Board->MaxDays = 3;
+
+	// ONE DECLINED FLIGHT PER SIMULATED DAY, TerminatedAt BACKDATED BY HAND: RollUp ages
+	// against UFlight::TerminatedAt, and backdating it directly is what lets this test control
+	// "how old" a History entry is without driving a real clock across ten days of game time.
+	for (int32 Day = 0; Day < 10; ++Day)
+	{
+		UFlight* Flight = BoardFlightNeeding(3400.0);
+		Board->AddOffer(*Clock, Flight);
+		Board->Decline(*Clock, *Flight);
+		Flight->TerminatedAt = Day * USimClock::SecondsPerDay;
+	}
+	TestEqual(TEXT("every declined flight left Flights at once"), Board->Live().Num()
+		+ Board->Offers().Num(), 0);
+	TestEqual(TEXT("and all ten are sitting in History before any RollUp"),
+		Board->GetHistoryCountForTest(), 10);
+
+	// "TODAY" IS DAY 9: with MaxDays == 3, the cutoff is day 6, so days 6, 7, 8 and 9 survive -
+	// four entries, not ten and not zero, which are the two answers a broken cutoff would give.
+	Board->RollUp(9.0 * USimClock::SecondsPerDay);
+	TestEqual(TEXT("only entries within MaxDays of \"now\" survive a roll-up"),
+		Board->GetHistoryCountForTest(), 4);
+
+	// A SECOND ROLL-UP, TEN DAYS LATER: everything still held ages out, because MaxDays is a
+	// WINDOW behind "now", not a one-shot amnesty at the moment a flight first qualified.
+	Board->RollUp(19.0 * USimClock::SecondsPerDay);
+	TestEqual(TEXT("and eventually every entry ages out, forgotten rather than accumulating"),
+		Board->GetHistoryCountForTest(), 0);
+	return true;
+}
+
+/**
+ * ISSUE #188 ITEM 2: FindByAgent/FindById now answer from a TMap rather than a scan of
+ * Flights. A map that silently drifted from the flights it claims to index would look correct
+ * at every single-flight call site the rest of this file already exercises - only checking it
+ * against the O(n) oracle across a MIX of every phase a flight can reach shows a difference,
+ * which is the whole reason FindByAgentLinearForTest/FindByIdLinearForTest exist at all.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardIndexMatchesTheLinearScanTest,
+	"AirportOps.Model.FlightBoard.MaintainedIndexMatchesTheLinearScan",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardIndexMatchesTheLinearScanTest::RunTest(const FString& Parameters)
+{
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = MakeBoard();
+
+	// A FIXED SEED: deterministic and reproducible if this ever goes red, not a flaky roll of
+	// the dice on every run.
+	FRandomStream Rng(188);
+	int32 NextTestAgentId = 1;
+	int32 CreatedCount = 0;
+
+	for (int32 I = 0; I < 40; ++I)
+	{
+		UFlight* Flight = BoardFlightNeeding(3400.0);
+		switch (Rng.RandRange(0, 3))
+		{
+		case 0:
+			// Stays Offered.
+			Board->AddOffer(*Clock, Flight);
+			break;
+		case 1:
+			// Declined - retired into History by MoveToHistory.
+			Board->AddOffer(*Clock, Flight);
+			Board->Decline(*Clock, *Flight);
+			break;
+		case 2:
+			// LIVE, mid-flight, holding a real agent id - the FFlightBoardFollowsTheAgentTest
+			// shape (AgentId set before AddOffer, not through DispatchNow), exercised at
+			// volume instead of once.
+			Flight->AgentId = NextTestAgentId++;
+			Flight->Phase = EFlightPhase::Landing;
+			Board->AddOffer(*Clock, Flight);
+			break;
+		default:
+			{
+				// DEPARTED - held a real agent id, then gave it back and moved to History.
+				const int32 AgentId = NextTestAgentId++;
+				Flight->AgentId = AgentId;
+				Flight->Phase = EFlightPhase::Departing;
+				Board->AddOffer(*Clock, Flight);
+				Board->OnAgentPhase(*Traffic, *Net, *Clock, AgentId,
+					EAgentPhase::Departing, EAgentPhase::Gone);
+			}
+			break;
+		}
+		++CreatedCount;
+	}
+
+	// A BATCH OF ALREADY-EXPIRED OFFERS, resolved through RearmSchedules rather than one at a
+	// time: this is the one production path that lapses an offer without a live Clock->Advance
+	// actually reaching its ExpiresAt, and issue #188's own migration sweep in OnAfterRestore
+	// shares its shape (a snapshot of Flights, walked once, moving some of it to History).
+	for (int32 I = 0; I < 10; ++I)
+	{
+		UFlight* Flight = BoardFlightNeeding(3400.0);
+		Flight->ExpiresAt = -1.0;   // already behind a fresh clock's Now() == 0.0
+		Board->AddOffer(*Clock, Flight);
+		++CreatedCount;
+	}
+	Board->RearmSchedules(*Traffic, *Net, *Clock);
+
+	bool bAllAgentsAgree = true;
+	for (int32 AgentId = INDEX_NONE; AgentId <= NextTestAgentId; ++AgentId)
+	{
+		if (Board->FindByAgentForTest(AgentId) != Board->FindByAgentLinearForTest(AgentId))
+		{
+			bAllAgentsAgree = false;
+			AddError(FString::Printf(
+				TEXT("FindByAgent(%d) disagrees with the linear scan"), AgentId));
+		}
+	}
+	TestTrue(TEXT("the maintained ByAgent index agrees with a full scan of Flights for every "
+		"agent id this fixture touched, and a few it never assigned"), bAllAgentsAgree);
+
+	bool bAllIdsAgree = true;
+	for (int32 Id = 1; Id <= CreatedCount + 2; ++Id)
+	{
+		if (Board->FindByIdForTest(Id) != Board->FindByIdLinearForTest(Id))
+		{
+			bAllIdsAgree = false;
+			AddError(FString::Printf(TEXT("FindById(%d) disagrees with the linear scan"), Id));
+		}
+	}
+	TestTrue(TEXT("the maintained ById index agrees with a full scan of Flights and History "
+		"for every id this fixture ever handed out, and a couple past the end"), bAllIdsAgree);
 	return true;
 }
 

@@ -371,6 +371,11 @@ void UOpsRuntime::PostDailyUpkeep()
 	// game day and the roll-up has no reason to be its own schedule.
 	Ledger->RollUp(Clock->Now());
 
+	// SAME BEAT, SAME REASON (issue #188): FlightBoard's own History needs no schedule of its
+	// own either, and a second daily timer here would just be a second place for the two to
+	// drift out of step with each other.
+	FlightBoard->RollUp(Clock->Now());
+
 	UE_LOG(LogAirportOps, Log, TEXT("Upkeep day %d: %.0f; balance %.0f"),
 		Clock->Day(), Base, Ledger->Balance());
 }

@@ -249,4 +249,64 @@ bool FFlightV2LoadAimsAtTheBoardsOldFocusTest::RunTest(const FString& Parameters
 	return true;
 }
 
+/**
+ * ISSUE #188: before History existed, EVERY flight ever created - live or long since declined
+ * - sat in the Flights blob, because there was nowhere else for one to go. This proves a save
+ * shaped like that still loads, and that the migration sweep in OnAfterRestore puts the old
+ * terminal flight where a fresh game would have put it, rather than either losing it or
+ * leaving it clogging Flights forever.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FFlightBoardHistorySplitMigratesAnOldSaveTest,
+	"AirportOps.Model.FlightSave.AnOldSaveWithADeclinedFlightStillInFlightsStillLoads",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FFlightBoardHistorySplitMigratesAnOldSaveTest::RunTest(const FString& Parameters)
+{
+	// A BYTE-FOR-BYTE PRE-#188 SAVE, reproduced by building the board the OLD way: AddOffer,
+	// then flipping Phase BY HAND rather than through Decline - which today would already move
+	// the flight into History before this test ever serialises anything, and so could never
+	// reproduce the shape a real old save has. Flipping the field directly is what leaves a
+	// Declined flight sitting in Flights, exactly as a genuine pre-#188 blob would.
+	URoadNetwork* Net = SaveTestNetwork();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = SaveTestBoard();
+
+	UFlight* KeptOffer = NewObject<UFlight>(GetTransientPackage());
+	KeptOffer->Airframe.Wingspan = 3400.0;
+	KeptOffer->ArrivesAt = Clock->Now() + 1000.0;
+	Board->AddOffer(*Clock, KeptOffer);
+
+	UFlight* OldDeclined = NewObject<UFlight>(GetTransientPackage());
+	OldDeclined->Airframe.Wingspan = 3400.0;
+	Board->AddOffer(*Clock, OldDeclined);
+	OldDeclined->Phase = EFlightPhase::Declined;
+	const int32 DeclinedId = OldDeclined->Id;
+
+	UFuelService* Fuel = NewObject<UFuelService>(GetTransientPackage());
+	FOpsSnapshot Snapshot;
+	OpsSave::Capture(OpsSaveTest::Persistents(*Clock, *Board, *Fuel), *Net, Snapshot);
+
+	URoadNetwork* RestoredNet = NewObject<URoadNetwork>(GetTransientPackage());
+	USimClock* RestoredClock = NewObject<USimClock>();
+	UFlightBoard* RestoredBoard = SaveTestBoard();
+	UFuelService* RestoredFuel = NewObject<UFuelService>(GetTransientPackage());
+	if (!TestTrue(TEXT("restore succeeds"),
+		OpsSave::Restore(Snapshot, OpsSaveTest::Persistents(*RestoredClock, *RestoredBoard, *RestoredFuel), *RestoredNet))) { return false; }
+
+	TestEqual(TEXT("the still-offered flight came back live"),
+		RestoredBoard->Offers().Num() + RestoredBoard->Live().Num(), 1);
+	TestEqual(TEXT("the pre-#188 declined flight was swept OUT of the live list on load"),
+		RestoredBoard->GetHistoryCountForTest(), 1);
+
+	UFlight* RestoredDeclined = RestoredBoard->FindByIdForTest(DeclinedId);
+	if (TestNotNull(TEXT("and is still reachable by its old id - a load forgets nothing, "
+		"only RollUp does"), RestoredDeclined))
+	{
+		TestEqual(TEXT("still Declined, not silently reset by the sweep"),
+			RestoredDeclined->Phase, EFlightPhase::Declined);
+	}
+	return true;
+}
+
 #endif
