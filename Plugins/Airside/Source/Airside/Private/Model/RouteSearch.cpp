@@ -308,8 +308,101 @@ FRouteQuery FRouteQuery::For(FGuidelineNodeId Start, FGuidelineNodeId Goal,
 	return Query;
 }
 
+FGuidelineNodeIndex::FGuidelineNodeIndex(const URoadNetwork& Network, double CellSizeIn)
+	// GUARDED, NOT ASSERTED: Rules.ResolveRadius is EditAnywhere, so a project file can set
+	// it to 0 or less, and dividing CellOf's position by a zero or negative cell size would
+	// either crash or bucket every node into one cell - silently turning the index back
+	// into the linear scan it exists to replace, with none of the log lines that would say
+	// so. 1.0 uu is small enough that a real ResolveRadius never reaches this floor.
+	: CellSize(CellSizeIn > 0.0 ? CellSizeIn : 1.0)
+{
+	const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
+	for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+	{
+		// DEAD SLOTS NEVER GO IN. FindNearestNode's own bAlive check would refuse them
+		// again at query time, but building the index over the live ones only is what keeps
+		// it close to the size of the graph a rebuild actually leaves behind, not the
+		// high-water mark of every slot ever allocated.
+		if (Nodes[Index].bAlive)
+		{
+			Cells.FindOrAdd(CellOf(Nodes[Index].Position)).Add(Index);
+		}
+	}
+}
+
+namespace
+{
+	/**
+	 * See RouteSearch::NodeVisitCountForTest. A free variable behind the namespace functions
+	 * that read and reset it, rather than a class static, because FindNearestNode itself is
+	 * a free function - matching FRoadNetworkSolver::NodeClaimsCallCountForTest's own reason
+	 * for being static rather than a member.
+	 */
+	int32 GNodeVisitCountForTest = 0;
+
+	/**
+	 * The one per-node test both FindNearestNode paths run, so the linear scan and the
+	 * indexed lookup cannot drift into two different answers for what "usable" means.
+	 * Advances Nearest/NearestDistance in place exactly as the old inline loop body did -
+	 * skips a dead node, skips one farther than the best found so far, then skips one no
+	 * edge of this Class may leave or arrive at - and counts the visit either way, which is
+	 * the boundary Airside.Model.Traffic.GraphRebuildNodeVisits measures.
+	 *
+	 * <= NOT <, deliberately: a node exactly as far as the current best REPLACES it, which
+	 * is what makes the last node visited at the smallest distance the winner on an exact
+	 * tie. Preserved from the original loop rather than tightened to <, because a caller
+	 * relies on that ordering - the indexed path below reproduces it exactly by visiting
+	 * candidates in the same ascending-index order the linear scan always has.
+	 */
+	void ConsiderNode(const URoadNetwork& Network, int32 NodeIndex, const FVector2D& Position,
+		ETraversalClass Class, double& NearestDistance, FGuidelineNodeId& Nearest)
+	{
+		++GNodeVisitCountForTest;
+
+		const FGuidelineNode& Node = Network.GetGuidelineNodes()[NodeIndex];
+		if (!Node.bAlive)
+		{
+			return;
+		}
+
+		const double Distance = FVector2D::Distance(Node.Position, Position);
+		if (Distance > NearestDistance)
+		{
+			return;
+		}
+
+		// Incidence alone, deliberately ignoring one-way direction: this same call picks
+		// both ends of a query, and a node reachable only by arriving is a perfectly good
+		// DESTINATION. Direction is the search's business.
+		bool bUsable = false;
+		for (const FGuidelineEdgeId EdgeId : Node.Incident)
+		{
+			const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
+			if (Edge != nullptr && Edge->AllowedTraffic.Allows(Class))
+			{
+				bUsable = true;
+				break;
+			}
+		}
+		if (!bUsable)
+		{
+			return;
+		}
+
+		// GuidelineNodeIdAt, NEVER a hand-built {Index, Node.Generation} (#79's own rule,
+		// flagged again at this exact site by #172): a second place that knows a handle is
+		// {slot index, slot generation} is a second place that can build one wrong, and the
+		// slot map already has the one function that is allowed to.
+		Nearest = Network.GuidelineNodeIdAt(NodeIndex);
+		NearestDistance = Distance;
+	}
+}
+
 namespace RouteSearch
 {
+	int32 NodeVisitCountForTest() { return GNodeVisitCountForTest; }
+	void ResetNodeVisitCountForTest() { GNodeVisitCountForTest = 0; }
+
 	FRoutePlan Find(const URoadNetwork& Network, const FRouteQuery& Query)
 	{
 		FRoutePlan Plan;
@@ -400,53 +493,63 @@ namespace RouteSearch
 
 	FGuidelineNodeId FindNearestNode(
 		const URoadNetwork& Network, const FVector2D& Position,
-		ETraversalClass Class, double MaxDistance)
+		ETraversalClass Class, double MaxDistance, const FGuidelineNodeIndex* Index)
 	{
 		FGuidelineNodeId Nearest;
 		double NearestDistance = MaxDistance;
 
-		const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
-		for (int32 Index = 0; Index < Nodes.Num(); ++Index)
+		if (Index == nullptr)
 		{
-			const FGuidelineNode& Node = Nodes[Index];
-			if (!Node.bAlive)
+			// THE UNINDEXED PATH, UNCHANGED IN COST: every node, in slot order. Still the
+			// only path a single-shot caller (HoldingPointTool's one click; a test that asks
+			// once) should take - building a grid to answer one query is the O(N) scan
+			// wearing a slower hat.
+			const TArray<FGuidelineNode>& Nodes = Network.GetGuidelineNodes();
+			for (int32 NodeIndex = 0; NodeIndex < Nodes.Num(); ++NodeIndex)
 			{
-				continue;
+				ConsiderNode(Network, NodeIndex, Position, Class, NearestDistance, Nearest);
 			}
-
-			const double Distance = FVector2D::Distance(Node.Position, Position);
-			if (Distance > NearestDistance)
-			{
-				continue;
-			}
-
-			// Incidence alone, deliberately ignoring one-way direction: this same call
-			// picks both ends of a query, and a node reachable only by arriving is a
-			// perfectly good DESTINATION. Direction is the search's business.
-			bool bUsable = false;
-			for (const FGuidelineEdgeId EdgeId : Node.Incident)
-			{
-				const FGuidelineEdge* Edge = Network.GetGuidelineEdge(EdgeId);
-				if (Edge != nullptr && Edge->AllowedTraffic.Allows(Class))
-				{
-					bUsable = true;
-					break;
-				}
-			}
-
-			if (!bUsable)
-			{
-				continue;
-			}
-
-			FGuidelineNodeId Id;
-			Id.Index = Index;
-			Id.Generation = Node.Generation;
-
-			Nearest = Id;
-			NearestDistance = Distance;
+			return Nearest;
 		}
 
+		// THE INDEXED PATH. CellRadius is how many rings of cells out a node within
+		// MaxDistance could possibly be: MaxDistance divided by the cell size, rounded up,
+		// floored at one so a MaxDistance smaller than the cell still gets its own ring of
+		// eight neighbours rather than just its own cell (a node can sit anywhere within a
+		// cell, so one that shares the query's cell is not the only one within reach of a
+		// point near that cell's edge). Every caller today builds the index at the same
+		// radius it queries with (Rules.ResolveRadius both times), which makes this 1; kept
+		// as a division rather than hard-coded so an index built at one radius and queried
+		// at a smaller one - the only shape that could ever need more than the eight - still
+		// gets a wide enough ring rather than a silently wrong answer.
+		const int32 CellRadius = FMath::Max(1, FMath::CeilToInt32(MaxDistance / Index->CellSize));
+		const FIntPoint Origin = Index->CellOf(Position);
+
+		// COLLECTED, THEN SORTED, THEN VISITED IN THAT ORDER - not visited cell by cell as
+		// they are found. ConsiderNode's <= means the LAST node visited at the smallest
+		// distance wins a tie, and the linear scan above visits every node in ascending slot
+		// order; sorting the candidates back into that same order before visiting them is
+		// what makes an indexed query and a linear one agree on which of two equidistant
+		// nodes to return, not merely on the distance. See
+		// Airside.Model.RouteSearch.IndexMatchesLinear, which is built to catch exactly this
+		// if the sort is ever dropped as "obviously" unnecessary.
+		TArray<int32> Candidates;
+		for (int32 OffsetY = -CellRadius; OffsetY <= CellRadius; ++OffsetY)
+		{
+			for (int32 OffsetX = -CellRadius; OffsetX <= CellRadius; ++OffsetX)
+			{
+				if (const TArray<int32>* Bucket = Index->Cells.Find(FIntPoint(Origin.X + OffsetX, Origin.Y + OffsetY)))
+				{
+					Candidates.Append(*Bucket);
+				}
+			}
+		}
+		Candidates.Sort();
+
+		for (int32 NodeIndex : Candidates)
+		{
+			ConsiderNode(Network, NodeIndex, Position, Class, NearestDistance, Nearest);
+		}
 		return Nearest;
 	}
 }

@@ -261,6 +261,45 @@ struct AIRSIDE_API FRouteQuery
 };
 
 /**
+ * A uniform grid over a network's LIVE guideline nodes, built once and queried many times
+ * by FindNearestNode's indexed overload (#172).
+ *
+ * WHY A GRID AND NOT A KD-TREE OR A SORTED-X ARRAY: every caller that builds one
+ * (UGroundTraffic::OnGraphRebuilt) already knows the one radius every query will use -
+ * Rules.ResolveRadius, the same figure for the from-node, every remaining step, and the
+ * goal - so a grid cell sized to that radius turns "nearest within R" into "look at my own
+ * cell and its ring of eight neighbours", no tree balance or rebuild-on-insert to reason
+ * about. A sorted-X array with a binary-searched window would need a second pass to bound
+ * Y within the window; the grid bounds both axes by construction.
+ *
+ * BUILT FRESH EVERY REBUILD, deliberately never kept across one: FRoadGuidelineBuilder
+ * frees and re-adds every derived node on each rebuild, so an index kept from the last one
+ * would be answering with dead slots by the time anything queried it. One O(N) build here
+ * replaces up to A*S+A separate O(N) scans in the rebuild that follows - see OnGraphRebuilt.
+ */
+struct AIRSIDE_API FGuidelineNodeIndex
+{
+	/** Indexes every live node in Network into cells of CellSizeIn on a side. */
+	FGuidelineNodeIndex(const URoadNetwork& Network, double CellSizeIn);
+
+	/**
+	 * The grid cell containing Position, keyed the same way cells are stored below.
+	 * FLOOR, not truncation - FMath::FloorToInt32 rounds -0.5 to -1 rather than to 0, which
+	 * truncation would, and a node just west of the origin belongs in cell -1, not cell 0.
+	 */
+	FIntPoint CellOf(const FVector2D& Position) const
+	{
+		return FIntPoint(FMath::FloorToInt32(Position.X / CellSize), FMath::FloorToInt32(Position.Y / CellSize));
+	}
+
+	/** Never 0 - see the constructor's guard - so CellOf always has something to divide by. */
+	double CellSize = 1.0;
+
+	/** Live node indices (into Network.GetGuidelineNodes()), bucketed by CellOf. */
+	TMap<FIntPoint, TArray<int32>> Cells;
+};
+
+/**
  * Shortest route over the guideline graph, by A*.
  *
  * NOT in Solve/ and not behind a graph adapter, unlike the junction solver. That solver is
@@ -297,8 +336,33 @@ namespace RouteSearch
 	 * a node the van was never entitled to.
 	 *
 	 * Returns an unset handle when nothing qualifies within MaxDistance.
+	 *
+	 * Index IS OPTIONAL AND DEFAULTS TO NONE (#172): a caller with no FGuidelineNodeIndex
+	 * to hand - HoldingPointTool's single click, or a test that asks once - gets exactly the
+	 * O(N) scan this function has always run, and pays for a grid it would use once. A
+	 * caller that will ask many times in one rebuild (UGroundTraffic::OnGraphRebuilt, via
+	 * FPlanReResolver::ReResolvePlan) builds one FGuidelineNodeIndex and passes it every
+	 * time, turning every one of those calls into a look at a handful of nearby cells
+	 * instead of the whole graph. THE ANSWER IS IDENTICAL EITHER WAY, tie for tie - both
+	 * paths run the same per-node distance-then-usability test in ascending node-index
+	 * order, so a query that hands in an index gets the same node an unindexed scan would
+	 * have, never an approximation. See Airside.Model.RouteSearch.IndexMatchesLinear.
 	 */
 	AIRSIDE_API FGuidelineNodeId FindNearestNode(
 		const URoadNetwork& Network, const FVector2D& Position,
-		ETraversalClass Class, double MaxDistance);
+		ETraversalClass Class, double MaxDistance, const FGuidelineNodeIndex* Index = nullptr);
+
+	/**
+	 * How many guideline nodes FindNearestNode has actually examined - alive or not, every
+	 * one it looked at rather than only the ones it kept - across every call since the last
+	 * reset. The #172 measurement that an indexed rebuild visits a small fraction of what a
+	 * linear one would, not merely that it returns the same answer. A free-standing counter, not a
+	 * member: FindNearestNode is a namespace function with no instance to count on, the
+	 * same reason FRoadNetworkSolver::NodeClaimsCallCountForTest is static there too.
+	 */
+	AIRSIDE_API int32 NodeVisitCountForTest();
+
+	/** Zeroes the counter above, so an earlier test's or an earlier rebuild's visits are
+	 *  never mistaken for the ones a test is about to measure. */
+	AIRSIDE_API void ResetNodeVisitCountForTest();
 }

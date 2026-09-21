@@ -260,9 +260,17 @@ struct AIRSIDE_API FPlanReResolver
 	 * MUTATES Agent.GoalNode when the goal position still resolves, because every replan
 	 * from here on searches to it: a goal handle left naming a freed slot would fail every
 	 * subsequent deadlock replan for the rest of the session, silently.
+	 *
+	 * NodeIndex IS THE #172 FIX: this calls RouteSearch::FindNearestNode for the from-node,
+	 * once per remaining step, and for the goal - A x S searches of a graph that could hold
+	 * thousands of nodes, on every committed edit, before this. A reference and not a
+	 * pointer: OnGraphRebuilt builds exactly one FGuidelineNodeIndex before its loop starts
+	 * and every call this rebuild makes shares it, so there is no caller here that could
+	 * have none to pass.
 	 */
 	EReResolve ReResolvePlan(FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep,
-		const URoadNetwork& Network, const FTrafficRules& Rules, FTrafficOccupancy& Occupancy);
+		const URoadNetwork& Network, const FTrafficRules& Rules, FTrafficOccupancy& Occupancy,
+		const FGuidelineNodeIndex& NodeIndex);
 
 	/**
 	 * Runs Query and splices its answer onto Plan's first KeepSteps steps, IN PLACE.

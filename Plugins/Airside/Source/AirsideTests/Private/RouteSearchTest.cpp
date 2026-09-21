@@ -340,4 +340,117 @@ bool FRouteSearchEdgeCostCacheTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// Named as a sibling for the same automation-tree reason the other two give: a distinct
+// dotted leaf under RouteSearch, no bare parent to collide with.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FRouteSearchNodeIndexTest,
+	"Airside.Model.RouteSearch.IndexMatchesLinear",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FRouteSearchNodeIndexTest::RunTest(const FString& Parameters)
+{
+	// #172: FGuidelineNodeIndex exists ONLY to make FindNearestNode cheaper, never to change
+	// what it answers. A test that merely checked "the indexed call returns SOMETHING" would
+	// pass on an index that silently missed a neighbouring cell; this compares the indexed
+	// and linear paths node for node, over a random fixture and many query points and both
+	// classes present in it, so a wrong cell radius or a dropped candidate shows up as a
+	// mismatch rather than as a plausible-looking wrong answer.
+	FRandomStream Rng(172172);
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+
+	// A DENSE FIELD, not a sparse scatter: MaxDistance below is 1500 uu, and node spacing
+	// has to be small enough next to that for most queries to actually hit something -
+	// otherwise this would mostly be comparing two paths that both return "nothing", which
+	// proves neither of them right.
+	const int32 NumNodes = 250;
+	const double Extent = 6000.0;
+	TArray<FGuidelineNodeId> Nodes;
+	Nodes.Reserve(NumNodes);
+	for (int32 Index = 0; Index < NumNodes; ++Index)
+	{
+		Nodes.Add(Net->AddGuidelineNode(
+			FVector2D(Rng.FRandRange(-Extent, Extent), Rng.FRandRange(-Extent, Extent))));
+	}
+
+	// EVERY OTHER NODE GETS AN EDGE TO ITS NEIGHBOUR IN THE ARRAY, cycling through THREE
+	// traffic masks - Aircraft-only, GroundVehicle-only, both - so "usable for this Class"
+	// genuinely partitions the graph and the test cannot pass by admitting everybody.
+	for (int32 Index = 0; Index + 1 < NumNodes; Index += 2)
+	{
+		const FGuidelineNode* A = Net->GetGuidelineNode(Nodes[Index]);
+		const FGuidelineNode* B = Net->GetGuidelineNode(Nodes[Index + 1]);
+		FGuidelineEdge Edge;
+		Edge.A = Nodes[Index];
+		Edge.B = Nodes[Index + 1];
+		Edge.Control = (A->Position + B->Position) * 0.5;
+		const int32 Which = (Index / 2) % 3;
+		Edge.AllowedTraffic = Which == 0 ? FTrafficMask::Only(ETraversalClass::Aircraft)
+			: Which == 1 ? FTrafficMask::Only(ETraversalClass::GroundVehicle)
+			: FTrafficMask::All();
+		Net->AddGuidelineEdge(MoveTemp(Edge));
+	}
+
+	// A DEAD SLOT: removed after being added, so the linear scan's bAlive check and the
+	// index's build-time skip have to agree on refusing it, not merely on both defaulting
+	// to the same thing by accident.
+	Net->RemoveGuidelineNode(Nodes[3]);
+
+	const double MaxDistance = 1500.0;
+	FGuidelineNodeIndex Index(*Net, MaxDistance);
+
+	int32 FoundSomething = 0;
+	for (int32 Query = 0; Query < 500; ++Query)
+	{
+		const FVector2D At(
+			Rng.FRandRange(-Extent * 1.2, Extent * 1.2), Rng.FRandRange(-Extent * 1.2, Extent * 1.2));
+		const ETraversalClass Class = (Query % 2 == 0) ? ETraversalClass::Aircraft : ETraversalClass::GroundVehicle;
+
+		const FGuidelineNodeId Linear = RouteSearch::FindNearestNode(*Net, At, Class, MaxDistance);
+		const FGuidelineNodeId Indexed = RouteSearch::FindNearestNode(*Net, At, Class, MaxDistance, &Index);
+		if (Linear.IsSet())
+		{
+			++FoundSomething;
+		}
+
+		if (!TestEqual(FString::Printf(
+			TEXT("query %d (%s) at (%.0f, %.0f): the indexed path agrees with the linear one"),
+			Query, Class == ETraversalClass::Aircraft ? TEXT("Aircraft") : TEXT("GroundVehicle"), At.X, At.Y),
+			Indexed, Linear))
+		{
+			return false;
+		}
+	}
+
+	// THE CONTROL: most of the 500 queries actually found a node, or the loop above would
+	// have been 500 near-vacuous comparisons of "unset" against "unset".
+	TestTrue(FString::Printf(TEXT("most queries found a node within range (%d of 500)"), FoundSomething),
+		FoundSomething > 250);
+
+	// THE TIE ITSELF, built by hand rather than hoped for from the random fixture: two
+	// usable nodes exactly MaxDistance apart from the query point on opposite sides of it.
+	// FindNearestNode's own comment says an exact tie goes to the LATER node visited - which
+	// for the unindexed scan is the higher slot index - so Second, added after First, is the
+	// one both paths must return. An indexed path that visited its candidates in whatever
+	// order the grid's TMap happened to bucket them, rather than sorting back to ascending
+	// index first, would agree with the linear scan only by chance.
+	{
+		URoadNetwork* Tied = NewObject<URoadNetwork>(GetTransientPackage());
+		const FGuidelineNodeId First = Tied->AddGuidelineNode(FVector2D(1000.0, 0.0));
+		const FGuidelineNodeId Second = Tied->AddGuidelineNode(FVector2D(-1000.0, 0.0));
+		Join(*Tied, First, Second);
+
+		FGuidelineNodeIndex TiedIndex(*Tied, 1000.0);
+		const FGuidelineNodeId LinearTie =
+			RouteSearch::FindNearestNode(*Tied, FVector2D(0.0, 0.0), ETraversalClass::Aircraft, 1000.0);
+		const FGuidelineNodeId IndexedTie =
+			RouteSearch::FindNearestNode(*Tied, FVector2D(0.0, 0.0), ETraversalClass::Aircraft, 1000.0, &TiedIndex);
+
+		TestEqual(TEXT("the linear scan's own tie-break picks the later-added node"), LinearTie, Second);
+		TestEqual(TEXT("and the indexed path breaks the same tie the same way"), IndexedTie, LinearTie);
+	}
+
+	return true;
+}
+
 #endif

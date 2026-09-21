@@ -177,6 +177,16 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 	// NodeReach above.
 	RunwayChains.Invalidate();
 
+	// ONE INDEX FOR THE WHOLE REBUILD (#172), built before any agent is touched: every
+	// FindNearestNode call below - the parked-agent branch just past this loop's top, and
+	// every one ReResolvePlan makes for the from-node, each remaining step, and the goal -
+	// used to scan every live guideline node itself, so one committed edit cost A agents x
+	// S remaining steps x N guideline nodes of linear search. Rules.ResolveRadius both sizes
+	// the grid cell and is the MaxDistance every one of those calls already passed, so the
+	// index answers each of them from its own cell and the eight around it rather than the
+	// whole graph. See Airside.Model.Traffic.GraphRebuildNodeVisits for the measurement.
+	const FGuidelineNodeIndex NodeIndex(Network, Rules.ResolveRadius);
+
 	int32 Considered = 0;
 	int32 Replanned = 0;
 	int32 Truncated = 0;
@@ -238,7 +248,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		if (Agent.Phase == EAgentPhase::Parked && Network.GetGuidelineNode(Agent.GoalNode) == nullptr)
 		{
 			const FGuidelineNodeId Here = RouteSearch::FindNearestNode(
-				Network, Agent.LastMotion.Position, Agent.Class, Rules.ResolveRadius);
+				Network, Agent.LastMotion.Position, Agent.Class, Rules.ResolveRadius, &NodeIndex);
 			if (Here.IsSet())
 			{
 				Agent.GoalNode = Here;
@@ -255,7 +265,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 		}
 
 		++Considered;
-		switch (PlanReResolver.ReResolvePlan(Agent, *Plan, FromStep, Network, Rules, Occupancy))
+		switch (PlanReResolver.ReResolvePlan(Agent, *Plan, FromStep, Network, Rules, Occupancy, NodeIndex))
 		{
 		case FPlanReResolver::EReResolve::Replanned: ++Replanned; break;
 		case FPlanReResolver::EReResolve::Truncated: ++Truncated; break;
@@ -300,7 +310,7 @@ void UGroundTraffic::OnGraphRebuilt(const URoadNetwork& Network)
 
 FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	FRoadAgent& Agent, FRoutePlan& Plan, int32 FromStep, const URoadNetwork& Network,
-	const FTrafficRules& Rules, FTrafficOccupancy& Occupancy)
+	const FTrafficRules& Rules, FTrafficOccupancy& Occupancy, const FGuidelineNodeIndex& NodeIndex)
 {
 	// WHOSE PLAN THIS IS, asked by address. The two callers hand in one of exactly two plans
 	// and the difference matters twice below: only the follower's plan gets Replace (nothing
@@ -388,7 +398,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 
 	// THE NODE THE CURRENT STEP LEAVES FROM, found by where that node WAS. Everything below
 	// walks forward from here, so this is the one lookup nothing can recover from.
-	FGuidelineNodeId Prev = RouteSearch::FindNearestNode(Network, Plan.Polyline[FromVertex], Agent.Class, Radius);
+	FGuidelineNodeId Prev = RouteSearch::FindNearestNode(Network, Plan.Polyline[FromVertex], Agent.Class, Radius, &NodeIndex);
 	if (!Prev.IsSet())
 	{
 		return Strand(TEXT("no live node holds the position its current step starts from"));
@@ -416,7 +426,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	{
 		const int32 EndVertex = Plan.Steps[Step].EndVertex;
 		const FGuidelineNodeId Next = Plan.Polyline.IsValidIndex(EndVertex)
-			? RouteSearch::FindNearestNode(Network, Plan.Polyline[EndVertex], Agent.Class, Radius)
+			? RouteSearch::FindNearestNode(Network, Plan.Polyline[EndVertex], Agent.Class, Radius, &NodeIndex)
 			: FGuidelineNodeId();
 
 		FGuidelineEdgeId Rejoined;
@@ -472,7 +482,7 @@ FPlanReResolver::EReResolve FPlanReResolver::ReResolvePlan(
 	// deadlock replan for the rest of the journey - searches to Agent.GoalNode, so a handle
 	// left naming a freed slot would fail all of them, silently and for ever. Left alone when
 	// the goal position no longer resolves: the truncation below then supplies one that does.
-	const FGuidelineNodeId Goal = RouteSearch::FindNearestNode(Network, Plan.Polyline.Last(), Agent.Class, Radius);
+	const FGuidelineNodeId Goal = RouteSearch::FindNearestNode(Network, Plan.Polyline.Last(), Agent.Class, Radius, &NodeIndex);
 	if (Goal.IsSet())
 	{
 		Agent.GoalNode = Goal;

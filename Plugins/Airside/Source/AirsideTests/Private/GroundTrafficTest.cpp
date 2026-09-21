@@ -2717,4 +2717,111 @@ bool FTrafficPoseContinuityTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------------------
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FTrafficGraphRebuildNodeVisitsTest,
+	"Airside.Model.Traffic.GraphRebuildNodeVisits",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FTrafficGraphRebuildNodeVisitsTest::RunTest(const FString& Parameters)
+{
+	// #172: every handle OnGraphRebuilt hands to FPlanReResolver::ReResolvePlan dies on a
+	// rebuild - re-added at the same slot count, new generations - so a re-resolving agent
+	// calls RouteSearch::FindNearestNode for its from-node, once per remaining step, and for
+	// its goal, and that function used to scan every LIVE guideline node to answer each one.
+	// A agents x S remaining steps x N nodes node-visits, in ONE rebuild, on the graph this
+	// test builds. This is the boundary the fix moves, not the route it produces - the
+	// existing GraphRebuild test above already pins that a same-geometry rebuild costs no
+	// search at all; this pins that answering it no longer costs the whole graph either.
+	constexpr int32 NumNodes = 200;
+	constexpr int32 NumAgents = 10;
+	constexpr double Spacing = 2000.0;
+
+	// A CHAIN, rebuilt exactly the way FRoadGuidelineBuilder::Build rebuilds one: every
+	// derived edge and node freed, then re-added at the SAME positions with NEW handles -
+	// same shape as FTrafficGraphRebuildTest's own Build lambda above, sized up from three
+	// nodes to two hundred so there is something for a linear scan to be slow over.
+	auto BuildChain = [](URoadNetwork& Net, TArray<FGuidelineNodeId>& OutNodes)
+	{
+		TArray<FGuidelineEdgeId> Edges;
+		for (int32 Index = 0; Index < Net.GetGuidelineEdges().Num(); ++Index)
+		{
+			if (Net.GetGuidelineEdges()[Index].bAlive)
+			{
+				FGuidelineEdgeId Id;
+				Id.Index = Index;
+				Id.Generation = Net.GetGuidelineEdges()[Index].Generation;
+				Edges.Add(Id);
+			}
+		}
+		for (const FGuidelineEdgeId& Id : Edges) { Net.RemoveGuidelineEdge(Id); }
+		for (int32 Index = 0; Index < Net.GetGuidelineNodes().Num(); ++Index)
+		{
+			if (Net.GetGuidelineNodes()[Index].bAlive) { Net.RemoveGuidelineNode(Net.GuidelineNodeIdAt(Index)); }
+		}
+
+		OutNodes.Reset();
+		OutNodes.Reserve(NumNodes);
+		for (int32 Index = 0; Index < NumNodes; ++Index)
+		{
+			OutNodes.Add(Net.AddGuidelineNode(FVector2D(Index * Spacing, 0.0)));
+		}
+		for (int32 Index = 0; Index + 1 < NumNodes; ++Index)
+		{
+			TestGraph::Join(Net, OutNodes[Index], OutNodes[Index + 1]);
+		}
+	};
+
+	URoadNetwork* Net = NewObject<URoadNetwork>(GetTransientPackage());
+	TArray<FGuidelineNodeId> Nodes;
+	BuildChain(*Net, Nodes);
+
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>(GetTransientPackage());
+	for (int32 AgentIndex = 0; AgentIndex < NumAgents; ++AgentIndex)
+	{
+		// FRESH, NOT TICKED: StartTaxi poses an agent on step 0 with Travelled 0, so every
+		// one of the chain's NumNodes-1 steps is still "remaining" - the worst case
+		// OnGraphRebuilt's own header names, not a shortened one a few ticks would leave.
+		Traffic->DispatchAgent(Net, M2TrafficRoute(*Net, Nodes[0], Nodes.Last(), ETraversalClass::GroundVehicle),
+			TestAirframes::Van(), ETraversalClass::GroundVehicle, 1.0);
+	}
+
+	// REBUILT AT THE SAME POSITIONS: every handle in every agent's plan is now dead, but
+	// nothing about where the pavement IS has moved, so every agent is fully re-resolved
+	// rather than truncated or stranded early - the case that actually walks every step.
+	BuildChain(*Net, Nodes);
+
+	RouteSearch::ResetNodeVisitCountForTest();
+	Traffic->OnGraphRebuilt(*Net);
+	const int32 Visits = RouteSearch::NodeVisitCountForTest();
+
+	const FGraphRebuildSummary Summary = Traffic->GetLastRebuildSummaryForTest();
+	if (!TestEqual(TEXT("every agent survived the rebuild un-stranded, so the walk below covers every step"),
+		Summary.Stranded, 0))
+	{
+		return false;
+	}
+	if (!TestEqual(TEXT("and none needed a fresh search - identical geometry costs one, not a route search"),
+		Summary.Replanned, 0))
+	{
+		return false;
+	}
+
+	// THE BOUND. Worst case is every agent's every remaining step plus its from-node and its
+	// goal, each an O(N) scan: NumAgents * (NumNodes - 1 steps + 2) * NumNodes. An indexed
+	// lookup instead visits only the handful of nodes in its own grid cell and the eight
+	// around it - on this chain, one or two - so the true count is close to NumAgents *
+	// (NumNodes + 1) * (a small constant), orders of magnitude under the worst case. The
+	// bound below does not pin that constant; it only rules out the O(N)-per-call code this
+	// replaces, which would land within a rounding error of WorstCase itself.
+	const int64 WorstCase = static_cast<int64>(NumAgents) * (NumNodes + 1) * NumNodes;
+	UE_LOG(LogM2TrafficTest, Log,
+		TEXT("GraphRebuildNodeVisits measured: %d node visits (%d agents, %d nodes, worst case %lld)"),
+		Visits, NumAgents, NumNodes, WorstCase);
+	TestTrue(FString::Printf(TEXT("node visits (%d) are well below A*S*N (%lld)"), Visits, WorstCase),
+		static_cast<int64>(Visits) < WorstCase / 10);
+
+	return true;
+}
+
 #endif
