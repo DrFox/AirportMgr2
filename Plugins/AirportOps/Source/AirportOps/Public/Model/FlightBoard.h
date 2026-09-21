@@ -65,23 +65,26 @@ public:
 	TFunction<bool(const FVector2D& Near, const FAirframe& Airframe)> Dispatcher;
 
 	/**
-	 * Raised whenever anything a viewmodel displays has changed.
+	 * Bumped whenever anything a viewmodel displays has changed - an offer added, accepted,
+	 * declined or expired, a phase change, a graph rebuild's re-apply.
 	 *
-	 * NOT ON UOpsEvents (issue #105 item 11's "or document why not"): that bus announces
-	 * discrete OUTCOMES - an agent's phase changed, an arrival was refused, the speed changed
-	 * - each with a publisher that fires it rarely enough to log and a payload Blueprint can
-	 * bind to. This is a coarse "go re-read everything" signal a C++ viewmodel polls off of
-	 * (UOfferInboxViewModel::Refresh re-derives its whole row list from the board every time),
-	 * fired from nearly every method in this class - AddOffer, Accept, Decline, DispatchNow,
-	 * OnAgentPhase, OnGraphRebuilt - often several times per player action. Logging each fire
-	 * the way every Notify* does would flood the log with lines that say nothing happened
-	 * except "ask the board again"; putting it on the bus would let Blueprint bind to a
-	 * signal that carries no information about what changed, unlike every other one there.
-	 * FSimpleMulticastDelegate (no UPROPERTY, no BlueprintAssignable) matches what it actually
-	 * is: C++ wiring between this model and its own viewmodels, not an outcome for anyone
-	 * else to hear about.
+	 * REPLACES A DELEGATE THIS CLASS USED TO CARRY (issue #169): OnChanged fired from nearly
+	 * every method here - AddOffer, Accept, Decline, DispatchNow, OnAgentPhase, OnGraphRebuilt
+	 * - documented as "a coarse go-re-read-everything signal a C++ viewmodel polls off of",
+	 * but nothing ever bound to it: UOfferInboxViewModel::Refresh polled on TICK instead, and
+	 * asked WhyNotAcceptable - a full ArrivalPlanner::Plan, a route search per stand per exit -
+	 * for every row, every frame, whether or not the board had moved. A signal with zero
+	 * subscribers cannot be told from a signal with none needed; a REVISION can, because the
+	 * poller compares it to the number it last saw rather than trusting that something rang.
+	 *
+	 * SAME IDIOM AS ULedger::Revision AND URoadNetwork::GetGuidelineRevision, and for the same
+	 * reason given there: the cheapest question a poller can ask is "has anything changed
+	 * since the number I remember". A plain session counter, not a UPROPERTY - nothing saves a
+	 * revision, and nothing should: a fresh load starts every cache one frame away from a
+	 * correct recompute, which is what "invalid until proven otherwise" already means for a
+	 * viewmodel with no cached answer yet.
 	 */
-	FSimpleMulticastDelegate OnChanged;
+	uint32 Revision() const { return RevisionCount; }
 
 	UPROPERTY() TObjectPtr<UStandAllocator> Allocator = nullptr;
 	UPROPERTY() TObjectPtr<UOfferGenerator> Generator = nullptr;
@@ -186,6 +189,17 @@ public:
 		const UFlight& Flight) const;
 
 	/**
+	 * How many times WhyNotAcceptable has actually run this session.
+	 *
+	 * WHAT ISSUE #169's TEST MEASURES: a route search per stand per exit is not free, and the
+	 * whole point of gating UOfferViewModel's cache on Revision/GetGuidelineRevision/
+	 * OccupancyRevision is that a quiet inbox calls this ZERO times a frame, not once per row.
+	 * A test that only checked the CACHED ANSWER was still correct could not tell a cache from
+	 * no cache at all - this counts the expensive call itself.
+	 */
+	int32 GetWhyNotAcceptableCallsForTest() const { return WhyNotAcceptableCallsForTest; }
+
+	/**
 	 * TAKES THE CLOCK because the fees posted here are dated, and a ledger entry that could not
 	 * say when it happened would break the roll-up and the determinism test both. The sibling
 	 * UFuelService::OnAgentPhase already takes one, so this is the neighbouring shape rather
@@ -228,6 +242,13 @@ public:
 private:
 	UPROPERTY() TArray<TObjectPtr<UFlight>> Flights;
 	UPROPERTY() int32 NextFlightId = 1;
+
+	/** See Revision. Not a UPROPERTY - a session counter, not state a save would ever need. */
+	uint32 RevisionCount = 0;
+
+	/** See GetWhyNotAcceptableCallsForTest. MUTABLE: WhyNotAcceptable is const, and counting a
+	 *  call is bookkeeping about it, not a change to what the board holds. */
+	mutable int32 WhyNotAcceptableCallsForTest = 0;
 
 	/**
 	 * Clock handles by flight id, so an accepted flight can be un-scheduled.

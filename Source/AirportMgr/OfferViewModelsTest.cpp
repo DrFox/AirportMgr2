@@ -120,4 +120,113 @@ bool FOfferInboxAcceptGoesThroughTheBoardTest::RunTest(const FString& Parameters
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferInboxWhyNotAcceptablePolledOnceThenCachedTest,
+	"AirportMgr.UI.OfferInbox.WhyNotAcceptablePolledOnceThenCached",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferInboxWhyNotAcceptablePolledOnceThenCachedTest::RunTest(const FString& Parameters)
+{
+	// ISSUE #169: WhyNotAcceptable is a full ArrivalPlanner::Plan - a route search per stand,
+	// then per runway exit - and NativeTick used to call it for every row, every frame, with
+	// nothing gating it. A quiet inbox (no offer added, accepted or declined; no graph edit;
+	// no occupancy change) must call it ONCE PER ROW, ever, not once per row per tick -
+	// UFlightBoard::GetWhyNotAcceptableCallsForTest counts the search itself, not the cached
+	// answer, so a fix that merely returned the same Why without re-deriving it would still
+	// fail this.
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+
+	constexpr int32 OfferCount = 3;
+	for (int32 Index = 0; Index < OfferCount; ++Index)
+	{
+		Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
+	}
+
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+
+	constexpr int32 Ticks = 5;
+	for (int32 Tick = 0; Tick < Ticks; ++Tick)
+	{
+		Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	}
+
+	TestEqual(TEXT("every offer got a row"), Inbox->GetOffers().Num(), OfferCount);
+	TestEqual(TEXT("N offers over K quiet ticks cost N searches, not N*K"),
+		Board->GetWhyNotAcceptableCallsForTest(), OfferCount);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FOfferInboxWhyNotAcceptableRecomputesOnEachRevisionTest,
+	"AirportMgr.UI.OfferInbox.WhyNotAcceptableRecomputesOnEachRevision",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FOfferInboxWhyNotAcceptableRecomputesOnEachRevisionTest::RunTest(const FString& Parameters)
+{
+	// THE OTHER HALF of the #169 fix: a cache that never invalidated would be as wrong as one
+	// that never cached. One row is watched through a bump of each of the three things
+	// UOfferViewModel gates on - the board, the guideline graph, and occupancy - and each
+	// bump must cost EXACTLY one more search of that one row, no more (a bump the row does
+	// not depend on leaking into a recompute) and no less (a bump it does depend on being
+	// missed).
+	URoadNetwork* Net = InboxNetwork();
+	UGroundTraffic* Traffic = NewObject<UGroundTraffic>();
+	USimClock* Clock = NewObject<USimClock>();
+	UFlightBoard* Board = NewObject<UFlightBoard>();
+	Board->Allocator = NewObject<UStandAllocator>();
+
+	Board->AddOffer(*Clock, InboxOffer(Clock->Now() + 600.0));
+
+	UOfferInboxViewModel* Inbox = NewObject<UOfferInboxViewModel>();
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("the one row's answer was searched once"),
+		Board->GetWhyNotAcceptableCallsForTest(), 1);
+
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("a repeat tick with nothing changed does not search again"),
+		Board->GetWhyNotAcceptableCallsForTest(), 1);
+
+	// 1. THE BOARD. A second offer added and immediately declined never becomes a row - Rows
+	//    ends this call exactly as it started - but UFlightBoard::Revision moved twice, and the
+	//    surviving row's own cached revision is now behind it.
+	UFlight* Transient = InboxOffer(Clock->Now() + 900.0);
+	Board->AddOffer(*Clock, Transient);
+	Board->Decline(*Clock, *Transient);
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("still one row"), Inbox->GetOffers().Num(), 1);
+	TestEqual(TEXT("a board revision the row depends on bumped it, once"),
+		Board->GetWhyNotAcceptableCallsForTest(), 2);
+
+	// 2. THE GUIDELINE GRAPH. Net.AddGuidelineNode is the same mutator NodeReachTest's own
+	//    "adding an edge bumped the revision" case uses - a hand-drawn edit, nothing to do
+	//    with this flight or this board.
+	const uint32 GuidelineBefore = Net->GetGuidelineRevision();
+	Net->AddGuidelineNode(FVector2D(50000.0, 50000.0), /*bDerived=*/false);
+	TestTrue(TEXT("the graph edit bumped the guideline revision"),
+		Net->GetGuidelineRevision() > GuidelineBefore);
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("a guideline revision the row depends on bumped it, once"),
+		Board->GetWhyNotAcceptableCallsForTest(), 3);
+
+	// 3. OCCUPANCY. HoldStand with no agent at all - the AirportOps reservation path, not a
+	//    dispatch - is enough: it is one of the two things ArrivalPlanner::Plan actually reads
+	//    off the occupancy table (see UGroundTraffic::OccupancyRevision's own comment).
+	FGuidelineNodeId SomeStand;
+	SomeStand.Index = 99;
+	TestTrue(TEXT("the hold was granted"), Traffic->HoldStand(-1, SomeStand));
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("an occupancy revision the row depends on bumped it, once"),
+		Board->GetWhyNotAcceptableCallsForTest(), 4);
+
+	// A last quiet tick proves the cache closed again rather than staying open after one miss.
+	Inbox->Refresh(*Board, *Traffic, *Net, *Clock);
+	TestEqual(TEXT("and a further quiet tick still does not search again"),
+		Board->GetWhyNotAcceptableCallsForTest(), 4);
+	return true;
+}
+
 #endif

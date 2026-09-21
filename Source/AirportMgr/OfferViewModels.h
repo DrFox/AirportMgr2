@@ -40,6 +40,29 @@ public:
 	FText GetRefusal() const { return Refusal; }
 
 private:
+	/**
+	 * The three revisions bAcceptable/Refusal were last computed at, and whether they have
+	 * been computed at all yet.
+	 *
+	 * WHY THIS ROW EXISTS (issue #169): WhyNotAcceptable is a full ArrivalPlanner::Plan - a
+	 * route search over every stand, then every runway exit - and Refresh used to run it
+	 * every tick for every row, whether or not anything it could depend on had moved. The
+	 * three things it depends on each publish a cheap revision already: the board itself
+	 * (UFlightBoard::Revision - added/accepted/declined/expired), the guideline graph
+	 * (URoadNetwork::GetGuidelineRevision - an edit changed the taxiways), and occupancy
+	 * (UGroundTraffic::OccupancyRevision - a stand claimed or freed, a runway taken or
+	 * cleared). Three integer compares replace the search on every call where none of the
+	 * three moved, which is most of them - the whole reason a route search per row per frame
+	 * went unnoticed until #169's profiling caught it.
+	 *
+	 * NOT reflected and not a UPROPERTY: bookkeeping about the last recompute, not state a
+	 * save would ever need - the same reasoning UGroundTraffic::LastStepsForTest gives.
+	 */
+	uint32 BoardRevisionAt = 0;
+	uint32 GuidelineRevisionAt = 0;
+	uint32 OccupancyRevisionAt = 0;
+	bool bWhyComputed = false;
+
 	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetAirline",
 		Category = "Offer", meta = (AllowPrivateAccess))
 	FText Airline;
@@ -84,9 +107,16 @@ public:
 	/**
 	 * Rebuild the rows from the board.
 	 *
-	 * Called on UFlightBoard::OnChanged and on tick. Rows are rebuilt rather than diffed:
-	 * there are a handful of them, and a diff would be a second model of what the inbox
-	 * holds - see "lists that must agree are ONE list".
+	 * CALLED ON TICK (issue #169 revised this from its old claim of "and on
+	 * UFlightBoard::OnChanged" - that delegate had fired from nearly every board method for
+	 * years with zero subscribers; see UFlightBoard::Revision, which replaces it). The ROW
+	 * SET - which flights have an offer at all - is rebuilt only when UFlightBoard::Revision
+	 * has moved since the last call: Board.Offers() allocates a fresh array on every call,
+	 * and diffing it against Rows was the same cost again for a tick where nothing happened.
+	 * Each row's OWN fields (the ETA text, and the acceptable/refusal pair gated on its own
+	 * three revisions - see UOfferViewModel) still refresh every call: bookkeeping about the
+	 * OFFER SET is cheap to gate here, but each row already knows how to gate what is
+	 * actually expensive.
 	 */
 	void Refresh(UFlightBoard& Board, UGroundTraffic& Traffic, const URoadNetwork& Network,
 		const USimClock& Clock);
@@ -106,6 +136,11 @@ private:
 
 	/** The same rows as raw pointers, because the list view and Blueprint want that shape. */
 	UPROPERTY(Transient) TArray<UOfferViewModel*> Offers;
+
+	/** UFlightBoard::Revision as of the last time Rows was rebuilt from Board.Offers(); see
+	 *  Refresh's own comment. Not a UPROPERTY: bookkeeping, not state a save would ever need. */
+	uint32 BoardRevisionAt = 0;
+	bool bRowsValid = false;
 
 	UPROPERTY(BlueprintReadOnly, Transient, FieldNotify, Getter = "GetPendingCount",
 		Category = "Offers", meta = (AllowPrivateAccess))
