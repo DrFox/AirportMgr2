@@ -269,4 +269,29 @@ namespace GuidelineGeom
 	AIRSIDE_API bool PointAtDistance(
 		const TArray<FVector2D>& Points, double Distance,
 		FVector2D& OutPosition, double& OutHeading);
+
+	/**
+	 * PointAtDistance with a START HINT, for a caller that walks the same polyline with
+	 * ever-increasing distances - FRouteFollower::Advance every substep, FClaimPass::
+	 * SampleBody's three calls per agent per substep. Without it each of those re-walked
+	 * the polyline from vertex 0 to find a span it had already found, or was about to find
+	 * again a few uu further on - issue #190.
+	 *
+	 * InOutHintVertex/InOutHintWalked are a CHECKPOINT of the plain overload's own loop -
+	 * the vertex it was about to test and how far the walk had gone to reach it - not a
+	 * second way of measuring the polyline. Passing them back in resumes that exact loop
+	 * instead of restarting it, so the two overloads share one implementation and can never
+	 * disagree - the single-evaluator rule this namespace exists to keep.
+	 *
+	 * A Distance BEHIND the hint - the one case a monotonically walked route cannot produce -
+	 * falls back to a walk from the start rather than trusting a hint that would walk
+	 * backwards, so a caller that got this wrong (or a Start/Replace that forgot to reset it)
+	 * is merely slow, never wrong. Seed InOutHintVertex/InOutHintWalked at 1 and 0.0 for the
+	 * first call on a polyline, and reset them there again whenever the polyline itself
+	 * changes - see FRouteFollower::Start and ::Replace.
+	 */
+	AIRSIDE_API bool PointAtDistance(
+		const TArray<FVector2D>& Points, double Distance,
+		FVector2D& OutPosition, double& OutHeading,
+		int32& InOutHintVertex, double& InOutHintWalked);
 }

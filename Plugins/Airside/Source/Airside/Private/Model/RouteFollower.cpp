@@ -16,6 +16,19 @@ void FRouteFollower::Start(const FRoutePlan& InPlan, const FAirframe& InAirframe
 	// Ground is NOT copied here any more (issue #83) - Advance and Replace take the airframe
 	// fresh from their caller every time instead.
 
+	// RESET WITH THE POLYLINE (issue #190): CursorVertex/CursorWalked checkpoint a walk over
+	// Plan.Polyline specifically, and Plan was just replaced above - a stale checkpoint would
+	// name a vertex on the PREVIOUS route, on the same or a different polyline where it means
+	// nothing. PointAtDistance's own Distance<Walked guard would catch a walk backwards, but
+	// InitialTravelled can be seeded FORWARD too (a rollout handover, see the comment below),
+	// which the guard cannot see is wrong on a polyline that changed under it.
+	CursorVertex = 1;
+	CursorWalked = 0.0;
+
+	// RECOMPUTED WITH THE PLAN, for the same reason: ReverseLegSteps describes THIS
+	// Plan.Steps array, and a Start always means a new one - see RebuildReverseLegSteps.
+	RebuildReverseLegSteps();
+
 	// LOGGED ONCE, HERE - not from EffectiveSteerLaw, which Advance below calls twice every
 	// frame this follower runs. #176: that used to log inline and turned one mis-authored
 	// airframe into ~3800 lines/s at 60 fps across a busy apron. Start runs once per dispatch,
@@ -103,8 +116,14 @@ bool FRouteFollower::Advance(double DeltaSeconds, const FAirframe& InAirframe, d
 
 	// Where the LINE points here. Not where the aircraft points - those are now two
 	// different things, and that gap is the whole of this function.
+	//
+	// HINTED (issue #190): Travelled only grows between Start/Replace calls (see
+	// CursorVertex's own comment), so this walks forward from where the LAST substep left
+	// off instead of from vertex 0 - the whole polyline was being re-walked once per agent
+	// per substep for a distance that had barely moved.
 	double LineHeading = 0.0;
-	if (!GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, OutPosition, LineHeading))
+	if (!GuidelineGeom::PointAtDistance(Plan.Polyline, Travelled, OutPosition, LineHeading,
+		CursorVertex, CursorWalked))
 	{
 		return false;
 	}
@@ -231,6 +250,19 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 
 	Plan = NewPlan;
 	Travelled = FMath::Clamp(Travelled, 0.0, Plan.Length);
+
+	// RESET WITH THE POLYLINE - see Start's own comment. A splice keeps the polyline's
+	// PREFIX unchanged up to the splice point, but the array is still a new one (NewPlan is
+	// a distinct FRoutePlan), so a checkpoint into the old Plan.Polyline's storage would be
+	// undefined the moment this assignment runs, not merely stale.
+	CursorVertex = 1;
+	CursorWalked = 0.0;
+
+	// RECOMPUTED WITH THE PLAN, for the same reason - see RebuildReverseLegSteps. The
+	// cursor starts at 0 again too: NextReverseLegRun's own "behind us" check will walk it
+	// forward past whatever the splice already drove, exactly as the per-tick scan this
+	// replaces would re-discover on its very next call.
+	RebuildReverseLegSteps();
 	{
 		// PER SPAN, because a route may contain a bay's reverse leg and judging that by the
 		// forward limit refuses a manoeuvre that is legal - see FSpeedProfile's overload. The
@@ -241,6 +273,55 @@ void FRouteFollower::Replace(const FRoutePlan& NewPlan, const FAirframe& InAirfr
 		Plan.DescribeSpanDirections(Spans);
 		Profile.Build(Plan.Polyline, InAirframe, Spans);
 	}
+}
+
+void FRouteFollower::RebuildReverseLegSteps()
+{
+	// EVERY bReverseLeg STEP, not just run starts: a run whose first step failed to arm
+	// (see NextReverseLegRun's own comment) must still be found from its second step once
+	// the first falls behind, which only works if the second step is itself a candidate in
+	// this array - a "run starts only" list would drop it.
+	ReverseLegSteps.Reset();
+	for (int32 Step = 0; Step < Plan.Steps.Num(); ++Step)
+	{
+		if (Plan.Steps[Step].bReverseLeg)
+		{
+			ReverseLegSteps.Add(Step);
+		}
+	}
+	ReverseLegCursor = 0;
+}
+
+bool FRouteFollower::NextReverseLegRun(int32& OutFrom, int32& OutTo)
+{
+	// MIRRORS THE PER-STEP SCAN THIS REPLACES EXACTLY (issue #190): that scan walked every
+	// step of Plan.Steps looking for the first one that was bReverseLeg AND not yet behind
+	// Travelled, then extended forward through the contiguous run. Only the population of
+	// candidates changed - precomputed once instead of re-tested every tick - and the
+	// "behind us" rule is applied one candidate at a time, in the same order, so a plan
+	// whose first reverse-leg step could not be armed still offers its second exactly when
+	// the original rescan would have.
+	while (ReverseLegSteps.IsValidIndex(ReverseLegCursor))
+	{
+		const int32 Step = ReverseLegSteps[ReverseLegCursor];
+		const double SpanStart = Step == 0 ? 0.0 : Plan.Steps[Step - 1].EndDistance;
+		if (SpanStart + UE_DOUBLE_KINDA_SMALL_NUMBER < Travelled)
+		{
+			// Behind us, PERMANENTLY: Travelled only grows between Start/Replace calls,
+			// which are the only two places that touch this array or the cursor.
+			++ReverseLegCursor;
+			continue;
+		}
+
+		OutFrom = Step;
+		OutTo = Step;
+		while (Plan.Steps.IsValidIndex(OutTo + 1) && Plan.Steps[OutTo + 1].bReverseLeg)
+		{
+			++OutTo;
+		}
+		return true;
+	}
+	return false;
 }
 
 bool FRouteFollower::HasArrived() const

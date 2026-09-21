@@ -533,8 +533,14 @@ public:
 	/** The handle for a live slot index, for callers walking GetEntities() by index. Unset if dead. */
 	FEntityInstanceId EntityIdAt(int32 Index) const;
 
-	/** Index of the live entity whose PoseNode is Node, or INDEX_NONE. A linear scan: the
-	 *  inspector asks once per frame for one node, and there are tens of stands. */
+	/**
+	 * Index of the live entity whose PoseNode is Node, or INDEX_NONE.
+	 *
+	 * MEMOISED against GuidelineRevision, not a linear scan any more (issue #190): "the
+	 * inspector asks once per frame for one node, and there are tens of stands" stopped being
+	 * true once FClaimPass::ClaimGoalNode started calling this for every agent every
+	 * substep - the inspector was never the busy caller. See PoseNodeIndex.
+	 */
 	int32 FindEntityIndexByPoseNode(FGuidelineNodeId Node) const;
 
 	/**
@@ -643,6 +649,28 @@ private:
 
 	UPROPERTY() TArray<FEntityInstance> Entities;
 	UPROPERTY() TArray<int32>           EntityFreeList;
+
+	/**
+	 * FindEntityIndexByPoseNode's index, memoised the same discipline FNodeReachCache and
+	 * FRunwayChainCache use against GuidelineRevision - brought inside this class rather than
+	 * a separate cache struct because there is only ever one Entities array to be stale
+	 * against, so the "which network was this built for" check those two need does not apply.
+	 *
+	 * NOT MAINTAINED BY PlaceEntity/RemoveEntity BY HAND, which is what the issue that added
+	 * this proposed: that is a second place this index could drift from Entities, exactly the
+	 * kind of duplication FindEntityIndexByPoseNode used to be safe from by reading Entities
+	 * directly. Every writer of PoseNode - PlaceEntity's AddGuidelineNode, RemoveEntity's
+	 * RemoveGuidelineNode - already bumps GuidelineRevision, so the mismatch is free to detect
+	 * and the rebuild below is the only place this map is ever written.
+	 *
+	 * MUTABLE: FindEntityIndexByPoseNode is const, and rebuilding this is memoisation of
+	 * Entities, not a decision - the array being memoised changed a revision ago, not now.
+	 */
+	mutable TMap<FGuidelineNodeId, int32> PoseNodeIndex;
+
+	/** GuidelineRevision PoseNodeIndex was built against. MAX_uint32 so the very first call
+	 *  always rebuilds rather than matching a network that happens to start at revision 0. */
+	mutable uint32 PoseNodeIndexRevision = MAX_uint32;
 
 	/** See SampleGuidelineCallCountForTest. mutable for the same reason ContextBuildCountForTest
 	 *  is on UBuildSession: SampleGuideline is const and this counts real work it did, not a

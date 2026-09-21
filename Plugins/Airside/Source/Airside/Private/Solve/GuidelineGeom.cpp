@@ -339,7 +339,8 @@ namespace GuidelineGeom
 
 	bool PointAtDistance(
 		const TArray<FVector2D>& Points, double Distance,
-		FVector2D& OutPosition, double& OutHeading)
+		FVector2D& OutPosition, double& OutHeading,
+		int32& InOutHintVertex, double& InOutHintWalked)
 	{
 		if (Points.Num() < 2)
 		{
@@ -349,8 +350,24 @@ namespace GuidelineGeom
 			return false;
 		}
 
-		double Walked = 0.0;
-		for (int32 At = 1; At < Points.Num(); ++At)
+		// RESUME THE CHECKPOINT, or start over if it cannot be trusted for this call - see
+		// the header. Trusting it blindly for a Distance BEHIND it would walk backwards from
+		// the wrong end of the span and report a point nearer the START than the truth.
+		//
+		// CLAMPED UP TO Points.Num(), NOT Points.Num() - 1: Points.Num() is the "past the
+		// end" checkpoint the fallback below leaves behind, and the loop's own condition
+		// (At < Points.Num()) already skips it correctly - clamping it down to the last
+		// valid span would re-test that span with a Walked that already counts it, reporting
+		// a point short of the true one by that span's length.
+		int32 At = FMath::Clamp(InOutHintVertex, 1, Points.Num());
+		double Walked = InOutHintWalked;
+		if (Distance < Walked)
+		{
+			At = 1;
+			Walked = 0.0;
+		}
+
+		for (; At < Points.Num(); ++At)
 		{
 			const FVector2D Step = Points[At] - Points[At - 1];
 			const double StepLength = Step.Size();
@@ -384,6 +401,13 @@ namespace GuidelineGeom
 				// round rather than very nearly a full revolution.
 				OutHeading = HeadingStart
 					+ FMath::UnwindRadians(HeadingEnd - HeadingStart) * (Into / StepLength);
+
+				// CHECKPOINTED AT THE START OF THIS SPAN, not one past it: the next call's
+				// Distance may land in this same span again (two callers a footprint apart
+				// on a long edge, or the same follower a substep later that barely moved),
+				// and re-testing it first is one comparison, not a walk backed into it.
+				InOutHintVertex = At;
+				InOutHintWalked = Walked;
 				return true;
 			}
 
@@ -393,9 +417,9 @@ namespace GuidelineGeom
 		// Past the end, or a polyline of nothing but coincident points. Report the last
 		// real position and the last real direction: an agent that overshoots by a frame
 		// should be standing at its destination facing the way it arrived.
-		for (int32 At = Points.Num() - 1; At >= 1; --At)
+		for (int32 Rewind = Points.Num() - 1; Rewind >= 1; --Rewind)
 		{
-			const FVector2D Step = Points[At] - Points[At - 1];
+			const FVector2D Step = Points[Rewind] - Points[Rewind - 1];
 			if (!Step.IsNearlyZero())
 			{
 				OutPosition = Points.Last();
@@ -404,11 +428,34 @@ namespace GuidelineGeom
 				// that arrives does not snap as it stops.
 				const FVector2D Facing = VertexDirection(Points, Points.Num() - 1, /*bLeaving=*/false);
 				OutHeading = RoadGeom::Bearing(Facing);
+
+				// PARKED PAST THE LAST SPAN, so an agent sitting past the end of its route
+				// (arrived, or overshot by a frame) does not re-walk the whole polyline on
+				// every further call. Points.Num(), NOT Points.Num() - 1: Walked here is
+				// already the FULL length (the for loop above ran to completion), so a hint
+				// pointing at the last span would have this same length double-counted on
+				// the next call's Walked + StepLength test - see the resume clamp's own
+				// comment for the failure that produces.
+				InOutHintVertex = Points.Num();
+				InOutHintWalked = Walked;
 				return true;
 			}
 		}
 
 		return false;
+	}
+
+	bool PointAtDistance(
+		const TArray<FVector2D>& Points, double Distance,
+		FVector2D& OutPosition, double& OutHeading)
+	{
+		// THE ORACLE: always walks from vertex 1 with nothing carried in, so a test that
+		// compares this against the hinted overload above is comparing two genuinely
+		// different entry points into the SAME loop, not two copies of it that could drift
+		// apart - see the header's "single-evaluator" note.
+		int32 HintVertex = 1;
+		double HintWalked = 0.0;
+		return PointAtDistance(Points, Distance, OutPosition, OutHeading, HintVertex, HintWalked);
 	}
 }
 

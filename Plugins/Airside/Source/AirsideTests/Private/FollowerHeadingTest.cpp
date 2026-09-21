@@ -210,4 +210,111 @@ bool FFollowerHeadingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+/**
+ * Pins GuidelineGeom::PointAtDistance's hinted overload (issue #190) against the plain one,
+ * which stays the ORACLE - see the header - by construction, walking a LONG, mixed route
+ * forward. FRouteFollower::Advance and FClaimPass::SampleBody both feed a checkpoint from one
+ * call into the next; this proves that checkpoint never disagrees with asking fresh, which is
+ * the one thing "results must be bitwise identical" needs of it.
+ */
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPointAtDistanceHintMatchesOracleTest,
+	"Airside.Model.PointAtDistanceHintMatchesOracle",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPointAtDistanceHintMatchesOracleTest::RunTest(const FString& Parameters)
+{
+	// TWENTY ARCS WELDED END TO END - hundreds of vertices, mixing the curved interpolation
+	// (VertexDirection's averaging) with the straight short-circuit (IsStraight), so the walk
+	// crosses many span boundaries of both kinds, which is exactly where a checkpoint could
+	// disagree with a fresh walk if the hint's carried-over Walked value were computed wrong.
+	TArray<FVector2D> LongRoute;
+	for (int32 Arc = 0; Arc < 20; ++Arc)
+	{
+		TArray<FVector2D> Piece = QuarterCircle(400.0 + Arc * 17.0, 16);
+		const FVector2D Offset = LongRoute.Num() > 0 ? LongRoute.Last() : FVector2D::ZeroVector;
+		for (FVector2D& Point : Piece)
+		{
+			Point += Offset;
+		}
+		if (LongRoute.Num() > 0)
+		{
+			// DROP THE SHARED VERTEX, the way a route welds consecutive edges into one
+			// polyline (FRoutePlan::Polyline's own comment) - two coincident points would
+			// hand PointAtDistance a zero-length span it has to skip, which this test does
+			// not need to exercise on top of everything else it already covers.
+			Piece.RemoveAt(0);
+		}
+		LongRoute.Append(Piece);
+	}
+
+	const double TotalLength = GuidelineGeom::PolylineLength(LongRoute);
+	TestTrue(TEXT("the fixture route is actually long"), TotalLength > 10000.0);
+
+	int32 HintVertex = 1;
+	double HintWalked = 0.0;
+	bool bAllMatch = true;
+	FString Mismatch;
+
+	// FAR FINER THAN THE VERTEX SPACING, so the sweep lands inside spans as often as it lands
+	// on their boundaries - both are places a checkpoint could go wrong in a different way.
+	//
+	// AND THREE STEPS PAST THE END: an agent that arrives, or overshoots by a frame, keeps
+	// asking after Distance > TotalLength, and the fallback that answers it checkpoints
+	// differently from the main loop (Points.Num(), not the last span - see the header). A
+	// sweep that stopped exactly at TotalLength would never re-enter PointAtDistance with the
+	// hint already parked there, which is exactly where that checkpoint was once wrong.
+	constexpr int32 Samples = 2000;
+	constexpr int32 OvershootSteps = 3;
+	for (int32 Step = 0; Step <= Samples + OvershootSteps && bAllMatch; ++Step)
+	{
+		const double Distance = Step <= Samples
+			? TotalLength * (static_cast<double>(Step) / Samples)
+			: TotalLength + (Step - Samples) * 137.0;
+
+		FVector2D OraclePosition;
+		double OracleHeading = 0.0;
+		const bool bOracleOk = GuidelineGeom::PointAtDistance(LongRoute, Distance, OraclePosition, OracleHeading);
+
+		FVector2D HintedPosition;
+		double HintedHeading = 0.0;
+		const bool bHintedOk = GuidelineGeom::PointAtDistance(
+			LongRoute, Distance, HintedPosition, HintedHeading, HintVertex, HintWalked);
+
+		if (bOracleOk != bHintedOk)
+		{
+			bAllMatch = false;
+			Mismatch = FString::Printf(TEXT("at distance %.3f: oracle returned %d, hinted %d"),
+				Distance, bOracleOk, bHintedOk);
+			break;
+		}
+
+		// BITWISE, not nearly-equal (the two share one loop body - see the header - so a
+		// real divergence is a checkpoint bug, not rounding that an epsilon would paper over).
+		if (bOracleOk && (!OraclePosition.Equals(HintedPosition, 0.0) || OracleHeading != HintedHeading))
+		{
+			bAllMatch = false;
+			Mismatch = FString::Printf(
+				TEXT("at distance %.3f: oracle (%.9f,%.9f)/%.12f vs hinted (%.9f,%.9f)/%.12f"),
+				Distance, OraclePosition.X, OraclePosition.Y, OracleHeading,
+				HintedPosition.X, HintedPosition.Y, HintedHeading);
+			break;
+		}
+	}
+
+	TestTrue(FString::Printf(TEXT("the hint matches the oracle walking forward (%s)"), *Mismatch),
+		bAllMatch);
+
+	// THE CHECKPOINT ITSELF MUST NOT DRIFT PAST THE TRUE LENGTH. The "past the end" fallback
+	// answers from Points.Last() regardless of Walked, so a Walked that crept upward on every
+	// further overshoot call could hide behind a still-correct position for a while and only
+	// misreport a nearer-the-end Distance much later - this catches the drift directly rather
+	// than waiting for it to surface as a wrong point. See PointAtDistance's own comment on
+	// why the fallback checkpoints at Points.Num(), not the last span.
+	TestTrue(FString::Printf(TEXT("the hint never overshoots the true length (%.3f vs %.3f)"),
+		HintWalked, TotalLength), HintWalked <= TotalLength + UE_DOUBLE_KINDA_SMALL_NUMBER);
+
+	return true;
+}
+
 #endif

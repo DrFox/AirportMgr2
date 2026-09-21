@@ -1229,14 +1229,26 @@ int32 URoadNetwork::FindEntityIndexByPoseNode(FGuidelineNodeId Node) const
 	{
 		return INDEX_NONE;
 	}
-	for (int32 Index = 0; Index < Entities.Num(); ++Index)
+
+	// REBUILT ONCE PER GuidelineRevision, not per call - see PoseNodeIndex's own comment.
+	// A revision match means Entities has not moved since the last rebuild, so the map is
+	// exactly as current as a fresh scan would be.
+	if (PoseNodeIndexRevision != GuidelineRevision)
 	{
-		if (Entities[Index].bAlive && Entities[Index].PoseNode == Node)
+		PoseNodeIndex.Reset();
+		PoseNodeIndex.Reserve(Entities.Num());
+		for (int32 Index = 0; Index < Entities.Num(); ++Index)
 		{
-			return Index;
+			if (Entities[Index].bAlive)
+			{
+				PoseNodeIndex.Add(Entities[Index].PoseNode, Index);
+			}
 		}
+		PoseNodeIndexRevision = GuidelineRevision;
 	}
-	return INDEX_NONE;
+
+	const int32* Found = PoseNodeIndex.Find(Node);
+	return Found != nullptr ? *Found : INDEX_NONE;
 }
 
 const FResolvedAnchor* URoadNetwork::FindResolvedAnchor(FEntityInstanceId Entity, FName AnchorId) const
