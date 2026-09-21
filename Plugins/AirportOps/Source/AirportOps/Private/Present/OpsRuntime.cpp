@@ -3,6 +3,8 @@
 #include "Build/BuildCost.h"
 #include "Content/AirportOpsSettings.h"
 #include "Content/AirsideSettings.h"
+#include "Model/ArrivalPlanner.h"
+#include "Model/GroundTraffic.h"
 #include "Model/OpsCatalog.h"
 #include "Model/OpsDefinition.h"
 #include "Entities/AircraftType.h"
@@ -396,6 +398,63 @@ bool UOpsRuntime::SaveToSlot(const FString& SlotName)
 	Events->NotifyNotification(bOk ? FString::Printf(TEXT("Saved '%s'"), *SlotName)
 	                               : FString::Printf(TEXT("Save to '%s' failed"), *SlotName));
 	return bOk;
+}
+
+EArrivalRefusal UOpsRuntime::LandNear(const FVector2D& Focus, const FAirframe* Override)
+{
+	// THE VIEW FOCUS RATHER THAN THE CURSOR: the bar's Land button is clicked with the cursor
+	// on the bar, where "nearest the cursor" is meaningless, and the focus is where the player
+	// is looking either way - both drivers resolve Focus themselves before calling this.
+	UE_LOG(LogAirportOps, Log, TEXT("Land: nearest runway to the view focus (%.0f, %.0f)"),
+		Focus.X, Focus.Y);
+
+	UGroundTraffic* Traffic = Target != nullptr ? Target->GetGroundTraffic() : nullptr;
+	if (Target == nullptr || Target->Network == nullptr || Traffic == nullptr)
+	{
+		// NoRunway rather than a new refusal of its own: there is nothing here to check a
+		// runway AGAINST, which is the same fact that refusal already names.
+		UE_LOG(LogAirportOps, Warning, TEXT("Land: no attached network to land on."));
+		return EArrivalRefusal::NoRunway;
+	}
+
+	// THE SAME RESOLVER EVERY DISPATCH FALLS BACK TO, for the same reason: an aircraft that
+	// approached as one airframe and taxied as another would be two different aircraft
+	// depending on which phase you were watching - see UAirsideSettings::
+	// ResolveDefaultAirframe.
+	//
+	// UNLESS THE CALLER PASSED ONE. Override exists so a particular aeroplane can be put on the
+	// runway without waiting for the board to offer one - ARoadBuildController::LandAircraftType
+	// is the one place that override is configured and read, and it stays there: it is a
+	// testing-only Config UPROPERTY on the driver, not a fact about the airport this class owns.
+	const FAirframe Airframe = Override != nullptr ? *Override : UAirsideSettings::ResolveDefaultAirframe();
+	if (Override != nullptr)
+	{
+		UE_LOG(LogAirportOps, Log,
+			TEXT("Land: using the configured test type (%s) rather than the default - clear ")
+			TEXT("LandAircraftType in DefaultGame.ini to restore it"),
+			*Airframe.TypeCode.ToString());
+	}
+	else
+	{
+		UE_LOG(LogAirportOps, Log, TEXT("Land: using the content default airframe (%s)"),
+			*Airframe.TypeCode.ToString());
+	}
+
+	// ONE CALL: make, aim, add and accept the debug flight are all UFlightBoard's job - see
+	// AcceptImmediate's own header (issue #96). THROUGH THE BOARD WHEN THERE IS ONE, and there
+	// always is one here - this class owns it - which is exactly what makes a direct dispatch
+	// two doors onto arrival: an aeroplane landed straight onto the traffic model would belong
+	// to no flight, so nothing would ever give its stand back or know it had landed.
+	const EArrivalRefusal Why = FlightBoard->AcceptImmediate(*Traffic, *Target->Network, *Clock,
+		Airframe, Focus, NSLOCTEXT("AirportOps", "DebugAirline", "(key 7)"));
+	if (Why != EArrivalRefusal::None)
+	{
+		// The key used to do nothing at all when the airport was full. Now it says which of the
+		// seven refusals it was, in the sentence the inbox would show.
+		UE_LOG(LogAirportOps, Warning, TEXT("Land: no flight. %s"),
+			*ArrivalPlanner::DescribeRefusal(Why));
+	}
+	return Why;
 }
 
 bool UOpsRuntime::LoadFromSlot(const FString& SlotName)

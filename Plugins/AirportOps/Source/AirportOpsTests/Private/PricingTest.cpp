@@ -111,6 +111,40 @@ bool FPricingElasticityTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FPricingStepLandingFeeTest,
+	"AirportOps.Model.PricingStepLandingFee",
+	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)
+
+bool FPricingStepLandingFeeTest::RunTest(const FString& Parameters)
+{
+	// WORLD-FREE, which is the whole point of issue #191's move: StepLandingFee used to be
+	// ARoadBuildController::StepLandingFee, reachable only by driving PIE with a live
+	// OpsRuntime and Pricing attached.
+	UPricing* Pricing = NewObject<UPricing>();
+	TestEqual(TEXT("starts at the authored default"), Pricing->LandingFeeMultiplier, 1.0, 1e-9);
+
+	Pricing->StepLandingFee(+1);
+	TestEqual(TEXT("one step up is ten percent"), Pricing->LandingFeeMultiplier, 1.1, 1e-9);
+
+	Pricing->StepLandingFee(-1);
+	TestEqual(TEXT("one step down undoes it"), Pricing->LandingFeeMultiplier, 1.0, 1e-9);
+
+	for (int32 I = 0; I < 20; ++I) { Pricing->StepLandingFee(+1); }
+	TestEqual(TEXT("stepping up hits the ceiling and stops there, rather than pricing the "
+		"inbox empty"), Pricing->LandingFeeMultiplier, 2.0, 1e-9);
+
+	for (int32 I = 0; I < 20; ++I) { Pricing->StepLandingFee(-1); }
+	TestEqual(TEXT("stepping down hits the floor and stops there, rather than reaching zero and "
+		"making DemandFactor meaningless"), Pricing->LandingFeeMultiplier, 0.5, 1e-9);
+
+	const double Before = Pricing->LandingFeeMultiplier;
+	Pricing->StepLandingFee(0);
+	TestEqual(TEXT("a zero direction is a no-op, the same guard the controller used to make "
+		"before calling this"), Pricing->LandingFeeMultiplier, Before, 1e-9);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FPricingBuildAndScrapTest,
 	"AirportOps.Model.PricingBuildAndScrap",
 	EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::EngineFilter)

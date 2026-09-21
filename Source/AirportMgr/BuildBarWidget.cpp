@@ -404,7 +404,11 @@ void UBuildBarWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 
 void UBuildBarWidget::RefreshState()
 {
-	const ARoadBuildController* C = Controller();
+	// NON-CONST, though this method never mutates the controller itself: Controller() already
+	// returns a mutable pointer, and Action.IsEnabled/IsActive now build an FBuildActionContext
+	// from it (issue #191), which holds a non-const ARoadBuildController& because Execute
+	// shares the same field and does mutate. A const C here would refuse to bind to that.
+	ARoadBuildController* C = Controller();
 	if (C == nullptr)
 	{
 		return;

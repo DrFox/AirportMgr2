@@ -13,7 +13,14 @@ public class AirportMgr : ModuleRules
 		// ever depends on the game, and AirportOps depends on Airside, never the reverse.
 		// DeveloperSettings: UAirportMgrUISettings, so the UI style asset is CONFIGURED and
 		// not coded - the same reason UAirsideSettings and UAirportOpsSettings take it.
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "DeveloperSettings", "Airside", "AirportOps" });
+		//
+		// NO EnhancedInput (issue #191 dropped it): input here is legacy InputComponent->
+		// BindKey plus IsInputKeyDown polls (ARoadBuildController::SetupInputComponent and
+		// UpdateView) - nothing in this module ever called an EnhancedInput C++ type, so the
+		// dependency bought nothing. DefaultInput.ini's EnhancedPlayerInput/
+		// EnhancedInputComponent defaults are a project-wide, plugin-level setting, unaffected
+		// by this module's own dependency list.
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "DeveloperSettings", "Airside", "AirportOps" });
 
 		// UMG: the build bar. Slate/SlateCore: FInputChord (the registry's Ctrl bindings) and
 		// the UMG types' bases.

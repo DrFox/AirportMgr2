@@ -14,6 +14,7 @@ class UFlightBoard;
 class UOfferGenerator;
 class ULedger;
 class UPricing;
+struct FAirframe;
 enum class EAgentPhase : uint8;
 enum class EArrivalRefusal : uint8;
 
@@ -86,6 +87,30 @@ public:
 	bool SaveToSlot(const FString& SlotName);
 	/** Restores clock and network, clears agents and undo history, rebuilds the actor's mesh. */
 	bool LoadFromSlot(const FString& SlotName);
+
+	/**
+	 * Lands an aircraft near Focus, through the flight board so it belongs to a flight the rest
+	 * of the game can track rather than an aeroplane that answers to nothing - see
+	 * UFlightBoard::AcceptImmediate's own header for why a direct dispatch is a second door
+	 * onto arrival, the thing this exists to avoid.
+	 *
+	 * Override is the one airframe the caller insists on, or null to resolve the content
+	 * default the airport would otherwise land - see UAirsideSettings::ResolveDefaultAirframe.
+	 * The CALLER still owns deciding whether an override applies (ARoadBuildController::
+	 * LandAircraftType is its own Config UPROPERTY, a testing-only override on the driver, not
+	 * a fact about the airport) - this only decides what happens once one is or is not given.
+	 *
+	 * Returns EArrivalRefusal::NoRunway when there is no attached network to check a runway
+	 * against at all (Target null, or its Network or ground traffic not yet built), and
+	 * whatever AcceptImmediate itself refused for otherwise - the same sentence
+	 * ArrivalPlanner::DescribeRefusal would print for it.
+	 *
+	 * MOVED FROM ARoadBuildController::LandAircraftNearViewFocus / LandThroughTheBoard by issue
+	 * #191: which aeroplane lands and how it reaches the board is this class's decision - it
+	 * already owns the board, the clock and the traffic model AcceptImmediate needs - not a
+	 * PlayerController's, and the old home could only be exercised by driving PIE.
+	 */
+	EArrivalRefusal LandNear(const FVector2D& Focus, const FAirframe* Override);
 
 	/** True once Attach has armed the repeating offer schedule. False if no airline in the
 	 *  catalog offers anything, or before Attach - see Attach's own comment. */

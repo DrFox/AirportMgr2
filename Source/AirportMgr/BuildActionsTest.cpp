@@ -110,14 +110,17 @@ bool FBuildActionTryRunTest::RunTest(const FString& Parameters)
 	int32 RanCount = 0;
 	FBuildAction Action;
 	Action.Id = FName(TEXT("test.action"));
-	Action.Execute = [&RanCount](ARoadBuildController&) { ++RanCount; };
-	Action.IsActive = [](const ARoadBuildController&) { return false; };
+	// FBuildActionContext&, not a bare ARoadBuildController& - issue #191 gave every action's
+	// Execute/IsActive/IsEnabled that context instead, so this generic TryRun test (which
+	// exercises none of the fields on it) matches the real signature.
+	Action.Execute = [&RanCount](FBuildActionContext&) { ++RanCount; };
+	Action.IsActive = [](const FBuildActionContext&) { return false; };
 
-	Action.IsEnabled = [](const ARoadBuildController&) { return false; };
+	Action.IsEnabled = [](const FBuildActionContext&) { return false; };
 	TestFalse(TEXT("TryRun refuses a disabled action"), Action.TryRun(*C, TEXT("Test")));
 	TestEqual(TEXT("Execute did not run while disabled"), RanCount, 0);
 
-	Action.IsEnabled = [](const ARoadBuildController&) { return true; };
+	Action.IsEnabled = [](const FBuildActionContext&) { return true; };
 	TestTrue(TEXT("TryRun runs an enabled action"), Action.TryRun(*C, TEXT("Test")));
 	TestEqual(TEXT("Execute ran exactly once while enabled"), RanCount, 1);
 
