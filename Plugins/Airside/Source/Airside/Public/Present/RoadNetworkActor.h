@@ -916,6 +916,12 @@ private:
 	 *  RebuildCountForTest, not state a save would ever need. */
 	int32 RebuildCount = 0;
 
+	/** How many of those calls ran the DERIVED-graph pass - guideline graph, anchor links,
+	 *  plots, traffic - rather than skipping it for a Geometry-only change. See
+	 *  TopologyRebuildCountForTest (issue #165): a Geometry notify bumps RebuildCount above
+	 *  but not this, which is the whole measurement a drag-frame test needs. */
+	int32 TopologyRebuildCount = 0;
+
 	/** Agents and dispatch - see UAirsideTraffic's own header. Same CreateDefaultSubobject
 	 *  and Transient reasoning as Presenter. */
 	UPROPERTY(Transient) TObjectPtr<UAirsideTraffic> Traffic;
@@ -962,6 +968,16 @@ private:
 	 *  functions and level-authored tunables. One place, so a rebuild cannot read the
 	 *  knobs into two different snapshots of itself. */
 	URoadSurfacePresenter::FSurfaceSettings MakeSurfaceSettings();
+
+	/**
+	 * What OnChanged actually binds to (issue #165) - RebuildMesh() is a thin forwarder
+	 * passing Topology, kept at its old name and signature because IRoadEditTarget, a
+	 * UFUNCTION(CallInEditor) button, and every test in this plugin call it with no
+	 * argument and expect a full rebuild. This is where Kind is read: Geometry runs the
+	 * presenter's surface-only path and returns before Plots or Traffic are touched;
+	 * Topology runs the whole pipeline exactly as RebuildMesh always has.
+	 */
+	void RebuildMeshForChange(EChangeKind Kind);
 
 	/** The narrower FSurfaceSettings UpdateGhost/BuildGhostBuffers need - see its own
 	 *  comment for why this is not MakeSurfaceSettings with most of it discarded. */
@@ -1071,6 +1087,17 @@ public:
 	 * silently break this count's meaning.
 	 */
 	int32 RebuildCountForTest() const { return RebuildCount; }
+
+	/**
+	 * How many of those rebuilds ran the guideline graph / anchor links / plots / traffic
+	 * pass, for Airside.Present.DragNotifiesGeometryOnly (issue #165).
+	 *
+	 * SEPARATE FROM RebuildCount, on purpose: a drag of N MoveNode frames bumps RebuildCount
+	 * N times (the surface must repaint every frame) but this only once, at
+	 * EndInteractiveEdit - which is exactly the claim "a drag frame does not re-derive the
+	 * graph" and RebuildCount alone cannot state.
+	 */
+	int32 TopologyRebuildCountForTest() const { return TopologyRebuildCount; }
 
 	/** The newest agent's Phase, for the same test - see UAirsideTraffic::
 	 *  LastAgentPhaseForTest for why Gone stands in for "no agent". */

@@ -19,6 +19,28 @@ class UGroundTraffic;
 class UEntityDefinition;
 
 /**
+ * What a graph change notification is ABOUT - issue #165. Every committed edit and every
+ * drag frame used to run the same full pipeline (solve, guideline graph, anchor links,
+ * plots, traffic), because URoadEditFacade::OnChanged carried no way to say less had
+ * happened. A dragged node is GEOMETRY: positions moved, but nothing was created, destroyed,
+ * split, or reclassified, so the graph's SHAPE - which nodes exist, how they connect - is
+ * exactly what it was. Everything else (PlaceNode, ConnectNodes, SplitSegment, DeleteNode,
+ * DeleteSegment, AddApron/DeleteApron, PlaceEntity/DeleteEntity, runway facts, and the one
+ * notify EndInteractiveEdit fires when a drag commits) is TOPOLOGY, because the derived
+ * graph - guidelines, anchor links, stand layouts, plots, agent routes - can only be stale
+ * or wrong if one of those changed.
+ *
+ * A PLAIN enum, not a UENUM: it travels on FOnNetworkChanged, an ordinary
+ * DECLARE_MULTICAST_DELEGATE - never a UPROPERTY or a UFUNCTION parameter - so nothing here
+ * is reflected and UHT never needs to see it (see CLAUDE.md on plain enums and UHT).
+ */
+enum class EChangeKind : uint8
+{
+	Geometry,
+	Topology
+};
+
+/**
  * The facade a tool edits through, seen only as the calls a tool makes.
  *
  * Pattern: Facade (ARoadNetworkActor) exposed to Strategy (the IBuildTool family) through

@@ -63,6 +63,19 @@ class IBuildPurse;
  * SetIntermediateHoldingPosition commits its scope WITHOUT notifying, by design - a holding
  * position changes neither pavement nor mesh.
  *
+ * MoveNode's (and MoveApronCorner's) PER-FRAME NOTIFY IS EChangeKind::Geometry, BUT ONLY
+ * WHILE AN INTERACTIVE EDIT IS OPEN (issue #165, tightened by review follow-up). Every
+ * earlier drag frame ran the full pipeline, guideline graph and anchor links and plots and
+ * traffic included, at frame rate. Nothing about a slid position needs any of those rebuilt
+ * until the drag actually stops moving nodes around, so EndInteractiveEdit(bKeep=true) fires
+ * one EChangeKind::Topology notify of its own once the drag commits, and that single notify
+ * is what catches the derived graph up - see its own comment. THE BARE-CALL TRAP: that promise
+ * only holds while `Use->IsEditing()` is true at the moment of the notify - a call with no
+ * EndInteractiveEdit coming (an editor world, where HistoryForEdit() is a deliberate no-op,
+ * or a bare `Actor->MoveNode(...)` that opens and closes its own tiny edit) notifies
+ * EChangeKind::Topology instead, because nothing else will ever catch it up. See MoveNode's
+ * own comment for the exact three cases.
+ *
  * ConnectGuidelines and DisconnectGuideline go through CommitAndNotify too, same as every
  * other scope-committing mutator above (issue #125). They used to open an FRoadEditScope and
  * fall off the end without calling Commit() on it, so a successful link or unlink pushed no
@@ -90,8 +103,15 @@ public:
 	 */
 	virtual URoadProfile* ResolveProfileFor(ERoadKind Kind, int32 WidthIndex) override;
 
-	/** Fired wherever this class's mutators used to call ARoadNetworkActor::RebuildMesh(). */
-	DECLARE_MULTICAST_DELEGATE(FOnNetworkChanged);
+	/**
+	 * Fired wherever this class's mutators used to call ARoadNetworkActor::RebuildMesh().
+	 *
+	 * CARRIES EChangeKind (issue #165), so the listener can skip the derived-graph passes
+	 * (guidelines, anchor links, plots, traffic) on a Geometry-only notify - see that enum's
+	 * own comment for the Geometry/Topology split, and NotifyChanged below for which mutators
+	 * pass which.
+	 */
+	DECLARE_MULTICAST_DELEGATE_OneParam(FOnNetworkChanged, EChangeKind);
 	FOnNetworkChanged OnChanged;
 
 	// --- IRoadEditTarget ---------------------------------------------------------------
@@ -258,8 +278,14 @@ private:
 	 * THE single OnChanged.Broadcast() call site - see the class comment for exactly which
 	 * mutators call this directly (Undo, Redo, ClearNetwork, MoveNode) versus through
 	 * CommitAndNotify below, and which two currently call neither (issue #125).
+	 *
+	 * DEFAULTS TO Topology, which is every call site except MoveNode's per-frame notify
+	 * (issue #165): every scope-committing mutator through CommitAndNotify changes the
+	 * graph's shape, and so do Undo/Redo/ClearNetwork (they replace Network wholesale) and
+	 * MergeNodes (it removes a node). MoveNode passes Geometry explicitly, because a drag
+	 * frame moves a position and nothing else - see its own call site.
 	 */
-	void NotifyChanged();
+	void NotifyChanged(EChangeKind Kind = EChangeKind::Topology);
 
 	/**
 	 * THE FREE DOOR. Edit.Commit() plus NotifyChanged(), in one call so a mutator that commits
@@ -346,6 +372,29 @@ private:
 	mutable bool bHasLastDeletionPlan = false;
 	mutable FRoadDeletionPlan LastDeletionPlan;
 	mutable int32 DeletionPlanComputeCount = 0;
+
+	/**
+	 * Whether MoveNode or MoveApronCorner actually moved something during the CURRENT
+	 * interactive edit - cleared in BeginInteractiveEdit, set by their own Geometry notify.
+	 *
+	 * WHAT THIS GUARDS (issue #165 follow-up review). Before #165, every MoveNode/
+	 * MoveApronCorner notify ran the whole pipeline, so it did not matter whether the edit
+	 * that owned a drag was later kept or abandoned: the derived graph was always fresh.
+	 * After #165 a drag frame notifies Geometry only, so EndInteractiveEdit is the ONLY place
+	 * left that can catch the derived graph up - and it needs to know whether there is
+	 * anything to catch up. Read in exactly two places:
+	 *   - bKeep=false (abandoned): AbandonEdit only drops the undo snapshot, it does NOT put
+	 *     the nodes back, so a drag that moved something and was then abandoned (Escape) would
+	 *     leave guidelines/anchor links/plots/traffic pointed at pre-drag positions FOREVER
+	 *     with no flag here to say so - nothing else will ever notify Topology for that edit.
+	 *   - bKeep=true with nothing moved (a click-release that opened and closed an edit
+	 *     without a single successful move): firing a Topology notify anyway would be a full
+	 *     rebuild that never happened before #165, for no reason.
+	 * NOT read on the CanAfford-revert branch inside bKeep=true - that branch already
+	 * notifies Topology itself via RevertEdit, unconditionally, because a reverted drag always
+	 * changed something (the charge check only runs after a real move).
+	 */
+	bool bGeometryChangedDuringEdit = false;
 
 	/**
 	 * The actor this facade edits, found through Outer rather than stored a second time.

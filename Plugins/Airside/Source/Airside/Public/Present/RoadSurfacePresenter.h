@@ -7,6 +7,7 @@
 #include "Build/RoadMeshSink.h"
 #include "Model/RoadHandles.h"
 #include "Model/RunwayFacts.h"
+#include "Tool/RoadEditTarget.h"
 #include "Tool/RoadSnap.h"
 #include "RoadSurfacePresenter.generated.h"
 
@@ -153,6 +154,28 @@ public:
 	void Rebuild(URoadNetwork& Network, const FSurfaceSettings& Settings);
 
 	/**
+	 * Rebuild's SURFACE-ONLY half (issue #165): the same solve and the same road mesh, plus
+	 * every layer that reads the live Network directly - aprons, runway paint, runway rubber
+	 * - but NEITHER FRoadGuidelineBuilder::Build NOR FAnchorLink::Build, and consequently not
+	 * RebuildMarkings either.
+	 *
+	 * WHY MARKINGS TOO: FHoldingPositionMarkingBuilder::Build reads
+	 * Network.GetGuidelineNodes(), which is FRoadGuidelineBuilder::Build's OWN OUTPUT - so
+	 * calling it here would paint holding bars at the guideline graph's last-derived (now
+	 * stale) positions, not a cheaper answer, a WRONG one that happens to look plausible.
+	 * Skipping it leaves the previous frame's bars on screen, unmoved, until Rebuild derives
+	 * a fresh graph - the same staleness this presenter already accepts for the guideline
+	 * graph itself (see CLAUDE.md's "guideline graph samples once"), extended to its one
+	 * consumer, rather than a second, cheaper evaluator that could disagree with the first.
+	 *
+	 * FOR A CALLER THAT KNOWS NOTHING WAS ADDED, REMOVED, SPLIT, OR RECLASSIFIED - a MoveNode
+	 * or MoveApronCorner drag frame - see ARoadNetworkActor::RebuildMeshForChange, the only
+	 * caller. A drag ends by calling Rebuild (through a Topology notify), which re-derives
+	 * the guideline graph and repaints the markings this skipped, exactly once.
+	 */
+	void RebuildSurfaceOnly(URoadNetwork& Network, const FSurfaceSettings& Settings);
+
+	/**
 	 * Forget what the ghost cache last showed, without touching the ghost component's
 	 * visibility.
 	 *
@@ -272,6 +295,15 @@ public:
 	UDynamicMeshComponent* GetLayerComponentForTest(ESurfaceLayer Layer) const { return GetLayerComponent(Layer); }
 
 private:
+	/**
+	 * Rebuild and RebuildSurfaceOnly are one body (issue #165): both solve and build the road
+	 * mesh identically, and differ only in whether the derived-graph passes run, which is a
+	 * single `if (Kind == EChangeKind::Topology)` rather than two near-duplicate functions
+	 * that could drift the way RebuildAprons/RebuildMarkings/RebuildRunwayMarkings did before
+	 * RebuildLayer folded THEM into one shape (issue #81).
+	 */
+	void RebuildInternal(URoadNetwork& Network, const FSurfaceSettings& Settings, EChangeKind Kind);
+
 	/** LayerComponents[Layer], or null if Layer has none - see Initialize and
 	 *  LayerComponents' own comment for why that is a supported state. */
 	UDynamicMeshComponent* GetLayerComponent(ESurfaceLayer Layer) const;

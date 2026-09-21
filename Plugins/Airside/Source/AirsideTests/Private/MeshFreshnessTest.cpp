@@ -112,17 +112,19 @@ bool FMeshFreshnessTest::RunTest(const FString& Parameters)
 }
 
 // ---------------------------------------------------------------------------------------
-// URoadEditFacade::OnChanged -> ARoadNetworkActor::RebuildMesh, which originally replaced
-// four direct RebuildMesh() calls the facade's mutators used to make (PlaceRunway,
-// ClearNetwork, Undo, Redo). Issue #77 (2026-09-13) made CommitAndNotify/NotifyChanged the
-// single broadcast point for every committed edit - PlaceNode, ConnectNodes, SplitSegment,
-// DeleteNode, DeleteSegment, MoveNode, AddApron, DeleteApron, PlaceEntity and DeleteEntity
-// now notify too, and the 12 RebuildMesh() calls the TOOLS used to make after them are gone
-// (one of them, RoadDrawTool's chaining state, used to rebuild even on a REFUSED connect -
-// see RoadEditFacade.h's own comment on OnChanged). Nothing asserted that the wiring still
-// fires: every other test that wants a rebuilt mesh calls Actor->RebuildMesh() itself, which
-// would still pass even if the constructor's
-// Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMesh) were deleted outright.
+// URoadEditFacade::OnChanged -> ARoadNetworkActor::RebuildMeshForChange (RebuildMesh() itself
+// until issue #165 gave OnChanged an EChangeKind and moved the binding to the new forwarder -
+// see RoadNetworkActor.cpp's constructor comment), which originally replaced four direct
+// RebuildMesh() calls the facade's mutators used to make (PlaceRunway, ClearNetwork, Undo,
+// Redo). Issue #77 (2026-09-13) made CommitAndNotify/NotifyChanged the single broadcast point
+// for every committed edit - PlaceNode, ConnectNodes, SplitSegment, DeleteNode, DeleteSegment,
+// MoveNode, AddApron, DeleteApron, PlaceEntity and DeleteEntity now notify too, and the 12
+// RebuildMesh() calls the TOOLS used to make after them are gone (one of them, RoadDrawTool's
+// chaining state, used to rebuild even on a REFUSED connect - see RoadEditFacade.h's own
+// comment on OnChanged). Nothing asserted that the wiring still fires: every other test that
+// wants a rebuilt mesh calls Actor->RebuildMesh() itself, which would still pass even if the
+// constructor's Facade->OnChanged.AddUObject(this, &ARoadNetworkActor::RebuildMeshForChange)
+// were deleted outright.
 //
 // NewObject, no world - matching Airside.Present.NetworkActor rather than
 // Airside.Present.ArrivalDispatch's spawned actor: what is under test here is the delegate
