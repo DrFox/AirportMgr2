@@ -90,6 +90,8 @@ def joint_names(source):
 BONE_RULES = [
     ("prop",  "PropAngleDegrees"),
     ("steer", "SteerAngleDegrees"),
+    ("truck", "TruckTiltAngleDegrees"),
+    ("bogie", "TruckTiltAngleDegrees"),
     ("wheel", "WheelAngleDegrees"),
     ("gear",  "GearAngleDegrees"),
     ("door",  "BayDoorAngleDegrees"),
@@ -125,6 +127,20 @@ def bone_plan(names):
       * GEAR AFTER WHEEL. On plane5's and plane7's rigs the retract bones are the PARENTS of
         the rolling ones, so a wrong winner here retracts the aeroplane every time it rolls
         forward.
+      * TRUCK BEFORE BOTH OF THOSE, added 2026-09-21 for plane6's 777. A wide-body main leg
+        is three bones deep - gear_L > truck_L > wheel_L1..L3 - and the middle one is the only
+        bone in this fleet whose plausible names collide with TWO other rules at once: a rig
+        that called it `gear_truck_L` would be read as a retract bone and one that called it
+        `truck_wheel_L` as a rolling one. Both failures are silent and both look like
+        modelling faults on screen. Ordering it above the pair costs nothing, because no rule
+        below it can match a name containing "truck" that was not meant for it.
+      * TWO NEEDLES, ONE VARIABLE, for the truck. Boeing say TRUCK and Airbus say BOGIE, the
+        fleet will eventually carry both, and a rigger reaching for the word their drawing
+        uses should not have their bone come out UNRECOGNISED. Checked against the one rig
+        that could have collided before this went in: fueltruck1 drives `wheel_*` and
+        `steer_*` and has no bone containing either needle, so no existing plan changes -
+        verified joint by joint rather than assumed, which is the check GEAR AFTER WHEEL above
+        records having skipped once.
       * EVERY RULE IS OFFERED TO EVERY RIG, including rules no bone of that rig can match.
         plane1's copy kept gear and door for a 172 whose gear is welded on, so that its plan
         could not quietly become a different plan from plane2's; fueltruck1's copy omitted

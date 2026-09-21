@@ -624,8 +624,8 @@ public:
 	 */
 	void AdvanceGear(double DeltaSeconds);
 
-	/** Both gear fractions - see FGearPerformance::FractionsAt, which produces them. */
-	void GearFractions(double& OutGearDown, double& OutDoorOpen) const;
+	/** The whole undercarriage pose - see FGearPerformance::FractionsAt, which produces it. */
+	FGearPose GearPose() const;
 
 	/**
 	 * The engine is running and already at speed, as it is for an aeroplane that has spent a

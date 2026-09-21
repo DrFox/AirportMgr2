@@ -16,6 +16,7 @@
 // function's own comment for exactly where, and why not FRoadAgent's own Start* methods.
 
 #include "CoreMinimal.h"
+#include "Model/GearPose.h"
 #include "Model/RunwayFacts.h"
 #include "Airframe.generated.h"
 
@@ -266,11 +267,34 @@ struct AIRSIDE_API FGearPerformance
 	/**
 	 * One bay door movement, seconds. Zero means the airframe has no doors to move.
 	 *
-	 * COUNTED ONCE BUT SPENT TWICE - the doors open before the gear travels and close after
-	 * it, so CycleSeconds() is this plus the travel plus this again. Authored as one figure
-	 * because a door takes the same time to open as to shut.
+	 * COUNTED ONCE AND SPENT ONCE PER CYCLE, at the GEAR-UP end of it: the doors shut behind
+	 * a retracting leg and open ahead of an extending one, and there is no door stage at the
+	 * gear-down end at all. So CycleSeconds() is this plus the travel, not this plus the
+	 * travel plus this again.
+	 *
+	 * THIS COMMENT SAID "SPENT TWICE" UNTIL 2026-09-21 and had been wrong since the trapezoid
+	 * was corrected on 2026-09-19 - the code changed and the sentence describing it did not.
+	 * Left on record because a stale note beside a correct figure is the harder of the two to
+	 * notice: the arithmetic here has been right for two days and the paragraph explaining it
+	 * has been describing a different function. See FractionsAt for the shape it really has.
+	 *
+	 * Authored as one figure because a door takes the same time to open as to shut.
 	 */
 	UPROPERTY(EditAnywhere) double DoorSeconds = 0.0;
+
+	/**
+	 * One truck tilt, seconds. ZERO MEANS THE AIRFRAME HAS NO TRUCK TO TILT.
+	 *
+	 * A FACT ABOUT THE AEROPLANE, exactly as DoorSeconds' zero is, and not an unmeasured
+	 * figure: a single-axle main gear has no bogie beam, no tilt actuator and no bone for
+	 * one. Every airframe in this fleet before the 777 leaves this zero and always will.
+	 *
+	 * COUNTED ONCE AND SPENT ONCE, like the doors, but at the OPPOSITE END of the cycle - the
+	 * truck tilts before a retracting leg can enter the well and levels after an extending one
+	 * has locked down. Authored as one figure because a truck takes the same time to tilt as
+	 * to level. See FractionsAt, which draws both stages.
+	 */
+	UPROPERTY(EditAnywhere) double TruckTiltSeconds = 0.0;
 
 	/**
 	 * Height above the surface at which a departure raises its gear, uu.
@@ -294,24 +318,42 @@ struct AIRSIDE_API FGearPerformance
 	/** Has anyone declared retractable gear for this airframe? */
 	bool IsSet() const { return TravelSeconds > 0.0; }
 
-	/** One gear travel plus ONE door movement. Seconds. */
+	/** One truck tilt plus one gear travel plus ONE door movement. Seconds. */
 	double CycleSeconds() const
 	{
-		return FMath::Max(DoorSeconds, 0.0) + FMath::Max(TravelSeconds, 0.0);
+		return FMath::Max(TruckTiltSeconds, 0.0) + FMath::Max(TravelSeconds, 0.0)
+			+ FMath::Max(DoorSeconds, 0.0);
 	}
 
 	/**
-	 * Both fractions at a point in a cycle. OutGearDown is 1 down-and-locked, 0 stowed;
-	 * OutDoorOpen is 1 fully open, 0 shut.
+	 * The whole pose at a point in a cycle - see FGearPose, which names each fraction and
+	 * says which way round it counts.
+	 *
+	 * ONE STRUCT, NOT THREE OUT-PARAMETERS. It filled two until the truck made a third, and
+	 * CLAUDE.md's "one struct per thing" bites at exactly that point: three out-parameters
+	 * are three chances to fill two of them, and the one left behind holds whatever the
+	 * previous call put there rather than reading as missing.
 	 *
 	 * THE DOORS ARE OPEN WHENEVER THE GEAR IS NOT STOWED, which is how a 737's nose bay
 	 * actually works: the doors are linked to the strut, so they hang open with the gear down
 	 * and shut only once it is up. The two rest states are therefore DIFFERENT - gear down
 	 * means doors open, gear up means doors shut - and the door movement sits at the GEAR-UP
-	 * END of the cycle in both directions:
+	 * END of the cycle in both directions.
 	 *
-	 *     raising    [ gear travels, doors open ][ doors shut ]
-	 *     lowering   [ doors open ][ gear travels, doors open ]
+	 * THE TRUCK IS THE SAME ARGUMENT AT THE OTHER END. A wide-body bogie must be tilted before
+	 * it will pass into the well and lies level once the leg is down, so its rest states are
+	 * different too - and its movement sits at the GEAR-DOWN end, opposite the doors. It
+	 * therefore LEADS a retraction and TRAILS an extension, which is the mirror image of what
+	 * the doors do:
+	 *
+	 *     raising    [ truck tilts ][ gear travels, doors open ][ doors shut ]
+	 *     lowering   [ doors open ][ gear travels, doors open ][ truck levels ]
+	 *
+	 * SEQUENTIAL RATHER THAN CONCURRENT WITH THE LEG, which a real tilt actuator is not
+	 * strictly. Chosen 2026-09-21 because it is the arrangement that keeps the cycle an exact
+	 * time-reversal of itself - see below - and because a tilt overlapped onto the travel is
+	 * invisible at ramp distance while costing the mirror property that pins the half of this
+	 * function nobody can currently see.
 	 *
 	 * THIS WAS A TRAPEZOID UNTIL 2026-09-19 - doors open, gear travels, doors shut - which
 	 * returned them to the SAME value at both ends. That is unfixable by any sign convention,
@@ -324,7 +366,7 @@ struct AIRSIDE_API FGearPerformance
 	 * retraction they trail, because they are already open and only shut behind it.
 	 *
 	 * Lowering is the exact time-reverse of raising - FractionsAt(t, false) equals
-	 * FractionsAt(CycleSeconds() - t, true) in both outputs - which is what
+	 * FractionsAt(CycleSeconds() - t, true) in all THREE fractions - which is what
 	 * Airside.Model.GearExtendMirrorsRetract pins.
 	 *
 	 * THE ONE EVALUATOR. The model stores what this returns and the view draws it; nothing
@@ -335,7 +377,7 @@ struct AIRSIDE_API FGearPerformance
 	 * Const and free of any agent, so a whole cycle can be sampled in a loop with no world,
 	 * no actor and no skeleton.
 	 */
-	void FractionsAt(double Elapsed, bool bRaising, double& OutGearDown, double& OutDoorOpen) const;
+	FGearPose FractionsAt(double Elapsed, bool bRaising) const;
 };
 
 /**

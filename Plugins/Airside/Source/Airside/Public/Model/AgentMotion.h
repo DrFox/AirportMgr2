@@ -6,7 +6,12 @@
 // not a new anchor or a new power setting. ARoadAgentActor takes just this now, instead of
 // the whole of RoadEntity.h.
 
+// Model/GearPose.h IS THE ONE HEADER THIS INCLUDES BEYOND CoreMinimal.h, and it was split out
+// of Airframe.h expressly so that stayed true - see its own header comment. A pose is what
+// the view needs; a performance is not.
+
 #include "CoreMinimal.h"
+#include "Model/GearPose.h"
 #include "AgentMotion.generated.h"
 
 /**
@@ -111,26 +116,17 @@ struct AIRSIDE_API FAgentMotion
 	UPROPERTY() double SteerAngleDegrees = 0.0;
 
 	/**
-	 * Where the landing gear is: 1 down and locked, 0 stowed. See FGearPerformance.
+	 * Where the undercarriage has got to - gear, bay doors and main truck. See FGearPose,
+	 * which names each fraction, says which way round it counts, and carries the reasons.
 	 *
-	 * A FRACTION AND NOT AN ANGLE, because the travel angle is a fact about one RIG - 90
-	 * degrees on plane4, measured in its build_export.py - and the model has no business
-	 * knowing it. UAirsideAgentAnim multiplies by its own measured figure, the same split
-	 * MainWheelRadius already makes.
+	 * ONE STRUCT AND NOT THREE DOUBLES, since 2026-09-21. It was two loose doubles until the
+	 * 777's truck tilt made a third, and three values that are always written together by one
+	 * evaluator are one thing - CLAUDE.md's rule, and the same argument FAirframe itself is
+	 * an instance of.
 	 *
-	 * ONE DEFAULTS TO DOWN, deliberately: an airframe with no gear data, a vehicle, and every
-	 * aircraft on the ground all want the same answer, and it is this one.
+	 * A DEFAULT-CONSTRUCTED POSE IS A PARKED AEROPLANE, which is also the bind pose of every
+	 * rig in the fleet, so a vehicle and an airframe that declared no gear both get the
+	 * answer that rotates no bone at all.
 	 */
-	UPROPERTY() double GearDownFraction = 1.0;
-
-	/**
-	 * The gear bay doors: 1 fully open, 0 shut.
-	 *
-	 * ONE DEFAULTS TO OPEN, which pairs with GearDownFraction's 1: together they are a parked
-	 * aeroplane, gear down and bay hanging open, which is what a 737's linked nose doors
-	 * actually do and what SK_Plane4's bind pose already is. An airframe with no doors, and
-	 * every ground vehicle, also want this value - it is the one that asks the animgraph to
-	 * rotate nothing.
-	 */
-	UPROPERTY() double BayDoorOpenFraction = 1.0;
+	UPROPERTY() FGearPose GearPose;
 };
